@@ -1,0 +1,66 @@
+package com.haoai.agent.agent.skills
+
+import com.haoai.agent.data.HaoJson
+import kotlinx.serialization.Serializable
+import java.io.File
+
+/**
+ * 技能库（上游 风格精简版）：把成功经验沉淀为可复用的 SKILL.md。
+ * 目录：filesDir/skills/<name>/SKILL.md，frontmatter 存 name/description，正文为步骤。
+ * 系统提示词只注入索引（名字+描述），正文按需加载省上下文。
+ */
+@Serializable
+data class SkillMeta(val name: String, val description: String, val updatedAt: Long = 0)
+
+class SkillStore(private val appFilesDir: File) {
+
+    private val dir: File get() = File(appFilesDir, "skills").apply { mkdirs() }
+
+    @Synchronized
+    fun save(name: String, description: String, body: String): File {
+        val safe = name.trim().replace(Regex("[^a-zA-Z0-9_\\-\\u4e00-\\u9fff]"), "-").take(40)
+            .ifBlank { "skill" }
+        val f = File(dir, safe).apply { mkdirs() }.let { File(it, "SKILL.md") }
+        val front = "---\nname: $safe\ndescription: ${description.trim().take(120)}\n---\n"
+        f.writeText(front + body.trim().take(8000))
+        return f
+    }
+
+    @Synchronized
+    fun list(): List<SkillMeta> =
+        dir.listFiles { f -> f.isDirectory }?.mapNotNull { d ->
+            val f = File(d, "SKILL.md")
+            if (!f.exists()) return@mapNotNull null
+            val text = runCatching { f.readText() }.getOrNull() ?: return@mapNotNull null
+            val name = d.name
+            val desc = Regex("^description:\\s*(.+)$", RegexOption.MULTILINE)
+                .find(text)?.groupValues?.get(1)?.trim() ?: ""
+            SkillMeta(name, desc, f.lastModified())
+        }?.sortedByDescending { it.updatedAt } ?: emptyList()
+
+    @Synchronized
+    fun view(name: String): String? {
+        val f = File(dir, name.trim())
+        if (!f.isDirectory) return null
+        val sf = File(f, "SKILL.md")
+        if (!sf.exists()) return null
+        return runCatching { sf.readText() }.getOrNull()
+    }
+
+    @Synchronized
+    fun delete(name: String): Boolean {
+        val d = File(dir, name.trim())
+        if (!d.isDirectory) return false
+        return d.deleteRecursively()
+    }
+
+    /** 供系统提示词注入的索引（Level-0，省 token）。 */
+    fun promptIndex(): String {
+        val all = list()
+        if (all.isEmpty()) return ""
+        return buildString {
+            appendLine("## 已沉淀技能（用 skill 工具的 view 动作按需加载全文）")
+            all.take(20).forEach { appendLine("- ${it.name}：${it.description.take(80)}") }
+        }.trimEnd()
+    }
+}

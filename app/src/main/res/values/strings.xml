@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">HaoAI</string>
+    <string name="a11y_label">HaoAI 自动化</string>
+    <string name="a11y_desc">允许 HaoAI 读取当前屏幕内容并代你点击、滑动、输入，用于执行手机自动化任务。</string>
+</resources>

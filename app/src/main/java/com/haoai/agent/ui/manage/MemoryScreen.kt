@@ -1,0 +1,342 @@
+package com.haoai.agent.ui.manage
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.haoai.agent.HaoApplication
+import com.haoai.agent.agent.memory.JournalDay
+import com.haoai.agent.agent.memory.Memory
+import com.haoai.agent.agent.memory.MemoryConsolidation
+import com.haoai.agent.ui.common.GlassPageBar
+import com.haoai.agent.ui.common.appLayer
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+@Composable
+fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: () -> Unit) {
+    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as HaoApplication
+    val vm: MemoryViewModel = viewModel(factory = viewModelFactory {
+        initializer { MemoryViewModel(app.container) }
+    })
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmClearJournal by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    var showAdd by remember { mutableStateOf(false) }
+    val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA) }
+
+    val prefN = vm.items.count { it.type == "preference" }
+    val factN = vm.items.count { it.type == "fact" }
+    val decisionN = vm.items.count { it.type == "decision" }
+    val eventN = vm.items.count { it.type == "event" }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .appLayer(backdrop)
+        ) {
+            Spacer(Modifier.height(64.dp))
+        Text(
+            "近期动态（每日日志，7 天后过期，重要条目夜间固化晋升）+ 长期记忆（按重要性注入）。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
+        Text(
+            "概览：偏好 $prefN · 事实 $factN · 决定 $decisionN · 事件 $eventN · 今日日志 ${vm.days.firstOrNull()?.items?.size ?: 0} 条",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+        )
+        msg?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (vm.days.isNotEmpty()) {
+                item(key = "journal_header") {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "近期动态 · ${vm.journalCount()} 条",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { confirmClearJournal = true }) {
+                            Text("清空", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                items(vm.days, key = { "j_${it.date}" }) { day ->
+                    JournalDayCard(day)
+                }
+            }
+            item(key = "lt_header") {
+                Text(
+                    if (vm.items.isEmpty() && vm.days.isEmpty()) "暂无记忆" else "长期记忆",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            items(vm.items, key = { it.id }) { m ->
+                MemoryCard(m, fmt, onDelete = { vm.delete(m.id) })
+            }
+        }
+        }
+        GlassPageBar(
+            backdrop = backdrop,
+            title = "记忆库（${vm.items.size}）",
+            onBack = onBack,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            actions = {
+                IconButton(onClick = { showAdd = true }) {
+                    Icon(Icons.Filled.Add, contentDescription = "手动添加记忆")
+                }
+                IconButton(onClick = {
+                    if (!vm.consolidating) vm.consolidate { msg = it }
+                }) {
+                    Icon(Icons.Filled.AutoFixHigh, contentDescription = "固化")
+                }
+                if (vm.items.isNotEmpty()) {
+                    IconButton(onClick = {
+                        val n = vm.tidy()
+                        msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
+                    }) {
+                        Icon(Icons.Filled.Build, contentDescription = "整理")
+                    }
+                    IconButton(onClick = { confirmClear = true }) {
+                        Icon(Icons.Filled.DeleteSweep, contentDescription = "清空长期记忆")
+                    }
+                }
+            }
+        )
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空记忆库") },
+            text = { Text("将删除全部 ${vm.items.size} 条长期记忆，此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.clearAll()
+                    confirmClear = false
+                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } }
+        )
+    }
+    if (confirmClearJournal) {
+        AlertDialog(
+            onDismissRequest = { confirmClearJournal = false },
+            title = { Text("清空每日日志") },
+            text = { Text("将删除全部 ${vm.journalCount()} 条近期动态（不影响长期记忆），此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.clearJournal()
+                    confirmClearJournal = false
+                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClearJournal = false }) { Text("取消") } }
+        )
+    }
+    if (showAdd) {
+        ManualAddDialog(
+            onAdd = { content, type, importance ->
+                vm.addManual(content, type, importance)
+                showAdd = false
+                msg = "已手动添加长期记忆"
+            },
+            onDismiss = { showAdd = false }
+        )
+    }
+}
+
+@Composable
+private fun ManualAddDialog(
+    onAdd: (String, String, Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var content by remember { mutableStateOf("") }
+    var type by remember { mutableStateOf("fact") }
+    var importance by remember { mutableStateOf(3) }
+    val types = listOf("preference" to "偏好", "fact" to "事实", "decision" to "决定", "event" to "事件")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("手动添加长期记忆") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = content,
+                    onValueChange = { content = it },
+                    label = { Text("内容（一句话）") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    types.forEach { (t, label) ->
+                        androidx.compose.material3.FilterChip(
+                            selected = type == t,
+                            onClick = { type = t },
+                            label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("重要度：$importance", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { if (importance > 1) importance-- }) {
+                        Icon(Icons.Filled.Remove, contentDescription = "降低")
+                    }
+                    IconButton(onClick = { if (importance < 5) importance++ }) {
+                        Icon(Icons.Filled.Add, contentDescription = "提高")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onAdd(content, type, importance) },
+                enabled = content.isNotBlank()
+            ) { Text("添加") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
+private fun JournalDayCard(day: JournalDay) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(day.date, style = MaterialTheme.typography.labelLarge)
+            day.items.asReversed().forEach { e ->
+                Column(Modifier.padding(top = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (e.importance >= MemoryConsolidation.PROMOTE_THRESHOLD) {
+                            Text(
+                                "★ ",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(e.content, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        "${e.source} · ${SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(e.createdAt))}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(m.content, style = MaterialTheme.typography.bodyMedium)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 6.dp)
+                ) {
+                    Text(
+                        "#${m.id}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    m.tags.forEach { tag ->
+                        Text(
+                            tag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        fmt.format(Date(m.createdAt)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
