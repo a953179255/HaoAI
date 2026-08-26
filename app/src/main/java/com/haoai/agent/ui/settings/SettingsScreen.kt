@@ -657,62 +657,58 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
             // 免拷贝直读：扫描结果选择弹窗（放在组合作用域内）
             if (showScan) {
                 val scanned = vm.scannedDeviceModels
-                AlertDialog(
-                    onDismissRequest = { showScan = false },
-                    title = { Text("手机上的模型文件") },
-                    text = {
-                        Column {
-                            if (vm.scanningModels) {
-                                Text("扫描中…（Download / Documents / models 等目录）")
-                            } else if (scanned.isNullOrEmpty()) {
-                                Text(
-                                    "未找到大体积 GGUF 文件。请确认模型位置；若放在应用专属目录之外的受限目录，" +
-                                        "需先在「权限与自动化 → 系统权限」里授予「文件管理（所有文件访问）」。",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            } else {
-                                Text(
-                                    "点击直接引用原文件（不复制、不占双份空间）：",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Column(Modifier.heightIn(max = 360.dp).padding(top = 6.dp)) {
-                                    scanned.forEach { f ->
-                                        Column(
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    vm.useDeviceModel(f.absolutePath)
-                                                    showScan = false
-                                                }
-                                                .padding(vertical = 8.dp)
-                                        ) {
-                                            Text(
-                                                f.name,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontFamily = FontFamily.Monospace,
-                                                maxLines = 1
-                                            )
-                                            Text(
-                                                "${f.length() / (1024 * 1024)} MB · ${f.parent?.removePrefix("/storage/emulated/0/") ?: ""}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
+                val canScan = !vm.scanningModels && vm.scannedDeviceModels == null
+                com.haoai.agent.ui.common.GlassAlertDialog(
+                    backdrop = backdrop,
+                    title = "手机上的模型文件",
+                    onDismiss = { vm.clearDeviceScan(); showScan = false },
+                    confirmLabel = if (canScan) "开始扫描" else "关闭",
+                    onConfirm = { if (canScan) vm.scanDeviceModels() else showScan = false },
+                    dismissLabel = "取消"
+                ) {
+                    Column {
+                        if (vm.scanningModels) {
+                            Text("扫描中…（Download / Documents / models 等目录）")
+                        } else if (scanned.isNullOrEmpty()) {
+                            Text(
+                                "未找到大体积 GGUF 文件。请确认模型位置；若放在应用专属目录之外的受限目录，" +
+                                    "需先在「权限与自动化 → 系统权限」里授予「文件管理（所有文件访问）」。",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        } else {
+                            Text(
+                                "点击直接引用原文件（不复制、不占双份空间）：",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Column(Modifier.heightIn(max = 360.dp).padding(top = 6.dp)) {
+                                scanned.forEach { f ->
+                                    Column(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                vm.useDeviceModel(f.absolutePath)
+                                                showScan = false
+                                            }
+                                            .padding(vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            f.name,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            "${f.length() / (1024 * 1024)} MB · ${f.parent?.removePrefix("/storage/emulated/0/") ?: ""}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
                                 }
                             }
                         }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { if (!vm.scanningModels && vm.scannedDeviceModels == null) vm.scanDeviceModels() else showScan = false }) {
-                            Text(if (!vm.scanningModels && vm.scannedDeviceModels == null) "开始扫描" else "关闭")
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { vm.clearDeviceScan(); showScan = false }) { Text("取消") }
                     }
-                )
+                }
             }
         }
     }
@@ -1172,21 +1168,20 @@ private fun LazyListScope.generalItems(
                 }
             }
             if (confirmWpClear) {
-                AlertDialog(
-                    onDismissRequest = { confirmWpClear = false },
-                    title = { Text("恢复默认背景") },
-                    text = { Text("将清除自定义壁纸并恢复默认渐变背景。") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            vm.clearWallpaper(context)
-                            wpVersion = false
-                            confirmWpClear = false
-                        }) { Text("清除", color = MaterialTheme.colorScheme.error) }
+                com.haoai.agent.ui.common.GlassAlertDialog(
+                    backdrop = backdrop,
+                    title = "恢复默认背景",
+                    onDismiss = { confirmWpClear = false },
+                    confirmLabel = "清除",
+                    onConfirm = {
+                        vm.clearWallpaper(context)
+                        wpVersion = false
+                        confirmWpClear = false
                     },
-                    dismissButton = {
-                        TextButton(onClick = { confirmWpClear = false }) { Text("取消") }
-                    }
-                )
+                    dismissLabel = "取消"
+                ) {
+                    Text("将清除自定义壁纸并恢复默认渐变背景。")
+                }
             }
         }
     }
@@ -1464,7 +1459,6 @@ private fun ProviderDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.32f))
             .clickable(interactionSource = null, indication = null) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -1474,7 +1468,7 @@ private fun ProviderDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            surfaceAlpha = 0.34f
+            surfaceAlpha = 0.26f
         ) {
             Column(
                 Modifier

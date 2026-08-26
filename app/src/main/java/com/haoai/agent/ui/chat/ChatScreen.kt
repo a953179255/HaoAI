@@ -291,7 +291,6 @@ fun ChatScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.32f))
                 .clickable(interactionSource = null, indication = null) { vm.onDeny() },
             contentAlignment = Alignment.Center
         ) {
@@ -301,7 +300,7 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
                 radius = 28.dp,
-                surfaceAlpha = 0.34f
+                surfaceAlpha = 0.26f
             ) {
                 Column(
                     Modifier
@@ -1073,50 +1072,48 @@ private fun SessionsDrawer(
 
     // 回收站：恢复 / 彻底删除，7 天后自动清理
     if (showTrash) {
-        AlertDialog(
-            onDismissRequest = { showTrash = false },
-            title = { Text("回收站") },
-            text = {
-                Column {
-                    if (deletedSessions.isEmpty()) {
-                        Text(
-                            "回收站是空的。删除的会话会在这里保留 7 天，之后自动清理。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Column(
-                            Modifier
-                                .heightIn(max = 380.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            deletedSessions.forEach { s ->
-                                val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
-                                Column(Modifier.padding(vertical = 6.dp)) {
-                                    Text(s.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                                    Text(
-                                        "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        TextButton(onClick = {
-                                            onRestoreSession(s.id)
-                                        }) { Text("恢复") }
-                                        TextButton(onClick = {
-                                            onDeleteForever(s.id)
-                                        }) { Text("彻底删除", color = MaterialTheme.colorScheme.error) }
-                                    }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "回收站",
+            onDismiss = { showTrash = false },
+            dismissLabel = "关闭"
+        ) {
+            Column {
+                if (deletedSessions.isEmpty()) {
+                    Text(
+                        "回收站是空的。删除的会话会在这里保留 7 天，之后自动清理。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Column(
+                        Modifier
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        deletedSessions.forEach { s ->
+                            val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
+                            Column(Modifier.padding(vertical = 6.dp)) {
+                                Text(s.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                Text(
+                                    "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = {
+                                        onRestoreSession(s.id)
+                                    }) { Text("恢复") }
+                                    TextButton(onClick = {
+                                        onDeleteForever(s.id)
+                                    }) { Text("彻底删除", color = MaterialTheme.colorScheme.error) }
                                 }
-                                HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f))
                             }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f))
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTrash = false }) { Text("关闭") }
             }
-        )
+        }
     }
 }
