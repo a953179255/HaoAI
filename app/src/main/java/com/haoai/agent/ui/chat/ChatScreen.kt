@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -583,6 +584,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
                     .clickable { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -743,6 +745,7 @@ private fun ToolChip(tool: com.haoai.agent.ui.UiTool) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 5.dp)
+            .clip(RoundedCornerShape(13.dp))
             .clickable { expanded = !expanded }
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {

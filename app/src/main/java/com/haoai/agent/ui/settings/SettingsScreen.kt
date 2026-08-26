@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -384,6 +385,7 @@ private fun LazyListScope.brainItems(
                         Row(
                             Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable {
                                     if (activeId != p.id) vm.setActiveProvider(p.id)
                                 }
@@ -987,6 +989,7 @@ private fun LazyListScope.memoryItems(
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable { vm.setDreamProvider("local") }
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -1005,6 +1008,7 @@ private fun LazyListScope.memoryItems(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable { vm.setDreamProvider(p.id) }
                         .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
