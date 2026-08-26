@@ -166,6 +166,8 @@ private data class StreamChoice(
 @Serializable
 private data class StreamDelta(
     val content: String? = null,
+    /** 推理过程增量（DeepSeek-R1 / OpenRouter reasoning models 等返回的 reasoning_content 字段）。 */
+    @SerialName("reasoning_content") val reasoning: String? = null,
     @SerialName("tool_calls") val toolCalls: List<StreamToolCall>? = null
 )
 
@@ -184,8 +186,70 @@ private data class StreamFunctionFragment(
 
 sealed interface SseEvent {
     data class Delta(val text: String) : SseEvent
+
+    /** 思考过程增量：来自 reasoning_content 字段或内容中的 <think>…</think> 标签。 */
+    data class Reasoning(val text: String) : SseEvent
     data class Completed(val toolCalls: List<com.haoai.agent.agent.model.ToolCallData>) : SseEvent
     data class Usage(val promptTokens: Int, val completionTokens: Int) : SseEvent
+}
+
+/**
+ * 流式 <think>…</think> 内联推理标签解析器：
+ * 增量可能把标签劈成任意位置，保留尾部疑似前缀凑齐判定；
+ * 未闭合标签在流结束时按思考内容冲出。
+ */
+class ThinkTagParser {
+    private val open = "<think>"
+    private val close = "</think>"
+    private var inThink = false
+    private val buf = StringBuilder()
+
+    /** @return first=可见正文增量 second=思考过程增量 */
+    fun feed(chunk: String): Pair<String, String> {
+        buf.append(chunk)
+        val visible = StringBuilder()
+        val reasoning = StringBuilder()
+        while (true) {
+            val tag = if (inThink) close else open
+            val idx = buf.indexOf(tag)
+            if (idx >= 0) {
+                val content = buf.substring(0, idx)
+                if (inThink) reasoning.append(content) else visible.append(content)
+                buf.delete(0, idx + tag.length)
+                inThink = !inThink
+                continue
+            }
+            val hold = holdBackLen(buf, tag)
+            val emitLen = buf.length - hold
+            if (emitLen > 0) {
+                val content = buf.substring(0, emitLen)
+                if (inThink) reasoning.append(content) else visible.append(content)
+                buf.delete(0, emitLen)
+            }
+            break
+        }
+        return visible.toString() to reasoning.toString()
+    }
+
+    /** @return first=可见正文残留 second=思考过程残留 */
+    fun flush(): Pair<String, String> {
+        if (buf.isEmpty()) return "" to ""
+        val rest = buf.toString()
+        buf.setLength(0)
+        return if (inThink) "" to rest else rest to ""
+    }
+
+    private fun holdBackLen(s: StringBuilder, tag: String): Int {
+        val max = minOf(s.length, tag.length - 1)
+        for (len in max downTo 1) {
+            var match = true
+            for (i in 0 until len) {
+                if (s[s.length - len + i] != tag[i]) { match = false; break }
+            }
+            if (match) return len
+        }
+        return 0
+    }
 }
 
 class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
@@ -239,6 +303,10 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
 
             val pending = sortedMapOf<Int, Pending>()
 
+            // 内容内联 <think>…</think> 解析（llama.cpp / Qwen3 等端侧模型把推理混在 content 里）。
+            // 流式增量可能把标签劈成两半，保留尾部疑似标签前缀，凑齐后再判定。
+            val thinkParser = ThinkTagParser()
+
             // 读循环是阻塞 IO：协程取消不会自动中断 socket 读（本地推理 prefill 数分钟无
             // token，停止键会卡到读超时）。挂 completion 钩子在取消时强制断开连接。
             val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
@@ -256,9 +324,15 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
                     chunk.usage?.let { if (it.promptTokens > 0 || it.completionTokens > 0) usage = it }
 
                     for (choice in chunk.choices) {
+                        choice.delta.reasoning?.takeIf { it.isNotEmpty() }?.let {
+                            gotAnyContent = true
+                            emit(SseEvent.Reasoning(it))
+                        }
                         choice.delta.content?.takeIf { it.isNotEmpty() }?.let {
                             gotAnyContent = true
-                            emit(SseEvent.Delta(it))
+                            val (visible, reasoning) = thinkParser.feed(it)
+                            if (reasoning.isNotEmpty()) emit(SseEvent.Reasoning(reasoning))
+                            if (visible.isNotEmpty()) emit(SseEvent.Delta(visible))
                         }
                         choice.delta.toolCalls?.forEach { tc ->
                             val idx = tc.index ?: pending.size
@@ -275,6 +349,11 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
             } finally {
                 cancelHandle?.dispose()
             }
+
+            // 流结束：冲出残留缓冲（未闭合的 <think> 尾部按思考内容处理）
+            val (tailVisible, tailReasoning) = thinkParser.flush()
+            if (tailReasoning.isNotEmpty()) emit(SseEvent.Reasoning(tailReasoning))
+            if (tailVisible.isNotEmpty()) emit(SseEvent.Delta(tailVisible))
 
             if (!gotAnyContent && pending.isEmpty()) {
                 throw IOException("供应商未返回任何内容，请检查模型 ID 与 Base URL 是否匹配")

@@ -19,6 +19,8 @@ data class ChatMessage(
     val error: Boolean = false,
     /** 用户附加图片的 data URL（base64），仅端侧多模态模型使用。 */
     val imageData: String? = null,
+    /** 思考过程文本（reasoning_content / <think>），仅展示用，不回传 API。 */
+    val reasoning: String? = null,
     val ts: Long = System.currentTimeMillis()
 ) {
     companion object {

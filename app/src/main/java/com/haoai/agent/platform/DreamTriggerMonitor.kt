@@ -84,9 +84,23 @@ object DreamTriggerMonitor {
         (context.applicationContext as com.haoai.agent.HaoApplication)
             .container.settingsFlow.value.dreamIdleMinutes.coerceIn(1, 240)
 
+    /**
+     * 自动梦境时间窗：仅 00:00–07:00 执行（用户要求的夜间前置条件）。
+     * 手动触发不受此限制。
+     */
+    private fun inDreamWindow(): Boolean {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return hour in 0..6
+    }
+
     private fun armIfCharging(context: Context) {
         disarm(context)
         if (!isCharging(context)) return
+        // 窗外不排布闹钟；窗口开始后（灭屏/充电事件或冷启动）会重新尝试
+        if (!inDreamWindow()) {
+            android.util.Log.d("HaoDream", "outside dream window (00:00-07:00), skip arm")
+            return
+        }
         val minutes = idleMinutes(context)
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val trigger = SystemClock.elapsedRealtime() + minutes * 60_000L
@@ -100,13 +114,16 @@ object DreamTriggerMonitor {
         android.util.Log.d("HaoDream", "charge+idle, dream in $minutes min (alarm=$ok)")
     }
 
-    /** 触发整理。manual=true 跳过充电复核（手动入口复用）。 */
+    /** 触发整理。manual=true 跳过充电与时间窗复核（手动入口复用）。 */
     fun fire(context: Context, manual: Boolean) {
         val app = context.applicationContext
         val st = (app as com.haoai.agent.HaoApplication).container.settingsFlow.value
         if (!st.memoryEnabled) return
-        if (!manual && (!isCharging(app) || !isScreenOff(app))) {
-            android.util.Log.d("HaoDream", "fire skipped: charging=${isCharging(app)} screenOff=${isScreenOff(app)}")
+        if (!manual && (!isCharging(app) || !isScreenOff(app) || !inDreamWindow())) {
+            android.util.Log.d(
+                "HaoDream",
+                "fire skipped: charging=${isCharging(app)} screenOff=${isScreenOff(app)} inWindow=${inDreamWindow()}"
+            )
             return
         }
         android.util.Log.d("HaoDream", "fire! manual=$manual")

@@ -1,6 +1,11 @@
 ﻿package com.haoai.agent.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +36,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
@@ -67,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -99,9 +106,11 @@ fun ChatScreen(
 
     val rows by vm.rows.collectAsState()
     val streaming by vm.streamingText.collectAsState()
+    val streamingReasoning by vm.streamingReasoning.collectAsState()
     val running by vm.running.collectAsState()
     val error by vm.error.collectAsState()
     val sessions by vm.sessions.collectAsState()
+    val deletedSessions by vm.deletedSessions.collectAsState()
     val approval by vm.approval.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
@@ -171,16 +180,15 @@ fun ChatScreen(
                     workspaceName = vm.workspaceName(),
                     backdrop = backdrop,
                     sessions = sessions,
+                    deletedSessions = deletedSessions,
                     activeId = vm.session.collectAsState().value?.id,
                     onSelect = {
                         vm.selectSession(it.id)
                         scope.launch { drawerState.close() }
                     },
                     onDelete = { vm.deleteSession(it.id) },
-                    onNewChat = {
-                        vm.newSession()
-                        scope.launch { drawerState.close() }
-                    },
+                    onRestoreSession = { vm.restoreSession(it) },
+                    onDeleteForever = { vm.deleteSessionForever(it) },
                     onSettings = {
                         scope.launch { drawerState.close() }
                         onOpenSettings(true)
@@ -204,6 +212,8 @@ fun ChatScreen(
             MessageList(
                 rows = rows,
                 streamingText = streaming,
+                streamingReasoning = streamingReasoning,
+                running = running,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -479,13 +489,16 @@ private fun TopBar(
 private fun MessageList(
     rows: List<ChatRow>,
     streamingText: String?,
+    streamingReasoning: String?,
+    running: Boolean,
     modifier: Modifier = Modifier,
     bottomPadding: androidx.compose.ui.unit.Dp
 ) {
     val listState = rememberLazyListState()
-    val totalItems = rows.size + (if (streamingText != null) 1 else 0)
+    val showStreaming = streamingText != null || running
+    val totalItems = rows.size + (if (showStreaming) 1 else 0)
 
-    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length) {
+    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length) {
         if (totalItems <= 0) return@LaunchedEffect
         val last = totalItems - 1
         val info = listState.layoutInfo
@@ -500,9 +513,9 @@ private fun MessageList(
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
         items(rows, key = { it.key }) { row -> RowItem(row) }
-        if (streamingText != null) {
+        if (showStreaming) {
             item(key = "streaming") {
-                StreamingBubble(streamingText)
+                StreamingItem(streamingText, streamingReasoning)
             }
         }
     }
@@ -513,6 +526,140 @@ private fun RowItem(row: ChatRow) {
     when (row.role) {
         "user" -> UserBubble(row.text)
         else -> AssistantBlock(row)
+    }
+}
+
+/** 思考中指示器：模型还在 prefill / 推理、尚未吐出正文时给用户明确反馈。 */
+@Composable
+private fun ThinkingIndicator(text: String = "正在思考") {
+    val transition = rememberInfiniteTransition(label = "think")
+    val dotAlpha by transition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(850, easing = LinearEasing)),
+        label = "dots"
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.size(9.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.size(3.dp))
+        Text(
+            "···",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.graphicsLayer { this.alpha = dotAlpha }
+        )
+    }
+}
+
+/**
+ * 思考过程面板：流式阶段（live）默认展开实时滚动显示推理内容；
+ * 正文开始后自动收起；历史消息里默认收起，点击可展开。
+ */
+@Composable
+private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = false) {
+    var userToggled by rememberSaveable { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(live) }
+    // 正文开始输出时自动收起（除非用户手动展开过）
+    LaunchedEffect(autoCollapse, live) {
+        if (autoCollapse && !userToggled) expanded = false
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { userToggled = true; expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (live) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.6.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.size(8.dp))
+                }
+                Text(
+                    if (live) "正在思考…" else "思考过程",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+            androidx.compose.animation.AnimatedVisibility(expanded) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                    modifier = Modifier.padding(top = 5.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamingItem(streamingText: String?, streamingReasoning: String?) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 5.dp)
+    ) {
+        val hasContent = !streamingText.isNullOrBlank()
+        if (!streamingReasoning.isNullOrBlank()) {
+            ReasoningPanel(
+                text = streamingReasoning,
+                live = !hasContent,
+                autoCollapse = hasContent
+            )
+            if (hasContent) Spacer(Modifier.size(5.dp))
+        }
+        if (hasContent) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                MarkdownText(
+                    streamingText + " ▍",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
+            }
+        } else if (streamingReasoning.isNullOrBlank()) {
+            // 什么都还没有：prefill / 等首 token
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    ThinkingIndicator()
+                }
+            }
+        }
     }
 }
 
@@ -545,6 +692,10 @@ private fun AssistantBlock(row: ChatRow) {
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 5.dp)
     ) {
+        row.reasoning?.takeIf { it.isNotBlank() }?.let {
+            ReasoningPanel(text = it, live = false)
+            Spacer(Modifier.size(5.dp))
+        }
         row.tools.forEach { tool -> ToolChip(tool) }
         if (row.text.isNotBlank()) {
             if (row.error) {
@@ -573,26 +724,6 @@ private fun AssistantBlock(row: ChatRow) {
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun StreamingBubble(text: String) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 5.dp)
-    ) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            MarkdownText(
-                text + " ▍",
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-            )
         }
     }
 }
@@ -775,17 +906,21 @@ private fun SessionsDrawer(
     workspaceName: String,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     sessions: List<StoredSession>,
+    deletedSessions: List<StoredSession>,
     activeId: String?,
     onSelect: (StoredSession) -> Unit,
     onDelete: (StoredSession) -> Unit,
-    onNewChat: () -> Unit,
+    onRestoreSession: (String) -> Unit,
+    onDeleteForever: (String) -> Unit,
     onSettings: () -> Unit
 ) {
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+    var showTrash by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxSize()
-            .padding(top = 18.dp)
+            .statusBarsPadding()
+            .padding(top = 30.dp)
     ) {
         Row(
             Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
@@ -812,29 +947,6 @@ private fun SessionsDrawer(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
-                )
-            }
-        }
-        com.haoai.agent.ui.common.LiquidGlassButton(
-            onClick = onNewChat,
-            backdrop = backdrop,
-            shape = RoundedCornerShape(percent = 50),
-            surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.size(6.dp))
-                Text(
-                    "开启新会话",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodyMedium
                 )
             }
         }
@@ -895,6 +1007,35 @@ private fun SessionsDrawer(
         Row(
             Modifier
                 .fillMaxWidth()
+                .clickable(onClick = { showTrash = true })
+                .padding(horizontal = 22.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.DeleteSweep,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(21.dp)
+            )
+            Spacer(Modifier.size(14.dp))
+            Text("回收站", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            if (deletedSessions.isNotEmpty()) {
+                Text(
+                    "${deletedSessions.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .background(
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
+                            CircleShape
+                        )
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
                 .clickable(onClick = onSettings)
                 .padding(horizontal = 22.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -909,5 +1050,54 @@ private fun SessionsDrawer(
             Text("设置", style = MaterialTheme.typography.bodyLarge)
         }
         Spacer(Modifier.navigationBarsPadding())
+    }
+
+    // 回收站：恢复 / 彻底删除，7 天后自动清理
+    if (showTrash) {
+        AlertDialog(
+            onDismissRequest = { showTrash = false },
+            title = { Text("回收站") },
+            text = {
+                Column {
+                    if (deletedSessions.isEmpty()) {
+                        Text(
+                            "回收站是空的。删除的会话会在这里保留 7 天，之后自动清理。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Column(
+                            Modifier
+                                .heightIn(max = 380.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            deletedSessions.forEach { s ->
+                                val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
+                                Column(Modifier.padding(vertical = 6.dp)) {
+                                    Text(s.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                    Text(
+                                        "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = {
+                                            onRestoreSession(s.id)
+                                        }) { Text("恢复") }
+                                        TextButton(onClick = {
+                                            onDeleteForever(s.id)
+                                        }) { Text("彻底删除", color = MaterialTheme.colorScheme.error) }
+                                    }
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTrash = false }) { Text("关闭") }
+            }
+        )
     }
 }

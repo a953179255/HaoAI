@@ -125,11 +125,15 @@ class LlamaServerController(
      * 绝不回退到「任意 mmproj」——不匹配的 mmproj 会让 server 启动即崩
      * （mtmd_init_from_file: mismatch between text model and mmproj n_embd）。
      */
-    fun findMmproj(modelFileName: String): File? {
-        val all = (modelsDir().listFiles { f -> isMmprojFile(f) }?.toList() ?: emptyList()) +
-            (internalModelsDir().listFiles { f -> isMmprojFile(f) }?.toList() ?: emptyList())
+    fun findMmproj(model: File): File? {
+        val all = ((modelsDir().listFiles { f -> isMmprojFile(f) }?.toList() ?: emptyList()) +
+            (internalModelsDir().listFiles { f -> isMmprojFile(f) }?.toList() ?: emptyList())).toMutableList()
+        // 直读的设备模型：投影文件与模型同目录放置时也能被发现
+        if (model.absolutePath.startsWith("/")) {
+            model.parentFile?.listFiles { f -> isMmprojFile(f) }?.let { all += it.toList() }
+        }
         if (all.isEmpty()) return null
-        val base = modelFileName.removeSuffix(".gguf")
+        val base = model.name.removeSuffix(".gguf")
         return all.firstOrNull {
             it.nameWithoutExtension == base || it.nameWithoutExtension.startsWith("$base-")
         }
@@ -159,7 +163,7 @@ class LlamaServerController(
                 return@withLock false
             }
 
-            val mmproj = findMmproj(model.name)
+            val mmproj = findMmproj(model)
             val ok = launchServer(bin, model, mmproj)
             if (!ok && mmproj != null) {
                 // 视觉投影与文本模型不匹配会让 server 启动即退出：去掉 mmproj 重试纯文本

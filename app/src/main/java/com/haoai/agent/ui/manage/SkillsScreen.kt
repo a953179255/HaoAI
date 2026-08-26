@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.ui.common.GlassCard
@@ -73,10 +74,34 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp)
         )
-        androidx.compose.material3.Button(
-            onClick = { showAdd = true },
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        ) { Text("＋ 手动添加技能") }
+        androidx.compose.foundation.layout.Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            com.haoai.agent.ui.common.LiquidGlassButton(
+                onClick = { showAdd = true },
+                backdrop = backdrop,
+                shape = RoundedCornerShape(percent = 50),
+                surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                ) {
+                    Text(
+                        "＋",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.padding(2.dp))
+                    Text(
+                        "手动添加技能",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
         if (skills.isEmpty()) {
             Text(
                 "暂无技能——当代理踩坑并总结出可复用步骤时会自动沉淀到这里，也可以手动添加。",
@@ -173,21 +198,19 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     }
 
     viewBody?.let { (name, body) ->
-        AlertDialog(
-            onDismissRequest = { viewBody = null },
-            title = { Text(name) },
-            text = {
-                Text(
-                    body,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.verticalScroll(rememberScrollState())
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { viewBody = null }) { Text("关闭") }
-            }
-        )
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = name,
+            onDismiss = { viewBody = null },
+            confirmLabel = "关闭",
+            onConfirm = { viewBody = null }
+        ) {
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace
+            )
+        }
     }
 
     if (showAdd) {
@@ -195,45 +218,45 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
         var desc by remember { mutableStateOf("") }
         var body by remember { mutableStateOf("") }
         val valid = name.isNotBlank() && desc.isNotBlank() && body.isNotBlank()
-        AlertDialog(
-            onDismissRequest = { showAdd = false },
-            title = { Text("添加技能") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    androidx.compose.material3.OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("名称（如 deepseek-api）") },
-                        singleLine = true
-                    )
-                    androidx.compose.material3.OutlinedTextField(
-                        value = desc,
-                        onValueChange = { desc = it },
-                        label = { Text("一句话描述（注入系统提示索引）") },
-                        singleLine = true
-                    )
-                    androidx.compose.material3.OutlinedTextField(
-                        value = body,
-                        onValueChange = { body = it },
-                        label = { Text("正文：步骤/要点（Markdown，按需加载）") },
-                        minLines = 4,
-                        maxLines = 8
-                    )
-                }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "添加技能",
+            onDismiss = { showAdd = false },
+            confirmLabel = "保存",
+            onConfirm = {
+                store.save(name, desc, body)
+                refresh()
+                showAdd = false
             },
-            confirmButton = {
-                androidx.compose.material3.Button(
-                    onClick = {
-                        store.save(name, desc, body)
-                        refresh()
-                        showAdd = false
-                    },
-                    enabled = valid
-                ) { Text("保存") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAdd = false }) { Text("取消") }
+            confirmEnabled = valid,
+            dismissLabel = "取消"
+        ) {
+            androidx.compose.foundation.layout.Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("名称（如 deepseek-api）") },
+                    singleLine = true,
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = desc,
+                    onValueChange = { desc = it },
+                    label = { Text("一句话描述（注入系统提示索引）") },
+                    singleLine = true,
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = body,
+                    onValueChange = { body = it },
+                    label = { Text("正文：步骤/要点（Markdown，按需加载）") },
+                    minLines = 4,
+                    maxLines = 8,
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                )
             }
-        )
+        }
     }
 }

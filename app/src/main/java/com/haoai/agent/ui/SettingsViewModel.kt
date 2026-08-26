@@ -314,11 +314,38 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun skillCount(): Int = SkillStore.list().size
 
-    // ---- 端侧模型文件导入（SAF 选择后拷入应用模型目录）----
+    // ---- 端侧模型文件：加载（直读原路径，不复制）----
 
     var importingModel by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * 加载模型文件：优先把 SAF content:// 解析成真实路径直读（不复制、不占双份空间）；
+     * 解析不了（第三方文档提供器）才回退为复制进应用目录。
+     */
+    fun loadModelFile(context: android.content.Context, uriString: String) {
+        val resolved = resolveDocumentPath(context, uriString)
+        if (resolved != null && resolved.endsWith(".gguf", ignoreCase = true) && java.io.File(resolved).exists()) {
+            useDeviceModel(resolved)
+            importingModel = "已加载 ${java.io.File(resolved).name}（原路径直读）"
+            viewModelScope.launch { delay(3500); if (importingModel?.startsWith("已加载") == true) importingModel = null }
+        } else {
+            importModel(context, uriString)
+        }
+    }
+
+    /** externalstorage 文档 URI → /storage/emulated/0/... 真实路径；其余返回 null。 */
+    private fun resolveDocumentPath(context: android.content.Context, uriString: String): String? = runCatching {
+        val uri = android.net.Uri.parse(uriString)
+        if (uri.authority != "com.android.externalstorage.documents") return@runCatching null
+        val seg = uri.path?.split("/document/")?.getOrNull(1) ?: return@runCatching null
+        when {
+            seg.startsWith("primary:") -> "/storage/emulated/0/" + seg.removePrefix("primary:")
+            else -> null
+        }
+    }.getOrNull()
+
+    /** 兜底：复制进应用模型目录（第三方提供器无法拿到真实路径时）。 */
     fun importModel(context: android.content.Context, uriString: String) {
         if (importingModel != null) return
         viewModelScope.launch(Dispatchers.IO) {

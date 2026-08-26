@@ -16,9 +16,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -44,6 +47,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -72,6 +76,8 @@ import com.haoai.agent.platform.llama.LlamaState
 import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
+import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 
 /**
@@ -269,6 +275,7 @@ fun SettingsScreen(
 
     draft?.let { d ->
         ProviderDialog(
+            backdrop = backdrop,
             draft = d,
             draftError = vm.draftError,
             testing = vm.testing,
@@ -488,15 +495,26 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                     ) {
                         when (llama) {
                             is LlamaState.Running -> {
-                                Button(onClick = { vm.stopLlama() }) { Text("停止服务") }
+                                LiquidPillButton(
+                                    backdrop = backdrop,
+                                    text = "停止服务",
+                                    emphasized = true
+                                ) { vm.stopLlama() }
                             }
                             else -> {
-                                Button(onClick = { vm.startLlama { } }, enabled = vm.llamaModelFile() != null) {
-                                    Text("启动服务")
-                                }
+                                LiquidPillButton(
+                                    backdrop = backdrop,
+                                    text = "启动服务",
+                                    enabled = vm.llamaModelFile() != null,
+                                    emphasized = true
+                                ) { vm.startLlama { } }
                             }
                         }
-                        TextButton(onClick = { vm.useLocalModel() }) { Text("使用端侧模型") }
+                        LiquidPillButton(
+                            backdrop = backdrop,
+                            text = "使用端侧模型",
+                            emphasized = false
+                        ) { vm.useLocalModel() }
                     }
                 }
             }
@@ -525,25 +543,33 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 } else {
-                    Button(
-                        onClick = { vm.downloadLlamaModel(dlUrl) { } },
-                        modifier = Modifier.padding(top = 8.dp)
-                    ) { Text("下载模型（Qwen2.5-0.5B，约 470MB）") }
+                    LiquidPillButton(
+                        backdrop = backdrop,
+                        text = "下载模型（Qwen2.5-0.5B，约 470MB）",
+                        modifier = Modifier.padding(top = 8.dp),
+                        emphasized = true
+                    ) { vm.downloadLlamaModel(dlUrl) { } }
                 }
             }
             val ctxLocal = androidx.compose.ui.platform.LocalContext.current
             val importLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.OpenDocument()
-            ) { uri -> uri?.let { vm.importModel(ctxLocal, it.toString()) } }
+            ) { uri -> uri?.let { vm.loadModelFile(ctxLocal, it.toString()) } }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(top = 8.dp)
             ) {
-                Button(
-                    onClick = { importLauncher.launch(arrayOf("*/*")) },
-                    enabled = vm.importingModel == null
-                ) { Text("导入模型文件（复制）") }
-                TextButton(onClick = { showScan = true }) { Text("扫描手机已有模型") }
+                LiquidPillButton(
+                    backdrop = backdrop,
+                    text = "加载模型文件",
+                    enabled = vm.importingModel == null,
+                    emphasized = true
+                ) { importLauncher.launch(arrayOf("*/*")) }
+                LiquidPillButton(
+                    backdrop = backdrop,
+                    text = "扫描手机已有模型",
+                    emphasized = false
+                ) { showScan = true }
             }
             vm.importingModel?.let {
                 Text(
@@ -554,7 +580,7 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                 )
             }
             Text(
-                "提示：优先用「扫描」直读手机上已有的 GGUF（不占双份空间）；导入会复制到应用目录。" +
+                "提示：优先用「扫描」或「加载模型文件」直读手机上已有的 GGUF（不复制、不占双份空间）；" +
                     "视觉投影文件与模型同名放置即可自动启用图像识别。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -566,28 +592,50 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp)
             )
-            val models = vm.localModels()
-            if (models.size > 1) {
-                Text(
-                    "应用目录内的模型（切换后自动重启服务生效）",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-                val selected = vm.selectedLocalModel()
-                models.forEach { name ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { vm.selectLocalModel(name) },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(selected = name == selected, onClick = { vm.selectLocalModel(name) })
+            // 已添加的模型：当前使用 + 应用目录内已有文件（只读展示，切换走扫描/加载入口）
+            Text(
+                "已添加的模型",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+            GlassGroup(backdrop, modifier = Modifier.padding(top = 6.dp)) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            name,
+                            "当前使用",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.widthIn(min = 64.dp)
+                        )
+                        Text(
+                            vm.currentLocalModelLabel() ?: "未添加",
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1
                         )
+                    }
+                    val appDirModels = vm.localModels()
+                    if (appDirModels.isNotEmpty()) {
+                        HorizontalDivider(
+                            Modifier.padding(vertical = 6.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                        )
+                        Text(
+                            "应用目录内（${appDirModels.size} 个）：",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        appDirModels.forEach { name ->
+                            Text(
+                                "· $name",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                maxLines = 1,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -684,26 +732,37 @@ private fun LazyListScope.privacyItems(
     item {
         val mode = settings.permissionMode
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
-            SingleChoiceSegmentedButtonRow(
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SegmentedButton(
-                    selected = mode == PermissionMode.ALWAYS_ASK,
-                    onClick = { vm.setPermissionMode(PermissionMode.ALWAYS_ASK) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                ) { Text("全部询问", maxLines = 1) }
-                SegmentedButton(
-                    selected = mode == PermissionMode.ASK_WRITES,
-                    onClick = { vm.setPermissionMode(PermissionMode.ASK_WRITES) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                ) { Text("写入时询问", maxLines = 1) }
-                SegmentedButton(
-                    selected = mode == PermissionMode.YOLO,
-                    onClick = { vm.setPermissionMode(PermissionMode.YOLO) },
-                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                ) { Text("全自动", maxLines = 1) }
+                listOf(
+                    PermissionMode.ALWAYS_ASK to "全部询问",
+                    PermissionMode.ASK_WRITES to "写入时询问",
+                    PermissionMode.YOLO to "全自动"
+                ).forEach { (m, label) ->
+                    val selected = mode == m
+                    com.haoai.agent.ui.common.LiquidGlassButton(
+                        onClick = { vm.setPermissionMode(m) },
+                        backdrop = backdrop,
+                        shape = RoundedCornerShape(percent = 50),
+                        modifier = Modifier.weight(1f),
+                        surfaceColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        else Color.White.copy(alpha = 0.10f)
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -725,14 +784,18 @@ private fun LazyListScope.privacyItems(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(onClick = {
+                LiquidPillButton(
+                    backdrop = backdrop,
+                    text = if (a11yOn) "管理" else "去开启",
+                    emphasized = !a11yOn
+                ) {
                     runCatching {
                         context.startActivity(
                             android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
                                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
                     }
-                }) { Text(if (a11yOn) "管理" else "去开启") }
+                }
             }
         }
     }
@@ -764,8 +827,18 @@ private fun LazyListScope.privacyItems(
                     if (granted) {
                         Text("✓", color = Color(0xFF3E9B5F), fontWeight = FontWeight.Bold)
                     } else {
-                        TextButton(onClick = { vm.requestPermission(spec, context) }) {
-                            Text(if (spec.special) "去设置" else "授权")
+                        com.haoai.agent.ui.common.LiquidGlassButton(
+                            onClick = { vm.requestPermission(spec, context) },
+                            backdrop = backdrop,
+                            shape = RoundedCornerShape(percent = 50),
+                            surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                        ) {
+                            Text(
+                                if (spec.special) "去设置" else "授权",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
                         }
                     }
                 }
@@ -883,7 +956,7 @@ private fun LazyListScope.memoryItems(
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
             ToggleRow(
                 title = "闲置时自动整理记忆",
-                subtitle = "充电且灭屏持续所选时间后执行；亮屏或断电即取消。固化历史写入 DREAMS.md。",
+                subtitle = "充电且灭屏持续所选时间后执行，仅 00:00–7:00 夜间时段生效；亮屏或断电即取消。固化历史写入 DREAMS.md。",
                 checked = settings.deepDream,
                 onChange = { vm.setDeepDream(it) },
                 backdrop = backdrop
@@ -1370,6 +1443,7 @@ private fun GlassStatTile(
 
 @Composable
 private fun ProviderDialog(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     draft: com.haoai.agent.ui.ProviderDraft,
     draftError: String?,
     testing: Boolean,
@@ -1387,139 +1461,182 @@ private fun ProviderDialog(
     onTest: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (draft.id == null) "添加模型服务" else "编辑模型服务") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    com.haoai.agent.ui.ProviderPresets.all.take(3).forEach { p ->
-                        AssistChip(onClick = { onPreset(p) }, label = { Text(p.label, style = MaterialTheme.typography.labelSmall) })
-                    }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    com.haoai.agent.ui.ProviderPresets.all.drop(3).forEach { p ->
-                        AssistChip(onClick = { onPreset(p) }, label = { Text(p.label, style = MaterialTheme.typography.labelSmall) })
-                    }
-                }
-                OutlinedTextField(
-                    value = draft.name,
-                    onValueChange = { v -> onChange(draft.copy(name = v)) },
-                    label = { Text("名称（可留空自动命名）") },
-                    singleLine = true
+    // 液态玻璃弹层：独立 Dialog 窗口采样不到 LayerBackdrop，用全屏遮罩 + GlassPanel 承载
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.32f))
+            .clickable(interactionSource = null, indication = null) { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            radius = 28.dp,
+            surfaceAlpha = 0.34f
+        ) {
+            Column(
+                Modifier
+                    .clickable(interactionSource = null, indication = null) {}
+                    .padding(20.dp)
+            ) {
+                Text(
+                    if (draft.id == null) "添加模型服务" else "编辑模型服务",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
                 )
-                OutlinedTextField(
-                    value = draft.baseUrl,
-                    onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
-                    label = { Text("Base URL（OpenAI 兼容）") },
-                    placeholder = { Text("https://openrouter.ai/api/v1") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = draft.model,
-                    onValueChange = { v -> onChange(draft.copy(model = v)) },
-                    label = { Text("模型 ID") },
-                    placeholder = { Text("如 deepseek-chat / stealth/ox-alpha") },
-                    singleLine = true
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                Column(
+                    Modifier
+                        .padding(top = 12.dp)
+                        .heightIn(max = 460.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    TextButton(onClick = onFetchModels, enabled = !fetchingModels && draft.baseUrl.isNotBlank()) {
-                        Text(if (fetchingModels) "拉取中…" else "拉取模型列表")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        com.haoai.agent.ui.ProviderPresets.all.take(3).forEach { p ->
+                            AssistChip(onClick = { onPreset(p) }, label = { Text(p.label, style = MaterialTheme.typography.labelSmall) })
+                        }
                     }
-                    TextButton(onClick = onDetectCaps, enabled = !detectingCaps && draft.model.isNotBlank()) {
-                        Text(if (detectingCaps) "检测中…" else "自动检测能力")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        com.haoai.agent.ui.ProviderPresets.all.drop(3).forEach { p ->
+                            AssistChip(onClick = { onPreset(p) }, label = { Text(p.label, style = MaterialTheme.typography.labelSmall) })
+                        }
                     }
-                }
-                detectResult?.let { (ok, msg) ->
-                    Text(
-                        msg,
-                        color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall
+                    OutlinedTextField(
+                        value = draft.name,
+                        onValueChange = { v -> onChange(draft.copy(name = v)) },
+                        label = { Text("名称（可留空自动命名）") },
+                        singleLine = true,
+                        colors = glassFieldColors()
                     )
-                }
-                modelChoices?.let { list ->
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .background(
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                RoundedCornerShape(10.dp)
-                            )
-                            .padding(vertical = 4.dp)
-                    ) {
+                    OutlinedTextField(
+                        value = draft.baseUrl,
+                        onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
+                        label = { Text("Base URL（OpenAI 兼容）") },
+                        placeholder = { Text("https://openrouter.ai/api/v1") },
+                        singleLine = true,
+                        colors = glassFieldColors()
+                    )
+                    OutlinedTextField(
+                        value = draft.model,
+                        onValueChange = { v -> onChange(draft.copy(model = v)) },
+                        label = { Text("模型 ID") },
+                        placeholder = { Text("如 deepseek-chat / stealth/ox-alpha") },
+                        singleLine = true,
+                        colors = glassFieldColors()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TextButton(onClick = onFetchModels, enabled = !fetchingModels && draft.baseUrl.isNotBlank()) {
+                            Text(if (fetchingModels) "拉取中…" else "拉取模型列表")
+                        }
+                        TextButton(onClick = onDetectCaps, enabled = !detectingCaps && draft.model.isNotBlank()) {
+                            Text(if (detectingCaps) "检测中…" else "自动检测能力")
+                        }
+                    }
+                    detectResult?.let { (ok, msg) ->
                         Text(
-                            "点击选择（共 ${list.size} 个）：",
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            msg,
+                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall
                         )
-                        Column(Modifier.heightIn(max = 180.dp)) {
-                            list.forEach { id ->
-                                Text(
-                                    id,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onPickModel(id) }
-                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                    }
+                    modelChoices?.let { list ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                    RoundedCornerShape(10.dp)
                                 )
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                "点击选择（共 ${list.size} 个）：",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                            Column(Modifier.heightIn(max = 180.dp)) {
+                                list.forEach { id ->
+                                    Text(
+                                        id,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onPickModel(id) }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                OutlinedTextField(
-                    value = draft.apiKeyPlain,
-                    onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
-                    label = { Text(if (draft.id == null) "API Key" else "API Key（留空保持不变）") },
-                    singleLine = true
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = draft.contextLength,
-                        onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
-                        label = { Text("上下文窗口") },
-                        placeholder = { Text("自动") },
-                        supportingText = { Text("0/留空=按模型推测") },
+                        value = draft.apiKeyPlain,
+                        onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
+                        label = { Text(if (draft.id == null) "API Key" else "API Key（留空保持不变）") },
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        colors = glassFieldColors()
                     )
-                    OutlinedTextField(
-                        value = draft.maxTokens,
-                        onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
-                        label = { Text("回复上限") },
-                        placeholder = { Text("默认") },
-                        supportingText = { Text("建议 8192+") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = draft.contextLength,
+                            onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
+                            label = { Text("上下文窗口") },
+                            placeholder = { Text("自动") },
+                            supportingText = { Text("0/留空=按模型推测") },
+                            singleLine = true,
+                            colors = glassFieldColors(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = draft.maxTokens,
+                            onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
+                            label = { Text("回复上限") },
+                            placeholder = { Text("默认") },
+                            supportingText = { Text("建议 8192+") },
+                            singleLine = true,
+                            colors = glassFieldColors(),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    if (draftError != null) {
+                        Text(
+                            draftError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    testResult?.let { (ok, msg) ->
+                        Text(
+                            msg,
+                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    TextButton(onClick = onTest, enabled = !testing) {
+                        Text(if (testing) "测试中…" else "测试连接")
+                    }
                 }
-                if (draftError != null) {
-                    Text(
-                        draftError,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                testResult?.let { (ok, msg) ->
-                    Text(
-                        msg,
-                        color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                TextButton(onClick = onTest, enabled = !testing) {
-                    Text(if (testing) "测试中…" else "测试连接")
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    LiquidPillButton(
+                        backdrop = backdrop,
+                        text = "保存",
+                        emphasized = true
+                    ) { onSave() }
                 }
             }
-        },
-        confirmButton = { Button(onClick = onSave) { Text("保存") } },
-        dismissButton = { TextButton(onClick = { onDismiss() }) { Text("取消") } }
-    )
+        }
+    }
 }
+
+/** 玻璃弹层输入框配色复用公共实现（ui/common/Glass.kt）。 */

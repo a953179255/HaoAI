@@ -4,19 +4,29 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +54,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
@@ -78,8 +89,8 @@ fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null): LayerBackdr
                 dstSize = androidx.compose.ui.unit.IntSize(dw.toInt(), dh.toInt())
             )
         } else {
-            // 默认浅色渐变：深色底会让液态玻璃上的文字难以辨认
-            drawRect(Brush.verticalGradient(listOf(Color(0xFFD8E4F2), Color(0xFFEDF2F8))))
+            // 默认浅色渐变（绿调中性，呼应液态玻璃绿主色）：深色底会让玻璃上的文字难以辨认
+            drawRect(Brush.verticalGradient(listOf(Color(0xFFD9E8DF), Color(0xFFEDF4EF))))
         }
         drawContent()
     }
@@ -527,3 +538,103 @@ fun GlassPageBar(
         }
     }
 }
+
+/**
+ * 液态玻璃弹窗壳：独立 Dialog 窗口采样不到 LayerBackdrop，
+ * 用全屏半透明遮罩 + GlassPanel 承载（点遮罩关闭，内容区点击不穿透）。
+ */
+@Composable
+fun GlassAlertDialog(
+    backdrop: LayerBackdrop,
+    title: String,
+    onDismiss: () -> Unit,
+    confirmLabel: String? = null,
+    onConfirm: (() -> Unit)? = null,
+    confirmEnabled: Boolean = true,
+    dismissLabel: String? = null,
+    contentMaxHeight: Dp = 420.dp,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.32f))
+            .clickable(interactionSource = null, indication = null, onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            radius = 28.dp,
+            surfaceAlpha = 0.34f
+        ) {
+            Column(
+                Modifier
+                    .clickable(interactionSource = null, indication = null, onClick = {})
+                    .padding(20.dp)
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Column(
+                    Modifier
+                        .padding(top = 12.dp)
+                        .heightIn(max = contentMaxHeight)
+                        .verticalScroll(rememberScrollState()),
+                    content = content
+                )
+                if (onConfirm != null || dismissLabel != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (dismissLabel != null) {
+                            TextButton(onClick = onDismiss) { Text(dismissLabel) }
+                        }
+                        if (onConfirm != null) {
+                            LiquidGlassButton(
+                                onClick = onConfirm,
+                                backdrop = backdrop,
+                                shape = RoundedCornerShape(percent = 50),
+                                enabled = confirmEnabled,
+                                surfaceColor = MaterialTheme.colorScheme.primary.copy(
+                                    alpha = if (confirmEnabled) 0.85f else 0.25f
+                                )
+                            ) {
+                                Text(
+                                    confirmLabel.orEmpty(),
+                                    color = if (confirmEnabled) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 玻璃弹层里的输入框配色（半透明白容器，与 Onboarding 一致）。 */
+@Composable
+fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+    focusedTextColor = MaterialTheme.colorScheme.onBackground,
+    unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
+    cursorColor = MaterialTheme.colorScheme.primary,
+    focusedBorderColor = MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+    focusedContainerColor = Color.White.copy(alpha = 0.32f),
+    unfocusedContainerColor = Color.White.copy(alpha = 0.20f),
+    focusedLabelColor = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+)

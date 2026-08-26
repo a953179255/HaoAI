@@ -7,13 +7,14 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
+// 主色调：液态玻璃绿（对齐 AndroidLiquidGlass Catalog 的绿色开关/按钮观感，iOS 系统绿系）
 private val HaoDarkColors = darkColorScheme(
-    primary = Color(0xFF8AB4FF),
-    onPrimary = Color(0xFF0A1B33),
-    primaryContainer = Color(0xFF27436E),
-    onPrimaryContainer = Color(0xFFD6E4FF),
-    secondary = Color(0xFF9FCBFF),
-    onSecondary = Color(0xFF0A1B33),
+    primary = Color(0xFF4ADE80),
+    onPrimary = Color(0xFF062D16),
+    primaryContainer = Color(0xFF14532D),
+    onPrimaryContainer = Color(0xFFBBF7D0),
+    secondary = Color(0xFF86EFAC),
+    onSecondary = Color(0xFF062D16),
     tertiary = Color(0xFF7BD88F),
     background = Color(0xFF0B0E14),
     onBackground = Color(0xFFE6EBF5),
@@ -27,11 +28,11 @@ private val HaoDarkColors = darkColorScheme(
 )
 
 private val HaoLightColors = lightColorScheme(
-    primary = Color(0xFF2C5FC4),
+    primary = Color(0xFF1EA84F),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFD9E2FF),
-    onPrimaryContainer = Color(0xFF0A1B33),
-    secondary = Color(0xFF4A608C),
+    primaryContainer = Color(0xFFD5F5E1),
+    onPrimaryContainer = Color(0xFF0B3D22),
+    secondary = Color(0xFF2F7D4F),
     onSecondary = Color(0xFFFFFFFF),
     tertiary = Color(0xFF256B41),
     background = Color(0xFFF5F7FC),

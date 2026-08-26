@@ -19,6 +19,7 @@ data class StoredMessage(
     val toolName: String? = null,
     val error: Boolean = false,
     val imageData: String? = null,
+    val reasoning: String? = null,
     val ts: Long = System.currentTimeMillis()
 )
 
@@ -29,7 +30,9 @@ data class StoredSession(
     val createdAt: Long,
     var updatedAt: Long,
     val messages: MutableList<StoredMessage> = mutableListOf(),
-    var workspaceUri: String? = null
+    var workspaceUri: String? = null,
+    /** 回收站：>0 表示已删除（该时间戳），7 天后自动清理；0=正常会话。 */
+    var deletedAt: Long = 0
 ) {
     companion object {
         fun create(workspaceUri: String?): StoredSession {
@@ -53,6 +56,7 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
     toolName = toolName,
     error = error,
     imageData = imageData,
+    reasoning = reasoning,
     ts = ts
 )
 
@@ -64,6 +68,7 @@ fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     toolName = toolName,
     error = error,
     imageData = imageData,
+    reasoning = reasoning,
     ts = ts
 )
 
@@ -93,14 +98,30 @@ class SessionStore(context: Context) {
         val merged = LinkedHashMap<String, StoredSession>()
         for (f in files) {
             val id = f.nameWithoutExtension
-            latest[id]?.let { merged[id] = it; continue }
+            latest[id]?.let { if (it.deletedAt == 0L) merged[id] = it; continue }
             val mtime = f.lastModified()
             val hit = diskCache[id]
             val parsed = if (hit != null && hit.first == mtime) hit.second
             else parseFile(f)?.also { diskCache[id] = mtime to it } ?: continue
-            merged[id] = parsed
+            if (parsed.deletedAt == 0L) merged[id] = parsed
         }
         return merged.values.sortedByDescending { it.updatedAt }
+    }
+
+    /** 回收站内容（按删除时间倒序）。 */
+    fun listDeleted(): List<StoredSession> {
+        val files = dir.listFiles { f -> f.extension == "json" } ?: return emptyList()
+        val merged = LinkedHashMap<String, StoredSession>()
+        for (f in files) {
+            val id = f.nameWithoutExtension
+            latest[id]?.let { if (it.deletedAt > 0L) merged[id] = it; continue }
+            val mtime = f.lastModified()
+            val hit = diskCache[id]
+            val parsed = if (hit != null && hit.first == mtime) hit.second
+            else parseFile(f)?.also { diskCache[id] = mtime to it } ?: continue
+            if (parsed.deletedAt > 0L) merged[id] = parsed
+        }
+        return merged.values.sortedByDescending { it.deletedAt }
     }
 
     fun load(id: String): StoredSession? {
@@ -134,9 +155,41 @@ class SessionStore(context: Context) {
         }
     }
 
+    /** 删除 → 进回收站（软删除），7 天后由 purgeExpired 彻底清理。 */
     fun delete(id: String) {
+        val s = load(id) ?: run {
+            latest.remove(id); diskCache.remove(id)
+            io.execute { runCatching { fileOf(id).delete() } }
+            return
+        }
+        s.deletedAt = System.currentTimeMillis()
+        save(s)
+    }
+
+    /** 从回收站恢复。 */
+    fun restore(id: String) {
+        val s = load(id) ?: return
+        s.deletedAt = 0
+        save(s)
+    }
+
+    /** 彻底删除（回收站内或直接）。 */
+    fun deleteForever(id: String) {
         latest.remove(id)
         diskCache.remove(id)
         io.execute { runCatching { fileOf(id).delete() } }
+    }
+
+    companion object {
+        /** 回收站保留时长：7 天。 */
+        const val TRASH_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+    }
+
+    /** 清理回收站中超过保留期的会话（应用启动/删除时调用）。 */
+    fun purgeExpiredTrash() {
+        val now = System.currentTimeMillis()
+        listDeleted().forEach { s ->
+            if (now - s.deletedAt > TRASH_RETENTION_MS) deleteForever(s.id)
+        }
     }
 }

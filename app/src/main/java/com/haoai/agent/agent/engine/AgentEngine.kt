@@ -80,7 +80,8 @@ class AgentEngine(
         userText: String,
         onDelta: (String) -> Unit,
         onEvent: (TurnEvent) -> Unit,
-        imageData: String? = null
+        imageData: String? = null,
+        onReasoning: (String) -> Unit = {}
     ) {
         appendAndNotify(
             ChatMessage(
@@ -126,6 +127,7 @@ class AgentEngine(
                 }
 
                 streamBuf.setLength(0)
+                val reasoningBuf = StringBuilder()
                 var calls: List<ToolCallData> = emptyList()
 
                 maybeNudgeHandoff(onEvent)
@@ -137,6 +139,10 @@ class AgentEngine(
                                 streamBuf.append(ev.text)
                                 onDelta(ev.text)
                             }
+                            is SseEvent.Reasoning -> {
+                                reasoningBuf.append(ev.text)
+                                onReasoning(ev.text)
+                            }
                             is SseEvent.Completed -> calls = ev.toolCalls
                             is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
                         }
@@ -147,7 +153,8 @@ class AgentEngine(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
                             content = streamBuf.toString(),
-                            toolCalls = calls
+                            toolCalls = calls,
+                            reasoning = reasoningBuf.toString().ifBlank { null }
                         ),
                         onEvent
                     )
@@ -288,6 +295,7 @@ class AgentEngine(
             httpClient.chatStream(provider, apiKey, msgs, apiTools, reasoningEffort.ifBlank { null }).collect { ev ->
                 when (ev) {
                     is SseEvent.Delta -> buf.append(ev.text)
+                    is SseEvent.Reasoning -> Unit
                     is SseEvent.Completed -> calls = ev.toolCalls
                     is SseEvent.Usage -> Unit
                 }

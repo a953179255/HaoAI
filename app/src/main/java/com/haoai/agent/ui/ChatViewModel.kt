@@ -37,7 +37,8 @@ data class ChatRow(
     val role: String,
     val text: String,
     val error: Boolean = false,
-    val tools: List<UiTool> = emptyList()
+    val tools: List<UiTool> = emptyList(),
+    val reasoning: String? = null
 )
 
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
@@ -55,6 +56,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText = _streamingText.asStateFlow()
 
+    /** 流式思考过程（reasoning_content / <think>），与 streamingText 同生命周期。 */
+    private val _streamingReasoning = MutableStateFlow<String?>(null)
+    val streamingReasoning = _streamingReasoning.asStateFlow()
+
     private val _running = MutableStateFlow(false)
     val running = _running.asStateFlow()
 
@@ -68,8 +73,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _sessions = MutableStateFlow<List<StoredSession>>(emptyList())
     val sessions = _sessions.asStateFlow()
 
+    private val _deletedSessions = MutableStateFlow<List<StoredSession>>(emptyList())
+    val deletedSessions = _deletedSessions.asStateFlow()
+
     init {
+        c.sessionStore.purgeExpiredTrash()
         refreshSessions()
+        refreshDeletedSessions()
         if (_sessions.value.isNotEmpty()) {
             selectSession(_sessions.value.first().id)
         } else {
@@ -83,6 +93,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun refreshSessions() {
         _sessions.value = c.sessionStore.list()
+    }
+
+    fun refreshDeletedSessions() {
+        _deletedSessions.value = c.sessionStore.listDeleted()
+    }
+
+    fun restoreSession(id: String) {
+        c.sessionStore.restore(id)
+        refreshSessions()
+        refreshDeletedSessions()
+    }
+
+    fun deleteSessionForever(id: String) {
+        c.sessionStore.deleteForever(id)
+        refreshDeletedSessions()
     }
 
     fun newSession() {
@@ -113,6 +138,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun deleteSession(id: String) {
         c.sessionStore.delete(id)
         refreshSessions()
+        refreshDeletedSessions()
         if (_session.value?.id == id) newSession()
     }
 
@@ -127,6 +153,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val s = currentSession ?: return
         _running.value = true
         _streamingText.value = null
+        _streamingReasoning.value = null
         job = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0)
@@ -142,11 +169,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     userText = text,
                     onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
                     onEvent = ::handleEvent,
-                    imageData = imageData
+                    imageData = imageData,
+                    onReasoning = { frag ->
+                        _streamingReasoning.value = (_streamingReasoning.value ?: "") + frag
+                    }
                 )
             } finally {
                 _running.value = false
                 _streamingText.value = null
+                _streamingReasoning.value = null
                 refreshSessions()
                 c.syncWorkspaceDocs()
             }
@@ -244,7 +275,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             else -> base
                         }
                     }
-                    rows.add(ChatRow("m$i", m.role, m.content, m.error, tools))
+                    rows.add(ChatRow("m$i", m.role, m.content, m.error, tools, m.reasoning))
                 }
                 ChatMessage.ROLE_USER ->
                     rows.add(ChatRow("m$i", m.role, m.content))
@@ -474,5 +505,6 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         job = null
         _running.value = false
         _streamingText.value = null
+        _streamingReasoning.value = null
     }
 }
