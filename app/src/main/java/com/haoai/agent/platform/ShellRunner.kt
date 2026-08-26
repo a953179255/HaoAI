@@ -39,20 +39,28 @@ object ShellRunner {
         pump.isDaemon = true
         pump.start()
 
-        val finished = runCatching {
-            process.waitFor(timeoutMs.coerceIn(1000, 300_000), TimeUnit.MILLISECONDS)
-        }.getOrDefault(false)
+        try {
+            val finished = runCatching {
+                process.waitFor(timeoutMs.coerceIn(1000, 300_000), TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
 
-        if (!finished) {
+            if (!finished) {
+                process.destroy()
+                runCatching { process.waitFor(2000, TimeUnit.MILLISECONDS) }
+                if (process.isAlive) process.destroyForcibly()
+                val partial = synchronized(buffer) { buffer.toString() }
+                return Result(-1, "$partial\n[执行超时（${timeoutMs}ms），已终止]")
+            }
+
+            runCatching { pump.join(1500) }
+            val output = synchronized(buffer) { buffer.toString() }
+            return Result(process.exitValue(), output.ifBlank { "(无输出)" })
+        } catch (ie: InterruptedException) {
+            // 调用协程被取消（用户按停止）：必须杀掉子进程，否则命令继续在后台跑
             process.destroy()
             runCatching { process.waitFor(2000, TimeUnit.MILLISECONDS) }
             if (process.isAlive) process.destroyForcibly()
-            val partial = synchronized(buffer) { buffer.toString() }
-            return Result(-1, "$partial\n[执行超时（${timeoutMs}ms），已终止]")
+            throw ie
         }
-
-        runCatching { pump.join(1500) }
-        val output = synchronized(buffer) { buffer.toString() }
-        return Result(process.exitValue(), output.ifBlank { "(无输出)" })
     }
 }

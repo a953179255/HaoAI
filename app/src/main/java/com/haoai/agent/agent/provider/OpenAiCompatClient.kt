@@ -198,6 +198,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
         reasoningEffort: String? = null
     ): Flow<SseEvent> = flow {
         val url = normalizeUrl(provider.baseUrl)
+        val isLocal = provider.baseUrl.contains("127.0.0.1")
         val requestJson = HaoJson.json.encodeToString(
             ChatCompletionRequest.serializer(),
             ChatCompletionRequest(
@@ -206,9 +207,10 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
                     if (m.toolCalls.isNullOrEmpty()) m.copy(toolCalls = null) else m
                 },
                 tools = tools.ifEmpty { null },
-                maxTokens = if (provider.baseUrl.contains("127.0.0.1")) 1024 else null,
-                streamOptions = if (provider.baseUrl.contains("127.0.0.1")) null else StreamOptions(),
-                reasoningEffort = reasoningEffort?.takeIf { it.isNotBlank() && !provider.baseUrl.contains("127.0.0.1") }
+                // 云端：用户配置的 maxTokens（0=供应商默认）；本地：默认 4096（原 1024 会硬截断回复）
+                maxTokens = provider.effectiveMaxTokens().takeIf { it > 0 },
+                streamOptions = StreamOptions(),
+                reasoningEffort = reasoningEffort?.takeIf { it.isNotBlank() && !isLocal }
             )
         )
         val builder = Request.Builder()
@@ -237,33 +239,41 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
 
             val pending = sortedMapOf<Int, Pending>()
 
-            while (true) {
-                val line = source.readUtf8Line() ?: break
-                if (line.isBlank()) continue
-                if (!line.startsWith("data:")) continue
-                val payload = line.substring(5).trim()
-                if (payload == "[DONE]") break
-                val chunk = runCatching {
-                    HaoJson.json.decodeFromString(StreamChunk.serializer(), payload)
-                }.getOrNull() ?: continue
-                chunk.usage?.let { if (it.promptTokens > 0 || it.completionTokens > 0) usage = it }
+            // 读循环是阻塞 IO：协程取消不会自动中断 socket 读（本地推理 prefill 数分钟无
+            // token，停止键会卡到读超时）。挂 completion 钩子在取消时强制断开连接。
+            val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+                ?.invokeOnCompletion { call.cancel() }
+            try {
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    if (!line.startsWith("data:")) continue
+                    val payload = line.substring(5).trim()
+                    if (payload == "[DONE]") break
+                    val chunk = runCatching {
+                        HaoJson.json.decodeFromString(StreamChunk.serializer(), payload)
+                    }.getOrNull() ?: continue
+                    chunk.usage?.let { if (it.promptTokens > 0 || it.completionTokens > 0) usage = it }
 
-                for (choice in chunk.choices) {
-                    choice.delta.content?.takeIf { it.isNotEmpty() }?.let {
-                        gotAnyContent = true
-                        emit(SseEvent.Delta(it))
-                    }
-                    choice.delta.toolCalls?.forEach { tc ->
-                        val idx = tc.index ?: pending.size
-                        val p = pending.getOrPut(idx) { Pending() }
-                        tc.id?.let { p.id = it }
-                        tc.function?.name?.let { p.name.append(it) }
-                        tc.function?.arguments?.let { p.args.append(it) }
-                    }
-                    if (!gotAnyContent && choice.delta.toolCalls != null && choice.delta.toolCalls.isNotEmpty()) {
-                        gotAnyContent = true
+                    for (choice in chunk.choices) {
+                        choice.delta.content?.takeIf { it.isNotEmpty() }?.let {
+                            gotAnyContent = true
+                            emit(SseEvent.Delta(it))
+                        }
+                        choice.delta.toolCalls?.forEach { tc ->
+                            val idx = tc.index ?: pending.size
+                            val p = pending.getOrPut(idx) { Pending() }
+                            tc.id?.let { p.id = it }
+                            tc.function?.name?.let { p.name.append(it) }
+                            tc.function?.arguments?.let { p.args.append(it) }
+                        }
+                        if (!gotAnyContent && choice.delta.toolCalls != null && choice.delta.toolCalls.isNotEmpty()) {
+                            gotAnyContent = true
+                        }
                     }
                 }
+            } finally {
+                cancelHandle?.dispose()
             }
 
             if (!gotAnyContent && pending.isEmpty()) {

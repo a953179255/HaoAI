@@ -107,7 +107,7 @@ class RawFileBackend(private val root: File) : FileBackend {
         require(f.isFile) { "这是一个目录，请用目录模式读取：$rel" }
         val head = ByteArray(8192)
         f.inputStream().use { ins ->
-            val n = ins.read(head)
+            val n = ins.read(head).coerceAtLeast(0)
             if (FileBackend.looksBinary(head.copyOf(n))) throw IllegalStateException("检测到二进制文件，拒绝读取：$rel")
         }
         if (f.length() > maxBytes) {

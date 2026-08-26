@@ -46,6 +46,9 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
     })
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.CHINA) }
 
+    // 系统返回手势：回到设置根页，而不是把应用最小化
+    androidx.activity.compose.BackHandler { onBack() }
+
     Box(
         Modifier
             .fillMaxSize()

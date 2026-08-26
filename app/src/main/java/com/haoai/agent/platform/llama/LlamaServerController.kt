@@ -2,8 +2,11 @@ package com.haoai.agent.platform.llama
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -50,6 +53,12 @@ class LlamaServerController(
     @Volatile
     var preferredModel: String? = null
 
+    /** 端侧上下文窗口（-c 参数）。Agent 工具流需要大上下文，默认 64K；小内存设备可下调。 */
+    @Volatile
+    var contextSize: Int = 65536
+
+    private val startMutex = kotlinx.coroutines.sync.Mutex()
+
     fun modelsDir(): File = File(context.getExternalFilesDir(null), "models").apply { mkdirs() }
 
     private fun internalModelsDir(): File = File(context.filesDir, "models")
@@ -73,14 +82,19 @@ class LlamaServerController(
     fun isMmprojFile(f: File): Boolean =
         f.name.endsWith(".mmproj", ignoreCase = true) || f.name.contains("mmproj", ignoreCase = true)
 
-    /** 查找视觉投影文件：优先与模型同名，否则取目录中任意一个。 */
+    /**
+     * 查找视觉投影文件：必须与模型同名（或以模型名为前缀）。
+     * 绝不回退到「任意 mmproj」——不匹配的 mmproj 会让 server 启动即崩
+     * （mtmd_init_from_file: mismatch between text model and mmproj n_embd）。
+     */
     fun findMmproj(modelFileName: String): File? {
         val all = (modelsDir().listFiles { f -> isMmprojFile(f) }?.toList() ?: emptyList()) +
             (internalModelsDir().listFiles { f -> isMmprojFile(f) }?.toList() ?: emptyList())
         if (all.isEmpty()) return null
         val base = modelFileName.removeSuffix(".gguf")
-        return all.firstOrNull { it.nameWithoutExtension == base || it.name.startsWith(base) }
-            ?: all.maxByOrNull { it.lastModified() }
+        return all.firstOrNull {
+            it.nameWithoutExtension == base || it.nameWithoutExtension.startsWith("$base-")
+        }
     }
 
     fun binaryPath(): String? {
@@ -92,86 +106,103 @@ class LlamaServerController(
         val current = _state.value
         if (current is LlamaState.Running) return@withContext true
 
-        val bin = binaryPath()
-        if (bin == null) {
-            _state.value = LlamaState.Failed("此设备缺少端侧推理组件（ABI 不支持）")
-            return@withContext false
-        }
-        val model = findModel()
-        if (model == null) {
-            _state.value = LlamaState.Failed("未找到模型文件，请先在设置中下载")
-            return@withContext false
-        }
+        // 并发调用（聊天/梦境/Worker 同时拉起）会起两个进程抢 8081 端口
+        startMutex.withLock {
+            if (_state.value is LlamaState.Running) return@withLock true
 
-        _state.value = LlamaState.Starting("加载模型 ${model.name}…")
-        stopInternal()
+            val bin = binaryPath()
+            if (bin == null) {
+                _state.value = LlamaState.Failed("此设备缺少端侧推理组件（ABI 不支持）")
+                return@withLock false
+            }
+            val model = findModel()
+            if (model == null) {
+                _state.value = LlamaState.Failed("未找到模型文件，请先在设置中下载")
+                return@withLock false
+            }
 
-        try {
-            // 多模态：与模型同名或任一 .mmproj 视觉投影文件存在时启用图像识别
             val mmproj = findMmproj(model.name)
-            val cmd = mutableListOf(
-                bin,
-                "-m", model.absolutePath,
-                "--host", "127.0.0.1",
-                "--port", PORT.toString(),
-                "-c", "32768",
-                "-t", Runtime.getRuntime().availableProcessors().coerceIn(2, 6).toString(),
-                "--no-webui",
-                "--jinja",
-                "--reasoning", "off"
-            )
-            if (mmproj != null) {
-                cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
-                _state.value = LlamaState.Starting("加载模型 ${model.name}（含视觉 ${mmproj.name}）…")
-            }
-            val pb = ProcessBuilder(cmd).redirectErrorStream(true)
-
-            val logFile = File(modelsDir(), "server.log")
-            val proc = pb.start()
-            process = proc
-
-            // 必须持续排水到 EOF：只读固定行数后关流，会让 server 写满管道冻结或
-            // 因 SIGPIPE 直接死掉；日志仅落盘前 MAX_LOG_LINES 行防止无限增长。
-            Thread {
-                runCatching {
-                    proc.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                        java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(logFile, false))).use { writer ->
-                            var written = 0
-                            reader.forEachLine { line ->
-                                if (written++ < MAX_LOG_LINES) writer.println(line)
-                            }
-                            writer.flush()
-                        }
-                    }
-                }
-            }.apply { isDaemon = true }.start()
-
-            val healthClient = okHttpClient.newBuilder()
-                .connectTimeout(2, TimeUnit.SECONDS)
-                .readTimeout(2, TimeUnit.SECONDS)
-                .build()
-            repeat(HEALTH_TRIES) { attempt ->
-                if (proc.exitValueOrNull() != null) throw IllegalStateException("server 进程退出，详见 server.log")
-                runCatching {
-                    healthClient.newCall(
-                        Request.Builder().url("$LOCAL_BASE_URL/health").build()
-                    ).execute().use { resp ->
-                        if (resp.isSuccessful) {
-                            _state.value = LlamaState.Running(model.name)
-                            return@withContext true
-                        }
-                    }
-                }
-                _state.value = LlamaState.Starting("启动中… ${(attempt + 1) * HEALTH_INTERVAL_MS / 1000}s")
-                Thread.sleep(HEALTH_INTERVAL_MS)
-            }
-            throw IllegalStateException("健康检查超时（${HEALTH_TRIES * HEALTH_INTERVAL_MS / 1000}s）")
-        } catch (e: Exception) {
-            stopInternal()
-            _state.value = LlamaState.Failed(e.message ?: e.javaClass.simpleName)
-            false
+            val ok = launchServer(bin, model, mmproj)
+            if (!ok && mmproj != null) {
+                // 视觉投影与文本模型不匹配会让 server 启动即退出：去掉 mmproj 重试纯文本
+                launchServer(bin, model, null)
+            } else ok
         }
     }
+
+    private suspend fun launchServer(bin: String, model: File, mmproj: File?): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                stopInternal()
+                val cmd = mutableListOf(
+                    bin,
+                    "-m", model.absolutePath,
+                    "--host", "127.0.0.1",
+                    "--port", PORT.toString(),
+                    "-c", contextSize.coerceIn(2048, 262_144).toString(),
+                    "-t", Runtime.getRuntime().availableProcessors().coerceIn(2, 6).toString(),
+                    "--no-webui",
+                    "--jinja",
+                    "--reasoning", "off"
+                )
+                if (mmproj != null) {
+                    cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
+                    _state.value = LlamaState.Starting("加载模型 ${model.name}（含视觉 ${mmproj.name}）…")
+                } else {
+                    _state.value = LlamaState.Starting("加载模型 ${model.name}…")
+                }
+                val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+
+                val logFile = File(modelsDir(), "server.log")
+                val proc = pb.start()
+                process = proc
+
+                // 必须持续排水到 EOF：只读固定行数后关流，会让 server 写满管道冻结或
+                // 因 SIGPIPE 直接死掉；日志仅落盘前 MAX_LOG_LINES 行防止无限增长。
+                Thread {
+                    runCatching {
+                        proc.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                            java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(logFile, false))).use { writer ->
+                                var written = 0
+                                reader.forEachLine { line ->
+                                    if (written++ < MAX_LOG_LINES) writer.println(line)
+                                }
+                                writer.flush()
+                            }
+                        }
+                    }
+                }.apply { isDaemon = true }.start()
+
+                val healthClient = okHttpClient.newBuilder()
+                    .connectTimeout(2, TimeUnit.SECONDS)
+                    .readTimeout(2, TimeUnit.SECONDS)
+                    .build()
+                repeat(HEALTH_TRIES) { attempt ->
+                    // 大模型加载可达数分钟：等待必须可被协程取消（停止键立即生效）
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    if (proc.exitValueOrNull() != null) throw IllegalStateException("server 进程退出，详见 server.log")
+                    runCatching {
+                        healthClient.newCall(
+                            Request.Builder().url("$LOCAL_BASE_URL/health").build()
+                        ).execute().use { resp ->
+                            if (resp.isSuccessful) {
+                                _state.value = LlamaState.Running(model.name)
+                                return@withContext true
+                            }
+                        }
+                    }
+                    _state.value = LlamaState.Starting("启动中… ${(attempt + 1) * HEALTH_INTERVAL_MS / 1000}s")
+                    delay(HEALTH_INTERVAL_MS)
+                }
+                throw IllegalStateException("健康检查超时（${HEALTH_TRIES * HEALTH_INTERVAL_MS / 1000}s）")
+            } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                stopInternal()
+                _state.value = LlamaState.Failed(e.message ?: e.javaClass.simpleName)
+                false
+            }
+        }
 
     fun stop() {
         stopInternal()

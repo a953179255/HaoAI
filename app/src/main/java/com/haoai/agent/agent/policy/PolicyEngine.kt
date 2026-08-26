@@ -47,6 +47,13 @@ class PolicyEngine(private val mode: PermissionMode) {
         Regex("\\bdiskutil\\s+eraseDisk", RegexOption.IGNORE_CASE)
     )
 
+    /** 无论参数如何，基础命令本身即高危（分段提取命令字后匹配）。 */
+    private val blockedCommands = setOf(
+        "mkfs", "mkfs.ext2", "mkfs.ext3", "mkfs.ext4", "mkfs.vfat", "mkfs.exfat", "mkfs.f2fs",
+        "shutdown", "reboot", "poweroff", "halt", "fdisk", "parted", "diskutil",
+        "flash_image", "fastboot", "su"
+    )
+
     fun riskOf(toolName: String): RiskLevel = when (toolName) {
         "bash" -> RiskLevel.EXEC
         "write", "edit" -> RiskLevel.WRITE
@@ -61,8 +68,71 @@ class PolicyEngine(private val mode: PermissionMode) {
         PermissionMode.ALWAYS_ASK -> true
     }
 
-    fun checkShellBlocked(command: String): String? =
+    /**
+     * 高危命令拦截。黑名单正则易被引号/变量/包装绕过，因此叠加结构化检查：
+     * 按 ; && || | 换行与 $() 反引号切分命令段，剥掉 env 前缀后取命令字，
+     * 命令字命中 blockedCommands 或「下载管道执行」模式即拦截。
+     */
+    fun checkShellBlocked(command: String): String? {
         shellBlacklist.firstOrNull { it.containsMatchIn(command) }?.let {
-            "命令被安全策略拦截：匹配高危模式「${it.pattern.take(40)}…」"
+            return "命令被安全策略拦截：匹配高危模式「${it.pattern.take(40)}…」"
         }
+        for (seg in splitSegments(command)) {
+            val base = baseCommandOf(seg) ?: continue
+            if (base.lowercase() in blockedCommands) {
+                return "命令被安全策略拦截：禁止使用「$base」"
+            }
+        }
+        // curl/wget … | sh|bash：远程代码执行
+        if (Regex("(curl|wget)[^|;]*\\|\\s*(ba)?sh\\b", RegexOption.IGNORE_CASE).containsMatchIn(command)) {
+            return "命令被安全策略拦截：不允许把下载内容直接管道给 shell 执行"
+        }
+        return null
+    }
+
+    /** 递归切分：运算符 + $() / 反引号内层命令都作为独立段检查。 */
+    private fun splitSegments(command: String): List<String> {
+        val out = mutableListOf<String>()
+        fun walk(s: String) {
+            s.split(';', '\n').forEach { part ->
+                part.split("&&", "||", "|").forEach { seg ->
+                    var t = seg.trim()
+                    // 展开 $(...) 与 `...` 的内层
+                    Regex("\\$\\((.*?)\\)").findAll(t).forEach { walk(it.groupValues[1]) }
+                    Regex("`([^`]*)`").findAll(t).forEach { walk(it.groupValues[1]) }
+                    t = t.replace(Regex("\\$\\(.*?\\)"), " ").replace(Regex("`[^`]*`"), " ")
+                    if (t.isNotBlank()) out.add(t)
+                }
+            }
+        }
+        walk(command)
+        return out
+    }
+
+    /** 取段内实际命令字：跳过 env 赋值前缀与 nohup/timeout 等包装。 */
+    private fun baseCommandOf(segment: String): String? {
+        var tokens = segment.trim().split(Regex("\\s+"))
+        while (tokens.isNotEmpty()) {
+            val first = tokens.first()
+            if (first.contains('=') && !first.startsWith("-")) {
+                tokens = tokens.drop(1); continue
+            }
+            if (first in setOf("nohup", "time", "exec", "nice")) {
+                tokens = tokens.drop(1); continue
+            }
+            if ((first == "timeout" || first == "nice") && tokens.size > 1 && tokens[1].startsWith("-")) {
+                tokens = tokens.drop(1); continue
+            }
+            if (first in setOf("bash", "sh", "ash", "zsh") && tokens.size > 1 &&
+                (tokens[1] == "-c" || tokens[1] == "-lc")
+            ) {
+                // sh -c "<inner>"：内层命令才是真正要跑的，递归检查
+                val inner = segment.substringAfter(tokens[1], "").trim()
+                    .trim('"', '\'')
+                if (inner.isNotBlank()) return baseCommandOf(inner) ?: first
+            }
+            return first.substringAfterLast('/')
+        }
+        return null
+    }
 }

@@ -21,7 +21,11 @@ data class ProviderDraft(
     val name: String = "",
     val baseUrl: String = "",
     val model: String = "",
-    val apiKeyPlain: String = ""
+    val apiKeyPlain: String = "",
+    /** 上下文窗口 tokens；空串=自动（按模型名推测） */
+    val contextLength: String = "",
+    /** 单次回复上限 max_tokens；空串=云端供应商默认 / 本地 4096 */
+    val maxTokens: String = ""
 )
 
 data class ProviderPreset(
@@ -113,7 +117,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             name = p.name,
             baseUrl = p.baseUrl,
             model = p.model,
-            apiKeyPlain = ""
+            apiKeyPlain = "",
+            contextLength = if (p.contextLength > 0) p.contextLength.toString() else "",
+            maxTokens = if (p.maxTokens > 0) p.maxTokens.toString() else ""
         )
         draftError = null
         testResult = null
@@ -165,12 +171,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                         return
                     }
                 } else null
+                val ctxLen = d.contextLength.trim().toIntOrNull()?.coerceIn(0, 10_000_000) ?: 0
+                val maxTok = d.maxTokens.trim().toIntOrNull()?.coerceIn(0, 1_000_000) ?: 0
                 c.updateSettings { s ->
                     val pid = d.id ?: UUID.randomUUID().toString()
                     val existing = s.providers.find { it.id == pid }
                     val keyCipher = newCipher ?: existing?.apiKeyCipher ?: ""
-                    val list = s.providers.filterNot { it.id == pid } +
-                        ProviderConfig(pid, d.name.ifBlank { "模型服务" }, url, d.model.trim(), keyCipher)
+                    val list = s.providers.filterNot { it.id == pid } + ProviderConfig(
+                        id = pid,
+                        name = d.name.ifBlank { "模型服务" },
+                        baseUrl = url,
+                        model = d.model.trim(),
+                        apiKeyCipher = keyCipher,
+                        contextLength = ctxLen,
+                        maxTokens = maxTok
+                    )
                     s.copy(
                         providers = list,
                         activeProviderId = s.activeProviderId?.takeIf { aid -> list.any { it.id == aid } } ?: pid
@@ -420,6 +435,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
         if (c.llama.state.value is com.haoai.agent.platform.llama.LlamaState.Running) c.llama.stop()
     }
+
+    /** 端侧上下文窗口：过大在小内存设备会 OOM/预填充极慢，切换后下次启动生效。 */
+    fun setLocalContextLength(size: Int) {
+        val v = size.coerceIn(2048, 262_144)
+        c.updateSettings { it.copy(localContextLength = v) }
+        c.llama.contextSize = v
+    }
+
+    fun localContextLength(): Int = c.settingsFlow.value.localContextLength
 
     fun setCustomPrompt(text: String) {
         c.updateSettings { it.copy(customPrompt = text) }

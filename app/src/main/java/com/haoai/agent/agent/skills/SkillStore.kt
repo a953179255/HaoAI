@@ -34,6 +34,10 @@ object SkillStore {
         return if (d.path.startsWith(root.path + File.separator)) d else null
     }
 
+    // 技能索引缓存：promptIndex 每轮注入系统提示，不能每轮扫盘读全部 SKILL.md
+    @Volatile
+    private var cachedList: List<SkillMeta>? = null
+
     @Synchronized
     fun save(name: String, description: String, body: String): File {
         val safe = name.trim().replace(Regex("[^a-zA-Z0-9_\\-\\u4e00-\\u9fff]"), "-").take(40)
@@ -43,12 +47,14 @@ object SkillStore {
         val f = File(dir, safe).apply { mkdirs() }.let { File(it, "SKILL.md") }
         val front = "---\nname: $safe\ndescription: $descOneLine\n---\n"
         com.haoai.agent.data.HaoJson.writeAtomic(f, front + body.trim().take(8000))
+        cachedList = null
         return f
     }
 
     @Synchronized
-    fun list(): List<SkillMeta> =
-        dir.listFiles { f -> f.isDirectory }?.mapNotNull { d ->
+    fun list(): List<SkillMeta> {
+        cachedList?.let { return it }
+        val result = dir.listFiles { f -> f.isDirectory }?.mapNotNull { d ->
             val f = File(d, "SKILL.md")
             if (!f.exists()) return@mapNotNull null
             val text = runCatching { f.readText() }.getOrNull() ?: return@mapNotNull null
@@ -57,6 +63,9 @@ object SkillStore {
                 .find(text)?.groupValues?.get(1)?.trim() ?: ""
             SkillMeta(name, desc, f.lastModified())
         }?.sortedByDescending { it.updatedAt } ?: emptyList()
+        cachedList = result
+        return result
+    }
 
     @Synchronized
     fun view(name: String): String? {
@@ -71,7 +80,9 @@ object SkillStore {
     fun delete(name: String): Boolean {
         val d = resolve(name) ?: return false
         if (!d.isDirectory) return false
-        return d.deleteRecursively()
+        val ok = d.deleteRecursively()
+        if (ok) cachedList = null
+        return ok
     }
 
     /** 供系统提示词注入的索引（Level-0，省 token）。 */

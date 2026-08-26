@@ -91,7 +91,9 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     vm: ChatViewModel,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    onOpenSettings: () -> Unit
+    drawerState: androidx.compose.material3.DrawerState =
+        androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed),
+    onOpenSettings: (fromDrawer: Boolean) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -105,7 +107,6 @@ fun ChatScreen(
     var input by rememberSaveable { mutableStateOf("") }
     var pendingImage by rememberSaveable { mutableStateOf<String?>(null) }
 
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawerState.open() }
 
@@ -177,7 +178,7 @@ fun ChatScreen(
                     },
                     onSettings = {
                         scope.launch { drawerState.close() }
-                        onOpenSettings()
+                        onOpenSettings(true)
                     }
                 )
                 }

@@ -43,7 +43,11 @@ class KeepAliveService : Service() {
             this,
             NOTIFICATION_ID,
             notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            // Android 15+ 用 specialUse（dataSync 有 6 小时/日系统上限）；旧版本走 dataSync
+            if (android.os.Build.VERSION.SDK_INT >= 34)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            else
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         )
         return START_STICKY
     }

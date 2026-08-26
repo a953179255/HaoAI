@@ -24,14 +24,25 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
 
     private val file = File(appFilesDir, "memories.json")
 
-    @Synchronized
-    private fun load(): MemoryState =
-        HaoJson.readTextSafe(file)?.let { t ->
+    // 内存态为真源：promptSnippet 每轮注入系统提示，不能每次都读盘（会卡主线程）
+    @Volatile
+    private var state: MemoryState? = null
+
+    private fun stateOrNull(): MemoryState {
+        state?.let { return it }
+        val loaded = HaoJson.readTextSafe(file)?.let { t ->
             runCatching { HaoJson.json.decodeFromString(MemoryState.serializer(), t) }.getOrNull()
         } ?: MemoryState()
+        state = loaded
+        return loaded
+    }
+
+    @Synchronized
+    private fun load(): MemoryState = stateOrNull()
 
     @Synchronized
     private fun save(state: MemoryState) {
+        this.state = state
         runCatching {
             HaoJson.writeAtomic(file, HaoJson.json.encodeToString(MemoryState.serializer(), state))
         }
@@ -46,7 +57,10 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
     ): Memory {
         val text = content.trim()
         val state = load()
+        // 精确 + 归一化双重去重：自动提取的换述版本（标点/空白/大小写差异）不再重复入库
+        val norm = normalize(text)
         val existed = state.items.firstOrNull { it.content == text }
+            ?: state.items.firstOrNull { normalize(it.content) == norm && norm.isNotEmpty() }
         if (existed != null) {
             existed.lastUsedAt = System.currentTimeMillis()
             if (importance > existed.importance) existed.importance = importance.coerceIn(1, 5)

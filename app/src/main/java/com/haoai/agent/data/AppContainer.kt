@@ -38,6 +38,7 @@ class AppContainer(app: Application) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(300, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .addInterceptor(com.haoai.agent.platform.NetGuard.interceptor())
         .build()
 
     val client = OpenAiCompatClient(okHttpClient)
@@ -51,6 +52,7 @@ class AppContainer(app: Application) {
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
         llama.preferredModel = settingsFlow.value.localModelFile
+        llama.contextSize = settingsFlow.value.localContextLength
         syncWorkspaceDocs()
     }
 

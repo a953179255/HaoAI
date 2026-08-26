@@ -58,6 +58,9 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     var confirmClearJournal by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     var showAdd by remember { mutableStateOf(false) }
+
+    // 系统返回手势：回到设置根页，而不是把应用最小化
+    androidx.activity.compose.BackHandler { onBack() }
     val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA) }
 
     val prefN = vm.items.count { it.type == "preference" }

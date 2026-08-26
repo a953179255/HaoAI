@@ -130,20 +130,15 @@ fun SettingsScreen(
                         subtitle = run {
                             val p = settings.providers.find { it.id == settings.activeProviderId }
                                 ?: settings.providers.firstOrNull()
-                            if (p == null) "未配置云端服务" else "${p.name} · ${p.model}"
+                            val cloud = when {
+                                p == null -> "未配置云端服务"
+                                else -> "${p.name} · ${p.model}"
+                            }
+                            val local = vm.llamaModelFile()?.let { " · 端侧:$it" } ?: ""
+                            "$cloud$local"
                         },
                         tint = Color(0xFF5B8DEF),
                         onClick = { section = "brain" }
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Memory,
-                        title = "端侧推理",
-                        subtitle = "llama.cpp 本地运行 · ${vm.llamaModelFile() ?: "模型未下载"}",
-                        tint = Color(0xFF8B5CF6),
-                        onClick = { section = "local" }
                     )
                 }
                 item {
@@ -245,8 +240,10 @@ fun SettingsScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 40.dp)
                 ) {
                     when (section) {
-                        "brain" -> brainItems(vm, settings)
-                        "local" -> localItems(vm)
+                        "brain" -> {
+                            brainItems(vm, settings)
+                            localItems(vm)
+                        }
                         "privacy" -> privacyItems(vm, settings, context, a11yOn)
                         "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop)
                         "workspace" -> workspaceItems(vm) { treePicker.launch(null) }
@@ -347,7 +344,6 @@ private fun permissionLabel(mode: PermissionMode): String = when (mode) {
 
 private fun sectionTitle(section: String): String = when (section) {
     "brain" -> "模型大脑"
-    "local" -> "端侧推理"
     "privacy" -> "权限与自动化"
     "memory" -> "记忆与梦境"
     "workspace" -> "工作空间"
@@ -387,7 +383,9 @@ private fun LazyListScope.brainItems(vm: SettingsViewModel, settings: AppSetting
                         Column(Modifier.weight(1f)) {
                             Text(p.name, style = MaterialTheme.typography.titleSmall)
                             Text(
-                                "${p.model}\n${p.baseUrl}",
+                                "${p.model} · ctx ${p.effectiveContextLength() / 1024}K" +
+                                    (p.maxTokens.takeIf { it > 0 }?.let { " · max $it" } ?: "") +
+                                    "\n${p.baseUrl}",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -416,6 +414,7 @@ private fun LazyListScope.brainItems(vm: SettingsViewModel, settings: AppSetting
 }
 
 private fun LazyListScope.localItems(vm: SettingsViewModel) {
+    item { SectionTitle("端侧推理（llama.cpp 本地运行）") }
     item {
         val llama by vm.llamaState.collectAsState()
         val dl by vm.llamaDownload.collectAsState()
@@ -554,6 +553,23 @@ private fun LazyListScope.localItems(vm: SettingsViewModel) {
                             fontFamily = FontFamily.Monospace,
                             maxLines = 1
                         )
+                    }
+                }
+            }
+            Text(
+                "上下文窗口（Agent 工具流建议 ≥64K；过大增加内存占用，切换后下次启动生效）",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
+            )
+            val ctxOptions = listOf(16384, 32768, 65536, 131072, 262144)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                ctxOptions.forEachIndexed { i, n ->
+                    SegmentedButton(
+                        selected = vm.localContextLength() == n,
+                        onClick = { vm.setLocalContextLength(n) },
+                        shape = SegmentedButtonDefaults.itemShape(index = i, count = ctxOptions.size)
+                    ) {
+                        Text(if (n >= 1024) "${n / 1024}K" else "$n", maxLines = 1)
                     }
                 }
             }
@@ -1021,8 +1037,12 @@ private fun LazyListScope.aboutItems(vm: SettingsViewModel, settings: AppSetting
     }
     item {
         HorizontalDivider(Modifier.padding(vertical = 18.dp, horizontal = 16.dp))
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        val ver = runCatching {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+        }.getOrNull() ?: "dev"
         Text(
-            "HaoAI v0.11.0 · 云端大脑 + 端侧肌肉\n三层记忆 · 技能自进化 · 手机自动化 · 定时任务",
+            "HaoAI v$ver · 云端大脑 + 端侧肌肉\n三层记忆 · 技能自进化 · 手机自动化 · 定时任务",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp)
@@ -1148,6 +1168,26 @@ private fun ProviderDialog(
                     label = { Text(if (draft.id == null) "API Key" else "API Key（留空保持不变）") },
                     singleLine = true
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = draft.contextLength,
+                        onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
+                        label = { Text("上下文窗口") },
+                        placeholder = { Text("自动") },
+                        supportingText = { Text("0/留空=按模型推测") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = draft.maxTokens,
+                        onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
+                        label = { Text("回复上限") },
+                        placeholder = { Text("默认") },
+                        supportingText = { Text("建议 8192+") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 if (draftError != null) {
                     Text(
                         draftError,

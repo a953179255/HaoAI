@@ -103,6 +103,14 @@ class DailyJournal(
 
     private fun fileFor(date: String) = File(dir, "$date.md")
 
+    // 近几天日志缓存：promptSnippet 每轮注入系统提示，避免反复读盘解析
+    @Volatile
+    private var recentCache: Pair<Int, List<JournalDay>>? = null
+
+    private fun invalidateCache() {
+        recentCache = null
+    }
+
     private fun formatLine(time: String, importance: Int, source: String, content: String) =
         "- $time | imp=${importance.coerceIn(1, 5)} | src=${source.take(10)} | ${sanitize(content).take(300)}"
 
@@ -130,6 +138,7 @@ class DailyJournal(
         )
         f.appendText(formatLine(timeFmt.format(Date()), entry.importance, entry.source, text) + "\n")
         trimToMax(f, existing.size + 1)
+        invalidateCache()
         return entry
     }
 
@@ -182,16 +191,19 @@ class DailyJournal(
         )
     }
 
-    /** 近 n 天的日志，按日期倒序。 */
+    /** 近 n 天的日志，按日期倒序（带缓存，写入/清理时失效）。 */
     @Synchronized
     fun recent(days: Int = 2): List<JournalDay> {
+        recentCache?.let { (d, v) -> if (d == days) return v }
         if (!dir.exists()) return emptyList()
         val files = dir.listFiles { f -> f.name.endsWith(".md") } ?: return emptyList()
-        return files.mapNotNull { f ->
+        val result = files.mapNotNull { f ->
             val items = runCatching { parseFile(f) }.getOrDefault(emptyList())
             if (items.isEmpty()) null
             else JournalDay(f.name.removeSuffix(".md"), items.toMutableList())
         }.sortedByDescending { it.date }.take(days)
+        recentCache = days to result
+        return result
     }
 
     fun allDays(): List<JournalDay> = recent(Int.MAX_VALUE)
@@ -214,12 +226,14 @@ class DailyJournal(
                 f.delete()
             }
         }
+        if (removed > 0) invalidateCache()
         return removed
     }
 
     @Synchronized
     fun clear() {
         dir.listFiles()?.forEach { it.delete() }
+        invalidateCache()
     }
 
     /** 注入系统提示词：近 n 天动态摘要。 */

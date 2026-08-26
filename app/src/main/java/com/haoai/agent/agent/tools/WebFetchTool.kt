@@ -30,6 +30,7 @@ class WebFetchTool : Tool {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .followRedirects(true)
+            .addInterceptor(com.haoai.agent.platform.NetGuard.interceptor())
             .build()
     }
 
@@ -48,7 +49,8 @@ class WebFetchTool : Tool {
                 http.newCall(request).execute().use { resp ->
                     if (!resp.isSuccessful) return@withContext ToolResult("HTTP ${resp.code}", true)
                     val contentType = resp.header("Content-Type") ?: ""
-                    val body = resp.body?.string() ?: ""
+                    // 上限 2MB：resp.body.string() 会把整个响应读进内存，大文件直接 OOM
+                    val body = readCapped(resp, MAX_DOWNLOAD_BYTES)
                     if (contentType.contains("html", ignoreCase = true) || body.trimStart().startsWith("<")) {
                         val text = HtmlText.convert(body)
                         ToolResult("$url（HTTP ${resp.code}）\n\n${TextCap.middle(text, maxChars)}")
@@ -58,6 +60,27 @@ class WebFetchTool : Tool {
                 }
             }.getOrElse { ToolResult("抓取失败：${it.message}", true) }
         }
+
+    /** 最多读 limit 字节即停止，防止超大响应撑爆内存。 */
+    private fun readCapped(resp: okhttp3.Response, limit: Int): String {
+        val src = resp.body?.source() ?: return ""
+        val out = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(16 * 1024)
+        var total = 0
+        src.inputStream().use { ins ->
+            while (total < limit) {
+                val n = ins.read(chunk, 0, minOf(chunk.size, limit - total))
+                if (n < 0) break
+                out.write(chunk, 0, n)
+                total += n
+            }
+        }
+        return out.toString("UTF-8")
+    }
+
+    private companion object {
+        const val MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024
+    }
 }
 
 object HtmlText {

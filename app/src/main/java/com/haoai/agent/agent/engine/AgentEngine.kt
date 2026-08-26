@@ -67,7 +67,9 @@ class AgentEngine(
     private val identity: String = "",
     private val onUsage: (suspend (Long, Long) -> Unit)? = null,
     private val depth: Int = 0,
-    private val backgroundScope: CoroutineScope? = null
+    private val backgroundScope: CoroutineScope? = null,
+    /** 每轮动态求值：模型/上下文/token 用量等运行状态，注入系统提示让代理自感知。 */
+    private val runtimeInfoProvider: () -> String = { "" }
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -241,9 +243,19 @@ class AgentEngine(
 
     private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): Pair<String, Boolean> =
         try {
-            withTimeout(TOOL_TIMEOUT_MS) { tool.run(args, ctx) }.let { it.content to it.isError }
-        } catch (ce: CancellationException) {
-            throw ce
+            // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
+            withTimeout(TOOL_TIMEOUT_MS) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    tool.run(args, ctx)
+                }
+            }.let { it.content to it.isError }
+        } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+            // 区分「工具超时」与「用户停止」：超时只作废本次调用，不能静默杀掉整轮任务
+            if (ce is kotlinx.coroutines.TimeoutCancellationException) {
+                ("工具执行超时（${TOOL_TIMEOUT_MS / 1000}s），请拆小任务或加大 timeout 重试") to true
+            } else {
+                throw ce
+            }
         } catch (e: Exception) {
             ("工具执行失败：${e.message ?: e.javaClass.simpleName}") to true
         }
@@ -337,18 +349,22 @@ class AgentEngine(
         val bank = memoryBank ?: return
         val scope = backgroundScope ?: return
         if (!memoryEnabled || !autoLearn || depth != 0) return
-        val transcript = session.messages
+        val recent = session.messages
             .filter {
                 (it.role == ChatMessage.ROLE_USER || it.role == ChatMessage.ROLE_ASSISTANT) &&
                     it.content.isNotBlank()
             }
             .takeLast(8)
+        // 门槛：没有实质用户输入（纯指令/太短）就不值得沉淀，直接跳过
+        val userText = recent.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content.orEmpty()
+        if (userText.length < 12) return
+        val transcript = recent
             .joinToString("\n") { m ->
                 val who = if (m.role == ChatMessage.ROLE_USER) "用户" else "助手"
                 "$who：${m.content.take(500)}"
             }
             .trim()
-        if (transcript.length < 60) return
+        if (transcript.length < 80) return
         scope.launch {
             runCatching {
                 val buf = StringBuilder()
@@ -360,8 +376,8 @@ class AgentEngine(
                     ),
                     emptyList()
                 ).collect { ev -> if (ev is SseEvent.Delta) buf.append(ev.text) }
-                parseMemories(buf.toString()).take(5).forEach { (content, tags) ->
-                    bank.remember(content, tags)
+                parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
+                    bank.remember(content, tags, importance = 2)
                 }
             }
         }
@@ -394,7 +410,8 @@ class AgentEngine(
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
                 identity = identity,
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
-                journalBlock = journalSnippet()
+                journalBlock = journalSnippet(),
+                runtimeBlock = runtimeInfoProvider()
             )
 
         // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
@@ -574,9 +591,13 @@ class AgentEngine(
         const val HANDOFF_MARKER = "## 任务交接文档"
 
         val EXTRACT_SYSTEM = """
-            [MEMORY-EXTRACT] 你是记忆沉淀器。从对话中提取值得长期记住的稳定信息：用户身份/偏好、项目背景、重要决定。
-            忽略一次性任务细节与寒暄。只输出 JSON 数组，每项格式 {"content":"...","tags":["..."]}，最多 3 条；没有可提取内容时输出 []。
-            注意：宁缺毋滥，只提取真正长期有效的信息。
+            [MEMORY-EXTRACT] 你是记忆守门员。只提取满足全部条件的稳定信息：
+            1) 用户明确表达的长期偏好、身份信息（名字/职业/城市）、长期项目背景、重要约定或纠正你的教训；
+            2) 半年后仍然有效；
+            3) 不查资料就能复述价值。
+            严禁提取：本次任务的执行细节、代码/命令、临时状态、寒暄、你自己的回答内容、常识。
+            只输出 JSON 数组，每项 {"content":"...","tags":["..."]}，最多 2 条，每条一句话且自包含；
+            没有符合条件的内容必须输出 []。拿不准就不记——漏记一条无关紧要，记错会永久污染记忆库。
         """.trimIndent()
 
         val SUBAGENT_SYSTEM = """

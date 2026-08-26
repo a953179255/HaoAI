@@ -50,6 +50,7 @@ import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.settings.SettingsScreen
 import com.haoai.agent.ui.theme.HaoTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -147,6 +148,13 @@ private fun RootApp() {
     var screen by rememberSaveable { mutableIntStateOf(0) }
     val settings by container.settingsFlow.collectAsState()
 
+    // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
+    val drawerState = androidx.compose.material3.rememberDrawerState(
+        androidx.compose.material3.DrawerValue.Closed
+    )
+    val rootScope = androidx.compose.runtime.rememberCoroutineScope()
+    var cameFromDrawer by rememberSaveable { mutableStateOf(false) }
+
     Box(Modifier.fillMaxSize()) {
         if (wallpaper != null) {
             Image(
@@ -166,7 +174,14 @@ private fun RootApp() {
                 1 -> SettingsScreen(
                     vm = settingsVm,
                     backdrop = backdrop,
-                    onBack = { screen = 0 },
+                    onBack = {
+                        screen = 0
+                        // 从侧边栏进入设置的：返回时恢复侧边栏展开状态
+                        if (cameFromDrawer) {
+                            cameFromDrawer = false
+                            rootScope.launch { drawerState.open() }
+                        }
+                    },
                     onOpenMemories = { screen = 2 },
                     onOpenSchedules = { screen = 3 },
                     onOpenSkills = { screen = 5 }
@@ -174,7 +189,15 @@ private fun RootApp() {
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(backdrop = backdrop, onBack = { screen = 1 })
                 3 -> com.haoai.agent.ui.manage.ScheduleScreen(backdrop = backdrop, onBack = { screen = 1 })
                 5 -> com.haoai.agent.ui.manage.SkillsScreen(backdrop = backdrop, onBack = { screen = 1 })
-                else -> ChatScreen(vm = chatVm, backdrop = backdrop, onOpenSettings = { screen = 1 })
+                else -> ChatScreen(
+                    vm = chatVm,
+                    backdrop = backdrop,
+                    drawerState = drawerState,
+                    onOpenSettings = { fromDrawer ->
+                        cameFromDrawer = fromDrawer
+                        screen = 1
+                    }
+                )
             }
         }
     }

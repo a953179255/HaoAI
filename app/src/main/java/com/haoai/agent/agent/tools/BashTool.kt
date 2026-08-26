@@ -34,7 +34,10 @@ class BashTool : Tool {
                 ctx.appContext, command, ctx.shellDir?.absolutePath
             )
             val timeout = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 300_000).toLong()
-            val result = ShellRunner.exec(dir, command, timeout)
+            // 可中断执行：用户按停止时线程中断会传播进 waitFor，ShellRunner 据此杀掉子进程
+            val result = kotlinx.coroutines.runInterruptible {
+                ShellRunner.exec(dir, command, timeout)
+            }
             ToolResult("exit=${result.exitCode}\n---\n${TextCap.middle(result.output, 12_000)}")
         }
 }

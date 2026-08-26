@@ -36,6 +36,12 @@ object ScheduleStore {
     @Volatile
     private var file: File? = null
 
+    // 内存态为真源：UI/Worker/工具高频读写，磁盘写异步化（原子写保序）
+    @Volatile
+    private var mem: ScheduleState? = null
+
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
+
     fun init(appFilesDir: File) {
         file = File(appFilesDir, "schedules.json")
     }
@@ -44,17 +50,24 @@ object ScheduleStore {
         get() = file ?: throw IllegalStateException("ScheduleStore 未初始化（需先调用 init）")
 
     @Synchronized
-    fun load(): ScheduleState =
-        com.haoai.agent.data.HaoJson.readTextSafe(f)?.let { t ->
+    fun load(): ScheduleState {
+        mem?.let { return it }
+        val loaded = com.haoai.agent.data.HaoJson.readTextSafe(f)?.let { t ->
             runCatching {
                 HaoJson.json.decodeFromString(ScheduleState.serializer(), t)
             }.getOrNull()
         } ?: ScheduleState()
+        mem = loaded
+        return loaded
+    }
 
     @Synchronized
     fun save(state: ScheduleState) {
-        runCatching {
-            HaoJson.writeAtomic(f, HaoJson.json.encodeToString(ScheduleState.serializer(), state))
+        mem = state
+        io.execute {
+            runCatching {
+                HaoJson.writeAtomic(f, HaoJson.json.encodeToString(ScheduleState.serializer(), state))
+            }
         }
     }
 

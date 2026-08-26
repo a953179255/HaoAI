@@ -91,6 +91,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentSession = s
         c.sessionStore.save(s)
         liveTools.clear()
+        sessionIn = 0
+        sessionOut = 0
         _session.value = s
         rebuildRows()
         refreshSessions()
@@ -102,6 +104,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val s = c.sessionStore.load(id) ?: return
         currentSession = s
         liveTools.clear()
+        sessionIn = 0
+        sessionOut = 0
         _session.value = s
         rebuildRows()
     }
@@ -319,8 +323,31 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             appContext = c.appContext,
             identity = identity,
             onUsage = { pin, pout -> addUsage(pin, pout) },
-            backgroundScope = c.applicationScope
+            backgroundScope = c.applicationScope,
+            runtimeInfoProvider = { runtimeBlock(provider) }
         )
+    }
+
+    /** 注入系统提示的运行状态：模型/上下文/token 用量，代理由此能回答「今天消耗了多少」。 */
+    private fun runtimeBlock(provider: com.haoai.agent.data.ProviderConfig): String {
+        val st = c.settingsFlow.value
+        val isLocal = provider.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+            provider.baseUrl.contains("127.0.0.1")
+        val ctx = if (isLocal) st.localContextLength else provider.effectiveContextLength()
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
+        return buildString {
+            appendLine("## 运行状态（用户问模型/用量时据此回答）")
+            appendLine("- 当前模型：${provider.model}（${provider.name}${if (isLocal) " · 本地推理" else " · 云端"}）")
+            appendLine("- 上下文窗口：约 $ctx tokens（接近上限会触发 handoff 自动压缩）")
+            provider.effectiveMaxTokens().takeIf { it > 0 }?.let {
+                appendLine("- 单次回复上限：$it tokens")
+            }
+            appendLine("- 本会话累计：输入 $sessionIn + 输出 $sessionOut tokens")
+            if (st.tokenDay == today) {
+                appendLine("- 今日累计：输入 ${st.tokenInToday} + 输出 ${st.tokenOutToday} tokens")
+            }
+            appendLine("- 历史累计：输入 ${st.tokenInTotal} + 输出 ${st.tokenOutTotal} tokens")
+        }
     }
 
     private val _usage = kotlinx.coroutines.flow.MutableStateFlow(
@@ -328,11 +355,26 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     )
     val usage: kotlinx.coroutines.flow.StateFlow<Pair<Long, Long>> = _usage
 
+    private var sessionIn = 0L
+    private var sessionOut = 0L
+
     private fun addUsage(pin: Long, pout: Long) {
         val cur = _usage.value
         val next = (cur.first + pin) to (cur.second + pout)
         _usage.value = next
-        c.updateSettings { it.copy(tokenInTotal = next.first, tokenOutTotal = next.second) }
+        sessionIn += pin
+        sessionOut += pout
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
+        c.updateSettings { s ->
+            val sameDay = s.tokenDay == today
+            s.copy(
+                tokenInTotal = next.first,
+                tokenOutTotal = next.second,
+                tokenDay = today,
+                tokenInToday = (if (sameDay) s.tokenInToday else 0L) + pin,
+                tokenOutToday = (if (sameDay) s.tokenOutToday else 0L) + pout
+            )
+        }
     }
 
     fun agentName(): String =
