@@ -28,7 +28,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,6 +49,7 @@ import com.haoai.agent.ui.common.GlassPageBar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @Composable
 fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: () -> Unit) {
@@ -58,6 +61,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     var confirmClearJournal by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     var showAdd by remember { mutableStateOf(false) }
+    var clearCountdown by remember { mutableIntStateOf(0) }
 
     // 系统返回手势：回到设置根页，而不是把应用最小化
     androidx.activity.compose.BackHandler { onBack() }
@@ -149,17 +153,17 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 IconButton(onClick = {
                     if (!vm.consolidating) vm.consolidate { msg = it }
                 }) {
-                    Icon(Icons.Filled.AutoFixHigh, contentDescription = "固化")
+                    Icon(Icons.Filled.AutoFixHigh, contentDescription = "固化记忆（AI自动整理重要信息）")
                 }
                 if (vm.items.isNotEmpty()) {
                     IconButton(onClick = {
                         val n = vm.tidy()
                         msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
                     }) {
-                        Icon(Icons.Filled.Build, contentDescription = "整理")
+                        Icon(Icons.Filled.Build, contentDescription = "整理冗余记忆")
                     }
                     IconButton(onClick = { confirmClear = true }) {
-                        Icon(Icons.Filled.DeleteSweep, contentDescription = "清空长期记忆")
+                        Icon(Icons.Filled.DeleteSweep, contentDescription = "清空所有长期记忆")
                     }
                 }
             }
@@ -167,35 +171,59 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     }
 
     if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("清空记忆库") },
-            text = { Text("将删除全部 ${vm.items.size} 条长期记忆，此操作不可恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
+        LaunchedEffect(confirmClear) {
+            clearCountdown = 5
+            while (clearCountdown > 0) {
+                delay(1000)
+                clearCountdown--
+            }
+        }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "清空记忆库",
+            onDismiss = { confirmClear = false },
+            confirmLabel = if (clearCountdown > 0) "${clearCountdown}秒后可清空" else "清空",
+            onConfirm = {
+                if (clearCountdown <= 0) {
                     vm.clearAll()
                     confirmClear = false
-                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+                }
             },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } }
-        )
+            confirmEnabled = clearCountdown <= 0,
+            dismissLabel = "取消"
+        ) {
+            Text("将删除全部 ${vm.items.size} 条长期记忆，此操作不可恢复。")
+        }
     }
     if (confirmClearJournal) {
-        AlertDialog(
-            onDismissRequest = { confirmClearJournal = false },
-            title = { Text("清空每日日志") },
-            text = { Text("将删除全部 ${vm.journalCount()} 条近期动态（不影响长期记忆），此操作不可恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
+        var journalCountdown by remember { mutableIntStateOf(0) }
+        LaunchedEffect(confirmClearJournal) {
+            journalCountdown = 5
+            while (journalCountdown > 0) {
+                delay(1000)
+                journalCountdown--
+            }
+        }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "清空每日日志",
+            onDismiss = { confirmClearJournal = false },
+            confirmLabel = if (journalCountdown > 0) "${journalCountdown}秒后可清空" else "清空",
+            onConfirm = {
+                if (journalCountdown <= 0) {
                     vm.clearJournal()
                     confirmClearJournal = false
-                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+                }
             },
-            dismissButton = { TextButton(onClick = { confirmClearJournal = false }) { Text("取消") } }
-        )
+            confirmEnabled = journalCountdown <= 0,
+            dismissLabel = "取消"
+        ) {
+            Text("将删除全部 ${vm.journalCount()} 条近期动态（不影响长期记忆），此操作不可恢复。")
+        }
     }
     if (showAdd) {
         ManualAddDialog(
+            backdrop = backdrop,
             onAdd = { content, type, importance ->
                 vm.addManual(content, type, importance)
                 showAdd = false
@@ -208,6 +236,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
 
 @Composable
 private fun ManualAddDialog(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onAdd: (String, String, Int) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -215,47 +244,44 @@ private fun ManualAddDialog(
     var type by remember { mutableStateOf("fact") }
     var importance by remember { mutableStateOf(3) }
     val types = listOf("preference" to "偏好", "fact" to "事实", "decision" to "决定", "event" to "事件")
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("手动添加长期记忆") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                androidx.compose.material3.OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text("内容（一句话）") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    types.forEach { (t, label) ->
-                        androidx.compose.material3.FilterChip(
-                            selected = type == t,
-                            onClick = { type = t },
-                            label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("重要度：$importance", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { if (importance > 1) importance-- }) {
-                        Icon(Icons.Filled.Remove, contentDescription = "降低")
-                    }
-                    IconButton(onClick = { if (importance < 5) importance++ }) {
-                        Icon(Icons.Filled.Add, contentDescription = "提高")
-                    }
+    com.haoai.agent.ui.common.GlassAlertDialog(
+        backdrop = backdrop,
+        title = "手动添加长期记忆",
+        onDismiss = onDismiss,
+        confirmLabel = "添加",
+        onConfirm = { onAdd(content, type, importance) },
+        confirmEnabled = content.isNotBlank(),
+        dismissLabel = "取消"
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            androidx.compose.material3.OutlinedTextField(
+                value = content,
+                onValueChange = { content = it },
+                label = { Text("内容（一句话）") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                types.forEach { (t, label) ->
+                    androidx.compose.material3.FilterChip(
+                        selected = type == t,
+                        onClick = { type = t },
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                    )
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onAdd(content, type, importance) },
-                enabled = content.isNotBlank()
-            ) { Text("添加") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("重要度：$importance", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { if (importance > 1) importance-- }) {
+                    Icon(Icons.Filled.Remove, contentDescription = "降低")
+                }
+                IconButton(onClick = { if (importance < 5) importance++ }) {
+                    Icon(Icons.Filled.Add, contentDescription = "提高")
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -296,6 +322,24 @@ private fun JournalDayCard(day: JournalDay, backdrop: com.kyant.backdrop.backdro
 
 @Composable
 private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    
+    if (showDeleteConfirm) {
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "删除记忆",
+            onDismiss = { showDeleteConfirm = false },
+            confirmLabel = "删除",
+            onConfirm = {
+                onDelete()
+                showDeleteConfirm = false
+            },
+            dismissLabel = "取消"
+        ) {
+            Text("确认删除此条记忆？此操作不可恢复。")
+        }
+    }
+    
     GlassCard(
         onClick = {},
         backdrop = backdrop,
@@ -332,7 +376,7 @@ private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit, b
                     )
                 }
             }
-            IconButton(onClick = onDelete) {
+            IconButton(onClick = { showDeleteConfirm = true }) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "删除",

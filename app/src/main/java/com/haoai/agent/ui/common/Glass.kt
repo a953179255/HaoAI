@@ -558,7 +558,7 @@ fun GlassAlertDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.32f))
+            .background(Color.Black.copy(alpha = 0.55f))
             .clickable(interactionSource = null, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.Center
     ) {
@@ -568,7 +568,7 @@ fun GlassAlertDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            surfaceAlpha = 0.34f
+            surfaceAlpha = 0.45f
         ) {
             Column(
                 Modifier

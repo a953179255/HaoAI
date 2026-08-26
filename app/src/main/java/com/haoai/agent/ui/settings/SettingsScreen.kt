@@ -376,7 +376,7 @@ private fun LazyListScope.brainItems(
 ) {
     item { SectionTitle("云端模型服务") }
     item {
-        val ps = settings.providers
+        val ps = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
         val activeId = settings.activeProviderId
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GlassGroup(backdrop) {
@@ -509,14 +509,9 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                                     text = "启动服务",
                                     enabled = vm.llamaModelFile() != null,
                                     emphasized = true
-                                ) { vm.startLlama { } }
+                                ) { vm.startLlama { vm.useLocalModel() } }
                             }
                         }
-                        LiquidPillButton(
-                            backdrop = backdrop,
-                            text = "使用端侧模型",
-                            emphasized = false
-                        ) { vm.useLocalModel() }
                     }
                 }
             }
@@ -642,7 +637,7 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                 }
             }
             Text(
-                "上下文窗口（Agent 工具流建议 ≥64K；过大增加内存占用，切换后下次启动生效）",
+                "本地模型上下文窗口（Agent 工具流建议 ≥64K；过大增加内存占用，切换后下次启动生效）",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
             )

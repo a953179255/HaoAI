@@ -939,7 +939,7 @@ private fun SessionsDrawer(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(top = 30.dp)
+            .padding(top = 8.dp)
     ) {
         Row(
             Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
