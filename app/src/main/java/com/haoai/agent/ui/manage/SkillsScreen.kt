@@ -1,5 +1,7 @@
 package com.haoai.agent.ui.manage
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -93,13 +95,38 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                     onClick = {},
                     backdrop = backdrop,
                     shape = RoundedCornerShape(16.dp),
-                    surfaceAlpha = 0.22f,
+                    surfaceAlpha = if (s.archived) 0.10f else 0.22f,
                     lensRadius = 16.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
                         Column(Modifier.weight(1f)) {
-                            Text(s.name, style = MaterialTheme.typography.titleSmall)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(s.name, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.padding(2.dp))
+                                if (s.archived) {
+                                    Text(
+                                        "已归档 · 闲置90天",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .padding(start = 6.dp)
+                                            .background(
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
+                                                RoundedCornerShape(6.dp)
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                                    )
+                                }
+                                if (s.pinned) {
+                                    Text(
+                                        "置顶",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(start = 6.dp)
+                                    )
+                                }
+                            }
                             Text(
                                 s.description.ifBlank { "（无描述）" },
                                 style = MaterialTheme.typography.labelSmall,
@@ -107,11 +134,16 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                                 maxLines = 2
                             )
                             Text(
-                                fmt.format(java.util.Date(s.updatedAt)),
+                                "使用 ${s.useCount} 次 · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
+                                    " · 来源 ${if (s.source == "agent") "自进化" else "手动"}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        TextButton(onClick = {
+                            store.setPinned(s.name, !s.pinned)
+                            refresh()
+                        }) { Text(if (s.pinned) "取消置顶" else "置顶") }
                         TextButton(onClick = {
                             viewBody = s.name to (store.view(s.name) ?: "")
                         }) { Text("查看") }

@@ -155,6 +155,9 @@ private fun RootApp() {
     val rootScope = androidx.compose.runtime.rememberCoroutineScope()
     var cameFromDrawer by rememberSaveable { mutableStateOf(false) }
 
+    // 设置二级页状态提升：从设置子页进入管理页（记忆库等）后，返回时回到原子页而非设置根
+    var settingsSection by rememberSaveable { mutableStateOf("") }
+
     Box(Modifier.fillMaxSize()) {
         if (wallpaper != null) {
             Image(
@@ -174,6 +177,8 @@ private fun RootApp() {
                 1 -> SettingsScreen(
                     vm = settingsVm,
                     backdrop = backdrop,
+                    initialSection = settingsSection,
+                    onSectionChange = { settingsSection = it },
                     onBack = {
                         screen = 0
                         // 从侧边栏进入设置的：返回时恢复侧边栏展开状态

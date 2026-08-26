@@ -68,6 +68,37 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var modelChoices by mutableStateOf<List<String>?>(null)
         private set
 
+    var detectingCaps by mutableStateOf(false)
+        private set
+
+    var detectResult by mutableStateOf<Pair<Boolean, String>?>(null)
+        private set
+
+    /** 云端模型能力自动检测（上游 同款目录数据源，含上下文/输出上限/多模态）。 */
+    fun detectCapabilities() {
+        val d = draft ?: return
+        if (d.baseUrl.isBlank() || d.model.isBlank()) {
+            draftError = "请先填写 Base URL 和模型 ID 再检测"
+            return
+        }
+        detectingCaps = true
+        detectResult = null
+        viewModelScope.launch {
+            val r = com.haoai.agent.data.ModelCatalog.lookup(c.okHttpClient, d.baseUrl.trim(), d.model.trim())
+            detectingCaps = false
+            r.fold(
+                onSuccess = { caps ->
+                    draft = draft?.copy(
+                        contextLength = if (caps.contextWindow > 0) caps.contextWindow.toString() else draft?.contextLength ?: "",
+                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.coerceAtMost(1_000_000).toString() else draft?.maxTokens ?: ""
+                    )
+                    detectResult = true to "✓ ${caps.describe()}"
+                },
+                onFailure = { detectResult = false to "✗ ${it.message ?: "检测失败"}（可手动填写）" }
+            )
+        }
+    }
+
     /** 拉取该供应商的可用模型列表（OpenAI 兼容 GET /models）。 */
     fun fetchModelList() {
         val d = draft ?: return
@@ -109,6 +140,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         draftError = null
         testResult = null
         modelChoices = null
+        detectResult = null
     }
 
     fun editProvider(p: ProviderConfig) {
@@ -337,6 +369,50 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             delay(4000)
             withContext(Dispatchers.Main) { if (importingModel?.startsWith("已导入") == true || importingModel?.startsWith("导入失败") == true) finish(null) }
         }
+    }
+
+    // ---- 端侧模型：免拷贝直读手机上已有的 GGUF ----
+
+    var scannedDeviceModels by mutableStateOf<List<java.io.File>?>(null)
+        private set
+
+    var scanningModels by mutableStateOf(false)
+        private set
+
+    fun scanDeviceModels() {
+        if (scanningModels) return
+        scanningModels = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { c.llama.scanDeviceModels() }
+            scanningModels = false
+            scannedDeviceModels = r.getOrDefault(emptyList())
+        }
+    }
+
+    fun clearDeviceScan() {
+        scannedDeviceModels = null
+    }
+
+    /** 直接引用手机上的模型文件（不复制），下次启动端侧服务生效。 */
+    fun useDeviceModel(path: String) {
+        viewModelScope.launch {
+            c.updateSettings { it.copy(localModelFile = path) }
+            c.llama.preferredModel = path
+            val display = java.io.File(path).name
+            c.updateSettings { s ->
+                s.copy(providers = s.providers.map {
+                    if (it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
+                        it.copy(model = display) else it
+                })
+            }
+            if (c.llama.state.value is com.haoai.agent.platform.llama.LlamaState.Running) c.llama.stop()
+        }
+    }
+
+    /** 当前选中的本地模型显示名（兼容应用目录内文件名与绝对路径两种形式）。 */
+    fun currentLocalModelLabel(): String? {
+        val pref = c.settingsFlow.value.localModelFile ?: return c.llama.findModel()?.name
+        return if (pref.startsWith("/")) java.io.File(pref).name + "（原路径直读）" else pref
     }
 
     // ---- 聊天背景壁纸 ----

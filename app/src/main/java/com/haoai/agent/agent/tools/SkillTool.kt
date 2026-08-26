@@ -37,7 +37,7 @@ class SkillTool(private val store: SkillStore) : Tool {
                 if (desc.isEmpty()) return ToolResult("save 需要 description（一句话说明该技能何时有用）", true)
                 val content = args.optString("content").trim()
                 if (content.isEmpty()) return ToolResult("save 需要 content（技能正文）", true)
-                store.save(name, desc, content)
+                store.save(name, desc, content, source = "agent")
                 ToolResult("技能「$name」已保存。下次遇到同类任务可直接 view 复用。")
             }
             "view" -> {

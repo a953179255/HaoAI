@@ -51,7 +51,15 @@ class MemoryTool : Tool {
                 val type = args.optString("type", "fact")
                 val importance = args.optInt("importance") ?: 3
                 val m = bank.remember(content, tags, type, importance)
-                ToolResult("已记住（id=${m.id}，共 ${bank.count()} 条记忆）。注意：只沉淀长期有效的信息，勿记琐碎内容。")
+                if (m == null) {
+                    ToolResult(
+                        "记忆库已满（${bank.count()}/${bank.capacity()} 条）且没有低价值条目可自动清理。" +
+                            "请先调用 forget 删除过时/低价值条目，或用更精炼的表述合并相似记忆后重试。",
+                        true
+                    )
+                } else {
+                    ToolResult("已记住（id=${m.id}，共 ${bank.count()} 条记忆）。注意：只沉淀长期有效的信息，勿记琐碎内容。")
+                }
             }
 
             "journal" -> {

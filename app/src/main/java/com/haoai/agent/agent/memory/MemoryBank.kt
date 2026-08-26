@@ -48,13 +48,17 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
         }
     }
 
+    /**
+     * 写入长期记忆。返回写入/命中的条目；返回 null 表示记忆库已满且无低价值条目可驱逐
+     * （上游 式：把整理责任交还模型，由其 forget/合并后再写）。
+     */
     @Synchronized
     fun remember(
         content: String,
         tags: List<String> = emptyList(),
         type: String = "fact",
         importance: Int = 3
-    ): Memory {
+    ): Memory? {
         val text = content.trim()
         val state = load()
         // 精确 + 归一化双重去重：自动提取的换述版本（标点/空白/大小写差异）不再重复入库
@@ -67,6 +71,18 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
             save(state)
             return existed
         }
+        // 预算控制：只静默驱逐「低价值且长期未用」的条目，其余情况拒绝写入并提示整理
+        while (state.items.size >= maxItems) {
+            val now = System.currentTimeMillis()
+            val victim = state.items
+                .filter {
+                    it.importance <= 2 &&
+                        (now - (if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt)) > 60L * 86_400_000
+                }
+                .minByOrNull { it.importance } ?: break
+            state.items.remove(victim)
+        }
+        if (state.items.size >= maxItems) return null
         val m = Memory(
             id = UUID.randomUUID().toString().take(8),
             content = text.take(500),
@@ -75,16 +91,11 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
             importance = importance.coerceIn(1, 5)
         )
         state.items.add(m)
-        while (state.items.size > maxItems) {
-            // 先按重要性、再按最久未用驱逐（时间戳量级远大于 importance，不能加权相加）
-            state.items.minWithOrNull(
-                compareBy<Memory> { it.importance }
-                    .thenBy { if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt }
-            )?.let { state.items.remove(it) } ?: break
-        }
         save(state)
         return m
     }
+
+    fun capacity(): Int = maxItems
 
     @Synchronized
     fun search(query: String, k: Int = 5): List<Memory> {

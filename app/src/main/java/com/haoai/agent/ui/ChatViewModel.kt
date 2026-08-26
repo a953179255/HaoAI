@@ -289,6 +289,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 opt("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             "spawn_agent" -> opt("task").take(60)
             "spawn_agents" -> "${(args["tasks"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0} 个并行子任务"
+            "app_status" -> "读取运行状态"
+            "update_settings" -> "修改设置"
             else -> argsJson.take(60)
         }
     }
@@ -324,30 +326,104 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             identity = identity,
             onUsage = { pin, pout -> addUsage(pin, pout) },
             backgroundScope = c.applicationScope,
-            runtimeInfoProvider = { runtimeBlock(provider) }
+            statusProvider = { buildStatusText() },
+            configMutator = { applyConfigPatch(it) }
         )
     }
 
-    /** 注入系统提示的运行状态：模型/上下文/token 用量，代理由此能回答「今天消耗了多少」。 */
-    private fun runtimeBlock(provider: com.haoai.agent.data.ProviderConfig): String {
+    /**
+     * 自身运行状态全文（上游 session_status 式）：由 app_status 工具按需读取，
+     * 不再每轮注入系统提示——省 token，数据仍然实时。
+     */
+    private fun buildStatusText(): String {
         val st = c.settingsFlow.value
-        val isLocal = provider.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-            provider.baseUrl.contains("127.0.0.1")
-        val ctx = if (isLocal) st.localContextLength else provider.effectiveContextLength()
+        val p = st.providers.find { it.id == st.activeProviderId } ?: st.providers.firstOrNull()
+        val isLocal = p?.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+            p?.baseUrl?.contains("127.0.0.1") == true
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
+        val ver = runCatching {
+            c.appContext.packageManager.getPackageInfo(c.appContext.packageName, 0).versionName
+        }.getOrNull() ?: "dev"
         return buildString {
-            appendLine("## 运行状态（用户问模型/用量时据此回答）")
-            appendLine("- 当前模型：${provider.model}（${provider.name}${if (isLocal) " · 本地推理" else " · 云端"}）")
-            appendLine("- 上下文窗口：约 $ctx tokens（接近上限会触发 handoff 自动压缩）")
-            provider.effectiveMaxTokens().takeIf { it > 0 }?.let {
-                appendLine("- 单次回复上限：$it tokens")
+            appendLine("应用：HaoAI v$ver（Android ${android.os.Build.VERSION.RELEASE}）")
+            if (p == null) {
+                appendLine("当前模型：未配置")
+            } else {
+                appendLine("当前模型：${p.model}（${p.name}${if (isLocal) " · 端侧本地推理" else " · 云端"}）")
+                appendLine("上下文窗口：约 ${if (isLocal) st.localContextLength else p.effectiveContextLength()} tokens")
+                val maxTok = if (isLocal) 4096 else p.effectiveMaxTokens()
+                appendLine("单次回复上限：${if (maxTok > 0) "$maxTok tokens" else "供应商默认"}")
             }
-            appendLine("- 本会话累计：输入 $sessionIn + 输出 $sessionOut tokens")
-            if (st.tokenDay == today) {
-                appendLine("- 今日累计：输入 ${st.tokenInToday} + 输出 ${st.tokenOutToday} tokens")
+            appendLine("本会话 token：输入 $sessionIn + 输出 $sessionOut")
+            appendLine(
+                if (st.tokenDay == today) "今日 token（$today）：输入 ${st.tokenInToday} + 输出 ${st.tokenOutToday}"
+                else "今日 token：今天还没有消耗（统计日期 ${st.tokenDay.ifBlank { "无" }}）"
+            )
+            appendLine("历史累计 token：输入 ${st.tokenInTotal} + 输出 ${st.tokenOutTotal}")
+            appendLine("长期记忆：${c.memoryBank.count()} 条 · 今日日志：${c.journal.count()} 条 · 技能：${com.haoai.agent.agent.skills.SkillStore.list().size} 个")
+            val llamaState = c.llama.state.value
+            appendLine(
+                "端侧推理：" + when (llamaState) {
+                    is com.haoai.agent.platform.llama.LlamaState.Running -> "运行中（${llamaState.modelFile}）"
+                    is com.haoai.agent.platform.llama.LlamaState.Starting -> "启动中"
+                    is com.haoai.agent.platform.llama.LlamaState.Failed -> "上次失败"
+                    else -> "已停止"
+                }
+            )
+        }.trimEnd()
+    }
+
+    /** update_settings 白名单落地；返回给模型的结果文本。 */
+    private fun applyConfigPatch(args: kotlinx.serialization.json.JsonObject): String {
+        fun intArg(key: String): Int? =
+            (args[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()?.toIntOrNull()
+        fun boolArg(key: String): Boolean? =
+            (args[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()?.toBooleanStrictOrNull()
+
+        val applied = mutableListOf<String>()
+        var localCtx: Int? = null
+        c.updateSettings { s ->
+            var next = s
+            val pid = s.activeProviderId ?: s.providers.firstOrNull()?.id
+            intArg("reply_max_tokens")?.let { v ->
+                next = next.copy(providers = next.providers.map {
+                    if (it.id == pid && it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
+                        it.copy(maxTokens = v.coerceIn(256, 1_000_000)) else it
+                })
+                applied.add("单次回复上限=${v.coerceIn(256, 1_000_000)}")
             }
-            appendLine("- 历史累计：输入 ${st.tokenInTotal} + 输出 ${st.tokenOutTotal} tokens")
+            intArg("context_length")?.let { v ->
+                next = next.copy(providers = next.providers.map {
+                    if (it.id == pid && it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
+                        it.copy(contextLength = v.coerceIn(1024, 10_000_000)) else it
+                })
+                applied.add("云端上下文窗口=${v.coerceIn(1024, 10_000_000)}")
+            }
+            intArg("local_context_length")?.let { v ->
+                val n = v.coerceIn(2048, 262_144)
+                next = next.copy(localContextLength = n)
+                localCtx = n
+                applied.add("端侧上下文窗口=$n（重启端侧服务生效）")
+            }
+            boolArg("memory_enabled")?.let { v ->
+                next = next.copy(memoryEnabled = v)
+                applied.add("记忆系统=${if (v) "开" else "关"}")
+            }
+            boolArg("auto_learn")?.let { v ->
+                next = next.copy(autoLearn = v)
+                applied.add("自动学习=${if (v) "开" else "关"}")
+            }
+            boolArg("deep_dream")?.let { v ->
+                next = next.copy(deepDream = v)
+                applied.add("闲置整理记忆=${if (v) "开" else "关"}")
+            }
+            next
         }
+        localCtx?.let { c.llama.contextSize = it }
+        return if (applied.isEmpty())
+            "没有任何字段被修改。支持的字段：reply_max_tokens / context_length / local_context_length / memory_enabled / auto_learn / deep_dream"
+        else
+            "已生效（用户已批准）：${applied.joinToString("；")}。可用 app_status 验证。"
     }
 
     private val _usage = kotlinx.coroutines.flow.MutableStateFlow(

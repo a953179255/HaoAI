@@ -20,7 +20,11 @@ data class ToolContext(
     val journal: DailyJournal? = null,
     val depth: Int = 0,
     val httpClient: okhttp3.OkHttpClient? = null,
-    val appContext: android.content.Context? = null
+    val appContext: android.content.Context? = null,
+    /** 动态渲染自身运行状态（app_status 工具数据源），由 VM 层注入。 */
+    val statusProvider: (() -> String)? = null,
+    /** 白名单设置修改（update_settings 工具），由 VM 层注入。 */
+    val configMutator: ((kotlinx.serialization.json.JsonObject) -> String)? = null
 )
 
 data class ToolResult(val content: String, val isError: Boolean = false)

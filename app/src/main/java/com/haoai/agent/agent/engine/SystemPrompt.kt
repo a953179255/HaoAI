@@ -11,6 +11,7 @@ object SystemPrompt {
 - 需要用户澄清时直接提问；涉及不可逆操作前说明后果。
 - 任务完成或确认无法继续时，立即给出最终回答，不要空转循环。
 - 记忆纪律：长期有效的偏好/事实/决定/事件用 memory.save 沉淀；当天的重要进展与事件用 memory(action=journal) 记入每日日志；闲聊和一次性细节不记。回答前先看注入的「长期记忆」与「近期动态」。
+- 自我状态：被问到自己的模型、上下文窗口、token 消耗、记忆数量等问题时，调用 app_status 工具读取真实数据后回答，不要编造；用户要求调整回复上限、上下文窗口等设置时用 update_settings（会弹窗请用户确认）。
 - 操作手机 UI 的标准循环：screen 拿编号列表 → tap(index=编号) 点击 → 界面可能加载，先 wait(mode=text 等目标文案出现) 或 wait(mode=idle) 等稳定 → 再 screen 确认。列表里找东西用 find(text=目标)，翻页滚动用 scroll(direction=…)。index 在每次 screen 后刷新，界面变了必须重新 screen。
 
 回答规范：
@@ -27,8 +28,7 @@ object SystemPrompt {
         a11yAvailable: Boolean = false,
         identity: String = "",
         skillIndex: String = "",
-        journalBlock: String = "",
-        runtimeBlock: String = ""
+        journalBlock: String = ""
     ): String = buildString {
         if (identity.isNotBlank()) {
             appendLine()
@@ -52,10 +52,6 @@ object SystemPrompt {
             else "- 无障碍自动化：未启用（工具会提示用户开启）"
         )
         appendLine("- 定时任务：可用（schedule 工具，spec 如 every:30m / daily:09:30）")
-        if (runtimeBlock.isNotBlank()) {
-            appendLine()
-            appendLine(runtimeBlock.trim())
-        }
         if (memoryBlock.isNotBlank()) {
             appendLine()
             appendLine(memoryBlock)

@@ -64,10 +64,16 @@ class LlamaServerController(
     private fun internalModelsDir(): File = File(context.filesDir, "models")
 
     fun findModel(): File? {
-        val all = listModels()
-        if (all.isEmpty()) return null
-        val preferred = preferredModel?.let { name -> all.find { it.name == name } }
-        return preferred ?: all.maxByOrNull { it.length() }
+        // 支持免拷贝直读：preferredModel 可以是手机上任意位置的绝对路径
+        preferredModel?.let { pref ->
+            if (pref.startsWith("/")) {
+                val f = File(pref)
+                if (f.exists() && f.length() > 1_000_000 && !isMmprojFile(f)) return f
+            } else {
+                listModels().firstOrNull { it.name == pref }?.let { return it }
+            }
+        }
+        return listModels().maxByOrNull { it.length() }
     }
 
     fun listModels(): List<File> {
@@ -75,6 +81,38 @@ class LlamaServerController(
         val internal = internalModelsDir().listFiles { f -> f.name.endsWith(".gguf") }?.toList() ?: emptyList()
         return (external + internal)
             .filter { it.length() > 1_000_000 && !isMmprojFile(it) }
+            .sortedByDescending { it.length() }
+    }
+
+    /**
+     * 扫描手机公共目录里已有的 GGUF 模型（Download/Documents/models 及存储根目录，
+     * 含一级子目录），供「免拷贝直读」选择——不再复制一份浪费空间。
+     * 需要已授予「所有文件访问」；未授权时返回空列表。
+     */
+    fun scanDeviceModels(): List<File> {
+        val roots = listOfNotNull(
+            java.io.File("/storage/emulated/0"),
+            java.io.File("/storage/emulated/0/Download"),
+            java.io.File("/storage/emulated/0/Documents"),
+            java.io.File("/storage/emulated/0/models"),
+            java.io.File("/storage/emulated/0/Models")
+        ).distinctBy { it.absolutePath }
+        val own = listOf(modelsDir().absolutePath, internalModelsDir().absolutePath)
+        val out = LinkedHashSet<File>()
+        for (r in roots) {
+            runCatching {
+                if (!r.isDirectory) return@runCatching
+                r.listFiles { f -> f.isFile && f.name.endsWith(".gguf", true) }
+                    ?.filter { it.length() > 50_000_000 }
+                    ?.let { out.addAll(it) }
+                r.listFiles { f -> f.isDirectory }?.take(30)?.forEach { sub ->
+                    sub.listFiles { f -> f.isFile && f.name.endsWith(".gguf", true) }
+                        ?.filter { it.length() > 50_000_000 }
+                        ?.let { out.addAll(it) }
+                }
+            }
+        }
+        return out.filter { f -> own.none { prefix -> f.absolutePath.startsWith(prefix) } }
             .sortedByDescending { it.length() }
     }
 

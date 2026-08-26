@@ -68,8 +68,10 @@ class AgentEngine(
     private val onUsage: (suspend (Long, Long) -> Unit)? = null,
     private val depth: Int = 0,
     private val backgroundScope: CoroutineScope? = null,
-    /** 每轮动态求值：模型/上下文/token 用量等运行状态，注入系统提示让代理自感知。 */
-    private val runtimeInfoProvider: () -> String = { "" }
+    /** 动态渲染自身运行状态（app_status 工具按需读取，不注入系统提示）。 */
+    private val statusProvider: () -> String = { "" },
+    /** 白名单设置修改（update_settings 工具，走用户审批）。 */
+    private val configMutator: (JsonObject) -> String = { "设置修改不可用" }
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -93,7 +95,9 @@ class AgentEngine(
             ?: File(appFilesDir, "shell-home").apply { mkdirs() }
         val ctx = ToolContext(
             backend, shellDir, todoStore, appFilesDir,
-            memoryBank, journal, depth, okHttpClient, appContext
+            memoryBank, journal, depth, okHttpClient, appContext,
+            statusProvider = statusProvider,
+            configMutator = configMutator
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx -> runSubAgent(task, parentCtx) } else null
@@ -207,7 +211,8 @@ class AgentEngine(
                 finalState = ToolRunState.DENIED
             }
 
-            policy.requiresApproval(call.name) -> {
+            // update_settings 属于配置写操作：无论权限模式如何都必须经用户批准（上游 提案式）
+            policy.requiresApproval(call.name) || call.name == "update_settings" -> {
                 val request = buildApprovalRequest(call, args)
                 val granted = approve(request)
                 if (!granted) {
@@ -264,8 +269,9 @@ class AgentEngine(
         val childCtx = ToolContext(
             parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
             parentCtx.appFilesDir, parentCtx.memoryBank, parentCtx.journal, parentCtx.depth + 1,
-            parentCtx.httpClient, parentCtx.appContext
-        )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位
+            parentCtx.httpClient, parentCtx.appContext,
+            statusProvider = parentCtx.statusProvider
+        )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位与设置修改
         val tools = ToolRegistry.readOnly(childCtx)
         val apiTools = tools.map { it.toApi() }
 
@@ -410,8 +416,7 @@ class AgentEngine(
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
                 identity = identity,
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
-                journalBlock = journalSnippet(),
-                runtimeBlock = runtimeInfoProvider()
+                journalBlock = journalSnippet()
             )
 
         // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
@@ -536,8 +541,31 @@ class AgentEngine(
                 args.optString("path"),
                 "- ${args.optString("old_string").take(300)}\n+ ${args.optString("new_string").take(300)}"
             )
+            "update_settings" -> ApprovalRequest.Generic(
+                "update_settings",
+                settingsChangeSummary(args)
+            )
             else -> ApprovalRequest.Generic(call.name, args.toString().take(400))
         }
+
+    /** 把 update_settings 的参数翻译成人可读的变更清单，供审批弹窗展示。 */
+    private fun settingsChangeSummary(args: JsonObject): String {
+        val labels = mapOf(
+            "reply_max_tokens" to "单次回复上限",
+            "context_length" to "云端上下文窗口",
+            "local_context_length" to "端侧上下文窗口",
+            "memory_enabled" to "记忆系统",
+            "auto_learn" to "自动学习",
+            "deep_dream" to "闲置整理记忆"
+        )
+        return args.entries.joinToString("\n") { (k, v) ->
+            val label = labels[k] ?: k
+            when (v) {
+                is kotlinx.serialization.json.JsonPrimitive -> "$label → ${v.content}"
+                else -> "$label → $v"
+            }
+        }.ifBlank { "无变更" }.take(400)
+    }
 
     private fun briefOf(call: ToolCallData): String {
         val args = parseArgs(call.argumentsJson)
@@ -570,6 +598,8 @@ class AgentEngine(
                 args.optString("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             "spawn_agent" -> args.optString("task").take(60)
             "spawn_agents" -> "${(args["tasks"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0} 个并行子任务"
+            "app_status" -> "读取运行状态"
+            "update_settings" -> settingsChangeSummary(args).lineSequence().firstOrNull() ?: "修改设置"
             "camera" -> "拍照"
             "location" -> "获取当前位置"
             else -> ""

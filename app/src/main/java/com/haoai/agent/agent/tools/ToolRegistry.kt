@@ -29,6 +29,8 @@ object ToolRegistry {
         add(ListAppsTool())
         add(ScheduleTool(ctx.appFilesDir))
         add(SkillTool(com.haoai.agent.agent.skills.SkillStore))
+        add(AppStatusTool(ctx.statusProvider))
+        add(UpdateSettingsTool(ctx.configMutator))
         add(CameraTool())
         add(LocationTool())
         if (ctx.httpClient != null) add(WebSearchTool())
@@ -43,7 +45,8 @@ object ToolRegistry {
         GrepTool(),
         GlobTool(),
         WebFetchTool(),
-        MemoryTool()
+        MemoryTool(),
+        AppStatusTool(ctx.statusProvider)
     ) + listOfNotNull(ctx.httpClient?.let { WebSearchTool() })
 }
 

@@ -110,6 +110,11 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawerState.open() }
 
+    // 系统返回手势：侧边栏展开时先收起侧边栏，而不是把应用最小化
+    androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
+        scope.launch { drawerState.close() }
+    }
+
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetContent()
     ) { uri ->
@@ -384,52 +389,86 @@ private fun TopBar(
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
-                DropdownMenu(
-                    expanded = quickMenu,
-                    onDismissRequest = { quickMenu = false },
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    if (sessions.isEmpty()) {
-                        DropdownMenuItem(
-                            text = { Text("暂无历史会话", style = MaterialTheme.typography.bodySmall) },
-                            onClick = {}
-                        )
-                    }
-                    sessions.take(8).forEach { s ->
-                        DropdownMenuItem(
-                            text = {
-                                Column(Modifier.padding(vertical = 2.dp)) {
+                // 会话快切面板：液态玻璃（DropdownMenu 无法承载玻璃材质）
+                if (quickMenu) {
+                    androidx.compose.ui.window.Popup(
+                        alignment = Alignment.BottomEnd,
+                        onDismissRequest = { quickMenu = false },
+                        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+                    ) {
+                        GlassPanel(
+                            backdrop = backdrop,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .widthIn(min = 240.dp, max = 320.dp),
+                            radius = 20.dp,
+                            surfaceAlpha = 0.52f
+                        ) {
+                            Column(
+                                Modifier
+                                    .heightIn(max = 420.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(vertical = 6.dp)
+                            ) {
+                                if (sessions.isEmpty()) {
                                     Text(
-                                        s.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = if (s.id == activeId) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (s.id == activeId) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        "暂无历史会话",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                                     )
                                 }
-                            },
-                            onClick = {
-                                quickMenu = false
-                                onSelectSession(s)
+                                sessions.take(8).forEach { s ->
+                                    Column(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                quickMenu = false
+                                                onSelectSession(s)
+                                            }
+                                            .padding(horizontal = 16.dp, vertical = 7.dp)
+                                    ) {
+                                        Text(
+                                            s.title,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (s.id == activeId) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (s.id == activeId) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onBackground,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(
+                                    Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
+                                )
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            quickMenu = false
+                                            onDrawer()
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Menu,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(19.dp),
+                                        tint = MaterialTheme.colorScheme.onBackground
+                                    )
+                                    Spacer(Modifier.size(10.dp))
+                                    Text("查看全部会话", style = MaterialTheme.typography.bodyMedium)
+                                }
                             }
-                        )
-                    }
-                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                    DropdownMenuItem(
-                        text = { Text("查看全部会话") },
-                        leadingIcon = { Icon(Icons.Filled.Menu, contentDescription = null, modifier = Modifier.size(19.dp)) },
-                        onClick = {
-                            quickMenu = false
-                            onDrawer()
                         }
-                    )
+                    }
                 }
             }
         }
@@ -776,15 +815,28 @@ private fun SessionsDrawer(
                 )
             }
         }
-        Button(
+        com.haoai.agent.ui.common.LiquidGlassButton(
             onClick = onNewChat,
+            backdrop = backdrop,
+            shape = RoundedCornerShape(percent = 50),
+            surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .padding(horizontal = 16.dp, vertical = 6.dp)
         ) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.size(6.dp))
-            Text("开启新会话")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    "开启新会话",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
         if (sessions.isEmpty()) {
