@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
+import com.haoai.agent.ui.common.appLayer
 
 /**
  * 技能库管理：查看/手动添加/删除 SKILL.md（skill 工具的图形入口）。
@@ -62,6 +63,7 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
+            .appLayer(backdrop)
     ) {
         Column(
             Modifier

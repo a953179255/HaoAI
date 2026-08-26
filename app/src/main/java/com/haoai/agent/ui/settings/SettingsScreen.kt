@@ -78,6 +78,7 @@ import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 
@@ -101,6 +102,11 @@ fun SettingsScreen(
     val draft = vm.draft
     val scope = rememberCoroutineScope()
 
+    // 提升到顶层（appLayer 之外）渲染的玻璃弹窗状态，避免与采样层自引用
+    var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
+    var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
+    var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
+
     // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）
     var section by rememberSaveable { mutableStateOf(initialSection) }
     androidx.compose.runtime.LaunchedEffect(section) { if (section != initialSection) onSectionChange(section) }
@@ -122,6 +128,7 @@ fun SettingsScreen(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .appLayer(backdrop)
         ) {
             Column(
                 Modifier
@@ -240,6 +247,7 @@ fun SettingsScreen(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .appLayer(backdrop)
         ) {
             Column(
                 Modifier
@@ -253,12 +261,16 @@ fun SettingsScreen(
                     when (section) {
                         "brain" -> {
                             brainItems(vm, settings, backdrop)
-                            localItems(vm, backdrop)
+                            localItems(vm, backdrop, onOpenScan = { showScan = true })
                         }
                         "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
                         "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop)
                         "workspace" -> workspaceItems(vm, backdrop) { treePicker.launch(null) }
-                        "general" -> generalItems(vm, settings, context, backdrop)
+                        "general" -> generalItems(
+                            vm, settings, context, backdrop,
+                            wpVersion, onWpVersionChange = { wpVersion = it },
+                            onRequestClearWallpaper = { confirmWpClear = true }
+                        )
                         "about" -> aboutItems(vm, settings, backdrop)
                     }
                 }
@@ -294,6 +306,79 @@ fun SettingsScreen(
             onTest = { vm.testDraftConnection() },
             onDismiss = { vm.cancelDraft() }
         )
+    }
+
+    if (showScan) {
+        val scanned = vm.scannedDeviceModels
+        val canScan = !vm.scanningModels && vm.scannedDeviceModels == null
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "手机上的模型文件",
+            onDismiss = { vm.clearDeviceScan(); showScan = false },
+            confirmLabel = if (canScan) "开始扫描" else "关闭",
+            onConfirm = { if (canScan) vm.scanDeviceModels() else showScan = false },
+            dismissLabel = "取消"
+        ) {
+            Column {
+                if (vm.scanningModels) {
+                    Text("扫描中…（Download / Documents / models 等目录）")
+                } else if (scanned.isNullOrEmpty()) {
+                    Text(
+                        "未找到大体积 GGUF 文件。请确认模型位置；若放在应用专属目录之外的受限目录，" +
+                            "需先在「权限与自动化 → 系统权限」里授予「文件管理（所有文件访问）」。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Text(
+                        "点击直接引用原文件（不复制、不占双份空间）：",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(Modifier.heightIn(max = 360.dp).padding(top = 6.dp)) {
+                        scanned.forEach { f ->
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        vm.useDeviceModel(f.absolutePath)
+                                        showScan = false
+                                    }
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Text(
+                                    f.name,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    "${f.length() / (1024 * 1024)} MB · ${f.parent?.removePrefix("/storage/emulated/0/") ?: ""}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmWpClear) {
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "恢复默认背景",
+            onDismiss = { confirmWpClear = false },
+            confirmLabel = "清除",
+            onConfirm = {
+                vm.clearWallpaper(context)
+                wpVersion = false
+                confirmWpClear = false
+            },
+            dismissLabel = "取消"
+        ) {
+            Text("将清除自定义壁纸并恢复默认渐变背景。")
+        }
     }
 }
 
@@ -456,7 +541,7 @@ private fun LazyListScope.brainItems(
     }
 }
 
-private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onOpenScan: () -> Unit) {
     item { SectionTitle("端侧推理（llama.cpp 本地运行）") }
     item {
         val llama by vm.llamaState.collectAsState()
@@ -464,7 +549,6 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
         var dlUrl by androidx.compose.runtime.remember {
             mutableStateOf(com.haoai.agent.platform.llama.LlamaServerController.DEFAULT_MODEL_URL)
         }
-        var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
         Column(Modifier.padding(16.dp)) {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -566,7 +650,7 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                     backdrop = backdrop,
                     text = "扫描手机已有模型",
                     emphasized = false
-                ) { showScan = true }
+                ) { onOpenScan() }
             }
             vm.importingModel?.let {
                 Text(
@@ -650,63 +734,6 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                         shape = SegmentedButtonDefaults.itemShape(index = i, count = ctxOptions.size)
                     ) {
                         Text("${n / 1024}K", maxLines = 1)
-                    }
-                }
-            }
-
-            // 免拷贝直读：扫描结果选择弹窗（放在组合作用域内）
-            if (showScan) {
-                val scanned = vm.scannedDeviceModels
-                val canScan = !vm.scanningModels && vm.scannedDeviceModels == null
-                com.haoai.agent.ui.common.GlassAlertDialog(
-                    backdrop = backdrop,
-                    title = "手机上的模型文件",
-                    onDismiss = { vm.clearDeviceScan(); showScan = false },
-                    confirmLabel = if (canScan) "开始扫描" else "关闭",
-                    onConfirm = { if (canScan) vm.scanDeviceModels() else showScan = false },
-                    dismissLabel = "取消"
-                ) {
-                    Column {
-                        if (vm.scanningModels) {
-                            Text("扫描中…（Download / Documents / models 等目录）")
-                        } else if (scanned.isNullOrEmpty()) {
-                            Text(
-                                "未找到大体积 GGUF 文件。请确认模型位置；若放在应用专属目录之外的受限目录，" +
-                                    "需先在「权限与自动化 → 系统权限」里授予「文件管理（所有文件访问）」。",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        } else {
-                            Text(
-                                "点击直接引用原文件（不复制、不占双份空间）：",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Column(Modifier.heightIn(max = 360.dp).padding(top = 6.dp)) {
-                                scanned.forEach { f ->
-                                    Column(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                vm.useDeviceModel(f.absolutePath)
-                                                showScan = false
-                                            }
-                                            .padding(vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            f.name,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontFamily = FontFamily.Monospace,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            "${f.length() / (1024 * 1024)} MB · ${f.parent?.removePrefix("/storage/emulated/0/") ?: ""}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -1103,7 +1130,10 @@ private fun LazyListScope.generalItems(
     vm: SettingsViewModel,
     settings: AppSettings,
     context: android.content.Context,
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    wpVersion: Boolean,
+    onWpVersionChange: (Boolean) -> Unit,
+    onRequestClearWallpaper: () -> Unit
 ) {
     item { SectionTitle("外观") }
     item {
@@ -1136,10 +1166,6 @@ private fun LazyListScope.generalItems(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
             )
-            var wpVersion by androidx.compose.runtime.remember {
-                mutableStateOf(vm.wallpaperSet(context))
-            }
-            var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1159,28 +1185,12 @@ private fun LazyListScope.generalItems(
                 ) { uri ->
                     uri?.let {
                         vm.setWallpaper(context, it.toString())
-                        wpVersion = vm.wallpaperSet(context)
+                        onWpVersionChange(vm.wallpaperSet(context))
                     }
                 }
                 TextButton(onClick = { wpPicker.launch("image/*") }) { Text("选择图片") }
                 if (wpVersion) {
-                    TextButton(onClick = { confirmWpClear = true }) { Text("清除") }
-                }
-            }
-            if (confirmWpClear) {
-                com.haoai.agent.ui.common.GlassAlertDialog(
-                    backdrop = backdrop,
-                    title = "恢复默认背景",
-                    onDismiss = { confirmWpClear = false },
-                    confirmLabel = "清除",
-                    onConfirm = {
-                        vm.clearWallpaper(context)
-                        wpVersion = false
-                        confirmWpClear = false
-                    },
-                    dismissLabel = "取消"
-                ) {
-                    Text("将清除自定义壁纸并恢复默认渐变背景。")
+                    TextButton(onClick = onRequestClearWallpaper) { Text("清除") }
                 }
             }
         }

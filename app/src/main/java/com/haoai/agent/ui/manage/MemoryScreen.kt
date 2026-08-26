@@ -46,6 +46,7 @@ import com.haoai.agent.agent.memory.Memory
 import com.haoai.agent.agent.memory.MemoryConsolidation
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
+import com.haoai.agent.ui.common.appLayer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -62,6 +63,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     var msg by remember { mutableStateOf<String?>(null) }
     var showAdd by remember { mutableStateOf(false) }
     var clearCountdown by remember { mutableIntStateOf(0) }
+    var pendingDelete by remember { mutableStateOf<Memory?>(null) }
 
     // 系统返回手势：回到设置根页，而不是把应用最小化
     androidx.activity.compose.BackHandler { onBack() }
@@ -76,6 +78,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
+            .appLayer(backdrop)
     ) {
         Column(
             Modifier
@@ -135,7 +138,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 )
             }
             items(vm.items, key = { it.id }) { m ->
-                MemoryCard(m, fmt, onDelete = { vm.delete(m.id) }, backdrop)
+                MemoryCard(m, fmt, onDeleteRequest = { pendingDelete = it }, backdrop)
             }
         }
         }
@@ -232,6 +235,21 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             onDismiss = { showAdd = false }
         )
     }
+    pendingDelete?.let { m ->
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "删除记忆",
+            onDismiss = { pendingDelete = null },
+            confirmLabel = "删除",
+            onConfirm = {
+                vm.delete(m.id)
+                pendingDelete = null
+            },
+            dismissLabel = "取消"
+        ) {
+            Text("确认删除此条记忆？此操作不可恢复。")
+        }
+    }
 }
 
 @Composable
@@ -321,25 +339,7 @@ private fun JournalDayCard(day: JournalDay, backdrop: com.kyant.backdrop.backdro
 }
 
 @Composable
-private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-    
-    if (showDeleteConfirm) {
-        com.haoai.agent.ui.common.GlassAlertDialog(
-            backdrop = backdrop,
-            title = "删除记忆",
-            onDismiss = { showDeleteConfirm = false },
-            confirmLabel = "删除",
-            onConfirm = {
-                onDelete()
-                showDeleteConfirm = false
-            },
-            dismissLabel = "取消"
-        ) {
-            Text("确认删除此条记忆？此操作不可恢复。")
-        }
-    }
-    
+private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDeleteRequest: (Memory) -> Unit, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
     GlassCard(
         onClick = {},
         backdrop = backdrop,
@@ -376,7 +376,7 @@ private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit, b
                     )
                 }
             }
-            IconButton(onClick = { showDeleteConfirm = true }) {
+            IconButton(onClick = { onDeleteRequest(m) }) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "删除",
