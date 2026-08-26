@@ -291,6 +291,7 @@ fun ChatScreen(
         Box(
             Modifier
                 .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.15f))
                 .clickable(interactionSource = null, indication = null) { vm.onDeny() },
             contentAlignment = Alignment.Center
         ) {
@@ -300,7 +301,7 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp),
                 radius = 28.dp,
-                surfaceAlpha = 0.26f
+                surfaceAlpha = 0.50f
             ) {
                 Column(
                     Modifier
