@@ -582,15 +582,14 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { userToggled = true; expanded = !expanded }
     ) {
         Column(Modifier.padding(vertical = 7.dp)) {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { userToggled = true; expanded = !expanded },
+                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.size(12.dp))
