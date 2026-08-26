@@ -17,10 +17,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -73,7 +76,9 @@ import com.haoai.agent.agent.engine.ToolRunState
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.ui.ChatRow
 import com.haoai.agent.ui.ChatViewModel
+import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
 import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.common.rememberAppBackdrop
@@ -134,6 +139,7 @@ fun ChatScreen(
         chars / 2
     }
 
+    Box(Modifier.fillMaxSize()) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -143,12 +149,21 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxHeight()
                         .fillMaxWidth(0.85f),
-                    radius = 28.dp,
-                    surfaceAlpha = 0.18f
+                    surfaceAlpha = 0.18f,
+                    // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
+                    shape = RoundedCornerShape(
+                        topStart = 0.dp,
+                        topEnd = 28.dp,
+                        bottomEnd = 28.dp,
+                        bottomStart = 0.dp
+                    ),
+                    // 关闭 lens 折射：方角处其采样内边距会产生弧形高光，形成"伪圆角"
+                    lensRadius = 0.dp
                 ) {
                     SessionsDrawer(
                     agentName = vm.agentName(),
                     workspaceName = vm.workspaceName(),
+                    backdrop = backdrop,
                     sessions = sessions,
                     activeId = vm.session.collectAsState().value?.id,
                     onSelect = {
@@ -251,24 +266,69 @@ fun ChatScreen(
     }
 
     approval?.let { (req, _) ->
-        AlertDialog(
-            onDismissRequest = { vm.onDeny() },
-            title = { Text(req.title) },
-            text = {
-                Text(
-                    req.detail,
-                    fontFamily = if (req.mono) FontFamily.Monospace else null,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp
-                )
-            },
-            confirmButton = {
-                Button(onClick = { vm.onApprove() }) { Text("允许") }
-            },
-            dismissButton = {
-                TextButton(onClick = { vm.onDeny() }) { Text("拒绝") }
+        // 审批弹窗改为液态玻璃卡片，叠在主窗口内（独立 Dialog 窗口无法采样 LayerBackdrop）
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.32f))
+                .clickable(interactionSource = null, indication = null) { vm.onDeny() },
+            contentAlignment = Alignment.Center
+        ) {
+            GlassPanel(
+                backdrop = backdrop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                radius = 28.dp,
+                surfaceAlpha = 0.34f
+            ) {
+                Column(
+                    Modifier
+                        .clickable(interactionSource = null, indication = null) {}
+                        .padding(20.dp)
+                ) {
+                    Text(
+                        req.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        req.detail,
+                        fontFamily = if (req.mono) FontFamily.Monospace else null,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.82f),
+                        modifier = Modifier
+                            .padding(top = 10.dp)
+                            .heightIn(max = 340.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { vm.onDeny() }) { Text("拒绝") }
+                        LiquidGlassButton(
+                            onClick = { vm.onApprove() },
+                            backdrop = backdrop,
+                            shape = RoundedCornerShape(percent = 50),
+                            surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        ) {
+                            Text(
+                                "允许",
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
             }
-        )
+        }
+    }
     }
 }
 
@@ -651,19 +711,17 @@ private fun ComposerBar(
                     }
                 }
             )
-            IconButton(
+            val actionable = running || text.isNotBlank() || pendingImage != null
+            LiquidGlassButton(
                 onClick = { if (running) onStop() else onSend() },
-                modifier = Modifier
-                    .size(46.dp)
-                    .background(
-                        MaterialTheme.colorScheme.primary.copy(alpha = if (text.isBlank() && !running && pendingImage == null) 0.25f else 0.85f),
-                        CircleShape
-                    )
+                backdrop = backdrop,
+                modifier = Modifier.size(46.dp),
+                surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = if (actionable) 0.85f else 0.25f)
             ) {
                 Icon(
                     if (running) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
                     contentDescription = if (running) "停止" else "发送",
-                    tint = MaterialTheme.colorScheme.onPrimary
+                    tint = if (actionable) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
                 )
             }
         }
@@ -675,6 +733,7 @@ private fun ComposerBar(
 private fun SessionsDrawer(
     agentName: String,
     workspaceName: String,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     sessions: List<StoredSession>,
     activeId: String?,
     onSelect: (StoredSession) -> Unit,
@@ -738,14 +797,16 @@ private fun SessionsDrawer(
         LazyColumn(Modifier.weight(1f)) {
             items(sessions, key = { it.id }) { s ->
                 val active = s.id == activeId
-                Surface(
-                    color = if (active) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-                    else Color.Transparent,
+                GlassCard(
+                    onClick = { onSelect(s) },
+                    backdrop = backdrop,
                     shape = RoundedCornerShape(14.dp),
+                    surfaceAlpha = if (active) 0.30f else 0.16f,
+                    tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
+                    lensRadius = 14.dp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 10.dp, vertical = 2.dp)
-                        .clickable { onSelect(s) }
                 ) {
                     Row(
                         Modifier.padding(start = 14.dp, end = 4.dp, top = 9.dp, bottom = 9.dp),

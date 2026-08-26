@@ -12,17 +12,27 @@ import java.io.File
  */
 object WallpaperStore {
 
+    /** 壁纸变更版本号：set/clear 时自增，UI 层收集它实现即时重载。 */
+    private val _changes = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val changes: kotlinx.coroutines.flow.StateFlow<Long> = _changes
+
     private fun file(context: Context): File = File(context.filesDir, "wallpaper.img")
 
     fun has(context: Context): Boolean = file(context).exists() && file(context).length() > 0
 
     fun set(context: Context, bytes: ByteArray) {
-        file(context).writeBytes(bytes)
+        val f = file(context)
+        // 临时文件+rename（Linux rename 原子替换已存在目标），避免写一半被杀留下损坏图片
+        val tmp = File(context.filesDir, "wallpaper.img.tmp")
+        tmp.writeBytes(bytes)
+        if (!tmp.renameTo(f)) runCatching { tmp.copyTo(f, overwrite = true) }
+        tmp.delete()
+        _changes.value += 1
     }
 
     fun clear(context: Context) {
-        android.util.Log.w("HaoWallpaper", "wallpaper clear() called", Throwable("trace"))
         file(context).delete()
+        _changes.value += 1
     }
 
     /** 采样解码为不超过 maxDim 的 Bitmap，避免大图占内存。 */

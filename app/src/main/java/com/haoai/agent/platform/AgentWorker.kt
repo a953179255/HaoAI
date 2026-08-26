@@ -27,23 +27,26 @@ class AgentWorker(context: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
         val container = (applicationContext as HaoApplication).container
-        val store = ScheduleStore(container.appFilesDir)
-        val state = store.load()
+        val state = ScheduleStore.load()
         val task = state.items.find { it.id == taskId }
 
         if (task == null || !task.enabled) {
             return Result.success()
         }
 
+        // 无人值守执行必须尊重用户设置的权限模式：
+        // YOLO 才全自动放行；ASK_WRITES/ALWAYS_ASK 下后台一律拒绝高危工具，防提示注入静默提权。
+        val mode = container.settingsFlow.value.permissionMode
+
         val provider0 = container.activeProvider()
         if (provider0 == null) {
-            updateTask(store, state, task, "未配置模型服务，任务跳过")
+            updateTask(task, "未配置模型服务，任务跳过")
             Scheduler.enqueueNext(task)
             return Result.success()
         }
         val provider = if (provider0.baseUrl.startsWith("local")) {
             if (!container.llama.ensureStarted()) {
-                updateTask(store, state, task, "端侧模型启动失败，任务跳过")
+                updateTask(task, "端侧模型启动失败，任务跳过")
                 Scheduler.enqueueNext(task)
                 return Result.success()
             }
@@ -57,8 +60,8 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             provider = provider,
             apiKey = container.cipher.decrypt(provider.apiKeyCipher),
             customPrompt = container.settingsFlow.value.customPrompt,
-            policy = PolicyEngine(PermissionMode.YOLO),
-            approve = { true },
+            policy = PolicyEngine(mode),
+            approve = { mode == PermissionMode.YOLO },
             session = session,
             persist = { container.sessionStore.save(session) },
             backend = container.workspace.current,
@@ -89,23 +92,20 @@ class AgentWorker(context: Context, params: WorkerParameters) :
         session.updatedAt = System.currentTimeMillis()
         container.sessionStore.save(session)
 
-        updateTask(store, state, task, resultText)
+        updateTask(task, resultText)
         notifyDone(applicationContext, task.name, resultText)
         Scheduler.enqueueNext(task)
         return Result.success()
     }
 
+    /** 读改写收敛到全局单例的原子 update 内，避免覆盖用户并发编辑。 */
     private fun updateTask(
-        store: ScheduleStore,
-        state: ScheduleState,
         task: ScheduleTask,
         result: String
     ) {
-        val fresh = store.load()
-        fresh.items.find { it.id == task.id }?.let {
+        ScheduleStore.update(task.id) {
             it.lastRunAt = System.currentTimeMillis()
             it.lastResult = TextCap.head(result.replace('\n', ' '), 200)
-            store.save(fresh)
         }
     }
 

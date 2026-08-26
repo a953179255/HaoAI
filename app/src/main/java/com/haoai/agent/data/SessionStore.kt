@@ -76,19 +76,25 @@ class SessionStore(context: Context) {
     fun list(): List<StoredSession> =
         dir.listFiles { f -> f.extension == "json" }
             ?.mapNotNull { f ->
-                runCatching {
-                    HaoJson.json.decodeFromString(StoredSession.serializer(), f.readText())
-                }.getOrNull()
+                HaoJson.readTextSafe(f)?.let { t ->
+                    runCatching {
+                        HaoJson.json.decodeFromString(StoredSession.serializer(), t)
+                    }.getOrNull()
+                }
             }
             ?.sortedByDescending { it.updatedAt }
             ?: emptyList()
 
     fun load(id: String): StoredSession? =
-        runCatching {
-            val f = fileOf(id)
-            if (f.exists()) HaoJson.json.decodeFromString(StoredSession.serializer(), f.readText()) else null
-        }.getOrNull()
+        fileOf(id).takeIf { it.exists() }?.let { f ->
+            HaoJson.readTextSafe(f)?.let { t ->
+                runCatching {
+                    HaoJson.json.decodeFromString(StoredSession.serializer(), t)
+                }.getOrNull()
+            }
+        }
 
+    @Synchronized
     fun save(session: StoredSession) {
         runCatching {
             session.updatedAt = System.currentTimeMillis()
@@ -96,7 +102,7 @@ class SessionStore(context: Context) {
                 session.messages.firstOrNull { it.role == ChatMessage.ROLE_USER && it.content.isNotBlank() }
                     ?.let { session.title = it.content.take(24).replace('\n', ' ') }
             }
-            fileOf(session.id).writeText(HaoJson.json.encodeToString(StoredSession.serializer(), session))
+            HaoJson.writeAtomic(fileOf(session.id), HaoJson.json.encodeToString(StoredSession.serializer(), session))
         }
     }
 

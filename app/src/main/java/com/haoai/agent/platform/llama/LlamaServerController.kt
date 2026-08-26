@@ -30,9 +30,11 @@ class LlamaServerController(
 
         const val DEFAULT_MODEL_URL =
             "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-
         private const val HEALTH_TRIES = 240
+
         private const val HEALTH_INTERVAL_MS = 500L
+
+        private const val MAX_LOG_LINES = 2000
     }
 
     private val _state = MutableStateFlow<LlamaState>(LlamaState.Stopped)
@@ -128,14 +130,17 @@ class LlamaServerController(
             val proc = pb.start()
             process = proc
 
+            // 必须持续排水到 EOF：只读固定行数后关流，会让 server 写满管道冻结或
+            // 因 SIGPIPE 直接死掉；日志仅落盘前 MAX_LOG_LINES 行防止无限增长。
             Thread {
                 runCatching {
-                    proc.inputStream.bufferedReader().use { reader ->
-                        java.io.PrintWriter(java.io.FileWriter(logFile, false)).use { writer ->
-                            repeat(400) {
-                                val line = reader.readLine() ?: return@use
-                                writer.println(line)
+                    proc.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(logFile, false))).use { writer ->
+                            var written = 0
+                            reader.forEachLine { line ->
+                                if (written++ < MAX_LOG_LINES) writer.println(line)
                             }
+                            writer.flush()
                         }
                     }
                 }
@@ -174,8 +179,15 @@ class LlamaServerController(
     }
 
     private fun stopInternal() {
-        runCatching { process?.destroy() }
+        val proc = process ?: return
         process = null
+        runCatching { proc.destroy() }
+        runCatching {
+            if (!proc.waitFor(3, TimeUnit.SECONDS)) {
+                proc.destroyForcibly()
+                proc.waitFor(2, TimeUnit.SECONDS)
+            }
+        }
     }
 
     suspend fun downloadModel(url: String, fileName: String? = null): Result<File> =

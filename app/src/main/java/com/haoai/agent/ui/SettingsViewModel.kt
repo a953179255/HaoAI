@@ -158,12 +158,17 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 draftError = "该服务需要填写 API Key"
             else -> {
                 draftError = null
+                // 先在 lambda 外完成加密：失败（null）则整体取消，绝不把空串当密文存进去
+                val newCipher = if (d.apiKeyPlain.isNotBlank()) {
+                    c.cipher.encrypt(d.apiKeyPlain) ?: run {
+                        draftError = "密钥加密失败（AndroidKeyStore 不可用），本次未保存"
+                        return
+                    }
+                } else null
                 c.updateSettings { s ->
                     val pid = d.id ?: UUID.randomUUID().toString()
                     val existing = s.providers.find { it.id == pid }
-                    val keyCipher =
-                        if (d.apiKeyPlain.isNotBlank()) c.cipher.encrypt(d.apiKeyPlain)
-                        else existing?.apiKeyCipher ?: ""
+                    val keyCipher = newCipher ?: existing?.apiKeyCipher ?: ""
                     val list = s.providers.filterNot { it.id == pid } +
                         ProviderConfig(pid, d.name.ifBlank { "模型服务" }, url, d.model.trim(), keyCipher)
                     s.copy(
@@ -260,7 +265,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun memoryCount(): Int = c.memoryBank.count()
     fun journalCount(): Int = c.journal.count()
 
-    fun skillCount(): Int = SkillStore(c.appFilesDir).list().size
+    fun skillCount(): Int = SkillStore.list().size
 
     // ---- 端侧模型文件导入（SAF 选择后拷入应用模型目录）----
 

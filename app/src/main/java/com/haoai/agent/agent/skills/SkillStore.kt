@@ -12,17 +12,37 @@ import java.io.File
 @Serializable
 data class SkillMeta(val name: String, val description: String, val updatedAt: Long = 0)
 
-class SkillStore(private val appFilesDir: File) {
+/**
+ * 技能库全局单例：引擎/工具/UI 共享同一把对象锁，避免多实例 @Synchronized 失效。
+ */
+object SkillStore {
 
-    private val dir: File get() = File(appFilesDir, "skills").apply { mkdirs() }
+    @Volatile
+    private var baseDir: File? = null
+
+    fun init(appFilesDir: File) {
+        baseDir = File(appFilesDir, "skills")
+    }
+
+    private val dir: File
+        get() = (baseDir ?: throw IllegalStateException("SkillStore 未初始化（需先调用 init）")).apply { mkdirs() }
+
+    /** 名称 → 目录的受限解析：拒绝路径穿越，只允许 skills/ 直属目录。 */
+    private fun resolve(name: String): File? {
+        val d = File(dir, name.trim()).canonicalFile
+        val root = dir.canonicalFile
+        return if (d.path.startsWith(root.path + File.separator)) d else null
+    }
 
     @Synchronized
     fun save(name: String, description: String, body: String): File {
         val safe = name.trim().replace(Regex("[^a-zA-Z0-9_\\-\\u4e00-\\u9fff]"), "-").take(40)
             .ifBlank { "skill" }
+        // description 进入 frontmatter 单行区域，换行会破坏头部结构
+        val descOneLine = description.trim().replace(Regex("[\\r\\n]+"), " ").take(120)
         val f = File(dir, safe).apply { mkdirs() }.let { File(it, "SKILL.md") }
-        val front = "---\nname: $safe\ndescription: ${description.trim().take(120)}\n---\n"
-        f.writeText(front + body.trim().take(8000))
+        val front = "---\nname: $safe\ndescription: $descOneLine\n---\n"
+        com.haoai.agent.data.HaoJson.writeAtomic(f, front + body.trim().take(8000))
         return f
     }
 
@@ -40,7 +60,7 @@ class SkillStore(private val appFilesDir: File) {
 
     @Synchronized
     fun view(name: String): String? {
-        val f = File(dir, name.trim())
+        val f = resolve(name) ?: return null
         if (!f.isDirectory) return null
         val sf = File(f, "SKILL.md")
         if (!sf.exists()) return null
@@ -49,7 +69,7 @@ class SkillStore(private val appFilesDir: File) {
 
     @Synchronized
     fun delete(name: String): Boolean {
-        val d = File(dir, name.trim())
+        val d = resolve(name) ?: return false
         if (!d.isDirectory) return false
         return d.deleteRecursively()
     }

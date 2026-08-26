@@ -28,7 +28,7 @@ object ToolRegistry {
         add(LaunchAppTool())
         add(ListAppsTool())
         add(ScheduleTool(ctx.appFilesDir))
-        add(SkillTool(com.haoai.agent.agent.skills.SkillStore(ctx.appFilesDir)))
+        add(SkillTool(com.haoai.agent.agent.skills.SkillStore))
         add(CameraTool())
         add(LocationTool())
         if (ctx.httpClient != null) add(WebSearchTool())

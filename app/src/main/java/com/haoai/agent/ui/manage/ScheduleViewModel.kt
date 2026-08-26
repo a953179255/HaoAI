@@ -14,7 +14,7 @@ class ScheduleViewModel(private val c: AppContainer) : ViewModel() {
     var items by mutableStateOf<List<ScheduleTask>>(emptyList())
         private set
 
-    private val store = ScheduleStore(c.appFilesDir)
+    private val store = ScheduleStore
 
     init {
         refresh()

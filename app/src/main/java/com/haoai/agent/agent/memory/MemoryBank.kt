@@ -25,16 +25,15 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
     private val file = File(appFilesDir, "memories.json")
 
     @Synchronized
-    private fun load(): MemoryState = runCatching {
-        if (!file.exists()) return MemoryState()
-        HaoJson.json.decodeFromString(MemoryState.serializer(), file.readText())
-    }.getOrDefault(MemoryState())
+    private fun load(): MemoryState =
+        HaoJson.readTextSafe(file)?.let { t ->
+            runCatching { HaoJson.json.decodeFromString(MemoryState.serializer(), t) }.getOrNull()
+        } ?: MemoryState()
 
     @Synchronized
     private fun save(state: MemoryState) {
         runCatching {
-            file.parentFile?.mkdirs()
-            file.writeText(HaoJson.json.encodeToString(MemoryState.serializer(), state))
+            HaoJson.writeAtomic(file, HaoJson.json.encodeToString(MemoryState.serializer(), state))
         }
     }
 
@@ -63,8 +62,11 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
         )
         state.items.add(m)
         while (state.items.size > maxItems) {
-            state.items.minByOrNull { it.importance * 10_000L + (if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt) }
-                ?.let { state.items.remove(it) } ?: break
+            // 先按重要性、再按最久未用驱逐（时间戳量级远大于 importance，不能加权相加）
+            state.items.minWithOrNull(
+                compareBy<Memory> { it.importance }
+                    .thenBy { if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt }
+            )?.let { state.items.remove(it) } ?: break
         }
         save(state)
         return m
@@ -142,11 +144,13 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
         val now = System.currentTimeMillis()
         val kept = mutableListOf<Memory>()
         var removed = 0
-        // 先清低价值
+        // 先清低价值（importance<=2 且 30 天未用）
+        val beforePurge = state.items.size
         state.items.removeAll {
             val ageDays = (now - (if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt)) / 86_400_000.0
             it.importance <= 2 && ageDays > 30
         }
+        removed += beforePurge - state.items.size
         for (m in state.items.sortedWith(compareByDescending<Memory> { it.importance }.thenByDescending { it.createdAt })) {
             val norm = normalize(m.content)
             val toks = tokenize(m.content)

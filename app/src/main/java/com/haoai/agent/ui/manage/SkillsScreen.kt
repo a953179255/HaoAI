@@ -19,8 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -35,18 +33,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.haoai.agent.HaoApplication
 import com.haoai.agent.agent.skills.SkillStore
+import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
-import com.haoai.agent.ui.common.appLayer
 
 /**
  * 技能库管理：查看/删除代理自沉淀的 SKILL.md（skill 工具的图形入口）。
  */
 @Composable
 fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: () -> Unit) {
-    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as HaoApplication
-    val store = remember { SkillStore(app.container.appFilesDir) }
+    val store = SkillStore
     var skills by remember { mutableStateOf(store.list()) }
     var viewBody by remember { mutableStateOf<Pair<String, String>?>(null) }
     val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA) }
@@ -63,7 +59,6 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
         Column(
             Modifier
                 .fillMaxSize()
-                .appLayer(backdrop)
         ) {
             Spacer(Modifier.height(64.dp))
         Text(
@@ -86,14 +81,15 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(skills, key = { it.name }) { s ->
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ),
+                GlassCard(
+                    onClick = {},
+                    backdrop = backdrop,
                     shape = RoundedCornerShape(16.dp),
+                    surfaceAlpha = 0.22f,
+                    lensRadius = 16.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp)) {
+                    Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
                         Column(Modifier.weight(1f)) {
                             Text(s.name, style = MaterialTheme.typography.titleSmall)
                             Text(

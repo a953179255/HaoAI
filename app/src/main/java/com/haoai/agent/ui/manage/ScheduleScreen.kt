@@ -1,6 +1,5 @@
 package com.haoai.agent.ui.manage
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,12 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -36,8 +32,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.haoai.agent.HaoApplication
 import com.haoai.agent.agent.schedule.ScheduleTask
 import com.haoai.agent.agent.schedule.Scheduler
+import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
-import com.haoai.agent.ui.common.appLayer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -58,7 +54,6 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
         Column(
             Modifier
                 .fillMaxSize()
-                .appLayer(backdrop)
         ) {
             Spacer(Modifier.height(64.dp))
         Text(
@@ -83,7 +78,7 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(vm.items, key = { it.id }) { t ->
-                TaskCard(t, fmt,
+                TaskCard(t, fmt, backdrop = backdrop,
                     onToggle = { vm.toggle(t) },
                     onDelete = { vm.remove(t) }
                 )
@@ -105,19 +100,19 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
 private fun TaskCard(
     t: ScheduleTask,
     fmt: SimpleDateFormat,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onToggle: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
+    GlassCard(
+        onClick = onToggle,
+        backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onToggle() }
+        surfaceAlpha = 0.24f,
+        lensRadius = 16.dp,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp)) {
+        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(t.name, style = MaterialTheme.typography.titleSmall)
                 Text(
@@ -146,7 +141,11 @@ private fun TaskCard(
                     )
                 }
             }
-            Switch(checked = t.enabled, onCheckedChange = { onToggle() })
+            com.haoai.agent.ui.common.LiquidToggle(
+                checked = t.enabled,
+                onCheckedChange = { onToggle() },
+                backdrop = backdrop
+            )
             IconButton(onClick = onDelete) {
                 Icon(
                     Icons.Filled.Delete,

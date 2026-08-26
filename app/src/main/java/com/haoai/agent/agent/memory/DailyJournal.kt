@@ -104,18 +104,23 @@ class DailyJournal(
     private fun fileFor(date: String) = File(dir, "$date.md")
 
     private fun formatLine(time: String, importance: Int, source: String, content: String) =
-        "- $time | imp=${importance.coerceIn(1, 5)} | src=${source.take(10)} | ${content.replace('\n', ' ').take(300)}"
+        "- $time | imp=${importance.coerceIn(1, 5)} | src=${source.take(10)} | ${sanitize(content).take(300)}"
+
+    /** 行格式用 " | " 分隔字段，正文里的分隔符必须替换，否则解析截断且去重失效。 */
+    private fun sanitize(content: String): String =
+        content.replace('\n', ' ').replace(" | ", " ｜ ")
 
     @Synchronized
     fun append(content: String, importance: Int = 3, source: String = "auto"): JournalEntry? {
-        val text = content.trim()
+        val text = sanitize(content.trim())
         if (text.isEmpty()) return null
         dir.mkdirs()
         val date = today()
         val f = fileFor(date)
         if (!f.exists()) f.writeText("# $date\n")
         val existing = parseFile(f)
-        if (existing.any { it.content == text }) return null
+        // 入库内容会被 take(300) 截断，去重必须按同一口径比较，否则长文本反复追加
+        if (existing.any { it.content == text.take(300) }) return null
         val entry = JournalEntry(
             id = Integer.toHexString((text + System.currentTimeMillis()).hashCode()),
             content = text.take(300),
@@ -134,7 +139,7 @@ class DailyJournal(
         val lines = f.readLines()
         val header = lines.takeWhile { !it.startsWith("- ") }
         val body = lines.drop(header.size).takeLast(MAX_PER_DAY)
-        f.writeText((header + body).joinToString("\n").trimEnd() + "\n")
+        com.haoai.agent.data.HaoJson.writeAtomic(f, (header + body).joinToString("\n").trimEnd() + "\n")
     }
 
     private fun parseFile(f: File): List<JournalEntry> {

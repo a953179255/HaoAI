@@ -393,13 +393,16 @@ class AgentEngine(
                 workspaceLabel, shellAvailable, dateText, customPrompt, memorySnippet(),
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
                 identity = identity,
-                skillIndex = com.haoai.agent.agent.skills.SkillStore(appFilesDir).promptIndex(),
+                skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
                 journalBlock = journalSnippet()
             )
 
+        // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
+        // OpenAI 兼容端会以 400 拒绝孤儿 tool 消息（且重试复现，会话就此卡死）。
         val history = session.messages.asReversed()
             .take(MAX_HISTORY)
             .asReversed()
+            .pairSanitized()
             .mapNotNull { m ->
                 when (m.role) {
                     ChatMessage.ROLE_USER ->
@@ -474,11 +477,28 @@ class AgentEngine(
             role = ChatMessage.ROLE_USER,
             content = "$HANDOFF_MARKER\n$summary\n\n（以上为此前对话的压缩交接，请基于它继续当前任务）"
         )
-        val kept = msgs.takeLast(HANDOFF_KEEP)
+        val kept = msgs.takeLast(HANDOFF_KEEP).pairSanitized()
         msgs.clear()
         msgs.add(doc.toStored())
         msgs.addAll(kept)
         persist()
+    }
+
+    /**
+     * 剔除因裁剪/压缩而失去配对的消息：
+     * 1) 没有对应 assistant(tool_calls) 的孤儿 tool 结果；
+     * 2) 其全部调用都缺少结果的 assistant(tool_calls)。
+     * 保证发给供应商的历史始终满足严格的调用配对约束。
+     */
+    private fun List<com.haoai.agent.data.StoredMessage>.pairSanitized(): List<com.haoai.agent.data.StoredMessage> {
+        val calledIds = flatMap { if (it.role == ChatMessage.ROLE_ASSISTANT) it.toolCalls.map { c -> c.id } else emptyList() }
+            .toSet()
+        val step1 = filterNot { it.role == ChatMessage.ROLE_TOOL && (it.toolCallId == null || it.toolCallId !in calledIds) }
+        val answeredIds = step1.filter { it.role == ChatMessage.ROLE_TOOL }.mapNotNull { it.toolCallId }.toSet()
+        return step1.filterNot { m ->
+            m.role == ChatMessage.ROLE_ASSISTANT && m.toolCalls.isNotEmpty() &&
+                m.toolCalls.all { it.id !in answeredIds }
+        }
     }
 
     private fun parseArgs(json: String): JsonObject =

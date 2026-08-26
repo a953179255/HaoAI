@@ -43,15 +43,14 @@ class SettingsStore(context: Context) {
     @Serializable
     private data class Wrapped(val settings: AppSettings = AppSettings())
 
-    fun load(): AppSettings = runCatching {
-        if (!file.exists()) return AppSettings()
-        HaoJson.json.decodeFromString(Wrapped.serializer(), file.readText()).settings
-    }.getOrDefault(AppSettings())
+    fun load(): AppSettings =
+        HaoJson.readTextSafe(file)?.let { t ->
+            runCatching { HaoJson.json.decodeFromString(Wrapped.serializer(), t).settings }.getOrNull()
+        } ?: AppSettings()
 
     fun save(settings: AppSettings) {
         runCatching {
-            file.parentFile?.mkdirs()
-            file.writeText(HaoJson.json.encodeToString(Wrapped.serializer(), Wrapped(settings)))
+            HaoJson.writeAtomic(file, HaoJson.json.encodeToString(Wrapped.serializer(), Wrapped(settings)))
         }.onFailure {
             android.util.Log.w("HaoSettings", "设置保存失败（检查文件属主/权限）: ${it.message}")
         }

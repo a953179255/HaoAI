@@ -29,7 +29,7 @@ class ScheduleTool(private val appFilesDir: java.io.File) : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
-        val store = com.haoai.agent.agent.schedule.ScheduleStore(appFilesDir)
+        val store = com.haoai.agent.agent.schedule.ScheduleStore
         return when (args.optString("action", "list").lowercase()) {
             "create" -> {
                 val name = args.optString("name").trim()

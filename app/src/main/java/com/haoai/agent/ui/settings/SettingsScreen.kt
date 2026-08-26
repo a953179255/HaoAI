@@ -48,7 +48,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,8 +70,8 @@ import com.haoai.agent.data.AppSettings
 import com.haoai.agent.platform.KeepAliveService
 import com.haoai.agent.platform.llama.LlamaState
 import com.haoai.agent.ui.SettingsViewModel
+import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
-import com.haoai.agent.ui.common.appLayer
 import kotlinx.coroutines.launch
 
 /**
@@ -116,7 +115,6 @@ fun SettingsScreen(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .appLayer(backdrop)
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
@@ -126,6 +124,7 @@ fun SettingsScreen(
                 ) {
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.SmartToy,
                         title = "模型大脑",
                         subtitle = run {
@@ -139,6 +138,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Memory,
                         title = "端侧推理",
                         subtitle = "llama.cpp 本地运行 · ${vm.llamaModelFile() ?: "模型未下载"}",
@@ -148,6 +148,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Security,
                         title = "权限与自动化",
                         subtitle = permissionLabel(settings.permissionMode) +
@@ -158,6 +159,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.AutoFixHigh,
                         title = "记忆与梦境",
                         subtitle = "${vm.memoryCount()} 条长期记忆" +
@@ -168,6 +170,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Construction,
                         title = "技能库",
                         subtitle = "${vm.skillCount()} 个沉淀技能 · 点击管理",
@@ -177,6 +180,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Schedule,
                         title = "定时任务",
                         subtitle = "到点自动执行并通知 · 点击管理",
@@ -186,6 +190,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Folder,
                         title = "工作空间",
                         subtitle = vm.workspaceName(),
@@ -195,6 +200,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Tune,
                         title = "通用",
                         subtitle = "后台保活 · 自定义指令 · 身份",
@@ -204,6 +210,7 @@ fun SettingsScreen(
                 }
                 item {
                     MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Info,
                         title = "关于",
                         subtitle = "Token 用量统计 · 版本信息",
@@ -231,7 +238,6 @@ fun SettingsScreen(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .appLayer(backdrop)
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
@@ -242,9 +248,9 @@ fun SettingsScreen(
                         "brain" -> brainItems(vm, settings)
                         "local" -> localItems(vm)
                         "privacy" -> privacyItems(vm, settings, context, a11yOn)
-                        "memory" -> memoryItems(vm, settings, onOpenMemories)
+                        "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop)
                         "workspace" -> workspaceItems(vm) { treePicker.launch(null) }
-                        "general" -> generalItems(vm, settings, context)
+                        "general" -> generalItems(vm, settings, context, backdrop)
                         "about" -> aboutItems(vm, settings)
                     }
                 }
@@ -281,21 +287,20 @@ fun SettingsScreen(
 
 @Composable
 private fun MenuCard(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     icon: ImageVector,
     title: String,
     subtitle: String,
     tint: Color = MaterialTheme.colorScheme.primary,
     onClick: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
+    GlassCard(
+        onClick = onClick,
+        backdrop = backdrop,
         shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
+        surfaceAlpha = 0.26f,
+        tint = tint.copy(alpha = 0.10f),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
@@ -653,7 +658,8 @@ private fun LazyListScope.privacyItems(
 private fun LazyListScope.memoryItems(
     vm: SettingsViewModel,
     settings: AppSettings,
-    onOpenMemories: () -> Unit
+    onOpenMemories: () -> Unit,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     item { SectionTitle("记忆开关") }
     item {
@@ -671,9 +677,10 @@ private fun LazyListScope.memoryItems(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            com.haoai.agent.ui.common.LiquidToggle(
                 checked = settings.memoryEnabled,
-                onCheckedChange = { vm.setMemoryEnabled(it) }
+                onCheckedChange = { vm.setMemoryEnabled(it) },
+                backdrop = backdrop
             )
         }
     }
@@ -692,9 +699,10 @@ private fun LazyListScope.memoryItems(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            com.haoai.agent.ui.common.LiquidToggle(
                 checked = settings.autoLearn,
-                onCheckedChange = { vm.setAutoLearn(it) }
+                onCheckedChange = { vm.setAutoLearn(it) },
+                backdrop = backdrop
             )
         }
     }
@@ -715,9 +723,10 @@ private fun LazyListScope.memoryItems(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            com.haoai.agent.ui.common.LiquidToggle(
                 checked = settings.deepDream,
-                onCheckedChange = { vm.setDeepDream(it) }
+                onCheckedChange = { vm.setDeepDream(it) },
+                backdrop = backdrop
             )
         }
     }
@@ -840,7 +849,8 @@ private fun LazyListScope.workspaceItems(vm: SettingsViewModel, pickFolder: () -
 private fun LazyListScope.generalItems(
     vm: SettingsViewModel,
     settings: AppSettings,
-    context: android.content.Context
+    context: android.content.Context,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     item { SectionTitle("外观") }
     item {
@@ -965,12 +975,13 @@ private fun LazyListScope.generalItems(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            com.haoai.agent.ui.common.LiquidToggle(
                 checked = settings.keepAlive,
                 onCheckedChange = { enabled ->
                     vm.setKeepAlive(enabled)
                     if (enabled) KeepAliveService.start(context) else KeepAliveService.stop(context)
-                }
+                },
+                backdrop = backdrop
             )
         }
     }

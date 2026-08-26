@@ -161,6 +161,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun stop() {
         job?.cancel()
         job = null
+        // 停止时若审批弹层还挂着，必须清掉，否则全屏遮罩会永久吃掉触摸事件
+        _approval.value = null
     }
 
     fun dismissError() {
@@ -178,7 +180,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private suspend fun requestApproval(req: ApprovalRequest): Boolean {
         val gate = CompletableDeferred<Boolean>()
         _approval.value = req to gate
-        return gate.await().also { _approval.value = null }
+        // try/finally：协程被取消（如用户按停止）时也要清掉弹层状态
+        try {
+            return gate.await()
+        } finally {
+            _approval.value = null
+        }
     }
 
     private fun handleEvent(ev: TurnEvent) {

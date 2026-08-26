@@ -47,6 +47,9 @@ class AppContainer(app: Application) {
     val settingsFlow = MutableStateFlow(settingsStore.load())
 
     init {
+        // 存储单例先初始化（WorkspaceDocs 异步任务会用到）
+        com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
+        com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
         llama.preferredModel = settingsFlow.value.localModelFile
         syncWorkspaceDocs()
     }

@@ -123,7 +123,7 @@ object WorkspaceDocs {
         appendLine()
         appendLine("> 到点由系统自动执行并通知；在应用内「设置 → 定时任务」管理。")
         appendLine()
-        val tasks = com.haoai.agent.agent.schedule.ScheduleStore(c.appFilesDir).load().items
+        val tasks = com.haoai.agent.agent.schedule.ScheduleStore.load().items
         if (tasks.isEmpty()) {
             appendLine("（暂无定时任务）")
         } else {

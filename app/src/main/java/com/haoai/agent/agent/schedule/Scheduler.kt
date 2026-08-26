@@ -27,22 +27,45 @@ data class ScheduleTask(
 @Serializable
 data class ScheduleState(val items: MutableList<ScheduleTask> = mutableListOf())
 
-class ScheduleStore(appFilesDir: File) {
+/**
+ * 定时任务持久化。全局单例：多处（Worker/工具/UI/启动）共享同一把对象锁，
+ * 避免各自 new 实例导致 @Synchronized 失效、并发读改写互相覆盖。
+ */
+object ScheduleStore {
 
-    private val file = File(appFilesDir, "schedules.json")
+    @Volatile
+    private var file: File? = null
+
+    fun init(appFilesDir: File) {
+        file = File(appFilesDir, "schedules.json")
+    }
+
+    private val f: File
+        get() = file ?: throw IllegalStateException("ScheduleStore 未初始化（需先调用 init）")
 
     @Synchronized
-    fun load(): ScheduleState = runCatching {
-        if (!file.exists()) return ScheduleState()
-        HaoJson.json.decodeFromString(ScheduleState.serializer(), file.readText())
-    }.getOrDefault(ScheduleState())
+    fun load(): ScheduleState =
+        com.haoai.agent.data.HaoJson.readTextSafe(f)?.let { t ->
+            runCatching {
+                HaoJson.json.decodeFromString(ScheduleState.serializer(), t)
+            }.getOrNull()
+        } ?: ScheduleState()
 
     @Synchronized
     fun save(state: ScheduleState) {
         runCatching {
-            file.parentFile?.mkdirs()
-            file.writeText(HaoJson.json.encodeToString(ScheduleState.serializer(), state))
+            HaoJson.writeAtomic(f, HaoJson.json.encodeToString(ScheduleState.serializer(), state))
         }
+    }
+
+    /** 原子读改写：在对象锁内完成 load→edit→save，杜绝并发覆盖。 */
+    @Synchronized
+    fun update(taskId: String, edit: (ScheduleTask) -> Unit): Boolean {
+        val state = load()
+        val target = state.items.find { it.id == taskId } ?: return false
+        edit(target)
+        save(state)
+        return true
     }
 }
 
@@ -128,7 +151,19 @@ object Scheduler {
 
     fun syncAll(tasks: List<ScheduleTask>) {
         if (!::appContext.isInitialized) return
-        tasks.forEach { if (it.enabled) enqueueNext(it) else cancel(it.id) }
+        val wm = WorkManager.getInstance(appContext)
+        tasks.forEach { t ->
+            if (!t.enabled) {
+                cancel(t.id)
+                return@forEach
+            }
+            // 已有未完成的调度就保持不动：WorkManager 自身跨重启持久，
+            // 若每次启动都 REPLACE 重排，周期任务的倒计时会被反复重置而永远到不了点。
+            val hasLiveWork = runCatching {
+                wm.getWorkInfosForUniqueWork(workTag(t.id)).get().any { !it.state.isFinished }
+            }.getOrDefault(false)
+            if (!hasLiveWork) enqueueNext(t)
+        }
     }
 
     private fun workTag(id: String) = "haoai-sched-$id"

@@ -22,8 +22,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,8 +42,8 @@ import com.haoai.agent.HaoApplication
 import com.haoai.agent.agent.memory.JournalDay
 import com.haoai.agent.agent.memory.Memory
 import com.haoai.agent.agent.memory.MemoryConsolidation
+import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
-import com.haoai.agent.ui.common.appLayer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -75,7 +73,6 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
         Column(
             Modifier
                 .fillMaxSize()
-                .appLayer(backdrop)
         ) {
             Spacer(Modifier.height(64.dp))
         Text(
@@ -121,7 +118,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                     }
                 }
                 items(vm.days, key = { "j_${it.date}" }) { day ->
-                    JournalDayCard(day)
+                    JournalDayCard(day, backdrop)
                 }
             }
             item(key = "lt_header") {
@@ -131,7 +128,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 )
             }
             items(vm.items, key = { it.id }) { m ->
-                MemoryCard(m, fmt, onDelete = { vm.delete(m.id) })
+                MemoryCard(m, fmt, onDelete = { vm.delete(m.id) }, backdrop)
             }
         }
         }
@@ -259,12 +256,13 @@ private fun ManualAddDialog(
 }
 
 @Composable
-private fun JournalDayCard(day: JournalDay) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-        ),
+private fun JournalDayCard(day: JournalDay, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+    GlassCard(
+        onClick = {},
+        backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
+        surfaceAlpha = 0.20f,
+        lensRadius = 16.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(14.dp)) {
@@ -294,15 +292,16 @@ private fun JournalDayCard(day: JournalDay) {
 }
 
 @Composable
-private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
+private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDelete: () -> Unit, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+    GlassCard(
+        onClick = {},
+        backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
+        surfaceAlpha = 0.20f,
+        lensRadius = 16.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp)) {
+        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(m.content, style = MaterialTheme.typography.bodyMedium)
                 Row(
