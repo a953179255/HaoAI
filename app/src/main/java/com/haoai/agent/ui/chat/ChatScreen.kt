@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -76,6 +77,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -580,7 +583,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
+        Column(Modifier.padding(vertical = 7.dp)) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -588,6 +591,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                     .clickable { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Spacer(Modifier.size(12.dp))
                 if (live) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(12.dp),
@@ -609,6 +613,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(17.dp)
                 )
+                Spacer(Modifier.size(12.dp))
             }
             androidx.compose.animation.AnimatedVisibility(expanded) {
                 Text(
@@ -616,7 +621,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                     style = MaterialTheme.typography.bodySmall,
                     lineHeight = 17.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                    modifier = Modifier.padding(top = 5.dp)
+                    modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
                 )
             }
         }
@@ -625,6 +630,8 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
 
 @Composable
 private fun StreamingItem(streamingText: String?, streamingReasoning: String?) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     Column(
         Modifier
             .fillMaxWidth()
@@ -643,7 +650,16 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?) {
             Surface(
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
                 shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            clipboardManager.setText(AnnotatedString(streamingText ?: ""))
+                            android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    )
             ) {
                 MarkdownText(
                     streamingText + " ▍",
@@ -667,6 +683,8 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?) {
 
 @Composable
 private fun UserBubble(text: String) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -676,7 +694,16 @@ private fun UserBubble(text: String) {
         Surface(
             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp))
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        clipboardManager.setText(AnnotatedString(text))
+                        android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                )
         ) {
             Text(
                 text,
@@ -689,6 +716,8 @@ private fun UserBubble(text: String) {
 
 @Composable
 private fun AssistantBlock(row: ChatRow) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     Column(
         Modifier
             .fillMaxWidth()
@@ -703,7 +732,16 @@ private fun AssistantBlock(row: ChatRow) {
             if (row.error) {
                 Surface(
                     color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = {
+                                clipboardManager.setText(AnnotatedString(row.text))
+                                android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        )
                 ) {
                     Text(
                         row.text,
@@ -718,7 +756,16 @@ private fun AssistantBlock(row: ChatRow) {
                 Surface(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
                     shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = {
+                                clipboardManager.setText(AnnotatedString(row.text))
+                                android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        )
                 ) {
                     MarkdownText(
                         row.text,
