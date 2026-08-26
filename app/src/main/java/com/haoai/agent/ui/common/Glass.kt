@@ -106,6 +106,8 @@ fun GlassPanel(
     tint: Color? = null,
     shape: Shape? = null,
     lensRadius: Dp = radius,
+    blurRadius: Dp = radius / 3f,
+    chromaticAberration: Boolean = false,
     content: @Composable () -> Unit
 ) {
     Box(
@@ -115,11 +117,11 @@ fun GlassPanel(
                 shape = { shape ?: RoundedCornerShape(radius) },
                 effects = {
                     vibrancy()
-                    blur(radius.toPx() / 3f)
+                    blur(blurRadius.toPx())
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。
                     if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f)
+                        lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f, chromaticAberration = chromaticAberration)
                     }
                 },
                 onDrawSurface = {
@@ -558,7 +560,7 @@ fun GlassAlertDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.12f))
+            .background(Color.Black.copy(alpha = 0.08f))
             .clickable(interactionSource = null, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.Center
     ) {
@@ -568,8 +570,9 @@ fun GlassAlertDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            surfaceAlpha = 0.45f,
-            tint = Color(0xFFB3E5FC)
+            surfaceAlpha = 0.30f,
+            blurRadius = 16.dp,
+            chromaticAberration = true
         ) {
             Column(
                 Modifier
