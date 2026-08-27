@@ -154,11 +154,8 @@ fun ChatScreen(
         }
     }
 
-    // 上下文用量粗估（中英混合约 2 字符/token），随消息增长即时更新
-    val contextTokens = remember(rows) {
-        val chars = rows.sumOf { it.text.length } + 3000
-        chars / 2
-    }
+    // 上下文使用量（来自 ViewModel 实时估算）
+    val contextUsage by vm.contextUsage.collectAsState()
 
     Box(Modifier.fillMaxSize()) {
     ModalNavigationDrawer(
@@ -239,7 +236,7 @@ fun ChatScreen(
         TopBar(
             title = vm.agentName(),
             subtitle = vm.workspaceName(),
-            contextTokens = contextTokens,
+            contextUsage = contextUsage,
             backdrop = backdrop,
             sessions = sessions,
             activeId = activeId,
@@ -360,14 +357,14 @@ fun ChatScreen(
             }
         }
     }
-    }
+}
 }
 
 @Composable
 private fun TopBar(
     title: String,
     subtitle: String,
-    contextTokens: Int,
+    contextUsage: ContextUsage,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     sessions: List<StoredSession>,
     activeId: String?,
@@ -377,6 +374,7 @@ private fun TopBar(
     modifier: Modifier = Modifier
 ) {
     var quickMenu by remember { mutableStateOf(false) }
+    var showContextDetail by remember { mutableStateOf(false) }
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     GlassPanel(
         backdrop = backdrop,
@@ -397,12 +395,17 @@ private fun TopBar(
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "$subtitle · ~$contextTokens tok",
+                    subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
             }
+            CircularContextIndicator(
+                usage = contextUsage,
+                onClick = { showContextDetail = !showContextDetail }
+            )
+            Spacer(Modifier.size(2.dp))
             IconButton(onClick = onNewChat) {
                 Icon(Icons.Filled.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)
             }
@@ -495,6 +498,20 @@ private fun TopBar(
                         }
                     }
                 }
+            }
+        }
+        // 上下文详情弹窗
+        if (showContextDetail) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.BottomEnd,
+                onDismissRequest = { showContextDetail = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+            ) {
+                ContextUsageDetailPopup(
+                    usage = contextUsage,
+                    backdrop = backdrop,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
             }
         }
     }

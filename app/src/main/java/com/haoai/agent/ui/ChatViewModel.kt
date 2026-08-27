@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.engine.AgentEngine
+import com.haoai.agent.ui.chat.ContextUsage
 import com.haoai.agent.agent.engine.Finished
 import com.haoai.agent.agent.engine.MessageAdded
 import com.haoai.agent.agent.engine.ToolChanged
@@ -75,6 +76,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private val _deletedSessions = MutableStateFlow<List<StoredSession>>(emptyList())
     val deletedSessions = _deletedSessions.asStateFlow()
+
+    private val _contextUsage = MutableStateFlow(
+        ContextUsage(usedTokens = 0, totalTokens = 32768, systemTokens = 0, toolsTokens = 0, historyTokens = 0)
+    )
+    val contextUsage = _contextUsage.asStateFlow()
 
     init {
         c.sessionStore.purgeExpiredTrash()
@@ -283,6 +289,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
         _rows.value = rows
+        recalcContextUsage()
     }
 
     private fun previewLine(content: String): String =
@@ -482,6 +489,27 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 tokenOutToday = (if (sameDay) s.tokenOutToday else 0L) + pout
             )
         }
+    }
+
+    /** 重新估算上下文使用量（UI 实时显示）。 */
+    private fun recalcContextUsage() {
+        val s = _session.value ?: return
+        val st = c.settingsFlow.value
+        val isLocal = st.providers.find { it.id == st.activeProviderId }
+            ?.let { it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID || it.baseUrl.contains("127.0.0.1") } == true
+        val contextWindow = if (isLocal) st.localContextLength
+            else st.providers.find { it.id == st.activeProviderId }?.effectiveContextLength() ?: 32768
+        val chatMsgs = s.messages.map { it.toModel() }
+        val sysTok = com.haoai.agent.ui.chat.ContextUsage.estimateSystemTokens("")
+        val toolsTok = 2000
+        val histTok = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) }
+        _contextUsage.value = com.haoai.agent.ui.chat.ContextUsage(
+            usedTokens = sysTok + toolsTok + histTok,
+            totalTokens = contextWindow,
+            systemTokens = sysTok,
+            toolsTokens = toolsTok,
+            historyTokens = histTok
+        )
     }
 
     fun agentName(): String =

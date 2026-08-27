@@ -75,6 +75,7 @@ class AgentEngine(
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
+    private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient)
 
     suspend fun runTurn(
         userText: String,
@@ -110,6 +111,9 @@ class AgentEngine(
         }
         val apiTools = tools.map { it.toApi() }
 
+        // 压缩检查：在主循环前判断是否需要压缩
+        maybeCompact(onEvent)
+
         val streamBuf = StringBuilder()
         try {
             var turns = 0
@@ -132,21 +136,42 @@ class AgentEngine(
 
                 maybeNudgeHandoff(onEvent)
 
-                httpClient.chatStream(provider, apiKey, buildApiMessages(), apiTools, reasoningEffort.ifBlank { null })
-                    .collect { ev ->
-                        when (ev) {
-                            is SseEvent.Delta -> {
-                                streamBuf.append(ev.text)
-                                onDelta(ev.text)
+                try {
+                    httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
+                        .collect { ev ->
+                            when (ev) {
+                                is SseEvent.Delta -> {
+                                    streamBuf.append(ev.text)
+                                    onDelta(ev.text)
+                                }
+                                is SseEvent.Reasoning -> {
+                                    reasoningBuf.append(ev.text)
+                                    onReasoning(ev.text)
+                                }
+                                is SseEvent.Completed -> calls = ev.toolCalls
+                                is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
                             }
-                            is SseEvent.Reasoning -> {
-                                reasoningBuf.append(ev.text)
-                                onReasoning(ev.text)
-                            }
-                            is SseEvent.Completed -> calls = ev.toolCalls
-                            is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
                         }
+                } catch (e: Exception) {
+                    // Overflow 检测：自动压缩后重试一次
+                    val emsg = e.message ?: ""
+                    if (compactionManager.isOverflowError(emsg) && !compactionManager.isCoolingDown()) {
+                        handleOverflow(emsg, onEvent) {
+                            // 重试：重新收集
+                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
+                                .collect { ev ->
+                                    when (ev) {
+                                        is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
+                                        is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
+                                        is SseEvent.Completed -> calls = ev.toolCalls
+                                        is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                                    }
+                                }
+                        }
+                    } else {
+                        throw e
                     }
+                }
 
                 if (streamBuf.isNotBlank() || calls.isNotEmpty()) {
                     appendAndNotify(
@@ -470,6 +495,19 @@ class AgentEngine(
         return listOf(ApiMessage(role = "system", content = systemText)) + history
     }
 
+    /** 在系统提示前注入压缩摘要（如果有）。 */
+    private fun buildApiMessagesWithSummary(): List<ApiMessage> {
+        val msgs = buildApiMessages()
+        val summary = session.compactionSummary
+        if (summary.isNullOrBlank()) return msgs
+        // 将摘要作为系统消息前缀注入
+        val summaryMsg = ApiMessage(
+            role = "system",
+            content = "[上下文压缩摘要]\n$summary\n[/上下文压缩摘要]\n\n以上是之前对话的压缩摘要，请基于此继续。"
+        )
+        return listOf(summaryMsg) + msgs
+    }
+
     private fun appendAndNotify(msg: ChatMessage, onEvent: (TurnEvent) -> Unit) {
         session.messages.add(msg.toStored())
         persist()
@@ -616,6 +654,65 @@ class AgentEngine(
 
     private fun previewOf(content: String): String =
         content.lineSequence().firstOrNull()?.take(160) ?: ""
+
+    // ── 上下文压缩 ──────────────────────────────────────────────────
+
+    /** 检查是否需要压缩，需要则执行。 */
+    private suspend fun maybeCompact(onEvent: (TurnEvent) -> Unit) {
+        if (compactionManager.isCoolingDown()) return
+        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        val chatMsgs = session.messages.map { it.toModel() }
+        val usedTokens = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) } +
+            com.haoai.agent.ui.chat.ContextUsage.estimateSystemTokens("") + 2000
+        if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
+
+        // 预修剪工具输出
+        val prunedMsgs = compactionManager.prePruneToolOutputs(chatMsgs)
+
+        val result = compactionManager.compact(
+            messages = prunedMsgs,
+            existingSummary = session.compactionSummary,
+            provider = provider,
+            apiKey = apiKey,
+            contextWindow = contextWindow
+        )
+        session.compactionSummary = result.summary
+        persist()
+        onEvent(MessageAdded(ChatMessage(
+            role = ChatMessage.ROLE_ASSISTANT,
+            content = "[系统] 上下文已压缩，释放约 ${result.tokensSaved} tokens"
+        )))
+    }
+
+    /** Overflow 恢复：检测 API 返回的 context_length_exceeded 错误，自动压缩后重试。 */
+    private suspend fun handleOverflow(
+        error: String,
+        onEvent: (TurnEvent) -> Unit,
+        retryBlock: suspend () -> Unit
+    ) {
+        if (!compactionManager.isOverflowError(error)) throw Exception(error)
+        if (compactionManager.isCoolingDown()) throw Exception(error)
+        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        val chatMsgs = session.messages.map { it.toModel() }
+
+        // 强制压缩
+        val result = compactionManager.compact(
+            messages = chatMsgs,
+            existingSummary = session.compactionSummary,
+            provider = provider,
+            apiKey = apiKey,
+            contextWindow = contextWindow
+        )
+        session.compactionSummary = result.summary
+        persist()
+        onEvent(MessageAdded(ChatMessage(
+            role = ChatMessage.ROLE_ASSISTANT,
+            content = "[系统] 上下文溢出，已自动压缩并重试"
+        )))
+        retryBlock()
+    }
 
     companion object {
         const val MAX_TURNS = 60
