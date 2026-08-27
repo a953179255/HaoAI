@@ -78,7 +78,6 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .appLayer(backdrop)
     ) {
         Column(
             Modifier
