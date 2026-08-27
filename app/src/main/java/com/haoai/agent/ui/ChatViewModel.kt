@@ -7,7 +7,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.engine.AgentEngine
 import com.haoai.agent.agent.tools.TodoItem
-import com.haoai.agent.agent.tools.TodoState
 import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
 import com.haoai.agent.agent.engine.Finished
@@ -136,6 +135,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _session.value = s
         rebuildRows()
         refreshSessions()
+        refreshTodos()
     }
 
     fun selectSession(id: String) {
@@ -148,6 +148,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         sessionOut = 0
         _session.value = s
         rebuildRows()
+        refreshTodos()
     }
 
     fun deleteSession(id: String) {
@@ -215,10 +216,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun refreshTodos() {
-        viewModelScope.launch {
-            val state = todoStore.load(c.workspace.current)
-            _todoItems.value = state.items.toList()
+        val s = currentSession ?: run {
+            _todoItems.value = emptyList()
+            return
         }
+        _todoItems.value = todoStore.load(s.id)
     }
 
     /**
@@ -416,7 +418,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             "grep" -> "/${opt("pattern")}/"
             "glob" -> opt("pattern")
             "web_fetch" -> opt("url")
-            "todo" -> opt("action").ifBlank { "view" }
+            "todo" -> {
+                val todos = args["todos"] as? kotlinx.serialization.json.JsonArray
+                if (todos != null) "更新清单(${todos.size}项)"
+                else "查看清单"
+            }
             "memory" -> opt("action").ifBlank { "list" } +
                 (opt("content").ifBlank { opt("query") }).takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             "screen" -> "读取屏幕"

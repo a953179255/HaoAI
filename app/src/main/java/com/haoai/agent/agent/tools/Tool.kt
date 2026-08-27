@@ -16,6 +16,7 @@ data class ToolContext(
     val shellDir: java.io.File?,
     val todoStore: TodoStore,
     val appFilesDir: java.io.File,
+    val sessionId: String = "",
     val memoryBank: MemoryBank? = null,
     val journal: DailyJournal? = null,
     val depth: Int = 0,

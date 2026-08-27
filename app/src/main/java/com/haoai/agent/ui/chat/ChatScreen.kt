@@ -311,103 +311,100 @@ fun ChatScreen(
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         )
 
-        ComposerBar(
-            backdrop = backdrop,
-            text = input,
-            onTextChange = { newVal ->
-                input = newVal
-                if (newVal.startsWith("/")) {
-                    slashFilterQuery = newVal
-                    slashMenuVisible = true
-                } else {
-                    slashMenuVisible = false
-                }
-            },
-            running = running,
-            pendingImage = pendingImage,
-            onPickImage = { imagePicker.launch("image/*") },
-            onPickDocument = { documentPicker.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml")) },
-            onClearImage = { pendingImage = null },
-            onSend = {
-                val trimmed = input.trim()
-                val slashResult = SlashCommands.parse(trimmed)
-                if (slashResult != null) {
-                    val (cmd, arg) = slashResult
-                    scope.launch {
-                        val handled = vm.handleSlashCommand(cmd, arg) {
-                            showModelPicker = true
-                        }
-                        if (handled) {
-                            when (cmd.name) {
-                                "help" -> showSlashHelp = true
-                                "status" -> showStatusPopup = true
-                            }
-                        }
-                    }
-                    input = ""
-                    slashMenuVisible = false
-                    return@ComposerBar
-                }
-                val docPrefix = if (pendingDocumentContent != null && pendingDocumentName != null) {
-                    "[附件: $pendingDocumentName]\n```\n$pendingDocumentContent\n```\n"
-                } else ""
-                val fullText = docPrefix + trimmed
-                if (fullText.isNotBlank() || pendingImage != null) {
-                    vm.send(fullText, pendingImage)
-                    input = ""
-                    pendingImage = null
-                    pendingDocumentName = null
-                    pendingDocumentContent = null
-                }
-            },
-            onStop = { vm.stop() },
-            placeholder = "给 ${vm.agentName()} 派个活…",
-            modifier = Modifier
+        Column(
+            Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .graphicsLayer { translationY = -imeHeightPx.toFloat() }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
-        )
-
-        SlashCommandPopup(
-            visible = slashMenuVisible,
-            filterQuery = slashFilterQuery,
-            backdrop = backdrop,
-            onSelect = { cmd ->
-                if (cmd.takesText) {
-                    input = "/${cmd.name} "
-                } else {
-                    scope.launch {
-                        val handled = vm.handleSlashCommand(cmd, "") {
-                            showModelPicker = true
-                        }
-                        if (handled) {
-                            when (cmd.name) {
-                                "help" -> showSlashHelp = true
-                                "status" -> showStatusPopup = true
+        ) {
+            TaskPanel(
+                items = todoItems,
+                backdrop = backdrop,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            SlashCommandPopup(
+                visible = slashMenuVisible,
+                filterQuery = slashFilterQuery,
+                backdrop = backdrop,
+                onSelect = { cmd ->
+                    if (cmd.takesText) {
+                        input = "/${cmd.name} "
+                    } else {
+                        scope.launch {
+                            val handled = vm.handleSlashCommand(cmd, "") {
+                                showModelPicker = true
+                            }
+                            if (handled) {
+                                when (cmd.name) {
+                                    "help" -> showSlashHelp = true
+                                    "status" -> showStatusPopup = true
+                                }
                             }
                         }
+                        input = ""
                     }
-                    input = ""
-                }
-                slashMenuVisible = false
-            },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
-                .padding(horizontal = 14.dp, vertical = 140.dp)
-        )
-
-        TaskPanel(
-            items = todoItems,
-            backdrop = backdrop,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
-                .padding(horizontal = 14.dp, vertical = 200.dp)
-        )
+                    slashMenuVisible = false
+                },
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            ComposerBar(
+                backdrop = backdrop,
+                text = input,
+                onTextChange = { newVal ->
+                    input = newVal
+                    if (newVal.startsWith("/")) {
+                        slashFilterQuery = newVal
+                        slashMenuVisible = true
+                    } else {
+                        slashMenuVisible = false
+                    }
+                },
+                running = running,
+                pendingImage = pendingImage,
+                onPickImage = { imagePicker.launch("image/*") },
+                onPickDocument = { documentPicker.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml")) },
+                onClearImage = { pendingImage = null },
+                onSlashCommand = {
+                    slashFilterQuery = ""
+                    slashMenuVisible = !slashMenuVisible
+                },
+                onSend = {
+                    val trimmed = input.trim()
+                    val slashResult = SlashCommands.parse(trimmed)
+                    if (slashResult != null) {
+                        val (cmd, arg) = slashResult
+                        scope.launch {
+                            val handled = vm.handleSlashCommand(cmd, arg) {
+                                showModelPicker = true
+                            }
+                            if (handled) {
+                                when (cmd.name) {
+                                    "help" -> showSlashHelp = true
+                                    "status" -> showStatusPopup = true
+                                }
+                            }
+                        }
+                        input = ""
+                        slashMenuVisible = false
+                        return@ComposerBar
+                    }
+                    val docPrefix = if (pendingDocumentContent != null && pendingDocumentName != null) {
+                        "[附件: $pendingDocumentName]\n```\n$pendingDocumentContent\n```\n"
+                    } else ""
+                    val fullText = docPrefix + trimmed
+                    if (fullText.isNotBlank() || pendingImage != null) {
+                        vm.send(fullText, pendingImage)
+                        input = ""
+                        pendingImage = null
+                        pendingDocumentName = null
+                        pendingDocumentContent = null
+                    }
+                },
+                onStop = { vm.stop() },
+                placeholder = "给 ${vm.agentName()} 派个活…"
+            )
+        }
 
         error?.let { msg ->
             Snackbar(
@@ -994,6 +991,7 @@ private fun ComposerBar(
     onPickImage: () -> Unit,
     onPickDocument: () -> Unit,
     onClearImage: () -> Unit,
+    onSlashCommand: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     placeholder: String = "给 HaoAI 派个活…",
@@ -1103,6 +1101,10 @@ private fun ComposerBar(
                         toolbarExpanded = false
                         onPickDocument()
                     })
+                    SlashToolbarButton(onClick = {
+                        toolbarExpanded = false
+                        onSlashCommand()
+                    })
                 }
             }
         }
@@ -1134,6 +1136,36 @@ private fun ToolbarButton(
             Spacer(Modifier.size(4.dp))
             Text(
                 label,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun SlashToolbarButton(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier.height(34.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "/",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.size(4.dp))
+            Text(
+                "命令",
                 style = MaterialTheme.typography.labelSmall,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

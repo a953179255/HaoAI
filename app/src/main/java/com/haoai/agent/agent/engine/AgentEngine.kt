@@ -99,6 +99,7 @@ class AgentEngine(
             ?: File(appFilesDir, "shell-home").apply { mkdirs() }
         val ctx = ToolContext(
             backend, shellDir, todoStore, appFilesDir,
+            sessionId = session.id,
             memoryBank, journal, depth, okHttpClient, appContext,
             statusProvider = statusProvider,
             configMutator = configMutator,
@@ -303,8 +304,9 @@ class AgentEngine(
     private suspend fun runSubAgent(task: String, parentCtx: ToolContext): String {
         val childCtx = ToolContext(
             parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
-            parentCtx.appFilesDir, parentCtx.memoryBank, parentCtx.journal, parentCtx.depth + 1,
-            parentCtx.httpClient, parentCtx.appContext,
+            parentCtx.appFilesDir, sessionId = parentCtx.sessionId,
+            memoryBank = parentCtx.memoryBank, journal = parentCtx.journal, depth = parentCtx.depth + 1,
+            httpClient = parentCtx.httpClient, appContext = parentCtx.appContext,
             statusProvider = parentCtx.statusProvider
         )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位与设置修改
         val tools = ToolRegistry.readOnly(childCtx)
