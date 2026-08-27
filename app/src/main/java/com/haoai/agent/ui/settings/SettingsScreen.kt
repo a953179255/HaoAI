@@ -129,13 +129,9 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            androidx.compose.runtime.CompositionLocalProvider(
-                com.haoai.agent.ui.common.LocalGlassRefract provides false
-            ) {
             Column(
                 Modifier
                     .fillMaxSize()
-                    .appLayer(backdrop)
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
@@ -236,7 +232,6 @@ fun SettingsScreen(
                 }
             }
             }
-            }
             GlassPageBar(
                 backdrop = backdrop,
                 title = "设置",
@@ -252,13 +247,9 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            androidx.compose.runtime.CompositionLocalProvider(
-                com.haoai.agent.ui.common.LocalGlassRefract provides false
-            ) {
             Column(
                 Modifier
                     .fillMaxSize()
-                    .appLayer(backdrop)
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
@@ -281,7 +272,6 @@ fun SettingsScreen(
                         "about" -> aboutItems(vm, settings, backdrop)
                     }
                 }
-            }
             }
             GlassPageBar(
                 backdrop = backdrop,

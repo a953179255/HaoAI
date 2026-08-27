@@ -64,13 +64,9 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             .fillMaxSize()
             .statusBarsPadding()
     ) {
-        androidx.compose.runtime.CompositionLocalProvider(
-            com.haoai.agent.ui.common.LocalGlassRefract provides false
-        ) {
         Column(
             Modifier
                 .fillMaxSize()
-                .appLayer(backdrop)
         ) {
             Spacer(Modifier.height(64.dp))
         Text(
@@ -190,7 +186,6 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                     }
                 }
             }
-        }
         }
         }
         GlassPageBar(

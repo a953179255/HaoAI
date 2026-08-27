@@ -212,55 +212,29 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .navigationBarsPadding()
                 .imePadding()
-        ) {
-            Column(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .appLayer(backdrop)
-                    .pointerInput(Unit) {
-                        detectTapGestures {
-                            focusManager.clearFocus()
-                        }
+                .appLayer(backdrop)
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        focusManager.clearFocus()
                     }
-            ) {
-                Spacer(
-                    Modifier
-                        .statusBarsPadding()
-                        .height(78.dp)
-                )
-                MessageList(
-                    rows = rows,
-                    streamingText = streaming,
-                    streamingReasoning = streamingReasoning,
-                    running = running,
-                    listState = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    bottomPadding = 8.dp
-                )
-            }
-            ComposerBar(
-                backdrop = backdrop,
-                text = input,
-                onTextChange = { input = it },
+                }
+        ) {
+            Spacer(
+                Modifier
+                    .statusBarsPadding()
+                    .height(78.dp)
+            )
+            MessageList(
+                rows = rows,
+                streamingText = streaming,
+                streamingReasoning = streamingReasoning,
                 running = running,
-                pendingImage = pendingImage,
-                onPickImage = { imagePicker.launch("image/*") },
-                onClearImage = { pendingImage = null },
-                onSend = {
-                    vm.send(input, pendingImage)
-                    input = ""
-                    pendingImage = null
-                },
-                onStop = { vm.stop() },
-                placeholder = "给 ${vm.agentName()} 派个活…",
+                listState = listState,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .weight(1f)
+                    .fillMaxWidth(),
+                bottomPadding = 132.dp
             )
         }
 
@@ -286,6 +260,28 @@ fun ChatScreen(
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+
+        ComposerBar(
+            backdrop = backdrop,
+            text = input,
+            onTextChange = { input = it },
+            running = running,
+            pendingImage = pendingImage,
+            onPickImage = { imagePicker.launch("image/*") },
+            onClearImage = { pendingImage = null },
+            onSend = {
+                vm.send(input, pendingImage)
+                input = ""
+                pendingImage = null
+            },
+            onStop = { vm.stop() },
+            placeholder = "给 ${vm.agentName()} 派个活…",
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         )
 
         error?.let { msg ->
