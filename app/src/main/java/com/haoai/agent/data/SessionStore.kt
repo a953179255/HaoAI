@@ -34,7 +34,9 @@ data class StoredSession(
     /** 回收站：>0 表示已删除（该时间戳），7 天后自动清理；0=正常会话。 */
     var deletedAt: Long = 0,
     /** 上下文压缩摘要（CompactionManager 生成）。非空时表示历史已被压缩。 */
-    var compactionSummary: String? = null
+    var compactionSummary: String? = null,
+    /** 智能标题已生成过（只生成一次，避免每轮都花 token）。 */
+    var titleAuto: Boolean = false
 ) {
     companion object {
         fun create(workspaceUri: String?): StoredSession {

@@ -196,6 +196,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 _streamingReasoning.value = null
                 refreshSessions()
                 c.syncWorkspaceDocs()
+                maybeGenerateTitle(s)
             }
         }
     }
@@ -207,6 +208,53 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val ok = c.llama.ensureStarted()
         if (!ok) return null
         return p.copy(baseUrl = com.haoai.agent.platform.llama.LlamaServerController.LOCAL_BASE_URL)
+    }
+
+    /**
+     * 智能会话标题：首轮对话完成后用当前模型总结 ≤12 字标题。
+     * 只生成一次（titleAuto 标记），异步执行、静默失败，不阻塞下一次对话。
+     */
+    private fun maybeGenerateTitle(s: StoredSession) {
+        if (s.titleAuto) return
+        val hasUser = s.messages.any {
+            it.role == com.haoai.agent.agent.model.ChatMessage.ROLE_USER && it.content.isNotBlank()
+        }
+        val hasReply = s.messages.any {
+            it.role == com.haoai.agent.agent.model.ChatMessage.ROLE_ASSISTANT &&
+                it.content.isNotBlank() && !it.error
+        }
+        if (!hasUser || !hasReply) return
+        val provider0 = c.activeProvider() ?: return
+        // 先落标记再请求：失败也不重试，避免每轮都烧 token
+        s.titleAuto = true
+        c.sessionStore.save(s)
+        viewModelScope.launch {
+            try {
+                val provider = resolveProvider(provider0) ?: return@launch
+                val engine = buildEngine(s, provider)
+                val sb = StringBuilder()
+                engine.runBtw(
+                    question = "用不超过12个字总结这段对话的主题，作为会话标题。只输出标题本身，不要引号、句号或任何解释。",
+                    onDelta = { frag -> if (sb.length < 80) sb.append(frag) },
+                    onReasoning = { }
+                )
+                val t = sb.toString().trim()
+                    .trim('"', '“', '”', '\'', '「', '」', '。', '.', '！', '!', '？', '?')
+                    .replace('\n', ' ')
+                    .take(24)
+                if (t.isNotBlank()) {
+                    s.title = t
+                    c.sessionStore.save(s)
+                    refreshSessions()
+                    // copy() 强制 StateFlow 发射（同引用修改不会触发更新）
+                    if (_session.value?.id == s.id) _session.value = s.copy()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("HaoTitle", "会话标题生成失败: ${e.message}")
+            }
+        }
     }
 
     fun stop() {
