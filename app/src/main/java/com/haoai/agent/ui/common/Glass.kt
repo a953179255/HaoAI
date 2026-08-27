@@ -5,6 +5,7 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -147,9 +148,10 @@ fun GlassPanel(
         // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
         modifier
             .clip(shape ?: RoundedCornerShape(radius))
-            .background(Color.White.copy(alpha = surfaceAlpha))
+            .background(Color.White.copy(alpha = surfaceAlpha.coerceAtLeast(0.28f)))
+            .border(1.5.dp, Color.White.copy(alpha = 0.45f), shape ?: RoundedCornerShape(radius))
             .then(
-                if (tint != null) Modifier.background(tint.copy(alpha = 0.30f)) else Modifier
+                if (tint != null) Modifier.background(tint.copy(alpha = 0.15f)) else Modifier
             )
     }
     Box(panelModifier) {
@@ -356,8 +358,9 @@ fun GlassCard(
     } else {
         Modifier
             .clip(shape)
-            .background(Color.White.copy(alpha = surfaceAlpha))
-            .then(if (tint != null) Modifier.background(tint.copy(alpha = 0.30f)) else Modifier)
+            .background(Color.White.copy(alpha = surfaceAlpha.coerceAtLeast(0.28f)))
+            .border(1.5.dp, Color.White.copy(alpha = 0.45f), shape)
+            .then(if (tint != null) Modifier.background(tint.copy(alpha = 0.15f)) else Modifier)
     }
 
     Box(
@@ -440,11 +443,12 @@ fun LiquidToggle(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     checkedColor: Color? = null,
-    refract: Boolean = true
+    refract: Boolean? = null
 ) {
     val animationScope = rememberCoroutineScope()
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
     val view = LocalView.current
+    val r = refract ?: LocalGlassRefract.current
 
     val width = 52.dp
     val height = 32.dp
@@ -464,7 +468,7 @@ fun LiquidToggle(
     fun fraction(): Float =
         if (dragFraction.isNaN()) progressAnim.value else dragFraction
 
-    val trackModifier = if (refract) {
+    val trackModifier = if (r) {
         Modifier.drawBackdrop(
             backdrop = backdrop,
             shape = { CircleShape },
