@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -36,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
@@ -127,6 +129,11 @@ fun ChatScreen(
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val density = LocalDensity.current
     val imeHeightPx = WindowInsets.ime.getBottom(density)
+    // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
+    val navBarPx = WindowInsets.navigationBars.getBottom(density)
+    val keyboardLiftPx = (imeHeightPx - navBarPx).coerceAtLeast(0)
+    // 底部悬浮列（TaskPanel/斜杠弹层/输入框）实测高度，驱动消息列表动态底部留白
+    var bottomBarHeightPx by remember { mutableStateOf(0) }
 
     // 斜杠命令状态
     var slashFilterQuery by remember { mutableStateOf("") }
@@ -261,7 +268,7 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
+                .graphicsLayer { translationY = -keyboardLiftPx.toFloat() }
                 .appLayer(backdrop)
                 .pointerInput(Unit) {
                     detectTapGestures {
@@ -284,7 +291,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                bottomPadding = 132.dp
+                bottomPadding = with(density) { maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) }
             )
         }
 
@@ -316,7 +323,8 @@ fun ChatScreen(
             Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
+                .graphicsLayer { translationY = -keyboardLiftPx.toFloat() }
+                .onSizeChanged { bottomBarHeightPx = it.height }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             TaskPanel(
