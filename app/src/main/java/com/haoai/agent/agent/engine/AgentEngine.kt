@@ -462,6 +462,7 @@ class AgentEngine(
         val history = session.messages.asReversed()
             .take(MAX_HISTORY)
             .asReversed()
+            .repairBlankCallIds()
             .pairSanitized()
             .mapNotNull { m ->
                 when (m.role) {
@@ -563,6 +564,43 @@ class AgentEngine(
      * 2) 其全部调用都缺少结果的 assistant(tool_calls)。
      * 保证发给供应商的历史始终满足严格的调用配对约束。
      */
+    /**
+     * 修复历史中遗留的空 tool call id（如 deepseek-v4-flash 偶发流式返回 "id": ""）。
+     * 请求要求 assistant.tool_calls[].id 非空且与 tool.tool_call_id 严格配对：
+     * 按最近 assistant 轮次的调用队列、同名优先，为空 id 派生一致的替代 id；
+     * 配不上对的孤儿 tool 结果直接丢弃（后续 pairSanitized 也会兜底清理）。
+     */
+    private fun List<com.haoai.agent.data.StoredMessage>.repairBlankCallIds(): List<com.haoai.agent.data.StoredMessage> {
+        val dirty = any { (it.role == ChatMessage.ROLE_ASSISTANT && it.toolCalls.any { c -> c.id.isBlank() }) ||
+            (it.role == ChatMessage.ROLE_TOOL && it.toolCallId.isNullOrBlank()) }
+        if (!dirty) return this
+        var seq = 0
+        val out = mutableListOf<com.haoai.agent.data.StoredMessage>()
+        // 当前 assistant 轮次可分配的 id：name -> 待消费 id 队列
+        var pendingIds = LinkedHashMap<String, MutableList<String>>()
+        for (m in this) {
+            when (m.role) {
+                ChatMessage.ROLE_ASSISTANT -> {
+                    pendingIds = LinkedHashMap()
+                    val calls = m.toolCalls.map { c ->
+                        val id = if (c.id.isBlank()) "call_fix_${seq++}" else c.id
+                        pendingIds.getOrPut(c.name) { mutableListOf() }.add(id)
+                        c.copy(id = id)
+                    }
+                    out += m.copy(toolCalls = calls)
+                }
+                ChatMessage.ROLE_TOOL -> {
+                    if (!m.toolCallId.isNullOrBlank()) { out += m; continue }
+                    val id = pendingIds[m.toolName]?.removeFirstOrNull()
+                        ?: pendingIds.values.firstOrNull { it.isNotEmpty() }?.removeFirstOrNull()
+                    if (id != null) out += m.copy(toolCallId = id)
+                }
+                else -> out += m
+            }
+        }
+        return out
+    }
+
     private fun List<com.haoai.agent.data.StoredMessage>.pairSanitized(): List<com.haoai.agent.data.StoredMessage> {
         val calledIds = flatMap { if (it.role == ChatMessage.ROLE_ASSISTANT) it.toolCalls.map { c -> c.id } else emptyList() }
             .toSet()

@@ -362,7 +362,9 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
             val calls = pending.entries.sortedBy { it.key }.mapIndexedNotNull { i, (_, p) ->
                 val name = p.name.toString().ifBlank { return@mapIndexedNotNull null }
                 com.haoai.agent.agent.model.ToolCallData(
-                    id = p.id ?: "call_${counter++}_$i",
+                    // 部分供应商（如 deepseek-v4-flash）会流式返回空字符串 id，
+                    // 回传 "id": "" 会被服务端以 400 missing tool_calls.id 拒绝，必须兜底生成
+                    id = p.id?.takeIf { it.isNotBlank() } ?: "call_${counter++}_$i",
                     name = name,
                     argumentsJson = p.args.toString().ifBlank { "{}" }
                 )
