@@ -71,7 +71,9 @@ class AgentEngine(
     /** 动态渲染自身运行状态（app_status 工具按需读取，不注入系统提示）。 */
     private val statusProvider: () -> String = { "" },
     /** 白名单设置修改（update_settings 工具，走用户审批）。 */
-    private val configMutator: (JsonObject) -> String = { "设置修改不可用" }
+    private val configMutator: (JsonObject) -> String = { "设置修改不可用" },
+    /** 工具状态变更回调（todo 修改后刷新 UI）。 */
+    private val onToolChange: (() -> Unit)? = null
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -99,7 +101,8 @@ class AgentEngine(
             backend, shellDir, todoStore, appFilesDir,
             memoryBank, journal, depth, okHttpClient, appContext,
             statusProvider = statusProvider,
-            configMutator = configMutator
+            configMutator = configMutator,
+            onToolChange = onToolChange
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx -> runSubAgent(task, parentCtx) } else null
@@ -712,6 +715,70 @@ class AgentEngine(
             content = "[系统] 上下文溢出，已自动压缩并重试"
         )))
         retryBlock()
+    }
+
+    // ── 手动压缩（/compact 命令） ────────────────────────────────────
+
+    suspend fun compactNow(): String? {
+        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        val chatMsgs = session.messages.map { it.toModel() }
+        val result = compactionManager.compact(
+            messages = chatMsgs,
+            existingSummary = session.compactionSummary,
+            provider = provider,
+            apiKey = apiKey,
+            contextWindow = contextWindow
+        )
+        session.compactionSummary = result.summary
+        persist()
+        return result.summary
+    }
+
+    // ── /btw 附带问题（不写入历史） ─────────────────────────────────
+
+    suspend fun runBtw(
+        question: String,
+        onDelta: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ) {
+        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+
+        val sysParts = mutableListOf<String>()
+        if (customPrompt.isNotBlank()) sysParts.add(customPrompt)
+        if (identity.isNotBlank()) sysParts.add(identity)
+        val sysText = sysParts.joinToString("\n\n")
+
+        val apiMessages = mutableListOf<com.haoai.agent.agent.provider.ApiMessage>()
+        if (sysText.isNotBlank()) {
+            apiMessages.add(com.haoai.agent.agent.provider.ApiMessage(role = "system", content = sysText))
+        }
+        session.messages.forEach { m ->
+            apiMessages.add(com.haoai.agent.agent.provider.ApiMessage(
+                role = when (m.role) {
+                    ChatMessage.ROLE_USER -> "user"
+                    ChatMessage.ROLE_ASSISTANT -> "assistant"
+                    else -> "user"
+                },
+                content = m.content
+            ))
+        }
+        apiMessages.add(com.haoai.agent.agent.provider.ApiMessage(role = "user", content = question))
+
+        httpClient.chatStream(
+            provider = provider,
+            apiKey = apiKey,
+            messages = apiMessages,
+            tools = emptyList(),
+            reasoningEffort = reasoningEffort.ifBlank { null }
+        ).collect { ev ->
+            when (ev) {
+                is SseEvent.Delta -> onDelta(ev.text)
+                is SseEvent.Reasoning -> onReasoning(ev.text)
+                else -> {}
+            }
+        }
     }
 
     companion object {

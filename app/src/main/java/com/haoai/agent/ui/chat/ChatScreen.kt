@@ -40,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandLess
@@ -114,15 +115,25 @@ fun ChatScreen(
     val sessions by vm.sessions.collectAsState()
     val deletedSessions by vm.deletedSessions.collectAsState()
     val approval by vm.approval.collectAsState()
+    val todoItems by vm.todoItems.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
     var pendingImage by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDocumentName by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDocumentContent by rememberSaveable { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawerState.open() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val density = LocalDensity.current
     val imeHeightPx = WindowInsets.ime.getBottom(density)
+
+    // 斜杠命令状态
+    var slashFilterQuery by remember { mutableStateOf("") }
+    var slashMenuVisible by remember { mutableStateOf(false) }
+    var showSlashHelp by remember { mutableStateOf(false) }
+    var showStatusPopup by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
 
     // 系统返回手势：侧边栏展开时先收起侧边栏，而不是把应用最小化
     androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
@@ -134,7 +145,6 @@ fun ChatScreen(
     ) { uri ->
         if (uri != null) {
             runCatching {
-                // 降采样到最长边 1024px 再编码，控制视觉 token 与请求体积
                 val resolver = context.contentResolver
                 val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
@@ -148,6 +158,53 @@ fun ChatScreen(
                     bmp.recycle()
                     pendingImage = "data:image/jpeg;base64," +
                         android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+                }
+            }
+        }
+    }
+
+    val documentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val resolver = context.contentResolver
+                val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
+                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    c.moveToFirst()
+                    if (nameIndex >= 0) c.getString(nameIndex) else "document"
+                } ?: "document"
+                val mimeType = resolver.getType(uri) ?: "application/octet-stream"
+                val isTextLike = mimeType.startsWith("text/") ||
+                    mimeType == "application/json" ||
+                    mimeType == "application/xml" ||
+                    fileName.endsWith(".kt", true) ||
+                    fileName.endsWith(".java", true) ||
+                    fileName.endsWith(".py", true) ||
+                    fileName.endsWith(".js", true) ||
+                    fileName.endsWith(".ts", true) ||
+                    fileName.endsWith(".html", true) ||
+                    fileName.endsWith(".css", true) ||
+                    fileName.endsWith(".json", true) ||
+                    fileName.endsWith(".xml", true) ||
+                    fileName.endsWith(".md", true) ||
+                    fileName.endsWith(".txt", true) ||
+                    fileName.endsWith(".csv", true) ||
+                    fileName.endsWith(".log", true) ||
+                    fileName.endsWith(".gradle", true) ||
+                    fileName.endsWith(".yaml", true) ||
+                    fileName.endsWith(".yml", true) ||
+                    fileName.endsWith(".toml", true) ||
+                    fileName.endsWith(".properties", true)
+                if (isTextLike) {
+                    val content = resolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+                    if (content != null) {
+                        pendingDocumentName = fileName
+                        pendingDocumentContent = content
+                    }
+                } else {
+                    pendingDocumentName = fileName
+                    pendingDocumentContent = "[文件附件: $fileName ($mimeType)]"
                 }
             }
         }
@@ -257,15 +314,51 @@ fun ChatScreen(
         ComposerBar(
             backdrop = backdrop,
             text = input,
-            onTextChange = { input = it },
+            onTextChange = { newVal ->
+                input = newVal
+                if (newVal.startsWith("/")) {
+                    slashFilterQuery = newVal
+                    slashMenuVisible = true
+                } else {
+                    slashMenuVisible = false
+                }
+            },
             running = running,
             pendingImage = pendingImage,
             onPickImage = { imagePicker.launch("image/*") },
+            onPickDocument = { documentPicker.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml")) },
             onClearImage = { pendingImage = null },
             onSend = {
-                vm.send(input, pendingImage)
-                input = ""
-                pendingImage = null
+                val trimmed = input.trim()
+                val slashResult = SlashCommands.parse(trimmed)
+                if (slashResult != null) {
+                    val (cmd, arg) = slashResult
+                    scope.launch {
+                        val handled = vm.handleSlashCommand(cmd, arg) {
+                            showModelPicker = true
+                        }
+                        if (handled) {
+                            when (cmd.name) {
+                                "help" -> showSlashHelp = true
+                                "status" -> showStatusPopup = true
+                            }
+                        }
+                    }
+                    input = ""
+                    slashMenuVisible = false
+                    return@ComposerBar
+                }
+                val docPrefix = if (pendingDocumentContent != null && pendingDocumentName != null) {
+                    "[附件: $pendingDocumentName]\n```\n$pendingDocumentContent\n```\n"
+                } else ""
+                val fullText = docPrefix + trimmed
+                if (fullText.isNotBlank() || pendingImage != null) {
+                    vm.send(fullText, pendingImage)
+                    input = ""
+                    pendingImage = null
+                    pendingDocumentName = null
+                    pendingDocumentContent = null
+                }
             },
             onStop = { vm.stop() },
             placeholder = "给 ${vm.agentName()} 派个活…",
@@ -274,6 +367,46 @@ fun ChatScreen(
                 .navigationBarsPadding()
                 .graphicsLayer { translationY = -imeHeightPx.toFloat() }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
+        )
+
+        SlashCommandPopup(
+            visible = slashMenuVisible,
+            filterQuery = slashFilterQuery,
+            backdrop = backdrop,
+            onSelect = { cmd ->
+                if (cmd.takesText) {
+                    input = "/${cmd.name} "
+                } else {
+                    scope.launch {
+                        val handled = vm.handleSlashCommand(cmd, "") {
+                            showModelPicker = true
+                        }
+                        if (handled) {
+                            when (cmd.name) {
+                                "help" -> showSlashHelp = true
+                                "status" -> showStatusPopup = true
+                            }
+                        }
+                    }
+                    input = ""
+                }
+                slashMenuVisible = false
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
+                .padding(horizontal = 14.dp, vertical = 140.dp)
+        )
+
+        TaskPanel(
+            items = todoItems,
+            backdrop = backdrop,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
+                .padding(horizontal = 14.dp, vertical = 200.dp)
         )
 
         error?.let { msg ->
@@ -859,12 +992,15 @@ private fun ComposerBar(
     running: Boolean,
     pendingImage: String?,
     onPickImage: () -> Unit,
+    onPickDocument: () -> Unit,
     onClearImage: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     placeholder: String = "给 HaoAI 派个活…",
     modifier: Modifier = Modifier
 ) {
+    var toolbarExpanded by remember { mutableStateOf(false) }
+
     GlassPanel(
         backdrop = backdrop,
         radius = 26.dp,
@@ -884,7 +1020,7 @@ private fun ComposerBar(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        "已附加图片（发送后由端侧视觉模型识别）",
+                        "已附加图片",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
@@ -903,54 +1039,105 @@ private fun ComposerBar(
                 }
             }
             Row(
-                Modifier.padding(start = 10.dp, end = 6.dp, bottom = 4.dp),
+                Modifier.padding(start = 6.dp, end = 6.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onPickImage, enabled = !running) {
+                IconButton(onClick = { toolbarExpanded = !toolbarExpanded }, enabled = !running) {
                     Icon(
-                        Icons.Filled.AddPhotoAlternate,
-                        contentDescription = "添加图片",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (toolbarExpanded) Icons.Filled.ExpandMore else Icons.Filled.Add,
+                        contentDescription = "展开工具栏",
+                        tint = if (toolbarExpanded) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 androidx.compose.foundation.text.BasicTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp
-                ),
-                maxLines = 5,
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-                decorationBox = { inner ->
-                    Box(Modifier.padding(vertical = 12.dp)) {
-                        if (text.isEmpty()) {
-                            Text(
-                                placeholder,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 15.sp
-                            )
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.weight(1f),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp
+                    ),
+                    maxLines = 5,
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                    decorationBox = { inner ->
+                        Box(Modifier.padding(vertical = 12.dp)) {
+                            if (text.isEmpty()) {
+                                Text(
+                                    placeholder,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 15.sp
+                                )
+                            }
+                            inner()
                         }
-                        inner()
                     }
-                }
-            )
-            val actionable = running || text.isNotBlank() || pendingImage != null
-            LiquidGlassButton(
-                onClick = { if (running) onStop() else onSend() },
-                backdrop = backdrop,
-                modifier = Modifier.size(46.dp),
-                surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = if (actionable) 0.85f else 0.25f)
-            ) {
-                Icon(
-                    if (running) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                    contentDescription = if (running) "停止" else "发送",
-                    tint = if (actionable) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
                 )
+                val actionable = running || text.isNotBlank() || pendingImage != null
+                LiquidGlassButton(
+                    onClick = { if (running) onStop() else onSend() },
+                    backdrop = backdrop,
+                    modifier = Modifier.size(46.dp),
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = if (actionable) 0.85f else 0.25f)
+                ) {
+                    Icon(
+                        if (running) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
+                        contentDescription = if (running) "停止" else "发送",
+                        tint = if (actionable) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            AnimatedVisibility(visible = toolbarExpanded) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ToolbarButton(icon = Icons.Filled.AddPhotoAlternate, label = "图片", onClick = {
+                        toolbarExpanded = false
+                        onPickImage()
+                    })
+                    ToolbarButton(icon = Icons.Filled.Description, label = "文档", onClick = {
+                        toolbarExpanded = false
+                        onPickDocument()
+                    })
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ToolbarButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier.height(34.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.size(4.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

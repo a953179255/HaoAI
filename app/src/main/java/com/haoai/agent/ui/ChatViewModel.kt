@@ -6,6 +6,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.engine.AgentEngine
+import com.haoai.agent.agent.tools.TodoItem
+import com.haoai.agent.agent.tools.TodoState
+import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
 import com.haoai.agent.agent.engine.Finished
 import com.haoai.agent.agent.engine.MessageAdded
@@ -82,10 +85,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     )
     val contextUsage = _contextUsage.asStateFlow()
 
+    private val _todoItems = MutableStateFlow<List<TodoItem>>(emptyList())
+    val todoItems = _todoItems.asStateFlow()
+
+    private val todoStore = TodoStore(c.appFilesDir)
+
     init {
         c.sessionStore.purgeExpiredTrash()
         refreshSessions()
         refreshDeletedSessions()
+        refreshTodos()
         if (_sessions.value.isNotEmpty()) {
             selectSession(_sessions.value.first().id)
         } else {
@@ -202,8 +211,107 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun stop() {
         job?.cancel()
         job = null
-        // 停止时若审批弹层还挂着，必须清掉，否则全屏遮罩会永久吃掉触摸事件
         _approval.value = null
+    }
+
+    fun refreshTodos() {
+        viewModelScope.launch {
+            val state = todoStore.load(c.workspace.current)
+            _todoItems.value = state.items.toList()
+        }
+    }
+
+    /**
+     * 处理斜杠命令。返回 true 表示命令已消费，UI 不应再发送为普通消息。
+     */
+    suspend fun handleSlashCommand(
+        command: com.haoai.agent.ui.chat.SlashCommand,
+        arg: String,
+        onModelPicker: () -> Unit
+    ): Boolean {
+        return when (command.name) {
+            "compact" -> {
+                val s = currentSession ?: return false
+                val provider = c.activeProvider() ?: return false
+                val engine = buildEngine(s, provider)
+                _running.value = true
+                try {
+                    val summary = engine.compactNow()
+                    if (summary != null) {
+                        _streamingText.value = null
+                        rebuildRows()
+                    }
+                } finally {
+                    _running.value = false
+                    _streamingText.value = null
+                    refreshSessions()
+                }
+                true
+            }
+            "clear" -> {
+                newSession()
+                true
+            }
+            "stop" -> {
+                stop()
+                true
+            }
+            "model" -> {
+                onModelPicker()
+                true
+            }
+            "btw", "side" -> {
+                if (arg.isBlank()) {
+                    _error.value = "用法：/btw <你的问题>"
+                    return true
+                }
+                sendBtw(arg)
+                true
+            }
+            "help" -> {
+                true
+            }
+            "status" -> {
+                true
+            }
+            "task", "todo", "tasks" -> {
+                refreshTodos()
+                true
+            }
+            else -> false
+        }
+    }
+
+    /**
+     * /btw 附带问题：临时借用当前上下文回答，不写入对话历史。
+     */
+    private fun sendBtw(question: String) {
+        val provider0 = c.activeProvider()
+        if (provider0 == null) {
+            _error.value = "请先配置模型服务"
+            return
+        }
+        val s = currentSession ?: return
+        _running.value = true
+        _streamingText.value = null
+        job = viewModelScope.launch {
+            try {
+                val provider = resolveProvider(provider0) ?: run {
+                    _error.value = "端侧模型启动失败"
+                    return@launch
+                }
+                val engine = buildEngine(s, provider)
+                engine.runBtw(
+                    question = question,
+                    onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
+                    onReasoning = { frag -> _streamingReasoning.value = (_streamingReasoning.value ?: "") + frag }
+                )
+            } finally {
+                _running.value = false
+                _streamingText.value = null
+                _streamingReasoning.value = null
+            }
+        }
     }
 
     fun dismissError() {
@@ -365,7 +473,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             onUsage = { pin, pout -> addUsage(pin, pout) },
             backgroundScope = c.applicationScope,
             statusProvider = { buildStatusText() },
-            configMutator = { applyConfigPatch(it) }
+            configMutator = { applyConfigPatch(it) },
+            onToolChange = { refreshTodos() }
         )
     }
 

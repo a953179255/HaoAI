@@ -24,7 +24,9 @@ data class ToolContext(
     /** 动态渲染自身运行状态（app_status 工具数据源），由 VM 层注入。 */
     val statusProvider: (() -> String)? = null,
     /** 白名单设置修改（update_settings 工具），由 VM 层注入。 */
-    val configMutator: ((kotlinx.serialization.json.JsonObject) -> String)? = null
+    val configMutator: ((kotlinx.serialization.json.JsonObject) -> String)? = null,
+    /** 工具状态变更回调（todo 修改后刷新 UI）。 */
+    val onToolChange: (() -> Unit)? = null
 )
 
 data class ToolResult(val content: String, val isError: Boolean = false)

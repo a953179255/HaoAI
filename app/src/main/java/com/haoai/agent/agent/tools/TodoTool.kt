@@ -70,6 +70,7 @@ class TodoTool : Tool {
                 state.items.add(TodoItem(state.nextId, text))
                 state.nextId += 1
                 store.save(state, ctx.backend)
+                ctx.onToolChange?.invoke()
                 ToolResult("已添加。\n" + render(state).content)
             }
 
@@ -84,12 +85,14 @@ class TodoTool : Tool {
                     else -> state.items.remove(item)
                 }
                 store.save(state, ctx.backend)
+                ctx.onToolChange?.invoke()
                 render(state)
             }
 
             "clear" -> {
                 state.items.clear()
                 store.save(state, ctx.backend)
+                ctx.onToolChange?.invoke()
                 ToolResult("清单已清空")
             }
 
