@@ -205,7 +205,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         p: com.haoai.agent.data.ProviderConfig
     ): com.haoai.agent.data.ProviderConfig? {
         if (!p.baseUrl.startsWith("local")) return p
-        val ok = c.llama.ensureStarted()
+        // 期望聊天模型：记忆固化可能把服务切到更小的记忆专用模型，这里按需切回
+        val ok = c.llama.ensureStarted(c.llama.findModel()?.absolutePath)
         if (!ok) return null
         return p.copy(baseUrl = com.haoai.agent.platform.llama.LlamaServerController.LOCAL_BASE_URL)
     }

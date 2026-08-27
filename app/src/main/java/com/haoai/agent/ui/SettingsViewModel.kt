@@ -299,6 +299,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(dreamProviderId = id) }
     }
 
+    /** 记忆整理专用端侧模型；null = 跟随端侧聊天模型。 */
+    fun setDreamLocalModelFile(path: String?) {
+        c.updateSettings { it.copy(dreamLocalModelFile = path?.takeIf { p -> p.isNotBlank() }) }
+    }
+
+    /** 应用目录内可用的端侧模型（绝对路径）。 */
+    fun llamaModelPaths(): List<String> = c.llama.listModels().map { it.absolutePath }
+
     fun setDreamIdleMinutes(minutes: Int) {
         c.updateSettings { it.copy(dreamIdleMinutes = minutes.coerceIn(1, 240)) }
     }
@@ -489,7 +497,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun startLlama(onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
-            onResult(c.llama.ensureStarted())
+            // 期望聊天模型：若服务正被记忆专用模型占用则切回
+            onResult(c.llama.ensureStarted(c.llama.findModel()?.absolutePath))
         }
     }
 

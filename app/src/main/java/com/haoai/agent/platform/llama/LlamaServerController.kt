@@ -53,6 +53,11 @@ class LlamaServerController(
     @Volatile
     var preferredModel: String? = null
 
+    /** 当前已加载模型的绝对路径（未运行时为 null）；供「指定不同模型需重启」判断。 */
+    @Volatile
+    var currentModelPath: String? = null
+        private set
+
     /** 端侧上下文窗口（-c 参数）。Agent 工具流需要大上下文，默认 64K；小内存设备可下调。 */
     @Volatile
     var contextSize: Int = 65536
@@ -144,20 +149,37 @@ class LlamaServerController(
         return if (f.exists()) f.absolutePath else null
     }
 
-    suspend fun ensureStarted(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun ensureStarted(preferredFile: String? = null): Boolean = withContext(Dispatchers.IO) {
         val current = _state.value
-        if (current is LlamaState.Running) return@withContext true
+        if (current is LlamaState.Running) {
+            // 已在运行：调用方要求其他模型（如记忆专用小模型）时重启切换
+            if (preferredFile != null && currentModelPath != preferredFile) {
+                stopInternal()
+                _state.value = LlamaState.Stopped
+            } else {
+                return@withContext true
+            }
+        }
 
         // 并发调用（聊天/梦境/Worker 同时拉起）会起两个进程抢 8081 端口
         startMutex.withLock {
-            if (_state.value is LlamaState.Running) return@withLock true
+            if (_state.value is LlamaState.Running) {
+                if (preferredFile != null && currentModelPath != preferredFile) {
+                    stopInternal()
+                    _state.value = LlamaState.Stopped
+                } else {
+                    return@withLock true
+                }
+            }
 
             val bin = binaryPath()
             if (bin == null) {
                 _state.value = LlamaState.Failed("此设备缺少端侧推理组件（ABI 不支持）")
                 return@withLock false
             }
-            val model = findModel()
+            val model = preferredFile
+                ?.let { pf -> listModels().firstOrNull { it.absolutePath == pf } ?: File(pf).takeIf { it.exists() && it.length() > 1_000_000 && !isMmprojFile(it) } }
+                ?: findModel()
             if (model == null) {
                 _state.value = LlamaState.Failed("未找到模型文件，请先在设置中下载")
                 return@withLock false
@@ -228,6 +250,7 @@ class LlamaServerController(
                             Request.Builder().url("$LOCAL_BASE_URL/health").build()
                         ).execute().use { resp ->
                             if (resp.isSuccessful) {
+                                currentModelPath = model.absolutePath
                                 _state.value = LlamaState.Running(model.name)
                                 return@withContext true
                             }
@@ -248,11 +271,13 @@ class LlamaServerController(
 
     fun stop() {
         stopInternal()
+        currentModelPath = null
         _state.value = LlamaState.Stopped
     }
 
     private fun stopInternal() {
-        val proc = process ?: return
+        val proc = process ?: run { currentModelPath = null; return }
+        currentModelPath = null
         process = null
         runCatching { proc.destroy() }
         runCatching {

@@ -105,6 +105,8 @@ fun SettingsScreen(
     var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
     // 待删除的供应商 id：点击删除先弹确认（防止误触直接删库）
     var pendingDelete by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
+    // 记忆专用端侧模型选择弹窗
+    var showDreamPicker by androidx.compose.runtime.remember { mutableStateOf(false) }
     var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
     var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
 
@@ -263,7 +265,7 @@ fun SettingsScreen(
                             localItems(vm, backdrop, onOpenScan = { showScan = true })
                         }
                         "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
-                        "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop)
+                        "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop, onPickDreamModel = { showDreamPicker = true })
                         "workspace" -> workspaceItems(vm, backdrop) { treePicker.launch(null) }
                         "general" -> generalItems(
                             vm, settings, context, backdrop,
@@ -383,6 +385,47 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
             )
+        }
+    }
+
+    // 记忆专用端侧模型选择：跟随聊天模型 / 应用目录内任一 GGUF
+    if (showDreamPicker) {
+        var picked by androidx.compose.runtime.remember { mutableStateOf(settings.dreamLocalModelFile) }
+        val dreamModels = androidx.compose.runtime.remember { vm.llamaModelPaths() }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "记忆专用端侧模型",
+            onDismiss = { showDreamPicker = false },
+            confirmLabel = "确定",
+            onConfirm = {
+                vm.setDreamLocalModelFile(picked)
+                showDreamPicker = false
+            },
+            dismissLabel = "取消"
+        ) {
+            Column {
+                if (dreamModels.isEmpty()) {
+                    Text(
+                        "应用目录内没有可用模型。请先在「模型大脑」里下载或扫描 GGUF 模型。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                ModelPickRow(
+                    selected = picked == null,
+                    title = "跟随端侧聊天模型",
+                    subtitle = "与对话使用同一个模型",
+                    onClick = { picked = null }
+                )
+                dreamModels.forEach { p ->
+                    ModelPickRow(
+                        selected = picked == p,
+                        title = p.substringAfterLast('/'),
+                        subtitle = p,
+                        onClick = { picked = p }
+                    )
+                }
+            }
         }
     }
 
@@ -893,7 +936,8 @@ private fun LazyListScope.memoryItems(
     vm: SettingsViewModel,
     settings: AppSettings,
     onOpenMemories: () -> Unit,
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onPickDreamModel: () -> Unit = {}
 ) {
     item { SectionTitle("记忆库概览") }
     item {
@@ -1035,14 +1079,20 @@ private fun LazyListScope.memoryItems(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 RadioButton(selected = settings.dreamProviderId == "local", onClick = { vm.setDreamProvider("local") })
-                Column(Modifier.padding(start = 4.dp)) {
+                Column(Modifier.padding(start = 4.dp).weight(1f)) {
                     Text("端侧小模型（推荐，零 token 消耗）", style = MaterialTheme.typography.bodySmall)
                     Text(
                         "llama.cpp 本地运行 · ${vm.llamaModelFile() ?: "未下载"}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Text(
+                        "记忆专用：${settings.dreamLocalModelFile?.substringAfterLast('/') ?: "跟随端侧聊天模型"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
+                TextButton(onClick = onPickDreamModel) { Text("选择", style = MaterialTheme.typography.labelMedium) }
             }
             settings.providers.filter { it.id != "local" }.forEach { p ->
                 Row(
@@ -1064,6 +1114,35 @@ private fun LazyListScope.memoryItems(
                     }
                 }
             }
+        }
+    }
+}
+
+/** 选择弹窗里的单选行：标题 + 路径副标题。 */
+@Composable
+private fun ModelPickRow(
+    selected: Boolean,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Column(Modifier.padding(start = 2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
         }
     }
 }
@@ -1106,8 +1185,9 @@ private fun LazyListScope.workspaceItems(
 ) {
     item {
         Column(Modifier.padding(16.dp)) {
+            // 顶部说明卡片：工作空间是什么、两种目录的差异
             GlassGroup(backdrop) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Filled.Folder,
@@ -1117,33 +1197,46 @@ private fun LazyListScope.workspaceItems(
                         )
                         Spacer(Modifier.size(10.dp))
                         Text(
-                            "当前：${vm.workspaceName()}",
-                            style = MaterialTheme.typography.bodyMedium,
+                            "什么是工作空间",
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                     }
                     Text(
-                        "SAF 目录下 bash 不可用；默认目录（应用专属）支持完整文件与 shell 能力。",
+                        "工作空间是助手读写文件、执行命令的根目录。默认目录（应用专属）支持完整文件与 shell 能力；选择 SAF 目录后 bash 不可用。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    HorizontalDivider(
+                        Modifier.padding(vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                    )
+                    Text(
+                        "当前：${vm.workspaceName()}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
-            LiquidPillButton(
-                backdrop = backdrop,
-                text = "选择文件夹 (SAF)",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-                emphasized = false
-            ) { pickFolder() }
-            LiquidPillButton(
-                backdrop = backdrop,
-                text = "恢复默认目录",
-                modifier = Modifier.fillMaxWidth(),
-                emphasized = false
-            ) { vm.useDefaultWorkspace() }
+            // 双按钮横排
+            Row(
+                Modifier.padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                LiquidPillButton(
+                    backdrop = backdrop,
+                    text = "选择文件夹 (SAF)",
+                    modifier = Modifier.weight(1f),
+                    emphasized = false
+                ) { pickFolder() }
+                LiquidPillButton(
+                    backdrop = backdrop,
+                    text = "恢复默认目录",
+                    modifier = Modifier.weight(1f),
+                    emphasized = false
+                ) { vm.useDefaultWorkspace() }
+            }
         }
     }
 }

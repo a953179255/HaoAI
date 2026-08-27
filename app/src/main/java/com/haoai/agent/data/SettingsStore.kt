@@ -63,6 +63,8 @@ data class AppSettings(
     val autoLearn: Boolean = true,
     val dreamProviderId: String = "local",
     val dreamIdleMinutes: Int = 15,
+    /** 记忆整理专用端侧模型（绝对路径）；null = 跟随端侧聊天模型。 */
+    val dreamLocalModelFile: String? = null,
     val themeMode: String = "light",
     val reasoningEffort: String = "",
     val localModelFile: String? = null,

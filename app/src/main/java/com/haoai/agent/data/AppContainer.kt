@@ -80,7 +80,10 @@ class AppContainer(app: Application) {
     suspend fun resolveDreamTarget(): DreamTarget? {
         val st = settingsFlow.value
         return if (st.dreamProviderId == "local") {
-            val up = runCatching { llama.ensureStarted() }.getOrDefault(false)
+            val up = runCatching {
+                // 记忆专用端侧小模型：指定了其他 GGUF 时 ensureStarted 会自动重启切换
+                llama.ensureStarted(st.dreamLocalModelFile?.takeIf { it.isNotBlank() })
+            }.getOrDefault(false)
             if (!up) null
             else DreamTarget(
                 ProviderConfig(

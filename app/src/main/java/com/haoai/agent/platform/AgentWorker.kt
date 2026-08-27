@@ -45,7 +45,8 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             return Result.success()
         }
         val provider = if (provider0.baseUrl.startsWith("local")) {
-            if (!container.llama.ensureStarted()) {
+            // 期望聊天模型：避免复用记忆固化留下的更小模型
+            if (!container.llama.ensureStarted(container.llama.findModel()?.absolutePath)) {
                 updateTask(task, "端侧模型启动失败，任务跳过")
                 Scheduler.enqueueNext(task)
                 return Result.success()
