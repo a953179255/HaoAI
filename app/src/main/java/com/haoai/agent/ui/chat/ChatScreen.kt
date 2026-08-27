@@ -514,16 +514,19 @@ private fun MessageList(
             .collect { if (it) focusManager.clearFocus() }
     }
 
+    // 自动滚底：用户发送新消息时无条件滚底；流式内容仅在用户位于底部附近时跟随
     LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length) {
         if (totalItems <= 0) return@LaunchedEffect
         val last = totalItems - 1
         val info = listState.layoutInfo
         val lastVisible = info.visibleItemsInfo.lastOrNull() ?: return@LaunchedEffect
-        // 用户贴近底部时才跟随新内容（滚动到消息底部而非顶部）；上滑阅读时不打扰
-        val following = lastVisible.index >= last - 1 &&
-            (lastVisible.offset + lastVisible.size) - info.viewportEndOffset < 400
-        if (following) {
-            listState.scrollToItem(last, info.viewportEndOffset)
+        val isNearBottom = lastVisible.index >= last - 1 &&
+            (lastVisible.offset + lastVisible.size) - info.viewportEndOffset < 200
+        // 用户发送新消息（最后一条是 user）→ 强制滚底；否则仅在底部附近时跟随
+        val isUserMessage = rows.lastOrNull()?.role == "user"
+        if (isUserMessage || isNearBottom) {
+            // animateScrollToItem 会等待 item 布局完成再滚动，避免 layout race
+            listState.animateScrollToItem(last)
         }
     }
 
