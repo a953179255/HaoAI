@@ -198,6 +198,11 @@ private fun RootApp() {
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(backdrop = backdrop, onBack = { screen = 1 })
                 3 -> com.haoai.agent.ui.manage.ScheduleScreen(backdrop = backdrop, onBack = { screen = 1 })
                 5 -> com.haoai.agent.ui.manage.SkillsScreen(backdrop = backdrop, onBack = { screen = 1 })
+                4 -> com.haoai.agent.ui.sessions.SessionsScreen(
+                    vm = chatVm,
+                    backdrop = backdrop,
+                    onBack = { screen = 0 }
+                )
                 else -> ChatScreen(
                     vm = chatVm,
                     backdrop = backdrop,
@@ -206,7 +211,8 @@ private fun RootApp() {
                     onOpenSettings = { fromDrawer ->
                         cameFromDrawer = fromDrawer
                         screen = 1
-                    }
+                    },
+                    onOpenSessions = { screen = 4 }
                 )
             }
         }

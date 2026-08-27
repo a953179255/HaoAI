@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -585,6 +586,60 @@ fun GlassPageBar(
                 modifier = Modifier.weight(1f).padding(horizontal = 6.dp)
             )
             actions()
+        }
+    }
+}
+
+/**
+ * 液态玻璃弹层壳：Popup + 进入/退出动画（淡入 + 缩放 0.92→1 + 轻微上滑）。
+ * 退出先播动画，onDismiss 延迟到动画结束才真正卸载弹层；
+ * content 的 close 参数供内容项点击后触发带动画的关闭。
+ */
+@Composable
+fun GlassPopup(
+    backdrop: LayerBackdrop,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    alignment: Alignment = Alignment.BottomEnd,
+    offset: androidx.compose.ui.unit.IntOffset = androidx.compose.ui.unit.IntOffset.Zero,
+    surfaceAlpha: Float = 0.52f,
+    radius: Dp = 20.dp,
+    content: @Composable (close: () -> Unit) -> Unit
+) {
+    var leaving by remember { mutableStateOf(false) }
+    val progress by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (leaving) 0f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 190),
+        label = "glassPopupProgress"
+    )
+    LaunchedEffect(leaving) {
+        if (leaving) {
+            kotlinx.coroutines.delay(200)
+            onDismiss()
+        }
+    }
+    val slidePx = with(LocalDensity.current) { 10.dp.toPx() }
+    androidx.compose.ui.window.Popup(
+        alignment = alignment,
+        offset = offset,
+        onDismissRequest = { leaving = true },
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+    ) {
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = modifier.graphicsLayer {
+                alpha = progress
+                val s = 0.92f + 0.08f * progress
+                scaleX = s
+                scaleY = s
+                translationY = (1f - progress) * slidePx
+                // 变换原点取右上角：从来源控件（顶栏右侧）展开更自然
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+            },
+            radius = radius,
+            surfaceAlpha = surfaceAlpha
+        ) {
+            content { leaving = true }
         }
     }
 }

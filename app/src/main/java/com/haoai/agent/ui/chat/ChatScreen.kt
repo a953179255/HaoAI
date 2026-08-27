@@ -105,7 +105,8 @@ fun ChatScreen(
         androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed),
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
-    onOpenSettings: (fromDrawer: Boolean) -> Unit
+    onOpenSettings: (fromDrawer: Boolean) -> Unit,
+    onOpenSessions: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -305,6 +306,7 @@ fun ChatScreen(
             sessions = sessions,
             activeId = activeId,
             onDrawer = { openDrawer() },
+            onOpenAllSessions = onOpenSessions,
             onNewChat = {
                 vm.newSession()
                 scope.launch { drawerState.close() }
@@ -507,6 +509,7 @@ private fun TopBar(
     sessions: List<StoredSession>,
     activeId: String?,
     onDrawer: () -> Unit,
+    onOpenAllSessions: () -> Unit = {},
     onNewChat: () -> Unit,
     onSelectSession: (StoredSession) -> Unit,
     modifier: Modifier = Modifier
@@ -555,83 +558,77 @@ private fun TopBar(
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
-                // 会话快切面板：液态玻璃（DropdownMenu 无法承载玻璃材质）
+                // 会话快切面板：液态玻璃 + 进入/退出动画（GlassPopup）
                 if (quickMenu) {
-                    androidx.compose.ui.window.Popup(
+                    com.haoai.agent.ui.common.GlassPopup(
+                        backdrop = backdrop,
                         alignment = Alignment.BottomEnd,
-                        onDismissRequest = { quickMenu = false },
-                        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
-                    ) {
-                        GlassPanel(
-                            backdrop = backdrop,
-                            modifier = Modifier
-                                .padding(top = 6.dp)
-                                .widthIn(min = 240.dp, max = 320.dp),
-                            radius = 20.dp,
-                            surfaceAlpha = 0.52f
+                        onDismiss = { quickMenu = false },
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .widthIn(min = 240.dp, max = 320.dp)
+                    ) { close ->
+                        Column(
+                            Modifier
+                                .heightIn(max = 420.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(vertical = 6.dp)
                         ) {
-                            Column(
-                                Modifier
-                                    .heightIn(max = 420.dp)
-                                    .verticalScroll(rememberScrollState())
-                                    .padding(vertical = 6.dp)
-                            ) {
-                                if (sessions.isEmpty()) {
-                                    Text(
-                                        "暂无历史会话",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                                    )
-                                }
-                                sessions.take(8).forEach { s ->
-                                    Column(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                quickMenu = false
-                                                onSelectSession(s)
-                                            }
-                                            .padding(horizontal = 16.dp, vertical = 7.dp)
-                                    ) {
-                                        Text(
-                                            s.title,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = if (s.id == activeId) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (s.id == activeId) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onBackground,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                HorizontalDivider(
-                                    Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
+                            if (sessions.isEmpty()) {
+                                Text(
+                                    "暂无历史会话",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                                 )
-                                Row(
+                            }
+                            sessions.take(8).forEach { s ->
+                                Column(
                                     Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            quickMenu = false
-                                            onDrawer()
+                                            close()
+                                            onSelectSession(s)
                                         }
-                                        .padding(horizontal = 16.dp, vertical = 9.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .padding(horizontal = 16.dp, vertical = 7.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Filled.Menu,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(19.dp),
-                                        tint = MaterialTheme.colorScheme.onBackground
+                                    Text(
+                                        s.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (s.id == activeId) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (s.id == activeId) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onBackground,
+                                        maxLines = 1
                                     )
-                                    Spacer(Modifier.size(10.dp))
-                                    Text("查看全部会话", style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
+                            }
+                            HorizontalDivider(
+                                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
+                            )
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        close()
+                                        onOpenAllSessions()
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Filled.Menu,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(19.dp),
+                                    tint = MaterialTheme.colorScheme.onBackground
+                                )
+                                Spacer(Modifier.size(10.dp))
+                                Text("查看全部会话", style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
