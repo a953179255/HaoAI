@@ -280,6 +280,7 @@ fun ChatScreen(
                 streamingReasoning = streamingReasoning,
                 running = running,
                 listState = listState,
+                sessionId = vm.session.collectAsState().value?.id,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -653,6 +654,7 @@ private fun MessageList(
     streamingReasoning: String?,
     running: Boolean,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    sessionId: String? = null,
     modifier: Modifier = Modifier,
     bottomPadding: androidx.compose.ui.unit.Dp
 ) {
@@ -680,6 +682,12 @@ private fun MessageList(
             // animateScrollToItem 会等待 item 布局完成再滚动，避免 layout race
             listState.animateScrollToItem(last)
         }
+    }
+
+    // 会话切换：无条件跳到最新一条（切换后通常停在旧位置，且最后一条未必是 user 消息，
+    // 上面的跟随逻辑不会触发）。新会话无消息时不滚动。
+    LaunchedEffect(sessionId) {
+        if (sessionId != null && totalItems > 0) listState.scrollToItem(totalItems - 1)
     }
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
