@@ -630,6 +630,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun agentName(): String =
         c.settingsFlow.value.agentName.ifBlank { "HaoAI" }
 
+    /** 档案状态流：头像/签名等 UI 直接订阅。 */
+    val settings get() = c.settingsFlow
+
+    /** 更新档案：名字、emoji 头像、渐变底色、签名。 */
+    fun updateProfile(name: String, avatarEmoji: String, avatarGradient: Int, bio: String) {
+        c.updateSettings {
+            it.copy(
+                agentName = name.trim().take(20),
+                avatarEmoji = avatarEmoji,
+                avatarGradient = avatarGradient.coerceIn(0, 5),
+                bio = bio.trim().take(60)
+            )
+        }
+    }
+
     fun needsOnboarding(): Boolean = !c.settingsFlow.value.onboarded
 
     fun completeOnboarding(name: String, soul: String) {

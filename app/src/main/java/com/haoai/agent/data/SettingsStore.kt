@@ -68,6 +68,12 @@ data class AppSettings(
     val localModelFile: String? = null,
     val agentName: String = "",
     val soul: String = "",
+    /** 档案头像：emoji 字符（空则回退名字首字）。 */
+    val avatarEmoji: String = "",
+    /** 档案头像底色：渐变索引（0-5）。 */
+    val avatarGradient: Int = 0,
+    /** 档案签名：一句话介绍，侧边栏头像旁展示。 */
+    val bio: String = "",
     val onboarded: Boolean = false,
     val tokenInTotal: Long = 0,
     val tokenOutTotal: Long = 0,

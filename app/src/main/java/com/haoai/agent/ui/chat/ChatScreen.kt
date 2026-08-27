@@ -1,4 +1,4 @@
-﻿package com.haoai.agent.ui.chat
+package com.haoai.agent.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
@@ -31,27 +31,37 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -75,14 +85,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.haoai.agent.agent.engine.ToolRunState
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.ui.ChatRow
@@ -106,7 +114,8 @@ fun ChatScreen(
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: (fromDrawer: Boolean) -> Unit,
-    onOpenSessions: () -> Unit = {}
+    onOpenSessions: () -> Unit = {},
+    onOpenManage: (screen: Int) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -117,6 +126,7 @@ fun ChatScreen(
     val error by vm.error.collectAsState()
     val sessions by vm.sessions.collectAsState()
     val deletedSessions by vm.deletedSessions.collectAsState()
+    val settings by vm.settings.collectAsState()
     val approval by vm.approval.collectAsState()
     val todoItems by vm.todoItems.collectAsState()
 
@@ -142,6 +152,7 @@ fun ChatScreen(
     var showSlashHelp by remember { mutableStateOf(false) }
     var showStatusPopup by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
+    var showProfileEdit by remember { mutableStateOf(false) }
 
     // 系统返回手势：侧边栏展开时先收起侧边栏，而不是把应用最小化
     androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
@@ -243,24 +254,34 @@ fun ChatScreen(
                     lensRadius = 0.dp
                 ) {
                     SessionsDrawer(
-                    agentName = vm.agentName(),
-                    workspaceName = vm.workspaceName(),
-                    backdrop = backdrop,
-                    sessions = sessions,
-                    deletedSessions = deletedSessions,
-                    activeId = vm.session.collectAsState().value?.id,
-                    onSelect = {
-                        vm.selectSession(it.id)
-                        scope.launch { drawerState.close() }
-                    },
-                    onDelete = { vm.deleteSession(it.id) },
-                    onRestoreSession = { vm.restoreSession(it) },
-                    onDeleteForever = { vm.deleteSessionForever(it) },
-                    onSettings = {
-                        scope.launch { drawerState.close() }
-                        onOpenSettings(true)
-                    }
-                )
+                        agentName = vm.agentName(),
+                        subtitleLine = settings.bio.ifBlank { vm.workspaceName() },
+                        avatarEmoji = settings.avatarEmoji,
+                        avatarGradient = settings.avatarGradient,
+                        sessionCount = sessions.size,
+                        backdrop = backdrop,
+                        onOpenSessions = {
+                            scope.launch { drawerState.close() }
+                            onOpenSessions()
+                        },
+                        onOpenMemories = {
+                            scope.launch { drawerState.close() }
+                            onOpenManage(2)
+                        },
+                        onOpenSchedules = {
+                            scope.launch { drawerState.close() }
+                            onOpenManage(3)
+                        },
+                        onOpenSkills = {
+                            scope.launch { drawerState.close() }
+                            onOpenManage(5)
+                        },
+                        onEditProfile = { showProfileEdit = true },
+                        onSettings = {
+                            scope.launch { drawerState.close() }
+                            onOpenSettings(true)
+                        }
+                    )
                 }
             }
         }
@@ -297,14 +318,14 @@ fun ChatScreen(
         }
 
         // 玻璃顶栏必须放在 appLayer 子树之外，否则层采样自引用会导致渲染循环崩溃
-        val activeId = vm.session.collectAsState().value?.id
+        val activeSession = vm.session.collectAsState().value
         TopBar(
             title = vm.agentName(),
-            subtitle = vm.workspaceName(),
+            subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
             contextUsage = contextUsage,
             backdrop = backdrop,
             sessions = sessions,
-            activeId = activeId,
+            activeId = activeSession?.id,
             onDrawer = { openDrawer() },
             onOpenAllSessions = onOpenSessions,
             onNewChat = {
@@ -429,6 +450,111 @@ fun ChatScreen(
             ) { Text(msg, maxLines = 4) }
         }
     }
+    }
+
+    // 档案编辑弹窗：名字 / emoji 头像 / 渐变底色 / 签名（放在抽屉之外，避免被抽屉层盖住）
+    if (showProfileEdit) {
+        var editName by remember { mutableStateOf(settings.agentName.ifBlank { "HaoAI" }) }
+        var editEmoji by remember { mutableStateOf(settings.avatarEmoji) }
+        var editGradient by remember { mutableStateOf(settings.avatarGradient) }
+        var editBio by remember { mutableStateOf(settings.bio) }
+        val emojiChoices = remember {
+            listOf("😀", "😊", "😎", "🤖", "🐱", "🐶", "🦊", "🐰", "🌸", "🌟", "🔥", "🌙", "⚡", "🍀", "🎧", "🚀")
+        }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "编辑档案",
+            onDismiss = { showProfileEdit = false },
+            confirmLabel = "保存",
+            onConfirm = {
+                vm.updateProfile(editName, editEmoji, editGradient, editBio)
+                showProfileEdit = false
+            },
+            dismissLabel = "取消"
+        ) {
+            OutlinedTextField(
+                value = editName,
+                onValueChange = { editName = it.take(20) },
+                label = { Text("名字") },
+                singleLine = true,
+                colors = com.haoai.agent.ui.common.glassFieldColors(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "头像",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 10.dp)
+            )
+            emojiChoices.chunked(6).forEach { rowEmojis ->
+                Row(
+                    Modifier.padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowEmojis.forEach { e ->
+                        val selected = e == editEmoji
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                    else Color.Transparent
+                                )
+                                .then(
+                                    if (selected) Modifier.border(
+                                        2.dp,
+                                        MaterialTheme.colorScheme.primary,
+                                        RoundedCornerShape(10.dp)
+                                    ) else Modifier
+                                )
+                                .clickable { editEmoji = if (selected) "" else e },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(e, fontSize = 20.sp)
+                        }
+                    }
+                }
+            }
+            Text(
+                "底色",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 10.dp)
+            )
+            Row(
+                Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AVATAR_GRADIENTS.forEachIndexed { i, colors ->
+                    val selected = i == editGradient
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(colors))
+                            .then(
+                                if (selected) Modifier.border(
+                                    2.dp,
+                                    MaterialTheme.colorScheme.primary,
+                                    CircleShape
+                                ) else Modifier
+                            )
+                            .clickable { editGradient = i }
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = editBio,
+                onValueChange = { editBio = it.take(60) },
+                label = { Text("签名（一句话介绍）") },
+                singleLine = true,
+                colors = com.haoai.agent.ui.common.glassFieldColors(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+            )
+        }
     }
 
     approval?.let { (req, _) ->
@@ -1190,199 +1316,139 @@ private fun SlashToolbarButton(onClick: () -> Unit) {
 @Composable
 private fun SessionsDrawer(
     agentName: String,
-    workspaceName: String,
+    subtitleLine: String,
+    avatarEmoji: String,
+    avatarGradient: Int,
+    sessionCount: Int,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    sessions: List<StoredSession>,
-    deletedSessions: List<StoredSession>,
-    activeId: String?,
-    onSelect: (StoredSession) -> Unit,
-    onDelete: (StoredSession) -> Unit,
-    onRestoreSession: (String) -> Unit,
-    onDeleteForever: (String) -> Unit,
+    onOpenSessions: () -> Unit,
+    onOpenMemories: () -> Unit,
+    onOpenSchedules: () -> Unit,
+    onOpenSkills: () -> Unit,
+    onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
-    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
-    var showTrash by remember { mutableStateOf(false) }
+    // 侧边栏瘦身：会话列表与回收站移入独立「全部会话」页，这里只留档案 + 导航
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .padding(top = 8.dp)
     ) {
+        // 档案头部：点击进入编辑
         Row(
-            Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onEditProfile)
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                Modifier
-                    .size(40.dp)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    agentName.take(1).ifEmpty { "AI" },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+            ProfileAvatar(
+                emoji = avatarEmoji,
+                gradientIndex = avatarGradient,
+                fallback = agentName,
+                size = 44.dp
+            )
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(agentName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    workspaceName,
+                    subtitleLine,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
             }
+            Icon(
+                Icons.Filled.Edit,
+                contentDescription = "编辑档案",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(17.dp)
+            )
         }
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
-        if (sessions.isEmpty()) {
-            Text(
-                "还没有历史会话",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-        }
-        LazyColumn(Modifier.weight(1f)) {
-            items(sessions, key = { it.id }) { s ->
-                val active = s.id == activeId
-                GlassCard(
-                    onClick = { onSelect(s) },
-                    backdrop = backdrop,
-                    shape = RoundedCornerShape(14.dp),
-                    surfaceAlpha = if (active) 0.30f else 0.16f,
-                    tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
-                    lensRadius = 14.dp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 2.dp)
-                ) {
-                    Row(
-                        Modifier.padding(start = 14.dp, end = 4.dp, top = 9.dp, bottom = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                s.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1
-                            )
-                            Text(
-                                "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        IconButton(onClick = { onDelete(s) }, modifier = Modifier.size(34.dp)) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = "删除",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = { showTrash = true })
-                .padding(horizontal = 22.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Filled.DeleteSweep,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(21.dp)
-            )
-            Spacer(Modifier.size(14.dp))
-            Text("回收站", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            if (deletedSessions.isNotEmpty()) {
-                Text(
-                    "${deletedSessions.size}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .background(
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
-                            CircleShape
-                        )
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                )
-            }
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onSettings)
-                .padding(horizontal = 22.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Filled.Settings,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(21.dp)
-            )
-            Spacer(Modifier.size(14.dp))
-            Text("设置", style = MaterialTheme.typography.bodyLarge)
-        }
+        DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessionCount, onClick = onOpenSessions)
+        DrawerEntry(Icons.Filled.Psychology, "记忆", onClick = onOpenMemories)
+        DrawerEntry(Icons.Filled.Schedule, "定时任务", onClick = onOpenSchedules)
+        DrawerEntry(Icons.Filled.Construction, "技能", onClick = onOpenSkills)
+        DrawerEntry(Icons.Filled.Settings, "设置", onClick = onSettings)
         Spacer(Modifier.navigationBarsPadding())
     }
+}
 
-    // 回收站：恢复 / 彻底删除，7 天后自动清理
-    if (showTrash) {
-        com.haoai.agent.ui.common.GlassAlertDialog(
-            backdrop = backdrop,
-            title = "回收站",
-            onDismiss = { showTrash = false },
-            dismissLabel = "关闭"
-        ) {
-            Column {
-                if (deletedSessions.isEmpty()) {
-                    Text(
-                        "回收站是空的。删除的会话会在这里保留 7 天，之后自动清理。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+/** 侧边栏导航行：图标 + 文案 + 可选计数徽标。 */
+@Composable
+private fun DrawerEntry(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    badge: Int = 0,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(21.dp)
+        )
+        Spacer(Modifier.size(14.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        if (badge > 0) {
+            Text(
+                "$badge",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .background(
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
+                        CircleShape
                     )
-                } else {
-                    Column(
-                        Modifier
-                            .heightIn(max = 380.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        deletedSessions.forEach { s ->
-                            val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
-                            Column(Modifier.padding(vertical = 6.dp)) {
-                                Text(s.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                                Text(
-                                    "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    TextButton(onClick = {
-                                        onRestoreSession(s.id)
-                                    }) { Text("恢复") }
-                                    TextButton(onClick = {
-                                        onDeleteForever(s.id)
-                                    }) { Text("彻底删除", color = MaterialTheme.colorScheme.error) }
-                                }
-                            }
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f))
-                        }
-                    }
-                }
-            }
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+// 档案头像 6 色渐变表（索引对应 SettingsStore.avatarGradient）
+private val AVATAR_GRADIENTS = listOf(
+    listOf(Color(0xFF7BC6A5), Color(0xFF4E9F7D)),
+    listOf(Color(0xFF8FB8F0), Color(0xFF5B8DEF)),
+    listOf(Color(0xFFF0B37E), Color(0xFFE88D5B)),
+    listOf(Color(0xFFD79BE8), Color(0xFFB06BD4)),
+    listOf(Color(0xFFF09BB0), Color(0xFFE56B8F)),
+    listOf(Color(0xFF9CD8C8), Color(0xFF5FB0C9))
+)
+
+/** 渐变底 emoji 头像：emoji 为空时回退名字首字。 */
+@Composable
+private fun ProfileAvatar(
+    emoji: String,
+    gradientIndex: Int,
+    fallback: String,
+    size: androidx.compose.ui.unit.Dp = 40.dp
+) {
+    val colors = AVATAR_GRADIENTS[gradientIndex.coerceIn(0, AVATAR_GRADIENTS.lastIndex)]
+    Box(
+        Modifier
+            .size(size)
+            .background(Brush.linearGradient(colors), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (emoji.isNotEmpty()) {
+            Text(emoji, fontSize = 20.sp)
+        } else {
+            Text(
+                fallback.take(1).ifEmpty { "AI" },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
         }
     }
 }

@@ -195,9 +195,36 @@ private fun RootApp() {
                     onOpenSchedules = { screen = 3 },
                     onOpenSkills = { screen = 5 }
                 )
-                2 -> com.haoai.agent.ui.manage.MemoryScreen(backdrop = backdrop, onBack = { screen = 1 })
-                3 -> com.haoai.agent.ui.manage.ScheduleScreen(backdrop = backdrop, onBack = { screen = 1 })
-                5 -> com.haoai.agent.ui.manage.SkillsScreen(backdrop = backdrop, onBack = { screen = 1 })
+                2 -> com.haoai.agent.ui.manage.MemoryScreen(
+                    backdrop = backdrop,
+                    onBack = {
+                        if (cameFromDrawer) {
+                            cameFromDrawer = false
+                            rootScope.launch { drawerState.close() }
+                            screen = 0
+                        } else screen = 1
+                    }
+                )
+                3 -> com.haoai.agent.ui.manage.ScheduleScreen(
+                    backdrop = backdrop,
+                    onBack = {
+                        if (cameFromDrawer) {
+                            cameFromDrawer = false
+                            rootScope.launch { drawerState.close() }
+                            screen = 0
+                        } else screen = 1
+                    }
+                )
+                5 -> com.haoai.agent.ui.manage.SkillsScreen(
+                    backdrop = backdrop,
+                    onBack = {
+                        if (cameFromDrawer) {
+                            cameFromDrawer = false
+                            rootScope.launch { drawerState.close() }
+                            screen = 0
+                        } else screen = 1
+                    }
+                )
                 4 -> com.haoai.agent.ui.sessions.SessionsScreen(
                     vm = chatVm,
                     backdrop = backdrop,
@@ -212,7 +239,11 @@ private fun RootApp() {
                         cameFromDrawer = fromDrawer
                         screen = 1
                     },
-                    onOpenSessions = { screen = 4 }
+                    onOpenSessions = { screen = 4 },
+                    onOpenManage = { target ->
+                        cameFromDrawer = true
+                        screen = target
+                    }
                 )
             }
         }
