@@ -657,6 +657,7 @@ fun GlassAlertDialog(
     onConfirm: (() -> Unit)? = null,
     confirmEnabled: Boolean = true,
     dismissLabel: String? = null,
+    danger: Boolean = false,
     contentMaxHeight: Dp = 420.dp,
     refract: Boolean? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
@@ -664,7 +665,7 @@ fun GlassAlertDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.18f))
+            .background(Color.Black.copy(alpha = 0.30f))
             .clickable(interactionSource = null, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.Center
     ) {
@@ -674,8 +675,8 @@ fun GlassAlertDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            surfaceAlpha = 0.82f,
-            blurRadius = 20.dp,
+            surfaceAlpha = 0.92f,
+            blurRadius = 28.dp,
             chromaticAberration = true,
             refract = refract
         ) {
@@ -714,15 +715,20 @@ fun GlassAlertDialog(
                                 backdrop = backdrop,
                                 shape = RoundedCornerShape(percent = 50),
                                 enabled = confirmEnabled,
-                                surfaceColor = MaterialTheme.colorScheme.primary.copy(
-                                    alpha = if (confirmEnabled) 0.85f else 0.25f
-                                ),
+                                surfaceColor = when {
+                                    !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                    danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                },
                                 refract = refract
                             ) {
                                 Text(
                                     confirmLabel.orEmpty(),
-                                    color = if (confirmEnabled) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+                                    color = when {
+                                        !confirmEnabled -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+                                        danger -> MaterialTheme.colorScheme.onError
+                                        else -> MaterialTheme.colorScheme.onPrimary
+                                    },
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                                 )

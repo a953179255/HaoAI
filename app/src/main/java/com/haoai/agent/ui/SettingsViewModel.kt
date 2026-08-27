@@ -220,7 +220,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                     )
                     s.copy(
                         providers = list,
-                        activeProviderId = s.activeProviderId?.takeIf { aid -> list.any { it.id == aid } } ?: pid
+                        // 新建供应商：保存后自动选中；编辑：保持原选中（被删才回退）
+                        activeProviderId = if (d.id == null) pid
+                        else s.activeProviderId?.takeIf { aid -> list.any { it.id == aid } } ?: pid
                     )
                 }
                 draft = null

@@ -38,7 +38,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -103,6 +103,8 @@ fun SettingsScreen(
 
     // 玻璃弹窗状态
     var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
+    // 待删除的供应商 id：点击删除先弹确认（防止误触直接删库）
+    var pendingDelete by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
     var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
 
@@ -257,7 +259,7 @@ fun SettingsScreen(
                 ) {
                     when (section) {
                         "brain" -> {
-                            brainItems(vm, settings, backdrop)
+                            brainItems(vm, settings, backdrop, onDeleteRequest = { pendingDelete = it })
                             localItems(vm, backdrop, onOpenScan = { showScan = true })
                         }
                         "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
@@ -361,6 +363,29 @@ fun SettingsScreen(
         }
     }
 
+    // 删除供应商确认：红色确认键，展示供应商名与模型
+    pendingDelete?.let { pid ->
+        val p = vm.providers().find { it.id == pid }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "删除模型服务",
+            onDismiss = { pendingDelete = null },
+            confirmLabel = "删除",
+            onConfirm = {
+                vm.deleteProvider(pid)
+                pendingDelete = null
+            },
+            dismissLabel = "取消",
+            danger = true
+        ) {
+            Text(
+                "确定删除「${p?.name ?: "该服务"}」（${p?.model ?: ""}）吗？删除后不可恢复。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+            )
+        }
+    }
+
     if (confirmWpClear) {
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
@@ -454,7 +479,8 @@ private fun sectionTitle(section: String): String = when (section) {
 private fun LazyListScope.brainItems(
     vm: SettingsViewModel,
     settings: AppSettings,
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onDeleteRequest: (String) -> Unit = {}
 ) {
     item { SectionTitle("云端模型服务") }
     item {
@@ -509,7 +535,7 @@ private fun LazyListScope.brainItems(
                                 Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(19.dp))
                             }
                             if (p.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID) {
-                                IconButton(onClick = { vm.deleteProvider(p.id) }) {
+                                IconButton(onClick = { onDeleteRequest(p.id) }) {
                                     Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(19.dp))
                                 }
                             }
@@ -688,8 +714,8 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                         )
                         Text(
                             vm.currentLocalModelLabel() ?: "未添加",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
                     }
@@ -708,7 +734,6 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                             Text(
                                 "· $name",
                                 style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                                 maxLines = 1,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -1472,7 +1497,8 @@ private fun ProviderDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.18f))
+            .background(Color.Black.copy(alpha = 0.30f))
+            .imePadding()
             .clickable(interactionSource = null, indication = null) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
@@ -1482,8 +1508,8 @@ private fun ProviderDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            surfaceAlpha = 0.82f,
-            blurRadius = 20.dp,
+            surfaceAlpha = 0.92f,
+            blurRadius = 28.dp,
             chromaticAberration = true
         ) {
             Column(
@@ -1494,7 +1520,8 @@ private fun ProviderDialog(
                 Text(
                     if (draft.id == null) "添加模型服务" else "编辑模型服务",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 Column(
                     Modifier
