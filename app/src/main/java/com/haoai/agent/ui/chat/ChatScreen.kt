@@ -18,8 +18,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -74,6 +75,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -119,6 +121,8 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawerState.open() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val density = LocalDensity.current
+    val imeHeightPx = WindowInsets.ime.getBottom(density)
 
     // 系统返回手势：侧边栏展开时先收起侧边栏，而不是把应用最小化
     androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
@@ -200,7 +204,7 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .imePadding()
+                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
                 .appLayer(backdrop)
                 .pointerInput(Unit) {
                     detectTapGestures {
@@ -268,7 +272,7 @@ fun ChatScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .imePadding()
+                .graphicsLayer { translationY = -imeHeightPx.toFloat() }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         )
 
