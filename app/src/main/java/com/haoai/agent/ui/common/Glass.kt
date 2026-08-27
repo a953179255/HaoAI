@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
@@ -69,6 +71,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.tanh
+
+/**
+ * 位于玻璃采样层（appLayer/layerBackdrop）内的内容层应设为 false，使内部玻璃组件
+ * 退化为本地磨砂绘制（不 drawBackdrop 采样），避免自引用渲染循环崩溃。
+ * 默认 true；内容层用 CompositionLocalProvider(LocalGlassRefract provides false) 包裹即可。
+ */
+val LocalGlassRefract = compositionLocalOf { true }
 
 @Composable
 fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null): LayerBackdrop =
@@ -108,9 +117,11 @@ fun GlassPanel(
     lensRadius: Dp = radius,
     blurRadius: Dp = radius / 3f,
     chromaticAberration: Boolean = false,
+    refract: Boolean? = null,
     content: @Composable () -> Unit
 ) {
-    Box(
+    val r = refract ?: LocalGlassRefract.current
+    val panelModifier = if (r) {
         modifier
             .drawBackdrop(
                 backdrop = backdrop,
@@ -132,7 +143,16 @@ fun GlassPanel(
                     }
                 }
             )
-    ) {
+    } else {
+        // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
+        modifier
+            .clip(shape ?: RoundedCornerShape(radius))
+            .background(Color.White.copy(alpha = surfaceAlpha))
+            .then(
+                if (tint != null) Modifier.background(tint.copy(alpha = 0.30f)) else Modifier
+            )
+    }
+    Box(panelModifier) {
         content()
     }
 }
@@ -225,41 +245,51 @@ fun LiquidGlassButton(
     shape: Shape = CircleShape,
     enabled: Boolean = true,
     surfaceColor: Color? = null,
+    refract: Boolean? = null,
     contentAlignment: Alignment = Alignment.Center,
     content: @Composable BoxScope.() -> Unit
 ) {
     val animationScope = rememberCoroutineScope()
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
 
+    val r = refract ?: LocalGlassRefract.current
+    val bgModifier = if (r) {
+        Modifier.drawBackdrop(
+            backdrop = backdrop,
+            shape = { shape },
+            effects = {
+                vibrancy()
+                blur(3.dp.toPx())
+                lens(10.dp.toPx(), 20.dp.toPx())
+            },
+            layerBlock = {
+                val progress = highlight.pressProgress
+                val scale = lerp(1f, 1f + 4.dp.toPx() / size.height, progress)
+
+                val maxOffset = size.minDimension
+                val initialDerivative = 0.05f
+                val off = highlight.offset
+                translationX = maxOffset * tanh(initialDerivative * off.x / maxOffset)
+                translationY = maxOffset * tanh(initialDerivative * off.y / maxOffset)
+
+                scaleX = scale
+                scaleY = scale
+            },
+            onDrawSurface = {
+                if (surfaceColor != null) {
+                    drawRect(surfaceColor)
+                }
+            }
+        )
+    } else {
+        Modifier
+            .clip(shape)
+            .background(surfaceColor ?: Color.White.copy(alpha = 0.25f))
+    }
+
     Box(
         modifier
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { shape },
-                effects = {
-                    vibrancy()
-                    blur(3.dp.toPx())
-                    lens(10.dp.toPx(), 20.dp.toPx())
-                },
-                layerBlock = {
-                    val progress = highlight.pressProgress
-                    val scale = lerp(1f, 1f + 4.dp.toPx() / size.height, progress)
-
-                    val maxOffset = size.minDimension
-                    val initialDerivative = 0.05f
-                    val off = highlight.offset
-                    translationX = maxOffset * tanh(initialDerivative * off.x / maxOffset)
-                    translationY = maxOffset * tanh(initialDerivative * off.y / maxOffset)
-
-                    scaleX = scale
-                    scaleY = scale
-                },
-                onDrawSurface = {
-                    if (surfaceColor != null) {
-                        drawRect(surfaceColor)
-                    }
-                }
-            )
+            .then(bgModifier)
             .clickable(
                 interactionSource = null,
                 indication = null,
@@ -289,11 +319,46 @@ fun GlassCard(
     surfaceAlpha: Float = 0.26f,
     tint: Color? = null,
     lensRadius: Dp = 18.dp,
+    refract: Boolean? = null,
     contentAlignment: Alignment = Alignment.TopStart,
     content: @Composable BoxScope.() -> Unit
 ) {
     val animationScope = rememberCoroutineScope()
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
+
+    val r = refract ?: LocalGlassRefract.current
+    val bgModifier = if (r) {
+        Modifier.drawBackdrop(
+            backdrop = backdrop,
+            shape = { shape },
+            effects = {
+                vibrancy()
+                blur(4.dp.toPx())
+                if (lensRadius > 0.dp) {
+                    lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f)
+                }
+            },
+            layerBlock = {
+                val off = highlight.offset
+                val maxOffset = size.minDimension
+                val initialDerivative = 0.04f
+                translationX = maxOffset * tanh(initialDerivative * off.x / maxOffset)
+                translationY = maxOffset * tanh(initialDerivative * off.y / maxOffset)
+            },
+            onDrawSurface = {
+                drawRect(Color.White.copy(alpha = surfaceAlpha))
+                if (tint != null) {
+                    drawRect(tint, blendMode = BlendMode.Hue)
+                    drawRect(tint.copy(alpha = 0.32f))
+                }
+            }
+        )
+    } else {
+        Modifier
+            .clip(shape)
+            .background(Color.White.copy(alpha = surfaceAlpha))
+            .then(if (tint != null) Modifier.background(tint.copy(alpha = 0.30f)) else Modifier)
+    }
 
     Box(
         modifier
@@ -303,31 +368,7 @@ fun GlassCard(
                 scaleX = s
                 scaleY = s
             }
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { shape },
-                effects = {
-                    vibrancy()
-                    blur(4.dp.toPx())
-                    if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f)
-                    }
-                },
-                layerBlock = {
-                    val off = highlight.offset
-                    val maxOffset = size.minDimension
-                    val initialDerivative = 0.04f
-                    translationX = maxOffset * tanh(initialDerivative * off.x / maxOffset)
-                    translationY = maxOffset * tanh(initialDerivative * off.y / maxOffset)
-                },
-                onDrawSurface = {
-                    drawRect(Color.White.copy(alpha = surfaceAlpha))
-                    if (tint != null) {
-                        drawRect(tint, blendMode = BlendMode.Hue)
-                        drawRect(tint.copy(alpha = 0.32f))
-                    }
-                }
-            )
+            .then(bgModifier)
             .clickable(
                 interactionSource = null,
                 indication = null,
@@ -506,13 +547,15 @@ fun GlassPageBar(
     title: String,
     onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    refract: Boolean? = null,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}
 ) {
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
         radius = 24.dp,
-        surfaceAlpha = 0.14f
+        surfaceAlpha = 0.14f,
+        refract = refract
     ) {
         Row(
             Modifier
@@ -555,6 +598,7 @@ fun GlassAlertDialog(
     confirmEnabled: Boolean = true,
     dismissLabel: String? = null,
     contentMaxHeight: Dp = 420.dp,
+    refract: Boolean? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     Box(
@@ -572,7 +616,8 @@ fun GlassAlertDialog(
             radius = 28.dp,
             surfaceAlpha = 0.82f,
             blurRadius = 20.dp,
-            chromaticAberration = true
+            chromaticAberration = true,
+            refract = refract
         ) {
             Column(
                 Modifier

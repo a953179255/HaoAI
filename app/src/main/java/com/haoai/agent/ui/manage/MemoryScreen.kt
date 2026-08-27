@@ -79,9 +79,13 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             .fillMaxSize()
             .statusBarsPadding()
     ) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            com.haoai.agent.ui.common.LocalGlassRefract provides false
+        ) {
         Column(
             Modifier
                 .fillMaxSize()
+                .appLayer(backdrop)
         ) {
             Spacer(Modifier.height(64.dp))
         Text(
@@ -139,6 +143,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             items(vm.items, key = { it.id }) { m ->
                 MemoryCard(m, fmt, onDeleteRequest = { pendingDelete = it }, backdrop)
             }
+        }
         }
         }
         GlassPageBar(

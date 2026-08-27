@@ -30,10 +30,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
@@ -105,6 +107,8 @@ fun ChatScreen(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     drawerState: androidx.compose.material3.DrawerState =
         androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed),
+    listState: androidx.compose.foundation.lazy.LazyListState =
+        androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: (fromDrawer: Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -123,6 +127,7 @@ fun ChatScreen(
 
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawerState.open() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     // 系统返回手势：侧边栏展开时先收起侧边栏，而不是把应用最小化
     androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
@@ -208,6 +213,12 @@ fun ChatScreen(
             Modifier
                 .fillMaxSize()
                 .appLayer(backdrop)
+                .imePadding()
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        focusManager.clearFocus()
+                    }
+                }
         ) {
             Spacer(
                 Modifier
@@ -219,6 +230,7 @@ fun ChatScreen(
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
+                listState = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -498,12 +510,19 @@ private fun MessageList(
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     modifier: Modifier = Modifier,
     bottomPadding: androidx.compose.ui.unit.Dp
 ) {
-    val listState = rememberLazyListState()
     val showStreaming = streamingText != null || running
     val totalItems = rows.size + (if (showStreaming) 1 else 0)
+
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    // 滑动列表时收起输入法
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }
+            .collect { if (it) focusManager.clearFocus() }
+    }
 
     LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length) {
         if (totalItems <= 0) return@LaunchedEffect

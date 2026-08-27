@@ -129,9 +129,13 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.haoai.agent.ui.common.LocalGlassRefract provides false
+            ) {
             Column(
                 Modifier
                     .fillMaxSize()
+                    .appLayer(backdrop)
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
@@ -232,6 +236,7 @@ fun SettingsScreen(
                 }
             }
             }
+            }
             GlassPageBar(
                 backdrop = backdrop,
                 title = "设置",
@@ -247,9 +252,13 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.haoai.agent.ui.common.LocalGlassRefract provides false
+            ) {
             Column(
                 Modifier
                     .fillMaxSize()
+                    .appLayer(backdrop)
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
@@ -272,6 +281,7 @@ fun SettingsScreen(
                         "about" -> aboutItems(vm, settings, backdrop)
                     }
                 }
+            }
             }
             GlassPageBar(
                 backdrop = backdrop,
@@ -1365,13 +1375,15 @@ private fun SectionTitle(text: String) {
 private fun GlassGroup(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     modifier: Modifier = Modifier,
+    refract: Boolean? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     com.haoai.agent.ui.common.GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
         radius = 18.dp,
-        surfaceAlpha = 0.16f
+        surfaceAlpha = 0.16f,
+        refract = refract
     ) {
         Column(Modifier.padding(vertical = 6.dp), content = content)
     }
@@ -1385,6 +1397,7 @@ private fun LiquidPillButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     emphasized: Boolean = true,
+    refract: Boolean? = null,
     onClick: () -> Unit
 ) {
     com.haoai.agent.ui.common.LiquidGlassButton(
@@ -1392,6 +1405,7 @@ private fun LiquidPillButton(
         backdrop = backdrop,
         shape = RoundedCornerShape(percent = 50),
         enabled = enabled,
+        refract = refract,
         surfaceColor = MaterialTheme.colorScheme.primary.copy(
             alpha = if (emphasized && enabled) 0.85f else 0.25f
         ),
@@ -1415,7 +1429,8 @@ private fun GlassStatTile(
     number: String,
     label: String,
     tint: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    refract: Boolean? = null
 ) {
     com.haoai.agent.ui.common.GlassCard(
         onClick = {},
@@ -1424,6 +1439,7 @@ private fun GlassStatTile(
         surfaceAlpha = 0.20f,
         tint = tint.copy(alpha = 0.10f),
         lensRadius = 12.dp,
+        refract = refract,
         modifier = modifier
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {

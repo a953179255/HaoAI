@@ -152,6 +152,10 @@ private fun RootApp() {
     val drawerState = androidx.compose.material3.rememberDrawerState(
         androidx.compose.material3.DrawerValue.Closed
     )
+    // 聊天滚动状态提升到 RootApp（不随 screen 切换销毁），进设置再返回时保持位置
+    val chatListState = androidx.compose.runtime.saveable.rememberSaveable(
+        saver = androidx.compose.foundation.lazy.LazyListState.Saver
+    ) { androidx.compose.foundation.lazy.LazyListState() }
     val rootScope = androidx.compose.runtime.rememberCoroutineScope()
     var cameFromDrawer by rememberSaveable { mutableStateOf(false) }
 
@@ -198,6 +202,7 @@ private fun RootApp() {
                     vm = chatVm,
                     backdrop = backdrop,
                     drawerState = drawerState,
+                    listState = chatListState,
                     onOpenSettings = { fromDrawer ->
                         cameFromDrawer = fromDrawer
                         screen = 1
