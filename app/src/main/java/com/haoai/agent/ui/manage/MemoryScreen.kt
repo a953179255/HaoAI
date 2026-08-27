@@ -14,14 +14,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,7 +44,6 @@ import com.haoai.agent.agent.memory.Memory
 import com.haoai.agent.agent.memory.MemoryConsolidation
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
-import com.haoai.agent.ui.common.appLayer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -84,62 +81,62 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 .fillMaxSize()
         ) {
             Spacer(Modifier.height(64.dp))
-        Text(
-            "近期动态（每日日志，7 天后过期，重要条目夜间固化晋升）+ 长期记忆（按重要性注入）。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
-        Text(
-            "概览：偏好 $prefN · 事实 $factN · 决定 $decisionN · 事件 $eventN · 今日日志 ${vm.days.firstOrNull()?.items?.size ?: 0} 条",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
-        )
-        msg?.let {
             Text(
-                it,
+                "近期动态（每日日志，7 天后过期，重要条目夜间固化晋升）+ 长期记忆（按重要性注入）。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            Text(
+                "概览：偏好 $prefN · 事实 $factN · 决定 $decisionN · 事件 $eventN · 今日日志 ${vm.days.firstOrNull()?.items?.size ?: 0} 条",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
             )
-        }
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            if (vm.days.isNotEmpty()) {
-                item(key = "journal_header") {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "近期动态 · ${vm.journalCount()} 条",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { confirmClearJournal = true }) {
-                            Text("清空", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-                items(vm.days, key = { "j_${it.date}" }) { day ->
-                    JournalDayCard(day, backdrop)
-                }
-            }
-            item(key = "lt_header") {
+            msg?.let {
                 Text(
-                    if (vm.items.isEmpty() && vm.days.isEmpty()) "暂无记忆" else "长期记忆",
-                    style = MaterialTheme.typography.titleMedium
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
                 )
             }
-            items(vm.items, key = { it.id }) { m ->
-                MemoryCard(m, fmt, onDeleteRequest = { pendingDelete = it }, backdrop)
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (vm.days.isNotEmpty()) {
+                    item(key = "journal_header") {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "近期动态 · ${vm.journalCount()} 条",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { confirmClearJournal = true }) {
+                                Text("清空", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    items(vm.days, key = { "j_${it.date}" }) { day ->
+                        JournalDayCard(day, backdrop)
+                    }
+                }
+                item(key = "lt_header") {
+                    Text(
+                        if (vm.items.isEmpty() && vm.days.isEmpty()) "暂无记忆" else "长期记忆",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                items(vm.items, key = { it.id }) { m ->
+                    MemoryCard(m, fmt, onDeleteRequest = { pendingDelete = it }, backdrop)
+                }
             }
-        }
         }
         GlassPageBar(
             backdrop = backdrop,

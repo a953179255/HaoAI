@@ -266,7 +266,7 @@ fun LiquidGlassButton(
             },
             layerBlock = {
                 val progress = highlight.pressProgress
-                val scale = lerp(1f, 1f + 4.dp.toPx() / size.height, progress)
+                val scale = lerp(1f, 1f + 1.5.dp.toPx() / size.height, progress)
 
                 val maxOffset = size.minDimension
                 val initialDerivative = 0.05f
@@ -287,6 +287,7 @@ fun LiquidGlassButton(
         Modifier
             .clip(shape)
             .background(surfaceColor ?: Color.White.copy(alpha = 0.25f))
+            .border(1.5.dp, Color.White.copy(alpha = 0.45f), shape)
     }
 
     Box(
@@ -660,7 +661,8 @@ fun GlassAlertDialog(
                                 enabled = confirmEnabled,
                                 surfaceColor = MaterialTheme.colorScheme.primary.copy(
                                     alpha = if (confirmEnabled) 0.85f else 0.25f
-                                )
+                                ),
+                                refract = refract
                             ) {
                                 Text(
                                     confirmLabel.orEmpty(),

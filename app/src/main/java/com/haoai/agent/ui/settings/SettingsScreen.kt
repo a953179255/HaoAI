@@ -78,7 +78,6 @@ import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
-import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 
@@ -102,7 +101,7 @@ fun SettingsScreen(
     val draft = vm.draft
     val scope = rememberCoroutineScope()
 
-    // 提升到顶层（appLayer 之外）渲染的玻璃弹窗状态，避免与采样层自引用
+    // 玻璃弹窗状态
     var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
     var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
     var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }

@@ -14,13 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -39,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
-import com.haoai.agent.ui.common.appLayer
 
 /**
  * 技能库管理：查看/手动添加/删除 SKILL.md（skill 工具的图形入口）。
@@ -69,124 +64,124 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 .fillMaxSize()
         ) {
             Spacer(Modifier.height(64.dp))
-        Text(
-            "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
-        androidx.compose.foundation.layout.Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            com.haoai.agent.ui.common.LiquidGlassButton(
-                onClick = { showAdd = true },
-                backdrop = backdrop,
-                shape = RoundedCornerShape(percent = 50),
-                surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+            Text(
+                "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            androidx.compose.foundation.layout.Row(
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = { showAdd = true },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
                 ) {
-                    Text(
-                        "＋",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.padding(2.dp))
-                    Text(
-                        "手动添加技能",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                    ) {
+                        Text(
+                            "＋",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.padding(2.dp))
+                        Text(
+                            "手动添加技能",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
-        }
-        if (skills.isEmpty()) {
-            Text(
-                "暂无技能——当代理踩坑并总结出可复用步骤时会自动沉淀到这里，也可以手动添加。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(24.dp)
-            )
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(skills, key = { it.name }) { s ->
-                GlassCard(
-                    onClick = {},
-                    backdrop = backdrop,
-                    shape = RoundedCornerShape(16.dp),
-                    surfaceAlpha = if (s.archived) 0.10f else 0.22f,
-                    lensRadius = 16.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(s.name, style = MaterialTheme.typography.titleSmall)
-                                Spacer(Modifier.padding(2.dp))
-                                if (s.archived) {
-                                    Text(
-                                        "已归档 · 闲置90天",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .padding(start = 6.dp)
-                                            .background(
-                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
-                                                RoundedCornerShape(6.dp)
-                                            )
-                                            .padding(horizontal = 6.dp, vertical = 1.dp)
-                                    )
+            if (skills.isEmpty()) {
+                Text(
+                    "暂无技能——当代理踩坑并总结出可复用步骤时会自动沉淀到这里，也可以手动添加。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(24.dp)
+                )
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(skills, key = { it.name }) { s ->
+                    GlassCard(
+                        onClick = {},
+                        backdrop = backdrop,
+                        shape = RoundedCornerShape(16.dp),
+                        surfaceAlpha = if (s.archived) 0.10f else 0.22f,
+                        lensRadius = 16.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(s.name, style = MaterialTheme.typography.titleSmall)
+                                    Spacer(Modifier.padding(2.dp))
+                                    if (s.archived) {
+                                        Text(
+                                            "已归档 · 闲置90天",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .padding(start = 6.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
+                                                    RoundedCornerShape(6.dp)
+                                                )
+                                                .padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                    if (s.pinned) {
+                                        Text(
+                                            "置顶",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(start = 6.dp)
+                                        )
+                                    }
                                 }
-                                if (s.pinned) {
-                                    Text(
-                                        "置顶",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(start = 6.dp)
-                                    )
-                                }
+                                Text(
+                                    s.description.ifBlank { "（无描述）" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2
+                                )
+                                Text(
+                                    "使用 ${s.useCount} 次 · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
+                                        " · 来源 ${if (s.source == "agent") "自进化" else "手动"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            Text(
-                                s.description.ifBlank { "（无描述）" },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2
-                            )
-                            Text(
-                                "使用 ${s.useCount} 次 · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
-                                    " · 来源 ${if (s.source == "agent") "自进化" else "手动"}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        TextButton(onClick = {
-                            store.setPinned(s.name, !s.pinned)
-                            refresh()
-                        }) { Text(if (s.pinned) "取消置顶" else "置顶") }
-                        TextButton(onClick = {
-                            viewBody = s.name to (store.view(s.name) ?: "")
-                        }) { Text("查看") }
-                        IconButton(onClick = {
-                            store.delete(s.name)
-                            refresh()
-                        }) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = "删除",
-                                tint = MaterialTheme.colorScheme.error
-                            )
+                            TextButton(onClick = {
+                                store.setPinned(s.name, !s.pinned)
+                                refresh()
+                            }) { Text(if (s.pinned) "取消置顶" else "置顶") }
+                            TextButton(onClick = {
+                                viewBody = s.name to (store.view(s.name) ?: "")
+                            }) { Text("查看") }
+                            IconButton(onClick = {
+                                store.delete(s.name)
+                                refresh()
+                            }) {
+                                Icon(
+                                    Icons.Filled.Delete,
+                                    contentDescription = "删除",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
         }
         GlassPageBar(
             backdrop = backdrop,
