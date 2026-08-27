@@ -159,7 +159,7 @@ fun ChatScreen(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().imePadding()) {
                 GlassPanel(
                     backdrop = backdrop,
                     modifier = Modifier
