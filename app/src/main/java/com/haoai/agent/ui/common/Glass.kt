@@ -718,7 +718,8 @@ fun GlassAlertDialog(
                                 surfaceColor = when {
                                     !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
                                     danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                    // 半透明着色让振动/透镜折射透出来，保持液态玻璃质感
+                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
                                 },
                                 refract = refract
                             ) {

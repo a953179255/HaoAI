@@ -74,6 +74,8 @@ data class AppSettings(
     val avatarEmoji: String = "",
     /** 档案头像底色：渐变索引（0-5）。 */
     val avatarGradient: Int = 0,
+    /** 档案头像：相册图片路径（应用私有目录）。非空时优先于 emoji。 */
+    val avatarImagePath: String? = null,
     /** 档案签名：一句话介绍，侧边栏头像旁展示。 */
     val bio: String = "",
     val onboarded: Boolean = false,

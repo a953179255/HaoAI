@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
@@ -49,7 +50,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandLess
@@ -153,8 +154,13 @@ fun ChatScreen(
     var showStatusPopup by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showProfileEdit by remember { mutableStateOf(false) }
+    // /task 强制展开任务面板（即使清单为空或已全部完成）
+    var taskPanelForced by remember { mutableStateOf(false) }
 
-    // 系统返回手势：侧边栏展开时先收起侧边栏，而不是把应用最小化
+    // 系统返回手势：弹层优先关闭，其次侧边栏，避免把应用最小化
+    androidx.activity.compose.BackHandler(enabled = showProfileEdit) { showProfileEdit = false }
+    androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
+    androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
     androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
         scope.launch { drawerState.close() }
     }
@@ -255,9 +261,10 @@ fun ChatScreen(
                 ) {
                     SessionsDrawer(
                         agentName = vm.agentName(),
-                        subtitleLine = settings.bio.ifBlank { vm.workspaceName() },
+                        subtitleLine = settings.bio,
                         avatarEmoji = settings.avatarEmoji,
                         avatarGradient = settings.avatarGradient,
+                        avatarImagePath = settings.avatarImagePath,
                         sessionCount = sessions.size,
                         backdrop = backdrop,
                         onOpenSessions = {
@@ -353,6 +360,8 @@ fun ChatScreen(
             TaskPanel(
                 items = todoItems,
                 backdrop = backdrop,
+                forced = taskPanelForced,
+                onDismiss = { taskPanelForced = false },
                 modifier = Modifier.padding(bottom = 6.dp)
             )
             SlashCommandPopup(
@@ -371,6 +380,7 @@ fun ChatScreen(
                                 when (cmd.name) {
                                     "help" -> showSlashHelp = true
                                     "status" -> showStatusPopup = true
+                                    "task" -> taskPanelForced = !taskPanelForced
                                 }
                             }
                         }
@@ -414,6 +424,7 @@ fun ChatScreen(
                                 when (cmd.name) {
                                     "help" -> showSlashHelp = true
                                     "status" -> showStatusPopup = true
+                                    "task" -> taskPanelForced = !taskPanelForced
                                 }
                             }
                         }
@@ -452,14 +463,97 @@ fun ChatScreen(
     }
     }
 
+    // /help 斜杠命令帮助
+    if (showSlashHelp) {
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "斜杠命令",
+            onDismiss = { showSlashHelp = false },
+            dismissLabel = "关闭"
+        ) {
+            val groups = SlashCommands.all.groupBy { it.group }
+            groups.entries.forEachIndexed { gi, (group, cmds) ->
+                Text(
+                    group,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = if (gi == 0) 2.dp else 14.dp, bottom = 2.dp)
+                )
+                cmds.forEach { cmd ->
+                    Row(
+                        Modifier.padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            cmd.icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            "/${cmd.name}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 10.dp)
+                        )
+                        Text(
+                            cmd.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                            modifier = Modifier.padding(start = 10.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // /status 会话状态
+    if (showStatusPopup) {
+        val sess by vm.session.collectAsState()
+        val rowsNow by vm.rows.collectAsState()
+        val runningNow by vm.running.collectAsState()
+        val todosNow by vm.todoItems.collectAsState()
+        val providerLabel = vm.activeProviderLabel() ?: "端侧 llama.cpp"
+        val cu = contextUsage
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "会话状态",
+            onDismiss = { showStatusPopup = false },
+            dismissLabel = "关闭"
+        ) {
+            StatusRow("Agent", vm.agentName())
+            StatusRow("模型", providerLabel)
+            StatusRow("会话", (sess?.title ?: "新会话") + " · " + rowsNow.size + " 条消息")
+            StatusRow("上下文", "${cu.usedTokens} / ${cu.totalTokens} tokens（${(cu.percentage * 100).toInt()}%）")
+            val openCount = todosNow.count { it.status != "completed" && it.status != "cancelled" }
+            StatusRow("任务", if (todosNow.isEmpty()) "暂无" else "${todosNow.size} 项 · 待完成 $openCount")
+            StatusRow("状态", if (runningNow) "运行中" else "空闲")
+        }
+    }
+
     // 档案编辑弹窗：名字 / emoji 头像 / 渐变底色 / 签名（放在抽屉之外，避免被抽屉层盖住）
     if (showProfileEdit) {
         var editName by remember { mutableStateOf(settings.agentName.ifBlank { "HaoAI" }) }
         var editEmoji by remember { mutableStateOf(settings.avatarEmoji) }
         var editGradient by remember { mutableStateOf(settings.avatarGradient) }
         var editBio by remember { mutableStateOf(settings.bio) }
+        var editImagePath by remember { mutableStateOf(settings.avatarImagePath) }
         val emojiChoices = remember {
             listOf("😀", "😊", "😎", "🤖", "🐱", "🐶", "🦊", "🐰", "🌸", "🌟", "🔥", "🌙", "⚡", "🍀", "🎧", "🚀")
+        }
+        val avatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.GetContent()
+        ) { uri ->
+            if (uri != null) {
+                vm.importAvatarImage(uri) { path ->
+                    if (path != null) {
+                        editImagePath = path
+                        editEmoji = ""
+                    }
+                }
+            }
         }
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
@@ -467,7 +561,7 @@ fun ChatScreen(
             onDismiss = { showProfileEdit = false },
             confirmLabel = "保存",
             onConfirm = {
-                vm.updateProfile(editName, editEmoji, editGradient, editBio)
+                vm.updateProfile(editName, editEmoji, editGradient, editBio, editImagePath)
                 showProfileEdit = false
             },
             dismissLabel = "取消"
@@ -486,6 +580,37 @@ fun ChatScreen(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = 10.dp)
             )
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ProfileAvatar(
+                    emoji = editEmoji,
+                    gradientIndex = editGradient,
+                    fallback = editName,
+                    size = 52.dp,
+                    imagePath = editImagePath
+                )
+                Spacer(Modifier.size(14.dp))
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = { avatarPicker.launch("image/*") },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                ) {
+                    Text(
+                        "从相册选择",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                    )
+                }
+                if (editImagePath != null) {
+                    androidx.compose.material3.TextButton(onClick = { editImagePath = null }) {
+                        Text("移除", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+                    }
+                }
+            }
             emojiChoices.chunked(6).forEach { rowEmojis ->
                 Row(
                     Modifier.padding(top = 6.dp),
@@ -508,7 +633,11 @@ fun ChatScreen(
                                         RoundedCornerShape(10.dp)
                                     ) else Modifier
                                 )
-                                .clickable { editEmoji = if (selected) "" else e },
+                                .clickable {
+                                    editEmoji = if (selected) "" else e
+                                    // 选 emoji 即回到 emoji 头像，图片模式退出
+                                    editImagePath = null
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(e, fontSize = 20.sp)
@@ -1319,6 +1448,7 @@ private fun SessionsDrawer(
     subtitleLine: String,
     avatarEmoji: String,
     avatarGradient: Int,
+    avatarImagePath: String?,
     sessionCount: Int,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onOpenSessions: () -> Unit,
@@ -1335,7 +1465,7 @@ private fun SessionsDrawer(
             .statusBarsPadding()
             .padding(top = 8.dp)
     ) {
-        // 档案头部：点击进入编辑
+        // 档案头部：点击头像或名字直接进入编辑
         Row(
             Modifier
                 .fillMaxWidth()
@@ -1347,24 +1477,21 @@ private fun SessionsDrawer(
                 emoji = avatarEmoji,
                 gradientIndex = avatarGradient,
                 fallback = agentName,
-                size = 44.dp
+                size = 44.dp,
+                imagePath = avatarImagePath
             )
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(agentName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    subtitleLine,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
+                if (subtitleLine.isNotBlank()) {
+                    Text(
+                        subtitleLine,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
             }
-            Icon(
-                Icons.Filled.Edit,
-                contentDescription = "编辑档案",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(17.dp)
-            )
         }
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
         DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessionCount, onClick = onOpenSessions)
@@ -1415,6 +1542,25 @@ private fun DrawerEntry(
     }
 }
 
+/** /status 弹窗里的键值行。 */
+@Composable
+private fun StatusRow(label: String, value: String) {
+    Row(Modifier.padding(top = 10.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+            modifier = Modifier.width(64.dp)
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
 // 档案头像 6 色渐变表（索引对应 SettingsStore.avatarGradient）
 private val AVATAR_GRADIENTS = listOf(
     listOf(Color(0xFF7BC6A5), Color(0xFF4E9F7D)),
@@ -1425,23 +1571,45 @@ private val AVATAR_GRADIENTS = listOf(
     listOf(Color(0xFF9CD8C8), Color(0xFF5FB0C9))
 )
 
-/** 渐变底 emoji 头像：emoji 为空时回退名字首字。 */
+/** 档案头像：图片 > emoji > 名字首字，渐变底色兜底。 */
 @Composable
 private fun ProfileAvatar(
     emoji: String,
     gradientIndex: Int,
     fallback: String,
-    size: androidx.compose.ui.unit.Dp = 40.dp
+    size: androidx.compose.ui.unit.Dp = 40.dp,
+    imagePath: String? = null
 ) {
     val colors = AVATAR_GRADIENTS[gradientIndex.coerceIn(0, AVATAR_GRADIENTS.lastIndex)]
+    val bmp = remember(imagePath) {
+        imagePath?.let { p ->
+            runCatching {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(p, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                android.graphics.BitmapFactory.decodeFile(p, opts)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
     Box(
         Modifier
             .size(size)
             .background(Brush.linearGradient(colors), CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        if (emoji.isNotEmpty()) {
-            Text(emoji, fontSize = 20.sp)
+        if (bmp != null) {
+            androidx.compose.foundation.Image(
+                bitmap = bmp,
+                contentDescription = "头像",
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
+        } else if (emoji.isNotEmpty()) {
+            Text(emoji, fontSize = (size.value * 0.45f).sp)
         } else {
             Text(
                 fallback.take(1).ifEmpty { "AI" },

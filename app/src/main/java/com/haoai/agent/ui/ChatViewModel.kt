@@ -682,17 +682,54 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** 档案状态流：头像/签名等 UI 直接订阅。 */
     val settings get() = c.settingsFlow
 
-    /** 更新档案：名字、emoji 头像、渐变底色、签名。 */
-    fun updateProfile(name: String, avatarEmoji: String, avatarGradient: Int, bio: String) {
+    /** 更新档案：名字、emoji 头像、渐变底色、签名、图片头像。 */
+    fun updateProfile(
+        name: String,
+        avatarEmoji: String,
+        avatarGradient: Int,
+        bio: String,
+        avatarImagePath: String?
+    ) {
         c.updateSettings {
             it.copy(
                 agentName = name.trim().take(20),
                 avatarEmoji = avatarEmoji,
                 avatarGradient = avatarGradient.coerceIn(0, 5),
-                bio = bio.trim().take(60)
+                bio = bio.trim().take(60),
+                avatarImagePath = avatarImagePath
             )
         }
     }
+
+    /** 从相册导入头像：压缩后拷入应用私有目录，完成后在主线程回传新文件路径（失败为 null）。 */
+    fun importAvatarImage(uri: android.net.Uri, onDone: (String?) -> Unit) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val path = runCatching {
+                val resolver = c.appContext.contentResolver
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+                    ?: return@runCatching null
+                val dir = java.io.File(c.appFilesDir, "avatar").apply { mkdirs() }
+                // 旧头像文件一并删除，避免私有目录堆积
+                c.settingsFlow.value.avatarImagePath?.let { old ->
+                    if (old.startsWith(dir.absolutePath)) java.io.File(old).delete()
+                }
+                val out = java.io.File(dir, "avatar_${System.currentTimeMillis()}.jpg")
+                out.outputStream().use { fos -> bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, fos) }
+                bmp.recycle()
+                out.absolutePath
+            }.getOrNull()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(path) }
+        }
+    }
+
+    /** 当前生效供应商标签（/status 展示用）。 */
+    fun activeProviderLabel(): String? =
+        c.activeProvider()?.let { "${it.name} · ${it.model}" }
 
     fun needsOnboarding(): Boolean = !c.settingsFlow.value.onboarded
 

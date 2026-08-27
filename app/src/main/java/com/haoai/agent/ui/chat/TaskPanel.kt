@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
@@ -49,12 +50,14 @@ import com.kyant.backdrop.backdrops.LayerBackdrop
 fun TaskPanel(
     items: List<TodoItem>,
     backdrop: LayerBackdrop,
+    forced: Boolean = false,
+    onDismiss: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    if (items.isEmpty()) return
+    if (items.isEmpty() && !forced) return
 
     val hasIncomplete = items.any { it.status != "completed" && it.status != "cancelled" }
-    if (!hasIncomplete) return
+    if (!hasIncomplete && !forced) return
 
     var expanded by remember { mutableStateOf(true) }
     val doneCount = items.count { it.status == "completed" }
@@ -107,6 +110,27 @@ fun TaskPanel(
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
+                if (items.isEmpty()) {
+                    // 强制展开的空态
+                    Text(
+                        "暂无任务",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                onDismiss?.let {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "关闭任务面板",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable { it() }
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
                 Icon(
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = null,
@@ -115,15 +139,17 @@ fun TaskPanel(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                strokeCap = StrokeCap.Round
-            )
+            if (items.isNotEmpty()) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                    strokeCap = StrokeCap.Round
+                )
+            }
             AnimatedVisibility(
                 visible = expanded,
                 enter = expandVertically(spring(stiffness = Spring.StiffnessMedium)),
