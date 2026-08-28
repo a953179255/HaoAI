@@ -158,21 +158,24 @@ object Scheduler {
         WorkManager.getInstance(appContext).cancelUniqueWork(workTag(taskId))
     }
 
+    /** 应用启动时对账：后台线程执行（getWorkInfosForUniqueWork().get() 是阻塞调用，主线程会卡启动）。 */
     fun syncAll(tasks: List<ScheduleTask>) {
         if (!::appContext.isInitialized) return
-        val wm = WorkManager.getInstance(appContext)
-        tasks.forEach { t ->
-            if (!t.enabled) {
-                cancel(t.id)
-                return@forEach
+        Thread {
+            val wm = runCatching { WorkManager.getInstance(appContext) }.getOrNull() ?: return@Thread
+            tasks.forEach { t ->
+                if (!t.enabled) {
+                    cancel(t.id)
+                    return@forEach
+                }
+                // 已有未完成的调度就保持不动：WorkManager 自身跨重启持久，
+                // 若每次启动都 REPLACE 重排，周期任务的倒计时会被反复重置而永远到不了点。
+                val hasLiveWork = runCatching {
+                    wm.getWorkInfosForUniqueWork(workTag(t.id)).get().any { !it.state.isFinished }
+                }.getOrDefault(false)
+                if (!hasLiveWork) enqueueNext(t)
             }
-            // 已有未完成的调度就保持不动：WorkManager 自身跨重启持久，
-            // 若每次启动都 REPLACE 重排，周期任务的倒计时会被反复重置而永远到不了点。
-            val hasLiveWork = runCatching {
-                wm.getWorkInfosForUniqueWork(workTag(t.id)).get().any { !it.state.isFinished }
-            }.getOrDefault(false)
-            if (!hasLiveWork) enqueueNext(t)
-        }
+        }.apply { isDaemon = true; name = "haoai-sched-sync" }.start()
     }
 
     private fun workTag(id: String) = "haoai-sched-$id"

@@ -21,35 +21,54 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val container = (applicationContext as HaoApplication).container
         val settings = container.settingsFlow.value
-        runCatching {
+        try {
             if (settings.deepDream && settings.memoryEnabled) {
                 val wasRunning =
                     container.llama.state.value is com.haoai.agent.platform.llama.LlamaState.Running
-                val target = runCatching { container.resolveDreamTarget() }.getOrNull()
-                val report = if (target != null) {
-                    runCatching {
-                        MemoryConsolidation.runDeep(
-                            container.memoryBank, container.journal,
-                            container.client, target.provider, target.apiKey
-                        )
-                    }.getOrElse { MemoryConsolidation.run(container.memoryBank, container.journal) }
-                } else {
-                    MemoryConsolidation.run(container.memoryBank, container.journal)
+                val target = try {
+                    container.resolveDreamTarget()
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (e: Throwable) {
+                    null
                 }
-                // 端侧服务是本次为整理而拉起的，用完即停
-                if (target?.isLocal == true && !wasRunning) {
-                    runCatching { container.llama.stop() }
+                // 为整理拉起的端侧服务：无论正常完成、失败还是被取消都要停掉
+                try {
+                    val report = if (target != null) {
+                        try {
+                            MemoryConsolidation.runDeep(
+                                container.memoryBank, container.journal,
+                                container.client, target.provider, target.apiKey
+                            )
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            // 深度整理被取消：不能静默回退规则层，否则半成品报告入库
+                            throw ce
+                        } catch (e: Throwable) {
+                            MemoryConsolidation.run(container.memoryBank, container.journal)
+                        }
+                    } else {
+                        MemoryConsolidation.run(container.memoryBank, container.journal)
+                    }
+                    WorkspaceDocs.appendDreamReport(
+                        container, report,
+                        deep = target != null,
+                        deepMergedNote = if (target == null) "（模型不可用，已回退规则整理）" else ""
+                    )
+                } finally {
+                    if (target?.isLocal == true && !wasRunning) {
+                        runCatching { container.llama.stop() }
+                    }
                 }
-                WorkspaceDocs.appendDreamReport(
-                    container, report,
-                    deep = target != null,
-                    deepMergedNote = if (target == null) "（模型不可用，已回退规则整理）" else ""
-                )
             } else {
                 val report = MemoryConsolidation.run(container.memoryBank, container.journal)
                 WorkspaceDocs.appendDreamReport(container, report, deep = false)
             }
             container.syncWorkspaceDocs()
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            // WorkManager 停止/系统回收：向上传播，不把半途而废当作已完成
+            throw ce
+        } catch (e: Throwable) {
+            // 后台整理失败保持静默，下次触发会重试
         }
         return Result.success()
     }

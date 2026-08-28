@@ -41,9 +41,14 @@ class CameraTool : Tool {
                 "camera"
             ).apply { mkdirs() }
             val out = File(dir, "photo-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.jpg")
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context, "${context.packageName}.fileprovider", out
-            )
+            val uri = try {
+                androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.fileprovider", out
+                )
+            } catch (e: IllegalArgumentException) {
+                // file_paths 未覆盖该路径等配置问题：返回错误而不是崩溃
+                return@withContext ToolResult("无法生成照片文件句柄：${e.message}", true)
+            }
             val intent = android.content.Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
                 .putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
                 .addFlags(

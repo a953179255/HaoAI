@@ -49,8 +49,10 @@ class WebFetchTool : Tool {
                 http.newCall(request).execute().use { resp ->
                     if (!resp.isSuccessful) return@withContext ToolResult("HTTP ${resp.code}", true)
                     val contentType = resp.header("Content-Type") ?: ""
-                    // 上限 2MB：resp.body.string() 会把整个响应读进内存，大文件直接 OOM
-                    val body = readCapped(resp, MAX_DOWNLOAD_BYTES)
+                    // 上限 2MB：读全量进内存会 OOM
+                    val bytes = readCapped(resp, MAX_DOWNLOAD_BYTES)
+                    // 按 HTTP 头 / HTML meta 声明的字符集解码：国内大量站点仍是 GBK，硬解 UTF-8 全是乱码
+                    val body = String(bytes, charsetOf(contentType, bytes))
                     if (contentType.contains("html", ignoreCase = true) || body.trimStart().startsWith("<")) {
                         val text = HtmlText.convert(body)
                         ToolResult("$url（HTTP ${resp.code}）\n\n${TextCap.middle(text, maxChars)}")
@@ -62,8 +64,8 @@ class WebFetchTool : Tool {
         }
 
     /** 最多读 limit 字节即停止，防止超大响应撑爆内存。 */
-    private fun readCapped(resp: okhttp3.Response, limit: Int): String {
-        val src = resp.body?.source() ?: return ""
+    private fun readCapped(resp: okhttp3.Response, limit: Int): ByteArray {
+        val src = resp.body?.source() ?: return ByteArray(0)
         val out = java.io.ByteArrayOutputStream()
         val chunk = ByteArray(16 * 1024)
         var total = 0
@@ -75,7 +77,22 @@ class WebFetchTool : Tool {
                 total += n
             }
         }
-        return out.toString("UTF-8")
+        return out.toByteArray()
+    }
+
+    /** 字符集解析：HTTP 头优先，其次 HTML 头部 meta 声明，默认 UTF-8。 */
+    private fun charsetOf(contentType: String, bytes: ByteArray): java.nio.charset.Charset {
+        Regex("(?i)charset=\\s*[\"']?([\\w-]+)").find(contentType)?.groupValues?.get(1)?.let { name ->
+            runCatching { return java.nio.charset.Charset.forName(name) }
+        }
+        if (bytes.isNotEmpty()) {
+            // meta 声明在文档前部；用 ISO-8859-1 无损读字节再找 charset 声明
+            val head = String(bytes, 0, minOf(bytes.size, 2048), Charsets.ISO_8859_1)
+            Regex("(?i)charset\\s*=\\s*[\"']?([\\w-]+)").find(head)?.groupValues?.get(1)?.let { name ->
+                runCatching { return java.nio.charset.Charset.forName(name) }
+            }
+        }
+        return Charsets.UTF_8
     }
 
     private companion object {
@@ -92,9 +109,13 @@ object HtmlText {
     private val entities = mapOf(
         "&amp;" to "&", "&lt;" to "<", "&gt;" to ">", "&quot;" to "\"",
         "&#39;" to "'", "&apos;" to "'", "&nbsp;" to " ", "&copy;" to "©",
-        "&mdash;" to "—", "&hellip;" to "…"
+        "&mdash;" to "—", "&hellip;" to "…", "&ndash;" to "–",
+        "&lsquo;" to "‘", "&rsquo;" to "’", "&ldquo;" to "“", "&rdquo;" to "”",
+        "&middot;" to "·", "&times;" to "×", "&divide;" to "÷", "&reg;" to "®"
     )
+    private val namedEntity = Regex("&([a-zA-Z][a-zA-Z0-9]{1,10});")
     private val numericEntity = Regex("&#(\\d+);")
+    private val hexEntity = Regex("&#x([0-9a-fA-F]+);")
     private val blankLines = Regex("\n{3,}")
 
     fun convert(html: String): String {
@@ -104,11 +125,25 @@ object HtmlText {
         t = blockTags.replace(t, "\n")
         t = anyTag.replace(t, "")
         for ((k, v) in entities) t = t.replace(k, v)
-        t = numericEntity.replace(t) { m -> m.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: "" }
+        // 十六进制与十进制数字实体：toChar() 只取低 16 位，增补平面字符必须走 toChars
+        t = hexEntity.replace(t) { m ->
+            decodeCodePoint(m.groupValues[1], hex = true)
+        }
+        t = numericEntity.replace(t) { m ->
+            decodeCodePoint(m.groupValues[1], hex = false)
+        }
+        // 未收录的命名实体原样删掉（&unknownx; 之类），避免混进正文
+        t = namedEntity.replace(t, "")
         t = t.replace("\r", "").replace("\t", " ")
         t = blankLines.replace(t, "\n\n")
         return t.split('\n').joinToString("\n") { it.trim().ifEmpty { "" } }
             .replace(blankLines, "\n\n")
             .trim()
     }
+
+    private fun decodeCodePoint(spec: String, hex: Boolean): String = runCatching {
+        val cp = if (hex) spec.toInt(16) else spec.toInt()
+        if (cp <= 0 || cp > Character.MAX_CODE_POINT || (cp in 0xD800..0xDFFF)) return ""
+        String(Character.toChars(cp))
+    }.getOrDefault("")
 }

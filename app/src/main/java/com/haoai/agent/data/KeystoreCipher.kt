@@ -45,6 +45,9 @@ class KeystoreCipher {
             val iv = cipher.iv
             val ct = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
             Base64.encodeToString(iv + ct, Base64.NO_WRAP)
+        }.onFailure {
+            // Keystore 故障（锁屏未验证/硬件不可用/换机恢复）：无日志排查会非常困难
+            android.util.Log.w("HaoCipher", "加密失败: ${it.javaClass.simpleName}: ${it.message}")
         }.getOrNull()
     }
 
@@ -52,10 +55,12 @@ class KeystoreCipher {
         if (cipherText.isNullOrBlank()) return ""
         return runCatching {
             val data = Base64.decode(cipherText, Base64.NO_WRAP)
-            val key = getKey() ?: return ""
+            val key = getKey() ?: error("密钥不存在（换机/清除数据后 Keystore 密钥不可迁移，密文无法恢复）")
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, data, 0, 12))
             String(cipher.doFinal(data, 12, data.size - 12), Charsets.UTF_8)
+        }.onFailure {
+            android.util.Log.w("HaoCipher", "解密失败: ${it.javaClass.simpleName}: ${it.message}")
         }.getOrDefault("")
     }
 
