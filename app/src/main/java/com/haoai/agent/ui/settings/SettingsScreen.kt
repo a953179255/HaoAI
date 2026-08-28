@@ -4,6 +4,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -81,6 +84,7 @@ import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.GlassTextButton
 import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 
@@ -1286,6 +1290,89 @@ private fun LazyListScope.generalItems(
                     ) { Text("深色", maxLines = 1) }
                 }
             }
+            // —— 主题色 / 动态颜色 / AMOLED / 气泡不透明度 ——
+            val darkNow = when (settings.themeMode) {
+                "dark" -> true
+                "light" -> false
+                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            }
+            val dynamicAvailable = android.os.Build.VERSION.SDK_INT >= 31
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "动态颜色（Material You）",
+                subtitle = if (dynamicAvailable) "根据系统壁纸动态生成配色，优先于主题色"
+                else "需要 Android 12 及以上",
+                checked = settings.dynamicColor && dynamicAvailable,
+                onChange = { if (dynamicAvailable) vm.setDynamicColor(it) },
+                backdrop = backdrop
+            )
+            if (!settings.dynamicColor || !dynamicAvailable) {
+                HorizontalDivider(
+                    Modifier.padding(horizontal = 14.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                )
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text("主题色", style = MaterialTheme.typography.bodyMedium)
+                    Row(
+                        Modifier.padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        com.haoai.agent.ui.theme.THEME_SEEDS.forEachIndexed { i, seed ->
+                            val color = if (darkNow) seed.darkPrimary else seed.lightPrimary
+                            val selected = settings.themeSeed == i
+                            Box(
+                                Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(color, CircleShape)
+                                    .border(
+                                        if (selected) 2.5.dp else 1.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                                        CircleShape
+                                    )
+                                    .clickable { vm.setThemeSeed(i) }
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "AMOLED 纯黑模式",
+                subtitle = "深色主题下使用纯黑背景（OLED 省电、息屏边框无光晕）",
+                checked = settings.amoledMode,
+                onChange = { vm.setAmoledMode(it) },
+                backdrop = backdrop
+            )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val pct = settings.bubbleOpacity.times(100).toInt()
+                    Text("气泡不透明度", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "$pct%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                androidx.compose.material3.Slider(
+                    value = settings.bubbleOpacity,
+                    onValueChange = { vm.setBubbleOpacity(it) },
+                    valueRange = 0.3f..1.5f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
@@ -1634,12 +1721,36 @@ private fun ProviderDialog(
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         com.haoai.agent.ui.ProviderPresets.all.take(3).forEach { p ->
-                            AssistChip(onClick = { onPreset(p) }, label = { Text(p.label, style = MaterialTheme.typography.labelSmall) })
+                            AssistChip(
+                                onClick = { onPreset(p) },
+                                label = {
+                                    Text(
+                                        p.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                                )
+                            )
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         com.haoai.agent.ui.ProviderPresets.all.drop(3).forEach { p ->
-                            AssistChip(onClick = { onPreset(p) }, label = { Text(p.label, style = MaterialTheme.typography.labelSmall) })
+                            AssistChip(
+                                onClick = { onPreset(p) },
+                                label = {
+                                    Text(
+                                        p.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                                )
+                            )
                         }
                     }
                     OutlinedTextField(
@@ -1666,12 +1777,18 @@ private fun ProviderDialog(
                         colors = glassFieldColors()
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        TextButton(onClick = onFetchModels, enabled = !fetchingModels && draft.baseUrl.isNotBlank()) {
-                            Text(if (fetchingModels) "拉取中…" else "拉取模型列表")
-                        }
-                        TextButton(onClick = onDetectCaps, enabled = !detectingCaps && draft.model.isNotBlank()) {
-                            Text(if (detectingCaps) "检测中…" else "自动检测能力")
-                        }
+                        GlassTextButton(
+                            text = if (fetchingModels) "拉取中…" else "拉取模型列表",
+                            onClick = onFetchModels,
+                            enabled = !fetchingModels && draft.baseUrl.isNotBlank(),
+                            backdrop = backdrop
+                        )
+                        GlassTextButton(
+                            text = if (detectingCaps) "检测中…" else "自动检测能力",
+                            onClick = onDetectCaps,
+                            enabled = !detectingCaps && draft.model.isNotBlank(),
+                            backdrop = backdrop
+                        )
                     }
                     detectResult?.let { (ok, msg) ->
                         Text(
@@ -1766,9 +1883,12 @@ private fun ProviderDialog(
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
-                    TextButton(onClick = onTest, enabled = !testing) {
-                        Text(if (testing) "测试中…" else "测试连接")
-                    }
+                    GlassTextButton(
+                        text = if (testing) "测试中…" else "测试连接",
+                        onClick = onTest,
+                        enabled = !testing,
+                        backdrop = backdrop
+                    )
                 }
                 Row(
                     Modifier
@@ -1777,7 +1897,7 @@ private fun ProviderDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss) { Text("取消") }
+                    GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
                     LiquidPillButton(
                         backdrop = backdrop,
                         text = "保存",

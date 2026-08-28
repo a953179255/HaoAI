@@ -96,7 +96,12 @@ class MainActivity : ComponentActivity() {
                 "light" -> false
                 else -> androidx.compose.foundation.isSystemInDarkTheme()
             }
-            HaoTheme(darkTheme = dark) {
+            HaoTheme(
+                darkTheme = dark,
+                dynamicColor = settings.dynamicColor,
+                seedIndex = settings.themeSeed,
+                amoled = settings.amoledMode
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -143,10 +148,15 @@ private fun RootApp() {
     val wallpaper = androidx.compose.runtime.remember(wpVersion) {
         com.haoai.agent.platform.WallpaperStore.loadBitmap(context)
     }
-    val backdrop = com.haoai.agent.ui.common.rememberAppBackdrop(wallpaper)
-
     var screen by rememberSaveable { mutableIntStateOf(0) }
     val settings by container.settingsFlow.collectAsState()
+    // 无壁纸时的默认渐变底色随主题切换（暗色/AMOLED 下不再露浅绿）
+    val darkBackdrop = when (settings.themeMode) {
+        "dark" -> true
+        "light" -> false
+        else -> androidx.compose.foundation.isSystemInDarkTheme()
+    }
+    val backdrop = com.haoai.agent.ui.common.rememberAppBackdrop(wallpaper, dark = darkBackdrop)
 
     // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
     val drawerState = androidx.compose.material3.rememberDrawerState(

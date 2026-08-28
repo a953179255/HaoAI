@@ -685,19 +685,22 @@ fun ChatScreen(
                     onClick = { avatarPicker.launch("image/*") },
                     backdrop = backdrop,
                     shape = RoundedCornerShape(percent = 50),
-                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                    // 弹窗内按钮采样不到弹窗遮罩，透明度低了壁纸直接透过（用户反馈点）
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
                 ) {
                     Text(
                         "从相册选择",
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                        color = MaterialTheme.colorScheme.onBackground,
                         fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
                     )
                 }
                 if (editImagePath != null) {
-                    androidx.compose.material3.TextButton(onClick = { editImagePath = null }) {
-                        Text("移除", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
-                    }
+                    com.haoai.agent.ui.common.GlassTextButton(
+                        text = "移除",
+                        onClick = { editImagePath = null }
+                    )
                 }
             }
             emojiChoices.chunked(6).forEach { rowEmojis ->
@@ -1091,7 +1094,7 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
         }
         if (hasContent) {
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = (0.62f * chatBubbleOpacity()).coerceAtMost(0.95f)),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1105,7 +1108,7 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
         } else if (streamingReasoning.isNullOrBlank()) {
             // 什么都还没有：prefill / 等首 token
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = (0.62f * chatBubbleOpacity()).coerceAtMost(0.95f)),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1117,6 +1120,14 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
     }
 }
 
+/** 当前气泡不透明度倍率（设置 → 通用 → 外观，0.3-1.5）。 */
+@Composable
+private fun chatBubbleOpacity(): Float {
+    val app = LocalContext.current.applicationContext as? com.haoai.agent.HaoApplication ?: return 1f
+    val settings by app.container.settingsFlow.collectAsState()
+    return settings.bubbleOpacity.coerceIn(0.3f, 1.5f)
+}
+
 @Composable
 private fun UserBubble(text: String) {
     Row(
@@ -1126,7 +1137,7 @@ private fun UserBubble(text: String) {
         horizontalArrangement = Arrangement.End
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = (0.20f * chatBubbleOpacity()).coerceAtMost(0.95f)),
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
@@ -1172,7 +1183,7 @@ private fun AssistantBlock(row: ChatRow) {
                 // 注意：不能用 GlassPanel（drawBackdrop）——消息在 appLayer 子树内，
                 // 层采样自引用会触发 hwui 渲染树循环崩溃；用高透 Surface 模拟磨砂
                 Surface(
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = (0.62f * chatBubbleOpacity()).coerceAtMost(0.95f)),
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -1518,7 +1529,8 @@ private fun SessionsDrawer(
             Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 6.dp)
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             if (sessions.isEmpty()) {
                 item {
@@ -1530,9 +1542,10 @@ private fun SessionsDrawer(
                     )
                 }
             }
-            itemsIndexed(sessions.take(20), key = { _, s -> s.id }) { index, s ->
+            // 不设上限：LazyColumn 惰性组合，几百条也只组合可见项
+            itemsIndexed(sessions, key = { _, s -> s.id }) { _, s ->
                 val active = s.id == activeId
-                // 右划呼出 置顶/重命名；划过按钮继续右划松手 = 删除（进回收站，7 天可恢复）
+                // 右划呼出 置顶/重命名；划入删除带松手只「上膛」（红色高亮），再拖一次/点垃圾桶才删除（进回收站，7 天可恢复）
                 SwipeRevealCard(
                     isOpen = openCardId == s.id,
                     anyOpen = openCardId != null,
@@ -1578,11 +1591,22 @@ private fun SessionsDrawer(
                         }
                     },
                     content = { cardClick ->
+                        // 卡面容器：整行像滑块一样作为一个整体滑动，当前会话带主题色浅底
                         Row(
                             Modifier
                                 .fillMaxWidth()
+                                .background(
+                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.055f),
+                                    RoundedCornerShape(14.dp)
+                                )
+                                .border(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+                                    RoundedCornerShape(14.dp)
+                                )
                                 .clickable(onClick = cardClick)
-                                .padding(vertical = 9.dp),
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (s.pinned) {
@@ -1612,12 +1636,6 @@ private fun SessionsDrawer(
                         }
                     }
                 )
-                if (index < sessions.size.coerceAtMost(20) - 1) {
-                    HorizontalDivider(
-                        Modifier.padding(horizontal = 22.dp),
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
-                    )
-                }
             }
         }
 

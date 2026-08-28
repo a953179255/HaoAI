@@ -319,6 +319,22 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(themeMode = mode) }
     }
 
+    fun setDynamicColor(enabled: Boolean) {
+        c.updateSettings { it.copy(dynamicColor = enabled) }
+    }
+
+    fun setThemeSeed(index: Int) {
+        c.updateSettings { it.copy(themeSeed = index.coerceIn(0, 100)) }
+    }
+
+    fun setAmoledMode(enabled: Boolean) {
+        c.updateSettings { it.copy(amoledMode = enabled) }
+    }
+
+    fun setBubbleOpacity(value: Float) {
+        c.updateSettings { it.copy(bubbleOpacity = value.coerceIn(0.3f, 1.5f)) }
+    }
+
     fun setReasoningEffort(level: String) {
         c.updateSettings { it.copy(reasoningEffort = level) }
     }

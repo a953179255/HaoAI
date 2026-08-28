@@ -375,14 +375,28 @@ private fun ManualAddDialog(
                 onValueChange = { content = it },
                 label = { Text("内容（一句话）") },
                 minLines = 2,
+                colors = com.haoai.agent.ui.common.glassFieldColors(),
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 types.forEach { (t, label) ->
+                    val selected = type == t
                     androidx.compose.material3.FilterChip(
-                        selected = type == t,
+                        selected = selected,
                         onClick = { type = t },
-                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                        label = {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f)
+                            )
+                        },
+                        colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f),
+                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
+                            selectedLabelColor = MaterialTheme.colorScheme.primary
+                        )
                     )
                 }
             }

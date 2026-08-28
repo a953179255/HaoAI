@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -81,8 +82,26 @@ import kotlin.math.tanh
  */
 val LocalGlassRefract = compositionLocalOf { true }
 
+/**
+ * 玻璃表面着色：浅色主题用白雾，深色主题用黑雾（白磨砂在暗色下发白发亮）。
+ * 深色 alpha 需要放大补偿黑雾的低对比度。
+ */
 @Composable
-fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null): LayerBackdrop =
+internal fun glassSurfaceColor(alpha: Float): Color {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return if (dark) Color(0xFF0A0D12).copy(alpha = (alpha * 1.8f).coerceAtMost(0.94f))
+    else Color.White.copy(alpha = alpha)
+}
+
+/** 玻璃描边：暗色下白色描边收敛到发丝级，避免刺眼亮框。 */
+@Composable
+internal fun glassBorderColor(alpha: Float): Color {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return if (dark) Color.White.copy(alpha = alpha * 0.35f) else Color.White.copy(alpha = alpha)
+}
+
+@Composable
+fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null, dark: Boolean = false): LayerBackdrop =
     rememberLayerBackdrop {
         if (wallpaper != null) {
             // 壁纸 cover-fit 铺满，给玻璃提供可折射的真实纹理（不加压层，保持通透）
@@ -99,8 +118,11 @@ fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null): LayerBackdr
                 ),
                 dstSize = androidx.compose.ui.unit.IntSize(dw.toInt(), dh.toInt())
             )
+        } else if (dark) {
+            // 默认暗色渐变（近黑深蓝，与暗色主题背景一致）
+            drawRect(Brush.verticalGradient(listOf(Color(0xFF07090D), Color(0xFF0E131B))))
         } else {
-            // 默认浅色渐变（绿调中性，呼应液态玻璃绿主色）：深色底会让玻璃上的文字难以辨认
+            // 默认浅色渐变（绿调中性，呼应液态玻璃绿主色）
             drawRect(Brush.verticalGradient(listOf(Color(0xFFD9E8DF), Color(0xFFEDF4EF))))
         }
         drawContent()
@@ -123,6 +145,8 @@ fun GlassPanel(
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
+    val surface = glassSurfaceColor(surfaceAlpha)
+    val border = glassBorderColor(0.45f)
     val panelModifier = if (r) {
         modifier
             .drawBackdrop(
@@ -138,7 +162,7 @@ fun GlassPanel(
                     }
                 },
                 onDrawSurface = {
-                    drawRect(Color.White.copy(alpha = surfaceAlpha))
+                    drawRect(surface)
                     if (tint != null) {
                         drawRect(tint, blendMode = BlendMode.Hue)
                         drawRect(tint.copy(alpha = 0.35f))
@@ -149,8 +173,8 @@ fun GlassPanel(
         // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
         modifier
             .clip(shape ?: RoundedCornerShape(radius))
-            .background(Color.White.copy(alpha = surfaceAlpha.coerceAtLeast(0.28f)))
-            .border(1.5.dp, Color.White.copy(alpha = 0.45f), shape ?: RoundedCornerShape(radius))
+            .background(surface)
+            .border(1.5.dp, border, shape ?: RoundedCornerShape(radius))
             .then(
                 if (tint != null) Modifier.background(tint.copy(alpha = 0.15f)) else Modifier
             )
@@ -287,8 +311,8 @@ fun LiquidGlassButton(
     } else {
         Modifier
             .clip(shape)
-            .background(surfaceColor ?: Color.White.copy(alpha = 0.25f))
-            .border(1.5.dp, Color.White.copy(alpha = 0.45f), shape)
+            .background(surfaceColor ?: glassSurfaceColor(0.25f))
+            .border(1.5.dp, glassBorderColor(0.45f), shape)
     }
 
     Box(
@@ -331,6 +355,7 @@ fun GlassCard(
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
 
     val r = refract ?: LocalGlassRefract.current
+    val cardSurface = glassSurfaceColor(surfaceAlpha)
     val bgModifier = if (r) {
         Modifier.drawBackdrop(
             backdrop = backdrop,
@@ -350,7 +375,7 @@ fun GlassCard(
                 translationY = maxOffset * tanh(initialDerivative * off.y / maxOffset)
             },
             onDrawSurface = {
-                drawRect(Color.White.copy(alpha = surfaceAlpha))
+                drawRect(cardSurface)
                 if (tint != null) {
                     drawRect(tint, blendMode = BlendMode.Hue)
                     drawRect(tint.copy(alpha = 0.32f))
@@ -360,8 +385,8 @@ fun GlassCard(
     } else {
         Modifier
             .clip(shape)
-            .background(Color.White.copy(alpha = surfaceAlpha.coerceAtLeast(0.28f)))
-            .border(1.5.dp, Color.White.copy(alpha = 0.45f), shape)
+            .background(cardSurface)
+            .border(1.5.dp, glassBorderColor(0.45f), shape)
             .then(if (tint != null) Modifier.background(tint.copy(alpha = 0.15f)) else Modifier)
     }
 
@@ -719,7 +744,12 @@ fun GlassAlertDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (dismissLabel != null) {
-                            TextButton(onClick = onDismiss) { Text(dismissLabel) }
+                            GlassTextButton(
+                                text = dismissLabel,
+                                onClick = onDismiss,
+                                backdrop = backdrop,
+                                refract = refract
+                            )
                         }
                         if (onConfirm != null) {
                             LiquidGlassButton(
@@ -728,10 +758,10 @@ fun GlassAlertDialog(
                                 shape = RoundedCornerShape(percent = 50),
                                 enabled = confirmEnabled,
                                 surfaceColor = when {
-                                    !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
-                                    danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                                    // 半透明着色让振动/透镜折射透出来，保持液态玻璃质感
-                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                                    !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+                                    danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.92f)
+                                    // 弹窗内按钮采样不到弹窗遮罩/面板（不在采样层里），透明度低了会直接透出壁纸
+                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
                                 },
                                 refract = refract
                             ) {
@@ -762,8 +792,82 @@ fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.co
     cursorColor = MaterialTheme.colorScheme.primary,
     focusedBorderColor = MaterialTheme.colorScheme.primary,
     unfocusedBorderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
-    focusedContainerColor = Color.White.copy(alpha = 0.32f),
-    unfocusedContainerColor = Color.White.copy(alpha = 0.20f),
+    focusedContainerColor = glassSurfaceColor(0.32f),
+    unfocusedContainerColor = glassSurfaceColor(0.20f),
     focusedLabelColor = MaterialTheme.colorScheme.primary,
     unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
 )
+
+/**
+ * 弹窗内统一的次级文字按钮：淡色容器 + 细描边（透明 TextButton 会和玻璃面板融在一起，
+ * 看起来"没做样式"）。refract=true 时在玻璃壳上再叠一层采样玻璃，保持质感统一。
+ */
+@Composable
+fun GlassTextButton(
+    text: String,
+    onClick: () -> Unit,
+    backdrop: LayerBackdrop? = null,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    refract: Boolean? = null
+) {
+    val shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(percent = 50)
+    val container: Modifier = Modifier
+        .background(
+            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+            shape
+        )
+        .border(
+            1.dp,
+            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.16f),
+            shape
+        )
+    val inner = @Composable {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+        )
+    }
+    if (backdrop != null && (refract ?: LocalGlassRefract.current)) {
+        androidx.compose.material3.TextButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier,
+            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                contentColor = Color.Transparent
+            )
+        ) {
+            Box(
+                Modifier
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { shape },
+                        effects = {
+                            vibrancy()
+                            blur(3.dp.toPx())
+                        }
+                    ) {
+                        drawRect(Color.White.copy(alpha = 0.10f))
+                    }
+                    .then(container)
+            ) {
+                inner()
+            }
+        }
+    } else {
+        androidx.compose.material3.TextButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier,
+            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                contentColor = Color.Transparent
+            )
+        ) {
+            Box(container) { inner() }
+        }
+    }
+}
