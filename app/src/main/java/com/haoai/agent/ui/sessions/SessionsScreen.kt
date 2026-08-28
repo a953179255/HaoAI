@@ -59,6 +59,8 @@ fun SessionsScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var showTrash by rememberSaveable { mutableStateOf(false) }
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+    // 待彻底删除的会话：误触不可逆操作前先确认
+    var pendingPurge by remember { mutableStateOf<com.haoai.agent.data.StoredSession?>(null) }
 
     // 系统返回手势直接回聊天页
     androidx.activity.compose.BackHandler { onBack() }
@@ -197,7 +199,7 @@ fun SessionsScreen(
                             TextButton(onClick = { vm.restoreSession(s.id) }) {
                                 Text("恢复", color = MaterialTheme.colorScheme.primary)
                             }
-                            TextButton(onClick = { vm.deleteSessionForever(s.id) }) {
+                            TextButton(onClick = { pendingPurge = s }) {
                                 Text("彻底删除", color = MaterialTheme.colorScheme.error)
                             }
                         }
@@ -251,6 +253,26 @@ fun SessionsScreen(
                     }
                 }
             }
+        }
+    }
+
+    pendingPurge?.let { target ->
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "彻底删除会话",
+            onDismiss = { pendingPurge = null },
+            confirmLabel = "彻底删除",
+            danger = true,
+            onConfirm = {
+                vm.deleteSessionForever(target.id)
+                pendingPurge = null
+            }
+        ) {
+            Text(
+                "「${target.title}」（${target.messages.size} 条消息）将被永久删除，无法恢复。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
         }
     }
 }

@@ -673,8 +673,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val contextWindow = if (isLocal) st.localContextLength
             else st.providers.find { it.id == st.activeProviderId }?.effectiveContextLength() ?: 32768
         val chatMsgs = s.messages.map { it.toModel() }
-        val sysTok = com.haoai.agent.ui.chat.ContextUsage.estimateSystemTokens("")
-        val toolsTok = 2000
+        // 与引擎压缩判断同一口径：真实系统提示（记忆/日志/技能注入）而非固定底数，
+        // 否则指示器长期低估、压缩偏晚
+        val engine = buildEngine(s, c.activeProvider() ?: com.haoai.agent.data.ProviderConfig(
+            id = "estimate", name = "估算", baseUrl = "https://estimate.invalid", model = "-"
+        ))
+        val (sysTok, toolsTok) = engine.estimateOverheadTokens()
         val histTok = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) }
         _contextUsage.value = com.haoai.agent.ui.chat.ContextUsage(
             usedTokens = sysTok + toolsTok + histTok,

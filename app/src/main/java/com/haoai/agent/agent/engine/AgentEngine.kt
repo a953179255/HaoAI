@@ -447,10 +447,10 @@ class AgentEngine(
         }.getOrDefault(emptyList())
     }
 
-    private fun buildApiMessages(): List<ApiMessage> {
+    private fun buildSystemText(): String {
         val shellAvailable = backend?.shellWorkdir() != null
         val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
-        val systemText = SystemPrompt.PREFIX +
+        return SystemPrompt.PREFIX +
             SystemPrompt.buildSuffix(
                 workspaceLabel, shellAvailable, dateText, customPrompt, memorySnippet(),
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
@@ -458,6 +458,14 @@ class AgentEngine(
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
                 journalBlock = journalSnippet()
             )
+    }
+
+    /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
+    fun estimateOverheadTokens(): Pair<Int, Int> =
+        com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to TOOLS_BASE_TOKENS
+
+    private fun buildApiMessages(): List<ApiMessage> {
+        val systemText = buildSystemText()
 
         // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
         // OpenAI 兼容端会以 400 拒绝孤儿 tool 消息（且重试复现，会话就此卡死）。
@@ -717,8 +725,11 @@ class AgentEngine(
         val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
         val chatMsgs = session.messages.map { it.toModel() }
+        // 用真实系统提示估算：记忆/日志/技能索引注入后可达 1 万+ tokens，
+        // 旧的固定 3000 底数严重低估，导致压缩触发过晚、频繁撞 overflow
+        val (sysTok, toolsTok) = estimateOverheadTokens()
         val usedTokens = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) } +
-            com.haoai.agent.ui.chat.ContextUsage.estimateSystemTokens("") + 2000
+            sysTok + toolsTok
         if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
 
         // 预修剪工具输出
@@ -861,6 +872,9 @@ class AgentEngine(
         const val MAX_TURNS = 60
         const val MAX_HISTORY = 80
         const val TOOL_TIMEOUT_MS = 180_000L
+
+        /** 工具定义 JSON 的近似 token 开销（工具数量与 schema 固定时误差可接受）。 */
+        const val TOOLS_BASE_TOKENS = 3500
         const val STORED_CAP = 16_000
         const val REQ_CAP = 4_000
         const val SUB_MAX_TURNS = 10

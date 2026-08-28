@@ -45,6 +45,8 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     var skills by remember { mutableStateOf(store.list()) }
     var viewBody by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showAdd by remember { mutableStateOf(false) }
+    // 待删除技能名：删除不可逆，先确认
+    var pendingDelete by remember { mutableStateOf<String?>(null) }
     val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA) }
 
     // 系统返回手势：回到设置根页，而不是把应用最小化
@@ -168,10 +170,7 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                             TextButton(onClick = {
                                 viewBody = s.name to (store.view(s.name) ?: "")
                             }) { Text("查看") }
-                            IconButton(onClick = {
-                                store.delete(s.name)
-                                refresh()
-                            }) {
+                            IconButton(onClick = { pendingDelete = s.name }) {
                                 Icon(
                                     Icons.Filled.Delete,
                                     contentDescription = "删除",
@@ -253,6 +252,27 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                     colors = com.haoai.agent.ui.common.glassFieldColors()
                 )
             }
+        }
+    }
+
+    pendingDelete?.let { name ->
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "删除技能",
+            onDismiss = { pendingDelete = null },
+            confirmLabel = "删除",
+            danger = true,
+            onConfirm = {
+                store.delete(name)
+                refresh()
+                pendingDelete = null
+            }
+        ) {
+            Text(
+                "技能「$name」将被删除，此操作不可恢复。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
         }
     }
 }
