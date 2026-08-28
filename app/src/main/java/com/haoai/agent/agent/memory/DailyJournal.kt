@@ -142,13 +142,21 @@ class DailyJournal(
         return entry
     }
 
-    /** 每天最多保留 MAX_PER_DAY 条（保留最新的）。 */
+    /**
+     * 每日配额（保留最新的）：普通记录 MAX_PER_DAY 条；handoff 交接独立配额 MAX_HANDOFF_PER_DAY，
+     * 互不挤占——长任务多的用户，主动记录的事件不会被自动交接日志顶掉。
+     */
     private fun trimToMax(f: File, currentCount: Int) {
         if (currentCount <= MAX_PER_DAY) return
         val lines = f.readLines()
         val header = lines.takeWhile { !it.startsWith("- ") }
-        val body = lines.drop(header.size).takeLast(MAX_PER_DAY)
-        com.haoai.agent.data.HaoJson.writeAtomic(f, (header + body).joinToString("\n").trimEnd() + "\n")
+        val body = lines.drop(header.size)
+        val isHandoff = body.map { it.contains("src=handoff") }
+        // 按原始时间顺序保留：普通条目取最新 50 条，handoff 取最新 10 条
+        val keepNormal = body.indices.filter { !isHandoff[it] }.takeLast(MAX_PER_DAY).toHashSet()
+        val keepHandoff = body.indices.filter { isHandoff[it] }.takeLast(MAX_HANDOFF_PER_DAY).toHashSet()
+        val kept = body.filterIndexed { i, _ -> i in keepNormal || i in keepHandoff }
+        com.haoai.agent.data.HaoJson.writeAtomic(f, (header + kept).joinToString("\n").trimEnd() + "\n")
     }
 
     private fun parseFile(f: File): List<JournalEntry> {
@@ -236,6 +244,9 @@ class DailyJournal(
         invalidateCache()
     }
 
+    /** 当前日志存储目录（备份/导出用）：workspace memory/ 或内部回退目录。 */
+    fun currentStorageDir(): File = dir
+
     /** 注入系统提示词：近 n 天动态摘要。 */
     fun promptSnippet(days: Int = 2, capPerItem: Int = 120): String {
         val rec = recent(days)
@@ -253,5 +264,8 @@ class DailyJournal(
 
     companion object {
         const val MAX_PER_DAY = 50
+
+        /** handoff 交接独立配额：不挤占每日 50 条主动记录。 */
+        const val MAX_HANDOFF_PER_DAY = 10
     }
 }

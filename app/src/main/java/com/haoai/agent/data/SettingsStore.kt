@@ -86,7 +86,14 @@ data class AppSettings(
     val tokenInToday: Long = 0,
     val tokenOutToday: Long = 0,
     /** 端侧推理上下文窗口（llama.cpp -c 参数）。系统提示+工具约 5K token，32K 与引擎本地压缩窗口对齐；KV 内存随窗口线性增长。 */
-    val localContextLength: Int = 32768
+    val localContextLength: Int = 32768,
+    /** 上次记忆本地自动备份时间（毫秒）。 */
+    val lastMemoryBackupAt: Long = 0,
+    /** 上次记忆导出时间（毫秒）。 */
+    val lastMemoryExportAt: Long = 0,
+    /** 上次记忆固化时间与结果（健康度仪表盘展示）。 */
+    val lastConsolidationAt: Long = 0,
+    val lastConsolidationReport: String = ""
 )
 
 class SettingsStore(context: Context) {

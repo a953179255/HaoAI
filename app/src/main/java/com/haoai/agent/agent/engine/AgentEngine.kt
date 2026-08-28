@@ -107,9 +107,9 @@ class AgentEngine(
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx -> runSubAgent(task, parentCtx) } else null
-        val tools = ToolRegistry.build(ctx, subAgentRunner) + com.haoai.agent.agent.tools.HandoffTool { summary ->
+        val tools = ToolRegistry.build(ctx, subAgentRunner) + com.haoai.agent.agent.tools.HandoffTool { summary, imp ->
             runCatching {
-                journal?.append(handoffEvent(summary), importance = 3, source = "handoff")
+                journal?.append(handoffEvent(summary), importance = imp, source = "handoff")
             }
             compactHistory(summary)
         }
@@ -366,8 +366,15 @@ class AgentEngine(
         return finalText.ifBlank { "子代理未给出结论" }
     }
 
-    private fun memorySnippet(): String =
-        if (memoryEnabled && depth == 0) memoryBank?.promptSnippet().orEmpty() else ""
+    /** 注入记忆时带上当前用户消息做主题相关性打分；markMemoryUse 仅在真实请求路径为 true（token 估算不计数）。 */
+    private fun memorySnippet(markMemoryUse: Boolean = false): String {
+        if (!memoryEnabled || depth != 0) return ""
+        val bank = memoryBank ?: return ""
+        val query = session.messages.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content
+        val (snippet, ids) = bank.promptSnippetIds(query?.take(300))
+        if (markMemoryUse) bank.markInjected(ids)
+        return snippet
+    }
 
     private fun journalSnippet(): String =
         if (memoryEnabled && depth == 0) journal?.promptSnippet().orEmpty() else ""
@@ -426,7 +433,7 @@ class AgentEngine(
                     emptyList()
                 ).collect { ev -> if (ev is SseEvent.Delta) buf.append(ev.text) }
                 parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
-                    bank.remember(content, tags, importance = 2)
+                    bank.remember(content, tags, importance = 2, source = "auto")
                 }
             }
         }
@@ -450,12 +457,12 @@ class AgentEngine(
         }.getOrDefault(emptyList())
     }
 
-    private fun buildSystemText(): String {
+    private fun buildSystemText(markMemoryUse: Boolean = false): String {
         val shellAvailable = backend?.shellWorkdir() != null
         val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
         return SystemPrompt.PREFIX +
             SystemPrompt.buildSuffix(
-                workspaceLabel, shellAvailable, dateText, customPrompt, memorySnippet(),
+                workspaceLabel, shellAvailable, dateText, customPrompt, memorySnippet(markMemoryUse),
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
                 identity = identity,
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
@@ -468,7 +475,7 @@ class AgentEngine(
         com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to TOOLS_BASE_TOKENS
 
     private fun buildApiMessages(): List<ApiMessage> {
-        val systemText = buildSystemText()
+        val systemText = buildSystemText(markMemoryUse = true)
 
         // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
         // OpenAI 兼容端会以 400 拒绝孤儿 tool 消息（且重试复现，会话就此卡死）。

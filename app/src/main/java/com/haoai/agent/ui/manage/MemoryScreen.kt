@@ -15,16 +15,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +70,14 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     // 系统返回手势：回到设置根页，而不是把应用最小化
     androidx.activity.compose.BackHandler { onBack() }
     val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) vm.exportTo(uri) { msg = it }
+    }
+    val exportName = remember {
+        "haoai-memory-" + SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date()) + ".zip"
+    }
 
     val prefN = vm.items.count { it.type == "preference" }
     val factN = vm.items.count { it.type == "fact" }
@@ -107,6 +120,9 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                item(key = "dashboard") {
+                    MemoryDashboardCard(vm, fmt, backdrop, onDeleteRequest = { pendingDelete = it })
+                }
                 if (vm.days.isNotEmpty()) {
                     item(key = "journal_header") {
                         Row(
@@ -148,6 +164,9 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             actions = {
                 IconButton(onClick = { showAdd = true }) {
                     Icon(Icons.Filled.Add, contentDescription = "手动添加记忆")
+                }
+                IconButton(onClick = { exportLauncher.launch(exportName) }) {
+                    Icon(Icons.Filled.Archive, contentDescription = "导出记忆备份（zip）")
                 }
                 IconButton(onClick = {
                     if (!vm.consolidating) vm.consolidate { msg = it }
@@ -244,6 +263,89 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             dismissLabel = "取消"
         ) {
             Text("确认删除此条记忆？此操作不可恢复。")
+        }
+    }
+}
+
+@Composable
+private fun MemoryDashboardCard(
+    vm: MemoryViewModel,
+    fmt: SimpleDateFormat,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onDeleteRequest: (Memory) -> Unit
+) {
+    GlassCard(
+        onClick = {},
+        backdrop = backdrop,
+        shape = RoundedCornerShape(16.dp),
+        surfaceAlpha = 0.20f,
+        lensRadius = 16.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("记忆健康度", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "${vm.items.size}/${vm.capacity} 条",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            LinearProgressIndicator(
+                progress = {
+                    if (vm.capacity > 0) (vm.items.size.toFloat() / vm.capacity).coerceIn(0f, 1f) else 0f
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "上次固化：" + if (vm.lastConsolidationAt > 0) {
+                    fmt.format(Date(vm.lastConsolidationAt)) +
+                        (vm.lastConsolidationReport.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+                } else "尚未固化（可点顶栏 ✨ 手动触发，或夜间充电灭屏自动执行）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "上次备份：" + if (vm.lastBackupAt > 0) fmt.format(Date(vm.lastBackupAt)) + "（自动，内部 backups/）"
+                else "尚无（固化后自动创建；顶栏 ⬇ 可手动导出 zip）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (vm.promotionCandidates > 0) {
+                Text(
+                    "待固化：${vm.promotionCandidates} 条重要动态（★）下次固化时晋升长期记忆",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            val oldest = vm.oldestUnused()
+            if (oldest.isNotEmpty()) {
+                Text(
+                    "最久未使用（可清理）：",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                oldest.forEach { m ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "(${m.id}) ${m.content.take(40)}" +
+                                " · " + (if (m.lastUsedAt > 0) "上次使用 " else "记录于 ") +
+                                SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
+                                    .format(Date(if (m.lastUsedAt > 0) m.lastUsedAt else m.createdAt)),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { onDeleteRequest(m) }) {
+                            Icon(
+                                Icons.Filled.DeleteOutline,
+                                contentDescription = "删除该记忆",
+                                modifier = Modifier.height(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

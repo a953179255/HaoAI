@@ -50,7 +50,7 @@ class MemoryTool : Tool {
                     .map { it.trim() }.filter { it.isNotEmpty() }
                 val type = args.optString("type", "fact")
                 val importance = args.optInt("importance") ?: 3
-                val m = bank.remember(content, tags, type, importance)
+                val m = bank.remember(content, tags, type, importance, source = "model")
                 if (m == null) {
                     ToolResult(
                         "记忆库已满（${bank.count()}/${bank.capacity()} 条）且没有低价值条目可自动清理。" +
@@ -58,7 +58,13 @@ class MemoryTool : Tool {
                         true
                     )
                 } else {
-                    ToolResult("已记住（id=${m.id}，共 ${bank.count()} 条记忆）。注意：只沉淀长期有效的信息，勿记琐碎内容。")
+                    // 近冲突提示：词面相近但表述不同的既有记忆，交还模型决定是否要 forget 旧条目
+                    val conflicts = bank.nearConflicts(content).filter { it.id != m.id }
+                    val hint = if (conflicts.isEmpty()) "" else
+                        "\n注意：已有相近记忆 " + conflicts.joinToString("；") {
+                            "(id=${it.id}) ${it.content.take(60)}"
+                        } + "。若是新信息取代旧情况，请 forget 旧条目；若不冲突请忽略本提示。"
+                    ToolResult("已记住（id=${m.id}，共 ${bank.activeCount()} 条记忆）。注意：只沉淀长期有效的信息，勿记琐碎内容。$hint")
                 }
             }
 

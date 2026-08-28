@@ -25,11 +25,21 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 object MemoryConsolidation {
 
-    data class Report(val promoted: Int, val expired: Int, val tidied: Int, val deepMerged: Int = 0) {
+    data class Report(
+        val promoted: Int,
+        val expired: Int,
+        val tidied: Int,
+        val deepMerged: Int = 0,
+        val promotedByUse: Int = 0,
+        val conflictResolved: Int = 0
+    ) {
         fun describe(): String = when {
-            promoted == 0 && expired == 0 && tidied == 0 && deepMerged == 0 -> "没有需要固化的内容"
+            promoted == 0 && expired == 0 && tidied == 0 && deepMerged == 0 &&
+                promotedByUse == 0 && conflictResolved == 0 -> "没有需要固化的内容"
             else -> buildString {
                 append("已固化：$promoted 条重要动态晋升长期记忆")
+                if (promotedByUse > 0) append("，$promotedByUse 条高频记忆升级重要度")
+                if (conflictResolved > 0) append("，$conflictResolved 条冲突记忆更新")
                 if (deepMerged > 0) append("，深度梦境合并 $deepMerged 条冗余")
                 if (tidied > 0) append("，规则整理 $tidied 条")
                 append("，清理过期日志 $expired 条")
@@ -40,15 +50,19 @@ object MemoryConsolidation {
     const val PROMOTE_THRESHOLD = 4
     const val KEEP_DAYS = 7
 
+    /** 使用次数晋升阈值：被反复检索/注入的高频 imp=3 记忆也能升级（痛点：imp=3 永不晋升）。 */
+    const val PROMOTE_USE_COUNT = 20
+
     /** 规则固化（快速、零成本）。 */
     fun run(bank: MemoryBank, journal: DailyJournal): Report {
         val promoted = promoteFromJournal(bank, journal)
+        val promotedByUse = promoteByUseCount(bank)
         val expired = journal.expire(KEEP_DAYS)
         val tidied = bank.tidy()
-        return Report(promoted, expired, tidied)
+        return Report(promoted, expired, tidied, promotedByUse = promotedByUse)
     }
 
-    /** 深度梦境：规则固化 + 端侧 LLM 语义去重合并。LLM 失败时静默回退规则结果。 */
+    /** 深度梦境：规则固化 + 端侧 LLM 语义去重合并 + 近冲突裁决。LLM 失败时静默回退规则结果。 */
     suspend fun runDeep(
         bank: MemoryBank,
         journal: DailyJournal,
@@ -57,12 +71,16 @@ object MemoryConsolidation {
         apiKey: String
     ): Report {
         val promoted = promoteFromJournal(bank, journal)
+        val promotedByUse = promoteByUseCount(bank)
         val expired = journal.expire(KEEP_DAYS)
         var deepMerged = 0
         runCatching { llmDedup(bank, client, provider, apiKey) }
             .onSuccess { deepMerged = it }
+        var conflictResolved = 0
+        runCatching { llmConflicts(bank, client, provider, apiKey) }
+            .onSuccess { conflictResolved = it }
         val tidied = bank.tidy()
-        return Report(promoted, expired, tidied, deepMerged)
+        return Report(promoted, expired, tidied, deepMerged, promotedByUse, conflictResolved)
     }
 
     private fun promoteFromJournal(bank: MemoryBank, journal: DailyJournal): Int {
@@ -72,11 +90,22 @@ object MemoryConsolidation {
             for (e in day.items) {
                 if (e.importance < PROMOTE_THRESHOLD) continue
                 if (!existing.add(e.content)) continue
-                bank.remember(e.content, listOf(day.date), type = "event", importance = e.importance)
+                bank.remember(e.content, listOf(day.date), type = "event", importance = e.importance, source = "consolidation")
                 promoted++
             }
         }
         return promoted
+    }
+
+    /** 高频使用晋升：useCount 达标的记忆 importance+1（封顶 5）。 */
+    private fun promoteByUseCount(bank: MemoryBank): Int {
+        var n = 0
+        for (m in bank.all()) {
+            if (m.useCount >= PROMOTE_USE_COUNT && m.importance < 5) {
+                if (bank.updateContent(m.id, m.content, m.importance + 1)) n++
+            }
+        }
+        return n
     }
 
     /**
@@ -168,5 +197,95 @@ object MemoryConsolidation {
         - type 只能取 fact/preference/decision/event；importance 取 1-5
         - content 必须自包含（脱离上下文也能看懂）
         - 最多 10 个 merge、5 个 remove；没有可整理的内容就输出 {}
+    """.trimIndent()
+
+    /**
+     * 近冲突裁决（Mem0 ADD/UPDATE/DELETE 思想的固化期落地）：
+     * 把词面相近但表述矛盾的条目对交给模型，裁决谁覆盖谁或合并。
+     * 安全约束与 llmDedup 一致：只动已存在的 id、操作量限额、失败静默跳过。
+     * @return 实际处置的冲突对数
+     */
+    private suspend fun llmConflicts(
+        bank: MemoryBank,
+        client: OpenAiCompatClient,
+        provider: ProviderConfig,
+        apiKey: String
+    ): Int {
+        val items = bank.all()
+        val byId = items.associateBy { it.id }
+        // 收集近冲突对（去重），最多 8 对送审
+        val pairs = linkedSetOf<Pair<String, String>>()
+        for (m in items) {
+            for (c in bank.nearConflicts(m.content)) {
+                if (c.id != m.id) pairs.add(if (m.id < c.id) m.id to c.id else c.id to m.id)
+                if (pairs.size >= 8) break
+            }
+            if (pairs.size >= 8) break
+        }
+        if (pairs.isEmpty()) return 0
+        val listing = pairs.mapNotNull { (a, b) ->
+            val ma = byId[a] ?: return@mapNotNull null
+            val mb = byId[b] ?: return@mapNotNull null
+            "A=${ma.id}|${ma.importance}|${ma.content.take(120)}\nB=${mb.id}|${mb.importance}|${mb.content.take(120)}"
+        }.joinToString("\n")
+        if (listing.isBlank()) return 0
+        val buf = StringBuilder()
+        client.chatStream(
+            provider, apiKey,
+            listOf(
+                ApiMessage(role = "system", content = CONFLICT_SYSTEM),
+                ApiMessage(role = "user", content = listing)
+            ),
+            emptyList()
+        ).collect { ev -> if (ev is SseEvent.Delta) buf.append(ev.text) }
+        currentCoroutineContext().ensureActive()
+
+        val text = buf.toString()
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) return 0
+        val obj = runCatching {
+            HaoJson.json.parseToJsonElement(text.substring(start, end + 1)).jsonObject
+        }.getOrNull() ?: return 0
+
+        var resolved = 0
+        runCatching {
+            obj["decisions"]?.jsonArray?.forEach { el ->
+                val d = el as? JsonObject ?: return@forEach
+                val a = d["a"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@forEach
+                val b = d["b"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@forEach
+                val action = d["action"]?.jsonPrimitive?.contentOrNull?.trim() ?: "keep"
+                if (a !in byId || b !in byId) return@forEach
+                when (action) {
+                    "supersede_a" -> if (bank.supersede(a, b)) resolved++
+                    "supersede_b" -> if (bank.supersede(b, a)) resolved++
+                    "merge" -> {
+                        val content = d["content"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (content.isEmpty() || content.length > 300) return@forEach
+                        val type = (d["type"]?.jsonPrimitive?.contentOrNull ?: "fact").take(20)
+                        val importance = d["importance"]?.jsonPrimitive?.contentOrNull
+                            ?.toIntOrNull()?.coerceIn(1, 5) ?: 3
+                        bank.removeIds(listOf(a, b))
+                        bank.remember(content, type = type, importance = importance, source = "consolidation")
+                        resolved++
+                    }
+                    else -> {} // keep：模型不确定时不动
+                }
+            }
+        }
+        return resolved
+    }
+
+    val CONFLICT_SYSTEM = """
+        [MEMORY-CONFLICT] 你是记忆裁决器。输入是助理长期记忆中若干对"词面相近但可能矛盾"的记忆（A/B 各一行）。
+        任务：判断每对是否真的互相矛盾或过时——例如"用 Vim"与"改用 VS Code"，新信息应覆盖旧信息。
+        只输出一个 JSON 对象，格式：
+        {"decisions":[{"a":"idA","b":"idB","action":"keep|supersede_a|supersede_b|merge","content":"合并后的一句话","type":"fact","importance":3}]}
+        动作含义：
+        - keep：不矛盾或不确定，什么都不做（宁缺毋滥，默认选这个）
+        - supersede_a：B 是更新的情况，A 已过时
+        - supersede_b：A 仍然成立，B 是误记或重复
+        - merge：两条各有部分正确，用 content 给出合并后的一句话（type 取 fact/preference/decision/event，importance 1-5）
+        - 只裁决输入中出现的 id，不得虚构；没有需要处理的就输出 {"decisions":[]}
     """.trimIndent()
 }

@@ -23,6 +23,22 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
     var consolidating by mutableStateOf(false)
         private set
 
+    /** 仪表盘数据：容量、上次固化/备份时间与结果、晋升候选数。 */
+    var capacity by mutableStateOf(200)
+        private set
+
+    var lastConsolidationAt by mutableStateOf(0L)
+        private set
+
+    var lastConsolidationReport by mutableStateOf("")
+        private set
+
+    var lastBackupAt by mutableStateOf(0L)
+        private set
+
+    var promotionCandidates by mutableStateOf(0)
+        private set
+
     init {
         refresh()
     }
@@ -30,7 +46,20 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
     fun refresh() {
         items = c.memoryBank.all()
         days = c.journal.allDays()
+        capacity = c.memoryBank.capacity()
+        val st = c.settingsFlow.value
+        lastConsolidationAt = st.lastConsolidationAt
+        lastConsolidationReport = st.lastConsolidationReport
+        lastBackupAt = st.lastMemoryBackupAt
+        val bankContents = items.mapTo(HashSet()) { it.content }
+        promotionCandidates = days.flatMap { it.items }
+            .count { it.importance >= MemoryConsolidation.PROMOTE_THRESHOLD && it.content !in bankContents }
     }
+
+    /** 最久未使用的记忆（健康度仪表盘的清理建议，最多 5 条）。 */
+    fun oldestUnused(): List<Memory> = items
+        .sortedBy { if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt }
+        .take(5)
 
     fun journalCount(): Int = days.sumOf { it.items.size }
 
@@ -86,16 +115,51 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
                     }
                 }
             }.getOrDefault(MemoryConsolidation.Report(0, 0, 0))
-            refresh()
             consolidating = false
             c.syncWorkspaceDocs()
+            // 先持久化再刷新：仪表盘的上次固化/备份时间要读到本次结果
+            persistConsolidation(report)
+            refresh()
             onDone(report.describe())
         }
     }
 
+    /** 固化结果持久化（健康度仪表盘用）+ 本地自动备份。 */
+    private suspend fun persistConsolidation(report: MemoryConsolidation.Report) {
+        runCatching {
+            c.updateSettings {
+                it.copy(
+                    lastConsolidationAt = System.currentTimeMillis(),
+                    lastConsolidationReport = report.describe()
+                )
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.haoai.agent.platform.MemoryBackupManager.autoBackup(c)
+            }
+        }
+    }
+
     fun addManual(content: String, type: String, importance: Int) {
-        c.memoryBank.remember(content.trim(), type = type, importance = importance.coerceIn(1, 5))
+        c.memoryBank.remember(
+            content.trim(), type = type, importance = importance.coerceIn(1, 5), source = "manual"
+        )
         refresh()
         c.syncWorkspaceDocs()
+    }
+
+    /** 导出记忆全部数据（MEMORY.md 真源 + 日志 + 固化报告 + 镜像 + 设置快照）为 zip。 */
+    fun exportTo(uri: android.net.Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.haoai.agent.platform.MemoryBackupManager.exportZip(c, uri)
+            }
+            result.fold(
+                onSuccess = { n ->
+                    c.updateSettings { it.copy(lastMemoryExportAt = System.currentTimeMillis()) }
+                    onDone("已导出 $n 个文件")
+                },
+                onFailure = { onDone("导出失败：${it.message}") }
+            )
+        }
     }
 }

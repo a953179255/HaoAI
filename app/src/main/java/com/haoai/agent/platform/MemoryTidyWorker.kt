@@ -21,6 +21,7 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val container = (applicationContext as HaoApplication).container
         val settings = container.settingsFlow.value
+        var reportText = ""
         try {
             if (settings.deepDream && settings.memoryEnabled) {
                 val wasRunning =
@@ -54,6 +55,7 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
                         deep = target != null,
                         deepMergedNote = if (target == null) "（模型不可用，已回退规则整理）" else ""
                     )
+                    reportText = report.describe()
                 } finally {
                     if (target?.isLocal == true && !wasRunning) {
                         runCatching { container.llama.stop() }
@@ -62,8 +64,16 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
             } else {
                 val report = MemoryConsolidation.run(container.memoryBank, container.journal)
                 WorkspaceDocs.appendDreamReport(container, report, deep = false)
+                reportText = report.describe()
             }
             container.syncWorkspaceDocs()
+            // 固化结果持久化（健康度仪表盘）+ 本地自动备份；失败静默，不影响固化主流程
+            runCatching {
+                container.updateSettings {
+                    it.copy(lastConsolidationAt = System.currentTimeMillis(), lastConsolidationReport = reportText)
+                }
+                MemoryBackupManager.autoBackup(container)
+            }
         } catch (ce: kotlinx.coroutines.CancellationException) {
             // WorkManager 停止/系统回收：向上传播，不把半途而废当作已完成
             throw ce

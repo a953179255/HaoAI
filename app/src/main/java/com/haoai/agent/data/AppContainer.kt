@@ -25,7 +25,12 @@ class AppContainer(app: Application) {
     val settingsStore = SettingsStore(app)
     val sessionStore = SessionStore(app)
     val workspace = WorkspaceManager(app)
-    val memoryBank = MemoryBank(appFilesDir)
+    // 长期记忆真源 = 工作区 MEMORY.md（上游 式"文件即记忆"）；SAF 工作区时回退内部目录
+    val memoryBank = MemoryBank(
+        appFilesDir,
+        storageFile = (workspace.current as? com.haoai.agent.platform.RawFileBackend)
+            ?.shellWorkdir()?.let { java.io.File(it, "MEMORY.md") }
+    )
     val journal = DailyJournal(
         appFilesDir,
         storageDir = (workspace.current as? com.haoai.agent.platform.RawFileBackend)

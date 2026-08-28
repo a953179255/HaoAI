@@ -31,7 +31,7 @@ object WorkspaceDocs {
         val root = workspaceRoot(c) ?: return
         runCatching {
             val items = c.memoryBank.all()
-            root.resolve("MEMORY.md").writeText(renderMemory(items))
+            // MEMORY.md 不在此同步：它已是长期记忆真源（由 MemoryBank 直接读写），覆盖会丢数据
             root.resolve("USER.md").writeText(renderUser(items))
             val st = c.settingsFlow.value
             root.resolve("IDENTITY.md").writeText(renderIdentity(st))
@@ -68,23 +68,6 @@ object WorkspaceDocs {
 
     private fun fmt(ts: Long): String =
         SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(ts))
-
-    private fun renderMemory(items: List<com.haoai.agent.agent.memory.Memory>): String = buildString {
-        appendLine("# 长期记忆（MEMORY.md）")
-        appendLine()
-        appendLine("> 由 HaoAI 自动维护，共 ${items.size} 条。每轮对话开始时按重要性挑选注入。")
-        appendLine("> 此文件为镜像视图：修改请用应用内记忆管理页，直接改动会在下次同步时被覆盖。")
-        appendLine()
-        listOf("preference" to "偏好", "decision" to "决定", "event" to "事件", "fact" to "事实").forEach { (type, label) ->
-            val group = items.filter { it.type == type }
-            if (group.isEmpty()) return@forEach
-            appendLine("## $label（${group.size}）")
-            group.sortedByDescending { it.importance }.forEach { m ->
-                appendLine("- [${m.id} · 重要度${m.importance}] ${m.content}（${fmt(if (m.createdAt > 0) m.createdAt else 0)}）")
-            }
-            appendLine()
-        }
-    }.trimEnd() + "\n"
 
     private fun renderUser(items: List<com.haoai.agent.agent.memory.Memory>): String = buildString {
         appendLine("# 用户画像（USER.md）")
@@ -140,8 +123,11 @@ object WorkspaceDocs {
 本工作区属于 HaoAI——运行在用户 Android 手机上的全能智能助理。
 
 ## 约定
-- 记忆分三层：会话上下文（工作）、memory/YYYY-MM-DD.md（每日情景，7 天过期）、MEMORY.md（长期精选）
+- 记忆分三层：会话上下文（工作）、memory/YYYY-MM-DD.md（每日情景，7 天过期）、MEMORY.md（长期记忆真源）
+- MEMORY.md 是长期记忆的存储本体（上游 式"文件即记忆"）：可直接查看，也可小心编辑——保留每行行尾 <!-- --> 元数据；
+  去重/上限/冲突检测等结构性修改建议仍走 memory 工具（有护栏）；文件被改动后下一轮对话自动生效
 - 每日凌晨自动「固化」：每日日志中重要性 ≥4 的条目晋升进 MEMORY.md；开启深度梦境时由端侧模型做语义去重合并
+- 低价值记忆 30 天未用会降级进 MEMORY.md「已归档」节（不再注入，仍可见可捞回），归档 30 天后物理清理
 - 固化历史见 DREAMS.md 与 dreaming/ 目录
 - 技能沉淀在应用内部（skill save/list/view/delete 工具管理）
 - 长任务先建 todo 清单；上下文将满时调用 handoff 五段式交接
@@ -149,8 +135,8 @@ object WorkspaceDocs {
 ## 文件说明
 | 文件 | 用途 |
 |------|------|
-| MEMORY.md | 长期记忆库（自动维护的镜像） |
-| USER.md | 用户画像 |
+| MEMORY.md | 长期记忆真源（可直接查看编辑，行尾元数据请保留） |
+| USER.md | 用户画像（自动维护的镜像） |
 | IDENTITY.md / SOUL.md | 身份与性格 |
 | HEARTBEAT.md | 定时任务清单 |
 | DREAMS.md | 梦境日记（固化历史） |
