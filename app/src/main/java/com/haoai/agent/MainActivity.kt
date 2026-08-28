@@ -96,17 +96,23 @@ class MainActivity : ComponentActivity() {
                 "light" -> false
                 else -> androidx.compose.foundation.isSystemInDarkTheme()
             }
+            // 壁纸提升到主题层：开动态颜色时直接从聊天壁纸取色（换壁纸配色即变）
+            val wpVersion by com.haoai.agent.platform.WallpaperStore.changes.collectAsState()
+            val wallpaper = androidx.compose.runtime.remember(wpVersion) {
+                com.haoai.agent.platform.WallpaperStore.loadBitmap(applicationContext)
+            }
             HaoTheme(
                 darkTheme = dark,
                 dynamicColor = settings.dynamicColor,
                 seedIndex = settings.themeSeed,
-                amoled = settings.amoledMode
+                amoled = settings.amoledMode,
+                wallpaper = wallpaper
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    RootApp()
+                    RootApp(wallpaper)
                 }
             }
         }
@@ -123,7 +129,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun RootApp() {
+private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val app = LocalContext.current.applicationContext as HaoApplication
     val container = app.container
     val context = LocalContext.current
@@ -142,12 +148,9 @@ private fun RootApp() {
         com.haoai.agent.platform.DreamTriggerMonitor.init(context)
     }
 
-    // 全局共享：壁纸背景 + 液态玻璃采样层（所有页面同一块玻璃语言）
-    // 收集 WallpaperStore.changes：设置页换壁纸后立即重载，无需重启应用
+    // 全局共享：液态玻璃采样层。壁纸默认只用于聊天界面（screen==0），设置里可切换全局应用
     val wpVersion by com.haoai.agent.platform.WallpaperStore.changes.collectAsState()
-    val wallpaper = androidx.compose.runtime.remember(wpVersion) {
-        com.haoai.agent.platform.WallpaperStore.loadBitmap(context)
-    }
+    androidx.compose.runtime.remember(wpVersion) { wallpaper }
     var screen by rememberSaveable { mutableIntStateOf(0) }
     val settings by container.settingsFlow.collectAsState()
     // 无壁纸时的默认渐变底色随主题切换（暗色/AMOLED 下不再露浅绿）
@@ -156,7 +159,10 @@ private fun RootApp() {
         "light" -> false
         else -> androidx.compose.foundation.isSystemInDarkTheme()
     }
-    val backdrop = com.haoai.agent.ui.common.rememberAppBackdrop(wallpaper, dark = darkBackdrop)
+    val wallpaperOnScreen = settings.wallpaperGlobal || screen == 0
+    val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(wallpaper, dark = darkBackdrop)
+    val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(null, dark = darkBackdrop)
+    val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
 
     // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
     val drawerState = androidx.compose.material3.rememberDrawerState(
@@ -173,7 +179,7 @@ private fun RootApp() {
     var settingsSection by rememberSaveable { mutableStateOf("") }
 
     Box(Modifier.fillMaxSize()) {
-        if (wallpaper != null) {
+        if (wallpaper != null && wallpaperOnScreen) {
             Image(
                 bitmap = wallpaper.asImageBitmap(),
                 contentDescription = null,

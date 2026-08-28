@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +40,7 @@ import androidx.compose.ui.input.pointer.positionChangeConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -49,9 +52,9 @@ import kotlin.math.abs
  * - 方向锁：totalX/totalY 任一轴先越过 touchSlop 即定格方向；纵向先越线则永不接管，
  *   事件全部穿透给外层（列表滚动/翻页），竖滑歪一点不会再误触发呼出。
  * - 未展开仅右滑接管；已展开双向接管（可左滑收回）。
- * - 可选删除带 [deleteWidth]：**两段式**——第一段拖入删除带松手只「上膛」（卡片推满、
- *   红色高亮、动作按钮隐藏），并不删除；上膛后再往右拖一次（或点删除带、点卡面取消）
- *   才执行 [onDeleteSwipe]。未提供 [deleteWidth] 则偏移钳制在呼出宽度内。
+ * - 可选删除带 [deleteWidth]：**两段式**——第一段拖入删除带松手只「上膛」（删除带居中
+ *   浮现、卡面贴住其右侧、红色高亮、动作按钮隐藏），并不删除；上膛后再往右拖一次
+ *   （或点删除带、点卡面取消）才执行 [onDeleteSwipe]。未提供 [deleteWidth] 则偏移钳制在呼出宽度内。
  *
  * 误触保护：[anyOpen] 为 true（列表里有任一卡展开）时，点卡片只收回，不触发 [onClick]；
  * 上膛态点卡片 = 取消上膛回到普通展开。[content] 收到组件生成好的 cardClick 回调。
@@ -76,18 +79,27 @@ fun SwipeRevealCard(
     val openPx = with(density) { openWidth.toPx() }
     val deletePx = with(density) { (deleteWidth ?: openWidth).toPx() }
     val armConfirmPx = with(density) { 40.dp.toPx() }
+    // 删除带水平居中于呼出区（不再贴最左边缘）；上膛位 = 删除带右缘 + 8dp，
+    // 卡面贴住删除按钮，而不是把标题推到最右（用户反馈：上膛后标题离删除按钮太远）
+    val bandWidth = 64.dp
+    val bandStart = ((openWidth - bandWidth) / 2f).coerceAtLeast(4.dp)
+    val armedPx = with(density) { (bandStart + bandWidth + 8.dp).toPx() }
     val offset = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
 
     // 两段式删除：第一段只上膛（推满删除带），第二段再拖/点击才真删
     var deleteArmed by remember { mutableStateOf(false) }
 
+    // 仅在卡片滑出（offset>0）时才挂 clipToBounds：矩形裁剪离屏层常驻的话，其方形边界会被
+    // 玻璃卡片的 backdrop 采样反复回画，在卡片四角外露一条「直角垫带」残影（实测确认）
+    val needsClip by remember { derivedStateOf { offset.value > 0.5f } }
+
     // 外部开合（展开另一张 / 操作完成 / 抽屉收起）统一由此驱动
     LaunchedEffect(isOpen) {
         if (!isOpen) deleteArmed = false
         val target = when {
             !isOpen -> 0f
-            deleteArmed -> deletePx
+            deleteArmed -> armedPx
             else -> openPx
         }
         if (offset.value < target - 0.5f || offset.value > target + 0.5f) offset.animateTo(target)
@@ -109,23 +121,23 @@ fun SwipeRevealCard(
     Box(
         modifier
             .fillMaxWidth()
-            .clipToBounds()
+            .then(if (needsClip) Modifier.clipToBounds() else Modifier)
     ) {
-        // 卡片后方：操作按钮区（露出部分）；进入删除带时随进度淡出，为垃圾桶让位
+        // 卡片后方：操作按钮区（露出部分）；上膛态隐藏，为居中的删除带让位
         Row(
             Modifier
                 .matchParentSize()
                 .graphicsLayer {
                     val reveal = (offset.value / openPx).coerceIn(0f, 1f)
                     val over = ((offset.value - openPx) / (deletePx - openPx).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                    alpha = reveal * (1f - over)
+                    alpha = if (deleteArmed) 0f else reveal * (1f - over)
                 }
                 .padding(start = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
             content = actions
         )
-        // 删除带：圆角红色容器；上膛态实心红 + 白图标，可点击直接删除
+        // 删除带：圆角红色容器，居中于呼出区；上膛态实心红 + 白图标，可点击直接删除
         if (deleteWidth != null) {
             val progress = ((offset.value - openPx) / (deletePx - openPx).coerceAtLeast(1f)).coerceIn(0f, 1f)
             val bandAlpha = if (deleteArmed) 1f else progress
@@ -138,9 +150,9 @@ fun SwipeRevealCard(
                 ) {
                     Box(
                         Modifier
-                            .padding(start = 4.dp, top = 5.dp, bottom = 5.dp)
+                            .padding(start = bandStart, top = 5.dp, bottom = 5.dp)
                             .fillMaxHeight()
-                            .width(64.dp)
+                            .width(bandWidth)
                             .background(
                                 if (deleteArmed) MaterialTheme.colorScheme.error
                                 else MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
@@ -162,7 +174,9 @@ fun SwipeRevealCard(
         Box(
             Modifier
                 .fillMaxWidth()
-                .graphicsLayer { translationX = offset.value }
+                // 布局期平移而非 graphicsLayer.translationX：离屏层的方形边界会被玻璃卡片的
+                // backdrop 采样反复回画，在四角积累成「直角阴影」残影（offset 不创建层）
+                .offset { IntOffset(offset.value.toInt(), 0) }
                 .pointerInput(isOpen, openPx, deletePx) {
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
@@ -197,11 +211,17 @@ fun SwipeRevealCard(
                                         // 上膛态右拖：累计确认量，位置轻微阻尼跟随
                                         armedTravel += delta.x
                                         val overPull = (armedTravel * 0.3f).coerceAtMost(with(density) { 12.dp.toPx() })
-                                        scope.launch { offset.snapTo(deletePx + overPull) }
+                                        scope.launch { offset.snapTo(armedPx + overPull) }
                                     } else {
                                         armedTravel = 0f
-                                        val raw = (offset.value + delta.x).coerceIn(0f, deletePx)
-                                        scope.launch { offset.snapTo(raw) }
+                                        val raw = offset.value + delta.x
+                                        if (raw < openPx - with(density) { 8.dp.toPx() }) {
+                                            // 左拖退出上膛：红带消失，交回普通拖动
+                                            deleteArmed = false
+                                            scope.launch { offset.snapTo(raw.coerceIn(0f, deletePx)) }
+                                        } else {
+                                            scope.launch { offset.snapTo(raw.coerceIn(armedPx, deletePx)) }
+                                        }
                                     }
                                 } else {
                                     val raw = offset.value + delta.x
@@ -220,27 +240,16 @@ fun SwipeRevealCard(
                                     onOpenChange(false)
                                     onDeleteSwipe()
                                 }
-                                // 上膛态左拖：拉回普通展开（超过一半则整体收起）
-                                deleteArmed && offset.value < openPx / 2f -> {
-                                    deleteArmed = false
-                                    scope.launch { offset.animateTo(0f) }
-                                    onOpenChange(false)
-                                }
-                                deleteArmed && offset.value < openPx + (deletePx - openPx) * 0.3f -> {
-                                    deleteArmed = false
-                                    scope.launch { offset.animateTo(openPx) }
-                                    onOpenChange(true)
-                                }
+                                // 上膛态松手：回到贴住删除带的上膛位（点垃圾桶或再拖一次才删）
                                 deleteArmed -> {
-                                    // 上膛态小幅晃动：回到上膛位
-                                    scope.launch { offset.animateTo(deletePx) }
+                                    scope.launch { offset.animateTo(armedPx) }
                                     onOpenChange(true)
                                 }
                                 // 第一段：拖入删除带松手 → 只上膛，不删除
                                 deleteWidth != null &&
                                     offset.value >= openPx + (deletePx - openPx) * 0.55f -> {
                                     deleteArmed = true
-                                    scope.launch { offset.animateTo(deletePx) }
+                                    scope.launch { offset.animateTo(armedPx) }
                                     onOpenChange(true)
                                 }
                                 offset.value >= openPx / 2f -> {

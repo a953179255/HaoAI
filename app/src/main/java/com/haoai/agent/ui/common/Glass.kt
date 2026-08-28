@@ -169,6 +169,8 @@ fun GlassPanel(
                     }
                 }
             )
+            // 发丝描边画在玻璃表面之上（后置 modifier 后绘制），与退化分支观感对齐
+            .border(1.5.dp, border, shape ?: RoundedCornerShape(radius))
     } else {
         // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
         modifier
@@ -699,6 +701,9 @@ fun GlassAlertDialog(
 ) {
     // 系统返回手势先关弹窗：后注册的 handler 优先，覆盖屏幕级的返回导航
     androidx.activity.compose.BackHandler(onBack = onDismiss)
+    // 弹窗是独立于采样层的全屏遮罩：折射采样到的是弹窗「底下」的页面而非弹窗自身，
+    // 按钮会显得「穿透背板 + 边缘光晕」。弹窗内统一退化为本地磨砂绘制。
+    androidx.compose.runtime.CompositionLocalProvider(LocalGlassRefract provides false) {
     Box(
         Modifier
             .fillMaxSize()
@@ -782,6 +787,7 @@ fun GlassAlertDialog(
             }
         }
     }
+    }
 }
 
 /** 玻璃弹层里的输入框配色（半透明白容器，与 Onboarding 一致）。 */
@@ -799,8 +805,10 @@ fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.co
 )
 
 /**
- * 弹窗内统一的次级文字按钮：淡色容器 + 细描边（透明 TextButton 会和玻璃面板融在一起，
- * 看起来"没做样式"）。refract=true 时在玻璃壳上再叠一层采样玻璃，保持质感统一。
+ * 弹窗内统一的次级文字按钮：磨砂容器 + 细描边（透明 TextButton 会和玻璃面板融在一起，
+ * 看起来"没做样式"）。刻意不做 drawBackdrop 折射——弹窗独立于采样层，折射只会采样到
+ * 弹窗底下的页面，表现为「穿透背板 + 边缘一圈光晕」，统一走本地磨砂绘制。
+ * backdrop/refract 参数保留以兼容旧调用点，不再参与绘制。
  */
 @Composable
 fun GlassTextButton(
@@ -811,17 +819,10 @@ fun GlassTextButton(
     enabled: Boolean = true,
     refract: Boolean? = null
 ) {
-    val shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(percent = 50)
+    val shape: Shape = RoundedCornerShape(percent = 50)
     val container: Modifier = Modifier
-        .background(
-            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
-            shape
-        )
-        .border(
-            1.dp,
-            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.16f),
-            shape
-        )
+        .background(glassSurfaceColor(0.28f), shape)
+        .border(1.dp, glassBorderColor(0.55f), shape)
     val inner = @Composable {
         Text(
             text,
@@ -832,42 +833,14 @@ fun GlassTextButton(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
         )
     }
-    if (backdrop != null && (refract ?: LocalGlassRefract.current)) {
-        androidx.compose.material3.TextButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = modifier,
-            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                contentColor = Color.Transparent
-            )
-        ) {
-            Box(
-                Modifier
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { shape },
-                        effects = {
-                            vibrancy()
-                            blur(3.dp.toPx())
-                        }
-                    ) {
-                        drawRect(Color.White.copy(alpha = 0.10f))
-                    }
-                    .then(container)
-            ) {
-                inner()
-            }
-        }
-    } else {
-        androidx.compose.material3.TextButton(
-            onClick = onClick,
-            enabled = enabled,
-            modifier = modifier,
-            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                contentColor = Color.Transparent
-            )
-        ) {
-            Box(container) { inner() }
-        }
+    androidx.compose.material3.TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+            contentColor = Color.Transparent
+        )
+    ) {
+        Box(container) { inner() }
     }
 }

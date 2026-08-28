@@ -1303,7 +1303,7 @@ private fun LazyListScope.generalItems(
             )
             ToggleRow(
                 title = "动态颜色（Material You）",
-                subtitle = if (dynamicAvailable) "根据系统壁纸动态生成配色，优先于主题色"
+                subtitle = if (dynamicAvailable) "跟随聊天壁纸动态生成配色（无壁纸时按系统壁纸取色）"
                 else "需要 Android 12 及以上",
                 checked = settings.dynamicColor && dynamicAvailable,
                 onChange = { if (dynamicAvailable) vm.setDynamicColor(it) },
@@ -1357,7 +1357,8 @@ private fun LazyListScope.generalItems(
             )
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val pct = settings.bubbleOpacity.times(100).toInt()
+                    val bubbleValue = settings.bubbleOpacity.coerceIn(0.3f, 1f)
+                    val pct = bubbleValue.times(100).toInt()
                     Text("气泡不透明度", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.weight(1f))
                     Text(
@@ -1367,9 +1368,9 @@ private fun LazyListScope.generalItems(
                     )
                 }
                 androidx.compose.material3.Slider(
-                    value = settings.bubbleOpacity,
+                    value = settings.bubbleOpacity.coerceIn(0.3f, 1f),
                     onValueChange = { vm.setBubbleOpacity(it) },
-                    valueRange = 0.3f..1.5f,
+                    valueRange = 0.3f..1f,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -1404,6 +1405,17 @@ private fun LazyListScope.generalItems(
                     TextButton(onClick = onRequestClearWallpaper) { Text("清除") }
                 }
             }
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "壁纸应用于所有页面",
+                subtitle = "关闭时壁纸只作为聊天界面背景，其他页面用主题底色",
+                checked = settings.wallpaperGlobal,
+                onChange = { vm.setWallpaperGlobal(it) },
+                backdrop = backdrop
+            )
         }
     }
     item { SectionTitle("模型行为") }
@@ -1585,7 +1597,7 @@ private fun GlassGroup(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
         radius = 18.dp,
-        surfaceAlpha = 0.16f,
+        surfaceAlpha = 0.30f,
         refract = refract
     ) {
         Column(Modifier.padding(vertical = 6.dp), content = content)
@@ -1683,6 +1695,10 @@ private fun ProviderDialog(
     onDismiss: () -> Unit
 ) {
     // 液态玻璃弹层：独立 Dialog 窗口采样不到 LayerBackdrop，用全屏遮罩 + GlassPanel 承载
+    // 弹窗内禁用折射：采样到的是弹窗底下的页面而非弹窗自身，按钮会「穿透背板 + 边缘光晕」
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.haoai.agent.ui.common.LocalGlassRefract provides false
+    ) {
     Box(
         Modifier
             .fillMaxSize()
@@ -1906,6 +1922,7 @@ private fun ProviderDialog(
                 }
             }
         }
+    }
     }
 }
 

@@ -66,14 +66,16 @@ data class AppSettings(
     /** 记忆整理专用端侧模型（绝对路径）；null = 跟随端侧聊天模型。 */
     val dreamLocalModelFile: String? = null,
     val themeMode: String = "light",
-    /** Material You 动态取色（Android 12+ 生效，按系统壁纸生成色板）。 */
+    /** 动态取色：优先从聊天壁纸取主色，无壁纸时 Android 12+ 按系统壁纸生成色板。 */
     val dynamicColor: Boolean = false,
     /** 主题色种子索引（THEME_SEEDS 下标，0=默认液态玻璃绿）；动态色关闭时生效。 */
     val themeSeed: Int = 0,
     /** AMOLED 纯黑模式（仅深色主题下生效：背景/表面换纯黑）。 */
     val amoledMode: Boolean = false,
-    /** 聊天气泡不透明度倍率（0.3-1.5，作用于用户/助手气泡的基准 alpha）。 */
-    val bubbleOpacity: Float = 1f,
+    /** 聊天气泡不透明度（0.3-1.0，100% 时气泡几乎不透明）。 */
+    val bubbleOpacity: Float = 0.7f,
+    /** 聊天壁纸作用范围：false=仅聊天界面（默认），true=应用为全局壁纸。 */
+    val wallpaperGlobal: Boolean = false,
     val reasoningEffort: String = "",
     val localModelFile: String? = null,
     val agentName: String = "",

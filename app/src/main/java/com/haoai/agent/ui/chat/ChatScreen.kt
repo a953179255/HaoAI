@@ -1094,7 +1094,7 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
         }
         if (hasContent) {
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = (0.62f * chatBubbleOpacity()).coerceAtMost(0.95f)),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1108,7 +1108,7 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
         } else if (streamingReasoning.isNullOrBlank()) {
             // 什么都还没有：prefill / 等首 token
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = (0.62f * chatBubbleOpacity()).coerceAtMost(0.95f)),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1120,12 +1120,13 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
     }
 }
 
-/** 当前气泡不透明度倍率（设置 → 通用 → 外观，0.3-1.5）。 */
+/** 气泡不透明度（设置 30%-100%）映射为 (用户气泡 alpha, 助手气泡 alpha)；100% 时几乎不透明。 */
 @Composable
-private fun chatBubbleOpacity(): Float {
-    val app = LocalContext.current.applicationContext as? com.haoai.agent.HaoApplication ?: return 1f
+private fun chatBubbleAlphas(): Pair<Float, Float> {
+    val app = LocalContext.current.applicationContext as? com.haoai.agent.HaoApplication ?: return 0.20f to 0.62f
     val settings by app.container.settingsFlow.collectAsState()
-    return settings.bubbleOpacity.coerceIn(0.3f, 1.5f)
+    val t = (settings.bubbleOpacity.coerceIn(0.3f, 1f) - 0.3f) / 0.7f
+    return (0.14f + 0.79f * t) to (0.45f + 0.52f * t)
 }
 
 @Composable
@@ -1137,7 +1138,7 @@ private fun UserBubble(text: String) {
         horizontalArrangement = Arrangement.End
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.primary.copy(alpha = (0.20f * chatBubbleOpacity()).coerceAtMost(0.95f)),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = chatBubbleAlphas().first),
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
@@ -1183,7 +1184,7 @@ private fun AssistantBlock(row: ChatRow) {
                 // 注意：不能用 GlassPanel（drawBackdrop）——消息在 appLayer 子树内，
                 // 层采样自引用会触发 hwui 渲染树循环崩溃；用高透 Surface 模拟磨砂
                 Surface(
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = (0.62f * chatBubbleOpacity()).coerceAtMost(0.95f)),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {

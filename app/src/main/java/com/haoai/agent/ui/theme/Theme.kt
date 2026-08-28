@@ -9,6 +9,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 
 /**
@@ -124,11 +125,16 @@ fun HaoTheme(
     dynamicColor: Boolean = false,
     seedIndex: Int = 0,
     amoled: Boolean = false,
+    wallpaper: android.graphics.Bitmap? = null,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
     var colorScheme = when {
-        // Material You 动态取色：Android 12+ 由系统壁纸生成，低版本回退种子色板
+        // 动态取色，优先级：App 聊天壁纸主色（用户直接可见，换壁纸配色即变）
+        // → 系统壁纸 Material You（Android 12+）→ 种子色板
+        dynamicColor && wallpaper != null ->
+            if (darkTheme) schemeFromSeed(wallpaperSeedColor(wallpaper), dark = true)
+            else schemeFromSeed(wallpaperSeedColor(wallpaper), dark = false)
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         else -> {
@@ -153,4 +159,69 @@ fun HaoTheme(
         )
     }
     MaterialTheme(colorScheme = colorScheme, content = content)
+}
+
+/**
+ * 从聊天壁纸提取主色（轻量 Palette）：降采样后按 16 级/通道量化计数，
+ * 取「饱和度 × 出现次数」加权重高的色桶，排除近灰白黑。
+ */
+fun wallpaperSeedColor(bitmap: android.graphics.Bitmap): Color? {
+    val small = android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 48, true)
+    val counts = HashMap<Int, Int>()
+    for (y in 0 until 48) for (x in 0 until 48) {
+        val c = small.getPixel(x, y)
+        val key = ((android.graphics.Color.red(c) shr 4) shl 8) or
+            ((android.graphics.Color.green(c) shr 4) shl 4) or
+            (android.graphics.Color.blue(c) shr 4)
+        counts[key] = (counts[key] ?: 0) + 1
+    }
+    var best = -1
+    var bestScore = 0f
+    for ((k, n) in counts) {
+        val r = ((k shr 8) and 0xF) * 17
+        val g = ((k shr 4) and 0xF) * 17
+        val b = (k and 0xF) * 17
+        val mx = maxOf(r, g, b)
+        val mn = minOf(r, g, b)
+        if (mx == 0) continue
+        val sat = (mx - mn) / mx.toFloat()
+        if (sat < 0.18f) continue
+        val score = sat * n
+        if (score > bestScore) {
+            bestScore = score
+            best = k
+        }
+    }
+    if (best < 0) return null
+    return Color(
+        ((best shr 8) and 0xF) * 17,
+        ((best shr 4) and 0xF) * 17,
+        (best and 0xF) * 17
+    )
+}
+
+/** 由壁纸主色派生一套协调的 primary 系配色（HSV 明度/饱和度调制，中性色沿用玻璃底）。 */
+private fun schemeFromSeed(seed: Color?, dark: Boolean) = run {
+    val base = if (dark) HaoDarkColors else HaoLightColors
+    if (seed == null) return@run base
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(seed.toArgb(), hsv)
+    fun h(s: Float, v: Float) = Color(android.graphics.Color.HSVToColor(floatArrayOf(hsv[0], s, v)))
+    if (dark) base.copy(
+        primary = h(0.55f, 0.74f),
+        onPrimary = h(0.60f, 0.14f),
+        primaryContainer = h(0.48f, 0.32f),
+        onPrimaryContainer = h(0.38f, 0.86f),
+        secondary = h(0.28f, 0.68f),
+        onSecondary = h(0.55f, 0.15f),
+        tertiary = h(0.45f, 0.70f)
+    ) else base.copy(
+        primary = h(0.62f, 0.50f),
+        onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = h(0.55f, 0.88f),
+        onPrimaryContainer = h(0.68f, 0.24f),
+        secondary = h(0.34f, 0.42f),
+        onSecondary = Color(0xFFFFFFFF),
+        tertiary = h(0.55f, 0.46f)
+    )
 }

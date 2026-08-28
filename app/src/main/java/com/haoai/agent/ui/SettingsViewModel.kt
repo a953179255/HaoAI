@@ -332,7 +332,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun setBubbleOpacity(value: Float) {
-        c.updateSettings { it.copy(bubbleOpacity = value.coerceIn(0.3f, 1.5f)) }
+        c.updateSettings { it.copy(bubbleOpacity = value.coerceIn(0.3f, 1f)) }
+    }
+
+    fun setWallpaperGlobal(enabled: Boolean) {
+        c.updateSettings { it.copy(wallpaperGlobal = enabled) }
     }
 
     fun setReasoningEffort(level: String) {
