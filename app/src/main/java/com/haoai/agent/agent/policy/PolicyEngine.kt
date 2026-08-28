@@ -109,7 +109,11 @@ class PolicyEngine(private val mode: PermissionMode) {
         return out
     }
 
-    /** 取段内实际命令字：跳过 env 赋值前缀与 nohup/timeout 等包装。 */
+    /**
+     * 取段内实际命令字：跳过 env 赋值前缀与 nohup/timeout/env/xargs 等包装。
+     * 全部按 basename 识别（/system/bin/sh、/usr/bin/timeout 不再绕过）；
+     * sh -c 递归检查内层；timeout/xargs 跳过 flag 与时长后继续检查真正的命令。
+     */
     private fun baseCommandOf(segment: String): String? {
         var tokens = segment.trim().split(Regex("\\s+"))
         while (tokens.isNotEmpty()) {
@@ -117,21 +121,41 @@ class PolicyEngine(private val mode: PermissionMode) {
             if (first.contains('=') && !first.startsWith("-")) {
                 tokens = tokens.drop(1); continue
             }
-            if (first in setOf("nohup", "time", "exec", "nice")) {
-                tokens = tokens.drop(1); continue
+            when (val head = first.substringAfterLast('/')) {
+                "nohup", "time", "exec", "nice", "ionice", "env", "stdbuf", "setsid", "taskset" -> {
+                    tokens = tokens.drop(1)
+                    // nice -n 5 这类「flag + 独立值」：纯数字/时长也一并跳过
+                    while (tokens.isNotEmpty() &&
+                        (tokens.first().startsWith("-") || Regex("^\\d+[a-zA-Z]?$").matches(tokens.first()))
+                    ) tokens = tokens.drop(1)
+                    continue
+                }
+                "timeout" -> {
+                    // timeout [FLAG]… DURATION CMD：之前只识别 timeout -FLAG 形式，
+                    // timeout 10 su 会绕过检查——跳过 flag 与时长后继续
+                    var i = 1
+                    while (i < tokens.size && tokens[i].startsWith("-")) i++
+                    if (i < tokens.size) i++ // duration（10 / 10s / 1m）
+                    if (i < tokens.size) { tokens = tokens.drop(i); continue }
+                    return head
+                }
+                "xargs" -> {
+                    var i = 1
+                    while (i < tokens.size && tokens[i].startsWith("-")) i++
+                    if (i < tokens.size) { tokens = tokens.drop(i); continue }
+                    return head
+                }
+                "bash", "sh", "ash", "zsh", "mksh", "dash" -> {
+                    // sh -c "<inner>"：内层命令才是真正要跑的，递归检查
+                    if (tokens.size > 1 && tokens[1].matches(Regex("^-[a-zA-Z]*c[a-zA-Z]*$"))) {
+                        val inner = segment.substringAfter(tokens[1], "").trim()
+                            .trim('"', '\'')
+                        if (inner.isNotBlank()) return baseCommandOf(inner) ?: head
+                    }
+                    return head
+                }
+                else -> return head
             }
-            if ((first == "timeout" || first == "nice") && tokens.size > 1 && tokens[1].startsWith("-")) {
-                tokens = tokens.drop(1); continue
-            }
-            if (first in setOf("bash", "sh", "ash", "zsh") && tokens.size > 1 &&
-                (tokens[1] == "-c" || tokens[1] == "-lc")
-            ) {
-                // sh -c "<inner>"：内层命令才是真正要跑的，递归检查
-                val inner = segment.substringAfter(tokens[1], "").trim()
-                    .trim('"', '\'')
-                if (inner.isNotBlank()) return baseCommandOf(inner) ?: first
-            }
-            return first.substringAfterLast('/')
         }
         return null
     }

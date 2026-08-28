@@ -132,9 +132,11 @@ fun ChatScreen(
     val todoItems by vm.todoItems.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
-    var pendingImage by rememberSaveable { mutableStateOf<String?>(null) }
+    // 大体积 base64 / 文档正文绝不能进 rememberSaveable：会被写入 savedInstanceState
+    // Bundle，超过 ~1MB 直接 TransactionTooLargeException 崩溃；进程重建丢失待发附件可接受
+    var pendingImage by remember { mutableStateOf<String?>(null) }
     var pendingDocumentName by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingDocumentContent by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawerState.open() }

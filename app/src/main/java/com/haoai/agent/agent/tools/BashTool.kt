@@ -14,7 +14,7 @@ class BashTool : Tool {
 
     override val name = "bash"
     override val description =
-        "在工作空间目录内执行 POSIX shell 命令（Android /system/bin/sh）。超时上限 5 分钟。高危命令会被安全策略拦截。"
+        "在工作空间目录内执行 POSIX shell 命令（Android /system/bin/sh）。timeout_ms 上限 170 秒（引擎总超时 180 秒内，超过会被引擎判失败）。高危命令会被安全策略拦截。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -33,7 +33,9 @@ class BashTool : Tool {
             PermissionCenter.ensureStorageIfOutside(
                 ctx.appContext, command, ctx.shellDir?.absolutePath
             )
-            val timeout = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 300_000).toLong()
+            // 引擎层 withTimeout(TOOL_TIMEOUT_MS=180s) 包裹所有工具：bash 上限必须留出余量，
+            // 否则模型请求 300s 时前 180s 就被引擎杀掉并误报失败
+            val timeout = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 170_000).toLong()
             // 可中断执行：用户按停止时线程中断会传播进 waitFor，ShellRunner 据此杀掉子进程
             val result = kotlinx.coroutines.runInterruptible {
                 ShellRunner.exec(dir, command, timeout)

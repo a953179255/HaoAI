@@ -284,7 +284,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return when (command.name) {
             "compact" -> {
                 val s = currentSession ?: return false
-                val provider = c.activeProvider() ?: return false
+                val provider0 = c.activeProvider() ?: return false
+                // 端侧供应商需要拉起/切回本地 server：直接用原始 provider 压缩会请求 local://llama 失败
+                val provider = resolveProvider(provider0) ?: run {
+                    _error.value = c.llama.state.value.let {
+                        (it as? com.haoai.agent.platform.llama.LlamaState.Failed)?.message
+                            ?: "端侧模型启动失败，无法压缩"
+                    }
+                    return true
+                }
                 val engine = buildEngine(s, provider)
                 _running.value = true
                 try {

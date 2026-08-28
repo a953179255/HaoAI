@@ -76,26 +76,33 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             backgroundScope = null
         )
 
-        var resultText = ""
-        runCatching {
+        var resultText: String? = null
+        try {
             engine.runTurn(
                 userText = "【定时任务 · ${task.name}】\n${task.prompt}",
                 onDelta = { },
                 onEvent = { }
             )
-        }.onSuccess {
             val last = session.messages.lastOrNull { m -> m.role == "assistant" && !m.error }
             resultText = last?.content ?: "（无输出）"
-        }.onFailure {
-            resultText = "执行失败：${it.message ?: it.javaClass.simpleName}"
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            // WorkManager 取消/系统回收：向上传播，不能被吞成「执行失败」
+            throw ce
+        } catch (e: Throwable) {
+            resultText = "执行失败：${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            // 续排下一次必须无条件执行：runCatching 包住每步，任何一步抛异常都不会让定时链断掉。
+            // 取消路径（resultText==null）不算一次执行，不写结果不发通知，但仍续排。
+            if (resultText != null) {
+                runCatching {
+                    session.updatedAt = System.currentTimeMillis()
+                    container.sessionStore.save(session)
+                }
+                runCatching { updateTask(task, resultText) }
+                notifyDone(applicationContext, task.name, resultText)
+            }
+            runCatching { Scheduler.enqueueNext(task) }
         }
-
-        session.updatedAt = System.currentTimeMillis()
-        container.sessionStore.save(session)
-
-        updateTask(task, resultText)
-        notifyDone(applicationContext, task.name, resultText)
-        Scheduler.enqueueNext(task)
         return Result.success()
     }
 

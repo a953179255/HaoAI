@@ -269,16 +269,29 @@ class LlamaServerController(
             }
         }
 
+    /**
+     * UI 直接调用：状态立即置 Stopped，进程收割（destroy + 最多 5s 等待）放后台线程，
+     * 不再阻塞主线程导致停止端侧模型时界面卡死。
+     */
     fun stop() {
-        stopInternal()
+        val proc = process
         currentModelPath = null
+        process = null
         _state.value = LlamaState.Stopped
+        if (proc != null) {
+            Thread { reapProcess(proc) }.apply { isDaemon = true }.start()
+        }
     }
 
+    /** 启动新 server 前必须同步释放端口，保持阻塞语义（仅在 IO 调度器上调用）。 */
     private fun stopInternal() {
         val proc = process ?: run { currentModelPath = null; return }
         currentModelPath = null
         process = null
+        reapProcess(proc)
+    }
+
+    private fun reapProcess(proc: Process) {
         runCatching { proc.destroy() }
         runCatching {
             if (!proc.waitFor(3, TimeUnit.SECONDS)) {
