@@ -391,8 +391,11 @@ private fun SwipeRevealSessionCard(
                 onClick = { onPin(); onClose() },
                 modifier = Modifier.size(44.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                    contentColor = MaterialTheme.colorScheme.primary
+                    // 未置顶：灰（同重命名）；已置顶：绿（提示当前处于置顶态）
+                    containerColor = if (s.pinned) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                    contentColor = if (s.pinned) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onBackground
                 )
             ) {
                 Icon(
