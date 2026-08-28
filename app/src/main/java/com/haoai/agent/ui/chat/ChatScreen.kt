@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
@@ -67,9 +68,11 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Snackbar
@@ -102,6 +105,7 @@ import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
+import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -276,6 +280,7 @@ fun ChatScreen(
                         sessions = sessions,
                         activeId = vm.session.collectAsState().value?.id,
                         backdrop = backdrop,
+                        drawerOpen = drawerState.currentValue == DrawerValue.Open,
                         onOpenSessions = {
                             scope.launch { drawerState.close() }
                             onOpenSessions()
@@ -284,6 +289,9 @@ fun ChatScreen(
                             vm.selectSession(id)
                             scope.launch { drawerState.close() }
                         },
+                        onPinSession = { id -> vm.pinSession(id) },
+                        onRenameSession = { id, title -> vm.renameSession(id, title) },
+                        onDeleteSession = { id -> vm.deleteSession(id) },
                         onEditProfile = { showProfileEdit = true },
                         onSettings = {
                             scope.launch { drawerState.close() }
@@ -1449,13 +1457,23 @@ private fun SessionsDrawer(
     sessions: List<StoredSession>,
     activeId: String?,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    drawerOpen: Boolean,
     onOpenSessions: () -> Unit,
     onSelectSession: (String) -> Unit,
+    onPinSession: (String) -> Unit,
+    onRenameSession: (String, String) -> Unit,
+    onDeleteSession: (String) -> Unit,
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
     // 上游 式三段结构：档案头部 → 最近会话列表（主体，点击即切换）→ 底部导航
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+    // 当前滑出操作按钮的会话（同时只允许一张）+ 重命名目标
+    var openCardId by remember { mutableStateOf<String?>(null) }
+    var renameTarget by remember { mutableStateOf<StoredSession?>(null) }
+    // 抽屉收起时自动收回展开的按钮
+    LaunchedEffect(drawerOpen) { if (!drawerOpen) openCardId = null }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -1511,38 +1529,86 @@ private fun SessionsDrawer(
             }
             itemsIndexed(sessions.take(20), key = { _, s -> s.id }) { index, s ->
                 val active = s.id == activeId
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelectSession(s.id) }
-                        .padding(horizontal = 22.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (s.pinned) {
-                        Icon(
-                            Icons.Filled.PushPin,
-                            contentDescription = "置顶",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(Modifier.size(7.dp))
+                // 右划呼出 置顶/重命名；划过按钮继续右划松手 = 删除（进回收站，7 天可恢复）
+                SwipeRevealCard(
+                    isOpen = openCardId == s.id,
+                    anyOpen = openCardId != null,
+                    onClick = { onSelectSession(s.id) },
+                    onOpenChange = { open -> openCardId = if (open) s.id else null },
+                    openWidth = 104.dp,
+                    deleteWidth = 200.dp,
+                    onDeleteSwipe = { onDeleteSession(s.id) },
+                    modifier = Modifier.padding(horizontal = 22.dp),
+                    actions = {
+                        FilledIconButton(
+                            onClick = {
+                                onPinSession(s.id)
+                                openCardId = null
+                            },
+                            modifier = Modifier.size(44.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                // 未置顶：灰（同重命名）；已置顶：绿（提示当前处于置顶态）
+                                containerColor = if (s.pinned) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                                contentColor = if (s.pinned) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onBackground
+                            )
+                        ) {
+                            Icon(
+                                Icons.Filled.PushPin,
+                                contentDescription = if (s.pinned) "取消置顶" else "置顶",
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        FilledIconButton(
+                            onClick = {
+                                renameTarget = s
+                                openCardId = null
+                            },
+                            modifier = Modifier.size(44.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                                contentColor = MaterialTheme.colorScheme.onBackground
+                            )
+                        ) {
+                            Icon(Icons.Filled.Edit, contentDescription = "重命名", modifier = Modifier.size(19.dp))
+                        }
+                    },
+                    content = { cardClick ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = cardClick)
+                                .padding(vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (s.pinned) {
+                                Icon(
+                                    Icons.Filled.PushPin,
+                                    contentDescription = "置顶",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.size(7.dp))
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    s.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (active) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onBackground,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            s.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                            color = if (active) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onBackground,
-                            maxLines = 1
-                        )
-                        Text(
-                            "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                )
                 if (index < sessions.size.coerceAtMost(20) - 1) {
                     HorizontalDivider(
                         Modifier.padding(horizontal = 22.dp),
@@ -1556,6 +1622,29 @@ private fun SessionsDrawer(
         DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = onOpenSessions)
         DrawerEntry(Icons.Filled.Settings, "设置", onClick = onSettings)
         Spacer(Modifier.navigationBarsPadding())
+    }
+
+    renameTarget?.let { target ->
+        var renameValue by remember(target.id) { mutableStateOf(target.title) }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "重命名会话",
+            onDismiss = { renameTarget = null },
+            confirmLabel = "保存",
+            onConfirm = {
+                onRenameSession(target.id, renameValue)
+                renameTarget = null
+            }
+        ) {
+            OutlinedTextField(
+                value = renameValue,
+                onValueChange = { renameValue = it.take(50) },
+                label = { Text("会话名") },
+                singleLine = true,
+                colors = com.haoai.agent.ui.common.glassFieldColors(),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 

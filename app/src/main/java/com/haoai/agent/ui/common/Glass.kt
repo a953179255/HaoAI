@@ -672,6 +672,8 @@ fun GlassAlertDialog(
     refract: Boolean? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
+    // 系统返回手势先关弹窗：后注册的 handler 优先，覆盖屏幕级的返回导航
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
     Box(
         Modifier
             .fillMaxSize()

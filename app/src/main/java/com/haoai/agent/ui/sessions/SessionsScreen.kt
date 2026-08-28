@@ -1,8 +1,6 @@
 package com.haoai.agent.ui.sessions
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,13 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.changedToUp
-import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.input.pointer.positionChangeConsumed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -62,13 +54,13 @@ import com.haoai.agent.ui.ChatViewModel
 import com.haoai.agent.ui.common.GlassAlertDialog
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
+import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.glassFieldColors
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
 
 /** 独立「全部会话」页：搜索过滤（会话/回收站共用）+ 左右滑动切换 + 置顶/重命名/回收站管理。 */
 @Composable
@@ -96,7 +88,11 @@ fun SessionsScreen(
     // 左「会话」右「回收站」：从右往左滑直接翻到回收站
     val pagerState = rememberPagerState(initialPage = if (showTrash) 1 else 0, pageCount = { 2 })
     LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.currentPage }.collect { page -> showTrash = page == 1 }
+        snapshotFlow { pagerState.currentPage }.collect { page ->
+            showTrash = page == 1
+            // 翻页时收起展开的操作按钮，避免另一页残留展开态
+            openCardId = null
+        }
     }
 
     // 系统返回手势直接回聊天页
@@ -165,7 +161,10 @@ fun SessionsScreen(
         ) {
             FilterChip(
                 selected = !showTrash,
-                onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                onClick = {
+                    openCardId = null
+                    scope.launch { pagerState.animateScrollToPage(0) }
+                },
                 label = {
                     Text(
                         "会话 ${sessions.size}",
@@ -175,7 +174,10 @@ fun SessionsScreen(
             )
             FilterChip(
                 selected = showTrash,
-                onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                onClick = {
+                    openCardId = null
+                    scope.launch { pagerState.animateScrollToPage(1) }
+                },
                 label = {
                     Text(
                         "回收站 ${deletedSessions.size}",
@@ -195,7 +197,12 @@ fun SessionsScreen(
             val sessionsPage = page == 0
             val list = (if (sessionsPage) sessions else deletedSessions).filter { matches(it) }
             // 页面根容器必须铺满：Pager 会把 wrap 高度的内容垂直居中（列表越短顶部空白越大）
-            Box(Modifier.fillMaxSize()) {
+            // 点空白处只收回展开的操作按钮（卡片/按钮自己会消费点击，不受影响）
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { openCardId = null } }
+            ) {
                 if (list.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
@@ -217,21 +224,106 @@ fun SessionsScreen(
                     ) {
                         items(list, key = { it.id }) { s ->
                             val active = s.id == activeId
-                            SwipeRevealSessionCard(
-                                s = s,
-                                active = active,
-                                fmt = fmt,
-                                backdrop = backdrop,
+                            SwipeRevealCard(
                                 isOpen = openCardId == s.id,
-                                onOpen = { openCardId = s.id },
-                                onClose = { if (openCardId == s.id) openCardId = null },
-                                onCardClick = {
+                                anyOpen = openCardId != null,
+                                onClick = {
                                     vm.selectSession(s.id)
                                     onBack()
                                 },
-                                onPin = { vm.pinSession(s.id) },
-                                onRename = { renameTarget = s },
-                                onDelete = { vm.deleteSession(s.id) }
+                                onOpenChange = { open -> openCardId = if (open) s.id else null },
+                                openWidth = 156.dp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                actions = {
+                                    FilledIconButton(
+                                        onClick = {
+                                            vm.pinSession(s.id)
+                                            openCardId = null
+                                        },
+                                        modifier = Modifier.size(44.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            // 未置顶：灰（同重命名）；已置顶：绿（提示当前处于置顶态）
+                                            containerColor = if (s.pinned) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                                            contentColor = if (s.pinned) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onBackground
+                                        )
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.PushPin,
+                                            contentDescription = if (s.pinned) "取消置顶" else "置顶",
+                                            modifier = Modifier.size(19.dp)
+                                        )
+                                    }
+                                    FilledIconButton(
+                                        onClick = { renameTarget = s; openCardId = null },
+                                        modifier = Modifier.size(44.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                                            contentColor = MaterialTheme.colorScheme.onBackground
+                                        )
+                                    ) {
+                                        Icon(Icons.Filled.Edit, contentDescription = "重命名", modifier = Modifier.size(19.dp))
+                                    }
+                                    FilledIconButton(
+                                        onClick = {
+                                            vm.deleteSession(s.id)
+                                            openCardId = null
+                                        },
+                                        modifier = Modifier.size(44.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
+                                            contentColor = MaterialTheme.colorScheme.error
+                                        )
+                                    ) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(20.dp))
+                                    }
+                                },
+                                content = { cardClick ->
+                                    GlassCard(
+                                        onClick = cardClick,
+                                        backdrop = backdrop,
+                                        shape = RoundedCornerShape(14.dp),
+                                        surfaceAlpha = if (active) 0.30f else 0.16f,
+                                        tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
+                                        lensRadius = 14.dp,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    if (s.pinned) {
+                                                        Icon(
+                                                            Icons.Filled.PushPin,
+                                                            contentDescription = "已置顶",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .padding(end = 2.dp)
+                                                        )
+                                                        Spacer(Modifier.size(3.dp))
+                                                    }
+                                                    Text(
+                                                        s.title,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (active) MaterialTheme.colorScheme.primary
+                                                        else MaterialTheme.colorScheme.onBackground,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                                Text(
+                                                    "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             )
                         }
                     }
@@ -344,167 +436,6 @@ fun SessionsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
-        }
-    }
-}
-
-/** 会话卡片右滑（从左往右）呼出左侧操作按钮；左滑/竖向滑动不消费，穿透给 Pager 翻页与列表滚动。 */
-@Composable
-private fun SwipeRevealSessionCard(
-    s: StoredSession,
-    active: Boolean,
-    fmt: SimpleDateFormat,
-    backdrop: LayerBackdrop,
-    isOpen: Boolean,
-    onOpen: () -> Unit,
-    onClose: () -> Unit,
-    onCardClick: () -> Unit,
-    onPin: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val openPx = with(LocalDensity.current) { 156.dp.toPx() }
-    val offset = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-
-    // 外部开合（展开另一张 / 操作完成 / 点卡片收回）统一由此驱动
-    LaunchedEffect(isOpen) {
-        val target = if (isOpen) openPx else 0f
-        if (offset.value < target - 0.5f || offset.value > target + 0.5f) offset.animateTo(target)
-    }
-
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clipToBounds()
-            .padding(horizontal = 10.dp, vertical = 2.dp)
-    ) {
-        Row(
-            Modifier
-                .matchParentSize()
-                .graphicsLayer { alpha = (offset.value / openPx).coerceIn(0f, 1f) }
-                .padding(start = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FilledIconButton(
-                onClick = { onPin(); onClose() },
-                modifier = Modifier.size(44.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    // 未置顶：灰（同重命名）；已置顶：绿（提示当前处于置顶态）
-                    containerColor = if (s.pinned) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                    contentColor = if (s.pinned) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onBackground
-                )
-            ) {
-                Icon(
-                    Icons.Filled.PushPin,
-                    contentDescription = if (s.pinned) "取消置顶" else "置顶",
-                    modifier = Modifier.size(19.dp)
-                )
-            }
-            FilledIconButton(
-                onClick = { onRename(); onClose() },
-                modifier = Modifier.size(44.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                    contentColor = MaterialTheme.colorScheme.onBackground
-                )
-            ) {
-                Icon(Icons.Filled.Edit, contentDescription = "重命名", modifier = Modifier.size(19.dp))
-            }
-            FilledIconButton(
-                onClick = { onDelete(); onClose() },
-                modifier = Modifier.size(44.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(20.dp))
-            }
-        }
-        GlassCard(
-            onClick = { if (isOpen) onClose() else onCardClick() },
-            backdrop = backdrop,
-            shape = RoundedCornerShape(14.dp),
-            surfaceAlpha = if (active) 0.30f else 0.16f,
-            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
-            lensRadius = 14.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer { translationX = offset.value }
-                .pointerInput(isOpen, openPx) {
-                    val slop = viewConfiguration.touchSlop
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var totalX = 0f
-                        var decided = false
-                        // 已展开的卡片双向接管（可左滑收回）；未展开时仅右滑接管
-                        var owned = isOpen
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (change.changedToUp()) break
-                            val dx = change.positionChange().x
-                            if (decided && !owned) {
-                                if (change.positionChangeConsumed()) break
-                            } else if (!decided) {
-                                if (change.positionChangeConsumed()) break
-                                totalX += dx
-                                if (abs(totalX) > slop) {
-                                    decided = true
-                                    if (!owned) owned = totalX > 0f
-                                }
-                            }
-                            if (decided && owned && dx != 0f) {
-                                change.consume()
-                                val next = (offset.value + dx).coerceIn(0f, openPx)
-                                scope.launch { offset.snapTo(next) }
-                            }
-                        }
-                        if (decided && owned) {
-                            val target = if (offset.value >= openPx / 2f) openPx else 0f
-                            scope.launch { offset.animateTo(target) }
-                            if (target >= openPx) onOpen() else onClose()
-                        }
-                    }
-                }
-        ) {
-            Row(
-                Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (s.pinned) {
-                            Icon(
-                                Icons.Filled.PushPin,
-                                contentDescription = "已置顶",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .size(12.dp)
-                                    .padding(end = 2.dp)
-                            )
-                            Spacer(Modifier.size(3.dp))
-                        }
-                        Text(
-                            s.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                            color = if (active) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onBackground,
-                            maxLines = 1
-                        )
-                    }
-                    Text(
-                        "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
-                    )
-                }
-            }
         }
     }
 }

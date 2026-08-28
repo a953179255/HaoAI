@@ -211,7 +211,11 @@ private fun RootApp() {
                 4 -> com.haoai.agent.ui.sessions.SessionsScreen(
                     vm = chatVm,
                     backdrop = backdrop,
-                    onBack = { screen = 0 }
+                    // 全部会话只能从侧边栏进入：返回（箭头/系统手势）回到聊天并重新展开侧边栏
+                    onBack = {
+                        screen = 0
+                        rootScope.launch { drawerState.open() }
+                    }
                 )
                 else -> ChatScreen(
                     vm = chatVm,
