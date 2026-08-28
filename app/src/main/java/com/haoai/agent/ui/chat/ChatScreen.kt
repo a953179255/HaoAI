@@ -324,6 +324,8 @@ fun ChatScreen(
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
+                thinkingHint = if (running && vm.isLocalProviderActive())
+                    "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
                 listState = listState,
                 sessionId = vm.session.collectAsState().value?.id,
                 modifier = Modifier
@@ -918,6 +920,7 @@ private fun MessageList(
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
+    thinkingHint: String? = null,
     listState: androidx.compose.foundation.lazy.LazyListState,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
@@ -959,7 +962,7 @@ private fun MessageList(
         items(rows, key = { it.key }) { row -> RowItem(row) }
         if (showStreaming) {
             item(key = "streaming") {
-                StreamingItem(streamingText, streamingReasoning)
+                StreamingItem(streamingText, streamingReasoning, thinkingHint)
             }
         }
     }
@@ -1071,7 +1074,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
 }
 
 @Composable
-private fun StreamingItem(streamingText: String?, streamingReasoning: String?) {
+private fun StreamingItem(streamingText: String?, streamingReasoning: String?, thinkingHint: String? = null) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -1107,7 +1110,7 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Box(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                    ThinkingIndicator()
+                    ThinkingIndicator(thinkingHint ?: "正在思考")
                 }
             }
         }

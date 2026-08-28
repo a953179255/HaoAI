@@ -260,6 +260,23 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         if (!hasUser || !hasReply) return
         val provider0 = c.activeProvider() ?: return
+        // 端侧模型不做 LLM 标题总结：辅助请求会冲掉 llama-server 单 slot 的前缀缓存，
+        // 让下一轮主对话全量重算 prefill（手机上多花几十秒）；直接取用户首条消息截断
+        if (provider0.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+            provider0.baseUrl.contains("127.0.0.1")
+        ) {
+            val fallback = s.messages.firstOrNull {
+                it.role == com.haoai.agent.agent.model.ChatMessage.ROLE_USER && it.content.isNotBlank()
+            }?.content?.lineSequence()?.firstOrNull()?.trim()?.take(12)
+            if (!fallback.isNullOrBlank()) {
+                s.titleAuto = true
+                s.title = fallback
+                c.sessionStore.save(s)
+                refreshSessions()
+                if (_session.value?.id == s.id) _session.value = s.copy()
+            }
+            return
+        }
         // 先落标记再请求：失败也不重试，避免每轮都烧 token
         s.titleAuto = true
         c.sessionStore.save(s)
@@ -779,6 +796,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** /model 弹窗：可切换的模型服务列表。 */
     fun providers() = c.settingsFlow.value.providers
+
+    /** 当前激活供应商是否为端侧模型（供 UI 提示端侧 prefill 特性）。 */
+    fun isLocalProviderActive(): Boolean {
+        val st = c.settingsFlow.value
+        return st.providers.find { it.id == st.activeProviderId }
+            ?.let {
+                it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+                    it.baseUrl.contains("127.0.0.1")
+            } == true
+    }
 
     fun activeProviderId(): String? = c.settingsFlow.value.activeProviderId
 

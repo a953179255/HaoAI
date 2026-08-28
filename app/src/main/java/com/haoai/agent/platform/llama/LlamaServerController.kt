@@ -204,7 +204,12 @@ class LlamaServerController(
                     "--host", "127.0.0.1",
                     "--port", PORT.toString(),
                     "-c", contextSize.coerceIn(2048, 262_144).toString(),
-                    "-t", Runtime.getRuntime().availableProcessors().coerceIn(2, 6).toString(),
+                    // 线程留 2 核给 UI/系统：推理打满 CPU 会把界面与停止键「饿死」十几秒
+                    "-t", (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4).toString(),
+                    // 单 slot：默认多 slot 会把 KV 内存翻数倍（4 slot × 64K = 256K 总缓存），
+                    // 且请求在 slot 间轮转，Agent 多轮的前缀缓存完全失效、每轮全量重算 prefill。
+                    // 不加 --cache-reuse：实测会触发 KV 碎片整理导致 prefill 阶段性卡死数十秒
+                    "-np", "1",
                     "--no-webui",
                     "--jinja",
                     "--reasoning", "off"

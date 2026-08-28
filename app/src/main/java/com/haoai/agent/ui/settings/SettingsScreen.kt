@@ -795,11 +795,11 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                 }
             }
             Text(
-                "本地模型上下文窗口（Agent 工具流建议 ≥64K；过大增加内存占用，切换后下次启动生效）",
+                "本地模型上下文窗口（32K 足够日常与工具流，KV 内存随窗口线性增长；切换后下次启动生效）",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
             )
-            val ctxOptions = listOf(65536, 131072, 262144)
+            val ctxOptions = listOf(32768, 65536, 131072, 262144)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 ctxOptions.forEachIndexed { i, n ->
                     SegmentedButton(

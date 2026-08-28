@@ -85,8 +85,8 @@ data class AppSettings(
     val tokenDay: String = "",
     val tokenInToday: Long = 0,
     val tokenOutToday: Long = 0,
-    /** 端侧推理上下文窗口（llama.cpp -c 参数）。Agent 场景系统提示+工具定义就数千 token，默认 64K。 */
-    val localContextLength: Int = 65536
+    /** 端侧推理上下文窗口（llama.cpp -c 参数）。系统提示+工具约 5K token，32K 与引擎本地压缩窗口对齐；KV 内存随窗口线性增长。 */
+    val localContextLength: Int = 32768
 )
 
 class SettingsStore(context: Context) {

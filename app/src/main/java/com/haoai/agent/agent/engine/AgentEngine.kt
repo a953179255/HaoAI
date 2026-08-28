@@ -395,6 +395,9 @@ class AgentEngine(
         val bank = memoryBank ?: return
         val scope = backgroundScope ?: return
         if (!memoryEnabled || !autoLearn || depth != 0) return
+        // 端侧模型跳过自动记忆提取：辅助请求会冲掉 llama-server 单 slot 前缀缓存，
+        // 让 Agent 工具循环的每轮请求全量重算 prefill（手机上每轮多花几十秒）
+        if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) return
         val recent = session.messages
             .filter {
                 (it.role == ChatMessage.ROLE_USER || it.role == ChatMessage.ROLE_ASSISTANT) &&
