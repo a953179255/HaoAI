@@ -197,33 +197,16 @@ private fun RootApp() {
                 )
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,
-                    onBack = {
-                        if (cameFromDrawer) {
-                            cameFromDrawer = false
-                            rootScope.launch { drawerState.close() }
-                            screen = 0
-                        } else screen = 1
-                    }
+                    // 记忆/任务/技能入口已收进设置页，返回回设置
+                    onBack = { screen = 1 }
                 )
                 3 -> com.haoai.agent.ui.manage.ScheduleScreen(
                     backdrop = backdrop,
-                    onBack = {
-                        if (cameFromDrawer) {
-                            cameFromDrawer = false
-                            rootScope.launch { drawerState.close() }
-                            screen = 0
-                        } else screen = 1
-                    }
+                    onBack = { screen = 1 }
                 )
                 5 -> com.haoai.agent.ui.manage.SkillsScreen(
                     backdrop = backdrop,
-                    onBack = {
-                        if (cameFromDrawer) {
-                            cameFromDrawer = false
-                            rootScope.launch { drawerState.close() }
-                            screen = 0
-                        } else screen = 1
-                    }
+                    onBack = { screen = 1 }
                 )
                 4 -> com.haoai.agent.ui.sessions.SessionsScreen(
                     vm = chatVm,
@@ -239,10 +222,10 @@ private fun RootApp() {
                         cameFromDrawer = fromDrawer
                         screen = 1
                     },
-                    onOpenSessions = { screen = 4 },
-                    onOpenManage = { target ->
-                        cameFromDrawer = true
-                        screen = target
+                    // 先收起抽屉再切页：否则返回时 drawerState 仍是 Open，抽屉会原样展开
+                    onOpenSessions = {
+                        rootScope.launch { drawerState.close() }
+                        screen = 4
                     }
                 )
             }

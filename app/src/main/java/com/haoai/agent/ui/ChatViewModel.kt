@@ -106,7 +106,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             ?: "未绑定工作空间"
 
     fun refreshSessions() {
+        // 置顶优先，其余按最近使用倒序
         _sessions.value = c.sessionStore.list()
+            .sortedWith(compareByDescending<StoredSession> { it.pinned }.thenByDescending { it.updatedAt })
     }
 
     fun refreshDeletedSessions() {
@@ -156,6 +158,37 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         refreshSessions()
         refreshDeletedSessions()
         if (_session.value?.id == id) newSession()
+    }
+
+    /** 置顶/取消置顶（切换）。 */
+    fun pinSession(id: String) {
+        val s = _sessions.value.firstOrNull { it.id == id } ?: return
+        c.sessionStore.setPinned(id, !s.pinned)
+        refreshSessions()
+    }
+
+    /** 手动重命名：titleAuto 置位，防止 AI 标题生成覆盖用户起的名字。 */
+    fun renameSession(id: String, title: String) {
+        val t = title.trim().take(50)
+        if (t.isEmpty()) return
+        val s = c.sessionStore.load(id) ?: return
+        s.title = t
+        s.titleAuto = true
+        c.sessionStore.save(s, touch = false)
+        refreshSessions()
+        if (currentSession?.id == id) {
+            // 同一实例上的字段变更不会触发 StateFlow 重发射，copy 一份让顶栏立即刷新
+            // （copy 共享同一个 messages 列表引用，引擎追加消息不受影响）
+            val view = s.copy()
+            currentSession = view
+            _session.value = view
+        }
+    }
+
+    /** 清空回收站：所有回收站会话彻底删除。 */
+    fun emptyTrash() {
+        _deletedSessions.value.forEach { c.sessionStore.deleteForever(it.id) }
+        refreshDeletedSessions()
     }
 
     fun send(rawText: String, imageData: String? = null) {

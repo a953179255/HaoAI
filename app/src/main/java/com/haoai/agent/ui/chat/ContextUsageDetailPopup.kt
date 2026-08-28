@@ -58,7 +58,11 @@ fun ContextUsageDetailPopup(
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
                 color = color,
-                trackColor = color.copy(alpha = 0.15f)
+                trackColor = color.copy(alpha = 0.15f),
+                // M3 1.3+ 默认在轨道末端画一个进度色圆点（stop indicator）：
+                // 未用到也会显示实心绿点，与「剩余轨道=浅色」的预期不符，去掉并消除间隙
+                gapSize = 0.dp,
+                drawStopIndicator = {}
             )
             Spacer(Modifier.height(4.dp))
             Text(

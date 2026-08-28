@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -115,8 +116,7 @@ fun ChatScreen(
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: (fromDrawer: Boolean) -> Unit,
-    onOpenSessions: () -> Unit = {},
-    onOpenManage: (screen: Int) -> Unit = {}
+    onOpenSessions: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -156,11 +156,15 @@ fun ChatScreen(
     var showStatusPopup by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showProfileEdit by remember { mutableStateOf(false) }
+    // 顶栏会话名点击重命名
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
     // /task 强制展开任务面板（即使清单为空或已全部完成）
     var taskPanelForced by remember { mutableStateOf(false) }
 
     // 系统返回手势：弹层优先关闭，其次侧边栏，避免把应用最小化
     androidx.activity.compose.BackHandler(enabled = showProfileEdit) { showProfileEdit = false }
+    androidx.activity.compose.BackHandler(enabled = showRenameDialog) { showRenameDialog = false }
     androidx.activity.compose.BackHandler(enabled = showModelPicker) { showModelPicker = false }
     androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
     androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
@@ -268,23 +272,16 @@ fun ChatScreen(
                         avatarEmoji = settings.avatarEmoji,
                         avatarGradient = settings.avatarGradient,
                         avatarImagePath = settings.avatarImagePath,
-                        sessionCount = sessions.size,
+                        sessions = sessions,
+                        activeId = vm.session.collectAsState().value?.id,
                         backdrop = backdrop,
                         onOpenSessions = {
                             scope.launch { drawerState.close() }
                             onOpenSessions()
                         },
-                        onOpenMemories = {
+                        onSelectSession = { id ->
+                            vm.selectSession(id)
                             scope.launch { drawerState.close() }
-                            onOpenManage(2)
-                        },
-                        onOpenSchedules = {
-                            scope.launch { drawerState.close() }
-                            onOpenManage(3)
-                        },
-                        onOpenSkills = {
-                            scope.launch { drawerState.close() }
-                            onOpenManage(5)
                         },
                         onEditProfile = { showProfileEdit = true },
                         onSettings = {
@@ -334,17 +331,14 @@ fun ChatScreen(
             subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
             contextUsage = contextUsage,
             backdrop = backdrop,
-            sessions = sessions,
-            activeId = activeSession?.id,
             onDrawer = { openDrawer() },
-            onOpenAllSessions = onOpenSessions,
             onNewChat = {
                 vm.newSession()
                 scope.launch { drawerState.close() }
             },
-            onSelectSession = { s ->
-                vm.selectSession(s.id)
-                scope.launch { drawerState.close() }
+            onRenameSubtitle = {
+                renameText = activeSession?.title ?: ""
+                showRenameDialog = true
             },
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -592,6 +586,31 @@ fun ChatScreen(
         }
     }
 
+    // 会话重命名弹窗（顶栏点击会话名触发）
+    if (showRenameDialog) {
+        val renameTarget = vm.session.collectAsState().value
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "重命名会话",
+            onDismiss = { showRenameDialog = false },
+            confirmLabel = "保存",
+            onConfirm = {
+                renameTarget?.let { vm.renameSession(it.id, renameText) }
+                showRenameDialog = false
+            },
+            dismissLabel = "取消"
+        ) {
+            OutlinedTextField(
+                value = renameText,
+                onValueChange = { renameText = it.take(50) },
+                label = { Text("会话名") },
+                singleLine = true,
+                colors = com.haoai.agent.ui.common.glassFieldColors(),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+
     // 档案编辑弹窗：名字 / emoji 头像 / 渐变底色 / 签名（放在抽屉之外，避免被抽屉层盖住）
     if (showProfileEdit) {
         var editName by remember { mutableStateOf(settings.agentName.ifBlank { "HaoAI" }) }
@@ -820,17 +839,13 @@ private fun TopBar(
     subtitle: String,
     contextUsage: ContextUsage,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    sessions: List<StoredSession>,
-    activeId: String?,
     onDrawer: () -> Unit,
-    onOpenAllSessions: () -> Unit = {},
     onNewChat: () -> Unit,
-    onSelectSession: (StoredSession) -> Unit,
+    // 点击标题区（会话名副标题）→ 重命名当前会话
+    onRenameSubtitle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var quickMenu by remember { mutableStateOf(false) }
     var showContextDetail by remember { mutableStateOf(false) }
-    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
@@ -847,7 +862,13 @@ private fun TopBar(
                 Icon(Icons.Filled.Menu, contentDescription = "会话列表", tint = MaterialTheme.colorScheme.onBackground)
             }
             Spacer(Modifier.size(2.dp))
-            Column(Modifier.weight(1f)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onRenameSubtitle)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
                     subtitle,
@@ -856,98 +877,14 @@ private fun TopBar(
                     maxLines = 1
                 )
             }
-            CircularContextIndicator(
-                usage = contextUsage,
-                onClick = { showContextDetail = !showContextDetail }
-            )
             Spacer(Modifier.size(2.dp))
             IconButton(onClick = onNewChat) {
                 Icon(Icons.Filled.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)
             }
-            Box {
-                IconButton(onClick = { quickMenu = true }) {
-                    Icon(
-                        Icons.Filled.ExpandMore,
-                        contentDescription = "切换会话",
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-                // 会话快切面板：液态玻璃 + 进入/退出动画（GlassPopup）
-                if (quickMenu) {
-                    com.haoai.agent.ui.common.GlassPopup(
-                        backdrop = backdrop,
-                        alignment = Alignment.BottomEnd,
-                        onDismiss = { quickMenu = false },
-                        modifier = Modifier
-                            .padding(top = 6.dp)
-                            .widthIn(min = 240.dp, max = 320.dp)
-                    ) { close ->
-                        Column(
-                            Modifier
-                                .heightIn(max = 420.dp)
-                                .verticalScroll(rememberScrollState())
-                                .padding(vertical = 6.dp)
-                        ) {
-                            if (sessions.isEmpty()) {
-                                Text(
-                                    "暂无历史会话",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                                )
-                            }
-                            sessions.take(8).forEach { s ->
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            close()
-                                            onSelectSession(s)
-                                        }
-                                        .padding(horizontal = 16.dp, vertical = 7.dp)
-                                ) {
-                                    Text(
-                                        s.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = if (s.id == activeId) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (s.id == activeId) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onBackground,
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            HorizontalDivider(
-                                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)
-                            )
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        close()
-                                        onOpenAllSessions()
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Filled.Menu,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(19.dp),
-                                    tint = MaterialTheme.colorScheme.onBackground
-                                )
-                                Spacer(Modifier.size(10.dp))
-                                Text("查看全部会话", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                    }
-                }
-            }
+            CircularContextIndicator(
+                usage = contextUsage,
+                onClick = { showContextDetail = !showContextDetail }
+            )
         }
         // 上下文详情弹窗
         if (showContextDetail) {
@@ -1508,16 +1445,16 @@ private fun SessionsDrawer(
     avatarEmoji: String,
     avatarGradient: Int,
     avatarImagePath: String?,
-    sessionCount: Int,
+    sessions: List<StoredSession>,
+    activeId: String?,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onOpenSessions: () -> Unit,
-    onOpenMemories: () -> Unit,
-    onOpenSchedules: () -> Unit,
-    onOpenSkills: () -> Unit,
+    onSelectSession: (String) -> Unit,
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
-    // 侧边栏瘦身：会话列表与回收站移入独立「全部会话」页，这里只留档案 + 导航
+    // 上游 式三段结构：档案头部 → 最近会话列表（主体，点击即切换）→ 底部导航
+    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     Column(
         Modifier
             .fillMaxSize()
@@ -1553,10 +1490,63 @@ private fun SessionsDrawer(
             }
         }
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
-        DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessionCount, onClick = onOpenSessions)
-        DrawerEntry(Icons.Filled.Psychology, "记忆", onClick = onOpenMemories)
-        DrawerEntry(Icons.Filled.Schedule, "定时任务", onClick = onOpenSchedules)
-        DrawerEntry(Icons.Filled.Construction, "技能", onClick = onOpenSkills)
+
+        // 最近会话列表：置顶优先（VM 排序），点击即切换并收起抽屉
+        LazyColumn(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 6.dp)
+        ) {
+            if (sessions.isEmpty()) {
+                item {
+                    Text(
+                        "暂无历史会话",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp)
+                    )
+                }
+            }
+            items(sessions.take(20), key = { it.id }) { s ->
+                val active = s.id == activeId
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectSession(s.id) }
+                        .padding(horizontal = 22.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (s.pinned) {
+                        Icon(
+                            Icons.Filled.PushPin,
+                            contentDescription = "置顶",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.size(7.dp))
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            s.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                            color = if (active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1
+                        )
+                        Text(
+                            "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = onOpenSessions)
         DrawerEntry(Icons.Filled.Settings, "设置", onClick = onSettings)
         Spacer(Modifier.navigationBarsPadding())
     }

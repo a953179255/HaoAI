@@ -36,7 +36,9 @@ data class StoredSession(
     /** 上下文压缩摘要（CompactionManager 生成）。非空时表示历史已被压缩。 */
     var compactionSummary: String? = null,
     /** 智能标题已生成过（只生成一次，避免每轮都花 token）。 */
-    var titleAuto: Boolean = false
+    var titleAuto: Boolean = false,
+    /** 置顶：列表排序最前（抽屉/全部会话页共用）。 */
+    var pinned: Boolean = false
 ) {
     companion object {
         fun create(workspaceUri: String?): StoredSession {
@@ -147,13 +149,15 @@ class SessionStore(context: Context) {
     }
 
     @Synchronized
-    fun save(session: StoredSession) {
+    fun save(session: StoredSession, touch: Boolean = true) {
         // 已彻底删除的会话：静默丢弃迟到的持久化（引擎后台 persist 等）
         if (session.id in tombstones) return
-        session.updatedAt = System.currentTimeMillis()
-        if (session.title == "新会话") {
-            session.messages.firstOrNull { it.role == ChatMessage.ROLE_USER && it.content.isNotBlank() }
-                ?.let { session.title = it.content.take(24).replace('\n', ' ') }
+        if (touch) {
+            session.updatedAt = System.currentTimeMillis()
+            if (session.title == "新会话") {
+                session.messages.firstOrNull { it.role == ChatMessage.ROLE_USER && it.content.isNotBlank() }
+                    ?.let { session.title = it.content.take(24).replace('\n', ' ') }
+            }
         }
         // 快照：引擎随时会向 session.messages 追加消息，后台序列化必须基于不可变快照
         val snapshot = session.copy(messages = session.messages.toMutableList())
@@ -185,6 +189,13 @@ class SessionStore(context: Context) {
         val s = load(id) ?: return
         s.deletedAt = 0
         save(s)
+    }
+
+    /** 置顶/取消置顶（touch=false：不刷新 updatedAt，不影响「最近使用」排序）。 */
+    fun setPinned(id: String, pinned: Boolean) {
+        val s = load(id) ?: return
+        s.pinned = pinned
+        save(s, touch = false)
     }
 
     /** 彻底删除（回收站内或直接）。连同 .bak/.tmp 一起清掉，不留隐私残留。 */
