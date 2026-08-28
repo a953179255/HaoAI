@@ -52,11 +52,7 @@ object ScheduleStore {
     @Synchronized
     fun load(): ScheduleState {
         mem?.let { return it }
-        val loaded = com.haoai.agent.data.HaoJson.readTextSafe(f)?.let { t ->
-            runCatching {
-                HaoJson.json.decodeFromString(ScheduleState.serializer(), t)
-            }.getOrNull()
-        } ?: ScheduleState()
+        val loaded = com.haoai.agent.data.HaoJson.readJsonSafe(f, ScheduleState.serializer()) ?: ScheduleState()
         mem = loaded
         return loaded
     }

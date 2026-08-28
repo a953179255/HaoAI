@@ -30,9 +30,7 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
 
     private fun stateOrNull(): MemoryState {
         state?.let { return it }
-        val loaded = HaoJson.readTextSafe(file)?.let { t ->
-            runCatching { HaoJson.json.decodeFromString(MemoryState.serializer(), t) }.getOrNull()
-        } ?: MemoryState()
+        val loaded = HaoJson.readJsonSafe(file, MemoryState.serializer()) ?: MemoryState()
         state = loaded
         return loaded
     }

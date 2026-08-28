@@ -59,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -69,6 +70,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.data.AppSettings
@@ -113,6 +116,8 @@ fun SettingsScreen(
     // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）
     var section by rememberSaveable { mutableStateOf(initialSection) }
     androidx.compose.runtime.LaunchedEffect(section) { if (section != initialSection) onSectionChange(section) }
+    // 首页计数（记忆/日志/技能）后台加载，避免组合期读盘
+    androidx.compose.runtime.LaunchedEffect(section) { vm.refreshHomeCounts() }
 
     androidx.activity.compose.BackHandler(enabled = draft == null) {
         if (section.isNotEmpty()) section = "" else onBack()
@@ -181,7 +186,7 @@ fun SettingsScreen(
                         backdrop = backdrop,
                         icon = Icons.Filled.AutoFixHigh,
                         title = "记忆与梦境",
-                        subtitle = "${vm.memoryCount()} 条长期记忆" +
+                        subtitle = "${vm.homeCounts.first} 条长期记忆" +
                             if (settings.deepDream) " · 深度梦境开" else "",
                         tint = Color(0xFF3FA37A),
                         onClick = { section = "memory" }
@@ -192,7 +197,7 @@ fun SettingsScreen(
                         backdrop = backdrop,
                         icon = Icons.Filled.Construction,
                         title = "技能库",
-                        subtitle = "${vm.skillCount()} 个沉淀技能 · 点击管理",
+                        subtitle = "${vm.homeCounts.third} 个沉淀技能 · 点击管理",
                         tint = Color(0xFFD9539E),
                         onClick = onOpenSkills
                     )
@@ -953,14 +958,14 @@ private fun LazyListScope.memoryItems(
         ) {
             GlassStatTile(
                 backdrop = backdrop,
-                number = "${vm.memoryCount()}",
+                number = "${vm.homeCounts.first}",
                 label = "长期记忆",
                 tint = Color(0xFF3FA37A),
                 modifier = Modifier.weight(1f)
             )
             GlassStatTile(
                 backdrop = backdrop,
-                number = "${vm.journalCount()}",
+                number = "${vm.homeCounts.second}",
                 label = "今日日志",
                 tint = Color(0xFF5B8DEF),
                 modifier = Modifier.weight(1f)
@@ -1706,11 +1711,23 @@ private fun ProviderDialog(
                             }
                         }
                     }
+                    // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对
+                    var showKey by remember { mutableStateOf(false) }
                     OutlinedTextField(
                         value = draft.apiKeyPlain,
                         onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
                         label = { Text(if (draft.id == null) "API Key" else "API Key（留空保持不变）") },
                         singleLine = true,
+                        visualTransformation =
+                            if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            TextButton(onClick = { showKey = !showKey }) {
+                                Text(
+                                    if (showKey) "隐藏" else "显示",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        },
                         colors = glassFieldColors()
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

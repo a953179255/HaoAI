@@ -90,18 +90,24 @@ class SessionStore(context: Context) {
     /** 已落盘解析结果缓存（按 mtime 失效），避免 list() 每次全量读盘解析。 */
     private val diskCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StoredSession>>()
 
+    /**
+     * 彻底删除墓碑：deleteForever 后迟到的 save（后台引擎 persist 回调）会把已删会话
+     * 重新写回磁盘造成「删除复活」；load/save/list 都要先过这道闸。
+     */
+    private val tombstones: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
     private fun fileOf(id: String) = File(dir, "$id.json")
 
     private fun parseFile(f: File): StoredSession? =
-        HaoJson.readTextSafe(f)?.let { t ->
-            runCatching { HaoJson.json.decodeFromString(StoredSession.serializer(), t) }.getOrNull()
-        }
+        HaoJson.readJsonSafe(f, StoredSession.serializer())
 
     fun list(): List<StoredSession> {
         val files = dir.listFiles { f -> f.extension == "json" } ?: return emptyList()
         val merged = LinkedHashMap<String, StoredSession>()
         for (f in files) {
             val id = f.nameWithoutExtension
+            if (id in tombstones) continue
             latest[id]?.let { if (it.deletedAt == 0L) merged[id] = it; continue }
             val mtime = f.lastModified()
             val hit = diskCache[id]
@@ -118,6 +124,7 @@ class SessionStore(context: Context) {
         val merged = LinkedHashMap<String, StoredSession>()
         for (f in files) {
             val id = f.nameWithoutExtension
+            if (id in tombstones) continue
             latest[id]?.let { if (it.deletedAt > 0L) merged[id] = it; continue }
             val mtime = f.lastModified()
             val hit = diskCache[id]
@@ -129,6 +136,7 @@ class SessionStore(context: Context) {
     }
 
     fun load(id: String): StoredSession? {
+        if (id in tombstones) return null
         latest[id]?.let { return it }
         val f = fileOf(id)
         if (!f.exists()) return null
@@ -140,6 +148,8 @@ class SessionStore(context: Context) {
 
     @Synchronized
     fun save(session: StoredSession) {
+        // 已彻底删除的会话：静默丢弃迟到的持久化（引擎后台 persist 等）
+        if (session.id in tombstones) return
         session.updatedAt = System.currentTimeMillis()
         if (session.title == "新会话") {
             session.messages.firstOrNull { it.role == ChatMessage.ROLE_USER && it.content.isNotBlank() }
@@ -177,11 +187,16 @@ class SessionStore(context: Context) {
         save(s)
     }
 
-    /** 彻底删除（回收站内或直接）。 */
+    /** 彻底删除（回收站内或直接）。连同 .bak/.tmp 一起清掉，不留隐私残留。 */
     fun deleteForever(id: String) {
+        tombstones.add(id)
         latest.remove(id)
         diskCache.remove(id)
-        io.execute { runCatching { fileOf(id).delete() } }
+        io.execute {
+            runCatching { fileOf(id).delete() }
+            runCatching { File(dir, "$id.json.bak").delete() }
+            runCatching { File(dir, "$id.json.tmp").delete() }
+        }
     }
 
     companion object {

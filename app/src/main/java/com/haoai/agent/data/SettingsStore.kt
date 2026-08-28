@@ -100,9 +100,7 @@ class SettingsStore(context: Context) {
     private data class Wrapped(val settings: AppSettings = AppSettings())
 
     fun load(): AppSettings =
-        HaoJson.readTextSafe(file)?.let { t ->
-            runCatching { HaoJson.json.decodeFromString(Wrapped.serializer(), t).settings }.getOrNull()
-        } ?: AppSettings()
+        HaoJson.readJsonSafe(file, Wrapped.serializer())?.settings ?: AppSettings()
 
     fun save(settings: AppSettings) {
         io.execute {

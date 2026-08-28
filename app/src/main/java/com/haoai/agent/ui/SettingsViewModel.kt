@@ -263,10 +263,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun deleteProvider(id: String) {
         c.updateSettings { s ->
             val list = s.providers.filterNot { it.id == id }
+            // 回退优先选云端服务：端侧模型可能还没下载，直接落到 local 会报「未找到模型文件」
+            val fallback = list.firstOrNull {
+                it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID
+            }?.id ?: list.firstOrNull()?.id
             s.copy(
                 providers = list,
                 activeProviderId = s.activeProviderId?.takeIf { aid -> list.any { it.id == aid } }
-                    ?: list.firstOrNull()?.id
+                    ?: fallback
             )
         }
     }
@@ -323,6 +327,18 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun journalCount(): Int = c.journal.count()
 
     fun skillCount(): Int = SkillStore.list().size
+
+    /** 主页三项计数（长期记忆/今日日志/技能数）：IO 收敛到后台，组合期只读内存。 */
+    var homeCounts by mutableStateOf(Triple(0, 0, 0))
+        private set
+
+    fun refreshHomeCounts() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                homeCounts = Triple(c.memoryBank.count(), c.journal.count(), SkillStore.list().size)
+            }
+        }
+    }
 
     // ---- 端侧模型文件：加载（直读原路径，不复制）----
 

@@ -1,5 +1,6 @@
 package com.haoai.agent.data
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
 
@@ -43,6 +44,25 @@ object HaoJson {
         val bak = File(file.parentFile, file.name + ".bak")
         if (bak.exists()) {
             runCatching { return bak.readText() }
+        }
+        return null
+    }
+
+    /**
+     * 读取并反序列化：主文件存在但内容损坏（JSON 解析失败）也会回退 .bak——
+     * readTextSafe 只看文件存在与否，截断/半截 JSON 会原样返回导致整份数据不可用。
+     */
+    fun <T> readJsonSafe(file: File, serializer: KSerializer<T>): T? {
+        if (file.exists()) {
+            val text = runCatching { file.readText() }.getOrNull()
+            if (text != null) {
+                runCatching { return json.decodeFromString(serializer, text) }
+            }
+        }
+        val bak = File(file.parentFile, file.name + ".bak")
+        if (bak.exists()) {
+            val bakText = runCatching { bak.readText() }.getOrNull() ?: return null
+            runCatching { return json.decodeFromString(serializer, bakText) }
         }
         return null
     }
