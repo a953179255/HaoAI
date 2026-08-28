@@ -11,12 +11,15 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.io.File
+import java.util.UUID
 
 @Serializable
 data class TodoItem(
     val text: String,
     val status: String = "pending",
-    val priority: String = "medium"
+    val priority: String = "medium",
+    /** 稳定唯一 id：LazyColumn key/精确更新用（旧 JSON 缺省时自动生成，避免重复 key 崩溃）。 */
+    val id: String = UUID.randomUUID().toString()
 )
 
 class TodoStore(private val appFilesDir: File) {

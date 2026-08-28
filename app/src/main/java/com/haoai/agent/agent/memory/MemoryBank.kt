@@ -130,9 +130,12 @@ class MemoryBank(private val appFilesDir: File, private val maxItems: Int = 200)
     fun forget(idOrQuery: String): Int {
         val state = load()
         val q = idOrQuery.trim()
+        // 空 query 会匹配到所有条目（"".contains("")==true），必须直接拒绝，防止误清空整个记忆库
+        if (q.isEmpty()) return 0
         val targets = state.items.filter {
-            it.id.equals(q, ignoreCase = true) || it.id.startsWith(q, ignoreCase = true) ||
-                it.content.contains(q)
+            it.id.equals(q, ignoreCase = true) ||
+                (q.length >= 3 && it.id.startsWith(q, ignoreCase = true)) ||
+                (q.length >= 2 && it.content.contains(q))
         }
         if (targets.isEmpty()) return 0
         state.items.removeAll(targets.toSet())

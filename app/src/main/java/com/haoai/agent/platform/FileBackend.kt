@@ -130,7 +130,13 @@ class RawFileBackend(private val root: File) : FileBackend {
     override suspend fun writeText(rel: String, content: String): Unit = withContext(Dispatchers.IO) {
         val f = resolve(rel)
         f.parentFile?.mkdirs()
-        f.writeText(content, Charsets.UTF_8)
+        // 原子写：直接 writeText 在写一半时崩溃/被杀会把文件截断，先写临时文件再 rename
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        tmp.writeText(content, Charsets.UTF_8)
+        if (!tmp.renameTo(f)) {
+            tmp.delete()
+            throw IllegalStateException("写入失败（重命名失败）：$rel")
+        }
     }
 
     override suspend fun delete(rel: String): Unit = withContext(Dispatchers.IO) {
@@ -163,7 +169,8 @@ class RawFileBackend(private val root: File) : FileBackend {
     override suspend fun walk(maxEntries: Int): List<FileEntry> = withContext(Dispatchers.IO) {
         val out = ArrayList<FileEntry>(maxEntries)
         root.walkTopDown()
-            .onEnter { dir -> dir.listFiles()?.none { it.name == ".git" } ?: true }
+            // 判断目录自身：原逻辑检查子项，任何含 .git 的目录（包括仓库根）会被整体跳过，walk 返回空
+            .onEnter { dir -> dir.name != ".git" }
             .filter { it.isFile }
             .forEach { f ->
                 if (out.size >= maxEntries) return@forEach
@@ -215,14 +222,23 @@ class SafFileBackend(
         require(doc.isFile) { "这是一个目录：$rel" }
         appContext.contentResolver.openInputStream(doc.uri)?.use { ins ->
             val head = ByteArray(8192)
-            val hn = ins.read(head)
-            if (FileBackend.looksBinary(head.copyOf(hn.coerceAtLeast(0)))) {
+            // 空文件 read 返回 -1，直接 copyOf(hn) 会抛 NegativeArraySizeException
+            val hn = ins.read(head).coerceAtLeast(0)
+            if (FileBackend.looksBinary(head.copyOf(hn))) {
                 throw IllegalStateException("检测到二进制文件，拒绝读取：$rel")
             }
-            val rest = ins.readBytes()
-            val all = head.copyOf(hn) + rest
+            // 有界读取：readBytes() 会把大文件整个读进内存，而结果反正只用到前 maxBytes
+            val out = java.io.ByteArrayOutputStream(minOf(maxBytes + 1, 1 shl 22))
+            out.write(head, 0, hn)
+            val buf = ByteArray(16384)
+            while (out.size() <= maxBytes) {
+                val r = ins.read(buf)
+                if (r < 0) break
+                out.write(buf, 0, r)
+            }
+            val all = out.toByteArray()
             if (all.size > maxBytes) {
-                String(all, 0, maxBytes, Charsets.UTF_8) + "\n\n[文件过大，已截断至 $maxBytes 字节，共 ${all.size} 字节]"
+                String(all, 0, maxBytes, Charsets.UTF_8) + "\n\n[文件过大，已截断至 $maxBytes 字节，共 ${doc.length()} 字节]"
             } else {
                 String(all, Charsets.UTF_8)
             }
@@ -274,7 +290,8 @@ class SafFileBackend(
             for (f in dir.listFiles()) {
                 if (out.size >= maxEntries) break
                 val name = f.name ?: continue
-                if (prefix.isEmpty() && name == ".git") continue
+                // 任意层级的 .git 目录（含上万文件的对象库）都不入队
+                if (name == ".git" && f.isDirectory) continue
                 val path = if (prefix.isEmpty()) name else "$prefix/$name"
                 if (f.isDirectory) queue.add(f to path)
                 else out.add(FileEntry(path, f.length(), f.lastModified()))

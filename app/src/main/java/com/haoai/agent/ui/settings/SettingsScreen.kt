@@ -117,6 +117,10 @@ fun SettingsScreen(
     androidx.activity.compose.BackHandler(enabled = draft == null) {
         if (section.isNotEmpty()) section = "" else onBack()
     }
+    // 后注册优先级更高：供应商编辑弹窗打开时，返回键关闭弹窗而不是直接退出应用
+    androidx.activity.compose.BackHandler(enabled = draft != null) {
+        vm.cancelDraft()
+    }
 
     val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {

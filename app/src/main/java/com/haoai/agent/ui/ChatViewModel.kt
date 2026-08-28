@@ -160,7 +160,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun send(rawText: String, imageData: String? = null) {
         val text = rawText.trim()
-        if (text.isEmpty() || _running.value) return
+        // 纯图片发送（无文字）也允许：否则 UI 已清掉 pendingImage，图片会静默丢失
+        if ((text.isEmpty() && imageData == null) || _running.value) return
         val provider0 = c.activeProvider()
         if (provider0 == null) {
             _error.value = "请先在「设置」里配置模型服务（Base URL / 模型 ID / API Key）"
@@ -730,6 +731,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** 当前生效供应商标签（/status 展示用）。 */
     fun activeProviderLabel(): String? =
         c.activeProvider()?.let { "${it.name} · ${it.model}" }
+
+    /** /model 弹窗：可切换的模型服务列表。 */
+    fun providers() = c.settingsFlow.value.providers
+
+    fun activeProviderId(): String? = c.settingsFlow.value.activeProviderId
+
+    fun selectProvider(id: String) {
+        c.updateSettings { it.copy(activeProviderId = id) }
+    }
 
     fun needsOnboarding(): Boolean = !c.settingsFlow.value.onboarded
 

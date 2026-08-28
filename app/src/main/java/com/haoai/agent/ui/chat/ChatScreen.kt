@@ -159,6 +159,7 @@ fun ChatScreen(
 
     // 系统返回手势：弹层优先关闭，其次侧边栏，避免把应用最小化
     androidx.activity.compose.BackHandler(enabled = showProfileEdit) { showProfileEdit = false }
+    androidx.activity.compose.BackHandler(enabled = showModelPicker) { showModelPicker = false }
     androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
     androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
     androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
@@ -502,6 +503,62 @@ fun ChatScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
                             modifier = Modifier.padding(start = 10.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // /model 模型服务切换
+    if (showModelPicker) {
+        val providersNow = vm.providers()
+        val activeIdNow = vm.activeProviderId()
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "切换模型",
+            onDismiss = { showModelPicker = false },
+            dismissLabel = "关闭"
+        ) {
+            if (providersNow.isEmpty()) {
+                Text(
+                    "还没有配置模型服务，请到「设置 → 模型服务」添加。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                )
+            }
+            providersNow.forEach { p ->
+                val active = p.id == activeIdNow
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            vm.selectProvider(p.id)
+                            showModelPicker = false
+                        }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            p.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                        Text(
+                            "${p.model} · ${p.baseUrl}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                    if (active) {
+                        Text(
+                            "使用中",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }

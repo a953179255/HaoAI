@@ -53,6 +53,10 @@ class HaoAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event != null) lastEventAt = System.currentTimeMillis()
+        // 窗口切换后旧 dump 的坐标已失效，清空缓存防止 tap(index) 点到旧界面
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            lastDump = emptyList()
+        }
     }
 
     override fun onInterrupt() = Unit
@@ -239,8 +243,13 @@ class HaoAccessibilityService : AccessibilityService() {
 
     fun typeText(text: String): String {
         val svc = instance ?: return enableHint()
-        val target = findByDfs(svc.rootInActiveWindow ?: return enableHint()) { it.isEditable }
+        val root = svc.rootInActiveWindow ?: return enableHint()
+        // 优先当前输入焦点，其次带焦点的输入框；DFS 第一个 editable 会把密码填进账号框
+        val target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: findByDfs(root) { it.isEditable && it.isFocused }
+            ?: findByDfs(root) { it.isEditable }
             ?: return "当前屏幕没有可输入的焦点框"
+        target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }

@@ -100,9 +100,12 @@ object SkillStore {
         HaoJson.writeAtomic(f, front + body)
     }
 
-    private fun bodyOf(f: File): String =
-        runCatching { f.readText() }.getOrDefault("")
-            .removePrefix("---").substringAfter("---", "").trimStart('\n')
+    private fun bodyOf(f: File): String {
+        val text = runCatching { f.readText() }.getOrDefault("")
+        // 无 frontmatter 的旧格式文件：substringAfter 兜底返回 ""，回写会把正文整个清空
+        if (!text.startsWith("---")) return text
+        return text.removePrefix("---").substringAfter("---", "").trimStart('\n')
+    }
 
     @Synchronized
     fun save(name: String, description: String, body: String, source: String = "user"): File {

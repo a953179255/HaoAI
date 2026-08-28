@@ -160,6 +160,8 @@ class AgentEngine(
                     // Overflow 检测：自动压缩后重试一次
                     val emsg = e.message ?: ""
                     if (compactionManager.isOverflowError(emsg) && !compactionManager.isCoolingDown()) {
+                        // 清掉首次失败已累积的半截流式输出，避免重试答案拼接在残句后面
+                        streamBuf.setLength(0)
                         handleOverflow(emsg, onEvent) {
                             // 重试：重新收集
                             httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
@@ -606,10 +608,19 @@ class AgentEngine(
             .toSet()
         val step1 = filterNot { it.role == ChatMessage.ROLE_TOOL && (it.toolCallId == null || it.toolCallId !in calledIds) }
         val answeredIds = step1.filter { it.role == ChatMessage.ROLE_TOOL }.mapNotNull { it.toolCallId }.toSet()
-        return step1.filterNot { m ->
-            m.role == ChatMessage.ROLE_ASSISTANT && m.toolCalls.isNotEmpty() &&
-                m.toolCalls.all { it.id !in answeredIds }
+        // 逐 call 过滤：多工具调用被中途取消时会产生「部分回答」的 assistant 消息，
+        // 未回答的 call 若保留会导致 API 400，且坏历史已持久化、会话永久卡死
+        val out = mutableListOf<com.haoai.agent.data.StoredMessage>()
+        for (m in step1) {
+            if (m.role == ChatMessage.ROLE_ASSISTANT && m.toolCalls.isNotEmpty()) {
+                val answered = m.toolCalls.filter { it.id in answeredIds }
+                if (answered.isEmpty()) continue
+                out += if (answered.size == m.toolCalls.size) m else m.copy(toolCalls = answered)
+            } else {
+                out += m
+            }
         }
+        return out
     }
 
     private fun parseArgs(json: String): JsonObject =
@@ -721,6 +732,7 @@ class AgentEngine(
             contextWindow = contextWindow
         )
         session.compactionSummary = result.summary
+        trimCompactedHistory()
         persist()
         onEvent(MessageAdded(ChatMessage(
             role = ChatMessage.ROLE_ASSISTANT,
@@ -749,12 +761,36 @@ class AgentEngine(
             contextWindow = contextWindow
         )
         session.compactionSummary = result.summary
+        trimCompactedHistory()
         persist()
         onEvent(MessageAdded(ChatMessage(
             role = ChatMessage.ROLE_ASSISTANT,
             content = "[系统] 上下文溢出，已自动压缩并重试"
         )))
         retryBlock()
+    }
+
+    /**
+     * 压缩成功后，把已被摘要覆盖的旧消息移出会话，仅保留 keepRecentTokens 内的尾部。
+     * 不裁剪的话请求仍是「摘要 + 全量历史」，token 只增不减，压缩与 overflow 恢复形同虚设。
+     */
+    private fun trimCompactedHistory() {
+        val msgs = session.messages
+        val keep = compactionManager.keepRecentTokens()
+        var acc = 0
+        var keepFrom = msgs.size
+        for (i in msgs.indices.reversed()) {
+            acc += com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(msgs[i].toModel())
+            if (acc > keep) break
+            keepFrom = i
+        }
+        // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰截断
+        var start = keepFrom
+        while (start < msgs.size && msgs[start].role != ChatMessage.ROLE_USER) start++
+        if (start <= 0 || start >= msgs.size) return
+        val kept = msgs.drop(start)
+        msgs.clear()
+        msgs.addAll(kept)
     }
 
     // ── 手动压缩（/compact 命令） ────────────────────────────────────

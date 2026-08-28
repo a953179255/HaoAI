@@ -508,14 +508,23 @@ fun LiquidToggle(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     var dragging = false
+                    var aborted = false
                     var upChange: androidx.compose.ui.input.pointer.PointerInputChange? = null
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) { upChange = change; break }
                         val dx = change.position.x - down.position.x
+                        val dy = change.position.y - down.position.y
                         if (!dragging && kotlin.math.abs(dx) > viewConfiguration.touchSlop) {
                             dragging = true
+                        }
+                        // 竖向滑动是在滚动外层列表：立即放弃手势，抬起时不能当成点击翻转开关
+                        if (!dragging && kotlin.math.abs(dy) > viewConfiguration.touchSlop &&
+                            kotlin.math.abs(dy) > kotlin.math.abs(dx)
+                        ) {
+                            aborted = true
+                            break
                         }
                         if (dragging && enabled && onCheckedChange != null) {
                             dragFraction =
@@ -523,7 +532,7 @@ fun LiquidToggle(
                             change.consume()
                         }
                     }
-                    if (enabled && onCheckedChange != null) {
+                    if (!aborted && enabled && onCheckedChange != null) {
                         if (dragging) {
                             val target = dragFraction >= 0.5f
                             dragFraction = Float.NaN
@@ -532,8 +541,9 @@ fun LiquidToggle(
                                 view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                                 onCheckedChange(target)
                             }
-                        } else {
-                            // 纯点击也要消费 UP，否则外层可点击卡片会再触发一次（开关净效果为零）
+                        } else if (upChange?.isConsumed != true) {
+                            // 纯点击也要消费 UP，否则外层可点击卡片会再触发一次（开关净效果为零）；
+                            // UP 已被父级（列表滚动）消费时不算点击
                             upChange?.consume()
                             view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                             onCheckedChange(!checked)

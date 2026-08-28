@@ -4,6 +4,7 @@ import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.provider.ApiMessage
 import com.haoai.agent.agent.provider.OpenAiCompatClient
 import com.haoai.agent.data.ProviderConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
 class CompactionManager(
@@ -22,6 +23,9 @@ class CompactionManager(
     /** 压缩冷却中。 */
     fun isCoolingDown(): Boolean =
         System.currentTimeMillis() - lastCompactionTime < settings.cooldownMs
+
+    /** 压缩后保留的最近 token 数（供引擎裁剪历史用）。 */
+    fun keepRecentTokens(): Int = settings.keepRecentTokens
 
     /** 工具输出预修剪：替换旧工具结果为占位符，释放 token。返回修剪后的消息列表。 */
     fun prePruneToolOutputs(messages: List<ChatMessage>): List<ChatMessage> {
@@ -55,12 +59,16 @@ class CompactionManager(
         val prompt = if (existingSummary.isNullOrBlank()) {
             CompactionPrompts.initialSummaryPrompt(context, budget)
         } else {
-            val newText = messagesToText(messages.takeLast(10))
+            // 全量传入：只取尾部会造成两轮压缩之间的消息既不在旧摘要也不进新摘要，信息无声丢失
+            val newText = messagesToText(messages)
             CompactionPrompts.incrementalSummaryPrompt(existingSummary, newText, budget)
         }
 
         val summary = try {
             callLlmForSummary(prompt, provider, apiKey)
+        } catch (ce: CancellationException) {
+            // 用户停止/协程取消：不能落进下面的 fallback，否则会把截断垃圾摘要持久化污染会话
+            throw ce
         } catch (_: Exception) {
             // LLM 调用失败，使用 fallback 截断
             val allText = messages.map { "${it.role}: ${it.content.take(200)}" }

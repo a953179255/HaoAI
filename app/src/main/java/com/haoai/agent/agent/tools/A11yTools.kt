@@ -19,8 +19,8 @@ class ScreenTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
-        if (!HaoAccessibilityService.connected()) return ToolResult(HaoAccessibilityService.enableHint(), true)
-        val dump = HaoAccessibilityService.instance!!.dumpIndexed(args.optInt("max_nodes") ?: 80)
+        val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
+        val dump = svc.dumpIndexed(args.optInt("max_nodes") ?: 80)
         return ToolResult(TextCap.middle(dump, 6000))
     }
 }
@@ -207,10 +207,11 @@ class ScrollTool : Tool {
         val w = svc.screenWidth()
         val h = svc.screenHeight()
         val ok = when (dir) {
-            "up" -> svc.swipe(w / 2, (h * (0.3 + amount / 2)).toInt(), w / 2, (h * (0.3 - amount / 2)).toInt(), 350)
-            "down" -> svc.swipe(w / 2, (h * (0.7 - amount / 2)).toInt(), w / 2, (h * (0.7 + amount / 2)).toInt(), 350)
-            "left" -> svc.swipe((w * 0.8).toInt(), h / 2, (w * (0.8 - amount)).toInt(), h / 2, 350)
-            "right" -> svc.swipe((w * 0.2).toInt(), h / 2, (w * (0.2 + amount)).toInt(), h / 2, 350)
+            // 终点坐标钳制在屏幕内：amount>0.6 时算出的越界坐标会让手势被系统拒绝、滚动静默失败
+            "up" -> svc.swipe(w / 2, (h * (0.3 + amount / 2)).toInt().coerceIn(0, h), w / 2, (h * (0.3 - amount / 2)).toInt().coerceIn(0, h), 350)
+            "down" -> svc.swipe(w / 2, (h * (0.7 - amount / 2)).toInt().coerceIn(0, h), w / 2, (h * (0.7 + amount / 2)).toInt().coerceIn(0, h), 350)
+            "left" -> svc.swipe((w * 0.8).toInt().coerceIn(0, w), h / 2, (w * (0.8 - amount)).toInt().coerceIn(0, w), h / 2, 350)
+            "right" -> svc.swipe((w * 0.2).toInt().coerceIn(0, w), h / 2, (w * (0.2 + amount)).toInt().coerceIn(0, w), h / 2, 350)
             else -> return ToolResult("未知方向：$dir", true)
         }
         return if (ok) ToolResult("已向 $dir 滚动") else ToolResult("手势注入失败", true)

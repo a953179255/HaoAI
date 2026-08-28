@@ -161,7 +161,7 @@ fun TaskPanel(
                         .heightIn(max = 180.dp)
                         .padding(top = 6.dp)
                 ) {
-                    itemsIndexed(items, key = { _, item -> item.text }) { _, item ->
+                    itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
                         TaskItemRow(item)
                     }
                 }
