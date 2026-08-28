@@ -1,5 +1,10 @@
 package com.haoai.agent.ui.common
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -7,6 +12,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -20,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -39,9 +46,11 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChangeConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -137,10 +146,17 @@ fun SwipeRevealCard(
             verticalAlignment = Alignment.CenterVertically,
             content = actions
         )
-        // 删除带：圆角红色容器，居中于呼出区；上膛态实心红 + 白图标，可点击直接删除
+        // 删除带：圆角红色容器，居中于呼出区；上膛态实心红 + 「继续右滑」呼吸提示，
+        // 视觉引导继续右拖确认（点击仍保留为备用路径）
         if (deleteWidth != null) {
             val progress = ((offset.value - openPx) / (deletePx - openPx).coerceAtLeast(1f)).coerceIn(0f, 1f)
             val bandAlpha = if (deleteArmed) 1f else progress
+            val armPulse = rememberInfiniteTransition(label = "armPulse").animateFloat(
+                initialValue = 0.55f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(620), RepeatMode.Reverse),
+                label = "armPulseAlpha"
+            )
             if (bandAlpha > 0f) {
                 Box(
                     Modifier
@@ -161,12 +177,25 @@ fun SwipeRevealCard(
                             .clickable(enabled = deleteArmed) { onDeleteSwipe() },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = if (deleteArmed) "点击删除" else "继续右拖以上膛删除",
-                            tint = if (deleteArmed) Color.White else MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = if (deleteArmed) "继续右滑删除" else "继续右拖以上膛删除",
+                                tint = if (deleteArmed) Color.White else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            if (deleteArmed) {
+                                Text(
+                                    "继续右滑",
+                                    color = Color.White.copy(alpha = armPulse.value),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
             }
