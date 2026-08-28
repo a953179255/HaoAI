@@ -387,24 +387,36 @@ private fun SwipeRevealSessionCard(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilledIconButton(onClick = { onPin(); onClose() }, modifier = Modifier.size(44.dp)) {
+            FilledIconButton(
+                onClick = { onPin(); onClose() },
+                modifier = Modifier.size(44.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
                 Icon(
                     Icons.Filled.PushPin,
                     contentDescription = if (s.pinned) "取消置顶" else "置顶",
-                    tint = if (s.pinned) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.size(19.dp)
                 )
             }
-            FilledIconButton(onClick = { onRename(); onClose() }, modifier = Modifier.size(44.dp)) {
+            FilledIconButton(
+                onClick = { onRename(); onClose() },
+                modifier = Modifier.size(44.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                    contentColor = MaterialTheme.colorScheme.onBackground
+                )
+            ) {
                 Icon(Icons.Filled.Edit, contentDescription = "重命名", modifier = Modifier.size(19.dp))
             }
             FilledIconButton(
                 onClick = { onDelete(); onClose() },
                 modifier = Modifier.size(44.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
+                    contentColor = MaterialTheme.colorScheme.error
                 )
             ) {
                 Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(20.dp))

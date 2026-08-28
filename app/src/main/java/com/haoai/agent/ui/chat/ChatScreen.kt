@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -1508,7 +1509,7 @@ private fun SessionsDrawer(
                     )
                 }
             }
-            items(sessions.take(20), key = { it.id }) { s ->
+            itemsIndexed(sessions.take(20), key = { _, s -> s.id }) { index, s ->
                 val active = s.id == activeId
                 Row(
                     Modifier
@@ -1541,6 +1542,12 @@ private fun SessionsDrawer(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+                if (index < sessions.size.coerceAtMost(20) - 1) {
+                    HorizontalDivider(
+                        Modifier.padding(horizontal = 22.dp),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
+                    )
                 }
             }
         }
