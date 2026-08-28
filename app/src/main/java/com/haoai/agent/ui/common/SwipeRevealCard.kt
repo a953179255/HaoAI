@@ -184,7 +184,9 @@ fun SwipeRevealCard(
                                 Icons.Filled.Delete,
                                 contentDescription = if (deleteArmed) "继续右滑删除" else "继续右拖以上膛删除",
                                 tint = if (deleteArmed) Color.White else MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier
+                                    .size(19.dp)
+                                    .offset(y = 1.dp)
                             )
                             if (deleteArmed) {
                                 Text(
@@ -237,9 +239,9 @@ fun SwipeRevealCard(
                                 change.consume()
                                 if (deleteArmed) {
                                     if (delta.x > 0f) {
-                                        // 上膛态右拖：累计确认量，位置轻微阻尼跟随
+                                        // 上膛态右拖：累计确认量，大幅跟手（视觉走到一半以上），滑得动、不卡滞
                                         armedTravel += delta.x
-                                        val overPull = (armedTravel * 0.3f).coerceAtMost(with(density) { 12.dp.toPx() })
+                                        val overPull = (armedTravel * 0.8f).coerceAtMost(with(density) { 34.dp.toPx() })
                                         scope.launch { offset.snapTo(armedPx + overPull) }
                                     } else {
                                         armedTravel = 0f

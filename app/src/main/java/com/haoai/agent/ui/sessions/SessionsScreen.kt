@@ -2,6 +2,7 @@ package com.haoai.agent.ui.sessions
 
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -101,21 +102,30 @@ fun SessionsScreen(
     fun matches(s: StoredSession): Boolean =
         query.isBlank() || s.title.contains(query.trim(), ignoreCase = true)
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(top = 6.dp)
+            .clickable(interactionSource = null, indication = null) {
+                // 点页面空白：呼出中只收起呼出
+                if (openCardId != null) openCardId = null
+            }
     ) {
         GlassPageBar(
             backdrop = backdrop,
             title = if (showTrash) "回收站" else "全部会话",
-            onBack = onBack,
+            onBack = {
+                // 呼出操作按钮期间点返回：只收起呼出，不离开页面
+                if (openCardId != null) openCardId = null else onBack()
+            },
             modifier = Modifier.padding(horizontal = 12.dp)
         )
 
         // 搜索框常驻：两个视图共用（回收站内可搜索后精准彻底删除）
+        Box {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -152,6 +162,14 @@ fun SessionsScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         )
+        if (openCardId != null) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clickable(interactionSource = null, indication = null) { openCardId = null }
+            )
+        }
+        }
 
         // 视图切换（与滑动双向同步）+ 回收站清空入口
         Row(
@@ -162,8 +180,12 @@ fun SessionsScreen(
             FilterChip(
                 selected = !showTrash,
                 onClick = {
-                    openCardId = null
-                    scope.launch { pagerState.animateScrollToPage(0) }
+                    // 呼出中只收起呼出，不翻页
+                    if (openCardId != null) {
+                        openCardId = null
+                    } else {
+                        scope.launch { pagerState.animateScrollToPage(0) }
+                    }
                 },
                 label = {
                     Text(
@@ -175,8 +197,11 @@ fun SessionsScreen(
             FilterChip(
                 selected = showTrash,
                 onClick = {
-                    openCardId = null
-                    scope.launch { pagerState.animateScrollToPage(1) }
+                    if (openCardId != null) {
+                        openCardId = null
+                    } else {
+                        scope.launch { pagerState.animateScrollToPage(1) }
+                    }
                 },
                 label = {
                     Text(
@@ -374,6 +399,8 @@ fun SessionsScreen(
                 }
             }
         }
+    }
+
     }
 
     pendingPurge?.let { target ->

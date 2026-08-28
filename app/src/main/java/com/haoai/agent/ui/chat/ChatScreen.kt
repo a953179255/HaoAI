@@ -1489,17 +1489,25 @@ private fun SessionsDrawer(
     // 抽屉收起时自动收回展开的按钮
     LaunchedEffect(drawerOpen) { if (!drawerOpen) openCardId = null }
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .padding(top = 8.dp)
+            .clickable(interactionSource = null, indication = null) {
+                // 点抽屉空白：呼出中只收起呼出；非呼出态吞掉点击（避免误关抽屉）
+                if (openCardId != null) openCardId = null
+            }
     ) {
         // 档案头部：点击头像或名字直接进入编辑
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onEditProfile)
+                .clickable {
+                    // 呼出操作按钮期间点头部：只收起呼出，不打开编辑档案
+                    if (openCardId != null) openCardId = null else onEditProfile()
+                }
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1641,9 +1649,15 @@ private fun SessionsDrawer(
         }
 
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-        DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = onOpenSessions)
-        DrawerEntry(Icons.Filled.Settings, "设置", onClick = onSettings)
+        DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = {
+            if (openCardId != null) openCardId = null else onOpenSessions()
+        })
+        DrawerEntry(Icons.Filled.Settings, "设置", onClick = {
+            if (openCardId != null) openCardId = null else onSettings()
+        })
         Spacer(Modifier.navigationBarsPadding())
+    }
+
     }
 
     renameTarget?.let { target ->
