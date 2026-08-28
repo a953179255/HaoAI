@@ -1,6 +1,10 @@
 package com.haoai.agent.ui.sessions
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,9 +26,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -41,7 +47,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChangeConsumed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.ui.ChatViewModel
@@ -54,6 +68,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 /** 独立「全部会话」页：搜索过滤（会话/回收站共用）+ 左右滑动切换 + 置顶/重命名/回收站管理。 */
 @Composable
@@ -75,6 +90,8 @@ fun SessionsScreen(
     // 重命名目标；清空回收站确认
     var renameTarget by remember { mutableStateOf<StoredSession?>(null) }
     var confirmEmptyTrash by remember { mutableStateOf(false) }
+    // 当前滑出操作按钮的会话（同时只允许一张）
+    var openCardId by remember { mutableStateOf<String?>(null) }
 
     // 左「会话」右「回收站」：从右往左滑直接翻到回收站
     val pagerState = rememberPagerState(initialPage = if (showTrash) 1 else 0, pageCount = { 2 })
@@ -175,152 +192,89 @@ fun SessionsScreen(
         }
 
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-            if (page == 0) {
-                val list = sessions.filter { matches(it) }
+            val sessionsPage = page == 0
+            val list = (if (sessionsPage) sessions else deletedSessions).filter { matches(it) }
+            // 页面根容器必须铺满：Pager 会把 wrap 高度的内容垂直居中（列表越短顶部空白越大）
+            Box(Modifier.fillMaxSize()) {
                 if (list.isEmpty()) {
-                    Text(
-                        if (query.isBlank()) "还没有历史会话" else "没有匹配的会话",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
-                    )
-                }
-                LazyColumn(
-                    Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
-                ) {
-                    items(list, key = { it.id }) { s ->
-                        val active = s.id == activeId
-                        GlassCard(
-                            onClick = {
-                                vm.selectSession(s.id)
-                                onBack()
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            when {
+                                !sessionsPage && query.isBlank() -> "回收站是空的。删除的会话会保留 7 天，之后自动清理。"
+                                query.isBlank() -> "还没有历史会话"
+                                else -> "没有匹配的会话"
                             },
-                            backdrop = backdrop,
-                            shape = RoundedCornerShape(14.dp),
-                            surfaceAlpha = if (active) 0.30f else 0.16f,
-                            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
-                            lensRadius = 14.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 2.dp)
-                        ) {
-                            Row(
-                                Modifier.padding(start = 14.dp, end = 4.dp, top = 9.dp, bottom = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                    }
+                } else if (sessionsPage) {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)
+                    ) {
+                        items(list, key = { it.id }) { s ->
+                            val active = s.id == activeId
+                            SwipeRevealSessionCard(
+                                s = s,
+                                active = active,
+                                fmt = fmt,
+                                backdrop = backdrop,
+                                isOpen = openCardId == s.id,
+                                onOpen = { openCardId = s.id },
+                                onClose = { if (openCardId == s.id) openCardId = null },
+                                onCardClick = {
+                                    vm.selectSession(s.id)
+                                    onBack()
+                                },
+                                onPin = { vm.pinSession(s.id) },
+                                onRename = { renameTarget = s },
+                                onDelete = { vm.deleteSession(s.id) }
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)
+                    ) {
+                        items(list, key = { it.id }) { s ->
+                            val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
+                            GlassCard(
+                                onClick = {},
+                                backdrop = backdrop,
+                                shape = RoundedCornerShape(14.dp),
+                                surfaceAlpha = 0.16f,
+                                lensRadius = 14.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 2.dp)
                             ) {
-                                Column(Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (s.pinned) {
-                                            Icon(
-                                                Icons.Filled.PushPin,
-                                                contentDescription = "已置顶",
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier
-                                                    .size(12.dp)
-                                                    .padding(end = 2.dp)
-                                            )
-                                            Spacer(Modifier.size(3.dp))
-                                        }
+                                Row(
+                                    Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
                                         Text(
                                             s.title,
                                             style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (active) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onBackground,
+                                            color = MaterialTheme.colorScheme.onBackground,
                                             maxLines = 1
                                         )
+                                        Text(
+                                            "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                                        )
                                     }
-                                    Text(
-                                        "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { vm.pinSession(s.id) },
-                                    modifier = Modifier.size(34.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Filled.PushPin,
-                                        contentDescription = if (s.pinned) "取消置顶" else "置顶",
-                                        tint = if (s.pinned) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { renameTarget = s },
-                                    modifier = Modifier.size(34.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Edit,
-                                        contentDescription = "重命名",
-                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                                IconButton(onClick = { vm.deleteSession(s.id) }, modifier = Modifier.size(34.dp)) {
-                                    Icon(
-                                        Icons.Filled.Delete,
-                                        contentDescription = "删除",
-                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                val list = deletedSessions.filter { matches(it) }
-                if (list.isEmpty()) {
-                    Text(
-                        if (query.isBlank()) "回收站是空的。删除的会话会保留 7 天，之后自动清理。"
-                        else "没有匹配的会话",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
-                    )
-                }
-                LazyColumn(
-                    Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
-                ) {
-                    items(list, key = { it.id }) { s ->
-                        val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
-                        GlassCard(
-                            onClick = {},
-                            backdrop = backdrop,
-                            shape = RoundedCornerShape(14.dp),
-                            surfaceAlpha = 0.16f,
-                            lensRadius = 14.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 2.dp)
-                        ) {
-                            Row(
-                                Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        s.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onBackground,
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
-                                    )
-                                }
-                                TextButton(onClick = { vm.restoreSession(s.id) }) {
-                                    Text("恢复", color = MaterialTheme.colorScheme.primary)
-                                }
-                                TextButton(onClick = { pendingPurge = s }) {
-                                    Text("彻底删除", color = MaterialTheme.colorScheme.error)
+                                    TextButton(onClick = { vm.restoreSession(s.id) }) {
+                                        Text("恢复", color = MaterialTheme.colorScheme.primary)
+                                    }
+                                    TextButton(onClick = { pendingPurge = s }) {
+                                        Text("彻底删除", color = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                         }
@@ -390,6 +344,152 @@ fun SessionsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
+        }
+    }
+}
+
+/** 会话卡片右滑（从左往右）呼出左侧操作按钮；左滑/竖向滑动不消费，穿透给 Pager 翻页与列表滚动。 */
+@Composable
+private fun SwipeRevealSessionCard(
+    s: StoredSession,
+    active: Boolean,
+    fmt: SimpleDateFormat,
+    backdrop: LayerBackdrop,
+    isOpen: Boolean,
+    onOpen: () -> Unit,
+    onClose: () -> Unit,
+    onCardClick: () -> Unit,
+    onPin: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val openPx = with(LocalDensity.current) { 156.dp.toPx() }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+
+    // 外部开合（展开另一张 / 操作完成 / 点卡片收回）统一由此驱动
+    LaunchedEffect(isOpen) {
+        val target = if (isOpen) openPx else 0f
+        if (offset.value < target - 0.5f || offset.value > target + 0.5f) offset.animateTo(target)
+    }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .padding(horizontal = 10.dp, vertical = 2.dp)
+    ) {
+        Row(
+            Modifier
+                .matchParentSize()
+                .graphicsLayer { alpha = (offset.value / openPx).coerceIn(0f, 1f) }
+                .padding(start = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledIconButton(onClick = { onPin(); onClose() }, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Filled.PushPin,
+                    contentDescription = if (s.pinned) "取消置顶" else "置顶",
+                    tint = if (s.pinned) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+            FilledIconButton(onClick = { onRename(); onClose() }, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Filled.Edit, contentDescription = "重命名", modifier = Modifier.size(19.dp))
+            }
+            FilledIconButton(
+                onClick = { onDelete(); onClose() },
+                modifier = Modifier.size(44.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            ) {
+                Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(20.dp))
+            }
+        }
+        GlassCard(
+            onClick = { if (isOpen) onClose() else onCardClick() },
+            backdrop = backdrop,
+            shape = RoundedCornerShape(14.dp),
+            surfaceAlpha = if (active) 0.30f else 0.16f,
+            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
+            lensRadius = 14.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer { translationX = offset.value }
+                .pointerInput(isOpen, openPx) {
+                    val slop = viewConfiguration.touchSlop
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var totalX = 0f
+                        var decided = false
+                        // 已展开的卡片双向接管（可左滑收回）；未展开时仅右滑接管
+                        var owned = isOpen
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.changedToUp()) break
+                            val dx = change.positionChange().x
+                            if (decided && !owned) {
+                                if (change.positionChangeConsumed()) break
+                            } else if (!decided) {
+                                if (change.positionChangeConsumed()) break
+                                totalX += dx
+                                if (abs(totalX) > slop) {
+                                    decided = true
+                                    if (!owned) owned = totalX > 0f
+                                }
+                            }
+                            if (decided && owned && dx != 0f) {
+                                change.consume()
+                                val next = (offset.value + dx).coerceIn(0f, openPx)
+                                scope.launch { offset.snapTo(next) }
+                            }
+                        }
+                        if (decided && owned) {
+                            val target = if (offset.value >= openPx / 2f) openPx else 0f
+                            scope.launch { offset.animateTo(target) }
+                            if (target >= openPx) onOpen() else onClose()
+                        }
+                    }
+                }
+        ) {
+            Row(
+                Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (s.pinned) {
+                            Icon(
+                                Icons.Filled.PushPin,
+                                contentDescription = "已置顶",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .padding(end = 2.dp)
+                            )
+                            Spacer(Modifier.size(3.dp))
+                        }
+                        Text(
+                            s.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                            color = if (active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1
+                        )
+                    }
+                    Text(
+                        "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                    )
+                }
+            }
         }
     }
 }
