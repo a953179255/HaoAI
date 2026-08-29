@@ -138,7 +138,10 @@ fun SwipeRevealCard(
                 .matchParentSize()
                 .graphicsLayer {
                     val reveal = (offset.value / openPx).coerceIn(0f, 1f)
-                    val over = ((offset.value - openPx) / (deletePx - openPx).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    // 无删除带时 span=0：over 必须恒 0，否则分母退化成 1px，
+                    // 手指按住的微抖跨越 openPx 会让按钮在全显/全隐间闪烁
+                    val span = deletePx - openPx
+                    val over = if (span > 1f) ((offset.value - openPx) / span).coerceIn(0f, 1f) else 0f
                     alpha = if (deleteArmed) 0f else reveal * (1f - over)
                 }
                 .padding(start = 4.dp),
@@ -186,7 +189,7 @@ fun SwipeRevealCard(
                                 tint = if (deleteArmed) Color.White else MaterialTheme.colorScheme.error,
                                 modifier = Modifier
                                     .size(19.dp)
-                                    .offset(y = 1.dp)
+                                    .offset(y = 2.5.dp)
                             )
                             if (deleteArmed) {
                                 Text(
