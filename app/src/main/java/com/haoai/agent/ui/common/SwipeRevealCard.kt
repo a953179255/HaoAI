@@ -232,6 +232,9 @@ fun SwipeRevealCard(
                         // 已展开的卡片双向接管（可左滑收回）；未展开时仅右滑接管
                         var owned = isOpen
                         var armedTravel = 0f // 上膛后继续右拖的累计量（第二段确认删除）
+                        // 手势内累计位移：Animatable.snapTo 是异步协程，高频拖动时 offset.value
+                        // 滞后真实位置（实测上膛在滑动末帧才随机触发）——判定与结算一律用 dragX
+                        var dragX = offset.value
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -252,37 +255,27 @@ fun SwipeRevealCard(
                             if (decided && owned && delta != Offset.Zero) {
                                 change.consume()
                                 if (deleteArmed) {
-                                    if (delta.x > 0f) {
-                                        // 上膛态右拖：累计确认量，锚点+累计量绝对定位（无时序抖动）
-                                        armedTravel += delta.x
-                                        val next = (armedAnchor + armedTravel * 0.8f)
-                                            .coerceAtMost(deletePx + with(density) { 34.dp.toPx() })
-                                        scope.launch { offset.snapTo(next) }
-                                    } else {
-                                        armedTravel = 0f
-                                        val raw = offset.value + delta.x
-                                        if (raw < openPx - with(density) { 8.dp.toPx() }) {
-                                            // 左拖退出上膛：红带消失，交回普通拖动
-                                            deleteArmed = false
-                                            scope.launch { offset.snapTo(raw.coerceIn(0f, deletePx)) }
-                                        } else {
-                                            scope.launch { offset.snapTo(raw.coerceIn(armedPx, deletePx)) }
-                                        }
-                                    }
+                                    // 统一锚点公式：左右拖同一条连续函数，微抖不跳变；左拖超过
+                                    // 16dp 才退膛
+                                    armedTravel += delta.x
+                                    val next = (armedAnchor + armedTravel * 0.8f)
+                                        .coerceIn(armedPx, deletePx + with(density) { 34.dp.toPx() })
+                                    dragX = next
+                                    scope.launch { offset.snapTo(next) }
+                                    if (armedTravel < -with(density) { 16.dp.toPx() }) deleteArmed = false
                                 } else {
-                                    val raw = offset.value + delta.x
-                                    val next = if (raw <= deletePx) raw
-                                    else deletePx + (raw - deletePx) * 0.3f // 删除带外阻尼
-                                    scope.launch { offset.snapTo(next.coerceAtLeast(0f)) }
-                                    // 拖入删除带深处即时上膛（带触觉提示），不必先松手：
-                                    // 一次拖出后继续右拖直接累计确认量，手指滑到屏幕边缘被
-                                    // 系统中断时也能按已累计量正确结算，不再出现「假松手」回弹
+                                    dragX = (dragX + delta.x).coerceAtLeast(0f)
+                                    val next = if (dragX <= deletePx) dragX
+                                    else deletePx + (dragX - deletePx) * 0.3f // 删除带外阻尼
+                                    scope.launch { offset.snapTo(next) }
+                                    // 拖入删除带深处即时上膛（带触觉提示），不必先松手；
+                                    // 判定用同步的 dragX，时机不再随机漂移
                                     if (deleteWidth != null && !deleteArmed &&
-                                        offset.value >= openPx + (deletePx - openPx) * 0.55f
+                                        dragX >= openPx + (deletePx - openPx) * 0.55f
                                     ) {
                                         deleteArmed = true
                                         armedTravel = 0f
-                                        armedAnchor = offset.value
+                                        armedAnchor = dragX
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     }
                                 }
@@ -297,20 +290,22 @@ fun SwipeRevealCard(
                                     onOpenChange(false)
                                     onDeleteSwipe()
                                 }
-                                // 上膛态松手：回到贴住删除带的上膛位（点垃圾桶或再拖一次才删）
+                                // 上膛态松手：回到贴住删除带的上膛位；锚点同步到回位目标，
+                                // 否则即时上膛的深处锚点会让二次手势位置跳变
                                 deleteArmed -> {
+                                    armedAnchor = armedPx
                                     scope.launch { offset.animateTo(armedPx) }
                                     onOpenChange(true)
                                 }
                                 // 第一段：拖入删除带松手 → 只上膛，不删除
                                 deleteWidth != null &&
-                                    offset.value >= openPx + (deletePx - openPx) * 0.55f -> {
+                                    dragX >= openPx + (deletePx - openPx) * 0.55f -> {
                                     deleteArmed = true
                                     armedAnchor = armedPx
                                     scope.launch { offset.animateTo(armedPx) }
                                     onOpenChange(true)
                                 }
-                                offset.value >= openPx / 2f -> {
+                                dragX >= openPx / 2f -> {
                                     deleteArmed = false
                                     scope.launch { offset.animateTo(openPx) }
                                     onOpenChange(true)

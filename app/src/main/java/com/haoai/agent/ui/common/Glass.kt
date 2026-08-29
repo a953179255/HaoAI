@@ -380,7 +380,12 @@ fun GlassCard(
             onDrawSurface = {
                 drawRect(cardSurface)
                 if (tint != null) {
-                    drawRect(tint)
+                    // 必须圆角矩形：drawRect 直角会从圆角裁剪的角部溢出，
+                    // 在卡片四角外露出 tint 色的直角块（实测确认）
+                    drawRoundRect(
+                        color = tint,
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(lensRadius.toPx())
+                    )
                 }
             }
         )
@@ -388,8 +393,10 @@ fun GlassCard(
         Modifier
             .clip(shape)
             .background(cardSurface)
-            .border(1.5.dp, glassBorderColor(0.45f), shape)
-            .then(if (tint != null) Modifier.background(tint.copy(alpha = 0.15f)) else Modifier)
+            // 磨砂实底卡（refract=false）多用浅色场景：白描边在白卡上不可见，
+            // 改用前景色系描边保证卡片边界可辨
+            .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f), shape)
+            .then(if (tint != null) Modifier.background(tint, shape) else Modifier)
     }
 
     Box(

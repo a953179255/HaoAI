@@ -216,7 +216,6 @@ fun ChatScreen(
     androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
     androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
     androidx.activity.compose.BackHandler(enabled = drawer.isOpen) {
-        scope.launch { drawer.close() }
     }
 
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -359,7 +358,6 @@ fun ChatScreen(
             onDrawer = { openDrawer() },
             onNewChat = {
                 vm.newSession()
-                scope.launch { drawer.close() }
             },
             onRenameSubtitle = {
                 renameText = activeSession?.title ?: ""
@@ -490,7 +488,6 @@ fun ChatScreen(
                     .matchParentSize()
                     .background(Color.Black.copy(alpha = 0.30f * drawerFraction))
                     .clickable(interactionSource = null, indication = null) {
-                        scope.launch { drawer.close() }
                     }
             )
         }
@@ -503,23 +500,8 @@ fun ChatScreen(
                 .fillMaxWidth(0.85f)
                 .onSizeChanged { sheetW = it.width }
                 .offset { IntOffset((-(1f - drawerFraction) * sheetW).toInt(), 0) }
-                .pointerInput(Unit) {
-                    // 左滑收起抽屉
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var tx = 0f; var ty = 0f
-                        while (true) {
-                            val e = awaitPointerEvent()
-                            val c = e.changes.firstOrNull { it.id == down.id } ?: break
-                            if (c.changedToUp()) break
-                            tx += c.positionChange().x; ty += c.positionChange().y
-                            if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
-                                if (abs(tx) > abs(ty) && tx < 0f) scope.launch { drawer.close() }
-                                break
-                            }
-                        }
-                    }
-                }
+                // 吃掉 sheet 空白区的点击：否则会穿透到下层 scrim 误关抽屉
+                .clickable(interactionSource = null, indication = null) { }
         ) {
         Box(Modifier.fillMaxSize()) {
                     GlassPanel(
@@ -549,19 +531,16 @@ fun ChatScreen(
                             backdrop = backdrop,
                             drawerOpen = drawer.isOpen,
                             onOpenSessions = {
-                                scope.launch { drawer.close() }
                                 onOpenSessions()
                             },
                             onSelectSession = { id ->
                                 vm.selectSession(id)
-                                scope.launch { drawer.close() }
                             },
                             onPinSession = { id -> vm.pinSession(id) },
                             onRenameSession = { id, title -> vm.renameSession(id, title) },
                             onDeleteSession = { id -> vm.deleteSession(id) },
                             onEditProfile = { showProfileEdit = true },
                             onSettings = {
-                                scope.launch { drawer.close() }
                                 onOpenSettings(true)
                             }
                         )
