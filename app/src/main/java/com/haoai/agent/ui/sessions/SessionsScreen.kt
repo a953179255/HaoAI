@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -35,6 +36,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +59,7 @@ import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.glassFieldColors
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import kotlin.math.abs
 import java.util.Date
@@ -87,8 +90,17 @@ fun SessionsScreen(
     // 系统返回手势直接回聊天页
     androidx.activity.compose.BackHandler { onBack() }
 
-    fun matches(s: StoredSession): Boolean =
-        query.isBlank() || s.title.contains(query.trim(), ignoreCase = true)
+    // 300ms 防抖：输入中不重算结果；query 变化会重启协程，旧 delay 自动作废
+    var debouncedQuery by remember { mutableStateOf("") }
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            debouncedQuery = ""
+        } else {
+            delay(300)
+            debouncedQuery = query.trim()
+        }
+    }
+    val searching = query.isNotBlank() && query.trim() != debouncedQuery
 
     Box(Modifier.fillMaxSize()) {
     Column(
@@ -119,7 +131,7 @@ fun SessionsScreen(
             onValueChange = { query = it },
             placeholder = {
                 Text(
-                    "搜索会话标题",
+                    "搜索标题与消息内容",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
                 )
@@ -132,7 +144,12 @@ fun SessionsScreen(
                 )
             },
             trailingIcon = {
-                if (query.isNotEmpty()) {
+                if (searching) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else if (query.isNotEmpty()) {
                     IconButton(onClick = { query = "" }, modifier = Modifier.size(34.dp)) {
                         Icon(
                             Icons.Filled.Close,
@@ -210,7 +227,17 @@ fun SessionsScreen(
         // graphicsLayer 平移会被玻璃卡片 backdrop 采样，在卡片四角回画成矩形阴影
         // （与抽屉弃用 ModalNavigationDrawer、SwipeRevealCard 弃 graphicsLayer 同因）
         val sessionsPage = !showTrash
-        val list = (if (sessionsPage) sessions else deletedSessions).filter { matches(it) }
+        val baseList = if (sessionsPage) sessions else deletedSessions
+        // 双模式搜索：标题命中 + 内容命中（带摘要）。内存过滤，量级为个人会话数，
+        // remember 缓存避免重组重算
+        val searchResult = remember(debouncedQuery, baseList) {
+            searchSessions(baseList, debouncedQuery)
+        }
+        val contentSnippets = remember(searchResult) {
+            searchResult.contentHits.associate { it.session.id to it.snippet }
+        }
+        val list = if (debouncedQuery.isBlank()) baseList
+        else searchResult.titleHits + searchResult.contentHits.map { it.session }
         Box(
             Modifier
                 .fillMaxWidth()
@@ -245,7 +272,7 @@ fun SessionsScreen(
                             when {
                                 !sessionsPage && query.isBlank() -> "回收站是空的。删除的会话会保留 7 天，之后自动清理。"
                                 query.isBlank() -> "还没有历史会话"
-                                else -> "没有匹配的会话"
+                                else -> "没有匹配的标题或内容"
                             },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
@@ -344,7 +371,7 @@ fun SessionsScreen(
                                                         Spacer(Modifier.size(3.dp))
                                                     }
                                                     Text(
-                                                        s.title,
+                                                        highlightedAnnotatedString(s.title, debouncedQuery),
                                                         style = MaterialTheme.typography.bodyMedium,
                                                         fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                                                         color = if (active) MaterialTheme.colorScheme.primary
@@ -357,6 +384,16 @@ fun SessionsScreen(
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
                                                 )
+                                                // 内容命中摘要：±50 字窗口，命中词高亮
+                                                contentSnippets[s.id]?.let { snippet ->
+                                                    Text(
+                                                        highlightedAnnotatedString(snippet, debouncedQuery),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                                        maxLines = 2,
+                                                        modifier = Modifier.padding(top = 2.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -388,7 +425,7 @@ fun SessionsScreen(
                                 ) {
                                     Column(Modifier.weight(1f)) {
                                         Text(
-                                            s.title,
+                                            highlightedAnnotatedString(s.title, debouncedQuery),
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onBackground,
                                             maxLines = 1
@@ -398,6 +435,15 @@ fun SessionsScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
                                         )
+                                        contentSnippets[s.id]?.let { snippet ->
+                                            Text(
+                                                highlightedAnnotatedString(snippet, debouncedQuery),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                                maxLines = 2,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
                                     }
                                     TextButton(onClick = { vm.restoreSession(s.id) }) {
                                         Text("恢复", color = MaterialTheme.colorScheme.primary)
