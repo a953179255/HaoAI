@@ -254,12 +254,6 @@ fun ChatScreen(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-    // 抽屉开合动画期间暂停玻璃折射：sheet 的平移离屏层会被卡片的 backdrop 采样
-    // 反复回画，点击会话关闭抽屉的瞬间卡片四角会闪出「直角残影」
-    val drawerAnimating = drawerState.isAnimationRunning
-    androidx.compose.runtime.CompositionLocalProvider(
-        com.haoai.agent.ui.common.LocalGlassRefract provides !drawerAnimating
-    ) {
     Box(Modifier.fillMaxSize()) {
                 GlassPanel(
                     backdrop = backdrop,
@@ -306,7 +300,6 @@ fun ChatScreen(
                     )
                 }
     }
-            }
         }
     ) {
     Box(Modifier.fillMaxSize()) {
