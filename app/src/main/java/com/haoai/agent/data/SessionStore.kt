@@ -22,6 +22,11 @@ data class StoredMessage(
     val error: Boolean = false,
     val imageData: String? = null,
     val reasoning: String? = null,
+    /** 本轮（含工具循环）累计输入/输出 tokens 与整轮耗时、模型名；旧 JSON 缺省 null。 */
+    val promptTokens: Int? = null,
+    val completionTokens: Int? = null,
+    val durationMs: Long? = null,
+    val model: String? = null,
     val ts: Long = System.currentTimeMillis()
 )
 
@@ -66,6 +71,10 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
     error = error,
     imageData = imageData,
     reasoning = reasoning,
+    promptTokens = promptTokens,
+    completionTokens = completionTokens,
+    durationMs = durationMs,
+    model = model,
     ts = ts
 )
 
@@ -79,6 +88,10 @@ fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     error = error,
     imageData = imageData,
     reasoning = reasoning,
+    promptTokens = promptTokens,
+    completionTokens = completionTokens,
+    durationMs = durationMs,
+    model = model,
     ts = ts
 )
 

@@ -61,16 +61,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -81,7 +84,9 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -176,6 +181,12 @@ fun ChatScreen(
 ) {
     val context = LocalContext.current
 
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    fun copyText(text: String) {
+        clipboard.setText(AnnotatedString(text))
+        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+    }
+
     val rows by vm.rows.collectAsState()
     val streaming by vm.streamingText.collectAsState()
     val streamingReasoning by vm.streamingReasoning.collectAsState()
@@ -195,6 +206,8 @@ fun ChatScreen(
     var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
     // 消息长按操作组（1.2）：目标消息 / 编辑重发草稿 / 删除确认
     var msgAction by remember { mutableStateOf<ChatRow?>(null) }
+    // 网页渲染预览目标（⋮ 菜单进入）
+    var previewTarget by remember { mutableStateOf<ChatRow?>(null) }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
     // 工具卡"查看变更"（1.3）：从写前快照现算 diff
@@ -351,7 +364,10 @@ fun ChatScreen(
             )
             MessageList(
                 rows = rows,
-                onMessageLongPress = { msgAction = it },
+                onOpenMenu = { msgAction = it },
+                onCopyRow = { copyText(it.text) },
+                onQuickRegenerate = { vm.regenerateFrom(it.id) },
+                onQuickEdit = { editTarget = it },
                 onToolViewDiff = { callId ->
                     snapshotScope.launch { diffViewer = vm.snapshotDiff(callId) }
                 },
@@ -606,12 +622,7 @@ fun ChatScreen(
         }
     }
 
-    // ===== 消息长按操作组（1.2）=====
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    fun copyText(text: String) {
-        clipboard.setText(AnnotatedString(text))
-        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-    }
+    // ===== 消息操作组（1.2，入口已改消息下方 ⋮ 与快捷行）=====
     msgAction?.let { target ->
         MessageActionPanel(
             backdrop = backdrop,
@@ -637,8 +648,15 @@ fun ChatScreen(
             onQuote = {
                 input = "> " + target.text.take(200).replace("\n", "\n> ") + "\n\n"
                 msgAction = null
+            },
+            onPreview = {
+                previewTarget = target
+                msgAction = null
             }
         )
+    }
+    previewTarget?.let { target ->
+        HtmlPreviewModal(row = target, onDismiss = { previewTarget = null })
     }
     editTarget?.let { target ->
         var editText by remember(target.id) { mutableStateOf(target.text) }
@@ -1143,7 +1161,10 @@ private fun TopBar(
 @Composable
 private fun MessageList(
     rows: List<ChatRow>,
-    onMessageLongPress: (ChatRow) -> Unit,
+    onOpenMenu: (ChatRow) -> Unit,
+    onCopyRow: (ChatRow) -> Unit,
+    onQuickRegenerate: (ChatRow) -> Unit,
+    onQuickEdit: (ChatRow) -> Unit,
     onToolViewDiff: (String) -> Unit,
     streamingText: String?,
     streamingReasoning: String?,
@@ -1187,7 +1208,17 @@ private fun MessageList(
     }
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
-        items(rows, key = { it.key }) { row -> RowItem(row, onMessageLongPress, onToolViewDiff) }
+        items(rows, key = { it.key }) { row ->
+            RowItem(
+                row,
+                onOpenMenu = onOpenMenu,
+                onCopyRow = onCopyRow,
+                onQuickRegenerate = onQuickRegenerate,
+                onQuickEdit = onQuickEdit,
+                running = running,
+                onViewDiff = onToolViewDiff
+            )
+        }
         if (showStreaming) {
             item(key = "streaming") {
                 StreamingItem(streamingText, streamingReasoning, thinkingHint)
@@ -1196,21 +1227,19 @@ private fun MessageList(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowItem(row: ChatRow, onLongPress: (ChatRow) -> Unit, onViewDiff: (String) -> Unit) {
-    Box(
-        Modifier.combinedClickable(
-            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-            indication = null,
-            onClick = {},
-            onLongClick = { onLongPress(row) }
-        )
-    ) {
-        when (row.role) {
-            "user" -> UserBubble(row.text)
-            else -> AssistantBlock(row, onViewDiff)
-        }
+private fun RowItem(
+    row: ChatRow,
+    onOpenMenu: (ChatRow) -> Unit,
+    onCopyRow: (ChatRow) -> Unit,
+    onQuickRegenerate: (ChatRow) -> Unit,
+    onQuickEdit: (ChatRow) -> Unit,
+    running: Boolean,
+    onViewDiff: (String) -> Unit
+) {
+    when (row.role) {
+        "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff)
     }
 }
 
@@ -1361,29 +1390,51 @@ private fun chatBubbleAlphas(): Pair<Float, Float> {
 }
 
 @Composable
-private fun UserBubble(text: String) {
-    Row(
+private fun UserBubble(
+    row: ChatRow,
+    onOpenMenu: (ChatRow) -> Unit,
+    onCopyRow: (ChatRow) -> Unit,
+    onQuickEdit: (ChatRow) -> Unit,
+    running: Boolean
+) {
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 5.dp),
-        horizontalArrangement = Arrangement.End
+        horizontalAlignment = Alignment.End
     ) {
         Surface(
             color = MaterialTheme.colorScheme.primary.copy(alpha = chatBubbleAlphas().first),
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
-            Text(
-                text,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
-            )
+            // 长按正文 = 系统文本选择（上游 交互），不再弹操作菜单
+            SelectionContainer {
+                Text(
+                    row.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                )
+            }
+        }
+        // 快捷操作行（user：复制 / 编辑重发 / 更多）
+        Row(Modifier.padding(top = 1.dp, end = 2.dp)) {
+            QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
+            QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
+            QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
         }
     }
 }
 
 @Composable
-private fun AssistantBlock(row: ChatRow, onViewDiff: (String) -> Unit) {
+private fun AssistantBlock(
+    row: ChatRow,
+    onOpenMenu: (ChatRow) -> Unit,
+    onCopyRow: (ChatRow) -> Unit,
+    onQuickRegenerate: (ChatRow) -> Unit,
+    running: Boolean,
+    onViewDiff: (String) -> Unit
+) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -1415,15 +1466,90 @@ private fun AssistantBlock(row: ChatRow, onViewDiff: (String) -> Unit) {
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    MarkdownText(
-                        row.text,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                    )
+                    // 长按正文 = 系统文本选择（上游 交互）；代码块内已嵌套
+                    // SelectionContainer（内层优先），复制按钮用 disableSelection 隔离
+                    SelectionContainer {
+                        MarkdownText(
+                            row.text,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                    }
                 }
             }
         }
+        // 快捷操作行（assistant：复制 / 重新生成 / 更多）——上游 式，⋮ 跟随排布
+        Row(Modifier.padding(start = 2.dp, top = 1.dp)) {
+            QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
+            QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
+            QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+        }
+        NerdLine(row)
     }
 }
+
+/** 消息快捷操作小图标（16dp 图标 + 6dp 内边距，可点区约 28dp）。 */
+@Composable
+private fun QuickActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.7f else 0.28f),
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(6.dp)
+            .size(16.dp)
+    )
+}
+
+/**
+ * 统计行（上游 NerdLine 同款）：细小灰字展示整轮 token 用量 / 速度 / 耗时。
+ * 旧消息或无数据（usage 缺省）时不渲染；口径 = 整轮累计（含工具循环全部 LLM 调用）。
+ */
+@Composable
+private fun NerdLine(row: ChatRow) {
+    val pt = row.promptTokens
+    val ct = row.completionTokens
+    val dur = row.durationMs
+    if (pt == null && ct == null && dur == null) return
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    Row(
+        Modifier.padding(start = 8.dp, top = 0.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        pt?.takeIf { it > 0 }?.let { NerdStat(Icons.Filled.ArrowUpward, fmtTokens(it), tint) }
+        ct?.takeIf { it > 0 }?.let { NerdStat(Icons.Filled.ArrowDownward, fmtTokens(it), tint) }
+        if (ct != null && ct > 0 && dur != null && dur > 0) {
+            NerdStat(Icons.Filled.Bolt, String.format(Locale.US, "%.1f tok/s", ct / (dur / 1000.0)), tint)
+        }
+        dur?.takeIf { it > 0 }?.let { NerdStat(Icons.Filled.Schedule, String.format(Locale.US, "%.1fs", it / 1000.0), tint) }
+    }
+}
+
+@Composable
+private fun NerdStat(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    tint: Color
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(11.dp))
+        Text(text, style = MaterialTheme.typography.labelSmall, color = tint)
+    }
+}
+
+/** token 数缩写：1234 → 1.2k（超过 1 万才缩，小数字原样）。 */
+private fun fmtTokens(n: Int): String =
+    if (n >= 10000) String.format(Locale.US, "%.1fk", n / 1000.0) else n.toString()
 
 @Composable
 private fun ToolChip(
@@ -2065,7 +2191,8 @@ private fun MessageActionPanel(
     onRegenerate: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onQuote: () -> Unit
+    onQuote: () -> Unit,
+    onPreview: () -> Unit
 ) {
     androidx.activity.compose.BackHandler(onBack = onDismiss)
     Box(
@@ -2112,6 +2239,15 @@ private fun MessageActionPanel(
                         onClick = { onCopy(code) }
                     )
                 }
+                // 网页渲染预览（上游 同款）：有文本即可用
+                if (row.text.isNotBlank()) {
+                    MessageActionItem(
+                        icon = Icons.Filled.Web,
+                        label = "网页渲染预览",
+                        enabled = true,
+                        onClick = onPreview
+                    )
+                }
                 if (row.role != "user") {
                     MessageActionItem(
                         icon = Icons.Filled.Refresh,
@@ -2139,6 +2275,17 @@ private fun MessageActionPanel(
                     label = "引用到输入框",
                     enabled = !running,
                     onClick = onQuote
+                )
+                // 元信息行（上游 同款）：时间 + 模型名
+                val meta = buildString {
+                    append(SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(row.ts)))
+                    row.model?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+                }
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(start = 14.dp, top = 4.dp)
                 )
             }
         }

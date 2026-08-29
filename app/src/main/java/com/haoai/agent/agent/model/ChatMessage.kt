@@ -24,6 +24,14 @@ data class ChatMessage(
     val imageData: String? = null,
     /** 思考过程文本（reasoning_content / <think>），仅展示用，不回传 API。 */
     val reasoning: String? = null,
+    /** 本轮（含工具循环多次调用）累计输入 tokens，assistant 消息统计行用。 */
+    val promptTokens: Int? = null,
+    /** 本轮累计输出 tokens。 */
+    val completionTokens: Int? = null,
+    /** 整轮耗时（用户发出→回复落库，含工具执行），毫秒。 */
+    val durationMs: Long? = null,
+    /** 生成该回复的模型名（统计行/操作面板元信息展示）。 */
+    val model: String? = null,
     val ts: Long = System.currentTimeMillis()
 ) {
     companion object {

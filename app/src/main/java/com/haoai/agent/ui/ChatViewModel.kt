@@ -43,7 +43,14 @@ data class ChatRow(
     val text: String,
     val error: Boolean = false,
     val tools: List<UiTool> = emptyList(),
-    val reasoning: String? = null
+    val reasoning: String? = null,
+    /** 消息时间戳（操作面板元信息行）。 */
+    val ts: Long = 0L,
+    /** 整轮用量统计（assistant 最终回复才有；旧消息为 null → 统计行不显示）。 */
+    val promptTokens: Int? = null,
+    val completionTokens: Int? = null,
+    val durationMs: Long? = null,
+    val model: String? = null
 )
 
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
@@ -576,10 +583,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             else -> base
                         }
                     }
-                    rows.add(ChatRow("m$i", m.id, m.role, m.content, m.error, tools, m.reasoning))
+                    rows.add(
+                        ChatRow(
+                            "m$i", m.id, m.role, m.content, m.error, tools, m.reasoning,
+                            ts = m.ts,
+                            promptTokens = m.promptTokens,
+                            completionTokens = m.completionTokens,
+                            durationMs = m.durationMs,
+                            model = m.model
+                        )
+                    )
                 }
                 ChatMessage.ROLE_USER ->
-                    rows.add(ChatRow("m$i", m.id, m.role, m.content))
+                    rows.add(ChatRow("m$i", m.id, m.role, m.content, ts = m.ts))
                 else -> Unit
             }
         }

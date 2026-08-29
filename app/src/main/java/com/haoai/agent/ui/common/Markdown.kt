@@ -247,6 +247,8 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                     contentDescription = "复制代码",
                     tint = plain.copy(alpha = 0.65f),
                     modifier = Modifier
+                        // 点按复制可用；长按会进入正文选择态（新版 Compose 已移除
+                        // disableSelection，与 上游 行为一致，可接受）
                         .size(16.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .clickable {

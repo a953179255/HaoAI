@@ -87,6 +87,10 @@ class AgentEngine(
         imageData: String? = null,
         onReasoning: (String) -> Unit = {}
     ) {
+        // 整轮统计起点：用户发出 → 最终回复落库（含工具循环全部 LLM 调用与工具执行）
+        val turnStartMs = System.currentTimeMillis()
+        var turnPrompt = 0L
+        var turnCompletion = 0L
         appendAndNotify(
             ChatMessage(
                 role = ChatMessage.ROLE_USER,
@@ -154,7 +158,11 @@ class AgentEngine(
                                     onReasoning(ev.text)
                                 }
                                 is SseEvent.Completed -> calls = ev.toolCalls
-                                is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                                is SseEvent.Usage -> {
+                                    turnPrompt += ev.promptTokens
+                                    turnCompletion += ev.completionTokens
+                                    onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                                }
                             }
                         }
                 } catch (e: Exception) {
@@ -171,7 +179,11 @@ class AgentEngine(
                                         is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
                                         is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
                                         is SseEvent.Completed -> calls = ev.toolCalls
-                                        is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                                        is SseEvent.Usage -> {
+                                            turnPrompt += ev.promptTokens
+                                            turnCompletion += ev.completionTokens
+                                            onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                                        }
                                     }
                                 }
                         }
@@ -181,12 +193,19 @@ class AgentEngine(
                 }
 
                 if (streamBuf.isNotBlank() || calls.isNotEmpty()) {
+                    // calls 为空 = 本轮无工具调用、循环即将 break：这是最终回复，
+                    // 把整轮累计的 token/耗时/模型名挂上（中间轮的 assistant 片段不带，避免重复展示）
+                    val isFinal = calls.isEmpty()
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
                             content = streamBuf.toString(),
                             toolCalls = calls,
-                            reasoning = reasoningBuf.toString().ifBlank { null }
+                            reasoning = reasoningBuf.toString().ifBlank { null },
+                            promptTokens = if (isFinal) turnPrompt.toInt() else null,
+                            completionTokens = if (isFinal) turnCompletion.toInt() else null,
+                            durationMs = if (isFinal) System.currentTimeMillis() - turnStartMs else null,
+                            model = if (isFinal) provider.model else null
                         ),
                         onEvent
                     )
@@ -207,7 +226,12 @@ class AgentEngine(
                 appendAndNotify(
                     ChatMessage(
                         role = ChatMessage.ROLE_ASSISTANT,
-                        content = streamBuf.toString() + "\n\n*[已停止]*"
+                        content = streamBuf.toString() + "\n\n*[已停止]*",
+                        // 用户中途停止：已消耗的部分也记上（best effort，供统计行展示）
+                        promptTokens = turnPrompt.toInt().takeIf { it > 0 },
+                        completionTokens = turnCompletion.toInt().takeIf { it > 0 },
+                        durationMs = System.currentTimeMillis() - turnStartMs,
+                        model = provider.model
                     ),
                     onEvent
                 )
