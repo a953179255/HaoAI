@@ -8,6 +8,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +20,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.positionChangeConsumed
 import androidx.compose.ui.layout.onSizeChanged
+import android.widget.Toast
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.abs
@@ -62,9 +65,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
@@ -103,7 +110,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -184,6 +193,10 @@ fun ChatScreen(
     var pendingImage by remember { mutableStateOf<String?>(null) }
     var pendingDocumentName by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
+    // 消息长按操作组（1.2）：目标消息 / 编辑重发草稿 / 删除确认
+    var msgAction by remember { mutableStateOf<ChatRow?>(null) }
+    var editTarget by remember { mutableStateOf<ChatRow?>(null) }
+    var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
 
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawer.open() }
@@ -335,6 +348,7 @@ fun ChatScreen(
             )
             MessageList(
                 rows = rows,
+                onMessageLongPress = { msgAction = it },
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
@@ -570,6 +584,83 @@ fun ChatScreen(
                     }
         }
         }
+
+    // ===== 消息长按操作组（1.2）=====
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    fun copyText(text: String) {
+        clipboard.setText(AnnotatedString(text))
+        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+    }
+    msgAction?.let { target ->
+        MessageActionPanel(
+            backdrop = backdrop,
+            row = target,
+            running = running,
+            onDismiss = { msgAction = null },
+            onCopy = { text ->
+                copyText(text)
+                msgAction = null
+            },
+            onRegenerate = {
+                vm.regenerateFrom(target.id)
+                msgAction = null
+            },
+            onEdit = {
+                editTarget = target
+                msgAction = null
+            },
+            onDelete = {
+                deleteTarget = target
+                msgAction = null
+            },
+            onQuote = {
+                input = "> " + target.text.take(200).replace("\n", "\n> ") + "\n\n"
+                msgAction = null
+            }
+        )
+    }
+    editTarget?.let { target ->
+        var editText by remember(target.id) { mutableStateOf(target.text) }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "编辑并重发",
+            onDismiss = { editTarget = null },
+            confirmLabel = "重发",
+            confirmEnabled = editText.isNotBlank()
+        ) {
+            androidx.compose.material3.OutlinedTextField(
+                value = editText,
+                onValueChange = { editText = it },
+                colors = com.haoai.agent.ui.common.glassFieldColors(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "发送后将替换这条消息并重新生成回复",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
+    }
+    deleteTarget?.let { target ->
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "删除该消息？",
+            onDismiss = { deleteTarget = null },
+            confirmLabel = "删除",
+            danger = true,
+            onConfirm = {
+                vm.deleteMessage(target.id)
+                deleteTarget = null
+            }
+        ) {
+            Text(
+                "仅删除这一条消息，其他内容不受影响。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 
     // /help 斜杠命令帮助
     if (showSlashHelp) {
@@ -1020,6 +1111,7 @@ private fun TopBar(
 @Composable
 private fun MessageList(
     rows: List<ChatRow>,
+    onMessageLongPress: (ChatRow) -> Unit,
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
@@ -1062,7 +1154,7 @@ private fun MessageList(
     }
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
-        items(rows, key = { it.key }) { row -> RowItem(row) }
+        items(rows, key = { it.key }) { row -> RowItem(row, onMessageLongPress) }
         if (showStreaming) {
             item(key = "streaming") {
                 StreamingItem(streamingText, streamingReasoning, thinkingHint)
@@ -1071,11 +1163,21 @@ private fun MessageList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowItem(row: ChatRow) {
-    when (row.role) {
-        "user" -> UserBubble(row.text)
-        else -> AssistantBlock(row)
+private fun RowItem(row: ChatRow, onLongPress: (ChatRow) -> Unit) {
+    Box(
+        Modifier.combinedClickable(
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null,
+            onClick = {},
+            onLongClick = { onLongPress(row) }
+        )
+    ) {
+        when (row.role) {
+            "user" -> UserBubble(row.text)
+            else -> AssistantBlock(row)
+        }
     }
 }
 
@@ -1162,15 +1264,13 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                 Spacer(Modifier.size(12.dp))
             }
             androidx.compose.animation.AnimatedVisibility(expanded) {
-                SelectionContainer {
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodySmall,
-                        lineHeight = 17.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                        modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
-                    )
-                }
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                    modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
+                )
             }
         }
     }
@@ -1198,12 +1298,10 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                SelectionContainer {
-                    MarkdownText(
-                        streamingText + " ▍",
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                    )
-                }
+                MarkdownText(
+                    streamingText + " ▍",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
             }
         } else if (streamingReasoning.isNullOrBlank()) {
             // 什么都还没有：prefill / 等首 token
@@ -1242,13 +1340,11 @@ private fun UserBubble(text: String) {
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
-            SelectionContainer {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
-                )
-            }
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            )
         }
     }
 }
@@ -1271,14 +1367,12 @@ private fun AssistantBlock(row: ChatRow) {
                     color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    SelectionContainer {
-                        Text(
-                            row.text,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
+                    Text(
+                        row.text,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp)
+                    )
                 }
             } else {
                 // 注意：不能用 GlassPanel（drawBackdrop）——消息在 appLayer 子树内，
@@ -1288,12 +1382,10 @@ private fun AssistantBlock(row: ChatRow) {
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SelectionContainer {
-                        MarkdownText(
-                            row.text,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                    }
+                    MarkdownText(
+                        row.text,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
                 }
             }
         }
@@ -1907,4 +1999,142 @@ private fun ProfileAvatar(
             )
         }
     }
+}
+
+
+/**
+ * 消息长按操作面板（1.2）：Glass 底部弹层。操作项按消息角色动态出现，
+ * 生成中（running）时破坏性操作置灰，仅复制可用。
+ */
+@Composable
+private fun MessageActionPanel(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    row: ChatRow,
+    running: Boolean,
+    onDismiss: () -> Unit,
+    onCopy: (String) -> Unit,
+    onRegenerate: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onQuote: () -> Unit
+) {
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.30f))
+            .clickable(interactionSource = null, indication = null, onClick = onDismiss),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        com.haoai.agent.ui.common.GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .padding(bottom = 24.dp)
+                .clickable(interactionSource = null, indication = null) {},
+            radius = 24.dp,
+            surfaceAlpha = 0.92f,
+            blurRadius = 24.dp
+        ) {
+            Column(Modifier.padding(horizontal = 8.dp, vertical = 10.dp)) {
+                Text(
+                    "消息操作",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(start = 14.dp, bottom = 4.dp)
+                )
+                MessageActionItem(
+                    icon = Icons.Filled.ContentCopy,
+                    label = "复制全文",
+                    enabled = true,
+                    onClick = { onCopy(row.text) }
+                )
+                // 含代码块时追加逐块复制（Markdown 源码里的围栏）
+                val blocks = codeBlocks(row.text)
+                blocks.forEachIndexed { i, (lang, code) ->
+                    val suffix = if (lang.isNotBlank()) "（" + lang + "）" else ""
+                    val label = if (blocks.size > 1) "复制代码 " + (i + 1) + suffix else "复制代码" + suffix
+                    MessageActionItem(
+                        icon = Icons.Filled.Code,
+                        label = label,
+                        enabled = true,
+                        onClick = { onCopy(code) }
+                    )
+                }
+                if (row.role != "user") {
+                    MessageActionItem(
+                        icon = Icons.Filled.Refresh,
+                        label = "重新生成",
+                        enabled = !running,
+                        onClick = onRegenerate
+                    )
+                } else {
+                    MessageActionItem(
+                        icon = Icons.Filled.Edit,
+                        label = "编辑重发",
+                        enabled = !running,
+                        onClick = onEdit
+                    )
+                }
+                MessageActionItem(
+                    icon = Icons.Filled.Delete,
+                    label = "删除该消息",
+                    enabled = !running,
+                    danger = true,
+                    onClick = onDelete
+                )
+                MessageActionItem(
+                    icon = Icons.Filled.FormatQuote,
+                    label = "引用到输入框",
+                    enabled = !running,
+                    onClick = onQuote
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageActionItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = (if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                .copy(alpha = if (enabled) 1f else 0.35f),
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.size(14.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (danger) FontWeight.SemiBold else FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (enabled) 0.88f else 0.35f),
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/** 提取 Markdown 源码中的围栏代码块（语言, 代码）。 */
+private fun codeBlocks(text: String): List<Pair<String, String>> {
+    val re = Regex("```(\\w*)[ \\t]*\\n?([\\s\\S]*?)(?:```|$)")
+    return re.findAll(text)
+        .map { it.groupValues[1] to it.groupValues[2].removeSuffix("\n") }
+        .filter { it.second.isNotBlank() }
+        .toList()
 }

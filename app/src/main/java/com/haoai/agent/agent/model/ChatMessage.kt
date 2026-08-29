@@ -1,6 +1,7 @@
 package com.haoai.agent.agent.model
 
 import kotlinx.serialization.Serializable
+import java.util.UUID
 
 @Serializable
 data class ToolCallData(
@@ -11,6 +12,8 @@ data class ToolCallData(
 
 @Serializable
 data class ChatMessage(
+    /** 消息唯一 id（旧 JSON 缺省时补新生成，用于长按操作/截断/搜索定位）。 */
+    val id: String = UUID.randomUUID().toString(),
     val role: String,
     val content: String = "",
     val toolCalls: List<ToolCallData> = emptyList(),

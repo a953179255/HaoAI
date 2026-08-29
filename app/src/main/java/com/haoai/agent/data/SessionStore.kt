@@ -12,6 +12,8 @@ data class StoredToolCall(val id: String, val name: String, val argumentsJson: S
 
 @Serializable
 data class StoredMessage(
+    /** 消息唯一 id（旧 JSON 缺省时补新生成，与 ChatMessage.id 对应）。 */
+    val id: String = UUID.randomUUID().toString(),
     val role: String,
     val content: String = "",
     val toolCalls: List<StoredToolCall> = emptyList(),
@@ -55,6 +57,7 @@ data class StoredSession(
 }
 
 fun StoredMessage.toModel(): ChatMessage = ChatMessage(
+    id = id,
     role = role,
     content = content,
     toolCalls = toolCalls.map { ToolCallData(it.id, it.name, it.argumentsJson) },
@@ -67,6 +70,7 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
 )
 
 fun ChatMessage.toStored(): StoredMessage = StoredMessage(
+    id = id,
     role = role,
     content = content,
     toolCalls = toolCalls.map { StoredToolCall(it.id, it.name, it.argumentsJson) },
@@ -171,6 +175,31 @@ class SessionStore(context: Context) {
                 )
             }
         }
+    }
+
+    /** 删除单条消息（消息长按操作）。返回是否删除成功。 */
+    fun deleteMessage(sessionId: String, messageId: String): Boolean {
+        val s = load(sessionId) ?: return false
+        val idx = s.messages.indexOfFirst { it.id == messageId }
+        if (idx < 0) return false
+        s.messages.removeAt(idx)
+        save(s)
+        return true
+    }
+
+    /**
+     * 截断：删除 [messageId] 及其后全部消息（重新生成/编辑重发用）。
+     * [inclusive] = false 时保留 messageId 本身（编辑重发先改内容再截断其后）。
+     */
+    fun truncateAfter(sessionId: String, messageId: String, inclusive: Boolean = true): Boolean {
+        val s = load(sessionId) ?: return false
+        val idx = s.messages.indexOfFirst { it.id == messageId }
+        if (idx < 0) return false
+        val keep = if (inclusive) idx else idx + 1
+        if (keep >= s.messages.size) return false
+        while (s.messages.size > keep) s.messages.removeAt(s.messages.size - 1)
+        save(s)
+        return true
     }
 
     /** 删除 → 进回收站（软删除），7 天后由 purgeExpired 彻底清理。 */

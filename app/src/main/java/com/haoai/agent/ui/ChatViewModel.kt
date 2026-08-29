@@ -37,6 +37,8 @@ data class UiTool(
 
 data class ChatRow(
     val key: String,
+    /** 消息唯一 id（StoredMessage.id），长按操作/截断/搜索定位用。 */
+    val id: String = "",
     val role: String,
     val text: String,
     val error: Boolean = false,
@@ -189,6 +191,71 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun emptyTrash() {
         _deletedSessions.value.forEach { c.sessionStore.deleteForever(it.id) }
         refreshDeletedSessions()
+    }
+
+    // ===== 消息长按操作组（1.2）：删除 / 重新生成 / 编辑重发 =====
+
+    private fun refreshSessionView(s: StoredSession) {
+        if (_session.value?.id == s.id) {
+            // copy() 让 StateFlow 立即重发射（同引用修改不会触发更新）
+            val view = s.copy()
+            currentSession = view
+            _session.value = view
+        }
+        rebuildRows()
+        refreshSessions()
+    }
+
+    /** 长按：删除单条消息。 */
+    fun deleteMessage(messageId: String) {
+        if (_running.value) return
+        val s = currentSession ?: return
+        if (!c.sessionStore.deleteMessage(s.id, messageId)) return
+        // 同步内存实例（引擎可能持有同引用追加消息）
+        s.messages.removeAll { it.id == messageId }
+        refreshSessionView(s)
+    }
+
+    /**
+     * 长按：重新生成——删除 [messageId]（assistant）及其后全部消息，
+     * 以它之前最近的用户消息重跑（用户消息一并截掉，由 send 重新落库，内容等价）。
+     */
+    fun regenerateFrom(messageId: String) {
+        if (_running.value) return
+        val s = currentSession ?: return
+        val idx = s.messages.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        var userIdx = -1
+        for (i in idx - 1 downTo 0) {
+            val m = s.messages[i]
+            if (m.role == ChatMessage.ROLE_USER && m.content.isNotBlank() && m.toolCallId == null) {
+                userIdx = i
+                break
+            }
+        }
+        if (userIdx < 0) return
+        val userMsg = s.messages[userIdx]
+        while (s.messages.size > userIdx) s.messages.removeAt(s.messages.size - 1)
+        c.sessionStore.save(s)
+        rebuildRows()
+        send(userMsg.content, userMsg.imageData)
+    }
+
+    /** 长按：编辑重发（仅用户消息）——截掉该条及其后，以编辑后文本重新发送。 */
+    fun editResend(messageId: String, newText: String) {
+        if (_running.value) return
+        val s = currentSession ?: return
+        val idx = s.messages.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        val m = s.messages[idx]
+        if (m.role != ChatMessage.ROLE_USER) return
+        val text = newText.trim()
+        if (text.isEmpty()) return
+        val imageData = m.imageData
+        while (s.messages.size > idx) s.messages.removeAt(s.messages.size - 1)
+        c.sessionStore.save(s)
+        rebuildRows()
+        send(text, imageData)
     }
 
     fun send(rawText: String, imageData: String? = null) {
@@ -499,10 +566,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             else -> base
                         }
                     }
-                    rows.add(ChatRow("m$i", m.role, m.content, m.error, tools, m.reasoning))
+                    rows.add(ChatRow("m$i", m.id, m.role, m.content, m.error, tools, m.reasoning))
                 }
                 ChatMessage.ROLE_USER ->
-                    rows.add(ChatRow("m$i", m.role, m.content))
+                    rows.add(ChatRow("m$i", m.id, m.role, m.content))
                 else -> Unit
             }
         }
