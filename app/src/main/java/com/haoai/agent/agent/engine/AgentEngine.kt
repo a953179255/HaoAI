@@ -12,6 +12,7 @@ import com.haoai.agent.agent.provider.SseEvent
 import com.haoai.agent.agent.tools.SubAgentRunner
 import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.agent.tools.TextCap
+import com.haoai.agent.agent.tools.optBool
 import com.haoai.agent.agent.tools.Tool
 import com.haoai.agent.agent.tools.ToolContext
 import com.haoai.agent.agent.tools.ToolRegistry
@@ -257,6 +258,30 @@ class AgentEngine(
                     result = "用户拒绝了本次操作。" to true
                     finalState = ToolRunState.DENIED
                 } else {
+                    // 1.3 快照：审批已通过、文件尚未修改，此刻读原文最可靠；
+                    // 新建文件（原不存在）无原文可存，只有 after 可供回看
+                    if (call.name == "write" || call.name == "edit") {
+                        runCatching {
+                            val path = args.optString("path")
+                            val before = backend?.readText(path)
+                            val after = when (call.name) {
+                                "write" -> args.optString("content")
+                                else -> {
+                                    val old = args.optString("old_string")
+                                    val new = args.optString("new_string")
+                                    val replaceAll = args.optBool("replace_all")
+                                    before?.let {
+                                        if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new)
+                                    }
+                                }
+                            }
+                            if (after != null) {
+                                com.haoai.agent.agent.tools.snapshot.FileSnapshot.snapshot(
+                                    appFilesDir, session.id, call.id, path, before, after
+                                )
+                            }
+                        }
+                    }
                     result = invokeTool(tool, args, ctx)
                     if (result.second) finalState = ToolRunState.ERROR
                 }
@@ -646,19 +671,43 @@ class AgentEngine(
             HaoJson.json.parseToJsonElement(json.ifBlank { "{}" })
         }.getOrNull() as? JsonObject ?: buildJsonObject {}
 
-    private fun buildApprovalRequest(call: ToolCallData, args: JsonObject): ApprovalRequest =
+    private suspend fun buildApprovalRequest(call: ToolCallData, args: JsonObject): ApprovalRequest =
         when (call.name) {
             "bash" -> ApprovalRequest.ExecOp(args.optString("command"))
-            "write" -> ApprovalRequest.WriteOp(
-                "write",
-                args.optString("path"),
-                "${args.optString("content").toByteArray(Charsets.UTF_8).size} 字节内容"
-            )
-            "edit" -> ApprovalRequest.WriteOp(
-                "edit",
-                args.optString("path"),
-                "- ${args.optString("old_string").take(300)}\n+ ${args.optString("new_string").take(300)}"
-            )
+            "write" -> {
+                val path = args.optString("path")
+                val newContent = args.optString("content")
+                // 审批时文件尚未被改：现读现算 diff（1.3 审查视图数据源）
+                val oldText = runCatching { backend?.readText(path) }.getOrNull()
+                val diff = if (oldText != null) {
+                    com.haoai.agent.ui.common.TextDiff.diffText(oldText, newContent).lines
+                } else emptyList()
+                ApprovalRequest.WriteOp(
+                    "write",
+                    path,
+                    "${newContent.toByteArray(Charsets.UTF_8).size} 字节内容",
+                    isNewFile = oldText == null,
+                    diff = diff
+                )
+            }
+            "edit" -> {
+                val path = args.optString("path")
+                val old = args.optString("old_string")
+                val new = args.optString("new_string")
+                val replaceAll = args.optBool("replace_all")
+                val oldText = runCatching { backend?.readText(path) }.getOrNull()
+                val newText = oldText?.let { if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new) }
+                val diff = if (oldText != null && newText != null) {
+                    com.haoai.agent.ui.common.TextDiff.diffText(oldText, newText).lines
+                } else emptyList()
+                ApprovalRequest.WriteOp(
+                    "edit",
+                    path,
+                    "- ${old.take(300)}\n+ ${new.take(300)}",
+                    isNewFile = false,
+                    diff = diff
+                )
+            }
             "update_settings" -> ApprovalRequest.Generic(
                 "update_settings",
                 settingsChangeSummary(args)

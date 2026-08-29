@@ -197,6 +197,9 @@ fun ChatScreen(
     var msgAction by remember { mutableStateOf<ChatRow?>(null) }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
+    // 工具卡"查看变更"（1.3）：从写前快照现算 diff
+    var diffViewer by remember { mutableStateOf<Pair<String, List<com.haoai.agent.ui.common.DiffLine>>?>(null) }
+    val snapshotScope = rememberCoroutineScope()
 
     val scope = rememberCoroutineScope()
     fun openDrawer() = scope.launch { drawer.open() }
@@ -349,6 +352,9 @@ fun ChatScreen(
             MessageList(
                 rows = rows,
                 onMessageLongPress = { msgAction = it },
+                onToolViewDiff = { callId ->
+                    snapshotScope.launch { diffViewer = vm.snapshotDiff(callId) }
+                },
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
@@ -584,6 +590,21 @@ fun ChatScreen(
                     }
         }
         }
+
+    // 工具卡"查看变更"弹层（1.3）：diff 从写前快照现算
+    diffViewer?.let { (path, diffLines) ->
+        androidx.compose.ui.window.Popup(
+            onDismissRequest = { diffViewer = null },
+            properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+        ) {
+            DiffReviewView(
+                path = path,
+                isNewFile = false,
+                diff = diffLines,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
+    }
 
     // ===== 消息长按操作组（1.2）=====
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1009,6 +1030,17 @@ fun ChatScreen(
                             .heightIn(max = 340.dp)
                             .verticalScroll(rememberScrollState())
                     )
+                    // 1.3 Diff 审查：写文件审批内嵌改动预览，拒绝 = 文件不变
+                    (req as? com.haoai.agent.agent.policy.ApprovalRequest.WriteOp)?.let { wop ->
+                        if (wop.isNewFile || wop.diff.isNotEmpty()) {
+                            DiffReviewView(
+                                path = wop.path,
+                                isNewFile = wop.isNewFile,
+                                diff = wop.diff,
+                                modifier = Modifier.padding(top = 12.dp)
+                            )
+                        }
+                    }
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -1112,6 +1144,7 @@ private fun TopBar(
 private fun MessageList(
     rows: List<ChatRow>,
     onMessageLongPress: (ChatRow) -> Unit,
+    onToolViewDiff: (String) -> Unit,
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
@@ -1154,7 +1187,7 @@ private fun MessageList(
     }
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
-        items(rows, key = { it.key }) { row -> RowItem(row, onMessageLongPress) }
+        items(rows, key = { it.key }) { row -> RowItem(row, onMessageLongPress, onToolViewDiff) }
         if (showStreaming) {
             item(key = "streaming") {
                 StreamingItem(streamingText, streamingReasoning, thinkingHint)
@@ -1165,7 +1198,7 @@ private fun MessageList(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowItem(row: ChatRow, onLongPress: (ChatRow) -> Unit) {
+private fun RowItem(row: ChatRow, onLongPress: (ChatRow) -> Unit, onViewDiff: (String) -> Unit) {
     Box(
         Modifier.combinedClickable(
             interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
@@ -1176,7 +1209,7 @@ private fun RowItem(row: ChatRow, onLongPress: (ChatRow) -> Unit) {
     ) {
         when (row.role) {
             "user" -> UserBubble(row.text)
-            else -> AssistantBlock(row)
+            else -> AssistantBlock(row, onViewDiff)
         }
     }
 }
@@ -1350,7 +1383,7 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun AssistantBlock(row: ChatRow) {
+private fun AssistantBlock(row: ChatRow, onViewDiff: (String) -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -1360,7 +1393,7 @@ private fun AssistantBlock(row: ChatRow) {
             ReasoningPanel(text = it, live = false)
             Spacer(Modifier.size(5.dp))
         }
-        row.tools.forEach { tool -> ToolChip(tool) }
+        row.tools.forEach { tool -> ToolChip(tool, onViewDiff) }
         if (row.text.isNotBlank()) {
             if (row.error) {
                 Surface(
@@ -1393,8 +1426,12 @@ private fun AssistantBlock(row: ChatRow) {
 }
 
 @Composable
-private fun ToolChip(tool: com.haoai.agent.ui.UiTool) {
+private fun ToolChip(
+    tool: com.haoai.agent.ui.UiTool,
+    onViewDiff: (String) -> Unit
+) {
     var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
+    val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
     val stateColor = when (tool.state) {
         ToolRunState.RUNNING -> MaterialTheme.colorScheme.primary
         ToolRunState.DONE -> Color(0xFF7BD88F)
@@ -1439,6 +1476,18 @@ private fun ToolChip(tool: com.haoai.agent.ui.UiTool) {
                     maxLines = 1,
                     modifier = Modifier.weight(1f)
                 )
+                if (canReview) {
+                    Text(
+                        "查看变更",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onViewDiff(tool.callId) }
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                    Spacer(Modifier.size(6.dp))
+                }
                 Icon(
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = null,
@@ -2137,4 +2186,93 @@ private fun codeBlocks(text: String): List<Pair<String, String>> {
         .map { it.groupValues[1] to it.groupValues[2].removeSuffix("\n") }
         .filter { it.second.isNotBlank() }
         .toList()
+}
+
+
+
+/** Diff 审查视图（1.3）：统计 + 行级变更列表（绿增/红删/灰同），超 300 行折叠。 */
+@Composable
+private fun DiffReviewView(
+    path: String,
+    isNewFile: Boolean,
+    diff: List<com.haoai.agent.ui.common.DiffLine>,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember(path) { mutableStateOf(false) }
+    val added = diff.count { it.type == com.haoai.agent.ui.common.DiffType.ADDED }
+    val removed = diff.count { it.type == com.haoai.agent.ui.common.DiffType.REMOVED }
+    val collapsed = !expanded && diff.size > 300
+    val shown = if (collapsed) diff.take(300) else diff
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (isNewFile) "新建文件 · $added 行" else "+$added −$removed",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    path.substringAfterLast('/'),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (isNewFile) {
+                Text(
+                    "新文件不展示全文 diff，批准后写入。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            } else {
+                androidx.compose.foundation.lazy.LazyColumn(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
+                        .padding(top = 6.dp)
+                ) {
+                    items(shown.size) { i ->
+                        val l = shown[i]
+                        val (bg, fg, prefix) = when (l.type) {
+                            com.haoai.agent.ui.common.DiffType.ADDED ->
+                                Triple(Color(0x2E3F9E5C), Color(0xFF9FD8AE), "+")
+                            com.haoai.agent.ui.common.DiffType.REMOVED ->
+                                Triple(Color(0x33C25549), Color(0xFFF3B3AC), "−")
+                            else -> Triple(Color.Transparent, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), " ")
+                        }
+                        Text(
+                            text = prefix + l.text,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            color = fg,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(bg)
+                                .padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                if (collapsed) {
+                    Text(
+                        "展开查看完整 diff（共 ${diff.size} 行）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { expanded = true }
+                            .padding(top = 6.dp)
+                    )
+                }
+            }
+        }
+    }
 }

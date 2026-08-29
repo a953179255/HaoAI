@@ -17,7 +17,15 @@ sealed class ApprovalRequest {
         override val mono = true
     }
 
-    data class WriteOp(val tool: String, val path: String, val summary: String) : ApprovalRequest() {
+    data class WriteOp(
+        val tool: String,
+        val path: String,
+        val summary: String,
+        /** 新建文件标记（无原文可 diff，弹窗显示"新建文件"）。 */
+        val isNewFile: Boolean = false,
+        /** 行级 diff（1.3 审查视图数据源）；空 = 无 diff 可展示。 */
+        val diff: List<com.haoai.agent.ui.common.DiffLine> = emptyList()
+    ) : ApprovalRequest() {
         override val title = "写入文件（$tool）"
         override val detail = "$path\n\n$summary"
         override val mono = true

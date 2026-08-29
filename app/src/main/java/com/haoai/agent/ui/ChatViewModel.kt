@@ -81,6 +81,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _deletedSessions = MutableStateFlow<List<StoredSession>>(emptyList())
     val deletedSessions = _deletedSessions.asStateFlow()
 
+    /** 工具卡"查看变更"（1.3）：callId → (路径, diff 行)；从写前快照现算。 */
+    suspend fun snapshotDiff(callId: String): Pair<String, List<com.haoai.agent.ui.common.DiffLine>>? {
+        val sid = _session.value?.id ?: return null
+        val snap = c.sessionStore.let {
+            com.haoai.agent.agent.tools.snapshot.FileSnapshot.read(c.appFilesDir, sid, callId)
+        } ?: return null
+        val (meta, before, after) = snap
+        return meta.path to com.haoai.agent.ui.common.TextDiff.diffText(before ?: "", after ?: "").lines
+    }
+
     private val _contextUsage = MutableStateFlow(
         ContextUsage(usedTokens = 0, totalTokens = 32768, systemTokens = 0, toolsTokens = 0, historyTokens = 0)
     )
