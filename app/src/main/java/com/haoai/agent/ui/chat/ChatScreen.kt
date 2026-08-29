@@ -527,7 +527,7 @@ fun ChatScreen(
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(0.85f),
-                        surfaceAlpha = 0.18f,
+                        surfaceAlpha = 0.28f,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
                             topStart = 0.dp,
@@ -1705,9 +1705,11 @@ private fun SessionsDrawer(
                             onClick = cardClick,
                             backdrop = backdrop,
                             shape = RoundedCornerShape(14.dp),
-                            surfaceAlpha = if (active) 0.30f else 0.16f,
-                            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
-                            lensRadius = 14.dp,
+                            // 面板已是折射玻璃，卡片改磨砂实底（玻璃上叠玻璃会糊住文字）；
+                            // active 用主题色叠加，选中态清晰
+                            refract = false,
+                            surfaceAlpha = 0.55f,
+                            tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
                             pressScale = false,
                             modifier = Modifier.fillMaxWidth()
                         ) {

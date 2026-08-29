@@ -178,7 +178,7 @@ fun GlassPanel(
             .background(surface)
             .border(1.5.dp, border, shape ?: RoundedCornerShape(radius))
             .then(
-                if (tint != null) Modifier.background(tint.copy(alpha = 0.15f)) else Modifier
+                if (tint != null) Modifier.background(tint) else Modifier
             )
     }
     Box(panelModifier) {
@@ -380,8 +380,7 @@ fun GlassCard(
             onDrawSurface = {
                 drawRect(cardSurface)
                 if (tint != null) {
-                    drawRect(tint, blendMode = BlendMode.Hue)
-                    drawRect(tint.copy(alpha = 0.32f))
+                    drawRect(tint)
                 }
             }
         )
@@ -395,14 +394,16 @@ fun GlassCard(
 
     Box(
         modifier
-            .then(
-                if (pressScale) Modifier.graphicsLayer {
+            // 此层必须常驻（即使不做按压缩放）：它把 drawBackdrop 的折射渲染隔离在
+            // 独立 RenderNode 内，否则 blur/lens 的渲染边界会直接暴露成卡片四角直角伪影
+            .graphicsLayer {
+                if (pressScale) {
                     val p = highlight.pressProgress
                     val s = lerp(1f, 1f - 0.015f, p)
                     scaleX = s
                     scaleY = s
-                } else Modifier
-            )
+                }
+            }
             .then(bgModifier)
             .clickable(
                 interactionSource = null,

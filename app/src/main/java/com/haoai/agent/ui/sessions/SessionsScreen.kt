@@ -310,7 +310,7 @@ fun SessionsScreen(
                                         backdrop = backdrop,
                                         shape = RoundedCornerShape(14.dp),
                                         surfaceAlpha = if (active) 0.30f else 0.16f,
-                                        tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
+                                        tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
                                         lensRadius = 14.dp,
                                         pressScale = false,
                                         modifier = Modifier.fillMaxWidth()
