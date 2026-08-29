@@ -216,6 +216,7 @@ fun ChatScreen(
     androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
     androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
     androidx.activity.compose.BackHandler(enabled = drawer.isOpen) {
+        scope.launch { drawer.close() }
     }
 
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -358,6 +359,7 @@ fun ChatScreen(
             onDrawer = { openDrawer() },
             onNewChat = {
                 vm.newSession()
+                scope.launch { drawer.close() }
             },
             onRenameSubtitle = {
                 renameText = activeSession?.title ?: ""
@@ -488,6 +490,7 @@ fun ChatScreen(
                     .matchParentSize()
                     .background(Color.Black.copy(alpha = 0.30f * drawerFraction))
                     .clickable(interactionSource = null, indication = null) {
+                        scope.launch { drawer.close() }
                     }
             )
         }
@@ -500,6 +503,24 @@ fun ChatScreen(
                 .fillMaxWidth(0.85f)
                 .onSizeChanged { sheetW = it.width }
                 .offset { IntOffset((-(1f - drawerFraction) * sheetW).toInt(), 0) }
+                // 左滑收起抽屉（v0.17.6 原有手势，v0.17.8 修穿透时误删后恢复）：卡片右滑
+                // 呼出操作会消费水平拖拽，不会误触发此处；此处只认左滑
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var tx = 0f; var ty = 0f
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                            if (c.changedToUp()) break
+                            tx += c.positionChange().x; ty += c.positionChange().y
+                            if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
+                                if (abs(tx) > abs(ty) && tx < 0f) scope.launch { drawer.close() }
+                                break
+                            }
+                        }
+                    }
+                }
                 // 吃掉 sheet 空白区的点击：否则会穿透到下层 scrim 误关抽屉
                 .clickable(interactionSource = null, indication = null) { }
         ) {
@@ -1640,7 +1661,7 @@ private fun SessionsDrawer(
                     openWidth = 104.dp,
                     deleteWidth = 200.dp,
                     onDeleteSwipe = { onDeleteSession(s.id) },
-                    modifier = Modifier.padding(horizontal = 22.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp),
                     actions = {
                         FilledIconButton(
                             onClick = {
@@ -1684,11 +1705,13 @@ private fun SessionsDrawer(
                             onClick = cardClick,
                             backdrop = backdrop,
                             shape = RoundedCornerShape(14.dp),
-                            // 面板已是折射玻璃，卡片改磨砂实底（玻璃上叠玻璃会糊住文字）；
-                            // active 用主题色叠加，选中态清晰
-                            refract = false,
-                            surfaceAlpha = 0.55f,
-                            tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
+                            // 恢复 v0.14 薄透折射玻璃质感：面板保持磨砂（lensRadius=0）不叠
+                            // 动态玻璃故文字不糊；折射渲染已被常驻隔离层兜底，四角无残影。
+                            // active 用 secondary 浸染（与旧版一致），仍禁按压缩放防采样回画。
+                            refract = true,
+                            surfaceAlpha = if (active) 0.30f else 0.16f,
+                            lensRadius = 14.dp,
+                            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
                             pressScale = false,
                             modifier = Modifier.fillMaxWidth()
                         ) {
