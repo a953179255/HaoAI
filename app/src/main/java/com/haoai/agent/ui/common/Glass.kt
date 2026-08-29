@@ -350,6 +350,7 @@ fun GlassCard(
     tint: Color? = null,
     lensRadius: Dp = 18.dp,
     refract: Boolean? = null,
+    pressScale: Boolean = true,
     contentAlignment: Alignment = Alignment.TopStart,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -394,12 +395,14 @@ fun GlassCard(
 
     Box(
         modifier
-            .graphicsLayer {
-                val p = highlight.pressProgress
-                val s = lerp(1f, 1f - 0.015f, p)
-                scaleX = s
-                scaleY = s
-            }
+            .then(
+                if (pressScale) Modifier.graphicsLayer {
+                    val p = highlight.pressProgress
+                    val s = lerp(1f, 1f - 0.015f, p)
+                    scaleX = s
+                    scaleY = s
+                } else Modifier
+            )
             .then(bgModifier)
             .clickable(
                 interactionSource = null,

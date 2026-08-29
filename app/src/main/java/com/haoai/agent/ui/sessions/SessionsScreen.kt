@@ -312,6 +312,7 @@ fun SessionsScreen(
                                         surfaceAlpha = if (active) 0.30f else 0.16f,
                                         tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
                                         lensRadius = 14.dp,
+                                        pressScale = false,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Row(
@@ -365,6 +366,7 @@ fun SessionsScreen(
                                 shape = RoundedCornerShape(14.dp),
                                 surfaceAlpha = 0.16f,
                                 lensRadius = 14.dp,
+                                pressScale = false,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 10.dp, vertical = 2.dp)

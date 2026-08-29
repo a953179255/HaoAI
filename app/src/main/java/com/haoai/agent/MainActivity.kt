@@ -165,9 +165,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
 
     // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
-    val drawerState = androidx.compose.material3.rememberDrawerState(
-        androidx.compose.material3.DrawerValue.Closed
-    )
+    val drawer = remember { com.haoai.agent.ui.chat.DrawerController() }
     // 聊天滚动状态提升到 RootApp（不随 screen 切换销毁），进设置再返回时保持位置
     val chatListState = androidx.compose.runtime.saveable.rememberSaveable(
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
@@ -204,7 +202,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         // 从侧边栏进入设置的：返回时恢复侧边栏展开状态
                         if (cameFromDrawer) {
                             cameFromDrawer = false
-                            rootScope.launch { drawerState.open() }
+                            rootScope.launch { drawer.open() }
                         }
                     },
                     onOpenMemories = { screen = 2 },
@@ -230,13 +228,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // 全部会话只能从侧边栏进入：返回（箭头/系统手势）回到聊天并重新展开侧边栏
                     onBack = {
                         screen = 0
-                        rootScope.launch { drawerState.open() }
+                        rootScope.launch { drawer.open() }
                     }
                 )
                 else -> ChatScreen(
                     vm = chatVm,
                     backdrop = backdrop,
-                    drawerState = drawerState,
+                    drawer = drawer,
                     listState = chatListState,
                     onOpenSettings = { fromDrawer ->
                         cameFromDrawer = fromDrawer
@@ -244,7 +242,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     },
                     // 先收起抽屉再切页：否则返回时 drawerState 仍是 Open，抽屉会原样展开
                     onOpenSessions = {
-                        rootScope.launch { drawerState.close() }
+                        rootScope.launch { drawer.close() }
                         screen = 4
                     }
                 )

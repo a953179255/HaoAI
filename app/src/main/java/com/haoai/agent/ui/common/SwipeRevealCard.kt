@@ -101,6 +101,9 @@ fun SwipeRevealCard(
 
     // 两段式删除：第一段只上膛（推满删除带），第二段再拖/点击才真删
     var deleteArmed by remember { mutableStateOf(false) }
+    // 上膛锚点：上膛瞬间的卡片位置。armed 右拖用「锚点 + 累计量」绝对定位，
+    // 不读 offset.value——snapTo 是异步协程，快速拖动时相对计算会读到旧值造成抽搐
+    var armedAnchor by remember { mutableStateOf(0f) }
 
 
 
@@ -250,10 +253,9 @@ fun SwipeRevealCard(
                                 change.consume()
                                 if (deleteArmed) {
                                     if (delta.x > 0f) {
-                                        // 上膛态右拖：累计确认量，从当前位置阻尼跟手（不跳回上膛位，
-                                        // 避免即时上膛瞬间的二次跳变）
+                                        // 上膛态右拖：累计确认量，锚点+累计量绝对定位（无时序抖动）
                                         armedTravel += delta.x
-                                        val next = (offset.value + delta.x * 0.8f)
+                                        val next = (armedAnchor + armedTravel * 0.8f)
                                             .coerceAtMost(deletePx + with(density) { 34.dp.toPx() })
                                         scope.launch { offset.snapTo(next) }
                                     } else {
@@ -280,6 +282,7 @@ fun SwipeRevealCard(
                                     ) {
                                         deleteArmed = true
                                         armedTravel = 0f
+                                        armedAnchor = offset.value
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     }
                                 }
@@ -303,6 +306,7 @@ fun SwipeRevealCard(
                                 deleteWidth != null &&
                                     offset.value >= openPx + (deletePx - openPx) * 0.55f -> {
                                     deleteArmed = true
+                                    armedAnchor = armedPx
                                     scope.launch { offset.animateTo(armedPx) }
                                     onOpenChange(true)
                                 }

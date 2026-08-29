@@ -12,6 +12,16 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.positionChangeConsumed
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.abs
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -112,12 +122,44 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 
+/**
+ * 轻量抽屉控制器：0..1 fraction 驱动布局期平移（Modifier.offset，不创建离屏层）。
+ * 不用 ModalNavigationDrawer——其 sheet 的 graphicsLayer 平移动画会被玻璃 backdrop
+ * 采样滞后回画，关抽屉时卡片四角闪直角残影；且动画期间禁折射又会造成暗→亮跳变。
+ */
+class DrawerController {
+    var targetOpen by androidx.compose.runtime.mutableStateOf(false)
+    val fraction = androidx.compose.animation.core.Animatable(0f)
+    val isOpen: Boolean get() = targetOpen
+
+    suspend fun open() {
+        targetOpen = true
+        fraction.animateTo(
+            1f,
+            androidx.compose.animation.core.spring(
+                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                visibilityThreshold = 0.001f
+            )
+        )
+    }
+
+    suspend fun close() {
+        targetOpen = false
+        fraction.animateTo(
+            0f,
+            androidx.compose.animation.core.spring(
+                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                visibilityThreshold = 0.001f
+            )
+        )
+    }
+}
+
 @Composable
 fun ChatScreen(
     vm: ChatViewModel,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    drawerState: androidx.compose.material3.DrawerState =
-        androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed),
+    drawer: DrawerController = remember { DrawerController() },
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: (fromDrawer: Boolean) -> Unit,
@@ -144,7 +186,7 @@ fun ChatScreen(
     var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
-    fun openDrawer() = scope.launch { drawerState.open() }
+    fun openDrawer() = scope.launch { drawer.open() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val density = LocalDensity.current
     val imeHeightPx = WindowInsets.ime.getBottom(density)
@@ -173,8 +215,8 @@ fun ChatScreen(
     androidx.activity.compose.BackHandler(enabled = showModelPicker) { showModelPicker = false }
     androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
     androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
-    androidx.activity.compose.BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {
-        scope.launch { drawerState.close() }
+    androidx.activity.compose.BackHandler(enabled = drawer.isOpen) {
+        scope.launch { drawer.close() }
     }
 
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -251,57 +293,7 @@ fun ChatScreen(
     val contextUsage by vm.contextUsage.collectAsState()
 
     Box(Modifier.fillMaxSize()) {
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-    Box(Modifier.fillMaxSize()) {
-                GlassPanel(
-                    backdrop = backdrop,
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.85f),
-                    surfaceAlpha = 0.18f,
-                    // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
-                    shape = RoundedCornerShape(
-                        topStart = 0.dp,
-                        topEnd = 28.dp,
-                        bottomEnd = 28.dp,
-                        bottomStart = 0.dp
-                    ),
-                    // 关闭 lens 折射：方角处其采样内边距会产生弧形高光，形成"伪圆角"
-                    lensRadius = 0.dp
-                ) {
-                    SessionsDrawer(
-                        agentName = vm.agentName(),
-                        subtitleLine = settings.bio,
-                        avatarEmoji = settings.avatarEmoji,
-                        avatarGradient = settings.avatarGradient,
-                        avatarImagePath = settings.avatarImagePath,
-                        sessions = sessions,
-                        activeId = vm.session.collectAsState().value?.id,
-                        backdrop = backdrop,
-                        drawerOpen = drawerState.currentValue == DrawerValue.Open,
-                        onOpenSessions = {
-                            scope.launch { drawerState.close() }
-                            onOpenSessions()
-                        },
-                        onSelectSession = { id ->
-                            vm.selectSession(id)
-                            scope.launch { drawerState.close() }
-                        },
-                        onPinSession = { id -> vm.pinSession(id) },
-                        onRenameSession = { id, title -> vm.renameSession(id, title) },
-                        onDeleteSession = { id -> vm.deleteSession(id) },
-                        onEditProfile = { showProfileEdit = true },
-                        onSettings = {
-                            scope.launch { drawerState.close() }
-                            onOpenSettings(true)
-                        }
-                    )
-                }
-    }
-        }
-    ) {
+    val drawerFraction = drawer.fraction.value
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -311,6 +303,28 @@ fun ChatScreen(
                 .pointerInput(Unit) {
                     detectTapGestures {
                         focusManager.clearFocus()
+                    }
+                }
+                .pointerInput(Unit) {
+                    // 左缘右滑开抽屉（替代 ModalNavigationDrawer 自带的边缘手势）
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.position.x < with(this) { 60.dp.toPx() }) {
+                            var tx = 0f; var ty = 0f
+                            while (true) {
+                                val e = awaitPointerEvent()
+                                val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                                if (c.changedToUp()) break
+                                tx += c.positionChange().x; ty += c.positionChange().y
+                                if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
+                                    if (abs(tx) > abs(ty) && tx > 0f) {
+                                        scope.launch { drawer.open() }
+                                        c.consume()
+                                    }
+                                    break
+                                }
+                            }
+                        }
                     }
                 }
         ) {
@@ -345,7 +359,7 @@ fun ChatScreen(
             onDrawer = { openDrawer() },
             onNewChat = {
                 vm.newSession()
-                scope.launch { drawerState.close() }
+                scope.launch { drawer.close() }
             },
             onRenameSubtitle = {
                 renameText = activeSession?.title ?: ""
@@ -469,7 +483,91 @@ fun ChatScreen(
             ) { Text(msg, maxLines = 4) }
         }
     }
-    }
+        // 抽屉 scrim：透明度随 fraction，点击收起
+        if (drawerFraction > 0.01f) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.30f * drawerFraction))
+                    .clickable(interactionSource = null, indication = null) {
+                        scope.launch { drawer.close() }
+                    }
+            )
+        }
+        // 抽屉 sheet：布局期平移（Modifier.offset 无离屏层）——ModalNavigationDrawer 的
+        // graphicsLayer 平移动画会被玻璃 backdrop 采样滞后回画，关抽屉时卡片四角闪直角残影
+        var sheetW by remember { mutableIntStateOf(0) }
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(0.85f)
+                .onSizeChanged { sheetW = it.width }
+                .offset { IntOffset((-(1f - drawerFraction) * sheetW).toInt(), 0) }
+                .pointerInput(Unit) {
+                    // 左滑收起抽屉
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var tx = 0f; var ty = 0f
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                            if (c.changedToUp()) break
+                            tx += c.positionChange().x; ty += c.positionChange().y
+                            if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
+                                if (abs(tx) > abs(ty) && tx < 0f) scope.launch { drawer.close() }
+                                break
+                            }
+                        }
+                    }
+                }
+        ) {
+        Box(Modifier.fillMaxSize()) {
+                    GlassPanel(
+                        backdrop = backdrop,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.85f),
+                        surfaceAlpha = 0.18f,
+                        // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
+                        shape = RoundedCornerShape(
+                            topStart = 0.dp,
+                            topEnd = 28.dp,
+                            bottomEnd = 28.dp,
+                            bottomStart = 0.dp
+                        ),
+                        // 关闭 lens 折射：方角处其采样内边距会产生弧形高光，形成"伪圆角"
+                        lensRadius = 0.dp
+                    ) {
+                        SessionsDrawer(
+                            agentName = vm.agentName(),
+                            subtitleLine = settings.bio,
+                            avatarEmoji = settings.avatarEmoji,
+                            avatarGradient = settings.avatarGradient,
+                            avatarImagePath = settings.avatarImagePath,
+                            sessions = sessions,
+                            activeId = vm.session.collectAsState().value?.id,
+                            backdrop = backdrop,
+                            drawerOpen = drawer.isOpen,
+                            onOpenSessions = {
+                                scope.launch { drawer.close() }
+                                onOpenSessions()
+                            },
+                            onSelectSession = { id ->
+                                vm.selectSession(id)
+                                scope.launch { drawer.close() }
+                            },
+                            onPinSession = { id -> vm.pinSession(id) },
+                            onRenameSession = { id, title -> vm.renameSession(id, title) },
+                            onDeleteSession = { id -> vm.deleteSession(id) },
+                            onEditProfile = { showProfileEdit = true },
+                            onSettings = {
+                                scope.launch { drawer.close() }
+                                onOpenSettings(true)
+                            }
+                        )
+                    }
+        }
+        }
 
     // /help 斜杠命令帮助
     if (showSlashHelp) {
@@ -1600,21 +1698,22 @@ private fun SessionsDrawer(
                         }
                     },
                     content = { cardClick ->
-                        // 卡面容器：整行像滑块一样作为一个整体滑动，当前会话带主题色浅底
+                        // 卡面：真折射玻璃（v0.17.0 容器化时误降级为普通色块，用户要求恢复
+                        // AndroidLiquidGlass 折射质感）；active 带主题色浸染，不按压缩放（避免
+                        // 按压层变换被 backdrop 采样回画成四角残影）
+                        com.haoai.agent.ui.common.GlassCard(
+                            onClick = cardClick,
+                            backdrop = backdrop,
+                            shape = RoundedCornerShape(14.dp),
+                            surfaceAlpha = if (active) 0.30f else 0.16f,
+                            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
+                            lensRadius = 14.dp,
+                            pressScale = false,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .background(
-                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.055f),
-                                    RoundedCornerShape(14.dp)
-                                )
-                                .border(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
-                                    RoundedCornerShape(14.dp)
-                                )
-                                .clickable(onClick = cardClick)
                                 .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1642,6 +1741,7 @@ private fun SessionsDrawer(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                        }
                         }
                     }
                 )
