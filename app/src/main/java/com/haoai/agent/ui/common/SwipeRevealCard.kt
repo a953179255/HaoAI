@@ -91,16 +91,18 @@ fun SwipeRevealCard(
     val openPx = with(density) { openWidth.toPx() }
     val deletePx = with(density) { (deleteWidth ?: openWidth).toPx() }
     val armConfirmPx = with(density) { 40.dp.toPx() }
-    // 删除带水平居中于呼出区（不再贴最左边缘）；上膛位 = 删除带右缘 + 8dp，
-    // 卡面贴住删除按钮，而不是把标题推到最右（用户反馈：上膛后标题离删除按钮太远）
+    // 删除带靠左贴边显示（用户反馈：不必居中于呼出区，靠左更顺手）；
+    // 上膛位 = 删除带右缘 + 8dp，卡面贴住删除按钮
     val bandWidth = 64.dp
-    val bandStart = ((openWidth - bandWidth) / 2f).coerceAtLeast(4.dp)
+    val bandStart = 4.dp
     val armedPx = with(density) { (bandStart + bandWidth + 8.dp).toPx() }
     val offset = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
 
     // 两段式删除：第一段只上膛（推满删除带），第二段再拖/点击才真删
     var deleteArmed by remember { mutableStateOf(false) }
+    // 第二段拖拽已越过删除确认阈值：松手即删（文案从「删除会话」切到「松手删除」）
+    var confirmReady by remember { mutableStateOf(false) }
     // 上膛锚点：上膛瞬间的卡片位置。armed 右拖用「锚点 + 累计量」绝对定位，
     // 不读 offset.value——snapTo 是异步协程，快速拖动时相对计算会读到旧值造成抽搐
     var armedAnchor by remember { mutableStateOf(0f) }
@@ -109,7 +111,7 @@ fun SwipeRevealCard(
 
     // 外部开合（展开另一张 / 操作完成 / 抽屉收起）统一由此驱动
     LaunchedEffect(isOpen) {
-        if (!isOpen) deleteArmed = false
+        if (!isOpen) { deleteArmed = false; confirmReady = false }
         val target = when {
             !isOpen -> 0f
             deleteArmed -> armedPx
@@ -158,8 +160,8 @@ fun SwipeRevealCard(
             verticalAlignment = Alignment.CenterVertically,
             content = actions
         )
-        // 删除带：圆角红色容器，居中于呼出区；上膛态实心红 + 「继续右滑」呼吸提示，
-        // 视觉引导继续右拖确认（点击仍保留为备用路径）
+        // 删除带：圆角红色容器，靠左贴边；上膛态实心红 + 「删除会话」呼吸提示，
+        // 再右滑越阈值变「松手删除」（点击删除带仍为备用路径）
         if (deleteWidth != null) {
             val progress = ((offset.value - openPx) / (deletePx - openPx).coerceAtLeast(1f)).coerceIn(0f, 1f)
             val bandAlpha = if (deleteArmed) 1f else progress
@@ -194,7 +196,11 @@ fun SwipeRevealCard(
                         ) {
                             Icon(
                                 Icons.Filled.Delete,
-                                contentDescription = if (deleteArmed) "继续右滑删除" else "继续右拖以上膛删除",
+                                contentDescription = when {
+                                    confirmReady -> "松手删除会话"
+                                    deleteArmed -> "再右滑或点击删除会话"
+                                    else -> "继续右拖以上膛删除"
+                                },
                                 tint = if (deleteArmed) Color.White else MaterialTheme.colorScheme.error,
                                 modifier = Modifier
                                     .size(19.dp)
@@ -204,7 +210,7 @@ fun SwipeRevealCard(
                             )
                             if (deleteArmed) {
                                 Text(
-                                    "继续右滑",
+                                    if (confirmReady) "松手删除" else "删除会话",
                                     color = Color.White.copy(alpha = armPulse.value),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.SemiBold,
@@ -235,6 +241,10 @@ fun SwipeRevealCard(
                         // 手势内累计位移：Animatable.snapTo 是异步协程，高频拖动时 offset.value
                         // 滞后真实位置（实测上膛在滑动末帧才随机触发）——判定与结算一律用 dragX
                         var dragX = offset.value
+                        // 上膛必须发生在上一段手势：同一段右滑里即时上膛后不再接管确认段，
+                        // 杜绝「一次右滑到底直接删掉」——确认删除需松手后再来一段或点删除带
+                        val armedAtStart = deleteArmed
+                        confirmReady = false
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -254,7 +264,7 @@ fun SwipeRevealCard(
                             }
                             if (decided && owned && delta != Offset.Zero) {
                                 change.consume()
-                                if (deleteArmed) {
+                                if (deleteArmed && armedAtStart) {
                                     // 统一锚点公式：左右拖同一条连续函数，微抖不跳变；左拖超过
                                     // 16dp 才退膛
                                     armedTravel += delta.x
@@ -262,7 +272,11 @@ fun SwipeRevealCard(
                                         .coerceIn(armedPx, deletePx + with(density) { 34.dp.toPx() })
                                     dragX = next
                                     scope.launch { offset.snapTo(next) }
-                                    if (armedTravel < -with(density) { 16.dp.toPx() }) deleteArmed = false
+                                    if (armedTravel >= armConfirmPx) confirmReady = true
+                                    if (armedTravel < -with(density) { 16.dp.toPx() }) {
+                                        deleteArmed = false
+                                        confirmReady = false
+                                    }
                                 } else {
                                     dragX = (dragX + delta.x).coerceAtLeast(0f)
                                     val next = if (dragX <= deletePx) dragX
@@ -283,9 +297,10 @@ fun SwipeRevealCard(
                         }
                         if (decided && owned) {
                             when {
-                                // 第二段：上膛态继续右拖 → 真删除
+                                // 第二段：上膛态继续右拖越过阈值 → 松手真删除
                                 deleteArmed && armedTravel >= armConfirmPx -> {
                                     deleteArmed = false
+                                    confirmReady = false
                                     scope.launch { offset.animateTo(0f) }
                                     onOpenChange(false)
                                     onDeleteSwipe()
@@ -293,6 +308,7 @@ fun SwipeRevealCard(
                                 // 上膛态松手：回到贴住删除带的上膛位；锚点同步到回位目标，
                                 // 否则即时上膛的深处锚点会让二次手势位置跳变
                                 deleteArmed -> {
+                                    confirmReady = false
                                     armedAnchor = armedPx
                                     scope.launch { offset.animateTo(armedPx) }
                                     onOpenChange(true)

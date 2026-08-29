@@ -1,6 +1,8 @@
 package com.haoai.agent.ui.sessions
 
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -16,8 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -35,18 +35,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -58,8 +57,8 @@ import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.glassFieldColors
 import com.kyant.backdrop.backdrops.LayerBackdrop
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import kotlin.math.abs
 import java.util.Date
 import java.util.Locale
 
@@ -77,7 +76,6 @@ fun SessionsScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var showTrash by rememberSaveable { mutableStateOf(false) }
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
-    val scope = rememberCoroutineScope()
     // 待彻底删除的会话：误触不可逆操作前先确认
     var pendingPurge by remember { mutableStateOf<StoredSession?>(null) }
     // 重命名目标；清空回收站确认
@@ -85,16 +83,6 @@ fun SessionsScreen(
     var confirmEmptyTrash by remember { mutableStateOf(false) }
     // 当前滑出操作按钮的会话（同时只允许一张）
     var openCardId by remember { mutableStateOf<String?>(null) }
-
-    // 左「会话」右「回收站」：从右往左滑直接翻到回收站
-    val pagerState = rememberPagerState(initialPage = if (showTrash) 1 else 0, pageCount = { 2 })
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.currentPage }.collect { page ->
-            showTrash = page == 1
-            // 翻页时收起展开的操作按钮，避免另一页残留展开态
-            openCardId = null
-        }
-    }
 
     // 系统返回手势直接回聊天页
     androidx.activity.compose.BackHandler { onBack() }
@@ -180,11 +168,11 @@ fun SessionsScreen(
             FilterChip(
                 selected = !showTrash,
                 onClick = {
-                    // 呼出中只收起呼出，不翻页
+                    // 呼出中只收起呼出，不切页
                     if (openCardId != null) {
                         openCardId = null
                     } else {
-                        scope.launch { pagerState.animateScrollToPage(0) }
+                        showTrash = false
                     }
                 },
                 label = {
@@ -200,7 +188,7 @@ fun SessionsScreen(
                     if (openCardId != null) {
                         openCardId = null
                     } else {
-                        scope.launch { pagerState.animateScrollToPage(1) }
+                        showTrash = true
                     }
                 },
                 label = {
@@ -218,16 +206,39 @@ fun SessionsScreen(
             }
         }
 
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-            val sessionsPage = page == 0
-            val list = (if (sessionsPage) sessions else deletedSessions).filter { matches(it) }
-            // 页面根容器必须铺满：Pager 会把 wrap 高度的内容垂直居中（列表越短顶部空白越大）
-            // 点空白处只收回展开的操作按钮（卡片/按钮自己会消费点击，不受影响）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) { detectTapGestures { openCardId = null } }
-            ) {
+        // 会话/回收站两页条件渲染 + 左右滑切页：不用 HorizontalPager——其页面
+        // graphicsLayer 平移会被玻璃卡片 backdrop 采样，在卡片四角回画成矩形阴影
+        // （与抽屉弃用 ModalNavigationDrawer、SwipeRevealCard 弃 graphicsLayer 同因）
+        val sessionsPage = !showTrash
+        val list = (if (sessionsPage) sessions else deletedSessions).filter { matches(it) }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .pointerInput(Unit) { detectTapGestures { openCardId = null } }
+                .pointerInput(Unit) {
+                    // 左滑→回收站，右滑→会话；卡片消费掉的水平拖拽不会到达此处
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var tx = 0f; var ty = 0f
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                            if (c.changedToUp()) break
+                            tx += c.positionChange().x; ty += c.positionChange().y
+                            if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
+                                if (abs(tx) > abs(ty)) {
+                                    if (tx < 0f && !showTrash) showTrash = true
+                                    else if (tx > 0f && showTrash) showTrash = false
+                                    // 切页时收起展开的操作按钮
+                                    openCardId = null
+                                }
+                                break
+                            }
+                        }
+                    }
+                }
+        ) {
                 if (list.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
@@ -312,7 +323,7 @@ fun SessionsScreen(
                                         surfaceAlpha = if (active) 0.30f else 0.16f,
                                         tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
                                         lensRadius = 14.dp,
-                                        pressScale = false,
+                                        pressScale = true,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Row(
@@ -366,7 +377,7 @@ fun SessionsScreen(
                                 shape = RoundedCornerShape(14.dp),
                                 surfaceAlpha = 0.16f,
                                 lensRadius = 14.dp,
-                                pressScale = false,
+                                pressScale = true,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 10.dp, vertical = 2.dp)
@@ -400,7 +411,6 @@ fun SessionsScreen(
                     }
                 }
             }
-        }
     }
 
     }
@@ -411,6 +421,7 @@ fun SessionsScreen(
             title = "彻底删除会话",
             onDismiss = { pendingPurge = null },
             confirmLabel = "彻底删除",
+            dismissLabel = "取消",
             danger = true,
             onConfirm = {
                 vm.deleteSessionForever(target.id)
@@ -432,6 +443,7 @@ fun SessionsScreen(
             title = "重命名会话",
             onDismiss = { renameTarget = null },
             confirmLabel = "保存",
+            dismissLabel = "取消",
             onConfirm = {
                 vm.renameSession(target.id, renameValue)
                 renameTarget = null
@@ -454,6 +466,7 @@ fun SessionsScreen(
             title = "清空回收站",
             onDismiss = { confirmEmptyTrash = false },
             confirmLabel = "全部彻底删除",
+            dismissLabel = "取消",
             danger = true,
             onConfirm = {
                 vm.emptyTrash()

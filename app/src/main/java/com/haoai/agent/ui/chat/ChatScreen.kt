@@ -500,7 +500,9 @@ fun ChatScreen(
         Box(
             Modifier
                 .fillMaxHeight()
-                .fillMaxWidth(0.85f)
+                // 外层宽度=可见面板宽度（0.72）：此前外层 0.85 内层再 0.85，
+                // 吃点击的 clickable 覆盖到 0.85，面板右缘与外层之间 13% 死区点不动
+                .fillMaxWidth(0.72f)
                 .onSizeChanged { sheetW = it.width }
                 .offset { IntOffset((-(1f - drawerFraction) * sheetW).toInt(), 0) }
                 // 左滑收起抽屉（v0.17.6 原有手势，v0.17.8 修穿透时误删后恢复）：卡片右滑
@@ -529,7 +531,7 @@ fun ChatScreen(
                         backdrop = backdrop,
                         modifier = Modifier
                             .fillMaxHeight()
-                            .fillMaxWidth(0.85f),
+                            .fillMaxWidth(1f),
                         surfaceAlpha = 0.28f,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
@@ -1707,12 +1709,12 @@ private fun SessionsDrawer(
                             shape = RoundedCornerShape(14.dp),
                             // 恢复 v0.14 薄透折射玻璃质感：面板保持磨砂（lensRadius=0）不叠
                             // 动态玻璃故文字不糊；折射渲染已被常驻隔离层兜底，四角无残影。
-                            // active 用 secondary 浸染（与旧版一致），仍禁按压缩放防采样回画。
+                            // active 用 secondary 浸染（与旧版一致），按压缩放恢复（隔离层已根治残影）
                             refract = true,
                             surfaceAlpha = if (active) 0.30f else 0.16f,
                             lensRadius = 14.dp,
                             tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
-                            pressScale = false,
+                            pressScale = true,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                         Row(
@@ -1771,6 +1773,7 @@ private fun SessionsDrawer(
             title = "重命名会话",
             onDismiss = { renameTarget = null },
             confirmLabel = "保存",
+            dismissLabel = "取消",
             onConfirm = {
                 onRenameSession(target.id, renameValue)
                 renameTarget = null

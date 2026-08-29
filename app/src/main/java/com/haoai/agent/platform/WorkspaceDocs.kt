@@ -91,7 +91,7 @@ object WorkspaceDocs {
         appendLine()
         appendLine("- 名字：${st.agentName.ifBlank { "HaoAI" }}（用户所起）")
         appendLine("- 平台：Android 手机全能助理")
-        appendLine("- 版本：v0.17.9")
+        appendLine("- 版本：v0.17.10")
     }.trimEnd() + "\n"
 
     private fun renderSoul(st: AppSettings): String = buildString {

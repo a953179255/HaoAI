@@ -360,16 +360,20 @@ fun GlassCard(
     val r = refract ?: LocalGlassRefract.current
     val cardSurface = glassSurfaceColor(surfaceAlpha)
     val bgModifier = if (r) {
-        Modifier.drawBackdrop(
-            backdrop = backdrop,
-            shape = { shape },
-            effects = {
-                vibrancy()
-                blur(4.dp.toPx())
-                if (lensRadius > 0.dp) {
-                    lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f)
-                }
-            },
+        Modifier
+            // 硬裁剪到卡片形状：drawBackdrop 的 blur/lens 与表面填充会溢出圆角外的
+            // 方形区域（平色背景上呈灰角块，实测确认）；磨砂路径本就有 clip，补齐折射路径
+            .clip(shape)
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { shape },
+                effects = {
+                    vibrancy()
+                    blur(4.dp.toPx())
+                    if (lensRadius > 0.dp) {
+                        lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f)
+                    }
+                },
             layerBlock = {
                 val off = highlight.offset
                 val maxOffset = size.minDimension
@@ -379,14 +383,9 @@ fun GlassCard(
             },
             onDrawSurface = {
                 drawRect(cardSurface)
-                if (tint != null) {
-                    // 必须圆角矩形：drawRect 直角会从圆角裁剪的角部溢出，
-                    // 在卡片四角外露出 tint 色的直角块（实测确认）
-                    drawRoundRect(
-                        color = tint,
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(lensRadius.toPx())
-                    )
-                }
+                // tint 不能画在这里：onDrawSurface 画布与 shape 存在亚像素错位，
+                // 圆角矩形边缘会露到 shape 外形成灰色矩形带（实测确认）；
+                // 改为在下方 Box 内容层用 background(tint, shape) 精确裁剪
             }
         )
     } else {
@@ -422,6 +421,11 @@ fun GlassCard(
             .then(highlight.gestureModifier),
         contentAlignment = contentAlignment
     ) {
+        // 着色层：叠在玻璃表面之上、内容之下；background(tint, shape) 按 shape
+        // 精确裁剪，无 onDrawSurface 的亚像素错位泄漏（磨砂路径已在 bgModifier 内）
+        if (r && tint != null) {
+            Box(Modifier.matchParentSize().background(tint, shape))
+        }
         content()
     }
 }
