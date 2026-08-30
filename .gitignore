@@ -12,3 +12,4 @@ captures/
 *.aab
 keystore.properties
 .zcode/
+.verify/

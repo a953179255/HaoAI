@@ -21,6 +21,8 @@ sealed class McpConnState {
     data object Connecting : McpConnState()
     data class Ready(val toolCount: Int) : McpConnState()
     data class Error(val message: String) : McpConnState()
+    /** stdio 服务器但 Linux 沙箱未安装：装好发行版后 onSandboxChanged 自动重连（3.5）。 */
+    data object PendingReady : McpConnState()
 }
 
 /**
@@ -32,6 +34,9 @@ sealed class McpConnState {
 object McpManager {
 
     private var http: OkHttpClient? = null
+
+    /** 沙箱解析器（AppContainer 注入，stdio 传输用）；每次连接现场解析，发行版装/删即时生效。 */
+    @Volatile private var sandboxProvider: (() -> com.haoai.agent.platform.sandbox.SandboxEnv.Sandbox?)? = null
 
     @Volatile private var servers: List<McpServerConfig> = emptyList()
 
@@ -46,9 +51,14 @@ object McpManager {
 
     private val saveMutex = Mutex()
 
-    fun init(filesDir: java.io.File, okHttpClient: OkHttpClient) {
+    fun init(
+        filesDir: java.io.File,
+        okHttpClient: OkHttpClient,
+        sandboxProvider: (() -> com.haoai.agent.platform.sandbox.SandboxEnv.Sandbox?)? = null
+    ) {
         McpServerStore.init(filesDir)
         http = okHttpClient
+        this.sandboxProvider = sandboxProvider
         servers = McpServerStore.load()
         refreshDerived()
         // 工具级风险覆盖：mcp_ 前缀默认 WRITE，降级名单内的按 READ 免审
@@ -117,12 +127,53 @@ object McpManager {
     /**
      * 连接单台服务器：initialize → tools/list → 更新 toolCache。
      * 指数退避重试共 3 次尝试（间隔 2s/4s）；最终失败标记 Error 带可读原因。
+     * stdio 类型（3.5）：Linux 沙箱未就绪 → PendingReady（不重试，装好发行版自动重连）。
      */
     suspend fun connectServer(serverId: String) {
         val cfg = servers.find { it.id == serverId } ?: return
         if (!cfg.enabled) return
         val client = http ?: return
         setState(serverId, McpConnState.Connecting)
+        if (cfg.kind == "stdio") {
+            val sb = sandboxProvider?.invoke()
+            if (sb == null) {
+                clients.remove(serverId)
+                setState(serverId, McpConnState.PendingReady)
+                return
+            }
+            if (cfg.command.isBlank()) {
+                clients.remove(serverId)
+                setState(serverId, McpConnState.Error("未配置启动命令"))
+                return
+            }
+            var lastError: String = "未知错误"
+            var attempt = 0
+            while (attempt < 3) {
+                if (attempt > 0) delay(1000L shl attempt) // 2s/4s
+                attempt++
+                val mcp = McpClient(StdioTransport(sb, cfg.command))
+                val initResult = mcp.initialize()
+                if (initResult.isFailure) {
+                    lastError = initResult.exceptionOrNull()?.message ?: "initialize 失败"
+                    mcp.close()
+                    continue
+                }
+                val toolsResult = mcp.listTools()
+                if (toolsResult.isFailure) {
+                    lastError = toolsResult.exceptionOrNull()?.message ?: "tools/list 失败"
+                    mcp.close()
+                    continue
+                }
+                val tools = toolsResult.getOrNull().orEmpty()
+                clients[serverId] = mcp
+                setState(serverId, McpConnState.Ready(tools.size))
+                updateConfig(serverId) { it.copy(toolCache = tools.map { t -> McpToolInfoData(t.name, t.description, t.inputSchema.toString()) }) }
+                return
+            }
+            clients.remove(serverId)
+            setState(serverId, McpConnState.Error(lastError))
+            return
+        }
         var lastError: String = "未知错误"
         var attempt = 0
         while (attempt < 3) {
@@ -151,6 +202,16 @@ object McpManager {
         clients.remove(serverId)
         setState(serverId, McpConnState.Error(lastError))
     }
+
+    /** 发行版安装/删除后调用：PendingReady 的 stdio 服务器自动重连，就绪的按文件系统现状重算。 */
+    fun onSandboxChanged(scope: CoroutineScope) {
+        servers.filter { it.enabled && it.kind == "stdio" }.forEach { cfg ->
+            scope.launch { connectServer(cfg.id) }
+        }
+    }
+
+    /** Linux 沙箱当前是否就绪（stdio 添加表单的状态提示用）。 */
+    fun sandboxReady(): Boolean = sandboxProvider?.invoke() != null
 
     private fun setState(serverId: String, state: McpConnState) {
         stateMap[serverId] = state
@@ -277,10 +338,22 @@ object McpManager {
 
     // ---------- 测试连接（设置页"测试连接"按钮） ----------
 
-    /** 独立临时客户端跑握手 + tools/list，返回工具数或可读错误；不占用 manager 连接池。 */
-    suspend fun testConnection(cfg: McpServerConfig): Result<Int> {
+    /** 独立临时客户端跑握手 + tools/list，返回工具数或可读错误；不占用 manager 连接池。45s 硬超时兜底。 */
+    suspend fun testConnection(cfg: McpServerConfig): Result<Int> =
+        kotlinx.coroutines.withTimeoutOrNull(45_000L) { testConnectionInner(cfg) }
+            ?: Result.failure(McpException("连接超时（45s）：stdio 服务器无响应"))
+
+    private suspend fun testConnectionInner(cfg: McpServerConfig): Result<Int> {
         val http = http ?: return Result.failure(McpException("MCP 未初始化"))
-        val mcp = McpClient(StreamableHttpTransport(http, cfg.url, cfg.headers))
+        val mcp = if (cfg.kind == "stdio") {
+            val sb = sandboxProvider?.invoke()
+                ?: return Result.failure(McpException("Linux 环境未就绪：请先在 设置 → Linux 环境 安装发行版"))
+            if (cfg.command.isBlank()) return Result.failure(McpException("未配置沙箱内启动命令"))
+            // 30s 读超时（< 外层 45s 兜底）：watchdog destroy 进程后 UI 必然在兜底前返回
+            McpClient(StdioTransport(sb, cfg.command, responseTimeoutMs = 30_000L))
+        } else {
+            McpClient(StreamableHttpTransport(http, cfg.url, cfg.headers))
+        }
         return try {
             val init = mcp.initialize()
             if (init.isFailure) return Result.failure(init.exceptionOrNull() ?: McpException("initialize 失败"))

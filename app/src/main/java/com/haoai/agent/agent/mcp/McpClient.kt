@@ -68,6 +68,8 @@ class McpClient(private val transport: McpTransport) {
      */
     suspend fun initialize(): Result<Unit> = mutex.withLock {
         try {
+            // stdio 传输在此拉起子进程（HTTP 为 no-op）；失败直接给出可读原因
+            transport.connect()
             val resp = transport.send(
                 rpc(
                     "initialize",

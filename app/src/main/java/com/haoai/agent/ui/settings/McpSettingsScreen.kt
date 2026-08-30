@@ -158,9 +158,19 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
                                     StatusDot(st)
                                     Spacer(Modifier.width(8.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text(srv.name, style = MaterialTheme.typography.titleSmall)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(srv.name, style = MaterialTheme.typography.titleSmall)
+                                            if (srv.kind == "stdio") {
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    "本地",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
                                         Text(
-                                            srv.url,
+                                            if (srv.kind == "stdio") srv.command else srv.url,
                                             style = MaterialTheme.typography.labelSmall,
                                             fontFamily = FontFamily.Monospace,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -231,6 +241,7 @@ private fun StatusDot(st: McpConnState) {
         is McpConnState.Ready -> Color(0xFF3FA37A)
         is McpConnState.Connecting -> Color(0xFF5B8DEF)
         is McpConnState.Error -> Color(0xFFE25555)
+        McpConnState.PendingReady -> Color(0xFFD9913F)
         McpConnState.Disconnected -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
     }
     Box(
@@ -244,6 +255,8 @@ private fun stateLabel(st: McpConnState): Pair<String?, Color?> = when (st) {
     is McpConnState.Ready -> "已连接（${st.toolCount} 把工具）" to null
     is McpConnState.Connecting -> "连接中…" to null
     is McpConnState.Error -> "连接失败：${st.message}" to Color(0xFFE25555)
+    McpConnState.PendingReady ->
+        "待就绪：需要 Linux 环境（设置 → Linux 环境 安装发行版后自动连接）" to Color(0xFFD9913F)
     McpConnState.Disconnected -> null to null
 }
 
@@ -258,7 +271,9 @@ private fun McpEditView(
     onDelete: (() -> Unit)?
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
-    var url by remember { mutableStateOf(initial?.url ?: "https://") }
+    var kind by remember { mutableStateOf(initial?.kind ?: "http") }
+    var url by remember { mutableStateOf(initial?.url?.ifBlank { "https://" } ?: "https://") }
+    var command by remember { mutableStateOf(initial?.command ?: "") }
     var bearer by remember {
         mutableStateOf(
             initial?.headers?.entries?.firstOrNull {
@@ -286,8 +301,21 @@ private fun McpEditView(
 
     fun buildConfig(): McpServerConfig? {
         val n = name.trim()
-        val u = url.trim()
         if (n.isEmpty()) { errText = "名称不能为空"; return null }
+        if (kind == "stdio") {
+            val cmd = command.trim()
+            if (cmd.isEmpty()) { errText = "启动命令不能为空"; return null }
+            return McpServerConfig(
+                id = initial?.id ?: UUID.randomUUID().toString(),
+                name = n, url = "", kind = "stdio", command = cmd,
+                headers = emptyMap(),
+                enabled = initial?.enabled ?: true,
+                approvalLevel = approvalLevel,
+                allowPlaintext = false,
+                toolCache = initial?.toolCache ?: emptyList()
+            )
+        }
+        val u = url.trim()
         if (!u.startsWith("https://") && !u.startsWith("http://")) {
             errText = "URL 需以 http(s):// 开头"; return null
         }
@@ -300,7 +328,8 @@ private fun McpEditView(
         }
         return McpServerConfig(
             id = initial?.id ?: UUID.randomUUID().toString(),
-            name = n, url = u, headers = headers,
+            name = n, url = u, kind = "http", command = "",
+            headers = headers,
             enabled = initial?.enabled ?: true,
             approvalLevel = approvalLevel,
             allowPlaintext = allowPlaintext,
@@ -322,70 +351,111 @@ private fun McpEditView(
             item {
                 GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), pressScale = false) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        LabeledField("名称", name, { name = it }, placeholder = "如 DeepWiki 文档查询")
-                        LabeledField(
-                            "服务器 URL（Streamable HTTP endpoint）", url, { url = it },
-                            placeholder = "https://example.com/mcp", mono = true
-                        )
-                        LabeledField(
-                            "Bearer Token（可选）", bearer, { bearer = it },
-                            placeholder = "留空表示无需鉴权",
-                            visual = PasswordVisualTransformation()
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        Column {
                             Text(
-                                "自定义请求头（可选）",
+                                "服务器类型",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            IconButton(onClick = {
-                                headerKeys = headerKeys + ""
-                                headerValues = headerValues + ""
-                            }) {
-                                Icon(Icons.Filled.Add, contentDescription = "添加请求头")
+                            Spacer(Modifier.height(6.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(
+                                    selected = kind == "http",
+                                    onClick = { kind = "http" },
+                                    label = { Text("远程 HTTP") }
+                                )
+                                FilterChip(
+                                    selected = kind == "stdio",
+                                    onClick = { kind = "stdio" },
+                                    label = { Text("本地 stdio") }
+                                )
                             }
+                            Text(
+                                if (kind == "stdio")
+                                    "在 Linux 沙箱内拉起本地 MCP 服务器进程（3.5）。需先安装 Linux 环境。"
+                                else "连接远程 Streamable HTTP MCP endpoint。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        headerKeys.indices.forEach { i ->
+                        LabeledField("名称", name, { name = it }, placeholder = "如 本地文件检索")
+                        if (kind == "stdio") {
+                            LabeledField(
+                                "沙箱内启动命令", command, { command = it },
+                                placeholder = "如 node /workspace/mcp/server.js", mono = true
+                            )
+                            val sandboxOk = remember { McpManager.sandboxReady() }
+                            Text(
+                                if (sandboxOk) "✓ Linux 沙箱已就绪，保存后自动连接"
+                                else "⚠ Linux 环境未安装：请先到 设置 → Linux 环境 安装发行版（安装后本服务器会自动连接）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (sandboxOk) Color(0xFF3FA37A) else Color(0xFFD9913F)
+                            )
+                        } else {
+                            LabeledField(
+                                "服务器 URL（Streamable HTTP endpoint）", url, { url = it },
+                                placeholder = "https://example.com/mcp", mono = true
+                            )
+                            LabeledField(
+                                "Bearer Token（可选）", bearer, { bearer = it },
+                                placeholder = "留空表示无需鉴权",
+                                visual = PasswordVisualTransformation()
+                            )
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                androidx.compose.material3.OutlinedTextField(
-                                    value = headerKeys[i],
-                                    onValueChange = { v ->
-                                        headerKeys = headerKeys.toMutableList().also { it[i] = v }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true,
-                                    placeholder = { Text("Header", style = MaterialTheme.typography.bodySmall) },
-                                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
-                                )
-                                Text(":", style = MaterialTheme.typography.titleMedium)
-                                androidx.compose.material3.OutlinedTextField(
-                                    value = headerValues.getOrElse(i) { "" },
-                                    onValueChange = { v ->
-                                        headerValues = headerValues.toMutableList().also {
-                                            if (i < it.size) it[i] = v else it.add(v)
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1.4f),
-                                    singleLine = true,
-                                    placeholder = { Text("值", style = MaterialTheme.typography.bodySmall) },
-                                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                                Text(
+                                    "自定义请求头（可选）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
                                 )
                                 IconButton(onClick = {
-                                    headerKeys = headerKeys.toMutableList().also { if (i < it.size) it.removeAt(i) }
-                                    headerValues = headerValues.toMutableList().also { if (i < it.size) it.removeAt(i) }
+                                    headerKeys = headerKeys + ""
+                                    headerValues = headerValues + ""
                                 }) {
-                                    Icon(
-                                        Icons.Filled.Delete,
-                                        contentDescription = "删除请求头",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Icon(Icons.Filled.Add, contentDescription = "添加请求头")
+                                }
+                            }
+                            headerKeys.indices.forEach { i ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    androidx.compose.material3.OutlinedTextField(
+                                        value = headerKeys[i],
+                                        onValueChange = { v ->
+                                            headerKeys = headerKeys.toMutableList().also { it[i] = v }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        placeholder = { Text("Header", style = MaterialTheme.typography.bodySmall) },
+                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                                     )
+                                    Text(":", style = MaterialTheme.typography.titleMedium)
+                                    androidx.compose.material3.OutlinedTextField(
+                                        value = headerValues.getOrElse(i) { "" },
+                                        onValueChange = { v ->
+                                            headerValues = headerValues.toMutableList().also {
+                                                if (i < it.size) it[i] = v else it.add(v)
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1.4f),
+                                        singleLine = true,
+                                        placeholder = { Text("值", style = MaterialTheme.typography.bodySmall) },
+                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                                    )
+                                    IconButton(onClick = {
+                                        headerKeys = headerKeys.toMutableList().also { if (i < it.size) it.removeAt(i) }
+                                        headerValues = headerValues.toMutableList().also { if (i < it.size) it.removeAt(i) }
+                                    }) {
+                                        Icon(
+                                            Icons.Filled.Delete,
+                                            contentDescription = "删除请求头",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -420,16 +490,18 @@ private fun McpEditView(
                             color = if (approvalLevel == "read") Color(0xFFD9913F)
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.weight(1f)) {
-                                Text("允许明文 http", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "仅为你自建的本地/内网 http 服务器开启；公网地址请使用 https。",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                        if (kind == "http") {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("允许明文 http", style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "仅为你自建的本地/内网 http 服务器开启；公网地址请使用 https。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(checked = allowPlaintext, onCheckedChange = { allowPlaintext = it })
                             }
-                            Switch(checked = allowPlaintext, onCheckedChange = { allowPlaintext = it })
                         }
                     }
                 }

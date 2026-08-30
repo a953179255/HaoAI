@@ -529,6 +529,8 @@ fun SettingsScreen(
                         onSuccess = {
                             com.haoai.agent.agent.tools.shell.ProotBackend.invalidate()
                             com.haoai.agent.agent.tools.shell.SandboxProbe.invalidate()
+                            // stdio MCP 服务器（3.5）待就绪状态自动重连
+                            com.haoai.agent.agent.mcp.McpManager.onSandboxChanged(scope)
                             linuxState.refresh(vm.distros)
                         },
                         onFailure = { linuxState.installError = it.message ?: "安装失败" }
@@ -573,6 +575,8 @@ fun SettingsScreen(
                     }
                     com.haoai.agent.agent.tools.shell.ProotBackend.invalidate()
                     com.haoai.agent.agent.tools.shell.SandboxProbe.invalidate()
+                    // 删除发行版后 stdio MCP 服务器会因沙箱缺失回 PendingReady（connectServer 内判定）
+                    com.haoai.agent.agent.mcp.McpManager.onSandboxChanged(scope)
                     linuxState.refresh(vm.distros)
                 }
             },

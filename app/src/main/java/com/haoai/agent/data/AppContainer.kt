@@ -70,7 +70,14 @@ class AppContainer(app: Application) {
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
         // MCP：加载服务器配置 → 注册风险覆盖/白名单 → enabled 服务器异步握手（不阻塞启动）
-        com.haoai.agent.agent.mcp.McpManager.init(appFilesDir, okHttpClient)
+        // sandboxProvider 供 stdio 类型（3.5）现场解析沙箱：发行版装/删即时生效
+        com.haoai.agent.agent.mcp.McpManager.init(appFilesDir, okHttpClient, sandboxProvider = {
+            val wsDir = (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+                ?: java.io.File(appFilesDir, "shell-home")
+            com.haoai.agent.platform.sandbox.SandboxEnv.resolve(
+                appFilesDir, app.applicationInfo.nativeLibraryDir, wsDir
+            )
+        })
         com.haoai.agent.agent.mcp.McpManager.connectAll(applicationScope)
         llama.preferredModel = settingsFlow.value.localModelFile
         llama.contextSize = settingsFlow.value.localContextLength

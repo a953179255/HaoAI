@@ -14,6 +14,10 @@ data class McpServerConfig(
     val id: String,
     val name: String,
     val url: String,
+    /** 传输类型：http = Streamable HTTP 远程（默认）；stdio = 沙箱内拉起本地服务器（3.5）。 */
+    val kind: String = "http",
+    /** stdio 类型的沙箱内启动命令（如 node /workspace/mcp/server.js 或 uvx mcp-server-fetch）。 */
+    val command: String = "",
     /** 自定义请求头（如 Authorization）。含敏感值，存 app 私有目录，不进工作区。 */
     val headers: Map<String, String> = emptyMap(),
     val enabled: Boolean = true,
