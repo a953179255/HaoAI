@@ -2,6 +2,7 @@ package com.haoai.agent.ui.manage
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,9 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.haoai.agent.agent.skills.SkillImporter
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
+import kotlinx.coroutines.launch
 
 /**
  * 技能库管理：查看/手动添加/删除 SKILL.md（skill 工具的图形入口）。
@@ -42,12 +45,77 @@ import com.haoai.agent.ui.common.GlassPageBar
 @Composable
 fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: () -> Unit) {
     val store = SkillStore
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var skills by remember { mutableStateOf(store.list()) }
     var viewBody by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showAdd by remember { mutableStateOf(false) }
     // 待删除技能名：删除不可逆，先确认
     var pendingDelete by remember { mutableStateOf<String?>(null) }
     val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA) }
+
+    // 2.2 导入：通道菜单 / URL 输入 / 剪贴板粘贴 / 批量结果
+    var showImportMenu by remember { mutableStateOf(false) }
+    var showUrlImport by remember { mutableStateOf(false) }
+    var showPasteImport by remember { mutableStateOf(false) }
+    var importResult by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    // 导出：待写出的技能 (名, 全文)，由 CreateDocument launcher 接收目标 uri
+    var pendingExport by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // 导入下载用客户端（复用 NetGuard 明文拦截）
+    val importHttp = remember {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .addInterceptor(com.haoai.agent.platform.NetGuard.interceptor())
+            .build()
+    }
+
+    val treePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            scope.launch {
+                importing = true
+                val docs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    SkillImporter.scanSafTree(context, uri)
+                }
+                importing = false
+                if (docs == null) {
+                    importResult = "无法读取所选目录"
+                } else if (docs.isEmpty()) {
+                    importResult = "所选目录（含一级子目录）未发现 SKILL.md"
+                } else {
+                    importResult = SkillImporter.importBatch(docs, "import_local").summary()
+                }
+                skills = store.list()
+            }
+        }
+    }
+
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/markdown")
+    ) { uri ->
+        val (name, text) = pendingExport ?: return@rememberLauncherForActivityResult
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { os ->
+                    os.write(text.toByteArray(Charsets.UTF_8))
+                }
+                android.widget.Toast.makeText(context, "已导出 $name", android.widget.Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                android.widget.Toast.makeText(context, "导出失败：${it.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        pendingExport = null
+    }
 
     // 系统返回手势：回到设置根页，而不是把应用最小化
     androidx.activity.compose.BackHandler { onBack() }
@@ -73,7 +141,8 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 modifier = Modifier.padding(horizontal = 20.dp)
             )
             androidx.compose.foundation.layout.Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)
             ) {
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = { showAdd = true },
@@ -98,6 +167,20 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                }
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = { showImportMenu = true },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    enabled = !importing,
+                    surfaceColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f)
+                ) {
+                    Text(
+                        if (importing) "导入中…" else "导入技能",
+                        color = MaterialTheme.colorScheme.onTertiary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                    )
                 }
             }
             if (skills.isEmpty()) {
@@ -158,24 +241,42 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                                 )
                                 Text(
                                     "使用 ${s.useCount} 次 · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
-                                        " · 来源 ${if (s.source == "agent") "自进化" else "手动"}",
+                                        " · 来源 " + when {
+                                        s.source == "agent" -> "自进化"
+                                        s.source == "import_local" -> "导入（本地文件夹）"
+                                        s.source == "import_url" -> "导入（URL）"
+                                        s.source == "import_clipboard" -> "导入（剪贴板）"
+                                        else -> "手动"
+                                    } + if (s.importedAt > 0) " · ${fmt.format(java.util.Date(s.importedAt))}" else "",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            TextButton(onClick = {
-                                store.setPinned(s.name, !s.pinned)
-                                refresh()
-                            }) { Text(if (s.pinned) "取消置顶" else "置顶") }
-                            TextButton(onClick = {
-                                viewBody = s.name to (store.view(s.name) ?: "")
-                            }) { Text("查看") }
-                            IconButton(onClick = { pendingDelete = s.name }) {
-                                Icon(
-                                    Icons.Filled.Delete,
-                                    contentDescription = "删除",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
+                            Column {
+                                TextButton(onClick = {
+                                    store.setPinned(s.name, !s.pinned)
+                                    refresh()
+                                }) { Text(if (s.pinned) "取消置顶" else "置顶") }
+                                TextButton(onClick = {
+                                    viewBody = s.name to (store.view(s.name) ?: "")
+                                }) { Text("查看") }
+                                TextButton(onClick = {
+                                    val text = runCatching {
+                                        val d = java.io.File(
+                                            context.filesDir, "skills/${s.name}/SKILL.md"
+                                        )
+                                        d.readText()
+                                    }.getOrDefault("")
+                                    pendingExport = s.name to text
+                                    exportLauncher.launch("${s.name}.md")
+                                }) { Text("导出") }
+                                IconButton(onClick = { pendingDelete = s.name }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "删除",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                         }
                     }
@@ -274,5 +375,171 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                 color = MaterialTheme.colorScheme.onBackground
             )
         }
+    }
+
+    // ---------- 2.2 导入弹窗组 ----------
+
+    if (showImportMenu) {
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "导入技能",
+            onDismiss = { showImportMenu = false },
+            dismissLabel = "取消",
+            contentMaxHeight = 360.dp
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "兼容 agentskills.io 规范的 SKILL.md（frontmatter 的 name/description 字段；其他字段忽略）。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ImportOptionRow("从本地文件夹", "扫描所选目录及一级子目录中的 SKILL.md") {
+                    showImportMenu = false
+                    treePicker.launch(null)
+                }
+                ImportOptionRow("从 URL 下载", ".md 或 .zip 直链（≤50MB，走安全拦截）") {
+                    showImportMenu = false
+                    showUrlImport = true
+                }
+                ImportOptionRow("从剪贴板粘贴", "粘贴 SKILL.md 全文") {
+                    showImportMenu = false
+                    showPasteImport = true
+                }
+            }
+        }
+    }
+
+    if (showUrlImport) {
+        var url by remember { mutableStateOf("") }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "从 URL 导入",
+            onDismiss = { showUrlImport = false },
+            confirmLabel = if (importing) "下载中…" else "下载并导入",
+            confirmEnabled = url.isNotBlank() && !importing,
+            dismissLabel = "取消",
+            onConfirm = {
+                scope.launch {
+                    importing = true
+                    val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        SkillImporter.downloadAndScan(importHttp, url).fold(
+                            { docs ->
+                                if (docs.isEmpty()) "下载内容中没有 SKILL.md"
+                                else SkillImporter.importBatch(docs, "import_url").summary()
+                            },
+                            { "下载失败：${it.message}" }
+                        )
+                    }
+                    importing = false
+                    showUrlImport = false
+                    importResult = r
+                    skills = store.list()
+                }
+            }
+        ) {
+            androidx.compose.material3.OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("https://…/SKILL.md 或 .zip") },
+                colors = com.haoai.agent.ui.common.glassFieldColors()
+            )
+        }
+    }
+
+    if (showPasteImport) {
+        var text by remember { mutableStateOf(clipboard.getText()?.text ?: "") }
+        var overwrite by remember { mutableStateOf(false) }
+        val parsed = remember(text) { SkillStore.parseDoc(text) }
+        val conflict = remember(text) {
+            val n = SkillStore.sanitizeName(parsed.name ?: "")
+            parsed.name != null && SkillStore.exists(n)
+        }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "从剪贴板导入",
+            onDismiss = { showPasteImport = false },
+            confirmLabel = "导入",
+            confirmEnabled = text.isNotBlank(),
+            dismissLabel = "取消",
+            onConfirm = {
+                val finalName = SkillStore.sanitizeName(parsed.name ?: (clipboard.getText()?.text?.lineSequence()?.firstOrNull() ?: "imported"))
+                if (SkillStore.exists(finalName) && !overwrite) {
+                    // 冲突：首次点击时提示勾选覆盖（保持弹窗打开）
+                    overwrite = true
+                } else {
+                    when (val r = SkillStore.importDoc(text, "import_clipboard", overwrite = overwrite)) {
+                        is SkillStore.ImportOutcome.Done -> {
+                            importResult = "已导入技能「${r.name}」" + if (overwrite && conflict) "（覆盖原技能）" else ""
+                            showPasteImport = false
+                            skills = store.list()
+                        }
+                        is SkillStore.ImportOutcome.Conflict -> overwrite = true
+                        is SkillStore.ImportOutcome.Failed -> importResult = "导入失败：${r.message}".also { showPasteImport = false }
+                    }
+                }
+            }
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (conflict && overwrite) {
+                    Text(
+                        "技能「${SkillStore.sanitizeName(parsed.name ?: "")}」已存在，再次点击将覆盖它。",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 6,
+                    maxLines = 12,
+                    label = { Text("SKILL.md 全文") },
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                )
+                if (text.isNotBlank()) {
+                    Text(
+                        when {
+                            parsed.error != null -> "⚠ ${parsed.error}"
+                            parsed.name != null -> "识别为技能「${parsed.name}」"
+                            else -> "⚠ 未识别到 frontmatter 的 name，将以正文首行或默认名导入"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (parsed.error != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    importResult?.let { msg ->
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "导入结果",
+            onDismiss = { importResult = null },
+            confirmLabel = "好的",
+            onConfirm = { importResult = null }
+        ) {
+            Text(msg, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun ImportOptionRow(title: String, subtitle: String, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
