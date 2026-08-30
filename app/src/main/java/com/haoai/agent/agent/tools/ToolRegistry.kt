@@ -34,6 +34,8 @@ object ToolRegistry {
         add(CameraTool())
         add(LocationTool())
         if (ctx.httpClient != null) add(WebSearchTool())
+        // MCP 外部工具：enabled 服务器全部展开（未连接时用 toolCache 占位，调用报不可用）
+        addAll(com.haoai.agent.agent.mcp.McpManager.toolInstances())
         if (ctx.depth == 0 && subAgentRunner != null) {
             add(SubAgentTool(subAgentRunner))
             add(SubAgentsTool(subAgentRunner))

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
@@ -101,7 +102,8 @@ fun SettingsScreen(
     onSectionChange: (String) -> Unit = {},
     onOpenMemories: () -> Unit = {},
     onOpenSchedules: () -> Unit = {},
-    onOpenSkills: () -> Unit = {}
+    onOpenSkills: () -> Unit = {},
+    onOpenMcp: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val settings by vm.settings.collectAsState()
@@ -214,6 +216,19 @@ fun SettingsScreen(
                         subtitle = "到点自动执行并通知 · 点击管理",
                         tint = Color(0xFFD9913F),
                         onClick = onOpenSchedules
+                    )
+                }
+                item {
+                    val mcpServers = com.haoai.agent.agent.mcp.McpManager.listServers()
+                    val mcpLabel = if (mcpServers.isEmpty()) "未接入 · 点击添加"
+                    else "${mcpServers.count { it.enabled }}/${mcpServers.size} 个服务器已启用"
+                    MenuCard(
+                        backdrop = backdrop,
+                        icon = Icons.Filled.Extension,
+                        title = "MCP 服务器",
+                        subtitle = "外部工具扩展 · $mcpLabel",
+                        tint = Color(0xFF7C6BE8),
+                        onClick = onOpenMcp
                     )
                 }
                 item {

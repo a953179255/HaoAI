@@ -56,6 +56,9 @@ class AppContainer(app: Application) {
         // 存储单例先初始化（WorkspaceDocs 异步任务会用到）
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
+        // MCP：加载服务器配置 → 注册风险覆盖/白名单 → enabled 服务器异步握手（不阻塞启动）
+        com.haoai.agent.agent.mcp.McpManager.init(appFilesDir, okHttpClient)
+        com.haoai.agent.agent.mcp.McpManager.connectAll(applicationScope)
         llama.preferredModel = settingsFlow.value.localModelFile
         llama.contextSize = settingsFlow.value.localContextLength
         syncWorkspaceDocs()

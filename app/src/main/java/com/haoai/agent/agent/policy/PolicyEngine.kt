@@ -40,6 +40,14 @@ sealed class ApprovalRequest {
 
 class PolicyEngine(private val mode: PermissionMode) {
 
+    companion object {
+        /**
+         * 外部模块（MCP）注册的工具风险覆盖：返回 null 走默认表。
+         * MCP 工具默认按 WRITE 询问；用户降级的只读 server 工具按 READ 免审。
+         */
+        @Volatile var riskOverride: ((String) -> RiskLevel?)? = null
+    }
+
     private val shellBlacklist = listOf(
         Regex("(^|[;&|\\s])sudo\\s", RegexOption.IGNORE_CASE),
         Regex("\\brm\\s+[^\\n]*-[a-zA-Z]*[rf][a-zA-Z]*[rf][a-zA-Z]*\\s+(\"?/?\"?\\s*|/\\*|~/*)($|\\s)", RegexOption.IGNORE_CASE),
@@ -62,7 +70,8 @@ class PolicyEngine(private val mode: PermissionMode) {
         "flash_image", "fastboot", "su"
     )
 
-    fun riskOf(toolName: String): RiskLevel = when (toolName) {
+    fun riskOf(toolName: String): RiskLevel =
+        riskOverride?.invoke(toolName) ?: when (toolName) {
         "bash" -> RiskLevel.EXEC
         "write", "edit" -> RiskLevel.WRITE
         "tap", "swipe", "type_text", "key" -> RiskLevel.EXEC

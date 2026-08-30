@@ -207,7 +207,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     },
                     onOpenMemories = { screen = 2 },
                     onOpenSchedules = { screen = 3 },
-                    onOpenSkills = { screen = 5 }
+                    onOpenSkills = { screen = 5 },
+                    onOpenMcp = { screen = 6 }
                 )
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,
@@ -219,6 +220,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onBack = { screen = 1 }
                 )
                 5 -> com.haoai.agent.ui.manage.SkillsScreen(
+                    backdrop = backdrop,
+                    onBack = { screen = 1 }
+                )
+                6 -> com.haoai.agent.ui.settings.McpSettingsScreen(
                     backdrop = backdrop,
                     onBack = { screen = 1 }
                 )

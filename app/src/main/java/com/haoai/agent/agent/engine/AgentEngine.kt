@@ -515,7 +515,8 @@ class AgentEngine(
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
                 identity = identity,
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
-                journalBlock = journalSnippet()
+                journalBlock = journalSnippet(),
+                mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary()
             )
     }
 

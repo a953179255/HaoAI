@@ -28,7 +28,8 @@ object SystemPrompt {
         a11yAvailable: Boolean = false,
         identity: String = "",
         skillIndex: String = "",
-        journalBlock: String = ""
+        journalBlock: String = "",
+        mcpSummary: String = ""
     ): String = buildString {
         if (identity.isNotBlank()) {
             appendLine()
@@ -52,6 +53,9 @@ object SystemPrompt {
             else "- 无障碍自动化：未启用（工具会提示用户开启）"
         )
         appendLine("- 定时任务：可用（schedule 工具，spec 如 every:30m / daily:09:30）")
+        if (mcpSummary.isNotBlank()) {
+            appendLine("- MCP 外部工具：$mcpSummary")
+        }
         if (memoryBlock.isNotBlank()) {
             appendLine()
             appendLine(memoryBlock)
