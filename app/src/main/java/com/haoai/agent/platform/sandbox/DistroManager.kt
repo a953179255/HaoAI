@@ -78,14 +78,9 @@ class DistroManager(
         File(filesDir, "proot/distros/$distroId/meta.json")
 
     /**
-     * /bin/sh 探测：alpine/ubuntu 的 sh 是绝对路径符号链接（sh -> /bin/busybox），
-     * File.exists() 会跟随链接在 Android 真实根下解析而误判损坏，必须按 NOFOLLOW 判存在。
+     * /bin/sh 探测统一走 Proot.shAvailable（NOFOLLOW，见其注释）。
      */
-    private fun shExists(root: File): Boolean {
-        val sh = File(root, "bin/sh")
-        if (sh.exists()) return true
-        return runCatching { java.nio.file.Files.isSymbolicLink(sh.toPath()) }.getOrDefault(false)
-    }
+    private fun shExists(root: File): Boolean = Proot.shAvailable(root)
 
     private fun downloadTmp(): File = File(filesDir, "proot/download.tmp")
 

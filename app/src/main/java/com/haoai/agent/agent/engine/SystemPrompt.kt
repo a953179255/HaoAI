@@ -29,7 +29,8 @@ object SystemPrompt {
         identity: String = "",
         skillIndex: String = "",
         journalBlock: String = "",
-        mcpSummary: String = ""
+        mcpSummary: String = "",
+        shellNote: String = ""
     ): String = buildString {
         if (identity.isNotBlank()) {
             appendLine()
@@ -48,6 +49,9 @@ object SystemPrompt {
             if (shellAvailable) "- Shell：可用（POSIX sh，工作目录为工作空间）"
             else "- Shell：不可用（当前工作空间为 SAF 授权目录）"
         )
+        if (shellNote.isNotBlank()) {
+            appendLine("- $shellNote")
+        }
         appendLine(
             if (a11yAvailable) "- 无障碍自动化：可用（screen 编号列表 → tap(index) → wait/find/scroll/type_text/key/launch_app）"
             else "- 无障碍自动化：未启用（工具会提示用户开启）"

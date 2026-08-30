@@ -526,7 +526,11 @@ fun SettingsScreen(
                     }, customUrl = custom)
                     linuxState.installingId = null
                     r.fold(
-                        onSuccess = { linuxState.refresh(vm.distros) },
+                        onSuccess = {
+                            com.haoai.agent.agent.tools.shell.ProotBackend.invalidate()
+                            com.haoai.agent.agent.tools.shell.SandboxProbe.invalidate()
+                            linuxState.refresh(vm.distros)
+                        },
                         onFailure = { linuxState.installError = it.message ?: "安装失败" }
                     )
                 }
@@ -567,6 +571,8 @@ fun SettingsScreen(
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                         vm.distros.delete(id)
                     }
+                    com.haoai.agent.agent.tools.shell.ProotBackend.invalidate()
+                    com.haoai.agent.agent.tools.shell.SandboxProbe.invalidate()
                     linuxState.refresh(vm.distros)
                 }
             },

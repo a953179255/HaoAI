@@ -75,21 +75,27 @@ object Proot {
      * 组装 proot 命令行（3.3 ProotBackend 复用）：
      * --kill-on-exit 保证进程清理；-0 伪装 root；-w 指定沙箱内初始工作目录；
      * -b 绑定目录（宿主:沙箱内路径）。
+     * @param envWrapper true 时经 /usr/local/bin/haoai-env 启动（注入 HOME/LANG/TERM/TZ/PATH/TMPDIR）。
      */
     fun buildCommand(
         install: Install,
         rootfsDir: File,
         cmd: String,
         binds: List<Pair<String, String>> = emptyList(),
-        workdir: String = "/root"
+        workdir: String = "/root",
+        envWrapper: Boolean = false,
+        fakeRoot: Boolean = true
     ): List<String> = buildList {
         add(install.binary.absolutePath)
         add("--kill-on-exit")
         add("-r"); add(rootfsDir.absolutePath)
-        add("-0")
+        if (fakeRoot) add("-0")
         add("-w"); add(workdir)
         for ((host, guest) in binds) {
             add("-b"); add("$host:$guest")
+        }
+        if (envWrapper) {
+            add("/usr/local/bin/haoai-env")
         }
         add("/bin/sh")
         add("-c")
@@ -107,5 +113,16 @@ object Proot {
             }
         }
         return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * rootfs 内 /bin/sh 存在性探测（3.2/3.3 共用）：alpine/ubuntu 的 sh 是绝对路径
+     * 符号链接（sh -> /bin/busybox），File.exists() 会跟随链接在 Android 真实根下
+     * 解析而误判损坏，必须按 NOFOLLOW 判存在。
+     */
+    fun shAvailable(rootfs: File): Boolean {
+        val sh = File(rootfs, "bin/sh")
+        if (sh.exists()) return true
+        return runCatching { java.nio.file.Files.isSymbolicLink(sh.toPath()) }.getOrDefault(false)
     }
 }

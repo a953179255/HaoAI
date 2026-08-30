@@ -335,8 +335,12 @@ class AgentEngine(
 
     private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): Pair<String, Boolean> =
         try {
+            // bash（3.3 多后端）允许显式放宽到 600s（长构建），按请求 +20s 余量；其余工具维持 180s
+            val budget = if (tool.name == "bash") {
+                (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000) + 20_000L
+            } else TOOL_TIMEOUT_MS
             // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
-            withTimeout(TOOL_TIMEOUT_MS) {
+            withTimeout(budget) {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     tool.run(args, ctx)
                 }
@@ -344,7 +348,7 @@ class AgentEngine(
         } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
             // 区分「工具超时」与「用户停止」：超时只作废本次调用，不能静默杀掉整轮任务
             if (ce is kotlinx.coroutines.TimeoutCancellationException) {
-                ("工具执行超时（${TOOL_TIMEOUT_MS / 1000}s），请拆小任务或加大 timeout 重试") to true
+                ("工具执行超时，请拆小任务或加大 timeout 重试") to true
             } else {
                 throw ce
             }
@@ -509,6 +513,22 @@ class AgentEngine(
     private fun buildSystemText(markMemoryUse: Boolean = false): String {
         val shellAvailable = backend?.shellWorkdir() != null
         val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
+        // 3.3：当前 shell 后端说明 + 沙箱能力探测（探测异步跑一次，下一轮注入）
+        val sandbox = com.haoai.agent.platform.sandbox.SandboxEnv.resolve(
+            appFilesDir, appContext?.applicationInfo?.nativeLibraryDir, backend?.shellWorkdir()
+        )
+        val shellNote = when {
+            !shellAvailable -> ""
+            sandbox != null -> {
+                if (backgroundScope != null) {
+                    com.haoai.agent.agent.tools.shell.SandboxProbe.ensureStarted(sandbox, backgroundScope)
+                }
+                com.haoai.agent.platform.sandbox.SandboxEnv.describe(
+                    sandbox, com.haoai.agent.agent.tools.shell.SandboxProbe.summary() ?: ""
+                )
+            }
+            else -> "Shell 后端：toybox（Android /system/bin/sh，工具集有限）；用户在 设置 → Linux 环境 安装发行版后 bash 将自动切换到 glibc 沙箱。"
+        }
         return SystemPrompt.PREFIX +
             SystemPrompt.buildSuffix(
                 workspaceLabel, shellAvailable, dateText, customPrompt, memorySnippet(markMemoryUse),
@@ -516,7 +536,8 @@ class AgentEngine(
                 identity = identity,
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
                 journalBlock = journalSnippet(),
-                mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary()
+                mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary(),
+                shellNote = shellNote
             )
     }
 

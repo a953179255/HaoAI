@@ -7,13 +7,37 @@ object ShellRunner {
 
     data class Result(val exitCode: Int, val output: String)
 
-    private const val MAX_OUTPUT = 64 * 1024
+    const val MAX_OUTPUT = 64 * 1024
 
-    fun exec(workdir: File?, command: String, timeoutMs: Long): Result {
-        val pb = ProcessBuilder("/system/bin/sh", "-c", command)
+    /** toybox 后端：/system/bin/sh -c <command>（3.3 前的既有入口，行为不变）。 */
+    fun exec(workdir: File?, command: String, timeoutMs: Long): Result =
+        execList(listOf("/system/bin/sh", "-c", command), workdir, timeoutMs)
+
+    /**
+     * 通用进程执行（3.3 多后端共用）：完整 argv + 可选环境变量 + 可中断。
+     * 超时/中断均杀进程树；输出合并 stdout+stderr（与 toybox 现状一致，保序）。
+     * @param clearEnv true 时清空继承环境（proot 沙箱用：app 的 ART/TMPDIR 等
+     *   变量会泄漏进 guest，且实测会让 guest 内 fork 失效）。
+     */
+    fun execList(
+        argv: List<String>,
+        workdir: File?,
+        timeoutMs: Long,
+        env: Map<String, String> = emptyMap(),
+        clearEnv: Boolean = false
+    ): Result {
+        val pb = ProcessBuilder(argv)
             .redirectErrorStream(true)
         if (workdir != null) {
             pb.directory(workdir)
+        }
+        if (clearEnv) {
+            val pe = pb.environment()
+            pe.clear()
+        }
+        if (env.isNotEmpty()) {
+            val pe = pb.environment()
+            for ((k, v) in env) pe[k] = v
         }
         val process = try {
             pb.start()
