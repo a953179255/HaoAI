@@ -215,8 +215,19 @@ fun ChatScreen(
     val snapshotScope = rememberCoroutineScope()
 
     val scope = rememberCoroutineScope()
-    fun openDrawer() = scope.launch { drawer.open() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    // 软键盘悬浮在 adjustNothing 窗口上会直接盖住抽屉下半部，键盘底色被玻璃 backdrop 采进去
+    // （表现为「侧边栏只有下半部分是灰色不透明」）——开抽屉前先收起 IME
+    fun hideIme() {
+        runCatching {
+            (context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as?
+                android.view.inputmethod.InputMethodManager)
+                ?.hideSoftInputFromWindow(view.windowToken, 0)
+        }
+        focusManager.clearFocus()
+    }
+    fun openDrawer() = scope.launch { hideIme(); drawer.open() }
     val density = LocalDensity.current
     val imeHeightPx = WindowInsets.ime.getBottom(density)
     // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
@@ -346,10 +357,10 @@ fun ChatScreen(
                                 if (c.changedToUp()) break
                                 tx += c.positionChange().x; ty += c.positionChange().y
                                 if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
-                                    if (abs(tx) > abs(ty) && tx > 0f) {
-                                        scope.launch { drawer.open() }
-                                        c.consume()
-                                    }
+                                if (abs(tx) > abs(ty) && tx > 0f) {
+                                    openDrawer()
+                                    c.consume()
+                                }
                                     break
                                 }
                             }
