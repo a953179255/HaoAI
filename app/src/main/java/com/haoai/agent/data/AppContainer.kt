@@ -39,6 +39,11 @@ class AppContainer(app: Application) {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Linux 沙箱 proot 安装（3.1）：null = 当前设备不可用（ABI 无包/sha 不符），3.3 后端据此回落 toybox。 */
+    val proot: com.haoai.agent.platform.sandbox.Proot.Install? = runCatching {
+        com.haoai.agent.platform.sandbox.Proot.ensureReady(appFilesDir, app.applicationInfo.nativeLibraryDir)
+    }.getOrNull()
+
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(300, TimeUnit.SECONDS)
