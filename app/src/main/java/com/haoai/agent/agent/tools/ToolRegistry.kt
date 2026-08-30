@@ -33,6 +33,14 @@ object ToolRegistry {
         add(UpdateSettingsTool(ctx.configMutator))
         add(CameraTool())
         add(LocationTool())
+        // 2.4 设备工具包
+        add(ClipboardReadTool())
+        add(CalendarQueryTool())
+        add(CalendarCreateTool())
+        add(ContactsSearchTool())
+        add(AlarmSetTool())
+        add(OcrImageTool())
+        add(NotificationsReadTool())
         if (ctx.httpClient != null) add(WebSearchTool())
         // MCP 外部工具：enabled 服务器全部展开（未连接时用 toolCache 占位，调用报不可用）
         addAll(com.haoai.agent.agent.mcp.McpManager.toolInstances())

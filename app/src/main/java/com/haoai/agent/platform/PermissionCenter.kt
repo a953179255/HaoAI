@@ -56,12 +56,20 @@ object PermissionCenter {
         "storage", "文件管理", "管理手机存储：读写工作空间之外的任意文件",
         special = true
     )
+    val CALENDAR = PermSpec(
+        "calendar", "日历", "查询与创建日历事件（calendar_query / calendar_create 工具）",
+        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+    )
+    val CONTACTS = PermSpec(
+        "contacts", "联系人", "按名字搜索联系人（contacts_search 工具）",
+        listOf(Manifest.permission.READ_CONTACTS)
+    )
     val NOTIFICATIONS = PermSpec(
         "notifications", "通知", "后台任务完成与定时提醒的通知推送",
         if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
     )
 
-    val ALL = listOf(CAMERA, LOCATION, MEDIA, STORAGE, NOTIFICATIONS)
+    val ALL = listOf(CAMERA, LOCATION, MEDIA, STORAGE, NOTIFICATIONS, CALENDAR, CONTACTS)
 
     private fun mediaPerms(): List<String> =
         if (Build.VERSION.SDK_INT >= 33)

@@ -76,6 +76,8 @@ class PolicyEngine(private val mode: PermissionMode) {
         "write", "edit" -> RiskLevel.WRITE
         "tap", "swipe", "type_text", "key" -> RiskLevel.EXEC
         "launch_app" -> RiskLevel.WRITE
+        "calendar_create" -> RiskLevel.WRITE
+        "alarm_set" -> RiskLevel.EXEC
         else -> RiskLevel.READ
     }
 

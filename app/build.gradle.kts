@@ -55,6 +55,8 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    // OCR 中文捆绑版（2.4 ocr_image）：模型打进 APK（约 4MB/ABI），Apache-2.0
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.activity.compose)
