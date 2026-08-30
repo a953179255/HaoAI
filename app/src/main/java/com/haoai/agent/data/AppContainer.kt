@@ -54,6 +54,9 @@ class AppContainer(app: Application) {
     val client = OpenAiCompatClient(okHttpClient)
     val anthropicClient = com.haoai.agent.agent.provider.AnthropicClient(okHttpClient)
 
+    /** Linux 发行版管理（3.2）：下载/校验/解压/初始化 rootfs，供 3.3 ProotBackend 使用。 */
+    val distros = com.haoai.agent.platform.sandbox.DistroManager(appFilesDir, okHttpClient)
+
     /** 按供应商配置的协议选客户端（2.3）：anthropic 原生 / openai_compat（默认）。 */
     fun clientFor(provider: ProviderConfig?): com.haoai.agent.agent.provider.ProviderClient =
         if (provider?.protocol == "anthropic") anthropicClient else client

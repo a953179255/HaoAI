@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.AssistChip
@@ -123,6 +124,11 @@ fun SettingsScreen(
     // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）
     var section by rememberSaveable { mutableStateOf(initialSection) }
     androidx.compose.runtime.LaunchedEffect(section) { if (section != initialSection) onSectionChange(section) }
+    // Linux 环境（3.2）：发行版状态/安装进度/弹窗路由集中在一处
+    val linuxState = androidx.compose.runtime.remember { LinuxEnvState() }
+    androidx.compose.runtime.LaunchedEffect(section) {
+        if (section == "linux" || section.isEmpty()) linuxState.refresh(vm.distros)
+    }
     // 首页计数（记忆/日志/技能）后台加载，避免组合期读盘
     androidx.compose.runtime.LaunchedEffect(section) { vm.refreshHomeCounts() }
 
@@ -233,6 +239,27 @@ fun SettingsScreen(
                     )
                 }
                 item {
+                    val linuxLabel = run {
+                        val st = linuxState.statuses
+                        if (linuxState.installingId != null) "正在安装…"
+                        else if (st.isEmpty()) "未初始化 · 点击查看"
+                        else {
+                            val ready = st.count { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY }
+                            if (ready > 0) "${st.first { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY }.distro.name} · 已就绪"
+                            else if (st.any { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED }) "rootfs 已损坏 · 建议重装"
+                            else "未安装 · 点击安装"
+                        }
+                    }
+                    MenuCard(
+                        backdrop = backdrop,
+                        icon = Icons.Filled.Terminal,
+                        title = "Linux 环境",
+                        subtitle = "沙箱发行版 · $linuxLabel",
+                        tint = Color(0xFF4A6FA5),
+                        onClick = { section = "linux" }
+                    )
+                }
+                item {
                     MenuCard(
                         backdrop = backdrop,
                         icon = Icons.Filled.Folder,
@@ -296,6 +323,7 @@ fun SettingsScreen(
                         "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
                         "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop, onPickDreamModel = { showDreamPicker = true })
                         "workspace" -> workspaceItems(vm, backdrop) { treePicker.launch(null) }
+                        "linux" -> linuxItems(vm, backdrop, linuxState)
                         "general" -> generalItems(
                             vm, settings, context, backdrop,
                             wpVersion, onWpVersionChange = { wpVersion = it },
@@ -474,6 +502,101 @@ fun SettingsScreen(
             Text("将清除自定义壁纸并恢复默认渐变背景。")
         }
     }
+
+    // Linux 发行版安装：预填官方源，可改为自定义镜像；sha256 始终按官方清单校验
+    linuxState.urlEditId?.let { id ->
+        val distro = vm.distros.distroById(id)
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "安装 ${distro?.name ?: "发行版"}",
+            onDismiss = { linuxState.urlEditId = null },
+            confirmLabel = "开始安装",
+            onConfirm = {
+                val d = distro ?: return@GlassAlertDialog
+                linuxState.urlEditId = null
+                linuxState.installingId = id
+                linuxState.installError = null
+                linuxState.progressRead = 0
+                linuxState.progressTotal = 0
+                val custom = linuxState.urlDraft
+                scope.launch {
+                    val r = vm.distros.install(d, onProgress = { read, total ->
+                        linuxState.progressRead = read
+                        linuxState.progressTotal = total
+                    }, customUrl = custom)
+                    linuxState.installingId = null
+                    r.fold(
+                        onSuccess = { linuxState.refresh(vm.distros) },
+                        onFailure = { linuxState.installError = it.message ?: "安装失败" }
+                    )
+                }
+            },
+            dismissLabel = "取消"
+        ) {
+            Column {
+                Text(
+                    "当前架构：${com.haoai.agent.platform.sandbox.Proot.abiOf()}。" +
+                        "下载完成后按官方 sha256 清单校验，不匹配即拒绝解压。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = linuxState.urlDraft,
+                    onValueChange = { linuxState.urlDraft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("下载 URL（默认官方源，可换镜像）") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                )
+            }
+        }
+    }
+
+    // Linux 发行版删除确认：展示占用空间
+    linuxState.pendingDeleteId?.let { id ->
+        val stat = linuxState.statuses.find { it.distro.id == id }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "删除 ${stat?.distro?.name ?: "发行版"}",
+            onDismiss = { linuxState.pendingDeleteId = null },
+            confirmLabel = "删除",
+            onConfirm = {
+                linuxState.pendingDeleteId = null
+                scope.launch {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        vm.distros.delete(id)
+                    }
+                    linuxState.refresh(vm.distros)
+                }
+            },
+            dismissLabel = "取消",
+            danger = true
+        ) {
+            Text(
+                "将删除整个 rootfs（占用 ${formatDistroSize(stat?.sizeBytes ?: 0)}），删除后不可恢复。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+            )
+        }
+    }
+
+    // Linux 安装失败提示
+    linuxState.installError?.let { err ->
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "安装失败",
+            onDismiss = { linuxState.installError = null },
+            confirmLabel = "知道了",
+            onConfirm = { linuxState.installError = null }
+        ) {
+            Text(
+                err,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+            )
+        }
+    }
 }
 
 @Composable
@@ -541,9 +664,33 @@ private fun sectionTitle(section: String): String = when (section) {
     "privacy" -> "权限与自动化"
     "memory" -> "记忆与梦境"
     "workspace" -> "工作空间"
+    "linux" -> "Linux 环境"
     "general" -> "通用"
     "about" -> "关于"
     else -> ""
+}
+
+/** Linux 环境区块的界面状态（发行版列表/安装进度/弹窗路由），由设置页持有。 */
+private class LinuxEnvState {
+    var statuses by androidx.compose.runtime.mutableStateOf<
+        List<com.haoai.agent.platform.sandbox.DistroManager.Status>>(emptyList())
+    var installingId by androidx.compose.runtime.mutableStateOf<String?>(null)
+    var progressRead by androidx.compose.runtime.mutableStateOf(0L)
+    var progressTotal by androidx.compose.runtime.mutableStateOf(0L)
+    var installError by androidx.compose.runtime.mutableStateOf<String?>(null)
+    var pendingDeleteId by androidx.compose.runtime.mutableStateOf<String?>(null)
+    var urlEditId by androidx.compose.runtime.mutableStateOf<String?>(null)
+    var urlDraft by androidx.compose.runtime.mutableStateOf("")
+
+    suspend fun refresh(dm: com.haoai.agent.platform.sandbox.DistroManager) {
+        statuses = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { dm.statuses() }
+    }
+}
+
+private fun formatDistroSize(bytes: Long): String = when {
+    bytes >= 1L shl 20 -> "%.1f MB".format(bytes / 1048576.0)
+    bytes >= 1L shl 10 -> "${bytes / 1024} KB"
+    else -> "$bytes B"
 }
 
 // ---------- 各子页 ----------
@@ -1974,3 +2121,126 @@ private fun ProviderDialog(
 }
 
 /** 玻璃弹层输入框配色复用公共实现（ui/common/Glass.kt）。 */
+
+// ---------- Linux 环境（3.2 发行版管理） ----------
+
+private fun androidx.compose.foundation.lazy.LazyListScope.linuxItems(
+    vm: SettingsViewModel,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    s: LinuxEnvState
+) {
+    item { SectionTitle("发行版") }
+    item {
+        GlassGroup(backdrop = backdrop) {
+            val st = s.statuses
+            if (st.isEmpty()) {
+                Text(
+                    "正在读取状态…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(14.dp)
+                )
+            }
+            st.forEach { stat ->
+                val d = stat.distro
+                val busy = s.installingId != null
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                d.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                when (stat.state) {
+                                    com.haoai.agent.platform.sandbox.DistroManager.State.READY ->
+                                        "已安装 · ${formatDistroSize(stat.sizeBytes)}" +
+                                            if (stat.installedAt > 0) " · ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date(stat.installedAt))} 装" else ""
+                                    com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED ->
+                                        "rootfs 已损坏（缺 /bin/sh）· 建议删除后重装"
+                                    com.haoai.agent.platform.sandbox.DistroManager.State.NOT_INSTALLED ->
+                                        "未安装 · ${d.desc}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            when (stat.state) {
+                                com.haoai.agent.platform.sandbox.DistroManager.State.NOT_INSTALLED ->
+                                    LiquidPillButton(
+                                        backdrop = backdrop,
+                                        text = "安装",
+                                        enabled = !busy
+                                    ) {
+                                        s.urlDraft = d.sources[com.haoai.agent.platform.sandbox.Proot.abiOf()]?.url ?: ""
+                                        s.urlEditId = d.id
+                                    }
+                                com.haoai.agent.platform.sandbox.DistroManager.State.READY ->
+                                    LiquidPillButton(
+                                        backdrop = backdrop,
+                                        text = "删除",
+                                        emphasized = false,
+                                        enabled = !busy
+                                    ) { s.pendingDeleteId = d.id }
+                                com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED -> {
+                                    LiquidPillButton(
+                                        backdrop = backdrop,
+                                        text = "重装",
+                                        enabled = !busy
+                                    ) {
+                                        s.urlDraft = d.sources[com.haoai.agent.platform.sandbox.Proot.abiOf()]?.url ?: ""
+                                        s.urlEditId = d.id
+                                    }
+                                    LiquidPillButton(
+                                        backdrop = backdrop,
+                                        text = "删除",
+                                        emphasized = false,
+                                        enabled = !busy
+                                    ) { s.pendingDeleteId = d.id }
+                                }
+                            }
+                        }
+                    }
+                    if (s.installingId == d.id) {
+                        Spacer(Modifier.height(8.dp))
+                        val frac = if (s.progressTotal > 0)
+                            (s.progressRead.toDouble() / s.progressTotal).toFloat() else 0f
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { frac },
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "${formatDistroSize(s.progressRead)} / " +
+                                (if (s.progressTotal > 0) formatDistroSize(s.progressTotal) else "未知大小") +
+                                "（${(frac * 100).toInt()}%）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+    item { SectionTitle("说明") }
+    item {
+        GlassGroup(backdrop = backdrop) {
+            Text(
+                "安装 = 下载 → sha256 校验 → 解压 → 初始化（DNS/时区/haoai-env）。" +
+                    "无论使用官方源还是自定义镜像，校验都按官方 sha256 清单执行，不匹配即拒绝安装。" +
+                    "安装完成后由 3.3 的 Linux Shell 后端在沙箱内执行命令。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+            )
+        }
+    }
+}

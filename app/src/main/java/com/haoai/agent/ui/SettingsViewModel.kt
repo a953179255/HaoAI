@@ -52,6 +52,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     val settings: kotlinx.coroutines.flow.StateFlow<AppSettings> =
         c.settingsFlow
 
+    /** Linux 发行版管理器（3.2，供设置页 Linux 环境区块使用）。 */
+    val distros get() = c.distros
+
     var draft by mutableStateOf<ProviderDraft?>(null)
         private set
 
