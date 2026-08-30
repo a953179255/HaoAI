@@ -57,7 +57,7 @@ class AgentWorker(context: Context, params: WorkerParameters) :
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "⏰ ${task.name}"
         val engine = AgentEngine(
-            httpClient = container.client,
+            httpClient = container.clientFor(provider),
             provider = provider,
             apiKey = container.cipher.decrypt(provider.apiKeyCipher),
             customPrompt = container.settingsFlow.value.customPrompt,

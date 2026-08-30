@@ -8,7 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
 class CompactionManager(
-    private val client: OpenAiCompatClient,
+    private val client: com.haoai.agent.agent.provider.ProviderClient,
     private val settings: CompactionSettings = CompactionSettings()
 ) {
     private var lastCompactionTime = 0L

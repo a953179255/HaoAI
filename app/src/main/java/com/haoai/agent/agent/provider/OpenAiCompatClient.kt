@@ -252,14 +252,14 @@ class ThinkTagParser {
     }
 }
 
-class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
+class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClient {
 
-    suspend fun chatStream(
+    override suspend fun chatStream(
         provider: ProviderConfig,
         apiKey: String,
         messages: List<ApiMessage>,
         tools: List<ApiTool>,
-        reasoningEffort: String? = null
+        reasoningEffort: String?
     ): Flow<SseEvent> = flow {
         val url = normalizeUrl(provider.baseUrl)
         val isLocal = provider.baseUrl.contains("127.0.0.1")
@@ -389,7 +389,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) {
         }
 
     /** 轻量连接测试：非流式、1 token，返回成功时的模型名或失败原因。 */
-    suspend fun testConnection(
+    override suspend fun testConnection(
         provider: ProviderConfig,
         apiKey: String
     ): Result<String> = withContext(Dispatchers.IO) {

@@ -47,6 +47,11 @@ class AppContainer(app: Application) {
         .build()
 
     val client = OpenAiCompatClient(okHttpClient)
+    val anthropicClient = com.haoai.agent.agent.provider.AnthropicClient(okHttpClient)
+
+    /** 按供应商配置的协议选客户端（2.3）：anthropic 原生 / openai_compat（默认）。 */
+    fun clientFor(provider: ProviderConfig?): com.haoai.agent.agent.provider.ProviderClient =
+        if (provider?.protocol == "anthropic") anthropicClient else client
 
     val llama = LlamaServerController(app, okHttpClient)
 

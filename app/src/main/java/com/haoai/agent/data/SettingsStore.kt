@@ -12,6 +12,8 @@ data class ProviderConfig(
     val baseUrl: String,
     val model: String,
     val apiKeyCipher: String = "",
+    /** 协议：openai_compat（默认，旧配置零迁移）| anthropic（原生 Messages API）。 */
+    val protocol: String = "openai_compat",
     /** 上下文窗口（tokens）。0 = 按模型名自动推测。 */
     val contextLength: Int = 0,
     /** 单次回复上限（max_tokens）。0 = 供应商默认（部分服务仅 4K，易截断）。 */

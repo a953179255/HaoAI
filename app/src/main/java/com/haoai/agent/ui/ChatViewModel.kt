@@ -658,7 +658,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
         return AgentEngine(
-            httpClient = c.client,
+            httpClient = c.clientFor(provider),
             provider = provider,
             apiKey = c.cipher.decrypt(provider.apiKeyCipher),
             customPrompt = st.customPrompt,

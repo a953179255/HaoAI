@@ -102,7 +102,7 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
                     val r = if (target != null) {
                         runCatching {
                             MemoryConsolidation.runDeep(
-                                c.memoryBank, c.journal, c.client, target.provider, target.apiKey
+                                c.memoryBank, c.journal, c.clientFor(target.provider), target.provider, target.apiKey
                             )
                         }.getOrElse { MemoryConsolidation.run(c.memoryBank, c.journal) }
                     } else MemoryConsolidation.run(c.memoryBank, c.journal)

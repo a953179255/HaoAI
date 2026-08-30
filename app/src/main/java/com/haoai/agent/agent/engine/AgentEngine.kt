@@ -47,7 +47,7 @@ import java.util.Date
 import java.util.Locale
 
 class AgentEngine(
-    private val httpClient: OpenAiCompatClient,
+    private val httpClient: com.haoai.agent.agent.provider.ProviderClient,
     private val provider: ProviderConfig,
     private val apiKey: String,
     private val customPrompt: String,

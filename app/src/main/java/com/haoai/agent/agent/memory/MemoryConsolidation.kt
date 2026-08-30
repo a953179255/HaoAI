@@ -1,7 +1,6 @@
 package com.haoai.agent.agent.memory
 
 import com.haoai.agent.agent.provider.ApiMessage
-import com.haoai.agent.agent.provider.OpenAiCompatClient
 import com.haoai.agent.agent.provider.SseEvent
 import com.haoai.agent.data.HaoJson
 import com.haoai.agent.data.ProviderConfig
@@ -66,7 +65,7 @@ object MemoryConsolidation {
     suspend fun runDeep(
         bank: MemoryBank,
         journal: DailyJournal,
-        client: OpenAiCompatClient,
+        client: com.haoai.agent.agent.provider.ProviderClient,
         provider: ProviderConfig,
         apiKey: String
     ): Report {
@@ -117,7 +116,7 @@ object MemoryConsolidation {
      */
     private suspend fun llmDedup(
         bank: MemoryBank,
-        client: OpenAiCompatClient,
+        client: com.haoai.agent.agent.provider.ProviderClient,
         provider: ProviderConfig,
         apiKey: String
     ): Int {
@@ -207,7 +206,7 @@ object MemoryConsolidation {
      */
     private suspend fun llmConflicts(
         bank: MemoryBank,
-        client: OpenAiCompatClient,
+        client: com.haoai.agent.agent.provider.ProviderClient,
         provider: ProviderConfig,
         apiKey: String
     ): Int {

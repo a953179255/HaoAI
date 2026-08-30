@@ -48,6 +48,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -1791,11 +1792,42 @@ private fun ProviderDialog(
                         singleLine = true,
                         colors = glassFieldColors()
                     )
+                    // 协议选择（2.3）：anthropic 原生 Messages / openai_compat 默认
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "协议",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FilterChip(
+                            selected = draft.protocol == "openai_compat",
+                            onClick = { onChange(draft.copy(protocol = "openai_compat")) },
+                            label = { Text("OpenAI 兼容") }
+                        )
+                        FilterChip(
+                            selected = draft.protocol == "anthropic",
+                            onClick = { onChange(draft.copy(protocol = "anthropic")) },
+                            label = { Text("Anthropic 原生") }
+                        )
+                    }
                     OutlinedTextField(
                         value = draft.baseUrl,
                         onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
-                        label = { Text("Base URL（OpenAI 兼容）") },
-                        placeholder = { Text("https://openrouter.ai/api/v1") },
+                        label = {
+                            Text(
+                                if (draft.protocol == "anthropic") "Base URL（Anthropic Messages）"
+                                else "Base URL（OpenAI 兼容）"
+                            )
+                        },
+                        placeholder = {
+                            Text(
+                                if (draft.protocol == "anthropic") "https://api.anthropic.com"
+                                else "https://openrouter.ai/api/v1"
+                            )
+                        },
                         singleLine = true,
                         colors = glassFieldColors()
                     )

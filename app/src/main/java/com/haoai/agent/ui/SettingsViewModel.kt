@@ -25,7 +25,9 @@ data class ProviderDraft(
     /** 上下文窗口 tokens；空串=自动（按模型名推测） */
     val contextLength: String = "",
     /** 单次回复上限 max_tokens；空串=云端供应商默认 / 本地 4096 */
-    val maxTokens: String = ""
+    val maxTokens: String = "",
+    /** 协议：openai_compat（默认）| anthropic（原生 Messages API） */
+    val protocol: String = "openai_compat"
 )
 
 data class ProviderPreset(
@@ -112,6 +114,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             existing != null -> runCatching { c.cipher.decrypt(existing.apiKeyCipher) }.getOrDefault("")
             else -> ""
         }
+        if (d.protocol == "anthropic") {
+            draftError = "Anthropic 原生协议不支持拉取模型列表，请手动填写模型 ID"
+            return
+        }
         fetchingModels = true
         viewModelScope.launch {
             val r = c.client.listModels(d.baseUrl.trim(), key)
@@ -151,7 +157,8 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             model = p.model,
             apiKeyPlain = "",
             contextLength = if (p.contextLength > 0) p.contextLength.toString() else "",
-            maxTokens = if (p.maxTokens > 0) p.maxTokens.toString() else ""
+            maxTokens = if (p.maxTokens > 0) p.maxTokens.toString() else "",
+            protocol = p.protocol
         )
         draftError = null
         testResult = null
@@ -215,6 +222,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                         baseUrl = url,
                         model = d.model.trim(),
                         apiKeyCipher = keyCipher,
+                        protocol = d.protocol,
                         contextLength = ctxLen,
                         maxTokens = maxTok
                     )
@@ -247,11 +255,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             existing != null -> runCatching { c.cipher.decrypt(existing.apiKeyCipher) }.getOrDefault("")
             else -> ""
         }
-        val probe = ProviderConfig("probe", d.name.ifBlank { "测试" }, d.baseUrl.trim(), d.model.trim())
+        val probe = ProviderConfig("probe", d.name.ifBlank { "测试" }, d.baseUrl.trim(), d.model.trim(), protocol = d.protocol)
         testing = true
         testResult = null
         viewModelScope.launch {
-            val r = c.client.testConnection(probe, key)
+            val r = c.clientFor(probe).testConnection(probe, key)
             testing = false
             testResult = r.fold(
                 onSuccess = { true to "✓ 连接成功 · $it" },
