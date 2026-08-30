@@ -15,6 +15,7 @@ object ToolRegistry {
         add(GlobTool())
         add(WebFetchTool())
         add(BashTool())
+        add(JobOutputTool())
         add(TodoTool())
         add(MemoryTool())
         add(ScreenTool())

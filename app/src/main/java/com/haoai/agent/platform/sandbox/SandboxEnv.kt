@@ -80,6 +80,7 @@ object SandboxEnv {
         sandbox ?: return ""
         val probe = if (probeSummary.isNotBlank()) "沙箱内可用：$probeSummary。" else ""
         return "Linux 沙箱（${sandbox.distroId}）已就绪：bash 默认在沙箱内执行，宿主工作区映射为沙箱内 /workspace，$probe" +
-            "可 apk add / apt install 按需安装软件（写入类操作走既有审批）。"
+            "可 apk add / apt install 按需安装软件（写入类操作走既有审批）。长任务（构建/下载/服务）用 bash 的 background=true 投递后台，" +
+            "立即返回后用 job_output 查看输出；也可用 tmux 会话管理交互式任务。"
     }
 }

@@ -9,6 +9,7 @@ import com.haoai.agent.platform.sandbox.SandboxEnv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -34,6 +35,10 @@ class BashTool : Tool {
                     add(JsonPrimitive("auto")); add(JsonPrimitive("toybox")); add(JsonPrimitive("linux")); add(JsonPrimitive("ssh"))
                 }
                 put("description", "执行后端：auto（默认，沙箱就绪用 linux 否则 toybox）/ toybox / linux / ssh")
+            }
+            putJsonObject("background") {
+                put("type", "boolean")
+                put("description", "true 时作为后台任务投递（仅 linux 后端），立即返回 job id；用 job_output 工具查看输出")
             }
         }
         putJsonArray("required") { add(JsonPrimitive("command")) }
@@ -76,8 +81,27 @@ class BashTool : Tool {
                 ctx.appContext, command, ctx.shellDir?.absolutePath
             )
 
+            // 3.4 长任务：linux 后端 background=true 时 nohup 投递立即返回，
+            // 日志落 /workspace/.haoai-jobs/<id>.log（宿主工作区可见），job_output 工具读取
+            val effectiveCommand = if (backend.id == "linux" && (args as? kotlinx.serialization.json.JsonObject)?.get("background")?.jsonPrimitive?.content == "true") {
+                val jobId = "job_" + java.lang.Long.toString(System.currentTimeMillis(), 36)
+                val quoted = "'" + command.replace("'", "'\''") + "'"
+                val launched = runCatching {
+                    backend.exec(
+                        "mkdir -p /workspace/.haoai-jobs && ( nohup sh -c $quoted >> /workspace/.haoai-jobs/$jobId.log 2>&1; echo __JOB_DONE_\$? >> /workspace/.haoai-jobs/$jobId.log ) >/dev/null 2>&1 & echo launched",
+                        15_000
+                    )
+                }.getOrNull()
+                if (launched != null && launched.exitCode == 0 && launched.output.contains("launched")) {
+                    return@withContext ToolResult(
+                        "后台任务已投递：$jobId\n日志：/workspace/.haoai-jobs/$jobId.log（用 job_output 工具查看，id 传 \"$jobId\"）"
+                    )
+                }
+                command // 投递失败退化为前台执行
+            } else command
+
             val result = try {
-                backend.exec(command, timeout)
+                backend.exec(effectiveCommand, timeout)
             } catch (ie: kotlinx.coroutines.CancellationException) {
                 throw ie
             } catch (e: Exception) {
