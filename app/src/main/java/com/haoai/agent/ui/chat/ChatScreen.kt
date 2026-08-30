@@ -1248,9 +1248,42 @@ private fun RowItem(
     running: Boolean,
     onViewDiff: (String) -> Unit
 ) {
+    // 引擎注入的系统事件（handoff 催办 / 压缩结果）不冒充聊天气泡，渲染为居中事件条
+    if (row.role == "user" && row.text.startsWith("[系统提示]") ||
+        row.role != "user" && row.text.startsWith("[系统]")
+    ) {
+        SystemEventBar(row.text)
+        return
+    }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
         else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff)
+    }
+}
+
+/**
+ * 系统事件条（居中小字胶囊，上游/同类工具 式）：压缩、交接等引擎级事件
+ * 与对话内容在视觉上分层，透明度跟随设置的「气泡 / 卡片不透明度」。
+ */
+@Composable
+private fun SystemEventBar(text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second * 0.6f),
+            shape = RoundedCornerShape(999.dp)
+        ) {
+            Text(
+                text.removePrefix("[系统提示]").removePrefix("[系统]").trim(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+            )
+        }
     }
 }
 
@@ -1300,7 +1333,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
         if (autoCollapse && !userToggled) expanded = false
     }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -1576,7 +1609,7 @@ private fun ToolChip(
         ToolRunState.DENIED -> Color(0xFFFFC46B)
     }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
         shape = RoundedCornerShape(13.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -2363,7 +2396,7 @@ private fun DiffReviewView(
     val shown = if (collapsed) diff.take(300) else diff
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
         shape = RoundedCornerShape(12.dp),
         modifier = modifier.fillMaxWidth()
     ) {

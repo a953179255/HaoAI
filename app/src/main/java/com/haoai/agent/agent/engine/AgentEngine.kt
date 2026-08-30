@@ -612,18 +612,29 @@ class AgentEngine(
     }
 
     /**
-     * 历史接近上限时，注入一次性提示让模型主动调用 handoff 压缩上下文。
-     * 以会话中是否已存在交接文档作为「只提示一次」的依据。
+     * token 占用逼近上限时，注入一次性提示让模型主动调用 handoff 压缩上下文。
+     * 与自动压缩同口径按 token 占用比例触发（旧版按消息条数，短消息密集时占用不足 10% 就误触发）；
+     * 以近期是否已有交接文档 / 是否已提示过来去重。
      */
     private fun maybeNudgeHandoff(onEvent: (TurnEvent) -> Unit) {
         val msgs = session.messages
-        if (msgs.size < HANDOFF_NUDGE_AT) return
-        val recentHasDoc = msgs.takeLast(HANDOFF_NUDGE_AT / 2)
-            .any { it.role == ChatMessage.ROLE_USER && it.content.startsWith(HANDOFF_MARKER) }
+        if (msgs.size < 8) return
         val recentNudged = msgs.takeLast(6).any {
-            it.role == ChatMessage.ROLE_USER && it.content.contains("handoff")
+            it.role == ChatMessage.ROLE_USER && it.content.contains("[系统提示]")
         }
-        if (recentHasDoc || recentNudged) return
+        val recentHasDoc = msgs.takeLast(20).any {
+            it.role == ChatMessage.ROLE_USER && it.content.startsWith(HANDOFF_MARKER)
+        }
+        if (recentNudged || recentHasDoc) return
+        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        if (contextWindow <= 0) return
+        // 与 maybeCompact 相同口径：历史 + 系统提示 + 工具定义的真实占用
+        val (sysTok, toolsTok) = estimateOverheadTokens()
+        val usedTokens = msgs.sumOf {
+            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel())
+        } + sysTok + toolsTok
+        if (usedTokens.toFloat() / contextWindow < HANDOFF_NUDGE_RATIO) return
         appendAndNotify(
             ChatMessage(
                 role = ChatMessage.ROLE_USER,
@@ -983,7 +994,8 @@ class AgentEngine(
         const val STORED_CAP = 16_000
         const val REQ_CAP = 4_000
         const val SUB_MAX_TURNS = 10
-        const val HANDOFF_NUDGE_AT = 56
+        /** handoff 催办阈值：token 占用比例（自动压缩 0.5 之后、危险线 0.9 之前）。 */
+        const val HANDOFF_NUDGE_RATIO = 0.75f
         const val HANDOFF_KEEP = 6
         const val HANDOFF_MARKER = "## 任务交接文档"
 

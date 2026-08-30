@@ -1528,7 +1528,7 @@ private fun LazyListScope.generalItems(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val bubbleValue = settings.bubbleOpacity.coerceIn(0.3f, 1f)
                     val pct = bubbleValue.times(100).toInt()
-                    Text("气泡不透明度", style = MaterialTheme.typography.bodyMedium)
+                    Text("气泡 / 卡片不透明度", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.weight(1f))
                     Text(
                         "$pct%",
