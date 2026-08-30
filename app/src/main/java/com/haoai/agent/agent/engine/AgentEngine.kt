@@ -818,6 +818,8 @@ class AgentEngine(
             "key" -> args.optString("action")
             "launch_app" -> args.optString("package")
             "list_apps" -> "列出应用"
+            "browser_search" -> "搜索「${args.optString("query")}」"
+            "browser_open" -> args.optString("url")
             "schedule" -> args.optString("action", "list") +
                 args.optString("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             "spawn_agent" -> args.optString("task").take(60)

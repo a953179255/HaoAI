@@ -28,6 +28,9 @@ object ToolRegistry {
         add(KeyTool())
         add(LaunchAppTool())
         add(ListAppsTool())
+        // 4.1 浏览器工具组：拉起系统浏览器，读取/操作复用上面 a11y 组合
+        add(BrowserSearchTool())
+        add(BrowserOpenTool())
         add(ScheduleTool(ctx.appFilesDir))
         add(SkillTool(com.haoai.agent.agent.skills.SkillStore))
         add(AppStatusTool(ctx.statusProvider))

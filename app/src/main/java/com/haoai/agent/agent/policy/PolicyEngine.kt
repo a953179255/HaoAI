@@ -75,6 +75,7 @@ class PolicyEngine(private val mode: PermissionMode) {
         "bash" -> RiskLevel.EXEC
         "write", "edit" -> RiskLevel.WRITE
         "tap", "swipe", "type_text", "key" -> RiskLevel.EXEC
+        "browser_search", "browser_open" -> RiskLevel.EXEC
         "launch_app" -> RiskLevel.WRITE
         "calendar_create" -> RiskLevel.WRITE
         "alarm_set" -> RiskLevel.EXEC
