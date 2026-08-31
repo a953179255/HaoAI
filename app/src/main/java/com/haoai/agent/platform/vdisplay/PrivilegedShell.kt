@@ -27,7 +27,7 @@ import rikka.shizuku.Shizuku
 object PrivilegedShell {
 
     const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-    private const val USER_SERVICE_VERSION = 3
+    private const val USER_SERVICE_VERSION = 5
 
     enum class Status { NOT_INSTALLED, NOT_RUNNING, UNAUTHORIZED, GRANTED }
 
@@ -170,10 +170,13 @@ object PrivilegedShell {
             }.getOrElse { -1 }
         }
 
-    /** shell 侧释放虚拟屏（屏归 shell 进程所有，须通知其释放）。 */
-    suspend fun releaseTrustedDisplay(displayId: Int) = withContext(Dispatchers.IO) {
-        val binder = userServiceBinder ?: return@withContext
-        runCatching {
+    /**
+     * shell 侧释放虚拟屏（屏归 shell 进程所有，须通知其释放）。
+     * 返回是否【已确认销毁】；服务进程退出兜底（binder 死亡）同样视为已销毁。
+     */
+    suspend fun releaseTrustedDisplay(displayId: Int): Boolean = withContext(Dispatchers.IO) {
+        val binder = userServiceBinder ?: return@withContext false
+        try {
             val data = Parcel.obtain()
             val reply = Parcel.obtain()
             try {
@@ -181,10 +184,13 @@ object PrivilegedShell {
                 data.writeInt(displayId)
                 binder.transact(PrivilegedShellService.TRANSACTION_RELEASE_DISPLAY, data, reply, 0)
                 reply.readException()
+                reply.readInt() == 1
             } finally {
                 data.recycle()
                 reply.recycle()
             }
+        } catch (e: android.os.DeadObjectException) {
+            true // 服务进程退出兜底：DMS 已随 binder 死亡回收其虚拟屏
         }
     }
 

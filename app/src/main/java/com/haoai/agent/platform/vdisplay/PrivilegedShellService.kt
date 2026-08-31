@@ -58,8 +58,11 @@ class PrivilegedShellService : Binder() {
             }
             TRANSACTION_RELEASE_DISPLAY -> {
                 data.enforceInterface(DESCRIPTOR)
-                releaseDisplay(data.readInt())
+                val released = runCatching { releaseDisplay(data.readInt()) }
+                    .onFailure { android.util.Log.e("HaoAIVD", "releaseDisplay failed", it) }
+                    .getOrDefault(false)
                 reply?.writeNoException()
+                reply?.writeInt(if (released) 1 else 0)
                 true
             }
             else -> super.onTransact(code, data, reply, flags)
@@ -89,6 +92,30 @@ class PrivilegedShellService : Binder() {
     private var currentH = 0
     private var currentDpi = 0
 
+    init {
+        // App 进程死亡/服务版本更替时 Shizuku 不一定回收旧 UserService 进程，
+        // 其名下虚拟屏随之泄漏；新进程启动时清掉残留同名进程（同 uid 可发信号），
+        // 屏会随 binder 死亡被 DMS 一并回收。
+        killStaleServiceProcesses()
+    }
+
+    private fun killStaleServiceProcesses() {
+        runCatching {
+            val me = android.os.Process.myPid()
+            java.io.File("/proc").listFiles { f -> (f.name.toIntOrNull() ?: me) != me }?.forEach { f ->
+                runCatching {
+                    val cmd = java.io.File(f, "cmdline").inputStream().use { ins ->
+                        ins.readBytes().toString(Charsets.UTF_8).trim('\u0000', ' ', '\n')
+                    }
+                    if (cmd == "com.haoai.agent:shell") {
+                        android.util.Log.w("HaoAIVD", "kill stale service process pid=${f.name}")
+                        android.os.Process.killProcess(f.name.toInt())
+                    }
+                }
+            }
+        }
+    }
+
     /** 同规格重复调用幂等（只换 surface）；失败返回 -1。 */
     @SuppressLint("BlockedPrivateApi", "SoonBlockedPrivateApi")
     private fun createTrustedDisplay(w: Int, h: Int, dpi: Int, surface: Surface): Int {
@@ -96,7 +123,10 @@ class PrivilegedShellService : Binder() {
             setSurface(currentDisplayId, surface)
             return currentDisplayId
         }
-        if (currentDisplayId != -1) releaseDisplay(currentDisplayId)
+        if (currentDisplayId != -1 && !releaseDisplay(currentDisplayId)) {
+            // 旧屏释放失败：服务进程即将退出回收，本次建屏按失败处理（客户端重试会重启服务）
+            return -1
+        }
 
         val idm = requireIDisplayManager() ?: return -1
         val token = Binder()
@@ -152,19 +182,53 @@ class PrivilegedShellService : Binder() {
         }
     }
 
-    private fun releaseDisplay(displayId: Int) {
-        if (displayId != currentDisplayId) return
-        val token = currentToken ?: return
+    /**
+     * 释放并【验证】是否真正销毁（AOSP 直接成功；部分 ROM 裸 binder 释放静默失败）。
+     * 验证失败 → 兜底退出服务进程：DMS 会随 binder 死亡回收其名下全部虚拟屏，
+     * Shizuku 在客户端下次绑定时重启 UserService。返回 false=未能确认释放。
+     */
+    @Synchronized
+    private fun releaseDisplay(displayId: Int): Boolean {
+        if (displayId != currentDisplayId) return true
+        val token = currentToken
+        currentDisplayId = -1
+        currentToken = null
+        if (token == null) return true
         runCatching {
-            val idm = requireIDisplayManager() ?: return
+            val idm = requireIDisplayManager() ?: return true
             idm.javaClass.methods.firstOrNull { it.name == "releaseVirtualDisplay" }?.let {
                 it.isAccessible = true
                 it.invoke(idm, token)
             }
         }
-        currentDisplayId = -1
-        currentToken = null
+        // DMS 侧销毁是异步的：轮询确认 displayId 已消失
+        var released = false
+        repeat(4) {
+            if (!displayIdExists(displayId)) {
+                released = true
+                return@repeat
+            }
+            Thread.sleep(200)
+        }
+        if (released) return true
+        android.util.Log.w("HaoAIVD", "release verified failed (display $displayId still alive), exit service as fallback")
+        // 先让 binder 应答送达客户端，再退出进程触发 DMS 回收
+        Thread {
+            runCatching { Thread.sleep(400) }
+            runCatching { android.os.Process.killProcess(android.os.Process.myPid()) }
+        }.start()
+        return false
     }
+
+    /** shell uid 查询当前全部逻辑 displayId（getDisplayIds 为 hidden API，反射调用）。 */
+    private fun displayIdExists(id: Int): Boolean = runCatching {
+        val idm = requireIDisplayManager() ?: return true
+        val ids = idm.javaClass.methods.firstOrNull { it.name == "getDisplayIds" }?.let {
+            it.isAccessible = true
+            it.invoke(idm) as? IntArray
+        } ?: return true
+        id in ids
+    }.getOrDefault(true)
 
     private fun requireIDisplayManager(): Any? = runCatching {
         // ServiceManager 为 hidden 类：反射取 display 服务 binder
