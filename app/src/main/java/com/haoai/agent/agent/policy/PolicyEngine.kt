@@ -79,6 +79,10 @@ class PolicyEngine(private val mode: PermissionMode) {
         // 4.2 内置浏览器：导航/截图/读结构不打扰用户走 READ 免审；点击/输入/滚动/后退改页面状态按 WRITE 审批
         "browser_navigate", "browser_screenshot" -> RiskLevel.READ
         "browser_click", "browser_input", "browser_scroll", "browser_back" -> RiskLevel.WRITE
+        // 4.3 虚拟屏后台自动化：读屏免审；启动目标 App 到屏 EXEC；其余改屏内状态按 WRITE
+        "vscreen_launch" -> RiskLevel.EXEC
+        "vscreen_screen" -> RiskLevel.READ
+        "vscreen_tap", "vscreen_text", "vscreen_scroll", "vscreen_back", "vscreen_home", "vscreen_close" -> RiskLevel.WRITE
         "launch_app" -> RiskLevel.WRITE
         "calendar_create" -> RiskLevel.WRITE
         "alarm_set" -> RiskLevel.EXEC

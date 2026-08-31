@@ -74,7 +74,9 @@ class AgentEngine(
     /** 白名单设置修改（update_settings 工具，走用户审批）。 */
     private val configMutator: (JsonObject) -> String = { "设置修改不可用" },
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
-    private val onToolChange: (() -> Unit)? = null
+    private val onToolChange: (() -> Unit)? = null,
+    /** 4.3 虚拟屏后台自动化：设置页总开关 ∧ API 30+（由调用方合并判定）。 */
+    private val vscreenEnabled: Boolean = false
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -108,7 +110,8 @@ class AgentEngine(
             memoryBank, journal, depth, okHttpClient, appContext,
             statusProvider = statusProvider,
             configMutator = configMutator,
-            onToolChange = onToolChange
+            onToolChange = onToolChange,
+            vscreenEnabled = vscreenEnabled
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx -> runSubAgent(task, parentCtx) } else null
@@ -550,7 +553,8 @@ class AgentEngine(
                 skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
                 journalBlock = journalSnippet(),
                 mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary(),
-                shellNote = shellNote
+                shellNote = shellNote,
+                vscreenAvailable = vscreenEnabled
             )
     }
 

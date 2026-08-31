@@ -1070,6 +1070,27 @@ private fun LazyListScope.privacyItems(
             }
         }
     }
+    item { SectionTitle("后台自动化（虚拟屏）") }
+    item {
+        val vscreenSupported = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+            ToggleRow(
+                title = "虚拟屏后台自动化",
+                subtitle = if (!vscreenSupported) "需要 Android 11 及以上（当前系统不支持，工具不可用）"
+                else "代理把目标 App 启动到后台虚拟屏操作，你的主屏不被占用；关闭后 vscreen_* 工具从清单移除",
+                checked = settings.vscreenEnabled && vscreenSupported,
+                onChange = { vm.setVscreenEnabled(it) },
+                backdrop = backdrop
+            )
+            Text(
+                "说明：操作走无障碍节点（点击/输入/滚动），无需触摸注入；精确手势（拖动滑块）本版本未启用，" +
+                    "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+    }
     item { SectionTitle("系统权限") }
     item {
         androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshPermissions(context) }

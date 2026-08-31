@@ -40,6 +40,17 @@ object ToolRegistry {
         add(BrowserFindTool())
         add(BrowserBackTool())
         add(BrowserScreenshotTool())
+        // 4.3 虚拟屏后台自动化：总开关开启才注册（开关在设置页，API 30+ 门槛由引擎合并判定）
+        if (ctx.vscreenEnabled) {
+            add(VScreenLaunchTool())
+            add(VScreenScreenTool())
+            add(VScreenTapTool())
+            add(VScreenTextTool())
+            add(VScreenScrollTool())
+            add(VScreenBackTool())
+            add(VScreenHomeTool())
+            add(VScreenCloseTool())
+        }
         add(ScheduleTool(ctx.appFilesDir))
         add(SkillTool(com.haoai.agent.agent.skills.SkillStore))
         add(AppStatusTool(ctx.statusProvider))

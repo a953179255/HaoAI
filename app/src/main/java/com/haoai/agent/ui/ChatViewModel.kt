@@ -691,7 +691,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             backgroundScope = c.applicationScope,
             statusProvider = { buildStatusText() },
             configMutator = { applyConfigPatch(it) },
-            onToolChange = { refreshTodos() }
+            onToolChange = { refreshTodos() },
+            vscreenEnabled = st.vscreenEnabled &&
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
         )
     }
 

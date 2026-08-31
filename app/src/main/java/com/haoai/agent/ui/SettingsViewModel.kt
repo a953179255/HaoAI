@@ -302,6 +302,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(memoryEnabled = enabled) }
     }
 
+    fun setVscreenEnabled(enabled: Boolean) {
+        c.updateSettings { it.copy(vscreenEnabled = enabled) }
+    }
+
     fun setDeepDream(enabled: Boolean) {
         c.updateSettings { it.copy(deepDream = enabled) }
     }

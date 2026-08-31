@@ -105,7 +105,9 @@ data class AppSettings(
     val lastMemoryExportAt: Long = 0,
     /** 上次记忆固化时间与结果（健康度仪表盘展示）。 */
     val lastConsolidationAt: Long = 0,
-    val lastConsolidationReport: String = ""
+    val lastConsolidationReport: String = "",
+    /** 4.3 虚拟屏后台自动化总开关（默认关；开启后 vscreen_* 工具才注册，且要求 API 30+）。 */
+    val vscreenEnabled: Boolean = false
 )
 
 class SettingsStore(context: Context) {

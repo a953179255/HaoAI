@@ -32,7 +32,8 @@ object SystemPrompt {
         skillIndex: String = "",
         journalBlock: String = "",
         mcpSummary: String = "",
-        shellNote: String = ""
+        shellNote: String = "",
+        vscreenAvailable: Boolean = false
     ): String = buildString {
         if (identity.isNotBlank()) {
             appendLine()
@@ -59,6 +60,14 @@ object SystemPrompt {
             else "- 无障碍自动化：未启用（browser_search/browser_open 仍可打开浏览器，但读不到屏幕内容）"
         )
         appendLine("- 定时任务：可用（schedule 工具，spec 如 every:30m / daily:09:30）")
+        if (vscreenAvailable) {
+            appendLine(
+                "- 后台自动化（虚拟屏）：可用——vscreen_launch(包名|URL) 把目标 App 启动到后台虚拟屏" +
+                    "（用户主屏不被占用，可继续用手机）→ vscreen_screen 读编号树+截图 → vscreen_tap/vscreen_text/" +
+                    "vscreen_scroll 操作 → 完毕必须 vscreen_close 销毁。虚拟屏与主屏是两套体系：屏内操作只用 vscreen_*，" +
+                    "绝不用 screen/tap 去动用户的手机；动作间隔保持 ~300ms；目标 App 拒绝多屏启动时按报错提示降级前台流程并告知用户。"
+            )
+        }
         if (mcpSummary.isNotBlank()) {
             appendLine("- MCP 外部工具：$mcpSummary")
         }

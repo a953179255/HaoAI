@@ -27,7 +27,9 @@ data class ToolContext(
     /** 白名单设置修改（update_settings 工具），由 VM 层注入。 */
     val configMutator: ((kotlinx.serialization.json.JsonObject) -> String)? = null,
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
-    val onToolChange: (() -> Unit)? = null
+    val onToolChange: (() -> Unit)? = null,
+    /** 4.3 虚拟屏后台自动化总开关（设置页），关闭时 vscreen_* 不注册进工具清单。 */
+    val vscreenEnabled: Boolean = false
 )
 
 data class ToolResult(

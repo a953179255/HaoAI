@@ -73,7 +73,9 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             journal = container.journal,
             okHttpClient = container.okHttpClient,
             appContext = container.appContext,
-            backgroundScope = null
+            backgroundScope = null,
+            vscreenEnabled = container.settingsFlow.value.vscreenEnabled &&
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
         )
 
         var resultText: String? = null
