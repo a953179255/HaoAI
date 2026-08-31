@@ -18,6 +18,7 @@ import android.os.Looper
 import android.util.Base64
 import android.view.Display
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicReference
 
@@ -42,8 +43,13 @@ object VirtualScreenController {
     private val lock = Any()
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
+    /** shell uid 可信屏的 displayId（trusted 通道下 display 为空）。 */
+    private var trustedDisplayId = -1
     private val latestFrame = AtomicReference<Bitmap?>(null)
     @Volatile private var lastActivityAt = 0L
+    /** 屏由哪个通道创建：trusted=shell uid 可信屏（留得住 App），local=本进程公共屏。 */
+    @Volatile var channel: String = ""
+        private set
     /** 上一步动作的目标控件矩形（虚拟屏坐标，与截图 1:1），供点击标记绘制。 */
     @Volatile var lastMarker: Pair<Rect, String>? = null
         private set
@@ -69,7 +75,7 @@ object VirtualScreenController {
         } else bmp.copy(Bitmap.Config.ARGB_8888, false)
     }
 
-    val displayId: Int? get() = display?.display?.displayId
+    val displayId: Int? get() = display?.display?.displayId ?: trustedDisplayId.takeIf { it > 0 }
 
     /** displayId 的可观察形态（聊天顶栏入口按钮据此显隐）。 */
     val displayIdFlow = MutableStateFlow<Int?>(null)
@@ -78,15 +84,20 @@ object VirtualScreenController {
 
     /** 空闲超 5 分钟自动销毁；每次工具调用前检查。返回 true 表示屏刚被回收。 */
     fun reapIfIdle(): Boolean {
-        if (display == null) return false
+        if (displayId == null) return false
         if (System.currentTimeMillis() - lastActivityAt < IDLE_DESTROY_MS) return false
         destroy()
         return true
     }
 
-    /** 建屏（幂等）。返回 null=成功，否则错误信息。 */
+    /**
+     * 建屏（幂等），双通道：PrivilegedShell 可用 → shell uid 建【可信屏】
+     * （TRUSTED flag，App 上屏后不被 ROM 重挂回主屏）；无特权源 → 本进程
+     * 公共屏（AOSP 可用，严格 ROM 会被重挂载）。ImageReader 一律在本进程
+     * （帧管线/截图/预览不跨进程），surface 传给 shell 侧建屏。
+     */
     fun ensureDisplay(context: Context): String? = synchronized(lock) {
-        if (display != null) return null
+        if (displayId != null) return null
         if (!supported) return "虚拟屏需要 Android 11（API 30）及以上"
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         val main = dm.getDisplay(Display.DEFAULT_DISPLAY)
@@ -105,6 +116,23 @@ object VirtualScreenController {
                 publishPreview(bmp)
             }
         }, Handler(Looper.getMainLooper()))
+
+        PrivilegedShell.refresh(context)
+        val privileged = PrivilegedShell.shizukuUsable() || PrivilegedShell.hasRoot()
+        if (privileged) {
+            val id = runBlocking { PrivilegedShell.createTrustedDisplay(w, h, metrics.densityDpi, r.surface) }
+            if (id > 0) {
+                reader = r
+                trustedDisplayId = id
+                channel = if (PrivilegedShell.shizukuUsable()) "trusted-shizuku" else "trusted-root"
+                displayIdFlow.value = id
+                touch()
+                return null
+            }
+            android.util.Log.w("HaoAIVD", "trusted display create failed (id=$id), fallback to local display")
+            // 可信屏创建失败：继续走本地公共屏回退（不留死 reader）
+        }
+
         val d = runCatching {
             dm.createVirtualDisplay(
                 "haoai-agent", w, h, metrics.densityDpi, r.surface,
@@ -118,6 +146,7 @@ object VirtualScreenController {
         }
         display = d
         reader = r
+        channel = "local"
         displayIdFlow.value = d.display?.displayId
         touch()
         null
@@ -163,6 +192,10 @@ object VirtualScreenController {
             val r = PrivilegedShell.rootExec(shellCmd)
             if (r.ok) { onLaunched(); return null }
             if (!r.output.contains("Permission Denial")) return "root 启动失败：${r.output.take(220)}"
+        }
+        // 可信屏归 shell 进程所有，本进程无法直启其上（owner 校验）——无直启回退
+        if (channel.startsWith("trusted")) {
+            return "特权启动失败：请确认 Shizuku 服务在运行"
         }
         val directError = synchronized(lock) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -232,10 +265,16 @@ object VirtualScreenController {
     }
 
     fun destroy() = synchronized(lock) {
+        val trusted = trustedDisplayId
+        if (trusted > 0) {
+            runBlocking { PrivilegedShell.releaseTrustedDisplay(trusted) }
+            trustedDisplayId = -1
+        }
         runCatching { display?.release() }
         runCatching { reader?.close() }
         display = null
         reader = null
+        channel = ""
         displayIdFlow.value = null
         latestFrame.getAndSet(null)?.recycle()
         previewFrame.value = null

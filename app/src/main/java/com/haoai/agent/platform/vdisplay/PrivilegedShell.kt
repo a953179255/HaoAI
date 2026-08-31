@@ -27,7 +27,7 @@ import rikka.shizuku.Shizuku
 object PrivilegedShell {
 
     const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-    private const val USER_SERVICE_VERSION = 1
+    private const val USER_SERVICE_VERSION = 3
 
     enum class Status { NOT_INSTALLED, NOT_RUNNING, UNAUTHORIZED, GRANTED }
 
@@ -133,6 +133,58 @@ object PrivilegedShell {
         } finally {
             data.recycle()
             reply.recycle()
+        }
+    }
+
+    /**
+     * shell uid 侧创建可信虚拟屏（TRUSTED flag，Flyme 重挂载克星）。
+     * surface 由应用进程 ImageReader 提供，跨进程传入；返回 displayId，≤0 失败。
+     */
+    suspend fun createTrustedDisplay(w: Int, h: Int, dpi: Int, surface: android.view.Surface): Int =
+        withContext(Dispatchers.IO) {
+            if (userServiceBinder == null) {
+                requestUserService()
+                val deadline = System.currentTimeMillis() + 10000
+                while (userServiceBinder == null && System.currentTimeMillis() < deadline) delay(100)
+            }
+            val binder = userServiceBinder ?: run {
+                android.util.Log.e("HaoAIVD", "createTrustedDisplay: userService bind timeout")
+                return@withContext -1
+            }
+            runCatching {
+                val data = Parcel.obtain()
+                val reply = Parcel.obtain()
+                try {
+                    data.writeInterfaceToken(PrivilegedShellService.DESCRIPTOR)
+                    data.writeInt(w)
+                    data.writeInt(h)
+                    data.writeInt(dpi)
+                    surface.writeToParcel(data, 0)
+                    binder.transact(PrivilegedShellService.TRANSACTION_CREATE_DISPLAY, data, reply, 0)
+                    reply.readException()
+                    reply.readInt()
+                } finally {
+                    data.recycle()
+                    reply.recycle()
+                }
+            }.getOrElse { -1 }
+        }
+
+    /** shell 侧释放虚拟屏（屏归 shell 进程所有，须通知其释放）。 */
+    suspend fun releaseTrustedDisplay(displayId: Int) = withContext(Dispatchers.IO) {
+        val binder = userServiceBinder ?: return@withContext
+        runCatching {
+            val data = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(PrivilegedShellService.DESCRIPTOR)
+                data.writeInt(displayId)
+                binder.transact(PrivilegedShellService.TRANSACTION_RELEASE_DISPLAY, data, reply, 0)
+                reply.readException()
+            } finally {
+                data.recycle()
+                reply.recycle()
+            }
         }
     }
 
