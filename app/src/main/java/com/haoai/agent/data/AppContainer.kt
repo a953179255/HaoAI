@@ -69,6 +69,8 @@ class AppContainer(app: Application) {
         // 存储单例先初始化（WorkspaceDocs 异步任务会用到）
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
+        // 5.4 运行账本（LLM/工具调用 JSONL，按月分文件 + 90 天清理）
+        UsageLedger.init(appFilesDir)
         // 4.2 内置浏览器控制器：WebView 池（工具无头运行 + BrowserScreen 可视共用）
         com.haoai.agent.agent.browser.BrowserController.init(app, applicationScope)
         // MCP：加载服务器配置 → 注册风险覆盖/白名单 → enabled 服务器异步握手（不阻塞启动）

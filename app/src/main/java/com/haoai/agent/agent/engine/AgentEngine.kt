@@ -80,7 +80,19 @@ class AgentEngine(
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
-    private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient)
+    private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient).apply {
+        // 5.4 账本：压缩摘要调用记账（purpose=compact）
+        onLlmUsage = { pin, pout, ok ->
+            com.haoai.agent.data.UsageLedger.add(
+                com.haoai.agent.data.UsageLedger.Entry(
+                    kind = "llm", ts = System.currentTimeMillis(),
+                    sessionId = session.id,
+                    purpose = "compact", model = provider.model,
+                    promptTokens = pin, completionTokens = pout, ok = ok
+                )
+            )
+        }
+    }
 
     suspend fun runTurn(
         userText: String,
@@ -223,8 +235,10 @@ class AgentEngine(
                 }
             }
             onEvent(Finished(null))
+            ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = true)
             maybeExtractMemory()
         } catch (ce: CancellationException) {
+            ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
             if (streamBuf.isNotBlank()) {
                 appendAndNotify(
                     ChatMessage(
@@ -242,6 +256,7 @@ class AgentEngine(
             onEvent(Finished("已停止"))
             throw ce
         } catch (e: Exception) {
+            ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
             val msg = ChatMessage(
                 role = ChatMessage.ROLE_ASSISTANT,
                 content = "出错了：${e.message ?: e.javaClass.simpleName}",
@@ -265,16 +280,20 @@ class AgentEngine(
 
         var result: ToolResult = ToolResult("")
         var finalState: ToolRunState = ToolRunState.DONE
+        var toolStartMs = 0L
+        var decision: String? = null
 
         when {
             tool == null -> {
                 result = ToolResult("未知工具：${call.name}", true)
                 finalState = ToolRunState.ERROR
+                decision = "unknown"
             }
 
             call.name == "bash" && policy.checkShellBlocked(args.optString("command")) != null -> {
                 result = ToolResult(policy.checkShellBlocked(args.optString("command")) ?: "被拦截", true)
                 finalState = ToolRunState.DENIED
+                decision = "blocked"
             }
 
             // update_settings 属于配置写操作：无论权限模式如何都必须经用户批准（上游 提案式）
@@ -284,7 +303,9 @@ class AgentEngine(
                 if (!granted) {
                     result = ToolResult("用户拒绝了本次操作。", true)
                     finalState = ToolRunState.DENIED
+                    decision = "denied"
                 } else {
+                    decision = "approved"
                     // 1.3 快照：审批已通过、文件尚未修改，此刻读原文最可靠；
                     // 新建文件（原不存在）无原文可存，只有 after 可供回看
                     if (call.name == "write" || call.name == "edit") {
@@ -309,15 +330,23 @@ class AgentEngine(
                             }
                         }
                     }
+                    toolStartMs = System.currentTimeMillis()
                     result = invokeTool(tool, args, ctx)
                     if (result.isError) finalState = ToolRunState.ERROR
                 }
             }
 
             else -> {
+                toolStartMs = System.currentTimeMillis()
                 result = invokeTool(tool, args, ctx)
                 if (result.isError) finalState = ToolRunState.ERROR
             }
+        }
+        if (toolStartMs > 0) {
+            ledgerTool(
+                call.name, System.currentTimeMillis() - toolStartMs,
+                ok = !result.isError, decision = decision ?: "direct"
+            )
         }
 
         val storedContent = TextCap.middle(result.content, STORED_CAP)
@@ -389,6 +418,9 @@ class AgentEngine(
         )
         var finalText = ""
         var turns = 0
+        var subPrompt = 0L
+        var subCompletion = 0L
+        val subStart = System.currentTimeMillis()
         while (turns++ < SUB_MAX_TURNS) {
             currentCoroutineContext().ensureActive()
             val buf = StringBuilder()
@@ -398,7 +430,7 @@ class AgentEngine(
                     is SseEvent.Delta -> buf.append(ev.text)
                     is SseEvent.Reasoning -> Unit
                     is SseEvent.Completed -> calls = ev.toolCalls
-                    is SseEvent.Usage -> Unit
+                    is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
                 }
             }
             finalText = buf.toString()
@@ -432,6 +464,7 @@ class AgentEngine(
                 )
             }
         }
+        ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = true)
         return finalText.ifBlank { "子代理未给出结论" }
     }
 
@@ -467,6 +500,30 @@ class AgentEngine(
         return "任务进展：$body"
     }
 
+    /** 5.4 运行账本：LLM 调用记账（写失败静默，绝不影响主流程）。 */
+    private fun ledgerLlm(purpose: String, promptTokens: Long, completionTokens: Long, durationMs: Long, ok: Boolean, model: String? = null, sessionId: String? = null) {
+        com.haoai.agent.data.UsageLedger.add(
+            com.haoai.agent.data.UsageLedger.Entry(
+                kind = "llm", ts = System.currentTimeMillis(),
+                sessionId = sessionId ?: session.id,
+                purpose = purpose, model = model ?: provider.model,
+                promptTokens = promptTokens.toInt(), completionTokens = completionTokens.toInt(),
+                durationMs = durationMs, ok = ok
+            )
+        )
+    }
+
+    private fun ledgerTool(name: String, durationMs: Long, ok: Boolean, decision: String) {
+        com.haoai.agent.data.UsageLedger.add(
+            com.haoai.agent.data.UsageLedger.Entry(
+                kind = "tool", ts = System.currentTimeMillis(),
+                sessionId = session.id,
+                tool = name, risk = policy.riskOf(name).name,
+                policyDecision = decision, durationMs = durationMs, ok = ok
+            )
+        )
+    }
+
     private fun maybeExtractMemory() {
         val bank = memoryBank ?: return
         val scope = backgroundScope ?: return
@@ -493,6 +550,8 @@ class AgentEngine(
         scope.launch {
             runCatching {
                 val buf = StringBuilder()
+                var mp = 0L; var mc = 0L
+                val mstart = System.currentTimeMillis()
                 httpClient.chatStream(
                     provider, apiKey,
                     listOf(
@@ -500,7 +559,14 @@ class AgentEngine(
                         ApiMessage(role = "user", content = TextCap.middle(transcript, 4000))
                     ),
                     emptyList()
-                ).collect { ev -> if (ev is SseEvent.Delta) buf.append(ev.text) }
+                ).collect { ev ->
+                    when (ev) {
+                        is SseEvent.Delta -> buf.append(ev.text)
+                        is SseEvent.Usage -> { mp += ev.promptTokens; mc += ev.completionTokens }
+                        else -> {}
+                    }
+                }
+                ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true)
                 parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
                     bank.remember(content, tags, importance = 2, source = "auto")
                 }
@@ -970,7 +1036,9 @@ class AgentEngine(
     suspend fun runBtw(
         question: String,
         onDelta: (String) -> Unit,
-        onReasoning: (String) -> Unit
+        onReasoning: (String) -> Unit,
+        /** 5.4 账本用途标记；5.3 标题路由传 "title"。 */
+        purpose: String = "btw"
     ) {
         val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
@@ -996,18 +1064,29 @@ class AgentEngine(
         }
         apiMessages.add(com.haoai.agent.agent.provider.ApiMessage(role = "user", content = question))
 
-        httpClient.chatStream(
-            provider = provider,
-            apiKey = apiKey,
-            messages = apiMessages,
-            tools = emptyList(),
-            reasoningEffort = reasoningEffort.ifBlank { null }
-        ).collect { ev ->
-            when (ev) {
-                is SseEvent.Delta -> onDelta(ev.text)
-                is SseEvent.Reasoning -> onReasoning(ev.text)
-                else -> {}
+        var btwUsage: Pair<Long, Long> = 0L to 0L
+        val btwStart = System.currentTimeMillis()
+        try {
+            httpClient.chatStream(
+                provider = provider,
+                apiKey = apiKey,
+                messages = apiMessages,
+                tools = emptyList(),
+                reasoningEffort = reasoningEffort.ifBlank { null }
+            ).collect { ev ->
+                when (ev) {
+                    is SseEvent.Delta -> onDelta(ev.text)
+                    is SseEvent.Reasoning -> onReasoning(ev.text)
+                    is SseEvent.Usage -> btwUsage = ev.promptTokens.toLong() to ev.completionTokens.toLong()
+                    else -> {}
+                }
             }
+            ledgerLlm(purpose, btwUsage.first, btwUsage.second, System.currentTimeMillis() - btwStart, ok = true)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            ledgerLlm(purpose, btwUsage.first, btwUsage.second, System.currentTimeMillis() - btwStart, ok = false)
+            throw e
         }
     }
 

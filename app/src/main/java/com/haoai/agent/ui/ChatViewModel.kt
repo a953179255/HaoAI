@@ -372,7 +372,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 engine.runBtw(
                     question = "用不超过12个字总结这段对话的主题，作为会话标题。只输出标题本身，不要引号、句号或任何解释。",
                     onDelta = { frag -> if (sb.length < 80) sb.append(frag) },
-                    onReasoning = { }
+                    onReasoning = { },
+                    purpose = "title"
                 )
                 val t = sb.toString().trim()
                     .trim('"', '“', '”', '\'', '「', '」', '。', '.', '！', '!', '？', '?')

@@ -102,7 +102,16 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
                     val r = if (target != null) {
                         runCatching {
                             MemoryConsolidation.runDeep(
-                                c.memoryBank, c.journal, c.clientFor(target.provider), target.provider, target.apiKey
+                                c.memoryBank, c.journal, c.clientFor(target.provider), target.provider, target.apiKey,
+                                onUsage = { pin, pout, ok ->
+                                    com.haoai.agent.data.UsageLedger.add(
+                                        com.haoai.agent.data.UsageLedger.Entry(
+                                            kind = "llm", ts = System.currentTimeMillis(),
+                                            purpose = "dream", model = target.provider.model,
+                                            promptTokens = pin, completionTokens = pout, ok = ok
+                                        )
+                                    )
+                                }
                             )
                         }.getOrElse { MemoryConsolidation.run(c.memoryBank, c.journal) }
                     } else MemoryConsolidation.run(c.memoryBank, c.journal)

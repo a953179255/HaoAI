@@ -13,6 +13,9 @@ class CompactionManager(
 ) {
     private var lastCompactionTime = 0L
 
+    /** 5.4 账本：压缩摘要 LLM 调用记账（不引会话依赖，由调用方可选注入）。 */
+    var onLlmUsage: ((promptTokens: Int, completionTokens: Int, ok: Boolean) -> Unit)? = null
+
     /** 判断是否需要触发压缩。 */
     fun shouldCompact(usedTokens: Int, contextWindow: Int): Boolean {
         if (contextWindow <= 0) return false
@@ -100,17 +103,19 @@ class CompactionManager(
         val messages = listOf(ApiMessage(role = "user", content = prompt))
         val flow = client.chatStream(provider, apiKey, messages, tools = emptyList())
         val sb = StringBuilder()
+        var up = 0; var uc = 0
         withTimeoutOrNull(60_000L) {
             flow.collect { event ->
                 when (event) {
                     is com.haoai.agent.agent.provider.SseEvent.Delta -> sb.append(event.text)
                     is com.haoai.agent.agent.provider.SseEvent.Reasoning -> {}
                     is com.haoai.agent.agent.provider.SseEvent.Completed -> {}
-                    is com.haoai.agent.agent.provider.SseEvent.Usage -> {}
+                    is com.haoai.agent.agent.provider.SseEvent.Usage -> { up = event.promptTokens; uc = event.completionTokens }
                 }
             }
         }
         val result = sb.toString().trim()
+        onLlmUsage?.invoke(up, uc, result.isNotBlank())
         if (result.isBlank()) throw Exception("Empty summary response")
         return result
     }

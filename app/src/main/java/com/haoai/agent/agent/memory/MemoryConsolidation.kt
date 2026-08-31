@@ -67,16 +67,18 @@ object MemoryConsolidation {
         journal: DailyJournal,
         client: com.haoai.agent.agent.provider.ProviderClient,
         provider: ProviderConfig,
-        apiKey: String
+        apiKey: String,
+        /** 5.4 账本：梦境 LLM 调用记账（promptTokens, completionTokens, ok）。 */
+        onUsage: ((Int, Int, Boolean) -> Unit)? = null
     ): Report {
         val promoted = promoteFromJournal(bank, journal)
         val promotedByUse = promoteByUseCount(bank)
         val expired = journal.expire(KEEP_DAYS)
         var deepMerged = 0
-        runCatching { llmDedup(bank, client, provider, apiKey) }
+        runCatching { llmDedup(bank, client, provider, apiKey, onUsage) }
             .onSuccess { deepMerged = it }
         var conflictResolved = 0
-        runCatching { llmConflicts(bank, client, provider, apiKey) }
+        runCatching { llmConflicts(bank, client, provider, apiKey, onUsage) }
             .onSuccess { conflictResolved = it }
         val tidied = bank.tidy()
         return Report(promoted, expired, tidied, deepMerged, promotedByUse, conflictResolved)
@@ -118,7 +120,8 @@ object MemoryConsolidation {
         bank: MemoryBank,
         client: com.haoai.agent.agent.provider.ProviderClient,
         provider: ProviderConfig,
-        apiKey: String
+        apiKey: String,
+        onUsage: ((Int, Int, Boolean) -> Unit)? = null
     ): Int {
         val items = bank.all()
         if (items.size < 4) return 0
@@ -133,7 +136,13 @@ object MemoryConsolidation {
                 ApiMessage(role = "user", content = listing)
             ),
             emptyList()
-        ).collect { ev -> if (ev is SseEvent.Delta) buf.append(ev.text) }
+        ).collect { ev ->
+            when (ev) {
+                is SseEvent.Delta -> buf.append(ev.text)
+                is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens, ev.completionTokens, true)
+                else -> {}
+            }
+        }
         currentCoroutineContext().ensureActive()
 
         val text = buf.toString()
@@ -208,7 +217,8 @@ object MemoryConsolidation {
         bank: MemoryBank,
         client: com.haoai.agent.agent.provider.ProviderClient,
         provider: ProviderConfig,
-        apiKey: String
+        apiKey: String,
+        onUsage: ((Int, Int, Boolean) -> Unit)? = null
     ): Int {
         val items = bank.all()
         val byId = items.associateBy { it.id }
@@ -236,7 +246,13 @@ object MemoryConsolidation {
                 ApiMessage(role = "user", content = listing)
             ),
             emptyList()
-        ).collect { ev -> if (ev is SseEvent.Delta) buf.append(ev.text) }
+        ).collect { ev ->
+            when (ev) {
+                is SseEvent.Delta -> buf.append(ev.text)
+                is SseEvent.Usage -> onUsage?.invoke(ev.promptTokens, ev.completionTokens, true)
+                else -> {}
+            }
+        }
         currentCoroutineContext().ensureActive()
 
         val text = buf.toString()

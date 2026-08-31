@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
@@ -86,6 +88,8 @@ fun SessionsScreen(
     var confirmEmptyTrash by remember { mutableStateOf(false) }
     // 当前滑出操作按钮的会话（同时只允许一张）
     var openCardId by remember { mutableStateOf<String?>(null) }
+    // 5.4 本会话用量弹窗目标
+    var usageTarget by remember { mutableStateOf<StoredSession?>(null) }
 
     // 系统返回手势直接回聊天页
     androidx.activity.compose.BackHandler { onBack() }
@@ -295,9 +299,23 @@ fun SessionsScreen(
                                     onBack()
                                 },
                                 onOpenChange = { open -> openCardId = if (open) s.id else null },
-                                openWidth = 156.dp,
+                                openWidth = 200.dp,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
                                 actions = {
+                                    FilledIconButton(
+                                        onClick = { usageTarget = s; openCardId = null },
+                                        modifier = Modifier.size(44.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                                            contentColor = MaterialTheme.colorScheme.onBackground
+                                        )
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.BarChart,
+                                            contentDescription = "本会话用量",
+                                            modifier = Modifier.size(19.dp)
+                                        )
+                                    }
                                     FilledIconButton(
                                         onClick = {
                                             vm.pinSession(s.id)
@@ -459,6 +477,28 @@ fun SessionsScreen(
             }
     }
 
+    }
+
+    // 5.4 本会话用量弹窗
+    usageTarget?.let { target ->
+        val su = remember(target.id) { com.haoai.agent.data.UsageLedger.summarize(target.id) }
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "本会话用量",
+            confirmLabel = "好",
+            onConfirm = { usageTarget = null },
+            onDismiss = { usageTarget = null }
+        ) {
+            Column {
+                Text("「${target.title}」", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Token 合计 ${su.monthIn + su.monthOut}（全量口径）\n输入 ${su.monthIn} · 输出 ${su.monthOut}\n调用记录 ${su.entries} 条",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 
     pendingPurge?.let { target ->

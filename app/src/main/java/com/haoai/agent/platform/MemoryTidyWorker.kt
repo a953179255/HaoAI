@@ -39,7 +39,16 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
                         try {
                             MemoryConsolidation.runDeep(
                                 container.memoryBank, container.journal,
-                                container.clientFor(target.provider), target.provider, target.apiKey
+                                container.clientFor(target.provider), target.provider, target.apiKey,
+                                onUsage = { pin, pout, ok ->
+                                    com.haoai.agent.data.UsageLedger.add(
+                                        com.haoai.agent.data.UsageLedger.Entry(
+                                            kind = "llm", ts = System.currentTimeMillis(),
+                                            purpose = "dream", model = target.provider.model,
+                                            promptTokens = pin, completionTokens = pout, ok = ok
+                                        )
+                                    )
+                                }
                             )
                         } catch (ce: kotlinx.coroutines.CancellationException) {
                             // 深度整理被取消：不能静默回退规则层，否则半成品报告入库

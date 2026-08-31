@@ -49,6 +49,10 @@ object ProviderPresets {
 
 class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
+    /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
+    fun sessionTitleOf(sessionId: String): String =
+        runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")
+
     val settings: kotlinx.coroutines.flow.StateFlow<AppSettings> =
         c.settingsFlow
 

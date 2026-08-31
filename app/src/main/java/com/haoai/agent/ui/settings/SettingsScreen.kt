@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
@@ -282,9 +283,19 @@ fun SettingsScreen(
                 item {
                     MenuCard(
                         backdrop = backdrop,
+                        icon = Icons.Filled.Equalizer,
+                        title = "用量",
+                        subtitle = "Token 用量统计 · 内部调用账本",
+                        tint = Color(0xFF3FA37A),
+                        onClick = { section = "usage" }
+                    )
+                }
+                item {
+                    MenuCard(
+                        backdrop = backdrop,
                         icon = Icons.Filled.Info,
                         title = "关于",
-                        subtitle = "Token 用量统计 · 版本信息",
+                        subtitle = "版本信息",
                         tint = Color(0xFF94A3B8),
                         onClick = { section = "about" }
                     )
@@ -330,6 +341,7 @@ fun SettingsScreen(
                             onRequestClearWallpaper = { confirmWpClear = true }
                         )
                         "about" -> aboutItems(vm, settings, backdrop)
+                        "usage" -> usageItems(vm, backdrop)
                     }
                 }
             }
@@ -677,6 +689,7 @@ private fun sectionTitle(section: String): String = when (section) {
     "linux" -> "Linux 环境"
     "general" -> "通用"
     "about" -> "关于"
+    "usage" -> "用量"
     else -> ""
 }
 
@@ -1760,60 +1773,202 @@ private fun LazyListScope.generalItems(
     }
 }
 
+/** 「用量」页（5.4）：今日/本周/本月汇总 + 按模型/用途分布条形（Canvas 自绘）+ 会话 Top5 + 清空账本。 */
+private fun LazyListScope.usageItems(
+    vm: SettingsViewModel,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+) {
+    item {
+        // 读文件较重：进入页面时计算一次（清空后重进更新）
+        val summary = androidx.compose.runtime.remember {
+            com.haoai.agent.data.UsageLedger.summarize()
+        }
+        var confirmClear by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+        Column {
+            SectionTitle("Token 汇总")
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GlassStatTile(
+                    backdrop = backdrop,
+                    number = formatTokens(summary.todayIn + summary.todayOut),
+                    label = "今日合计",
+                    tint = Color(0xFF5B8DEF),
+                    modifier = Modifier.weight(1f)
+                )
+                GlassStatTile(
+                    backdrop = backdrop,
+                    number = formatTokens(summary.weekIn + summary.weekOut),
+                    label = "本周",
+                    tint = Color(0xFF3FA37A),
+                    modifier = Modifier.weight(1f)
+                )
+                GlassStatTile(
+                    backdrop = backdrop,
+                    number = formatTokens(summary.monthIn + summary.monthOut),
+                    label = "本月",
+                    tint = Color(0xFF8B7BEF),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Text(
+                "共 ${summary.entries} 条记录 · 输入 ${formatTokens(summary.monthIn)} / 输出 ${formatTokens(summary.monthOut)}（本月）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+            )
+
+            if (summary.byModel.isNotEmpty()) {
+                SectionTitle("按模型")
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    summary.byModel.take(6).forEach { m ->
+                        UsageBar(
+                            label = m.model,
+                            value = m.promptTokens + m.completionTokens,
+                            maxValue = summary.byModel.maxOf { it.promptTokens + it.completionTokens },
+                            detail = "${formatTokens(m.promptTokens + m.completionTokens)} · ${m.calls} 次",
+                            tint = Color(0xFF5B8DEF)
+                        )
+                    }
+                }
+            }
+
+            if (summary.byPurpose.isNotEmpty()) {
+                SectionTitle("按用途")
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    summary.byPurpose.take(6).forEach { p ->
+                        UsageBar(
+                            label = purposeLabel(p.purpose),
+                            value = p.promptTokens + p.completionTokens,
+                            maxValue = summary.byPurpose.maxOf { it.promptTokens + it.completionTokens },
+                            detail = "${formatTokens(p.promptTokens + p.completionTokens)} · ${p.calls} 次",
+                            tint = Color(0xFF3FA37A)
+                        )
+                    }
+                }
+            }
+
+            if (summary.bySession.size > 1) {
+                SectionTitle("会话排行")
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    summary.bySession.take(5).forEach { s ->
+                        val title = runCatching {
+                            vm.sessionTitleOf(s.sessionId)
+                        }.getOrNull().orEmpty().ifBlank { "会话 ${s.sessionId.take(8)}" }
+                        UsageBar(
+                            label = title,
+                            value = s.promptTokens + s.completionTokens,
+                            maxValue = summary.bySession.maxOf { it.promptTokens + it.completionTokens },
+                            detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
+                            tint = Color(0xFFD9913F)
+                        )
+                    }
+                }
+            }
+
+            SectionTitle("维护")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                GlassGroup(backdrop) {
+                    ToggleRow(
+                        title = "清空账本",
+                        subtitle = "删除全部用量记录（不影响对话与记忆）",
+                        checked = false,
+                        onChange = { confirmClear = true },
+                        backdrop = backdrop
+                    )
+                }
+            }
+        }
+
+        if (confirmClear) {
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = backdrop,
+                title = "清空用量账本",
+                confirmLabel = "清空",
+                dismissLabel = "取消",
+                danger = true,
+                onConfirm = {
+                    confirmClear = false
+                    com.haoai.agent.data.UsageLedger.clearAll()
+                },
+                onDismiss = { confirmClear = false }
+            ) {
+                Text(
+                    "全部 Token 用量与工具调用记录将被删除，无法恢复。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageBar(label: String, value: Long, maxValue: Long, detail: String, tint: Color) {
+    Column(Modifier.padding(vertical = 5.dp)) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        androidx.compose.foundation.Canvas(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+                .height(6.dp)
+        ) {
+            val ratio = if (maxValue > 0) (value.toFloat() / maxValue).coerceIn(0f, 1f) else 0f
+            val w = size.width * ratio
+            drawRoundRect(
+                color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.06f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+            )
+            if (w > 0f) {
+                drawRoundRect(
+                    color = tint,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
+                    size = androidx.compose.ui.geometry.Size(w, size.height)
+                )
+            }
+        }
+    }
+}
+
+private fun purposeLabel(p: String): String = when (p) {
+    "chat" -> "对话"
+    "subagent" -> "子代理"
+    "memory" -> "记忆提取"
+    "title" -> "会话标题"
+    "btw" -> "附带提问"
+    "compact" -> "上下文压缩"
+    "dream" -> "梦境固化"
+    else -> p
+}
+
 private fun LazyListScope.aboutItems(
     vm: SettingsViewModel,
     settings: AppSettings,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
-    item { SectionTitle("Token 用量") }
+    item { SectionTitle("Token 概览") }
     item {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            GlassStatTile(
-                backdrop = backdrop,
-                number = formatTokens(settings.tokenInToday),
-                label = "今日输入",
-                tint = Color(0xFF5B8DEF),
-                modifier = Modifier.weight(1f)
-            )
-            GlassStatTile(
-                backdrop = backdrop,
-                number = formatTokens(settings.tokenOutToday),
-                label = "今日输出",
-                tint = Color(0xFF3FA37A),
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-    item {
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                GlassStatTile(
-                    backdrop = backdrop,
-                    number = formatTokens(settings.tokenInTotal),
-                    label = "累计输入",
-                    tint = Color(0xFF8B7BEF),
-                    modifier = Modifier.weight(1f)
-                )
-                GlassStatTile(
-                    backdrop = backdrop,
-                    number = formatTokens(settings.tokenOutTotal),
-                    label = "累计输出",
-                    tint = Color(0xFFD9913F),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
         Text(
-            "统计日期：${settings.tokenDay.ifBlank { "无" }} · 也可在聊天里直接问 Agent「今天用了多少 token」（app_status 工具）",
+            "详细统计（今日/本周/本月、按模型与用途分布、会话排行）已移至「用量」页。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
         )
     }
     item { SectionTitle("关于本机大脑") }
