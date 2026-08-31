@@ -74,5 +74,7 @@ dependencies {
     implementation(libs.backdrop)
     implementation(libs.androidx.work)
     debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     testImplementation(libs.junit)
 }

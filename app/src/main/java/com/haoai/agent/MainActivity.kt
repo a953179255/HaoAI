@@ -271,6 +271,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         // 顶栏 🌐 直达全屏：先收预览面板，避免浮层叠在全屏浏览器上
                         com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
                         screen = 7
+                    },
+                    onOpenVscreen = {
+                        com.haoai.agent.platform.vdisplay.VirtualScreenController.openPreview()
                     }
                 )
             }
@@ -284,6 +287,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
                         screen = 7
                     }
+                )
+            }
+            // 4.3 增强：虚拟屏实时预览浮层（vscreen_launch 成功自动弹出）
+            val vscreenOpen by com.haoai.agent.platform.vdisplay.VirtualScreenController.previewOpen.collectAsState()
+            if (vscreenOpen) {
+                com.haoai.agent.ui.browser.VScreenPreviewPanel(
+                    backdrop = backdrop,
+                    onClose = { com.haoai.agent.platform.vdisplay.VirtualScreenController.closePreview() }
                 )
             }
         }

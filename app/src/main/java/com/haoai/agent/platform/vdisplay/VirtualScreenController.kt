@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.view.Display
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicReference
 
@@ -47,7 +48,31 @@ object VirtualScreenController {
     @Volatile var lastMarker: Pair<Rect, String>? = null
         private set
 
+    /** 预览面板开合；vscreen_launch 成功自动弹出（两段式 uiOpener 模式）。 */
+    val previewOpen = MutableStateFlow(false)
+    /** 面板实时帧（降采样，软件位图随 GC 回收不显式 recycle——面板可能仍持引用绘制）。 */
+    val previewFrame = MutableStateFlow<Bitmap?>(null)
+
+    fun openPreview() {
+        previewOpen.value = true
+        // 面板打开时先发当前帧，避免要等内容更新才见画面
+        latestFrame.get()?.let { publishPreview(it) }
+    }
+    fun closePreview() { previewOpen.value = false }
+
+    private fun publishPreview(bmp: Bitmap) {
+        if (!previewOpen.value) return
+        val scale = minOf(1f, 720f / maxOf(bmp.width, bmp.height))
+        // 始终发布独立副本：latestFrame 会被 recycle，面板不能共享同一实例
+        previewFrame.value = if (scale < 1f) {
+            Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
+        } else bmp.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
     val displayId: Int? get() = display?.display?.displayId
+
+    /** displayId 的可观察形态（聊天顶栏入口按钮据此显隐）。 */
+    val displayIdFlow = MutableStateFlow<Int?>(null)
 
     fun touch() { lastActivityAt = System.currentTimeMillis() }
 
@@ -75,7 +100,10 @@ object VirtualScreenController {
             val img = runCatching { rd.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
             val bmp = runCatching { imageToBitmap(img) }.getOrNull()
             img.close()
-            if (bmp != null) latestFrame.getAndSet(bmp)?.takeIf { it !== bmp }?.recycle()
+            if (bmp != null) {
+                latestFrame.getAndSet(bmp)?.takeIf { it !== bmp }?.recycle()
+                publishPreview(bmp)
+            }
         }, Handler(Looper.getMainLooper()))
         val d = runCatching {
             dm.createVirtualDisplay(
@@ -90,6 +118,7 @@ object VirtualScreenController {
         }
         display = d
         reader = r
+        displayIdFlow.value = d.display?.displayId
         touch()
         null
     }
@@ -98,23 +127,61 @@ object VirtualScreenController {
      * 把目标 App/页面启动到虚拟屏。target=包名 或 http(s) URL。
      * 启动失败（App 拒绝多屏/系统限制）返回错误信息，由工具层引导降级前台。
      */
-    fun launch(context: Context, target: String): String? = synchronized(lock) {
+    /**
+     * 三级通道启动（Shizuku shell uid → root → App 直启）。shell 通道等价
+     * `adb shell am start --display`，豁免 untrusted 屏启动检查（系统 App/
+     * 严格 ROM 也能上屏）；直启失败沿用原报错降级文案。返回 null=成功。
+     */
+    suspend fun launch(context: Context, target: String): String? {
         ensureDisplay(context)?.let { return it }
         val id = displayId ?: return "虚拟屏不可用"
         val pm = context.packageManager
-        val intent = when {
-            target.startsWith("http://") || target.startsWith("https://") ->
-                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
-            else -> pm.getLaunchIntentForPackage(target)
+        val isUrl = target.startsWith("http://") || target.startsWith("https://")
+        // shell 通道拼命令行；直启通道拼 intent
+        val shellCmd: String
+        val launchIntent: Intent
+        if (isUrl) {
+            shellCmd = "am start --display $id -a android.intent.action.VIEW -d '$target'"
+            launchIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
+        } else {
+            val act = runCatching { pm.getLaunchIntentForPackage(target)?.component }.getOrNull()
                 ?: return "未安装应用：$target（可先用 list_apps 查包名）"
+            shellCmd = "am start --display $id -n ${act.flattenToString()}"
+            launchIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                component = act
+            }
         }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val options = ActivityOptions.makeBasic().apply { launchDisplayId = id }
-        runCatching { context.startActivity(intent, options.toBundle()) }
-            .onFailure { return "启动到虚拟屏失败：${it.message}（该 App 可能拒绝多屏，建议降级前台 a11y 流程）" }
+        PrivilegedShell.refresh(context)
+        if (PrivilegedShell.shizukuUsable()) {
+            val r = PrivilegedShell.shizukuExec(shellCmd)
+            if (r.ok) { onLaunched(); return null }
+            // shell 错误（Activity 不存在等）直接透传；Permission Denial 才回退直启
+            if (!r.output.contains("Permission Denial")) return "Shizuku 启动失败：${r.output.take(220)}"
+        }
+        if (PrivilegedShell.hasRoot()) {
+            val r = PrivilegedShell.rootExec(shellCmd)
+            if (r.ok) { onLaunched(); return null }
+            if (!r.output.contains("Permission Denial")) return "root 启动失败：${r.output.take(220)}"
+        }
+        val directError = synchronized(lock) {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val options = ActivityOptions.makeBasic().apply { launchDisplayId = id }
+            runCatching { context.startActivity(launchIntent, options.toBundle()) }
+                .fold(
+                    onSuccess = { null },
+                    onFailure = { "启动到虚拟屏失败：${it.message}（该 App 可能拒绝多屏；安装并授权 Shizuku 可解锁）" }
+                )
+        }
+        if (directError != null) return directError
+        onLaunched()
+        return null
+    }
+
+    private fun onLaunched() {
         lastMarker = null
         touch()
-        null
+        previewOpen.value = true
     }
 
     /** 回到虚拟屏桌面：home intent 定向到虚拟屏（等效于把屏上应用退到后台）。 */
@@ -169,7 +236,10 @@ object VirtualScreenController {
         runCatching { reader?.close() }
         display = null
         reader = null
+        displayIdFlow.value = null
         latestFrame.getAndSet(null)?.recycle()
+        previewFrame.value = null
+        previewOpen.value = false
         lastMarker = null
     }
 

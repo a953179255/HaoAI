@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
@@ -179,7 +180,8 @@ fun ChatScreen(
         androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: (fromDrawer: Boolean) -> Unit,
     onOpenSessions: () -> Unit = {},
-    onOpenBrowser: () -> Unit = {}
+    onOpenBrowser: () -> Unit = {},
+    onOpenVscreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -415,6 +417,7 @@ fun ChatScreen(
                 showRenameDialog = true
             },
             onOpenBrowser = onOpenBrowser,
+            onOpenVscreen = onOpenVscreen,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -1113,9 +1116,11 @@ private fun TopBar(
     // 点击标题区（会话名副标题）→ 重命名当前会话
     onRenameSubtitle: () -> Unit,
     onOpenBrowser: () -> Unit = {},
+    onOpenVscreen: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showContextDetail by remember { mutableStateOf(false) }
+    val vscreenId by com.haoai.agent.platform.vdisplay.VirtualScreenController.displayIdFlow.collectAsState()
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
@@ -1155,6 +1160,17 @@ private fun TopBar(
                     modifier = Modifier.size(22.dp),
                     tint = MaterialTheme.colorScheme.onBackground
                 )
+            }
+            // 4.3 增强：虚拟屏活跃时显示入口，点开实时预览面板
+            if (vscreenId != null) {
+                IconButton(onClick = onOpenVscreen) {
+                    Icon(
+                        Icons.Filled.SmartDisplay,
+                        contentDescription = "虚拟屏预览",
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
             }
             IconButton(onClick = onNewChat) {
                 Icon(Icons.Filled.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)

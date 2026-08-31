@@ -1082,6 +1082,9 @@ private fun LazyListScope.privacyItems(
                 onChange = { vm.setVscreenEnabled(it) },
                 backdrop = backdrop
             )
+            if (vscreenSupported) {
+                VscreenChannelRow(backdrop)
+            }
             Text(
                 "说明：操作走无障碍节点（点击/输入/滚动），无需触摸注入；精确手势（拖动滑块）本版本未启用，" +
                     "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。",
@@ -1350,6 +1353,87 @@ private fun ModelPickRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
+        }
+    }
+}
+
+/**
+ * 4.3 增强：虚拟屏启动通道状态行（Shizuku → root → 直启 三级）。
+ * 状态在进入区块时刷新；Shizuku 已装未授权时给「授权」按钮。
+ */
+@Composable
+private fun VscreenChannelRow(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        com.haoai.agent.platform.vdisplay.PrivilegedShell.refresh(context)
+    }
+    val status by com.haoai.agent.platform.vdisplay.PrivilegedShell.shizukuStatus.collectAsState()
+    val root by com.haoai.agent.platform.vdisplay.PrivilegedShell.rootAvailable.collectAsState()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("App 上屏通道", style = MaterialTheme.typography.bodyMedium)
+            val channelText = when {
+                status == com.haoai.agent.platform.vdisplay.PrivilegedShell.Status.GRANTED -> "Shizuku 已授权（任意 App 均可上屏）"
+                root -> "root 已就绪（任意 App 均可上屏）"
+                status == com.haoai.agent.platform.vdisplay.PrivilegedShell.Status.UNAUTHORIZED -> "Shizuku 待授权（未授权时仅部分 App 能上屏）"
+                status == com.haoai.agent.platform.vdisplay.PrivilegedShell.Status.NOT_RUNNING -> "Shizuku 未运行（打开 Shizuku 应用启动服务）"
+                else -> "未检测到 Shizuku/root（直启受限：部分 App 会拒绝上屏）"
+            }
+            Text(
+                channelText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        when (status) {
+            com.haoai.agent.platform.vdisplay.PrivilegedShell.Status.UNAUTHORIZED -> {
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = {
+                        val msg = com.haoai.agent.platform.vdisplay.PrivilegedShell.requestShizukuPermission()
+                        if (msg != null) {
+                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                ) {
+                    Text(
+                        "授权",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+            com.haoai.agent.platform.vdisplay.PrivilegedShell.Status.NOT_INSTALLED -> {
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse("https://github.com/RikkaApps/Shizuku/releases")
+                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                ) {
+                    Text(
+                        "获取 Shizuku",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
+            else -> {}
         }
     }
 }
