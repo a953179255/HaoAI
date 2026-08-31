@@ -30,7 +30,12 @@ data class ToolContext(
     val onToolChange: (() -> Unit)? = null
 )
 
-data class ToolResult(val content: String, val isError: Boolean = false)
+data class ToolResult(
+    val content: String,
+    val isError: Boolean = false,
+    /** 非空时引擎在工具结果后追加一条带图 user 消息（browser_screenshot 图像注入通路）。 */
+    val imageDataUrl: String? = null
+)
 
 interface Tool {
     val name: String

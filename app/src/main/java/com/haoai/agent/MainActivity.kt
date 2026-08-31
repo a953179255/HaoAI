@@ -146,6 +146,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             KeepAliveService.start(context)
         }
         com.haoai.agent.platform.DreamTriggerMonitor.init(context)
+        // 4.2 内置浏览器：建 INVISIBLE 宿主（detached WebView 不执行 loadUrl，
+        // 必须挂 window 才能加载；UI 打开时 swap 到可见容器）
+        (context as? android.app.Activity)?.let {
+            com.haoai.agent.agent.browser.BrowserController.bindActivity(it)
+        }
     }
 
     // 全局共享：液态玻璃采样层。壁纸默认只用于聊天界面（screen==0），设置里可切换全局应用
@@ -164,6 +169,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(null, dark = darkBackdrop)
     val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
 
+    // 4.2 内置浏览器：无头工具触发浏览时自动把 UI 切到浏览器页（可见容器才真实加载）
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        com.haoai.agent.agent.browser.BrowserController.uiOpener = { screen = 7 }
+    }
     // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
     val drawer = remember { com.haoai.agent.ui.chat.DrawerController() }
     // 聊天滚动状态提升到 RootApp（不随 screen 切换销毁），进设置再返回时保持位置
@@ -236,6 +245,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         rootScope.launch { drawer.open() }
                     }
                 )
+                // 4.2 内置浏览器：与工具共用 BrowserController WebView 池
+                7 -> com.haoai.agent.ui.browser.BrowserScreen(
+                    backdrop = backdrop,
+                    onBack = { screen = 0 }
+                )
                 else -> ChatScreen(
                     vm = chatVm,
                     backdrop = backdrop,
@@ -249,7 +263,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onOpenSessions = {
                         rootScope.launch { drawer.close() }
                         screen = 4
-                    }
+                    },
+                    onOpenBrowser = { screen = 7 }
                 )
             }
         }

@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
@@ -177,7 +178,8 @@ fun ChatScreen(
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: (fromDrawer: Boolean) -> Unit,
-    onOpenSessions: () -> Unit = {}
+    onOpenSessions: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -412,6 +414,7 @@ fun ChatScreen(
                 renameText = activeSession?.title ?: ""
                 showRenameDialog = true
             },
+            onOpenBrowser = onOpenBrowser,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -1109,6 +1112,7 @@ private fun TopBar(
     onNewChat: () -> Unit,
     // 点击标题区（会话名副标题）→ 重命名当前会话
     onRenameSubtitle: () -> Unit,
+    onOpenBrowser: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showContextDetail by remember { mutableStateOf(false) }
@@ -1144,6 +1148,14 @@ private fun TopBar(
                 )
             }
             Spacer(Modifier.size(2.dp))
+            IconButton(onClick = onOpenBrowser) {
+                Icon(
+                    Icons.Filled.Public,
+                    contentDescription = "内置浏览器",
+                    modifier = Modifier.size(22.dp),
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
+            }
             IconButton(onClick = onNewChat) {
                 Icon(Icons.Filled.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)
             }

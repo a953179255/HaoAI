@@ -638,6 +638,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             "key" -> opt("action")
             "launch_app" -> opt("package")
             "list_apps" -> "列出应用"
+            "browser_search" -> "搜索「${opt("query")}」"
+            "browser_open" -> opt("url")
+            "browser_navigate" -> opt("url")
+            "browser_read" -> "读取页面结构"
+            "browser_click" -> opt("index")?.let { "[$it]" } ?: ""
+            "browser_input" -> "[${opt("index")}] 输入：${opt("text").take(30)}"
+            "browser_scroll" -> "滚动 " + opt("direction").ifBlank { "down" }
+            "browser_find" -> "查找「${opt("text")}」"
+            "browser_back" -> "后退"
+            "browser_screenshot" -> "页面截图"
             "schedule" -> opt("action").ifBlank { "list" } +
                 opt("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             "spawn_agent" -> opt("task").take(60)

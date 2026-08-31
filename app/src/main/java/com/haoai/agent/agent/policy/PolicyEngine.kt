@@ -76,6 +76,9 @@ class PolicyEngine(private val mode: PermissionMode) {
         "write", "edit" -> RiskLevel.WRITE
         "tap", "swipe", "type_text", "key" -> RiskLevel.EXEC
         "browser_search", "browser_open" -> RiskLevel.EXEC
+        // 4.2 内置浏览器：导航/截图/读结构不打扰用户走 READ 免审；点击/输入/滚动/后退改页面状态按 WRITE 审批
+        "browser_navigate", "browser_screenshot" -> RiskLevel.READ
+        "browser_click", "browser_input", "browser_scroll", "browser_back" -> RiskLevel.WRITE
         "launch_app" -> RiskLevel.WRITE
         "calendar_create" -> RiskLevel.WRITE
         "alarm_set" -> RiskLevel.EXEC

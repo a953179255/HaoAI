@@ -260,17 +260,17 @@ class AgentEngine(
         val tool = tools.firstOrNull { it.name == call.name }
         val args = parseArgs(call.argumentsJson)
 
-        var result: Pair<String, Boolean>
+        var result: ToolResult = ToolResult("")
         var finalState: ToolRunState = ToolRunState.DONE
 
         when {
             tool == null -> {
-                result = "未知工具：${call.name}" to true
+                result = ToolResult("未知工具：${call.name}", true)
                 finalState = ToolRunState.ERROR
             }
 
             call.name == "bash" && policy.checkShellBlocked(args.optString("command")) != null -> {
-                result = (policy.checkShellBlocked(args.optString("command")) ?: "被拦截") to true
+                result = ToolResult(policy.checkShellBlocked(args.optString("command")) ?: "被拦截", true)
                 finalState = ToolRunState.DENIED
             }
 
@@ -279,7 +279,7 @@ class AgentEngine(
                 val request = buildApprovalRequest(call, args)
                 val granted = approve(request)
                 if (!granted) {
-                    result = "用户拒绝了本次操作。" to true
+                    result = ToolResult("用户拒绝了本次操作。", true)
                     finalState = ToolRunState.DENIED
                 } else {
                     // 1.3 快照：审批已通过、文件尚未修改，此刻读原文最可靠；
@@ -307,53 +307,66 @@ class AgentEngine(
                         }
                     }
                     result = invokeTool(tool, args, ctx)
-                    if (result.second) finalState = ToolRunState.ERROR
+                    if (result.isError) finalState = ToolRunState.ERROR
                 }
             }
 
             else -> {
                 result = invokeTool(tool, args, ctx)
-                if (result.second) finalState = ToolRunState.ERROR
+                if (result.isError) finalState = ToolRunState.ERROR
             }
         }
 
-        val storedContent = TextCap.middle(result.first, STORED_CAP)
+        val storedContent = TextCap.middle(result.content, STORED_CAP)
         val message = ChatMessage(
             role = ChatMessage.ROLE_TOOL,
             content = storedContent,
             toolCallId = call.id,
             toolName = call.name,
-            error = result.second
+            error = result.isError
         )
         appendAndNotify(message, onEvent)
+        // 图像注入通路（4.2 browser_screenshot）：工具结果带图时追加一条 user 图像消息，
+        // 复用既有 imageData → image_url 转换，OpenAI/Anthropic 两协议均可消费
+        result.imageDataUrl?.let { img ->
+            appendAndNotify(
+                ChatMessage(
+                    role = ChatMessage.ROLE_USER,
+                    content = "[${call.name}] 页面截图（当前视觉状态，供图像分析）",
+                    imageData = img
+                ),
+                onEvent
+            )
+        }
         onEvent(
             ToolChanged(
-                ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.first))
+                ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.content))
             )
         )
     }
 
-    private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): Pair<String, Boolean> =
+    private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =
         try {
             // bash（3.3 多后端）允许显式放宽到 600s（长构建），按请求 +20s 余量；其余工具维持 180s
             val budget = if (tool.name == "bash") {
                 (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000) + 20_000L
             } else TOOL_TIMEOUT_MS
             // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
+            // （browser_* 工具内部自行 withContext(Main) 操作 WebView，嵌套切换安全）
             withTimeout(budget) {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     tool.run(args, ctx)
                 }
-            }.let { it.content to it.isError }
+            }
         } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
             // 区分「工具超时」与「用户停止」：超时只作废本次调用，不能静默杀掉整轮任务
             if (ce is kotlinx.coroutines.TimeoutCancellationException) {
-                ("工具执行超时，请拆小任务或加大 timeout 重试") to true
+                ToolResult("工具执行超时，请拆小任务或加大 timeout 重试", true)
             } else {
                 throw ce
             }
         } catch (e: Exception) {
-            ("工具执行失败：${e.message ?: e.javaClass.simpleName}") to true
+            ToolResult("工具执行失败：${e.message ?: e.javaClass.simpleName}", true)
         }
 
     private suspend fun runSubAgent(task: String, parentCtx: ToolContext): String {
@@ -820,6 +833,14 @@ class AgentEngine(
             "list_apps" -> "列出应用"
             "browser_search" -> "搜索「${args.optString("query")}」"
             "browser_open" -> args.optString("url")
+            "browser_navigate" -> args.optString("url")
+            "browser_read" -> "读取页面结构"
+            "browser_click" -> args.optInt("index")?.let { "[$it]" } ?: ""
+            "browser_input" -> "[${args.optInt("index")}] 输入：${args.optString("text").take(30)}"
+            "browser_scroll" -> "滚动 ${args.optString("direction", "down")}"
+            "browser_find" -> "查找「${args.optString("text")}」"
+            "browser_back" -> "后退"
+            "browser_screenshot" -> "页面截图"
             "schedule" -> args.optString("action", "list") +
                 args.optString("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             "spawn_agent" -> args.optString("task").take(60)
