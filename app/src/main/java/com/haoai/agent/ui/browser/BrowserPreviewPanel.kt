@@ -7,14 +7,17 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -72,10 +77,10 @@ fun BrowserPreviewPanel(
     val revision by BrowserController.revision.collectAsState()
     val active by BrowserController.activeIndex.collectAsState()
 
-    fun copyAndToast(text: String) {
+    fun copyAndToast(text: String, what: String) {
         if (text.isBlank()) return
         clipboard.setText(AnnotatedString(text))
-        Toast.makeText(context, "已复制：${text.take(48)}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "已复制$what：${text.take(48)}", Toast.LENGTH_SHORT).show()
     }
 
     // 可见期间即「UI 打开」：工具照常工作、空闲回收挂起；关闭时 WebView 摘回
@@ -118,7 +123,11 @@ fun BrowserPreviewPanel(
     val title = BrowserController.tabTitles().getOrNull(active).orEmpty()
     val url = BrowserController.activeUrl()
 
-    Box(Modifier.fillMaxSize()) {
+    // 面板高度：默认 62%，顶部把手可在 35%~88% 间拖拽调节（始终保留聊天区可见）
+    var heightFraction by remember { mutableStateOf(0.62f) }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val fullH = constraints.maxHeight
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -126,9 +135,30 @@ fun BrowserPreviewPanel(
                 .padding(horizontal = 8.dp)
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
-                .fillMaxHeight(0.46f)
+                .fillMaxHeight(heightFraction)
                 .graphicsLayer { translationY = slide * size.height }
         ) {
+            // 拖拽把手：上拉加高、下拉收窄
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(18.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, dy ->
+                            if (fullH > 0) {
+                                heightFraction = (heightFraction - dy / fullH).coerceIn(0.35f, 0.88f)
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .size(width = 36.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
+                )
+            }
             GlassPanel(
                 backdrop = backdrop,
                 modifier = Modifier.fillMaxWidth(),
@@ -145,7 +175,7 @@ fun BrowserPreviewPanel(
                             Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable { copyAndToast(url) }
+                                .clickable { copyAndToast(url, "当前网址") }
                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
                             Text(
@@ -154,19 +184,31 @@ fun BrowserPreviewPanel(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Text(
-                                url.ifBlank { "点按复制当前网址" },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    url.ifBlank { "点按复制当前网址" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Icon(
+                                    Icons.Filled.ContentCopy,
+                                    "复制当前网址",
+                                    modifier = Modifier
+                                        .padding(start = 4.dp)
+                                        .size(11.dp)
+                                        .alpha(0.55f)
+                                )
+                            }
                         }
                         IconButton(onClick = onFullscreen, modifier = Modifier.size(36.dp)) {
                             Icon(Icons.Filled.Public, "全屏浏览器", modifier = Modifier.size(18.dp))
                         }
                     }
-                    // 链接条：当前页可见链接，点击直接复制（上游 CopyableURLCapsule 同思路）
+                    // 链接条：当前页可见链接，点击复制该链接的「去向」网址
+                    // （区别于顶栏：顶栏复制的是当前页地址）
                     if (links.isNotEmpty()) {
                         Row(
                             Modifier
@@ -184,7 +226,7 @@ fun BrowserPreviewPanel(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
-                                        .clickable { copyAndToast(href) }
+                                        .clickable { copyAndToast(href, "链接") }
                                         .padding(horizontal = 10.dp, vertical = 6.dp)
                                 )
                             }
