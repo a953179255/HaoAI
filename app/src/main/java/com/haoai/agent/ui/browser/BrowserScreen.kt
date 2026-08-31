@@ -78,10 +78,14 @@ fun BrowserScreen(
         }
     }
 
-    // 界面可见期间挂起 5 分钟空闲回收（正在看，别销毁）
+    // 界面可见期间挂起 5 分钟空闲回收（正在看，别销毁）；离开时摘下 WebView
+    // 回 detached 态（上游 模式：无隐藏宿主，下次打开再换挂）
     LaunchedEffect(Unit) { BrowserController.uiVisible = true }
     DisposableEffect(Unit) {
-        onDispose { BrowserController.uiVisible = false }
+        onDispose {
+            BrowserController.uiVisible = false
+            BrowserController.detachAll()
+        }
     }
 
     Column(Modifier.fillMaxSize()) {

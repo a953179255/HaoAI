@@ -53,19 +53,23 @@ object BrowserController {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
-     * 隐藏宿主（Activity content 最底层、全屏、VISIBLE、平移出屏幕右缘）。
-     * 实测矩阵（魅族 20 Pro/Android 16，目标页 example.org）——Chromium 加载
-     * 的硬条件是「attached 到 window + 全屏尺寸 + VISIBLE」三者齐备：
-     * - detached / INVISIBLE 宿主 / 1x1 宿主：全部假加载（onPageFinished 回调
-     *   但 location 停在 about:blank）；
-     * - 平移出屏全屏宿主（本方案）：加载/布局/JS/截图全部正常（出屏部分不参与
-     *   合成，用户不可见）；
-     * 转移挂载教训：BrowserScreen 用「空容器 + update 里 swap」模式，绝不在
-     * factory 直接返回宿主里的 WebView（转移挂载破坏 Compose 绘制 → 整页白屏）。
+     * 托管模式（2026-08-31 去泊车重构，上游 同款）：WebView 用应用上下文
+     * 创建后保持 detached（parent == null，不挂任何窗口），**没有隐藏宿主**。
+     * 旧方案（全屏 VISIBLE 宿主垫在 content 底层被 Compose 盖住泊车）在魅族
+     * 20 Pro/Android 16 上出现「导航停摆」：可见容器里 loadUrl 后 onPageFinished
+     * 永不回调（fa8ab01 原版同样复现、重启手机/清 app_webview 均无效，而同机
+     * 系统浏览器与 上游 正常）——泊车态 Chromium 合成器进入抑制态后换挂
+     * 可见容器也无法恢复。三方调研（上游/上游/上游）证实无项目采用
+     * 「已挂载但被遮挡」的泊车模式：
+     * - 上游：全程 detached，每次 loadUrl 前手动 measure(EXACTLY)+layout
+     *   合成布局，导航/JS/截图全通（同机实证可用）；活跃性靠进程级 FGS。
+     * - 上游：WindowManager 1x1 悬浮窗（SYSTEM_ALERT_WINDOW）+ 伪全屏 measure。
+     * - 上游：VirtualDisplay + ImageReader。
+     * 无头导航的活跃性由进程承担（本应用 KeepAliveService 前台服务已有），
+     * 视图树层面只保证「可见容器内导航」（预览面板自动弹出即为此设计）。
      */
-    @Volatile private var hiddenHost: ViewGroup? = null
 
-    class Tab internal constructor(val id: Long, val webView: WebView) {
+    class Tab internal constructor(val id: Long, internal var webView: WebView) {
         var title: String = ""
         var url: String = ""
         internal var loadSignal: CompletableDeferred<Unit>? = null
@@ -81,12 +85,20 @@ object BrowserController {
     @Volatile var uiVisible = false
 
     /**
-     * 界面拉起器（MainActivity 注册）：无头 navigate 时自动把 UI 切到浏览器页。
-     * Android 16 硬约束：被遮挡的 WebView 不推进导航（onPageStarted 后卡死、
-     * 网络请求不发，data URL 隔离实验实锤）——浏览必须在可见容器中进行。
-     * 产品行为：Agent 要浏览时浏览器界面自动弹出，用户全程看得到浏览过程。
+     * 界面拉起器（MainActivity 注册）：无头 navigate 时自动弹出底部预览面板
+     * （两段式呼出第一段，用户全程看得到浏览过程；点面板 🌐 换挂全屏浏览器
+     * 完整操作）。唤起失败不阻断——navigate 会降级为 detached 导航。
      */
     var uiOpener: (() -> Unit)? = null
+
+    /**
+     * 底部预览面板开关（MainActivity 收集渲染 BrowserPreviewPanel）。面板与
+     * 全屏 BrowserScreen 共用 WebView 池、一次只显示其一；关闭面板时 WebView
+     * 摘回 detached 态，下次 navigate 再自动弹出。
+     */
+    val previewOpen = MutableStateFlow(false)
+
+    fun openPreview() { previewOpen.value = true }
 
     /** UI 观察用：任一标签加载状态变化时自增，驱动 BrowserScreen 刷新地址栏/标题。 */
     val revision = MutableStateFlow(0)
@@ -109,56 +121,45 @@ object BrowserController {
         }
     }
 
-    /**
-     * Activity 绑定（MainActivity 进程内调用一次）：建 1x1 VISIBLE 宿主，
-     * 挂到 content 首个子位置（被 Surface 全覆盖，用户不可见）。
-     */
+    /** Activity 绑定（MainActivity 进程内调用一次）：仅更新屏幕尺寸缓存。 */
     fun bindActivity(activity: android.app.Activity) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post { bindActivity(activity) }
             return
         }
-        if (hiddenHost != null) return
-        val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
-        val host = android.widget.FrameLayout(activity).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            // 屏内全屏 VISIBLE（flags 可见，Chromium 才会真实加载），垫在 content
-            // 第一个子位（index 0）：上面是不透明的 ComposeView Surface，完全被盖住，
-            // 用户不可见；不加 alpha/translation——两者都会让 Chromium 判 hidden
-            importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        content.addView(host, 0)
-        hiddenHost = host
-        for (tab in tabs) parkWebView(tab.webView)
-        bump()
+        screenW = activity.resources.displayMetrics.widthPixels
+        screenH = activity.resources.displayMetrics.heightPixels
     }
 
-    /** WebView 挂进隐藏宿主（可见容器先摘下）；全屏布局保证 Chromium 真实加载。 */
-    internal fun parkWebView(wv: WebView) {
-        (wv.parent as? ViewGroup)?.removeView(wv)
-        val host = hiddenHost ?: return
-        wv.layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        )
-        host.addView(wv)
+    /** 池内所有 WebView 从任何父容器摘下（回到 detached 态）：预览面板/浏览器
+     *  界面关闭时调用。异步延迟一拍执行并带 uiVisible 守卫——面板→全屏切换时
+     *  全屏容器会先挂上 WebView，面板的 onDispose 后到，若同步摘除会把刚挂好
+     *  的实例又拽下来（全屏白屏）；下一拍 uiVisible 已被新界面置 true，跳过。 */
+    internal fun detachAll() {
+        mainHandler.post {
+            if (uiVisible) return@post
+            for (tab in tabs) {
+                (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
+                ensureLaidOut(tab.webView)
+            }
+        }
     }
 
     /**
-     * detached WebView 的合成布局（上游 BrowserUseManager 同款手法）：
-     * WebView 不挂任何窗口时永远不会自动 layout，viewport 为 0、页面不排版
-     * （readStructure 拿到 pageHeight=0 的根因）。手动按屏幕尺寸 EXACTLY
-     * measure+layout 后，JS 布局数据（getBoundingClientRect/scrollHeight）与
-     * draw(Canvas) 截图全部可用。
+     * detached WebView 的合成布局（上游 BrowserUseManager.applyViewport 同款）：
+     * WebView 不挂任何窗口时永远不会自动 layout，viewport 为 0、页面不排版。
+     * 手动按屏幕尺寸 EXACTLY measure+layout 后，JS 布局数据与导航均可推进。
      */
+    @Volatile private var screenW = 0
+    @Volatile private var screenH = 0
+
     internal fun ensureLaidOut(wv: WebView) {
         // UI 可见时 WebView 在可见容器里有真实布局，交给容器（手动改成全屏会撑变形）
         if (uiVisible) return
         val ctx = appContext ?: return
         val dm = ctx.resources.displayMetrics
-        val w = dm.widthPixels
-        val h = dm.heightPixels
+        val w = if (screenW > 0) screenW else dm.widthPixels
+        val h = if (screenH > 0) screenH else dm.heightPixels
         if (w <= 0 || h <= 0) return
         if (wv.width == w && wv.height == h && wv.isLaidOut) return
         val specW = android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY)
@@ -190,10 +191,15 @@ object BrowserController {
         return tab.webView
     }
 
-    /** 无参同步取活动标签（UI 进入时）；tabs 为空则建首个标签。 */
+    /** 无参同步取活动标签（UI 进入时）；tabs 为空则建首个标签并入列。
+     *  （2026-08-31 修复：旧实现调 newTabLocked() 后不入列——tabs 恒空，
+     *  面板挂载/navigate/read 各造各的孤儿 WebView，onPageFinished 永远
+     *  找不到 tab → loadSignal 永不完成 → 一律 20s 超时假加载。） */
     private fun getOrCreateTab(): Tab {
         tabs.firstOrNull()?.let { return it }
-        return newTabLocked()
+        val tab = newTabLocked()
+        tabs.add(tab)
+        return tab
     }
 
     /** 仅创建不入列表（入列由调用方负责，避免同一实例双重入列→UI 双标签）。 */
@@ -201,11 +207,9 @@ object BrowserController {
         val ctx = appContext ?: error("BrowserController 未初始化")
         val wv = createWebView(ctx)
         val tab = Tab(nextTabId++, wv)
+        // detached 创建（上游 模式）：不挂任何宿主；无头导航前由
+        // ensureLaidOut 合成布局，UI 打开时由可见容器换挂
         ensureLaidOut(wv)
-        // Android detached WebView 不执行 loadUrl（对比 iOS，实测确认）：必须
-        // attach 到 window 才能加载。默认挂隐藏宿主（INVISIBLE，照常加载布局）；
-        // UI 打开时 swap 到可见容器。
-        parkWebView(wv)
         return tab
     }
 
@@ -322,6 +326,8 @@ object BrowserController {
         // WebView 不可见 ~10s 即被 cached-app freezer 冻结 → loadUrl 停在
         // onPageStarted、网络请求永不发出（日志与 dumpsys 进程状态实锤）。
         return WebView(ctx).apply {
+            // 上游 实战加固：OEM GPU 合成在弹层/换挂场景下白屏，强制硬件层
+            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             // target=_blank 就地打开：自动化里 onCreateWindow 是死路
@@ -332,7 +338,7 @@ object BrowserController {
             settings.setSupportZoom(true)
             settings.builtInZoomControls = true
             settings.displayZoomControls = false
-            // 无头保命开关：WebView 不可见（隐藏宿主里）时继续光栅化/渲染，
+            // 无头保命开关：WebView 不可见（detached 态）时继续光栅化/渲染，
             // 否则 Android 16 的 freezer 会在 ~10s 后冻结 webview_service，
             // loadUrl 变成假加载（onPageFinished 永不回调、无网络请求）
             settings.offscreenPreRaster = true
@@ -343,10 +349,33 @@ object BrowserController {
                     val tab = tabs.firstOrNull { it.webView === view } ?: return
                     tab.title = view.title ?: ""
                     tab.url = url ?: view.url ?: ""
-                    android.util.Log.d("HaoaiBrowser", "onPageFinished: url=$url title=${tab.title} viewAttached=${view.isAttachedToWindow} size=${view.width}x${view.height}")
                     tab.loadSignal?.complete(Unit)
                     tab.loadSignal = null
                     bump()
+                }
+                // 上游 加固：主帧加载失败也完成 loadSignal——否则错误页
+                // 永不触发 onPageFinished，navigate 白白等满 20s 超时
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                    if (!request.isForMainFrame) return
+                    val tab = tabs.firstOrNull { it.webView === view } ?: return
+                    tab.title = view.title ?: ""
+                    tab.url = request.url.toString()
+                    tab.loadSignal?.complete(Unit)
+                    tab.loadSignal = null
+                    bump()
+                }
+                // 上游/上游 同款自愈：渲染进程崩死后该实例永久假加载，
+                // 原地销毁重建一个新标签替换，导航管线恢复
+                override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                    val idx = tabs.indexOfFirst { it.webView === view }
+                    if (idx >= 0) {
+                        val dead = tabs.removeAt(idx)
+                        (dead.webView.parent as? ViewGroup)?.removeView(dead.webView)
+                        runCatching { dead.webView.destroy() }
+                        if (activeIndex.value >= tabs.size) activeIndex.value = (tabs.size - 1).coerceAtLeast(0)
+                    }
+                    bump()
+                    return true
                 }
                 // http(s)/相对地址就地加载；intent:/mailto:/tel: 等拦截掉（WebView 加载会变错误页）
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -382,23 +411,31 @@ object BrowserController {
 
     /** 加载 url：等 onPageFinished（超时 20s）+ 固定渲染余量，返回最终 title/url。 */
     suspend fun navigate(url: String, index: Int? = null): String {
-        // Android 16 平台约束（模拟器 logcat + data URL 隔离实验实锤）：
-        // WebView 被遮挡/出屏时 Chromium 不推进导航——onPageStarted 会回调但
-        // onPageFinished 与网络请求永不来（data URL 零网络同样卡死）。
-        // 因此真实浏览只在浏览器界面可见时进行；界面未开时明确告知模型降级。
+        // 平台说明（2026-08-31 去泊车重构定案）：可见容器内导航（预览面板/全屏）
+        // 为主路径；面板唤起失败时降级为 detached + 合成布局导航（上游
+        // 同机实证可推进），不再直接报错。
         if (!uiVisible) {
-            // 自动拉起浏览器界面（可见容器里导航才真实推进），等它就绪
+            // 自动弹出底部预览面板让用户看到浏览过程
             uiOpener?.invoke()
-            val ready = withTimeoutOrNull(2_500L) {
+            withTimeoutOrNull(2_500L) {
                 while (!uiVisible) kotlinx.coroutines.delay(100)
                 true
-            } ?: return "内置浏览器界面未能自动打开：请改用 web_fetch 抓取纯文本，" +
-                "或请用户手动打开内置浏览器界面（聊天页顶栏 🌐）后重试。"
+            }
         }
         return withContext(Dispatchers.Main) {
             touch()
             val tab = (index?.let { tabs.getOrNull(it) } ?: getOrCreateTab())
-            ensureLaidOut(tab.webView)
+            // 关键（真机/模拟器日志实证）：面板 uiVisible 置位后，AndroidView 的
+            // update 换挂要等下一帧才执行。若此刻就 loadUrl，WebView 仍 detached
+            // （attached=false size=0x0），Chromium 启动的导航停在 onPageStarted
+            // 永不 Finished——必须先等换挂完成（attached 且有尺寸）再导航。
+            val deadline = System.currentTimeMillis() + 3_000L
+            while ((tab.webView.parent == null || tab.webView.width <= 0 || tab.webView.height <= 0) &&
+                System.currentTimeMillis() < deadline
+            ) {
+                if (tab.webView.parent == null) ensureLaidOut(tab.webView)
+                delay(50)
+            }
             val target = withScheme(url)
             tab.loadSignal = CompletableDeferred()
             tab.webView.loadUrl(target)
@@ -452,6 +489,17 @@ object BrowserController {
         val wv = webViewAt(index)
         val result = evalJs(wv, "(function(){$MARK_FUNC_JS;return window.__haoaiMark($max);})()")
         return unwrapJsString(result)
+    }
+
+    /**
+     * 当前页可见链接（预览面板链接条用）：独立 __haoaiLinks JS，只读、不给元素
+     * 打 data-haoai-index 编号（避免与模型进行中的 read→click 编号序列竞争），
+     * 可见优先排序 + href 去重，返回 JSON 数组 [{"text","href"}]。
+     */
+    suspend fun collectLinks(max: Int = 10): String {
+        if (tabs.isEmpty()) return "[]"
+        val wv = webViewAt()
+        return unwrapJsString(evalJs(wv, "(function(){$LINKS_FUNC_JS;return window.__haoaiLinks($max);})()"))
     }
 
     /** 点击编号元素：滚动到可视区 → focus → 完整鼠标事件序列（React 等框架兼容）。 */
@@ -648,6 +696,38 @@ object BrowserController {
           pageHeight:Math.round(document.documentElement.scrollHeight),
           viewport:[window.innerWidth,window.innerHeight],
           totalInteractive:items.length,elements:els});
+      };
+    """
+
+    /**
+     * 链接提取（预览面板链接条）：与 __haoaiMark 分离——只读不编号，页面绝对
+     * http(s) 链接，可见优先排序 + href 去重；Kotlin raw string 内 JS 用 + 拼接。
+     */
+    private const val LINKS_FUNC_JS = """
+      window.__haoaiLinks=function(max){
+        var nodes=document.querySelectorAll('a[href]'),seen={},out=[];
+        var items=[];
+        for(var i=0;i<nodes.length;i++){
+          var el=nodes[i],r=el.getBoundingClientRect(),st=window.getComputedStyle(el);
+          if(st.display==='none'||st.visibility==='hidden')continue;
+          if(r.width===0&&r.height===0)continue;
+          var h=el.href||'';   // property 取绝对 URL（相对 href 由浏览器解析）；attribute 会拿到相对路径
+          if(h.indexOf('http')!==0)continue;
+          var txt=(el.innerText||el.getAttribute('aria-label')||el.title||'').trim().replace(/\s+/g,' ');
+          if(!txt)txt=h.replace(/^https?:\/\//,'').slice(0,30);
+          if(txt.length>24)txt=txt.slice(0,24);
+          items.push({el:el,txt:txt,h:h,vis:r.bottom>0&&r.top<window.innerHeight});
+        }
+        items.sort(function(a,b){
+          if(a.vis!==b.vis)return a.vis?-1:1;
+          return 0;
+        });
+        for(var j=0;j<items.length&&out.length<max;j++){
+          if(seen[items[j].h])continue;
+          seen[items[j].h]=1;
+          out.push({text:items[j].txt,href:items[j].h});
+        }
+        return JSON.stringify(out);
       };
     """
 

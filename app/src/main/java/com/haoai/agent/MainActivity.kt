@@ -169,9 +169,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(null, dark = darkBackdrop)
     val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
 
-    // 4.2 内置浏览器：无头工具触发浏览时自动把 UI 切到浏览器页（可见容器才真实加载）
+    // 4.2 呼出优化：无头工具触发浏览时自动弹出底部预览面板（两段式第一段，
+    // 聊天不打断）；面板 🌐 才进全屏浏览器。可见容器才真实加载（平台约束）
     androidx.compose.runtime.LaunchedEffect(Unit) {
-        com.haoai.agent.agent.browser.BrowserController.uiOpener = { screen = 7 }
+        com.haoai.agent.agent.browser.BrowserController.uiOpener = {
+            com.haoai.agent.agent.browser.BrowserController.openPreview()
+        }
     }
     // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
     val drawer = remember { com.haoai.agent.ui.chat.DrawerController() }
@@ -264,7 +267,23 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         rootScope.launch { drawer.close() }
                         screen = 4
                     },
-                    onOpenBrowser = { screen = 7 }
+                    onOpenBrowser = {
+                        // 顶栏 🌐 直达全屏：先收预览面板，避免浮层叠在全屏浏览器上
+                        com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
+                        screen = 7
+                    }
+                )
+            }
+            // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
+            val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
+            if (previewOpen) {
+                com.haoai.agent.ui.browser.BrowserPreviewPanel(
+                    backdrop = backdrop,
+                    onClose = { com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false },
+                    onFullscreen = {
+                        com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
+                        screen = 7
+                    }
                 )
             }
         }
