@@ -162,6 +162,17 @@ class AgentEngine(
         }
         val apiTools = tools.map { it.toApi() }
 
+        // E4a 工具定义 token 估算动态化：真实序列化各工具 JSON 求和（兜底下限 3500）
+        _toolsTokenCache = runCatching {
+            apiTools.sumOf { t ->
+                com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
+                    com.haoai.agent.data.HaoJson.json.encodeToString(
+                        com.haoai.agent.agent.provider.ApiTool.serializer(), t
+                    )
+                )
+            }
+        }.getOrNull()?.coerceAtLeast(TOOLS_BASE_TOKENS)
+
         // 压缩检查：在主循环前判断是否需要压缩
         maybeCompact(onEvent)
 
@@ -373,8 +384,22 @@ class AgentEngine(
             )
         }
 
+        // E3 任务级失败升级：连续失败 ≥2 引导验证前置条件，≥3 禁止同参重试
+        var storedContent0 = result.content
+        if (result.isError) {
+            val n = conFailCount.merge(call.name, 1) { a, b -> a + b } ?: 1
+            when {
+                n == 2 -> storedContent0 += "\n\n[恢复提示] 工具 ${call.name} 已连续失败 2 次。先验证前置条件（路径存在？参数格式？权限模式？），或改用替代工具。"
+                n >= 3 -> storedContent0 += "\n\n[升级] 该步骤已失败 ${n} 次。禁止用相同参数重试。二选一：a) 换方法达成同一目标；b) 直接向用户说明阻塞点并请求指示。"
+            }
+            if (call.name == "bash" && n >= 2) {
+                storedContent0 += "\n[提示] 先完整查看 stderr 再决定下一步。"
+            }
+        } else {
+            conFailCount.remove(call.name)
+        }
         // 5.7 技能自改进闭环：skill 工具执行后回写结果 + 追加修订提示（每会话每技能限一次）
-        var storedContent = TextCap.middle(result.content, STORED_CAP)
+        var storedContent = TextCap.middle(storedContent0, STORED_CAP)
         if (call.name == "skill") {
             val skillName = runCatching { args.optString("name") }.getOrNull().orEmpty().ifBlank { "unknown" }
             val resultTag = if (result.isError) "failed: ${result.content.take(80)}" else "success"
@@ -480,6 +505,15 @@ class AgentEngine(
         )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位与设置修改
         val tools = ToolRegistry.readOnly(childCtx)
         val apiTools = tools.map { it.toApi() }
+        _toolsTokenCache = runCatching {
+            apiTools.sumOf { t ->
+                com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
+                    com.haoai.agent.data.HaoJson.json.encodeToString(
+                        com.haoai.agent.agent.provider.ApiTool.serializer(), t
+                    )
+                )
+            }
+        }.getOrNull()?.coerceAtLeast(TOOLS_BASE_TOKENS)
 
         val msgs = mutableListOf(
             ApiMessage(role = "system", content = SUBAGENT_SYSTEM),
@@ -699,9 +733,14 @@ class AgentEngine(
             ) + budgetHint()
     }
 
+    /** E3 会话级工具连续失败计数（成功清零）。 */
+    private val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
+    private var _toolsTokenCache: Int? = null
     fun estimateOverheadTokens(): Pair<Int, Int> =
-        com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to TOOLS_BASE_TOKENS
+        com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to
+            (_toolsTokenCache ?: TOOLS_BASE_TOKENS)
 
     private fun buildApiMessages(): List<ApiMessage> {
         val systemText = buildSystemText(markMemoryUse = true)
@@ -1173,7 +1212,8 @@ class AgentEngine(
         const val MAX_HISTORY = 80
         const val TOOL_TIMEOUT_MS = 180_000L
 
-        /** 工具定义 JSON 的近似 token 开销（工具数量与 schema 固定时误差可接受）。 */
+        /** E4a 工具定义开销兜底下限：正常路径按真实序列化求和（_toolsTokenCache），
+         *  仅异常/未构建时回退此值。 */
         const val TOOLS_BASE_TOKENS = 3500
         const val STORED_CAP = 16_000
         const val REQ_CAP = 4_000
