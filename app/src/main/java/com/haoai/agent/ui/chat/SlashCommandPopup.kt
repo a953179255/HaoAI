@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +34,7 @@ fun SlashCommandPopup(
     filterQuery: String,
     backdrop: LayerBackdrop,
     onSelect: (SlashCommand) -> Unit,
+    onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val commands = SlashCommands.filter(filterQuery)
@@ -51,12 +54,28 @@ fun SlashCommandPopup(
                 .heightIn(max = 320.dp)
         ) {
             Column(Modifier.padding(vertical = 6.dp)) {
-                Text(
-                    "斜杠命令",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "斜杠命令",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                    androidx.compose.material3.IconButton(onClick = onDismiss) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.material.icons.Icons.Filled.Close,
+                            contentDescription = "收起",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
                 LazyColumn(Modifier.heightIn(max = 280.dp)) {
                     items(commands, key = { it.name }) { cmd ->
                         SlashCommandItem(cmd = cmd, onClick = { onSelect(cmd) })

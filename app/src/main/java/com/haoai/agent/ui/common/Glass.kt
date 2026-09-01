@@ -148,11 +148,12 @@ fun GlassPanel(
     chromaticAberration: Boolean = false,
     refract: Boolean? = null,
     redrawKey: (() -> Any?)? = null,
+    border: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
     val surface = glassSurfaceColor(surfaceAlpha)
-    val border = glassBorderColor(0.45f)
+    val border2 = glassBorderColor(0.45f)
     val panelModifier = if (r) {
         modifier
             .drawBackdrop(
@@ -182,7 +183,7 @@ fun GlassPanel(
                 }
             )
             // 发丝描边画在玻璃表面之上（后置 modifier 后绘制），与退化分支观感对齐
-            .border(1.5.dp, border, shape ?: RoundedCornerShape(radius))
+            .then(if (border) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
     } else {
         // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂：
         // Modifier.blur 对自身内容做高斯模糊 + 着色底，观感接近真玻璃（非死板白底）。
@@ -191,7 +192,7 @@ fun GlassPanel(
         modifier
             .clip(shape ?: RoundedCornerShape(radius))
             .background(surface)
-            .border(1.5.dp, border, shape ?: RoundedCornerShape(radius))
+            .then(if (border) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
             .then(
                 if (tint != null) Modifier.background(tint) else Modifier
             )

@@ -3,11 +3,21 @@ package com.haoai.agent.ui.chat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -29,12 +40,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
@@ -254,6 +267,127 @@ private fun TaskStatusIcon(status: String, priority: String) {
                 color = color,
                 modifier = Modifier.width(size)
             )
+        }
+    }
+}
+
+
+/**
+ * 顶栏一体任务区（opencode 风格条目图标）：
+ * - 每条任务前是圆角小方块；进行中方块内呼吸圆点（alpha 0.35↔1 正弦脉动）；
+ * - 完成方块填充主色 + 白勾，任务文字划线变灰；
+ * - 标题行「任务 N/M」+ 细进度条；无关闭按钮（由顶栏右下角耳片统一收展）。
+ */
+@Composable
+fun TopTaskSection(
+    items: List<TodoItem>,
+    modifier: Modifier = Modifier
+) {
+    val doneCount = items.count { it.status == "completed" }
+    val total = items.size
+    val progress = if (total > 0) doneCount.toFloat() / total else 0f
+
+    val infinite = androidx.compose.animation.core.rememberInfiniteTransition(label = "breath")
+    val breath by infinite.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(900),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ),
+        label = "breathAlpha"
+    )
+
+    Column(modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "任务",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "$doneCount/$total",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+            Spacer(Modifier.width(10.dp))
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(4.dp),
+                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        items.forEach { item ->
+            val done = item.status == "completed"
+            val active = item.status == "in_progress"
+            Row(
+                Modifier.padding(vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 圆角方块状态图标
+                androidx.compose.foundation.layout.Box(
+                    Modifier
+                        .size(20.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        done -> {
+                            androidx.compose.foundation.layout.Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        active -> {
+                            androidx.compose.foundation.layout.Box(
+                                Modifier
+                                    .size(9.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = breath)
+                                    )
+                            )
+                        }
+                        else -> {
+                            androidx.compose.foundation.layout.Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                    .border(
+                                        1.5.dp,
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                        androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+                                    )
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    item.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 13.sp,
+                    textDecoration = if (done) TextDecoration.LineThrough else null,
+                    color = if (done) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                    else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

@@ -70,6 +70,12 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -232,6 +238,8 @@ fun ChatScreen(
     // 大体积 base64 / 文档正文绝不能进 rememberSaveable：会被写入 savedInstanceState
     // Bundle，超过 ~1MB 直接 TransactionTooLargeException 崩溃；进程重建丢失待发附件可接受
     var pendingImage by remember { mutableStateOf<String?>(null) }
+    // 相机临时文件：filesDir 下（file_paths.xml 的 internal_files 已覆盖）
+    val cameraShotFile = java.io.File(context.filesDir, "camera_shot.jpg")
     var pendingDocumentName by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
     // 消息长按操作组（1.2）：目标消息 / 编辑重发草稿 / 删除确认
@@ -284,7 +292,14 @@ fun ChatScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     // /task 强制展开任务面板（即使清单为空或已全部完成）
-    var taskPanelForced by remember { mutableStateOf(false) }
+    var taskPanelExpanded by remember { mutableStateOf(false) }
+    // /task 命令强制展开标记（无任务时也能看空态）
+    var taskPanelForcedVisible by remember { mutableStateOf(false) }
+
+    // 新任务清单到达（首条 id 变化）时自动展开一次顶栏任务面板
+    LaunchedEffect(todoItems.firstOrNull()?.id) {
+        if (todoItems.isNotEmpty()) taskPanelExpanded = true
+    }
 
     // 系统返回手势：弹层优先关闭，其次侧边栏，避免把应用最小化
     androidx.activity.compose.BackHandler(enabled = showProfileEdit) { showProfileEdit = false }
@@ -319,6 +334,43 @@ fun ChatScreen(
         }
     }
 
+    // 拍照：动态权限 → TakePicture 到 FileProvider Uri → 采样解码压缩为 base64 附件
+    val cameraLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.TakePicture()
+    ) { ok ->
+        if (ok) {
+            runCatching {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                java.io.FileInputStream(cameraShotFile).use {
+                    android.graphics.BitmapFactory.decodeFileDescriptor(it.fd, null, bounds)
+                }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = android.graphics.BitmapFactory.decodeFile(cameraShotFile.absolutePath, opts)
+                if (bmp != null) {
+                    val bos = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
+                    bmp.recycle()
+                    pendingImage = "data:image/jpeg;base64," +
+                        android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+                }
+                cameraShotFile.delete()
+            }
+        }
+    }
+    val launchCamera: () -> Unit = {
+        runCatching {
+            cameraShotFile.outputStream().close()
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, context.packageName + ".fileprovider", cameraShotFile
+            )
+            cameraLauncher.launch(uri)
+        }
+    }
+    val cameraPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) launchCamera() }
     val documentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -372,22 +424,14 @@ fun ChatScreen(
     Box(Modifier.fillMaxSize()) {
     val drawerFraction = drawer.fraction.value
     Box(Modifier.fillMaxSize()) {
-        // 采样层根必须是「静止节点」：appLayer 直接挂在被 offset 上移的 Column 上时，
-        // layer 节点坐标 = (0, -lift)，玻璃按 localPositionOf 算出的采样位置整体多加
-        // 一个 lift——键盘弹出后顶栏/输入栏透出的是壁纸下方 lift 处的内容（字节码确认：
-        // 采样 offset = layerCoordinates.localPositionOf(glass, Zero)）。挂到静止 Box
-        // 后采样位置 = 屏幕位置；offset 移入层内，录制内容与屏幕同步随动
-        Box(
-            Modifier
-                .fillMaxSize()
-                .appLayer(backdrop)
-        ) {
+        // 采样层根保持静止（无 offset/graphicsLayer 外层变换）：字节码确认采样 offset
+        // = layerCoordinates.localPositionOf(glass, Zero)，任何外层平移都会整体错位。
+        // 键盘抬升不再平移列表，改为增大 MessageList 底部留白（见 bottomPadding），
+        // 顶部占位 Spacer 固定——消息永远从顶栏下方开始，不再顶入玻璃
         Column(
             Modifier
                 .fillMaxSize()
-                // 布局期平移而非 graphicsLayer：graphicsLayer 抬升只挪 RenderNode，
-                // 不会触发采样层内容重录，键盘动画期间消息无法随动
-                .offset { androidx.compose.ui.unit.IntOffset(0, -keyboardLiftPx) }
+                .appLayer(backdrop)
                 .pointerInput(Unit) {
                     detectTapGestures {
                         focusManager.clearFocus()
@@ -467,35 +511,91 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                bottomPadding = with(density) { maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) }
+                bottomPadding = with(density) {
+                    maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp()
+                }
             )
-        }
         }
 
         // 玻璃顶栏不能进入上面的 appLayer 子树——drawBackdrop 采样自层会递归崩溃
         val activeSession = vm.session.collectAsState().value
-        TopBar(
-            title = vm.agentName(),
-            subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
-            contextUsage = contextUsage,
-            backdrop = backdrop,
-            onDrawer = { openDrawer() },
-            onNewChat = {
-                vm.newSession()
-                scope.launch { drawer.close() }
-            },
-            onRenameSubtitle = {
-                renameText = activeSession?.title ?: ""
-                showRenameDialog = true
-            },
-            onOpenBrowser = onOpenBrowser,
-            onOpenVscreen = onOpenVscreen,
-            planMode = planMode,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-        )
+        val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
+        Box(Modifier.align(Alignment.TopCenter)) {
+            TopBar(
+                title = vm.agentName(),
+                subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
+                contextUsage = contextUsage,
+                backdrop = backdrop,
+                onDrawer = { openDrawer() },
+                onNewChat = {
+                    vm.newSession()
+                    scope.launch { drawer.close() }
+                },
+                onRenameSubtitle = {
+                    renameText = activeSession?.title ?: ""
+                    showRenameDialog = true
+                },
+                onOpenBrowser = onOpenBrowser,
+                onOpenVscreen = onOpenVscreen,
+                planMode = planMode,
+                todoItems = todoItems,
+                taskExpanded = taskPanelExpanded,
+                onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
+                modifier = Modifier
+                    .statusBarsPadding()
+            )
+            // 右下角耳片：面板收起时凸起一小块玻璃，点开任务面板（与顶栏连体贴合）
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !taskPanelExpanded && (hasActiveTask || taskPanelForcedVisible),
+                enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
+                modifier = Modifier.align(Alignment.BottomEnd)
+            ) {
+                val infinite = rememberInfiniteTransition(label = "ear")
+                val breath by infinite.animateFloat(
+                    0.35f, 1f,
+                    androidx.compose.animation.core.infiniteRepeatable(
+                        androidx.compose.animation.core.tween(900),
+                        androidx.compose.animation.core.RepeatMode.Reverse
+                    ), label = "earA"
+                )
+                GlassPanel(
+                    backdrop = backdrop,
+                    radius = 0.dp,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(
+                        bottomStart = 16.dp, bottomEnd = 16.dp
+                    ),
+                    lensRadius = 0.dp,
+                    surfaceAlpha = 0.20f,
+                    border = false,
+                    modifier = Modifier.size(width = 116.dp, height = 46.dp)
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxSize()
+                            .clickable { taskPanelExpanded = true },
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (hasActiveTask) {
+                            Box(
+                                Modifier
+                                    .size(8.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Icon(
+                            Icons.Filled.ExpandMore,
+                            contentDescription = "展开任务",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+        }
 
         Column(
             Modifier
@@ -506,17 +606,11 @@ fun ChatScreen(
                 .onSizeChanged { bottomBarHeightPx = it.height }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            TaskPanel(
-                items = todoItems,
-                backdrop = backdrop,
-                forced = taskPanelForced,
-                onDismiss = { taskPanelForced = false },
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
             SlashCommandPopup(
                 visible = slashMenuVisible,
                 filterQuery = slashFilterQuery,
                 backdrop = backdrop,
+                onDismiss = { slashMenuVisible = false },
                 onSelect = { cmd ->
                     if (cmd.takesText) {
                         input = "/${cmd.name} "
@@ -529,7 +623,10 @@ fun ChatScreen(
                                 when (cmd.name) {
                                     "help" -> showSlashHelp = true
                                     "status" -> showStatusPopup = true
-                                    "task" -> taskPanelForced = !taskPanelForced
+                                    "task" -> {
+                                        taskPanelExpanded = !taskPanelExpanded
+                                        taskPanelForcedVisible = !taskPanelForcedVisible
+                                    }
                                 }
                             }
                         }
@@ -554,6 +651,13 @@ fun ChatScreen(
                 running = running,
                 pendingImage = pendingImage,
                 onPickImage = { imagePicker.launch("image/*") },
+                onTakePhoto = {
+                    if (androidx.core.content.ContextCompat.checkSelfPermission(
+                            context, android.Manifest.permission.CAMERA
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) launchCamera() else
+                        cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                },
                 onPickDocument = { documentPicker.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml")) },
                 onClearImage = { pendingImage = null },
                 onSlashCommand = {
@@ -573,7 +677,10 @@ fun ChatScreen(
                                 when (cmd.name) {
                                     "help" -> showSlashHelp = true
                                     "status" -> showStatusPopup = true
-                                    "task" -> taskPanelForced = !taskPanelForced
+                                    "task" -> {
+                                        taskPanelExpanded = !taskPanelExpanded
+                                        taskPanelForcedVisible = !taskPanelForcedVisible
+                                    }
                                 }
                             }
                         }
@@ -1291,20 +1398,35 @@ private fun TopBar(
     onOpenBrowser: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
     planMode: Boolean = false,
+    // 一体任务面板：todoItems 驱动内容；expanded 由外部控制（任务按钮/右下耳片//task 命令）
+    todoItems: List<com.haoai.agent.agent.tools.TodoItem> = emptyList(),
+    taskExpanded: Boolean = false,
+    onToggleTask: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
     var showContextDetail by remember { mutableStateOf(false) }
     val vscreenId by com.haoai.agent.platform.vdisplay.VirtualScreenController.displayIdFlow.collectAsState()
+    // 通栏方角顶栏（上游 式）：无左右边距、无圆角、无四周描边（底缘发丝线由内容
+    // Row 下方的 Box 画出）；任务面板在同一块玻璃内向下一体生长（animateContentSize）
     GlassPanel(
         backdrop = backdrop,
-        modifier = modifier.fillMaxWidth(),
-        radius = 24.dp,
-        surfaceAlpha = 0.14f
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        radius = 0.dp,
+        lensRadius = 0.dp,
+        // blurRadius 默认=radius/3，方角顶栏 radius=0 会得到 blur(0)——显式给模糊量
+        blurRadius = 12.dp,
+        surfaceAlpha = 0.30f,
+        border = false
     ) {
+        // GlassPanel 内容是 Box：顶栏行与任务区必须包在同一 Column 里，否则叠放
+        Column(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onDrawer) {
@@ -1341,6 +1463,31 @@ private fun TopBar(
                 )
             }
             Spacer(Modifier.size(2.dp))
+            IconButton(onClick = onToggleTask) {
+                BadgedBox(
+                    badge = {
+                        if (hasActiveTask && !taskExpanded) {
+                            // 呼吸点提示：任务进行中且面板收起时
+                            val infinite = rememberInfiniteTransition(label = "tb")
+                            val b by infinite.animateFloat(
+                                0.35f, 1f,
+                                androidx.compose.animation.core.infiniteRepeatable(
+                                    androidx.compose.animation.core.tween(900),
+                                    androidx.compose.animation.core.RepeatMode.Reverse
+                                ), label = "tbA"
+                            )
+                            Badge(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = b))
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.Filled.Checklist,
+                        contentDescription = "任务面板",
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+            }
             IconButton(onClick = onOpenBrowser) {
                 Icon(
                     Icons.Filled.Public,
@@ -1367,6 +1514,52 @@ private fun TopBar(
                 usage = contextUsage,
                 onClick = { showContextDetail = !showContextDetail }
             )
+        }
+        // 任务面板：同一块玻璃向下一体生长（顶栏加宽效果），无独立卡片、无关闭钮
+        androidx.compose.animation.AnimatedVisibility(
+            visible = taskExpanded,
+            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 10.dp)
+            ) {
+                // 与顶栏行的细分隔线
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+                )
+                TopTaskSection(items = todoItems)
+                // 右下角收起圆钮（向上箭头）
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End
+                ) {
+                    androidx.compose.material3.Surface(
+                        onClick = onToggleTask,
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                Icons.Filled.ExpandLess,
+                                contentDescription = "收起任务",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+        }
         }
         // 上下文详情弹窗
         if (showContextDetail) {
@@ -1927,6 +2120,7 @@ private fun ComposerBar(
     running: Boolean,
     pendingImage: String?,
     onPickImage: () -> Unit,
+    onTakePhoto: () -> Unit = {},
     onPickDocument: () -> Unit,
     onClearImage: () -> Unit,
     onSlashCommand: () -> Unit,
@@ -2035,6 +2229,10 @@ private fun ComposerBar(
                         .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    ToolbarButton(icon = Icons.Filled.PhotoCamera, label = "拍照", onClick = {
+                        toolbarExpanded = false
+                        onTakePhoto()
+                    })
                     ToolbarButton(icon = Icons.Filled.AddPhotoAlternate, label = "图片", onClick = {
                         toolbarExpanded = false
                         onPickImage()
