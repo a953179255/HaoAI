@@ -18,3 +18,18 @@ data class MessageAdded(val message: ChatMessage) : TurnEvent
 data class ToolChanged(val update: ToolUpdate) : TurnEvent
 
 data class Finished(val error: String?) : TurnEvent
+
+/**
+ * E7a 子代理进度上报：spawn_agents 每路完成时触发（state/用量/简报），
+ * UI 据此刷新对应卡片（不阻塞主卡片）。
+ * @param callId 关联的 spawn 工具调用 id
+ * @param index 1..total 路序号
+ */
+data class SubagentUpdate(
+    val callId: String,
+    val index: Int,
+    val total: Int,
+    val state: String,
+    val tokensUsed: Long,
+    val brief: String
+) : TurnEvent
