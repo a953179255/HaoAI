@@ -40,7 +40,8 @@ class ConfigFileBridge(
         /** settings 白名单：与 UpdateSettingsTool 同一清单，其余键一律拒绝 */
         private val SETTINGS_KEYS = setOf(
             "reply_max_tokens", "context_length", "local_context_length",
-            "memory_enabled", "auto_learn", "deep_dream"
+            "memory_enabled", "auto_learn", "deep_dream",
+            "turn_token_cap", "consecutive_tool_fail_cap"
         )
         private val PROVIDER_KEYS = setOf(
             "id", "name", "baseUrl", "model", "protocol", "apiKey",
@@ -76,6 +77,8 @@ class ConfigFileBridge(
             put("memory_enabled", settings.memoryEnabled)
             put("auto_learn", settings.autoLearn)
             put("deep_dream", settings.deepDream)
+            put("turn_token_cap", settings.turnTokenCap)
+            put("consecutive_tool_fail_cap", settings.consecutiveToolFailCap)
         }
         return Json { encodeDefaults = true }.encodeToString(
             JsonObject.serializer(),
@@ -170,6 +173,8 @@ class ConfigFileBridge(
         st["memory_enabled"]?.booleanOrNullOr()?.let { next = next.copy(memoryEnabled = it) }
         st["auto_learn"]?.booleanOrNullOr()?.let { next = next.copy(autoLearn = it) }
         st["deep_dream"]?.booleanOrNullOr()?.let { next = next.copy(deepDream = it) }
+        st["turn_token_cap"]?.intOrNullOr()?.let { v -> next = next.copy(turnTokenCap = v.coerceIn(0, 10_000_000)) }
+        st["consecutive_tool_fail_cap"]?.intOrNullOr()?.let { v -> next = next.copy(consecutiveToolFailCap = v.coerceIn(0, 100)) }
 
         updateSettings { next }
         val msg = "已应用: ${newProviders.size} 个 provider，${activeTarget?.let { "当前 = ${it.name}" } ?: "无 provider"}"

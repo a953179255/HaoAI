@@ -805,6 +805,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             vscreenEnabled = st.vscreenEnabled &&
                 android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
             budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) },
+            // E5 单轮熔断：token 上限 + 连续工具失败阈值（设置-通用-模型行为）
+            turnTokenCap = st.turnTokenCap,
+            toolFailCap = st.consecutiveToolFailCap,
             memoryTarget = {
                 c.resolvePurposeTarget(st.memoryExtractProviderId)?.let { it.provider to it.apiKey }
             },

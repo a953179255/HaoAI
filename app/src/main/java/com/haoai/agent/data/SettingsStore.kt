@@ -117,7 +117,11 @@ data class AppSettings(
     /** 5.3 会话标题生成模型。 */
     val titleProviderId: String = "",
     /** 5.3 上下文压缩摘要模型。 */
-    val summarizeProviderId: String = ""
+    val summarizeProviderId: String = "",
+    /** E5 单轮 LLM token 累计上限（prompt+completion）；0=不限。 */
+    val turnTokenCap: Int = 150_000,
+    /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */
+    val consecutiveToolFailCap: Int = 8
 )
 
 class SettingsStore(context: Context) {

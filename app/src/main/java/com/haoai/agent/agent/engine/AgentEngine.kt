@@ -86,10 +86,17 @@ class AgentEngine(
     /** 5.3 专用目标的协议客户端解析（缺省仍用主 httpClient）。 */
     private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
     /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
-    private val planGate: () -> Boolean = { false }
+    private val planGate: () -> Boolean = { false },
+    /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。 */
+    private val turnTokenCap: Int = 150_000,
+    /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
+    private val toolFailCap: Int = 8
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
+
+    /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
+    private var _loopFailedCap = false
 
     /** E3 会话级工具连续失败计数（成功清零）。 */
     private val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
@@ -191,6 +198,9 @@ class AgentEngine(
         val streamBuf = StringBuilder()
         try {
             var turns = 0
+            // E5 连续工具失败熔断：executeCall 内置位（引擎成员 _loopFailedCap），循环尾检查
+            @Suppress("UNUSED_VARIABLE")
+            var failedCap = false
             while (true) {
                 currentCoroutineContext().ensureActive()
                 if (++turns > MAX_TURNS) {
@@ -257,6 +267,19 @@ class AgentEngine(
                     }
                 }
 
+                // E5 单轮成本熔断：turnPrompt+turnCompletion 达上限 → 注入收尾指令 + break
+                if (turnTokenCap > 0 && turnPrompt + turnCompletion >= turnTokenCap) {
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = "[成本熔断] 本轮已消耗约 ${turnPrompt + turnCompletion} tokens，达到上限（${turnTokenCap}）。请立即总结当前进度与剩余步骤，然后结束本轮。"
+                        ),
+                        onEvent
+                    )
+                    onEvent(ToolChanged(ToolUpdate("cap-break", ToolRunState.DONE, "成本熔断", "token 上限")))
+                    break
+                }
+
                 if (streamBuf.isNotBlank() || calls.isNotEmpty()) {
                     // calls 为空 = 本轮无工具调用、循环即将 break：这是最终回复，
                     // 把整轮累计的 token/耗时/模型名挂上（中间轮的 assistant 片段不带，避免重复展示）
@@ -282,6 +305,19 @@ class AgentEngine(
                 for (call in calls) {
                     currentCoroutineContext().ensureActive()
                     executeCall(call, tools, ctx, onEvent)
+                }
+                // E5 连续工具失败熔断：达到阈值直接 break 输出失败总结
+                if (_loopFailedCap) {
+                    _loopFailedCap = false
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = "工具连续失败达到阈值，本轮已终止。请拆解任务或检查失败工具的用法。",
+                        ),
+                        onEvent
+                    )
+                    onEvent(ToolChanged(ToolUpdate("fail-cap", ToolRunState.DONE, "失败熔断", "连续工具失败")))
+                    break
                 }
             }
             onEvent(Finished(null))
@@ -415,6 +451,10 @@ class AgentEngine(
                 call.name, System.currentTimeMillis() - toolStartMs,
                 ok = !result.isError, decision = decision ?: "direct"
             )
+        }
+        // E5 连续工具失败熔断：达到阈值直接 break 并输出失败总结（不交给模型发挥）
+        if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
+            _loopFailedCap = true
         }
 
         // E7b hooks：E3 失败升级 / 5.7 技能提示 / E7c 写文件校验统一在 after 阶段按列表序执行
