@@ -110,7 +110,6 @@ fun SessionsScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .statusBarsPadding()
             .navigationBarsPadding()
             .padding(top = 6.dp)
             .clickable(interactionSource = null, indication = null) {
@@ -125,7 +124,7 @@ fun SessionsScreen(
                 // 呼出操作按钮期间点返回：只收起呼出，不离开页面
                 if (openCardId != null) openCardId = null else onBack()
             },
-            modifier = Modifier.padding(horizontal = 12.dp)
+            modifier = Modifier
         )
 
         // 搜索框常驻：两个视图共用（回收站内可搜索后精准彻底删除）

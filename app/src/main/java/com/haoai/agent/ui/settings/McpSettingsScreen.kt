@@ -97,9 +97,9 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
             }
         )
     } else {
-        Box(Modifier.fillMaxSize().statusBarsPadding()) {
-            Column(Modifier.fillMaxSize()) {
-                Spacer(Modifier.height(64.dp))
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                Spacer(Modifier.height(56.dp))
                 Text(
                     "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；添加后冷启动会自动连接。",
                     style = MaterialTheme.typography.labelSmall,
@@ -215,7 +215,6 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
             onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
         )
         }
         pendingDelete?.let { srv ->
@@ -343,7 +342,7 @@ private fun McpEditView(
         )
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(Modifier.fillMaxSize()) {
         GlassPageBar(
             backdrop = backdrop,
             title = if (initial == null) "添加 MCP 服务器" else "编辑服务器",

@@ -166,8 +166,17 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         else -> androidx.compose.foundation.isSystemInDarkTheme()
     }
     val wallpaperOnScreen = settings.wallpaperGlobal || screen == 0
-    val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(wallpaper, dark = darkBackdrop)
-    val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(null, dark = darkBackdrop)
+    // 素底玻璃的底色跟随主题（动态取色时随 Material You 变化）：
+    // 上浅下深两级 surface，玻璃 vibrancy 透出的即主题背景色
+    val scheme = androidx.compose.material3.MaterialTheme.colorScheme
+    val plainTop = scheme.surface
+    val plainBottom = scheme.surfaceVariant
+    val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+        wallpaper, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
+    )
+    val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+        null, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
+    )
     val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
 
     // 4.2 呼出优化：无头工具触发浏览时自动弹出底部预览面板（两段式第一段，

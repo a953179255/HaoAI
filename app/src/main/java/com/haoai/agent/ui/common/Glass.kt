@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -106,8 +107,12 @@ internal fun glassBorderColor(alpha: Float): Color {
 }
 
 @Composable
-fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null, dark: Boolean = false): LayerBackdrop =
-    rememberLayerBackdrop {
+fun rememberAppBackdrop(
+    wallpaper: android.graphics.Bitmap? = null,
+    dark: Boolean = false,
+    baseTop: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(0xFFEDF4EF),
+    baseBottom: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(0xFFD9E8DF)
+): LayerBackdrop = rememberLayerBackdrop {
         if (wallpaper != null) {
             // 壁纸 cover-fit 铺满，给玻璃提供可折射的真实纹理（不加压层，保持通透）
             val canvasW = size.width
@@ -127,8 +132,9 @@ fun rememberAppBackdrop(wallpaper: android.graphics.Bitmap? = null, dark: Boolea
             // 默认暗色渐变（近黑深蓝，与暗色主题背景一致）
             drawRect(Brush.verticalGradient(listOf(Color(0xFF07090D), Color(0xFF0E131B))))
         } else {
-            // 默认浅色渐变（绿调中性，呼应液态玻璃绿主色）
-            drawRect(Brush.verticalGradient(listOf(Color(0xFFD9E8DF), Color(0xFFEDF4EF))))
+            // 素色底：颜色由调用方按主题（支持动态取色）传入，
+            // 玻璃透过的是主题背景色，而非固定的绿调
+            drawRect(Brush.verticalGradient(listOf(baseTop, baseBottom)))
         }
         drawContent()
     }
@@ -606,7 +612,11 @@ fun LiquidToggle(
     )
 }
 
-/** 子页面通用玻璃页头：返回键 + 标题 + 可选动作区，悬浮在内容层之上的液态玻璃条。 */
+/**
+ * 子页面通用玻璃页头：返回键 + 标题 + 可选动作区。
+ * 与聊天页 TopBar 同款通栏方角玻璃（含状态栏高度、贴边无圆角无描边），
+ * 各二级页共用同一条视觉页头，仅换标题——保证全局一体性。
+ */
 @Composable
 fun GlassPageBar(
     backdrop: LayerBackdrop,
@@ -619,13 +629,18 @@ fun GlassPageBar(
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
-        radius = 24.dp,
-        surfaceAlpha = 0.14f,
+        radius = 0.dp,
+        lensRadius = 0.dp,
+        blurRadius = 12.dp,
+        surfaceAlpha = 0.30f,
+        border = false,
         refract = refract
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
+                // 玻璃含状态栏：内容排到状态栏下方，状态栏文字浮在玻璃上
+                .statusBarsPadding()
                 .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

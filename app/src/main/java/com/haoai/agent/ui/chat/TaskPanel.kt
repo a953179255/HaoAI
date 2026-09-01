@@ -313,14 +313,22 @@ fun TopTaskSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
             Spacer(Modifier.width(10.dp))
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
+            // 自绘进度条：Material3 默认样式右端带绿色 stopIndicator 圆点，去掉
+            Box(
+                Modifier
                     .weight(1f)
-                    .height(4.dp),
-                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
-                color = MaterialTheme.colorScheme.primary
-            )
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(progress)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         items.forEach { item ->

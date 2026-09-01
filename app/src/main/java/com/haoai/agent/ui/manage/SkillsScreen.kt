@@ -127,13 +127,13 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     Box(
         Modifier
             .fillMaxSize()
-            .statusBarsPadding()
     ) {
         Column(
             Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
         ) {
-            Spacer(Modifier.height(64.dp))
+            Spacer(Modifier.height(56.dp))
             Text(
                 "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
                 style = MaterialTheme.typography.labelSmall,
@@ -298,7 +298,6 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
         )
     }
 

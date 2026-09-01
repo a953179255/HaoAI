@@ -178,13 +178,13 @@ fun SettingsScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
         ) {
             Column(
                 Modifier
                     .fillMaxSize()
+                    .statusBarsPadding()
             ) {
-                Spacer(Modifier.height(64.dp))
+                Spacer(Modifier.height(56.dp))
                 LazyColumn(
                     state = rootListState,
                     modifier = Modifier.fillMaxSize(),
@@ -344,20 +344,19 @@ fun SettingsScreen(
                 onBack = onBack,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
     } else {
         Box(
             Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
         ) {
             Column(
                 Modifier
                     .fillMaxSize()
+                    .statusBarsPadding()
             ) {
-                Spacer(Modifier.height(64.dp))
+                Spacer(Modifier.height(56.dp))
                 LazyColumn(
                     state = rootListState,
                     modifier = Modifier.fillMaxSize(),
@@ -389,7 +388,6 @@ fun SettingsScreen(
                 onBack = { section = "" },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
     }

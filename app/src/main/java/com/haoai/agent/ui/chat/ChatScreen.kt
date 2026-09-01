@@ -542,7 +542,6 @@ fun ChatScreen(
                 taskExpanded = taskPanelExpanded,
                 onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
                 modifier = Modifier
-                    .statusBarsPadding()
             )
             // 右下角耳片：面板收起时凸起一小块玻璃，点开任务面板（与顶栏连体贴合）
             androidx.compose.animation.AnimatedVisibility(
@@ -606,36 +605,6 @@ fun ChatScreen(
                 .onSizeChanged { bottomBarHeightPx = it.height }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            SlashCommandPopup(
-                visible = slashMenuVisible,
-                filterQuery = slashFilterQuery,
-                backdrop = backdrop,
-                onDismiss = { slashMenuVisible = false },
-                onSelect = { cmd ->
-                    if (cmd.takesText) {
-                        input = "/${cmd.name} "
-                    } else {
-                        scope.launch {
-                            val handled = vm.handleSlashCommand(cmd, "") {
-                                showModelPicker = true
-                            }
-                            if (handled) {
-                                when (cmd.name) {
-                                    "help" -> showSlashHelp = true
-                                    "status" -> showStatusPopup = true
-                                    "task" -> {
-                                        taskPanelExpanded = !taskPanelExpanded
-                                        taskPanelForcedVisible = !taskPanelForcedVisible
-                                    }
-                                }
-                            }
-                        }
-                        input = ""
-                    }
-                    slashMenuVisible = false
-                },
-                modifier = Modifier.padding(bottom = 6.dp)
-            )
             ComposerBar(
                 backdrop = backdrop,
                 text = input,
@@ -664,6 +633,32 @@ fun ChatScreen(
                     slashFilterQuery = ""
                     slashMenuVisible = !slashMenuVisible
                 },
+                slashVisible = slashMenuVisible,
+                slashQuery = slashFilterQuery,
+                onSlashSelect = { cmd ->
+                    if (cmd.takesText) {
+                        input = "/${cmd.name} "
+                    } else {
+                        scope.launch {
+                            val handled = vm.handleSlashCommand(cmd, "") {
+                                showModelPicker = true
+                            }
+                            if (handled) {
+                                when (cmd.name) {
+                                    "help" -> showSlashHelp = true
+                                    "status" -> showStatusPopup = true
+                                    "task" -> {
+                                        taskPanelExpanded = !taskPanelExpanded
+                                        taskPanelForcedVisible = !taskPanelForcedVisible
+                                    }
+                                }
+                            }
+                        }
+                        input = ""
+                    }
+                    slashMenuVisible = false
+                },
+                onSlashDismiss = { slashMenuVisible = false },
                 onSend = {
                     val trimmed = input.trim()
                     val slashResult = SlashCommands.parse(trimmed)
@@ -1423,6 +1418,13 @@ private fun TopBar(
     ) {
         // GlassPanel 内容是 Box：顶栏行与任务区必须包在同一 Column 里，否则叠放
         Column(Modifier.fillMaxWidth()) {
+        // 状态栏高度并入顶栏玻璃：玻璃从屏幕最顶端铺下来（不再 statusBarsPadding 外扩）
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(0.dp)
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1463,31 +1465,6 @@ private fun TopBar(
                 )
             }
             Spacer(Modifier.size(2.dp))
-            IconButton(onClick = onToggleTask) {
-                BadgedBox(
-                    badge = {
-                        if (hasActiveTask && !taskExpanded) {
-                            // 呼吸点提示：任务进行中且面板收起时
-                            val infinite = rememberInfiniteTransition(label = "tb")
-                            val b by infinite.animateFloat(
-                                0.35f, 1f,
-                                androidx.compose.animation.core.infiniteRepeatable(
-                                    androidx.compose.animation.core.tween(900),
-                                    androidx.compose.animation.core.RepeatMode.Reverse
-                                ), label = "tbA"
-                            )
-                            Badge(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = b))
-                        }
-                    }
-                ) {
-                    Icon(
-                        Icons.Filled.Checklist,
-                        contentDescription = "任务面板",
-                        modifier = Modifier.size(22.dp),
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-            }
             IconButton(onClick = onOpenBrowser) {
                 Icon(
                     Icons.Filled.Public,
@@ -2128,9 +2105,15 @@ private fun ComposerBar(
     onStop: () -> Unit,
     placeholder: String = "给 HaoAI 派个活…",
     modifier: Modifier = Modifier,
-    redrawKey: (() -> Any?)? = null
+    redrawKey: (() -> Any?)? = null,
+    // 斜杠命令面板：渲染在本玻璃内、输入行之上——从输入栏向上生长/收回，一体感
+    slashVisible: Boolean = false,
+    slashQuery: String = "",
+    onSlashSelect: (SlashCommand) -> Unit = {},
+    onSlashDismiss: () -> Unit = {}
 ) {
     var toolbarExpanded by remember { mutableStateOf(false) }
+    val slashCommands = SlashCommands.filter(slashQuery)
 
     GlassPanel(
         backdrop = backdrop,
@@ -2142,6 +2125,22 @@ private fun ComposerBar(
         modifier = modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(top = 4.dp)) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = slashVisible && slashCommands.isNotEmpty(),
+                enter = androidx.compose.animation.expandVertically(
+                    expandFrom = Alignment.Bottom
+                ) + androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.shrinkVertically(
+                    shrinkTowards = Alignment.Bottom
+                ) + androidx.compose.animation.fadeOut()
+            ) {
+                SlashCommandList(
+                    commands = slashCommands,
+                    onSelect = onSlashSelect,
+                    onDismiss = onSlashDismiss,
+                    modifier = Modifier.padding(horizontal = 6.dp)
+                )
+            }
             if (pendingImage != null) {
                 Row(
                     Modifier.padding(horizontal = 18.dp, vertical = 2.dp),

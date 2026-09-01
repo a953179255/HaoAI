@@ -68,11 +68,12 @@ fun WorkflowScreen(
     androidx.compose.foundation.layout.Box(
         Modifier
             .fillMaxSize()
-            .statusBarsPadding()
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 84.dp, bottom = 40.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 56.dp, bottom = 40.dp)
         ) {
             item {
                 Text(
@@ -201,7 +202,6 @@ fun WorkflowScreen(
             onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
         )
     }
 

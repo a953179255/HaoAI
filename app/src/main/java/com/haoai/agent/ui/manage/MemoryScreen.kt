@@ -87,13 +87,13 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     Box(
         Modifier
             .fillMaxSize()
-            .statusBarsPadding()
     ) {
         Column(
             Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
         ) {
-            Spacer(Modifier.height(64.dp))
+            Spacer(Modifier.height(56.dp))
             Text(
                 "近期动态（每日日志，7 天后过期，重要条目夜间固化晋升）+ 长期记忆（按重要性注入）。",
                 style = MaterialTheme.typography.labelSmall,
@@ -159,8 +159,7 @@ fun MemoryScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
             title = "记忆库（${vm.items.size}）",
             onBack = onBack,
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .align(Alignment.TopCenter),
             actions = {
                 IconButton(onClick = { showAdd = true }) {
                     Icon(Icons.Filled.Add, contentDescription = "手动添加记忆")

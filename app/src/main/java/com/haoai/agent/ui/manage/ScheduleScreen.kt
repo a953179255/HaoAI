@@ -52,13 +52,13 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
     Box(
         Modifier
             .fillMaxSize()
-            .statusBarsPadding()
     ) {
         Column(
             Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
         ) {
-            Spacer(Modifier.height(64.dp))
+            Spacer(Modifier.height(56.dp))
         Text(
             "到点后代理会在后台自动执行任务并通知结果。可在聊天里用 schedule 工具创建。",
             style = MaterialTheme.typography.labelSmall,
@@ -94,7 +94,6 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
             onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
         )
     }
 }

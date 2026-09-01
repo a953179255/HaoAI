@@ -29,58 +29,40 @@ import com.haoai.agent.ui.common.GlassPanel
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
 @Composable
-fun SlashCommandPopup(
-    visible: Boolean,
-    filterQuery: String,
-    backdrop: LayerBackdrop,
+fun SlashCommandList(
+    commands: List<SlashCommand>,
     onSelect: (SlashCommand) -> Unit,
     onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val commands = SlashCommands.filter(filterQuery)
-
-    AnimatedVisibility(
-        visible = visible && commands.isNotEmpty(),
-        enter = slideInVertically(initialOffsetY = { it }),
-        exit = slideOutVertically(targetOffsetY = { it }),
-        modifier = modifier
-    ) {
-        GlassPanel(
-            backdrop = backdrop,
-            radius = 18.dp,
-            surfaceAlpha = 0.32f,
-            modifier = Modifier
+    // 无自带玻璃/动画：由 ComposerBar 在同一块玻璃内用 AnimatedVisibility
+    // （expandFrom Bottom）驱动——从输入栏向上生长、收回时缩回输入栏
+    Column(modifier.padding(vertical = 6.dp)) {
+        Row(
+            Modifier
                 .fillMaxWidth()
-                .heightIn(max = 320.dp)
+                .padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
         ) {
-            Column(Modifier.padding(vertical = 6.dp)) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        "斜杠命令",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
-                    androidx.compose.material3.IconButton(onClick = onDismiss) {
-                        androidx.compose.material3.Icon(
-                            androidx.compose.material.icons.Icons.Filled.Close,
-                            contentDescription = "收起",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-                LazyColumn(Modifier.heightIn(max = 280.dp)) {
-                    items(commands, key = { it.name }) { cmd ->
-                        SlashCommandItem(cmd = cmd, onClick = { onSelect(cmd) })
-                    }
-                }
+            Text(
+                "斜杠命令",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            androidx.compose.material3.IconButton(onClick = onDismiss) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Filled.Close,
+                    contentDescription = "收起",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+        LazyColumn(Modifier.heightIn(max = 280.dp)) {
+            items(commands, key = { it.name }) { cmd ->
+                SlashCommandItem(cmd = cmd, onClick = { onSelect(cmd) })
             }
         }
     }
