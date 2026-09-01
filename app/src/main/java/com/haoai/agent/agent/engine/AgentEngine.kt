@@ -90,7 +90,9 @@ class AgentEngine(
     /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。 */
     private val turnTokenCap: Int = 150_000,
     /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
-    private val toolFailCap: Int = 8
+    private val toolFailCap: Int = 8,
+    /** E8 循环内插话队列：生成期间用户新指令入队，引擎在安全间隙合并注入。 */
+    private val interjectQueue: java.util.concurrent.ConcurrentLinkedQueue<String>? = null
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -220,6 +222,23 @@ class AgentEngine(
                 streamBuf.setLength(0)
                 val reasoningBuf = StringBuilder()
                 var calls: List<ToolCallData> = emptyList()
+
+                // E8 间隙 A：本轮工具执行结束、下一轮 LLM 请求前——合并注入插话
+                val interjections = mutableListOf<String>()
+                interjectQueue?.let { q ->
+                    while (true) q.poll()?.let { interjections += it } ?: break
+                }
+                if (interjections.isNotEmpty()) {
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_USER,
+                            content = "[用户插话] " + interjections.joinToString(
+                                separator = "\n"
+                            )
+                        ),
+                        onEvent
+                    )
+                }
 
                 maybeNudgeHandoff(onEvent)
 

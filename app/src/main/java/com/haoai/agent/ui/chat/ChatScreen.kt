@@ -658,6 +658,23 @@ fun ChatScreen(
                 .onSizeChanged { bottomBarHeightPx = it.height }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
+            // E8 插话排队提示（生成期间用户发送的消息在队列中等待间隙注入）
+            val interjectCount by vm.interjectCount.collectAsState()
+            if (interjectCount > 0) {
+                Row(
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(bottom = 6.dp)
+                        .clickable { vm.withdrawInterjection() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "$interjectCount 条插话已排队 · 当前步骤结束后送达（点此撤回）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                    )
+                }
+            }
             ComposerBar(
                 backdrop = backdrop,
                 text = input,

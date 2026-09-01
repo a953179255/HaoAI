@@ -56,6 +56,23 @@ data class ChatRow(
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private var currentSession: StoredSession? = null
+
+    /** E8 循环内插话队列（引擎间隙 A 消费；StateFlow 驱动 UI 排队提示）。 */
+    private val interjectQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val _interjectCount = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val interjectCount = _interjectCount.asStateFlow()
+
+    /** E8 撤回单条插话（最新一条）。 */
+    fun withdrawInterjection() {
+        interjectQueue.poll()
+        _interjectCount.value = interjectQueue.size
+    }
+
+    /** E8 引擎结束（/stop 或 Finished）时清空队列。 */
+    private fun clearInterjections() {
+        interjectQueue.clear()
+        _interjectCount.value = 0
+    }
     private var job: Job? = null
     private val liveTools = mutableMapOf<String, UiTool>()
 
@@ -283,7 +300,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun send(rawText: String, imageData: String? = null) {
         val text = rawText.trim()
         // 纯图片发送（无文字）也允许：否则 UI 已清掉 pendingImage，图片会静默丢失
-        if ((text.isEmpty() && imageData == null) || _running.value) return
+        if (text.isEmpty() && imageData == null) return
+        // E8 循环内插话：生成期间用户发送 → 入队等引擎间隙注入（不入历史、不立即执行）
+        if (_running.value) {
+            if (text.isNotEmpty()) {
+                interjectQueue.add(text)
+                _interjectCount.value = interjectQueue.size
+            }
+            return
+        }
         val provider0 = c.activeProvider()
         if (provider0 == null) {
             _error.value = "请先在「设置」里配置模型服务（Base URL / 模型 ID / API Key）"
@@ -1100,5 +1125,6 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _running.value = false
         _streamingText.value = null
         _streamingReasoning.value = null
+        clearInterjections()
     }
 }
