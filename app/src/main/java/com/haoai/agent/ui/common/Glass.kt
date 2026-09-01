@@ -380,6 +380,9 @@ fun GlassCard(
                 // 改为在下方 Box 内容层用 background(tint, shape) 精确裁剪
             }
         )
+        // 常驻细描边：lens 高光依赖边缘外的背景对比，卡片滚到列表顶部/底部
+        // 边缘外是纯色时高光会短暂消失（效果特性）——白描边兜底保证边界始终可辨
+        Modifier.border(1.dp, Color.White.copy(alpha = 0.22f), shape)
     } else {
         Modifier
             .clip(shape)
