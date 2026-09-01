@@ -133,8 +133,11 @@ fun SettingsScreen(
     var confirmClearLedger by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     // 「模型大脑 → 内部任务模型」选择弹窗：同样必须在根级渲染
     var purposePicker by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    // 设置根页列表滚动状态：必须在 if(section) 分支之外 remember，否则进二级页返回后回到顶部
-    val rootListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // 设置根页列表滚动状态：必须在 if(section) 分支之外 remember，否则进二级页返回后回到顶部；
+    // 用 saveable Saver——连进程重建/配置变化都能恢复
+    val rootListState = androidx.compose.runtime.saveable.rememberSaveable(
+        saver = androidx.compose.foundation.lazy.LazyListState.Saver
+    ) { androidx.compose.foundation.lazy.LazyListState() }
     // Linux 环境（3.2）：发行版状态/安装进度/弹窗路由集中在一处
     val linuxState = androidx.compose.runtime.remember { LinuxEnvState() }
     androidx.compose.runtime.LaunchedEffect(section) {
