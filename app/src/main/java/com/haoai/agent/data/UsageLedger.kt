@@ -178,4 +178,28 @@ object UsageLedger {
         val d = dir ?: return
         synchronized(lock) { d.listFiles()?.forEach { runCatching { it.delete() } } }
     }
+
+    /** 今日（输入+输出）token 合计，供 5.1 预算判定。 */
+    fun todayTokens(): Long = summarize().let { it.todayIn + it.todayOut }
+
+    /**
+     * 5.1 每日预算提示文案（注入 SystemPrompt 尾部）：
+     * budgetK≤0 关闭；≥70% 提醒精简；≥100% 警告超预算。
+     */
+    fun budgetHint(budgetK: Int): String {
+        if (budgetK <= 0) return ""
+        val budget = budgetK * 1000L
+        val used = todayTokens()
+        if (used >= budget) {
+            return "\n[每日预算警告] 今日 token 已超预算（${used / 1000}K/${budgetK}K）。如非用户明确要求，避免一切非必要工具调用，回复尽量精简。"
+        }
+        if (used >= budget * 7 / 10) {
+            return "\n[每日预算] 今日 token 已用 ${used * 100 / budget}%，回复请更精简。"
+        }
+        return ""
+    }
+
+    /** 5.1 预算是否已超（定时任务/梦境固化跳过判定）。 */
+    fun budgetExhausted(budgetK: Int): Boolean =
+        budgetK > 0 && todayTokens() >= budgetK * 1000L
 }

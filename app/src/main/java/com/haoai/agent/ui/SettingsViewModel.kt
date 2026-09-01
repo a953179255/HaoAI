@@ -314,6 +314,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(deepDream = enabled) }
     }
 
+    /** 5.1 每日 token 预算（千 token 单位）；0=不限。 */
+    fun setDailyTokenBudgetK(k: Int) {
+        c.updateSettings { it.copy(dailyTokenBudgetK = k.coerceIn(0, 10_000)) }
+    }
+
     fun setAutoLearn(enabled: Boolean) {
         c.updateSettings { it.copy(autoLearn = enabled) }
     }

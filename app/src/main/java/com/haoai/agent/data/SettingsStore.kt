@@ -107,7 +107,9 @@ data class AppSettings(
     val lastConsolidationAt: Long = 0,
     val lastConsolidationReport: String = "",
     /** 4.3 虚拟屏后台自动化总开关（默认关；开启后 vscreen_* 工具才注册，且要求 API 30+）。 */
-    val vscreenEnabled: Boolean = false
+    val vscreenEnabled: Boolean = false,
+    /** 5.1 Token 每日预算（输入+输出合计，千 token 为单位避免输入大数）；0=不限。 */
+    val dailyTokenBudgetK: Int = 0
 )
 
 class SettingsStore(context: Context) {

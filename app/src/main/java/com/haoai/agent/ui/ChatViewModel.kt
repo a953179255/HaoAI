@@ -694,7 +694,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             configMutator = { applyConfigPatch(it) },
             onToolChange = { refreshTodos() },
             vscreenEnabled = st.vscreenEnabled &&
-                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
+            budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) }
         )
     }
 

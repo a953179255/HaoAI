@@ -92,4 +92,25 @@ class UsageLedgerTest {
         UsageLedger.clearAll()
         assertEquals(0, UsageLedger.summarize().entries)
     }
+
+    @Test
+    fun `预算提示三档`() {
+        initLedger()
+        val now = System.currentTimeMillis()
+        // 今日已用 8000（8K）
+        UsageLedger.appendNow(entry(ts = now, pin = 8000, pout = 0))
+        // 未设预算：无提示
+        assertEquals("", UsageLedger.budgetHint(0))
+        // 预算 10K：80% ≥70% 且未超 → 精简提醒
+        assertTrue(UsageLedger.budgetHint(10).contains("更精简"))
+        assertTrue(!UsageLedger.budgetHint(10).contains("警告"))
+        // 预算 5K：已超 → 警告
+        assertTrue(UsageLedger.budgetHint(5).contains("警告"))
+        // 预算 50K：16% < 70% → 无提示
+        assertEquals("", UsageLedger.budgetHint(50))
+        // 超预算判定
+        assertTrue(UsageLedger.budgetExhausted(5))
+        assertTrue(!UsageLedger.budgetExhausted(10))
+        assertTrue(!UsageLedger.budgetExhausted(0))
+    }
 }

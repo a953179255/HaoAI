@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -341,7 +342,7 @@ fun SettingsScreen(
                             onRequestClearWallpaper = { confirmWpClear = true }
                         )
                         "about" -> aboutItems(vm, settings, backdrop)
-                        "usage" -> usageItems(vm, backdrop)
+                        "usage" -> usageItems(vm, settings, backdrop)
                     }
                 }
             }
@@ -1776,6 +1777,7 @@ private fun LazyListScope.generalItems(
 /** 「用量」页（5.4）：今日/本周/本月汇总 + 按模型/用途分布条形（Canvas 自绘）+ 会话 Top5 + 清空账本。 */
 private fun LazyListScope.usageItems(
     vm: SettingsViewModel,
+    settings: AppSettings,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     item {
@@ -1866,6 +1868,36 @@ private fun LazyListScope.usageItems(
                             detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
                             tint = Color(0xFFD9913F)
                         )
+                    }
+                }
+            }
+
+            SectionTitle("每日预算（5.1）")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                GlassGroup(backdrop) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        Text(
+                            "超 70% 提醒精简；达 100% 后定时任务与云端梦境固化自动跳过（手动对话不中断）。0 = 不限。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            var budgetText by androidx.compose.runtime.remember(settings.dailyTokenBudgetK) {
+                                androidx.compose.runtime.mutableStateOf(settings.dailyTokenBudgetK.let { if (it == 0) "" else it.toString() })
+                            }
+                            OutlinedTextField(
+                                value = budgetText,
+                                onValueChange = { t ->
+                                    budgetText = t.filter { ch -> ch.isDigit() }.take(5)
+                                    vm.setDailyTokenBudgetK(budgetText.toIntOrNull() ?: 0)
+                                },
+                                modifier = Modifier.width(140.dp),
+                                singleLine = true,
+                                placeholder = { Text("不限") },
+                                trailingIcon = { Text("K tok/日", style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
                     }
                 }
             }

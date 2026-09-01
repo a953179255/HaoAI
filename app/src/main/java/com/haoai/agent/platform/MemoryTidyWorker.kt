@@ -23,7 +23,10 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
         val settings = container.settingsFlow.value
         var reportText = ""
         try {
-            if (settings.deepDream && settings.memoryEnabled) {
+            // 5.1 每日预算：超预算时跳过云端 LLM 深度固化（端侧模型不耗云端 token 不受限），回退纯规则
+            val overBudget = com.haoai.agent.data.UsageLedger.budgetExhausted(settings.dailyTokenBudgetK) &&
+                settings.dreamProviderId != "local"
+            if (settings.deepDream && settings.memoryEnabled && !overBudget) {
                 val wasRunning =
                     container.llama.state.value is com.haoai.agent.platform.llama.LlamaState.Running
                 val target = try {

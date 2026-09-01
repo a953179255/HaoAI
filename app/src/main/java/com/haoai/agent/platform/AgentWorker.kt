@@ -44,6 +44,14 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             Scheduler.enqueueNext(task)
             return Result.success()
         }
+        // 5.1 每日预算：超预算时无人值守任务自动跳过（通知用户），调度链保持
+        val budgetK = container.settingsFlow.value.dailyTokenBudgetK
+        if (com.haoai.agent.data.UsageLedger.budgetExhausted(budgetK)) {
+            updateTask(task, "今日 token 预算已用完，任务跳过")
+            notifyDone(applicationContext, "⏰ ${task.name}", "今日 token 预算已用完（${container.settingsFlow.value.dailyTokenBudgetK}K），任务已跳过；明天自动恢复。")
+            Scheduler.enqueueNext(task)
+            return Result.success()
+        }
         val provider = if (provider0.baseUrl.startsWith("local")) {
             // 期望聊天模型：避免复用记忆固化留下的更小模型
             if (!container.llama.ensureStarted(container.llama.findModel()?.absolutePath)) {

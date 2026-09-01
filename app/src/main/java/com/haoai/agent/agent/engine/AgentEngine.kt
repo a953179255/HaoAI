@@ -76,7 +76,9 @@ class AgentEngine(
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
     private val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化：设置页总开关 ∧ API 30+（由调用方合并判定）。 */
-    private val vscreenEnabled: Boolean = false
+    private val vscreenEnabled: Boolean = false,
+    /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
+    private val budgetHint: () -> String = { "" }
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -621,7 +623,7 @@ class AgentEngine(
                 mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary(),
                 shellNote = shellNote,
                 vscreenAvailable = vscreenEnabled
-            )
+            ) + budgetHint()
     }
 
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
