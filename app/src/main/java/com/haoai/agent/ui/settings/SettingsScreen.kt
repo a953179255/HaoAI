@@ -668,7 +668,8 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("下载 URL（默认官方源，可换镜像）") },
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
                 )
             }
         }
@@ -1008,7 +1009,8 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                         .padding(top = 8.dp),
                     label = { Text("模型 GGUF 下载地址") },
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.labelSmall
+                    textStyle = MaterialTheme.typography.labelSmall,
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
                 )
                 if (dl != null) {
                     androidx.compose.material3.LinearProgressIndicator(
@@ -1409,15 +1411,12 @@ private fun LazyListScope.memoryItems(
                     modifier = Modifier.padding(bottom = 6.dp)
                 )
                 val options = listOf(1 to "1 分钟", 5 to "5 分钟", 15 to "15 分钟", 30 to "30 分钟")
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    options.forEachIndexed { i, (m, label) ->
-                        SegmentedButton(
-                            selected = settings.dreamIdleMinutes == m,
-                            onClick = { vm.setDreamIdleMinutes(m) },
-                            shape = SegmentedButtonDefaults.itemShape(index = i, count = options.size)
-                        ) { Text(label, maxLines = 1) }
-                    }
-                }
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = options.map { it.second },
+                    selectedIndex = options.indexOfFirst { it.first == settings.dreamIdleMinutes }.coerceAtLeast(0),
+                    onSelected = { i -> vm.setDreamIdleMinutes(options[i].first) },
+                    backdrop = backdrop
+                )
             }
         }
     }
@@ -1690,27 +1689,14 @@ private fun LazyListScope.generalItems(
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Text("主题模式", style = MaterialTheme.typography.bodyMedium)
-                SingleChoiceSegmentedButtonRow(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                ) {
-                    SegmentedButton(
-                        selected = settings.themeMode == "system",
-                        onClick = { vm.setThemeMode("system") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                    ) { Text("跟随系统", maxLines = 1) }
-                    SegmentedButton(
-                        selected = settings.themeMode == "light",
-                        onClick = { vm.setThemeMode("light") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                    ) { Text("浅色", maxLines = 1) }
-                    SegmentedButton(
-                        selected = settings.themeMode == "dark",
-                        onClick = { vm.setThemeMode("dark") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                    ) { Text("深色", maxLines = 1) }
-                }
+                val themeOptions = listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = themeOptions.map { it.second },
+                    selectedIndex = themeOptions.indexOfFirst { it.first == settings.themeMode }.coerceAtLeast(0),
+                    onSelected = { i -> vm.setThemeMode(themeOptions[i].first) },
+                    backdrop = backdrop,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
             // —— 主题色 / 动态颜色 / AMOLED / 气泡不透明度 ——
             val darkNow = when (settings.themeMode) {
@@ -1881,7 +1867,8 @@ private fun LazyListScope.generalItems(
                 .padding(horizontal = 16.dp),
             placeholder = { Text("附加到系统提示末尾的个人偏好…") },
             minLines = 2,
-            maxLines = 6
+            maxLines = 6,
+            colors = com.haoai.agent.ui.common.glassFieldColors()
         )
     }
 }
@@ -2007,7 +1994,8 @@ private fun LazyListScope.usageItems(
                                 modifier = Modifier.width(140.dp),
                                 singleLine = true,
                                 placeholder = { Text("不限") },
-                                trailingIcon = { Text("K tok/日", style = MaterialTheme.typography.labelSmall) }
+                                trailingIcon = { Text("K tok/日", style = MaterialTheme.typography.labelSmall) },
+                                colors = com.haoai.agent.ui.common.glassFieldColors()
                             )
                         }
                     }

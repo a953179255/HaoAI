@@ -173,14 +173,15 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
                                             maxLines = 1
                                         )
                                     }
-                                    Switch(
+                                    com.haoai.agent.ui.common.LiquidToggle(
                                         checked = srv.enabled,
                                         onCheckedChange = { on ->
                                             scope.launch {
                                                 McpManager.setEnabled(srv.id, on)
                                                 refresh()
                                             }
-                                        }
+                                        },
+                                        backdrop = backdrop
                                     )
                                 }
                                 val (label, color) = stateLabel(st)
@@ -505,7 +506,11 @@ private fun McpEditView(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                Switch(checked = allowPlaintext, onCheckedChange = { allowPlaintext = it })
+                                com.haoai.agent.ui.common.LiquidToggle(
+                                    checked = allowPlaintext,
+                                    onCheckedChange = { allowPlaintext = it },
+                                    backdrop = backdrop
+                                )
                             }
                         }
                     }

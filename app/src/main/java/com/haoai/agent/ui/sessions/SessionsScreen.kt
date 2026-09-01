@@ -186,38 +186,16 @@ fun SessionsScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FilterChip(
-                selected = !showTrash,
-                onClick = {
+            com.haoai.agent.ui.common.LiquidTabRow(
+                tabs = listOf("会话 ${sessions.size}", "回收站 ${deletedSessions.size}"),
+                selectedIndex = if (showTrash) 1 else 0,
+                onSelected = { i ->
                     // 呼出中只收起呼出，不切页
-                    if (openCardId != null) {
-                        openCardId = null
-                    } else {
-                        showTrash = false
-                    }
+                    if (openCardId != null) openCardId = null
+                    showTrash = i == 1
                 },
-                label = {
-                    Text(
-                        "会话 ${sessions.size}",
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-            )
-            FilterChip(
-                selected = showTrash,
-                onClick = {
-                    if (openCardId != null) {
-                        openCardId = null
-                    } else {
-                        showTrash = true
-                    }
-                },
-                label = {
-                    Text(
-                        "回收站 ${deletedSessions.size}",
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                }
+                backdrop = backdrop,
+                modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.weight(1f))
             if (showTrash && deletedSessions.isNotEmpty()) {

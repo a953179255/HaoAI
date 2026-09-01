@@ -108,7 +108,7 @@ fun WorkflowScreen(
                                 )
                                 Spacer(Modifier.size(6.dp))
                             }
-                            Switch(
+                            com.haoai.agent.ui.common.LiquidToggle(
                                 checked = w.enabled && !w.pendingConfirm,
                                 onCheckedChange = { on ->
                                     val next = w.copy(enabled = on && !w.pendingConfirm, pendingConfirm = false)
@@ -118,7 +118,8 @@ fun WorkflowScreen(
                                     if (next.enabled && next.trigger.type == "schedule") {
                                         WorkflowRunner.enqueueSchedule(container.appContext, next.id, next.trigger.config)
                                     } else WorkflowRunner.cancelSchedule(container.appContext, next.id)
-                                }
+                                },
+                                backdrop = backdrop
                             )
                         }
                         Text(

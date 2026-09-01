@@ -370,7 +370,10 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = -keyboardLiftPx.toFloat() }
+                // 布局期平移而非 graphicsLayer：backdrop 采样对齐基于布局坐标（库 2.0.0
+                // TODO 明言外层变换不参与计算），graphicsLayer 抬升会让玻璃透出抬起前的
+                // 背景；offset 让 onGloballyPositioned 触发、采样随动
+                .offset { androidx.compose.ui.unit.IntOffset(0, -keyboardLiftPx) }
                 .appLayer(backdrop)
                 .pointerInput(Unit) {
                     detectTapGestures {
@@ -484,7 +487,8 @@ fun ChatScreen(
             Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .graphicsLayer { translationY = -keyboardLiftPx.toFloat() }
+                // 同上：offset 布局期平移，保证 TaskPanel/斜杠弹层/输入框玻璃采样随键盘抬升
+                .offset { androidx.compose.ui.unit.IntOffset(0, -keyboardLiftPx) }
                 .onSizeChanged { bottomBarHeightPx = it.height }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
