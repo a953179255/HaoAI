@@ -147,7 +147,7 @@ fun GlassPanel(
     blurRadius: Dp = radius / 3f,
     chromaticAberration: Boolean = false,
     refract: Boolean? = null,
-    redrawKey: Any? = null,
+    redrawKey: (() -> Any?)? = null,
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
@@ -159,17 +159,18 @@ fun GlassPanel(
                 backdrop = backdrop,
                 shape = { shape ?: RoundedCornerShape(radius) },
                 effects = {
-                    // 绘制期读取 redrawKey 状态：值变化 → 本节点 draw 失效重绘 →
-                    // 采样 offset 用最新布局坐标重算（仅位置变化不会自动重绘 draw，
-                    // 键盘抬升等布局位移必须显式给 key，否则透出位移前的旧背景）
-                    @Suppress("UNUSED_EXPRESSION") redrawKey
+                    // 绘制期调用 redrawKey lambda 读取其中的 State：值变化 →
+                    // ObserverModifierNode 回调失效重绘 → 采样 offset 用最新布局
+                    // 坐标重算。直接传值无效（读参数不注册快照订阅）——必须传
+                    // 「读取 State 的 lambda」
+                    redrawKey?.invoke()
                     vibrancy()
                     blur(blurRadius.toPx())
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。
                     if (lensRadius > 0.dp) {
-                        // 环宽封顶 14dp：原 2×lensRadius（默认 24dp 圆角时 48dp）白边过粗
-                        lens(lensRadius.toPx() * 0.9f, (lensRadius * 2f).coerceAtMost(14.dp).toPx(), chromaticAberration = chromaticAberration)
+                        // 环宽 12-20dp：过粗（2×radius=48dp）成白圈、过细（14dp）没折射感
+                        lens(lensRadius.toPx() * 1.1f, (lensRadius * 1.2f).coerceIn(12.dp, 20.dp).toPx(), chromaticAberration = chromaticAberration)
                     }
                 },
                 onDrawSurface = {
@@ -380,7 +381,7 @@ fun GlassCard(
                     vibrancy()
                     blur(4.dp.toPx())
                     if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 0.9f, (lensRadius * 2f).coerceAtMost(14.dp).toPx())
+                        lens(lensRadius.toPx() * 1.1f, (lensRadius * 1.2f).coerceIn(12.dp, 20.dp).toPx())
                     }
                 },
             layerBlock = {

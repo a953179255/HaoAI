@@ -265,6 +265,11 @@ fun ChatScreen(
     // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
     val navBarPx = WindowInsets.navigationBars.getBottom(density)
     val keyboardLiftPx = (imeHeightPx - navBarPx).coerceAtLeast(0)
+    // 玻璃 effects 在「绘制期」读取这个 State 注册快照订阅：键盘动画每帧变更 →
+    // backdrop 节点失效重绘 → 采样 offset 用最新布局坐标重算。effects 里读普通
+    // Int（keyboardLiftPx 参数）不会注册订阅——这正是输入栏透出抬升前旧背景的根因
+    val keyboardLiftState = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    keyboardLiftState.intValue = keyboardLiftPx
     // 底部悬浮列（TaskPanel/斜杠弹层/输入框）实测高度，驱动消息列表动态底部留白
     var bottomBarHeightPx by remember { mutableStateOf(0) }
 
@@ -581,7 +586,7 @@ fun ChatScreen(
                 },
                 onStop = { vm.stop() },
                 placeholder = "给 ${vm.agentName()} 派个活…",
-                redrawKey = keyboardLiftPx
+                redrawKey = { keyboardLiftState.intValue }
             )
         }
 
@@ -1920,7 +1925,7 @@ private fun ComposerBar(
     onStop: () -> Unit,
     placeholder: String = "给 HaoAI 派个活…",
     modifier: Modifier = Modifier,
-    redrawKey: Any? = null
+    redrawKey: (() -> Any?)? = null
 ) {
     var toolbarExpanded by remember { mutableStateOf(false) }
 
