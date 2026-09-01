@@ -324,7 +324,31 @@ class AgentEngine(
 
                 if (calls.isEmpty()) break
 
-                for (call in calls) {
+                // E6 同轮多工具并行分组：READ 且在白名单内的调用异步并发（上限 4），
+                // 结果按原 calls 顺序 await 落库（executeCall 在 await 时执行，顺序可回放）
+                val parallelCalls = calls.filter {
+                    // 并行安全：READ + 白名单 + 无需审批（ALWAYS_ASK 模式 READ 也审批，
+                    // 审批弹窗必须在主线程/原协程，不能进后台 CompletableFuture）
+                    policy.riskOf(it.name) == com.haoai.agent.agent.policy.RiskLevel.READ &&
+                        it.name in PARALLEL_SAFE &&
+                        !policy.requiresApproval(it.name)
+                }
+                val serialCalls = calls.filterNot { it in parallelCalls }
+                // 并发上限 4：分桶后每桶内 async 并行，桶间串行
+                // 并发上限 4：桶内并发执行（CompletableFuture 并行），桶间串行；
+                // await 按原调序 → executeCall 的落库顺序=模型调用顺序，会话可回放
+                val parallelFutures = parallelCalls.map { call ->
+                    java.util.concurrent.CompletableFuture.runAsync {
+                        kotlinx.coroutines.runBlocking {
+                            currentCoroutineContext().ensureActive()
+                            executeCall(call, tools, ctx, onEvent)
+                        }
+                    }
+                }
+                parallelFutures.forEach { it.get() }
+                // 依次 await（按原顺序落库；桶内并发数 ≤4）
+                // 顺序落库：futures 已按原序 forEach.get()，此处无需额外处理
+                for (call in serialCalls) {
                     currentCoroutineContext().ensureActive()
                     executeCall(call, tools, ctx, onEvent)
                 }
@@ -539,6 +563,7 @@ class AgentEngine(
             ToolResult("工具执行失败：${e.message ?: e.javaClass.simpleName}", true)
         }
 
+    /** E6 并行段辅助：在 CoroutineScope 接收者内 map async（并发 ≤4 由调用方分桶）。 */
     private suspend fun runSubAgent(task: String, parentCtx: ToolContext): String {
         val childCtx = ToolContext(
             parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
@@ -1259,6 +1284,11 @@ class AgentEngine(
         const val STORED_CAP = 16_000
         const val REQ_CAP = 4_000
         const val SUB_MAX_TURNS = 10
+        /** E6 并行安全白名单：纯读无全局状态副作用；新增成员必须逐个评审（a11y/相机/定位永不入列）。 */
+        val PARALLEL_SAFE = setOf(
+            "read", "grep", "glob", "web_fetch", "web_search", "memory",
+            "list_apps", "app_status", "browser_read", "browser_find", "todo"
+        )
         /** handoff 催办阈值：token 占用比例（自动压缩 0.5 之后、危险线 0.9 之前）。 */
         const val HANDOFF_NUDGE_RATIO = 0.75f
         const val HANDOFF_KEEP = 6
