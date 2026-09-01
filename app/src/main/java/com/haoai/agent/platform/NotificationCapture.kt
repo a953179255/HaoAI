@@ -1,6 +1,9 @@
 package com.haoai.agent.platform
 
 import android.service.notification.NotificationListenerService
+import com.haoai.agent.HaoApplication
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.launch
 import android.service.notification.StatusBarNotification
 
 /**
@@ -64,6 +67,28 @@ class NotificationCapture : NotificationListenerService() {
                 postedAt = sbn.postTime
             )
         )
+        // Phase 6 工作流通知触发：匹配到 enabled 工作流的关键词时入队执行（防抖：每关键词 60s 一次）
+        runCatching { dispatchWorkflowTriggers(title, text) }
+    }
+
+    private var lastTriggerAt = mutableMapOf<String, Long>()
+
+    private fun dispatchWorkflowTriggers(title: String, text: String) {
+        val app = application as? HaoApplication ?: return
+        val container = app.container
+        val now = System.currentTimeMillis()
+        val content = title + "\n" + text
+        com.haoai.agent.agent.workflow.WorkflowStore.list().forEach { def ->
+            if (!def.enabled || def.pendingConfirm || def.trigger.type != "notification") return@forEach
+            val kw = def.trigger.config.trim()
+            if (kw.isEmpty() || !content.contains(kw, ignoreCase = true)) return@forEach
+            val last = synchronized(lastTriggerAt) { lastTriggerAt[def.id] ?: 0L }
+            if (now - last < 60_000L) return@forEach
+            synchronized(lastTriggerAt) { lastTriggerAt[def.id] = now }
+            container.applicationScope.launch {
+                runCatching { com.haoai.agent.agent.workflow.WorkflowRunner.run(container, def) }
+            }
+        }
     }
 
     private fun appNameOf(pkg: String): String = runCatching {

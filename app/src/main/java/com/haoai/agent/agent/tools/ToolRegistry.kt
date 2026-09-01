@@ -52,6 +52,8 @@ object ToolRegistry {
             add(VScreenCloseTool())
         }
         add(ScheduleTool(ctx.appFilesDir))
+        // Phase 6 工作流：Agent 起草（workflow_save，待确认）/列表/删除
+        add(WorkflowTool(ctx.appFilesDir))
         add(SkillTool(com.haoai.agent.agent.skills.SkillStore))
         add(AppStatusTool(ctx.statusProvider))
         add(UpdateSettingsTool(ctx.configMutator))

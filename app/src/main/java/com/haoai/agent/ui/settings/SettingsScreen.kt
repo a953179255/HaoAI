@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Schedule
@@ -107,7 +108,8 @@ fun SettingsScreen(
     onOpenMemories: () -> Unit = {},
     onOpenSchedules: () -> Unit = {},
     onOpenSkills: () -> Unit = {},
-    onOpenMcp: () -> Unit = {}
+    onOpenMcp: () -> Unit = {},
+    onOpenWorkflows: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val settings by vm.settings.collectAsState()
@@ -279,6 +281,16 @@ fun SettingsScreen(
                         subtitle = "后台保活 · 自定义指令 · 身份",
                         tint = Color(0xFF64748B),
                         onClick = { section = "general" }
+                    )
+                }
+                item {
+                    MenuCard(
+                        backdrop = backdrop,
+                        icon = Icons.Filled.Bolt,
+                        title = "工作流",
+                        subtitle = "多步自动化 · 定时/开机/通知触发",
+                        tint = Color(0xFFD9913F),
+                        onClick = onOpenWorkflows
                     )
                 }
                 item {

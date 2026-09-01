@@ -86,6 +86,19 @@ class AppContainer(app: Application) {
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
         // 5.4 运行账本（LLM/工具调用 JSONL，按月分文件 + 90 天清理）
         UsageLedger.init(appFilesDir)
+        // Phase 6 工作流存储 + schedule 触发重入队（冷启/进程重建后恢复调度链）
+        com.haoai.agent.agent.workflow.WorkflowStore.init(appFilesDir)
+        applicationScope.launch {
+            runCatching {
+                com.haoai.agent.agent.workflow.WorkflowStore.list()
+                    .filter { it.enabled && !it.pendingConfirm && it.trigger.type == "schedule" }
+                    .forEach { wf ->
+                        com.haoai.agent.agent.workflow.WorkflowRunner.enqueueSchedule(
+                            app, wf.id, wf.trigger.config
+                        )
+                    }
+            }
+        }
         // 4.2 内置浏览器控制器：WebView 池（工具无头运行 + BrowserScreen 可视共用）
         com.haoai.agent.agent.browser.BrowserController.init(app, applicationScope)
         // MCP：加载服务器配置 → 注册风险覆盖/白名单 → enabled 服务器异步握手（不阻塞启动）
