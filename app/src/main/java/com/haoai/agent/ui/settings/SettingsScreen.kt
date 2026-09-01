@@ -136,6 +136,22 @@ fun SettingsScreen(
     // 首页计数（记忆/日志/技能）后台加载，避免组合期读盘
     androidx.compose.runtime.LaunchedEffect(section) { vm.refreshHomeCounts() }
 
+    // 从系统设置授权/开启无障碍回到 App：ON_RESUME 重读，界面立即反映最新状态。
+    // a11yOn 必须是状态（a11yTick 驱动重读）——普通 val 只在组合时求值一次，授权回来不刷新
+    var a11yTick by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val a11yOn = remember(a11yTick) { com.haoai.agent.platform.a11y.HaoAccessibilityService.connected() }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                vm.refreshPermissions(context)
+                a11yTick++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
     androidx.activity.compose.BackHandler(enabled = draft == null) {
         if (section.isNotEmpty()) section = "" else onBack()
     }
@@ -149,8 +165,6 @@ fun SettingsScreen(
             scope.launch { vm.useSafWorkspace(uri.toString()) }
         }
     }
-
-    val a11yOn = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected()
 
     if (section.isEmpty()) {
         Box(
@@ -214,7 +228,7 @@ fun SettingsScreen(
                         backdrop = backdrop,
                         icon = Icons.Filled.Construction,
                         title = "技能库",
-                        subtitle = "${vm.homeCounts.third} 个沉淀技能 · 点击管理",
+                        subtitle = "${vm.homeCounts.third} 个沉淀技能",
                         tint = Color(0xFFD9539E),
                         onClick = onOpenSkills
                     )
@@ -224,15 +238,15 @@ fun SettingsScreen(
                         backdrop = backdrop,
                         icon = Icons.Filled.Schedule,
                         title = "定时任务",
-                        subtitle = "到点自动执行并通知 · 点击管理",
+                        subtitle = "到点自动执行并通知",
                         tint = Color(0xFFD9913F),
                         onClick = onOpenSchedules
                     )
                 }
                 item {
                     val mcpServers = com.haoai.agent.agent.mcp.McpManager.listServers()
-                    val mcpLabel = if (mcpServers.isEmpty()) "未接入 · 点击添加"
-                    else "${mcpServers.count { it.enabled }}/${mcpServers.size} 个服务器已启用"
+                        val mcpLabel = if (mcpServers.isEmpty()) "未接入"
+                        else "${mcpServers.count { it.enabled }}/${mcpServers.size} 个服务器已启用"
                     MenuCard(
                         backdrop = backdrop,
                         icon = Icons.Filled.Extension,

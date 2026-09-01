@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.statusBarsPadding
 import com.haoai.agent.agent.workflow.WorkflowRunner
 import com.haoai.agent.agent.workflow.WorkflowStore
 import com.haoai.agent.data.HaoJson
@@ -61,7 +62,14 @@ fun WorkflowScreen(
 
     fun refresh() { workflows = WorkflowStore.list() }
 
-    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+    // 系统返回手势：回到设置根页，而不是把应用最小化
+    androidx.activity.compose.BackHandler { onBack() }
+
+    androidx.compose.foundation.layout.Box(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 84.dp, bottom = 40.dp)
