@@ -239,6 +239,15 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2
                                 )
+                                if (!s.lastUsedResult.isNullOrBlank()) {
+                                    val failed = s.lastUsedResult.startsWith("failed")
+                                    Text(
+                                        if (failed) "⚠ 上次使用失败" else "✓ 上次使用成功",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
                                 Text(
                                     "使用 ${s.useCount} 次 · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
                                         " · 来源 " + when {

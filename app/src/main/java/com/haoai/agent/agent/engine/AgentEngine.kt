@@ -94,6 +94,9 @@ class AgentEngine(
     /** 5.6 本回合拦截过 WRITE/EXEC（供 UI 判定模型产出的是计划）。 */
     var planIntercepted: Boolean = false
         private set
+
+    /** 5.7 已追加过自改进提示的技能（引擎生命周期=会话，天然满足每会话限一次）。 */
+    private val hintedSkills = mutableSetOf<String>()
     private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient).apply {
         // 5.4 账本：压缩摘要调用记账（purpose=compact）
         onLlmUsage = { pin, pout, ok ->
@@ -370,7 +373,24 @@ class AgentEngine(
             )
         }
 
-        val storedContent = TextCap.middle(result.content, STORED_CAP)
+        // 5.7 技能自改进闭环：skill 工具执行后回写结果 + 追加修订提示（每会话每技能限一次）
+        var storedContent = TextCap.middle(result.content, STORED_CAP)
+        if (call.name == "skill") {
+            val skillName = runCatching { args.optString("name") }.getOrNull().orEmpty().ifBlank { "unknown" }
+            val resultTag = if (result.isError) "failed: ${result.content.take(80)}" else "success"
+            runCatching {
+                com.haoai.agent.agent.skills.SkillStore.recordUseResult(skillName, resultTag)
+            }
+            val hintKey = skillName
+            if (hintedSkills.add(hintKey)) {
+                val hint = if (result.isError) {
+                    "\n\n[技能自改进] 技能「" + skillName + "」刚被使用（结果：失败——" + result.content.take(80) + "）。若失败暴露了技能步骤缺陷，用 skill save 修订该技能。"
+                } else {
+                    "\n\n[技能自改进] 技能「" + skillName + "」刚被使用（结果：成功）。若发现技能内容有改进空间，用 skill save 修订该技能。"
+                }
+                storedContent += hint
+            }
+        }
         val message = ChatMessage(
             role = ChatMessage.ROLE_TOOL,
             content = storedContent,

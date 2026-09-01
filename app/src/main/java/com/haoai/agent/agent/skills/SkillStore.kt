@@ -23,7 +23,9 @@ data class SkillMeta(
     val pinned: Boolean = false,
     val archived: Boolean = false,
     /** 外部导入时间戳（source 为 import_* 时有值），技能卡片展示用。 */
-    val importedAt: Long = 0
+    val importedAt: Long = 0,
+    /** 5.7 最近一次使用结果："success" / "failed: <原因>"（自改进提示依据，技能列表展示）。 */
+    val lastUsedResult: String? = null
 ) {
     /** 最近活动锚点：用过看 lastUsedAt，没用过看创建/更新时间。 */
     fun anchor(): Long = maxOf(lastUsedAt, updatedAt)
@@ -83,7 +85,8 @@ object SkillStore {
             source = line("source") ?: "user",
             pinned = line("pinned") == "true",
             archived = line("archived") == "true",
-            importedAt = line("importedAt")?.toLongOrNull() ?: 0L
+            importedAt = line("importedAt")?.toLongOrNull() ?: 0L,
+            lastUsedResult = line("lastUsedResult")?.takeIf { it != "null" }
         )
     }
 
@@ -115,6 +118,7 @@ object SkillStore {
             appendLine("pinned: ${meta.pinned}")
             appendLine("archived: ${meta.archived}")
             if (meta.importedAt > 0) appendLine("importedAt: ${meta.importedAt}")
+            if (meta.lastUsedResult != null) appendLine("lastUsedResult: ${meta.lastUsedResult}")
             appendLine("updatedAt: ${meta.updatedAt}")
             appendLine("---")
         }
@@ -195,6 +199,22 @@ object SkillStore {
         writeMeta(sf, meta.copy(useCount = meta.useCount + 1, lastUsedAt = System.currentTimeMillis()), bodyOf(sf))
         cachedList = null
         return text
+    }
+
+    /**
+     * 5.7 技能自改进闭环：skill 工具执行后由引擎回写使用结果（不影响 useCount 遥测）。
+     * [result] "success" 或 "failed: <原因>"。
+     */
+    @Synchronized
+    fun recordUseResult(name: String, result: String): Boolean {
+        val d = resolve(name) ?: return false
+        val sf = File(d, "SKILL.md")
+        if (!sf.exists()) return false
+        val text = runCatching { sf.readText() }.getOrNull() ?: return false
+        val meta = parseMeta(text, d.name, sf.lastModified())
+        writeMeta(sf, meta.copy(lastUsedResult = result.take(160)), bodyOf(sf))
+        cachedList = null
+        return true
     }
 
     @Synchronized
