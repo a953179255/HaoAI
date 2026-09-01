@@ -91,12 +91,24 @@ class AgentEngine(
 
     private val todoStore = TodoStore(appFilesDir)
 
+    /** E3 会话级工具连续失败计数（成功清零）。 */
+    private val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** 5.7 已追加过自改进提示的技能（引擎生命周期=会话，天然满足每会话限一次）。 */
+    private val hintedSkills = mutableSetOf<String>()
+
+    /** E7b 横切 hooks：before（快照）+ after（E3 升级/技能提示/写文件校验），列表序执行。 */
+    private val hooks: List<ToolHook> = listOf(
+        SnapshotHook(appFilesDir, session.id, backend),
+        EscalationHook(conFailCount),
+        SkillHintHook(hintedSkills),
+        ValidateWriteHook()
+    )
+
     /** 5.6 本回合拦截过 WRITE/EXEC（供 UI 判定模型产出的是计划）。 */
     var planIntercepted: Boolean = false
         private set
 
-    /** 5.7 已追加过自改进提示的技能（引擎生命周期=会话，天然满足每会话限一次）。 */
-    private val hintedSkills = mutableSetOf<String>()
     private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient).apply {
         // 5.4 账本：压缩摘要调用记账（purpose=compact）
         onLlmUsage = { pin, pout, ok ->
@@ -320,6 +332,7 @@ class AgentEngine(
         var finalState: ToolRunState = ToolRunState.DONE
         var toolStartMs = 0L
         var decision: String? = null
+        var handledByHook = false
 
         // 5.6 Plan 模式：READ 之外的工具一律不执行，引导模型产出计划文本
         if (planGate() && tool != null && policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ) {
@@ -339,7 +352,29 @@ class AgentEngine(
             return
         }
 
+        // E7b before hooks：Plan 门与审批之后、工具执行之前（快照在此拍）。返回 Handled 时直接落库
+        try {
+            for (h in hooks) {
+                if (h.names.isNotEmpty() && call.name !in h.names) continue
+                val d = h.before(call, args, ctx)
+                if (d is ToolHook.HookDecision.Handled) {
+                    result = d.result
+                    finalState = if (d.result.isError) ToolRunState.ERROR else ToolRunState.DONE
+                    decision = "hook"
+                    handledByHook = true
+                    break
+                }
+            }
+        } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            android.util.Log.w("HaoEngine", "hook before failed: ${e.message}")
+        }
+
         when {
+            // hook 已处理（如 Plan 拦截的等价 case），跳过工具执行
+            handledByHook -> Unit
+
             tool == null -> {
                 result = ToolResult("未知工具：${call.name}", true)
                 finalState = ToolRunState.ERROR
@@ -362,7 +397,6 @@ class AgentEngine(
                     decision = "denied"
                 } else {
                     decision = "approved"
-                    snapshotBeforeWrite(call, args)
                     toolStartMs = System.currentTimeMillis()
                     result = invokeTool(tool, args, ctx)
                     if (result.isError) finalState = ToolRunState.ERROR
@@ -371,7 +405,6 @@ class AgentEngine(
 
             else -> {
                 // YOLO 等免审批模式同样要拍快照（5.5 回滚依赖），否则全自动下写入无档可回
-                snapshotBeforeWrite(call, args)
                 toolStartMs = System.currentTimeMillis()
                 result = invokeTool(tool, args, ctx)
                 if (result.isError) finalState = ToolRunState.ERROR
@@ -384,49 +417,24 @@ class AgentEngine(
             )
         }
 
-        // E3 任务级失败升级：连续失败 ≥2 引导验证前置条件，≥3 禁止同参重试
-        var storedContent0 = result.content
-        if (result.isError) {
-            val n = conFailCount.merge(call.name, 1) { a, b -> a + b } ?: 1
-            when {
-                n == 2 -> storedContent0 += "\n\n[恢复提示] 工具 ${call.name} 已连续失败 2 次。先验证前置条件（路径存在？参数格式？权限模式？），或改用替代工具。"
-                n >= 3 -> storedContent0 += "\n\n[升级] 该步骤已失败 ${n} 次。禁止用相同参数重试。二选一：a) 换方法达成同一目标；b) 直接向用户说明阻塞点并请求指示。"
-            }
-            if (call.name == "bash" && n >= 2) {
-                storedContent0 += "\n[提示] 先完整查看 stderr 再决定下一步。"
-            }
-        } else {
-            conFailCount.remove(call.name)
+        // E7b hooks：E3 失败升级 / 5.7 技能提示 / E7c 写文件校验统一在 after 阶段按列表序执行
+        var finalResult = result
+        for (h in hooks) {
+            if (h.names.isNotEmpty() && call.name !in h.names) continue
+            finalResult = h.after(call, args, ctx, finalResult)
         }
-        // 5.7 技能自改进闭环：skill 工具执行后回写结果 + 追加修订提示（每会话每技能限一次）
-        var storedContent = TextCap.middle(storedContent0, STORED_CAP)
-        if (call.name == "skill") {
-            val skillName = runCatching { args.optString("name") }.getOrNull().orEmpty().ifBlank { "unknown" }
-            val resultTag = if (result.isError) "failed: ${result.content.take(80)}" else "success"
-            runCatching {
-                com.haoai.agent.agent.skills.SkillStore.recordUseResult(skillName, resultTag)
-            }
-            val hintKey = skillName
-            if (hintedSkills.add(hintKey)) {
-                val hint = if (result.isError) {
-                    "\n\n[技能自改进] 技能「" + skillName + "」刚被使用（结果：失败——" + result.content.take(80) + "）。若失败暴露了技能步骤缺陷，用 skill save 修订该技能。"
-                } else {
-                    "\n\n[技能自改进] 技能「" + skillName + "」刚被使用（结果：成功）。若发现技能内容有改进空间，用 skill save 修订该技能。"
-                }
-                storedContent += hint
-            }
-        }
+        var storedContent = TextCap.middle(finalResult.content, STORED_CAP)
         val message = ChatMessage(
             role = ChatMessage.ROLE_TOOL,
             content = storedContent,
             toolCallId = call.id,
             toolName = call.name,
-            error = result.isError
+            error = finalResult.isError
         )
         appendAndNotify(message, onEvent)
         // 图像注入通路（4.2 browser_screenshot）：工具结果带图时追加一条 user 图像消息，
         // 复用既有 imageData → image_url 转换，OpenAI/Anthropic 两协议均可消费
-        result.imageDataUrl?.let { img ->
+        finalResult.imageDataUrl?.let { img ->
             appendAndNotify(
                 ChatMessage(
                     role = ChatMessage.ROLE_USER,
@@ -441,34 +449,6 @@ class AgentEngine(
                 ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.content))
             )
         )
-    }
-
-    /**
-     * 1.3/5.5 写前快照：审批通过或免审批直执行时，文件尚未修改，此刻读原文最可靠。
-     * 新建文件（原不存在）无原文可存，只有 after 可供回看（readText 对不存在文件抛异常，置 null）。
-     */
-    private suspend fun snapshotBeforeWrite(call: ToolCallData, args: JsonObject) {
-        if (call.name != "write" && call.name != "edit") return
-        runCatching {
-            val path = args.optString("path")
-            val before = runCatching { backend?.readText(path) }.getOrNull()
-            val after = when (call.name) {
-                "write" -> args.optString("content")
-                else -> {
-                    val old = args.optString("old_string")
-                    val new = args.optString("new_string")
-                    val replaceAll = args.optBool("replace_all")
-                    before?.let {
-                        if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new)
-                    }
-                }
-            }
-            if (after != null) {
-                com.haoai.agent.agent.tools.snapshot.FileSnapshot.snapshot(
-                    appFilesDir, session.id, call.id, path, before, after
-                )
-            }
-        }
     }
 
     private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =
@@ -732,9 +712,6 @@ class AgentEngine(
                 vscreenAvailable = vscreenEnabled
             ) + budgetHint()
     }
-
-    /** E3 会话级工具连续失败计数（成功清零）。 */
-    private val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
     private var _toolsTokenCache: Int? = null
