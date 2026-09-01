@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.ui.graphics.vector.ImageVector
 data class SlashCommand(
@@ -39,6 +40,12 @@ object SlashCommands {
             name = "stop",
             description = "停止当前正在运行的任务",
             icon = Icons.Filled.Pause,
+            group = "会话"
+        ),
+        SlashCommand(
+            name = "undo",
+            description = "回滚最近一次文件变更（再输一次可往返）",
+            icon = Icons.Filled.Undo,
             group = "会话"
         ),
         SlashCommand(

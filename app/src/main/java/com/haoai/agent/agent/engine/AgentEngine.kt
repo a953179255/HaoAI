@@ -324,30 +324,7 @@ class AgentEngine(
                     decision = "denied"
                 } else {
                     decision = "approved"
-                    // 1.3 快照：审批已通过、文件尚未修改，此刻读原文最可靠；
-                    // 新建文件（原不存在）无原文可存，只有 after 可供回看
-                    if (call.name == "write" || call.name == "edit") {
-                        runCatching {
-                            val path = args.optString("path")
-                            val before = backend?.readText(path)
-                            val after = when (call.name) {
-                                "write" -> args.optString("content")
-                                else -> {
-                                    val old = args.optString("old_string")
-                                    val new = args.optString("new_string")
-                                    val replaceAll = args.optBool("replace_all")
-                                    before?.let {
-                                        if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new)
-                                    }
-                                }
-                            }
-                            if (after != null) {
-                                com.haoai.agent.agent.tools.snapshot.FileSnapshot.snapshot(
-                                    appFilesDir, session.id, call.id, path, before, after
-                                )
-                            }
-                        }
-                    }
+                    snapshotBeforeWrite(call, args)
                     toolStartMs = System.currentTimeMillis()
                     result = invokeTool(tool, args, ctx)
                     if (result.isError) finalState = ToolRunState.ERROR
@@ -355,6 +332,8 @@ class AgentEngine(
             }
 
             else -> {
+                // YOLO 等免审批模式同样要拍快照（5.5 回滚依赖），否则全自动下写入无档可回
+                snapshotBeforeWrite(call, args)
                 toolStartMs = System.currentTimeMillis()
                 result = invokeTool(tool, args, ctx)
                 if (result.isError) finalState = ToolRunState.ERROR
@@ -393,6 +372,34 @@ class AgentEngine(
                 ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.content))
             )
         )
+    }
+
+    /**
+     * 1.3/5.5 写前快照：审批通过或免审批直执行时，文件尚未修改，此刻读原文最可靠。
+     * 新建文件（原不存在）无原文可存，只有 after 可供回看（readText 对不存在文件抛异常，置 null）。
+     */
+    private suspend fun snapshotBeforeWrite(call: ToolCallData, args: JsonObject) {
+        if (call.name != "write" && call.name != "edit") return
+        runCatching {
+            val path = args.optString("path")
+            val before = runCatching { backend?.readText(path) }.getOrNull()
+            val after = when (call.name) {
+                "write" -> args.optString("content")
+                else -> {
+                    val old = args.optString("old_string")
+                    val new = args.optString("new_string")
+                    val replaceAll = args.optBool("replace_all")
+                    before?.let {
+                        if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new)
+                    }
+                }
+            }
+            if (after != null) {
+                com.haoai.agent.agent.tools.snapshot.FileSnapshot.snapshot(
+                    appFilesDir, session.id, call.id, path, before, after
+                )
+            }
+        }
     }
 
     private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =

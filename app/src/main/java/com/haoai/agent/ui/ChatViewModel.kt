@@ -461,6 +461,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 stop()
                 true
             }
+            "undo" -> {
+                val msg = undoLastChange()
+                if (msg != null) _error.value = msg
+                true
+            }
             "model" -> {
                 onModelPicker()
                 true
@@ -531,6 +536,56 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _approval.value?.second?.complete(false)
     }
 
+    /**
+     * 5.5 /undo：回滚本会话最近一次文件变更。redo 往返自然成立——回滚会把
+     * 「当前内容」存为 redo 快照（时间最新），下一次 /undo 命中的就是它。
+     * 走 WRITE 审批弹窗（复用引擎审批管线）。
+     */
+    suspend fun undoLastChange(): String? {
+        val s = _session.value ?: return "会话未打开"
+        val metas = com.haoai.agent.agent.tools.snapshot.FileSnapshot.listSession(c.appFilesDir, s.id)
+        if (metas.isEmpty()) return "本会话没有可回滚的文件变更"
+        val target = metas.last()
+        val snap = com.haoai.agent.agent.tools.snapshot.FileSnapshot.read(c.appFilesDir, s.id, target.callId)
+            ?: return "快照文件缺失（可能已被清理）"
+        val ok = requestApproval(com.haoai.agent.agent.policy.ApprovalRequest.Generic("undo", "回滚最近文件变更：${target.path}"))
+        if (!ok) return null
+        return performRollback(s.id, c.workspace.current, snap.first, snap.second)
+    }
+
+    /** 5.5 回滚指定变更（工具卡「回滚」按钮）。 */
+    suspend fun rollbackChange(callId: String): String? {
+        val s = _session.value ?: return "会话未打开"
+        val snap = com.haoai.agent.agent.tools.snapshot.FileSnapshot.read(c.appFilesDir, s.id, callId)
+            ?: return "快照不存在或已被清理"
+        val ok = requestApproval(com.haoai.agent.agent.policy.ApprovalRequest.Generic("undo", "回滚文件变更：${snap.first.path}"))
+        if (!ok) return null
+        return performRollback(s.id, c.workspace.current, snap.first, snap.second)
+    }
+
+    private suspend fun performRollback(
+        sessionId: String,
+        backend: com.haoai.agent.platform.FileBackend?,
+        meta: com.haoai.agent.agent.tools.snapshot.FileSnapshot.Meta,
+        before: String?
+    ): String? {
+        val current = runCatching { backend?.readText(meta.path) }.getOrNull()
+        val redoCall = "undo-${System.currentTimeMillis()}"
+        runCatching {
+            com.haoai.agent.agent.tools.snapshot.FileSnapshot.rollback(c.appFilesDir, sessionId, meta.callId, current, redoCall)
+        }.onFailure { return "回滚失败：${it.message}" }
+        try {
+            if (before == null) backend?.delete(meta.path) else backend?.writeText(meta.path, before)
+        } catch (e: Exception) {
+            return "回滚失败：${e.message}"
+        }
+        // 行数口径：被撤销的那次改动（before→current）的 +/−
+        val diff = com.haoai.agent.ui.common.TextDiff.diffText(before ?: "", current ?: "").lines
+        val added = diff.count { it.type == com.haoai.agent.ui.common.DiffType.ADDED }
+        val removed = diff.count { it.type == com.haoai.agent.ui.common.DiffType.REMOVED }
+        return "已回滚 ${meta.path}（撤销 +$added −$removed 的改动）；再输 /undo 可恢复"
+    }
+
     private suspend fun requestApproval(req: ApprovalRequest): Boolean {
         val gate = CompletableDeferred<Boolean>()
         _approval.value = req to gate
@@ -541,6 +596,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             _approval.value = null
         }
     }
+
+    /** 5.5 工具卡回滚结果的 SnackBar 展示入口。 */
+    fun showError(msg: String) { _error.value = msg }
 
     private fun handleEvent(ev: TurnEvent) {
         when (ev) {

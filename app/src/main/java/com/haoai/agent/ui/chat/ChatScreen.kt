@@ -386,6 +386,12 @@ fun ChatScreen(
                 onToolViewDiff = { callId ->
                     snapshotScope.launch { diffViewer = vm.snapshotDiff(callId) }
                 },
+                onToolRollback = { callId ->
+                    snapshotScope.launch {
+                        val msg = vm.rollbackChange(callId)
+                        if (msg != null) vm.showError(msg)
+                    }
+                },
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
@@ -1205,6 +1211,7 @@ private fun MessageList(
     onQuickRegenerate: (ChatRow) -> Unit,
     onQuickEdit: (ChatRow) -> Unit,
     onToolViewDiff: (String) -> Unit,
+    onToolRollback: (String) -> Unit = {},
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
@@ -1255,7 +1262,8 @@ private fun MessageList(
                 onQuickRegenerate = onQuickRegenerate,
                 onQuickEdit = onQuickEdit,
                 running = running,
-                onViewDiff = onToolViewDiff
+                onViewDiff = onToolViewDiff,
+                onRollback = onToolRollback
             )
         }
         if (showStreaming) {
@@ -1274,7 +1282,8 @@ private fun RowItem(
     onQuickRegenerate: (ChatRow) -> Unit,
     onQuickEdit: (ChatRow) -> Unit,
     running: Boolean,
-    onViewDiff: (String) -> Unit
+    onViewDiff: (String) -> Unit,
+    onRollback: (String) -> Unit = {}
 ) {
     // 引擎注入的系统事件（handoff 催办 / 压缩结果）不冒充聊天气泡，渲染为居中事件条
     if (row.role == "user" && row.text.startsWith("[系统提示]") ||
@@ -1285,7 +1294,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback)
     }
 }
 
@@ -1505,7 +1514,8 @@ private fun AssistantBlock(
     onCopyRow: (ChatRow) -> Unit,
     onQuickRegenerate: (ChatRow) -> Unit,
     running: Boolean,
-    onViewDiff: (String) -> Unit
+    onViewDiff: (String) -> Unit,
+    onRollback: (String) -> Unit = {}
 ) {
     Column(
         Modifier
@@ -1516,7 +1526,7 @@ private fun AssistantBlock(
             ReasoningPanel(text = it, live = false)
             Spacer(Modifier.size(5.dp))
         }
-        row.tools.forEach { tool -> ToolChip(tool, onViewDiff) }
+        row.tools.forEach { tool -> ToolChip(tool, onViewDiff, onRollback) }
         if (row.text.isNotBlank()) {
             if (row.error) {
                 Surface(
@@ -1626,7 +1636,8 @@ private fun fmtTokens(n: Int): String =
 @Composable
 private fun ToolChip(
     tool: com.haoai.agent.ui.UiTool,
-    onViewDiff: (String) -> Unit
+    onViewDiff: (String) -> Unit,
+    onRollback: (String) -> Unit = {}
 ) {
     var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
     val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
@@ -1682,6 +1693,15 @@ private fun ToolChip(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .clickable { onViewDiff(tool.callId) }
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                    Text(
+                        "回滚",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onRollback(tool.callId) }
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                     Spacer(Modifier.size(6.dp))
