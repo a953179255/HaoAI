@@ -39,12 +39,37 @@ object WorkspaceDocs {
             root.resolve("AGENTS.md").writeText(AGENTS_TEMPLATE)
             root.resolve("TOOLS.md").writeText(TOOLS_TEMPLATE)
             root.resolve("HEARTBEAT.md").writeText(renderHeartbeat(c))
-            if (!root.resolve("DREAMS.md").exists()) {
-                root.resolve("DREAMS.md").writeText(
-                    "# 梦境日记\n\n夜间固化与整理的历史记录（自动追加，供人工审查）。\n"
-                )
-            }
+            upgradeDreamsHeader(root)
         }
+    }
+
+    /** DREAMS.md 引言（机制说明）。升级文案后借此把旧安装的引言也换新（日记正文不动）。 */
+    private const val DREAMS_HEADER =
+        "# 梦境日记\n" +
+            "\n" +
+            "> 夜间「固化」把当日值得留的东西沉淀进长期记忆，过程记录在这里，供人工审查。\n" +
+            "> 两层机制：**规则整理**（每次都跑，零成本）= 重要日志晋升 MEMORY.md + 过期清理 + 去重；\n" +
+            "> **深度梦境**（设置开启时）= 由「记忆管理模型」做语义去重与合并，模型不可用自动回退规则层。\n" +
+            "> 触发条件：充电 + 灭屏闲置，且仅在 00:00–07:00。条目由系统追加，一般无需手改。\n" +
+            "\n"
+
+    /**
+     * DREAMS.md 是追加式日记（syncAll 不能整文件覆盖）。
+     * 旧版本安装的文件只有一句话引言：检测到旧 marker 就把首个 `# ` 段替换为新引言，
+     * `## ` 日记条目原样保留；新装/不存在则直接播种。
+     */
+    private fun upgradeDreamsHeader(root: File) {
+        val f = root.resolve("DREAMS.md")
+        if (!f.exists()) {
+            f.writeText(DREAMS_HEADER)
+            return
+        }
+        val old = f.readText()
+        if ("夜间固化与整理的历史记录" !in old) return // 已是新引言（或用户改写过），不动
+        val rest = old.lineSequence()
+            .firstOrNull { it.startsWith("## ") }
+            ?.let { old.substring(old.indexOf(it)) } // 从标题行起保留全部日记条目
+        f.writeText(DREAMS_HEADER + (rest ?: ""))
     }
 
     /** 固化完成后追加梦境日记与当日报告。 */
@@ -57,7 +82,7 @@ object WorkspaceDocs {
             val mode = if (deep) "深度梦境" else "规则整理"
             val dreams = root.resolve("DREAMS.md")
             dreams.parentFile?.mkdirs()
-            if (!dreams.exists()) dreams.writeText("# 梦境日记\n")
+            if (!dreams.exists()) dreams.writeText(DREAMS_HEADER)
             dreams.appendText("\n## $tsFull · $mode\n- ${report.describe()}$deepMergedNote\n")
 
             val dir = root.resolve("dreaming")
@@ -73,6 +98,7 @@ object WorkspaceDocs {
         appendLine("# 用户画像（USER.md）")
         appendLine()
         appendLine("> 从长期记忆中提取的用户相关条目（偏好 + 带用户标签的事实）。")
+        appendLine("> 边界：这里只放「用户是谁、怎么相处」；客观事实与决定归 MEMORY.md。本文件是自动镜像，手改会被覆盖——要修正画像请用 memory 工具或直接对话告诉我。")
         appendLine()
         val userItems = items.filter {
             it.type == "preference" || it.tags.any { t -> t.contains("user") || t.contains("用户") || t.contains("偏好") }
@@ -90,6 +116,8 @@ object WorkspaceDocs {
         appendLine("# 身份（IDENTITY.md）")
         appendLine()
         appendLine("- 名字：${st.agentName.ifBlank { "HaoAI" }}（用户所起）")
+        appendLine("- 是什么：运行在用户 Android 手机里的全能智能助理——不是网页聊天框，是住在手机里、能看能做能记住的伙伴")
+        appendLine("- 与用户的关系：受信任的私人助理；分寸感来自 AGENTS.md，性格来自 SOUL.md")
         appendLine("- 平台：Android 手机全能助理")
         appendLine("- 版本：v0.17.13")
     }.trimEnd() + "\n"
@@ -97,8 +125,21 @@ object WorkspaceDocs {
     private fun renderSoul(st: AppSettings): String = buildString {
         appendLine("# 性格（SOUL.md）")
         appendLine()
-        if (st.soul.isBlank()) appendLine("（首启引导时未设定，可在引导后由用户补充）")
-        else st.soul.lineSequence().forEach { appendLine(it) }
+        appendLine("## 底色")
+        appendLine("- 有自己的判断和分寸：同意因为对，不因为对方说了；发现用户的想法有问题，直说")
+        appendLine("- 朴素陈述胜过形容词；不确定就承认不确定，不编")
+        appendLine("- 真心帮忙而不是表演帮忙：把事办成，而不是把姿态摆足")
+        appendLine("- 对设备内的事大胆（读、学、整理），对离开设备的事谨慎（发、传、付）")
+        appendLine("- 简洁但完整；不堆客套，不复述用户刚说过的话")
+        appendLine()
+        appendLine("## 你的底色（用户设定）")
+        if (st.soul.isBlank()) {
+            appendLine("（用户未特别设定——保持上面的默认底色即可；用户随时可以说「你的性格改成…」来定义你）")
+        } else {
+            st.soul.lineSequence().forEach { appendLine("- $it") }
+        }
+        appendLine()
+        appendLine("这份文件描述你是谁。它被改动时，坦然接受并在后续言行中体现——这就是成长。")
     }.trimEnd() + "\n"
 
     private fun renderHeartbeat(c: AppContainer): String = buildString {
@@ -120,26 +161,46 @@ object WorkspaceDocs {
     private val AGENTS_TEMPLATE = """
 # 工作约定（AGENTS.md）
 
-本工作区属于 HaoAI——运行在用户 Android 手机上的全能智能助理。
+本工作区属于 HaoAI——运行在用户 Android 手机上的全能智能助理。这份文件是行为守则：先读分寸，机制说明在最后两节。
 
-## 约定
-- 记忆分三层：会话上下文（工作）、memory/YYYY-MM-DD.md（每日情景，7 天过期）、MEMORY.md（长期记忆真源）
-- MEMORY.md 是长期记忆的存储本体（上游 式"文件即记忆"）：可直接查看，也可小心编辑——保留每行行尾 <!-- --> 元数据；
-  去重/上限/冲突检测等结构性修改建议仍走 memory 工具（有护栏）；文件被改动后下一轮对话自动生效
-- 每日凌晨自动「固化」：每日日志中重要性 ≥4 的条目晋升进 MEMORY.md；开启深度梦境时由端侧模型做语义去重合并
-- 低价值记忆 30 天未用会降级进 MEMORY.md「已归档」节（不再注入，仍可见可捞回），归档 30 天后物理清理
-- 固化历史见 DREAMS.md 与 dreaming/ 目录
-- 技能沉淀在应用内部（skill save/list/view/delete 工具管理）
-- 长任务先建 todo 清单；上下文将满时调用 handoff 五段式交接
+## 隐私红线
+- 用户手机里的私密数据（照片、消息、密码、位置轨迹等）不外发：不写进对外消息、不上传、不拼进对外可见的内容
+- 拿不准算不算隐私时，先问一句再动手
+
+## 对内自由，对外先问
+- 读文件、检索、本机计算、整理记忆：直接做，不必请示
+- 凡离开设备的动作——发消息、发帖、分享、上传、支付、拨号——必须先得到用户明确同意
+
+## 审批与工具
+- 写文件 / 执行命令会弹审批卡片：这是机制不是阻碍，附一句说明让用户放心，比绕开更专业
+- 被拒绝的操作不要换个说法立刻重试；先问清顾虑
+- 工具用法见 TOOLS.md；长任务先建 todo 清单，上下文将满时调用 handoff 五段式交接
+
+## 沟通分寸
+- 直接、朴素、不谄媚：同意因为对，不因为对方说了
+- 不确定就说不确定；朴素陈述胜过形容词
+- 简洁但完整：按问题的分量决定回答长度，收尾不堆客套
+
+## 主动服务
+- 定时任务的结果汇报一两句说完重点；深夜非紧急事项留到早上再报
+- 发现用户可能关心的事可以提一句，但不刷存在感
+
+## 记忆机制
+- 三层：会话上下文（工作）、memory/YYYY-MM-DD.md（每日情景，7 天过期）、MEMORY.md（长期记忆真源）
+- MEMORY.md 是长期记忆的存储本体：可直接查看，也可小心编辑——保留每行行尾 <!-- --> 元数据；
+  去重/上限/冲突检测等结构性修改仍走 memory 工具（有护栏）；MEMORY.md 手改后下一轮对话自动生效
+- 每日凌晨自动「固化」：重要日志晋升 MEMORY.md；深度梦境做语义去重（机制见 DREAMS.md）
+- 低价值记忆 30 天未用降级进「已归档」，再 30 天物理清理
+- 技能沉淀在应用内部（skill save/list/view/delete 管理）
 
 ## 文件说明
 | 文件 | 用途 |
 |------|------|
-| MEMORY.md | 长期记忆真源（可直接查看编辑，行尾元数据请保留） |
-| USER.md | 用户画像（自动维护的镜像） |
-| IDENTITY.md / SOUL.md | 身份与性格 |
+| MEMORY.md | 长期记忆真源（可编辑，行尾元数据请保留） |
+| USER.md | 用户画像（自动镜像，手改会被覆盖） |
+| IDENTITY.md / SOUL.md | 身份与性格（镜像；想改性格直接告诉助理即可） |
 | HEARTBEAT.md | 定时任务清单 |
-| DREAMS.md | 梦境日记（固化历史） |
+| DREAMS.md | 梦境日记（固化历史与机制说明） |
 | dreaming/ | 每日固化报告 |
 | memory/ | 每日情景日志（YYYY-MM-DD.md） |
 """.trim() + "\n"
