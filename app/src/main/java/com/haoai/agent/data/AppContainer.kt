@@ -57,15 +57,22 @@ class AppContainer(app: Application) {
     /** Linux 发行版管理（3.2）：下载/校验/解压/初始化 rootfs，供 3.3 ProotBackend 使用。 */
     val distros = com.haoai.agent.platform.sandbox.DistroManager(appFilesDir, okHttpClient)
 
-    /** 按供应商配置的协议选客户端（2.3）：anthropic 原生 / openai_compat（默认）。 */
+    /** 按供应商配置的协议选客户端（2.3）：anthropic 原生 / openai_compat（默认）。
+     *  E2 请求级重试（ResilientCall）永远包裹单次请求：网络错误/429/5xx/空流
+     *  指数退避重试（1s/2s/4s，最多 3 次），已产出 delta 不重放。
+     *  5.2 降级链（FallbackClient）仅当 provider 是链头且链非空时最外层包装：
+     *  单 provider 重试耗尽后才切备用。 */
     fun clientFor(provider: ProviderConfig?): com.haoai.agent.agent.provider.ProviderClient {
-        val base = if (provider?.protocol == "anthropic") anthropicClient else client
-        // 5.2 降级链：仅当 provider 是链头（主 Provider）且链非空时包装
+        if (provider == null) return client
+        fun resolve(p: ProviderConfig): com.haoai.agent.agent.provider.ProviderClient {
+            val c = if (p.protocol == "anthropic") anthropicClient else client
+            return com.haoai.agent.agent.provider.ResilientCall(resolve = { _ -> c })
+        }
         val st = settingsFlow.value
         val chain = st.fallbackChain
-        if (provider == null || chain.isEmpty() || provider.id != st.activeProviderId) return base
+        if (chain.isEmpty() || provider.id != st.activeProviderId) return resolve(provider)
         return com.haoai.agent.agent.provider.FallbackClient(
-            resolve = { p -> if (p.protocol == "anthropic") anthropicClient else client },
+            resolve = { p -> resolve(p) },
             lookup = { id -> st.providers.find { it.id == id } },
             decrypt = { p -> runCatching { cipher.decrypt(p.apiKeyCipher) }.getOrDefault("") },
             fallbackIds = chain,
