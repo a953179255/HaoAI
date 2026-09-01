@@ -31,6 +31,32 @@ class LlamaServerController(
         const val LOCAL_PROVIDER_ID = "local"
         const val LOCAL_PROVIDER_BASE = "local://llama"
 
+        /** Phase 7 阶段2：最近一次 server 实际生效的后端（"cpu" / "htp-v73"…）。 */
+        @Volatile
+        var lastActiveBackend: String = "cpu"
+
+        /**
+         * Hexagon 后端架构选择（Phase 7 阶段2）：Build.SOC_MODEL/Build.HARDWARE
+         * 映射 skel 版本；null = 非骁龙/未识别，走 CPU 兜底。
+         * 8 Gen 2(SM8550)→v73；8 Gen 3/8s(SM8650/9200)→v75；8 Elite(SM8750/9300)→v79。
+         */
+        fun detectHexagonArch(): String? {
+            val soc = (android.os.Build.SOC_MODEL + " " + android.os.Build.HARDWARE).lowercase()
+            val isSnapdragon = listOf("qcom", "qualcomm", "sm8", "sm7", "sdm", "msm", "kalama", "sun", "pineapple", "taro")
+                .any { soc.contains(it) } || android.os.Build.SOC_MODEL.contains("Snapdragon", true)
+            if (!isSnapdragon) return null
+            return when {
+                listOf("sm8550", "8950", "kalama", "8 gen 2", "8g2").any { soc.contains(it) } -> "v73"
+                listOf("sm8650", "9200", "pineapple", "8 gen 3", "8g3", "8s gen").any { soc.contains(it) } -> "v75"
+                listOf("sm8750", "9300", "sun", "8 elite", "8g4").any { soc.contains(it) } -> "v79"
+                else -> null
+            }
+        }
+
+        /** jniLibs 里是否存在 Hexagon skel 库（仅 arm64 构建打包）。 */
+        fun skelLibsAvailable(nativeDir: String?): Boolean =
+            nativeDir?.let { dir -> java.io.File(dir, "libggml-htp-v73.so").exists() } == true
+
         const val DEFAULT_MODEL_URL =
             "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
         private const val HEALTH_TRIES = 240
@@ -39,6 +65,9 @@ class LlamaServerController(
 
         private const val MAX_LOG_LINES = 2000
     }
+
+    /** 本次 server 生效后端（镜像 companion.lastActiveBackend，设置页读取）。 */
+    val activeBackend: String get() = lastActiveBackend
 
     private val _state = MutableStateFlow<LlamaState>(LlamaState.Stopped)
     val state = _state.asStateFlow()
@@ -196,6 +225,11 @@ class LlamaServerController(
 
     private suspend fun launchServer(bin: String, model: File, mmproj: File?): Boolean =
         withContext(Dispatchers.IO) {
+            // HTP 参数在 try 外声明：启动失败时 catch 块去掉 NPU 参数以 CPU 兜底重试
+            var useHtp = false
+            var hex: String? = null
+            val nativeDir = context.applicationInfo.nativeLibraryDir
+            var cmd = mutableListOf(bin)
             try {
                 stopInternal()
                 val cmd = mutableListOf(
@@ -214,13 +248,23 @@ class LlamaServerController(
                     "--jinja",
                     "--reasoning", "off"
                 )
-                if (mmproj != null) {
-                    cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
-                    _state.value = LlamaState.Starting("加载模型 ${model.name}（含视觉 ${mmproj.name}）…")
-                } else {
-                    _state.value = LlamaState.Starting("加载模型 ${model.name}…")
-                }
+                if (mmproj != null) cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
+                // ── Hexagon NPU（Phase 7 阶段2）：arm64 + 骁龙 + skel 在位 → HTP 设备；
+                // 启动/健康失败自动去 NPU 参数以 CPU 兜底重启（三后端单二进制）。
+                hex = if (android.os.Build.SUPPORTED_ABIS.firstOrNull() == "arm64-v8a" &&
+                    skelLibsAvailable(nativeDir)
+                ) detectHexagonArch() else null
+                useHtp = hex != null
+                if (useHtp) cmd.addAll(listOf("-ngl", "99", "-dev", "HTP0", "--device", "HTP0"))
+                _state.value = LlamaState.Starting(
+                    if (useHtp) "加载模型 ${model.name}（Hexagon $hex NPU）…" else "加载模型 ${model.name}（CPU）…"
+                )
                 val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+                if (useHtp) {
+                    val env = pb.environment()
+                    env["LD_LIBRARY_PATH"] = nativeDir + ":" + (env["LD_LIBRARY_PATH"] ?: "")
+                    env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
+                }
 
                 val logFile = File(modelsDir(), "server.log")
                 val proc = pb.start()
@@ -256,6 +300,7 @@ class LlamaServerController(
                         ).execute().use { resp ->
                             if (resp.isSuccessful) {
                                 currentModelPath = model.absolutePath
+                                lastActiveBackend = if (useHtp) "htp-$hex" else "cpu"
                                 _state.value = LlamaState.Running(model.name)
                                 return@withContext true
                             }
@@ -269,6 +314,52 @@ class LlamaServerController(
                 throw ce
             } catch (e: Exception) {
                 stopInternal()
+                // HTP 失败（skel 不兼容/无 HTP 权限）：去 NPU 参数 CPU 兜底重试一次
+                if (useHtp) {
+                    android.util.Log.w("HaoLlama", "Hexagon 启动失败（${e.message?.take(120)}），回退 CPU")
+                    val retry = cmd.filterIndexed { i, arg ->
+                        !(arg == "-ngl" || arg == "-dev" || arg == "--device" ||
+                            (i > 0 && (cmd[i - 1] == "-ngl" || cmd[i - 1] == "-dev" || cmd[i - 1] == "--device")))
+                    }
+                    val pb2 = ProcessBuilder(retry).redirectErrorStream(true)
+                    val env2 = pb2.environment()
+                    env2["LD_LIBRARY_PATH"] = nativeDir + ":" + (env2["LD_LIBRARY_PATH"] ?: "")
+                    _state.value = LlamaState.Starting("NPU 不可用，CPU 兜底加载 ${model.name}…")
+                    val proc2 = pb2.start()
+                    process = proc2
+                    Thread {
+                        runCatching {
+                            proc2.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                                java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(File(modelsDir(), "server.log"), false))).use { w ->
+                                    var n = 0
+                                    reader.forEachLine { line -> if (n++ < MAX_LOG_LINES) w.println(line) }
+                                    w.flush()
+                                }
+                            }
+                        }
+                    }.apply { isDaemon = true }.start()
+                    val health2 = okHttpClient.newBuilder()
+                        .connectTimeout(2, TimeUnit.SECONDS)
+                        .readTimeout(2, TimeUnit.SECONDS)
+                        .build()
+                    repeat(HEALTH_TRIES) { attempt ->
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        if (proc2.exitValueOrNull() != null) throw IllegalStateException("CPU 兜底进程退出，详见 server.log")
+                        runCatching {
+                            health2.newCall(Request.Builder().url("$LOCAL_BASE_URL/health").build())
+                                .execute().use { resp ->
+                                    if (resp.isSuccessful) {
+                                        currentModelPath = model.absolutePath
+                                        lastActiveBackend = "cpu"
+                                        _state.value = LlamaState.Running(model.name)
+                                        return@withContext true
+                                    }
+                                }
+                        }
+                        delay(HEALTH_INTERVAL_MS)
+                    }
+                }
+                lastActiveBackend = "cpu"
                 _state.value = LlamaState.Failed(e.message ?: e.javaClass.simpleName)
                 false
             }

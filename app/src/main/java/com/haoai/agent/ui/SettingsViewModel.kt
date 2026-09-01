@@ -49,6 +49,9 @@ object ProviderPresets {
 
 class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
+    /** Phase 7：端侧当前生效后端（设置页状态行）。 */
+    fun backendLabel(): String = runCatching { c.llama.activeBackend }.getOrDefault("cpu")
+
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
     fun sessionTitleOf(sessionId: String): String =
         runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")

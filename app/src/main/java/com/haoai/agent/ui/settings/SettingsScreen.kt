@@ -928,6 +928,18 @@ private fun LazyListScope.brainItems(
 private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onOpenScan: () -> Unit) {
     item { SectionTitle("端侧推理（llama.cpp 本地运行）") }
     item {
+        // Phase 7 阶段2：SoC 后端检测结果
+        val detected = remember { com.haoai.agent.platform.llama.LlamaServerController.detectHexagonArch() }
+        Text(
+            "推理后端：三后端单二进制（CPU/GPU/NPU-Hexagon）· " +
+                (detected?.let { "本机骁龙 → Hexagon $it（arm64 启动时启用，失败自动 CPU 兜底）" } ?: "本机走 CPU/GPU 兜底") +
+                " · 当前生效：${vm.backendLabel()}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+        )
+    }
+    item {
         val llama by vm.llamaState.collectAsState()
         val dl by vm.llamaDownload.collectAsState()
         var dlUrl by androidx.compose.runtime.remember {
