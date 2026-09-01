@@ -98,6 +98,7 @@ import kotlinx.coroutines.launch
  * 设置主页（上游 移动端式分组导航）：
  * 根页面只列分类入口，具体设置项进各子页，避免功能增多后平铺混乱。
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SettingsScreen(
     vm: SettingsViewModel,
@@ -184,6 +185,10 @@ fun SettingsScreen(
                     .fillMaxSize()
             ) {
                 Spacer(Modifier.height(64.dp))
+                // 关 overscroll stretch：边缘过度滚动的拉伸是外层 graphicsLayer 变换，
+                // backdrop 采样不支持（同输入栏抬升问题）→ 卡片描边短暂消失
+                val overscrollOff = androidx.compose.foundation.LocalOverscrollConfiguration provides null
+                androidx.compose.runtime.CompositionLocalProvider(overscrollOff) {
                 LazyColumn(
                     state = rootListState,
                     modifier = Modifier.fillMaxSize(),
@@ -335,6 +340,7 @@ fun SettingsScreen(
                         onClick = { section = "about" }
                     )
                 }
+            }
             }
             }
             GlassPageBar(

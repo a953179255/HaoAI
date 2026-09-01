@@ -580,7 +580,8 @@ fun ChatScreen(
                     }
                 },
                 onStop = { vm.stop() },
-                placeholder = "给 ${vm.agentName()} 派个活…"
+                placeholder = "给 ${vm.agentName()} 派个活…",
+                matte = keyboardLiftPx > 0
             )
         }
 
@@ -1918,14 +1919,18 @@ private fun ComposerBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
     placeholder: String = "给 HaoAI 派个活…",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    matte: Boolean = false
 ) {
     var toolbarExpanded by remember { mutableStateOf(false) }
 
     GlassPanel(
         backdrop = backdrop,
         radius = 26.dp,
-        surfaceAlpha = 0.30f,
+        surfaceAlpha = 0.22f,
+        // 键盘抬起时切本地磨砂：backdrop 采样不随「仅位置变化」重绘，
+        // 液态折射会透出抬起前的旧背景；matte 保证透出效果永远正确
+        refract = !matte,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(top = 4.dp)) {
