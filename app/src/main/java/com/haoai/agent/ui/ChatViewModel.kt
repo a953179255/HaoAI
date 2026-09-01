@@ -553,6 +553,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
             is Finished -> {
                 if (ev.error != null && ev.error != "已停止") _error.value = ev.error
+                // 5.2 降级提示：回合结束消费（SnackBar 显示「已降级到 X」）
+                c.lastFallbackNotice?.let { name ->
+                    c.lastFallbackNotice = null
+                    _error.value = "已降级到 $name（主服务请求失败）"
+                }
             }
         }
     }

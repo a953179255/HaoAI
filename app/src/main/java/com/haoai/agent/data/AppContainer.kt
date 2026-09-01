@@ -58,8 +58,23 @@ class AppContainer(app: Application) {
     val distros = com.haoai.agent.platform.sandbox.DistroManager(appFilesDir, okHttpClient)
 
     /** 按供应商配置的协议选客户端（2.3）：anthropic 原生 / openai_compat（默认）。 */
-    fun clientFor(provider: ProviderConfig?): com.haoai.agent.agent.provider.ProviderClient =
-        if (provider?.protocol == "anthropic") anthropicClient else client
+    fun clientFor(provider: ProviderConfig?): com.haoai.agent.agent.provider.ProviderClient {
+        val base = if (provider?.protocol == "anthropic") anthropicClient else client
+        // 5.2 降级链：仅当 provider 是链头（主 Provider）且链非空时包装
+        val st = settingsFlow.value
+        val chain = st.fallbackChain
+        if (provider == null || chain.isEmpty() || provider.id != st.activeProviderId) return base
+        return com.haoai.agent.agent.provider.FallbackClient(
+            resolve = { p -> if (p.protocol == "anthropic") anthropicClient else client },
+            lookup = { id -> st.providers.find { it.id == id } },
+            decrypt = { p -> runCatching { cipher.decrypt(p.apiKeyCipher) }.getOrDefault("") },
+            fallbackIds = chain,
+            onFallback = { name -> lastFallbackNotice = name }
+        )
+    }
+
+    /** 5.2 最近一次降级通知（UI 轮询显示「已降级到 X」）；null=无。 */
+    @Volatile var lastFallbackNotice: String? = null
 
     val llama = LlamaServerController(app, okHttpClient)
 

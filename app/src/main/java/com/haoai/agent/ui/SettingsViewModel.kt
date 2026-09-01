@@ -319,6 +319,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(dailyTokenBudgetK = k.coerceIn(0, 10_000)) }
     }
 
+    /** 5.2 降级链：勾选/取消备用 Provider（链顺序 = provider 列表顺序）。 */
+    fun toggleFallback(id: String) {
+        c.updateSettings { st ->
+            val next = if (id in st.fallbackChain) st.fallbackChain - id else st.fallbackChain + id
+            st.copy(fallbackChain = next)
+        }
+    }
+
     fun setAutoLearn(enabled: Boolean) {
         c.updateSettings { it.copy(autoLearn = enabled) }
     }

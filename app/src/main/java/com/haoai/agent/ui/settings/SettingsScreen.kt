@@ -805,6 +805,49 @@ private fun LazyListScope.brainItems(
             )
         }
     }
+    item { SectionTitle("失败降级链（5.2）") }
+    item {
+        val ps2 = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            GlassGroup(backdrop) {
+                Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                    ps2.forEach { p ->
+                        val inChain = p.id in settings.fallbackChain
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { vm.toggleFallback(p.id) }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.Checkbox(
+                                checked = inChain,
+                                onCheckedChange = { vm.toggleFallback(p.id) }
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    if (p.id == settings.activeProviderId) "当前主服务（自动为链头）" else "备用候选",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (inChain) {
+                                val order = settings.fallbackChain.indexOf(p.id) + 1
+                                Text("备用 $order", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                "勾选备用服务：主服务网络错误 / 5xx / 429 时自动切换（每级 1 次），UI 提示「已降级到 X」；流式中途失败不切换。默认全不勾 = 不降级。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+            )
+        }
+    }
 }
 
 private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onOpenScan: () -> Unit) {

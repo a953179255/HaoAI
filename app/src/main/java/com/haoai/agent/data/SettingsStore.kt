@@ -109,7 +109,9 @@ data class AppSettings(
     /** 4.3 虚拟屏后台自动化总开关（默认关；开启后 vscreen_* 工具才注册，且要求 API 30+）。 */
     val vscreenEnabled: Boolean = false,
     /** 5.1 Token 每日预算（输入+输出合计，千 token 为单位避免输入大数）；0=不限。 */
-    val dailyTokenBudgetK: Int = 0
+    val dailyTokenBudgetK: Int = 0,
+    /** 5.2 Provider 降级链（有序 providerId 备用列表）；空=不降级。 */
+    val fallbackChain: List<String> = emptyList()
 )
 
 class SettingsStore(context: Context) {
