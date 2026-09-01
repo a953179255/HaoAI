@@ -228,10 +228,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onSectionChange = { settingsSection = it },
                     onBack = {
                         screen = 0
-                        // 从侧边栏进入设置的：返回时恢复侧边栏展开状态
+                        // 从侧边栏进入设置的：返回时侧边栏直接以展开态出现（snapOpen），
+                        // 不重播滑出动画——与页面淡入叠加会显得两段式、不丝滑
                         if (cameFromDrawer) {
                             cameFromDrawer = false
-                            rootScope.launch { drawer.open() }
+                            rootScope.launch { drawer.snapOpen() }
                         }
                     },
                     onOpenMemories = { screen = 2 },

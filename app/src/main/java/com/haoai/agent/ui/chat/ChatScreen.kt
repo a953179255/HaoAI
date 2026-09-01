@@ -163,6 +163,12 @@ class DrawerController {
         fraction.animateTo(1f, settleSpec(), fraction.velocity)
     }
 
+    /** 无动画直接以展开态出现：设置返回聊天并恢复侧边栏时用，避免与页面过渡叠加成两段动画 */
+    suspend fun snapOpen() {
+        targetOpen = true
+        fraction.snapTo(1f)
+    }
+
     suspend fun close() {
         targetOpen = false
         fraction.animateTo(0f, settleSpec(), fraction.velocity)
@@ -711,6 +717,14 @@ fun ChatScreen(
 
     // ===== 消息操作组（1.2，入口已改消息下方 ⋮ 与快捷行）=====
     msgAction?.let { target ->
+        androidx.compose.animation.AnimatedVisibility(
+            visible = true,
+            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
+                androidx.compose.animation.slideInVertically(
+                    initialOffsetY = { it / 3 },
+                    animationSpec = androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                )
+        ) {
         MessageActionPanel(
             backdrop = backdrop,
             row = target,
@@ -741,6 +755,7 @@ fun ChatScreen(
                 msgAction = null
             }
         )
+        }
     }
     previewTarget?.let { target ->
         HtmlPreviewModal(row = target, onDismiss = { previewTarget = null })

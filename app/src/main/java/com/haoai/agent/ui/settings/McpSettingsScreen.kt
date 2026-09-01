@@ -99,11 +99,7 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
     } else {
         Box(Modifier.fillMaxSize().statusBarsPadding()) {
             Column(Modifier.fillMaxSize()) {
-                GlassPageBar(
-                    backdrop = backdrop,
-                    title = "MCP 服务器",
-                    onBack = onBack
-                )
+                Spacer(Modifier.height(64.dp))
                 Text(
                     "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；添加后冷启动会自动连接。",
                     style = MaterialTheme.typography.labelSmall,
@@ -211,6 +207,15 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
                     }
                 }
             }
+        // 顶栏悬浮（与其他管理页一致：TopCenter + 12/6 边距）
+        GlassPageBar(
+            backdrop = backdrop,
+            title = "MCP 服务器",
+            onBack = onBack,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        )
         }
         pendingDelete?.let { srv ->
             GlassAlertDialog(

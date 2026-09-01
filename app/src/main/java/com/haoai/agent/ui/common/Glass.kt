@@ -711,6 +711,15 @@ fun GlassAlertDialog(
     // 弹窗是独立于采样层的全屏遮罩：折射采样到的是弹窗「底下」的页面而非弹窗自身，
     // 按钮会显得「穿透背板 + 边缘光晕」。弹窗内统一退化为本地磨砂绘制。
     androidx.compose.runtime.CompositionLocalProvider(LocalGlassRefract provides false) {
+    // 入场过渡：条件组合进入时 AnimatedVisibility 会从初始态播放 enter 动画
+    androidx.compose.animation.AnimatedVisibility(
+        visible = true,
+        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
+            androidx.compose.animation.scaleIn(
+                initialScale = 0.92f,
+                animationSpec = androidx.compose.animation.core.tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+            )
+    ) {
     Box(
         Modifier
             .fillMaxSize()
@@ -793,6 +802,7 @@ fun GlassAlertDialog(
                 }
             }
         }
+    }
     }
     }
 }

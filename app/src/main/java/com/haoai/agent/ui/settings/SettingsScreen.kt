@@ -128,6 +128,13 @@ fun SettingsScreen(
     // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）
     var section by rememberSaveable { mutableStateOf(initialSection) }
     androidx.compose.runtime.LaunchedEffect(section) { if (section != initialSection) onSectionChange(section) }
+    // 用量页「清空账本」确认弹窗：状态提在根级（弹窗不能渲染在 LazyColumn item 内——
+    // fillMaxSize 遮罩会受 item 高度约束，实测只盖住下半屏）
+    var confirmClearLedger by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    // 「模型大脑 → 内部任务模型」选择弹窗：同样必须在根级渲染
+    var purposePicker by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    // 设置根页列表滚动状态：必须在 if(section) 分支之外 remember，否则进二级页返回后回到顶部
+    val rootListState = androidx.compose.foundation.lazy.rememberLazyListState()
     // Linux 环境（3.2）：发行版状态/安装进度/弹窗路由集中在一处
     val linuxState = androidx.compose.runtime.remember { LinuxEnvState() }
     androidx.compose.runtime.LaunchedEffect(section) {
@@ -178,6 +185,7 @@ fun SettingsScreen(
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
+                    state = rootListState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -355,7 +363,7 @@ fun SettingsScreen(
                 ) {
                     when (section) {
                         "brain" -> {
-                            brainItems(vm, settings, backdrop, onDeleteRequest = { pendingDelete = it })
+                            brainItems(vm, settings, backdrop, onDeleteRequest = { pendingDelete = it }, onPickPurposeModel = { purposePicker = it })
                             localItems(vm, backdrop, onOpenScan = { showScan = true })
                         }
                         "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
@@ -368,7 +376,7 @@ fun SettingsScreen(
                             onRequestClearWallpaper = { confirmWpClear = true }
                         )
                         "about" -> aboutItems(vm, settings, backdrop)
-                        "usage" -> usageItems(vm, settings, backdrop)
+                        "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = { confirmClearLedger = true })
                     }
                 }
             }
@@ -481,6 +489,74 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
             )
+        }
+    }
+
+    // 「用量」清空账本确认：必须渲染在根级（LazyColumn item 内 fillMaxSize 遮罩会被约束）
+    if (confirmClearLedger) {
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "清空用量账本",
+            confirmLabel = "清空",
+            dismissLabel = "取消",
+            danger = true,
+            onConfirm = {
+                confirmClearLedger = false
+                com.haoai.agent.data.UsageLedger.clearAll()
+            },
+            onDismiss = { confirmClearLedger = false }
+        ) {
+            Text(
+                "全部 Token 用量与工具调用记录将被删除，无法恢复。",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+    }
+
+    // 「模型大脑 → 内部任务模型」选择窗（根级渲染，点行弹窗选择）
+    if (purposePicker != null) {
+        val purpose = purposePicker!!
+        val current = when (purpose) {
+            "title" -> settings.titleProviderId
+            "memory" -> settings.memoryExtractProviderId
+            else -> settings.summarizeProviderId
+        }
+        val options = listOf("" to "主模型") +
+            settings.providers
+                .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
+                .map { it.id to it.name } +
+            listOf("local" to "端侧（llama.cpp）")
+        com.haoai.agent.ui.common.GlassAlertDialog(
+            backdrop = backdrop,
+            title = "选择模型",
+            confirmLabel = "关闭",
+            onConfirm = { purposePicker = null },
+            onDismiss = { purposePicker = null }
+        ) {
+            Column {
+                options.forEach { (id, name) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                vm.setPurposeModel(purpose, id)
+                                purposePicker = null
+                            }
+                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (id == current) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onBackground,
+                            fontWeight = if (id == current) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (id == current) Text("✓", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
         }
     }
 
@@ -749,7 +825,8 @@ private fun LazyListScope.brainItems(
     vm: SettingsViewModel,
     settings: AppSettings,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    onDeleteRequest: (String) -> Unit = {}
+    onDeleteRequest: (String) -> Unit = {},
+    onPickPurposeModel: (String) -> Unit = {}
 ) {
     item { SectionTitle("云端模型服务") }
     item {
@@ -831,106 +908,19 @@ private fun LazyListScope.brainItems(
             )
         }
     }
-    item { SectionTitle("内部任务模型（5.3）") }
+    item { SectionTitle("内部任务模型") }
     item {
-        // purpose 配置行：点击弹选择对话框（主模型 / 各云端服务 / 端侧）
-        val showPicker = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+        // purpose 配置行：点击弹根级选择窗（选择窗状态在 SettingsScreen 根部）
         Column(Modifier.padding(horizontal = 16.dp)) {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                    purposeRow("会话标题", "title", settings.titleProviderId, settings, vm, backdrop) { showPicker.value = it }
-                    purposeRow("记忆提取", "memory", settings.memoryExtractProviderId, settings, vm, backdrop) { showPicker.value = it }
-                    purposeRow("上下文压缩", "summarize", settings.summarizeProviderId, settings, vm, backdrop) { showPicker.value = it }
+                    purposeRow("会话标题", "title", settings.titleProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
+                    purposeRow("记忆提取", "memory", settings.memoryExtractProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
+                    purposeRow("上下文压缩", "summarize", settings.summarizeProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                 }
             }
             Text(
                 "为内部辅助任务指定独立（更廉价的）模型；「主模型」= 跟随当前云端服务，「端侧」= 本机 llama.cpp 小模型。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
-            )
-        }
-        showPicker.value?.let { purpose ->
-            val current = when (purpose) {
-                "title" -> settings.titleProviderId
-                "memory" -> settings.memoryExtractProviderId
-                else -> settings.summarizeProviderId
-            }
-            val options = listOf("" to "主模型") +
-                settings.providers
-                    .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
-                    .map { it.id to it.name } +
-                listOf("local" to "端侧（llama.cpp）")
-            com.haoai.agent.ui.common.GlassAlertDialog(
-                backdrop = backdrop,
-                title = "选择模型",
-                confirmLabel = "关闭",
-                onConfirm = { showPicker.value = null },
-                onDismiss = { showPicker.value = null }
-            ) {
-                Column {
-                    options.forEach { (id, name) ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    vm.setPurposeModel(purpose, id)
-                                    showPicker.value = null
-                                }
-                                .padding(horizontal = 8.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            androidx.compose.material3.RadioButton(
-                                selected = current == id,
-                                onClick = {
-                                    vm.setPurposeModel(purpose, id)
-                                    showPicker.value = null
-                                }
-                            )
-                            Text(name, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
-        }
-    }
-    item { SectionTitle("失败降级链（5.2）") }
-    item {
-        val ps2 = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            GlassGroup(backdrop) {
-                Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                    ps2.forEach { p ->
-                        val inChain = p.id in settings.fallbackChain
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { vm.toggleFallback(p.id) }
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            androidx.compose.material3.Checkbox(
-                                checked = inChain,
-                                onCheckedChange = { vm.toggleFallback(p.id) }
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(p.name, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    if (p.id == settings.activeProviderId) "当前主服务（自动为链头）" else "备用候选",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (inChain) {
-                                val order = settings.fallbackChain.indexOf(p.id) + 1
-                                Text("备用 $order", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-            Text(
-                "勾选备用服务：主服务网络错误 / 5xx / 429 时自动切换（每级 1 次），UI 提示「已降级到 X」；流式中途失败不切换。默认全不勾 = 不降级。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
@@ -1922,14 +1912,14 @@ private fun LazyListScope.generalItems(
 private fun LazyListScope.usageItems(
     vm: SettingsViewModel,
     settings: AppSettings,
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onRequestClearLedger: () -> Unit = {}
 ) {
     item {
         // 读文件较重：进入页面时计算一次（清空后重进更新）
         val summary = androidx.compose.runtime.remember {
             com.haoai.agent.data.UsageLedger.summarize()
         }
-        var confirmClear by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
         Column {
             SectionTitle("Token 汇总")
@@ -2049,34 +2039,30 @@ private fun LazyListScope.usageItems(
             SectionTitle("维护")
             Column(Modifier.padding(horizontal = 16.dp)) {
                 GlassGroup(backdrop) {
-                    ToggleRow(
-                        title = "清空账本",
-                        subtitle = "删除全部用量记录（不影响对话与记忆）",
-                        checked = false,
-                        onChange = { confirmClear = true },
-                        backdrop = backdrop
-                    )
+                    // 危险操作行（非开关）：点击弹根级确认窗
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onRequestClearLedger() }
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("清空账本", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "删除全部用量记录（不影响对话与记忆）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            "清空",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
-            }
-        }
-
-        if (confirmClear) {
-            com.haoai.agent.ui.common.GlassAlertDialog(
-                backdrop = backdrop,
-                title = "清空用量账本",
-                confirmLabel = "清空",
-                dismissLabel = "取消",
-                danger = true,
-                onConfirm = {
-                    confirmClear = false
-                    com.haoai.agent.data.UsageLedger.clearAll()
-                },
-                onDismiss = { confirmClear = false }
-            ) {
-                Text(
-                    "全部 Token 用量与工具调用记录将被删除，无法恢复。",
-                    style = MaterialTheme.typography.bodyMedium
-                )
             }
         }
     }
