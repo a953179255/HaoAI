@@ -103,6 +103,10 @@ class AgentEngine(
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
     private var _loopFailedCap = false
 
+    /** E9 todo 进度联动：清单变更后的下一轮注入一次进度行。 */
+    private var todoDirty = false
+    private var todoLastSnapshot: List<com.haoai.agent.agent.tools.TodoItem>? = null
+
     /** E3 会话级工具连续失败计数（成功清零）。 */
     private val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
@@ -239,6 +243,13 @@ class AgentEngine(
                         onEvent
                     )
                 }
+
+                // E9 todo 变更检测：本轮执行过 todo 工具 → 下一轮注入进度行
+                val todoNow = todoStore.load(session.id)
+                if (todoLastSnapshot != null && todoNow != todoLastSnapshot) {
+                    todoDirty = true
+                }
+                todoLastSnapshot = todoNow
 
                 maybeNudgeHandoff(onEvent)
 
@@ -799,7 +810,20 @@ class AgentEngine(
                 mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary(),
                 shellNote = shellNote,
                 vscreenAvailable = vscreenEnabled
-            ) + budgetHint()
+            ) + budgetHint() + todoProgressLine()
+    }
+
+    /** E9 todo 进度行（仅 todoDirty 后的下一轮注入一次，注入后清标志；≤120 字）。 */
+    private fun todoProgressLine(): String {
+        if (!todoDirty) return ""
+        todoDirty = false
+        val items = todoStore.load(session.id)
+        if (items.isEmpty()) return ""
+        val done = items.count { it.status == "completed" }
+        val active = items.firstOrNull { it.status == "in_progress" } ?: items.firstOrNull { it.status == "pending" }
+        val head = active?.text?.take(30) ?: ""
+        val human = if (done == items.size) "全部完成" else "待办 ${items.size} 项：已完成 $done、进行中 ${items.count { it.status == "in_progress" }}"
+        return "\n[任务进度] $human${if (head.isNotEmpty()) "（$head）" else ""}"
     }
 
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
