@@ -372,14 +372,22 @@ fun ChatScreen(
     Box(Modifier.fillMaxSize()) {
     val drawerFraction = drawer.fraction.value
     Box(Modifier.fillMaxSize()) {
+        // 采样层根必须是「静止节点」：appLayer 直接挂在被 offset 上移的 Column 上时，
+        // layer 节点坐标 = (0, -lift)，玻璃按 localPositionOf 算出的采样位置整体多加
+        // 一个 lift——键盘弹出后顶栏/输入栏透出的是壁纸下方 lift 处的内容（字节码确认：
+        // 采样 offset = layerCoordinates.localPositionOf(glass, Zero)）。挂到静止 Box
+        // 后采样位置 = 屏幕位置；offset 移入层内，录制内容与屏幕同步随动
+        Box(
+            Modifier
+                .fillMaxSize()
+                .appLayer(backdrop)
+        ) {
         Column(
             Modifier
                 .fillMaxSize()
-                // 布局期平移而非 graphicsLayer：backdrop 采样对齐基于布局坐标（库 2.0.0
-                // TODO 明言外层变换不参与计算），graphicsLayer 抬升会让玻璃透出抬起前的
-                // 背景；offset 让 onGloballyPositioned 触发、采样随动
+                // 布局期平移而非 graphicsLayer：graphicsLayer 抬升只挪 RenderNode，
+                // 不会触发采样层内容重录，键盘动画期间消息无法随动
                 .offset { androidx.compose.ui.unit.IntOffset(0, -keyboardLiftPx) }
-                .appLayer(backdrop)
                 .pointerInput(Unit) {
                     detectTapGestures {
                         focusManager.clearFocus()
@@ -462,8 +470,9 @@ fun ChatScreen(
                 bottomPadding = with(density) { maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) }
             )
         }
+        }
 
-        // 玻璃顶栏必须放在 appLayer 子树之外，否则层采样自引用会导致渲染循环崩溃
+        // 玻璃顶栏不能进入上面的 appLayer 子树——drawBackdrop 采样自层会递归崩溃
         val activeSession = vm.session.collectAsState().value
         TopBar(
             title = vm.agentName(),
