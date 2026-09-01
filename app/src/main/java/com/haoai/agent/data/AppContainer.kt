@@ -80,6 +80,18 @@ class AppContainer(app: Application) {
 
     val settingsFlow = MutableStateFlow(settingsStore.load())
 
+    /** 工作区配置文件桥（haoai.config.json）：agent 可直接改的 上游 式镜像配置。 */
+    val configFile: java.io.File =
+        (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+            ?.let { java.io.File(it, "haoai.config.json") }
+            ?: java.io.File(appFilesDir, "haoai.config.json")
+    val configBridge = ConfigFileBridge(
+        file = configFile,
+        cipher = cipher,
+        updateSettings = { edit -> updateSettings(edit) },
+        readSettings = { settingsFlow.value }
+    )
+
     init {
         // 存储单例先初始化（WorkspaceDocs 异步任务会用到）
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
@@ -114,12 +126,16 @@ class AppContainer(app: Application) {
         llama.preferredModel = settingsFlow.value.localModelFile
         llama.contextSize = settingsFlow.value.localContextLength
         syncWorkspaceDocs()
+        // 配置文件桥：启动渲染镜像 + 监听外部改动（agent 写 haoai.config.json → 自动合并入库）
+        configBridge.startWatching(applicationScope)
     }
 
     fun updateSettings(edit: (AppSettings) -> AppSettings) {
         val next = edit(settingsFlow.value)
         settingsStore.save(next)
         settingsFlow.value = next
+        // 镜像配置保持与真源一致（apiKey 掩码化回写）
+        runCatching { configBridge.onSettingsChanged() }
     }
 
     /** 把记忆/身份等渲染为工作区 Markdown（上游 式文件层），异步执行。 */

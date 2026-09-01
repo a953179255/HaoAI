@@ -52,6 +52,19 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** Phase 7：端侧当前生效后端（设置页状态行）。 */
     fun backendLabel(): String = runCatching { c.llama.activeBackend }.getOrDefault("cpu")
 
+    /** 配置文件桥状态行：最近一次应用时间 + 错误（读 config-bridge.log 尾部）。 */
+    fun configFileStatus(): String {
+        val f = java.io.File(c.appFilesDir, "settings/config-bridge.log")
+        if (!f.exists()) return "未配置"
+        return runCatching {
+            val lines = f.readLines().filter { it.isNotBlank() }
+            lines.lastOrNull()?.take(120) ?: "未配置"
+        }.getOrDefault("未配置")
+    }
+
+    /** 配置文件绝对路径（供 UI 展示）。 */
+    fun configFilePath(): String = c.configFile.absolutePath
+
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
     fun sessionTitleOf(sessionId: String): String =
         runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")

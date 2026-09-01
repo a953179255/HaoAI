@@ -193,10 +193,24 @@ object WorkspaceDocs {
 - 低价值记忆 30 天未用降级进「已归档」，再 30 天物理清理
 - 技能沉淀在应用内部（skill save/list/view/delete 管理）
 
+## 配置管理（改配置 = 编辑文件，不要动无障碍 UI）
+- **haoai.config.json**（本工作区根）是应用配置的镜像：添加/删除云端模型、切换当前模型、
+  改六个白名单设置项，直接编辑这个文件即可，约 2 秒后自动生效（无需重启）。
+  你的 read/write/edit 工具就能改它——**不要**用 screen/tap/type_text 去点设置页 UI。
+- providers 数组字段：`id`（已有模型沿用，新增可省略）、`name`、`baseUrl`（http(s)://）、
+  `model`、`protocol`（openai_compat|anthropic，默认前者）、`apiKey`、
+  `contextLength`/`maxTokens`（0=自动）、`active`（true=切换为当前模型）。
+- **apiKey 掩码语义**：已有模型的 key 渲染为 `"****"`（= 保持原 key 不动）；新增模型必须写明文
+  key，应用后自动加密入库并回写为 `****`。配置文件里不留明文 key。
+- settings 白名单：`reply_max_tokens` / `context_length` / `local_context_length` /
+  `memory_enabled` / `auto_learn` / `deep_dream`；其余键会被整体拒绝（保留上次配置）。
+- 格式错误/未知键会拒绝且不破坏现有配置，失败原因见应用内「通用 → 配置文件」状态行。
+
 ## 文件说明
 | 文件 | 用途 |
 |------|------|
 | MEMORY.md | 长期记忆真源（可编辑，行尾元数据请保留） |
+| haoai.config.json | 应用配置镜像（添加云端模型/切模型/改设置，auto 生效） |
 | USER.md | 用户画像（自动镜像，手改会被覆盖） |
 | IDENTITY.md / SOUL.md | 身份与性格（镜像；想改性格直接告诉助理即可） |
 | HEARTBEAT.md | 定时任务清单 |

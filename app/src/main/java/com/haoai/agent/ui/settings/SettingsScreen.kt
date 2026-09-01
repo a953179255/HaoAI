@@ -1825,6 +1825,26 @@ private fun LazyListScope.generalItems(
                 onChange = { vm.setWallpaperGlobal(it) },
                 backdrop = backdrop
             )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            // 配置文件桥状态（上游 式：agent 改 haoai.config.json → 2 秒自动生效）
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text("配置文件", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    vm.configFilePath(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 2
+                )
+                Text(
+                    "最近应用：${vm.configFileStatus()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                    maxLines = 2
+                )
+            }
         }
     }
     item { SectionTitle("模型行为") }
