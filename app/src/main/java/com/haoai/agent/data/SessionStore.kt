@@ -45,9 +45,24 @@ data class StoredSession(
     /** 智能标题已生成过（只生成一次，避免每轮都花 token）。 */
     var titleAuto: Boolean = false,
     /** 置顶：列表排序最前（抽屉/全部会话页共用）。 */
-    var pinned: Boolean = false
+    var pinned: Boolean = false,
+    /** E1 引擎运行状态机：null=空闲（旧会话零迁移）；running=执行中；其他=中断/封顶/失败（可恢复）。 */
+    var runState: String? = null,
+    /** E1 本轮目标（用户指令摘要 ≤200 字），供恢复横幅展示与恢复注入。 */
+    var runGoal: String? = null,
+    /** E1 本轮已用轮数（turncapped 时续跑参考）。 */
+    var runTurnsUsed: Int = 0
 ) {
     companion object {
+        const val RUN_IDLE = "idle"
+        const val RUN_INTERRUPTED = "interrupted"
+        const val RUN_TURNCAPPED = "turncapped"
+        const val RUN_FAILED = "failed"
+
+        /** 是否需要展示恢复入口（显式主动停止/完成除外）。 */
+        fun resumable(runState: String?): Boolean =
+            runState == RUN_INTERRUPTED || runState == RUN_TURNCAPPED || runState == RUN_FAILED
+
         fun create(workspaceUri: String?): StoredSession {
             val now = System.currentTimeMillis()
             return StoredSession(

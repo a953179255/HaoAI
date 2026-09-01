@@ -163,6 +163,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (_session.value?.id == id) return
         stopInternal()
         val s = c.sessionStore.load(id) ?: return
+        // E1 进程死亡检测：上次 running（引擎已灭）→ interrupted，可恢复
+        if (s.runState == "running") {
+            s.runState = com.haoai.agent.data.StoredSession.RUN_INTERRUPTED
+            runCatching { c.sessionStore.save(s) }
+        }
         currentSession = s
         liveTools.clear()
         sessionIn = 0
@@ -288,6 +293,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
+        // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
+        s.runGoal = text.take(200)
+        s.runTurnsUsed = 0
+        s.runState = "running"
+        runCatching { c.sessionStore.save(s) }
         job = viewModelScope.launch {
             var turnEngine: AgentEngine? = null
             try {
@@ -313,6 +323,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 _running.value = false
                 _streamingText.value = null
                 _streamingReasoning.value = null
+                // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
+                val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
+                s.runState = endState
+                runCatching { c.sessionStore.save(s) }
+                _session.value = s
                 refreshSessions()
                 c.syncWorkspaceDocs()
                 maybeGenerateTitle(s)
@@ -1051,6 +1066,32 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             )
         }
         c.syncWorkspaceDocs()
+    }
+
+    /**
+     * E1 断点恢复：把恢复引导作为普通用户消息注入并重新 runTurn
+     * （不复活内存状态，靠持久化历史 + 压缩摘要 + handoff 接续）。
+     */
+    fun resumeRun() {
+        val s = currentSession ?: return
+        if (_running.value) return
+        val goal = s.runGoal ?: "未记录目标".take(80)
+        val turns = s.runTurnsUsed
+        val resumeText = "[系统恢复] 上次任务在第 $turns 轮中断，未完成目标：$goal。请先评估当前进度（可读文件/记忆核实），再继续执行。"
+        s.runState = com.haoai.agent.data.StoredSession.RUN_IDLE
+        s.runGoal = null
+        runCatching { c.sessionStore.save(s) }
+        _session.value = s
+        send(resumeText, null)
+    }
+
+    /** E1 忽略恢复：清状态不注入。 */
+    fun dismissResume() {
+        val s = currentSession ?: return
+        s.runState = com.haoai.agent.data.StoredSession.RUN_IDLE
+        s.runGoal = null
+        runCatching { c.sessionStore.save(s) }
+        _session.value = s
     }
 
     private fun stopInternal() {

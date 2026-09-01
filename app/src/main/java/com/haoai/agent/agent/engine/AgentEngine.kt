@@ -95,6 +95,9 @@ class AgentEngine(
 
     private val todoStore = TodoStore(appFilesDir)
 
+    /** E1 轮次结束状态：由 runTurn 生命周期填写（idle/interrupted/turncapped/failed）；null=进行中。 */
+    @Volatile var runEndState: String? = null
+
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
     private var _loopFailedCap = false
 
@@ -342,6 +345,7 @@ class AgentEngine(
             onEvent(Finished("已停止"))
             throw ce
         } catch (e: Exception) {
+            runEndState = com.haoai.agent.data.StoredSession.RUN_FAILED
             ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
             val msg = ChatMessage(
                 role = ChatMessage.ROLE_ASSISTANT,
@@ -351,6 +355,7 @@ class AgentEngine(
             appendAndNotify(msg, onEvent)
             onEvent(Finished(e.message ?: "未知错误"))
         }
+        if (runEndState == null) runEndState = com.haoai.agent.data.StoredSession.RUN_IDLE
     }
 
     private suspend fun executeCall(

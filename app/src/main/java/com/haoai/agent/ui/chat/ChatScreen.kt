@@ -596,6 +596,59 @@ fun ChatScreen(
             }
         }
 
+        // E1 断点恢复横幅：顶层 Box 内、紧随顶栏下方展示（running 标记由 selectSession 死亡检测置入）
+        val runStateNow = activeSession?.runState
+        val runGoalNow = activeSession?.runGoal
+        if (com.haoai.agent.data.StoredSession.resumable(runStateNow) && runGoalNow != null) {
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 130.dp, start = 12.dp, end = 12.dp)
+            ) {
+                com.haoai.agent.ui.common.GlassCard(
+                    onClick = {},
+                    backdrop = backdrop,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                    surfaceAlpha = 0.55f,
+                    contentAlignment = androidx.compose.ui.Alignment.CenterStart
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "上次任务中断：${runGoalNow.take(60)}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2
+                            )
+                            Text(
+                                when (runStateNow) {
+                                    com.haoai.agent.data.StoredSession.RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
+                                    com.haoai.agent.data.StoredSession.RUN_FAILED -> "执行出错，可继续尝试"
+                                    else -> "进程中断，可继续执行"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        androidx.compose.material3.TextButton(onClick = { vm.resumeRun() }) {
+                            Text("继续", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        }
+                        androidx.compose.material3.TextButton(onClick = { vm.dismissResume() }) {
+                            Text("忽略", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
