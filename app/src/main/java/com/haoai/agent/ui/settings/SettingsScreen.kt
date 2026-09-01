@@ -1125,17 +1125,13 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                 modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
             )
             val ctxOptions = listOf(32768, 65536, 131072, 262144)
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                ctxOptions.forEachIndexed { i, n ->
-                    SegmentedButton(
-                        selected = vm.localContextLength() == n,
-                        onClick = { vm.setLocalContextLength(n) },
-                        shape = SegmentedButtonDefaults.itemShape(index = i, count = ctxOptions.size)
-                    ) {
-                        Text("${n / 1024}K", maxLines = 1)
-                    }
-                }
-            }
+            com.haoai.agent.ui.common.LiquidTabRow(
+                tabs = ctxOptions.map { "${it / 1024}K" },
+                selectedIndex = ctxOptions.indexOf(vm.localContextLength()).coerceAtLeast(0),
+                onSelected = { i -> vm.setLocalContextLength(ctxOptions[i]) },
+                backdrop = backdrop,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }
@@ -1849,32 +1845,14 @@ private fun LazyListScope.generalItems(
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Text("思考等级（reasoning effort，仅支持的云服务生效）", style = MaterialTheme.typography.bodyMedium)
-                SingleChoiceSegmentedButtonRow(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                ) {
-                    SegmentedButton(
-                        selected = settings.reasoningEffort.isBlank(),
-                        onClick = { vm.setReasoningEffort("") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 4)
-                    ) { Text("默认", maxLines = 1) }
-                    SegmentedButton(
-                        selected = settings.reasoningEffort == "low",
-                        onClick = { vm.setReasoningEffort("low") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 4)
-                    ) { Text("低", maxLines = 1) }
-                    SegmentedButton(
-                        selected = settings.reasoningEffort == "medium",
-                        onClick = { vm.setReasoningEffort("medium") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 4)
-                    ) { Text("中", maxLines = 1) }
-                    SegmentedButton(
-                        selected = settings.reasoningEffort == "high",
-                        onClick = { vm.setReasoningEffort("high") },
-                        shape = SegmentedButtonDefaults.itemShape(index = 3, count = 4)
-                    ) { Text("高", maxLines = 1) }
-                }
+                val effortOptions = listOf("" to "默认", "low" to "低", "medium" to "中", "high" to "高")
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = effortOptions.map { it.second },
+                    selectedIndex = effortOptions.indexOfFirst { it.first == settings.reasoningEffort }.coerceAtLeast(0),
+                    onSelected = { i -> vm.setReasoningEffort(effortOptions[i].first) },
+                    backdrop = backdrop,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
         }
     }

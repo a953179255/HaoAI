@@ -12,6 +12,11 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -158,7 +163,8 @@ fun GlassPanel(
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。
                     if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f, chromaticAberration = chromaticAberration)
+                        // 环宽封顶 14dp：原 2×lensRadius（默认 24dp 圆角时 48dp）白边过粗
+                        lens(lensRadius.toPx() * 0.9f, (lensRadius * 2f).coerceAtMost(14.dp).toPx(), chromaticAberration = chromaticAberration)
                     }
                 },
                 onDrawSurface = {
@@ -366,7 +372,7 @@ fun GlassCard(
                     vibrancy()
                     blur(4.dp.toPx())
                     if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 0.9f, lensRadius.toPx() * 2f)
+                        lens(lensRadius.toPx() * 0.9f, (lensRadius * 2f).coerceAtMost(14.dp).toPx())
                     }
                 },
             layerBlock = {
@@ -765,12 +771,22 @@ fun GlassAlertDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (dismissLabel != null) {
-                            GlassTextButton(
-                                text = dismissLabel,
+                            // 取消=表面液态按钮（无着色）；确认=着色液态按钮（下方），Catalog LiquidButton 两款
+                            LiquidGlassButton(
                                 onClick = onDismiss,
                                 backdrop = backdrop,
+                                shape = RoundedCornerShape(percent = 50),
+                                enabled = true,
                                 refract = refract
-                            )
+                            ) {
+                                Text(
+                                    dismissLabel,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                            }
                         }
                         if (onConfirm != null) {
                             LiquidGlassButton(
@@ -859,5 +875,99 @@ fun GlassTextButton(
         )
     ) {
         Box(container) { inner() }
+    }
+}
+
+/**
+ * 玻璃分段选项卡（对齐 Kyant0/AndroidLiquidGlass Catalog 的 LiquidBottomTabs）：
+ * 玻璃胶囊容器 + 着色液态滑动指示器 + 弹性动画。替代 Material3 SegmentedButton。
+ * tabs/selectedIndex 由调用方受控；切换时指示器以轻微果冻的 spring 滑过去。
+ */
+@Composable
+fun LiquidTabRow(
+    tabs: List<String>,
+    selectedIndex: Int,
+    onSelected: (Int) -> Unit,
+    backdrop: LayerBackdrop,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.primary
+) {
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth().height(44.dp)) {
+        val tabWidth = maxWidth / tabs.size
+        // 指示器位置：0..tabs.size-1 的连续值，spring 弹性滑动
+        val pos = androidx.compose.animation.core.animateFloatAsState(
+            targetValue = selectedIndex.toFloat(),
+            animationSpec = androidx.compose.animation.core.spring(
+                dampingRatio = 0.85f,
+                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+            ),
+            label = "tabIndicator"
+        )
+        // 容器：玻璃胶囊（细 lens 环）
+        val containerSurface = glassSurfaceColor(0.30f)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { RoundedCornerShape(50) },
+                    effects = {
+                        vibrancy()
+                        blur(6.dp.toPx())
+                        lens(12.dp.toPx(), 12.dp.toPx())
+                    },
+                    onDrawSurface = {
+                        drawRect(containerSurface)
+                    }
+                )
+                .clickable(interactionSource = null, indication = null) { }
+        )
+        // 着色液态指示器：Hue 混合把背景折射染成主题色（demo 同款双 drawRect）
+        Box(
+            Modifier
+                .offset { androidx.compose.ui.unit.IntOffset((tabWidth.toPx() * pos.value).toInt(), 0) }
+                .width(tabWidth)
+                .fillMaxHeight()
+                .padding(4.dp)
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { RoundedCornerShape(50) },
+                    effects = {
+                        vibrancy()
+                        blur(4.dp.toPx())
+                        lens(10.dp.toPx(), 12.dp.toPx())
+                    },
+                    onDrawSurface = {
+                        drawRect(tint, blendMode = BlendMode.Hue)
+                        drawRect(tint.copy(alpha = 0.75f))
+                    }
+                )
+        )
+        // 标签内容层（最后组合=绘制在最上）
+        Row(Modifier.fillMaxSize()) {
+            tabs.forEachIndexed { i, label ->
+                val selected = i == selectedIndex
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = null,
+                            indication = null,
+                            role = Role.Button
+                        ) { onSelected(i) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        maxLines = 1,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f)
+                    )
+                }
+            }
+        }
     }
 }
