@@ -245,8 +245,11 @@ class LlamaServerController(
                     // 不加 --cache-reuse：实测会触发 KV 碎片整理导致 prefill 阶段性卡死数十秒
                     "-np", "1",
                     "--no-webui",
-                    "--jinja",
-                    "--reasoning", "off"
+                    // --jinja 必须保留（OpenAI 端点工具调用依赖模板解析）；
+                    // 不能加 --reasoning off：思考型模型（MiniCPM5 等）被强制跳过推理后会乱答
+                    // （实测 2+3=4），保留思考则正确（2+3=5）且思考走 reasoning_content 独立字段，
+                    // App 端 OpenAiCompatClient 已解析为「思考过程」展示
+                    "--jinja"
                 )
                 if (mmproj != null) cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
                 // ── Hexagon NPU（Phase 7 阶段2）：arm64 + 骁龙 + skel 在位 → HTP 设备；
@@ -262,7 +265,9 @@ class LlamaServerController(
                 val pb = ProcessBuilder(cmd).redirectErrorStream(true)
                 if (useHtp) {
                     val env = pb.environment()
-                    env["LD_LIBRARY_PATH"] = nativeDir + ":" + (env["LD_LIBRARY_PATH"] ?: "")
+                    // libOpenCL.so 在 vendor 分区（App 类加载器搜索路径不含 vendor），
+                    // 二进制 DT_NEEDED 直接依赖它，必须显式加 /vendor/lib64
+                    env["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env["LD_LIBRARY_PATH"] ?: "")
                     env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
                 }
 
@@ -320,10 +325,10 @@ class LlamaServerController(
                     val retry = cmd.filterIndexed { i, arg ->
                         !(arg == "-ngl" || arg == "-dev" || arg == "--device" ||
                             (i > 0 && (cmd[i - 1] == "-ngl" || cmd[i - 1] == "-dev" || cmd[i - 1] == "--device")))
-                    }
+                    } + listOf("-ngl", "0")
                     val pb2 = ProcessBuilder(retry).redirectErrorStream(true)
                     val env2 = pb2.environment()
-                    env2["LD_LIBRARY_PATH"] = nativeDir + ":" + (env2["LD_LIBRARY_PATH"] ?: "")
+                    env2["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env2["LD_LIBRARY_PATH"] ?: "")
                     _state.value = LlamaState.Starting("NPU 不可用，CPU 兜底加载 ${model.name}…")
                     val proc2 = pb2.start()
                     process = proc2
@@ -344,7 +349,14 @@ class LlamaServerController(
                         .build()
                     repeat(HEALTH_TRIES) { attempt ->
                         kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                        if (proc2.exitValueOrNull() != null) throw IllegalStateException("CPU 兜底进程退出，详见 server.log")
+                        if (proc2.exitValueOrNull() != null) {
+                            // 处于 catch 块内，再抛异常会逃逸协程直接崩 App：
+                            // 置 Failed 走 return，让调用方拿到 false 优雅降级
+                            android.util.Log.w("HaoLlama", "CPU 兜底进程也退出（exit=${proc2.exitValueOrNull()}）")
+                            lastActiveBackend = "cpu"
+                            _state.value = LlamaState.Failed("端侧服务启动失败（NPU 与 CPU 均不可用），详见 server.log")
+                            return@withContext false
+                        }
                         runCatching {
                             health2.newCall(Request.Builder().url("$LOCAL_BASE_URL/health").build())
                                 .execute().use { resp ->
