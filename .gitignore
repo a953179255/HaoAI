@@ -13,3 +13,4 @@ captures/
 keystore.properties
 .zcode/
 .verify/
+.tmp_phone/
