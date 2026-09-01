@@ -295,7 +295,9 @@ fun LiquidGlassButton(
                 val progress = highlight.pressProgress
                 val scale = lerp(1f, 1f + 1.5.dp.toPx() / size.height, progress)
 
-                val maxOffset = size.minDimension
+                // 平移限幅：小按钮上 minDimension≈按钮本身宽，跟指平移观感像「按钮被拖走」；
+                // 收紧到固定 12dp 上限（tanh 饱和后最多平移 12dp），折射流动感保留、不再拖尾
+                val maxOffset = minOf(size.minDimension, 12.dp.toPx() * 4f)
                 val initialDerivative = 0.05f
                 val off = highlight.offset
                 translationX = maxOffset * tanh(initialDerivative * off.x / maxOffset)
@@ -376,7 +378,9 @@ fun GlassCard(
                 },
             layerBlock = {
                 val off = highlight.offset
-                val maxOffset = size.minDimension
+                // 与 LiquidGlassButton 同理：限幅防「整卡被拖走」观感（卡片大，minDimension
+                // 折算可达上百 dp），取对角线 1/6 封顶
+                val maxOffset = minOf(size.minDimension, size.minDimension / 6f)
                 val initialDerivative = 0.04f
                 translationX = maxOffset * tanh(initialDerivative * off.x / maxOffset)
                 translationY = maxOffset * tanh(initialDerivative * off.y / maxOffset)

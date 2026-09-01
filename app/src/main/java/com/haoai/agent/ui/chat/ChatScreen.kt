@@ -142,32 +142,50 @@ import kotlinx.coroutines.launch
  * 轻量抽屉控制器：0..1 fraction 驱动布局期平移（Modifier.offset，不创建离屏层）。
  * 不用 ModalNavigationDrawer——其 sheet 的 graphicsLayer 平移动画会被玻璃 backdrop
  * 采样滞后回画，关抽屉时卡片四角闪直角残影；且动画期间禁折射又会造成暗→亮跳变。
+ *
+ * 支持跟手拖动（dragTo/snapTo）与松手速度判定（settle）——上游/上游 式丝滑：
+ * 手势期间每帧 snapTo 跟手，松手按当前位置+速度决定开或关，spring 带轻微回弹。
  */
 class DrawerController {
     var targetOpen by androidx.compose.runtime.mutableStateOf(false)
     val fraction = androidx.compose.animation.core.Animatable(0f)
     val isOpen: Boolean get() = targetOpen
 
+    /** 打开态弹性参数：中低刚度+轻微回弹（damping 0.85），有「果冻到位」感而不狂振荡 */
+    private fun settleSpec() = androidx.compose.animation.core.spring(
+        dampingRatio = 0.85f,
+        stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+        visibilityThreshold = 0.001f
+    )
+
     suspend fun open() {
         targetOpen = true
-        fraction.animateTo(
-            1f,
-            androidx.compose.animation.core.spring(
-                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
-                visibilityThreshold = 0.001f
-            )
-        )
+        fraction.animateTo(1f, settleSpec(), fraction.velocity)
     }
 
     suspend fun close() {
         targetOpen = false
-        fraction.animateTo(
-            0f,
-            androidx.compose.animation.core.spring(
-                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
-                visibilityThreshold = 0.001f
-            )
-        )
+        fraction.animateTo(0f, settleSpec(), fraction.velocity)
+    }
+
+    /** 跟手：直接把 fraction 钉到 v（0..1），无动画。 */
+    suspend fun dragTo(v: Float) {
+        targetOpen = v > 0.5f
+        fraction.snapTo(v.coerceIn(0f, 1f))
+    }
+
+    /**
+     * 松手结算：按当前位置与速度决定终点——
+     * 速度超过 0.35/s 直接顺着方向；否则看位置过半没。返回实际执行的动画是否为打开。
+     */
+    suspend fun settle(velocityFraction: Float): Boolean {
+        val shouldOpen = when {
+            velocityFraction > 0.35f -> true
+            velocityFraction < -0.35f -> false
+            else -> fraction.value > 0.5f
+        }
+        if (shouldOpen) open() else close()
+        return shouldOpen
     }
 }
 
@@ -235,6 +253,8 @@ fun ChatScreen(
     }
     fun openDrawer() = scope.launch { hideIme(); drawer.open() }
     val density = LocalDensity.current
+    // 抽屉面板宽度（与 sheet 的 fillMaxWidth(0.72f) 一致）：跟手拖动时把 px 位移归一化为 fraction
+    val drawerPanelWidthDp = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp * 0.72f).dp
     val imeHeightPx = WindowInsets.ime.getBottom(density)
     // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
     val navBarPx = WindowInsets.navigationBars.getBottom(density)
@@ -352,21 +372,42 @@ fun ChatScreen(
                     }
                 }
                 .pointerInput(Unit) {
-                    // 左缘右滑开抽屉（替代 ModalNavigationDrawer 自带的边缘手势）
+                    // 左缘右滑开抽屉：跟手拖动（上游/上游 式）——越过 slop 且方向为右后
+                    // 每帧把 fraction 钉到 位移/面板宽度，松手按位置+速度结算开或关
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         if (down.position.x < with(this) { 60.dp.toPx() }) {
                             var tx = 0f; var ty = 0f
+                            var tracking = false
+                            var startTime = 0L
                             while (true) {
                                 val e = awaitPointerEvent()
                                 val c = e.changes.firstOrNull { it.id == down.id } ?: break
-                                if (c.changedToUp()) break
                                 tx += c.positionChange().x; ty += c.positionChange().y
+                            if (!tracking) {
                                 if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
-                                if (abs(tx) > abs(ty) && tx > 0f) {
-                                    openDrawer()
-                                    c.consume()
+                                    if (abs(tx) > abs(ty) && tx > 0f) {
+                                        tracking = true
+                                        startTime = System.currentTimeMillis()
+                                        hideIme()
+                                        c.consume()
+                                    } else break
                                 }
+                            } else {
+                                // 位移按面板宽度归一化：用累计位移 tx（含 slop 前的量），
+                                // 面板从 0 开始跟手；异步 launch 合并同帧多次调用
+                                val panelPx = with(this) { drawerPanelWidthDp.toPx() }
+                                val target = (tx / panelPx).coerceIn(0f, 1f)
+                                scope.launch { drawer.dragTo(target) }
+                                c.consume()
+                            }
+                                if (!c.pressed) {
+                                    if (tracking) {
+                                        val dt = ((System.currentTimeMillis() - startTime).coerceAtLeast(1)) / 1000f
+                                        // 近似速度：总位移 / 总时长（touch 采样下的稳定估计）
+                                        val v = (tx / (with(this) { drawerPanelWidthDp.toPx() })) / dt
+                                        scope.launch { drawer.settle(v) }
+                                    }
                                     break
                                 }
                             }
@@ -567,19 +608,39 @@ fun ChatScreen(
                 .fillMaxWidth(0.72f)
                 .onSizeChanged { sheetW = it.width }
                 .offset { IntOffset((-(1f - drawerFraction) * sheetW).toInt(), 0) }
-                // 左滑收起抽屉（v0.17.6 原有手势，v0.17.8 修穿透时误删后恢复）：卡片右滑
-                // 呼出操作会消费水平拖拽，不会误触发此处；此处只认左滑
+                // 左滑收起抽屉：跟手拖动，松手按位置+速度结算（与左缘呼出对称）
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         var tx = 0f; var ty = 0f
+                        var tracking = false
+                        var startTime = 0L
                         while (true) {
                             val e = awaitPointerEvent()
                             val c = e.changes.firstOrNull { it.id == down.id } ?: break
-                            if (c.changedToUp()) break
                             tx += c.positionChange().x; ty += c.positionChange().y
-                            if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
-                                if (abs(tx) > abs(ty) && tx < 0f) scope.launch { drawer.close() }
+                            if (!tracking) {
+                                if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
+                                    // 卡片右滑呼出操作会消费水平拖拽，此处只认左滑
+                                    if (abs(tx) > abs(ty) && tx < 0f) {
+                                        tracking = true
+                                        startTime = System.currentTimeMillis()
+                                        c.consume()
+                                    } else break
+                                }
+                            } else {
+                                // 从开态 1.0 起跟手左移：累计位移（负值）归一化
+                                val panelPx = with(this) { drawerPanelWidthDp.toPx() }
+                                val target = (1f + tx / panelPx).coerceIn(0f, 1f)
+                                scope.launch { drawer.dragTo(target) }
+                                c.consume()
+                            }
+                            if (!c.pressed) {
+                                if (tracking) {
+                                    val dt = ((System.currentTimeMillis() - startTime).coerceAtLeast(1)) / 1000f
+                                    val v = (tx / (with(this) { drawerPanelWidthDp.toPx() })) / dt
+                                    scope.launch { drawer.settle(v) }
+                                }
                                 break
                             }
                         }

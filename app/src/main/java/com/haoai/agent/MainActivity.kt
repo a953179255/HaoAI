@@ -22,6 +22,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -203,7 +204,23 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 onSave = { name, soul -> chatVm.completeOnboarding(name, soul) }
             )
         } else {
-            when (screen) {
+            // 页面切换过渡：淡入 + 3% 轻微上移 + 98%→100% 缩放（上游 式克制动效）。
+            // 不用滑动方向感（左右 slide）：screen 编号与层级无关（0=聊天 1=设置 8=工作流），
+            // 方向滑动会显得随机；快速 fade+微位移既有过渡又不拖沓。
+            androidx.compose.animation.AnimatedContent(
+                targetState = screen,
+                transitionSpec = {
+                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) +
+                        androidx.compose.animation.scaleIn(
+                            initialScale = 0.985f,
+                            animationSpec = androidx.compose.animation.core.tween(200)
+                        )).togetherWith(
+                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120))
+                    )
+                },
+                label = "screenSwitch"
+            ) { s ->
+            when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
                     backdrop = backdrop,
@@ -283,6 +300,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     }
                 )
             }
+            } // AnimatedContent content lambda
             // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
             val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
             if (previewOpen) {
