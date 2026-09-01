@@ -60,6 +60,10 @@ fun TaskPanel(
     if (!hasIncomplete && !forced) return
 
     var expanded by remember { mutableStateOf(true) }
+    // × 手动关闭：与 forced 无关地对任何来源的面板生效；
+    // 清单被整体替换（新任务首条 id 变化）时重置，同一清单的状态更新不复活
+    var dismissed by remember(items.firstOrNull()?.id) { mutableStateOf(false) }
+    if (dismissed && !forced) return
     val doneCount = items.count { it.status == "completed" }
     val total = items.size
     val progress = if (total > 0) doneCount.toFloat() / total else 0f
@@ -127,12 +131,16 @@ fun TaskPanel(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .size(16.dp)
-                            .clickable { it() }
+                            .clickable {
+                                it()
+                                dismissed = true
+                            }
                     )
                     Spacer(Modifier.width(4.dp))
                 }
+                // 图标语义 = 点击后动作：展开态显示 ⌃（收起），收起态显示 ⌄（展开）
                 Icon(
-                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    if (expanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)

@@ -1341,6 +1341,9 @@ private fun MessageList(
     }
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
+        // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
+        // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
+        val finalRowKey = if (!running) rows.lastOrNull()?.key else null
         items(rows, key = { it.key }) { row ->
             RowItem(
                 row,
@@ -1350,7 +1353,8 @@ private fun MessageList(
                 onQuickEdit = onQuickEdit,
                 running = running,
                 onViewDiff = onToolViewDiff,
-                onRollback = onToolRollback
+                onRollback = onToolRollback,
+                showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey
             )
         }
         if (showStreaming) {
@@ -1370,7 +1374,8 @@ private fun RowItem(
     onQuickEdit: (ChatRow) -> Unit,
     running: Boolean,
     onViewDiff: (String) -> Unit,
-    onRollback: (String) -> Unit = {}
+    onRollback: (String) -> Unit = {},
+    showActions: Boolean = true
 ) {
     // 引擎注入的系统事件（handoff 催办 / 压缩结果）不冒充聊天气泡，渲染为居中事件条
     if (row.role == "user" && row.text.startsWith("[系统提示]") ||
@@ -1381,7 +1386,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, showActions)
     }
 }
 
@@ -1602,7 +1607,8 @@ private fun AssistantBlock(
     onQuickRegenerate: (ChatRow) -> Unit,
     running: Boolean,
     onViewDiff: (String) -> Unit,
-    onRollback: (String) -> Unit = {}
+    onRollback: (String) -> Unit = {},
+    showActions: Boolean = true
 ) {
     Column(
         Modifier
@@ -1646,11 +1652,14 @@ private fun AssistantBlock(
                 }
             }
         }
-        // 快捷操作行（assistant：复制 / 重新生成 / 更多）——上游 式，⋮ 跟随排布
-        Row(Modifier.padding(start = 2.dp, top = 1.dp)) {
-            QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
-            QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
-            QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+        // 快捷操作行（assistant：复制 / 重新生成 / 更多）——仅回合最终回复显示，
+        // 工具循环的中间叙述（"马上帮你查"等）不渲染，避免每条都挂一排按钮
+        if (showActions) {
+            Row(Modifier.padding(start = 2.dp, top = 1.dp)) {
+                QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
+                QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
+                QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+            }
         }
         NerdLine(row)
     }
