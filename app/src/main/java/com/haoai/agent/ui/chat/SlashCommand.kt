@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.ui.graphics.vector.ImageVector
 data class SlashCommand(
@@ -40,6 +41,12 @@ object SlashCommands {
             name = "stop",
             description = "停止当前正在运行的任务",
             icon = Icons.Filled.Pause,
+            group = "会话"
+        ),
+        SlashCommand(
+            name = "plan",
+            description = "计划模式：只产出计划不执行改动，再输一次退出",
+            icon = Icons.Filled.FactCheck,
             group = "会话"
         ),
         SlashCommand(

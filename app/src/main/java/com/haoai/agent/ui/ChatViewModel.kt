@@ -289,6 +289,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingText.value = null
         _streamingReasoning.value = null
         job = viewModelScope.launch {
+            var turnEngine: AgentEngine? = null
             try {
                 val provider = resolveProvider(provider0)
                 if (provider == null) {
@@ -298,7 +299,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     }
                     return@launch
                 }
-                val engine = buildEngine(s, provider)
+                val engine = buildEngine(s, provider).also { turnEngine = it }
                 engine.runTurn(
                     userText = text,
                     onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
@@ -315,6 +316,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 refreshSessions()
                 c.syncWorkspaceDocs()
                 maybeGenerateTitle(s)
+                // 5.6：Plan 模式下拦截过工具 → 本轮输出即计划，弹确认卡
+                if (_planMode.value && turnEngine?.planIntercepted == true) {
+                    val plan = s.messages.lastOrNull {
+                        it.role == ChatMessage.ROLE_ASSISTANT && it.content.isNotBlank()
+                    }?.content.orEmpty()
+                    if (plan.isNotBlank()) _planProposal.value = plan
+                }
             }
         }
     }
@@ -466,6 +474,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 if (msg != null) _error.value = msg
                 true
             }
+            "plan" -> {
+                _planMode.value = !_planMode.value
+                _error.value = if (_planMode.value) "已进入计划模式：WRITE/EXEC 工具被禁用，模型只产出计划" else "已退出计划模式"
+                true
+            }
             "model" -> {
                 onModelPicker()
                 true
@@ -599,6 +612,29 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 5.5 工具卡回滚结果的 SnackBar 展示入口。 */
     fun showError(msg: String) { _error.value = msg }
+
+    // ── 5.6 Plan / Execute 模式 ─────────────────────────────────────
+
+    private val _planMode = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val planMode = _planMode
+
+    /** 回合结束时计划待确认（引擎本轮产出过计划文本 → 弹确认卡）。 */
+    private val _planProposal = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val planProposal = _planProposal
+
+    /** 是否在本回合拦截过 WRITE/EXEC 工具（判定"模型给出的是计划"）。 */
+    @Volatile private var planIntercepted = false
+
+    /** 批准计划：退出 Plan 模式并自动触发执行（仍走正常审批）。 */
+    fun approvePlan() {
+        _planProposal.value = null
+        _planMode.value = false
+        send("请按上述计划执行。")
+    }
+
+    fun dismissPlan() {
+        _planProposal.value = null
+    }
 
     private fun handleEvent(ev: TurnEvent) {
         when (ev) {
@@ -775,7 +811,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             summarizeTarget = {
                 c.resolvePurposeTarget(st.summarizeProviderId)?.let { it.provider to it.apiKey }
             },
-            auxClientFor = { p -> c.clientFor(p) }
+            auxClientFor = { p -> c.clientFor(p) },
+            planGate = { _planMode.value }
         )
     }
 

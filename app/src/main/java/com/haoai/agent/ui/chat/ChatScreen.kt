@@ -201,6 +201,8 @@ fun ChatScreen(
     val settings by vm.settings.collectAsState()
     val approval by vm.approval.collectAsState()
     val todoItems by vm.todoItems.collectAsState()
+    val planMode by vm.planMode.collectAsState()
+    val planProposal by vm.planProposal.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
     // 大体积 base64 / 文档正文绝不能进 rememberSaveable：会被写入 savedInstanceState
@@ -424,6 +426,7 @@ fun ChatScreen(
             },
             onOpenBrowser = onOpenBrowser,
             onOpenVscreen = onOpenVscreen,
+            planMode = planMode,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -1031,6 +1034,75 @@ fun ChatScreen(
         }
     }
 
+    // 5.6 计划确认卡：Plan 模式回合结束且拦截过工具时弹出
+    planProposal?.let { plan ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.18f))
+        ) {
+            GlassPanel(
+                backdrop = backdrop,
+                radius = 22.dp,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "执行计划",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Plan 模式下产出的计划。批准后退出计划模式并开始执行（执行仍走正常审批）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                    )
+                    Text(
+                        plan.take(4000),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 14,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            .padding(10.dp)
+                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
+                    ) {
+                        Text(
+                            "继续讨论",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { vm.dismissPlan() }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                        Text(
+                            "批准并执行",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { vm.approvePlan() }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     approval?.let { (req, _) ->
         // 审批弹窗改为液态玻璃卡片，叠在主窗口内（独立 Dialog 窗口无法采样 LayerBackdrop）
         Box(
@@ -1123,6 +1195,7 @@ private fun TopBar(
     onRenameSubtitle: () -> Unit,
     onOpenBrowser: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
+    planMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var showContextDetail by remember { mutableStateOf(false) }
@@ -1150,6 +1223,20 @@ private fun TopBar(
                     .clickable(onClick = onRenameSubtitle)
                     .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
+                if (planMode) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    ) {
+                        Text(
+                            "计划中 · /plan 退出",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                }
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
                     subtitle,

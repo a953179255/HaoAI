@@ -84,10 +84,16 @@ class AgentEngine(
     /** 5.3 模型路由：上下文压缩摘要专用 (provider, apiKey)。 */
     private val summarizeTarget: (suspend () -> Pair<ProviderConfig, String>?)? = null,
     /** 5.3 专用目标的协议客户端解析（缺省仍用主 httpClient）。 */
-    private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null
+    private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
+    /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
+    private val planGate: () -> Boolean = { false }
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
+
+    /** 5.6 本回合拦截过 WRITE/EXEC（供 UI 判定模型产出的是计划）。 */
+    var planIntercepted: Boolean = false
+        private set
     private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient).apply {
         // 5.4 账本：压缩摘要调用记账（purpose=compact）
         onLlmUsage = { pin, pout, ok ->
@@ -300,6 +306,24 @@ class AgentEngine(
         var finalState: ToolRunState = ToolRunState.DONE
         var toolStartMs = 0L
         var decision: String? = null
+
+        // 5.6 Plan 模式：READ 之外的工具一律不执行，引导模型产出计划文本
+        if (planGate() && tool != null && policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ) {
+            this.planIntercepted = true
+            result = ToolResult(
+                "[Plan 模式] 工具 ${call.name} 已被拦截（计划阶段不执行改动）。" +
+                    "请基于已有信息给出完整执行计划：步骤、涉及文件、预期结果，等待用户批准后再执行。",
+                false
+            )
+            finalState = ToolRunState.DONE
+            val storedP = TextCap.middle(result.content, STORED_CAP)
+            appendAndNotify(
+                ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, toolCallId = call.id, toolName = call.name),
+                onEvent
+            )
+            onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.DONE, briefOf(call), "已拦截（Plan 模式）")))
+            return
+        }
 
         when {
             tool == null -> {
