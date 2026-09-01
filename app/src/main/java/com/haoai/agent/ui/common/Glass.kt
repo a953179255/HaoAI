@@ -147,6 +147,7 @@ fun GlassPanel(
     blurRadius: Dp = radius / 3f,
     chromaticAberration: Boolean = false,
     refract: Boolean? = null,
+    redrawKey: Any? = null,
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
@@ -158,6 +159,10 @@ fun GlassPanel(
                 backdrop = backdrop,
                 shape = { shape ?: RoundedCornerShape(radius) },
                 effects = {
+                    // 绘制期读取 redrawKey 状态：值变化 → 本节点 draw 失效重绘 →
+                    // 采样 offset 用最新布局坐标重算（仅位置变化不会自动重绘 draw，
+                    // 键盘抬升等布局位移必须显式给 key，否则透出位移前的旧背景）
+                    @Suppress("UNUSED_EXPRESSION") redrawKey
                     vibrancy()
                     blur(blurRadius.toPx())
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
@@ -178,7 +183,10 @@ fun GlassPanel(
             // 发丝描边画在玻璃表面之上（后置 modifier 后绘制），与退化分支观感对齐
             .border(1.5.dp, border, shape ?: RoundedCornerShape(radius))
     } else {
-        // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
+        // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂：
+        // Modifier.blur 对自身内容做高斯模糊 + 着色底，观感接近真玻璃（非死板白底）。
+        // 实现手法：外包一个离屏 Box 画 backdrop 的内容色近似（用 surface 深色版），
+        // 内容层加 blur——这里用「背景模糊层+表面」两层组合
         modifier
             .clip(shape ?: RoundedCornerShape(radius))
             .background(surface)

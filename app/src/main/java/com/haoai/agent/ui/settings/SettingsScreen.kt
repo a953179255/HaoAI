@@ -185,10 +185,6 @@ fun SettingsScreen(
                     .fillMaxSize()
             ) {
                 Spacer(Modifier.height(64.dp))
-                // 关 overscroll stretch：边缘过度滚动的拉伸是外层 graphicsLayer 变换，
-                // backdrop 采样不支持（同输入栏抬升问题）→ 卡片描边短暂消失
-                val overscrollOff = androidx.compose.foundation.LocalOverscrollConfiguration provides null
-                androidx.compose.runtime.CompositionLocalProvider(overscrollOff) {
                 LazyColumn(
                     state = rootListState,
                     modifier = Modifier.fillMaxSize(),
@@ -342,7 +338,6 @@ fun SettingsScreen(
                 }
             }
             }
-            }
             GlassPageBar(
                 backdrop = backdrop,
                 title = "设置",
@@ -364,8 +359,10 @@ fun SettingsScreen(
             ) {
                 Spacer(Modifier.height(64.dp))
                 LazyColumn(
+                    state = rootListState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 40.dp)
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     when (section) {
                         "brain" -> {

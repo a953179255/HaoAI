@@ -581,7 +581,7 @@ fun ChatScreen(
                 },
                 onStop = { vm.stop() },
                 placeholder = "给 ${vm.agentName()} 派个活…",
-                matte = keyboardLiftPx > 0
+                redrawKey = keyboardLiftPx
             )
         }
 
@@ -1920,7 +1920,7 @@ private fun ComposerBar(
     onStop: () -> Unit,
     placeholder: String = "给 HaoAI 派个活…",
     modifier: Modifier = Modifier,
-    matte: Boolean = false
+    redrawKey: Any? = null
 ) {
     var toolbarExpanded by remember { mutableStateOf(false) }
 
@@ -1928,9 +1928,9 @@ private fun ComposerBar(
         backdrop = backdrop,
         radius = 26.dp,
         surfaceAlpha = 0.22f,
-        // 键盘抬起时切本地磨砂：backdrop 采样不随「仅位置变化」重绘，
-        // 液态折射会透出抬起前的旧背景；matte 保证透出效果永远正确
-        refract = !matte,
+        // 键盘抬升值作重绘键：位置变化后强制重绘折射，采样对齐新布局位置，
+        // 保持完整液态效果且背景正确（matte 方案观感差已弃）
+        redrawKey = redrawKey,
         modifier = modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(top = 4.dp)) {
