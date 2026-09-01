@@ -16,6 +16,9 @@ class CompactionManager(
     /** 5.4 账本：压缩摘要 LLM 调用记账（不引会话依赖，由调用方可选注入）。 */
     var onLlmUsage: ((promptTokens: Int, completionTokens: Int, ok: Boolean) -> Unit)? = null
 
+    /** 5.3 模型路由：压缩摘要走专用模型时按 provider 解析协议客户端（缺省用构造的主 client）。 */
+    var clientResolver: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null
+
     /** 判断是否需要触发压缩。 */
     fun shouldCompact(usedTokens: Int, contextWindow: Int): Boolean {
         if (contextWindow <= 0) return false
@@ -101,7 +104,7 @@ class CompactionManager(
         apiKey: String
     ): String {
         val messages = listOf(ApiMessage(role = "user", content = prompt))
-        val flow = client.chatStream(provider, apiKey, messages, tools = emptyList())
+        val flow = (clientResolver?.invoke(provider) ?: client).chatStream(provider, apiKey, messages, tools = emptyList())
         val sb = StringBuilder()
         var up = 0; var uc = 0
         withTimeoutOrNull(60_000L) {

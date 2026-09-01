@@ -343,12 +343,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 it.content.isNotBlank() && !it.error
         }
         if (!hasUser || !hasReply) return
-        val provider0 = c.activeProvider() ?: return
         // 端侧模型不做 LLM 标题总结：辅助请求会冲掉 llama-server 单 slot 的前缀缓存，
         // 让下一轮主对话全量重算 prefill（手机上多花几十秒）；直接取用户首条消息截断
-        if (provider0.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-            provider0.baseUrl.contains("127.0.0.1")
-        ) {
+        // （仅未配置专用标题模型、且主模型本身是端侧时；显式路由到端侧小模型由用户选择，照常生成）
+        val titleCfgId = c.settingsFlow.value.titleProviderId.trim()
+        val mainProvider = c.activeProvider() ?: return
+        val implicitLocal = titleCfgId.isEmpty() && (
+            mainProvider.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+                mainProvider.baseUrl.contains("127.0.0.1")
+            )
+        if (implicitLocal) {
             val fallback = s.messages.firstOrNull {
                 it.role == com.haoai.agent.agent.model.ChatMessage.ROLE_USER && it.content.isNotBlank()
             }?.content?.lineSequence()?.firstOrNull()?.trim()?.take(12)
@@ -366,7 +370,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.sessionStore.save(s)
         viewModelScope.launch {
             try {
-                val provider = resolveProvider(provider0) ?: return@launch
+                val provider = if (titleCfgId.isEmpty()) {
+                    resolveProvider(mainProvider) ?: return@launch
+                } else {
+                    // 5.3 专用标题模型（含端侧小模型：resolvePurposeTarget 会拉起 llama）
+                    val t = runCatching { c.resolvePurposeTarget(titleCfgId) }.getOrNull() ?: return@launch
+                    resolveProvider(t.provider) ?: return@launch
+                }
                 val engine = buildEngine(s, provider)
                 val sb = StringBuilder()
                 engine.runBtw(
@@ -700,7 +710,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             onToolChange = { refreshTodos() },
             vscreenEnabled = st.vscreenEnabled &&
                 android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
-            budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) }
+            budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) },
+            memoryTarget = {
+                c.resolvePurposeTarget(st.memoryExtractProviderId)?.let { it.provider to it.apiKey }
+            },
+            summarizeTarget = {
+                c.resolvePurposeTarget(st.summarizeProviderId)?.let { it.provider to it.apiKey }
+            },
+            auxClientFor = { p -> c.clientFor(p) }
         )
     }
 

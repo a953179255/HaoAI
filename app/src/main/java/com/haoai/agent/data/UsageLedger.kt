@@ -60,7 +60,11 @@ object UsageLedger {
     }
 
     fun add(entry: Entry) {
-        executor.execute { runCatching { appendNow(entry) } }
+        executor.execute {
+            runCatching { appendNow(entry) }.onFailure {
+                android.util.Log.w("HaoLedger", "ledger write failed: ${it.message}")
+            }
+        }
     }
 
     /** 同步追加（测试用；主流程一律走异步 [add]）。 */

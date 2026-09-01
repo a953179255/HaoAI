@@ -805,6 +805,69 @@ private fun LazyListScope.brainItems(
             )
         }
     }
+    item { SectionTitle("内部任务模型（5.3）") }
+    item {
+        // purpose 配置行：点击弹选择对话框（主模型 / 各云端服务 / 端侧）
+        val showPicker = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            GlassGroup(backdrop) {
+                Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                    purposeRow("会话标题", "title", settings.titleProviderId, settings, vm, backdrop) { showPicker.value = it }
+                    purposeRow("记忆提取", "memory", settings.memoryExtractProviderId, settings, vm, backdrop) { showPicker.value = it }
+                    purposeRow("上下文压缩", "summarize", settings.summarizeProviderId, settings, vm, backdrop) { showPicker.value = it }
+                }
+            }
+            Text(
+                "为内部辅助任务指定独立（更廉价的）模型；「主模型」= 跟随当前云端服务，「端侧」= 本机 llama.cpp 小模型。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+            )
+        }
+        showPicker.value?.let { purpose ->
+            val current = when (purpose) {
+                "title" -> settings.titleProviderId
+                "memory" -> settings.memoryExtractProviderId
+                else -> settings.summarizeProviderId
+            }
+            val options = listOf("" to "主模型") +
+                settings.providers
+                    .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
+                    .map { it.id to it.name } +
+                listOf("local" to "端侧（llama.cpp）")
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = backdrop,
+                title = "选择模型",
+                confirmLabel = "关闭",
+                onConfirm = { showPicker.value = null },
+                onDismiss = { showPicker.value = null }
+            ) {
+                Column {
+                    options.forEach { (id, name) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.setPurposeModel(purpose, id)
+                                    showPicker.value = null
+                                }
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = current == id,
+                                onClick = {
+                                    vm.setPurposeModel(purpose, id)
+                                    showPicker.value = null
+                                }
+                            )
+                            Text(name, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        }
+    }
     item { SectionTitle("失败降级链（5.2）") }
     item {
         val ps2 = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
@@ -2587,5 +2650,39 @@ private fun androidx.compose.foundation.lazy.LazyListScope.linuxItems(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
             )
         }
+    }
+}
+
+/** 5.3 内部任务模型选择行（显示当前生效目标）。 */
+@Composable
+private fun purposeRow(
+    label: String,
+    purpose: String,
+    configId: String,
+    settings: AppSettings,
+    vm: SettingsViewModel,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onPick: (String) -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onPick(purpose) }
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                when {
+                    configId.isBlank() -> "主模型"
+                    configId == "local" -> "端侧（llama.cpp）"
+                    else -> settings.providers.find { it.id == configId }?.name ?: "已失效服务"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text("更换 ›", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
     }
 }

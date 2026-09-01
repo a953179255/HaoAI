@@ -148,6 +148,33 @@ class AppContainer(app: Application) {
         }
     }
 
+    /**
+     * 5.3 内部任务模型路由：按用途解析专用 provider（memoryExtract/title/summarize）。
+     * 空配置回落主模型；"local"=端侧聊天模型（拉起 llama.cpp）；目标不可用返回 null（调用方回落主模型）。
+     */
+    suspend fun resolvePurposeTarget(purposeProviderId: String): DreamTarget? {
+        val st = settingsFlow.value
+        val id = purposeProviderId.trim()
+        if (id.isEmpty()) return null
+        return if (id == "local") {
+            val up = runCatching { llama.ensureStarted(st.localModelFile?.takeIf { it.isNotBlank() }) }.getOrDefault(false)
+            if (!up) null
+            else DreamTarget(
+                ProviderConfig(
+                    id = "purpose-local", name = "local",
+                    baseUrl = com.haoai.agent.platform.llama.LlamaServerController.LOCAL_BASE_URL,
+                    model = "local"
+                ),
+                apiKey = "",
+                isLocal = true
+            )
+        } else {
+            val p = st.providers.find { it.id == id } ?: return null
+            if (p.baseUrl.startsWith("local")) return null
+            DreamTarget(p, runCatching { cipher.decrypt(p.apiKeyCipher) }.getOrDefault(""), false)
+        }
+    }
+
     fun activeProvider(): ProviderConfig? {
         val s = settingsFlow.value
         return s.providers.find { it.id == s.activeProviderId } ?: s.providers.firstOrNull()

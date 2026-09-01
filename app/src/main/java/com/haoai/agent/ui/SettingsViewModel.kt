@@ -319,6 +319,17 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(dailyTokenBudgetK = k.coerceIn(0, 10_000)) }
     }
 
+    /** 5.3 内部任务模型路由设置（purpose: memory/title/summarize；""=主模型，"local"=端侧）。 */
+    fun setPurposeModel(purpose: String, id: String) {
+        c.updateSettings { st ->
+            when (purpose) {
+                "memory" -> st.copy(memoryExtractProviderId = id)
+                "title" -> st.copy(titleProviderId = id)
+                else -> st.copy(summarizeProviderId = id)
+            }
+        }
+    }
+
     /** 5.2 降级链：勾选/取消备用 Provider（链顺序 = provider 列表顺序）。 */
     fun toggleFallback(id: String) {
         c.updateSettings { st ->

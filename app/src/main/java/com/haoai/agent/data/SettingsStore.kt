@@ -111,7 +111,13 @@ data class AppSettings(
     /** 5.1 Token 每日预算（输入+输出合计，千 token 为单位避免输入大数）；0=不限。 */
     val dailyTokenBudgetK: Int = 0,
     /** 5.2 Provider 降级链（有序 providerId 备用列表）；空=不降级。 */
-    val fallbackChain: List<String> = emptyList()
+    val fallbackChain: List<String> = emptyList(),
+    /** 5.3 内部任务模型路由：记忆提取（空=主模型；"local"=端侧）。 */
+    val memoryExtractProviderId: String = "",
+    /** 5.3 会话标题生成模型。 */
+    val titleProviderId: String = "",
+    /** 5.3 上下文压缩摘要模型。 */
+    val summarizeProviderId: String = ""
 )
 
 class SettingsStore(context: Context) {

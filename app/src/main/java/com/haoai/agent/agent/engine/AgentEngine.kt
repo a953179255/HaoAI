@@ -78,7 +78,13 @@ class AgentEngine(
     /** 4.3 虚拟屏后台自动化：设置页总开关 ∧ API 30+（由调用方合并判定）。 */
     private val vscreenEnabled: Boolean = false,
     /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
-    private val budgetHint: () -> String = { "" }
+    private val budgetHint: () -> String = { "" },
+    /** 5.3 模型路由：记忆提取专用 (provider, apiKey)；null/异常回落主模型。 */
+    private val memoryTarget: (suspend () -> Pair<ProviderConfig, String>?)? = null,
+    /** 5.3 模型路由：上下文压缩摘要专用 (provider, apiKey)。 */
+    private val summarizeTarget: (suspend () -> Pair<ProviderConfig, String>?)? = null,
+    /** 5.3 专用目标的协议客户端解析（缺省仍用主 httpClient）。 */
+    private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -89,11 +95,21 @@ class AgentEngine(
                 com.haoai.agent.data.UsageLedger.Entry(
                     kind = "llm", ts = System.currentTimeMillis(),
                     sessionId = session.id,
-                    purpose = "compact", model = provider.model,
+                    purpose = "compact", model = compactProvider?.model ?: provider.model,
                     promptTokens = pin, completionTokens = pout, ok = ok
                 )
             )
         }
+        clientResolver = { p -> auxClientFor?.invoke(p) ?: httpClient }
+    }
+
+    @Volatile private var compactProvider: ProviderConfig? = null
+
+    /** 5.3 压缩摘要路由：配置了专用模型则返回 (provider, apiKey)，否则主模型。 */
+    private suspend fun summarizerRoute(): Pair<ProviderConfig, String> {
+        val t = runCatching { summarizeTarget?.invoke() }.getOrNull() ?: return provider to apiKey
+        compactProvider = t.first
+        return t.first to t.second
     }
 
     suspend fun runTurn(
@@ -504,6 +520,7 @@ class AgentEngine(
 
     /** 5.4 运行账本：LLM 调用记账（写失败静默，绝不影响主流程）。 */
     private fun ledgerLlm(purpose: String, promptTokens: Long, completionTokens: Long, durationMs: Long, ok: Boolean, model: String? = null, sessionId: String? = null) {
+        if (purpose != "chat") android.util.Log.d("HaoLedger", "llm purpose=$purpose model=${model ?: provider.model} pin=$promptTokens pout=$completionTokens ok=$ok")
         com.haoai.agent.data.UsageLedger.add(
             com.haoai.agent.data.UsageLedger.Entry(
                 kind = "llm", ts = System.currentTimeMillis(),
@@ -551,11 +568,16 @@ class AgentEngine(
         if (transcript.length < 80) return
         scope.launch {
             runCatching {
+                // 5.3 记忆提取路由：配置了专用模型则走专用（挂起解析须在协程内）
+                val memRoute = runCatching { memoryTarget?.invoke() }.getOrNull()
+                val memProv = memRoute?.first ?: provider
+                val memKey = memRoute?.second ?: apiKey
+                val memClient = if (memRoute != null) (auxClientFor?.invoke(memProv) ?: httpClient) else httpClient
                 val buf = StringBuilder()
                 var mp = 0L; var mc = 0L
                 val mstart = System.currentTimeMillis()
-                httpClient.chatStream(
-                    provider, apiKey,
+                memClient.chatStream(
+                    memProv, memKey,
                     listOf(
                         ApiMessage(role = "system", content = EXTRACT_SYSTEM),
                         ApiMessage(role = "user", content = TextCap.middle(transcript, 4000))
@@ -568,7 +590,7 @@ class AgentEngine(
                         else -> {}
                     }
                 }
-                ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true)
+                ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true, model = memProv.model)
                 parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
                     bank.remember(content, tags, importance = 2, source = "auto")
                 }
@@ -933,8 +955,9 @@ class AgentEngine(
     /** 检查是否需要压缩，需要则执行。 */
     private suspend fun maybeCompact(onEvent: (TurnEvent) -> Unit) {
         if (compactionManager.isCoolingDown()) return
-        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        val (sp, sk) = summarizerRoute()
+        val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
         val chatMsgs = session.messages.map { it.toModel() }
         // 用真实系统提示估算：记忆/日志/技能索引注入后可达 1 万+ tokens，
         // 旧的固定 3000 底数严重低估，导致压缩触发过晚、频繁撞 overflow
@@ -949,8 +972,8 @@ class AgentEngine(
         val result = compactionManager.compact(
             messages = prunedMsgs,
             existingSummary = session.compactionSummary,
-            provider = provider,
-            apiKey = apiKey,
+            provider = sp,
+            apiKey = sk,
             contextWindow = contextWindow
         )
         session.compactionSummary = result.summary
@@ -970,16 +993,17 @@ class AgentEngine(
     ) {
         if (!compactionManager.isOverflowError(error)) throw Exception(error)
         if (compactionManager.isCoolingDown()) throw Exception(error)
-        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        val (sp, sk) = summarizerRoute()
+        val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
         val chatMsgs = session.messages.map { it.toModel() }
 
         // 强制压缩
         val result = compactionManager.compact(
             messages = chatMsgs,
             existingSummary = session.compactionSummary,
-            provider = provider,
-            apiKey = apiKey,
+            provider = sp,
+            apiKey = sk,
             contextWindow = contextWindow
         )
         session.compactionSummary = result.summary
@@ -1018,14 +1042,15 @@ class AgentEngine(
     // ── 手动压缩（/compact 命令） ────────────────────────────────────
 
     suspend fun compactNow(): String? {
-        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+        val (sp, sk) = summarizerRoute()
+        val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
+        val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
         val chatMsgs = session.messages.map { it.toModel() }
         val result = compactionManager.compact(
             messages = chatMsgs,
             existingSummary = session.compactionSummary,
-            provider = provider,
-            apiKey = apiKey,
+            provider = sp,
+            apiKey = sk,
             contextWindow = contextWindow
         )
         session.compactionSummary = result.summary
