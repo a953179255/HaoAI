@@ -2017,9 +2017,10 @@ private fun AssistantBlock(
         // 快捷操作行（assistant：复制 / 重新生成 / 更多）——仅回合最终回复显示，
         // 工具循环的中间叙述（"马上帮你查"等）不渲染，避免每条都挂一排按钮
         if (showActions) {
-            Row(Modifier.padding(start = 2.dp, top = 1.dp)) {
+            Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 1.dp)) {
                 QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
                 QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
+                Spacer(Modifier.weight(1f))
                 QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
             }
         }
@@ -2038,7 +2039,7 @@ private fun QuickActionButton(
     Icon(
         imageVector = icon,
         contentDescription = contentDescription,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.7f else 0.28f),
+        tint = wallpaperAdaptiveGray(alpha = if (enabled) 0.8f else 0.3f),
         modifier = Modifier
             .clip(CircleShape)
             .clickable(enabled = enabled, onClick = onClick)
@@ -2138,12 +2139,16 @@ private fun ToolChip(
                     tool.name,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.5.sp,
+                    // 等宽字体自然行高 ~1.5em 会把头部撑到 ~20dp，显式封顶 18sp
+                    // 与思考胶囊（图标 18dp 主导）等高
+                    lineHeight = 18.sp,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(Modifier.size(8.dp))
                 Text(
                     tool.brief,
                     fontSize = 11.5.sp,
+                    lineHeight = 18.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     modifier = Modifier.weight(1f)

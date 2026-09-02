@@ -989,7 +989,9 @@ fun LiquidTabRow(
                     Text(
                         label,
                         style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        // 两态同字重：选中态只靠着色胶囊 + onPrimary 区分。
+                        // 此前 SemiBold/Medium 切换会让文字看起来忽大忽小
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         color = if (selected) MaterialTheme.colorScheme.onPrimary
                         else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f)

@@ -8,7 +8,11 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 
@@ -158,7 +162,43 @@ fun HaoTheme(
             surfaceVariant = Color(0xFF121217)
         )
     }
-    MaterialTheme(colorScheme = colorScheme, content = content)
+    // 壁纸深浅标志：叠在壁纸上的小字据此自适应灰度（见 wallpaperAdaptiveGray）
+    val wallpaperDark = wallpaper?.let { wp -> remember(wp) { wallpaperIsDark(wp) } }
+    CompositionLocalProvider(LocalWallpaperDark provides wallpaperDark) {
+        MaterialTheme(colorScheme = colorScheme, content = content)
+    }
+}
+
+/** 壁纸是否偏暗：HaoTheme 计算一次，供全树读取；null = 未设壁纸。 */
+val LocalWallpaperDark = staticCompositionLocalOf<Boolean?> { null }
+
+/**
+ * 壁纸平均亮度判深浅：与 wallpaperSeedColor 同款 48×48 降采样，
+ * Rec.709 相对亮度求均值，阈值 0.5。
+ */
+fun wallpaperIsDark(bitmap: android.graphics.Bitmap): Boolean {
+    val small = android.graphics.Bitmap.createScaledBitmap(bitmap, 48, 48, true)
+    var sum = 0f
+    for (y in 0 until 48) for (x in 0 until 48) {
+        val c = small.getPixel(x, y)
+        sum += (0.2126f * android.graphics.Color.red(c) +
+            0.7152f * android.graphics.Color.green(c) +
+            0.0722f * android.graphics.Color.blue(c)) / 255f
+    }
+    return sum / (48 * 48) < 0.5f
+}
+
+/**
+ * 壁纸自适应灰：统计小字等弱化的文字叠在壁纸上时，深壁纸用灰白、
+ * 浅壁纸用灰黑（取另一套色板的 onSurfaceVariant，保证与背景有色差
+ * 又不刺眼）；无壁纸时回退按主题底色亮度判断。
+ */
+@Composable
+fun wallpaperAdaptiveGray(alpha: Float = 0.8f): Color {
+    val onDark = LocalWallpaperDark.current
+        ?: (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+    return (if (onDark) HaoDarkColors.onSurfaceVariant else HaoLightColors.onSurfaceVariant)
+        .copy(alpha = alpha)
 }
 
 /**

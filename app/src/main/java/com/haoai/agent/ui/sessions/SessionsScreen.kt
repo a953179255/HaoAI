@@ -47,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -197,10 +198,15 @@ fun SessionsScreen(
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.weight(1f))
-            if (showTrash && deletedSessions.isNotEmpty()) {
-                TextButton(onClick = { confirmEmptyTrash = true }) {
-                    Text("清空", color = MaterialTheme.colorScheme.error)
-                }
+            // 常驻占位：若按条件增删，Row 权重空间重分配会让 LiquidTabRow 宽度
+            // 跳变（切回收站胶囊缩小、切回又放大）。不可见时 alpha(0)+禁用，宽度恒定
+            val trashActionVisible = showTrash && deletedSessions.isNotEmpty()
+            TextButton(
+                onClick = { confirmEmptyTrash = true },
+                enabled = trashActionVisible,
+                modifier = Modifier.alpha(if (trashActionVisible) 1f else 0f)
+            ) {
+                Text("清空", color = MaterialTheme.colorScheme.error)
             }
         }
 
