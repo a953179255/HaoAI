@@ -41,6 +41,10 @@ class JobOutputTool : Tool {
                 return@withContext ToolResult("还没有后台任务（用 bash 的 background=true 投递）")
             }
             val id = args.optString("id").trim()
+            // 路径安全：id 只允许真实投递格式（job_<base36>），杜绝 "../" 拼路径逃出 .haoai-jobs
+            if (id.isNotBlank() && !Regex("job_[0-9a-z]+").matches(id)) {
+                return@withContext ToolResult("非法任务 id：$id（应为 bash background=true 返回的 job_xxx）", true)
+            }
             val logFile = if (id.isNotBlank()) {
                 java.io.File(jobsDir, "$id.log").takeIf { it.isFile }
                     ?: return@withContext ToolResult("找不到任务日志：$id（jobs 目录：.haoai-jobs/，可用 ls 查看）", true)

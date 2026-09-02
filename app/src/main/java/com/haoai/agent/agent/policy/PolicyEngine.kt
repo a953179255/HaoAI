@@ -37,9 +37,9 @@ sealed class ApprovalRequest {
         override val mono = true
     }
 
-    /** C1/C6 配置变更审批：detail 为语义 diff（+/-/~ provider、◉ 当前模型、设置项 a → b）。 */
+    /** C1/C6 配置变更审批：detail 为人话变更清单（新增/修改/删除模型服务、设置项 a → b）。 */
     data class ConfigChange(val summary: String) : ApprovalRequest() {
-        override val title = "修改应用配置（config_set）"
+        override val title = "代理请求修改应用配置"
         override val detail = summary
         override val mono = false
     }
@@ -74,8 +74,25 @@ class PolicyEngine(private val mode: PermissionMode) {
     private val blockedCommands = setOf(
         "mkfs", "mkfs.ext2", "mkfs.ext3", "mkfs.ext4", "mkfs.vfat", "mkfs.exfat", "mkfs.f2fs",
         "shutdown", "reboot", "poweroff", "halt", "fdisk", "parted", "diskutil",
-        "flash_image", "fastboot", "su"
+        "flash_image", "fastboot", "su", "sudo"
     )
+
+    /** 递归删除的目标是否属于"灾难级"路径（根/主目录/系统分区），普通子路径不受影响。 */
+    private fun isRootish(path: String): Boolean {
+        val p = path.trim('"', '\'').trimEnd('/')
+        return p.isEmpty() || p in setOf(
+            "~", "~/*", ".", "..", "*", "/*",
+            "/system", "/data", "/vendor", "/etc", "/etc/*",
+            "/sdcard", "/storage", "/mnt"
+        )
+    }
+
+    /** rm 的参数里是否带递归旗标（-r/-R/-rf 等短旗标组合或 --recursive）。 */
+    private fun hasRecursiveFlag(args: List<String>): Boolean =
+        args.any {
+            (it.startsWith("-") && !it.startsWith("--") && it.any { c -> c == 'r' || c == 'R' }) ||
+                it == "--recursive"
+        }
 
     fun riskOf(toolName: String): RiskLevel =
         riskOverride?.invoke(toolName) ?: when (toolName) {
@@ -118,9 +135,36 @@ class PolicyEngine(private val mode: PermissionMode) {
                 return "命令被安全策略拦截：禁止使用「$base」"
             }
         }
+        // 结构化兜底：正则挡不住的长选项/引号/多目标形态（rm --recursive --force "/" 等）
+        for (seg in splitSegments(command)) {
+            val tokens = seg.trim().split(Regex("\\s+"))
+            when (tokens.firstOrNull()?.substringAfterLast('/')?.lowercase()) {
+                "rm" -> {
+                    val args = tokens.drop(1)
+                    if (hasRecursiveFlag(args) &&
+                        args.filterNot { it.startsWith("-") }.any { isRootish(it) }
+                    ) {
+                        return "命令被安全策略拦截：禁止递归删除根目录/系统分区/主目录"
+                    }
+                }
+                "find" -> {
+                    val args = tokens.drop(1)
+                    if ("-delete" in args &&
+                        args.firstOrNull { !it.startsWith("-") }?.let { isRootish(it) } == true
+                    ) {
+                        return "命令被安全策略拦截：禁止 find -delete 批量删除根级/系统目录"
+                    }
+                }
+                else -> Unit
+            }
+        }
         // curl/wget … | sh|bash：远程代码执行
         if (Regex("(curl|wget)[^|;]*\\|\\s*(ba)?sh\\b", RegexOption.IGNORE_CASE).containsMatchIn(command)) {
             return "命令被安全策略拦截：不允许把下载内容直接管道给 shell 执行"
+        }
+        // bash <(curl …)：进程替换等价于下载即执行（不走管道，正则漏网形态）
+        if (Regex("\\b(ba)?sh\\s+<\\([^)]*(curl|wget)", RegexOption.IGNORE_CASE).containsMatchIn(command)) {
+            return "命令被安全策略拦截：不允许把下载内容直接交给 shell 执行"
         }
         return null
     }
