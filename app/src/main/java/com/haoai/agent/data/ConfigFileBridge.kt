@@ -637,6 +637,9 @@ class ConfigFileBridge(
                     o.allowPlaintext != s.allowPlaintext -> {
                         lines += "修改 MCP 服务器「${s.name}」明文 http 白名单：${if (s.allowPlaintext) "开" else "关"}"; touched = true
                     }
+                    o.name != s.name -> {
+                        lines += "MCP 服务器「${o.name}」改名为「${s.name}」"; touched = true
+                    }
                 }
             }
             if (parsed.mcpRemoved) {

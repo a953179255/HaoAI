@@ -36,10 +36,15 @@ data class McpToolInfoData(
     val schemaJson: String = ""
 )
 
-/** 服务器配置持久化（filesDir/mcp/servers.json，HaoJson 原子写 + .bak 兜底）。 */
+/** 服务器配置持久化（filesDir/mcp/servers.json，HaoJson 原子写 + .bak 兜底）。
+ *  headers 值经 Android Keystore 加密落盘（enc:<base64>，密钥名不敏感保留明文）：
+ *  旧版明文值加载后原样识别，首次 save 自动升级；Keystore 不可用时回退明文（load 双兼容）。 */
 object McpServerStore {
 
     private lateinit var file: File
+
+    private const val ENC_PREFIX = "enc:"
+    private val cipher = com.haoai.agent.data.KeystoreCipher()
 
     fun init(filesDir: File) {
         file = File(filesDir, "mcp/servers.json")
@@ -48,17 +53,45 @@ object McpServerStore {
     fun load(): List<McpServerConfig> {
         if (!::file.isInitialized) return emptyList()
         val text = HaoJson.readTextSafe(file) ?: return emptyList()
-        return runCatching {
+        val parsed = runCatching {
             HaoJson.json.decodeFromString(ListSerializer(McpServerConfig.serializer()), text)
         }.getOrDefault(emptyList())
+        // 解密（enc: 前缀）+ 识别旧版明文；发现明文立即回写完成迁移
+        val decrypted = parsed.map { s ->
+            if (s.headers.isEmpty()) s
+            else s.copy(headers = s.headers.mapValues { (_, v) -> decryptValue(v) })
+        }
+        val hasLegacy = parsed.any { s ->
+            s.headers.values.any { it.isNotBlank() && !it.startsWith(ENC_PREFIX) }
+        }
+        if (hasLegacy) runCatching { save(decrypted) }
+        return decrypted
     }
 
     fun save(servers: List<McpServerConfig>) {
         if (!::file.isInitialized) return
+        val secured = servers.map { s ->
+            if (s.headers.isEmpty()) s
+            else s.copy(headers = s.headers.mapValues { (_, v) -> encryptValue(v) })
+        }
         val text = HaoJson.json.encodeToString(
             ListSerializer(McpServerConfig.serializer()),
-            servers
+            secured
         )
         HaoJson.writeAtomic(file, text)
     }
+
+    private fun encryptValue(v: String): String =
+        if (v.isBlank() || v.startsWith(ENC_PREFIX)) v
+        else cipher.encrypt(v)?.let { ENC_PREFIX + it } ?: v
+
+    private fun decryptValue(v: String): String =
+        if (!v.startsWith(ENC_PREFIX)) v
+        else {
+            val plain = cipher.decrypt(v.removePrefix(ENC_PREFIX))
+            if (plain.isEmpty()) {
+                android.util.Log.w("HaoMcp", "MCP header 解密失败（Keystore 不可用/换机恢复），值置空")
+            }
+            plain
+        }
 }
