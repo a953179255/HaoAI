@@ -522,6 +522,7 @@ class ConfigFileBridge(
      * C1/C6 语义 diff：对比当前配置与「将要生效的配置」，生成人读变更清单
      * （config_set 审批弹窗与工具回显共用）。字段口径与 parseToSettings 同源。
      */
+    /** 审批弹窗语义 diff：面向普通用户的人话描述（技术取值放箭头后备查）。 */
     fun semanticSummary(old: AppSettings, new: AppSettings): String {
         val lines = mutableListOf<String>()
         val oldIds = old.providers.associateBy { it.id }
@@ -529,51 +530,56 @@ class ConfigFileBridge(
         newIds.forEach { (id, p) ->
             val o = oldIds[id]
             when {
-                o == null -> lines += "+ provider [${p.name}] = ${p.baseUrl} / ${p.model}"
-                o.baseUrl != p.baseUrl || o.protocol != p.protocol -> {
+                o == null -> lines += "新增模型服务「${p.name}」（模型：${p.model}）"
+                else -> {
                     val ch = mutableListOf<String>()
-                    if (o.baseUrl != p.baseUrl) ch += "baseUrl ${o.baseUrl} → ${p.baseUrl}"
-                    if (o.protocol != p.protocol) ch += "protocol ${o.protocol} → ${p.protocol}"
-                    lines += "~ provider [${p.name}] ${ch.joinToString(" / ")}"
+                    if (o.baseUrl != p.baseUrl) ch += "接口地址 ${o.baseUrl} → ${p.baseUrl}"
+                    if (o.protocol != p.protocol) ch += "接口协议 ${o.protocol} → ${p.protocol}"
+                    if (o.model != p.model) ch += "模型 ${o.model} → ${p.model}"
+                    if (o.apiKeyCipher != p.apiKeyCipher) ch += "API 密钥已更新（内容已隐藏）"
+                    if (ch.isNotEmpty()) lines += "修改模型服务「${p.name}」：${ch.joinToString("；")}"
                 }
-                o.model != p.model -> lines += "~ provider [${p.name}] model ${o.model} → ${p.model}"
             }
         }
         oldIds.forEach { (id, o) ->
-            if (id !in newIds) lines += "- provider [${o.name}]"
+            if (id !in newIds) lines += "删除模型服务「${o.name}」"
         }
         val oldActive = activeProviderOf(old)
         val newActive = activeProviderOf(new)
         if (oldActive?.id != newActive?.id && newActive != null) {
-            lines += "◉ 当前模型 → [${newActive.name}]"
+            lines += "当前使用的模型服务切换为「${newActive.name}」"
         }
-        fun cmp(name: String, ov: Any?, nv: Any?) {
-            if (ov != nv) lines += "* $name: $ov → $nv"
+        fun cmp(label: String, ov: Any?, nv: Any?) {
+            if (ov != nv) lines += "修改「$label」：${humanValue(ov)} → ${humanValue(nv)}"
         }
-        cmp("单次回复上限", oldActive?.maxTokens, newActive?.maxTokens)
-        cmp("云端上下文窗口", oldActive?.contextLength, newActive?.contextLength)
-        cmp("local_context_length", old.localContextLength, new.localContextLength)
+        fun cmpProvider(label: String, oldId: String?, newId: String?) {
+            val a = providerLabel(old, oldId)
+            val b = providerLabel(new, newId)
+            if (a != b) lines += "修改「$label」：$a → $b"
+        }
+        cmp("单次回复上限（token）", oldActive?.maxTokens, newActive?.maxTokens)
+        cmp("上下文窗口（token）", oldActive?.contextLength, newActive?.contextLength)
+        cmp("端侧上下文窗口（token）", old.localContextLength, new.localContextLength)
         cmp("记忆系统", old.memoryEnabled, new.memoryEnabled)
         cmp("自动学习", old.autoLearn, new.autoLearn)
-        cmp("闲置整理记忆", old.deepDream, new.deepDream)
-        cmp("permission_mode", permissionModeToKey(old.permissionMode), permissionModeToKey(new.permissionMode))
+        cmp("闲置时整理记忆", old.deepDream, new.deepDream)
+        cmp("权限模式", humanPermission(old.permissionMode), humanPermission(new.permissionMode))
         if (new.fallbackChain != old.fallbackChain) {
             val added = new.fallbackChain - old.fallbackChain
             val removed = old.fallbackChain - new.fallbackChain
-            val parts = listOfNotNull(
-                if (added.isNotEmpty()) "+[${added.joinToString()}]" else null,
-                if (removed.isNotEmpty()) "-[${removed.joinToString()}]" else null
-            )
-            lines += "* 降级链 ${parts.joinToString(" ")}"
+            val parts = mutableListOf<String>()
+            if (added.isNotEmpty()) parts += "新增 ${added.joinToString("、") { providerLabel(new, it) }}"
+            if (removed.isNotEmpty()) parts += "移除 ${removed.joinToString("、") { providerLabel(old, it) }}"
+            lines += "修改「模型降级链」：${parts.joinToString("；")}"
         }
-        cmp("memory_extract_provider", old.memoryExtractProviderId, new.memoryExtractProviderId)
-        cmp("title_provider", old.titleProviderId, new.titleProviderId)
-        cmp("summarize_provider", old.summarizeProviderId, new.summarizeProviderId)
-        cmp("daily_token_budget_k", old.dailyTokenBudgetK, new.dailyTokenBudgetK)
-        cmp("keep_alive", old.keepAlive, new.keepAlive)
-        cmp("dream_provider", old.dreamProviderId, new.dreamProviderId)
-        cmp("dream_idle_minutes", old.dreamIdleMinutes, new.dreamIdleMinutes)
-        cmp("主题", old.themeMode, new.themeMode)
+        cmpProvider("记忆提取模型", old.memoryExtractProviderId, new.memoryExtractProviderId)
+        cmpProvider("会话标题模型", old.titleProviderId, new.titleProviderId)
+        cmpProvider("压缩摘要模型", old.summarizeProviderId, new.summarizeProviderId)
+        cmp("每日 token 预算（千）", old.dailyTokenBudgetK, new.dailyTokenBudgetK)
+        cmp("后台常驻", old.keepAlive, new.keepAlive)
+        cmpProvider("记忆整理模型", old.dreamProviderId, new.dreamProviderId)
+        cmp("灭屏闲置触发（分钟）", old.dreamIdleMinutes, new.dreamIdleMinutes)
+        cmp("外观主题", humanTheme(old.themeMode), humanTheme(new.themeMode))
         cmp("主题色", old.themeSeed, new.themeSeed)
         cmp("AMOLED 纯黑", old.amoledMode, new.amoledMode)
         cmp("气泡不透明度", old.bubbleOpacity, new.bubbleOpacity)
@@ -581,6 +587,34 @@ class ConfigFileBridge(
         cmp("动态取色", old.dynamicColor, new.dynamicColor)
         cmp("思考等级", old.reasoningEffort.ifBlank { "默认" }, new.reasoningEffort.ifBlank { "默认" })
         return lines.joinToString("\n").ifBlank { "（无字段变化）" }.take(500)
+    }
+
+    private fun humanValue(v: Any?): String = when (v) {
+        null -> "（无）"
+        is Boolean -> if (v) "开" else "关"
+        is String -> v.ifBlank { "（未设置）" }
+        else -> v.toString()
+    }
+
+    private fun humanPermission(mode: com.haoai.agent.agent.policy.PermissionMode): String = when (
+        permissionModeToKey(mode)
+    ) {
+        "yolo" -> "全自动"
+        "ask_writes" -> "写入时询问"
+        else -> "全部询问"
+    }
+
+    private fun humanTheme(theme: String?): String = when (theme) {
+        "light" -> "浅色"
+        "dark" -> "深色"
+        else -> "跟随系统"
+    }
+
+    /** 供应商 id → 人话名（「名称」；未设置/未知回退 id）。 */
+    private fun providerLabel(st: AppSettings, id: String?): String {
+        if (id.isNullOrBlank()) return "未设置"
+        val p = st.providers.find { it.id == id.trim() } ?: return id
+        return "「${p.name}」"
     }
 
     /** MCP/SSH 分区语义 diff（审批弹窗用）；外部连接面变更附醒目提示。 */
@@ -592,25 +626,25 @@ class ConfigFileBridge(
             new.forEach { s ->
                 val o = cur[s.id]
                 when {
-                    o == null -> { lines += "+ MCP server [${s.name}] ${s.kind} ${s.url.ifBlank { s.command }}"; touched = true }
+                    o == null -> { lines += "新增 MCP 外部服务器「${s.name}」（${s.kind} ${s.url.ifBlank { s.command }}）"; touched = true }
                     o.url != s.url || o.command != s.command || o.kind != s.kind -> {
-                        lines += "~ MCP server [${s.name}] 端点 → ${s.url.ifBlank { s.command }}"; touched = true
+                        lines += "修改 MCP 服务器「${s.name}」：地址 → ${s.url.ifBlank { s.command }}"; touched = true
                     }
-                    o.enabled != s.enabled -> { lines += "~ MCP server [${s.name}] ${if (s.enabled) "启用" else "停用"}"; touched = true }
+                    o.enabled != s.enabled -> { lines += "${if (s.enabled) "启用" else "停用"} MCP 服务器「${s.name}」"; touched = true }
                     o.approvalLevel != s.approvalLevel -> {
-                        lines += "~ MCP server [${s.name}] 审批级别 ${o.approvalLevel} → ${s.approvalLevel}"; touched = true
+                        lines += "修改 MCP 服务器「${s.name}」调用审批：${humanApprovalLevel(o.approvalLevel)} → ${humanApprovalLevel(s.approvalLevel)}"; touched = true
                     }
                     o.allowPlaintext != s.allowPlaintext -> {
-                        lines += "~ MCP server [${s.name}] 明文白名单 ${if (s.allowPlaintext) "开" else "关"}"; touched = true
+                        lines += "修改 MCP 服务器「${s.name}」明文 http 白名单：${if (s.allowPlaintext) "开" else "关"}"; touched = true
                     }
                 }
             }
             if (parsed.mcpRemoved) {
                 cur.keys.filter { k -> new.none { it.id == k } }.forEach { id ->
-                    lines += "- MCP server [${cur[id]?.name}]"; touched = true
+                    lines += "删除 MCP 服务器「${cur[id]?.name}」"; touched = true
                 }
             }
-            if (touched) lines += "⚠ MCP 变更 = 引入/移除外部工具面，请确认服务器来源可信"
+            if (touched) lines += "⚠ MCP 服务器变更会改变代理可调用的外部工具，请确认来源可信"
         }
         parsed.sshTargets?.let { new ->
             val cur = readSsh().associateBy { it.id }
@@ -618,22 +652,25 @@ class ConfigFileBridge(
             new.forEach { t ->
                 val o = cur[t.id]
                 when {
-                    o == null -> { lines += "+ SSH 目标 [${t.name}] ${t.user}@${t.host}:${t.port}"; touched = true }
+                    o == null -> { lines += "新增远程连接「${t.name}」（${t.user}@${t.host}:${t.port}）"; touched = true }
                     o.host != t.host || o.port != t.port || o.user != t.user -> {
-                        lines += "~ SSH 目标 [${t.name}] → ${t.user}@${t.host}:${t.port}"; touched = true
+                        lines += "修改远程连接「${t.name}」：地址 → ${t.user}@${t.host}:${t.port}"; touched = true
                     }
-                    o.name != t.name -> { lines += "~ SSH 目标 [${t.name}] 改名"; touched = true }
+                    o.name != t.name -> { lines += "远程连接「${o.name}」改名为「${t.name}」"; touched = true }
                 }
             }
             if (parsed.sshRemoved) {
                 cur.keys.filter { k -> new.none { it.id == k } }.forEach { id ->
-                    lines += "- SSH 目标 [${cur[id]?.name}]"; touched = true
+                    lines += "删除远程连接「${cur[id]?.name}」"; touched = true
                 }
             }
-            if (touched) lines += "⚠ SSH 目标变更影响远程命令执行面"
+            if (touched) lines += "⚠ 远程连接变更会影响代理想远程执行命令的范围，请确认"
         }
         return lines.joinToString("\n")
     }
+
+    /** MCP 审批级别的人话表述。 */
+    private fun humanApprovalLevel(level: String): String = if (level == "read") "免审批" else "每次询问"
 
     /**
      * C6 config_set 入口：把工具补丁合并进当前镜像再走 apply 同一严格校验。
@@ -667,19 +704,30 @@ class ConfigFileBridge(
             }
             return JsonArray(byId.values.toList())
         }
+        // *_removed=true 时补丁名单即"完整保留名单"：不与现有数组合并（否则缺席条目
+        // 被旧数据顶回、删除永远不生效，preview 与 apply 同错）；掩码 apiKey 由解析层沿用旧密文
+        val providersRemoved = patch["providers_removed"]?.booleanOrNullOr() == true
+        val mcpRemoved = patch["mcp_servers_removed"]?.booleanOrNullOr() == true
+        val sshRemoved = patch["ssh_targets_removed"]?.booleanOrNullOr() == true
         val mergedProviders: JsonArray = when (val el = patch["providers"]) {
             null -> (current["providers"] as? JsonArray) ?: JsonArray(emptyList())
-            is JsonArray -> mergeInto(current["providers"], el)
+            is JsonArray ->
+                if (providersRemoved) mergeInto(JsonArray(emptyList()), el)
+                else mergeInto(current["providers"], el)
             else -> return "" to "providers 必须是数组"
         }
         val mergedMcp: JsonArray? = when (val el = patch["mcp_servers"]) {
             null -> current["mcp_servers"] as? JsonArray
-            is JsonArray -> mergeInto(current["mcp_servers"], el)
+            is JsonArray ->
+                if (mcpRemoved) mergeInto(JsonArray(emptyList()), el)
+                else mergeInto(current["mcp_servers"], el)
             else -> return "" to "mcp_servers 必须是数组"
         }
         val mergedSsh: JsonArray? = when (val el = patch["ssh_targets"]) {
             null -> current["ssh_targets"] as? JsonArray
-            is JsonArray -> mergeInto(current["ssh_targets"], el)
+            is JsonArray ->
+                if (sshRemoved) mergeInto(JsonArray(emptyList()), el)
+                else mergeInto(current["ssh_targets"], el)
             else -> return "" to "ssh_targets 必须是数组"
         }
 

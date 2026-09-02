@@ -500,16 +500,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 }
                 val engine = buildEngine(s, provider)
                 _running.value = true
-                try {
-                    val summary = engine.compactNow()
-                    if (summary != null) {
+                // 挂到 job 上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
+                job = viewModelScope.launch {
+                    try {
+                        val summary = engine.compactNow()
+                        if (summary != null) {
+                            _streamingText.value = null
+                            rebuildRows()
+                        }
+                    } finally {
+                        _running.value = false
                         _streamingText.value = null
-                        rebuildRows()
+                        refreshSessions()
                     }
-                } finally {
-                    _running.value = false
-                    _streamingText.value = null
-                    refreshSessions()
                 }
                 true
             }
@@ -764,9 +767,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             else -> base
                         }
                     }
+                    // key 用消息 id：下标 key 在删除/截断/重新生成后会整体平移，列表状态错乱
                     rows.add(
                         ChatRow(
-                            "m$i", m.id, m.role, m.content, m.error, tools, m.reasoning,
+                            m.id.ifBlank { "m$i" }, m.id, m.role, m.content, m.error, tools, m.reasoning,
                             ts = m.ts,
                             promptTokens = m.promptTokens,
                             completionTokens = m.completionTokens,
@@ -776,7 +780,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     )
                 }
                 ChatMessage.ROLE_USER ->
-                    rows.add(ChatRow("m$i", m.id, m.role, m.content, ts = m.ts))
+                    rows.add(ChatRow(m.id.ifBlank { "m$i" }, m.id, m.role, m.content, ts = m.ts))
                 else -> Unit
             }
         }
