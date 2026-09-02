@@ -72,13 +72,36 @@ object VirtualScreenController {
     }
     fun closePreview() { previewOpen.value = false }
 
-    private fun publishPreview(bmp: Bitmap) {
+    /** WMS 强制取帧成功过 → ImageReader 输出面已被 ROM 冻结，此后只信 WMS（防白帧闪屏）。 */
+    @Volatile private var wmsReliable = false
+
+    private fun publishPreview(bmp: Bitmap, fromWms: Boolean = false) {
         if (!previewOpen.value) return
+        // 通路仲裁：WMS 已证明可靠后，丢弃 ImageReader 来的退化帧（纯色/白板），
+        // 否则两条通路交替发布会「一真一白」闪烁
+        if (wmsReliable && !fromWms && isDegenerateBitmap(bmp)) return
         val scale = minOf(1f, 720f / maxOf(bmp.width, bmp.height))
         // 始终发布独立副本：latestFrame 会被 recycle，面板不能共享同一实例
         previewFrame.value = if (scale < 1f) {
             Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
         } else bmp.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    /** 采样判定退化帧：颜色数 ≤3 视为纯色/底板（与帧统计同一标准）。 */
+    private fun isDegenerateBitmap(bmp: Bitmap): Boolean {
+        val colors = HashSet<Int>()
+        val step = 64
+        var y = 0
+        while (y < bmp.height) {
+            var x = 0
+            while (x < bmp.width) {
+                colors.add(bmp.getPixel(x, y))
+                if (colors.size > 3) return false
+                x += step
+            }
+            y += step
+        }
+        return true
     }
 
     /** WMS 强制取帧（JPEG）→ 位图，供预览面板在 ROM 冻结 VD 输出时也能看到真实画面。 */
@@ -92,7 +115,8 @@ object VirtualScreenController {
             val bytes = PrivilegedShell.captureDisplayJpeg(id, 720, 70)
             val bmp = bytes?.takeIf { it.isNotEmpty() }?.let { decodeJpeg(it) }
             if (bmp != null) {
-                publishPreview(bmp)
+                if (!wmsReliable) wmsReliable = !isDegenerateBitmap(bmp)
+                publishPreview(bmp, fromWms = true)
             } else {
                 latestFrame.get()?.takeIf { !it.isRecycled }?.let { publishPreview(it) }
             }
@@ -125,6 +149,18 @@ object VirtualScreenController {
      * （帧管线/截图/预览不跨进程），surface 传给 shell 侧建屏。
      */
     fun ensureDisplay(context: Context): String? = synchronized(lock) {
+        // 进程外可信屏可能已随 shell 服务死亡（重装 APK/杀服务进程/Shizuku 重启都会回收
+        // 其名下虚拟屏），而 App 侧缓存 id 不自知——不清理会拿失效 id 启动，系统报
+        // Permission Denial（表象是「Shizuku 未授权」假错）。PUBLIC 屏对 App 可见，可查活。
+        val cached = trustedDisplayId.takeIf { it > 0 }
+        if (cached != null && !displayAlive(context, cached)) {
+            debugLog("cached trusted display $cached is gone, clearing state")
+            trustedDisplayId = -1
+            channel = ""
+            displayIdFlow.value = null
+            latestFrame.getAndSet(null)?.recycle()
+            previewFrame.value = null
+        }
         if (displayId != null) return null
         if (!supported) return "虚拟屏需要 Android 11（API 30）及以上"
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
@@ -146,8 +182,7 @@ object VirtualScreenController {
             if (bmp != null) {
                 latestFrame.getAndSet(bmp)?.takeIf { it !== bmp }?.recycle()
                 publishPreview(bmp)
-                logFrameStats(bmp)
-            } else {
+                logFrameStats(bmp)            } else {
                 android.util.Log.w("HaoAIVD", "frame decode failed（可能非 RGBA 格式或行距异常）")
             }
         }, captureHandler)
@@ -247,6 +282,7 @@ object VirtualScreenController {
                 debugLog("launched via shizuku: $target (display $id)")
                 return firstFrameOrHeal(id, target)
             }
+            lastShellErr = r.output
             // shell 错误（Activity 不存在等）直接透传；Permission Denial 才回退直启
             if (!r.output.contains("Permission Denial")) return "Shizuku 启动失败：${r.output.take(220)}"
         }
@@ -261,11 +297,15 @@ object VirtualScreenController {
                 debugLog("launched via root: $target (display $id)")
                 return firstFrameOrHeal(id, target)
             }
+            lastShellErr = r.output
             if (!r.output.contains("Permission Denial")) return "root 启动失败：${r.output.take(220)}"
         }
         // 可信屏归 shell 进程所有，本进程无法直启其上（owner 校验）——无直启回退
         if (channel.startsWith("trusted")) {
-            return "特权启动失败：请确认 Shizuku 服务在运行"
+            val lastErr = runCatching { lastShellErr }.getOrNull().orEmpty()
+            // 两个特权通道都 Permission Denial：多为缓存屏已失效（对不存在 displayId
+            // 系统直接拒绝），报真实原因，不让模型误判成「Shizuku 未授权」
+            return "特权启动失败：系统拒绝了本次启动（虚拟屏可能已失效或目标 App 不允许上屏）。请重试一次，若仍失败请让用户检查 Shizuku。原始信息：${lastErr.take(160)}"
         }
         val directError = synchronized(lock) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -287,6 +327,9 @@ object VirtualScreenController {
         previewOpen.value = true
     }
 
+    /** 最近一次特权 shell 输出（诊断落点：trusted 分支报错时引用真实拒绝原因）。 */
+    @Volatile private var lastShellErr: String = ""
+
     /**
      * 首帧自愈：启动成功后 6s 无任何帧 → 屏可能处于僵尸态（跨进程复用/ROM 合成故障），
      * 销毁重建并让调用方重试一次。有帧返回 null。
@@ -300,6 +343,13 @@ object VirtualScreenController {
 
     /** 诊断用：当前是否有帧（debug 路由观察）。 */
     fun hasFrame(): Boolean = latestFrame.get() != null
+
+    /** displayId 是否真实存在（App 进程内查询 DisplayManager；失效屏防呆）。 */
+    private fun displayAlive(context: Context, id: Int): Boolean =
+        runCatching {
+            val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            dm.getDisplay(id) != null
+        }.getOrDefault(true)
 
     /** 回到虚拟屏桌面：home intent 定向到虚拟屏（等效于把屏上应用退到后台）。 */
     fun goHome(context: Context): String? = synchronized(lock) {
@@ -464,6 +514,7 @@ object VirtualScreenController {
         previewFrame.value = null
         previewOpen.value = false
         lastMarker = null
+        wmsReliable = false
         debugLog("destroyed")
     }
 

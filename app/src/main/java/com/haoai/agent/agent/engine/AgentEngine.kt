@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -297,6 +298,28 @@ class AgentEngine(
                         // 清掉首次失败已累积的半截流式输出，避免重试答案拼接在残句后面
                         streamBuf.setLength(0)
                         handleOverflow(emsg, onEvent) { collectStream() }
+                    } else if (isTransientHttpError(emsg)) {
+                        // 429/超时/网关抖动：供应商限流在多轮工具任务里很常见（每步一请求），
+                        // 退避重试而不是整轮失败；等待期可被取消，清残句避免拼接错乱
+                        val backoffsSec = intArrayOf(5, 12, 25)
+                        var last: Exception? = e
+                        for (sec in backoffsSec) {
+                            onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.RUNNING, "供应商限流", "HTTP 错误，${sec}s 后自动重试")))
+                            delay(sec * 1000L)
+                            currentCoroutineContext().ensureActive()
+                            streamBuf.setLength(0)
+                            reasoningBuf.setLength(0)
+                            try {
+                                collectStream()
+                                onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.DONE, "供应商限流", "已恢复")))
+                                last = null
+                                break
+                            } catch (re: Exception) {
+                                last = re
+                                if (!isTransientHttpError(re.message ?: "")) throw re
+                            }
+                        }
+                        last?.let { throw it }
                     } else {
                         throw e
                     }
@@ -1300,6 +1323,13 @@ class AgentEngine(
             role = ChatMessage.ROLE_ASSISTANT,
             content = "[系统] 上下文已压缩，释放约 ${result.tokensSaved} tokens"
         )))
+    }
+
+    /** 供应商瞬态错误（值得退避重试）：429 限流 / 5xx 网关 / 超时。 */
+    private fun isTransientHttpError(msg: String): Boolean {
+        val m = msg.lowercase()
+        return "http 429" in m || "http 5" in m || "timeout" in m ||
+            "timed out" in m || "connection reset" in m || "eofexception" in m
     }
 
     /** Overflow 恢复：检测 API 返回的 context_length_exceeded 错误，自动压缩后重试。 */
