@@ -30,9 +30,14 @@ import com.haoai.agent.data.toStored
 import com.haoai.agent.platform.FileBackend
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
@@ -218,12 +223,12 @@ class AgentEngine(
         val streamBuf = StringBuilder()
         try {
             var turns = 0
-            // E5 连续工具失败熔断：executeCall 内置位（引擎成员 _loopFailedCap），循环尾检查
-            @Suppress("UNUSED_VARIABLE")
-            var failedCap = false
             while (true) {
                 currentCoroutineContext().ensureActive()
+                // E1：已完成请求轮数持久化（turncapped 续跑参考）
+                session.runTurnsUsed = turns
                 if (++turns > MAX_TURNS) {
+                    runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
@@ -264,18 +269,13 @@ class AgentEngine(
 
                 maybeNudgeHandoff(onEvent)
 
-                try {
+                // 单轮流式收集（overflow 自动压缩后的重试复用同一段逻辑，避免双份维护）
+                suspend fun collectStream() {
                     httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
                         .collect { ev ->
                             when (ev) {
-                                is SseEvent.Delta -> {
-                                    streamBuf.append(ev.text)
-                                    onDelta(ev.text)
-                                }
-                                is SseEvent.Reasoning -> {
-                                    reasoningBuf.append(ev.text)
-                                    onReasoning(ev.text)
-                                }
+                                is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
+                                is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
                                 is SseEvent.Completed -> calls = ev.toolCalls
                                 is SseEvent.Usage -> {
                                     turnPrompt += ev.promptTokens
@@ -284,28 +284,16 @@ class AgentEngine(
                                 }
                             }
                         }
+                }
+                try {
+                    collectStream()
                 } catch (e: Exception) {
                     // Overflow 检测：自动压缩后重试一次
                     val emsg = e.message ?: ""
                     if (compactionManager.isOverflowError(emsg) && !compactionManager.isCoolingDown()) {
                         // 清掉首次失败已累积的半截流式输出，避免重试答案拼接在残句后面
                         streamBuf.setLength(0)
-                        handleOverflow(emsg, onEvent) {
-                            // 重试：重新收集
-                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
-                                .collect { ev ->
-                                    when (ev) {
-                                        is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
-                                        is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
-                                        is SseEvent.Completed -> calls = ev.toolCalls
-                                        is SseEvent.Usage -> {
-                                            turnPrompt += ev.promptTokens
-                                            turnCompletion += ev.completionTokens
-                                            onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
-                                        }
-                                    }
-                                }
-                        }
+                        handleOverflow(emsg, onEvent) { collectStream() }
                     } else {
                         throw e
                     }
@@ -313,6 +301,7 @@ class AgentEngine(
 
                 // E5 单轮成本熔断：turnPrompt+turnCompletion 达上限 → 注入收尾指令 + break
                 if (turnTokenCap > 0 && turnPrompt + turnCompletion >= turnTokenCap) {
+                    runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
@@ -332,7 +321,7 @@ class AgentEngine(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
                             content = streamBuf.toString(),
-                            toolCalls = calls,
+                            toolCalls = maskSecretArgs(calls),
                             reasoning = reasoningBuf.toString().ifBlank { null },
                             promptTokens = if (isFinal) turnPrompt.toInt() else null,
                             completionTokens = if (isFinal) turnCompletion.toInt() else null,
@@ -346,30 +335,18 @@ class AgentEngine(
 
                 if (calls.isEmpty()) break
 
-                // E6 同轮多工具并行分组：READ 且在白名单内的调用异步并发（上限 4），
-                // 结果按原 calls 顺序 await 落库（executeCall 在 await 时执行，顺序可回放）
+                // E6 同轮多工具并行分组：READ 且在白名单内的调用并发执行
+                // （ALWAYS_ASK 模式 READ 也审批，审批弹窗必须在主协程，不能进并发块）。
+                // 工具体在 IO 协程并发（信号量限 4），事件/账本/落库统一回主协程按原 calls 顺序串行收尾：
+                // 既保证会话回放顺序，也避免阻塞调用线程（与 browser_* 的 withContext(Main) 互等死锁）
+                // 和多线程并发写 session.messages/liveTools 的数据竞争。
                 val parallelCalls = calls.filter {
-                    // 并行安全：READ + 白名单 + 无需审批（ALWAYS_ASK 模式 READ 也审批，
-                    // 审批弹窗必须在主线程/原协程，不能进后台 CompletableFuture）
                     policy.riskOf(it.name) == com.haoai.agent.agent.policy.RiskLevel.READ &&
                         it.name in PARALLEL_SAFE &&
                         !policy.requiresApproval(it.name)
                 }
                 val serialCalls = calls.filterNot { it in parallelCalls }
-                // 并发上限 4：分桶后每桶内 async 并行，桶间串行
-                // 并发上限 4：桶内并发执行（CompletableFuture 并行），桶间串行；
-                // await 按原调序 → executeCall 的落库顺序=模型调用顺序，会话可回放
-                val parallelFutures = parallelCalls.map { call ->
-                    java.util.concurrent.CompletableFuture.runAsync {
-                        kotlinx.coroutines.runBlocking {
-                            currentCoroutineContext().ensureActive()
-                            executeCall(call, tools, ctx, onEvent)
-                        }
-                    }
-                }
-                parallelFutures.forEach { it.get() }
-                // 依次 await（按原顺序落库；桶内并发数 ≤4）
-                // 顺序落库：futures 已按原序 forEach.get()，此处无需额外处理
+                executeParallelCalls(parallelCalls, tools, ctx, onEvent)
                 for (call in serialCalls) {
                     currentCoroutineContext().ensureActive()
                     executeCall(call, tools, ctx, onEvent)
@@ -442,17 +419,7 @@ class AgentEngine(
         val tool = tools.firstOrNull { it.name == call.name }
         val args = parseArgs(call.argumentsJson)
         // E7a：按调用注入 callId 与子代理进度上报桥（子代理工具经 parentCtx 回调 → SubagentUpdate 事件）
-        val callCtx = ctx.copy(
-            currentCallId = call.id,
-            onSubagentEvent = { report ->
-                onEvent(
-                    SubagentUpdate(
-                        call.id, report.index, report.total,
-                        report.state, report.tokensUsed, report.brief
-                    )
-                )
-            }
-        )
+        val callCtx = subagentBridge(ctx, call, onEvent)
 
         var result: ToolResult = ToolResult("")
         var finalState: ToolRunState = ToolRunState.DONE
@@ -503,16 +470,7 @@ class AgentEngine(
 
             tool == null -> {
                 // E4b：模型可能凭系统提示里的分组描述臆测调用未注入的工具 —— 给出 tools_enable 引导
-                val g = ToolRegistry.groupOf(call.name)
-                val groups = session.activeGroups?.toSet()
-                result = if (groups != null && g != ToolRegistry.GROUP_CORE && g !in groups) {
-                    ToolResult(
-                        "工具 ${call.name} 属于未启用的「$g」工具组。请先调用 tools_enable（group=\"$g\"）启用后再使用。",
-                        true
-                    )
-                } else {
-                    ToolResult("未知工具：${call.name}", true)
-                }
+                result = unknownToolResult(call.name)
                 finalState = ToolRunState.ERROR
                 decision = "unknown"
             }
@@ -571,6 +529,52 @@ class AgentEngine(
                 if (result.isError) finalState = ToolRunState.ERROR
             }
         }
+        finishCall(call, args, callCtx, result, finalState, toolStartMs, decision, onEvent)
+    }
+
+    /** E7a：按调用注入 callId 与子代理进度上报桥（串行/并行两路共用）。 */
+    private fun subagentBridge(ctx: ToolContext, call: ToolCallData, onEvent: (TurnEvent) -> Unit): ToolContext =
+        ctx.copy(
+            currentCallId = call.id,
+            onSubagentEvent = { report ->
+                onEvent(
+                    SubagentUpdate(
+                        call.id, report.index, report.total,
+                        report.state, report.tokensUsed, report.brief
+                    )
+                )
+            }
+        )
+
+    /** E4b：模型可能凭系统提示里的分组描述臆测调用未注入的工具 —— 给出 tools_enable 引导。 */
+    private fun unknownToolResult(name: String): ToolResult {
+        val g = ToolRegistry.groupOf(name)
+        val groups = session.activeGroups?.toSet()
+        return if (groups != null && g != ToolRegistry.GROUP_CORE && g !in groups) {
+            ToolResult(
+                "工具 $name 属于未启用的「$g」工具组。请先调用 tools_enable（group=\"$g\"）启用后再使用。",
+                true
+            )
+        } else {
+            ToolResult("未知工具：$name", true)
+        }
+    }
+
+    /**
+     * 执行收尾：账本 / E5 连续失败熔断 / E7b after hooks / 结果落库 / 状态事件。
+     * 串行路径（executeCall）与并行段（executeParallelCalls）共用；
+     * 会在主协程按序执行，禁止放进并发块（session.messages 与事件回调非线程安全）。
+     */
+    private suspend fun finishCall(
+        call: ToolCallData,
+        args: JsonObject,
+        callCtx: ToolContext,
+        result: ToolResult,
+        finalState: ToolRunState,
+        toolStartMs: Long,
+        decision: String?,
+        onEvent: (TurnEvent) -> Unit
+    ) {
         if (toolStartMs > 0) {
             ledgerTool(
                 call.name, System.currentTimeMillis() - toolStartMs,
@@ -614,6 +618,58 @@ class AgentEngine(
                 ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.content))
             )
         )
+    }
+
+    /** E6 并行段单次调用的准备态：参数解析在主协程完成，工具体并发执行。 */
+    private class PreparedCall(
+        val call: ToolCallData,
+        val tool: Tool?,
+        val args: JsonObject,
+        val ctx: ToolContext
+    )
+
+    /**
+     * E6 并行执行：READ 白名单调用在 IO 协程并发跑工具体（信号量限 4），
+     * 结果按原 calls 顺序在主协程经 finishCall 串行收尾（顺序可回放，零数据竞争）。
+     * 单调用退化为完整 executeCall（保留 Plan 门等特判语义）。
+     */
+    private suspend fun executeParallelCalls(
+        calls: List<ToolCallData>,
+        tools: List<Tool>,
+        ctx: ToolContext,
+        onEvent: (TurnEvent) -> Unit
+    ) {
+        if (calls.isEmpty()) return
+        if (calls.size == 1) {
+            executeCall(calls.first(), tools, ctx, onEvent)
+            return
+        }
+        val prepared = calls.map { call ->
+            PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.argumentsJson), ctx)
+        }
+        prepared.forEach { p ->
+            onEvent(ToolChanged(ToolUpdate(p.call.id, ToolRunState.RUNNING, briefOf(p.call))))
+        }
+        val gate = Semaphore(PARALLEL_MAX_CONCURRENCY)
+        coroutineScope {
+            val bodies = prepared.map { p ->
+                async(Dispatchers.IO) {
+                    gate.withPermit { runParallelBody(p) }
+                }
+            }
+            prepared.zip(bodies).forEach { (p, body) ->
+                val (result, state, elapsed) = body.await()
+                finishCall(p.call, p.args, p.ctx, result, state, elapsed, "direct", onEvent)
+            }
+        }
+    }
+
+    /** E6 并行工具体：白名单调用均为 READ 免审批，直接执行即可。 */
+    private suspend fun runParallelBody(p: PreparedCall): Triple<ToolResult, ToolRunState, Long> {
+        if (p.tool == null) return Triple(unknownToolResult(p.call.name), ToolRunState.ERROR, 0L)
+        val start = System.currentTimeMillis()
+        val result = invokeTool(p.tool, p.args, p.ctx)
+        return Triple(result, if (result.isError) ToolRunState.ERROR else ToolRunState.DONE, System.currentTimeMillis() - start)
     }
 
     private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =
@@ -661,7 +717,8 @@ class AgentEngine(
         report("RUNNING", 0, task)
         val tools = ToolRegistry.readOnly(childCtx)
         val apiTools = tools.map { it.toApi() }
-        _toolsTokenCache = estimateToolsTokens(apiTools)
+        // 注意：不更新引擎级 _toolsTokenCache——那是主循环工具清单的开销估算，
+        // 子代理只读工具集远小于主清单，覆写会让压缩/催办判断在本轮剩余时间持续低估
 
         val msgs = mutableListOf(
             ApiMessage(role = "system", content = SUBAGENT_SYSTEM),
@@ -933,12 +990,16 @@ class AgentEngine(
                 shellNote = shellNote,
                 vscreenAvailable = vscreenEnabled,
                 toolsGroupHint = toolsGroupHintText()
-            ) + budgetHint() + todoProgressLine()
+            ) + budgetHint() + todoProgressLine(consume = markMemoryUse)
     }
 
-    /** E9 todo 进度行（仅 todoDirty 后的下一轮注入一次，注入后清标志；≤120 字）。 */
-    private fun todoProgressLine(): String {
-        if (!todoDirty) return ""
+    /**
+     * E9 todo 进度行：仅在真实请求路径（consume=true，buildApiMessages）注入并消费标志；
+     * 估算路径（estimateOverheadTokens/maybeNudgeHandoff）只读不消费——否则标志会被
+     * 估算先行清掉，进度行永远进不了真实请求。
+     */
+    private fun todoProgressLine(consume: Boolean): String {
+        if (!todoDirty || !consume) return ""
         todoDirty = false
         val items = todoStore.load(session.id)
         if (items.isEmpty()) return ""
@@ -1137,6 +1198,17 @@ class AgentEngine(
         runCatching {
             HaoJson.json.parseToJsonElement(json.ifBlank { "{}" })
         }.getOrNull() as? JsonObject ?: buildJsonObject {}
+
+    /**
+     * C2 补口：config_set 补丁里的明文密钥不进会话 JSON 与压缩摘要上下文
+     * （执行已按原始参数完成，历史回放只需协议有效的 arguments）。
+     */
+    private fun maskSecretArgs(calls: List<ToolCallData>): List<ToolCallData> =
+        calls.map { c ->
+            if (c.name == "config_set") {
+                c.copy(argumentsJson = com.haoai.agent.data.ConfigFileBridge.maskApiKeys(c.argumentsJson))
+            } else c
+        }
 
     private suspend fun buildApprovalRequest(call: ToolCallData, args: JsonObject): ApprovalRequest =
         when (call.name) {
@@ -1422,6 +1494,9 @@ class AgentEngine(
             "read", "grep", "glob", "web_fetch", "web_search", "memory",
             "list_apps", "app_status", "browser_read", "browser_find", "todo"
         )
+
+        /** E6 并发上限：同时执行的并行工具体数量。 */
+        const val PARALLEL_MAX_CONCURRENCY = 4
         /** handoff 催办阈值：token 占用比例（自动压缩 0.5 之后、危险线 0.9 之前）。 */
         const val HANDOFF_NUDGE_RATIO = 0.75f
         const val HANDOFF_KEEP = 6
