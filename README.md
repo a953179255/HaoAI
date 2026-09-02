@@ -340,6 +340,7 @@ git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader && \
 ## 已知限制
 
 - 单元测试在含中文的工作目录路径下因 Gradle worker 问题无法运行（构建脚本中已尝试 UTF-8 编码参数规避，但部分环境下仍失败）
+- `bash` 工具（toybox 后端）与 App 同 UID 运行：工作目录虽在工作区，但进程物理可达应用私有目录（含配置状态目录、会话存储）。"配置仅能经 config_set 恒审批修改"的边界对 read/write/glob/grep 等工作区工具成立，对全自动（YOLO）模式下的 bash 是软约束；proot 沙箱后端受绑定挂载隔离无此问题，敏感场景建议安装 Linux 发行版并使用沙箱后端
 - 使用 SAF 授权目录作为工作空间时，`bash` 工具不可用（SAF 无法提供真实 shell 工作目录）；需要 shell 时请切换到应用目录模式
 - 端侧 4B 模型（Agents-A1，约 2.6GB、占用约 3GB 内存）已实测可完成多步工具调用，但生成速度约 7 tok/s（8 Gen 2 调优 CPU），长回复仍需耐心；轻量问答可切 0.5B 换取速度
 - 定时任务依赖 WorkManager，未使用前台服务常驻，极端省电策略下触发时间可能有延迟
