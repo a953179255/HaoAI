@@ -28,9 +28,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 
-/** 流式 UI 刷新节拍：SSE 上游每 delta 一次重组重绘代价过高，按此间隔批量刷。 */
-private const val STREAM_FLUSH_MS = 60L
-
 data class UiTool(
     val callId: String,
     val name: String,
@@ -104,47 +101,6 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** 流式思考过程（reasoning_content / <think>），与 streamingText 同生命周期。 */
     private val _streamingReasoning = MutableStateFlow<String?>(null)
     val streamingReasoning = _streamingReasoning.asStateFlow()
-
-    // ── 流式节流 ─────────────────────────────────────────────────
-    // SSE 每 delta 直接写 StateFlow 会让整条气泡按上游速率重组重绘（实测流式期间
-    // RenderThread+主线程合计 >130% 单核）。改为 StringBuilder 累积、按节拍刷 UI：
-    // 事件回调与刷屏协程都在主线程，无并发问题。
-    private val streamingBuf = StringBuilder()
-    private val reasoningBuf = StringBuilder()
-    private var streamFlushJob: Job? = null
-
-    private fun startStreaming() {
-        streamingBuf.setLength(0)
-        reasoningBuf.setLength(0)
-        _streamingText.value = null
-        _streamingReasoning.value = null
-        streamFlushJob?.cancel()
-        streamFlushJob = viewModelScope.launch {
-            while (true) {
-                // 固定 60ms（16fps）：打字机流畅度的下限节奏。曾试过按气泡长度放宽到
-                // 120/200ms，长文吐字明显一顿一顿（真机反馈），不采用——长文本的解析
-                // 成本靠 MarkdownText 自身后续优化（增量渲染）解决，而非牺牲观感。
-                kotlinx.coroutines.delay(STREAM_FLUSH_MS)
-                flushStreaming()
-            }
-        }
-    }
-
-    private fun flushStreaming() {
-        val t = streamingBuf.toString()
-        if (_streamingText.value != t) _streamingText.value = t
-        val r = reasoningBuf.toString().ifBlank { null }
-        if (_streamingReasoning.value != r) _streamingReasoning.value = r
-    }
-
-    private fun stopStreaming() {
-        streamFlushJob?.cancel()
-        streamFlushJob = null
-        streamingBuf.setLength(0)
-        reasoningBuf.setLength(0)
-        _streamingText.value = null
-        _streamingReasoning.value = null
-    }
 
     private val _running = MutableStateFlow(false)
     val running = _running.asStateFlow()
@@ -373,7 +329,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         val s = currentSession ?: return
         _running.value = true
-        startStreaming()
+        _streamingText.value = null
+        _streamingReasoning.value = null
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
         s.runGoal = text.take(200)
         s.runTurnsUsed = 0
@@ -393,13 +350,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider).also { turnEngine = it }
                 engine.runTurn(
                     userText = text,
-                    onDelta = { frag -> streamingBuf.append(frag) },
+                    onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
                     onEvent = ::handleEvent,
                     imageData = imageData,
-                    onReasoning = { frag -> reasoningBuf.append(frag) }
+                    onReasoning = { frag ->
+                        _streamingReasoning.value = (_streamingReasoning.value ?: "") + frag
+                    }
                 )
             } finally {
-                stopStreaming()
+                _streamingText.value = null
+                _streamingReasoning.value = null
                 flushUsage()
                 _running.value = false
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
@@ -613,7 +573,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         val s = currentSession ?: return
         _running.value = true
-        startStreaming()
+        _streamingText.value = null
         job = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
@@ -623,12 +583,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider)
                 engine.runBtw(
                     question = question,
-                    onDelta = { frag -> streamingBuf.append(frag) },
-                    onReasoning = { frag -> reasoningBuf.append(frag) }
+                    onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
+                    onReasoning = { frag -> _streamingReasoning.value = (_streamingReasoning.value ?: "") + frag }
                 )
             } finally {
-                stopStreaming()
                 _running.value = false
+                _streamingText.value = null
+                _streamingReasoning.value = null
             }
         }
     }
