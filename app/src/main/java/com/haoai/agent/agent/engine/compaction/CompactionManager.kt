@@ -107,7 +107,8 @@ class CompactionManager(
         val flow = (clientResolver?.invoke(provider) ?: client).chatStream(provider, apiKey, messages, tools = emptyList())
         val sb = StringBuilder()
         var up = 0; var uc = 0
-        withTimeoutOrNull(60_000L) {
+        // 超时返回 null：把半截摘要按失败处理（走 fallbackTruncate），绝不把截断垃圾当成功入库
+        val completed = withTimeoutOrNull(60_000L) {
             flow.collect { event ->
                 when (event) {
                     is com.haoai.agent.agent.provider.SseEvent.Delta -> sb.append(event.text)
@@ -116,8 +117,9 @@ class CompactionManager(
                     is com.haoai.agent.agent.provider.SseEvent.Usage -> { up = event.promptTokens; uc = event.completionTokens }
                 }
             }
-        }
-        val result = sb.toString().trim()
+            true
+        } ?: false
+        val result = if (completed) sb.toString().trim() else ""
         onLlmUsage?.invoke(up, uc, result.isNotBlank())
         if (result.isBlank()) throw Exception("Empty summary response")
         return result

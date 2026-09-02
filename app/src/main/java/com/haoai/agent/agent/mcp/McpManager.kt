@@ -42,6 +42,9 @@ object McpManager {
 
     private val clients = ConcurrentHashMap<String, McpClient>()
 
+    /** 同一 server 的连接互斥：connectAll / onSandboxChanged / 兜底重连并发时防止双跑互相覆盖。 */
+    private val connectLocks = ConcurrentHashMap<String, Mutex>()
+
     private val stateMap = ConcurrentHashMap<String, McpConnState>()
     private val _states = MutableStateFlow<Map<String, McpConnState>>(emptyMap())
     val states: StateFlow<Map<String, McpConnState>> = _states
@@ -130,6 +133,12 @@ object McpManager {
      * stdio 类型（3.5）：Linux 沙箱未就绪 → PendingReady（不重试，装好发行版自动重连）。
      */
     suspend fun connectServer(serverId: String) {
+        connectLocks.getOrPut(serverId) { Mutex() }.withLock {
+            connectServerLocked(serverId)
+        }
+    }
+
+    private suspend fun connectServerLocked(serverId: String) {
         val cfg = servers.find { it.id == serverId } ?: return
         if (!cfg.enabled) return
         val client = http ?: return
@@ -137,12 +146,12 @@ object McpManager {
         if (cfg.kind == "stdio") {
             val sb = sandboxProvider?.invoke()
             if (sb == null) {
-                clients.remove(serverId)
+                closeClient(serverId)
                 setState(serverId, McpConnState.PendingReady)
                 return
             }
             if (cfg.command.isBlank()) {
-                clients.remove(serverId)
+                closeClient(serverId)
                 setState(serverId, McpConnState.Error("未配置启动命令"))
                 return
             }
@@ -165,12 +174,12 @@ object McpManager {
                     continue
                 }
                 val tools = toolsResult.getOrNull().orEmpty()
-                clients[serverId] = mcp
+                replaceClient(serverId, mcp)
                 setState(serverId, McpConnState.Ready(tools.size))
                 updateConfig(serverId) { it.copy(toolCache = tools.map { t -> McpToolInfoData(t.name, t.description, t.inputSchema.toString()) }) }
                 return
             }
-            clients.remove(serverId)
+            closeClient(serverId)
             setState(serverId, McpConnState.Error(lastError))
             return
         }
@@ -194,13 +203,23 @@ object McpManager {
                 continue
             }
             val tools = toolsResult.getOrNull().orEmpty()
-            clients[serverId] = mcp
+            replaceClient(serverId, mcp)
             setState(serverId, McpConnState.Ready(tools.size))
             updateConfig(serverId) { it.copy(toolCache = tools.map { t -> McpToolInfoData(t.name, t.description, t.inputSchema.toString()) }) }
             return
         }
-        clients.remove(serverId)
+        closeClient(serverId)
         setState(serverId, McpConnState.Error(lastError))
+    }
+
+    /** 换新 client 前必须关旧连接：stdio 的 proot 宿主进程与 HTTP 会话否则永久泄漏。 */
+    private suspend fun replaceClient(serverId: String, mcp: McpClient) {
+        clients.put(serverId, mcp)?.let { old -> runCatching { old.close() } }
+    }
+
+    /** 摘除并关闭连接（不 close 会泄漏底层进程/会话）。 */
+    private suspend fun closeClient(serverId: String) {
+        clients.remove(serverId)?.let { old -> runCatching { old.close() } }
     }
 
     /** 发行版安装/删除后调用：PendingReady 的 stdio 服务器自动重连，就绪的按文件系统现状重算。 */

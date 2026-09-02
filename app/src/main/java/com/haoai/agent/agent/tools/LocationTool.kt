@@ -56,9 +56,12 @@ class LocationTool : Tool {
                     listener = LocationListener { loc ->
                         if (done.compareAndSet(false, true)) {
                             runCatching { lm.removeUpdates(listener) }
-                            cont.resume(loc)
+                            if (cont.isActive) cont.resume(loc)
                         }
                     }
+                    // 超时/用户停止时摘除监听器（requestSingleUpdate 只有收到首个 fix 才自移除，
+                    // GPS 无 fix 会永久挂住，每次调用泄漏一个 listener）
+                    cont.invokeOnCancellation { runCatching { lm.removeUpdates(listener) } }
                     runCatching {
                         lm.requestSingleUpdate(
                             LocationManager.NETWORK_PROVIDER, listener, Looper.getMainLooper()

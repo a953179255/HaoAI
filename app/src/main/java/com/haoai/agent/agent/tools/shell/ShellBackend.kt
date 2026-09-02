@@ -199,7 +199,8 @@ class ProotBackend private constructor(
         /** 发行版安装/删除后调用：强制重建会话。 */
         fun invalidate() {
             synchronized(this) {
-                shared?.let { it.killSession(it.session ?: return@synchronized) }
+                // killSession 只收非空 Session；session 已为 null（进程已死）时也不能跳过 shared = null
+                shared?.let { backend -> backend.session?.let { backend.killSession(it) } }
                 shared = null
             }
         }

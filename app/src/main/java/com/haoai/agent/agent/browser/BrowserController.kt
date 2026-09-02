@@ -228,6 +228,7 @@ object BrowserController {
     }
 
     suspend fun closeTab(index: Int): Unit = withContext(Dispatchers.Main) {
+        if (tabs.isEmpty()) return@withContext // 空池（上次已就地销毁最后一个标签）时 coerceIn 会崩
         closeTabInternal(index.coerceIn(0, tabs.size - 1))
     }
 
