@@ -121,14 +121,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         streamFlushJob?.cancel()
         streamFlushJob = viewModelScope.launch {
             while (true) {
-                // 自适应节拍：气泡越长，每次全量 Markdown 重解析越贵，
-                // 按长度放宽间隔（60→120→200ms），保持打字机观感的同时限制解析频率
-                val ms = when {
-                    streamingBuf.length < 1_500 -> STREAM_FLUSH_MS
-                    streamingBuf.length < 5_000 -> STREAM_FLUSH_MS * 2
-                    else -> STREAM_FLUSH_MS * 3
-                }
-                kotlinx.coroutines.delay(ms)
+                // 固定 60ms（16fps）：打字机流畅度的下限节奏。曾试过按气泡长度放宽到
+                // 120/200ms，长文吐字明显一顿一顿（真机反馈），不采用——长文本的解析
+                // 成本靠 MarkdownText 自身后续优化（增量渲染）解决，而非牺牲观感。
+                kotlinx.coroutines.delay(STREAM_FLUSH_MS)
                 flushStreaming()
             }
         }

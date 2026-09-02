@@ -140,6 +140,7 @@ import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
+import com.haoai.agent.ui.theme.wallpaperAdaptiveGray
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -256,19 +257,6 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val view = androidx.compose.ui.platform.LocalView.current
-
-    // 流式输出期间把刷新率投票压到 60Hz：打字机每帧重排 + 玻璃层重采样在 120Hz
-    // LTPO 面板上会让 RenderThread 满载（实测占一核 74%）；文字生长 60fps 观感无差。
-    // 结束后清掉投票（preferredRefreshRate=0）恢复系统默认调度。尽力而为策略，ROM 可忽略。
-    val streamingActive = running && (streaming != null || streamingReasoning != null)
-    LaunchedEffect(streamingActive) {
-        val w = (context as? android.app.Activity)?.window ?: return@LaunchedEffect
-        runCatching {
-            w.attributes = w.attributes.apply {
-                preferredRefreshRate = if (streamingActive) 60f else 0f
-            }
-        }
-    }
 
     // 软键盘悬浮在 adjustNothing 窗口上会直接盖住抽屉下半部，键盘底色被玻璃 backdrop 采进去
     // （表现为「侧边栏只有下半部分是灰色不透明」）——开抽屉前先收起 IME
@@ -1837,13 +1825,13 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
     }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(13.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(13.dp))
             .clickable { userToggled = true; expanded = !expanded }
     ) {
-        Column(Modifier.padding(vertical = 7.dp)) {
+        Column(Modifier.padding(vertical = 8.dp)) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -1868,7 +1856,7 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(17.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.size(12.dp))
             }
@@ -2069,7 +2057,7 @@ private fun NerdLine(row: ChatRow) {
     val ct = row.completionTokens
     val dur = row.durationMs
     if (pt == null && ct == null && dur == null) return
-    val tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    val tint = wallpaperAdaptiveGray()
     Row(
         Modifier.padding(start = 8.dp, top = 0.dp, bottom = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
