@@ -59,6 +59,16 @@ fun VScreenPreviewPanel(
 
     BackHandler(onBack = onClose)
 
+    // ROM 冻结 VD 输出面时 ImageReader 不出帧：面板打开期间周期性走 WMS 强制合成取帧
+    androidx.compose.runtime.LaunchedEffect(displayId) {
+        if (displayId != null) {
+            while (true) {
+                VirtualScreenController.refreshPreview()
+                kotlinx.coroutines.delay(2000)
+            }
+        }
+    }
+
     var shown by remember { mutableStateOf(false) }
     var heightFraction by remember { mutableStateOf(0.62f) }
     val slide by animateFloatAsState(if (shown) 0f else 1f, tween(260), label = "vscreenSlide")

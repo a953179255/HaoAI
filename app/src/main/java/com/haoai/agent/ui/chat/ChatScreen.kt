@@ -1,6 +1,8 @@
 package com.haoai.agent.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -1742,10 +1744,18 @@ private fun MessageList(
         if (sessionId != null && totalItems > 0) listState.scrollToEnd(animate = false, guard = scrollGuard)
     }
 
+    // 流式刚结束的那次重组（running true→false 与最终行入列同帧发生）：最终行 footer
+    // （操作按钮+统计行）先隐藏、下一帧起 200ms 生长动画，把 +46dp 硬跳吸收成动画，
+    // 滚动跟随（settle 循环）追的是连续生长而非跳变。历史消息不满足条件、静态直出
+    val prevRunning = remember { mutableStateOf(running) }
+    val justFinished = prevRunning.value && !running
+    prevRunning.value = running
+
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
         val finalRowKey = if (!running) rows.lastOrNull()?.key else null
+        val growInKey = if (justFinished) finalRowKey else null
         items(rows, key = { it.key }) { row ->
             RowItem(
                 row,
@@ -1756,7 +1766,8 @@ private fun MessageList(
                 running = running,
                 onViewDiff = onToolViewDiff,
                 onRollback = onToolRollback,
-                showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey
+                showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
+                growIn = row.key == growInKey
             )
         }
         if (showStreaming) {
@@ -1782,11 +1793,12 @@ private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToEnd(
     try {
     // 首轮不先等帧：流式 delta 约每帧一次，先 withFrameNanos 会让 effect 反复在等待中
     // 被下一个 delta 取消，滚动永远执行不到、列表越落越远（isNearBottom 随之失效断跟随）。
-    // 但 delta≈0 也不能提前返回：流式结束那刻最终行增高（操作按钮/统计行、长文 Markdown
-    // 异步布局）要到之后几帧才可见，故循环重读布局微调，连续两帧贴合才收工（上限 10 帧）。
+    // 但 delta≈0 也不能提前返回：流式结束那刻最终行增高（footer 生长动画 200ms≈12 帧、
+    // 长文 Markdown 异步布局）要到之后若干帧才可见，故循环重读布局微调，
+    // 连续两帧贴合才收工（上限 18 帧，覆盖整个 footer 动画期）。
     var settled = 0
     var attempt = 0
-    while (attempt < 10 && settled < 2) {
+    while (attempt < 18 && settled < 2) {
         attempt++
         val info = layoutInfo
         val lastIndex = info.totalItemsCount - 1
@@ -1827,7 +1839,8 @@ private fun RowItem(
     running: Boolean,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
-    showActions: Boolean = true
+    showActions: Boolean = true,
+    growIn: Boolean = false
 ) {
     // 引擎注入的系统事件（handoff 催办 / 压缩结果）不冒充聊天气泡，渲染为居中事件条
     if (row.role == "user" && row.text.startsWith("[系统提示]") ||
@@ -1838,7 +1851,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, showActions)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, showActions, growIn)
     }
 }
 
@@ -2060,7 +2073,8 @@ private fun AssistantBlock(
     running: Boolean,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
-    showActions: Boolean = true
+    showActions: Boolean = true,
+    growIn: Boolean = false
 ) {
     Column(
         Modifier
@@ -2105,16 +2119,33 @@ private fun AssistantBlock(
             }
         }
         // 快捷操作行（assistant：复制 / 重新生成 / 更多）——仅回合最终回复显示，
-        // 工具循环的中间叙述（"马上帮你查"等）不渲染，避免每条都挂一排按钮
-        if (showActions) {
-            Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 1.dp)) {
-                QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
-                QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
-                Spacer(Modifier.weight(1f))
-                QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+        // 工具循环的中间叙述（"马上帮你查"等）不渲染，避免每条都挂一排按钮。
+        // growIn（流式刚结束的那一行）：footer 首帧隐藏、下一帧起 expand+fade 200ms，
+        // 把操作按钮+统计行的 +46dp 硬跳吸收成生长动画；历史消息 footerShown 初值 true，
+        // AnimatedVisibility 初始即可见、不播动画
+        var footerShown by remember(row.key) { mutableStateOf(!growIn) }
+        LaunchedEffect(row.key) {
+            if (!footerShown) {
+                withFrameNanos { }
+                footerShown = true
             }
         }
-        NerdLine(row)
+        AnimatedVisibility(
+            visible = footerShown && (showActions || row.completionTokens != null || row.durationMs != null),
+            enter = expandVertically(tween(200)) + fadeIn(tween(200))
+        ) {
+            Column {
+                if (showActions) {
+                    Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 1.dp)) {
+                        QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
+                        QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
+                        Spacer(Modifier.weight(1f))
+                        QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+                    }
+                }
+                NerdLine(row)
+            }
+        }
     }
 }
 

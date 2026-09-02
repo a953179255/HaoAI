@@ -18,6 +18,7 @@ import android.os.Looper
 import android.util.Base64
 import android.view.Display
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -79,6 +80,28 @@ object VirtualScreenController {
             Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
         } else bmp.copy(Bitmap.Config.ARGB_8888, false)
     }
+
+    /** WMS 强制取帧（JPEG）→ 位图，供预览面板在 ROM 冻结 VD 输出时也能看到真实画面。 */
+    private fun decodeJpeg(bytes: ByteArray): Bitmap? =
+        runCatching { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+
+    /** 预览刷新：WMS 强制合成一帧发面板（独立于 ImageReader 输出面的冻结状态）。 */
+    fun refreshPreview() {
+        val id = displayId ?: return
+        previewScope.launch {
+            val bytes = PrivilegedShell.captureDisplayJpeg(id, 720, 70)
+            val bmp = bytes?.takeIf { it.isNotEmpty() }?.let { decodeJpeg(it) }
+            if (bmp != null) {
+                publishPreview(bmp)
+            } else {
+                latestFrame.get()?.takeIf { !it.isRecycled }?.let { publishPreview(it) }
+            }
+        }
+    }
+
+    private val previewScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob()
+    )
 
     val displayId: Int? get() = display?.display?.displayId ?: trustedDisplayId.takeIf { it > 0 }
 

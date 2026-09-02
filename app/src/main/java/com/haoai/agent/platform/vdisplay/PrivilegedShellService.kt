@@ -284,117 +284,78 @@ class PrivilegedShellService : Binder() {
      * 全反射；失败返回 null，客户端回退本地 ImageReader 帧。
      */
     private fun captureDisplay(displayId: Int, maxSide: Int, quality: Int): ByteArray? {
-        val wmBinder = Class.forName("android.os.ServiceManager")
-            .getMethod("getService", String::class.java).invoke(null, "window") as? IBinder ?: return null
-        val wm = Class.forName("android.view.IWindowManager\$Stub")
-            .getMethod("asInterface", IBinder::class.java).invoke(null, wmBinder) ?: return null
-        val info = wm.javaClass.methods.firstOrNull { it.name == "captureDisplay" } ?: return null
+        return try {
+            val wmBinder = Class.forName("android.os.ServiceManager")
+                .getMethod("getService", String::class.java).invoke(null, "window") as? IBinder
+                ?: run { shellLog("WMS: no window service"); return null }
+            val wm = Class.forName("android.view.IWindowManager\$Stub")
+                .getMethod("asInterface", IBinder::class.java).invoke(null, wmBinder)
+                ?: run { shellLog("WMS: no IWindowManager"); return null }
+            val info = wm.javaClass.methods.firstOrNull { it.name == "captureDisplay" }
+                ?: run { shellLog("WMS: no captureDisplay method"); return null }
+            shellLog("WMS: captureDisplay method ok")
 
-        // CaptureArgs：sourceCrop=全屏 + 恒等变换
-        val argsCls = Class.forName("android.window.ScreenCapture\$CaptureArgs")
-        val bldr = argsCls.fields.firstOrNull { it.name == "Builder" }?.type
-            ?: argsCls.methods.firstOrNull { it.name == "builder" }?.returnType
-            ?: Class.forName("android.window.ScreenCapture\$CaptureArgs\$Builder")
-        val b = bldr.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-        runCatching {
-            bldr.getMethod("setSourceCrop", Rect::class.java).invoke(b, null)
-        }
-        // useIdentityTransform 可选（部分版本有）
-        runCatching {
-            val m = bldr.methods.firstOrNull { it.name == "setUseIdentityTransform" } ?: return@runCatching
-            m.invoke(b, true)
-        }
-        runCatching {
-            val m = bldr.methods.firstOrNull { it.name == "setUid" } ?: return@runCatching
-            m.invoke(b, -1)
-        }
-        val args = bldr.methods.first { it.name == "build" }.invoke(b)
+            // CaptureArgs（Builder 嵌套类位置随版本变化：先查 CaptureArgs 自带的，再查外层）
+            val argsCls = Class.forName("android.window.ScreenCapture\$CaptureArgs").also {
+                shellLog("WMS: CaptureArgs ${it.name}")
+            }
+            val host = Class.forName("android.window.ScreenCapture")
+            val bldr = (argsCls.declaredClasses + host.declaredClasses).firstOrNull { it.simpleName == "Builder" }
+                ?: run { shellLog("WMS: no CaptureArgs Builder declared class"); return null }
+            val b = bldr.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+            runCatching {
+                bldr.getMethod("setSourceCrop", Rect::class.java).invoke(b, null)
+            }
+            runCatching {
+                bldr.methods.firstOrNull { it.name == "setUseIdentityTransform" }?.invoke(b, true)
+            }
+            runCatching {
+                bldr.methods.firstOrNull { it.name == "setUid" }?.invoke(b, -1)
+            }
+            val args = bldr.methods.first { it.name == "build" }.invoke(b)
+            shellLog("WMS: CaptureArgs built ($bldr)")
 
-        // 监听器 proxy：从回调参数中提取结果对象（Screenshot/Result/Buffer 类）
-        val listenerCls = Class.forName("android.window.ScreenCapture\$ScreenCaptureListener")
-        val token = Binder()
-        val lock = Object()
-        var buffer: android.hardware.HardwareBuffer? = null
-        var colorSpace: android.graphics.ColorSpace? = null
-        val proxy = java.lang.reflect.Proxy.newProxyInstance(
-            listenerCls.classLoader, arrayOf(listenerCls)
-        ) { _, method, a ->
-            when (method.name) {
-                "asBinder" -> token
-                else -> {
-                    a?.firstOrNull {
-                        val n = it?.javaClass?.simpleName ?: ""
-                        n.contains("Screenshot") || n.contains("HardwareBuffer") || n.contains("Result")
-                    }?.let { res ->
+            // 监听器：ScreenCaptureListener(ObjIntConsumer<ScreenshotHardwareBuffer>)——
+            // Android 16 上是具体类非接口，Proxy 不可用；直接传函数式回调
+            val listenerCls = Class.forName("android.window.ScreenCapture\$ScreenCaptureListener")
+            val lock = Object()
+            var buffer: android.hardware.HardwareBuffer? = null
+            var colorSpace: android.graphics.ColorSpace? = null
+            @Suppress("UNCHECKED_CAST")
+            val ctor = listenerCls.getConstructor(java.util.function.ObjIntConsumer::class.java)
+            val consumer = java.util.function.ObjIntConsumer<Any?> { res, _ ->
+                try {
+                    if (res != null) {
+                        shellLog("WMS: callback result=${res.javaClass.name}")
                         synchronized(lock) {
-                            runCatching {
-                                res.javaClass.methods.first { it.name == "getHardwareBuffer" }.apply { isAccessible = true }
-                                    .invoke(res) as? android.hardware.HardwareBuffer
-                            }.getOrNull()?.let { buffer = it }
-                            runCatching {
-                                res.javaClass.methods.firstOrNull { it.name == "getColorSpace" }?.apply { isAccessible = true }
-                                    ?.invoke(res) as? android.graphics.ColorSpace
-                            }.getOrNull()?.let { colorSpace = it }
+                            if (buffer == null) {
+                                buffer = res.javaClass.methods.first { it.name == "getHardwareBuffer" }
+                                    .apply { isAccessible = true }.invoke(res) as? android.hardware.HardwareBuffer
+                                colorSpace = res.javaClass.methods.firstOrNull { it.name == "getColorSpace" }
+                                    ?.apply { isAccessible = true }?.invoke(res) as? android.graphics.ColorSpace
+                            }
                             if (buffer != null) lock.notifyAll()
                         }
                     }
-                    0
+                } catch (e: Exception) {
+                    shellLog("WMS: callback err ${e.javaClass.simpleName}: ${e.message}")
                 }
             }
-        }
-        try {
+            val listener = ctor.newInstance(consumer)
             // 异步回调：轮询 3s 等缓冲
+            info.invoke(wm, displayId, args, listener)
             val deadline = System.currentTimeMillis() + 3000
-            info.invoke(wm, displayId, args, proxy)
             while (buffer == null && System.currentTimeMillis() < deadline) Thread.sleep(50)
-            val hb = buffer ?: run { shellLog("WMS capture: no buffer (display $displayId)"); return null }
-            val bmp = android.graphics.Bitmap.wrapHardwareBuffer(hb, colorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
-                ?: run { shellLog("WMS capture: wrapHardwareBuffer failed"); return null }
-            shellLog("WMS capture ok (display $displayId, ${bmp.width}x${bmp.height})")
-            return scaleAndJpeg(bmp, maxSide, quality)
+            val hb = buffer ?: run { shellLog("WMS: no buffer (display $displayId)"); return null }
+            val bmp = android.graphics.Bitmap.wrapHardwareBuffer(
+                hb, colorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)
+            ) ?: run { shellLog("WMS: wrapHardwareBuffer failed"); return null }
+            shellLog("WMS ok (display $displayId, ${bmp.width}x${bmp.height})")
+            scaleAndJpeg(bmp, maxSide, quality)
         } catch (e: Exception) {
             shellLog("WMS capture failed (display $displayId): ${e.javaClass.simpleName}: ${e.message}")
-            return null
-        } finally {
-            buffer?.close()
+            null
         }
-    }
-
-    /** DisplayInfo 字段取值（旧字段名 → getter 兜底；跨版本字段迁移容错）。 */
-    private fun infoField(info: Any, name: String): Int? {
-        runCatching { info.javaClass.getField(name).apply { isAccessible = true }.getInt(info) }
-            .getOrNull()?.let { return it }
-        return runCatching {
-            val m = info.javaClass.methods.firstOrNull { it.name == "get" + name.replaceFirstChar { c -> c.uppercaseChar() } }
-                ?: return null
-            m.isAccessible = true
-            (m.invoke(info) as? Number)?.toInt()
-        }.getOrNull()
-    }
-
-    /** 单平面 RGBA_8888 → Bitmap（逐行拷贝规避 rowStride 行距填充）。 */
-    private fun imageToBitmap(img: android.media.Image): Bitmap? {
-        val plane = img.planes.firstOrNull() ?: return null
-        val buf = plane.buffer ?: return null
-        val pixelStride = plane.pixelStride
-        val rowStride = plane.rowStride
-        if (pixelStride != 4) return null
-        val w = img.width
-        val h = img.height
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val row = IntArray(w)
-        for (y in 0 until h) {
-            buf.position(y * rowStride)
-            for (x in 0 until w) {
-                val b = buf.get(x * pixelStride).toInt() and 0xFF
-                val g = buf.get(x * pixelStride + 1).toInt() and 0xFF
-                val r = buf.get(x * pixelStride + 2).toInt() and 0xFF
-                val a = buf.get(x * pixelStride + 3).toInt() and 0xFF
-                row[x] = (a shl 24) or (r shl 16) or (g shl 8) or b
-            }
-            bmp.setPixels(row, 0, w, 0, y, w, 1)
-        }
-        return bmp
     }
 
     /** 按最长边缩放并编译 JPEG。 */

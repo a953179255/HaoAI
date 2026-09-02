@@ -28,7 +28,7 @@ object PrivilegedShell {
 
     const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     // 注意：每次修改 PrivilegedShellService 代码后必须 +1，Shizuku 才会杀掉旧服务进程换新代码
-    const val USER_SERVICE_VERSION = 11
+    const val USER_SERVICE_VERSION = 14
 
     enum class Status { NOT_INSTALLED, NOT_RUNNING, UNAUTHORIZED, GRANTED }
 

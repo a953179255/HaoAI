@@ -362,8 +362,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             } finally {
                 _streamingText.value = null
                 _streamingReasoning.value = null
-                flushUsage()
+                // running 必须先于 flushUsage 翻：flushUsage 挂 IO 会跨帧，期间
+                // showStreaming(=running) 仍真 → 最终行下方渲染空"正在思考"占位气泡，
+                // 消失时又触发一轮滚动修正，表现为结束瞬间先冲过头再弹回的抖动
                 _running.value = false
+                flushUsage()
                 com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
                 val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
