@@ -50,23 +50,26 @@ class VScreenLaunchTool : Tool {
         if (target.isBlank()) return ToolResult("缺少 target", true)
         VirtualScreenController.launch(app, target)?.let { return ToolResult(it, true) }
         delay(1200)
-        // 重挂载检测：启动后虚拟屏上仍无目标窗口 → 本 ROM 把应用窗口挂回主屏，
-        // 虚拟屏只剩系统画面（白屏/纯色），后续 vscreen_screen 也是空转——明确报错引导降级
+        // 硬性故障检查：启动后虚拟屏上仍无目标窗口（App 拒绝多屏/系统把重投递主屏等）
         val svc = HaoAccessibilityService.instance
         val targetPkg = if (target.startsWith("http")) "" else target.substringBefore('/')
         val onVscreen = svc != null && svc.targetAppWindowOnDisplay(VirtualScreenController.displayId ?: -1, targetPkg)
         if (!onVscreen) {
-            VirtualScreenController.debugLog("remount detected: target=$target no app window on vscreen")
+            VirtualScreenController.debugLog("target window missing on vscreen: $target")
             return ToolResult(
-                "目标 App 未出现在虚拟屏（检测到本 ROM 会把应用窗口挂回主屏：虚拟屏只合成系统画面→白屏/纯色）。" +
-                    "此环境无法进行后台虚拟屏自动化——请改用主屏 screen/tap 工具流程操作该应用，并建议用户关闭「后台自动化（虚拟屏）」开关。",
+                "目标 App 未出现在虚拟屏（窗口可能被重投递回主屏或 App 拒绝多屏）。" +
+                    "请先关闭主屏上的该 App 后重试；仍失败则改用主屏 screen/tap 工具流程。",
                 true
             )
         }
         delay(600)
         VirtualScreenController.awaitFrame()
+        // 画面纯色提示（部分 ROM 不把应用内容合入虚拟屏帧缓冲——属已知限制，节点操作不受影响）
+        val visualNote = if (VirtualScreenController.frameIsDegenerate())
+            "；注意：当前画面可能为纯色（本 ROM 不合成应用画面），操作以 vscreen_screen 的控件树为准"
+            else ""
         return ToolResult(
-            "已启动 $target 到虚拟屏（displayId=${activeDisplayId()}）。用 vscreen_screen 读取界面树与截图。"
+            "已启动 $target 到虚拟屏（displayId=${activeDisplayId()}）。用 vscreen_screen 读取界面树与截图$visualNote。"
         )
     }
 }
@@ -92,11 +95,13 @@ class VScreenScreenTool : Tool {
         VirtualScreenController.awaitFrame(1500)
         val (maxSide, quality) = VirtualScreenController.presetFor(ctx.vscreenBitrateKbps)
         val shot = VirtualScreenController.capture(maxSide, quality)
-        return ToolResult(
-            dump + if (shot != null) "\n（截图已附上，红框标注上一步动作位置）"
-            else "\n（暂无截图帧：虚拟屏画面未更新）",
-            imageDataUrl = shot
-        )
+        // 部分 ROM 虚拟屏只合入纯色/启动画面：明确告知模型按控件树操作，避免误解"截图即真相"
+        val visualNote = if (shot != null && VirtualScreenController.frameIsDegenerate())
+            "\n\n【注意：截图疑似纯色（该 ROM 不把应用内容合成到虚拟屏帧缓冲）——操作以控件编号/坐标为准，截图仅作参考】"
+            else ""
+        val head = dump + if (shot != null) "\n（截图已附上，红框标注上一步动作位置）"
+        else "\n（暂无截图帧：虚拟屏画面未更新）"
+        return ToolResult(head + visualNote, imageDataUrl = shot)
     }
 }
 

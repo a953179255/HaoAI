@@ -323,6 +323,11 @@ object VirtualScreenController {
         }
     }
 
+    @Volatile private var lastStatsColors = 0
+
+    /** 最近一帧画面健康：颜色数 ≤3 视为纯色/底板（部分 ROM 不把应用内容合入虚拟屏帧缓冲）。 */
+    fun frameIsDegenerate(): Boolean = lastStatsColors in 1..3
+
     private fun logFrameStats(bmp: Bitmap) {
         val w = bmp.width
         val h = bmp.height
@@ -344,6 +349,7 @@ object VirtualScreenController {
             }
             y += step
         }
+        lastStatsColors = colors.size
         debugLog("frame ${w}x${h} colors=${colors.size} avg=(${rSum / n},${gSum / n},${bSum / n}) white=${white * 100 / n}%")
     }
 

@@ -153,11 +153,12 @@ class PrivilegedShellService : Binder() {
         var flags = DisplayManagerFlags.PUBLIC or DisplayManagerFlags.OWN_CONTENT_ONLY or
             DisplayManagerFlags.SUPPORTS_TOUCH or DisplayManagerFlags.SHOULD_SHOW_SYSTEM_DECORATIONS
         if (Build.VERSION.SDK_INT >= 33) {
-            flags = flags or DisplayManagerFlags.TRUSTED or
+            flags = flags or DisplayManagerFlags.TRUSTED or DisplayManagerFlags.OWN_DISPLAY_GROUP or
                 DisplayManagerFlags.ALWAYS_UNLOCKED or DisplayManagerFlags.TOUCH_FEEDBACK_DISABLED
         }
         if (Build.VERSION.SDK_INT >= 34) {
-            flags = flags or DisplayManagerFlags.OWN_FOCUS
+            flags = flags or DisplayManagerFlags.OWN_FOCUS or DisplayManagerFlags.DEVICE_DISPLAY_GROUP or
+                DisplayManagerFlags.STEAL_TOP_FOCUS_DISABLED
         }
 
         val displayId = if (Build.VERSION.SDK_INT >= 31) {

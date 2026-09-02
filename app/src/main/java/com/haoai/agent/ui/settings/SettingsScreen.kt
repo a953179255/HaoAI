@@ -1290,8 +1290,8 @@ private fun LazyListScope.privacyItems(
             }
             Text(
                 "说明：操作走无障碍节点（点击/输入/滚动），无需触摸注入；精确手势（拖动滑块）本版本未启用，" +
-                    "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。部分 ROM（含 Flyme 等）会把上屏应用的窗口挂回主屏，" +
-                    "导致虚拟屏只有纯色画面——此时 vscreen_launch 会明确报错并引导改用主屏自动化。",
+                    "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。部分 ROM（含 Flyme 等）的虚拟屏仅合入纯色/启动画面，" +
+                    "截图不可用但控件树操作不受影响（工具会明确提示以控件树为准）。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
