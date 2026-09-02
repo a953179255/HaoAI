@@ -1,12 +1,18 @@
 package com.haoai.agent.platform.vdisplay
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
+import android.media.ImageReader
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.Parcel
+import android.util.Base64
 import android.view.Surface
+import java.io.ByteArrayOutputStream
 
 /**
  * Shizuku UserService：由 Shizuku server 经 app_process 以 shell uid 启动。
@@ -26,6 +32,7 @@ class PrivilegedShellService : Binder() {
         const val TRANSACTION_EXIT = FIRST_CALL_TRANSACTION + 1
         const val TRANSACTION_CREATE_DISPLAY = FIRST_CALL_TRANSACTION + 2
         const val TRANSACTION_RELEASE_DISPLAY = FIRST_CALL_TRANSACTION + 3
+        const val TRANSACTION_CAPTURE_DISPLAY = FIRST_CALL_TRANSACTION + 4
     }
 
     // ---------- 生命周期入口 ----------
@@ -64,6 +71,18 @@ class PrivilegedShellService : Binder() {
                     .getOrDefault(false)
                 reply?.writeNoException()
                 reply?.writeInt(if (released) 1 else 0)
+                true
+            }
+            TRANSACTION_CAPTURE_DISPLAY -> {
+                data.enforceInterface(DESCRIPTOR)
+                val displayId = data.readInt()
+                val maxSide = data.readInt()
+                val quality = data.readInt()
+                val bytes = runCatching { captureDisplay(displayId, maxSide, quality) }
+                    .onFailure { android.util.Log.e("HaoAIVD", "captureDisplay failed", it) }
+                    .getOrNull()
+                reply?.writeNoException()
+                reply?.writeByteArray(bytes ?: ByteArray(0))
                 true
             }
             else -> super.onTransact(code, data, reply, flags)
@@ -245,6 +264,155 @@ class PrivilegedShellService : Binder() {
             .getMethod("asInterface", IBinder::class.java)
             .invoke(null, binder)
     }.getOrNull()
+
+    /** shell 进程日志（logcat 被部分 ROM 压制时落盘诊断；UserService 为 shell uid，写 /data/local/tmp）。 */
+    private fun shellLog(msg: String) {
+        runCatching {
+            val f = java.io.File("/data/local/tmp/haovd-shell.log")
+            if (f.length() > 128 * 1024) f.delete()
+            f.appendText("${System.currentTimeMillis()}  $msg\n")
+        }
+    }
+
+    // ---------- 强制合成取帧（Operator-on-Android 同款：WMS captureDisplay） ----------
+
+    /**
+     * WMS captureDisplay 强制合成取帧：虚拟屏自身的 ImageReader 输出面在部分 ROM 上会被
+     * 冻结成纯色/启动画面（合成器不再更新 VD 输出），而 captureDisplay 由 WMS 重合成一次。
+     * Android 16 实测 IWindowManager.captureDisplay(int, ScreenCapture$CaptureArgs,
+     * ScreenCapture$ScreenCaptureListener) 可用（SurfaceControl 镜像 API 16 已改/移除）。
+     * 全反射；失败返回 null，客户端回退本地 ImageReader 帧。
+     */
+    private fun captureDisplay(displayId: Int, maxSide: Int, quality: Int): ByteArray? {
+        val wmBinder = Class.forName("android.os.ServiceManager")
+            .getMethod("getService", String::class.java).invoke(null, "window") as? IBinder ?: return null
+        val wm = Class.forName("android.view.IWindowManager\$Stub")
+            .getMethod("asInterface", IBinder::class.java).invoke(null, wmBinder) ?: return null
+        val info = wm.javaClass.methods.firstOrNull { it.name == "captureDisplay" } ?: return null
+
+        // CaptureArgs：sourceCrop=全屏 + 恒等变换
+        val argsCls = Class.forName("android.window.ScreenCapture\$CaptureArgs")
+        val bldr = argsCls.fields.firstOrNull { it.name == "Builder" }?.type
+            ?: argsCls.methods.firstOrNull { it.name == "builder" }?.returnType
+            ?: Class.forName("android.window.ScreenCapture\$CaptureArgs\$Builder")
+        val b = bldr.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+        runCatching {
+            bldr.getMethod("setSourceCrop", Rect::class.java).invoke(b, null)
+        }
+        // useIdentityTransform 可选（部分版本有）
+        runCatching {
+            val m = bldr.methods.firstOrNull { it.name == "setUseIdentityTransform" } ?: return@runCatching
+            m.invoke(b, true)
+        }
+        runCatching {
+            val m = bldr.methods.firstOrNull { it.name == "setUid" } ?: return@runCatching
+            m.invoke(b, -1)
+        }
+        val args = bldr.methods.first { it.name == "build" }.invoke(b)
+
+        // 监听器 proxy：从回调参数中提取结果对象（Screenshot/Result/Buffer 类）
+        val listenerCls = Class.forName("android.window.ScreenCapture\$ScreenCaptureListener")
+        val token = Binder()
+        val lock = Object()
+        var buffer: android.hardware.HardwareBuffer? = null
+        var colorSpace: android.graphics.ColorSpace? = null
+        val proxy = java.lang.reflect.Proxy.newProxyInstance(
+            listenerCls.classLoader, arrayOf(listenerCls)
+        ) { _, method, a ->
+            when (method.name) {
+                "asBinder" -> token
+                else -> {
+                    a?.firstOrNull {
+                        val n = it?.javaClass?.simpleName ?: ""
+                        n.contains("Screenshot") || n.contains("HardwareBuffer") || n.contains("Result")
+                    }?.let { res ->
+                        synchronized(lock) {
+                            runCatching {
+                                res.javaClass.methods.first { it.name == "getHardwareBuffer" }.apply { isAccessible = true }
+                                    .invoke(res) as? android.hardware.HardwareBuffer
+                            }.getOrNull()?.let { buffer = it }
+                            runCatching {
+                                res.javaClass.methods.firstOrNull { it.name == "getColorSpace" }?.apply { isAccessible = true }
+                                    ?.invoke(res) as? android.graphics.ColorSpace
+                            }.getOrNull()?.let { colorSpace = it }
+                            if (buffer != null) lock.notifyAll()
+                        }
+                    }
+                    0
+                }
+            }
+        }
+        try {
+            // 异步回调：轮询 3s 等缓冲
+            val deadline = System.currentTimeMillis() + 3000
+            info.invoke(wm, displayId, args, proxy)
+            while (buffer == null && System.currentTimeMillis() < deadline) Thread.sleep(50)
+            val hb = buffer ?: run { shellLog("WMS capture: no buffer (display $displayId)"); return null }
+            val bmp = android.graphics.Bitmap.wrapHardwareBuffer(hb, colorSpace ?: android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+                ?: run { shellLog("WMS capture: wrapHardwareBuffer failed"); return null }
+            shellLog("WMS capture ok (display $displayId, ${bmp.width}x${bmp.height})")
+            return scaleAndJpeg(bmp, maxSide, quality)
+        } catch (e: Exception) {
+            shellLog("WMS capture failed (display $displayId): ${e.javaClass.simpleName}: ${e.message}")
+            return null
+        } finally {
+            buffer?.close()
+        }
+    }
+
+    /** DisplayInfo 字段取值（旧字段名 → getter 兜底；跨版本字段迁移容错）。 */
+    private fun infoField(info: Any, name: String): Int? {
+        runCatching { info.javaClass.getField(name).apply { isAccessible = true }.getInt(info) }
+            .getOrNull()?.let { return it }
+        return runCatching {
+            val m = info.javaClass.methods.firstOrNull { it.name == "get" + name.replaceFirstChar { c -> c.uppercaseChar() } }
+                ?: return null
+            m.isAccessible = true
+            (m.invoke(info) as? Number)?.toInt()
+        }.getOrNull()
+    }
+
+    /** 单平面 RGBA_8888 → Bitmap（逐行拷贝规避 rowStride 行距填充）。 */
+    private fun imageToBitmap(img: android.media.Image): Bitmap? {
+        val plane = img.planes.firstOrNull() ?: return null
+        val buf = plane.buffer ?: return null
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        if (pixelStride != 4) return null
+        val w = img.width
+        val h = img.height
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val row = IntArray(w)
+        for (y in 0 until h) {
+            buf.position(y * rowStride)
+            for (x in 0 until w) {
+                val b = buf.get(x * pixelStride).toInt() and 0xFF
+                val g = buf.get(x * pixelStride + 1).toInt() and 0xFF
+                val r = buf.get(x * pixelStride + 2).toInt() and 0xFF
+                val a = buf.get(x * pixelStride + 3).toInt() and 0xFF
+                row[x] = (a shl 24) or (r shl 16) or (g shl 8) or b
+            }
+            bmp.setPixels(row, 0, w, 0, y, w, 1)
+        }
+        return bmp
+    }
+
+    /** 按最长边缩放并编译 JPEG。 */
+    private fun scaleAndJpeg(src: Bitmap, maxSide: Int, quality: Int): ByteArray? {
+        val scale = minOf(1f, maxSide.toFloat() / maxOf(src.width, src.height))
+        val bmp = if (scale < 1f) {
+            Bitmap.createScaledBitmap(src, (src.width * scale).toInt(), (src.height * scale).toInt(), true).also {
+                if (it !== src) src.recycle()
+            }
+        } else src
+        return try {
+            val bos = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, quality, bos)
+            bos.toByteArray()
+        } finally {
+            if (bmp !== src) bmp.recycle()
+        }
+    }
 
     private fun createApi31(
         idm: Any, callbackProxy: Any, surface: Surface,

@@ -49,6 +49,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
+import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -527,28 +531,86 @@ fun ChatScreen(
         val activeSession = vm.session.collectAsState().value
         val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
         Box(Modifier.align(Alignment.TopCenter)) {
-            TopBar(
-                title = vm.agentName(),
-                subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
-                contextUsage = contextUsage,
-                backdrop = backdrop,
-                onDrawer = { openDrawer() },
-                onNewChat = {
-                    vm.newSession()
-                    scope.launch { drawer.close() }
-                },
-                onRenameSubtitle = {
-                    renameText = activeSession?.title ?: ""
-                    showRenameDialog = true
-                },
-                onOpenBrowser = onOpenBrowser,
-                onOpenVscreen = onOpenVscreen,
-                planMode = planMode,
-                todoItems = todoItems,
-                taskExpanded = taskPanelExpanded,
-                onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
-                modifier = Modifier
-            )
+            Column {
+                TopBar(
+                    title = vm.agentName(),
+                    subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
+                    contextUsage = contextUsage,
+                    backdrop = backdrop,
+                    onDrawer = { openDrawer() },
+                    onNewChat = {
+                        vm.newSession()
+                        scope.launch { drawer.close() }
+                    },
+                    onRenameSubtitle = {
+                        renameText = activeSession?.title ?: ""
+                        showRenameDialog = true
+                    },
+                    onOpenBrowser = onOpenBrowser,
+                    onOpenVscreen = onOpenVscreen,
+                    planMode = planMode,
+                    todoItems = todoItems,
+                    taskExpanded = taskPanelExpanded,
+                    onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
+                    modifier = Modifier
+                )
+                // E1 断点恢复横幅：从顶栏下沿延展出现（running 标记由 selectSession 死亡检测置入）
+                val runStateNow = activeSession?.runState
+                val runGoalNow = activeSession?.runGoal
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = com.haoai.agent.data.StoredSession.resumable(runStateNow) && runGoalNow != null,
+                    enter = androidx.compose.animation.fadeIn() +
+                        androidx.compose.animation.expandVertically(),
+                    exit = androidx.compose.animation.fadeOut() +
+                        androidx.compose.animation.shrinkVertically()
+                ) {
+                    com.haoai.agent.ui.common.GlassCard(
+                        onClick = {},
+                        backdrop = backdrop,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(
+                            topStart = 0.dp, topEnd = 0.dp, bottomStart = 14.dp, bottomEnd = 14.dp
+                        ),
+                        surfaceAlpha = 0.60f,
+                        contentAlignment = androidx.compose.ui.Alignment.CenterStart,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                    ) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "上次任务中断：${runGoalNow?.take(60) ?: ""}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 2
+                                )
+                                Text(
+                                    when (runStateNow) {
+                                        com.haoai.agent.data.StoredSession.RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
+                                        com.haoai.agent.data.StoredSession.RUN_FAILED -> "执行出错，可继续尝试"
+                                        else -> "进程中断，可继续执行"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            androidx.compose.material3.TextButton(onClick = { vm.resumeRun() }) {
+                                Text("继续", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                            }
+                            androidx.compose.material3.TextButton(onClick = { vm.dismissResume() }) {
+                                Text("忽略", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
             // 右下角耳片：面板收起时凸起一小块玻璃，点开任务面板（与顶栏连体贴合）
             androidx.compose.animation.AnimatedVisibility(
                 visible = !taskPanelExpanded && (hasActiveTask || taskPanelForcedVisible),
@@ -597,59 +659,6 @@ fun ChatScreen(
                             modifier = Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
-                    }
-                }
-            }
-        }
-
-        // E1 断点恢复横幅：顶层 Box 内、紧随顶栏下方展示（running 标记由 selectSession 死亡检测置入）
-        val runStateNow = activeSession?.runState
-        val runGoalNow = activeSession?.runGoal
-        if (com.haoai.agent.data.StoredSession.resumable(runStateNow) && runGoalNow != null) {
-            Box(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 130.dp, start = 12.dp, end = 12.dp)
-            ) {
-                com.haoai.agent.ui.common.GlassCard(
-                    onClick = {},
-                    backdrop = backdrop,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                    surfaceAlpha = 0.55f,
-                    contentAlignment = androidx.compose.ui.Alignment.CenterStart
-                ) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "上次任务中断：${runGoalNow.take(60)}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 2
-                            )
-                            Text(
-                                when (runStateNow) {
-                                    com.haoai.agent.data.StoredSession.RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
-                                    com.haoai.agent.data.StoredSession.RUN_FAILED -> "执行出错，可继续尝试"
-                                    else -> "进程中断，可继续执行"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        androidx.compose.material3.TextButton(onClick = { vm.resumeRun() }) {
-                            Text("继续", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                        }
-                        androidx.compose.material3.TextButton(onClick = { vm.dismissResume() }) {
-                            Text("忽略", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
                     }
                 }
             }
@@ -1674,32 +1683,63 @@ private fun MessageList(
     val totalItems = rows.size + (if (showStreaming) 1 else 0)
 
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-    // 滑动列表时收起输入法
+    // 程序化滚动标志：跟随/补滚期间为 true。isScrollInProgress 不区分滚动来源，
+    // 不加这层守卫，流式跟随/键盘抬升补滚会被当成"用户滑动"而 clearFocus 收起输入法
+    // （表现为点输入框键盘刚弹出就被关），也会误断粘滞
+    val scrollGuard = remember { mutableStateOf(false) }
+    // 用户滑动列表时收起输入法（程序化滚动不触发）
     LaunchedEffect(listState) {
         androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }
-            .collect { if (it) focusManager.clearFocus() }
+            .collect { if (it && !scrollGuard.value) focusManager.clearFocus() }
     }
 
-    // 自动滚底：用户发送新消息时无条件滚底；流式内容仅在用户位于底部附近时跟随
-    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length) {
+    // 粘滞标志：只有用户亲手把列表拖离底部才断开跟随；键盘抬升/内容增高/补滚动画不算
+    var userScrolledAway by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged().collect { inProgress ->
+                if (scrollGuard.value) return@collect
+                val info = listState.layoutInfo
+                val lv = info.visibleItemsInfo.lastOrNull() ?: return@collect
+                val dist = lv.offset + lv.size - (info.viewportEndOffset - info.afterContentPadding)
+                if (inProgress) { if (dist > 200) userScrolledAway = true }
+                else if (dist <= 200) userScrolledAway = false
+            }
+    }
+
+    // 自动滚底：用户发送新消息时无条件滚底；流式内容仅在粘滞（用户未主动滑走）时跟随。
+    // running/durationMs/bottomPadding 也入 key：流式结束最终行增高（操作按钮/统计行，
+    // usage 常晚于正文落值）与键盘抬升改 padding 时，都要各补一次沉降滚底。
+    // 流式中用瞬时滚动（animate=false）：animateScrollBy 会被下一帧 delta 取消，
+    // 快 token 率/键盘跳变下进度被饿死，列表越落越远直至断跟随
+    // 发送新消息收起键盘：旧版靠强制滚动的 clearFocus 副作用实现，加滚动守卫后需显式收。
+    // 按末条 user 消息 key 去重——流式期间最后一条仍是 user，不能每次都收，
+    // 否则用户流式中打开键盘想插话会被下一个 delta 误关
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    var lastSentUserKey by rememberSaveable { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length, running, rows.lastOrNull()?.durationMs, bottomPadding) {
         if (totalItems <= 0) return@LaunchedEffect
-        val last = totalItems - 1
-        val info = listState.layoutInfo
-        val lastVisible = info.visibleItemsInfo.lastOrNull() ?: return@LaunchedEffect
-        val isNearBottom = lastVisible.index >= last - 1 &&
-            (lastVisible.offset + lastVisible.size) - info.viewportEndOffset < 200
-        // 用户发送新消息（最后一条是 user）→ 强制滚底；否则仅在底部附近时跟随
+        // 用户发送新消息（最后一条是 user）→ 强制滚底并复位粘滞
         val isUserMessage = rows.lastOrNull()?.role == "user"
-        if (isUserMessage || isNearBottom) {
-            // animateScrollToItem 会等待 item 布局完成再滚动，避免 layout race
-            listState.animateScrollToItem(last)
+        if (isUserMessage) {
+            userScrolledAway = false
+            val k = rows.last().key
+            if (k != lastSentUserKey) {
+                lastSentUserKey = k
+                keyboardController?.hide()
+                focusManager.clearFocus()
+            }
+        }
+        if (isUserMessage || !userScrolledAway) {
+            listState.scrollToEnd(animate = !running, guard = scrollGuard)
         }
     }
 
     // 会话切换：无条件跳到最新一条（切换后通常停在旧位置，且最后一条未必是 user 消息，
     // 上面的跟随逻辑不会触发）。新会话无消息时不滚动。
     LaunchedEffect(sessionId) {
-        if (sessionId != null && totalItems > 0) listState.scrollToItem(totalItems - 1)
+        if (sessionId != null && totalItems > 0) listState.scrollToEnd(animate = false, guard = scrollGuard)
     }
 
     LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
@@ -1724,6 +1764,56 @@ private fun MessageList(
                 StreamingItem(streamingText, streamingReasoning, thinkingHint)
             }
         }
+    }
+}
+
+/**
+ * 滚到列表末端：末项底边对齐内容末端（视口末端-后 padding），上游 animateScrollToEnd 同思路。
+ * animateScrollToItem(last) 是顶边对齐——流式条目长过一屏后，最新内容留在视口下方外，
+ * 近底判定也随之失真，表现为"流式快结束时停住、结束不滚到底"。
+ * 末项增高（操作按钮/统计行出现、Markdown 异步布局）晚于本次 layoutInfo 快照，
+ * 故循环若干帧重读布局微调直至贴合。
+ */
+private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToEnd(
+    animate: Boolean,
+    guard: androidx.compose.runtime.MutableState<Boolean>
+) {
+    guard.value = true
+    try {
+    // 首轮不先等帧：流式 delta 约每帧一次，先 withFrameNanos 会让 effect 反复在等待中
+    // 被下一个 delta 取消，滚动永远执行不到、列表越落越远（isNearBottom 随之失效断跟随）。
+    // 但 delta≈0 也不能提前返回：流式结束那刻最终行增高（操作按钮/统计行、长文 Markdown
+    // 异步布局）要到之后几帧才可见，故循环重读布局微调，连续两帧贴合才收工（上限 10 帧）。
+    var settled = 0
+    var attempt = 0
+    while (attempt < 10 && settled < 2) {
+        attempt++
+        val info = layoutInfo
+        val lastIndex = info.totalItemsCount - 1
+        if (lastIndex < 0) return
+        val lastItem = info.visibleItemsInfo.lastOrNull { it.index == lastIndex }
+        if (lastItem == null) {
+            // 末项尚未组合（如切会话停在旧位置）：先跳过去，下一帧再微调
+            scrollToItem(lastIndex)
+            settled = 0
+        } else {
+            val contentEnd = info.viewportEndOffset - info.afterContentPadding
+            val delta = lastItem.offset + lastItem.size - contentEnd
+            if (kotlin.math.abs(delta) > 1) {
+                val d = delta.toFloat()
+                if (animate) animateScrollBy(d) else scrollBy(d)
+                settled = 0
+            } else {
+                settled++
+            }
+        }
+        withFrameNanos { }
+    }
+        // 多等一帧再复位守卫：scrollBy 触发的 isScrollInProgress 快照可能晚一帧送达，
+        // 提前复位会让这帧被误判成用户滑动而收起输入法
+        withFrameNanos { }
+    } finally {
+        guard.value = false
     }
 }
 

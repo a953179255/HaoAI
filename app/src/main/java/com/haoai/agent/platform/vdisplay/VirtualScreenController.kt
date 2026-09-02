@@ -143,6 +143,7 @@ object VirtualScreenController {
                 debugLog("trusted display created/reused id=$id")
                 return null
             }
+            debugLog("trusted display create failed (id=$id), fallback to local display")
             android.util.Log.w("HaoAIVD", "trusted display create failed (id=$id), fallback to local display")
             // 可信屏创建失败：继续走本地公共屏回退（不留死 reader）
         }
@@ -328,6 +329,26 @@ object VirtualScreenController {
     /** 最近一帧画面健康：颜色数 ≤3 视为纯色/底板（部分 ROM 不把应用内容合入虚拟屏帧缓冲）。 */
     fun frameIsDegenerate(): Boolean = lastStatsColors in 1..3
 
+    /** 影子镜像抓到的帧是真实合成：解码采样更新颜色统计（让"纯色提示"跟随真实画面）。 */
+    private fun updateDegenerateFromJpeg(bytes: ByteArray) {
+        runCatching {
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+            val colors = HashSet<Int>()
+            val step = 64
+            var y = 0
+            while (y < bmp.height) {
+                var x = 0
+                while (x < bmp.width) {
+                    colors.add(bmp.getPixel(x, y))
+                    x += step
+                }
+                y += step
+            }
+            lastStatsColors = colors.size
+            bmp.recycle()
+        }
+    }
+
     private fun logFrameStats(bmp: Bitmap) {
         val w = bmp.width
         val h = bmp.height
@@ -355,6 +376,20 @@ object VirtualScreenController {
 
     /** 最近一帧 + 点击标记 → JPEG data URL（复用 browser_screenshot 图像通路）。 */
     fun capture(maxLongSide: Int = 1280, quality: Int = 70): String? {
+        // 首选：特权侧影子镜像强制合成取帧（Operator-on-Android/scrcpy 同款——绕过 ROM 对
+        // VD 输出面只合成纯色/启动画面的冻结）；失败回退本地 ImageReader 帧
+        debugLog("capture($maxLongSide,$quality) channel=$channel tid=${displayId}")
+        // 影子镜像对任意 displayId 生效（服务端按 layerStack 强制合成，不依赖谁创建的屏）
+        val capId = displayId
+        if (capId != null) {
+            val bytes = runBlocking { PrivilegedShell.captureDisplayJpeg(capId, maxLongSide, quality) }
+            if (bytes != null && bytes.isNotEmpty()) {
+                debugLog("capture via shadow-mirror display=$capId ${bytes.size} bytes")
+                updateDegenerateFromJpeg(bytes)
+                return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+            }
+            debugLog("shadow-mirror capture failed${PrivilegedShell.lastCaptureError?.let { " ($it)" } ?: ""}, fallback local frame")
+        }
         val frame = latestFrame.get() ?: return null
         if (frame.isRecycled) return null
         val src = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)

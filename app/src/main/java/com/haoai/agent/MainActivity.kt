@@ -216,8 +216,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         }
                         repeat(6) { i ->
                             kotlinx.coroutines.delay(2500)
+                            val shot = com.haoai.agent.platform.vdisplay.VirtualScreenController.capture(960, 70)
                             com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog(
-                                "route observe $i frame=${com.haoai.agent.platform.vdisplay.VirtualScreenController.hasFrame()}"
+                                "route observe $i frame=${com.haoai.agent.platform.vdisplay.VirtualScreenController.hasFrame()} shot=${shot?.length ?: "null"}"
                             )
                         }
                     }

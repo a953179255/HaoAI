@@ -27,7 +27,8 @@ import rikka.shizuku.Shizuku
 object PrivilegedShell {
 
     const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-    const val USER_SERVICE_VERSION = 6
+    // 注意：每次修改 PrivilegedShellService 代码后必须 +1，Shizuku 才会杀掉旧服务进程换新代码
+    const val USER_SERVICE_VERSION = 11
 
     enum class Status { NOT_INSTALLED, NOT_RUNNING, UNAUTHORIZED, GRANTED }
 
@@ -39,7 +40,7 @@ object PrivilegedShell {
     /** 进程实例 token：UserService 凭它识别跨进程复用（僵尸屏），确保只复用本进程会话的屏。 */
     private val instanceToken: String = java.util.UUID.randomUUID().toString()
     /** UserService 的裸 Binder（onServiceConnected 异步回填；失效置 null 下次重绑）。 */
-    private var userServiceBinder: IBinder? = null
+    @Volatile private var userServiceBinder: IBinder? = null
 
     private val connection = object : android.content.ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -138,6 +139,16 @@ object PrivilegedShell {
         }
     }
 
+    /** 取 UserService Binder：未绑定先发起绑定并等待回填（服务进程被替换后连接会断开）。 */
+    private suspend fun awaitUserService(timeoutMs: Long = 20_000): IBinder? {
+        if (userServiceBinder == null) {
+            requestUserService()
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (userServiceBinder == null && System.currentTimeMillis() < deadline) delay(100)
+        }
+        return userServiceBinder
+    }
+
     /**
      * shell uid 侧创建可信虚拟屏（TRUSTED flag，Flyme 重挂载克星）。
      * surface 由应用进程 ImageReader 提供，跨进程传入；返回 displayId，≤0 失败。
@@ -146,12 +157,7 @@ object PrivilegedShell {
      */
     suspend fun createTrustedDisplay(w: Int, h: Int, dpi: Int, surface: android.view.Surface): Int =
         withContext(Dispatchers.IO) {
-            if (userServiceBinder == null) {
-                requestUserService()
-                val deadline = System.currentTimeMillis() + 10000
-                while (userServiceBinder == null && System.currentTimeMillis() < deadline) delay(100)
-            }
-            val binder = userServiceBinder ?: run {
+            val binder = awaitUserService() ?: run {
                 android.util.Log.e("HaoAIVD", "createTrustedDisplay: userService bind timeout")
                 return@withContext -1
             }
@@ -217,6 +223,38 @@ object PrivilegedShell {
             ExecResult(-1, "Shizuku 执行失败：${it.message}")
         }
     }
+
+    /**
+     * 强制合成取帧（影子镜像）：服务端新建临时镜像显示绑定虚拟屏 layerStack 抓一帧，
+     * 绕过 ROM 对 VD 输出面只合成纯色/启动画面的冻结。返回 JPEG 字节，失败 null
+     * （调用方回退本地 ImageReader 帧）。
+     */
+    /** 最近一次镜像取帧失败原因（客户端可见，落盘诊断用）。 */
+    @Volatile var lastCaptureError: String? = null
+
+    suspend fun captureDisplayJpeg(displayId: Int, maxSide: Int, quality: Int): ByteArray? =
+        withContext(Dispatchers.IO) {
+            val binder = awaitUserService(4000) ?: run {
+                lastCaptureError = "userService bind timeout"
+                return@withContext null
+            }
+            runCatching {
+                val data = Parcel.obtain()
+                val reply = Parcel.obtain()
+                try {
+                    data.writeInterfaceToken(PrivilegedShellService.DESCRIPTOR)
+                    data.writeInt(displayId)
+                    data.writeInt(maxSide)
+                    data.writeInt(quality)
+                    binder.transact(PrivilegedShellService.TRANSACTION_CAPTURE_DISPLAY, data, reply, 0)
+                    reply.readException()
+                    reply.createByteArray()
+                } finally {
+                    data.recycle()
+                    reply.recycle()
+                }
+            }.onFailure { lastCaptureError = it.javaClass.simpleName + ": ${it.message}" }.getOrNull()
+        }
 
     /** root（su）执行；阻塞读，须在 IO 线程。 */
     suspend fun rootExec(cmd: String): ExecResult = withContext(Dispatchers.IO) {

@@ -176,7 +176,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun newSession() {
-        stopInternal()
+        detachStreaming() // 新建会话不中断进行中的任务（结果写回原会话），仅摘除流式展示
         val s = StoredSession.create(c.workspace.workspaceUriForSession)
         currentSession = s
         c.sessionStore.save(s)
@@ -191,7 +191,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun selectSession(id: String) {
         if (_session.value?.id == id) return
-        stopInternal()
+        detachStreaming() // 切换会话不中断进行中的任务（结果写回原会话），仅摘除流式展示
         val s = c.sessionStore.load(id) ?: return
         // E1 进程死亡检测：上次 running（引擎已灭）→ interrupted，可恢复
         if (s.runState == "running") {
@@ -369,7 +369,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
                 s.runState = endState
                 runCatching { c.sessionStore.save(s) }
-                _session.value = s
+                // 用户可能已切换会话：仅在仍看该会话时回写视图（copy 确保 StateFlow 重发射）
+                if (_session.value?.id == s.id) {
+                    val view = s.copy()
+                    currentSession = view
+                    _session.value = view
+                }
                 refreshSessions()
                 c.syncWorkspaceDocs()
                 maybeGenerateTitle(s)
@@ -1121,20 +1126,26 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val goal = s.runGoal ?: "未记录目标".take(80)
         val turns = s.runTurnsUsed
         val resumeText = "[系统恢复] 上次任务在第 $turns 轮中断，未完成目标：$goal。请先评估当前进度（可读文件/记忆核实），再继续执行。"
-        s.runState = com.haoai.agent.data.StoredSession.RUN_IDLE
-        s.runGoal = null
-        runCatching { c.sessionStore.save(s) }
-        _session.value = s
+        val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = null)
+        currentSession = view
+        c.sessionStore.save(view)
+        _session.value = view
         send(resumeText, null)
     }
 
-    /** E1 忽略恢复：清状态不注入。 */
+    /** E1 忽略恢复：清状态不注入（copy 实例使 StateFlow 必然重发射，否则横幅不消失）。 */
     fun dismissResume() {
         val s = currentSession ?: return
-        s.runState = com.haoai.agent.data.StoredSession.RUN_IDLE
-        s.runGoal = null
-        runCatching { c.sessionStore.save(s) }
-        _session.value = s
+        val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = null)
+        currentSession = view
+        c.sessionStore.save(view)
+        _session.value = view
+    }
+
+    /** 摘除当前会话的流式展示（切换/新建会话时调用；任务继续在后台跑，不中断）。 */
+    private fun detachStreaming() {
+        _streamingText.value = null
+        _streamingReasoning.value = null
     }
 
     private fun stopInternal() {
