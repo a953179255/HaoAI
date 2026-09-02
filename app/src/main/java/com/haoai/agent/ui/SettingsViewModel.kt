@@ -672,9 +672,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun useDefaultWorkspace() {
         c.workspace.useDefault()
+        c.onWorkspaceSwitched()
     }
 
-    fun useSafWorkspace(uriString: String): Boolean = c.workspace.useSaf(uriString)
+    fun useSafWorkspace(uriString: String): Boolean {
+        val ok = c.workspace.useSaf(uriString)
+        if (ok) c.onWorkspaceSwitched()
+        return ok
+    }
 
     fun workspaceName(): String = c.workspace.current?.displayName ?: "未绑定"
 }

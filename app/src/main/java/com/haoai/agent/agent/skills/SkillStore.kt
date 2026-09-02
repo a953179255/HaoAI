@@ -42,14 +42,28 @@ data class SkillMeta(
 
 /**
  * 技能库全局单例：引擎/工具/UI 共享同一把对象锁，避免多实例 @Synchronized 失效。
+ * C5：技能落盘迁工作区 `skills/<slug>/SKILL.md`（人机共编辑权威资源，可 git）；
+ * 状态目录 filesDir/skills/ 仅作初始化前的默认值与迁移来源。SAF 工作区时保持状态目录
+ * （SafFileBackend 无本地路径，工具经 SAF 访问工作区，技能读写仍走 File 落点不破坏）。
  */
 object SkillStore {
 
     @Volatile
     private var baseDir: File? = null
 
+    @Volatile
+    private var fallbackDir: File? = null
+
     fun init(appFilesDir: File) {
-        baseDir = File(appFilesDir, "skills")
+        fallbackDir = File(appFilesDir, "skills")
+        baseDir = fallbackDir
+    }
+
+    /** C5：切落到工作区 skills/ 目录（幂等迁移由调用方完成）；null 回退状态目录（SAF 工作区场景）。 */
+    @Synchronized
+    fun useWorkspaceDir(dir: File?) {
+        baseDir = dir ?: fallbackDir
+        cachedList = null
     }
 
     private val dir: File

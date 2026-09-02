@@ -109,6 +109,19 @@ class AppContainer(app: Application) {
         // 存储单例先初始化（WorkspaceDocs 异步任务会用到）
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
+        // C5：技能落盘迁工作区 skills/<slug>/SKILL.md（人机共编辑权威资源，可 git/用户可读改）；
+        // filesDir/skills/ 存量幂等迁移一次（目标同名技能已存在则保留工作区版本，重复执行不产生重复项）
+        (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
+            val legacy = java.io.File(appFilesDir, "skills")
+            val target = java.io.File(ws, "skills")
+            if (legacy.isDirectory) {
+                legacy.listFiles { f -> f.isDirectory }?.forEach { d ->
+                    if (java.io.File(java.io.File(target, d.name), "SKILL.md").exists()) return@forEach
+                    runCatching { d.copyRecursively(java.io.File(target, d.name), overwrite = false) }
+                }
+            }
+            com.haoai.agent.agent.skills.SkillStore.useWorkspaceDir(target)
+        }
         // 5.4 运行账本（LLM/工具调用 JSONL，按月分文件 + 90 天清理）
         UsageLedger.init(appFilesDir)
         // Phase 6 工作流存储 + schedule 触发重入队（冷启/进程重建后恢复调度链）
@@ -165,6 +178,13 @@ class AppContainer(app: Application) {
     /** 把记忆/身份等渲染为工作区 Markdown（上游 式文件层），异步执行。 */
     fun syncWorkspaceDocs() {
         applicationScope.launch { runCatching { WorkspaceDocs.syncAll(this@AppContainer) } }
+    }
+
+    /** C5：工作区切换后同步技能落点（默认工作区 = 工作区 skills/；SAF 无本地路径回退状态目录）。 */
+    fun onWorkspaceSwitched() {
+        val ws = (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+        com.haoai.agent.agent.skills.SkillStore.useWorkspaceDir(ws?.let { java.io.File(it, "skills") })
+        syncWorkspaceDocs()
     }
 
     fun activeProviderById(id: String?): ProviderConfig? =

@@ -40,6 +40,27 @@ object WorkspaceDocs {
             root.resolve("TOOLS.md").writeText(TOOLS_TEMPLATE)
             root.resolve("HEARTBEAT.md").writeText(renderHeartbeat(c))
             upgradeDreamsHeader(root)
+            seedDocs(root)
+        }
+    }
+
+    /**
+     * C5：知识库目录 docs/（人机共编辑权威资源）——agent 用 read/write/edit 直接读写，
+     * 用户可阅读/编辑/git 管理。只播种 README 说明，不覆盖已有内容。
+     */
+    private fun seedDocs(root: File) {
+        val docs = root.resolve("docs")
+        if (!docs.isDirectory) docs.mkdirs()
+        val readme = docs.resolve("README.md")
+        if (!readme.exists()) {
+            readme.writeText(
+                "# 知识库（docs/）\n\n" +
+                    "人与助理共同维护的长期知识：网页摘要、项目资料、调研笔记、操作手册等。\n" +
+                    "- 助理：用 read/write/edit 工具直接读写本目录；把值得长期保留的工作产物沉淀到这里\n" +
+                    "- 人：直接编辑即可，Markdown 为主；改动对助理立即可见\n" +
+                    "- 与 MEMORY.md 的分工：MEMORY.md 是助理的「记忆」（自动提取、带元数据），\n" +
+                    "  docs/ 是「资料库」（人工组织、自由结构），互不替代\n"
+            )
         }
     }
 
@@ -191,7 +212,16 @@ object WorkspaceDocs {
   去重/上限/冲突检测等结构性修改仍走 memory 工具（有护栏）；MEMORY.md 手改后下一轮对话自动生效
 - 每日凌晨自动「固化」：重要日志晋升 MEMORY.md；深度梦境做语义去重（机制见 DREAMS.md）
 - 低价值记忆 30 天未用降级进「已归档」，再 30 天物理清理
-- 技能沉淀在应用内部（skill save/list/view/delete 管理）
+- 技能沉淀在工作区 skills/ 目录（skill 工具的 save/list/view/delete 管理，SKILL.md 格式；
+  用户可手工新增/修改技能目录，之后调 skill list 刷新即可发现）
+
+## 目录边界（工作区 vs 状态目录）
+- 本工作区放「人机共编辑的权威资源」：MEMORY/USER/IDENTITY/SOUL/AGENTS/TOOLS/HEARTBEAT/DREAMS、
+  memory/、skills/、docs/、dreaming/
+- 应用状态目录（app 私有，你读不到）放机器运行态：配置真源与 config 源、会话、快照、
+  定时任务、用量账本、SSH 目标、密钥密文。这些**不放工作区**（防 git/云同步泄密），也不要试图用
+  read/write 探测；改配置走 config_get/config_set 工具（见「配置管理」）
+- 定时任务权威源在状态目录（schedule 工具管理）；HEARTBEAT.md 只是它的渲染展示镜像
 
 ## 配置管理（改配置 = config_get / config_set 工具，不要动无障碍 UI）
 - 应用配置（模型 providers、当前模型、白名单设置项）的真源在应用状态目录，**工作区里没有配置文件**，
@@ -216,10 +246,12 @@ object WorkspaceDocs {
 | MEMORY.md | 长期记忆真源（可编辑，行尾元数据请保留） |
 | USER.md | 用户画像（自动镜像，手改会被覆盖） |
 | IDENTITY.md / SOUL.md | 身份与性格（镜像；想改性格直接告诉助理即可） |
-| HEARTBEAT.md | 定时任务清单 |
+| HEARTBEAT.md | 定时任务清单（展示镜像；管理用 schedule 工具） |
 | DREAMS.md | 梦境日记（固化历史与机制说明） |
 | dreaming/ | 每日固化报告 |
 | memory/ | 每日情景日志（YYYY-MM-DD.md） |
+| skills/ | 技能库（SKILL.md 格式，skill 工具读写；人可手工编辑） |
+| docs/ | 知识库（人机共同维护的长期资料，read/write/edit 直接读写） |
 """.trim() + "\n"
 
     private val TOOLS_TEMPLATE = """
