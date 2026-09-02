@@ -170,7 +170,13 @@ object VirtualScreenController {
         val shellCmd: String
         val launchIntent: Intent
         if (isUrl) {
-            shellCmd = "am start --display $id -a android.intent.action.VIEW -d '$target'"
+            // 注入防线：target 经特权 shell 单引号拼接，单引号/换行可逃逸成任意命令；
+            // 百分号编码语义等价（URI 解码后还原），正常 URL 不受影响
+            val shellTarget = target
+                .replace("'", "%27")
+                .replace("\n", "%0A")
+                .replace("\r", "%0D")
+            shellCmd = "am start --display $id -a android.intent.action.VIEW -d '$shellTarget'"
             launchIntent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(target))
         } else {
             val act = runCatching { pm.getLaunchIntentForPackage(target)?.component }.getOrNull()

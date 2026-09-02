@@ -436,6 +436,10 @@ private class HeightBridge(private val onHeight: (Int) -> Unit) {
 private fun jsString(s: String): String =
     kotlinx.serialization.json.JsonPrimitive(s).toString().replace("</", "<\\/")
 
+/** HTML 文本转义：用于把不可信内容（模型输出）放进 HTML 文档的文本位。 */
+private fun htmlEscape(s: String): String =
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
 private fun katexHtml(latex: String, dark: Boolean): String {
     val lat = jsString(latex)
     val textColor = if (dark) "#E6EBF5" else "#171B26"
@@ -459,7 +463,7 @@ private fun mermaidHtml(code: String, dark: Boolean): String {
         "<script src=\"mermaid.min.js\"></script>" +
         "<style>body{margin:0;padding:4px;background:transparent;overflow:hidden}" +
         ".mermaid svg{max-width:100%}</style></head><body>" +
-        "<div class=\"mermaid\">" + code.replace("</", "<\\/") + "</div>" +
+        "<div class=\"mermaid\">" + htmlEscape(code) + "</div>" +
         "<script>" +
         "var failed=false;" +
         "try{mermaid.initialize({startOnLoad:false,theme:'" + theme + "'});" +

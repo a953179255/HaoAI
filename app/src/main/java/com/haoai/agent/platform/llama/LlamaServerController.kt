@@ -229,7 +229,8 @@ class LlamaServerController(
             var useHtp = false
             var hex: String? = null
             val nativeDir = context.applicationInfo.nativeLibraryDir
-            var cmd = mutableListOf(bin)
+            // 完整命令在 try 内赋值、catch 兜底时读取（不得在 catch 里重新拼——无 -m/--port 必失败）
+            var fullCmd: List<String>? = null
             try {
                 stopInternal()
                 val cmd = mutableListOf(
@@ -259,6 +260,7 @@ class LlamaServerController(
                 ) detectHexagonArch() else null
                 useHtp = hex != null
                 if (useHtp) cmd.addAll(listOf("-ngl", "99", "-dev", "HTP0", "--device", "HTP0"))
+                fullCmd = cmd
                 _state.value = LlamaState.Starting(
                     if (useHtp) "加载模型 ${model.name}（Hexagon $hex NPU）…" else "加载模型 ${model.name}（CPU）…"
                 )
@@ -322,9 +324,13 @@ class LlamaServerController(
                 // HTP 失败（skel 不兼容/无 HTP 权限）：去 NPU 参数 CPU 兜底重试一次
                 if (useHtp) {
                     android.util.Log.w("HaoLlama", "Hexagon 启动失败（${e.message?.take(120)}），回退 CPU")
-                    val retry = cmd.filterIndexed { i, arg ->
+                    val base = fullCmd
+                    if (base == null) {
+                        android.util.Log.w("HaoLlama", "CPU 兜底缺完整命令行，跳过重试")
+                    } else {
+                    val retry = base.filterIndexed { i, arg ->
                         !(arg == "-ngl" || arg == "-dev" || arg == "--device" ||
-                            (i > 0 && (cmd[i - 1] == "-ngl" || cmd[i - 1] == "-dev" || cmd[i - 1] == "--device")))
+                            (i > 0 && (base[i - 1] == "-ngl" || base[i - 1] == "-dev" || base[i - 1] == "--device")))
                     } + listOf("-ngl", "0")
                     val pb2 = ProcessBuilder(retry).redirectErrorStream(true)
                     val env2 = pb2.environment()
@@ -369,6 +375,7 @@ class LlamaServerController(
                                 }
                         }
                         delay(HEALTH_INTERVAL_MS)
+                    }
                     }
                 }
                 lastActiveBackend = "cpu"

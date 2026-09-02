@@ -40,9 +40,14 @@ object NetGuard {
     fun check(url: String) {
         val http = url.trim().lowercase().startsWith("http://")
         if (!http) return
-        // 用户显式白名单优先：命中 origin 前缀直接放行
+        // 用户显式白名单优先：命中 origin 前缀直接放行。
+        // 前缀之后必须是 / ? # 或结尾——否则 http://ip:8080 会放过 http://ip:8080.attacker.com
         val target = url.trim()
-        if (httpWhitelist.any { it.isNotBlank() && target.startsWith(it) }) return
+        if (httpWhitelist.any { w ->
+                w.isNotBlank() && target.startsWith(w) &&
+                    (target.length == w.length || target[w.length] in "/?#")
+            }
+        ) return
         val host = runCatching { java.net.URI(url.trim()).host }.getOrNull()
             ?: throw IOException(MSG)
         if (!isPrivateHost(host)) throw IOException(MSG)
