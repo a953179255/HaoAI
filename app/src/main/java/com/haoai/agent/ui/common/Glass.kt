@@ -155,6 +155,8 @@ fun GlassPanel(
     refract: Boolean? = null,
     redrawKey: (() -> Any?)? = null,
     border: Boolean = true,
+    /** 表面附加绘制（画在磨砂与着色之上、内容之下）：如顶栏状态栏带的渐变补强。仅折射路径生效。 */
+    surfaceOverlay: (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
@@ -186,6 +188,7 @@ fun GlassPanel(
                         drawRect(tint, blendMode = BlendMode.Hue)
                         drawRect(tint.copy(alpha = 0.35f))
                     }
+                    surfaceOverlay?.invoke(this)
                 }
             )
             // 发丝描边画在玻璃表面之上（后置 modifier 后绘制），与退化分支观感对齐

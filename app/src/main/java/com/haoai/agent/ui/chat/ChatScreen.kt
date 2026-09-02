@@ -1476,6 +1476,9 @@ private fun TopBar(
     val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
     var showContextDetail by remember { mutableStateOf(false) }
     val vscreenId by com.haoai.agent.platform.vdisplay.VirtualScreenController.displayIdFlow.collectAsState()
+    val density = LocalDensity.current
+    val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
+    val scrimColor = MaterialTheme.colorScheme.background
     // 通栏方角顶栏（上游 式）：无左右边距、无圆角、无四周描边（底缘发丝线由内容
     // Row 下方的 Box 画出）；任务面板在同一块玻璃内向下一体生长（animateContentSize）
     GlassPanel(
@@ -1488,7 +1491,18 @@ private fun TopBar(
         // blurRadius 默认=radius/3，方角顶栏 radius=0 会得到 blur(0)——显式给模糊量
         blurRadius = 12.dp,
         surfaceAlpha = 0.30f,
-        border = false
+        border = false,
+        // backdrop blur 在玻璃顶缘采样衰减，高对比文字滚入状态栏带会透出：
+        // 顶部叠一条背景色渐变补强，到状态栏底 +20dp（标题行上缘）淡出
+        surfaceOverlay = {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(scrimColor.copy(alpha = 0.55f), scrimColor.copy(alpha = 0f)),
+                    startY = 0f,
+                    endY = statusBarPx + with(density) { 20.dp.toPx() }
+                )
+            )
+        }
     ) {
         // GlassPanel 内容是 Box：顶栏行与任务区必须包在同一 Column 里，否则叠放
         Column(
