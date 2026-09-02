@@ -49,6 +49,20 @@ class VScreenLaunchTool : Tool {
         val target = args.optString("target")
         if (target.isBlank()) return ToolResult("缺少 target", true)
         VirtualScreenController.launch(app, target)?.let { return ToolResult(it, true) }
+        delay(1200)
+        // 重挂载检测：启动后虚拟屏上仍无目标窗口 → 本 ROM 把应用窗口挂回主屏，
+        // 虚拟屏只剩系统画面（白屏/纯色），后续 vscreen_screen 也是空转——明确报错引导降级
+        val svc = HaoAccessibilityService.instance
+        val targetPkg = if (target.startsWith("http")) "" else target.substringBefore('/')
+        val onVscreen = svc != null && svc.targetAppWindowOnDisplay(VirtualScreenController.displayId ?: -1, targetPkg)
+        if (!onVscreen) {
+            VirtualScreenController.debugLog("remount detected: target=$target no app window on vscreen")
+            return ToolResult(
+                "目标 App 未出现在虚拟屏（检测到本 ROM 会把应用窗口挂回主屏：虚拟屏只合成系统画面→白屏/纯色）。" +
+                    "此环境无法进行后台虚拟屏自动化——请改用主屏 screen/tap 工具流程操作该应用，并建议用户关闭「后台自动化（虚拟屏）」开关。",
+                true
+            )
+        }
         delay(600)
         VirtualScreenController.awaitFrame()
         return ToolResult(
@@ -76,7 +90,8 @@ class VScreenScreenTool : Tool {
         val dump = svc.dumpIndexedOnDisplay(id, args.optInt("max_nodes") ?: 80)
             ?: return ToolResult("读不到虚拟屏窗口（服务未连接或屏上无应用窗口）", true)
         VirtualScreenController.awaitFrame(1500)
-        val shot = VirtualScreenController.capture()
+        val (maxSide, quality) = VirtualScreenController.presetFor(ctx.vscreenBitrateKbps)
+        val shot = VirtualScreenController.capture(maxSide, quality)
         return ToolResult(
             dump + if (shot != null) "\n（截图已附上，红框标注上一步动作位置）"
             else "\n（暂无截图帧：虚拟屏画面未更新）",

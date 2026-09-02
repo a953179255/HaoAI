@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -72,6 +73,12 @@ class MainActivity : ComponentActivity() {
             pendingResultCb?.invoke(if (r.resultCode == RESULT_OK) r.data else null)
             pendingResultCb = null
         }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        // 深链/第三方 startActivity 重投递时框架不自动更新 getIntent()，须手动 setIntent
+        setIntent(intent)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -161,6 +168,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
 
     // debug deep link 路由：adb shell am start -a android.intent.action.VIEW -d "haoai://debug/<target>"
     // 验证直达（跳过导航点击）。仅响应 host=debug（Manifest intent-filter 限定）
+    val rootScope = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect((context as? android.app.Activity)?.intent?.data) {
         val act = context as? android.app.Activity ?: return@LaunchedEffect
         act.intent?.data?.takeIf { it.host == "debug" }?.let { uri ->
@@ -175,6 +183,45 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 "mcp" -> screen = 6
                 "browser" -> screen = 7
                 "workflows" -> screen = 8
+                "vscreen" -> {
+                    screen = 0
+                    rootScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                        val appCtx = container.appContext
+                        val pkg = uri.getQueryParameter("pkg") ?: "com.android.settings"
+                        // 观察循环：重投递则强退设置重投；无帧自愈后重试；最终长观察帧管线
+                        var attempt = 0
+                        var launchedOk = false
+                        while (attempt < 4 && !launchedOk) {
+                            attempt++
+                            com.haoai.agent.platform.vdisplay.VirtualScreenController.ensureDisplay(appCtx)
+                                ?.let { e ->
+                                    com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog("route attempt $attempt: $e")
+                                    return@launch
+                                }
+                            val err = com.haoai.agent.platform.vdisplay.VirtualScreenController.launch(appCtx, pkg)
+                            if (err == null) {
+                                com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog("route: launched OK (attempt $attempt, frame=${com.haoai.agent.platform.vdisplay.VirtualScreenController.hasFrame()})")
+                                launchedOk = true
+                            } else {
+                                com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog("route attempt $attempt: $err")
+                                if (err.contains("正在主屏运行")) {
+                                    com.haoai.agent.platform.vdisplay.PrivilegedShell.refresh(appCtx)
+                                    val kill = if (com.haoai.agent.platform.vdisplay.PrivilegedShell.shizukuUsable())
+                                        com.haoai.agent.platform.vdisplay.PrivilegedShell.shizukuExec("am force-stop $pkg")
+                                    else com.haoai.agent.platform.vdisplay.PrivilegedShell.rootExec("am force-stop $pkg")
+                                    com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog("route force-stopped $pkg: ${kill.ok}")
+                                }
+                                kotlinx.coroutines.delay(2500)
+                            }
+                        }
+                        repeat(6) { i ->
+                            kotlinx.coroutines.delay(2500)
+                            com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog(
+                                "route observe $i frame=${com.haoai.agent.platform.vdisplay.VirtualScreenController.hasFrame()}"
+                            )
+                        }
+                    }
+                }
                 "new" -> {
                     screen = 0
                     chatVm.newSession()
@@ -182,6 +229,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             }
             // 消费后清掉，避免旋转/重建后重复路由
             act.intent = null
+        }
+    }
+    // 运行时任务视图隐藏兜底恢复：进程上次被强杀时任务可能残留隐藏态，
+    // 应用重新回到前台且 Agent 未在运行 → 恢复最近任务可见（防「任务藏起来了找不到」）
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            com.haoai.agent.platform.TaskVisibility.restoreIfIdle(
+                context.applicationContext, chatVm.running.value
+            )
         }
     }
     val settings by container.settingsFlow.collectAsState()
@@ -218,7 +275,6 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val chatListState = androidx.compose.runtime.saveable.rememberSaveable(
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
     ) { androidx.compose.foundation.lazy.LazyListState() }
-    val rootScope = androidx.compose.runtime.rememberCoroutineScope()
     var cameFromDrawer by rememberSaveable { mutableStateOf(false) }
 
     // 设置二级页状态提升：从设置子页进入管理页（记忆库等）后，返回时回到原子页而非设置根

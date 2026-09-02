@@ -331,6 +331,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
+        // 运行时任务视图隐藏：Agent 运行期间把本应用任务移出最近任务（防误清）
+        com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
         s.runGoal = text.take(200)
         s.runTurnsUsed = 0
@@ -362,6 +364,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 _streamingReasoning.value = null
                 flushUsage()
                 _running.value = false
+                com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
                 val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
                 s.runState = endState
@@ -574,6 +577,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val s = currentSession ?: return
         _running.value = true
         _streamingText.value = null
+        com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         job = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
@@ -590,6 +594,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 _running.value = false
                 _streamingText.value = null
                 _streamingReasoning.value = null
+                com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
             }
         }
     }
@@ -858,6 +863,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             onToolChange = { refreshTodos() },
             vscreenEnabled = st.vscreenEnabled &&
                 android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
+            vscreenBitrateKbps = st.vscreenBitrateKbps,
             budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) },
             // E5 单轮熔断：token 上限 + 连续工具失败阈值（设置-通用-模型行为）
             turnTokenCap = st.turnTokenCap,

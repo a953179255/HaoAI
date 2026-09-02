@@ -27,7 +27,7 @@ import rikka.shizuku.Shizuku
 object PrivilegedShell {
 
     const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-    private const val USER_SERVICE_VERSION = 5
+    const val USER_SERVICE_VERSION = 6
 
     enum class Status { NOT_INSTALLED, NOT_RUNNING, UNAUTHORIZED, GRANTED }
 
@@ -36,6 +36,8 @@ object PrivilegedShell {
 
     private var listenerRegistered = false
     private var bindRequested = false
+    /** 进程实例 token：UserService 凭它识别跨进程复用（僵尸屏），确保只复用本进程会话的屏。 */
+    private val instanceToken: String = java.util.UUID.randomUUID().toString()
     /** UserService 的裸 Binder（onServiceConnected 异步回填；失效置 null 下次重绑）。 */
     private var userServiceBinder: IBinder? = null
 
@@ -139,6 +141,8 @@ object PrivilegedShell {
     /**
      * shell uid 侧创建可信虚拟屏（TRUSTED flag，Flyme 重挂载克星）。
      * surface 由应用进程 ImageReader 提供，跨进程传入；返回 displayId，≤0 失败。
+     * 每次传递进程实例 token：应用进程重启后旧屏的 surface 已死（僵尸屏不出帧），
+     * 服务端凭 token 识别跨进程复用并强制释放重建。
      */
     suspend fun createTrustedDisplay(w: Int, h: Int, dpi: Int, surface: android.view.Surface): Int =
         withContext(Dispatchers.IO) {
@@ -159,6 +163,7 @@ object PrivilegedShell {
                     data.writeInt(w)
                     data.writeInt(h)
                     data.writeInt(dpi)
+                    data.writeString(instanceToken)
                     surface.writeToParcel(data, 0)
                     binder.transact(PrivilegedShellService.TRANSACTION_CREATE_DISPLAY, data, reply, 0)
                     reply.readException()

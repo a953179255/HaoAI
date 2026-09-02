@@ -347,6 +347,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(vscreenEnabled = enabled) }
     }
 
+    /** 4.3 虚拟屏画面码率档位（kbps：1500/3000/5000/10000/20000）。 */
+    fun setVscreenBitrate(kbps: Int) {
+        c.updateSettings { it.copy(vscreenBitrateKbps = kbps.coerceIn(1500, 20000)) }
+    }
+
+    /** 4.3 运行时任务视图隐藏开关。 */
+    fun setVscreenHideTask(enabled: Boolean) {
+        c.updateSettings { it.copy(vscreenHideTask = enabled) }
+    }
+
+    /** 4.3 无障碍适配模式开关（TalkBack 等环境下节点优先、禁手势、朗读步骤）。 */
+    fun setA11yAdaptiveMode(enabled: Boolean) {
+        c.updateSettings { it.copy(a11yAdaptiveMode = enabled) }
+    }
+
     fun setDeepDream(enabled: Boolean) {
         c.updateSettings { it.copy(deepDream = enabled) }
     }

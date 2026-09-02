@@ -31,6 +31,35 @@ class HaoAccessibilityService : AccessibilityService() {
         var lastEventAt: Long = 0L
     }
 
+    // ---------- 4.3 无障碍适配模式（TalkBack 等环境下自动钳制行为） ----------
+
+    private var talkBackCheckedAt = 0L
+    private var talkBackActiveNow = false
+
+    /** 适配模式生效条件：设置页开关 ∧ TalkBack 等朗读无障碍服务确在运行（5s 缓存）。 */
+    fun adaptiveModeOn(): Boolean {
+        val enabled = runCatching {
+            (application as? com.haoai.agent.HaoApplication)?.container?.settingsFlow?.value?.a11yAdaptiveMode
+                ?: false
+        }.getOrDefault(false)
+        if (!enabled) return false
+        val now = System.currentTimeMillis()
+        if (now - talkBackCheckedAt > 5000) {
+            talkBackCheckedAt = now
+            talkBackActiveNow = runCatching {
+                android.provider.Settings.Secure.getString(
+                    contentResolver, "enabled_accessibility_services"
+                )?.contains("talkback", ignoreCase = true) ?: false
+            }.getOrDefault(false)
+        }
+        return talkBackActiveNow
+    }
+
+    /** 朗读步骤（TalkBack 自动朗读 toast）；适配模式下的操作可感知性。 */
+    private fun announce(msg: String) {
+        runCatching { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show() }
+    }
+
     data class IndexedNode(
         val index: Int,
         val cls: String,
@@ -204,23 +233,33 @@ class HaoAccessibilityService : AccessibilityService() {
         }
         val rect = Rect().also { node.getBoundsInScreen(it) }
         if (!longPress && target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            if (adaptiveModeOn()) announce("已点击「$text」")
             return "已点击「$text」"
         }
         return if (longPress && longPress(rect.centerX(), rect.centerY()))
             "已长按「$text」"
         else if (tapScreen(rect.centerX(), rect.centerY()))
             "已坐标点击「$text」"
+        else if (adaptiveModeOn())
+            "点击失败：无障碍适配模式已启用，控件不可点击时跳过手势注入（避免与 TalkBack 冲突）"
         else "点击失败：控件不可点击且手势注入失败"
     }
 
     fun clickById(viewId: String): String {
         val node = findNode(viewId = viewId) ?: return "未找到 id=$viewId 的控件"
-        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return "已点击 id=$viewId"
+        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            if (adaptiveModeOn()) announce("已点击 id=$viewId")
+            return "已点击 id=$viewId"
+        }
         val rect = Rect().also { node.getBoundsInScreen(it) }
-        return if (tapScreen(rect.centerX(), rect.centerY())) "已坐标点击 id=$viewId" else "点击失败"
+        return if (tapScreen(rect.centerX(), rect.centerY())) "已坐标点击 id=$viewId"
+        else if (adaptiveModeOn()) "点击失败：无障碍适配模式已启用，该控件无点击语义，已跳过手势注入"
+        else "点击失败"
     }
 
     fun tapScreen(x: Int, y: Int): Boolean {
+        // 适配模式：手势会被 TalkBack 接管（滑动手势触发焦点导航），一律走节点语义
+        if (adaptiveModeOn()) return false
         val svc = instance ?: return false
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val gesture = GestureDescription.Builder()
@@ -230,6 +269,7 @@ class HaoAccessibilityService : AccessibilityService() {
     }
 
     fun longPress(x: Int, y: Int, durationMs: Int = 600): Boolean {
+        if (adaptiveModeOn()) return false
         val svc = instance ?: return false
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val gesture = GestureDescription.Builder()
@@ -243,6 +283,7 @@ class HaoAccessibilityService : AccessibilityService() {
     fun screenHeight(): Int = resources.displayMetrics.heightPixels
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Boolean {
+        if (adaptiveModeOn()) return false
         val svc = instance ?: return false
         val path = Path().apply {
             moveTo(x1.toFloat(), y1.toFloat())
@@ -326,6 +367,25 @@ class HaoAccessibilityService : AccessibilityService() {
         return win?.root
     }
 
+    /** 指定屏上是否存在目标应用的应用窗口（诊断虚拟屏重挂载：部分 ROM 把窗口挂回主屏）。 */
+    fun targetAppWindowOnDisplay(displayId: Int, targetPkg: String): Boolean {
+        if (!displaySupported()) return false
+        val svc = instance ?: return false
+        val byDisplay = runCatching { svc.windowsOnAllDisplays }.getOrNull() ?: return false
+        val windows = byDisplay[displayId]?.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            ?: return false
+        if (targetPkg.isNotBlank()) {
+            return windows.any { runCatching { it.root?.packageName?.toString() == targetPkg }.getOrDefault(false) }
+        }
+        // URL 目标：排除系统 launcher 后任意应用窗口即可（浏览器在虚拟屏上）
+        val launcherPkg = runCatching {
+            val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            packageManager.queryIntentActivities(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                .firstOrNull()?.activityInfo?.packageName
+        }.getOrNull() ?: ""
+        return windows.any { it.root?.packageName?.toString()?.takeIf { p -> p != launcherPkg } != null }
+    }
+
     /** 虚拟屏索引化 dump：编号规则与 dumpIndexed 完全一致（共用 numberedWalk）。 */
     fun dumpIndexedOnDisplay(displayId: Int, maxNodes: Int = 80): String? {
         if (!displaySupported()) return null
@@ -372,7 +432,9 @@ class HaoAccessibilityService : AccessibilityService() {
             depth++
         }
         val rect = Rect().also { node.getBoundsInScreen(it) }
-        return (target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) to rect
+        val ok = target.isClickable && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (ok && adaptiveModeOn()) announce("已点击虚拟屏控件 [$index]")
+        return ok to rect
     }
 
     fun textOnDisplay(displayId: Int, index: Int, text: String): Pair<Boolean, Rect?> {

@@ -20,6 +20,7 @@ import android.view.Display
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -39,10 +40,14 @@ object VirtualScreenController {
     val supported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
     private const val IDLE_DESTROY_MS = 5 * 60 * 1000L
+    /** 3 缓冲：2 缓冲下 acquireLatestImage 与生产者写缓冲贴得太近，部分 ROM 会读到过渡垃圾帧（竖条）。 */
+    private const val MAX_IMAGES = 3
 
     private val lock = Any()
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
+    /** 帧管线独立线程：主线程被聊天/流式渲染占用时逐像素拷贝会被拖慢，导致掉帧与预览迟钝。 */
+    private var captureThread: android.os.HandlerThread? = null
     /** shell uid 可信屏的 displayId（trusted 通道下 display 为空）。 */
     private var trustedDisplayId = -1
     private val latestFrame = AtomicReference<Bitmap?>(null)
@@ -106,7 +111,11 @@ object VirtualScreenController {
         val w = metrics.widthPixels
         val h = metrics.heightPixels
         if (w <= 0 || h <= 0) return "主屏尺寸异常（${w}x$h）"
-        val r = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        debugCtx = context
+        debugLog("ensureDisplay: ${w}x${h} @ ${metrics.densityDpi}dpi, existing=${displayId}")
+        val r = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, MAX_IMAGES)
+        val th = android.os.HandlerThread("haovd-capture").apply { start() }
+        val captureHandler = Handler(th.looper)
         r.setOnImageAvailableListener({ rd ->
             val img = runCatching { rd.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
             val bmp = runCatching { imageToBitmap(img) }.getOrNull()
@@ -114,8 +123,11 @@ object VirtualScreenController {
             if (bmp != null) {
                 latestFrame.getAndSet(bmp)?.takeIf { it !== bmp }?.recycle()
                 publishPreview(bmp)
+                logFrameStats(bmp)
+            } else {
+                android.util.Log.w("HaoAIVD", "frame decode failed（可能非 RGBA 格式或行距异常）")
             }
-        }, Handler(Looper.getMainLooper()))
+        }, captureHandler)
 
         PrivilegedShell.refresh(context)
         val privileged = PrivilegedShell.shizukuUsable() || PrivilegedShell.hasRoot()
@@ -123,10 +135,12 @@ object VirtualScreenController {
             val id = runBlocking { PrivilegedShell.createTrustedDisplay(w, h, metrics.densityDpi, r.surface) }
             if (id > 0) {
                 reader = r
+                captureThread = th
                 trustedDisplayId = id
                 channel = if (PrivilegedShell.shizukuUsable()) "trusted-shizuku" else "trusted-root"
                 displayIdFlow.value = id
                 touch()
+                debugLog("trusted display created/reused id=$id")
                 return null
             }
             android.util.Log.w("HaoAIVD", "trusted display create failed (id=$id), fallback to local display")
@@ -142,13 +156,16 @@ object VirtualScreenController {
         }.getOrNull()
         if (d == null) {
             runCatching { r.close() }
+            runCatching { th.quitSafely() }
             return "虚拟屏创建失败（本 ROM 可能限制了公共虚拟屏）"
         }
         display = d
         reader = r
+        captureThread = th
         channel = "local"
         displayIdFlow.value = d.display?.displayId
         touch()
+        debugLog("local display created id=${d.display?.displayId}")
         null
     }
 
@@ -188,15 +205,38 @@ object VirtualScreenController {
             }
         }
         PrivilegedShell.refresh(context)
+        // 目标 App 已在主屏运行时，am start --display 会被系统送回主屏实例（"delivered to
+        // currently running"），虚拟屏收不到内容 → 用户看到白屏/空帧，须明确报错
+        fun redeliveryCheck(out: String): String? = if (out.contains("delivered to currently running") ||
+            out.contains("Activity not started")
+        ) {
+            "目标 App 正在主屏运行：无法投递到虚拟屏（系统会把启动送回主屏实例）。请让用户先关闭主屏上的该 App，再重试；不要擅自 force-stop 打断用户当前操作。"
+        } else null
         if (PrivilegedShell.shizukuUsable()) {
             val r = PrivilegedShell.shizukuExec(shellCmd)
-            if (r.ok) { onLaunched(); return null }
+            redeliveryCheck(r.output)?.let {
+                debugLog("launch redelivered (shizuku): ${target}")
+                return it
+            }
+            if (r.ok) {
+                onLaunched()
+                debugLog("launched via shizuku: $target (display $id)")
+                return firstFrameOrHeal(id, target)
+            }
             // shell 错误（Activity 不存在等）直接透传；Permission Denial 才回退直启
             if (!r.output.contains("Permission Denial")) return "Shizuku 启动失败：${r.output.take(220)}"
         }
         if (PrivilegedShell.hasRoot()) {
             val r = PrivilegedShell.rootExec(shellCmd)
-            if (r.ok) { onLaunched(); return null }
+            redeliveryCheck(r.output)?.let {
+                debugLog("launch redelivered (root): ${target}")
+                return it
+            }
+            if (r.ok) {
+                onLaunched()
+                debugLog("launched via root: $target (display $id)")
+                return firstFrameOrHeal(id, target)
+            }
             if (!r.output.contains("Permission Denial")) return "root 启动失败：${r.output.take(220)}"
         }
         // 可信屏归 shell 进程所有，本进程无法直启其上（owner 校验）——无直启回退
@@ -223,6 +263,20 @@ object VirtualScreenController {
         previewOpen.value = true
     }
 
+    /**
+     * 首帧自愈：启动成功后 6s 无任何帧 → 屏可能处于僵尸态（跨进程复用/ROM 合成故障），
+     * 销毁重建并让调用方重试一次。有帧返回 null。
+     */
+    private suspend fun firstFrameOrHeal(displayId: Int, target: String): String? {
+        if (awaitFrame(6000)) return null
+        debugLog("no first frame (display $displayId, target $target) -> destroy & retry")
+        destroy()
+        return "目标未在虚拟屏出画面（疑似屏幕合成故障，已清理重建）：请重试一次启动「$target」"
+    }
+
+    /** 诊断用：当前是否有帧（debug 路由观察）。 */
+    fun hasFrame(): Boolean = latestFrame.get() != null
+
     /** 回到虚拟屏桌面：home intent 定向到虚拟屏（等效于把屏上应用退到后台）。 */
     fun goHome(context: Context): String? = synchronized(lock) {
         val id = displayId ?: return "虚拟屏未启动"
@@ -240,12 +294,69 @@ object VirtualScreenController {
         touch()
     }
 
+    /** 码率档位（kbps）→ 截图分辨率与 JPEG 质量。HaoAI 帧管线是逐帧位图（无 H.264 编码），
+     * 码率以「每帧字节」等效映射：档位越高截图越大越清晰，预览与喂给模型的字节也随之增大。 */
+    fun presetFor(bitrateKbps: Int): Pair<Int, Int> = when (bitrateKbps) {
+        1500 -> 720 to 62
+        5000 -> 1280 to 72
+        10000 -> 1600 to 80
+        20000 -> 1920 to 86
+        else -> 960 to 66 // 3000 kbps 默认档
+    }
+
+    /**
+     * 帧健康诊断（debug 门控：setprop log.tag.HaoAIVD DEBUG 或 debuggable 构建；
+     * 部分 ROM 压制 logcat 输出，诊断同时落 filesDir/haovd-debug.log）。
+     */
+    @Volatile private var debugCtx: Context? = null
+
+    fun debugLog(msg: String) {
+        val ctx = debugCtx ?: return
+        val on = android.util.Log.isLoggable("HaoAIVD", android.util.Log.DEBUG) ||
+            (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
+        if (!on) return
+        android.util.Log.d("HaoAIVD", msg)
+        runCatching {
+            val f = File(ctx.filesDir, "haovd-debug.log")
+            if (f.length() > 256 * 1024) f.delete()
+            f.appendText("${System.currentTimeMillis()}  $msg\n")
+        }
+    }
+
+    private fun logFrameStats(bmp: Bitmap) {
+        val w = bmp.width
+        val h = bmp.height
+        val step = 64
+        val colors = HashSet<Int>()
+        var rSum = 0L; var gSum = 0L; var bSum = 0L; var white = 0; var n = 0
+        val row = IntArray(w)
+        var y = 0
+        while (y < h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            var x = 0
+            while (x < w) {
+                val p = row[x]
+                colors.add(p)
+                if ((p shr 16 and 0xFF) > 240 && (p shr 8 and 0xFF) > 240 && (p and 0xFF) > 240) white++
+                rSum += p shr 16 and 0xFF; gSum += p shr 8 and 0xFF; bSum += p and 0xFF
+                n++
+                x += step
+            }
+            y += step
+        }
+        debugLog("frame ${w}x${h} colors=${colors.size} avg=(${rSum / n},${gSum / n},${bSum / n}) white=${white * 100 / n}%")
+    }
+
     /** 最近一帧 + 点击标记 → JPEG data URL（复用 browser_screenshot 图像通路）。 */
     fun capture(maxLongSide: Int = 1280, quality: Int = 70): String? {
         val frame = latestFrame.get() ?: return null
+        if (frame.isRecycled) return null
         val src = Bitmap.createBitmap(frame.width, frame.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(src)
-        canvas.drawBitmap(frame, 0f, 0f, null)
+        // 帧监听线程可能恰在回收上一帧：画失败重试一次，仍不行就放弃（不抛成工具错误）
+        runCatching { canvas.drawBitmap(frame, 0f, 0f, null) }
+            .onFailure { runCatching { canvas.drawBitmap(frame, 0f, 0f, null) }
+                .onFailure { src.recycle(); return null } }
         lastMarker?.let { (rect, label) -> drawMarker(canvas, rect, label) }
         val scale = minOf(1f, maxLongSide.toFloat() / maxOf(src.width, src.height))
         val bmp = if (scale < 1f) {
@@ -257,6 +368,7 @@ object VirtualScreenController {
         bmp.compress(Bitmap.CompressFormat.JPEG, quality, bos)
         bmp.recycle()
         val b64 = Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
+        debugLog("capture ${src.width}x${src.height} q=$quality -> ${bos.size()} bytes")
         return "data:image/jpeg;base64,$b64"
     }
 
@@ -278,14 +390,17 @@ object VirtualScreenController {
         }
         runCatching { display?.release() }
         runCatching { reader?.close() }
+        runCatching { captureThread?.quitSafely() }
         display = null
         reader = null
+        captureThread = null
         channel = ""
         displayIdFlow.value = null
         latestFrame.getAndSet(null)?.recycle()
         previewFrame.value = null
         previewOpen.value = false
         lastMarker = null
+        debugLog("destroyed")
     }
 
     private fun drawMarker(canvas: Canvas, rect: Rect, label: String) {

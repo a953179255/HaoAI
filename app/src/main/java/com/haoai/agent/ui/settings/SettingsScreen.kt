@@ -1215,6 +1215,14 @@ private fun LazyListScope.privacyItems(
                     }
                 }
             }
+            ToggleRow(
+                title = "无障碍适配模式",
+                subtitle = if (settings.a11yAdaptiveMode) "已开：检测到 TalkBack 时禁用手势注入（会被其接管），操作走节点语义并逐步朗读"
+                else "为 TalkBack 等无障碍用户优化 UI 自动化：操作优先节点、谨慎自动点击，并朗读操作步骤",
+                checked = settings.a11yAdaptiveMode,
+                onChange = { vm.setA11yAdaptiveMode(it) },
+                backdrop = backdrop
+            )
         }
     }
     item { SectionTitle("后台自动化（虚拟屏）") }
@@ -1232,9 +1240,58 @@ private fun LazyListScope.privacyItems(
             if (vscreenSupported) {
                 VscreenChannelRow(backdrop)
             }
+            if (vscreenSupported) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("虚拟屏画面码率", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "档位越高截图越清晰，喂给模型的图片越大（当前 ${settings.vscreenBitrateKbps / 1000f} Mbps）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(1500, 3000, 5000, 10000, 20000).forEach { kbps ->
+                        val selected = settings.vscreenBitrateKbps == kbps
+                        com.haoai.agent.ui.common.LiquidGlassButton(
+                            onClick = { vm.setVscreenBitrate(kbps) },
+                            backdrop = backdrop,
+                            shape = RoundedCornerShape(percent = 50),
+                            surfaceColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                        ) {
+                            Text(
+                                if (kbps % 1000 == 0) "${kbps / 1000} Mbps" else "1.5 Mbps",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+                ToggleRow(
+                    title = "运行时任务视图隐藏",
+                    subtitle = if (settings.vscreenHideTask) "已开：Agent 运行期间本应用任务从最近任务隐藏，运行结束自动恢复"
+                    else "Agent 运行期间本应用任务从系统最近任务中隐藏，避免被误滑关闭中断任务",
+                    checked = settings.vscreenHideTask,
+                    onChange = { vm.setVscreenHideTask(it) },
+                    backdrop = backdrop
+                )
+            }
             Text(
                 "说明：操作走无障碍节点（点击/输入/滚动），无需触摸注入；精确手势（拖动滑块）本版本未启用，" +
-                    "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。",
+                    "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。部分 ROM（含 Flyme 等）会把上屏应用的窗口挂回主屏，" +
+                    "导致虚拟屏只有纯色画面——此时 vscreen_launch 会明确报错并引导改用主屏自动化。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)

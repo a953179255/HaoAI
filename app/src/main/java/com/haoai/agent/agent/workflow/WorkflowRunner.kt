@@ -116,6 +116,7 @@ object WorkflowRunner {
             appContext = container.appContext,
             backgroundScope = container.applicationScope,
             vscreenEnabled = st.vscreenEnabled && android.os.Build.VERSION.SDK_INT >= 30,
+            vscreenBitrateKbps = st.vscreenBitrateKbps,
             budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) }
         )
         var out = ""
@@ -144,7 +145,8 @@ object WorkflowRunner {
             sessionId = session.id,
             container.memoryBank, container.journal, 0, container.okHttpClient, container.appContext,
             onToolChange = null,
-            vscreenEnabled = st.vscreenEnabled && android.os.Build.VERSION.SDK_INT >= 30
+            vscreenEnabled = st.vscreenEnabled && android.os.Build.VERSION.SDK_INT >= 30,
+            vscreenBitrateKbps = st.vscreenBitrateKbps
         )
         val tools = ToolRegistry.build(ctx, null) +
             com.haoai.agent.agent.tools.HandoffTool { _, _ -> } // 工作流 tool 步禁用交接（无会话上下文）

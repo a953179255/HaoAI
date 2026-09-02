@@ -83,7 +83,8 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             appContext = container.appContext,
             backgroundScope = null,
             vscreenEnabled = container.settingsFlow.value.vscreenEnabled &&
-                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
+            vscreenBitrateKbps = container.settingsFlow.value.vscreenBitrateKbps
         )
 
         var resultText: String? = null

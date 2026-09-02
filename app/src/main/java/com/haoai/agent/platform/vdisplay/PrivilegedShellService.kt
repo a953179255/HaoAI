@@ -48,8 +48,9 @@ class PrivilegedShellService : Binder() {
                 val w = data.readInt()
                 val h = data.readInt()
                 val dpi = data.readInt()
+                val token = data.readString().orEmpty()
                 val surface = Surface.CREATOR.createFromParcel(data)
-                val displayId = runCatching { createTrustedDisplay(w, h, dpi, surface) }
+                val displayId = runCatching { createTrustedDisplay(w, h, dpi, token, surface) }
                     .onFailure { android.util.Log.e("HaoAIVD", "createTrustedDisplay failed", it) }
                     .getOrDefault(-1)
                 reply?.writeNoException()
@@ -80,7 +81,8 @@ class PrivilegedShellService : Binder() {
         val out = p.inputStream.readBytes().decodeToString()
         val err = p.errorStream.readBytes().decodeToString()
         val rc = p.waitFor()
-        val text = (out.ifBlank { err }).ifBlank { "(no output)" }.trim()
+        // stdout+stderr 合并：am start 的重投递警告走 stderr，只取 stdout 会漏检
+        val text = (out + "\n" + err).trim().ifBlank { "(no output)" }
         return "$rc\n$text"
     }
 
@@ -91,6 +93,8 @@ class PrivilegedShellService : Binder() {
     private var currentW = 0
     private var currentH = 0
     private var currentDpi = 0
+    /** 创建者进程实例 token：跨进程复用意味着旧 surface 已死（僵尸屏不出帧），必须释放重建。 */
+    private var sessionToken = ""
 
     init {
         // App 进程死亡/服务版本更替时 Shizuku 不一定回收旧 UserService 进程，
@@ -116,10 +120,10 @@ class PrivilegedShellService : Binder() {
         }
     }
 
-    /** 同规格重复调用幂等（只换 surface）；失败返回 -1。 */
+    /** 同规格且同一创建进程才复用（只换 surface）；跨进程/规格变化先释放重建。失败返回 -1。 */
     @SuppressLint("BlockedPrivateApi", "SoonBlockedPrivateApi")
-    private fun createTrustedDisplay(w: Int, h: Int, dpi: Int, surface: Surface): Int {
-        if (currentDisplayId != -1 && currentW == w && currentH == h && currentDpi == dpi) {
+    private fun createTrustedDisplay(w: Int, h: Int, dpi: Int, token: String, surface: Surface): Int {
+        if (currentDisplayId != -1 && currentW == w && currentH == h && currentDpi == dpi && token == sessionToken) {
             setSurface(currentDisplayId, surface)
             return currentDisplayId
         }
@@ -129,13 +133,13 @@ class PrivilegedShellService : Binder() {
         }
 
         val idm = requireIDisplayManager() ?: return -1
-        val token = Binder()
+        val callbackToken = Binder()
         val callbackClass = Class.forName("android.hardware.display.IVirtualDisplayCallback")
         val callbackProxy = java.lang.reflect.Proxy.newProxyInstance(
             callbackClass.classLoader, arrayOf(callbackClass)
         ) { _, method, args ->
             when (method.name) {
-                "asBinder" -> token
+                "asBinder" -> callbackToken
                 else -> when (method.returnType) {
                     Boolean::class.javaPrimitiveType -> false
                     Int::class.javaPrimitiveType -> 0
@@ -149,12 +153,11 @@ class PrivilegedShellService : Binder() {
         var flags = DisplayManagerFlags.PUBLIC or DisplayManagerFlags.OWN_CONTENT_ONLY or
             DisplayManagerFlags.SUPPORTS_TOUCH or DisplayManagerFlags.SHOULD_SHOW_SYSTEM_DECORATIONS
         if (Build.VERSION.SDK_INT >= 33) {
-            flags = flags or DisplayManagerFlags.TRUSTED or DisplayManagerFlags.OWN_DISPLAY_GROUP or
+            flags = flags or DisplayManagerFlags.TRUSTED or
                 DisplayManagerFlags.ALWAYS_UNLOCKED or DisplayManagerFlags.TOUCH_FEEDBACK_DISABLED
         }
         if (Build.VERSION.SDK_INT >= 34) {
-            flags = flags or DisplayManagerFlags.OWN_FOCUS or DisplayManagerFlags.DEVICE_DISPLAY_GROUP or
-                DisplayManagerFlags.STEAL_TOP_FOCUS_DISABLED
+            flags = flags or DisplayManagerFlags.OWN_FOCUS
         }
 
         val displayId = if (Build.VERSION.SDK_INT >= 31) {
@@ -164,8 +167,9 @@ class PrivilegedShellService : Binder() {
         }
         if (displayId > 0) {
             currentDisplayId = displayId
-            currentToken = token
+            currentToken = callbackToken
             currentW = w; currentH = h; currentDpi = dpi
+            sessionToken = token
         }
         return displayId
     }
@@ -193,6 +197,7 @@ class PrivilegedShellService : Binder() {
         val token = currentToken
         currentDisplayId = -1
         currentToken = null
+        sessionToken = ""
         if (token == null) return true
         runCatching {
             val idm = requireIDisplayManager() ?: return true

@@ -108,6 +108,12 @@ data class AppSettings(
     val lastConsolidationReport: String = "",
     /** 4.3 虚拟屏后台自动化总开关（默认关；开启后 vscreen_* 工具才注册，且要求 API 30+）。 */
     val vscreenEnabled: Boolean = false,
+    /** 4.3 虚拟屏画面码率档位（kbps，可选项 1500/3000/5000/10000/20000）；映射截图分辨率与 JPEG 质量。 */
+    val vscreenBitrateKbps: Int = 3000,
+    /** 4.3 运行时任务视图隐藏：Agent 运行期间把本应用任务从最近任务中隐藏，避免被误滑关闭。 */
+    val vscreenHideTask: Boolean = false,
+    /** 4.3 无障碍适配模式：有 TalkBack 等无障碍服务时禁用手势注入（会被接管），操作走节点语义并逐步朗读。 */
+    val a11yAdaptiveMode: Boolean = false,
     /** 5.1 Token 每日预算（输入+输出合计，千 token 为单位避免输入大数）；0=不限。 */
     val dailyTokenBudgetK: Int = 0,
     /** 5.2 Provider 降级链（有序 providerId 备用列表）；空=不降级。 */

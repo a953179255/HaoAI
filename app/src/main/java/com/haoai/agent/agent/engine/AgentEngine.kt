@@ -89,6 +89,8 @@ class AgentEngine(
     private val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化：设置页总开关 ∧ API 30+（由调用方合并判定）。 */
     private val vscreenEnabled: Boolean = false,
+    /** 4.3 虚拟屏画面码率档位（kbps），映射截图清晰度（见 VirtualScreenController.presetFor）。 */
+    private val vscreenBitrateKbps: Int = 3000,
     /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
     private val budgetHint: () -> String = { "" },
     /** 5.3 模型路由：记忆提取专用 (provider, apiKey)；null/异常回落主模型。 */
@@ -194,7 +196,8 @@ class AgentEngine(
             configMutator = configMutator,
             configRender = configRender,
             onToolChange = onToolChange,
-            vscreenEnabled = vscreenEnabled
+            vscreenEnabled = vscreenEnabled,
+            vscreenBitrateKbps = vscreenBitrateKbps
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx, index, total ->
