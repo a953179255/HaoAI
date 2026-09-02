@@ -28,6 +28,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 
+/** 流式 UI 刷新节拍：SSE 上游每 delta 一次重组重绘代价过高，按此间隔批量刷。 */
+private const val STREAM_FLUSH_MS = 60L
+
 data class UiTool(
     val callId: String,
     val name: String,
@@ -48,6 +51,7 @@ data class SubagentLine(
 )
 
 data class ChatRow(
+    /** LazyColumn 稳定 key：用消息 id，勿回退为下标（删除/重发后会整体错位）。 */
     val key: String,
     /** 消息唯一 id（StoredMessage.id），长按操作/截断/搜索定位用。 */
     val id: String = "",
@@ -100,6 +104,51 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** 流式思考过程（reasoning_content / <think>），与 streamingText 同生命周期。 */
     private val _streamingReasoning = MutableStateFlow<String?>(null)
     val streamingReasoning = _streamingReasoning.asStateFlow()
+
+    // ── 流式节流 ─────────────────────────────────────────────────
+    // SSE 每 delta 直接写 StateFlow 会让整条气泡按上游速率重组重绘（实测流式期间
+    // RenderThread+主线程合计 >130% 单核）。改为 StringBuilder 累积、按节拍刷 UI：
+    // 事件回调与刷屏协程都在主线程，无并发问题。
+    private val streamingBuf = StringBuilder()
+    private val reasoningBuf = StringBuilder()
+    private var streamFlushJob: Job? = null
+
+    private fun startStreaming() {
+        streamingBuf.setLength(0)
+        reasoningBuf.setLength(0)
+        _streamingText.value = null
+        _streamingReasoning.value = null
+        streamFlushJob?.cancel()
+        streamFlushJob = viewModelScope.launch {
+            while (true) {
+                // 自适应节拍：气泡越长，每次全量 Markdown 重解析越贵，
+                // 按长度放宽间隔（60→120→200ms），保持打字机观感的同时限制解析频率
+                val ms = when {
+                    streamingBuf.length < 1_500 -> STREAM_FLUSH_MS
+                    streamingBuf.length < 5_000 -> STREAM_FLUSH_MS * 2
+                    else -> STREAM_FLUSH_MS * 3
+                }
+                kotlinx.coroutines.delay(ms)
+                flushStreaming()
+            }
+        }
+    }
+
+    private fun flushStreaming() {
+        val t = streamingBuf.toString()
+        if (_streamingText.value != t) _streamingText.value = t
+        val r = reasoningBuf.toString().ifBlank { null }
+        if (_streamingReasoning.value != r) _streamingReasoning.value = r
+    }
+
+    private fun stopStreaming() {
+        streamFlushJob?.cancel()
+        streamFlushJob = null
+        streamingBuf.setLength(0)
+        reasoningBuf.setLength(0)
+        _streamingText.value = null
+        _streamingReasoning.value = null
+    }
 
     private val _running = MutableStateFlow(false)
     val running = _running.asStateFlow()
@@ -328,8 +377,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         val s = currentSession ?: return
         _running.value = true
-        _streamingText.value = null
-        _streamingReasoning.value = null
+        startStreaming()
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
         s.runGoal = text.take(200)
         s.runTurnsUsed = 0
@@ -349,17 +397,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider).also { turnEngine = it }
                 engine.runTurn(
                     userText = text,
-                    onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
+                    onDelta = { frag -> streamingBuf.append(frag) },
                     onEvent = ::handleEvent,
                     imageData = imageData,
-                    onReasoning = { frag ->
-                        _streamingReasoning.value = (_streamingReasoning.value ?: "") + frag
-                    }
+                    onReasoning = { frag -> reasoningBuf.append(frag) }
                 )
             } finally {
+                stopStreaming()
+                flushUsage()
                 _running.value = false
-                _streamingText.value = null
-                _streamingReasoning.value = null
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
                 val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
                 s.runState = endState
@@ -571,7 +617,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         val s = currentSession ?: return
         _running.value = true
-        _streamingText.value = null
+        startStreaming()
         job = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
@@ -581,13 +627,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider)
                 engine.runBtw(
                     question = question,
-                    onDelta = { frag -> _streamingText.value = (_streamingText.value ?: "") + frag },
-                    onReasoning = { frag -> _streamingReasoning.value = (_streamingReasoning.value ?: "") + frag }
+                    onDelta = { frag -> streamingBuf.append(frag) },
+                    onReasoning = { frag -> reasoningBuf.append(frag) }
                 )
             } finally {
+                stopStreaming()
                 _running.value = false
-                _streamingText.value = null
-                _streamingReasoning.value = null
             }
         }
     }
@@ -923,48 +968,97 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private var sessionIn = 0L
     private var sessionOut = 0L
 
+    // ── token 计数落盘防抖 ───────────────────────────────────────
+    // 每次 Usage 事件直接 updateSettings 会同步写 settings.json + 重渲染配置镜像
+    // （两次磁盘 IO，全在调用线程）。改为累积增量、1s 节拍/回合结束统一落盘。
+    private var pendingIn = 0L
+    private var pendingOut = 0L
+    private var usageFlushJob: Job? = null
+
     private fun addUsage(pin: Long, pout: Long) {
         val cur = _usage.value
-        val next = (cur.first + pin) to (cur.second + pout)
-        _usage.value = next
+        _usage.value = (cur.first + pin) to (cur.second + pout)
         sessionIn += pin
         sessionOut += pout
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
-        c.updateSettings { s ->
-            val sameDay = s.tokenDay == today
-            s.copy(
-                tokenInTotal = next.first,
-                tokenOutTotal = next.second,
-                tokenDay = today,
-                tokenInToday = (if (sameDay) s.tokenInToday else 0L) + pin,
-                tokenOutToday = (if (sameDay) s.tokenOutToday else 0L) + pout
-            )
+        pendingIn += pin
+        pendingOut += pout
+        if (usageFlushJob?.isActive != true) {
+            usageFlushJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(1_000)
+                flushUsage()
+            }
         }
     }
+
+    /** 把累积的 token 增量落进设置（IO 线程写盘）；回合结束/防抖到期时调用。 */
+    private suspend fun flushUsage() {
+        val pin = pendingIn
+        val pout = pendingOut
+        if (pin == 0L && pout == 0L) return
+        pendingIn = 0
+        pendingOut = 0
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA)
+                .format(java.util.Date())
+            c.updateSettings { s ->
+                val sameDay = s.tokenDay == today
+                s.copy(
+                    tokenInTotal = s.tokenInTotal + pin,
+                    tokenOutTotal = s.tokenOutTotal + pout,
+                    tokenDay = today,
+                    tokenInToday = (if (sameDay) s.tokenInToday else 0L) + pin,
+                    tokenOutToday = (if (sameDay) s.tokenOutToday else 0L) + pout
+                )
+            }
+        }
+    }
+
+    // ── 上下文用量估算（防抖 + IO）────────────────────────────────
+    // 每条 MessageAdded/ToolChanged 事件都会触发；此前在主线程同步做：
+    // 新建引擎（含 Keystore 解密）+ 全量系统提示构建（沙箱探测/技能索引/记忆/日志/账本读盘）
+    // + 序列化全部工具 schema 估算 token——工具循环期间每个事件都来一遍，是发热主源之一。
+    // 改为：主线程只拍快照，IO 线程延迟 300ms 计算（突发事件合并成一次），结果回主线程发射。
+    private var contextJob: Job? = null
 
     /** 重新估算上下文使用量（UI 实时显示）。 */
     private fun recalcContextUsage() {
         val s = _session.value ?: return
-        val st = c.settingsFlow.value
-        val isLocal = st.providers.find { it.id == st.activeProviderId }
-            ?.let { it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID || it.baseUrl.contains("127.0.0.1") } == true
-        val contextWindow = if (isLocal) st.localContextLength
-            else st.providers.find { it.id == st.activeProviderId }?.effectiveContextLength() ?: 32768
-        val chatMsgs = s.messages.map { it.toModel() }
-        // 与引擎压缩判断同一口径：真实系统提示（记忆/日志/技能注入）而非固定底数，
-        // 否则指示器长期低估、压缩偏晚
-        val engine = buildEngine(s, c.activeProvider() ?: com.haoai.agent.data.ProviderConfig(
-            id = "estimate", name = "估算", baseUrl = "https://estimate.invalid", model = "-"
-        ))
-        val (sysTok, toolsTok) = engine.estimateOverheadTokens()
-        val histTok = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) }
-        _contextUsage.value = com.haoai.agent.ui.chat.ContextUsage(
-            usedTokens = sysTok + toolsTok + histTok,
-            totalTokens = contextWindow,
-            systemTokens = sysTok,
-            toolsTokens = toolsTok,
-            historyTokens = histTok
-        )
+        // 快照在主线程取：IO 计算期间引擎仍可能向 messages 追加消息
+        val messagesSnapshot = s.messages.toList()
+        contextJob?.cancel()
+        contextJob = viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                kotlinx.coroutines.delay(300)
+                runCatching {
+                    val settings = c.settingsFlow.value
+                    val isLocal = settings.providers.find { it.id == settings.activeProviderId }
+                        ?.let {
+                            it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+                                it.baseUrl.contains("127.0.0.1")
+                        } == true
+                    val contextWindow = if (isLocal) settings.localContextLength
+                        else settings.providers.find { it.id == settings.activeProviderId }
+                            ?.effectiveContextLength() ?: 32768
+                    val provider = c.activeProvider() ?: com.haoai.agent.data.ProviderConfig(
+                        id = "estimate", name = "估算", baseUrl = "https://estimate.invalid", model = "-"
+                    )
+                    val engine = buildEngine(s, provider)
+                    val (sysTok, toolsTok) = engine.estimateOverheadTokens()
+                    val histTok = messagesSnapshot.sumOf {
+                        com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel())
+                    }
+                    com.haoai.agent.ui.chat.ContextUsage(
+                        usedTokens = sysTok + toolsTok + histTok,
+                        totalTokens = contextWindow,
+                        systemTokens = sysTok,
+                        toolsTokens = toolsTok,
+                        historyTokens = histTok
+                    )
+                }.getOrNull()
+            }?.let { usage ->
+                _contextUsage.value = usage
+            }
+        }
     }
 
     fun agentName(): String =
