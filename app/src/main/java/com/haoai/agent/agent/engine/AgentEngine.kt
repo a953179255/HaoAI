@@ -1258,55 +1258,8 @@ class AgentEngine(
             p.err ?: p.diff.ifBlank { "（无字段变化）" }
         }
 
-    private fun briefOf(call: ToolCallData): String {
-        val args = parseArgs(call.argumentsJson)
-        return when (call.name) {
-            "bash" -> args.optString("command").lineSequence().firstOrNull()?.take(90) ?: ""
-            "read", "write", "edit" -> args.optString("path")
-            "grep" -> "/${args.optString("pattern")}/"
-            "glob" -> args.optString("pattern")
-            "web_fetch" -> args.optString("url")
-            "web_search" -> args.optString("query")
-            "todo" -> args.optString("action", "view") +
-                args.optString("text").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            "memory" -> args.optString("action", "list") +
-                (args.optString("content").ifBlank { args.optString("query") })
-                .takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            "screen" -> "读取屏幕"
-            "tap" -> args.optInt("index")?.let { "[$it]" }
-                ?: args.optString("text").ifBlank { args.optString("view_id") }
-                .ifBlank { "(${args.optString("x")},${args.optString("y")})" }
-            "swipe" -> "滑动"
-            "scroll" -> "滚动 ${args.optString("direction", "down")}"
-            "find" -> "查找「${args.optString("text")}」"
-            "wait" -> "等待 ${args.optString("mode", "text")}" +
-                args.optString("text").takeIf { it.isNotBlank() }?.let { "「$it」" }.orEmpty()
-            "type_text" -> "输入：${args.optString("text").take(40)}"
-            "key" -> args.optString("action")
-            "launch_app" -> args.optString("package")
-            "list_apps" -> "列出应用"
-            "browser_search" -> "搜索「${args.optString("query")}」"
-            "browser_open" -> args.optString("url")
-            "browser_navigate" -> args.optString("url")
-            "browser_read" -> "读取页面结构"
-            "browser_click" -> args.optInt("index")?.let { "[$it]" } ?: ""
-            "browser_input" -> "[${args.optInt("index")}] 输入：${args.optString("text").take(30)}"
-            "browser_scroll" -> "滚动 ${args.optString("direction", "down")}"
-            "browser_find" -> "查找「${args.optString("text")}」"
-            "browser_back" -> "后退"
-            "browser_screenshot" -> "页面截图"
-            "schedule" -> args.optString("action", "list") +
-                args.optString("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            "spawn_agent" -> args.optString("task").take(60)
-            "spawn_agents" -> "${(args["tasks"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0} 个并行子任务"
-            "app_status" -> "读取运行状态"
-            "config_get" -> "读取配置"
-            "config_set" -> "修改配置"
-            "camera" -> "拍照"
-            "location" -> "获取当前位置"
-            else -> ""
-        }
-    }
+    private fun briefOf(call: ToolCallData): String =
+        com.haoai.agent.agent.tools.ToolBrief.of(call.name, call.argumentsJson)
 
     private fun previewOf(content: String): String =
         content.lineSequence().firstOrNull()?.take(160) ?: ""

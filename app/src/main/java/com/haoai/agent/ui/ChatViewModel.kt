@@ -791,58 +791,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private fun previewLine(content: String): String =
         content.lineSequence().firstOrNull()?.take(160) ?: ""
 
-    private fun briefFor(toolName: String, argsJson: String): String {
-        val args = runCatching {
-            com.haoai.agent.data.HaoJson.json.parseToJsonElement(argsJson.ifBlank { "{}" })
-        }.getOrNull() as? kotlinx.serialization.json.JsonObject
-            ?: return ""
-        fun opt(k: String): String =
-            (args[k] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull ?: ""
-        return when (toolName) {
-            "bash" -> opt("command").lineSequence().firstOrNull()?.take(90) ?: ""
-            "read", "write", "edit" -> opt("path")
-            "grep" -> "/${opt("pattern")}/"
-            "glob" -> opt("pattern")
-            "web_fetch" -> opt("url")
-            "todo" -> {
-                val todos = args["todos"] as? kotlinx.serialization.json.JsonArray
-                if (todos != null) "更新清单(${todos.size}项)"
-                else "查看清单"
-            }
-            "memory" -> opt("action").ifBlank { "list" } +
-                (opt("content").ifBlank { opt("query") }).takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            "screen" -> "读取屏幕"
-            "tap" -> opt("index")?.let { "[$it]" }
-                ?: opt("text").ifBlank { opt("view_id") }
-                .ifBlank { "(${opt("x")},${opt("y")})" }
-            "swipe" -> "滑动"
-            "scroll" -> "滚动 " + opt("direction").ifBlank { "down" }
-            "find" -> "查找「${opt("text")}」"
-            "wait" -> "等待 " + opt("mode").ifBlank { "text" } + opt("text").takeIf { it.isNotBlank() }?.let { "「$it」" }.orEmpty()
-            "type_text" -> "输入：${opt("text").take(40)}"
-            "key" -> opt("action")
-            "launch_app" -> opt("package")
-            "list_apps" -> "列出应用"
-            "browser_search" -> "搜索「${opt("query")}」"
-            "browser_open" -> opt("url")
-            "browser_navigate" -> opt("url")
-            "browser_read" -> "读取页面结构"
-            "browser_click" -> opt("index")?.let { "[$it]" } ?: ""
-            "browser_input" -> "[${opt("index")}] 输入：${opt("text").take(30)}"
-            "browser_scroll" -> "滚动 " + opt("direction").ifBlank { "down" }
-            "browser_find" -> "查找「${opt("text")}」"
-            "browser_back" -> "后退"
-            "browser_screenshot" -> "页面截图"
-            "schedule" -> opt("action").ifBlank { "list" } +
-                opt("name").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            "spawn_agent" -> opt("task").take(60)
-            "spawn_agents" -> "${(args["tasks"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0} 个并行子任务"
-            "app_status" -> "读取运行状态"
-            "config_get" -> "读取配置"
-            "config_set" -> "修改配置"
-            else -> argsJson.take(60)
-        }
-    }
+    private fun briefFor(toolName: String, argsJson: String): String =
+        com.haoai.agent.agent.tools.ToolBrief.of(toolName, argsJson)
 
     private fun buildEngine(s: StoredSession, provider: com.haoai.agent.data.ProviderConfig): AgentEngine {
         val st = c.settingsFlow.value
