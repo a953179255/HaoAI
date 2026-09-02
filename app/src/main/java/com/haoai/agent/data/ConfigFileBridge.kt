@@ -869,30 +869,50 @@ class ConfigFileBridge(
     @Volatile private var lastRenderedHash: String? = null
     @Volatile private var lastExternalHash: String? = null
     private var watchJob: Job? = null
+    private var observer: android.os.FileObserver? = null
 
-    /** 启动监听：每 2s 检查一次；内容两次采样稳定一致且不同于本次渲染结果 → apply。 */
+    /**
+     * 启动监听：FileObserver（inotify）监听配置文件所在目录，命中目标文件名后
+     * 防抖 600ms 再采样——替代原 2 秒 MD5 轮询（消灭周期性唤醒与读盘）。
+     * 监视目录而非文件本身：writeAtomic 是 tmp+rename，监听文件会在替换后失联。
+     * 内容采样稳定且不同于本次渲染结果 → apply。
+     */
     fun startWatching(scope: CoroutineScope) {
         if (watchJob != null) return
+        renderAndUpdate()
+        val fileName = file.name
+        val events = kotlinx.coroutines.channels.Channel<Unit>(
+            kotlinx.coroutines.channels.Channel.CONFLATED
+        )
+        observer = object : android.os.FileObserver(
+            file.parentFile,
+            android.os.FileObserver.CLOSE_WRITE or
+                android.os.FileObserver.MOVED_TO or
+                android.os.FileObserver.CREATE or
+                android.os.FileObserver.DELETE
+        ) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != null && path == fileName) events.trySend(Unit)
+            }
+        }
+        observer?.startWatching()
         watchJob = scope.launch {
-            renderAndUpdate()
             while (true) {
-                delay(2000)
+                events.receive()
                 runCatching {
+                    // 防抖：写盘是成对事件（tmp 创建 + rename 落位），等写入完全停歇
+                    delay(600)
                     val h = file.md5()
                     if (h == null) {
-                        // 文件被删：下轮 renderAndUpdate 重建
+                        // 文件被外部删除：按注释意图重建镜像
                         lastExternalHash = null
-                    } else if (h != lastExternalHash) {
-                        lastExternalHash = h
-                        delay(500)
-                        val h2 = file.md5()
-                        if (h2 != null && h2 == h && h != lastRenderedHash) {
-                            val raw = runCatching { file.readText() }.getOrNull()
-                            if (raw != null) {
-                                // 成功才回写规范化镜像；拒绝时 C2 脱敏覆盖原文件并另存修正副本
-                                val r = apply(raw)
-                                if (r.ok) renderAndUpdate() else rejectAndSanitize(raw, r.message)
-                            }
+                        renderAndUpdate()
+                    } else if (h != lastExternalHash && h != lastRenderedHash) {
+                        val raw = runCatching { file.readText() }.getOrNull()
+                        if (raw != null) {
+                            // 成功才回写规范化镜像；拒绝时 C2 脱敏覆盖原文件并另存修正副本
+                            val r = apply(raw)
+                            if (r.ok) renderAndUpdate() else rejectAndSanitize(raw, r.message)
                         }
                     }
                 }.onFailure { e ->
