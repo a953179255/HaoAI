@@ -36,6 +36,13 @@ sealed class ApprovalRequest {
         override val detail = summary
         override val mono = true
     }
+
+    /** C1/C6 配置变更审批：detail 为语义 diff（+/-/~ provider、◉ 当前模型、设置项 a → b）。 */
+    data class ConfigChange(val summary: String) : ApprovalRequest() {
+        override val title = "修改应用配置（config_set）"
+        override val detail = summary
+        override val mono = false
+    }
 }
 
 class PolicyEngine(private val mode: PermissionMode) {
@@ -74,6 +81,7 @@ class PolicyEngine(private val mode: PermissionMode) {
         riskOverride?.invoke(toolName) ?: when (toolName) {
         "bash" -> RiskLevel.EXEC
         "write", "edit" -> RiskLevel.WRITE
+        "config_set" -> RiskLevel.WRITE // C6：配置写恒审批（引擎另有特判，YOLO 下同样强制弹窗）
         "tap", "swipe", "type_text", "key" -> RiskLevel.EXEC
         "browser_search", "browser_open" -> RiskLevel.EXEC
         // 4.2 内置浏览器：导航/截图/读结构不打扰用户走 READ 免审；点击/输入/滚动/后退改页面状态按 WRITE 审批

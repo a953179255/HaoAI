@@ -87,11 +87,17 @@ class AppContainer(app: Application) {
 
     val settingsFlow = MutableStateFlow(settingsStore.load())
 
-    /** 工作区配置文件桥（haoai.config.json）：agent 可直接改的 上游 式镜像配置。 */
+    /**
+     * C6 配置源迁状态目录（app 私有，对齐 上游「config 归 state dir」）：
+     * 工作区不再出现 haoai.config.json，agent 的 read/write/edit 摸不到它——
+     * agent 改配置唯一入口是 config_get/config_set 工具（恒审批）。
+     * state/agents/ 为多 Agent 预留骨架（将来每个 Agent 一个子目录：config + sessions）。
+     */
     val configFile: java.io.File =
-        (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-            ?.let { java.io.File(it, "haoai.config.json") }
-            ?: java.io.File(appFilesDir, "haoai.config.json")
+        java.io.File(appFilesDir, "state/haoai.config.json").apply {
+            parentFile?.mkdirs()
+            java.io.File(parentFile, "agents/main").mkdirs()
+        }
     val configBridge = ConfigFileBridge(
         file = configFile,
         cipher = cipher,
@@ -133,7 +139,18 @@ class AppContainer(app: Application) {
         llama.preferredModel = settingsFlow.value.localModelFile
         llama.contextSize = settingsFlow.value.localContextLength
         syncWorkspaceDocs()
-        // 配置文件桥：启动渲染镜像 + 监听外部改动（agent 写 haoai.config.json → 自动合并入库）
+        // C6：工作区旧 haoai.config.json 一次性迁移——先应用其中未落库的改动（明文 key 加密入库），
+        // 随后移除工作区文件（配置源已迁状态目录，工作区不再保留镜像）
+        runCatching {
+            (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
+                val legacy = java.io.File(ws, "haoai.config.json")
+                if (legacy.exists()) {
+                    runCatching { legacy.readText() }.getOrNull()?.let { configBridge.apply(it) }
+                    runCatching { legacy.delete() }
+                }
+            }
+        }
+        // 配置文件桥：启动渲染镜像 + 监听外部改动（兜底覆盖 adb/文件管理器手改状态目录文件）
         configBridge.startWatching(applicationScope)
     }
 

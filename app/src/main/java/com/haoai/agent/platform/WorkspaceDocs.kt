@@ -193,24 +193,27 @@ object WorkspaceDocs {
 - 低价值记忆 30 天未用降级进「已归档」，再 30 天物理清理
 - 技能沉淀在应用内部（skill save/list/view/delete 管理）
 
-## 配置管理（改配置 = 编辑文件，不要动无障碍 UI）
-- **haoai.config.json**（本工作区根）是应用配置的镜像：添加/删除云端模型、切换当前模型、
-  改六个白名单设置项，直接编辑这个文件即可，约 2 秒后自动生效（无需重启）。
-  你的 read/write/edit 工具就能改它——**不要**用 screen/tap/type_text 去点设置页 UI。
-- providers 数组字段：`id`（已有模型沿用，新增可省略）、`name`、`baseUrl`（http(s)://）、
-  `model`、`protocol`（openai_compat|anthropic，默认前者）、`apiKey`、
-  `contextLength`/`maxTokens`（0=自动）、`active`（true=切换为当前模型）。
-- **apiKey 掩码语义**：已有模型的 key 渲染为 `"****"`（= 保持原 key 不动）；新增模型必须写明文
-  key，应用后自动加密入库并回写为 `****`。配置文件里不留明文 key。
-- settings 白名单：`reply_max_tokens` / `context_length` / `local_context_length` /
-  `memory_enabled` / `auto_learn` / `deep_dream`；其余键会被整体拒绝（保留上次配置）。
-- 格式错误/未知键会拒绝且不破坏现有配置，失败原因见应用内「通用 → 配置文件」状态行。
+## 配置管理（改配置 = config_get / config_set 工具，不要动无障碍 UI）
+- 应用配置（模型 providers、当前模型、白名单设置项）的真源在应用状态目录，**工作区里没有配置文件**，
+  你的 read/write/edit 摸不到它。改配置唯一入口：
+  1. **config_get** 读取当前配置（apiKey 一律掩码 `****` = 保持原 key 不动）；
+  2. **config_set** 提交补丁（只传要改的字段，providers 按 id 合并；每次都会弹审批，批准后立即生效并返回结果）。
+- providers 字段：`id`（已有模型沿用，新增可省略）、`name`、`baseUrl`（http(s)://）、`model`、
+  `protocol`（openai_compat|anthropic，默认前者）、`apiKey`、`contextLength`/`maxTokens`（0=自动）、
+  `active`（true=切换为当前模型）。**新增模型必须写明文 apiKey**（应用后自动加密掩码，明文不落盘）；
+  改已有模型的 baseUrl/protocol 也必须同时给明文 apiKey（重认证）。
+- **删除模型**：config_set 传 providers 数组 + 顶层 `providers_removed=true`，缺席的云端模型才会被删
+  （默认合并式保留，防误删；删除过半会有警告）。
+- settings 白名单（平铺传补丁顶层）：`reply_max_tokens` / `context_length` / `local_context_length` /
+  `memory_enabled` / `auto_learn` / `deep_dream` / `permission_mode` / `fallback_chain` /
+  `memory_extract_provider` / `title_provider` / `summarize_provider` / `daily_token_budget_k` /
+  `keep_alive` / `dream_provider` / `dream_idle_minutes`。
+- 未知键/非法值会整体拒绝并返回原因（当轮可见），修正后重试即可；配置校验日志见应用内「通用 → 配置文件」状态行。
 
 ## 文件说明
 | 文件 | 用途 |
 |------|------|
 | MEMORY.md | 长期记忆真源（可编辑，行尾元数据请保留） |
-| haoai.config.json | 应用配置镜像（添加云端模型/切模型/改设置，auto 生效） |
 | USER.md | 用户画像（自动镜像，手改会被覆盖） |
 | IDENTITY.md / SOUL.md | 身份与性格（镜像；想改性格直接告诉助理即可） |
 | HEARTBEAT.md | 定时任务清单 |
@@ -229,6 +232,7 @@ HaoAI 代理可调用的工具（共 27 个）：
 | 文件 | read / write / edit / glob / grep | 工作区内读写检索 |
 | 执行 | bash | POSIX shell（默认目录模式可用） |
 | 网络 | web_fetch / web_search | 抓取网页正文转 Markdown；Bing 搜索（免 key） |
+| 配置 | config_get / config_set | 读配置（掩码）/ 改配置（JSON patch，恒审批） |
 | 任务 | todo | 多步任务清单 |
 | 记忆 | memory | save 长期 / journal 每日日志 / search / list / forget |
 | 交接 | handoff | 上下文压缩五段式总结 |

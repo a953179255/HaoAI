@@ -834,7 +834,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             "spawn_agent" -> opt("task").take(60)
             "spawn_agents" -> "${(args["tasks"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0} 个并行子任务"
             "app_status" -> "读取运行状态"
-            "update_settings" -> "修改设置"
+            "config_get" -> "读取配置"
+            "config_set" -> "修改配置"
             else -> argsJson.take(60)
         }
     }
@@ -871,7 +872,33 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             onUsage = { pin, pout -> addUsage(pin, pout) },
             backgroundScope = c.applicationScope,
             statusProvider = { buildStatusText() },
-            configMutator = { applyConfigPatch(it) },
+            // C6/C1 统一配置入口：config_get 渲染镜像；config_set 合并补丁→桥严格校验→同步入库
+            configRender = { c.configBridge.render(c.settingsFlow.value) },
+            configPreview = { patch ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { c.configBridge.previewPatch(patch) }.getOrElse {
+                        com.haoai.agent.data.ConfigFileBridge.Preview(err = it.message ?: "预检失败")
+                    }
+                }
+            },
+            configMutator = { args ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val (merged, err) = c.configBridge.mergePatch(args)
+                        if (err != null) {
+                            com.haoai.agent.agent.tools.ToolResult("配置被拒绝：$err（未生效）", true)
+                        } else {
+                            val r = c.configBridge.apply(merged)
+                            if (r.ok) com.haoai.agent.agent.tools.ToolResult("配置已应用：${r.message}")
+                            else com.haoai.agent.agent.tools.ToolResult(
+                                "配置被拒绝：${r.message}（未生效，修正后重新调用 config_set 即可）", true
+                            )
+                        }
+                    }.getOrElse {
+                        com.haoai.agent.agent.tools.ToolResult("配置修改失败：${it.message}", true)
+                    }
+                }
+            },
             onToolChange = { refreshTodos() },
             vscreenEnabled = st.vscreenEnabled &&
                 android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
@@ -932,58 +959,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }.trimEnd()
     }
 
-    /** update_settings 白名单落地；返回给模型的结果文本。 */
-    private fun applyConfigPatch(args: kotlinx.serialization.json.JsonObject): String {
-        fun intArg(key: String): Int? =
-            (args[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()?.toIntOrNull()
-        fun boolArg(key: String): Boolean? =
-            (args[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()?.toBooleanStrictOrNull()
-
-        val applied = mutableListOf<String>()
-        var localCtx: Int? = null
-        c.updateSettings { s ->
-            var next = s
-            val pid = s.activeProviderId ?: s.providers.firstOrNull()?.id
-            intArg("reply_max_tokens")?.let { v ->
-                next = next.copy(providers = next.providers.map {
-                    if (it.id == pid && it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
-                        it.copy(maxTokens = v.coerceIn(256, 1_000_000)) else it
-                })
-                applied.add("单次回复上限=${v.coerceIn(256, 1_000_000)}")
-            }
-            intArg("context_length")?.let { v ->
-                next = next.copy(providers = next.providers.map {
-                    if (it.id == pid && it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
-                        it.copy(contextLength = v.coerceIn(1024, 10_000_000)) else it
-                })
-                applied.add("云端上下文窗口=${v.coerceIn(1024, 10_000_000)}")
-            }
-            intArg("local_context_length")?.let { v ->
-                val n = v.coerceIn(2048, 262_144)
-                next = next.copy(localContextLength = n)
-                localCtx = n
-                applied.add("端侧上下文窗口=$n（重启端侧服务生效）")
-            }
-            boolArg("memory_enabled")?.let { v ->
-                next = next.copy(memoryEnabled = v)
-                applied.add("记忆系统=${if (v) "开" else "关"}")
-            }
-            boolArg("auto_learn")?.let { v ->
-                next = next.copy(autoLearn = v)
-                applied.add("自动学习=${if (v) "开" else "关"}")
-            }
-            boolArg("deep_dream")?.let { v ->
-                next = next.copy(deepDream = v)
-                applied.add("闲置整理记忆=${if (v) "开" else "关"}")
-            }
-            next
-        }
-        localCtx?.let { c.llama.contextSize = it }
-        return if (applied.isEmpty())
-            "没有任何字段被修改。支持的字段：reply_max_tokens / context_length / local_context_length / memory_enabled / auto_learn / deep_dream"
-        else
-            "已生效（用户已批准）：${applied.joinToString("；")}。可用 app_status 验证。"
-    }
+    /** update_settings 白名单落地已废弃（C1/C6：统一走 config_set 工具 + 桥校验）。 */
 
     private val _usage = kotlinx.coroutines.flow.MutableStateFlow(
         (c.settingsFlow.value.tokenInTotal.toLong() to c.settingsFlow.value.tokenOutTotal.toLong())

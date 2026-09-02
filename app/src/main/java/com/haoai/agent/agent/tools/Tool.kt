@@ -24,8 +24,10 @@ data class ToolContext(
     val appContext: android.content.Context? = null,
     /** 动态渲染自身运行状态（app_status 工具数据源），由 VM 层注入。 */
     val statusProvider: (() -> String)? = null,
-    /** 白名单设置修改（update_settings 工具），由 VM 层注入。 */
-    val configMutator: ((kotlinx.serialization.json.JsonObject) -> String)? = null,
+    /** C6 config_set 落地（JSON patch → 桥校验入库），由 VM 层注入；null=配置修改不可用。 */
+    val configMutator: (suspend (kotlinx.serialization.json.JsonObject) -> ToolResult)? = null,
+    /** C6 config_get 数据源：渲染当前配置镜像（apiKey 掩码）。 */
+    val configRender: (() -> String)? = null,
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
     val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化总开关（设置页），关闭时 vscreen_* 不注册进工具清单。 */

@@ -13,7 +13,7 @@ object ToolRegistry {
     const val GROUP_MCP = "mcp"
     val ALL_GROUPS = setOf(GROUP_CORE, GROUP_EXTENDED, GROUP_MCP)
 
-    /** extended 组成员（a11y/内置浏览器/虚拟屏/相机定位/设备工具包/工作流/设置修改）。 */
+    /** extended 组成员（a11y/内置浏览器/虚拟屏/相机定位/设备工具包/工作流）。 */
     private val EXTENDED_TOOLS = setOf(
         // 无障碍自动化
         "screen", "tap", "swipe", "scroll", "find", "wait", "type_text", "key", "launch_app", "list_apps",
@@ -28,8 +28,8 @@ object ToolRegistry {
         // 设备工具包
         "clipboard_read", "calendar_query", "calendar_create", "contacts_search",
         "alarm_set", "ocr_image", "notifications_read",
-        // 工作流与设置修改
-        "workflow_save", "update_settings"
+        // 工作流（C1/C6：设置修改统一走 config_get/config_set，属 core 组）
+        "workflow_save"
     )
 
     /** E4b 工具名 → 组名；mcp_ 前缀归 mcp，未知工具默认 core（恒开，未来工具零迁移）。 */
@@ -93,7 +93,9 @@ object ToolRegistry {
         add(WorkflowTool(ctx.appFilesDir))
         add(SkillTool(com.haoai.agent.agent.skills.SkillStore))
         add(AppStatusTool(ctx.statusProvider))
-        add(UpdateSettingsTool(ctx.configMutator))
+        // C6/C1 统一配置入口：config_get（READ 免审）/ config_set（引擎特判恒审批）
+        add(ConfigGetTool(ctx.configRender ?: { "" }))
+        add(ConfigSetTool(ctx.configMutator ?: { ToolResult("配置修改不可用", true) }))
         add(CameraTool())
         add(LocationTool())
         // 2.4 设备工具包

@@ -72,8 +72,14 @@ class AgentEngine(
     private val backgroundScope: CoroutineScope? = null,
     /** 动态渲染自身运行状态（app_status 工具按需读取，不注入系统提示）。 */
     private val statusProvider: () -> String = { "" },
-    /** 白名单设置修改（update_settings 工具，走用户审批）。 */
-    private val configMutator: (JsonObject) -> String = { "设置修改不可用" },
+    /** C6/C1 config_set 落地（JSON patch → 桥严格校验入库），由 VM 层注入；每次调用引擎强制审批。 */
+    private val configMutator: (suspend (JsonObject) -> com.haoai.agent.agent.tools.ToolResult)? = null,
+    /** C6 config_get 数据源：渲染当前配置镜像（apiKey 掩码）。 */
+    private val configRender: () -> String = { "" },
+    /** C1 config_set 预检：合并补丁→同源解析→语义 diff；err 非空=补丁非法（免审批直接拒绝）。 */
+    private val configPreview: suspend (JsonObject) -> com.haoai.agent.data.ConfigFileBridge.Preview = {
+        com.haoai.agent.data.ConfigFileBridge.Preview(err = "配置预检不可用", diff = "")
+    },
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
     private val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化：设置页总开关 ∧ API 30+（由调用方合并判定）。 */
@@ -181,6 +187,7 @@ class AgentEngine(
             memoryBank, journal, depth, okHttpClient, appContext,
             statusProvider = statusProvider,
             configMutator = configMutator,
+            configRender = configRender,
             onToolChange = onToolChange,
             vscreenEnabled = vscreenEnabled
         )
@@ -516,8 +523,33 @@ class AgentEngine(
                 decision = "blocked"
             }
 
-            // update_settings 属于配置写操作：无论权限模式如何都必须经用户批准（上游 提案式）
-            policy.requiresApproval(call.name) || call.name == "update_settings" -> {
+            // C6/C1 config_set 恒审批：预检（补丁非法 → 免审批直接拒绝）→ 语义 diff 审批 → 同步 apply。
+            // 无论权限模式如何都必须经用户批准（配置写不变量，含 permission_mode 自提权场景）。
+            call.name == "config_set" -> {
+                val preview = configPreview(args)
+                if (preview.err != null) {
+                    result = ToolResult(
+                        "配置被拒绝：${preview.err}（未生效；修正参数后重新调用 config_set 即可）",
+                        true
+                    )
+                    finalState = ToolRunState.ERROR
+                    decision = "invalid"
+                } else {
+                    val granted = approve(ApprovalRequest.ConfigChange(preview.diff.ifBlank { "（无字段变化）" }))
+                    if (!granted) {
+                        result = ToolResult("用户拒绝了配置修改。", true)
+                        finalState = ToolRunState.DENIED
+                        decision = "denied"
+                    } else {
+                        decision = "approved"
+                        toolStartMs = System.currentTimeMillis()
+                        result = invokeTool(tool, args, callCtx)
+                        if (result.isError) finalState = ToolRunState.ERROR
+                    }
+                }
+            }
+
+            policy.requiresApproval(call.name) -> {
                 val request = buildApprovalRequest(call, args)
                 val granted = approve(request)
                 if (!granted) {
@@ -1143,31 +1175,16 @@ class AgentEngine(
                     diff = diff
                 )
             }
-            "update_settings" -> ApprovalRequest.Generic(
-                "update_settings",
-                settingsChangeSummary(args)
-            )
+            // C1：config_set 审批展示语义 diff（preview 失败时不会走到这里——executeCall 先行拦截）
+            "config_set" -> ApprovalRequest.ConfigChange(configChangeSummary(args))
             else -> ApprovalRequest.Generic(call.name, args.toString().take(400))
         }
 
-    /** 把 update_settings 的参数翻译成人可读的变更清单，供审批弹窗展示。 */
-    private fun settingsChangeSummary(args: JsonObject): String {
-        val labels = mapOf(
-            "reply_max_tokens" to "单次回复上限",
-            "context_length" to "云端上下文窗口",
-            "local_context_length" to "端侧上下文窗口",
-            "memory_enabled" to "记忆系统",
-            "auto_learn" to "自动学习",
-            "deep_dream" to "闲置整理记忆"
-        )
-        return args.entries.joinToString("\n") { (k, v) ->
-            val label = labels[k] ?: k
-            when (v) {
-                is kotlinx.serialization.json.JsonPrimitive -> "$label → ${v.content}"
-                else -> "$label → $v"
-            }
-        }.ifBlank { "无变更" }.take(400)
-    }
+    /** C1 语义 diff：合并补丁 → 同源解析 → 与当前配置对比生成人读变更清单（后台执行，失败给可读原因）。 */
+    private suspend fun configChangeSummary(args: JsonObject): String =
+        configPreview.invoke(args).let { p ->
+            p.err ?: p.diff.ifBlank { "（无字段变化）" }
+        }
 
     private fun briefOf(call: ToolCallData): String {
         val args = parseArgs(call.argumentsJson)
@@ -1211,7 +1228,8 @@ class AgentEngine(
             "spawn_agent" -> args.optString("task").take(60)
             "spawn_agents" -> "${(args["tasks"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0} 个并行子任务"
             "app_status" -> "读取运行状态"
-            "update_settings" -> settingsChangeSummary(args).lineSequence().firstOrNull() ?: "修改设置"
+            "config_get" -> "读取配置"
+            "config_set" -> "修改配置"
             "camera" -> "拍照"
             "location" -> "获取当前位置"
             else -> ""
