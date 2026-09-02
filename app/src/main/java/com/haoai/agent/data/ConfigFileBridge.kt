@@ -102,6 +102,19 @@ class ConfigFileBridge(
                 if (v.isBlank() || v == MASK) m.value
                 else m.groupValues[1] + MASK + m.groupValues[3]
             }
+
+        /**
+         * MCP headers 对象内敏感值脱敏（Authorization 等自定义头）。render 输出本身已掩码，
+         * 此函数用于拒绝路径覆盖文件与修正副本——与 maskApiKeys 同一承诺：明文密钥不落盘。
+         */
+        fun maskHeaderValues(text: String): String =
+            Regex("""("headers"\s*:\s*\{)([^}]*)(\})""").replace(text) { m ->
+                val inner = Regex("""("[^"]*"\s*:\s*")([^"]*)(")""").replace(m.groupValues[2]) { v ->
+                    if (v.groupValues[2].isBlank() || v.groupValues[2] == MASK) v.value
+                    else v.groupValues[1] + MASK + v.groupValues[3]
+                }
+                m.groupValues[1] + inner + m.groupValues[3]
+            }
     }
 
     data class ApplyResult(val ok: Boolean, val message: String)
@@ -703,9 +716,9 @@ class ConfigFileBridge(
         return Preview(diff = diff.take(700))
     }
 
-    /** C2 拒绝路径脱敏：生成修正用副本（apiKey 已脱敏）并覆盖原文件，明文不落盘。 */
+    /** C2 拒绝路径脱敏：生成修正用副本（apiKey 与 MCP headers 密钥均脱敏）并覆盖原文件，明文不落盘。 */
     fun rejectAndSanitize(raw: String, reason: String) {
-        val masked = maskApiKeys(raw)
+        val masked = maskHeaderValues(maskApiKeys(raw))
         val ts = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
         val copy = File(file.parentFile, "${file.name}.REJECTED.$ts")
         runCatching { copy.writeText(masked) }

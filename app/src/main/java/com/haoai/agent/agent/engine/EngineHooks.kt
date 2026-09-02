@@ -150,12 +150,16 @@ class SnapshotHook(
                 }
             }
             if (after != null) {
-                // C2：快照落盘前对 apiKey 脱敏（明文 key 不进 filesDir/snapshots，/undo 恢复的也是
-                // 掩码版本——掩码=保持原 key 不动，恢复后的配置仍能通过校验）
+                // C2：快照落盘前脱敏（apiKey 与 MCP headers 密钥），明文不进 filesDir/snapshots，
+                // /undo 恢复的也是掩码版本——掩码=保持原值不动，恢复后配置仍能通过校验
+                fun mask(t: String): String {
+                    val b = com.haoai.agent.data.ConfigFileBridge
+                    return b.maskHeaderValues(b.maskApiKeys(t))
+                }
                 com.haoai.agent.agent.tools.snapshot.FileSnapshot.snapshot(
                     appFilesDir, sessionId, call.id, path,
-                    before?.let { com.haoai.agent.data.ConfigFileBridge.maskApiKeys(it) },
-                    com.haoai.agent.data.ConfigFileBridge.maskApiKeys(after)
+                    before?.let(::mask),
+                    mask(after)
                 )
             }
         }
