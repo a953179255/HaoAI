@@ -51,7 +51,9 @@ data class StoredSession(
     /** E1 本轮目标（用户指令摘要 ≤200 字），供恢复横幅展示与恢复注入。 */
     var runGoal: String? = null,
     /** E1 本轮已用轮数（turncapped 时续跑参考）。 */
-    var runTurnsUsed: Int = 0
+    var runTurnsUsed: Int = 0,
+    /** E4b 工具分层：会话内已启用的工具组（core 恒开）。null=全开（升级前旧会话零感知）；新会话默认仅 core。 */
+    var activeGroups: List<String>? = null
 ) {
     companion object {
         const val RUN_IDLE = "idle"
@@ -70,7 +72,9 @@ data class StoredSession(
                 title = "新会话",
                 createdAt = now,
                 updatedAt = now,
-                workspaceUri = workspaceUri
+                workspaceUri = workspaceUri,
+                // E4b 新会话默认仅注入 core 工具组（token 明显下降）；extended/mcp 由模型 tools_enable 按需启用
+                activeGroups = listOf(com.haoai.agent.agent.tools.ToolRegistry.GROUP_CORE)
             )
         }
     }

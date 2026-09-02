@@ -101,7 +101,8 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Spacer(Modifier.height(56.dp))
                 Text(
-                    "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；添加后冷启动会自动连接。",
+                    "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；添加后冷启动会自动连接。" +
+                        "MCP 工具属于「mcp」工具组：新会话默认不注入清单，代理需要时会先调用 tools_enable(\"mcp\") 启用（仅当前会话生效）。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)

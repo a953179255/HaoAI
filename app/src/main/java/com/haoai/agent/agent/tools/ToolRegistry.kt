@@ -7,7 +7,44 @@ import com.haoai.agent.agent.provider.ApiToolDef
 
 object ToolRegistry {
 
-    fun build(ctx: ToolContext, subAgentRunner: SubAgentRunner? = null): List<Tool> = buildList {
+    /** E4b 工具分层：core 恒开；extended/mcp 需 tools_enable 启用（会话级保持，null=全开兼容旧会话）。 */
+    const val GROUP_CORE = "core"
+    const val GROUP_EXTENDED = "extended"
+    const val GROUP_MCP = "mcp"
+    val ALL_GROUPS = setOf(GROUP_CORE, GROUP_EXTENDED, GROUP_MCP)
+
+    /** extended 组成员（a11y/内置浏览器/虚拟屏/相机定位/设备工具包/工作流/设置修改）。 */
+    private val EXTENDED_TOOLS = setOf(
+        // 无障碍自动化
+        "screen", "tap", "swipe", "scroll", "find", "wait", "type_text", "key", "launch_app", "list_apps",
+        // 系统浏览器 + 内置浏览器
+        "browser_search", "browser_open", "browser_navigate", "browser_read", "browser_click",
+        "browser_input", "browser_scroll", "browser_find", "browser_back", "browser_screenshot",
+        // 虚拟屏后台自动化
+        "vscreen_launch", "vscreen_screen", "vscreen_tap", "vscreen_text",
+        "vscreen_scroll", "vscreen_back", "vscreen_home", "vscreen_close",
+        // 相机/定位
+        "camera", "location",
+        // 设备工具包
+        "clipboard_read", "calendar_query", "calendar_create", "contacts_search",
+        "alarm_set", "ocr_image", "notifications_read",
+        // 工作流与设置修改
+        "workflow_save", "update_settings"
+    )
+
+    /** E4b 工具名 → 组名；mcp_ 前缀归 mcp，未知工具默认 core（恒开，未来工具零迁移）。 */
+    fun groupOf(name: String): String = when {
+        name.startsWith("mcp_") -> GROUP_MCP
+        name in EXTENDED_TOOLS -> GROUP_EXTENDED
+        else -> GROUP_CORE
+    }
+
+    fun build(
+        ctx: ToolContext,
+        subAgentRunner: SubAgentRunner? = null,
+        activeGroups: Set<String>? = null
+    ): List<Tool> {
+        val all = buildList {
         add(ReadTool())
         add(WriteTool())
         add(EditTool())
@@ -73,6 +110,13 @@ object ToolRegistry {
         if (ctx.depth == 0 && subAgentRunner != null) {
             add(SubAgentTool(subAgentRunner))
             add(SubAgentsTool(subAgentRunner))
+        }
+        }
+        // E4b 分层过滤：core 恒开；activeGroups=null 视为全开（旧会话零感知）
+        if (activeGroups == null) return all
+        return all.filter { tool ->
+            val g = groupOf(tool.name)
+            g == GROUP_CORE || g in activeGroups
         }
     }
 
