@@ -18,6 +18,11 @@ import kotlinx.serialization.json.putJsonObject
 
 class BashTool : Tool {
 
+    companion object {
+        /** 后台任务日志保留时长：投递新任务时顺手清理超期日志。 */
+        const val JOB_LOG_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+    }
+
     override val name = "bash"
     override val description =
         "在工作空间目录内执行 shell 命令。默认 backend=auto：Linux 沙箱（proot 发行版）就绪时在沙箱内执行（glibc 环境，宿主工作区=沙箱内 /workspace），否则回落 Android toybox（/system/bin/sh）。可显式 backend=\"toybox\"|\"linux\"|\"ssh\"。timeout_ms 默认 30 秒、上限 600 秒（长构建）。高危命令会被安全策略拦截（三个后端一致）。"
@@ -83,8 +88,17 @@ class BashTool : Tool {
 
             // 3.4 长任务：linux 后端 background=true 时 nohup 投递立即返回，
             // 日志落 /workspace/.haoai-jobs/<id>.log（宿主工作区可见），job_output 工具读取
-            val effectiveCommand = if (backend.id == "linux" && (args as? kotlinx.serialization.json.JsonObject)?.get("background")?.jsonPrimitive?.content == "true") {
+            val effectiveCommand = if (backend.id == "linux" && args.optBool("background")) {
                 val jobId = "job_" + java.lang.Long.toString(System.currentTimeMillis(), 36)
+                // 顺手式清理：每次投递时删掉 7 天前的旧任务日志（跟随触发，不引入独立定时唤醒）
+                runCatching {
+                    ctx.shellDir?.let { sd ->
+                        val cutoff = System.currentTimeMillis() - JOB_LOG_RETENTION_MS
+                        java.io.File(sd, ".haoai-jobs")
+                            .listFiles { f -> f.isFile && f.name.endsWith(".log") && f.lastModified() < cutoff }
+                            ?.forEach { it.delete() }
+                    }
+                }
                 val quoted = "'" + command.replace("'", "'\''") + "'"
                 val launched = runCatching {
                     backend.exec(
