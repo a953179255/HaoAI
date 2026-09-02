@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
@@ -273,6 +274,11 @@ fun ChatScreen(
     // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
     val navBarPx = WindowInsets.navigationBars.getBottom(density)
     val keyboardLiftPx = (imeHeightPx - navBarPx).coerceAtLeast(0)
+    // 消息列表顶部留白 = 状态栏 + 顶栏高度：列表物理延伸到玻璃顶栏下方（消息可滚入玻璃
+    // 被磨砂遮住，主流聊天观感），仅用 contentPadding 保证初始首条消息停在顶栏下沿
+    val topBarHeightDp = with(density) {
+        WindowInsets.statusBars.getTop(density).toDp() + 60.dp
+    }
     // 玻璃 effects 在「绘制期」读取这个 State 注册快照订阅：键盘动画每帧变更 →
     // backdrop 节点失效重绘 → 采样 offset 用最新布局坐标重算。effects 里读普通
     // Int（keyboardLiftPx 参数）不会注册订阅——这正是输入栏透出抬升前旧背景的根因
@@ -481,11 +487,8 @@ fun ChatScreen(
                     }
                 }
         ) {
-            Spacer(
-                Modifier
-                    .statusBarsPadding()
-                    .height(78.dp)
-            )
+            // 顶部不再占位：列表物理延伸到玻璃顶栏下方（含状态栏区域），
+            // 初始首条消息位置由 MessageList 的 topPadding 保证
             MessageList(
                 rows = rows,
                 onOpenMenu = { msgAction = it },
@@ -511,6 +514,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
+                topPadding = topBarHeightDp + 8.dp,
                 bottomPadding = with(density) {
                     maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp()
                 }
@@ -1487,7 +1491,13 @@ private fun TopBar(
         border = false
     ) {
         // GlassPanel 内容是 Box：顶栏行与任务区必须包在同一 Column 里，否则叠放
-        Column(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                // 玻璃面吃掉空白区点按：消息现在会滚入顶栏下方，玻璃后的模糊消息
+                // 不应再响应点按/长按（内部按钮与标题列的点击不受影响）
+                .clickable(interactionSource = null, indication = null) {}
+        ) {
         // 状态栏高度并入顶栏玻璃：玻璃从屏幕最顶端铺下来（不再 statusBarsPadding 外扩）
         Spacer(
             Modifier
@@ -1641,6 +1651,7 @@ private fun MessageList(
     listState: androidx.compose.foundation.lazy.LazyListState,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
+    topPadding: androidx.compose.ui.unit.Dp = 0.dp,
     bottomPadding: androidx.compose.ui.unit.Dp
 ) {
     val showStreaming = streamingText != null || running
@@ -1675,7 +1686,7 @@ private fun MessageList(
         if (sessionId != null && totalItems > 0) listState.scrollToItem(totalItems - 1)
     }
 
-    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = bottomPadding)) {
+    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
         val finalRowKey = if (!running) rows.lastOrNull()?.key else null
