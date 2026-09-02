@@ -227,18 +227,25 @@ object WorkspaceDocs {
 - 应用配置（模型 providers、当前模型、白名单设置项）的真源在应用状态目录，**工作区里没有配置文件**，
   你的 read/write/edit 摸不到它。改配置唯一入口：
   1. **config_get** 读取当前配置（apiKey 一律掩码 `****` = 保持原 key 不动）；
-  2. **config_set** 提交补丁（只传要改的字段，providers 按 id 合并；每次都会弹审批，批准后立即生效并返回结果）。
+  2. **config_set** 提交补丁（只传要改的字段，数组按 id 合并；每次都会弹审批，批准后立即生效并返回结果）。
 - providers 字段：`id`（已有模型沿用，新增可省略）、`name`、`baseUrl`（http(s)://）、`model`、
   `protocol`（openai_compat|anthropic，默认前者）、`apiKey`、`contextLength`/`maxTokens`（0=自动）、
   `active`（true=切换为当前模型）。**新增模型必须写明文 apiKey**（应用后自动加密掩码，明文不落盘）；
   改已有模型的 baseUrl/protocol 也必须同时给明文 apiKey（重认证）。
-- **删除模型**：config_set 传 providers 数组 + 顶层 `providers_removed=true`，缺席的云端模型才会被删
-  （默认合并式保留，防误删；删除过半会有警告）。
+- **删除类操作**：providers/mcp_servers/ssh_targets 默认合并保留，要删除须传对应数组 +
+  顶层 `*_removed=true`（如 providers_removed），缺席者才会被删（删除过半会有警告）。
+- **MCP 服务器**（mcp_servers 数组）：kind=http 须 url（http(s)://），kind=stdio 须 command；
+  headers 值写 `****` 沿用原值、新服务器必须明文；approvalLevel=write（默认，每次工具询问）|read。
+  应用后自动重连，连接结果当轮返回。**添加 MCP = 引入外部工具面，审批弹窗会提示用户确认来源**。
+- **SSH 目标**（ssh_targets 数组）：id/name/host/port/user；凭据（密码/密钥）仅设置页管理，
+  不经配置通道。变更影响远程命令执行面，同样有审批提示。
 - settings 白名单（平铺传补丁顶层）：`reply_max_tokens` / `context_length` / `local_context_length` /
   `memory_enabled` / `auto_learn` / `deep_dream` / `permission_mode` / `fallback_chain` /
   `memory_extract_provider` / `title_provider` / `summarize_provider` / `daily_token_budget_k` /
-  `keep_alive` / `dream_provider` / `dream_idle_minutes`。
-- 未知键/非法值会整体拒绝并返回原因（当轮可见），修正后重试即可；配置校验日志见应用内「通用 → 配置文件」状态行。
+  `keep_alive` / `dream_provider` / `dream_idle_minutes`；外观：`theme_mode` / `theme_seed` /
+  `amoled_mode` / `bubble_opacity` / `wallpaper_global` / `dynamic_color` / `reasoning_effort`。
+- 未知键/非法值会整体拒绝并返回原因（当轮可见），修正后重试即可；每次应用前自动存配置快照，
+  用户在设置页「配置文件」处可一键回退上一版。校验日志见应用内「通用 → 配置文件」状态行。
 
 ## 文件说明
 | 文件 | 用途 |

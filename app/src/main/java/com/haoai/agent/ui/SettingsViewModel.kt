@@ -77,6 +77,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         return n
     }
 
+    /** 回滚兜底：最近一次配置快照时间（null=无快照可回退）。 */
+    fun latestConfigSnapshot(): String? = c.configBridge.listSnapshots().firstOrNull()
+
+    /** 回滚兜底：回退到最近一次快照（apply 前自动存的 last-known-good）。 */
+    fun restoreLatestConfigSnapshot(): Boolean {
+        val name = c.configBridge.listSnapshots().firstOrNull() ?: return false
+        return c.configBridge.restoreSnapshot(name)
+    }
+
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
     fun sessionTitleOf(sessionId: String): String =
         runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")

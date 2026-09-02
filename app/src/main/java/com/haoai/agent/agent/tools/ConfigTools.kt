@@ -47,22 +47,24 @@ class ConfigSetTool(private val mutator: suspend (JsonObject) -> ToolResult) : T
     override val description =
         "修改应用配置（JSON patch，每次都会弹窗请用户批准）。先 config_get 拿当前结构，再只传要改的字段：" +
             "改/加模型传 providers 数组（按 id 合并，新增必须带明文 apiKey；改已有模型的 baseUrl/protocol 也必须带明文 apiKey 重认证）；" +
-            "删模型传 providers 数组 + providers_removed=true（缺席的云端 provider 会被删除，过半会警告）；" +
+            "删模型传 providers 数组 + providers_removed=true（缺席的云端模型会被删除，过半会警告）；" +
+            "MCP 服务器传 mcp_servers 数组（按 id 合并；headers 值写 **** 沿用原值，新服务器须明文；" +
+            "kind=http 须 url，kind=stdio 须 command；删除传 mcp_servers_removed=true）；" +
+            "SSH 目标传 ssh_targets 数组（id/name/host/port/user，凭据仅设置页管理；删除传 ssh_targets_removed=true）；" +
             "改设置传平铺键（reply_max_tokens / context_length / local_context_length / memory_enabled / " +
             "auto_learn / deep_dream / permission_mode / fallback_chain / memory_extract_provider / " +
-            "title_provider / summarize_provider / daily_token_budget_k / keep_alive / dream_provider / dream_idle_minutes）。" +
-            "用户要求「添加模型/换模型/调大回复上限/改设置」等时使用。"
+            "title_provider / summarize_provider / daily_token_budget_k / keep_alive / dream_provider / dream_idle_minutes / " +
+            "theme_mode / theme_seed / amoled_mode / bubble_opacity / wallpaper_global / dynamic_color / reasoning_effort）。" +
+            "用户要求「添加模型/换模型/调设置/换主题/加 MCP 服务器/加 SSH 目标」等时使用。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
-            putJsonObject("providers") {
-                put("type", "array")
-                put("description", "要新增/更新的 provider 对象数组（按 id 合并，缺席 provider 保留）")
-                putJsonArray("items") {
-                    add(buildJsonObject { put("type", "object") })
-                }
-            }
+            putJsonArrayDesc("providers", "要新增/更新的 provider 对象数组（按 id 合并，缺席 provider 保留）")
             putDesc("providers_removed", "boolean", "true=删除当前存在但 providers 里没有的云端 provider（显式删除开关）")
+            putJsonArrayDesc("mcp_servers", "要新增/更新的 MCP 服务器对象数组（按 id 合并；字段 id/name/url/kind/command/headers/enabled/approvalLevel/allowPlaintext）")
+            putDesc("mcp_servers_removed", "boolean", "true=删除当前存在但 mcp_servers 里没有的服务器")
+            putJsonArrayDesc("ssh_targets", "要新增/更新的 SSH 目标对象数组（按 id 合并；字段 id/name/host/port/user）")
+            putDesc("ssh_targets_removed", "boolean", "true=删除当前存在但 ssh_targets 里没有的目标")
             putDesc("reply_max_tokens", "integer", "当前云端模型单次回复上限 (256-1000000)")
             putDesc("context_length", "integer", "当前云端模型上下文窗口 tokens (1024-10000000)")
             putDesc("local_context_length", "integer", "端侧推理上下文窗口 (2048-262144)，重启端侧服务生效")
@@ -81,6 +83,13 @@ class ConfigSetTool(private val mutator: suspend (JsonObject) -> ToolResult) : T
             putDesc("keep_alive", "boolean", "后台保活")
             putDesc("dream_provider", "string", "记忆整理模型 id（空=主模型，local=端侧）")
             putDesc("dream_idle_minutes", "integer", "深度梦境闲置触发分钟 (5-240)")
+            putDesc("theme_mode", "string", "主题 light|dark|system")
+            putDesc("theme_seed", "integer", "主题色种子索引 (0-100)")
+            putDesc("amoled_mode", "boolean", "AMOLED 纯黑模式（深色主题下生效）")
+            putDesc("bubble_opacity", "number", "聊天气泡不透明度 (0.3-1.0)")
+            putDesc("wallpaper_global", "boolean", "壁纸应用于所有页面")
+            putDesc("dynamic_color", "boolean", "动态取色")
+            putDesc("reasoning_effort", "string", "思考等级 空|low|medium|high（仅支持的云服务生效）")
         }
     }
 
@@ -95,7 +104,13 @@ private fun JsonObjectBuilder.putDesc(key: String, type: String, description: St
     }
 }
 
-private fun JsonObjectBuilder.put(key: String, type: String, description: String) {
-    put("type", type)
-    put("description", description)
+/** 对象数组字段（providers/mcp_servers/ssh_targets）：items 为自由对象。 */
+private fun JsonObjectBuilder.putJsonArrayDesc(key: String, description: String) {
+    putJsonObject(key) {
+        put("type", "array")
+        put("description", description)
+        putJsonArray("items") {
+            add(buildJsonObject { put("type", "object") })
+        }
+    }
 }

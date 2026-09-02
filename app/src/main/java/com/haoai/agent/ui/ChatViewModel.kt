@@ -888,11 +888,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         if (err != null) {
                             com.haoai.agent.agent.tools.ToolResult("配置被拒绝：$err（未生效）", true)
                         } else {
-                            val r = c.configBridge.apply(merged)
-                            if (r.ok) com.haoai.agent.agent.tools.ToolResult("配置已应用：${r.message}")
-                            else com.haoai.agent.agent.tools.ToolResult(
-                                "配置被拒绝：${r.message}（未生效，修正后重新调用 config_set 即可）", true
-                            )
+                            // applyFull 内部：快照 → 入库 → MCP/SSH 分区同步（含连接状态备注）
+                            val p = c.configBridge.applyFull(merged)
+                            if (!p.ok) com.haoai.agent.agent.tools.ToolResult(
+                                "配置被拒绝：${p.message}（未生效，修正后重新调用 config_set 即可）", true
+                            ) else com.haoai.agent.agent.tools.ToolResult("配置已应用：${p.message}")
                         }
                     }.getOrElse {
                         com.haoai.agent.agent.tools.ToolResult("配置修改失败：${it.message}", true)

@@ -1862,6 +1862,18 @@ private fun LazyListScope.generalItems(
                         TextButton(onClick = { vm.clearRejectedConfigCopies() }) { Text("清理") }
                     }
                 }
+                // 回滚兜底：每次配置应用前自动存快照，改坏了一键回退（不依赖对话修复）
+                vm.latestConfigSnapshot()?.let { snap ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "上次配置快照：${snap.removeSuffix(".json").take(4)}-${snap.substring(4, 6)}-${snap.substring(6, 8)} ${snap.substring(9, 11)}:${snap.substring(11, 13)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { vm.restoreLatestConfigSnapshot() }) { Text("回退") }
+                    }
+                }
             }
         }
     }

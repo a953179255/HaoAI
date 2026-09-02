@@ -23,6 +23,9 @@ class SshBackend(
 
     override val id = "ssh"
 
+    /** SSH 目标（companion 外提为类级嵌套：外部可 SshBackend.Target 引用）。 */
+    data class Target(val id: String, val name: String, val host: String, val port: Int, val user: String)
+
     private fun sshPath(): String = sshBinary?.absolutePath ?: "ssh"
 
     override suspend fun exec(command: String, timeoutMs: Long): ShellBackend.ExecResult {
@@ -46,8 +49,6 @@ class SshBackend(
     }
 
     companion object {
-        data class Target(val id: String, val name: String, val host: String, val port: Int, val user: String)
-
         /** 目标配置持久化（filesDir/ssh/targets.json）；密码/私钥后续卡接入 KeystoreCipher。 */
         fun loadTargets(filesDir: File): List<Target> = runCatching {
             val f = File(filesDir, "ssh/targets.json")
@@ -58,6 +59,22 @@ class SshBackend(
                 Target(o.optString("id"), o.optString("name"), o.optString("host"), o.optInt("port", 22), o.optString("user"))
             }
         }.getOrDefault(emptyList())
+
+        /** 写回目标列表（原子写；config_set 分区同步与设置页共用）。 */
+        fun saveTargets(filesDir: File, targets: List<Target>) {
+            val arr = org.json.JSONArray()
+            targets.forEach { t ->
+                arr.put(org.json.JSONObject().apply {
+                    put("id", t.id); put("name", t.name); put("host", t.host)
+                    put("port", t.port); put("user", t.user)
+                })
+            }
+            val f = File(filesDir, "ssh/targets.json")
+            f.parentFile?.mkdirs()
+            val tmp = File(f.parentFile, f.name + ".tmp")
+            tmp.writeText(arr.toString(2))
+            if (!tmp.renameTo(f)) tmp.delete()
+        }
 
         /** 在设备上寻找可用 ssh 二进制（应用 PATH + 常见 Termux 路径）。 */
         fun findSshBinary(): File? = listOf(

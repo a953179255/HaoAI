@@ -102,7 +102,52 @@ class AppContainer(app: Application) {
         file = configFile,
         cipher = cipher,
         updateSettings = { edit -> updateSettings(edit) },
-        readSettings = { settingsFlow.value }
+        readSettings = { settingsFlow.value },
+        // MCP/SSH 分区当前值（config_set 校验掩码沿用 + 审批 diff 对比）
+        readMcp = { com.haoai.agent.agent.mcp.McpManager.listServers() },
+        readSsh = { com.haoai.agent.agent.tools.shell.SshBackend.loadTargets(appFilesDir) },
+        // 分区同步：apply（config_set 与轮询兜底两条路径）成功后落各自存储+重连，备注拼进结果
+        onExtChanged = { p ->
+            val notes = mutableListOf<String>()
+            kotlinx.coroutines.runBlocking {
+                p.mcpServers?.let { new ->
+                    val cur = com.haoai.agent.agent.mcp.McpManager.listServers()
+                    if (p.mcpRemoved) {
+                        cur.filter { s -> new.none { it.id == s.id } }.forEach {
+                            com.haoai.agent.agent.mcp.McpManager.removeServer(it.id)
+                        }
+                    }
+                    new.forEach { cfg ->
+                        val old = cur.find { it.id == cfg.id }
+                        // 内容不变跳过（轮询路径每次 apply 都带全量分区，避免无谓重连）
+                        if (old == cfg) return@forEach
+                        when {
+                            old == null -> com.haoai.agent.agent.mcp.McpManager.addServer(cfg)
+                            else -> com.haoai.agent.agent.mcp.McpManager.updateServer(cfg)
+                        }
+                    }
+                    new.forEach { cfg ->
+                        if (!cfg.enabled) return@forEach
+                        when (val st = com.haoai.agent.agent.mcp.McpManager.states.value[cfg.id]) {
+                            is com.haoai.agent.agent.mcp.McpConnState.Ready ->
+                                notes += "MCP「${cfg.name}」已连接（${st.toolCount} 个工具）"
+                            is com.haoai.agent.agent.mcp.McpConnState.Error ->
+                                notes += "MCP「${cfg.name}」连接失败：${st.message.take(80)}"
+                            com.haoai.agent.agent.mcp.McpConnState.PendingReady ->
+                                notes += "MCP「${cfg.name}」等待 Linux 沙箱就绪"
+                            else -> Unit
+                        }
+                    }
+                }
+            }
+            p.sshTargets?.let { new ->
+                val cur = com.haoai.agent.agent.tools.shell.SshBackend.loadTargets(appFilesDir)
+                val merged = if (p.sshRemoved) new else cur.filter { t -> new.none { it.id == t.id } } + new
+                com.haoai.agent.agent.tools.shell.SshBackend.saveTargets(appFilesDir, merged)
+                notes += "SSH 目标已同步（共 ${merged.size} 个）"
+            }
+            if (notes.isEmpty()) "" else "；" + notes.joinToString("；")
+        }
     )
 
     init {
