@@ -33,6 +33,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -102,6 +103,9 @@ class AgentEngine(
 
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
     private var _loopFailedCap = false
+
+    /** E4b tools_enable 生效标记：工具组变更后主循环尾重建工具清单（下一轮 LLM 请求生效）。 */
+    @Volatile private var _groupsDirty = false
 
     /** E9 todo 进度联动：清单变更后的下一轮注入一次进度行。 */
     private var todoDirty = false
@@ -184,24 +188,22 @@ class AgentEngine(
             if (depth == 0) SubAgentRunner { task, parentCtx, index, total ->
                 runSubAgent(task, parentCtx, index, total)
             } else null
-        val tools = ToolRegistry.build(ctx, subAgentRunner) + com.haoai.agent.agent.tools.HandoffTool { summary, imp ->
+        val handoffTool = com.haoai.agent.agent.tools.HandoffTool { summary, imp ->
             runCatching {
                 journal?.append(handoffEvent(summary), importance = imp, source = "handoff")
             }
             compactHistory(summary)
         }
-        val apiTools = tools.map { it.toApi() }
+        val toolsEnableTool = com.haoai.agent.agent.tools.ToolsEnableTool { group ->
+            enableToolGroup(group)
+        }
+        // E4b 工具分层：按会话 activeGroups 注入（null=全开兼容旧会话）；handoff/tools_enable 恒在
+        var tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
+            handoffTool + toolsEnableTool
+        var apiTools = tools.map { it.toApi() }
 
         // E4a 工具定义 token 估算动态化：真实序列化各工具 JSON 求和（兜底下限 3500）
-        _toolsTokenCache = runCatching {
-            apiTools.sumOf { t ->
-                com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
-                    com.haoai.agent.data.HaoJson.json.encodeToString(
-                        com.haoai.agent.agent.provider.ApiTool.serializer(), t
-                    )
-                )
-            }
-        }.getOrNull()?.coerceAtLeast(TOOLS_BASE_TOKENS)
+        _toolsTokenCache = estimateToolsTokens(apiTools)
 
         // 压缩检查：在主循环前判断是否需要压缩
         maybeCompact(onEvent)
@@ -365,6 +367,14 @@ class AgentEngine(
                     currentCoroutineContext().ensureActive()
                     executeCall(call, tools, ctx, onEvent)
                 }
+                // E4b tools_enable 生效点：组变更后重建工具清单，下一轮请求即带新组
+                if (_groupsDirty) {
+                    _groupsDirty = false
+                    tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
+                        handoffTool + toolsEnableTool
+                    apiTools = tools.map { it.toApi() }
+                    _toolsTokenCache = estimateToolsTokens(apiTools)
+                }
                 // E5 连续工具失败熔断：达到阈值直接 break 输出失败总结
                 if (_loopFailedCap) {
                     _loopFailedCap = false
@@ -485,7 +495,17 @@ class AgentEngine(
             handledByHook -> Unit
 
             tool == null -> {
-                result = ToolResult("未知工具：${call.name}", true)
+                // E4b：模型可能凭系统提示里的分组描述臆测调用未注入的工具 —— 给出 tools_enable 引导
+                val g = ToolRegistry.groupOf(call.name)
+                val groups = session.activeGroups?.toSet()
+                result = if (groups != null && g != ToolRegistry.GROUP_CORE && g !in groups) {
+                    ToolResult(
+                        "工具 ${call.name} 属于未启用的「$g」工具组。请先调用 tools_enable（group=\"$g\"）启用后再使用。",
+                        true
+                    )
+                } else {
+                    ToolResult("未知工具：${call.name}", true)
+                }
                 finalState = ToolRunState.ERROR
                 decision = "unknown"
             }
@@ -609,15 +629,7 @@ class AgentEngine(
         report("RUNNING", 0, task)
         val tools = ToolRegistry.readOnly(childCtx)
         val apiTools = tools.map { it.toApi() }
-        _toolsTokenCache = runCatching {
-            apiTools.sumOf { t ->
-                com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
-                    com.haoai.agent.data.HaoJson.json.encodeToString(
-                        com.haoai.agent.agent.provider.ApiTool.serializer(), t
-                    )
-                )
-            }
-        }.getOrNull()?.coerceAtLeast(TOOLS_BASE_TOKENS)
+        _toolsTokenCache = estimateToolsTokens(apiTools)
 
         val msgs = mutableListOf(
             ApiMessage(role = "system", content = SUBAGENT_SYSTEM),
@@ -814,6 +826,51 @@ class AgentEngine(
         }.getOrDefault(emptyList())
     }
 
+    /** E4a/E4b 工具定义 token 估算：真实序列化各工具 JSON 求和（兜底下限 3500）。 */
+    private fun estimateToolsTokens(apiTools: List<com.haoai.agent.agent.provider.ApiTool>): Int = runCatching {
+        apiTools.sumOf { t ->
+            com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
+                com.haoai.agent.data.HaoJson.json.encodeToString(
+                    com.haoai.agent.agent.provider.ApiTool.serializer(), t
+                )
+            )
+        }
+    }.getOrNull()?.coerceAtLeast(TOOLS_BASE_TOKENS) ?: TOOLS_BASE_TOKENS
+
+    /** E4b tools_enable 回调：把组并入会话 activeGroups、持久化并标记主循环重建工具清单。 */
+    private fun enableToolGroup(group: String): String {
+        val g = group.trim().lowercase()
+        if (g == ToolRegistry.GROUP_CORE) {
+            return "core 组是常驻工具组（读写/编辑/bash/搜索/记忆/待办等），无需也无法启用。"
+        }
+        if (g != ToolRegistry.GROUP_EXTENDED && g != ToolRegistry.GROUP_MCP) {
+            return "未知工具组「$group」。可用组：extended（无障碍操作/内置浏览器/虚拟屏/相机/定位/设备工具包/工作流等）、mcp（MCP 外部服务器工具）。"
+        }
+        val current = session.activeGroups?.toSet() ?: ToolRegistry.ALL_GROUPS
+        if (g in current) return "工具组 $g 已处于启用状态。"
+        session.activeGroups = (current + g).toSortedSet().toList()
+        persist()
+        _groupsDirty = true
+        return "已启用 $g 工具组，相关工具已注入（本会话保持）。现在可以直接使用该组的工具。"
+    }
+
+    /** E4b 分层注入提示：告知模型未加载的工具组与启用方式（全开/无缺省时为空）。 */
+    private fun toolsGroupHintText(): String {
+        val active = session.activeGroups?.toSet() ?: return ""
+        val disabled = ToolRegistry.ALL_GROUPS - active
+        if (disabled.isEmpty()) return ""
+        val parts = buildList {
+            if (ToolRegistry.GROUP_EXTENDED in disabled) {
+                add("extended（无障碍操作/内置浏览器/虚拟屏/相机/定位/设备工具包/工作流等）")
+            }
+            if (ToolRegistry.GROUP_MCP in disabled) add("mcp（MCP 外部服务器工具）")
+        }
+        return "## 工具分组\n" +
+            "- 本会话未加载的工具组：${parts.joinToString("；")}。这些组的工具不在你的工具清单里。\n" +
+            "- 需要时先调用 tools_enable（group=\"组名\"）启用：本轮工具执行完成后即生效，本会话保持。\n" +
+            "- 未启用前不要臆测调用这些组的工具。"
+    }
+
     private fun buildSystemText(markMemoryUse: Boolean = false): String {
         val shellAvailable = backend?.shellWorkdir() != null
         val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
@@ -842,7 +899,8 @@ class AgentEngine(
                 journalBlock = journalSnippet(),
                 mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary(),
                 shellNote = shellNote,
-                vscreenAvailable = vscreenEnabled
+                vscreenAvailable = vscreenEnabled,
+                toolsGroupHint = toolsGroupHintText()
             ) + budgetHint() + todoProgressLine()
     }
 
