@@ -50,6 +50,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- debug deep link：adb shell am start -a android.intent.action.VIEW -d "haoai://debug/<target>"
+                 验证直达（跳过导航点击）。可用 target 见 MainActivity.DEBUG_ROUTES -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="haoai" android:host="debug" />
+            </intent-filter>
         </activity>
 
         <!-- 2.4 notifications_read：通知使用权服务（用户在系统设置中授权） -->

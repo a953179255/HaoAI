@@ -158,6 +158,32 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val wpVersion by com.haoai.agent.platform.WallpaperStore.changes.collectAsState()
     androidx.compose.runtime.remember(wpVersion) { wallpaper }
     var screen by rememberSaveable { mutableIntStateOf(0) }
+
+    // debug deep link 路由：adb shell am start -a android.intent.action.VIEW -d "haoai://debug/<target>"
+    // 验证直达（跳过导航点击）。仅响应 host=debug（Manifest intent-filter 限定）
+    LaunchedEffect((context as? android.app.Activity)?.intent?.data) {
+        val act = context as? android.app.Activity ?: return@LaunchedEffect
+        act.intent?.data?.takeIf { it.host == "debug" }?.let { uri ->
+            val target = uri.lastPathSegment ?: ""
+            when (target) {
+                "chat" -> screen = 0
+                "settings" -> screen = 1
+                "memory" -> screen = 2
+                "schedules" -> screen = 3
+                "sessions" -> screen = 4
+                "skills" -> screen = 5
+                "mcp" -> screen = 6
+                "browser" -> screen = 7
+                "workflows" -> screen = 8
+                "new" -> {
+                    screen = 0
+                    chatVm.newSession()
+                }
+            }
+            // 消费后清掉，避免旋转/重建后重复路由
+            act.intent = null
+        }
+    }
     val settings by container.settingsFlow.collectAsState()
     // 无壁纸时的默认渐变底色随主题切换（暗色/AMOLED 下不再露浅绿）
     val darkBackdrop = when (settings.themeMode) {
