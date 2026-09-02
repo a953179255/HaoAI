@@ -52,9 +52,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** Phase 7：端侧当前生效后端（设置页状态行）。 */
     fun backendLabel(): String = runCatching { c.llama.activeBackend }.getOrDefault("cpu")
 
-    /** 配置文件桥状态行：最近一次应用时间 + 错误（读 config-bridge.log 尾部）。 */
+    /** 配置文件桥状态行：最近一次应用/拒绝记录（读状态目录 config-bridge.log 尾部）。 */
     fun configFileStatus(): String {
-        val f = java.io.File(c.appFilesDir, "settings/config-bridge.log")
+        val f = java.io.File(c.configFile.parentFile, "config-bridge.log")
         if (!f.exists()) return "未配置"
         return runCatching {
             val lines = f.readLines().filter { it.isNotBlank() }
@@ -62,8 +62,20 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }.getOrDefault("未配置")
     }
 
-    /** 配置文件绝对路径（供 UI 展示）。 */
+    /** 配置文件绝对路径（供 UI 展示；C6 起位于状态目录，agent 经 config 工具读写）。 */
     fun configFilePath(): String = c.configFile.absolutePath
+
+    /** C2：待清理的 REJECTED 修正副本数（拒绝时脱敏存档，供用户检查/清理）。 */
+    fun rejectedConfigCopies(): Int =
+        c.configFile.parentFile?.listFiles { f -> f.name.contains(".REJECTED.") }?.size ?: 0
+
+    /** C2：一键清理 REJECTED 修正副本。 */
+    fun clearRejectedConfigCopies(): Int {
+        val files = c.configFile.parentFile?.listFiles { f -> f.name.contains(".REJECTED.") } ?: return 0
+        var n = 0
+        files.forEach { if (it.delete()) n++ }
+        return n
+    }
 
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
     fun sessionTitleOf(sessionId: String): String =

@@ -1829,7 +1829,7 @@ private fun LazyListScope.generalItems(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
             )
-            // 配置文件桥状态（上游 式：agent 改 haoai.config.json → 2 秒自动生效）
+            // 配置文件桥状态（C6：配置源在状态目录；agent 改配置走 config_get/config_set 工具恒审批）
             Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                 Text("配置文件", style = MaterialTheme.typography.bodyMedium)
                 Text(
@@ -1844,6 +1844,24 @@ private fun LazyListScope.generalItems(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                     maxLines = 2
                 )
+                Text(
+                    "新增模型的 API Key 请让代理经 config_set 即时写入（成功后自动加密掩码）；" +
+                        "若配置未通过校验，明文会被自动脱敏为 ****，不会以明文留在状态目录或快照中。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                    maxLines = 4
+                )
+                if (vm.rejectedConfigCopies() > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${vm.rejectedConfigCopies()} 个被拒绝配置的修正副本（已脱敏）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { vm.clearRejectedConfigCopies() }) { Text("清理") }
+                    }
+                }
             }
         }
     }
