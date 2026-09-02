@@ -36,7 +36,7 @@ class SubAgentsTool(private val runner: SubAgentRunner) : Tool {
         if (tasks.size > MAX_PARALLEL) return ToolResult("一次最多 $MAX_PARALLEL 个子代理", true)
 
         val results = coroutineScope {
-            tasks.map { task -> async { task to runOne(task, ctx) } }.awaitAll()
+            tasks.mapIndexed { i, task -> async { task to runOne(task, i + 1, tasks.size, ctx) } }.awaitAll()
         }
         return ToolResult(
             results.mapIndexed { i, (task, r) ->
@@ -45,8 +45,8 @@ class SubAgentsTool(private val runner: SubAgentRunner) : Tool {
         )
     }
 
-    private suspend fun runOne(task: String, ctx: ToolContext): String = try {
-        runner.run(task, ctx)
+    private suspend fun runOne(task: String, index: Int, total: Int, ctx: ToolContext): String = try {
+        runner.run(task, ctx, index, total)
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {

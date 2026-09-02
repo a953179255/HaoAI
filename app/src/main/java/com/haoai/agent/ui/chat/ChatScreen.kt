@@ -2078,6 +2078,11 @@ private fun ToolChip(
         ToolRunState.ERROR -> MaterialTheme.colorScheme.error
         ToolRunState.DENIED -> Color(0xFFFFC46B)
     }
+    // E7a 子代理卡片：任一路在跑即自动展开逐行状态；全部结束后可手动收起
+    val anyRunning = tool.subagents.any { it.state == "RUNNING" }
+    LaunchedEffect(anyRunning) {
+        if (anyRunning) expanded = true
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
         shape = RoundedCornerShape(13.dp),
@@ -2146,6 +2151,61 @@ private fun ToolChip(
             }
             AnimatedVisibility(expanded) {
                 Column(Modifier.padding(top = 6.dp)) {
+                    // E7a：spawn 工具展开时逐行显示每路子代理状态（RUNNING/DONE/ERROR + 用量）
+                    if (tool.subagents.isNotEmpty()) {
+                        tool.subagents.forEach { sub ->
+                            val subColor = when (sub.state) {
+                                "RUNNING" -> MaterialTheme.colorScheme.primary
+                                "DONE" -> Color(0xFF7BD88F)
+                                else -> MaterialTheme.colorScheme.error
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                if (sub.state == "RUNNING") {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(11.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = subColor
+                                    )
+                                } else {
+                                    Box(
+                                        Modifier
+                                            .size(8.dp)
+                                            .background(subColor, CircleShape)
+                                    )
+                                }
+                                Spacer(Modifier.size(7.dp))
+                                Text(
+                                    "子代理 ${sub.index}/${sub.total}",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    sub.brief,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (sub.tokensUsed > 0) {
+                                    Spacer(Modifier.size(6.dp))
+                                    Text(
+                                        fmtTokens(sub.tokensUsed.toInt()) + " tok",
+                                        fontSize = 10.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.size(2.dp))
+                    }
                     Text(
                         tool.preview ?: "(等待结果)",
                         fontFamily = FontFamily.Monospace,

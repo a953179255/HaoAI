@@ -33,3 +33,12 @@ data class SubagentUpdate(
     val tokensUsed: Long,
     val brief: String
 ) : TurnEvent
+
+/** E7a 工具侧上报载荷（ToolContext.onSubagentEvent），引擎补 callId 后转成 SubagentUpdate。 */
+data class SubagentReport(
+    val index: Int = 1,
+    val total: Int = 1,
+    val state: String,
+    val tokensUsed: Long = 0,
+    val brief: String
+)

@@ -11,6 +11,7 @@ import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
 import com.haoai.agent.agent.engine.Finished
 import com.haoai.agent.agent.engine.MessageAdded
+import com.haoai.agent.agent.engine.SubagentUpdate
 import com.haoai.agent.agent.engine.ToolChanged
 import com.haoai.agent.agent.engine.ToolRunState
 import com.haoai.agent.agent.engine.TurnEvent
@@ -32,7 +33,18 @@ data class UiTool(
     val name: String,
     val brief: String,
     val state: ToolRunState = ToolRunState.RUNNING,
-    val preview: String? = null
+    val preview: String? = null,
+    /** E7a spawn_agents/spawn_agent 逐路子代理状态（index 从 1 起；按到达序刷新）。 */
+    val subagents: List<SubagentLine> = emptyList()
+)
+
+/** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）。 */
+data class SubagentLine(
+    val index: Int,
+    val total: Int,
+    val state: String,
+    val tokensUsed: Long,
+    val brief: String
 )
 
 data class ChatRow(
@@ -691,7 +703,25 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     liveTools[ev.update.callId]?.name ?: "",
                     ev.update.brief ?: "",
                     ev.update.state,
-                    ev.update.preview
+                    ev.update.preview,
+                    liveTools[ev.update.callId]?.subagents ?: emptyList()
+                )
+                rebuildRows()
+            }
+            is SubagentUpdate -> {
+                // E7a：按 callId 聚合各路子代理状态（并发到达，同 index 覆盖旧态）
+                val prev = liveTools[ev.callId]
+                val lines = prev?.subagents.orEmpty().toMutableList()
+                val at = lines.indexOfFirst { it.index == ev.index }
+                val line = SubagentLine(ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief)
+                if (at >= 0) lines[at] = line else lines.add(line)
+                liveTools[ev.callId] = UiTool(
+                    ev.callId,
+                    prev?.name ?: "",
+                    prev?.brief ?: "",
+                    prev?.state ?: ToolRunState.RUNNING,
+                    prev?.preview,
+                    lines.sortedBy { it.index }
                 )
                 rebuildRows()
             }
@@ -727,7 +757,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             live != null && live.state == ToolRunState.RUNNING -> live
                             stored != null -> base.copy(
                                 state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
-                                preview = previewLine(stored.first)
+                                preview = previewLine(stored.first),
+                                subagents = live?.subagents ?: emptyList()
                             )
                             live != null -> live
                             else -> base

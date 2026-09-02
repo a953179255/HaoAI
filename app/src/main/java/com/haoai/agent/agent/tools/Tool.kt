@@ -29,7 +29,11 @@ data class ToolContext(
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
     val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化总开关（设置页），关闭时 vscreen_* 不注册进工具清单。 */
-    val vscreenEnabled: Boolean = false
+    val vscreenEnabled: Boolean = false,
+    /** E7a 当前工具调用的 call id（executeCall 每次执行前更新），供子代理上报关联 UI 卡片。 */
+    val currentCallId: String? = null,
+    /** E7a 子代理进度上报（RUNNING/完成/失败 + token 用量），引擎桥接为 SubagentUpdate 事件。 */
+    val onSubagentEvent: ((com.haoai.agent.agent.engine.SubagentReport) -> Unit)? = null
 )
 
 data class ToolResult(

@@ -6,7 +6,8 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 fun interface SubAgentRunner {
-    suspend fun run(task: String, parentCtx: ToolContext): String
+    /** E7a：index/total 供多路并行时逐路上报进度（单路 1/1）。 */
+    suspend fun run(task: String, parentCtx: ToolContext, index: Int, total: Int): String
 }
 
 class SubAgentTool(private val runner: SubAgentRunner) : Tool {
@@ -28,7 +29,7 @@ class SubAgentTool(private val runner: SubAgentRunner) : Tool {
         val task = args.optString("task").trim()
         if (task.isEmpty()) return ToolResult("缺少 task", true)
         return try {
-            val result = runner.run(task, ctx)
+            val result = runner.run(task, ctx, 1, 1)
             ToolResult(TextCap.middle(result, 6000))
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

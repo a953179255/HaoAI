@@ -181,7 +181,9 @@ class AgentEngine(
             vscreenEnabled = vscreenEnabled
         )
         val subAgentRunner: SubAgentRunner? =
-            if (depth == 0) SubAgentRunner { task, parentCtx -> runSubAgent(task, parentCtx) } else null
+            if (depth == 0) SubAgentRunner { task, parentCtx, index, total ->
+                runSubAgent(task, parentCtx, index, total)
+            } else null
         val tools = ToolRegistry.build(ctx, subAgentRunner) + com.haoai.agent.agent.tools.HandoffTool { summary, imp ->
             runCatching {
                 journal?.append(handoffEvent(summary), importance = imp, source = "handoff")
@@ -422,6 +424,18 @@ class AgentEngine(
 
         val tool = tools.firstOrNull { it.name == call.name }
         val args = parseArgs(call.argumentsJson)
+        // E7a：按调用注入 callId 与子代理进度上报桥（子代理工具经 parentCtx 回调 → SubagentUpdate 事件）
+        val callCtx = ctx.copy(
+            currentCallId = call.id,
+            onSubagentEvent = { report ->
+                onEvent(
+                    SubagentUpdate(
+                        call.id, report.index, report.total,
+                        report.state, report.tokensUsed, report.brief
+                    )
+                )
+            }
+        )
 
         var result: ToolResult = ToolResult("")
         var finalState: ToolRunState = ToolRunState.DONE
@@ -451,7 +465,7 @@ class AgentEngine(
         try {
             for (h in hooks) {
                 if (h.names.isNotEmpty() && call.name !in h.names) continue
-                val d = h.before(call, args, ctx)
+                val d = h.before(call, args, callCtx)
                 if (d is ToolHook.HookDecision.Handled) {
                     result = d.result
                     finalState = if (d.result.isError) ToolRunState.ERROR else ToolRunState.DONE
@@ -493,7 +507,7 @@ class AgentEngine(
                 } else {
                     decision = "approved"
                     toolStartMs = System.currentTimeMillis()
-                    result = invokeTool(tool, args, ctx)
+                    result = invokeTool(tool, args, callCtx)
                     if (result.isError) finalState = ToolRunState.ERROR
                 }
             }
@@ -501,7 +515,7 @@ class AgentEngine(
             else -> {
                 // YOLO 等免审批模式同样要拍快照（5.5 回滚依赖），否则全自动下写入无档可回
                 toolStartMs = System.currentTimeMillis()
-                result = invokeTool(tool, args, ctx)
+                result = invokeTool(tool, args, callCtx)
                 if (result.isError) finalState = ToolRunState.ERROR
             }
         }
@@ -520,7 +534,7 @@ class AgentEngine(
         var finalResult = result
         for (h in hooks) {
             if (h.names.isNotEmpty() && call.name !in h.names) continue
-            finalResult = h.after(call, args, ctx, finalResult)
+            finalResult = h.after(call, args, callCtx, finalResult)
         }
         var storedContent = TextCap.middle(finalResult.content, STORED_CAP)
         val message = ChatMessage(
@@ -575,7 +589,7 @@ class AgentEngine(
         }
 
     /** E6 并行段辅助：在 CoroutineScope 接收者内 map async（并发 ≤4 由调用方分桶）。 */
-    private suspend fun runSubAgent(task: String, parentCtx: ToolContext): String {
+    private suspend fun runSubAgent(task: String, parentCtx: ToolContext, index: Int = 1, total: Int = 1): String {
         val childCtx = ToolContext(
             parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
             parentCtx.appFilesDir, sessionId = parentCtx.sessionId,
@@ -583,6 +597,16 @@ class AgentEngine(
             httpClient = parentCtx.httpClient, appContext = parentCtx.appContext,
             statusProvider = parentCtx.statusProvider
         )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位与设置修改
+        // E7a 进度上报（经 parentCtx 回调；失败也上报 ERROR，不拖垮整卡）
+        fun report(state: String, tokens: Long, brief: String) {
+            try {
+                parentCtx.onSubagentEvent?.invoke(
+                    com.haoai.agent.agent.engine.SubagentReport(index, total, state, tokens, brief)
+                )
+            } catch (_: Exception) {
+            }
+        }
+        report("RUNNING", 0, task)
         val tools = ToolRegistry.readOnly(childCtx)
         val apiTools = tools.map { it.toApi() }
         _toolsTokenCache = runCatching {
@@ -608,13 +632,21 @@ class AgentEngine(
             currentCoroutineContext().ensureActive()
             val buf = StringBuilder()
             var calls: List<ToolCallData> = emptyList()
-            httpClient.chatStream(provider, apiKey, msgs, apiTools, reasoningEffort.ifBlank { null }).collect { ev ->
-                when (ev) {
-                    is SseEvent.Delta -> buf.append(ev.text)
-                    is SseEvent.Reasoning -> Unit
-                    is SseEvent.Completed -> calls = ev.toolCalls
-                    is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
+            try {
+                httpClient.chatStream(provider, apiKey, msgs, apiTools, reasoningEffort.ifBlank { null }).collect { ev ->
+                    when (ev) {
+                        is SseEvent.Delta -> buf.append(ev.text)
+                        is SseEvent.Reasoning -> Unit
+                        is SseEvent.Completed -> calls = ev.toolCalls
+                        is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
+                    }
                 }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
+                report("ERROR", subPrompt + subCompletion, "失败：${e.message ?: e.javaClass.simpleName}")
+                throw e
             }
             finalText = buf.toString()
             if (calls.isEmpty()) break
@@ -648,6 +680,7 @@ class AgentEngine(
             }
         }
         ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = true)
+        report("DONE", subPrompt + subCompletion, finalText.ifBlank { "（未给出结论）" })
         return finalText.ifBlank { "子代理未给出结论" }
     }
 
