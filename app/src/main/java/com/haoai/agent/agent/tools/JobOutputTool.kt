@@ -59,20 +59,34 @@ class JobOutputTool : Tool {
                 ctx.appContext, logFile.name, dir.absolutePath
             )
 
-            val lines = logFile.readLines()
+            val tailN = (args.optInt("tail_lines") ?: 60).coerceIn(1, 500)
+            // 尾部窗口读取：长构建日志可达数十 MB，整文件 readLines 每次轮询全量解析太重；
+            // __JOB_DONE_ 标记恒为末行（投递脚本最后写入），窗口覆盖标记 + tail 即可
+            val lines = readTail(logFile, maxOf(64 * 1024, (tailN + 16) * 256))
             var status = "运行中"
             var rcNote = ""
-            val trimmed = lines.toMutableList()
-            val doneIdx = trimmed.indexOfLast { it.startsWith("__JOB_DONE_") }
-            if (doneIdx >= 0) {
-                val rc = trimmed[doneIdx].removePrefix("__JOB_DONE_").trim()
+            val body = if (lines.lastOrNull()?.startsWith("__JOB_DONE_") == true) {
                 status = "已结束"
-                rcNote = "，退出码 $rc"
-                trimmed.removeAt(doneIdx)
-            }
-            val tailN = ((args.optInt("tail_lines") ?: 60).coerceIn(1, 500))
-            val tail = trimmed.takeLast(tailN)
-            val head = "${logFile.nameWithoutExtension}（$status$rcNote，共 ${trimmed.size} 行）\n---\n"
+                rcNote = "，退出码 ${lines.last().removePrefix("__JOB_DONE_").trim()}"
+                lines.dropLast(1)
+            } else lines
+            val tail = body.takeLast(tailN)
+            val head = "${logFile.nameWithoutExtension}（$status$rcNote）\n---\n"
             ToolResult(head + if (tail.isEmpty()) "(暂无输出)" else tail.joinToString("\n"))
         }
+
+    /** 只读文件尾部 maxBytes 字节；起始行可能是被截断的残片，丢弃到首个换行。 */
+    private fun readTail(file: java.io.File, maxBytes: Int): List<String> {
+        val len = file.length()
+        if (len <= 0L) return emptyList()
+        val start = maxOf(0L, len - maxBytes)
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            raf.seek(start)
+            val buf = ByteArray((len - start).toInt())
+            raf.readFully(buf)
+            var text = String(buf, Charsets.UTF_8)
+            if (start > 0L) text = text.substringAfter('\n', "")
+            return text.lines().let { if (it.lastOrNull()?.isEmpty() == true) it.dropLast(1) else it }
+        }
+    }
 }
