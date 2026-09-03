@@ -544,6 +544,20 @@ object VirtualScreenController {
     }
 
     /**
+     * 经 shell 枚举确认目标包是否在指定屏的任务里（不依赖无障碍服务）。
+     * 返回 null = 无特权通道可用，无法判定。
+     */
+    suspend fun appOnDisplayViaShell(displayId: Int, pkg: String): Boolean? {
+        if (pkg.isBlank() || displayId < 0) return null
+        if (!(PrivilegedShell.shizukuUsable() || PrivilegedShell.hasRoot())) return null
+        val listing = runCatching {
+            if (PrivilegedShell.shizukuUsable()) PrivilegedShell.shizukuExec("am stack list").output
+            else PrivilegedShell.rootExec("am stack list").output
+        }.getOrNull() ?: return null
+        return regexPkgsOnDisplay(listing, displayId).contains(pkg)
+    }
+
+    /**
      * 解析 am stack list 输出，取指定 display 上任务的包名（排除本应用）。
      * 系统会给每块新建虚拟屏自动挂 home 任务（如 Flyme SecondaryDisplayLauncher）——
      * force-stop 它会重启用户手机桌面，必须按 mActivityType=home/recents 跳过。

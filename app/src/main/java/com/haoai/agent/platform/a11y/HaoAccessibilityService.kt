@@ -375,7 +375,22 @@ class HaoAccessibilityService : AccessibilityService() {
         val windows = byDisplay[displayId]?.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
             ?: return false
         if (targetPkg.isNotBlank()) {
-            return windows.any { runCatching { it.root?.packageName?.toString() == targetPkg }.getOrDefault(false) }
+            val hit = windows.any { runCatching { it.root?.packageName?.toString() == targetPkg }.getOrDefault(false) }
+            if (!hit) {
+                // 误报探针：列出系统真正注册的窗口（displayId/包名/类型），供 miss 时对照。
+                // 写文件日志（本 ROM logcat 被抑制，android.util.Log 不可见）
+                val sb = StringBuilder()
+                for (i in 0 until byDisplay.size()) {
+                    sb.append(byDisplay.keyAt(i)).append("=[")
+                    sb.append(byDisplay.valueAt(i).joinToString(",") { w ->
+                        "${runCatching { w.root?.packageName?.toString() }.getOrNull() ?: "?"}:${w.type}"
+                    })
+                    sb.append("];")
+                }
+                com.haoai.agent.platform.vdisplay.VirtualScreenController
+                    .debugLog("a11y window miss d=$displayId target=$targetPkg actual: $sb")
+            }
+            return hit
         }
         // URL 目标：排除系统 launcher 后任意应用窗口即可（浏览器在虚拟屏上）
         val launcherPkg = runCatching {

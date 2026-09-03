@@ -233,6 +233,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 screen = 0
                 chatVm.newSession()
             }
+            "ask" -> {
+                // 调试直达：haoai://debug/ask?text=...（URL 编码）——绕过 IME 注入直接派任务
+                screen = 0
+                uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { chatVm.send(it) }
+            }
             "vsclose" -> {
                 screen = 0
                 rootScope.launch(kotlinx.coroutines.Dispatchers.Default) {

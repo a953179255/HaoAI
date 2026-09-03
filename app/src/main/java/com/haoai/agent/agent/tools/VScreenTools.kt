@@ -49,11 +49,36 @@ class VScreenLaunchTool : Tool {
         val target = args.optString("target")
         if (target.isBlank()) return ToolResult("缺少 target", true)
         VirtualScreenController.launch(app, target)?.let { return ToolResult(it, true) }
-        delay(1200)
-        // 硬性故障检查：启动后虚拟屏上仍无目标窗口（App 拒绝多屏/系统把重投递主屏等）
+        // 硬性故障检查：启动后虚拟屏上仍无目标窗口（App 拒绝多屏/系统把重投递主屏等）。
+        // 轮询等待而非一次判死——App 冷启动普遍要 2~5s，过早检查会把"还没起来"误报成"没出现"。
+        // 双通道：无障碍（快）+ shell 枚举（am stack list，不依赖 a11y——App 重启后服务未重连是
+        // Flyme 常态，单靠 a11y 会把启动成功的任务误判失败，agent 随即降级主屏 = 用户看到的"窜屏"）
         val svc = HaoAccessibilityService.instance
         val targetPkg = if (target.startsWith("http")) "" else target.substringBefore('/')
-        val onVscreen = svc != null && svc.targetAppWindowOnDisplay(VirtualScreenController.displayId ?: -1, targetPkg)
+        var onVscreen = false
+        var channelUsable = false
+        for (i in 1..12) { // 12 × 500ms = 最长 6s
+            delay(500)
+            val id = VirtualScreenController.displayId ?: -1
+            if (svc != null) {
+                channelUsable = true
+                if (svc.targetAppWindowOnDisplay(id, targetPkg)) { onVscreen = true; break }
+            } else if (i % 2 == 0) { // 无 a11y：每 1s 一次 shell 枚举
+                val shell = VirtualScreenController.appOnDisplayViaShell(id, targetPkg)
+                if (shell != null) { channelUsable = true; if (shell) { onVscreen = true; break } }
+            }
+        }
+        if (!onVscreen && svc != null) {
+            // a11y 全程 miss：shell 复核一次（窗口注册滞后/被 a11y 过滤时救回，防误杀成功启动）
+            onVscreen = VirtualScreenController.appOnDisplayViaShell(
+                VirtualScreenController.displayId ?: -1, targetPkg
+            ) == true
+        }
+        if (!onVscreen && !channelUsable) {
+            // 两条通道都不可用：launch 已派发成功，不武断判死——放行并记录，交给后续 screen 自纠
+            VirtualScreenController.debugLog("window check skipped (no a11y/shell): $target")
+            onVscreen = true
+        }
         if (!onVscreen) {
             VirtualScreenController.debugLog("target window missing on vscreen: $target")
             return ToolResult(
@@ -62,7 +87,6 @@ class VScreenLaunchTool : Tool {
                 true
             )
         }
-        delay(600)
         VirtualScreenController.awaitFrame()
         // 画面纯色提示（部分 ROM 不把应用内容合入虚拟屏帧缓冲——属已知限制，节点操作不受影响）
         val visualNote = if (VirtualScreenController.frameIsDegenerate())
