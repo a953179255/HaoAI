@@ -2507,12 +2507,11 @@ private fun ProviderDialog(
                             )
                         }
                     }
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.name,
                         onValueChange = { v -> onChange(draft.copy(name = v)) },
-                        label = { Text("名称（留空自动命名）") },
-                        singleLine = true,
-                        colors = glassFieldColors()
+                        label = "名称",
+                        placeholder = "留空自动命名"
                     )
                     // 协议选择（2.3）：anthropic 原生 Messages / openai_compat 默认。
                     // 紧凑排版：chip 薄化（少上下 padding），与「名称」同占一行的密度
@@ -2536,32 +2535,18 @@ private fun ProviderDialog(
                             label = { Text("Anthropic 原生") }
                         )
                     }
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.baseUrl,
                         onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
-                        label = {
-                            Text(
-                                if (draft.protocol == "anthropic") "Base URL（Anthropic Messages）"
-                                else "Base URL（OpenAI 兼容）"
-                            )
-                        },
-                        placeholder = {
-                            Text(
-                                if (draft.protocol == "anthropic") "https://api.anthropic.com"
-                                else "https://openrouter.ai/api/v1"
-                            )
-                        },
-                        singleLine = true,
-                        colors = glassFieldColors()
+                        label = "Base URL",
+                        placeholder = if (draft.protocol == "anthropic") "https://api.anthropic.com"
+                        else "https://openrouter.ai/api/v1"
                     )
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.model,
                         onValueChange = { v -> onChange(draft.copy(model = v)) },
-                        label = { Text("模型 ID（默认使用）") },
-                        placeholder = { Text("如 deepseek-chat") },
-                        singleLine = true,
-                        colors = glassFieldColors(),
-                        modifier = Modifier.fillMaxWidth()
+                        label = "模型 ID",
+                        placeholder = "默认使用 · 如 deepseek-chat"
                     )
                     // 同一供应商的多模型直接在这里录入（原收在「高级选项」折叠区里，
                     // 配一个供应商要连续加好几个模型 ID 时得先展开，够不着）
@@ -2639,42 +2624,35 @@ private fun ProviderDialog(
                     }
                     // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对
                     var showKey by remember { mutableStateOf(false) }
-                    OutlinedTextField(
+                    com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.apiKeyPlain,
                         onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
-                        label = { Text(if (draft.id == null) "API Key" else "API Key（留空保持不变）") },
-                        singleLine = true,
+                        label = "API Key",
+                        placeholder = if (draft.id == null) "sk-…" else "留空保持不变",
                         visualTransformation =
                             if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
+                        trailing = {
                             TextButton(onClick = { showKey = !showKey }) {
                                 Text(
                                     if (showKey) "隐藏" else "显示",
                                     style = MaterialTheme.typography.labelSmall
                                 )
                             }
-                        },
-                        colors = glassFieldColors()
+                        }
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
+                        com.haoai.agent.ui.common.CompactGlassField(
                             value = draft.contextLength,
                             onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
-                            label = { Text("上下文窗口") },
-                            placeholder = { Text("自动") },
-                            supportingText = { Text("0/留空=按模型推测") },
-                            singleLine = true,
-                            colors = glassFieldColors(),
+                            label = "上下文",
+                            placeholder = "自动推测",
                             modifier = Modifier.weight(1f)
                         )
-                        OutlinedTextField(
+                        com.haoai.agent.ui.common.CompactGlassField(
                             value = draft.maxTokens,
                             onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
-                            label = { Text("回复上限") },
-                            placeholder = { Text("默认") },
-                            supportingText = { Text("建议 8192+") },
-                            singleLine = true,
-                            colors = glassFieldColors(),
+                            label = "回复上限",
+                            placeholder = "默认",
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -2751,10 +2729,10 @@ private fun ProviderDialog(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedTextField(
+                                com.haoai.agent.ui.common.CompactGlassField(
                                     value = poolKey, onValueChange = { poolKey = it },
-                                    label = { Text("添加备用 Key") }, singleLine = true,
-                                    colors = glassFieldColors(), modifier = Modifier.weight(1f)
+                                    label = "备用 Key", placeholder = "逐请求轮换",
+                                    modifier = Modifier.weight(1f)
                                 )
                                 GlassTextButton(
                                     text = "添加",
@@ -2783,19 +2761,17 @@ private fun ProviderDialog(
                                     onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) })
                             }
                             if (draft.balanceEnabled) {
-                                OutlinedTextField(
+                                com.haoai.agent.ui.common.CompactGlassField(
                                     value = draft.balanceApiPath,
                                     onValueChange = { onChange(draft.copy(balanceApiPath = it)) },
-                                    label = { Text("余额接口路径") },
-                                    placeholder = { Text("/credits") }, singleLine = true,
-                                    colors = glassFieldColors()
+                                    label = "接口路径",
+                                    placeholder = "/credits"
                                 )
-                                OutlinedTextField(
+                                com.haoai.agent.ui.common.CompactGlassField(
                                     value = draft.balanceJsonPath,
                                     onValueChange = { onChange(draft.copy(balanceJsonPath = it)) },
-                                    label = { Text("取值 JSON 路径（点分）") },
-                                    placeholder = { Text("data.total_usage") }, singleLine = true,
-                                    colors = glassFieldColors()
+                                    label = "JSON 路径",
+                                    placeholder = "data.total_usage（点分）"
                                 )
                             }
                         }
@@ -2889,35 +2865,35 @@ private fun ModelIdQuickAdd(
                 }
             }
         }
-        OutlinedTextField(
-            value = input,
-            onValueChange = { input = it },
-            label = { Text("添加其他模型 ID") },
-            placeholder = { Text("输入后点 + 加入") },
-            singleLine = true,
-            colors = glassFieldColors(),
-            modifier = Modifier.fillMaxWidth(),
-            trailingIcon = {
-                IconButton(
-                    onClick = {
-                        if (currentId.isBlank()) {
-                            onChange(draft.copy(model = candidate))
-                        } else {
-                            onChange(draft.copy(models = draft.models + com.haoai.agent.data.ModelEntry(candidate)))
-                        }
-                        input = ""
-                    },
-                    enabled = canAdd
-                ) {
-                    Icon(
-                        Icons.Filled.Add,
-                        contentDescription = "添加模型 ID",
-                        tint = if (canAdd) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                    )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            com.haoai.agent.ui.common.CompactGlassField(
+                value = input,
+                onValueChange = { input = it },
+                label = "其他模型",
+                placeholder = "输入后点 + 加入",
+                modifier = Modifier.weight(1f),
+                trailing = {
+                    IconButton(
+                        onClick = {
+                            if (currentId.isBlank()) {
+                                onChange(draft.copy(model = candidate))
+                            } else {
+                                onChange(draft.copy(models = draft.models + com.haoai.agent.data.ModelEntry(candidate)))
+                            }
+                            input = ""
+                        },
+                        enabled = canAdd
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "添加模型 ID",
+                            tint = if (canAdd) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        )
+                    }
                 }
-            }
-        )
+            )
+        }
     }
 }
 

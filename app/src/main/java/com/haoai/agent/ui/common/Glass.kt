@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -43,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -864,6 +866,77 @@ fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.co
     focusedLabelColor = MaterialTheme.colorScheme.primary,
     unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
 )
+
+/**
+ * 弹窗内的紧凑输入框：48dp 定高（Material 默认 56dp，浮动标签上下留白占掉一大截）。
+ * label 固定渲染在框内左侧（不浮动），值与标签并排——纵向密度优先：
+ * 同一屏能多看一两个字段。直接基于 Foundation BasicTextField 自绘边框，
+ * 不碰 Material 内部 API（版本间签名不稳）。
+ */
+@Composable
+fun CompactGlassField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    singleLine: Boolean = true,
+    visualTransformation: androidx.compose.ui.text.input.VisualTransformation =
+        androidx.compose.ui.text.input.VisualTransformation.None,
+    trailing: @Composable (() -> Unit)? = null
+) {
+    val interaction = androidx.compose.runtime.remember {
+        androidx.compose.foundation.interaction.MutableInteractionSource()
+    }
+    val focused by interaction.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(11.dp)
+    val borderColor = if (focused) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
+    val container = if (focused) glassSurfaceColor(0.32f) else glassSurfaceColor(0.20f)
+
+    androidx.compose.foundation.layout.Row(
+        modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .background(container, shape)
+            .border(1.dp, borderColor, shape)
+            .padding(end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 固定标签：始终在内容左侧，与已填值并排
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
+            maxLines = 1,
+            modifier = Modifier.padding(start = 12.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty() && placeholder != null) {
+                Text(
+                    placeholder,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+                    maxLines = 1
+                )
+            }
+            androidx.compose.foundation.text.BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = singleLine,
+                visualTransformation = visualTransformation,
+                interactionSource = interaction,
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = MaterialTheme.typography.bodySmall.copy(
+                    color = MaterialTheme.colorScheme.onBackground
+                ),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary)
+            )
+        }
+        trailing?.invoke()
+    }
+}
 
 /**
  * 弹窗内统一的次级文字按钮：磨砂容器 + 细描边（透明 TextButton 会和玻璃面板融在一起，
