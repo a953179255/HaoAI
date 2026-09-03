@@ -2426,8 +2426,10 @@ private fun LiquidPillButton(
         shape = RoundedCornerShape(percent = 50),
         enabled = enabled,
         refract = refract,
+        // 禁用观感由 LiquidGlassButton 的整体 opacity(0.45) 统一处理，
+        // 这里不再针对 enabled 降 surfaceColor（双层降透明会糊成一团）
         surfaceColor = MaterialTheme.colorScheme.primary.copy(
-            alpha = if (emphasized && enabled) 0.85f else 0.25f
+            alpha = if (emphasized) 0.85f else 0.25f
         ),
         modifier = modifier
     ) {
@@ -2779,22 +2781,44 @@ private fun ProviderDialog(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("••••••••••（已保存）", style = MaterialTheme.typography.labelSmall,
                                         fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-                                    Text("删除", style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.clickable {
-                                            onChange(draft.copy(poolCiphers = draft.poolCiphers.filterIndexed { j, _ -> j != i }))
-                                        }.padding(4.dp))
+                                    // 40dp 热区 + Button role：纯文字 clickable 只有十几 dp
+                                    // 且无按钮语义（屏幕阅读器读不出可点）
+                                    Box(
+                                        Modifier
+                                            .size(40.dp)
+                                            .clickable(
+                                                interactionSource = null,
+                                                indication = null,
+                                                role = Role.Button
+                                            ) {
+                                                onChange(draft.copy(poolCiphers = draft.poolCiphers.filterIndexed { j, _ -> j != i }))
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("删除", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                             draft.poolAddPlain.forEachIndexed { i, k ->
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(k.take(8) + "…（本次新增）", style = MaterialTheme.typography.labelSmall,
                                         fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-                                    Text("删除", style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.clickable {
-                                            onChange(draft.copy(poolAddPlain = draft.poolAddPlain.filterIndexed { j, _ -> j != i }))
-                                        }.padding(4.dp))
+                                    Box(
+                                        Modifier
+                                            .size(40.dp)
+                                            .clickable(
+                                                interactionSource = null,
+                                                indication = null,
+                                                role = Role.Button
+                                            ) {
+                                                onChange(draft.copy(poolAddPlain = draft.poolAddPlain.filterIndexed { j, _ -> j != i }))
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("删除", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                             var poolKey by remember(draft.id) { mutableStateOf("") }

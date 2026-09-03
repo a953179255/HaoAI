@@ -341,6 +341,9 @@ fun LiquidGlassButton(
 
     Box(
         modifier
+            // 禁用态整体降透明（0.45）：与 GlassAlertDialog 禁用文字的观感一致。
+            // 原先只把 surfaceColor alpha 降到 40%，内容文字仍是全亮，读不出不可点
+            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .then(bgModifier)
             .clickable(
                 interactionSource = null,
@@ -411,9 +414,9 @@ fun GlassCard(
         Modifier
             .clip(shape)
             .background(cardSurface)
-            // 磨砂实底卡（refract=false）多用浅色场景：白描边在白卡上不可见，
-            // 改用前景色系描边保证卡片边界可辨
-            .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f), shape)
+            // 描边与折射路径（glassBorderColor）同源同值：refract 切换时描边不跳变。
+            // 前景系描边在浅色磨砂卡上仍可辨（白卡上白描边才真的不可见）
+            .border(1.5.dp, glassBorderColor(0.45f), shape)
             .then(if (tint != null) Modifier.background(tint, shape) else Modifier)
     }
 
@@ -892,14 +895,18 @@ fun CompactGlassField(
     val shape = RoundedCornerShape(11.dp)
     val borderColor = if (focused) MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
-    val container = if (focused) glassSurfaceColor(0.32f) else glassSurfaceColor(0.20f)
+    // 降明度而非提白度：弹窗面板本身已是 0.92 白（浅色主题），再叠白色容器就是
+    // 「白叠白」，边界全靠描边硬撑。改用 onBackground 叠加（浅色下=压暗、
+    // 深色下=提亮），容器与面板有真实明度差；聚焦时再加深一档
+    val container = if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
+    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f)
 
     androidx.compose.foundation.layout.Row(
         modifier
             .fillMaxWidth()
             .height(48.dp)
             .background(container, shape)
-            .border(1.dp, borderColor, shape)
+            .border(if (focused) 1.5.dp else 1.dp, borderColor, shape)
             .padding(end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
