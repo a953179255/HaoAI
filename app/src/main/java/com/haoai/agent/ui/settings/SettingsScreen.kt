@@ -574,6 +574,7 @@ fun SettingsScreen(
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 36.dp)
                             .clickable {
                                 vm.setPurposeModel(purpose, id)
                                 // 主目标从备用链剔除，避免自我降级；
@@ -588,7 +589,7 @@ fun SettingsScreen(
                                 vm.setPurposeFallback(purpose, fallback.filterNot { it == id })
                                 purposePicker = null
                             }
-                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -607,42 +608,57 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
                 )
                 Text(
-                    "备用链（主目标失败按序降级）",
+                    "备用链 · 主目标失败按序降级",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
                 options.filter { it.first.isNotBlank() && it.first != current }.forEach { (id, name) ->
                     val on = id in fallback
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .heightIn(min = 36.dp)
                             .clickable {
                                 vm.setPurposeFallback(
                                     purpose,
                                     if (on) fallback - id else fallback + id
                                 )
                             }
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = on,
-                            onCheckedChange = {
-                                vm.setPurposeFallback(purpose, if (it) fallback + id else fallback - id)
-                            },
-                            modifier = Modifier.scale(0.8f)
-                        )
+                        // 带数字圆标对齐设计稿：选中=主题色实心圆+白字序号（顺序一眼可读），
+                        // 未选=细描边空圈。替代 Checkbox（勾选态读不出「顺序」语义）+
+                        // 右侧「第 N 顺位」文字（序号入圆后文字就是冗余）
+                        Box(
+                            Modifier
+                                .size(22.dp)
+                                .background(
+                                    if (on) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    CircleShape
+                                )
+                                .border(
+                                    1.5.dp,
+                                    if (on) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f),
+                                    CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (on) Text(
+                                "${fallback.indexOf(id) + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                        Spacer(Modifier.size(10.dp))
                         Text(
                             name,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.weight(1f)
-                        )
-                        if (on) Text(
-                            "第 ${fallback.indexOf(id) + 1} 顺位",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
