@@ -497,6 +497,31 @@ object VirtualScreenController {
     }
 
     fun destroy() = synchronized(lock) {
+        // 销毁前清场：Flyme 等 ROM 会在虚拟屏销毁时把屏上任务重挂主屏前台（用户看到
+        // App 窜到主屏全屏）。先 force-stop 屏上第三方应用（与 vscreen_close「屏上应用
+        // 随之退出」的工具契约一致），再释放屏，杜绝迁移。
+        // 用 am stack list 查屏上任务（不依赖无障碍服务——Flyme 会在 force-stop 本应用
+        // 时顺带吊销其无障碍授权，a11y 通道不可靠）
+        val id = displayId
+        if (id != null) {
+            runCatching {
+                if (PrivilegedShell.shizukuUsable() || PrivilegedShell.hasRoot()) {
+                    val exec = { cmd: String ->
+                        runBlocking {
+                            if (PrivilegedShell.shizukuUsable()) PrivilegedShell.shizukuExec(cmd)
+                            else PrivilegedShell.rootExec(cmd)
+                        }
+                    }
+                    val listing = exec("am stack list").output
+                    // RootTask ... displayId=<id> 块内 taskId 行的包名
+                    val pkgs = regexPkgsOnDisplay(listing, id)
+                    for (pkg in pkgs) {
+                        exec("am force-stop $pkg")
+                        debugLog("destroy cleanup: force-stop $pkg")
+                    }
+                }
+            }
+        }
         val trusted = trustedDisplayId
         if (trusted > 0) {
             runBlocking { PrivilegedShell.releaseTrustedDisplay(trusted) }
@@ -516,6 +541,33 @@ object VirtualScreenController {
         lastMarker = null
         wmsReliable = false
         debugLog("destroyed")
+    }
+
+    /**
+     * 解析 am stack list 输出，取指定 display 上任务的包名（排除本应用）。
+     * 系统会给每块新建虚拟屏自动挂 home 任务（如 Flyme SecondaryDisplayLauncher）——
+     * force-stop 它会重启用户手机桌面，必须按 mActivityType=home/recents 跳过。
+     */
+    private fun regexPkgsOnDisplay(listing: String, displayId: Int): List<String> {
+        val pkgs = LinkedHashSet<String>()
+        var inTarget = false
+        var isSystemBlock = false
+        for (line in listing.lines()) {
+            val root = Regex("RootTask id=\\d+ .*displayId=(\\d+)").find(line)
+            if (root != null) {
+                inTarget = root.groupValues[1].toInt() == displayId
+                isSystemBlock = false
+            }
+            if (line.contains("mActivityType=home") || line.contains("mActivityType=recents")) {
+                isSystemBlock = true
+            }
+            val task = Regex("taskId=\\d+: ([\\w.]+)/").find(line)
+            if (inTarget && !isSystemBlock && task != null) {
+                val pkg = task.groupValues[1]
+                if (pkg != "com.haoai.agent") pkgs.add(pkg)
+            }
+        }
+        return pkgs.toList()
     }
 
     private fun drawMarker(canvas: Canvas, rect: Rect, label: String) {
