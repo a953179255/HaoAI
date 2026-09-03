@@ -566,15 +566,37 @@ fun SettingsScreen(
                 else -> "上下文压缩 · 使用哪个模型"
             },
             confirmLabel = "完成",
+            // 单主操作：完成键通栏（设计稿样式）
+            fullWidthConfirm = true,
             onConfirm = { purposePicker = null },
             onDismiss = { purposePicker = null }
         ) {
             Column {
+                // ── 分区：主目标（设计稿 grpl 分组标题 + 单选圆圈）──
+                Text(
+                    "主目标",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(2.dp))
                 options.forEach { (id, name) ->
+                    val selected = id == current
+                    val sub = when {
+                        id.isBlank() -> "跟随当前云端服务"
+                        id == "local" -> "本机 llama.cpp"
+                        else -> settings.providers.find { it.id == id }?.model ?: ""
+                    }
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 36.dp)
+                            .heightIn(min = 40.dp)
+                            .then(
+                                if (selected) Modifier.background(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                    RoundedCornerShape(11.dp)
+                                ) else Modifier
+                            )
                             .clickable {
                                 vm.setPurposeModel(purpose, id)
                                 // 主目标从备用链剔除，避免自我降级；
@@ -589,48 +611,91 @@ fun SettingsScreen(
                                 vm.setPurposeFallback(purpose, fallback.filterNot { it == id })
                                 purposePicker = null
                             }
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (id == current) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onBackground,
-                            fontWeight = if (id == current) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (id == current) Text("✓", color = MaterialTheme.colorScheme.primary)
+                        // 单选圆圈（设计稿 radio）：选中=主题色实心点
+                        Box(
+                            Modifier
+                                .size(19.dp)
+                                .border(
+                                    1.5.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f),
+                                    CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (selected) {
+                                Box(
+                                    Modifier
+                                        .size(9.dp)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.size(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onBackground,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                            if (sub.isNotBlank()) {
+                                Text(
+                                    sub,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (selected) {
+                            Text(
+                                "当前",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
-                HorizontalDivider(
-                    Modifier.padding(vertical = 6.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
-                )
+                Spacer(Modifier.height(8.dp))
+                // ── 分区：备用链（数字圆标 + 移出）──
                 Text(
-                    "备用链 · 主目标失败按序降级",
+                    "备用链 · 按序降级",
                     style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(2.dp))
-                options.filter { it.first.isNotBlank() && it.first != current }.forEach { (id, name) ->
+                val candidates = options.filter { it.first.isNotBlank() && it.first != current }
+                if (candidates.isEmpty()) {
+                    Text(
+                        "暂无可用备用（先在上方选一个主目标）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+                candidates.forEach { (id, name) ->
                     val on = id in fallback
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 36.dp)
+                            .heightIn(min = 40.dp)
                             .clickable {
                                 vm.setPurposeFallback(
                                     purpose,
                                     if (on) fallback - id else fallback + id
                                 )
                             }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 带数字圆标对齐设计稿：选中=主题色实心圆+白字序号（顺序一眼可读），
-                        // 未选=细描边空圈。替代 Checkbox（勾选态读不出「顺序」语义）+
-                        // 右侧「第 N 顺位」文字（序号入圆后文字就是冗余）
+                        // 未选=细描边空圈。替代 Checkbox（勾选态读不出「顺序」语义）
                         Box(
                             Modifier
                                 .size(22.dp)
@@ -660,7 +725,20 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.weight(1f)
                         )
+                        if (on) Text(
+                            "移出",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
+                }
+                if (fallback.size >= 2) {
+                    Text(
+                        "主目标失败时按 ${fallback.map { fallback.indexOf(it) + 1 }.joinToString(" → ")} 顺序尝试",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
                 }
             }
         }

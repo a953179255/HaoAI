@@ -743,6 +743,8 @@ fun GlassAlertDialog(
     danger: Boolean = false,
     contentMaxHeight: Dp = 420.dp,
     refract: Boolean? = null,
+    /** 确认键通栏全宽（设计稿场景：单主操作弹窗，如「完成」） */
+    fullWidthConfirm: Boolean = false,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     // 系统返回手势先关弹窗：后注册的 handler 优先，覆盖屏幕级的返回导航
@@ -800,7 +802,8 @@ fun GlassAlertDialog(
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                        horizontalArrangement = if (fullWidthConfirm) Arrangement.Center
+                        else Arrangement.spacedBy(12.dp, Alignment.End),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (dismissLabel != null) {
@@ -827,6 +830,8 @@ fun GlassAlertDialog(
                                 backdrop = backdrop,
                                 shape = RoundedCornerShape(percent = 50),
                                 enabled = confirmEnabled,
+                                // 全宽模式：确认键铺满操作栏（单主操作弹窗）
+                                modifier = if (fullWidthConfirm) Modifier.fillMaxWidth() else Modifier,
                                 surfaceColor = when {
                                     !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
                                     danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.92f)
