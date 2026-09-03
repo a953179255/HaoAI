@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.sp
 fun CircularContextIndicator(
     usage: ContextUsage,
     onClick: () -> Unit,
+    // 详情面板展开时底盘加深：触发点显示激活态（面板改为顶栏下展开后不再有 Popup 自关高亮）
+    expanded: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val animatedProgress by animateFloatAsState(
@@ -45,7 +47,7 @@ fun CircularContextIndicator(
         modifier = modifier
             .size(30.dp)
             .clip(CircleShape)
-            .background(color.copy(alpha = 0.12f))
+            .background(color.copy(alpha = if (expanded) 0.30f else 0.12f))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {

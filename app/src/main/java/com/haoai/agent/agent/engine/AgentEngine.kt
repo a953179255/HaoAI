@@ -425,7 +425,7 @@ class AgentEngine(
             ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
             val msg = ChatMessage(
                 role = ChatMessage.ROLE_ASSISTANT,
-                content = "出错了：${e.message ?: e.javaClass.simpleName}",
+                content = friendlyError(e.message ?: e.javaClass.simpleName),
                 error = true
             )
             appendAndNotify(msg, onEvent)
@@ -986,7 +986,16 @@ class AgentEngine(
             "- 未启用前不要臆测调用这些组的工具。"
     }
 
-    private fun buildSystemText(markMemoryUse: Boolean = false): String {
+    private fun buildSystemText(markMemoryUse: Boolean = false): String =
+        buildSystemTextWithInjected(markMemoryUse).first
+
+    /**
+     * (系统提示全文, 动态注入块拼接文本[记忆/技能索引/日志/MCP 摘要/预算提示])。
+     * 第二项仅供上下文用量拆分估算（estimateOverheadBreakdown）；真实请求路径只用全文。
+     * token 启发式按字符线性可加减，基础提示 = 全文 − 注入，buildSuffix 为注入块
+     * 加的小标题归入基础提示（误差可忽略）。
+     */
+    private fun buildSystemTextWithInjected(markMemoryUse: Boolean = false): Pair<String, String> {
         val shellAvailable = backend?.shellWorkdir() != null
         val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
         // 3.3：当前 shell 后端说明 + 沙箱能力探测（探测异步跑一次，下一轮注入）
@@ -1005,18 +1014,25 @@ class AgentEngine(
             }
             else -> "Shell 后端：toybox（Android /system/bin/sh，工具集有限）；用户在 设置 → Linux 环境 安装发行版后 bash 将自动切换到 glibc 沙箱。"
         }
-        return SystemPrompt.PREFIX +
+        val memory = memorySnippet(markMemoryUse)
+        val skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex()
+        val journalBlock = journalSnippet()
+        val mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary()
+        val budget = budgetHint()
+        val full = SystemPrompt.PREFIX +
             SystemPrompt.buildSuffix(
-                workspaceLabel, shellAvailable, dateText, customPrompt, memorySnippet(markMemoryUse),
+                workspaceLabel, shellAvailable, dateText, customPrompt, memory,
                 a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
                 identity = identity,
-                skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex(),
-                journalBlock = journalSnippet(),
-                mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary(),
+                skillIndex = skillIndex,
+                journalBlock = journalBlock,
+                mcpSummary = mcpSummary,
                 shellNote = shellNote,
                 vscreenAvailable = vscreenEnabled,
                 toolsGroupHint = toolsGroupHintText()
-            ) + budgetHint() + todoProgressLine(consume = markMemoryUse)
+            ) + budget + todoProgressLine(consume = markMemoryUse)
+        val injected = memory + skillIndex + journalBlock + mcpSummary + budget
+        return full to injected
     }
 
     /**
@@ -1042,6 +1058,18 @@ class AgentEngine(
         com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to
             (_toolsTokenCache ?: TOOLS_BASE_TOKENS)
 
+    /** 拆分估算 (基础系统提示, 动态注入[记忆/技能/日志/MCP/预算], 工具定义)，供上下文详情面板。 */
+    fun estimateOverheadBreakdown(): Triple<Int, Int, Int> {
+        val (full, injected) = buildSystemTextWithInjected()
+        val sysTok = com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(full)
+        val injTok = com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(injected)
+        return Triple(
+            (sysTok - injTok).coerceAtLeast(0),
+            injTok,
+            _toolsTokenCache ?: TOOLS_BASE_TOKENS
+        )
+    }
+
     private fun buildApiMessages(): List<ApiMessage> {
         val systemText = buildSystemText(markMemoryUse = true)
 
@@ -1055,7 +1083,7 @@ class AgentEngine(
             .mapNotNull { m ->
                 when (m.role) {
                     ChatMessage.ROLE_USER ->
-                        if (!m.imageData.isNullOrBlank()) ApiMessage(
+                        if (!m.imageData.isNullOrBlank() && providerSupportsVision()) ApiMessage(
                             role = "user",
                             content = null,
                             parts = listOf(
@@ -1066,7 +1094,12 @@ class AgentEngine(
                                 )
                             )
                         )
-                        else ApiMessage(role = "user", content = m.content)
+                        else ApiMessage(
+                            role = "user",
+                            content = if (!m.imageData.isNullOrBlank())
+                                "$m.content\n[系统] 截图已省略（当前模型不支持图像输入），请依据文字/控件树信息操作。"
+                            else m.content
+                        )
                     ChatMessage.ROLE_ASSISTANT -> {
                         if (m.content.isBlank() && m.toolCalls.isEmpty()) null
                         else ApiMessage(
@@ -1330,6 +1363,50 @@ class AgentEngine(
         val m = msg.lowercase()
         return "http 429" in m || "http 5" in m || "timeout" in m ||
             "timed out" in m || "connection reset" in m || "eofexception" in m
+    }
+
+    /**
+     * 当前供应商模型是否支持图像输入。无配置字段可依时按模型名保守推测：
+     * 命中已知 vision 型号关键词 → true；命中明确纯文本型号 → false；未知 → true（乐观，
+     * 失败会得到供应商 400，friendlyError 已翻译成"换 vision 模型"指引）。
+     */
+    private fun providerSupportsVision(): Boolean {
+        val m = provider.model.lowercase()
+        if (Regex("vision|vl|-v[0-9]|multimodal|4o|4\\.1|gpt-5|o1|o3|o4|gemini|claude|glm-4v|qwen.*vl|llava|pixtral").containsMatchIn(m)) return true
+        if (Regex("deepseek-v[0-9]+$|deepseek-chat|deepseek-r\\d|qwen2?\\.5$|miniax-text|text-embed").containsMatchIn(m)) return false
+        return true
+    }
+
+    /**
+     * 把供应商原始报错翻译成普通用户能看懂、知道下一步该干嘛的话。
+     * 原始信息截短附在括号里，方便反馈给开发者定位。
+     */
+    private fun friendlyError(raw: String): String {
+        val m = raw.lowercase()
+        val detail = raw.take(120)
+        return when {
+            // 余额/配额类：余额不足、配额超限
+            "insufficient balance" in m || "balance=" in m || "quota" in m && "exceed" in m ||
+                "insufficient_user_quota" in m || "arrears" in m ->
+                "⚠️ 这个 AI 账号的话费用完了，需要去服务商充值或换一个账号（设置 → 模型供应商）。"
+            // 模型不支持图像（多模态截图发给纯文本模型）
+            "do not support image" in m || "not support image" in m || "image input" in m && "not" in m ->
+                "⚠️ 当前模型看不了图。任务里需要识别屏幕截图，请在设置里换一个支持图像的模型（比如带 vision 的型号）再试。"
+            // 401/403 密钥问题
+            "http 401" in m || "http 403" in m || "invalid api key" in m || "unauthorized" in m ->
+                "⚠️ AI 账号验证失败：密钥可能填错或过期了，请到 设置 → 模型供应商 检查密钥。"
+            // 429 限流（isTransientHttpError 已自动重试，到这里说明重试耗尽）
+            "http 429" in m || "rate limit" in m ->
+                "⏳ AI 服务太忙（限流），自动重试了几次仍失败。等一两分钟再发一次就行。"
+            // 400 参数类：分"带图发给纯文本模型"与其他
+            "http 400" in m ->
+                "⚠️ 请求被 AI 服务拒绝（参数不兼容）。如果刚才在跑屏幕截图类任务，多半是当前模型不支持图像，换个支持图像的模型；否则可能是这个模型与 App 协议不完全兼容，换一个模型供应商试试。（$detail）"
+            // 超时/网络
+            "timeout" in m || "timed out" in m || "connection" in m || "unknownhost" in m || "econnrefused" in m ->
+                "⚠️ 连不上 AI 服务：网络不稳定或服务暂时不可用，稍后再试一次。"
+            // 兜底：保留原文但加人话开头
+            else -> "出错了：$detail"
+        }
     }
 
     /** Overflow 恢复：检测 API 返回的 context_length_exceeded 错误，自动压缩后重试。 */

@@ -9,10 +9,16 @@ data class ContextUsage(
     val totalTokens: Int,
     val systemTokens: Int,
     val toolsTokens: Int,
-    val historyTokens: Int
+    val historyTokens: Int,
+    /** 系统提示中的动态注入块（记忆/技能索引/日志/MCP 摘要/预算提示），与基础系统提示分列 */
+    val injectedTokens: Int = 0,
+    /** 上下文压缩摘要：真实请求作为独立 system 消息注入，此前完全没计入 */
+    val summaryTokens: Int = 0,
+    /** 单次回复上限（max_tokens）：占用窗口但非"已用"，剩余可用需扣除 */
+    val reservedTokens: Int = 0
 ) {
     val percentage: Float get() = if (totalTokens > 0) usedTokens.toFloat() / totalTokens else 0f
-    val remainingTokens: Int get() = (totalTokens - usedTokens).coerceAtLeast(0)
+    val remainingTokens: Int get() = (totalTokens - usedTokens - reservedTokens).coerceAtLeast(0)
 
     fun progressColor(safe: Color, warn: Color, danger: Color, critical: Color): Color = when {
         percentage > 0.9f -> critical
@@ -38,9 +44,18 @@ data class ContextUsage(
             return (cjk * CJK_RATIO + other * OTHER_RATIO).toInt()
         }
 
-        fun estimateMessageTokens(msg: ChatMessage): Int {
+        /**
+         * @param toolContentCap >0 时按真实请求口径截断 tool 结果内容
+         * （AgentEngine.buildApiMessages 对每条 tool 消息做 TextCap.middle(REQ_CAP)），
+         * 否则按全文估算——长工具循环会话会显著高估。
+         */
+        fun estimateMessageTokens(msg: ChatMessage, toolContentCap: Int = 0): Int {
             var tokens = MSG_OVERHEAD
-            tokens += estimateStringTokens(msg.content)
+            val content =
+                if (toolContentCap > 0 && msg.role == ChatMessage.ROLE_TOOL && msg.content.length > toolContentCap)
+                    msg.content.take(toolContentCap)
+                else msg.content
+            tokens += estimateStringTokens(content)
             for (tc in msg.toolCalls) {
                 tokens += estimateStringTokens(tc.name)
                 tokens += estimateStringTokens(tc.argumentsJson)

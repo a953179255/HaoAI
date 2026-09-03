@@ -433,6 +433,9 @@ fun ChatScreen(
 
     // 上下文使用量（来自 ViewModel 实时估算）
     val contextUsage by vm.contextUsage.collectAsState()
+    // 上下文详情面板开关：状态提升到此处——面板在顶栏 Column 内展开（与 E1 横幅同列），
+    // 触发点在 TopBar 的环形指示器，点消息区也要能关，故不能留在 TopBar 内部
+    var showContextDetail by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
     val drawerFraction = drawer.fraction.value
@@ -448,6 +451,8 @@ fun ChatScreen(
                 .pointerInput(Unit) {
                     detectTapGestures {
                         focusManager.clearFocus()
+                        // 点消息区收起上下文详情面板（原 Popup 的 outside-dismiss 语义）
+                        showContextDetail = false
                     }
                 }
                 .pointerInput(Unit) {
@@ -553,8 +558,33 @@ fun ChatScreen(
                     todoItems = todoItems,
                     taskExpanded = taskPanelExpanded,
                     onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
+                    contextDetailExpanded = showContextDetail,
+                    onToggleContextDetail = { showContextDetail = !showContextDetail },
                     modifier = Modifier
                 )
+                // 上下文用量详情：从顶栏玻璃下沿向下展开、水平居中。
+                // 顶栏展开面板层级（自上而下）：任务面板（与玻璃一体生长，常驻工作状态）
+                // > 上下文详情（用户点环形指示器主动弹出的瞬时信息，贴近触发点）
+                // > E1 断点恢复横幅（系统被动通知，优先级最低）。
+                // 三者同在布局流里堆叠，互不遮挡。
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showContextDetail,
+                    enter = androidx.compose.animation.expandVertically() +
+                        androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.shrinkVertically() +
+                        androidx.compose.animation.fadeOut()
+                ) {
+                    Box(
+                        Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        ContextUsagePanel(
+                            usage = contextUsage,
+                            backdrop = backdrop,
+                            modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)
+                        )
+                    }
+                }
                 // E1 断点恢复横幅：从顶栏下沿延展出现（running 标记由 selectSession 死亡检测置入）
                 val runStateNow = activeSession?.runState
                 val runGoalNow = activeSession?.runGoal
@@ -1483,10 +1513,13 @@ private fun TopBar(
     todoItems: List<com.haoai.agent.agent.tools.TodoItem> = emptyList(),
     taskExpanded: Boolean = false,
     onToggleTask: () -> Unit = {},
+    // 上下文详情面板：开关状态提升到 ChatScreen（面板在顶栏下方布局流里展开），
+    // TopBar 只留触发点
+    contextDetailExpanded: Boolean = false,
+    onToggleContextDetail: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
-    var showContextDetail by remember { mutableStateOf(false) }
     val vscreenId by com.haoai.agent.platform.vdisplay.VirtualScreenController.displayIdFlow.collectAsState()
     val density = LocalDensity.current
     val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
@@ -1595,7 +1628,8 @@ private fun TopBar(
             }
             CircularContextIndicator(
                 usage = contextUsage,
-                onClick = { showContextDetail = !showContextDetail }
+                onClick = onToggleContextDetail,
+                expanded = contextDetailExpanded
             )
         }
         // 任务面板：同一块玻璃向下一体生长（顶栏加宽效果），无独立卡片、无关闭钮
@@ -1643,20 +1677,6 @@ private fun TopBar(
                 }
             }
         }
-        }
-        // 上下文详情弹窗
-        if (showContextDetail) {
-            androidx.compose.ui.window.Popup(
-                alignment = Alignment.BottomEnd,
-                onDismissRequest = { showContextDetail = false },
-                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
-            ) {
-                ContextUsageDetailPopup(
-                    usage = contextUsage,
-                    backdrop = backdrop,
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-            }
         }
     }
 }

@@ -1014,16 +1014,30 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         id = "estimate", name = "估算", baseUrl = "https://estimate.invalid", model = "-"
                     )
                     val engine = buildEngine(s, provider)
-                    val (sysTok, toolsTok) = engine.estimateOverheadTokens()
-                    val histTok = messagesSnapshot.sumOf {
-                        com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel())
-                    }
+                    // 拆分口径与真实请求（AgentEngine.buildApiMessages）对齐：
+                    // 系统提示=基础+注入分列；压缩摘要作为独立 system 消息单独计；
+                    // 历史只送最近 MAX_HISTORY 条且 tool 结果截断 REQ_CAP 字符；
+                    // 回复上限（max_tokens）占用窗口，从"剩余可用"中扣除
+                    val (sysTok, injTok, toolsTok) = engine.estimateOverheadBreakdown()
+                    val summaryTok = ContextUsage.estimateStringTokens(s.compactionSummary ?: "")
+                    val histTok = messagesSnapshot
+                        .takeLast(com.haoai.agent.agent.engine.AgentEngine.MAX_HISTORY)
+                        .sumOf {
+                            ContextUsage.estimateMessageTokens(
+                                it.toModel(),
+                                toolContentCap = com.haoai.agent.agent.engine.AgentEngine.REQ_CAP
+                            )
+                        }
+                    val reservedTok = provider.effectiveMaxTokens().coerceAtLeast(0)
                     com.haoai.agent.ui.chat.ContextUsage(
-                        usedTokens = sysTok + toolsTok + histTok,
+                        usedTokens = sysTok + injTok + toolsTok + summaryTok + histTok,
                         totalTokens = contextWindow,
                         systemTokens = sysTok,
                         toolsTokens = toolsTok,
-                        historyTokens = histTok
+                        historyTokens = histTok,
+                        injectedTokens = injTok,
+                        summaryTokens = summaryTok,
+                        reservedTokens = reservedTok
                     )
                 }.getOrNull()
             }?.let { usage ->

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -23,8 +22,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
+/**
+ * 上下文用量详情面板：从顶栏玻璃下沿向下展开、水平居中（不再是锚定右上角的 Popup）。
+ * 行口径与真实请求一致：基础系统提示 / 动态注入 / 工具定义 / 压缩摘要 /
+ * 历史（最近 80 条、tool 结果按 4K 字符截断）/ 回复预留（max_tokens）。
+ */
 @Composable
-fun ContextUsageDetailPopup(
+fun ContextUsagePanel(
     usage: ContextUsage,
     backdrop: LayerBackdrop,
     modifier: Modifier = Modifier
@@ -38,9 +42,7 @@ fun ContextUsageDetailPopup(
 
     com.haoai.agent.ui.common.GlassPanel(
         backdrop = backdrop,
-        modifier = modifier
-            .padding(top = 6.dp, end = 4.dp)
-            .widthIn(min = 220.dp),
+        modifier = modifier.width(300.dp),
         radius = 16.dp,
         surfaceAlpha = 0.72f
     ) {
@@ -74,8 +76,11 @@ fun ContextUsageDetailPopup(
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             Spacer(Modifier.height(6.dp))
             DetailRow("系统提示", usage.systemTokens)
+            if (usage.injectedTokens > 0) DetailRow("记忆/技能注入", usage.injectedTokens)
             DetailRow("工具定义", usage.toolsTokens)
+            if (usage.summaryTokens > 0) DetailRow("压缩摘要", usage.summaryTokens)
             DetailRow("历史消息", usage.historyTokens)
+            if (usage.reservedTokens > 0) DetailRow("回复预留", usage.reservedTokens)
             Spacer(Modifier.height(4.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             Spacer(Modifier.height(4.dp))
