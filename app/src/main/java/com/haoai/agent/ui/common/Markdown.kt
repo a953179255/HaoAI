@@ -27,8 +27,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +52,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** 解析后的 Markdown 块：类型化区分，渲染端按类型分发。 */
 sealed class MdBlock {
@@ -182,7 +186,17 @@ fun parseMarkdownBlocks(src: String): List<MdBlock> {
 
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier) {
-    val blocks = remember(text) { parseMarkdownBlocks(text) }
+    // 结构解析挪后台线程 + mapLatest 语义（上游 同款）：LaunchedEffect(text) 每次
+    // 文本变化重启并取消在途解析，只提交最新完成版；首帧同步解析防闪烁。
+    // parseMarkdownBlocks 是纯字符串处理（Regex/String），后台线程安全
+    var blocks by remember { mutableStateOf(parseMarkdownBlocks(text)) }
+    var parsedFor by remember { mutableStateOf(text) }
+    LaunchedEffect(text) {
+        if (parsedFor == text) return@LaunchedEffect
+        val result = withContext(Dispatchers.Default) { parseMarkdownBlocks(text) }
+        blocks = result
+        parsedFor = text
+    }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
@@ -191,17 +205,23 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier) {
                 is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
                 is MdBlock.Math -> FormulaBlock(block.latex, dark)
                 is MdBlock.Table -> TableBlock(block)
-                is MdBlock.Text -> Text(
-                    text = buildInline(block.text),
-                    style = when (block.heading) {
-                        1 -> MaterialTheme.typography.headlineSmall
-                        2 -> MaterialTheme.typography.titleLarge
-                        3 -> MaterialTheme.typography.titleMedium
-                        0 -> MaterialTheme.typography.bodyMedium
-                        else -> MaterialTheme.typography.titleSmall
-                    },
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                is MdBlock.Text -> {
+                    // 块级缓存：行内正则/AnnotatedString 仅在块文本变化时重算。
+                    // 流式期 blocks 列表每次都是新对象但历史块文本不变 → 缓存命中，
+                    // Text 拿到同一 AnnotatedString 实例 → 文本布局缓存复用不重排
+                    val ann = remember(block.text) { buildInline(block.text) }
+                    Text(
+                        text = ann,
+                        style = when (block.heading) {
+                            1 -> MaterialTheme.typography.headlineSmall
+                            2 -> MaterialTheme.typography.titleLarge
+                            3 -> MaterialTheme.typography.titleMedium
+                            0 -> MaterialTheme.typography.bodyMedium
+                            else -> MaterialTheme.typography.titleSmall
+                        },
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
             }
         }
     }
@@ -215,6 +235,10 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
     val colors = if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()
     val bg = if (dark) Color(0xFF06080D).copy(alpha = 0.88f) else Color(0xFFF7F8FA)
     val plain = colors.plain
+    // 块级缓存：语法高亮全量正则扫描只在代码/语言/配色变化时重算（Colors 为 data class）
+    val highlighted = remember(code, lang, colors) {
+        CodeHighlight.highlight(code.trimEnd('\n'), lang, colors)
+    }
 
     Surface(
         color = bg,
@@ -259,7 +283,7 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
             }
             SelectionContainer {
                 Text(
-                    text = CodeHighlight.highlight(code.trimEnd('\n'), lang, colors),
+                    text = highlighted,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.5.sp,
                     lineHeight = 18.sp,
@@ -279,6 +303,11 @@ private fun TableBlock(table: MdBlock.Table) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val bg = if (dark) Color(0xFF141A24) else Color(0xFFF4F6FA)
     val altBg = if (dark) Color(0xFF1A2130) else Color(0xFFEAEFF7)
+    // 块级缓存：单元格行内样式整表一次构建；MdBlock.Table 是 data class，
+    // 流式期表格内容不变时按 equals 命中缓存
+    val inlined = remember(table) {
+        table.header.map { buildInline(it) } to table.rows.map { row -> row.map { buildInline(it) } }
+    }
 
     Surface(
         color = bg,
@@ -291,9 +320,9 @@ private fun TableBlock(table: MdBlock.Table) {
                 .padding(vertical = 4.dp)
         ) {
             Row(Modifier.padding(horizontal = 8.dp)) {
-                table.header.forEachIndexed { c, h ->
+                table.header.forEachIndexed { c, _ ->
                     Text(
-                        text = buildInline(h),
+                        text = inlined.first[c],
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground,
@@ -302,15 +331,15 @@ private fun TableBlock(table: MdBlock.Table) {
                     )
                 }
             }
-            table.rows.forEachIndexed { _, cells ->
+            table.rows.forEachIndexed { r, cells ->
                 Row(
                     Modifier
                         .padding(horizontal = 8.dp)
                         .background(altBg, RoundedCornerShape(8.dp))
                 ) {
-                    cells.forEachIndexed { c, cell ->
+                    cells.forEachIndexed { c, _ ->
                         Text(
-                            text = buildInline(cell),
+                            text = inlined.second[r][c],
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f),
                             textAlign = alignOf(table.aligns, c),
@@ -353,8 +382,10 @@ private fun FormulaBlock(latex: String, dark: Boolean) {
             )
         }
     } else {
+        // 块级缓存：HTML 拼接只在公式/配色变化时重算（WebView update 侧本有 tag 去重）
+        val html = remember(latex, dark) { katexHtml(latex, dark) }
         WebViewBlock(
-            html = katexHtml(latex, dark),
+            html = html,
             baseUrl = "file:///android_asset/katex/"
         )
     }
@@ -384,8 +415,9 @@ private fun MermaidBlock(code: String, dark: Boolean) {
             )
         }
     } else {
+        val html = remember(code, dark) { mermaidHtml(code, dark) }
         WebViewBlock(
-            html = mermaidHtml(code, dark),
+            html = html,
             baseUrl = "file:///android_asset/mermaid/"
         )
     }
