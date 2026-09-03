@@ -2456,7 +2456,10 @@ private fun ProviderDialog(
             backdrop = backdrop,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp),
+                .padding(horizontal = 20.dp)
+                // 弹窗自身限定在键盘之上的可见区内：内容多时不再整体溢出屏幕，
+                // 而是内部滚动区收缩，标题与底部操作栏始终可见
+                .heightIn(max = 560.dp),
             radius = 28.dp,
             surfaceAlpha = 0.92f,
             blurRadius = 28.dp,
@@ -2465,7 +2468,8 @@ private fun ProviderDialog(
             Column(
                 Modifier
                     .clickable(interactionSource = null, indication = null) {}
-                    .padding(20.dp)
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 16.dp, bottom = 12.dp)
             ) {
                 Text(
                     if (draft.id == null) "添加模型服务" else "编辑模型服务",
@@ -2475,30 +2479,19 @@ private fun ProviderDialog(
                 )
                 Column(
                     Modifier
-                        .padding(top = 12.dp)
-                        .heightIn(max = 460.dp)
+                        .padding(top = 10.dp)
+                        // weight(1f, fill=false)：内容不足时按实际高度收缩（不撑满），
+                        // 内容/键盘挤压时最多吃到剩余空间——操作栏永远不会被顶出屏幕
+                        .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        com.haoai.agent.ui.ProviderPresets.all.take(3).forEach { p ->
-                            AssistChip(
-                                onClick = { onPreset(p) },
-                                label = {
-                                    Text(
-                                        p.label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-                                    )
-                                },
-                                colors = AssistChipDefaults.assistChipColors(
-                                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
-                                )
-                            )
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        com.haoai.agent.ui.ProviderPresets.all.drop(3).forEach { p ->
+                    // 预设一行放不下自动换行（原 take(3)/drop(3) 写死两行，加服务商必溢出）
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        com.haoai.agent.ui.ProviderPresets.all.forEach { p ->
                             AssistChip(
                                 onClick = { onPreset(p) },
                                 label = {
@@ -2517,14 +2510,15 @@ private fun ProviderDialog(
                     OutlinedTextField(
                         value = draft.name,
                         onValueChange = { v -> onChange(draft.copy(name = v)) },
-                        label = { Text("名称（可留空自动命名）") },
+                        label = { Text("名称（留空自动命名）") },
                         singleLine = true,
                         colors = glassFieldColors()
                     )
-                    // 协议选择（2.3）：anthropic 原生 Messages / openai_compat 默认
+                    // 协议选择（2.3）：anthropic 原生 Messages / openai_compat 默认。
+                    // 紧凑排版：chip 薄化（少上下 padding），与「名称」同占一行的密度
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
                             "协议",
@@ -2564,7 +2558,7 @@ private fun ProviderDialog(
                         value = draft.model,
                         onValueChange = { v -> onChange(draft.copy(model = v)) },
                         label = { Text("模型 ID（默认使用）") },
-                        placeholder = { Text("如 deepseek-chat / stealth/ox-alpha") },
+                        placeholder = { Text("如 deepseek-chat") },
                         singleLine = true,
                         colors = glassFieldColors(),
                         modifier = Modifier.fillMaxWidth()
@@ -2830,8 +2824,9 @@ private fun ProviderDialog(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(top = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                        // 操作栏钉在弹窗底部：滚动区收缩时它仍在键盘上方的可见区内
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
@@ -2898,7 +2893,7 @@ private fun ModelIdQuickAdd(
             value = input,
             onValueChange = { input = it },
             label = { Text("添加其他模型 ID") },
-            placeholder = { Text("输入后点右侧 + 加入") },
+            placeholder = { Text("输入后点 + 加入") },
             singleLine = true,
             colors = glassFieldColors(),
             modifier = Modifier.fillMaxWidth(),
