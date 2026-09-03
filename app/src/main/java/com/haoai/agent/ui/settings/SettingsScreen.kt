@@ -923,7 +923,9 @@ private fun LazyListScope.brainItems(
     item {
         val ps = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
         val activeId = settings.activeProviderId
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 列表行两级信息瘦身：主行=名称+徽标，副行=模型 ID。
+        // baseUrl / ctx / max / 余额下沉到编辑弹窗——行高减半，一屏多看几个服务
+        Column(Modifier.padding(horizontal = 16.dp)) {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                     ps.forEachIndexed { idx, p ->
@@ -931,10 +933,17 @@ private fun LazyListScope.brainItems(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
+                                .then(
+                                    // 当前服务：主题色 8% 底色强调，扫视即定位
+                                    if (p.id == activeId) Modifier.background(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                        RoundedCornerShape(12.dp)
+                                    ) else Modifier
+                                )
                                 .clickable {
                                     if (activeId != p.id) vm.setActiveProvider(p.id)
                                 }
-                                .padding(start = 8.dp, end = 2.dp, top = 10.dp, bottom = 10.dp),
+                                .padding(start = 8.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -944,47 +953,46 @@ private fun LazyListScope.brainItems(
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(p.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                    if (p.id == activeId) {
+                                    if (p.models.isNotEmpty()) {
                                         Spacer(Modifier.size(8.dp))
+                                        // 备用模型数做成中性徽标，替代单独一行的小字
                                         Text(
-                                            "使用中",
+                                            "${p.models.size} 个模型",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .background(
+                                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f),
+                                                    RoundedCornerShape(5.dp)
+                                                )
+                                                .padding(horizontal = 6.dp, vertical = 1.dp)
                                         )
                                     }
                                 }
                                 Text(
-                                    "${p.model} · ctx ${p.effectiveContextLength() / 1024}K" +
-                                        (p.maxTokens.takeIf { it > 0 }?.let { " · max $it" } ?: ""),
+                                    p.model,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    p.baseUrl,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    // 不透明：onSurfaceVariant @0.7 在浅色主题下对比度只有
-                                    // 3.49:1（AA 要求 4.5:1），降到不透明即 7.26:1
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1
                                 )
-                                // 点1：多模型徽标 + 点3：余额行（启用才显示，点击查询）
-                                if (p.models.isNotEmpty()) {
-                                    Text(
-                                        "含 ${p.models.size} 个备用模型",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
-                                    )
-                                }
+                                // 余额行保留在行内（这是列表页少数值得常驻的动态信息），
+                                // 热区抬到 32dp 高；ctx/max/baseUrl 移入编辑弹窗
                                 if (p.balanceEnabled) {
                                     val bal = vm.balanceResults[p.id]
-                                    Text(
-                                        if (bal == null) "点击查询余额" else "余额：$bal",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.clickable { vm.checkBalance(p) }
-                                    )
+                                    Row(
+                                        Modifier
+                                            .heightIn(min = 32.dp)
+                                            .clickable { vm.checkBalance(p) }
+                                            .padding(vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            if (bal == null) "查询余额 ›" else "余额：$bal",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                             IconButton(onClick = { vm.editProvider(p) }) {
@@ -1003,18 +1011,38 @@ private fun LazyListScope.brainItems(
                             )
                         }
                     }
+                    // 添加项作为列表末行：与列表同容器，符合设置页惯例
+                    // （原先全宽胶囊浮在玻璃组外面，与列表无归属关系）
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { vm.startNewDraft() }
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        Text(
+                            "添加模型服务",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
-            LiquidPillButton(
-                backdrop = backdrop,
-                text = "添加模型服务",
-                modifier = Modifier.fillMaxWidth(),
-                emphasized = true
-            ) { vm.startNewDraft() }
             Text(
-                "点击卡片切换当前使用的服务；支持 DeepSeek/OpenRouter/Kimi/智谱/Ollama 预设、能力自动检测、测试连接与在线拉取模型列表。",
+                "点击行切换当前使用的服务；编辑内可测试连接、拉取模型列表与查询余额。",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
             )
         }
     }
@@ -2580,6 +2608,19 @@ private fun ProviderDialog(
                         label = "模型 ID",
                         placeholder = "默认使用 · 如 deepseek-chat"
                     )
+                    // 列表行瘦身下沉的详情：ctx/max 常驻摘要（只在编辑已有服务时显示）
+                    if (draft.id != null) {
+                        val ctxK = draft.contextLength.trim().toIntOrNull()
+                            ?.takeIf { it > 0 }?.div(1024)
+                        val maxT = draft.maxTokens.trim().toIntOrNull()?.takeIf { it > 0 }
+                        Text(
+                            "生效参数 · ctx ${ctxK?.let { "${it}K" } ?: "自动"}" +
+                                (maxT?.let { " · max $it" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     // 同一供应商的多模型直接在这里录入（原收在「高级选项」折叠区里，
                     // 配一个供应商要连续加好几个模型 ID 时得先展开，够不着）
                     ModelIdQuickAdd(draft = draft, onChange = onChange)
@@ -2840,7 +2881,8 @@ private fun ProviderDialog(
                     GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
                     LiquidPillButton(
                         backdrop = backdrop,
-                        text = "保存",
+                        // 按钮写明副作用：新建保存后会自动设为当前使用的服务
+                        text = if (draft.id == null) "保存并启用" else "保存",
                         emphasized = true
                     ) { onSave() }
                 }
