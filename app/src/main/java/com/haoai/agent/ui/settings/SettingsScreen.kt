@@ -477,9 +477,14 @@ fun SettingsScreen(
         }
     }
 
-    // 删除供应商确认：红色确认键，展示供应商名与模型
+    // 删除供应商确认：红色确认键，展示供应商名与模型；
+    // 删的是当前服务时写明将自动切换到哪个——fallback 是列表里下一个云端服务，用户该知道
     pendingDelete?.let { pid ->
         val p = vm.providers().find { it.id == pid }
+        val isCurrent = p?.id == settings.activeProviderId
+        val remaining = vm.providers().filterNot { it.id == pid }
+            .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
+        val nextUp = remaining.firstOrNull()?.name
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
             title = "删除模型服务",
@@ -492,11 +497,23 @@ fun SettingsScreen(
             dismissLabel = "取消",
             danger = true
         ) {
-            Text(
-                "确定删除「${p?.name ?: "该服务"}」（${p?.model ?: ""}）吗？删除后不可恢复。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-            )
+            Column {
+                Text(
+                    "确定删除「${p?.name ?: "该服务"}」（${p?.model ?: ""}）吗？删除后不可恢复。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+                )
+                if (isCurrent) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        // 与 SettingsViewModel.deleteProvider 的回退逻辑一致：优先下一个云端服务
+                        if (nextUp != null) "「${p?.name}」正在使用中，删除后将自动切换到「$nextUp」。"
+                        else "「${p?.name}」正在使用中，删除后没有其他云端服务可用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
     }
 
@@ -542,8 +559,13 @@ fun SettingsScreen(
         }
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
-            title = "选择模型",
-            confirmLabel = "关闭",
+            // 标题带任务名：进出弹窗不丢「在配哪个内部任务」的上下文
+            title = when (purpose) {
+                "title" -> "会话标题 · 使用哪个模型"
+                "memory" -> "记忆提取 · 使用哪个模型"
+                else -> "上下文压缩 · 使用哪个模型"
+            },
+            confirmLabel = "完成",
             onConfirm = { purposePicker = null },
             onDismiss = { purposePicker = null }
         ) {
@@ -554,7 +576,15 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .clickable {
                                 vm.setPurposeModel(purpose, id)
-                                // 主目标从备用链剔除，避免自我降级
+                                // 主目标从备用链剔除，避免自我降级；
+                                // 剔除了东西才提示，不让用户已勾的链被静默改动
+                                if (id in fallback) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "已将「$name」设为主目标，并从备用链移出",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                                 vm.setPurposeFallback(purpose, fallback.filterNot { it == id })
                                 purposePicker = null
                             }
@@ -934,7 +964,9 @@ private fun LazyListScope.brainItems(
                                     p.baseUrl,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    // 不透明：onSurfaceVariant @0.7 在浅色主题下对比度只有
+                                    // 3.49:1（AA 要求 4.5:1），降到不透明即 7.26:1
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1
                                 )
                                 // 点1：多模型徽标 + 点3：余额行（启用才显示，点击查询）
