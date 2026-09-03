@@ -207,13 +207,17 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun pickModel(id: String) {
         val d = draft ?: return
-        // 点1：切换当前模型时——旧模型若有能力条目则留在列表，新模型若曾入列则出列
-        val oldEntry = d.models.find { it.id == d.model.trim() }
         val newId = id.trim()
-        var models = d.models.filterNot { it.id == newId }
-        if (oldEntry != null && newId != d.model.trim()) models = models + oldEntry
-        draft = d.copy(model = newId, models = models)
-        modelChoices = null
+        if (newId.isBlank() || newId == d.model.trim()) return
+        // 旧模型保留为备选（同供应商多模型），新模型从备选里出列。
+        // 此前只在旧模型「已有能力条目」时才保留，首次点选会把上一个模型直接丢掉
+        val oldId = d.model.trim()
+        val oldEntry = d.models.find { it.id == oldId }
+            ?: oldId.takeIf { it.isNotBlank() }?.let { com.haoai.agent.data.ModelEntry(it) }
+        val models = d.models.filterNot { it.id == newId } + listOfNotNull(oldEntry)
+        draft = d.copy(model = newId, models = models.distinctBy { it.id })
+        draftError = null
+        // 列表保持展开：可以连着点选好几个模型，选完一个不用重新拉一次
     }
 
     /** 点1：聊天/设置共用——把某供应商的当前模型切到指定 modelId（同供应商多模型）。 */
@@ -315,9 +319,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun updateDraft(next: ProviderDraft) {
+        val prev = draft
         draft = next
         draftError = null
-        modelChoices = null
+        // 只有会影响拉取结果的字段变了才丢弃模型列表。此前无条件清空，
+        // 改个服务名都会把刚拉下来的上百条模型 ID 清掉、得重新拉一次
+        if (prev == null || prev.baseUrl != next.baseUrl || prev.protocol != next.protocol) {
+            modelChoices = null
+        }
     }
 
     fun cancelDraft() {
