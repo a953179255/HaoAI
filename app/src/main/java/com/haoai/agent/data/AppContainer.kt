@@ -306,9 +306,24 @@ class AppContainer(app: Application) {
                 isLocal = true
             )
         } else {
-            val p = st.providers.find { it.id == id } ?: return null
+            // "providerId|modelId"：同供应商多模型精确路由——把目标模型提为该副本的 model，
+            // 原默认退入备选列表，能力条目跟随模型 ID 不丢
+            val (pid, modelOverride) = if (id.contains('|')) {
+                id.split('|', limit = 2).let { it[0] to it[1] }
+            } else id to null
+            val p = st.providers.find { it.id == pid } ?: return null
             if (p.baseUrl.startsWith("local")) return null
-            DreamTarget(p, resolveApiKey(p), false)
+            val effective = if (modelOverride != null && modelOverride != p.model &&
+                (modelOverride == p.model || p.models.any { it.id == modelOverride })
+            ) {
+                val oldEntry = p.models.find { it.id == p.model }
+                    ?: p.model.takeIf { it.isNotBlank() }?.let { ModelEntry(it) }
+                p.copy(
+                    model = modelOverride,
+                    models = p.models.filterNot { it.id == modelOverride } + listOfNotNull(oldEntry)
+                )
+            } else p
+            DreamTarget(effective, resolveApiKey(p), false)
         }
     }
 

@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
@@ -538,29 +540,42 @@ fun SettingsScreen(
         }
     }
 
-    // 「模型大脑 → 内部任务模型」选择窗（根级渲染，点行弹窗选择）
+    // 「模型大脑 → 模型切换」选择窗（根级渲染，点行弹窗选择）
     if (purposePicker != null) {
         val purpose = purposePicker!!
         val current = when (purpose) {
             "title" -> settings.titleProviderId
             "memory" -> settings.memoryExtractProviderId
+            "chat" -> settings.chatPurposeId
             else -> settings.summarizeProviderId
         }
-        val options = listOf("" to "主模型") +
-            settings.providers
-                .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
-                .map { it.id to it.name } +
-            listOf("local" to "端侧（llama.cpp）")
+        // 选项构造：供应商级（"pid"）+ 同供应商多模型展开为模型级（"pid|modelId"）。
+        // 聊天会话需要精确到模型（glm-5.3-flash 配了多个模型时能选到具体那个）；
+        // 辅助任务用供应商级即可（用该供应商的默认模型）
+        val cloudProviders = settings.providers
+            .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
+        val options: List<Pair<String, String>> = listOf("" to "主模型") +
+            cloudProviders.flatMap { p ->
+                val models = (listOf(p.model).filter { it.isNotBlank() } + p.models.map { it.id }).distinct()
+                if (purpose == "chat" && models.size > 1) {
+                    // 多模型供应商：展开为模型级选项
+                    models.map { m -> "${p.id}|$m" to "${p.name} · $m" }
+                } else {
+                    listOf(p.id to p.name)
+                }
+            } + listOf("local" to "端侧（llama.cpp）")
         // 点6：备用链（有序多选）——主目标失败按勾选顺序降级
         val fallback = when (purpose) {
             "title" -> settings.titleFallbackIds
             "memory" -> settings.memoryExtractFallbackIds
+            "chat" -> settings.chatFallbackIds
             else -> settings.summarizeFallbackIds
         }
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
-            // 标题带任务名：进出弹窗不丢「在配哪个内部任务」的上下文
+            // 标题带任务名：进出弹窗不丢「在配哪个任务」的上下文
             title = when (purpose) {
+                "chat" -> "聊天会话 · 使用哪个模型"
                 "title" -> "会话标题 · 使用哪个模型"
                 "memory" -> "记忆提取 · 使用哪个模型"
                 else -> "上下文压缩 · 使用哪个模型"
@@ -583,8 +598,9 @@ fun SettingsScreen(
                 options.forEach { (id, name) ->
                     val selected = id == current
                     val sub = when {
-                        id.isBlank() -> "跟随当前云端服务"
+                        id.isBlank() -> "跟随当前供应商默认"
                         id == "local" -> "本机 llama.cpp"
+                        id.contains('|') -> "指定模型"
                         else -> settings.providers.find { it.id == id }?.model ?: ""
                     }
                     Row(
@@ -1013,88 +1029,102 @@ private fun LazyListScope.brainItems(
     onDeleteRequest: (String) -> Unit = {},
     onPickPurposeModel: (String) -> Unit = {}
 ) {
-    item { SectionTitle("云端模型服务") }
+    item { SectionTitle("供应商") }
     item {
         val ps = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
         val activeId = settings.activeProviderId
-        // 列表行两级信息瘦身：主行=名称+徽标，副行=模型 ID。
-        // baseUrl / ctx / max / 余额下沉到编辑弹窗——行高减半，一屏多看几个服务
+        // 供应商视角（用户反馈）：行=供应商+模型数徽标；点击行展开该供应商的
+        // 全部模型清单，点模型即切换默认——「glm-5.3-flash 加了两个模型怎么切」
+        // 的答案就在展开区里，不再需要进编辑弹窗
+        var expandedId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
         Column(Modifier.padding(horizontal = 16.dp)) {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                     ps.forEachIndexed { idx, p ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .then(
-                                    // 当前服务：主题色 8% 底色强调，扫视即定位
-                                    if (p.id == activeId) Modifier.background(
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
-                                        RoundedCornerShape(12.dp)
-                                    ) else Modifier
+                        val expanded = expandedId == p.id
+                        val isActive = p.id == activeId
+                        Column {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .then(
+                                        if (isActive) Modifier.background(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                            RoundedCornerShape(12.dp)
+                                        ) else Modifier
+                                    )
+                                    .clickable { expandedId = if (expanded) null else p.id }
+                                    .padding(start = 8.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isActive,
+                                    onClick = { vm.setActiveProvider(p.id) }
                                 )
-                                .clickable {
-                                    if (activeId != p.id) vm.setActiveProvider(p.id)
-                                }
-                                .padding(start = 8.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = p.id == activeId,
-                                onClick = { vm.setActiveProvider(p.id) }
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(p.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                    if (p.models.isNotEmpty()) {
-                                        Spacer(Modifier.size(8.dp))
-                                        // 备用模型数做成中性徽标，替代单独一行的小字
-                                        Text(
-                                            "${p.models.size} 个模型",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .background(
-                                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f),
-                                                    RoundedCornerShape(5.dp)
-                                                )
-                                                .padding(horizontal = 6.dp, vertical = 1.dp)
-                                        )
+                                Column(Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(p.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                        val modelCount = p.models.size + if (p.model.isNotBlank()) 1 else 0
+                                        if (modelCount > 1) {
+                                            Spacer(Modifier.size(8.dp))
+                                            Text(
+                                                "$modelCount 个模型",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier
+                                                    .background(
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f),
+                                                        RoundedCornerShape(5.dp)
+                                                    )
+                                                    .padding(horizontal = 6.dp, vertical = 1.dp)
+                                            )
+                                        }
                                     }
+                                    Text(
+                                        p.model,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
                                 }
-                                Text(
-                                    p.model,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
+                                // 展开指示：点击行=展开模型清单（主操作），编辑/删除独立按钮
+                                Icon(
+                                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                    contentDescription = if (expanded) "收起模型列表" else "展开模型列表",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                // 余额行保留在行内（这是列表页少数值得常驻的动态信息），
-                                // 热区抬到 32dp 高；ctx/max/baseUrl 移入编辑弹窗
-                                if (p.balanceEnabled) {
-                                    val bal = vm.balanceResults[p.id]
-                                    Row(
-                                        Modifier
-                                            .heightIn(min = 32.dp)
-                                            .clickable { vm.checkBalance(p) }
-                                            .padding(vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            if (bal == null) "查询余额 ›" else "余额：$bal",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
+                                Spacer(Modifier.size(2.dp))
+                                IconButton(onClick = { vm.editProvider(p) }) {
+                                    Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(19.dp))
+                                }
+                                if (p.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID) {
+                                    IconButton(onClick = { onDeleteRequest(p.id) }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(19.dp))
                                     }
                                 }
                             }
-                            IconButton(onClick = { vm.editProvider(p) }) {
-                                Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(19.dp))
-                            }
-                            if (p.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID) {
-                                IconButton(onClick = { onDeleteRequest(p.id) }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(19.dp))
+                            // 展开区：该供应商的全部模型，点=切换默认，×=移除备选
+                            if (expanded) {
+                                Column(Modifier.padding(start = 52.dp, end = 8.dp, bottom = 8.dp)) {
+                                    ModelSwitchRow(
+                                        id = p.model,
+                                        isDefault = true,
+                                        enabled = p.model.isNotBlank(),
+                                        onClick = {},
+                                        onRemove = null
+                                    )
+                                    p.models.forEach { m ->
+                                        ModelSwitchRow(
+                                            id = m.id,
+                                            isDefault = false,
+                                            enabled = true,
+                                            onClick = { vm.setProviderDefaultModel(p.id, m.id) },
+                                            onRemove = { vm.removeProviderModel(p.id, m.id) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1124,7 +1154,7 @@ private fun LazyListScope.brainItems(
                         )
                         Spacer(Modifier.size(10.dp))
                         Text(
-                            "添加模型服务",
+                            "添加供应商",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary
@@ -1133,26 +1163,28 @@ private fun LazyListScope.brainItems(
                 }
             }
             Text(
-                "点击行切换当前使用的服务；编辑内可测试连接、拉取模型列表与查询余额。",
+                "点击行展开模型清单并切换默认模型；编辑内可测试连接、拉取列表与配置密钥。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
             )
         }
     }
-    item { SectionTitle("内部任务模型") }
+    item { SectionTitle("模型切换") }
     item {
-        // purpose 配置行：点击弹根级选择窗（选择窗状态在 SettingsScreen 根部）
+        // purpose 配置行（用户反馈：原「内部任务模型」不够细分）：
+        // 新增「聊天会话」行；purpose 值可为 "providerId|modelId" 精确到同供应商的具体模型
         Column(Modifier.padding(horizontal = 16.dp)) {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                    purposeRow("聊天会话", "chat", settings.chatPurposeId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("会话标题", "title", settings.titleProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("记忆提取", "memory", settings.memoryExtractProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("上下文压缩", "summarize", settings.summarizeProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                 }
             }
             Text(
-                "为内部辅助任务指定独立（更廉价的）模型；「主模型」= 跟随当前云端服务，「端侧」= 本机 llama.cpp 小模型。",
+                "为不同任务指定模型：聊天会话可精确到某供应商的某个模型；辅助任务建议用更廉价的模型。「主模型」= 跟随当前供应商默认，「端侧」= 本机 llama.cpp。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
@@ -2653,20 +2685,18 @@ private fun ProviderDialog(
                     // 编辑已有服务时不显示——改的是连接参数，不是换供应商
                     if (draft.id == null) {
                         androidx.compose.foundation.layout.FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            // 卡片张数不足一行时整体居中（设计稿 vgrid 视觉）
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             com.haoai.agent.ui.ProviderPresets.all.forEach { p ->
                                 val selected = draft.name == p.name && draft.baseUrl == p.baseUrl
                                 PresetCard(
                                     label = p.label,
-                                    sub = when {
-                                        // Anthropic 官方端点走原生协议（与 ProviderPreset.protocol 扩展同规则）
-                                        p.baseUrl.startsWith("https://api.anthropic.com") -> "原生协议"
-                                        p.baseUrl.contains("127.0.0.1") -> "本机"
-                                        p.model.isBlank() -> "聚合"
-                                        else -> "已预填"
-                                    },
+                                    // 副注写「能拿到什么模型」（参考 上游 shortDescription），
+                                    // 选中后统一显示「已预填」确认反馈
+                                    sub = p.sub,
                                     selected = selected,
                                     onClick = { onPreset(p) }
                                 )
@@ -3053,7 +3083,8 @@ private fun PresetCard(label: String, sub: String, selected: Boolean, onClick: (
     val shape = RoundedCornerShape(12.dp)
     androidx.compose.foundation.layout.Column(
         Modifier
-            .widthIn(min = 96.dp)
+            // 3 列铺满一行（每张约 104dp）：固定宽让 6 张卡片两行对齐，不偏左
+            .width(104.dp)
             .clip(shape)
             .background(
                 if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
@@ -3072,7 +3103,7 @@ private fun PresetCard(label: String, sub: String, selected: Boolean, onClick: (
                 role = Role.Button,
                 onClick = onClick
             )
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = 8.dp, vertical = 9.dp),
         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
     ) {
         Text(
@@ -3080,13 +3111,100 @@ private fun PresetCard(label: String, sub: String, selected: Boolean, onClick: (
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
             color = if (selected) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onBackground
+            else MaterialTheme.colorScheme.onBackground,
+            maxLines = 1
         )
         Text(
             if (selected) "已预填" else sub,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
+            maxLines = 1
         )
+    }
+}
+
+/**
+ * 供应商展开区里的单行模型：默认模型行（radio 选中态，不可移除）与
+ * 备选模型行（点击升为默认，×移除）。供「点供应商行展开清单切换模型」用。
+ */
+@Composable
+private fun ModelSwitchRow(
+    id: String,
+    isDefault: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onRemove: (() -> Unit)?
+) {
+    if (id.isBlank()) return
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .then(
+                if (isDefault) Modifier.background(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                    RoundedCornerShape(10.dp)
+                ) else Modifier
+            )
+            .clickable(enabled = enabled && !isDefault, onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(18.dp)
+                .border(
+                    1.5.dp,
+                    if (isDefault) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f),
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isDefault) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                )
+            }
+        }
+        Spacer(Modifier.size(10.dp))
+        Text(
+            id,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            modifier = Modifier.weight(1f)
+        )
+        if (isDefault) {
+            Text(
+                "默认",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        } else {
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clickable(
+                        interactionSource = null,
+                        indication = null,
+                        role = Role.Button,
+                        enabled = onRemove != null,
+                        onClick = { onRemove?.invoke() }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "移除 $id",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
     }
 }
 
@@ -3407,6 +3525,12 @@ private fun purposeRow(
                 when {
                     configId.isBlank() -> "主模型"
                     configId == "local" -> "端侧（llama.cpp）"
+                    // "pid|model"：同供应商指定模型（聊天会话精确路由）
+                    configId.contains('|') -> {
+                        val (pid, mid) = configId.split('|', limit = 2)
+                        val pn = settings.providers.find { it.id == pid }?.name ?: "已失效服务"
+                        "$pn · $mid"
+                    }
                     else -> settings.providers.find { it.id == configId }?.name ?: "已失效服务"
                 },
                 style = MaterialTheme.typography.labelSmall,

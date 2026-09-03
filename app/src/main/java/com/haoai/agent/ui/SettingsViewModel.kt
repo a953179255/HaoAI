@@ -56,17 +56,19 @@ data class ProviderPreset(
     val label: String,
     val name: String,
     val baseUrl: String,
-    val model: String
+    val model: String,
+    /** 卡片副注：参考 上游 shortDescription——写「能拿到什么模型」而非「已预填」 */
+    val sub: String = ""
 )
 
 object ProviderPresets {
     val all = listOf(
-        ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
-        ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "kimi-k2-0905-preview"),
-        ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
-        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", ""),
-        ProviderPreset("Anthropic", "Anthropic", "https://api.anthropic.com", ""),
-        ProviderPreset("Ollama", "Ollama (本机)", "http://127.0.0.1:11434/v1", "")
+        ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "deepseek 官方模型"),
+        ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "kimi-k2-0905-preview", "kimi 系列模型"),
+        ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus", "GLM 系列模型"),
+        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", "", "聚合 400+ 模型"),
+        ProviderPreset("Ollama", "Ollama (本机)", "http://127.0.0.1:11434/v1", "", "本机模型服务"),
+        ProviderPreset("自定义", "", "", "", "任意兼容端点")
     )
 }
 
@@ -467,6 +469,32 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(activeProviderId = id) }
     }
 
+    /**
+     * 设置供应商的默认模型（同供应商多模型切换入口）。
+     * 把 models 里的目标模型提为 provider.model，原默认退回备选列表。
+     */
+    fun setProviderDefaultModel(providerId: String, modelId: String) {
+        c.updateSettings { s ->
+            val p = s.providers.find { it.id == providerId } ?: return@updateSettings s
+            if (modelId == p.model || p.models.none { it.id == modelId }) return@updateSettings s
+            val oldEntry = p.models.find { it.id == p.model }
+                ?: p.model.takeIf { it.isNotBlank() }?.let { com.haoai.agent.data.ModelEntry(it) }
+            val rest = p.models.filterNot { it.id == modelId }
+            val updated = p.copy(model = modelId, models = (rest + listOfNotNull(oldEntry)).distinctBy { it.id })
+            s.copy(providers = s.providers.map { if (it.id == providerId) updated else it })
+        }
+    }
+
+    /** 删除供应商的某个备选模型（不影响当前默认模型）。 */
+    fun removeProviderModel(providerId: String, modelId: String) {
+        c.updateSettings { s ->
+            val p = s.providers.find { it.id == providerId } ?: return@updateSettings s
+            if (modelId == p.model) return@updateSettings s
+            val updated = p.copy(models = p.models.filterNot { it.id == modelId })
+            s.copy(providers = s.providers.map { if (it.id == providerId) updated else it })
+        }
+    }
+
     fun setPermissionMode(mode: PermissionMode) {
         c.updateSettings { it.copy(permissionMode = mode) }
     }
@@ -507,12 +535,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(dailyTokenBudgetK = k.coerceIn(0, 10_000)) }
     }
 
-    /** 5.3 内部任务模型路由设置（purpose: memory/title/summarize；""=主模型，"local"=端侧）。 */
+    /** 5.3 内部任务模型路由设置（purpose: memory/title/summarize/chat；""=主模型，"local"=端侧，"pid|model"=同供应商指定模型）。 */
     fun setPurposeModel(purpose: String, id: String) {
         c.updateSettings { st ->
             when (purpose) {
                 "memory" -> st.copy(memoryExtractProviderId = id)
                 "title" -> st.copy(titleProviderId = id)
+                "chat" -> st.copy(chatPurposeId = id)
                 else -> st.copy(summarizeProviderId = id)
             }
         }
@@ -524,6 +553,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             when (purpose) {
                 "memory" -> st.copy(memoryExtractFallbackIds = ids)
                 "title" -> st.copy(titleFallbackIds = ids)
+                "chat" -> st.copy(chatFallbackIds = ids)
                 else -> st.copy(summarizeFallbackIds = ids)
             }
         }

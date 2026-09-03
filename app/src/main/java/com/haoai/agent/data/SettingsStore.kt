@@ -170,10 +170,14 @@ data class AppSettings(
     val titleProviderId: String = "",
     /** 5.3 上下文压缩摘要模型。 */
     val summarizeProviderId: String = "",
+    /** 5.4 聊天会话模型：格式 "providerId" 或 "providerId|modelId"（同供应商多模型时精确到模型）。空=跟随供应商默认。 */
+    val chatPurposeId: String = "",
     /** 用途模型备用链（借鉴 上游 模型组）：主目标请求失败时按序降级。 */
     val memoryExtractFallbackIds: List<String> = emptyList(),
     val titleFallbackIds: List<String> = emptyList(),
     val summarizeFallbackIds: List<String> = emptyList(),
+    /** 聊天模型备用链（同 purpose 结构，元素可为 "providerId" 或 "providerId|modelId"）。 */
+    val chatFallbackIds: List<String> = emptyList(),
     /** E5 单轮 LLM token 累计上限（prompt+completion）；0=不限。 */
     val turnTokenCap: Int = 150_000,
     /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */
