@@ -51,7 +51,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.withFrameNanos
@@ -1710,17 +1709,19 @@ private fun MessageList(
     }
 
     // 自动滚底：用户发送新消息时无条件滚底；流式内容仅在粘滞（用户未主动滑走）时跟随。
-    // running/durationMs/bottomPadding 也入 key：流式结束最终行增高（操作按钮/统计行，
-    // usage 常晚于正文落值）与键盘抬升改 padding 时，都要各补一次沉降滚底。
-    // 流式中用瞬时滚动（animate=false）：animateScrollBy 会被下一帧 delta 取消，
-    // 快 token 率/键盘跳变下进度被饿死，列表越落越远直至断跟随
+    // running/durationMs/bottomPadding/footerRevealTick 也入 key：流式结束最终行增高
+    // （usage 常晚于正文落值）、footer 生长动画启动、键盘抬升改 padding 时都要补沉降。
+    // 一律瞬时滚动：animateScrollBy 会被下一帧 delta 取消，快 token 率下进度被饿死
     // 发送新消息收起键盘：旧版靠强制滚动的 clearFocus 副作用实现，加滚动守卫后需显式收。
     // 按末条 user 消息 key 去重——流式期间最后一条仍是 user，不能每次都收，
     // 否则用户流式中打开键盘想插话会被下一个 delta 误关
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var lastSentUserKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // footer 展开动画启动的通知：settle 循环若在动画开始前退出（隐藏态本就"贴合"），
+    // 动画增高的 ~45dp 将无人跟进，静止位比真底部高两行（可上拖）。收到通知重启一次
+    var footerRevealTick by remember { mutableStateOf(0) }
 
-    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length, running, rows.lastOrNull()?.durationMs, bottomPadding) {
+    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length, running, rows.lastOrNull()?.durationMs, bottomPadding, footerRevealTick) {
         if (totalItems <= 0) return@LaunchedEffect
         // 用户发送新消息（最后一条是 user）→ 强制滚底并复位粘滞
         val isUserMessage = rows.lastOrNull()?.role == "user"
@@ -1734,14 +1735,14 @@ private fun MessageList(
             }
         }
         if (isUserMessage || !userScrolledAway) {
-            listState.scrollToEnd(animate = !running, guard = scrollGuard)
+            listState.scrollToEnd(guard = scrollGuard)
         }
     }
 
     // 会话切换：无条件跳到最新一条（切换后通常停在旧位置，且最后一条未必是 user 消息，
     // 上面的跟随逻辑不会触发）。新会话无消息时不滚动。
     LaunchedEffect(sessionId) {
-        if (sessionId != null && totalItems > 0) listState.scrollToEnd(animate = false, guard = scrollGuard)
+        if (sessionId != null && totalItems > 0) listState.scrollToEnd(guard = scrollGuard)
     }
 
     // 流式刚结束的那次重组（running true→false 与最终行入列同帧发生）：最终行 footer
@@ -1767,7 +1768,8 @@ private fun MessageList(
                 onViewDiff = onToolViewDiff,
                 onRollback = onToolRollback,
                 showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
-                growIn = row.key == growInKey
+                growIn = row.key == growInKey,
+                onFooterReveal = { footerRevealTick++ }
             )
         }
         if (showStreaming) {
@@ -1786,7 +1788,6 @@ private fun MessageList(
  * 故循环若干帧重读布局微调直至贴合。
  */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToEnd(
-    animate: Boolean,
     guard: androidx.compose.runtime.MutableState<Boolean>
 ) {
     guard.value = true
@@ -1798,7 +1799,9 @@ private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToEnd(
     // 连续两帧贴合才收工（上限 18 帧，覆盖整个 footer 动画期）。
     var settled = 0
     var attempt = 0
-    while (attempt < 18 && settled < 2) {
+    // 至少 8 帧才允许按 settled 退出：footer expand 动画的 tween 缓入段头几帧增高 <1px，
+    // 会被误判"贴合"连续计数提前收工，剩余生长无人追踪（实测静止位比底部差 ~150px 可上拖）
+    while (attempt < 18 && !(attempt >= 8 && settled >= 2)) {
         attempt++
         val info = layoutInfo
         val lastIndex = info.totalItemsCount - 1
@@ -1812,8 +1815,9 @@ private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToEnd(
             val contentEnd = info.viewportEndOffset - info.afterContentPadding
             val delta = lastItem.offset + lastItem.size - contentEnd
             if (kotlin.math.abs(delta) > 1) {
-                val d = delta.toFloat()
-                if (animate) animateScrollBy(d) else scrollBy(d)
+                // 一律瞬时滚动：生长动画本身平滑，逐帧贴住即连续；animateScrollBy
+                // 的动画挂起会让循环落后于生长、且小 delta 被缓入帧骗退
+                scrollBy(delta.toFloat())
                 settled = 0
             } else {
                 settled++
@@ -1840,7 +1844,8 @@ private fun RowItem(
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
     showActions: Boolean = true,
-    growIn: Boolean = false
+    growIn: Boolean = false,
+    onFooterReveal: () -> Unit = {}
 ) {
     // 引擎注入的系统事件（handoff 催办 / 压缩结果）不冒充聊天气泡，渲染为居中事件条
     if (row.role == "user" && row.text.startsWith("[系统提示]") ||
@@ -1851,7 +1856,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, showActions, growIn)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, showActions, growIn, onFooterReveal)
     }
 }
 
@@ -2074,7 +2079,8 @@ private fun AssistantBlock(
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
     showActions: Boolean = true,
-    growIn: Boolean = false
+    growIn: Boolean = false,
+    onFooterReveal: () -> Unit = {}
 ) {
     Column(
         Modifier
@@ -2128,6 +2134,8 @@ private fun AssistantBlock(
             if (!footerShown) {
                 withFrameNanos { }
                 footerShown = true
+                // 通知列表：footer 展开动画开始，重启 settle 追踪生长高度
+                onFooterReveal()
             }
         }
         AnimatedVisibility(
