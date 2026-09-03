@@ -2697,13 +2697,18 @@ private fun ProviderDialog(
                             }
                         }
                     }
-                    // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对
+                    // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对。
+                    // 编辑态区分「已存过 Key」（占位符明示留空即保留）与「从未存过」
                     var showKey by remember { mutableStateOf(false) }
                     com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.apiKeyPlain,
                         onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
                         label = "API Key",
-                        placeholder = if (draft.id == null) "sk-…" else "留空保持不变",
+                        placeholder = when {
+                            draft.id != null && draft.hasSavedKey -> "已保存 · 留空保持不变"
+                            draft.id != null -> "未保存过 · 该服务可能免密"
+                            else -> "sk-…"
+                        },
                         visualTransformation =
                             if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
                         trailing = {

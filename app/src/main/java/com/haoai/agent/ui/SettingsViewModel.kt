@@ -29,6 +29,8 @@ data class ProviderDraft(
     val maxTokens: String = "",
     /** 协议：openai_compat（默认）| anthropic（原生 Messages API） */
     val protocol: String = "openai_compat",
+    /** 编辑已有服务时该服务是否已保存过 Key（决定 API Key 占位符提示文案） */
+    val hasSavedKey: Boolean = false,
     // ── 点1：同供应商多模型（不含当前 model；当前 model 的能力编辑写回对应条目）──
     val models: List<com.haoai.agent.data.ModelEntry> = emptyList(),
     // ── 点2：采样参数发送开关（值用字符串承载输入框内容）──
@@ -60,12 +62,17 @@ data class ProviderPreset(
 object ProviderPresets {
     val all = listOf(
         ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
-        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", ""),
         ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "kimi-k2-0905-preview"),
         ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
+        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", ""),
+        ProviderPreset("Anthropic", "Anthropic", "https://api.anthropic.com", ""),
         ProviderPreset("Ollama", "Ollama (本机)", "http://127.0.0.1:11434/v1", "")
     )
 }
+
+/** 预设对应的 API 协议：Anthropic 官方端点用原生 Messages，其余走 OpenAI 兼容。 */
+val ProviderPreset.protocol: String
+    get() = if (baseUrl.startsWith("https://api.anthropic.com")) "anthropic" else "openai_compat"
 
 class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
@@ -283,6 +290,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             baseUrl = p.baseUrl,
             model = p.model,
             apiKeyPlain = "",
+            hasSavedKey = p.apiKeyCipher.isNotBlank(),
             contextLength = if (p.contextLength > 0) p.contextLength.toString() else "",
             maxTokens = if (p.maxTokens > 0) p.maxTokens.toString() else "",
             protocol = p.protocol,
@@ -311,6 +319,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         draft = d.copy(
             name = p.name,
             baseUrl = p.baseUrl,
+            // 预设连带协议：Anthropic 官方端点切原生 Messages，
+            // 其余切回 OpenAI 兼容——原先只填 URL 不动协议，
+            // 选了 Anthropic 预设还得手动去找协议切换行
+            protocol = p.protocol,
             model = if (p.model.isNotBlank()) p.model else d.model
         )
         draftError = null
