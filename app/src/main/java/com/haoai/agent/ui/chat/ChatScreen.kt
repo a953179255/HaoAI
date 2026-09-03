@@ -54,6 +54,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -1136,6 +1137,26 @@ fun ChatScreen(
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+                }
+                // 点1（借鉴 上游/上游）：供应商下的模型直接点选切换，无需进设置
+                if (p.models.isNotEmpty()) {
+                    Row(
+                        Modifier
+                            .padding(bottom = 8.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        p.modelIds().forEach { mid ->
+                            androidx.compose.material3.FilterChip(
+                                selected = active && mid == p.model,
+                                onClick = {
+                                    vm.selectModel(p.id, mid)
+                                    showModelPicker = false
+                                },
+                                label = { Text(mid, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
                     }
                 }
             }

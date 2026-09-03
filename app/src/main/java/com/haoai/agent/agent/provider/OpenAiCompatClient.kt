@@ -139,6 +139,9 @@ private data class ChatCompletionRequest(
     val tools: List<ApiTool>? = null,
     val stream: Boolean = true,
     val temperature: Double? = null,
+    @SerialName("top_p") val topP: Double? = null,
+    @SerialName("presence_penalty") val presencePenalty: Double? = null,
+    @SerialName("frequency_penalty") val frequencyPenalty: Double? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("stream_options") val streamOptions: StreamOptions? = null,
     @SerialName("reasoning_effort") val reasoningEffort: String? = null
@@ -263,6 +266,8 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
     ): Flow<SseEvent> = flow {
         val url = normalizeUrl(provider.baseUrl)
         val isLocal = provider.baseUrl.contains("127.0.0.1")
+        // 能力门控（借鉴 上游/上游）：模型标记不支持 reasoning 时不发 effort 参数
+        val entry = provider.modelEntry()
         val requestJson = HaoJson.json.encodeToString(
             ChatCompletionRequest.serializer(),
             ChatCompletionRequest(
@@ -274,7 +279,14 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                 // 云端：用户配置的 maxTokens（0=供应商默认）；本地：默认 4096（原 1024 会硬截断回复）
                 maxTokens = provider.effectiveMaxTokens().takeIf { it > 0 },
                 streamOptions = StreamOptions(),
-                reasoningEffort = reasoningEffort?.takeIf { it.isNotBlank() && !isLocal }
+                reasoningEffort = reasoningEffort?.takeIf {
+                    it.isNotBlank() && !isLocal && entry?.reasoning != false
+                },
+                // 采样参数「是否发送」开关（借鉴 上游）：关=请求体不带该字段，与旧行为一致
+                temperature = provider.temperature.toDouble().takeIf { provider.sendTemperature },
+                topP = provider.topP.toDouble().takeIf { provider.sendTopP },
+                presencePenalty = provider.presencePenalty.toDouble().takeIf { provider.sendPresencePenalty },
+                frequencyPenalty = provider.frequencyPenalty.toDouble().takeIf { provider.sendFrequencyPenalty }
             )
         )
         val builder = Request.Builder()

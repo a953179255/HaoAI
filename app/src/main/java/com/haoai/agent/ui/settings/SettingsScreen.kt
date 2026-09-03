@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -51,6 +53,7 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -62,6 +65,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -527,6 +531,12 @@ fun SettingsScreen(
                 .filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
                 .map { it.id to it.name } +
             listOf("local" to "端侧（llama.cpp）")
+        // 点6：备用链（有序多选）——主目标失败按勾选顺序降级
+        val fallback = when (purpose) {
+            "title" -> settings.titleFallbackIds
+            "memory" -> settings.memoryExtractFallbackIds
+            else -> settings.summarizeFallbackIds
+        }
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
             title = "选择模型",
@@ -541,6 +551,8 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .clickable {
                                 vm.setPurposeModel(purpose, id)
+                                // 主目标从备用链剔除，避免自我降级
+                                vm.setPurposeFallback(purpose, fallback.filterNot { it == id })
                                 purposePicker = null
                             }
                             .padding(horizontal = 8.dp, vertical = 10.dp),
@@ -555,6 +567,50 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f)
                         )
                         if (id == current) Text("✓", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                HorizontalDivider(
+                    Modifier.padding(vertical = 6.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
+                )
+                Text(
+                    "备用链（主目标失败按序降级）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                options.filter { it.first.isNotBlank() && it.first != current }.forEach { (id, name) ->
+                    val on = id in fallback
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                vm.setPurposeFallback(
+                                    purpose,
+                                    if (on) fallback - id else fallback + id
+                                )
+                            }
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = on,
+                            onCheckedChange = {
+                                vm.setPurposeFallback(purpose, if (it) fallback + id else fallback - id)
+                            },
+                            modifier = Modifier.scale(0.8f)
+                        )
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (on) Text(
+                            "第 ${fallback.indexOf(id) + 1} 顺位",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -878,6 +934,23 @@ private fun LazyListScope.brainItems(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     maxLines = 1
                                 )
+                                // 点1：多模型徽标 + 点3：余额行（启用才显示，点击查询）
+                                if (p.models.isNotEmpty()) {
+                                    Text(
+                                        "含 ${p.models.size} 个备用模型",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                                    )
+                                }
+                                if (p.balanceEnabled) {
+                                    val bal = vm.balanceResults[p.id]
+                                    Text(
+                                        if (bal == null) "点击查询余额" else "余额：$bal",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.clickable { vm.checkBalance(p) }
+                                    )
+                                }
                             }
                             IconButton(onClick = { vm.editProvider(p) }) {
                                 Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(19.dp))
@@ -2585,6 +2658,209 @@ private fun ProviderDialog(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    // ── 高级选项（点1/2/3/5：多模型 / 采样开关 / Key 池 / 余额）──
+                    var advanced by remember(draft.id) { mutableStateOf(false) }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { advanced = !advanced }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "高级选项（多模型 / 采样参数 / Key 池 / 余额）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            if (advanced) "收起 ▲" else "展开 ▼",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    androidx.compose.animation.AnimatedVisibility(visible = advanced) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // 点1：同供应商可选模型（当前模型排首，点击=切换，×=移除）
+                            Text(
+                                "可选模型（聊天内直接切换，无需新建服务）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                FilterChip(
+                                    selected = true,
+                                    onClick = {},
+                                    label = { Text(draft.model.ifBlank { "（未填）" }, style = MaterialTheme.typography.labelSmall) }
+                                )
+                                draft.models.forEach { m ->
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            val old = draft.model.trim()
+                                            val oldEntry = draft.models.find { it.id == old }
+                                            val rest = draft.models.filterNot { it.id == m.id }
+                                            onChange(draft.copy(model = m.id, models = (rest + listOfNotNull(oldEntry)).distinctBy { it.id }))
+                                        },
+                                        label = { Text(m.id, style = MaterialTheme.typography.labelSmall) },
+                                        trailingIcon = {
+                                            Text(
+                                                " ×",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.clickable {
+                                                    onChange(draft.copy(models = draft.models.filterNot { it.id == m.id }))
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                            var newModel by remember(draft.id) { mutableStateOf("") }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = newModel,
+                                    onValueChange = { newModel = it },
+                                    label = { Text("添加模型 ID") },
+                                    singleLine = true,
+                                    colors = glassFieldColors(),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                GlassTextButton(
+                                    text = "添加",
+                                    enabled = newModel.isNotBlank() &&
+                                        draft.models.none { it.id == newModel.trim() } &&
+                                        newModel.trim() != draft.model.trim(),
+                                    onClick = {
+                                        onChange(draft.copy(models = draft.models + com.haoai.agent.data.ModelEntry(newModel.trim())))
+                                        newModel = ""
+                                    },
+                                    backdrop = backdrop
+                                )
+                            }
+                            // 点4：当前模型能力三态（自动=不门控 / 支持 / 不支持=请求侧裁剪）
+                            val curId = draft.model.trim()
+                            val curEntry = draft.models.find { it.id == curId }
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                CapTriChip("图像", curEntry?.vision) { v ->
+                                    val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(vision = v)
+                                    onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                                }
+                                CapTriChip("工具", curEntry?.tools) { v ->
+                                    val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v)
+                                    onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                                }
+                                CapTriChip("推理", curEntry?.reasoning) { v ->
+                                    val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v)
+                                    onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                                }
+                            }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+                            // 点2：采样参数发送开关（借鉴 上游：关=请求体不带该字段）
+                            Text(
+                                "采样参数（默认不发送；开启才随请求下发）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            SwitchParamField("temperature", draft.sendTemperature, draft.temperature,
+                                { onChange(draft.copy(sendTemperature = it)) }, { onChange(draft.copy(temperature = it)) })
+                            SwitchParamField("top_p", draft.sendTopP, draft.topP,
+                                { onChange(draft.copy(sendTopP = it)) }, { onChange(draft.copy(topP = it)) })
+                            SwitchParamField("presence_penalty", draft.sendPresencePenalty, draft.presencePenalty,
+                                { onChange(draft.copy(sendPresencePenalty = it)) }, { onChange(draft.copy(presencePenalty = it)) })
+                            SwitchParamField("frequency_penalty", draft.sendFrequencyPenalty, draft.frequencyPenalty,
+                                { onChange(draft.copy(sendFrequencyPenalty = it)) }, { onChange(draft.copy(frequencyPenalty = it)) })
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+                            // 点5：备用 Key 池（借鉴 上游）
+                            Text(
+                                "备用 Key 池（逐请求轮换，分摊单 Key 限流）",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            draft.poolCiphers.forEachIndexed { i, _ ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("••••••••••（已保存）", style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                                    Text("删除", style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.clickable {
+                                            onChange(draft.copy(poolCiphers = draft.poolCiphers.filterIndexed { j, _ -> j != i }))
+                                        }.padding(4.dp))
+                                }
+                            }
+                            draft.poolAddPlain.forEachIndexed { i, k ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(k.take(8) + "…（本次新增）", style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                                    Text("删除", style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.clickable {
+                                            onChange(draft.copy(poolAddPlain = draft.poolAddPlain.filterIndexed { j, _ -> j != i }))
+                                        }.padding(4.dp))
+                                }
+                            }
+                            var poolKey by remember(draft.id) { mutableStateOf("") }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = poolKey, onValueChange = { poolKey = it },
+                                    label = { Text("添加备用 Key") }, singleLine = true,
+                                    colors = glassFieldColors(), modifier = Modifier.weight(1f)
+                                )
+                                GlassTextButton(
+                                    text = "添加",
+                                    enabled = poolKey.isNotBlank(),
+                                    onClick = {
+                                        onChange(draft.copy(poolAddPlain = draft.poolAddPlain + poolKey.trim()))
+                                        poolKey = ""
+                                    },
+                                    backdrop = backdrop
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                FilterChip(selected = draft.keyRotation == "ROUND_ROBIN",
+                                    onClick = { onChange(draft.copy(keyRotation = "ROUND_ROBIN")) },
+                                    label = { Text("轮询", style = MaterialTheme.typography.labelSmall) })
+                                FilterChip(selected = draft.keyRotation == "RANDOM",
+                                    onClick = { onChange(draft.copy(keyRotation = "RANDOM")) },
+                                    label = { Text("随机", style = MaterialTheme.typography.labelSmall) })
+                            }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+                            // 点3：余额查询（借鉴 上游）
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("余额查询", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                                Switch(checked = draft.balanceEnabled,
+                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) })
+                            }
+                            if (draft.balanceEnabled) {
+                                OutlinedTextField(
+                                    value = draft.balanceApiPath,
+                                    onValueChange = { onChange(draft.copy(balanceApiPath = it)) },
+                                    label = { Text("余额接口路径") },
+                                    placeholder = { Text("/credits") }, singleLine = true,
+                                    colors = glassFieldColors()
+                                )
+                                OutlinedTextField(
+                                    value = draft.balanceJsonPath,
+                                    onValueChange = { onChange(draft.copy(balanceJsonPath = it)) },
+                                    label = { Text("取值 JSON 路径（点分）") },
+                                    placeholder = { Text("data.total_usage") }, singleLine = true,
+                                    colors = glassFieldColors()
+                                )
+                            }
+                        }
+                    }
                     if (draftError != null) {
                         Text(
                             draftError,
@@ -2623,6 +2899,45 @@ private fun ProviderDialog(
             }
         }
     }
+    }
+}
+
+/** 能力三态芯片：自动（不门控）→ 支持 → 不支持 循环。 */
+@Composable
+private fun CapTriChip(label: String, value: Boolean?, onChange: (Boolean?) -> Unit) {
+    val text = when (value) {
+        null -> "$label·自动"
+        true -> "$label·支持"
+        false -> "$label·不支持"
+    }
+    FilterChip(
+        selected = value != null,
+        onClick = { onChange(when (value) { null -> true; true -> false; false -> null }) },
+        label = { Text(text, style = MaterialTheme.typography.labelSmall) }
+    )
+}
+
+/** 采样参数行：开关 + 数值输入（借鉴 上游 的参数级发送控制）。 */
+@Composable
+private fun SwitchParamField(
+    label: String,
+    enabled: Boolean,
+    value: String,
+    onToggle: (Boolean) -> Unit,
+    onValue: (String) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Switch(checked = enabled, onCheckedChange = onToggle, modifier = Modifier.scale(0.8f))
+        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+        if (enabled) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { v -> onValue(v.filter { !it.isLetter() }.take(8)) },
+                singleLine = true,
+                modifier = Modifier.width(90.dp),
+                textStyle = MaterialTheme.typography.labelSmall
+            )
+        }
     }
 }
 

@@ -5,6 +5,23 @@ import com.haoai.agent.agent.policy.PermissionMode
 import kotlinx.serialization.Serializable
 import java.io.File
 
+/**
+ * 供应商下的单个模型条目（借鉴 上游/上游 的「供应商→模型」两级结构）。
+ * 能力三态：null=未知/自动（不做门控），true=支持，false=不支持（请求侧据此裁剪参数）。
+ */
+@Serializable
+data class ModelEntry(
+    val id: String,
+    val displayName: String = "",
+    val vision: Boolean? = null,
+    val tools: Boolean? = null,
+    val reasoning: Boolean? = null,
+    /** 0=沿用供应商配置/按模型名推测 */
+    val contextLength: Int = 0,
+    /** 0=沿用供应商配置 */
+    val maxTokens: Int = 0
+)
+
 @Serializable
 data class ProviderConfig(
     val id: String,
@@ -17,15 +34,44 @@ data class ProviderConfig(
     /** 上下文窗口（tokens）。0 = 按模型名自动推测。 */
     val contextLength: Int = 0,
     /** 单次回复上限（max_tokens）。0 = 供应商默认（部分服务仅 4K，易截断）。 */
-    val maxTokens: Int = 0
+    val maxTokens: Int = 0,
+    /** 同供应商下的可选模型列表（不含当前 model；聊天与设置均可直接切换，无需新建条目）。 */
+    val models: List<ModelEntry> = emptyList(),
+    // ── 采样参数「是否发送」开关（借鉴 上游）：默认全关=与旧行为一致，请求体不带该字段 ──
+    val sendTemperature: Boolean = false,
+    val temperature: Float = 1.0f,
+    val sendTopP: Boolean = false,
+    val topP: Float = 1.0f,
+    val sendPresencePenalty: Boolean = false,
+    val presencePenalty: Float = 0f,
+    val sendFrequencyPenalty: Boolean = false,
+    val frequencyPenalty: Float = 0f,
+    // ── API Key 池（借鉴 上游）：主 Key 之外追加备用密文，按策略轮换分摊限流 ──
+    val apiKeyPoolCiphers: List<String> = emptyList(),
+    /** ROUND_ROBIN=逐请求轮询 | RANDOM=随机 */
+    val keyRotation: String = "ROUND_ROBIN",
+    // ── 余额查询（借鉴 上游）：GET baseUrl+path，按点分 JSON 路径取值展示 ──
+    val balanceEnabled: Boolean = false,
+    val balanceApiPath: String = "/credits",
+    val balanceJsonPath: String = "data.total_usage"
 ) {
-    /** 实际生效的上下文窗口：未配置时按模型名推测。 */
-    fun effectiveContextLength(): Int =
-        contextLength.takeIf { it > 0 } ?: guessContextLength(model)
+    /** 当前 model 对应的条目（无则 null=能力未知不门控）。 */
+    fun modelEntry(): ModelEntry? = models.firstOrNull { it.id == model }
 
-    /** 实际生效的单次回复上限：未配置时本地 4096，云端交供应商默认。 */
+    /** 实际生效的上下文窗口：模型条目覆盖 > 供应商配置 > 按模型名推测。 */
+    fun effectiveContextLength(): Int =
+        modelEntry()?.contextLength?.takeIf { it > 0 }
+            ?: contextLength.takeIf { it > 0 }
+            ?: guessContextLength(model)
+
+    /** 实际生效的单次回复上限：模型条目覆盖 > 供应商配置 > 本地 4096/云端默认。 */
     fun effectiveMaxTokens(): Int =
-        maxTokens.takeIf { it > 0 } ?: if (baseUrl.contains("127.0.0.1") || baseUrl.startsWith("local")) 4096 else 0
+        modelEntry()?.maxTokens?.takeIf { it > 0 }
+            ?: maxTokens.takeIf { it > 0 }
+            ?: if (baseUrl.contains("127.0.0.1") || baseUrl.startsWith("local")) 4096 else 0
+
+    /** 全部可选模型 ID（当前 model 排最前，去重）。 */
+    fun modelIds(): List<String> = (listOf(model) + models.map { it.id }).distinct()
 
     companion object {
         /** 按模型名推测上下文窗口（常见模型速查，未命中给保守默认）。 */
@@ -124,6 +170,10 @@ data class AppSettings(
     val titleProviderId: String = "",
     /** 5.3 上下文压缩摘要模型。 */
     val summarizeProviderId: String = "",
+    /** 用途模型备用链（借鉴 上游 模型组）：主目标请求失败时按序降级。 */
+    val memoryExtractFallbackIds: List<String> = emptyList(),
+    val titleFallbackIds: List<String> = emptyList(),
+    val summarizeFallbackIds: List<String> = emptyList(),
     /** E5 单轮 LLM token 累计上限（prompt+completion）；0=不限。 */
     val turnTokenCap: Int = 150_000,
     /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */

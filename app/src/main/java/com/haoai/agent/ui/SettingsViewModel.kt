@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 
 data class ProviderDraft(
@@ -27,7 +28,26 @@ data class ProviderDraft(
     /** 单次回复上限 max_tokens；空串=云端供应商默认 / 本地 4096 */
     val maxTokens: String = "",
     /** 协议：openai_compat（默认）| anthropic（原生 Messages API） */
-    val protocol: String = "openai_compat"
+    val protocol: String = "openai_compat",
+    // ── 点1：同供应商多模型（不含当前 model；当前 model 的能力编辑写回对应条目）──
+    val models: List<com.haoai.agent.data.ModelEntry> = emptyList(),
+    // ── 点2：采样参数发送开关（值用字符串承载输入框内容）──
+    val sendTemperature: Boolean = false,
+    val temperature: String = "1.0",
+    val sendTopP: Boolean = false,
+    val topP: String = "1.0",
+    val sendPresencePenalty: Boolean = false,
+    val presencePenalty: String = "0",
+    val sendFrequencyPenalty: Boolean = false,
+    val frequencyPenalty: String = "0",
+    // ── 点5：Key 池——existing=已存密文（原样保留/删除），addPlain=本次新增明文 ──
+    val poolCiphers: List<String> = emptyList(),
+    val poolAddPlain: List<String> = emptyList(),
+    val keyRotation: String = "ROUND_ROBIN",
+    // ── 点3：余额查询 ──
+    val balanceEnabled: Boolean = false,
+    val balanceApiPath: String = "/credits",
+    val balanceJsonPath: String = "data.total_usage"
 )
 
 data class ProviderPreset(
@@ -134,9 +154,18 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             detectingCaps = false
             r.fold(
                 onSuccess = { caps ->
+                    // 点4：目录能力写回当前模型条目（vision/reasoning 显式标记，请求侧据此门控）
+                    val entry = com.haoai.agent.data.ModelEntry(
+                        id = d.model.trim(),
+                        vision = caps.inputModalities.any { it == "image" || it == "video" },
+                        reasoning = caps.reasoning,
+                        contextLength = if (caps.contextWindow > 0) caps.contextWindow.toInt() else 0,
+                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.toInt().coerceAtMost(1_000_000) else 0
+                    )
                     draft = draft?.copy(
                         contextLength = if (caps.contextWindow > 0) caps.contextWindow.toString() else draft?.contextLength ?: "",
-                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.coerceAtMost(1_000_000).toString() else draft?.maxTokens ?: ""
+                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.coerceAtMost(1_000_000).toString() else draft?.maxTokens ?: "",
+                        models = (draft?.models ?: emptyList()).filterNot { it.id == entry.id } + entry
                     )
                     detectResult = true to "✓ ${caps.describe()}"
                 },
@@ -178,8 +207,58 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun pickModel(id: String) {
         val d = draft ?: return
-        draft = d.copy(model = id)
+        // 点1：切换当前模型时——旧模型若有能力条目则留在列表，新模型若曾入列则出列
+        val oldEntry = d.models.find { it.id == d.model.trim() }
+        val newId = id.trim()
+        var models = d.models.filterNot { it.id == newId }
+        if (oldEntry != null && newId != d.model.trim()) models = models + oldEntry
+        draft = d.copy(model = newId, models = models)
         modelChoices = null
+    }
+
+    /** 点1：聊天/设置共用——把某供应商的当前模型切到指定 modelId（同供应商多模型）。 */
+    fun selectModel(providerId: String, modelId: String) {
+        c.updateSettings { s ->
+            s.copy(
+                providers = s.providers.map {
+                    if (it.id == providerId && it.model != modelId) it.copy(model = modelId) else it
+                },
+                activeProviderId = providerId
+            )
+        }
+    }
+
+    /** 点3：余额查询结果缓存（providerId → 展示文本；"…"=进行中）。 */
+    var balanceResults by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+
+    /** 点3（借鉴 上游）：GET baseUrl+path，按点分 JSON 路径取余额展示。 */
+    fun checkBalance(p: ProviderConfig) {
+        balanceResults = balanceResults + (p.id to "查询中…")
+        viewModelScope.launch {
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val key = c.resolveApiKey(p)
+                    val url = p.baseUrl.trimEnd('/') +
+                        (if (p.balanceApiPath.startsWith("/")) p.balanceApiPath else "/" + p.balanceApiPath)
+                    val req = okhttp3.Request.Builder().url(url)
+                        .apply { if (key.isNotBlank()) header("Authorization", "Bearer $key") }
+                        .build()
+                    c.okHttpClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                        val body = resp.body?.string() ?: error("空响应")
+                        var node: kotlinx.serialization.json.JsonElement =
+                            kotlinx.serialization.json.Json.parseToJsonElement(body)
+                        for (seg in p.balanceJsonPath.split('.').filter { it.isNotBlank() }) {
+                            node = node.jsonObject[seg] ?: error("路径缺字段 $seg")
+                        }
+                        (node as? kotlinx.serialization.json.JsonPrimitive)?.content
+                            ?: node.toString().trim('"')
+                    }
+                }
+            }
+            balanceResults = balanceResults + (p.id to (r.getOrNull() ?: "查询失败：${r.exceptionOrNull()?.message?.take(40) ?: "未知"}"))
+        }
     }
 
     fun providers(): List<ProviderConfig> = c.settingsFlow.value.providers
@@ -202,7 +281,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             apiKeyPlain = "",
             contextLength = if (p.contextLength > 0) p.contextLength.toString() else "",
             maxTokens = if (p.maxTokens > 0) p.maxTokens.toString() else "",
-            protocol = p.protocol
+            protocol = p.protocol,
+            models = p.models,
+            sendTemperature = p.sendTemperature,
+            temperature = p.temperature.toString(),
+            sendTopP = p.sendTopP,
+            topP = p.topP.toString(),
+            sendPresencePenalty = p.sendPresencePenalty,
+            presencePenalty = p.presencePenalty.toString(),
+            sendFrequencyPenalty = p.sendFrequencyPenalty,
+            frequencyPenalty = p.frequencyPenalty.toString(),
+            poolCiphers = p.apiKeyPoolCiphers,
+            keyRotation = p.keyRotation,
+            balanceEnabled = p.balanceEnabled,
+            balanceApiPath = p.balanceApiPath,
+            balanceJsonPath = p.balanceJsonPath
         )
         draftError = null
         testResult = null
@@ -256,6 +349,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 } else null
                 val ctxLen = d.contextLength.trim().toIntOrNull()?.coerceIn(0, 10_000_000) ?: 0
                 val maxTok = d.maxTokens.trim().toIntOrNull()?.coerceIn(0, 1_000_000) ?: 0
+                // 点5：Key 池新增明文逐条加密；任一失败整体取消（与主 Key 同策略）
+                val poolAdd = d.poolAddPlain.map { it.trim() }.filter { it.isNotBlank() }
+                val poolAddCiphers = poolAdd.map { k ->
+                    c.cipher.encrypt(k) ?: run {
+                        draftError = "备用 Key 加密失败（AndroidKeyStore 不可用），本次未保存"
+                        return
+                    }
+                }
                 c.updateSettings { s ->
                     val pid = d.id ?: UUID.randomUUID().toString()
                     val existing = s.providers.find { it.id == pid }
@@ -268,7 +369,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                         apiKeyCipher = keyCipher,
                         protocol = d.protocol,
                         contextLength = ctxLen,
-                        maxTokens = maxTok
+                        maxTokens = maxTok,
+                        models = d.models,  // 含当前模型条目（能力/窗口覆盖挂在其上）
+                        sendTemperature = d.sendTemperature,
+                        temperature = d.temperature.toFloatOrNull()?.coerceIn(0f, 2f) ?: 1f,
+                        sendTopP = d.sendTopP,
+                        topP = d.topP.toFloatOrNull()?.coerceIn(0f, 1f) ?: 1f,
+                        sendPresencePenalty = d.sendPresencePenalty,
+                        presencePenalty = d.presencePenalty.toFloatOrNull()?.coerceIn(-2f, 2f) ?: 0f,
+                        sendFrequencyPenalty = d.sendFrequencyPenalty,
+                        frequencyPenalty = d.frequencyPenalty.toFloatOrNull()?.coerceIn(-2f, 2f) ?: 0f,
+                        apiKeyPoolCiphers = d.poolCiphers + poolAddCiphers,
+                        keyRotation = if (d.keyRotation == "RANDOM") "RANDOM" else "ROUND_ROBIN",
+                        balanceEnabled = d.balanceEnabled,
+                        balanceApiPath = d.balanceApiPath.ifBlank { "/credits" },
+                        balanceJsonPath = d.balanceJsonPath.ifBlank { "data.total_usage" }
                     )
                     s.copy(
                         providers = list,
@@ -378,6 +493,17 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 "memory" -> st.copy(memoryExtractProviderId = id)
                 "title" -> st.copy(titleProviderId = id)
                 else -> st.copy(summarizeProviderId = id)
+            }
+        }
+    }
+
+    /** 点6（借鉴 上游 模型组）：用途模型备用链——主目标失败按序降级。 */
+    fun setPurposeFallback(purpose: String, ids: List<String>) {
+        c.updateSettings { st ->
+            when (purpose) {
+                "memory" -> st.copy(memoryExtractFallbackIds = ids)
+                "title" -> st.copy(titleFallbackIds = ids)
+                else -> st.copy(summarizeFallbackIds = ids)
             }
         }
     }

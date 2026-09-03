@@ -133,8 +133,17 @@ object ToolRegistry {
 }
 
 fun Tool.toApi(): ApiTool = ApiTool(
-    function = ApiToolDef(name, description, parameters)
+    function = ApiToolDef(name, description, sanitizeParameters(parameters))
 )
+
+/**
+ * 严格网关兼容（实测 b.ai glm-5.3-flash 上游）：无参工具的 `"properties":{}` 会被
+ * 部分供应商校验器 400 拒绝（code 1210），删键只留 {"type":"object"} 即可通过。
+ */
+private fun sanitizeParameters(params: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+    val props = params["properties"] as? kotlinx.serialization.json.JsonObject
+    return if (props != null && props.isEmpty()) kotlinx.serialization.json.JsonObject(params - "properties") else params
+}
 
 fun toolCallToApi(id: String, name: String, argumentsJson: String): ApiToolCall =
     ApiToolCall(id = id, function = ApiFunctionCall(name = name, arguments = argumentsJson))

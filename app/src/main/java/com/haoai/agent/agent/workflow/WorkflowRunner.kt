@@ -98,7 +98,7 @@ object WorkflowRunner {
         val engine = AgentEngine(
             httpClient = container.clientFor(p),
             provider = p,
-            apiKey = container.cipher.decrypt(p.apiKeyCipher),
+            apiKey = container.resolveApiKey(p),
             customPrompt = st.customPrompt,
             policy = PolicyEngine(mode),
             approve = approveFor(mode),

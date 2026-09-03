@@ -253,6 +253,9 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
             put("model", provider.model)
             // Anthropic 必填 max_tokens：云端未配置时 4096 兜底
             put("max_tokens", maxTokensOverride ?: provider.effectiveMaxTokens().takeIf { it > 0 } ?: 4096)
+            // 采样参数开关（借鉴 上游）：Anthropic 仅支持 temperature/top_p，penalty 无对应字段
+            if (provider.sendTemperature) put("temperature", provider.temperature.toDouble())
+            if (provider.sendTopP) put("top_p", provider.topP.toDouble())
             if (converted.system.isNotBlank()) put("system", converted.system)
             put("stream", stream)
             putJsonArray("messages") {

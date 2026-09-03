@@ -442,37 +442,42 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         s.titleAuto = true
         c.sessionStore.save(s)
         viewModelScope.launch {
-            try {
-                val provider = if (titleCfgId.isEmpty()) {
-                    resolveProvider(mainProvider) ?: return@launch
-                } else {
-                    // 5.3 专用标题模型（含端侧小模型：resolvePurposeTarget 会拉起 llama）
-                    val t = runCatching { c.resolvePurposeTarget(titleCfgId) }.getOrNull() ?: return@launch
-                    resolveProvider(t.provider) ?: return@launch
+            // 点6：标题模型链式降级——主+备用按序尝试，拿到非空标题即止
+            val chain = if (titleCfgId.isEmpty()) emptyList()
+            else runCatching {
+                c.resolvePurposeTargets(titleCfgId, c.settingsFlow.value.titleFallbackIds)
+            }.getOrDefault(emptyList()).map { it.provider }
+            val targets = (if (chain.isEmpty()) listOf(mainProvider) else chain).distinctBy { it.id }
+            for (target in targets) {
+                val done = try {
+                    val provider = resolveProvider(target) ?: continue
+                    val engine = buildEngine(s, provider)
+                    val sb = StringBuilder()
+                    engine.runBtw(
+                        question = "用不超过12个字总结这段对话的主题，作为会话标题。只输出标题本身，不要引号、句号或任何解释。",
+                        onDelta = { frag -> if (sb.length < 80) sb.append(frag) },
+                        onReasoning = { },
+                        purpose = "title"
+                    )
+                    val t = sb.toString().trim()
+                        .trim('"', '“', '”', '\'', '「', '」', '。', '.', '！', '!', '？', '?')
+                        .replace('\n', ' ')
+                        .take(24)
+                    if (t.isNotBlank()) {
+                        s.title = t
+                        c.sessionStore.save(s)
+                        refreshSessions()
+                        // copy() 强制 StateFlow 发射（同引用修改不会触发更新）
+                        if (_session.value?.id == s.id) _session.value = s.copy()
+                        true
+                    } else false
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.w("HaoTitle", "会话标题生成失败（${target.name}）: ${e.message}")
+                    false
                 }
-                val engine = buildEngine(s, provider)
-                val sb = StringBuilder()
-                engine.runBtw(
-                    question = "用不超过12个字总结这段对话的主题，作为会话标题。只输出标题本身，不要引号、句号或任何解释。",
-                    onDelta = { frag -> if (sb.length < 80) sb.append(frag) },
-                    onReasoning = { },
-                    purpose = "title"
-                )
-                val t = sb.toString().trim()
-                    .trim('"', '“', '”', '\'', '「', '」', '。', '.', '！', '!', '？', '?')
-                    .replace('\n', ' ')
-                    .take(24)
-                if (t.isNotBlank()) {
-                    s.title = t
-                    c.sessionStore.save(s)
-                    refreshSessions()
-                    // copy() 强制 StateFlow 发射（同引用修改不会触发更新）
-                    if (_session.value?.id == s.id) _session.value = s.copy()
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.w("HaoTitle", "会话标题生成失败: ${e.message}")
+                if (done) break
             }
         }
     }
@@ -821,7 +826,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return AgentEngine(
             httpClient = c.clientFor(provider),
             provider = provider,
-            apiKey = c.cipher.decrypt(provider.apiKeyCipher),
+            apiKey = c.resolveApiKey(provider),
             customPrompt = st.customPrompt,
             policy = PolicyEngine(st.permissionMode),
             approve = { req -> requestApproval(req) },
@@ -877,10 +882,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             turnTokenCap = st.turnTokenCap,
             toolFailCap = st.consecutiveToolFailCap,
             memoryTarget = {
-                c.resolvePurposeTarget(st.memoryExtractProviderId)?.let { it.provider to it.apiKey }
+                c.resolvePurposeTargets(st.memoryExtractProviderId, st.memoryExtractFallbackIds)
+                    .map { it.provider to it.apiKey }
             },
             summarizeTarget = {
-                c.resolvePurposeTarget(st.summarizeProviderId)?.let { it.provider to it.apiKey }
+                c.resolvePurposeTargets(st.summarizeProviderId, st.summarizeFallbackIds)
+                    .map { it.provider to it.apiKey }
             },
             auxClientFor = { p -> c.clientFor(p) },
             planGate = { _planMode.value }
@@ -1118,6 +1125,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun selectProvider(id: String) {
         c.updateSettings { it.copy(activeProviderId = id) }
+    }
+
+    /** 点1（借鉴 上游/上游）：切换供应商并选中其下指定模型（聊天 /model 切换器）。 */
+    fun selectModel(providerId: String, modelId: String) {
+        c.updateSettings { s ->
+            s.copy(
+                providers = s.providers.map {
+                    if (it.id == providerId && it.model != modelId) it.copy(model = modelId) else it
+                },
+                activeProviderId = providerId
+            )
+        }
     }
 
     fun needsOnboarding(): Boolean = !c.settingsFlow.value.onboarded

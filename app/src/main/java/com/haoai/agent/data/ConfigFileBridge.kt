@@ -12,11 +12,15 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
@@ -52,6 +56,7 @@ class ConfigFileBridge(
             // C4 A 组行为字段
             "permission_mode", "fallback_chain",
             "memory_extract_provider", "title_provider", "summarize_provider",
+            "memory_extract_fallback", "title_fallback", "summarize_fallback",
             "daily_token_budget_k", "keep_alive", "dream_provider", "dream_idle_minutes",
             // 外观主题组（枚举/范围校验，改错可即时回改，无安全风险）
             "theme_mode", "theme_seed", "amoled_mode", "bubble_opacity",
@@ -66,7 +71,11 @@ class ConfigFileBridge(
 
         val PROVIDER_KEYS = setOf(
             "id", "name", "baseUrl", "model", "protocol", "apiKey",
-            "contextLength", "maxTokens", "active"
+            "contextLength", "maxTokens", "active",
+            // 多模型/采样开关/Key池/余额（缺席=保留现值，绝不静默清零）
+            "models", "send_temperature", "temperature", "send_top_p", "top_p",
+            "send_presence_penalty", "presence_penalty", "send_frequency_penalty", "frequency_penalty",
+            "key_rotation", "apiKeyPool", "balance_enabled", "balance_api_path", "balance_json_path"
         )
 
         /** MCP 服务器分区字段（toolCache 是派生态，不渲染也不接受）。 */
@@ -150,6 +159,27 @@ class ConfigFileBridge(
                 put("contextLength", p.contextLength)
                 put("maxTokens", p.maxTokens)
                 put("active", p.id == active?.id)
+                // 多模型条目（能力三态：null=未知不输出）
+                putJsonArray("models") {
+                    p.models.forEach { m -> addJsonObject {
+                        put("id", m.id)
+                        m.vision?.let { put("vision", it) }
+                        m.tools?.let { put("tools", it) }
+                        m.reasoning?.let { put("reasoning", it) }
+                        put("contextLength", m.contextLength)
+                        put("maxTokens", m.maxTokens)
+                    } }
+                }
+                put("send_temperature", p.sendTemperature); put("temperature", p.temperature)
+                put("send_top_p", p.sendTopP); put("top_p", p.topP)
+                put("send_presence_penalty", p.sendPresencePenalty); put("presence_penalty", p.presencePenalty)
+                put("send_frequency_penalty", p.sendFrequencyPenalty); put("frequency_penalty", p.frequencyPenalty)
+                put("key_rotation", p.keyRotation)
+                // Key 池只渲染掩码计数（明文永不落盘）；解析时掩码条目=保留
+                putJsonArray("apiKeyPool") { p.apiKeyPoolCiphers.forEach { add(MASK) } }
+                put("balance_enabled", p.balanceEnabled)
+                put("balance_api_path", p.balanceApiPath)
+                put("balance_json_path", p.balanceJsonPath)
             }
         }
         val st = buildJsonObject {
@@ -165,6 +195,9 @@ class ConfigFileBridge(
             put("memory_extract_provider", settings.memoryExtractProviderId)
             put("title_provider", settings.titleProviderId)
             put("summarize_provider", settings.summarizeProviderId)
+            putJsonArray("memory_extract_fallback") { settings.memoryExtractFallbackIds.forEach { add(it) } }
+            putJsonArray("title_fallback") { settings.titleFallbackIds.forEach { add(it) } }
+            putJsonArray("summarize_fallback") { settings.summarizeFallbackIds.forEach { add(it) } }
             put("daily_token_budget_k", settings.dailyTokenBudgetK)
             put("keep_alive", settings.keepAlive)
             put("dream_provider", settings.dreamProviderId)
@@ -302,12 +335,64 @@ class ConfigFileBridge(
                     failP("apiKey 加密失败（Keystore 不可用）"); return@forEachIndexed
                 }
             }
+            // ── 新字段：文件缺席=保留现值（config_set 局部补丁绝不静默清零）──
+            val models: List<ModelEntry> = (p["models"] as? JsonArray)?.mapNotNull { el ->
+                val o = el as? JsonObject ?: return@mapNotNull null
+                val mid = o.str("id") ?: return@mapNotNull null
+                ModelEntry(
+                    id = mid,
+                    vision = o["vision"]?.booleanOrNullOr(),
+                    tools = o["tools"]?.booleanOrNullOr(),
+                    reasoning = o["reasoning"]?.booleanOrNullOr(),
+                    contextLength = (o.intOr("contextLength") ?: 0).coerceAtLeast(0),
+                    maxTokens = (o.intOr("maxTokens") ?: 0).coerceAtLeast(0)
+                )
+            } ?: existing?.models ?: emptyList()
+            fun floatField(key: String, old: Float, lo: Float, hi: Float): Float {
+                val v = (p[key] as? JsonPrimitive)?.contentOrNull?.toFloatOrNull()
+                return v?.coerceIn(lo, hi) ?: old
+            }
+            val sendTemp = p.booleanOr("send_temperature") ?: existing?.sendTemperature ?: false
+            val temp = floatField("temperature", existing?.temperature ?: 1f, 0f, 2f)
+            val sendTopP = p.booleanOr("send_top_p") ?: existing?.sendTopP ?: false
+            val topP = floatField("top_p", existing?.topP ?: 1f, 0f, 1f)
+            val sendPP = p.booleanOr("send_presence_penalty") ?: existing?.sendPresencePenalty ?: false
+            val pp = floatField("presence_penalty", existing?.presencePenalty ?: 0f, -2f, 2f)
+            val sendFP = p.booleanOr("send_frequency_penalty") ?: existing?.sendFrequencyPenalty ?: false
+            val fp = floatField("frequency_penalty", existing?.frequencyPenalty ?: 0f, -2f, 2f)
+            val rotation = p.str("key_rotation") ?: existing?.keyRotation ?: "ROUND_ROBIN"
+            if (rotation !in setOf("ROUND_ROBIN", "RANDOM")) {
+                failP("key_rotation 仅支持 ROUND_ROBIN/RANDOM"); return@forEachIndexed
+            }
+            val poolCiphers: List<String> = (p["apiKeyPool"] as? JsonArray)?.let { arr ->
+                val oldPool = existing?.apiKeyPoolCiphers ?: emptyList()
+                arr.mapIndexed { i, el ->
+                    val v = (el as? JsonPrimitive)?.contentOrNull
+                    when {
+                        v.isNullOrBlank() || v == MASK -> oldPool.getOrNull(i) ?: ""
+                        else -> cipher.encrypt(v) ?: run {
+                            failP("apiKeyPool 第 ${i + 1} 项加密失败（Keystore 不可用）"); ""
+                        }
+                    }
+                }.filter { it.isNotBlank() }
+            } ?: existing?.apiKeyPoolCiphers ?: emptyList()
+            if (errors.isNotEmpty()) return@forEachIndexed
+            val balEnabled = p.booleanOr("balance_enabled") ?: existing?.balanceEnabled ?: false
+            val balPath = p.str("balance_api_path") ?: existing?.balanceApiPath ?: "/credits"
+            val balJson = p.str("balance_json_path") ?: existing?.balanceJsonPath ?: "data.total_usage"
             // 同 id 后写覆盖先写（补丁内重复条目按更新语义）
             newProviders.removeAll { it.id == id }
             newProviders += ProviderConfig(
                 id = id, name = name, baseUrl = baseUrl, model = model,
                 apiKeyCipher = newCipher, protocol = protocol,
-                contextLength = ctxClamped, maxTokens = maxClamped
+                contextLength = ctxClamped, maxTokens = maxClamped,
+                models = models,
+                sendTemperature = sendTemp, temperature = temp,
+                sendTopP = sendTopP, topP = topP,
+                sendPresencePenalty = sendPP, presencePenalty = pp,
+                sendFrequencyPenalty = sendFP, frequencyPenalty = fp,
+                apiKeyPoolCiphers = poolCiphers, keyRotation = rotation,
+                balanceEnabled = balEnabled, balanceApiPath = balPath, balanceJsonPath = balJson
             )
             seenIds += id
             if (active) newActiveId = id
@@ -366,6 +451,22 @@ class ConfigFileBridge(
                 return fail("fallback_chain 引用了不存在的 providerId: ${bad.joinToString()}")
             }
             next = next.copy(fallbackChain = ids)
+        }
+        // 点6：用途模型备用链（providerId 数组，校验存在性）
+        for ((key, apply) in mapOf(
+            "memory_extract_fallback" to { s2: AppSettings, ids: List<String> -> s2.copy(memoryExtractFallbackIds = ids) },
+            "title_fallback" to { s2: AppSettings, ids: List<String> -> s2.copy(titleFallbackIds = ids) },
+            "summarize_fallback" to { s2: AppSettings, ids: List<String> -> s2.copy(summarizeFallbackIds = ids) }
+        )) {
+            st[key]?.let { el ->
+                val arr = el as? JsonArray ?: return fail("$key 必须是 providerId 字符串数组")
+                val ids = arr.mapNotNull { (it as? JsonPrimitive)?.content?.trim() }.filter { it.isNotBlank() }
+                val bad = ids.filter { pid -> next.providers.none { it.id == pid } }
+                if (bad.isNotEmpty()) {
+                    return fail("$key 引用了不存在的 providerId: ${bad.joinToString()}")
+                }
+                next = apply(next, ids)
+            }
         }
         for ((key, apply2) in PURPOSE_FIELDS) {
             st[key]?.let { el ->

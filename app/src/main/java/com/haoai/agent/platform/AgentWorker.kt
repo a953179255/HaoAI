@@ -67,7 +67,7 @@ class AgentWorker(context: Context, params: WorkerParameters) :
         val engine = AgentEngine(
             httpClient = container.clientFor(provider),
             provider = provider,
-            apiKey = container.cipher.decrypt(provider.apiKeyCipher),
+            apiKey = container.resolveApiKey(provider),
             customPrompt = container.settingsFlow.value.customPrompt,
             policy = PolicyEngine(mode),
             approve = { mode == PermissionMode.YOLO },

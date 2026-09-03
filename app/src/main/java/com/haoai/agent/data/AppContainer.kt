@@ -74,7 +74,7 @@ class AppContainer(app: Application) {
         return com.haoai.agent.agent.provider.FallbackClient(
             resolve = { p -> resolve(p) },
             lookup = { id -> st.providers.find { it.id == id } },
-            decrypt = { p -> runCatching { cipher.decrypt(p.apiKeyCipher) }.getOrDefault("") },
+            decrypt = { p -> resolveApiKey(p) },
             fallbackIds = chain,
             onFallback = { name -> lastFallbackNotice = name }
         )
@@ -82,6 +82,25 @@ class AppContainer(app: Application) {
 
     /** 5.2 最近一次降级通知（UI 轮询显示「已降级到 X」）；null=无。 */
     @Volatile var lastFallbackNotice: String? = null
+
+    // ── API Key 池（借鉴 上游）：主 Key + 备用池按策略逐请求轮换，分摊单 Key 限流 ──
+    private val keyCursor = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** 解密供应商当前应使用的 API Key（池内轮换；解密失败回退空串）。 */
+    fun resolveApiKey(p: ProviderConfig): String {
+        val pool = (listOf(p.apiKeyCipher) + p.apiKeyPoolCiphers).filter { it.isNotBlank() }
+        if (pool.isEmpty()) return ""
+        val idx = when {
+            pool.size == 1 -> 0
+            p.keyRotation == "RANDOM" -> (pool.indices).random()
+            else -> {
+                val cur = keyCursor[p.id] ?: 0
+                keyCursor[p.id] = (cur + 1) % pool.size
+                cur % pool.size
+            }
+        }
+        return runCatching { cipher.decrypt(pool[idx]) }.getOrDefault("")
+    }
 
     val llama = LlamaServerController(app, okHttpClient)
 
@@ -262,7 +281,7 @@ class AppContainer(app: Application) {
         } else {
             val p = activeProviderById(st.dreamProviderId) ?: return null
             if (p.baseUrl.startsWith("local")) return null
-            DreamTarget(p, runCatching { cipher.decrypt(p.apiKeyCipher) }.getOrDefault(""), false)
+            DreamTarget(p, resolveApiKey(p), false)
         }
     }
 
@@ -289,8 +308,18 @@ class AppContainer(app: Application) {
         } else {
             val p = st.providers.find { it.id == id } ?: return null
             if (p.baseUrl.startsWith("local")) return null
-            DreamTarget(p, runCatching { cipher.decrypt(p.apiKeyCipher) }.getOrDefault(""), false)
+            DreamTarget(p, resolveApiKey(p), false)
         }
+    }
+
+    /**
+     * 用途模型链解析（借鉴 上游 模型组）：主目标 + 备用链按序去重，返回全部可用目标。
+     * 调用方按序尝试、失败降级；主目标为空配置时返回空列表（调用方回落主模型）。
+     */
+    suspend fun resolvePurposeTargets(primaryId: String, fallbackIds: List<String>): List<DreamTarget> {
+        val ids = (listOf(primaryId.trim()) + fallbackIds.map { it.trim() })
+            .filter { it.isNotEmpty() }.distinct()
+        return ids.mapNotNull { resolvePurposeTarget(it) }
     }
 
     fun activeProvider(): ProviderConfig? {

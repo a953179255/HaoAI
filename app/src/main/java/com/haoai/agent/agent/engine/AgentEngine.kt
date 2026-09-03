@@ -94,10 +94,10 @@ class AgentEngine(
     private val vscreenBitrateKbps: Int = 3000,
     /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
     private val budgetHint: () -> String = { "" },
-    /** 5.3 模型路由：记忆提取专用 (provider, apiKey)；null/异常回落主模型。 */
-    private val memoryTarget: (suspend () -> Pair<ProviderConfig, String>?)? = null,
-    /** 5.3 模型路由：上下文压缩摘要专用 (provider, apiKey)。 */
-    private val summarizeTarget: (suspend () -> Pair<ProviderConfig, String>?)? = null,
+    /** 5.3 模型路由：记忆提取专用链（主+备用，借鉴 上游 模型组）；空=回落主模型。 */
+    private val memoryTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
+    /** 5.3 模型路由：上下文压缩摘要专用链。 */
+    private val summarizeTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.3 专用目标的协议客户端解析（缺省仍用主 httpClient）。 */
     private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
     /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
@@ -160,11 +160,39 @@ class AgentEngine(
 
     @Volatile private var compactProvider: ProviderConfig? = null
 
-    /** 5.3 压缩摘要路由：配置了专用模型则返回 (provider, apiKey)，否则主模型。 */
-    private suspend fun summarizerRoute(): Pair<ProviderConfig, String> {
-        val t = runCatching { summarizeTarget?.invoke() }.getOrNull() ?: return provider to apiKey
-        compactProvider = t.first
-        return t.first to t.second
+    /** 5.3 压缩摘要路由链（点6 链化）：主+备用按序；空配置回落主模型。 */
+    private suspend fun summarizerChain(): List<Pair<ProviderConfig, String>> {
+        val t = runCatching { summarizeTarget?.invoke() }.getOrNull() ?: emptyList()
+        val chain = if (t.isEmpty()) listOf(provider to apiKey) else t
+        compactProvider = chain.first().first
+        return chain
+    }
+
+    /** 点6：链式压缩——按序尝试各目标，单个失败（非取消）降级下一个；全失败抛最后错误。 */
+    private suspend fun compactWithChain(
+        chatMsgs: List<com.haoai.agent.agent.model.ChatMessage>,
+        chain: List<Pair<ProviderConfig, String>>
+    ): com.haoai.agent.agent.engine.compaction.CompactionResult {
+        var lastErr: Throwable? = null
+        for ((p, k) in chain) {
+            val isLocal = p.baseUrl.contains("127.0.0.1") || p.baseUrl.startsWith("local")
+            val cw = if (isLocal) 32768 else p.effectiveContextLength()
+            try {
+                return compactionManager.compact(
+                    messages = chatMsgs,
+                    existingSummary = session.compactionSummary,
+                    provider = p,
+                    apiKey = k,
+                    contextWindow = cw
+                )
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                lastErr = e
+                android.util.Log.w("HaoCompact", "压缩目标 ${p.name}/${p.model} 失败，尝试链上下一个", e)
+            }
+        }
+        throw lastErr ?: IllegalStateException("压缩摘要无可用模型")
     }
 
     suspend fun runTurn(
@@ -216,10 +244,10 @@ class AgentEngine(
         // E4b 工具分层：按会话 activeGroups 注入（null=全开兼容旧会话）；handoff/tools_enable 恒在
         var tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
             handoffTool + toolsEnableTool
-        var apiTools = tools.map { it.toApi() }
+        var apiTools = gateTools(tools.map { it.toApi() })
 
-        // E4a 工具定义 token 估算动态化：真实序列化各工具 JSON 求和（兜底下限 3500）
-        _toolsTokenCache = estimateToolsTokens(apiTools)
+        // E4a 工具定义 token 估算动态化：真实序列化各工具 JSON 求和（兜底下限 3500；门控清空则记 0）
+        _toolsTokenCache = if (apiTools.isEmpty()) 0 else estimateToolsTokens(apiTools)
 
         // 压缩检查：在主循环前判断是否需要压缩
         maybeCompact(onEvent)
@@ -382,8 +410,8 @@ class AgentEngine(
                     _groupsDirty = false
                     tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
                         handoffTool + toolsEnableTool
-                    apiTools = tools.map { it.toApi() }
-                    _toolsTokenCache = estimateToolsTokens(apiTools)
+                    apiTools = gateTools(tools.map { it.toApi() })
+                    _toolsTokenCache = if (apiTools.isEmpty()) 0 else estimateToolsTokens(apiTools)
                 }
                 // E5 连续工具失败熔断：达到阈值直接 break 输出失败总结
                 if (_loopFailedCap) {
@@ -742,7 +770,7 @@ class AgentEngine(
         }
         report("RUNNING", 0, task)
         val tools = ToolRegistry.readOnly(childCtx)
-        val apiTools = tools.map { it.toApi() }
+        val apiTools = gateTools(tools.map { it.toApi() })
         // 注意：不更新引擎级 _toolsTokenCache——那是主循环工具清单的开销估算，
         // 子代理只读工具集远小于主清单，覆写会让压缩/催办判断在本轮剩余时间持续低估
 
@@ -892,33 +920,37 @@ class AgentEngine(
             .trim()
         if (transcript.length < 80) return
         scope.launch {
-            runCatching {
-                // 5.3 记忆提取路由：配置了专用模型则走专用（挂起解析须在协程内）
-                val memRoute = runCatching { memoryTarget?.invoke() }.getOrNull()
-                val memProv = memRoute?.first ?: provider
-                val memKey = memRoute?.second ?: apiKey
-                val memClient = if (memRoute != null) (auxClientFor?.invoke(memProv) ?: httpClient) else httpClient
-                val buf = StringBuilder()
-                var mp = 0L; var mc = 0L
-                val mstart = System.currentTimeMillis()
-                memClient.chatStream(
-                    memProv, memKey,
-                    listOf(
-                        ApiMessage(role = "system", content = EXTRACT_SYSTEM),
-                        ApiMessage(role = "user", content = TextCap.middle(transcript, 4000))
-                    ),
-                    emptyList()
-                ).collect { ev ->
-                    when (ev) {
-                        is SseEvent.Delta -> buf.append(ev.text)
-                        is SseEvent.Usage -> { mp += ev.promptTokens; mc += ev.completionTokens }
-                        else -> {}
+            // 5.3 记忆提取路由链（点6）：主+备用按序尝试，空配置回落主模型
+            val memChain = runCatching { memoryTarget?.invoke() }.getOrNull() ?: emptyList()
+            val memTargets = if (memChain.isEmpty()) listOf(provider to apiKey) else memChain
+            for ((memProv, memKey) in memTargets) {
+                val r = runCatching {
+                    val memClient = auxClientFor?.invoke(memProv) ?: httpClient
+                    val buf = StringBuilder()
+                    var mp = 0L; var mc = 0L
+                    val mstart = System.currentTimeMillis()
+                    memClient.chatStream(
+                        memProv, memKey,
+                        listOf(
+                            ApiMessage(role = "system", content = EXTRACT_SYSTEM),
+                            ApiMessage(role = "user", content = TextCap.middle(transcript, 4000))
+                        ),
+                        emptyList()
+                    ).collect { ev ->
+                        when (ev) {
+                            is SseEvent.Delta -> buf.append(ev.text)
+                            is SseEvent.Usage -> { mp += ev.promptTokens; mc += ev.completionTokens }
+                            else -> {}
+                        }
+                    }
+                    ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true, model = memProv.model)
+                    parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
+                        bank.remember(content, tags, importance = 2, source = "auto")
                     }
                 }
-                ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true, model = memProv.model)
-                parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
-                    bank.remember(content, tags, importance = 2, source = "auto")
-                }
+                if (r.isSuccess) break
+                (r.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
+                android.util.Log.w("HaoMemory", "记忆提取目标 ${memProv.name}/${memProv.model} 失败，降级链上下一个")
             }
         }
     }
@@ -1054,6 +1086,11 @@ class AgentEngine(
 
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
     private var _toolsTokenCache: Int? = null
+
+    /** 能力门控（借鉴 上游/上游）：模型标记不支持 tools 时清空工具清单，降级纯对话。 */
+    private fun gateTools(apiTools: List<com.haoai.agent.agent.provider.ApiTool>): List<com.haoai.agent.agent.provider.ApiTool> =
+        if (provider.modelEntry()?.tools == false) emptyList() else apiTools
+
     fun estimateOverheadTokens(): Pair<Int, Int> =
         com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to
             (_toolsTokenCache ?: TOOLS_BASE_TOKENS)
@@ -1328,7 +1365,8 @@ class AgentEngine(
     /** 检查是否需要压缩，需要则执行。 */
     private suspend fun maybeCompact(onEvent: (TurnEvent) -> Unit) {
         if (compactionManager.isCoolingDown()) return
-        val (sp, sk) = summarizerRoute()
+        val chain = summarizerChain()
+        val sp = chain.first().first
         val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
         val chatMsgs = session.messages.map { it.toModel() }
@@ -1342,13 +1380,7 @@ class AgentEngine(
         // 预修剪工具输出
         val prunedMsgs = compactionManager.prePruneToolOutputs(chatMsgs)
 
-        val result = compactionManager.compact(
-            messages = prunedMsgs,
-            existingSummary = session.compactionSummary,
-            provider = sp,
-            apiKey = sk,
-            contextWindow = contextWindow
-        )
+        val result = compactWithChain(prunedMsgs, chain)
         session.compactionSummary = result.summary
         trimCompactedHistory()
         persist()
@@ -1371,6 +1403,8 @@ class AgentEngine(
      * 失败会得到供应商 400，friendlyError 已翻译成"换 vision 模型"指引）。
      */
     private fun providerSupportsVision(): Boolean {
+        // 能力门控：模型条目显式标记优先于名字推测
+        provider.modelEntry()?.vision?.let { return it }
         val m = provider.model.lowercase()
         if (Regex("vision|vl|-v[0-9]|multimodal|4o|4\\.1|gpt-5|o1|o3|o4|gemini|claude|glm-4v|qwen.*vl|llava|pixtral").containsMatchIn(m)) return true
         if (Regex("deepseek-v[0-9]+$|deepseek-chat|deepseek-r\\d|qwen2?\\.5$|miniax-text|text-embed").containsMatchIn(m)) return false
@@ -1417,19 +1451,14 @@ class AgentEngine(
     ) {
         if (!compactionManager.isOverflowError(error)) throw Exception(error)
         if (compactionManager.isCoolingDown()) throw Exception(error)
-        val (sp, sk) = summarizerRoute()
+        val chain = summarizerChain()
+        val sp = chain.first().first
         val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
         val chatMsgs = session.messages.map { it.toModel() }
 
-        // 强制压缩
-        val result = compactionManager.compact(
-            messages = chatMsgs,
-            existingSummary = session.compactionSummary,
-            provider = sp,
-            apiKey = sk,
-            contextWindow = contextWindow
-        )
+        // 强制压缩（点6：链式降级）
+        val result = compactWithChain(chatMsgs, chain)
         session.compactionSummary = result.summary
         trimCompactedHistory()
         persist()
@@ -1466,17 +1495,9 @@ class AgentEngine(
     // ── 手动压缩（/compact 命令） ────────────────────────────────────
 
     suspend fun compactNow(): String? {
-        val (sp, sk) = summarizerRoute()
-        val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
+        val chain = summarizerChain()
         val chatMsgs = session.messages.map { it.toModel() }
-        val result = compactionManager.compact(
-            messages = chatMsgs,
-            existingSummary = session.compactionSummary,
-            provider = sp,
-            apiKey = sk,
-            contextWindow = contextWindow
-        )
+        val result = compactWithChain(chatMsgs, chain)
         session.compactionSummary = result.summary
         persist()
         return result.summary
