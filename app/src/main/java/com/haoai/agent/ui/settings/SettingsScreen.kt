@@ -2564,27 +2564,44 @@ private fun ProviderDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    // 预设一行放不下自动换行（原 take(3)/drop(3) 写死两行，加服务商必溢出）
-                    androidx.compose.foundation.layout.FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        com.haoai.agent.ui.ProviderPresets.all.forEach { p ->
-                            AssistChip(
-                                onClick = { onPreset(p) },
-                                label = {
-                                    Text(
-                                        p.label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-                                    )
-                                },
-                                colors = AssistChipDefaults.assistChipColors(
-                                    containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                    // ── 分区：服务商（设计稿网格卡片，选中态主题色描边）──
+                    Text(
+                        "服务商",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    // 3 列自适应网格（设计稿 vgrid）：新增服务商自动换行，不再写死两行 chips。
+                    // 编辑已有服务时不显示——改的是连接参数，不是换供应商
+                    if (draft.id == null) {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            com.haoai.agent.ui.ProviderPresets.all.forEach { p ->
+                                val selected = draft.name == p.name && draft.baseUrl == p.baseUrl
+                                PresetCard(
+                                    label = p.label,
+                                    sub = when {
+                                        // Anthropic 官方端点走原生协议（与 ProviderPreset.protocol 扩展同规则）
+                                        p.baseUrl.startsWith("https://api.anthropic.com") -> "原生协议"
+                                        p.baseUrl.contains("127.0.0.1") -> "本机"
+                                        p.model.isBlank() -> "聚合"
+                                        else -> "已预填"
+                                    },
+                                    selected = selected,
+                                    onClick = { onPreset(p) }
                                 )
-                            )
+                            }
                         }
                     }
+                    // ── 分区：连接 ──
+                    Text(
+                        "连接",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.name,
                         onValueChange = { v -> onChange(draft.copy(name = v)) },
@@ -2620,47 +2637,58 @@ private fun ProviderDialog(
                         placeholder = if (draft.protocol == "anthropic") "https://api.anthropic.com"
                         else "https://openrouter.ai/api/v1"
                     )
+                    // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对。
+                    // 编辑态区分「已存过 Key」（占位符明示留空即保留）与「从未存过」
+                    var showKey by remember { mutableStateOf(false) }
+                    com.haoai.agent.ui.common.CompactGlassField(
+                        value = draft.apiKeyPlain,
+                        onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
+                        label = "API Key",
+                        placeholder = when {
+                            draft.id != null && draft.hasSavedKey -> "已保存 · 留空保持不变"
+                            draft.id != null -> "未保存过 · 该服务可能免密"
+                            else -> "sk-…"
+                        },
+                        visualTransformation =
+                            if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailing = {
+                            TextButton(onClick = { showKey = !showKey }) {
+                                Text(
+                                    if (showKey) "隐藏" else "显示",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    )
+                    // 测试连接：紧跟 Key 之后（设计稿位置），填完即测，结果就地显示，
+                    // 不用滚到底部找按钮再滚回来
+                    testResult?.let { (ok, msg) ->
+                        Text(
+                            msg,
+                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                    GlassTextButton(
+                        text = if (testing) "测试中…" else "测试连接",
+                        onClick = onTest,
+                        enabled = !testing,
+                        backdrop = backdrop
+                    )
+                    // ── 分区：模型 ──
+                    Text(
+                        "模型",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     com.haoai.agent.ui.common.CompactGlassField(
                         value = draft.model,
                         onValueChange = { v -> onChange(draft.copy(model = v)) },
                         label = "模型 ID",
                         placeholder = "默认使用 · 如 deepseek-chat"
                     )
-                    // 列表行瘦身下沉的详情：ctx/max 常驻摘要（只在编辑已有服务时显示）
-                    if (draft.id != null) {
-                        val ctxK = draft.contextLength.trim().toIntOrNull()
-                            ?.takeIf { it > 0 }?.div(1024)
-                        val maxT = draft.maxTokens.trim().toIntOrNull()?.takeIf { it > 0 }
-                        Text(
-                            "生效参数 · ctx ${ctxK?.let { "${it}K" } ?: "自动"}" +
-                                (maxT?.let { " · max $it" } ?: ""),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    // 同一供应商的多模型直接在这里录入（原收在「高级选项」折叠区里，
-                    // 配一个供应商要连续加好几个模型 ID 时得先展开，够不着）
-                    ModelIdQuickAdd(draft = draft, onChange = onChange)
-                    // 当前模型能力三态（自动=不门控 / 支持 / 不支持=请求侧裁剪）
-                    val curId = draft.model.trim()
-                    val curEntry = draft.models.find { it.id == curId }
-                    if (curId.isNotBlank()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CapTriChip("图像", curEntry?.vision) { v ->
-                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(vision = v)
-                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
-                            }
-                            CapTriChip("工具", curEntry?.tools) { v ->
-                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v)
-                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
-                            }
-                            CapTriChip("推理", curEntry?.reasoning) { v ->
-                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v)
-                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
-                            }
-                        }
-                    }
+                    // 拉取列表入口也归入模型分区（它拉的就是模型）
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GlassTextButton(
                             text = if (fetchingModels) "拉取中…" else "拉取模型列表",
@@ -2713,46 +2741,58 @@ private fun ProviderDialog(
                             }
                         }
                     }
-                    // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对。
-                    // 编辑态区分「已存过 Key」（占位符明示留空即保留）与「从未存过」
-                    var showKey by remember { mutableStateOf(false) }
-                    com.haoai.agent.ui.common.CompactGlassField(
-                        value = draft.apiKeyPlain,
-                        onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
-                        label = "API Key",
-                        placeholder = when {
-                            draft.id != null && draft.hasSavedKey -> "已保存 · 留空保持不变"
-                            draft.id != null -> "未保存过 · 该服务可能免密"
-                            else -> "sk-…"
-                        },
-                        visualTransformation =
-                            if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailing = {
-                            TextButton(onClick = { showKey = !showKey }) {
-                                Text(
-                                    if (showKey) "隐藏" else "显示",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
+                    // 同一供应商的多模型直接在这里录入（原收在「高级选项」折叠区里，
+                    // 配一个供应商要连续加好几个模型 ID 时得先展开，够不着）
+                    ModelIdQuickAdd(draft = draft, onChange = onChange)
+                    // 当前模型能力三态（自动=不门控 / 支持 / 不支持=请求侧裁剪）
+                    val curId = draft.model.trim()
+                    val curEntry = draft.models.find { it.id == curId }
+                    if (curId.isNotBlank()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            CapTriChip("图像", curEntry?.vision) { v ->
+                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(vision = v)
+                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                            }
+                            CapTriChip("工具", curEntry?.tools) { v ->
+                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v)
+                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                            }
+                            CapTriChip("推理", curEntry?.reasoning) { v ->
+                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v)
+                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
                             }
                         }
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        com.haoai.agent.ui.common.CompactGlassField(
-                            value = draft.contextLength,
-                            onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
-                            label = "上下文",
-                            placeholder = "自动推测",
-                            modifier = Modifier.weight(1f)
-                        )
-                        com.haoai.agent.ui.common.CompactGlassField(
-                            value = draft.maxTokens,
-                            onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
-                            label = "回复上限",
-                            placeholder = "默认",
-                            modifier = Modifier.weight(1f)
-                        )
                     }
-                    // ── 高级选项（点1/2/3/5：多模型 / 采样开关 / Key 池 / 余额）──
+                    // 列表行瘦身下沉的详情：ctx/max 常驻摘要（只在编辑已有服务时显示）
+                    if (draft.id != null) {
+                        val ctxK = draft.contextLength.trim().toIntOrNull()
+                            ?.takeIf { it > 0 }?.div(1024)
+                        val maxT = draft.maxTokens.trim().toIntOrNull()?.takeIf { it > 0 }
+                        Text(
+                            "生效参数 · ctx ${ctxK?.let { "${it}K" } ?: "自动"}" +
+                                (maxT?.let { " · max $it" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            com.haoai.agent.ui.common.CompactGlassField(
+                                value = draft.contextLength,
+                                onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
+                                label = "上下文",
+                                placeholder = "自动推测",
+                                modifier = Modifier.weight(1f)
+                            )
+                            com.haoai.agent.ui.common.CompactGlassField(
+                                value = draft.maxTokens,
+                                onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
+                                label = "回复上限",
+                                placeholder = "默认",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    // ── 分区：高级（默认折叠，设计稿第四分区）──
                     var advanced by remember(draft.id) { mutableStateOf(false) }
                     Row(
                         Modifier
@@ -2763,13 +2803,14 @@ private fun ProviderDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "高级选项（采样参数 / Key 池 / 余额）",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                            "高级",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f)
                         )
                         Text(
-                            if (advanced) "收起 ▲" else "展开 ▼",
+                            if (advanced) "收起 ▲" else "采样参数 / Key 池 / 余额 ▼",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2901,19 +2942,6 @@ private fun ProviderDialog(
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
-                    testResult?.let { (ok, msg) ->
-                        Text(
-                            msg,
-                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                    GlassTextButton(
-                        text = if (testing) "测试中…" else "测试连接",
-                        onClick = onTest,
-                        enabled = !testing,
-                        backdrop = backdrop
-                    )
                 }
                 Row(
                     Modifier
@@ -2934,6 +2962,53 @@ private fun ProviderDialog(
             }
         }
     }
+    }
+}
+
+/**
+ * 服务商预设卡片（设计稿 vgrid）：标识 + 一句副注，3 列自适应网格。
+ * 选中态=主题色描边+浅色底，未选=中性细描边。比 AssistChip 行多一个
+ * 「这是第一步选服务商」的视觉分量。
+ */
+@Composable
+private fun PresetCard(label: String, sub: String, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    androidx.compose.foundation.layout.Column(
+        Modifier
+            .widthIn(min = 96.dp)
+            .clip(shape)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f),
+                shape
+            )
+            .border(
+                if (selected) 1.5.dp else 1.dp,
+                if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
+                shape
+            )
+            .clickable(
+                interactionSource = null,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            if (selected) "已预填" else sub,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+        )
     }
 }
 
