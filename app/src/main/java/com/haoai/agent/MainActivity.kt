@@ -290,6 +290,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     )
     val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
 
+    // 状态栏图标随顶部实际亮度自适应（修复：系统深色 + App 浅色时白图标看不见）
+    com.haoai.agent.ui.common.AdaptiveStatusBarIcons(
+        dark = darkBackdrop,
+        sampleKey = "${darkBackdrop}|${settings.themeSeed}|${settings.dynamicColor}|" +
+            "${settings.amoledMode}|$screen|$wpVersion|${settings.wallpaperGlobal}"
+    )
+
     // 4.2 呼出优化：无头工具触发浏览时自动弹出底部预览面板（两段式第一段，
     // 聊天不打断）；面板 🌐 才进全屏浏览器。可见容器才真实加载（平台约束）
     androidx.compose.runtime.LaunchedEffect(Unit) {
