@@ -341,4 +341,31 @@ class AppContainer(app: Application) {
         val s = settingsFlow.value
         return s.providers.find { it.id == s.activeProviderId } ?: s.providers.firstOrNull()
     }
+
+    /**
+     * 聊天会话生效模型：设置里「模型切换 → 聊天会话」配置了就按配置解析
+     * （"pid" 或 "pid|modelId"，支持同供应商精确到模型），否则回落当前激活供应商。
+     * local 配置不在此处理——聊天入口的 resolveProvider 已有端侧拉起逻辑，
+     * 这里返回 LOCAL_PROVIDER_ID 的原始条目让其照走原路径。
+     */
+    fun activeChatProvider(): ProviderConfig? {
+        val s = settingsFlow.value
+        val cfg = s.chatPurposeId.trim()
+        if (cfg.isEmpty() || cfg == "local") return activeProvider()
+        val (pid, modelOverride) = if (cfg.contains('|')) {
+            cfg.split('|', limit = 2).let { it[0] to it[1] }
+        } else cfg to null
+        val p = s.providers.find { it.id == pid } ?: return activeProvider()
+        if (modelOverride == null || modelOverride == p.model) return p
+        // 目标模型必须在该供应商的已知集合里（默认或备选），否则配置已失效→回落
+        val known = modelOverride == p.model || p.models.any { it.id == modelOverride }
+        if (!known) return activeProvider()
+        val oldEntry = p.models.find { it.id == p.model }
+            ?: p.model.takeIf { it.isNotBlank() }?.let { ModelEntry(it) }
+        return p.copy(
+            model = modelOverride,
+            models = (p.models.filterNot { it.id == modelOverride } + listOfNotNull(oldEntry))
+                .distinctBy { it.id }
+        )
+    }
 }

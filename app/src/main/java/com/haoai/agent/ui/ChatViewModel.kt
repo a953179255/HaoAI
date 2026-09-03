@@ -322,7 +322,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
             return
         }
-        val provider0 = c.activeProvider()
+        // 聊天会话模型路由：设置里「模型切换 → 聊天会话」优先（可精确到同供应商某模型），
+        // 未配置回落激活供应商
+        val provider0 = c.activeChatProvider() ?: c.activeProvider()
         if (provider0 == null) {
             _error.value = "请先在「设置」里配置模型服务（Base URL / 模型 ID / API Key）"
             return
@@ -582,7 +584,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * /btw 附带问题：临时借用当前上下文回答，不写入对话历史。
      */
     private fun sendBtw(question: String) {
-        val provider0 = c.activeProvider()
+        val provider0 = c.activeChatProvider() ?: c.activeProvider()
         if (provider0 == null) {
             _error.value = "请先配置模型服务"
             return
@@ -1106,7 +1108,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 当前生效供应商标签（/status 展示用）。 */
     fun activeProviderLabel(): String? =
-        c.activeProvider()?.let { "${it.name} · ${it.model}" }
+        (c.activeChatProvider() ?: c.activeProvider())?.let { "${it.name} · ${it.model}" }
 
     /** /model 弹窗：可切换的模型服务列表。 */
     fun providers() = c.settingsFlow.value.providers
