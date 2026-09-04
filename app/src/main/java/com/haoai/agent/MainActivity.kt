@@ -329,12 +329,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 onSave = { name, soul -> chatVm.completeOnboarding(name, soul) }
             )
         } else {
-            // 页面切换过渡（上游 RouteActivity 同款，源码参考其 NavDisplay transitionSpec）：
-            // 按页面层级 push/pop —— 进入更深层级：新页右滑全宽入、旧页左移 1/2 + 缩 0.7 + 淡出
-            // （双层视差）；返回反向。聊天页(0)是根，与它互转一律 fade（根页不滑，只有对方动）。
-            // 侧边栏点「设置」直接切页：滑入是「覆盖」语义，抽屉跟着旧页被盖过去，
-            // 无需先收抽屉（fade 会露馅，slide 不会）；返回聊天时抽屉随页滑出自然重现。
-            // screen 编号与层级无关（2=记忆 3=定时 5=技能…），层级查此表。
+            // 页面切换过渡（用户选定的 B+ 修复版：抽屉→设置 三层同帧推进）：
+            // 抽屉向左滑出(-100%) + 聊天页视差左移(-15%) + 新页从右侧贴边推进(+100%→0)，
+            // 三层同帧启动、一条时间轴 380ms——用运动本身填满页面重组的空档（消除停顿感）。
+            // pop 反向：新页右滑出，旧页从 -15% 回到 0（抽屉若在开态则随旧页一起回来）。
+            // 聊天页(0)参与的往返：pop 进入聊天时走 B+ 反向（聊天页带抽屉视差回归）；
+            // 其余与聊天页相关的切换保持 fade+微缩。
             fun levelOf(s: Int) = when (s) {
                 0 -> 0          // 聊天（根）
                 1, 4, 7 -> 1    // 设置 / 会话列表 / 浏览器
@@ -346,15 +346,26 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 transitionSpec = {
                     val from = levelOf(initialState)
                     val to = levelOf(targetState)
-                    // slide 用 IntOffset 规格，scale 用 Float 规格（Compose 泛型不互通）
                     val slideFull: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                        androidx.compose.animation.core.tween(durationMillis = 400, easing = ease)
-                    val slideHalf: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                        androidx.compose.animation.core.tween(durationMillis = 400, easing = ease)
-                    val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
-                        androidx.compose.animation.core.tween(durationMillis = 400, easing = ease)
+                        androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
+                    val parallax: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+                        androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
                     when {
-                        // 根页(聊天)参与的双向：纯 fade，根页不滑
+                        // 聊天页 ↔ 一级页（设置等）：B+ 三层推进（聊天页作视差层参与滑动，
+                        // 抽屉若在开态则叠在聊天页上一起被推走——点设置的那一刻三层同帧启动）
+                        (from == 0 && to == 1) -> {
+                            (androidx.compose.animation.slideInHorizontally(slideFull) { it })
+                                .togetherWith(
+                                androidx.compose.animation.slideOutHorizontally(parallax) { -it / 7 }
+                            )
+                        }
+                        (from == 1 && to == 0) -> {
+                            (androidx.compose.animation.slideInHorizontally(parallax) { -it / 7 })
+                                .togetherWith(
+                                androidx.compose.animation.slideOutHorizontally(slideFull) { it }
+                            )
+                        }
+                        // 其余与聊天页相关的切换：fade + 微缩（保持轻）
                         from == 0 || to == 0 -> {
                             (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220, easing = ease)) +
                                 androidx.compose.animation.scaleIn(
@@ -369,21 +380,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                             (androidx.compose.animation.slideInHorizontally(slideFull) { it } +
                                 androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200, easing = ease)))
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideHalf) { -it / 2 } +
-                                    androidx.compose.animation.scaleOut(
-                                        targetScale = 0.7f,
-                                        animationSpec = scaleSpec
-                                    ) +
+                                androidx.compose.animation.slideOutHorizontally(parallax) { -it / 3 } +
                                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(240, easing = ease))
                             )
                         }
                         // pop（返回）：左页回来 + 右滑出
                         else -> {
-                            (androidx.compose.animation.slideInHorizontally(slideHalf) { -it / 2 } +
-                                androidx.compose.animation.scaleIn(
-                                    initialScale = 0.7f,
-                                    animationSpec = scaleSpec
-                                ) +
+                            (androidx.compose.animation.slideInHorizontally(parallax) { -it / 3 } +
                                 androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200, easing = ease)))
                                 .togetherWith(
                                 androidx.compose.animation.slideOutHorizontally(slideFull) { it }
