@@ -2229,17 +2229,22 @@ private fun LazyListScope.generalItems(
     }
     item { SectionTitle("自定义指令") }
     item {
-        OutlinedTextField(
-            value = settings.customPrompt,
-            onValueChange = { vm.setCustomPrompt(it) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            placeholder = { Text("附加到系统提示末尾的个人偏好…") },
-            minLines = 2,
-            maxLines = 6,
-            colors = com.haoai.agent.ui.common.glassFieldColors()
-        )
+        // 裸 OutlinedTextField → 玻璃组包裹：与设置页其他区块视觉一致
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            GlassGroup(backdrop) {
+                Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    OutlinedTextField(
+                        value = settings.customPrompt,
+                        onValueChange = { vm.setCustomPrompt(it) },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("附加到系统提示末尾的个人偏好…") },
+                        minLines = 2,
+                        maxLines = 6,
+                        colors = com.haoai.agent.ui.common.glassFieldColors()
+                    )
+                }
+            }
+        }
     }
 }
 
