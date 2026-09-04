@@ -370,14 +370,19 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     val parallax: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
                         androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
                     when {
-                        // 聊天页 ↔ 一级页（设置等）：B+ 三层推进（聊天页作视差层参与滑动，
-                        // 抽屉若在开态则叠在聊天页上一起被推走——点设置的那一刻三层同帧启动）
+                        // 聊天页 → 一级页（设置等）：B+ 修正——退出页快速完全滑出
+                        // （-100%，无中途视差停留），进入页滑入+快速淡入。
+                        // 此前聊天页 -15% 视差停留导致转场中后段「半透明设置页玻璃
+                        // 透出聊天页彩色残影 + 抽屉卡在中间」（录屏逐帧确认）。
+                        // 快速淡入让进入页越过半透明阶段，不与退出内容叠加渗透。
                         (from == 0 && to == 1) -> {
-                            (androidx.compose.animation.slideInHorizontally(slideFull) { it })
+                            (androidx.compose.animation.slideInHorizontally(slideFull) { it } +
+                                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(120, easing = ease)))
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(parallax) { -it / 7 }
+                                androidx.compose.animation.slideOutHorizontally(slideFull) { -it / 4 }
                             )
                         }
+                        // 返回聊天：设置页右滑出（完整离场），聊天页带轻微视差回来
                         (from == 1 && to == 0) -> {
                             (androidx.compose.animation.slideInHorizontally(parallax) { -it / 7 })
                                 .togetherWith(
