@@ -1,10 +1,20 @@
 package com.haoai.agent.agent.tools
 
+import com.haoai.agent.platform.a11y.A11yGate
 import com.haoai.agent.platform.a11y.HaoAccessibilityService
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+
+/**
+ * 无障碍门禁：已启用返回 null 直接放行；未启用则自动开启（adb 授权过 WRITE_SECURE_SETTINGS
+ * 时静默自启）或弹出系统开关页并等待，用户开启后放行，超时才返回错误结果。
+ */
+private suspend fun a11yGate(ctx: ToolContext): ToolResult? {
+    if (HaoAccessibilityService.instance != null) return null
+    return A11yGate.awaitEnabled(ctx.appContext)?.let { ToolResult(it, true) }
+}
 
 class ScreenTool : Tool {
 
@@ -19,6 +29,7 @@ class ScreenTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val dump = svc.dumpIndexed(args.optInt("max_nodes") ?: 80)
         return ToolResult(TextCap.middle(dump, 6000))
@@ -43,6 +54,7 @@ class TapTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val text = args.optString("text")
         val viewId = args.optString("view_id")
@@ -96,6 +108,7 @@ class WaitTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val mode = args.optString("mode").ifBlank { "text" }
         val timeoutMs = ((args.optInt("timeout_s") ?: 10).coerceIn(1, 60)) * 1000L
@@ -156,6 +169,7 @@ class FindTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val text = args.optString("text")
         if (text.isBlank()) return ToolResult("缺少 text", true)
@@ -201,6 +215,7 @@ class ScrollTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val dir = args.optString("direction").ifBlank { "down" }
         val amount = ((args.optDouble("amount") ?: 0.5)).coerceIn(0.1, 0.9)
@@ -234,6 +249,7 @@ class SwipeTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val x1 = args.optInt("x1") ?: return ToolResult("缺少 x1", true)
         val y1 = args.optInt("y1") ?: return ToolResult("缺少 y1", true)
@@ -257,6 +273,7 @@ class TypeTextTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val text = args.optString("text")
         if (text.isEmpty()) return ToolResult("缺少 text", true)
@@ -276,6 +293,7 @@ class KeyTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         return ToolResult(svc.pressKey(args.optString("action")))
     }
@@ -293,6 +311,7 @@ class LaunchAppTool : Tool {
     }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val pkg = args.optString("package")
         if (pkg.isEmpty()) return ToolResult("缺少 package", true)
@@ -307,6 +326,7 @@ class ListAppsTool : Tool {
     override val parameters = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         return ToolResult(svc.listApps())
     }

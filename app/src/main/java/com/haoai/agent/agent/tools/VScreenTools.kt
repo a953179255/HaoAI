@@ -1,5 +1,6 @@
 package com.haoai.agent.agent.tools
 
+import com.haoai.agent.platform.a11y.A11yGate
 import com.haoai.agent.platform.a11y.HaoAccessibilityService
 import com.haoai.agent.platform.vdisplay.VirtualScreenController
 import kotlinx.coroutines.delay
@@ -18,7 +19,8 @@ import kotlinx.serialization.json.putJsonObject
 private suspend fun vscreenGuard(ctx: ToolContext): String? {
     if (!ctx.vscreenEnabled) return "后台自动化总开关未开启：请让用户到 设置 → 后台自动化（虚拟屏） 开启"
     if (!VirtualScreenController.supported) return "虚拟屏需要 Android 11（API 30）及以上，本设备不支持"
-    if (HaoAccessibilityService.instance == null) return HaoAccessibilityService.enableHint()
+    // 未启用时自动开启/弹页等待，开启后继续（超时才报错），与前台 a11y 工具行为一致
+    if (HaoAccessibilityService.instance == null) A11yGate.awaitEnabled(ctx.appContext)?.let { return it }
     VirtualScreenController.reapIfIdle()
     return null
 }

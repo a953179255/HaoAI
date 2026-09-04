@@ -1469,12 +1469,8 @@ private fun LazyListScope.privacyItems(
                     text = if (a11yOn) "管理" else "去开启",
                     emphasized = !a11yOn
                 ) {
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }
+                    // 与工具门禁同一套多级兜底：优先直达「无障碍 → HaoAI 自动化」开关页
+                    runCatching { com.haoai.agent.platform.a11y.A11yGate.openEnablePage(context) }
                 }
             }
             ToggleRow(
