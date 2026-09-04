@@ -373,26 +373,32 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     val parallax: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
                         androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
                     when {
-                        // 聊天页 → 一级页（设置等）：B+ 修正——退出页快速完全滑出
-                        // （-100%，无中途视差停留），进入页滑入+快速淡入。
-                        // 此前聊天页 -15% 视差停留导致转场中后段「半透明设置页玻璃
-                        // 透出聊天页彩色残影 + 抽屉卡在中间」（录屏逐帧确认）。
-                        // 快速淡入让进入页越过半透明阶段，不与退出内容叠加渗透。
+                        // 聊天页 → 一级页（设置等）：边缘锁死的纯 push——退出页全程
+                        // 滑到 -100%（与进入页左缘同步，无中途停留）。此前 -it/4 视差
+                        // 停留让聊天+抽屉在左侧 25% 形成静止残留带，直到被设置页扫过
+                        // （换彩色壁纸后无所遁形，用户标注确认）。
                         (from == 0 && to == 1) -> {
                             (androidx.compose.animation.slideInHorizontally(slideFull) { it } +
                                 androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(120, easing = ease)))
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideFull) { -it / 4 }
+                                androidx.compose.animation.slideOutHorizontally(slideFull) { -it }
                             )
                         }
-                        // 返回聊天：设置页右滑出（完整离场），聊天页带轻微视差回来。
-                        // targetContentZIndex 让退出的设置页压在聊天页之上——聊天页
-                        // LazyColumn 首帧组合慢（曾出现空白中间帧），被盖住时视觉无洞
+                        // 返回聊天：边缘锁死的纯 push——聊天页带 1/4 视差从左滑回。
+                        // 几何保证：聊天页左缘 ≥ 设置页右缘（两者位移同频同步），
+                        // 永不脱开——此前 -it/7 慢速滑回与设置页右滑出之间出现空隙，
+                        // 透出垫底层灰色竖带（换壁纸后暴露，用户红框标注）。
+                        // targetContentZIndex = -1 把目标页（聊天）压到退出页（设置）
+                        // 之下：AnimatedContent 默认 target 在顶，返回时聊天页（含抽屉
+                        // 30% scrim）会盖在设置页上把整屏洗灰——内容 lambda 里的
+                        // Modifier.zIndex 是死代码（不参与 AnimatedContent 的 z 排序），
+                        // 必须用 ContentTransform 的 targetContentZIndex 声明。
+                        // 附带效果：设置页盖住聊天页首帧组合慢的空档，无空白中间帧
                         (from == 1 && to == 0) -> {
-                            (androidx.compose.animation.slideInHorizontally(parallax) { -it / 7 })
+                            (androidx.compose.animation.slideInHorizontally(parallax) { -it / 4 })
                                 .togetherWith(
                                 androidx.compose.animation.slideOutHorizontally(slideFull) { it }
-                            )
+                            ).apply { targetContentZIndex = -1f }
                         }
                         // 其余与聊天页相关的切换：fade + 微缩（保持轻）
                         from == 0 || to == 0 -> {
@@ -425,9 +431,17 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 },
                 label = "screenSwitch"
             ) { s ->
-            // pop（返回聊天）时让退出页压在进入页上：聊天页 LazyColumn 首帧组合慢，
-            // 被滑出的设置页盖住可避免空白中间帧被看穿
-            androidx.compose.ui.Modifier.zIndex(if (s == 1 && screen == 0) 1f else 0f).let { pageZ ->
+            // pop（返回聊天）时让退出页（设置）压在进入页（聊天）之上：聊天页
+            // LazyColumn 首帧组合慢，被盖住可避免空白中间帧被看穿。
+            // 关键：zIndex 必须真实应用到页面容器 Box——此前只是「创建了 Modifier
+            // 却从未传给任何组件」的死代码（.let{ pageZ -> } 后 pageZ 无人消费），
+            // AnimatedContent 默认 target 在顶，返回时聊天页（含抽屉 30% scrim）
+            // 反而盖在设置页上：整屏被遮罩洗灰、卡片缝隙透壁纸成灰带（换彩色
+            // 壁纸后暴露，用户红框标注即此）。
+            androidx.compose.foundation.layout.Box(
+                modifier = androidx.compose.ui.Modifier
+                    .zIndex(if (s == 1 && screen == 0) 1f else 0f)
+            ) {
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
@@ -506,7 +520,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     }
                 )
             }
-            } // pageZ let
+            } // pageZ Box
             } // AnimatedContent content lambda
             // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
             val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
