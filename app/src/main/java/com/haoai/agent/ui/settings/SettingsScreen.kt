@@ -2121,15 +2121,31 @@ private fun LazyListScope.generalItems(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                val wpPicker = rememberLauncherForActivityResult(
-                    ActivityResultContracts.GetContent()
-                ) { uri ->
+                // ACTION_PICK 分发给默认图库（Flyme 图库等），与聊天「图片」入口一致；
+                // 兜底：图库 intent 无人处理时（极少数无图库的设备）回退 SAF 文档选择器
+                val wpApply: (android.net.Uri?) -> Unit = { uri ->
                     uri?.let {
                         vm.setWallpaper(context, it.toString())
                         onWpVersionChange(vm.wallpaperSet(context))
                     }
                 }
-                TextButton(onClick = { wpPicker.launch("image/*") }) { Text("选择图片") }
+                val wpPick = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult()
+                ) { result -> wpApply(result.data?.data) }
+                val wpFallback = rememberLauncherForActivityResult(
+                    ActivityResultContracts.GetContent()
+                ) { uri -> wpApply(uri) }
+                TextButton(onClick = {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_PICK,
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    )
+                    if (intent.resolveActivity(context.packageManager) != null) {
+                        wpPick.launch(intent)
+                    } else {
+                        wpFallback.launch("image/*")
+                    }
+                }) { Text("选择图片") }
                 if (wpVersion) {
                     TextButton(onClick = onRequestClearWallpaper) { Text("清除") }
                 }
