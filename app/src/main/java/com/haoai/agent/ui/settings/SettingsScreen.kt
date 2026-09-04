@@ -118,10 +118,6 @@ fun SettingsScreen(
     onBack: () -> Unit,
     /** 全局壁纸开时传入：页面自带对齐的壁纸底（随页面整体滑动，玻璃采样与之一致） */
     wallpaper: android.graphics.Bitmap? = null,
-    /** 转场进行中：玻璃卡退化为本地磨砂（不 drawBackdrop 采样）——退出页
-     *  （聊天遮罩带/滑出中的页面）正在采样画布上移动，实时采样会把它「画进」
-     *  卡片形成清晰↔模糊分界带，落位后突然变化（用户截图框选） */
-    samplingFrozen: Boolean = false,
     /**
      * 锁定渲染某个 section 子页（独立 screen 化）：非空时本组件直接渲染该
      * 子页（跳过主页与 section 路由），返回走 onSectionBack。由 MainActivity
@@ -214,9 +210,6 @@ fun SettingsScreen(
 
     // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）
     if (lockedSection != null) {
-        androidx.compose.runtime.CompositionLocalProvider(
-            com.haoai.agent.ui.common.LocalGlassRefract provides !samplingFrozen
-        ) {
         SectionPage(
             section = lockedSection,
             vm = vm, settings = settings, backdrop = backdrop, wallpaper = wallpaper,
@@ -232,7 +225,6 @@ fun SettingsScreen(
             onOpenMemories = onOpenMemories,
             onBack = onSectionBack
         )
-        }
         return
     }
 
@@ -1041,7 +1033,6 @@ private fun sectionTitle(section: String): String = when (section) {
  */
 @Composable
 private fun SectionPage(
-    samplingFrozen: Boolean = false,
     section: String,
     vm: SettingsViewModel,
     settings: AppSettings,
@@ -1068,11 +1059,6 @@ private fun SectionPage(
     onOpenMemories: () -> Unit,
     onBack: () -> Unit
 ) {
-    // 转场期玻璃退化本地磨砂（LocalGlassRefract=false）：
-    // 采样画布上有滑出中的页面内容，实时采样会形成清晰↔模糊分界带
-    androidx.compose.runtime.CompositionLocalProvider(
-        com.haoai.agent.ui.common.LocalGlassRefract provides !samplingFrozen
-    ) {
     Box(
         Modifier
             .fillMaxSize()
@@ -1128,7 +1114,6 @@ private fun SectionPage(
             modifier = Modifier
                 .align(Alignment.TopCenter)
         )
-    }
     }
 }
 
