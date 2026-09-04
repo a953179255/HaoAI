@@ -318,12 +318,17 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         androidx.compose.runtime.mutableStateOf(0f)
     }
     androidx.compose.runtime.LaunchedEffect(screen) {
-        // 转场纱幕时序：push 升起（旧页淡出溶进净色）→ 与转场同步稍长后
-        // 缓退（露出新页自己的底：聊天页=壁纸 / 设置页=自带壁纸或净色）。
-        // pop 回聊天也短暂升起：退出中的设置页淡出同样需要净色接住
-        scrimLevel = 0.9f
-        kotlinx.coroutines.delay(420)
-        scrimLevel = 0f
+        // 转场纱幕只为「有淡出参与」的转场服务（非聊天页之间的纵深转场，
+        // 旧页 fadeOut 需要净色接住）。方向二后聊天页参与的转场是纯滑动、
+        // 无任何淡出——若升纱幕，转场结束后的 450ms 缓退会在已落位的
+        // 聊天页上呈现为「背景缓慢淡出」（用户反馈确认），故直接跳过
+        val chatInvolved = screen == 0 || lastScreen == 0
+        lastScreen = screen
+        if (!chatInvolved) {
+            scrimLevel = 0.9f
+            kotlinx.coroutines.delay(420)
+            scrimLevel = 0f
+        }
     }
     val scrimAlpha = androidx.compose.animation.core.animateFloatAsState(
         targetValue = scrimLevel,
@@ -503,8 +508,62 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onOpenSchedules = { screen = 3 },
                     onOpenSkills = { screen = 5 },
                     onOpenMcp = { screen = 6 },
-                    onOpenWorkflows = { screen = 8 }
-                )                2 -> com.haoai.agent.ui.manage.MemoryScreen(
+                    onOpenWorkflows = { screen = 8 },
+                    // 独立 screen 化的 section 子页：与技能库/MCP/工作流同机制
+                    // （转场动画 + 全局壁纸），消除「瞬切无动画」的不一致
+                    onOpenSection = { settingsSection = ""; screen = it }
+                )
+                // ---- 设置 section 子页独立 screen（9-16）：共用 SettingsScreen
+                // lockedSection 渲染，转场/壁纸/返回与技能库等完全一致 ----
+                9 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "brain", onSectionBack = { screen = 1 }
+                )
+                10 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "privacy", onSectionBack = { screen = 1 }
+                )
+                11 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "memory", onSectionBack = { screen = 1 }
+                )
+                12 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "linux", onSectionBack = { screen = 1 }
+                )
+                13 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "workspace", onSectionBack = { screen = 1 }
+                )
+                14 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "general", onSectionBack = { screen = 1 }
+                )
+                15 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "about", onSectionBack = { screen = 1 }
+                )
+                16 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "usage", onSectionBack = { screen = 1 }
+                )
+                2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,
                     // 记忆/任务/技能入口已收进设置页，返回回设置
                     onBack = { screen = 1 }

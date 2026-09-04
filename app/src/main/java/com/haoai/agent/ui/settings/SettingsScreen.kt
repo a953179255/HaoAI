@@ -118,13 +118,23 @@ fun SettingsScreen(
     onBack: () -> Unit,
     /** 全局壁纸开时传入：页面自带对齐的壁纸底（随页面整体滑动，玻璃采样与之一致） */
     wallpaper: android.graphics.Bitmap? = null,
+    /**
+     * 锁定渲染某个 section 子页（独立 screen 化）：非空时本组件直接渲染该
+     * 子页（跳过主页与 section 路由），返回走 onSectionBack。由 MainActivity
+     * 为「模型大脑/权限与自动化/记忆与梦境/工作空间/Linux/通用/关于/用量」
+     * 各建一个独立 screen 调用——与技能库/MCP/工作流一致地获得转场+壁纸
+     */
+    lockedSection: String? = null,
+    onSectionBack: () -> Unit = {},
     initialSection: String = "",
     onSectionChange: (String) -> Unit = {},
     onOpenMemories: () -> Unit = {},
     onOpenSchedules: () -> Unit = {},
     onOpenSkills: () -> Unit = {},
     onOpenMcp: () -> Unit = {},
-    onOpenWorkflows: () -> Unit = {}
+    onOpenWorkflows: () -> Unit = {},
+    /** section 子页独立 screen 化：主页菜单点击回调（参数为 section key → screen 号由 MainActivity 映射） */
+    onOpenSection: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val settings by vm.settings.collectAsState()
@@ -140,8 +150,9 @@ fun SettingsScreen(
     var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
     var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
 
-    // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）
-    var section by rememberSaveable { mutableStateOf(initialSection) }
+    // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）。
+    // lockedSection 非空（独立 screen 模式）时 section 恒为该值、不可变
+    var section by rememberSaveable { mutableStateOf(lockedSection ?: initialSection) }
     androidx.compose.runtime.LaunchedEffect(section) { if (section != initialSection) onSectionChange(section) }
     // 用量页「清空账本」确认弹窗：状态提在根级（弹窗不能渲染在 LazyColumn item 内——
     // fillMaxSize 遮罩会受 item 高度约束，实测只盖住下半屏）
@@ -175,7 +186,13 @@ fun SettingsScreen(
     }
 
     androidx.activity.compose.BackHandler(enabled = draft == null) {
-        if (section.isNotEmpty()) section = "" else onBack()
+        when {
+            // 供应商编辑弹窗优先级由下方 enabled=draft!=null 的 handler 处理；
+            // 独立 screen 模式：返回键=退出本 screen（回设置主页）
+            lockedSection != null -> onSectionBack()
+            section.isNotEmpty() -> section = ""
+            else -> onBack()
+        }
     }
     // 后注册优先级更高：供应商编辑弹窗打开时，返回键关闭弹窗而不是直接退出应用
     androidx.activity.compose.BackHandler(enabled = draft != null) {
@@ -186,6 +203,26 @@ fun SettingsScreen(
         if (uri != null) {
             scope.launch { vm.useSafWorkspace(uri.toString()) }
         }
+    }
+
+    // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）
+    if (lockedSection != null) {
+        SectionPage(
+            section = lockedSection,
+            vm = vm, settings = settings, backdrop = backdrop, wallpaper = wallpaper,
+            context = context, a11yOn = a11yOn, a11yTick = a11yTick,
+            wpVersion = wpVersion, linuxState = linuxState,
+            showScan = showScan, onShowScan = { showScan = true },
+            pendingDelete = pendingDelete, onPendingDelete = { pendingDelete = it },
+            purposePicker = purposePicker, onPickPurposeModel = { purposePicker = it },
+            showDreamPicker = showDreamPicker, onPickDreamModel = { showDreamPicker = true },
+            confirmWpClear = confirmWpClear, onConfirmWpClear = { confirmWpClear = true },
+            confirmClearLedger = confirmClearLedger, onConfirmClearLedger = { confirmClearLedger = true },
+            treePickerLaunch = { treePicker.launch(null) },
+            onOpenMemories = onOpenMemories,
+            onBack = onSectionBack
+        )
+        return
     }
 
     if (section.isEmpty()) {
@@ -234,7 +271,7 @@ fun SettingsScreen(
                             "$cloud$local"
                         },
                         tint = Color(0xFF5B8DEF),
-                        onClick = { section = "brain" }
+                        onClick = { onOpenSection(9) }
                     )
                 }
                 item {
@@ -245,7 +282,7 @@ fun SettingsScreen(
                         subtitle = permissionLabel(settings.permissionMode) +
                             if (a11yOn) " · 无障碍已启用" else " · 无障碍未启用",
                         tint = Color(0xFFEF7D54),
-                        onClick = { section = "privacy" }
+                        onClick = { onOpenSection(10) }
                     )
                 }
                 item {
@@ -256,7 +293,7 @@ fun SettingsScreen(
                         subtitle = "${vm.homeCounts.first} 条长期记忆" +
                             if (settings.deepDream) " · 深度梦境开" else "",
                         tint = Color(0xFF3FA37A),
-                        onClick = { section = "memory" }
+                        onClick = { onOpenSection(11) }
                     )
                 }
                 item {
@@ -310,7 +347,7 @@ fun SettingsScreen(
                         title = "Linux 环境",
                         subtitle = "沙箱发行版 · $linuxLabel",
                         tint = Color(0xFF4A6FA5),
-                        onClick = { section = "linux" }
+                        onClick = { onOpenSection(12) }
                     )
                 }
                 item {
@@ -320,7 +357,7 @@ fun SettingsScreen(
                         title = "工作空间",
                         subtitle = vm.workspaceName(),
                         tint = Color(0xFF38A3C7),
-                        onClick = { section = "workspace" }
+                        onClick = { onOpenSection(13) }
                     )
                 }
                 item {
@@ -330,7 +367,7 @@ fun SettingsScreen(
                         title = "通用",
                         subtitle = "后台保活 · 自定义指令 · 身份",
                         tint = Color(0xFF64748B),
-                        onClick = { section = "general" }
+                        onClick = { onOpenSection(14) }
                     )
                 }
                 item {
@@ -350,7 +387,7 @@ fun SettingsScreen(
                         title = "用量",
                         subtitle = "Token 用量统计 · 内部调用账本",
                         tint = Color(0xFF3FA37A),
-                        onClick = { section = "usage" }
+                        onClick = { onOpenSection(16) }
                     )
                 }
                 item {
@@ -360,7 +397,7 @@ fun SettingsScreen(
                         title = "关于",
                         subtitle = "版本信息",
                         tint = Color(0xFF94A3B8),
-                        onClick = { section = "about" }
+                        onClick = { onOpenSection(15) }
                     )
                 }
             }
@@ -374,59 +411,21 @@ fun SettingsScreen(
             )
         }
     } else {
-        Box(
-            Modifier
-                .fillMaxSize()
-                // 同上：二级页转场期也需要实底；全局壁纸开时同样铺对齐壁纸
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            if (wallpaper != null) {
-                Image(
-                    bitmap = wallpaper.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-            ) {
-                Spacer(Modifier.height(56.dp))
-                LazyColumn(
-                    state = rootListState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    when (section) {
-                        "brain" -> {
-                            brainItems(vm, settings, backdrop, onDeleteRequest = { pendingDelete = it }, onPickPurposeModel = { purposePicker = it })
-                            localItems(vm, backdrop, onOpenScan = { showScan = true })
-                        }
-                        "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
-                        "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop, onPickDreamModel = { showDreamPicker = true })
-                        "workspace" -> workspaceItems(vm, backdrop) { treePicker.launch(null) }
-                        "linux" -> linuxItems(vm, backdrop, linuxState)
-                        "general" -> generalItems(
-                            vm, settings, context, backdrop,
-                            wpVersion, onWpVersionChange = { wpVersion = it },
-                            onRequestClearWallpaper = { confirmWpClear = true }
-                        )
-                        "about" -> aboutItems(vm, settings, backdrop)
-                        "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = { confirmClearLedger = true })
-                    }
-                }
-            }
-            GlassPageBar(
-                backdrop = backdrop,
-                title = sectionTitle(section),
-                onBack = { section = "" },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-            )
-        }
+        SectionPage(
+            section = section,
+            vm = vm, settings = settings, backdrop = backdrop, wallpaper = wallpaper,
+            context = context, a11yOn = a11yOn, a11yTick = a11yTick,
+            wpVersion = wpVersion, linuxState = linuxState,
+            showScan = showScan, onShowScan = { showScan = true },
+            pendingDelete = pendingDelete, onPendingDelete = { pendingDelete = it },
+            purposePicker = purposePicker, onPickPurposeModel = { purposePicker = it },
+            showDreamPicker = showDreamPicker, onPickDreamModel = { showDreamPicker = true },
+            confirmWpClear = confirmWpClear, onConfirmWpClear = { confirmWpClear = true },
+            confirmClearLedger = confirmClearLedger, onConfirmClearLedger = { confirmClearLedger = true },
+            treePickerLaunch = { treePicker.launch(null) },
+            onOpenMemories = onOpenMemories,
+            onBack = { section = "" }
+        )
     }
 
     draft?.let { d ->
@@ -1023,6 +1022,96 @@ private fun sectionTitle(section: String): String = when (section) {
     "about" -> "关于"
     "usage" -> "用量"
     else -> ""
+}
+
+/**
+ * 设置 section 子页渲染（原 SettingsScreen else 分支提取）：
+ * 主页内嵌与独立 screen 模式共用同一渲染，保证视觉/行为完全一致。
+ */
+@Composable
+private fun SectionPage(
+    section: String,
+    vm: SettingsViewModel,
+    settings: AppSettings,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    wallpaper: android.graphics.Bitmap?,
+    context: android.content.Context,
+    a11yOn: Boolean,
+    a11yTick: Int,
+    wpVersion: Boolean,
+    linuxState: LinuxEnvState,
+    showScan: Boolean,
+    onShowScan: () -> Unit,
+    pendingDelete: String?,
+    onPendingDelete: (String?) -> Unit,
+    purposePicker: String?,
+    onPickPurposeModel: (String?) -> Unit,
+    showDreamPicker: Boolean,
+    onPickDreamModel: () -> Unit,
+    confirmWpClear: Boolean,
+    onConfirmWpClear: () -> Unit,
+    confirmClearLedger: Boolean,
+    onConfirmClearLedger: () -> Unit,
+    treePickerLaunch: () -> Unit,
+    onOpenMemories: () -> Unit,
+    onBack: () -> Unit
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            // 独立 screen 化后本页参与平移转场：实底垫背必须；
+            // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize()
+            )
+        }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
+            Spacer(Modifier.height(56.dp))
+            val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                when (section) {
+                    "brain" -> {
+                        brainItems(vm, settings, backdrop, onDeleteRequest = { onPendingDelete(it) }, onPickPurposeModel = { onPickPurposeModel(it) })
+                        localItems(vm, backdrop, onOpenScan = onShowScan)
+                    }
+                    "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
+                    "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop, onPickDreamModel = onPickDreamModel)
+                    "workspace" -> workspaceItems(vm, backdrop) { treePickerLaunch() }
+                    "linux" -> linuxItems(vm, backdrop, linuxState)
+                    "general" -> generalItems(
+                        vm, settings, context, backdrop,
+                        wpVersion, onWpVersionChange = { },
+                        onRequestClearWallpaper = onConfirmWpClear,
+                        onWpChanged = { }
+                    )
+                    "about" -> aboutItems(vm, settings, backdrop)
+                    "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = onConfirmClearLedger)
+                }
+            }
+        }
+        GlassPageBar(
+            backdrop = backdrop,
+            title = sectionTitle(section),
+            onBack = onBack,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+        )
+    }
 }
 
 /** Linux 环境区块的界面状态（发行版列表/安装进度/弹窗路由），由设置页持有。 */
@@ -2025,7 +2114,8 @@ private fun LazyListScope.generalItems(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     wpVersion: Boolean,
     onWpVersionChange: (Boolean) -> Unit,
-    onRequestClearWallpaper: () -> Unit
+    onRequestClearWallpaper: () -> Unit,
+    onWpChanged: () -> Unit = {}
 ) {
     item { SectionTitle("外观") }
     item {
