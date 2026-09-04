@@ -2,12 +2,15 @@
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -113,6 +116,8 @@ fun SettingsScreen(
     vm: SettingsViewModel,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onBack: () -> Unit,
+    /** 全局壁纸开时传入：页面自带对齐的壁纸底（随页面整体滑动，玻璃采样与之一致） */
+    wallpaper: android.graphics.Bitmap? = null,
     initialSection: String = "",
     onSectionChange: (String) -> Unit = {},
     onOpenMemories: () -> Unit = {},
@@ -187,11 +192,20 @@ fun SettingsScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                // 不透明页面底：转场（B+ 推进/返回）期间本页会被平移到屏幕边缘外，
-                // 其半透明玻璃卡片需要实底垫背——否则露出 AnimatedContent 空黑，
-                // 出现「背景缺失只显示按钮」「按钮效果断裂」（录屏帧标注确认）
+                // 不透明净色兜底：转场期间本页整体平移，页面自带实底垫背。
+                // 全局壁纸开时上面再铺对齐的壁纸 Image（与 backdrop 采样画布
+                // 同源同位，玻璃卡透出对位的壁纸磨砂——「壁纸应用于所有页面」
+                // 真正生效且无错位）
                 .background(MaterialTheme.colorScheme.background)
         ) {
+            if (wallpaper != null) {
+                Image(
+                    bitmap = wallpaper.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+            }
             Column(
                 Modifier
                     .fillMaxSize()
@@ -363,9 +377,17 @@ fun SettingsScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                // 同上：二级页转场期也需要实底
+                // 同上：二级页转场期也需要实底；全局壁纸开时同样铺对齐壁纸
                 .background(MaterialTheme.colorScheme.background)
         ) {
+            if (wallpaper != null) {
+                Image(
+                    bitmap = wallpaper.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+            }
             Column(
                 Modifier
                     .fillMaxSize()

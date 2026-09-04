@@ -317,29 +317,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     var scrimLevel by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(0f)
     }
-    // 壁纸采样就绪标记：默认 true。历史上用于转场期强制素底，现二级页
-    // 已固定素底（按 screen 分配），此标记保留给聊天页转场窗口兜底
-    var wpReady by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(true)
-    }
     androidx.compose.runtime.LaunchedEffect(screen) {
-        val pushed = screenLevel(screen) > screenLevel(lastScreen)
-        lastScreen = screen
-        if (screen != 0) {
-            // 二级页固定素底采样，wpReady 不影响其画面；置 true 让之后
-            // 返回聊天时无需等待
-            wpReady = true
-        } else if (pushed == false && lastScreen != screen) {
-            // pop 回聊天：直接就绪（聊天页本来就该透壁纸）
-            wpReady = true
-        } else {
-            // 首帧组合：聊天页在壁纸上，直接就绪
-            wpReady = true
-        }
+        // 转场纱幕时序：push 升起（旧页淡出溶进净色）→ 与转场同步稍长后
+        // 缓退（露出新页自己的底：聊天页=壁纸 / 设置页=自带壁纸或净色）。
+        // pop 回聊天也短暂升起：退出中的设置页淡出同样需要净色接住
+        scrimLevel = 0.9f
+        kotlinx.coroutines.delay(420)
+        scrimLevel = 0f
     }
-    // push 到二级页时短暂拉低 wpReady 没有意义了（二级页固定素底）；
-    // 真正需要时序控制的只有聊天页自己的转场窗口：纱幕负责挡住
-    // 转场期的采样错位，无需再动 backdrop 分配
     val scrimAlpha = androidx.compose.animation.core.animateFloatAsState(
         targetValue = scrimLevel,
         animationSpec = androidx.compose.animation.core.tween(
@@ -356,15 +341,15 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
         null, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
     )
-    // backdrop 按页面分配：只有聊天页（screen 0）采样壁纸画布，
-    // 设置等二级页无条件素底画布。
-    // 关键认知（三联帧+彩度曲线确认）：设置页玻璃卡若采样壁纸画布，
-    // 采到的是「全屏壁纸」与页面实际背景（净色）对不上——落位后卡片
-    // 磨砂背后永久透出错位的彩色图案（用户截屏框选即此）。
-    // 「全局壁纸玻璃」只对聊天页成立（壁纸层在其背后实时对位）；
-    // 设置页实底背景不是壁纸，采样壁纸必然错位 → 固定素底。
-    // 转场期（wpReady=false）聊天页也暂用素底，纱幕退完再切回
-    val backdrop = if (wallpaper != null && wpReady && screen == 0) {
+    // backdrop 分配（与各页实际背景严格对齐——采样=所见是玻璃不出错的铁律）：
+    // - 聊天页(0)：壁纸层在它背后实时对位 → wpBackdrop
+    // - 设置等二级页 + 全局壁纸开：页面根底自带来对齐的壁纸 Image（SettingsScreen
+    //   内部绘制）→ wpBackdrop。上一版强制素底导致「全局壁纸失效显示白底」
+    // - 其余（全局关时的二级页）：净色底 → plainBackdrop
+    // 转场期纱幕（页面层之下）负责接住退出页的淡出，采样无需再降级
+    val backdrop = if (wallpaper != null &&
+        (screen == 0 || settings.wallpaperGlobal)
+    ) {
         wpBackdrop
     } else {
         plainBackdrop
@@ -486,6 +471,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
                     backdrop = backdrop,
+                    // 全局壁纸开时设置页自带对齐的壁纸底（页面自己的 Image 层，
+                    // 随页面整体滑动）——「壁纸应用于所有页面」真正生效
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     initialSection = settingsSection,
                     onSectionChange = { settingsSection = it },
                     // 从设置返回聊天：恢复抽屉展开态（与预览方案一致——返回后侧边栏在）。
