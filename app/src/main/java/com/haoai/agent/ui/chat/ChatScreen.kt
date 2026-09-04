@@ -128,7 +128,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -164,6 +167,15 @@ class DrawerController {
     var targetOpen by androidx.compose.runtime.mutableStateOf(false)
     val fraction = androidx.compose.animation.core.Animatable(0f)
     val isOpen: Boolean get() = targetOpen
+
+    /**
+     * 转场冻结标记：true 时 ChatScreen 绘制层改为输出最近记录的 GraphicsLayer
+     * 快照（组合照跑、绘制被静态图像替代）。聊天页是全 App 最重的页面
+     * （抽屉+遮罩+壁纸+LazyColumn），push 到设置时首帧重组慢曾被看穿成
+     * 「残留/不同步」；快照让转场期滑动的只是一张图，重组延迟被彻底隔离。
+     * 退出转场后必须置回 false，否则聊天页永远显示旧画面。
+     */
+    var frozen by androidx.compose.runtime.mutableStateOf(false)
 
     /** 打开态弹性参数：中低刚度+轻微回弹（damping 0.85），有「果冻到位」感而不狂振荡 */
     private fun settleSpec() = androidx.compose.animation.core.spring(
@@ -443,7 +455,23 @@ fun ChatScreen(
 
     Box(Modifier.fillMaxSize()) {
     val drawerFraction = drawer.fraction.value
-    Box(Modifier.fillMaxSize()) {
+    // 转场快照层：常态每帧把整页内容记录进 GraphicsLayer（record 只在有
+    // 重绘时发生，无额外开销）；drawer.frozen=true（push 到设置转场中）时
+    // 改为绘制上次记录的静态图像——重组照跑但绘制被快照替代，重页面
+    // 组合延迟不再被看穿。转场结束 frozen 置回 false 恢复实时绘制
+    val snapshotLayer = rememberGraphicsLayer()
+    Box(
+        Modifier
+            .fillMaxSize()
+            .drawWithContent {
+                if (drawer.frozen) {
+                    drawLayer(snapshotLayer)
+                } else {
+                    drawContent()
+                    snapshotLayer.record { this@drawWithContent.drawContent() }
+                }
+            }
+    ) {
         // 采样层根保持静止（无 offset/graphicsLayer 外层变换）：字节码确认采样 offset
         // = layerCoordinates.localPositionOf(glass, Zero)，任何外层平移都会整体错位。
         // 键盘抬升不再平移列表，改为增大 MessageList 底部留白（见 bottomPadding），

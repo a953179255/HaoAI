@@ -477,9 +477,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     initialSection = settingsSection,
                     onSectionChange = { settingsSection = it },
                     // 从设置返回聊天：恢复抽屉展开态（与预览方案一致——返回后侧边栏在）。
-                    // snapOpen 无动画瞬位，与 pop 过渡同帧；聊天页带展开抽屉一起视差回来
+                    // snapOpen 无动画瞬位，与 pop 过渡同帧；聊天页带展开抽屉一起视差回来。
+                    // 同时解除冻结：返回后聊天页恢复实时绘制
                     onBack = {
                         screen = 0
+                        drawer.frozen = false
                         rootScope.launch { drawer.snapOpen() }
                     },
                     onOpenMemories = { screen = 2 },
@@ -487,8 +489,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onOpenSkills = { screen = 5 },
                     onOpenMcp = { screen = 6 },
                     onOpenWorkflows = { screen = 8 }
-                )
-                2 -> com.haoai.agent.ui.manage.MemoryScreen(
+                )                2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,
                     // 记忆/任务/技能入口已收进设置页，返回回设置
                     onBack = { screen = 1 }
@@ -529,10 +530,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     backdrop = backdrop,
                     drawer = drawer,
                     listState = chatListState,
-                    // 侧边栏点设置：直接切页——push 滑入是覆盖语义，抽屉跟着旧页
-                    // 被盖过去（上游 同款，无需先收抽屉）；返回时 drawer 仍是
-                    // Open 态，聊天页带展开的抽屉一起从左侧视差回来，自然衔接
-                    onOpenSettings = { screen = 1 },
+                    // 侧边栏点设置：push 转场开始——先冻结聊天页（后续帧绘制
+                    // 静态快照，重页面组合延迟不再被看穿），切页触发转场
+                    onOpenSettings = {
+                        drawer.frozen = true
+                        screen = 1
+                    },
                     // 先收起抽屉再切页：否则返回时 drawerState 仍是 Open，抽屉会原样展开
                     onOpenSessions = {
                         rootScope.launch { drawer.close() }
