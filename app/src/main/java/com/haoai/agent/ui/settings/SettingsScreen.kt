@@ -1562,9 +1562,17 @@ private fun LazyListScope.privacyItems(
             com.haoai.agent.platform.PermissionCenter.ALL.forEach { spec ->
                 val granted = vm.permissionStates[spec.key]
                     ?: com.haoai.agent.platform.PermissionCenter.granted(context, spec)
+                // 已授权的行也可点击：进入对应系统权限管理页，方便取消授权
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .then(
+                            if (granted) Modifier.clickable(
+                                interactionSource = null, indication = null
+                            ) { com.haoai.agent.platform.PermissionCenter.openManagement(context, spec) }
+                            else Modifier
+                        )
                         .padding(horizontal = 14.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

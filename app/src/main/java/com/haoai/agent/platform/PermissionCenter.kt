@@ -174,6 +174,28 @@ object PermissionCenter {
         return ensure(appContext, STORAGE)
     }
 
+    /**
+     * 打开该权限的系统管理页（已授权后点击行进入，方便取消）：
+     * 特殊权限→各自的系统开关页（进去关掉即撤权）；运行时权限→本应用「应用信息」页，
+     * 在「权限」分组里逐项开关（系统没有直达单个运行时权限开关页的公开 action）。
+     */
+    fun openManagement(context: Context, spec: PermSpec) {
+        runCatching {
+            when {
+                spec.key == "storage" -> openStorageSettings(context)
+                spec.special -> context.startActivity(
+                    Intent(spec.settingsAction).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                else -> context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+    }
+
     /** 打开「所有文件访问」设置页（设置界面的手动入口用）。 */
     fun openStorageSettings(context: Context) {
         runCatching {
