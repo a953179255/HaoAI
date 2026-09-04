@@ -187,6 +187,10 @@ fun SettingsScreen(
         Box(
             Modifier
                 .fillMaxSize()
+                // 不透明页面底：转场（B+ 推进/返回）期间本页会被平移到屏幕边缘外，
+                // 其半透明玻璃卡片需要实底垫背——否则露出 AnimatedContent 空黑，
+                // 出现「背景缺失只显示按钮」「按钮效果断裂」（录屏帧标注确认）
+                .background(MaterialTheme.colorScheme.background)
         ) {
             Column(
                 Modifier
@@ -359,6 +363,8 @@ fun SettingsScreen(
         Box(
             Modifier
                 .fillMaxSize()
+                // 同上：二级页转场期也需要实底
+                .background(MaterialTheme.colorScheme.background)
         ) {
             Column(
                 Modifier
