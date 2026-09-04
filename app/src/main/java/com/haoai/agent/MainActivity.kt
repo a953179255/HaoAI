@@ -349,99 +349,61 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 onSave = { name, soul -> chatVm.completeOnboarding(name, soul) }
             )
         } else {
-            // 页面切换过渡（用户选定的 B+ 修复版：抽屉→设置 三层同帧推进）：
-            // 抽屉向左滑出(-100%) + 聊天页视差左移(-15%) + 新页从右侧贴边推进(+100%→0)，
-            // 三层同帧启动、一条时间轴 380ms——用运动本身填满页面重组的空档（消除停顿感）。
-            // pop 反向：新页右滑出，旧页从 -15% 回到 0（抽屉若在开态则随旧页一起回来）。
-            // 聊天页(0)参与的往返：pop 进入聊天时走 B+ 反向（聊天页带抽屉视差回归）；
-            // 其余与聊天页相关的切换保持 fade+微缩。
+            // 页面切换过渡（上游 同款：slide + scale + fade，有纵深感）：
+            // push——新页全屏滑入；旧页缩小(1→0.92)+变暗淡出沉底（不是全 0.7，
+            // HaoAI 旧页带着展开抽屉，缩太多会露出边缘）。pop 反向——旧页全速
+            // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 上游 流畅感来源。
+            // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
+            // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
             fun levelOf(s: Int) = when (s) {
                 0 -> 0          // 聊天（根）
                 1, 4, 7 -> 1    // 设置 / 会话列表 / 浏览器
                 else -> 2       // 记忆 / 定时 / 技能 / MCP / 工作流
             }
             val ease = androidx.compose.animation.core.FastOutSlowInEasing
+            val slideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+                androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
+            val fadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
+                androidx.compose.animation.core.tween(durationMillis = 300, easing = ease)
+            val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
+                androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
-                // pop 方向：退出页（设置）压在进入页（聊天）之上——聊天页 LazyColumn
-                // 首帧组合慢，曾被看穿出现空白中间帧
                 transitionSpec = {
                     val from = levelOf(initialState)
                     val to = levelOf(targetState)
-                    val slideFull: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                        androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
-                    val parallax: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                        androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
                     when {
-                        // 聊天页 → 一级页（设置等）：边缘锁死的纯 push——退出页全程
-                        // 滑到 -100%（与进入页左缘同步，无中途停留）。此前 -it/4 视差
-                        // 停留让聊天+抽屉在左侧 25% 形成静止残留带，直到被设置页扫过
-                        // （换彩色壁纸后无所遁形，用户标注确认）。
-                        (from == 0 && to == 1) -> {
-                            (androidx.compose.animation.slideInHorizontally(slideFull) { it } +
-                                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(120, easing = ease)))
+                        // push（聊天→设置 / 设置→二级页，同级 1→1 段内切换也走这条）：
+                        // 新页全速滑入；旧页向左滑出 + 缩小沉底 + 变暗
+                        to >= from && initialState != 0 || (from == 0 && to == 1) -> {
+                            (androidx.compose.animation.slideInHorizontally(slideSpec) { it })
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideFull) { -it }
-                            )
+                                androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
+                                    androidx.compose.animation.scaleOut(
+                                        targetScale = 0.92f, animationSpec = scaleSpec
+                                    ) +
+                                    androidx.compose.animation.fadeOut(fadeSpec)
+                            ).apply { targetContentZIndex = 1f }
                         }
-                        // 返回聊天：边缘锁死的纯 push——聊天页带 1/4 视差从左滑回。
-                        // 几何保证：聊天页左缘 ≥ 设置页右缘（两者位移同频同步），
-                        // 永不脱开——此前 -it/7 慢速滑回与设置页右滑出之间出现空隙，
-                        // 透出垫底层灰色竖带（换壁纸后暴露，用户红框标注）。
-                        // targetContentZIndex = -1 把目标页（聊天）压到退出页（设置）
-                        // 之下：AnimatedContent 默认 target 在顶，返回时聊天页（含抽屉
-                        // 30% scrim）会盖在设置页上把整屏洗灰——内容 lambda 里的
-                        // Modifier.zIndex 是死代码（不参与 AnimatedContent 的 z 排序），
-                        // 必须用 ContentTransform 的 targetContentZIndex 声明。
-                        // 附带效果：设置页盖住聊天页首帧组合慢的空档，无空白中间帧
-                        (from == 1 && to == 0) -> {
-                            (androidx.compose.animation.slideInHorizontally(parallax) { -it / 4 })
-                                .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideFull) { it }
-                            ).apply { targetContentZIndex = -1f }
-                        }
-                        // 其余与聊天页相关的切换：fade + 微缩（保持轻）
-                        from == 0 || to == 0 -> {
-                            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220, easing = ease)) +
-                                androidx.compose.animation.scaleIn(
-                                    initialScale = 0.985f,
-                                    animationSpec = androidx.compose.animation.core.tween(260, easing = ease)
-                                )).togetherWith(
-                                androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(180, easing = ease))
-                            )
-                        }
-                        // push（进入更深层级）：右滑入 + 左视差退出
-                        to > from -> {
-                            (androidx.compose.animation.slideInHorizontally(slideFull) { it } +
-                                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200, easing = ease)))
-                                .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(parallax) { -it / 3 } +
-                                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(240, easing = ease))
-                            )
-                        }
-                        // pop（返回）：左页回来 + 右滑出
+                        // pop（返回聊天 / 返回设置）：旧页全速右滑出；
+                        // 下层页从 0.92 迎上来放大回位 + 淡入（双向运动）
                         else -> {
-                            (androidx.compose.animation.slideInHorizontally(parallax) { -it / 3 } +
-                                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200, easing = ease)))
+                            (androidx.compose.animation.slideInHorizontally(slideSpec) { -it / 5 } +
+                                androidx.compose.animation.scaleIn(
+                                    initialScale = 0.92f, animationSpec = scaleSpec
+                                ) +
+                                androidx.compose.animation.fadeIn(fadeSpec))
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideFull) { it }
-                            )
+                                androidx.compose.animation.slideOutHorizontally(slideSpec) { it }
+                            ).apply { targetContentZIndex = -1f }
                         }
                     }
                 },
                 label = "screenSwitch"
             ) { s ->
-            // pop（返回聊天）时让退出页（设置）压在进入页（聊天）之上：聊天页
-            // LazyColumn 首帧组合慢，被盖住可避免空白中间帧被看穿。
-            // 关键：zIndex 必须真实应用到页面容器 Box——此前只是「创建了 Modifier
-            // 却从未传给任何组件」的死代码（.let{ pageZ -> } 后 pageZ 无人消费），
-            // AnimatedContent 默认 target 在顶，返回时聊天页（含抽屉 30% scrim）
-            // 反而盖在设置页上：整屏被遮罩洗灰、卡片缝隙透壁纸成灰带（换彩色
-            // 壁纸后暴露，用户红框标注即此）。
-            androidx.compose.foundation.layout.Box(
-                modifier = androidx.compose.ui.Modifier
-                    .zIndex(if (s == 1 && screen == 0) 1f else 0f)
-            ) {
+            // zIndex 已由 transitionSpec 的 targetContentZIndex 声明（内容重组层
+            // 的 Modifier.zIndex 不参与 AnimatedContent 的 z 排序，是死代码），
+            // 页面直接平铺
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
@@ -520,7 +482,6 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     }
                 )
             }
-            } // pageZ Box
             } // AnimatedContent content lambda
             // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
             val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
