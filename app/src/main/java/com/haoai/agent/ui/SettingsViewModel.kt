@@ -638,17 +638,25 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
 
     /**
-     * 加载模型文件：优先把 SAF content:// 解析成真实路径直读（不复制、不占双份空间）；
-     * 解析不了（第三方文档提供器）才回退为复制进应用目录。
+     * 加载模型文件：仅直读 SAF 解析出的本机真实路径（不复制、不占双份空间）。
+     * 解析不到真实路径（第三方/云文档提供器）时不再复制兜底，直接提示改用「扫描」或把模型放到本机存储。
      */
     fun loadModelFile(context: android.content.Context, uriString: String) {
         val resolved = resolveDocumentPath(context, uriString)
-        if (resolved != null && resolved.endsWith(".gguf", ignoreCase = true) && java.io.File(resolved).exists()) {
-            useDeviceModel(resolved)
-            importingModel = "已加载 ${java.io.File(resolved).name}（原路径直读）"
-            viewModelScope.launch { delay(3500); if (importingModel?.startsWith("已加载") == true) importingModel = null }
-        } else {
-            importModel(context, uriString)
+        val file = resolved?.let { java.io.File(it) }
+        val msg = when {
+            resolved == null || !resolved.endsWith(".gguf", ignoreCase = true) || file?.exists() != true ->
+                "无法直读该位置（非本机存储路径）。请把模型放到手机存储（如 Download），再用「扫描手机已有模型」选择"
+            !file.canRead() ->
+                "无读取权限：请在设置里给 HaoAI 开启「所有文件访问」，或把模型移到 HaoAI 的 models 目录"
+            else -> {
+                useDeviceModel(resolved)
+                "已加载 ${file.name}（原路径直读）"
+            }
+        }
+        importingModel = msg
+        if (msg.startsWith("已加载")) {
+            viewModelScope.launch { delay(4000); if (importingModel == msg) importingModel = null }
         }
     }
 
@@ -662,59 +670,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             else -> null
         }
     }.getOrNull()
-
-    /** 兜底：复制进应用模型目录（第三方提供器无法拿到真实路径时）。 */
-    fun importModel(context: android.content.Context, uriString: String) {
-        if (importingModel != null) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val finish: (String?) -> Unit = { msg ->
-                importingModel = msg
-            }
-            runCatching {
-                val resolver = context.contentResolver
-                val uri = android.net.Uri.parse(uriString)
-                var name = runCatching {
-                    androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name
-                }.getOrNull()
-                if (name.isNullOrBlank()) name = "imported-${System.currentTimeMillis()}.gguf"
-                if (!name.endsWith(".gguf")) name += ".gguf"
-                withContext(Dispatchers.Main) { finish("导入 $name…") }
-                val out = java.io.File(c.llama.modelsDir(), name)
-                resolver.openInputStream(uri)?.use { ins ->
-                    java.io.FileOutputStream(out).use { fos ->
-                        val buf = ByteArray(1 shl 20)
-                        var total = 0L
-                        var lastMb = -1L
-                        while (true) {
-                            val n = ins.read(buf)
-                            if (n < 0) break
-                            fos.write(buf, 0, n)
-                            total += n
-                            val mb = total / (1024L * 1024L)
-                            if (mb != lastMb) {
-                                lastMb = mb
-                                withContext(Dispatchers.Main) {
-                                    finish("导入 $name · ${mb} MB")
-                                }
-                            }
-                        }
-                    }
-                } ?: throw IllegalStateException("无法读取所选文件")
-                if (out.length() < 1_000_000) throw IllegalStateException("文件过小，可能不是有效 GGUF")
-                if (c.llama.isMmprojFile(out)) {
-                    withContext(Dispatchers.Main) { finish("已导入视觉投影 $name（与模型同名即可自动启用图像识别）") }
-                } else {
-                    c.updateSettings { it.copy(localModelFile = name) }
-                    c.llama.preferredModel = name
-                    withContext(Dispatchers.Main) { finish("已导入 $name（${out.length() / (1024 * 1024)} MB）并设为当前端侧模型") }
-                }
-            }.onFailure {
-                withContext(Dispatchers.Main) { finish("导入失败：${it.message ?: it.javaClass.simpleName}") }
-            }
-            delay(4000)
-            withContext(Dispatchers.Main) { if (importingModel?.startsWith("已导入") == true || importingModel?.startsWith("导入失败") == true) finish(null) }
-        }
-    }
 
     // ---- 端侧模型：免拷贝直读手机上已有的 GGUF ----
 
