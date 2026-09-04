@@ -142,6 +142,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// 页面层级：转场方向判定与纱幕升降共用（push = 层级升高）
+private fun screenLevel(s: Int) = when (s) {
+    0 -> 0          // 聊天（根）
+    1, 4, 7 -> 1    // 设置 / 会话列表 / 浏览器
+    else -> 2       // 记忆 / 定时 / 技能 / MCP / 工作流
+}
+
 @Composable
 private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val app = LocalContext.current.applicationContext as HaoApplication
@@ -298,6 +305,35 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // 素底玻璃的底色跟随主题（动态取色时随 Material You 变化）：
     // 上浅下深两级 surface，玻璃 vibrancy 透出的即主题背景色
     val scheme = androidx.compose.material3.MaterialTheme.colorScheme
+    // 转场纱幕：上游 旧页淡出溶进的是「净色实底」（其根布局
+    // background(colorScheme.background)），HaoAI 淡出溶进的是花壁纸
+    // ——彩色图案残影。push 期间在壁纸上盖一层主题净色「纱」
+    // （alpha 0.9 近实底，转场完缓退），转场瞬间借用 上游 的净底。
+    // 只在 push（离开聊天/设置根）时升起：pop 是「揭开」语义，聊天页
+    // 滑回时壁纸应同步回归——纱幕若在，会把落位的聊天页罩灰（实测确认）
+    var lastScreen by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(screen)
+    }
+    var scrimLevel by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(0f)
+    }
+    androidx.compose.runtime.LaunchedEffect(screen) {
+        val pushed = screenLevel(screen) > screenLevel(lastScreen)
+        lastScreen = screen
+        if (pushed) {
+            scrimLevel = 0.9f
+            kotlinx.coroutines.delay(420)   // 与转场同步稍长
+            scrimLevel = 0f
+        }
+    }
+    val scrimAlpha = androidx.compose.animation.core.animateFloatAsState(
+        targetValue = scrimLevel,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (scrimLevel > 0f) 0 else 450,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
+        label = "transitionScrim"
+    ).value
     val plainTop = scheme.surface
     val plainBottom = scheme.surfaceVariant
     val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
@@ -342,6 +378,15 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize()
             )
+            // 转场纱幕：净色盖在壁纸上（页面层之下），旧页淡出时溶进净色
+            // 而非花壁纸——上游 丝滑的关键（其底就是净色实底）
+            if (scrimAlpha > 0.01f) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .background(scheme.background.copy(alpha = scrimAlpha))
+                )
+            }
         }
         if (!settings.onboarded) {
             OnboardingGlass(
@@ -355,18 +400,26 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 上游 流畅感来源。
             // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
             // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
-            fun levelOf(s: Int) = when (s) {
-                0 -> 0          // 聊天（根）
-                1, 4, 7 -> 1    // 设置 / 会话列表 / 浏览器
-                else -> 2       // 记忆 / 定时 / 技能 / MCP / 工作流
-            }
+            fun levelOf(s: Int) = screenLevel(s)
             val ease = androidx.compose.animation.core.FastOutSlowInEasing
+            // 上游 未指定 tween：navigation3/AnimatedContent 默认 spring
+            // （stiffness MediumLow 附近）——先快后缓的自然减速，比固定
+            // 380ms tween 的匀速机械感更「丝滑」。visibilityThreshold 保证
+            // 像素级收敛不抖动
             val slideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
+                androidx.compose.animation.core.spring(
+                    dampingRatio = 0.9f,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                    visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
+                )
             val fadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
                 androidx.compose.animation.core.tween(durationMillis = 300, easing = ease)
             val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
-                androidx.compose.animation.core.tween(durationMillis = 380, easing = ease)
+                androidx.compose.animation.core.spring(
+                    dampingRatio = 0.9f,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                    visibilityThreshold = 0.001f
+                )
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
                 transitionSpec = {
