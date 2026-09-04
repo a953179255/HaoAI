@@ -317,15 +317,29 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     var scrimLevel by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(0f)
     }
+    // 壁纸采样就绪标记：默认 true。历史上用于转场期强制素底，现二级页
+    // 已固定素底（按 screen 分配），此标记保留给聊天页转场窗口兜底
+    var wpReady by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(true)
+    }
     androidx.compose.runtime.LaunchedEffect(screen) {
         val pushed = screenLevel(screen) > screenLevel(lastScreen)
         lastScreen = screen
-        if (pushed) {
-            scrimLevel = 0.9f
-            kotlinx.coroutines.delay(420)   // 与转场同步稍长
-            scrimLevel = 0f
+        if (screen != 0) {
+            // 二级页固定素底采样，wpReady 不影响其画面；置 true 让之后
+            // 返回聊天时无需等待
+            wpReady = true
+        } else if (pushed == false && lastScreen != screen) {
+            // pop 回聊天：直接就绪（聊天页本来就该透壁纸）
+            wpReady = true
+        } else {
+            // 首帧组合：聊天页在壁纸上，直接就绪
+            wpReady = true
         }
     }
+    // push 到二级页时短暂拉低 wpReady 没有意义了（二级页固定素底）；
+    // 真正需要时序控制的只有聊天页自己的转场窗口：纱幕负责挡住
+    // 转场期的采样错位，无需再动 backdrop 分配
     val scrimAlpha = androidx.compose.animation.core.animateFloatAsState(
         targetValue = scrimLevel,
         animationSpec = androidx.compose.animation.core.tween(
@@ -342,8 +356,19 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
         null, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
     )
-    // backdrop 立即跟随 screen（进入页采样素底）；壁纸 Image 层才延迟
-    val backdrop = if (wallpaper != null && wallpaperOnScreenBase) wpBackdrop else plainBackdrop
+    // backdrop 按页面分配：只有聊天页（screen 0）采样壁纸画布，
+    // 设置等二级页无条件素底画布。
+    // 关键认知（三联帧+彩度曲线确认）：设置页玻璃卡若采样壁纸画布，
+    // 采到的是「全屏壁纸」与页面实际背景（净色）对不上——落位后卡片
+    // 磨砂背后永久透出错位的彩色图案（用户截屏框选即此）。
+    // 「全局壁纸玻璃」只对聊天页成立（壁纸层在其背后实时对位）；
+    // 设置页实底背景不是壁纸，采样壁纸必然错位 → 固定素底。
+    // 转场期（wpReady=false）聊天页也暂用素底，纱幕退完再切回
+    val backdrop = if (wallpaper != null && wpReady && screen == 0) {
+        wpBackdrop
+    } else {
+        plainBackdrop
+    }
 
     // 状态栏图标随顶部实际亮度自适应（修复：系统深色 + App 浅色时白图标看不见）
     com.haoai.agent.ui.common.AdaptiveStatusBarIcons(
