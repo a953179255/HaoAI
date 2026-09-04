@@ -118,6 +118,10 @@ fun SettingsScreen(
     onBack: () -> Unit,
     /** 全局壁纸开时传入：页面自带对齐的壁纸底（随页面整体滑动，玻璃采样与之一致） */
     wallpaper: android.graphics.Bitmap? = null,
+    /** 转场进行中：玻璃卡退化为本地磨砂（不 drawBackdrop 采样）——退出页
+     *  （聊天遮罩带/滑出中的页面）正在采样画布上移动，实时采样会把它「画进」
+     *  卡片形成清晰↔模糊分界带，落位后突然变化（用户截图框选） */
+    samplingFrozen: Boolean = false,
     /**
      * 锁定渲染某个 section 子页（独立 screen 化）：非空时本组件直接渲染该
      * 子页（跳过主页与 section 路由），返回走 onSectionBack。由 MainActivity
@@ -159,8 +163,11 @@ fun SettingsScreen(
     var confirmClearLedger by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     // 「模型大脑 → 内部任务模型」选择弹窗：同样必须在根级渲染
     var purposePicker by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    // 设置根页列表滚动状态：必须在 if(section) 分支之外 remember，否则进二级页返回后回到顶部
-    val rootListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // 设置根页列表滚动状态：独立 screen 化后进子页会销毁重建本组件，
+    // 必须 rememberSaveable（滚动位置写入 saved state）才能在返回后恢复
+    val rootListState = androidx.compose.runtime.saveable.rememberSaveable(
+        saver = androidx.compose.foundation.lazy.LazyListState.Saver
+    ) { androidx.compose.foundation.lazy.LazyListState() }
     // Linux 环境（3.2）：发行版状态/安装进度/弹窗路由集中在一处
     val linuxState = androidx.compose.runtime.remember { LinuxEnvState() }
     androidx.compose.runtime.LaunchedEffect(section) {
@@ -207,6 +214,9 @@ fun SettingsScreen(
 
     // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）
     if (lockedSection != null) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            com.haoai.agent.ui.common.LocalGlassRefract provides !samplingFrozen
+        ) {
         SectionPage(
             section = lockedSection,
             vm = vm, settings = settings, backdrop = backdrop, wallpaper = wallpaper,
@@ -222,6 +232,7 @@ fun SettingsScreen(
             onOpenMemories = onOpenMemories,
             onBack = onSectionBack
         )
+        }
         return
     }
 
@@ -1030,6 +1041,7 @@ private fun sectionTitle(section: String): String = when (section) {
  */
 @Composable
 private fun SectionPage(
+    samplingFrozen: Boolean = false,
     section: String,
     vm: SettingsViewModel,
     settings: AppSettings,
@@ -1056,6 +1068,11 @@ private fun SectionPage(
     onOpenMemories: () -> Unit,
     onBack: () -> Unit
 ) {
+    // 转场期玻璃退化本地磨砂（LocalGlassRefract=false）：
+    // 采样画布上有滑出中的页面内容，实时采样会形成清晰↔模糊分界带
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.haoai.agent.ui.common.LocalGlassRefract provides !samplingFrozen
+    ) {
     Box(
         Modifier
             .fillMaxSize()
@@ -1111,6 +1128,7 @@ private fun SectionPage(
             modifier = Modifier
                 .align(Alignment.TopCenter)
         )
+    }
     }
 }
 

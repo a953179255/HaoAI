@@ -353,6 +353,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
         wallpaper, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
     )
+    // 设置系页面专用 backdrop：与 wpBackdrop 同为纯壁纸画布，但聊天页的
+    // appLayer 挂在 wpBackdrop 上——其全部内容（含打开抽屉的磨砂面板）会
+    // 实时画进该画布；设置页玻璃卡采样它时，抽屉停留过的左带区域呈
+    // 「磨砂叠磨砂」双重模糊，转场后突然变浅（用户截图框选）。设置系
+    // 页面用本实例采样，画布永远干净
+    val settingsBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+        wallpaper, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
+    )
     val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
         null, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
     )
@@ -363,10 +371,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // - 其余（全局关时的二级页）：净色底 → plainBackdrop
     // 转场期（samplingFrozen）强制素底：退出页（聊天遮罩带/滑出中的页面）
     // 会被玻璃卡实时采样画进卡片，落位后突然变化（用户截图框选的深色竖带）
-    val backdrop = if (wallpaper != null && !samplingFrozen &&
+    val backdrop = if (wallpaper != null &&
         (screen == 0 || settings.wallpaperGlobal)
     ) {
-        wpBackdrop
+        if (screen == 0) wpBackdrop else settingsBackdrop
     } else {
         plainBackdrop
     }
@@ -505,6 +513,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // 全局壁纸开时设置页自带对齐的壁纸底（页面自己的 Image 层，
                     // 随页面整体滑动）——「壁纸应用于所有页面」真正生效
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    samplingFrozen = samplingFrozen,
                     initialSection = settingsSection,
                     onSectionChange = { settingsSection = it },
                     // 从设置返回聊天：恢复抽屉展开态（与预览方案一致——返回后侧边栏在）。
@@ -530,18 +539,21 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "brain", onSectionBack = { screen = 1 }
                 )
                 10 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "privacy", onSectionBack = { screen = 1 }
                 )
                 11 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "memory", onSectionBack = { screen = 1 },
                     onOpenMemories = { screen = 2 }
                 )
@@ -549,30 +561,35 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "linux", onSectionBack = { screen = 1 }
                 )
                 13 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "workspace", onSectionBack = { screen = 1 }
                 )
                 14 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "general", onSectionBack = { screen = 1 }
                 )
                 15 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "about", onSectionBack = { screen = 1 }
                 )
                 16 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
+                    samplingFrozen = samplingFrozen,
                     lockedSection = "usage", onSectionBack = { screen = 1 }
                 )
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(
