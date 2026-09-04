@@ -21,7 +21,7 @@ class BootReceiver : BroadcastReceiver() {
                 com.haoai.agent.agent.workflow.WorkflowStore.list()
                     .filter { it.enabled && !it.pendingConfirm && it.trigger.type == "boot" }
                     .forEach { def ->
-                        runCatching { com.haoai.agent.agent.workflow.WorkflowRunner.run(container, def) }
+                        runCatching { com.haoai.agent.agent.workflow.WorkflowRunner.run(container, def, trigger = "boot") }
                     }
             }
             goAsync.finish()

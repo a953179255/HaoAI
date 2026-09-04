@@ -42,12 +42,18 @@ object WorkflowRunner {
     suspend fun run(
         container: com.haoai.agent.data.AppContainer,
         def: WorkflowDef,
+        trigger: String = "manual",
         onProgress: (suspend (Progress) -> Unit)? = null
     ): RunRecord {
         val started = System.currentTimeMillis()
         val mode = container.settingsFlow.value.permissionMode
         val logs = mutableListOf<String>()
         var ok = true
+        /** 各步输出（按 1-based 序号），供 {{prev}}/{{stepN}} 注入；被跳过/失败的步无条目。 */
+        val outputs = mutableMapOf<Int, String>()
+        /** 最近一个实际执行完的步骤输出（条件判断基准，跳过的步不更新）。 */
+        var lastOutput = ""
+        var skipped = 0
 
         val provider0 = container.activeProvider()
         val provider: ProviderConfig? = if (provider0 == null) null
@@ -58,15 +64,25 @@ object WorkflowRunner {
         } else provider0
 
         for ((i, step) in def.steps.withIndex()) {
-            onProgress?.invoke(Progress(i + 1, def.steps.size, stepBrief(step)))
+            val n = i + 1
+            if (!conditionMet(step.condition, lastOutput)) {
+                skipped++
+                logs.add("↷ 步骤 $n：条件不满足已跳过（${step.condition.take(40)}）")
+                continue
+            }
+            onProgress?.invoke(Progress(n, def.steps.size, stepBrief(step)))
             val result = runCatching {
                 when (step.type) {
-                    "tool" -> runToolStep(container, def, step, mode)
-                    else -> runPromptStep(container, def, step, provider, mode)
+                    "tool" -> runToolStep(container, def, step, mode, outputs)
+                    else -> runPromptStep(container, def, step, provider, mode, outputs)
                 }
             }
             result.fold(
-                onSuccess = { out -> logs.add("✓ ${stepBrief(step)}：${out.take(120)}") },
+                onSuccess = { out ->
+                    outputs[n] = out
+                    lastOutput = out
+                    logs.add("✓ ${stepBrief(step)}：${out.take(120)}")
+                },
                 onFailure = { e ->
                     ok = false
                     logs.add("✗ ${stepBrief(step)}：${e.message ?: e.javaClass.simpleName}")
@@ -75,10 +91,43 @@ object WorkflowRunner {
             if (!ok && step.stopOnError) break
         }
 
+        if (skipped > 0) logs.add("（$skipped 步因条件不满足跳过）")
         val summary = (if (ok) "成功" else "部分失败") + "：" + logs.joinToString("；").take(400)
-        return RunRecord(
-            ts = started, ok = ok, summary = summary
-        ).also { WorkflowStore.save(def.copy(lastRun = it)) }
+        val rec = RunRecord(
+            ts = started, ok = ok, summary = summary,
+            durationMs = System.currentTimeMillis() - started, trigger = trigger
+        )
+        // lastRun 快照 + history 环形保留最近 20 条
+        WorkflowStore.save(def.copy(lastRun = rec, history = (def.history + rec).takeLast(20)))
+        return rec
+    }
+
+    /**
+     * 步骤间数据传递：把 {{prev}}（上一步输出）与 {{stepN}}（第 N 步输出）替换进
+     * prompt 文本 / 工具参数。输出截断 6000 字防 prompt 爆炸；未产出过的步替换为空串。
+     * jsonEscape=true 时对替换值做 JSON 字符串转义（工具参数场景，防引号/换行破坏 JSON）。
+     */
+    fun render(template: String, outputs: Map<Int, String>, jsonEscape: Boolean = false): String {
+        fun subst(v: String?) = (v?.take(6000) ?: "").let {
+            if (jsonEscape) it.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "")
+            else it
+        }
+        var s = template
+        Regex("\\{\\{step(\\d+)\\}\\}").findAll(template).forEach { m ->
+            val n = m.groupValues[1].toIntOrNull() ?: return@forEach
+            s = s.replace(m.value, subst(outputs[n]))
+        }
+        return s.replace("{{prev}}", subst(outputs.entries.maxOfOrNull { it.key }?.let { outputs[it] }))
+    }
+
+    /** 条件文法：空=执行；prev_contains:X / prev_not_contains:X（忽略大小写）。无上一步输出时仅“not_contains”通过。 */
+    private fun conditionMet(condition: String, lastOutput: String): Boolean {
+        val c = condition.trim()
+        if (c.isEmpty()) return true
+        val (negative, needle) = if (c.startsWith("prev_not_contains:")) true to c.removePrefix("prev_not_contains:")
+        else false to c.removePrefix("prev_contains:")
+        val hit = lastOutput.contains(needle.trim(), ignoreCase = true)
+        return if (negative) !hit else hit
     }
 
     private fun stepBrief(step: WorkflowStore.Step): String =
@@ -89,7 +138,8 @@ object WorkflowRunner {
         def: WorkflowDef,
         step: WorkflowStore.Step,
         provider: ProviderConfig?,
-        mode: PermissionMode
+        mode: PermissionMode,
+        outputs: Map<Int, String>
     ): String {
         val p = provider ?: throw Exception("未配置模型服务")
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
@@ -121,7 +171,7 @@ object WorkflowRunner {
         )
         var out = ""
         engine.runTurn(
-            userText = step.text,
+            userText = render(step.text, outputs),
             onDelta = { frag -> if (out.length < 2000) out += frag },
             onEvent = { }
         )
@@ -133,7 +183,8 @@ object WorkflowRunner {
         container: com.haoai.agent.data.AppContainer,
         def: WorkflowDef,
         step: WorkflowStore.Step,
-        mode: PermissionMode
+        mode: PermissionMode,
+        outputs: Map<Int, String>
     ): String {
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "▶ ${def.name}"
@@ -153,7 +204,7 @@ object WorkflowRunner {
         val tool = tools.firstOrNull { it.name == step.tool }
             ?: throw Exception("未知工具：${step.tool}")
         val args = runCatching {
-            com.haoai.agent.data.HaoJson.json.parseToJsonElement(step.args.ifBlank { "{}" }).jsonObject
+            com.haoai.agent.data.HaoJson.json.parseToJsonElement(render(step.args, outputs, jsonEscape = true).ifBlank { "{}" }).jsonObject
         }.getOrElse { throw Exception("参数 JSON 非法：${it.message}") }
         val approve = approveFor(mode)
         val req = com.haoai.agent.agent.policy.ApprovalRequest.Generic(step.tool, "工作流「${def.name}」步骤调用")
@@ -225,7 +276,7 @@ class WorkflowWorker(context: Context, params: WorkerParameters) : CoroutineWork
             // 工作流已被删/停：链条终止
             return Result.success()
         }
-        withContext(Dispatchers.IO) { WorkflowRunner.run(container, def) }
+        withContext(Dispatchers.IO) { WorkflowRunner.run(container, def, trigger = "schedule") }
         // 保持调度链：按 spec 继续入队下一次
         WorkflowRunner.enqueueSchedule(applicationContext, def.id, def.trigger.config)
         return Result.success()

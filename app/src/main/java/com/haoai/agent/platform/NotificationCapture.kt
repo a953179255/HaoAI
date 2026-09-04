@@ -86,7 +86,7 @@ class NotificationCapture : NotificationListenerService() {
             if (now - last < 60_000L) return@forEach
             synchronized(lastTriggerAt) { lastTriggerAt[def.id] = now }
             container.applicationScope.launch {
-                runCatching { com.haoai.agent.agent.workflow.WorkflowRunner.run(container, def) }
+                runCatching { com.haoai.agent.agent.workflow.WorkflowRunner.run(container, def, trigger = "notification") }
             }
         }
     }

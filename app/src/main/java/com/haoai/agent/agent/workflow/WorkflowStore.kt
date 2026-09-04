@@ -24,21 +24,27 @@ object WorkflowStore {
     data class Step(
         /** "prompt"=以一段用户指令跑一次完整 Agent 循环；"tool"=直接调用单个工具 */
         val type: String = "prompt",
-        /** prompt 步的指令文本 */
+        /** prompt 步的指令文本。支持 {{prev}}=上一步输出、{{step1}}/{{step2}}…=第 N 步输出 */
         val text: String = "",
         /** tool 步的工具名 */
         val tool: String = "",
-        /** tool 步的参数 JSON 文本 */
+        /** tool 步的参数 JSON 文本，同样支持 {{prev}}/{{stepN}} 模板 */
         val args: String = "",
         /** 步骤失败是否中止整个工作流（prompt 步失败/工具被拒均算失败） */
-        val stopOnError: Boolean = true
+        val stopOnError: Boolean = true,
+        /** 条件分支：空=总是执行；prev_contains:文本 / prev_not_contains:文本（对上一步输出判断，不满足则跳过该步） */
+        val condition: String = ""
     )
 
     @Serializable
     data class RunRecord(
         val ts: Long,
         val ok: Boolean,
-        val summary: String
+        val summary: String,
+        /** 本次运行耗时（毫秒），0=旧记录 */
+        val durationMs: Long = 0,
+        /** 触发来源：manual | schedule | boot | notification | external */
+        val trigger: String = "manual"
     )
 
     @Serializable
@@ -51,7 +57,11 @@ object WorkflowStore {
         val trigger: Trigger = Trigger(),
         val steps: List<Step> = emptyList(),
         val createdAt: Long = 0,
-        val lastRun: RunRecord? = null
+        val lastRun: RunRecord? = null,
+        /** 最近 20 次运行记录（新在前由 UI 处理，存储按时间正序追加）。 */
+        val history: List<RunRecord> = emptyList(),
+        /** 外部广播触发令牌（16 位）；懒生成，广播 extras 必须携带匹配值才触发。 */
+        val externalToken: String? = null
     )
 
     @Volatile private var dir: File? = null
@@ -99,4 +109,19 @@ object WorkflowStore {
     /** 工具 spec 校验（复用 Scheduler 文法：hourly | every:<n><m|h|d> | daily:HH:MM）。 */
     fun validScheduleSpec(spec: String): Boolean =
         spec == "hourly" || Regex("^every:\\d+[mhd]$").matches(spec) || Regex("^daily:\\d{2}:\\d{2}$").matches(spec)
+
+    /** 条件分支文法：空=无条件 | prev_contains:文本 | prev_not_contains:文本。 */
+    fun validCondition(c: String): Boolean =
+        c.isBlank() || c.startsWith("prev_contains:") || c.startsWith("prev_not_contains:")
+
+    /**
+     * 外部触发令牌：每工作流固定随机串，广播方（Tasker/adb）须携带匹配值。
+     * 令牌为空时外部触发对该工作流无效——避免任何知道包名的人都能拉起流程。
+     */
+    fun externalToken(def: WorkflowDef): String {
+        def.externalToken?.takeIf { it.isNotBlank() }?.let { return it }
+        val t = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        save(def.copy(externalToken = t))
+        return t
+    }
 }

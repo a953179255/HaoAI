@@ -8,21 +8,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -41,12 +45,16 @@ import com.haoai.agent.agent.workflow.WorkflowStore
 import com.haoai.agent.data.HaoJson
 import com.haoai.agent.ui.common.GlassAlertDialog
 import com.haoai.agent.ui.common.GlassCard
+import com.haoai.agent.ui.common.LiquidTabRow
+import com.haoai.agent.ui.common.LiquidToggle
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import kotlinx.coroutines.launch
 
+private val TRIGGER_TYPES = listOf("manual", "schedule", "boot", "notification")
+
 /**
- * Phase 6 工作流管理页：列表 + 手动创建/编辑（JSON 高级模式）+ 启停 + 待确认徽标
- * + 手动运行 + lastRun 结果展开。Agent 起草的（pendingConfirm）只有这里能确认启用。
+ * 工作流管理页：列表 + 可视化步骤编辑器（JSON 高级模式可切换）+ 启停 + 待确认徽标
+ * + 手动运行 + 运行历史（最近 20 条）+ 外部触发令牌。Agent 起草的（pendingConfirm）只有这里能确认启用。
  */
 @Composable
 fun WorkflowScreen(
@@ -58,6 +66,8 @@ fun WorkflowScreen(
     var editTarget by remember { mutableStateOf<WorkflowStore.WorkflowDef?>(null) }
     var newDraft by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<WorkflowStore.WorkflowDef?>(null) }
+    var historyFor by remember { mutableStateOf<WorkflowStore.WorkflowDef?>(null) }
+    var extFor by remember { mutableStateOf<WorkflowStore.WorkflowDef?>(null) }
     val scope = rememberCoroutineScope()
 
     fun refresh() { workflows = WorkflowStore.list() }
@@ -111,7 +121,7 @@ fun WorkflowScreen(
                                 )
                                 Spacer(Modifier.size(6.dp))
                             }
-                            com.haoai.agent.ui.common.LiquidToggle(
+                            LiquidToggle(
                                 checked = w.enabled && !w.pendingConfirm,
                                 onCheckedChange = { on ->
                                     val next = w.copy(enabled = on && !w.pendingConfirm, pendingConfirm = false)
@@ -133,8 +143,7 @@ fun WorkflowScreen(
                         )
                         w.lastRun?.let { run ->
                             Text(
-                                (if (run.ok) "✓ " else "✗ ") + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(run.ts)) +
-                                    " · " + run.summary.take(80),
+                                (if (run.ok) "✓ " else "✗ ") + fmtTs(run.ts) + " · " + run.summary.take(80),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (run.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(top = 3.dp)
@@ -154,11 +163,32 @@ fun WorkflowScreen(
                                     .clip(RoundedCornerShape(8.dp))
                                     .clickable {
                                         scope.launch {
-                                            val def = WorkflowStore.get(w.id) ?: return@launch
-                                            WorkflowRunner.run(container, def.copy(lastRun = null))
+                                            WorkflowStore.get(w.id)?.let { def ->
+                                                WorkflowRunner.run(container, def)
+                                            }
                                             refresh()
                                         }
                                     }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                            if (w.history.isNotEmpty()) {
+                                Text(
+                                    "历史 ${w.history.size}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { historyFor = w }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                            Text(
+                                "外部触发",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { extFor = w }
                                     .padding(horizontal = 10.dp, vertical = 4.dp)
                             )
                             Icon(
@@ -191,7 +221,7 @@ fun WorkflowScreen(
                         ) {
                             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.size(6.dp))
-                            Text("新建工作流（JSON）", style = MaterialTheme.typography.labelMedium)
+                            Text("新建工作流", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
@@ -207,53 +237,19 @@ fun WorkflowScreen(
         )
     }
 
-    // JSON 编辑弹窗（新建/编辑通用）
+    // 编辑弹窗（新建/编辑通用；可视化步骤卡片 + JSON 高级模式可切换）
     if (editTarget != null || newDraft) {
-        val editing = editTarget
-        var json by remember(editing?.id ?: "new") {
-            mutableStateOf(
-                editing?.let { HaoJson.json.encodeToString(WorkflowStore.WorkflowDef.serializer(), it) }
-                    ?: WorkflowStore.WorkflowDef(
-                        id = WorkflowStore.newId(), name = "新工作流",
-                        trigger = WorkflowStore.Trigger("schedule", "every:30m"),
-                        steps = listOf(WorkflowStore.Step(type = "prompt", text = "报个时间")),
-                        createdAt = System.currentTimeMillis()
-                    ).let { HaoJson.json.encodeToString(WorkflowStore.WorkflowDef.serializer(), it) }
-            )
-        }
-        var err by remember { mutableStateOf<String?>(null) }
-        GlassAlertDialog(
+        EditWorkflowDialog(
+            editing = editTarget,
+            container = container,
             backdrop = backdrop,
-            title = if (editing == null) "新建工作流" else "编辑工作流",
-            confirmLabel = "保存",
-            dismissLabel = "取消",
-            contentMaxHeight = 460.dp,
-            onConfirm = {
-                runCatching {
-                    val def = HaoJson.json.decodeFromString(WorkflowStore.WorkflowDef.serializer(), json)
-                    WorkflowStore.save(def)
-                    if (def.enabled && def.trigger.type == "schedule") {
-                        WorkflowRunner.enqueueSchedule(container.appContext, def.id, def.trigger.config)
-                    } else WorkflowRunner.cancelSchedule(container.appContext, def.id)
-                    err = null
-                    editTarget = null
-                    newDraft = false
-                    refresh()
-                }.onFailure { err = it.message ?: "JSON 解析失败" }
-            },
-            onDismiss = { editTarget = null; newDraft = false; err = null }
-        ) {
-            androidx.compose.material3.OutlinedTextField(
-                value = json,
-                onValueChange = { json = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(320.dp),
-                textStyle = MaterialTheme.typography.labelSmall,
-                isError = err != null,
-                supportingText = { Text(err ?: "完整 JSON 定义；pendingConfirm=false 且 enabled=true 即生效") }
-            )
-        }
+            onDismiss = { editTarget = null; newDraft = false },
+            onSaved = {
+                editTarget = null
+                newDraft = false
+                refresh()
+            }
+        )
     }
 
     deleteTarget?.let { w ->
@@ -274,6 +270,415 @@ fun WorkflowScreen(
             Text("「${w.name}」将被删除，无法恢复。", style = MaterialTheme.typography.bodyMedium)
         }
     }
+
+    historyFor?.let { w ->
+        GlassAlertDialog(
+            backdrop = backdrop,
+            title = "运行历史 · ${w.name}",
+            confirmLabel = "关闭",
+            fullWidthConfirm = true,
+            onConfirm = { historyFor = null },
+            onDismiss = { historyFor = null }
+        ) {
+            Column(
+                Modifier
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (w.history.isEmpty()) {
+                    Text("暂无运行记录", style = MaterialTheme.typography.bodySmall)
+                }
+                w.history.reversed().forEach { r ->
+                    Column(Modifier.padding(vertical = 5.dp)) {
+                        Text(
+                            (if (r.ok) "✓" else "✗") + " ${fmtTs(r.ts)} · ${sourceLabel(r.trigger)} · ${fmtDur(r.durationMs)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (r.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            r.summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    extFor?.let { w ->
+        val token = remember(w.id) {
+            WorkflowStore.get(w.id)?.let { WorkflowStore.externalToken(it) } ?: ""
+        }
+        val cmd =
+            "adb shell am broadcast -a com.haoai.agent.WORKFLOW_RUN -n com.haoai.agent/.platform.WorkflowTriggerReceiver --es id ${w.id} --es token $token"
+        val clipboard = LocalClipboardManager.current
+        GlassAlertDialog(
+            backdrop = backdrop,
+            title = "外部触发 · ${w.name}",
+            confirmLabel = "复制命令",
+            dismissLabel = "关闭",
+            onConfirm = {
+                clipboard.setText(AnnotatedString(cmd))
+                extFor = null
+            },
+            onDismiss = { extFor = null }
+        ) {
+            Column {
+                Text(
+                    "令牌（每工作流唯一，更换即作废旧令牌）：",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(token, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    "Tasker/MacroDroid：发送广播，动作 com.haoai.agent.WORKFLOW_RUN，目标组件 com.haoai.agent/.platform.WorkflowTriggerReceiver（须显式组件，隐式广播会被系统拦截），字符串 extras：id=${w.id}（或 name=工作流名）、token=$token。仅已启用的流程可被拉起。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    cmd,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditWorkflowDialog(
+    editing: WorkflowStore.WorkflowDef?,
+    container: com.haoai.agent.data.AppContainer,
+    backdrop: LayerBackdrop,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit
+) {
+    var advanced by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf(editing?.name ?: "新工作流") }
+    var triggerType by remember {
+        mutableStateOf(TRIGGER_TYPES.indexOf(editing?.trigger?.type ?: "schedule").coerceAtLeast(0))
+    }
+    var triggerConfig by remember { mutableStateOf(editing?.trigger?.config?.ifBlank { "every:30m" } ?: "every:30m") }
+    var steps by remember {
+        mutableStateOf(editing?.steps?.ifEmpty { listOf(WorkflowStore.Step(type = "prompt", text = "")) }
+            ?: listOf(WorkflowStore.Step(type = "prompt", text = "")))
+    }
+    var json by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf<String?>(null) }
+
+    fun toDef(): WorkflowStore.WorkflowDef = WorkflowStore.WorkflowDef(
+        id = editing?.id ?: WorkflowStore.newId(),
+        name = name.trim().take(40).ifBlank { "未命名工作流" },
+        enabled = editing?.enabled ?: false,
+        pendingConfirm = editing?.pendingConfirm ?: false,
+        trigger = WorkflowStore.Trigger(TRIGGER_TYPES[triggerType], triggerConfig.trim()),
+        steps = steps,
+        createdAt = editing?.createdAt ?: System.currentTimeMillis(),
+        lastRun = editing?.lastRun,
+        history = editing?.history ?: emptyList(),
+        externalToken = editing?.externalToken
+    )
+
+    fun save(d: WorkflowStore.WorkflowDef) {
+        WorkflowStore.save(d)
+        if (d.enabled && d.trigger.type == "schedule") {
+            WorkflowRunner.enqueueSchedule(container.appContext, d.id, d.trigger.config)
+        } else WorkflowRunner.cancelSchedule(container.appContext, d.id)
+        onSaved()
+    }
+
+    GlassAlertDialog(
+        backdrop = backdrop,
+        title = if (editing == null) "新建工作流" else "编辑工作流",
+        confirmLabel = "保存",
+        dismissLabel = "取消",
+        contentMaxHeight = 480.dp,
+        onConfirm = {
+            if (advanced) {
+                runCatching {
+                    HaoJson.json.decodeFromString(WorkflowStore.WorkflowDef.serializer(), json)
+                }.onSuccess { err = null; save(it) }
+                    .onFailure { err = "JSON 无效：${it.message}" }
+            } else {
+                val d = toDef()
+                if (d.trigger.type == "schedule" && !WorkflowStore.validScheduleSpec(d.trigger.config)) {
+                    err = "定时规格无效。可用：every:30m / every:2h / every:1d / daily:09:30 / hourly"
+                } else if (d.steps.none { it.type == "prompt" && it.text.isNotBlank() || it.type == "tool" && it.tool.isNotBlank() }) {
+                    err = "至少需要一个非空步骤（指令或工具）"
+                } else {
+                    err = null; save(d)
+                }
+            }
+        },
+        onDismiss = onDismiss
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            Text(
+                if (advanced) "← 可视化编辑" else "高级 JSON 模式",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        if (advanced) {
+                            runCatching {
+                                HaoJson.json.decodeFromString(WorkflowStore.WorkflowDef.serializer(), json)
+                            }.onSuccess { d ->
+                                name = d.name
+                                triggerType = TRIGGER_TYPES.indexOf(d.trigger.type).coerceAtLeast(0)
+                                triggerConfig = d.trigger.config
+                                steps = d.steps.ifEmpty { listOf(WorkflowStore.Step()) }
+                                advanced = false
+                                err = null
+                            }.onFailure { err = "JSON 无效：${it.message}" }
+                        } else {
+                            json = HaoJson.json.encodeToString(WorkflowStore.WorkflowDef.serializer(), toDef())
+                            advanced = true
+                            err = null
+                        }
+                    }
+                    .padding(horizontal = 10.dp, vertical = 2.dp)
+            )
+        }
+        if (advanced) {
+            OutlinedTextField(
+                value = json,
+                onValueChange = { json = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp),
+                textStyle = MaterialTheme.typography.labelSmall,
+                isError = err != null,
+                supportingText = { Text(err ?: "完整 JSON 定义；pendingConfirm=false 且 enabled=true 即生效") }
+            )
+        } else {
+            Column(
+                Modifier
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    "触发方式",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LiquidTabRow(
+                    tabs = listOf("手动", "定时", "开机", "通知"),
+                    selectedIndex = triggerType,
+                    onSelected = { triggerType = it },
+                    backdrop = backdrop
+                )
+                if (TRIGGER_TYPES[triggerType] == "schedule" || TRIGGER_TYPES[triggerType] == "notification") {
+                    OutlinedTextField(
+                        value = triggerConfig,
+                        onValueChange = { triggerConfig = it },
+                        label = { Text(if (TRIGGER_TYPES[triggerType] == "schedule") "定时规格" else "通知关键词") },
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                if (TRIGGER_TYPES[triggerType] == "schedule")
+                                    "every:30m / every:2h / every:1d / daily:09:30 / hourly"
+                                else "捕获到含关键词的通知时触发（需通知使用权）",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Spacer(Modifier.size(10.dp))
+                steps.forEachIndexed { i, s ->
+                    StepEditorCard(
+                        index = i,
+                        total = steps.size,
+                        step = s,
+                        backdrop = backdrop,
+                        onChange = { ns -> steps = steps.toMutableList().also { it[i] = ns } },
+                        onRemove = { steps = steps.toMutableList().also { it.removeAt(i) } },
+                        onMove = { delta ->
+                            val j = i + delta
+                            if (j in steps.indices) {
+                                steps = steps.toMutableList().also { m -> m[i] = m[j].also { m[j] = m[i] } }
+                            }
+                        }
+                    )
+                    if (i < steps.size - 1) {
+                        Text(
+                            "↓ 输出可经 {{prev}} / {{step${i + 1}}} 传入后续步骤",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, top = 1.dp, bottom = 1.dp)
+                        )
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        "+ 添加步骤",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { steps = steps + WorkflowStore.Step() }
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+                err?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 单步骤卡片：类型切换 + 指令/工具参数 + 条件 + 失败中止 + 排序/删除。 */
+@Composable
+private fun StepEditorCard(
+    index: Int,
+    total: Int,
+    step: WorkflowStore.Step,
+    backdrop: LayerBackdrop,
+    onChange: (WorkflowStore.Step) -> Unit,
+    onRemove: () -> Unit,
+    onMove: (Int) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "步骤 ${index + 1}",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                Icons.Filled.KeyboardArrowUp,
+                contentDescription = "上移",
+                tint = if (index > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .size(18.dp)
+                    .clickable(enabled = index > 0) { onMove(-1) }
+            )
+            Spacer(Modifier.size(6.dp))
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = "下移",
+                tint = if (index < total - 1) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .size(18.dp)
+                    .clickable(enabled = index < total - 1) { onMove(1) }
+            )
+            Spacer(Modifier.size(6.dp))
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "删除步骤",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(16.dp)
+                    .clickable { onRemove() }
+            )
+        }
+        Spacer(Modifier.size(6.dp))
+        LiquidTabRow(
+            tabs = listOf("指令（Agent）", "工具直调"),
+            selectedIndex = if (step.type == "tool") 1 else 0,
+            onSelected = { onChange(step.copy(type = if (it == 1) "tool" else "prompt")) },
+            backdrop = backdrop
+        )
+        Spacer(Modifier.size(8.dp))
+        if (step.type == "tool") {
+            OutlinedTextField(
+                value = step.tool,
+                onValueChange = { onChange(step.copy(tool = it.trim().take(60))) },
+                label = { Text("工具名") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = step.args,
+                onValueChange = { onChange(step.copy(args = it.take(4000))) },
+                label = { Text("参数 JSON") },
+                textStyle = MaterialTheme.typography.labelSmall,
+                supportingText = { Text("支持 {{prev}}/{{stepN}}，注入时自动 JSON 转义", style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else {
+            OutlinedTextField(
+                value = step.text,
+                onValueChange = { onChange(step.copy(text = it.take(2000))) },
+                label = { Text("交给代理的指令") },
+                textStyle = MaterialTheme.typography.bodySmall,
+                minLines = 2,
+                maxLines = 6,
+                supportingText = { Text("支持 {{prev}}=上一步输出、{{step1}}=第 1 步输出", style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        OutlinedTextField(
+            value = step.condition,
+            onValueChange = { onChange(step.copy(condition = it.take(200))) },
+            label = { Text("条件（可选）") },
+            singleLine = true,
+            placeholder = { Text("prev_contains:完成") },
+            supportingText = { Text("prev_contains:X / prev_not_contains:X，不满足则跳过此步", style = MaterialTheme.typography.labelSmall) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LiquidToggle(
+                checked = step.stopOnError,
+                onCheckedChange = { onChange(step.copy(stopOnError = it)) },
+                backdrop = backdrop
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                "失败中止",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun fmtTs(ts: Long): String =
+    java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ts))
+
+private fun fmtDur(ms: Long): String =
+    if (ms <= 0) "" else if (ms < 60_000) "${ms / 1000}s" else "${ms / 60_000}m${(ms % 60_000) / 1000}s"
+
+private fun sourceLabel(t: String): String = when (t) {
+    "manual" -> "手动"
+    "schedule" -> "定时"
+    "boot" -> "开机"
+    "notification" -> "通知"
+    "external" -> "外部"
+    else -> t
 }
 
 private fun triggerLabel(w: WorkflowStore.WorkflowDef): String = when (w.trigger.type) {

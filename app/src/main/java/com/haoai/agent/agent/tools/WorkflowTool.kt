@@ -21,7 +21,10 @@ class WorkflowTool(private val appFilesDir: java.io.File) : Tool {
         "把重复任务沉淀为工作流（需用户在管理页确认后才会启用执行）。action: save(name, triggerType, triggerConfig, steps) / list / delete(id)。" +
             "triggerType: manual|schedule|boot|notification；triggerConfig 为 schedule 时的规格（every:30m / daily:09:30 / hourly）；" +
             "notification 时为触发关键词。" +
-            "steps 为 JSON 数组，每步 {\"type\":\"prompt\",\"text\":\"交给代理的指令\"} 或 {\"type\":\"tool\",\"tool\":\"工具名\",\"args\":\"{} 参数JSON\",\"stopOnError\":true}。"
+            "steps 为 JSON 数组，每步 {\"type\":\"prompt\",\"text\":\"交给代理的指令\",\"condition\":\"可选\"} 或 {\"type\":\"tool\",\"tool\":\"工具名\",\"args\":\"{} 参数JSON\",\"condition\":\"可选\",\"stopOnError\":true}。" +
+            "步骤间数据传递：text/args 里可用 {{prev}} 引用上一步输出、{{step1}}/{{step2}} 引用第 N 步输出（tool 的 args 会做 JSON 转义）。" +
+            "条件分支：condition 为 prev_contains:关键词 或 prev_not_contains:关键词（对上一步输出判断，不满足则跳过该步）。" +
+            "外部触发：启用后管理页提供令牌，Tasker/adb 广播 com.haoai.agent.WORKFLOW_RUN 可拉起。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -53,12 +56,16 @@ class WorkflowTool(private val appFilesDir: java.io.File) : Tool {
                             val o = el.jsonObject
                             val type = o["type"]?.jsonPrimitive?.contentOrNull?.lowercase() ?: "prompt"
                             if (type !in listOf("prompt", "tool")) throw Exception("step.type 仅支持 prompt/tool")
+                            val condition = o["condition"]?.jsonPrimitive?.contentOrNull.orEmpty().take(200)
+                            if (!com.haoai.agent.agent.workflow.WorkflowStore.validCondition(condition))
+                                throw Exception("condition 仅支持 prev_contains:文本 / prev_not_contains:文本")
                             com.haoai.agent.agent.workflow.WorkflowStore.Step(
                                 type = type,
                                 text = o["text"]?.jsonPrimitive?.contentOrNull.orEmpty().take(2000),
                                 tool = o["tool"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                                 args = o["args"]?.jsonPrimitive?.contentOrNull.orEmpty().take(4000),
-                                stopOnError = o["stopOnError"]?.jsonPrimitive?.contentOrNull != "false"
+                                stopOnError = o["stopOnError"]?.jsonPrimitive?.contentOrNull != "false",
+                                condition = condition
                             )
                         }
                 }.getOrElse { return ToolResult("steps JSON 无效：${it.message}", true) }

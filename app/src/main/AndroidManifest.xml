@@ -70,6 +70,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Phase 6 工作流外部触发（Tasker/MacroDroid/adb 广播）：须携带每流程的触发令牌 -->
+        <receiver
+            android:name=".platform.WorkflowTriggerReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.haoai.agent.WORKFLOW_RUN" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".platform.NotificationCapture"
             android:exported="false"
