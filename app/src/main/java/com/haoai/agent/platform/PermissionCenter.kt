@@ -32,7 +32,9 @@ data class PermSpec(
     val description: String,
     val permissions: List<String> = emptyList(),
     /** true=特殊权限（需跳转系统设置开关），false=运行时权限（可弹系统对话框） */
-    val special: Boolean = false
+    val special: Boolean = false,
+    /** special 权限跳转的系统设置 action（storage 走专用「所有文件访问」页，其余用此 action） */
+    val settingsAction: String? = null
 )
 
 object PermissionCenter {
@@ -68,8 +70,18 @@ object PermissionCenter {
         "notifications", "通知", "后台任务完成与定时提醒的通知推送",
         if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
     )
+    val NOTIF_LISTENER = PermSpec(
+        "notif_listener", "通知使用权", "读取最近系统通知（notifications_read 工具）",
+        special = true,
+        settingsAction = Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
+    )
+    val EXACT_ALARM = PermSpec(
+        "exact_alarm", "精确闹钟", "梦境整理定时更准时（可选；未授权自动降级 ±5 分钟窗口）",
+        special = true,
+        settingsAction = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+    )
 
-    val ALL = listOf(CAMERA, LOCATION, MEDIA, STORAGE, NOTIFICATIONS, CALENDAR, CONTACTS)
+    val ALL = listOf(CAMERA, LOCATION, MEDIA, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, CALENDAR, CONTACTS)
 
     private fun mediaPerms(): List<String> =
         if (Build.VERSION.SDK_INT >= 33)
@@ -79,6 +91,14 @@ object PermissionCenter {
 
     fun granted(context: Context, spec: PermSpec): Boolean = when {
         spec.key == "storage" -> Environment.isExternalStorageManager()
+        spec.key == "notif_listener" -> Settings.Secure.getString(
+            context.contentResolver, "enabled_notification_listeners"
+        )?.contains(context.packageName) == true
+        spec.key == "exact_alarm" ->
+            if (Build.VERSION.SDK_INT >= 31)
+                (context.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager)
+                    ?.canScheduleExactAlarms() ?: true
+            else true
         spec.permissions.isEmpty() -> true
         else -> spec.permissions.all {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
@@ -92,7 +112,7 @@ object PermissionCenter {
     suspend fun ensure(context: Context, spec: PermSpec, timeoutMs: Long = 90_000): Boolean {
         if (granted(context, spec)) return true
         return if (spec.special) {
-            ensureSpecial(context, timeoutMs)
+            ensureSpecial(context, spec, timeoutMs)
         } else {
             val launcher = PermissionBridge.requestRuntime ?: return false
             val result = withTimeoutOrNull(timeoutMs) {
@@ -104,23 +124,31 @@ object PermissionCenter {
         }
     }
 
-    private suspend fun ensureSpecial(context: Context, timeoutMs: Long): Boolean {
-        val ok = runCatching {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }.recoverCatching {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }.isSuccess
+    private suspend fun ensureSpecial(context: Context, spec: PermSpec, timeoutMs: Long): Boolean {
+        val ok = if (spec.key == "storage") {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.recoverCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.isSuccess
+        } else {
+            runCatching {
+                context.startActivity(
+                    Intent(spec.settingsAction).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.isSuccess
+        }
         if (!ok) return false
         return runCatching {
             val deadline = System.currentTimeMillis() + timeoutMs
             while (System.currentTimeMillis() < deadline) {
-                if (Environment.isExternalStorageManager()) return true
+                if (granted(context, spec)) return true
                 delay(800)
             }
             false

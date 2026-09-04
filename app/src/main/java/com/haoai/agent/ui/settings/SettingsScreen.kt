@@ -1471,6 +1471,23 @@ private fun LazyListScope.privacyItems(
                 onChange = { vm.setA11yAdaptiveMode(it) },
                 backdrop = backdrop
             )
+            // 可选增强状态：WRITE_SECURE_SETTINGS（adb 一次性授予）→ Agent 需要无障碍时静默自启
+            val wssGranted = runCatching {
+                context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            }.getOrDefault(false)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("无障碍自动开启（可选增强）", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (wssGranted) "已授权：Agent 需要时会静默开启无障碍，全程不弹页"
+                        else "未授权：需要时自动弹出无障碍开关页等待开启；电脑 adb 执行 " +
+                            "pm grant com.haoai.agent android.permission.WRITE_SECURE_SETTINGS 后可静默自启",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
     item { SectionTitle("后台自动化（虚拟屏）") }
@@ -1527,9 +1544,9 @@ private fun LazyListScope.privacyItems(
                 )
             }
             Text(
-                "说明：操作走无障碍节点（点击/输入/滚动），无需触摸注入；精确手势（拖动滑块）本版本未启用，" +
-                    "此类操作会明确报受限并引导节点方案。熄屏场景在部分 ROM 受限。部分 ROM（含 Flyme 等）的虚拟屏仅合入纯色/启动画面，" +
-                    "截图不可用但控件树操作不受影响（工具会明确提示以控件树为准）。",
+                "虚拟屏能力边界：点击/输入/滚动走无障碍节点操作，不占用你的主屏；精确手势（拖动滑块、拖拽排序、双指缩放）虚拟屏不支持，" +
+                    "相关操作会明确报受限并引导节点方案。部分 ROM（含 Flyme）虚拟屏可能只渲染纯色/启动画面——截图空白属正常，" +
+                    "控件树操作不受影响（工具会提示以控件树为准）；熄屏投屏同样因 ROM 而异。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
