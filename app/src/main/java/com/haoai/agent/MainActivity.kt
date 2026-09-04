@@ -23,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.zIndex
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -362,6 +363,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             val ease = androidx.compose.animation.core.FastOutSlowInEasing
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
+                // pop 方向：退出页（设置）压在进入页（聊天）之上——聊天页 LazyColumn
+                // 首帧组合慢，曾被看穿出现空白中间帧
                 transitionSpec = {
                     val from = levelOf(initialState)
                     val to = levelOf(targetState)
@@ -382,7 +385,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                                 androidx.compose.animation.slideOutHorizontally(slideFull) { -it / 4 }
                             )
                         }
-                        // 返回聊天：设置页右滑出（完整离场），聊天页带轻微视差回来
+                        // 返回聊天：设置页右滑出（完整离场），聊天页带轻微视差回来。
+                        // targetContentZIndex 让退出的设置页压在聊天页之上——聊天页
+                        // LazyColumn 首帧组合慢（曾出现空白中间帧），被盖住时视觉无洞
                         (from == 1 && to == 0) -> {
                             (androidx.compose.animation.slideInHorizontally(parallax) { -it / 7 })
                                 .togetherWith(
@@ -420,13 +425,21 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 },
                 label = "screenSwitch"
             ) { s ->
+            // pop（返回聊天）时让退出页压在进入页上：聊天页 LazyColumn 首帧组合慢，
+            // 被滑出的设置页盖住可避免空白中间帧被看穿
+            androidx.compose.ui.Modifier.zIndex(if (s == 1 && screen == 0) 1f else 0f).let { pageZ ->
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
                     backdrop = backdrop,
                     initialSection = settingsSection,
                     onSectionChange = { settingsSection = it },
-                    onBack = { screen = 0 },
+                    // 从设置返回聊天：恢复抽屉展开态（与预览方案一致——返回后侧边栏在）。
+                    // snapOpen 无动画瞬位，与 pop 过渡同帧；聊天页带展开抽屉一起视差回来
+                    onBack = {
+                        screen = 0
+                        rootScope.launch { drawer.snapOpen() }
+                    },
                     onOpenMemories = { screen = 2 },
                     onOpenSchedules = { screen = 3 },
                     onOpenSkills = { screen = 5 },
@@ -493,6 +506,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     }
                 )
             }
+            } // pageZ let
             } // AnimatedContent content lambda
             // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
             val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
