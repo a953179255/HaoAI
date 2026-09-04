@@ -216,7 +216,7 @@ fun ChatScreen(
     drawer: DrawerController = remember { DrawerController() },
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
-    onOpenSettings: (fromDrawer: Boolean) -> Unit,
+    onOpenSettings: () -> Unit,
     onOpenSessions: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
     onOpenVscreen: () -> Unit = {}
@@ -931,7 +931,7 @@ fun ChatScreen(
                             onDeleteSession = { id -> vm.deleteSession(id) },
                             onEditProfile = { showProfileEdit = true },
                             onSettings = {
-                                onOpenSettings(true)
+                                onOpenSettings()
                             }
                         )
                     }

@@ -310,7 +310,6 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val chatListState = androidx.compose.runtime.saveable.rememberSaveable(
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
     ) { androidx.compose.foundation.lazy.LazyListState() }
-    var cameFromDrawer by rememberSaveable { mutableStateOf(false) }
 
     // 设置二级页状态提升：从设置子页进入管理页（记忆库等）后，返回时回到原子页而非设置根
     var settingsSection by rememberSaveable { mutableStateOf("") }
@@ -330,19 +329,67 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 onSave = { name, soul -> chatVm.completeOnboarding(name, soul) }
             )
         } else {
-            // 页面切换过渡：淡入 + 3% 轻微上移 + 98%→100% 缩放（上游 式克制动效）。
-            // 不用滑动方向感（左右 slide）：screen 编号与层级无关（0=聊天 1=设置 8=工作流），
-            // 方向滑动会显得随机；快速 fade+微位移既有过渡又不拖沓。
+            // 页面切换过渡（上游 RouteActivity 同款，源码参考其 NavDisplay transitionSpec）：
+            // 按页面层级 push/pop —— 进入更深层级：新页右滑全宽入、旧页左移 1/2 + 缩 0.7 + 淡出
+            // （双层视差）；返回反向。聊天页(0)是根，与它互转一律 fade（根页不滑，只有对方动）。
+            // 侧边栏点「设置」直接切页：滑入是「覆盖」语义，抽屉跟着旧页被盖过去，
+            // 无需先收抽屉（fade 会露馅，slide 不会）；返回聊天时抽屉随页滑出自然重现。
+            // screen 编号与层级无关（2=记忆 3=定时 5=技能…），层级查此表。
+            fun levelOf(s: Int) = when (s) {
+                0 -> 0          // 聊天（根）
+                1, 4, 7 -> 1    // 设置 / 会话列表 / 浏览器
+                else -> 2       // 记忆 / 定时 / 技能 / MCP / 工作流
+            }
+            val ease = androidx.compose.animation.core.FastOutSlowInEasing
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
                 transitionSpec = {
-                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) +
-                        androidx.compose.animation.scaleIn(
-                            initialScale = 0.985f,
-                            animationSpec = androidx.compose.animation.core.tween(200)
-                        )).togetherWith(
-                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120))
-                    )
+                    val from = levelOf(initialState)
+                    val to = levelOf(targetState)
+                    // slide 用 IntOffset 规格，scale 用 Float 规格（Compose 泛型不互通）
+                    val slideFull: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+                        androidx.compose.animation.core.tween(durationMillis = 400, easing = ease)
+                    val slideHalf: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+                        androidx.compose.animation.core.tween(durationMillis = 400, easing = ease)
+                    val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
+                        androidx.compose.animation.core.tween(durationMillis = 400, easing = ease)
+                    when {
+                        // 根页(聊天)参与的双向：纯 fade，根页不滑
+                        from == 0 || to == 0 -> {
+                            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220, easing = ease)) +
+                                androidx.compose.animation.scaleIn(
+                                    initialScale = 0.985f,
+                                    animationSpec = androidx.compose.animation.core.tween(260, easing = ease)
+                                )).togetherWith(
+                                androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(180, easing = ease))
+                            )
+                        }
+                        // push（进入更深层级）：右滑入 + 左视差退出
+                        to > from -> {
+                            (androidx.compose.animation.slideInHorizontally(slideFull) { it } +
+                                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200, easing = ease)))
+                                .togetherWith(
+                                androidx.compose.animation.slideOutHorizontally(slideHalf) { -it / 2 } +
+                                    androidx.compose.animation.scaleOut(
+                                        targetScale = 0.7f,
+                                        animationSpec = scaleSpec
+                                    ) +
+                                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(240, easing = ease))
+                            )
+                        }
+                        // pop（返回）：左页回来 + 右滑出
+                        else -> {
+                            (androidx.compose.animation.slideInHorizontally(slideHalf) { -it / 2 } +
+                                androidx.compose.animation.scaleIn(
+                                    initialScale = 0.7f,
+                                    animationSpec = scaleSpec
+                                ) +
+                                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200, easing = ease)))
+                                .togetherWith(
+                                androidx.compose.animation.slideOutHorizontally(slideFull) { it }
+                            )
+                        }
+                    }
                 },
                 label = "screenSwitch"
             ) { s ->
@@ -352,15 +399,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     backdrop = backdrop,
                     initialSection = settingsSection,
                     onSectionChange = { settingsSection = it },
-                    onBack = {
-                        screen = 0
-                        // 从侧边栏进入设置的：返回时侧边栏直接以展开态出现（snapOpen），
-                        // 不重播滑出动画——与页面淡入叠加会显得两段式、不丝滑
-                        if (cameFromDrawer) {
-                            cameFromDrawer = false
-                            rootScope.launch { drawer.snapOpen() }
-                        }
-                    },
+                    onBack = { screen = 0 },
                     onOpenMemories = { screen = 2 },
                     onOpenSchedules = { screen = 3 },
                     onOpenSkills = { screen = 5 },
@@ -408,10 +447,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     backdrop = backdrop,
                     drawer = drawer,
                     listState = chatListState,
-                    onOpenSettings = { fromDrawer ->
-                        cameFromDrawer = fromDrawer
-                        screen = 1
-                    },
+                    // 侧边栏点设置：直接切页——push 滑入是覆盖语义，抽屉跟着旧页
+                    // 被盖过去（上游 同款，无需先收抽屉）；返回时 drawer 仍是
+                    // Open 态，聊天页带展开的抽屉一起从左侧视差回来，自然衔接
+                    onOpenSettings = { screen = 1 },
                     // 先收起抽屉再切页：否则返回时 drawerState 仍是 Open，抽屉会原样展开
                     onOpenSessions = {
                         rootScope.launch { drawer.close() }
