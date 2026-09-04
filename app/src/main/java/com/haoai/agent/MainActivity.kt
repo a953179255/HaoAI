@@ -276,7 +276,23 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         "light" -> false
         else -> androidx.compose.foundation.isSystemInDarkTheme()
     }
-    val wallpaperOnScreen = settings.wallpaperGlobal || screen == 0
+    // 壁纸可见性：聊天页(0)或全局壁纸。注意过渡期保护——
+    // 从聊天页切到设置页时若壁纸立即消失，退出中的聊天页（半透明玻璃）
+    // 背后露出的底色突变，右缘出现明暗断裂竖条（用户截图确认）
+    val wallpaperOnScreenBase = settings.wallpaperGlobal || screen == 0
+    // transition 活跃期间保持过渡前的壁纸状态，落位后才跟随 screen 切换
+    var wallpaperOnScreen by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(wallpaperOnScreenBase)
+    }
+    androidx.compose.runtime.LaunchedEffect(wallpaperOnScreenBase) {
+        // 仅在变为 false 时延迟释放（等 380ms 转场走完）；变 true 立即生效
+        if (wallpaperOnScreenBase) {
+            wallpaperOnScreen = true
+        } else {
+            kotlinx.coroutines.delay(400)
+            wallpaperOnScreen = false
+        }
+    }
     // 素底玻璃的底色跟随主题（动态取色时随 Material You 变化）：
     // 上浅下深两级 surface，玻璃 vibrancy 透出的即主题背景色
     val scheme = androidx.compose.material3.MaterialTheme.colorScheme
