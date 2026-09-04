@@ -40,7 +40,7 @@ data class PermSpec(
 object PermissionCenter {
 
     val CAMERA = PermSpec(
-        "camera", "相机", "拍照与录像（camera 工具）",
+        "camera", "相机", "拍照（camera 工具、聊天拍照发图）",
         listOf(Manifest.permission.CAMERA)
     )
     val LOCATION = PermSpec(
@@ -49,10 +49,6 @@ object PermissionCenter {
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
-    )
-    val MEDIA = PermSpec(
-        "media", "照片与视频", "读取相册媒体文件（壁纸选择、图片识别）",
-        mediaPerms()
     )
     val STORAGE = PermSpec(
         "storage", "文件管理", "管理手机存储：读写工作空间之外的任意文件",
@@ -81,13 +77,9 @@ object PermissionCenter {
         settingsAction = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
     )
 
-    val ALL = listOf(CAMERA, LOCATION, MEDIA, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, CALENDAR, CONTACTS)
-
-    private fun mediaPerms(): List<String> =
-        if (Build.VERSION.SDK_INT >= 33)
-            listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
-        else
-            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    // MEDIA（READ_MEDIA_*）已删除：壁纸选择走 SAF 临时授权、图片识别走文件路径+所有文件访问，
+    // 没有任何代码直接查 MediaStore，该权限是纯僵尸项
+    val ALL = listOf(CAMERA, LOCATION, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, CALENDAR, CONTACTS)
 
     fun granted(context: Context, spec: PermSpec): Boolean = when {
         spec.key == "storage" -> Environment.isExternalStorageManager()

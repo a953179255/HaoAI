@@ -325,9 +325,12 @@ fun ChatScreen(
         scope.launch { drawer.close() }
     }
 
+    // ACTION_PICK 分发给默认图库（Flyme 图库等），结果 URI 自带临时读权限；
+    // 原 GetContent() 走 SAF 文档选择器，界面是文件管理器而非图库（用户反馈）
     val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.GetContent()
-    ) { uri ->
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data
         if (uri != null) {
             runCatching {
                 val resolver = context.contentResolver
@@ -736,7 +739,14 @@ fun ChatScreen(
                 },
                 running = running,
                 pendingImage = pendingImage,
-                onPickImage = { imagePicker.launch("image/*") },
+                onPickImage = {
+                    imagePicker.launch(
+                        android.content.Intent(
+                            android.content.Intent.ACTION_PICK,
+                            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        )
+                    )
+                },
                 onTakePhoto = {
                     if (androidx.core.content.ContextCompat.checkSelfPermission(
                             context, android.Manifest.permission.CAMERA
