@@ -317,18 +317,28 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     var scrimLevel by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(0f)
     }
+    // 转场采样冻结：转场期间（含聊天页纯滑动）所有玻璃卡暂用素底采样——
+    // 聊天页退出时其 30% 抽屉遮罩带在屏幕上滑过，设置页玻璃卡实时采样会
+    // 把遮罩带「画进」卡片（左侧深色竖带，转场结束突然变浅，用户截图框选）。
+    // 落位后切回壁纸采样，页面自己的壁纸 Image 底保证观感无缝
+    var samplingFrozen by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
     androidx.compose.runtime.LaunchedEffect(screen) {
         // 转场纱幕只为「有淡出参与」的转场服务（非聊天页之间的纵深转场，
         // 旧页 fadeOut 需要净色接住）。方向二后聊天页参与的转场是纯滑动、
         // 无任何淡出——若升纱幕，转场结束后的 450ms 缓退会在已落位的
         // 聊天页上呈现为「背景缓慢淡出」（用户反馈确认），故直接跳过
         val chatInvolved = screen == 0 || lastScreen == 0
+        samplingFrozen = true
         lastScreen = screen
         if (!chatInvolved) {
             scrimLevel = 0.9f
             kotlinx.coroutines.delay(420)
             scrimLevel = 0f
         }
+        kotlinx.coroutines.delay(100)   // 转场 spring 收尾完再恢复壁纸采样
+        samplingFrozen = false
     }
     val scrimAlpha = androidx.compose.animation.core.animateFloatAsState(
         targetValue = scrimLevel,
@@ -351,8 +361,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // - 设置等二级页 + 全局壁纸开：页面根底自带来对齐的壁纸 Image（SettingsScreen
     //   内部绘制）→ wpBackdrop。上一版强制素底导致「全局壁纸失效显示白底」
     // - 其余（全局关时的二级页）：净色底 → plainBackdrop
-    // 转场期纱幕（页面层之下）负责接住退出页的淡出，采样无需再降级
-    val backdrop = if (wallpaper != null &&
+    // 转场期（samplingFrozen）强制素底：退出页（聊天遮罩带/滑出中的页面）
+    // 会被玻璃卡实时采样画进卡片，落位后突然变化（用户截图框选的深色竖带）
+    val backdrop = if (wallpaper != null && !samplingFrozen &&
         (screen == 0 || settings.wallpaperGlobal)
     ) {
         wpBackdrop
@@ -531,7 +542,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
-                    lockedSection = "memory", onSectionBack = { screen = 1 }
+                    lockedSection = "memory", onSectionBack = { screen = 1 },
+                    onOpenMemories = { screen = 2 }
                 )
                 12 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
@@ -566,24 +578,29 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,
                     // 记忆/任务/技能入口已收进设置页，返回回设置
-                    onBack = { screen = 1 }
+                    onBack = { screen = 1 },
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
                 )
                 3 -> com.haoai.agent.ui.manage.ScheduleScreen(
                     backdrop = backdrop,
-                    onBack = { screen = 1 }
+                    onBack = { screen = 1 },
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
                 )
                 5 -> com.haoai.agent.ui.manage.SkillsScreen(
                     backdrop = backdrop,
-                    onBack = { screen = 1 }
+                    onBack = { screen = 1 },
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
                 )
                 6 -> com.haoai.agent.ui.settings.McpSettingsScreen(
                     backdrop = backdrop,
-                    onBack = { screen = 1 }
+                    onBack = { screen = 1 },
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
                 )
                 8 -> com.haoai.agent.ui.manage.WorkflowScreen(
                     container = container,
                     backdrop = backdrop,
-                    onBack = { screen = 1 }
+                    onBack = { screen = 1 },
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
                 )
                 4 -> com.haoai.agent.ui.sessions.SessionsScreen(
                     vm = chatVm,

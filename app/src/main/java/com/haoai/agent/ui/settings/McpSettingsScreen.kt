@@ -1,6 +1,7 @@
 package com.haoai.agent.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,6 +37,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -56,7 +59,12 @@ import java.util.UUID
  * 按 server 启停与审批级别设置。视觉沿用 Glass 组件库。
  */
 @Composable
-fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: () -> Unit) {
+fun McpSettingsScreen(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onBack: () -> Unit,
+    /** 全局壁纸开时传入：页面自带对齐的壁纸底 */
+    wallpaper: android.graphics.Bitmap? = null
+) {
     var servers by remember { mutableStateOf(McpManager.listServers()) }
     val states by McpManager.states.collectAsState()
     val scope = rememberCoroutineScope()
@@ -98,6 +106,14 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
         )
     } else {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper.asImageBitmap(),
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.matchParentSize()
+            )
+        }
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Spacer(Modifier.height(56.dp))
                 Text(

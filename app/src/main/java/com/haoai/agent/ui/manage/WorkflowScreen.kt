@@ -1,5 +1,6 @@
 package com.haoai.agent.ui.manage
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +35,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -60,7 +63,9 @@ private val TRIGGER_TYPES = listOf("manual", "schedule", "boot", "notification")
 fun WorkflowScreen(
     container: com.haoai.agent.data.AppContainer,
     backdrop: LayerBackdrop,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** 全局壁纸开时传入：页面自带对齐的壁纸底 */
+    wallpaper: android.graphics.Bitmap? = null
 ) {
     var workflows by remember { mutableStateOf(WorkflowStore.list()) }
     var editTarget by remember { mutableStateOf<WorkflowStore.WorkflowDef?>(null) }
@@ -78,9 +83,18 @@ fun WorkflowScreen(
     androidx.compose.foundation.layout.Box(
         Modifier
             .fillMaxSize()
-            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑（同设置页修复）
+            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑；
+            // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper.asImageBitmap(),
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.matchParentSize()
+            )
+        }
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()

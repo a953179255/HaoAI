@@ -1,6 +1,7 @@
 package com.haoai.agent.ui.manage
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,7 +46,12 @@ import kotlinx.coroutines.launch
  * 技能库管理：查看/手动添加/删除 SKILL.md（skill 工具的图形入口）。
  */
 @Composable
-fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: () -> Unit) {
+fun SkillsScreen(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onBack: () -> Unit,
+    /** 全局壁纸开时传入：页面自带对齐的壁纸底 */
+    wallpaper: android.graphics.Bitmap? = null
+) {
     val store = SkillStore
     val context = androidx.compose.ui.platform.LocalContext.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -127,9 +135,18 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     Box(
         Modifier
             .fillMaxSize()
-            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑（同设置页修复）
+            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑；
+            // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
+        if (wallpaper != null) {
+            Image(
+                bitmap = wallpaper.asImageBitmap(),
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.matchParentSize()
+            )
+        }
         Column(
             Modifier
                 .fillMaxSize()
