@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -315,12 +316,14 @@ fun LiquidGlassButton(
             shape = { shape },
             effects = {
                 vibrancy()
-                blur(3.dp.toPx())
-                lens(10.dp.toPx(), 20.dp.toPx())
+                // Catalog LiquidButton 同款：blur(2.dp) + lens(12.dp, 24.dp) —
+                // 适中折射强度，按压时 liquid 感最强
+                blur(2.dp.toPx())
+                lens(12.dp.toPx(), 24.dp.toPx())
             },
             layerBlock = {
                 val progress = highlight.pressProgress
-                val scale = lerp(1f, 1f + 1.5.dp.toPx() / size.height, progress)
+                val scale = lerp(1f, 1f + 2.dp.toPx() / size.height, progress)
                 // 不做跟指平移：折射层跟随指尖在小按钮上读作「按钮可以被拖走」（两轮用户反馈）。
                 // 交互反馈保留按压缩放 + 指尖辉光，位置完全静止
                 scaleX = scale
@@ -965,29 +968,58 @@ fun GlassTextButton(
     enabled: Boolean = true,
     refract: Boolean? = null
 ) {
-    val shape: Shape = RoundedCornerShape(percent = 50)
-    val container: Modifier = Modifier
-        .background(glassSurfaceColor(0.28f), shape)
-        .border(1.dp, glassBorderColor(0.55f), shape)
-    val inner = @Composable {
+    // Catalog 同款轻量玻璃按钮：无 surfaceColor 覆盖，纯描边 + 点击液感反馈。
+    // 弹窗内 drawBackdrop 会自引用渲染崩溃（背景层包含自身像素），所以放弃
+    // 在弹窗内做折射，统一走本地磨砂；但**关键不贴半透明白底**——
+    // 之前 0.28f 的半透明在弹窗里让背景页面元素透出来，按钮边缘形成视觉上
+    // 的「大阴影」，违背 Catalog 的轻量玻璃美学
+    val shape = RoundedCornerShape(percent = 50)
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val tintAlpha = androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.10f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(120),
+        label = "glassTextBtnTint"
+    ).value
+
+    Box(
+        modifier
+            .graphicsLayer {
+                // 按压缩放：Catalog LiquidButton 标配（scale 1.0 → 0.97），
+                // 反馈感强但视觉无负担（不放大、不摇晃）
+                val scale = if (isPressed && enabled) 0.965f else 1f
+                scaleX = scale
+                scaleY = scale
+                // 禁用观感：与 LiquidGlassButton 统一处理
+                alpha = if (enabled) 1f else 0.45f
+            }
+            .background(
+                MaterialTheme.colorScheme.onBackground.copy(alpha = tintAlpha),
+                shape
+            )
+            .border(
+                1.dp,
+                if (enabled) glassBorderColor(0.55f)
+                else glassBorderColor(0.25f),
+                shape
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                enabled = enabled,
+                onClick = onClick
+            )
+            .padding(horizontal = 14.dp, vertical = 9.dp)
+    ) {
         Text(
             text,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = if (enabled) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f)
         )
-    }
-    androidx.compose.material3.TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier,
-        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-            contentColor = Color.Transparent
-        )
-    ) {
-        Box(container) { inner() }
     }
 }
 
