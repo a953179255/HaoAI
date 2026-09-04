@@ -495,7 +495,7 @@ fun SettingsScreen(
         val nextUp = remaining.firstOrNull()?.name
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
-            title = "删除模型服务",
+            title = "删除模型供应商",
             onDismiss = { pendingDelete = null },
             confirmLabel = "删除",
             onConfirm = {
@@ -1035,7 +1035,7 @@ private fun LazyListScope.brainItems(
     onDeleteRequest: (String) -> Unit = {},
     onPickPurposeModel: (String) -> Unit = {}
 ) {
-    item { SectionTitle("供应商") }
+    item { SectionTitle("模型供应商") }
     item {
         val ps = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
         val activeId = settings.activeProviderId
@@ -1071,7 +1071,8 @@ private fun LazyListScope.brainItems(
                                 Column(Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(p.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                        val modelCount = p.models.size + if (p.model.isNotBlank()) 1 else 0
+                                        // 去重计数：models 里含与默认同 ID 的能力条目，不能简单 size+1
+                                        val modelCount = p.modelIds().distinct().size
                                         if (modelCount > 1) {
                                             Spacer(Modifier.size(8.dp))
                                             Text(
@@ -1122,7 +1123,9 @@ private fun LazyListScope.brainItems(
                                         onClick = {},
                                         onRemove = null
                                     )
-                                    p.models.forEach { m ->
+                                    // 排除与默认同 ID 的条目：能力覆盖数据仍留在 models 里
+                                    // （modelEntry() 依赖），只是不重复渲染成可点的幽灵行
+                                    p.models.filter { it.id != p.model }.forEach { m ->
                                         ModelSwitchRow(
                                             id = m.id,
                                             isDefault = false,
@@ -1160,7 +1163,7 @@ private fun LazyListScope.brainItems(
                         )
                         Spacer(Modifier.size(10.dp))
                         Text(
-                            "添加供应商",
+                            "添加模型供应商",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary
@@ -2667,7 +2670,7 @@ private fun ProviderDialog(
                     .padding(top = 16.dp, bottom = 12.dp)
             ) {
                 Text(
-                    if (draft.id == null) "添加模型服务" else "编辑模型服务",
+                    if (draft.id == null) "添加模型供应商" else "编辑模型供应商",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground

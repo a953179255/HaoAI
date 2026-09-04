@@ -386,7 +386,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                     val keyCipher = newCipher ?: existing?.apiKeyCipher ?: ""
                     val list = s.providers.filterNot { it.id == pid } + ProviderConfig(
                         id = pid,
-                        name = d.name.ifBlank { "模型服务" },
+                        name = d.name.ifBlank { "模型供应商" },
                         baseUrl = url,
                         model = d.model.trim(),
                         apiKeyCipher = keyCipher,
