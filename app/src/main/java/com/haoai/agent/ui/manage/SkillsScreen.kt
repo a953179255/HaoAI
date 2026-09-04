@@ -127,6 +127,8 @@ fun SkillsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack: (
     Box(
         Modifier
             .fillMaxSize()
+            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑（同设置页修复）
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             Modifier

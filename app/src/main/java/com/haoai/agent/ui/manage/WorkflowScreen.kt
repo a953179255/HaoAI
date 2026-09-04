@@ -68,6 +68,8 @@ fun WorkflowScreen(
     androidx.compose.foundation.layout.Box(
         Modifier
             .fillMaxSize()
+            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑（同设置页修复）
+            .background(MaterialTheme.colorScheme.background)
     ) {
         LazyColumn(
             modifier = Modifier

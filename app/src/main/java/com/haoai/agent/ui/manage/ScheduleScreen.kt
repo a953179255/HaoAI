@@ -1,5 +1,6 @@
 package com.haoai.agent.ui.manage
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +53,8 @@ fun ScheduleScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBack:
     Box(
         Modifier
             .fillMaxSize()
+            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑（同设置页修复）
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             Modifier

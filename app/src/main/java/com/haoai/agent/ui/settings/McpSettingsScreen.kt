@@ -97,7 +97,7 @@ fun McpSettingsScreen(backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onBa
             }
         )
     } else {
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Spacer(Modifier.height(56.dp))
                 Text(
@@ -343,7 +343,11 @@ private fun McpEditView(
         )
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier.fillMaxSize()
+            // 平移转场页面必须有实底：否则转场中卡片缝隙透空黑（同设置页修复）
+            .background(MaterialTheme.colorScheme.background)
+    ) {
         GlassPageBar(
             backdrop = backdrop,
             title = if (initial == null) "添加 MCP 服务器" else "编辑服务器",
