@@ -32,7 +32,7 @@ data class ToolContext(
     val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化总开关（设置页），关闭时 vscreen_* 不注册进工具清单。 */
     val vscreenEnabled: Boolean = false,
-    /** 4.3 虚拟屏画面码率档位（kbps，设置页可选 1500/3000/5000/10000/20000），映射截图清晰度。 */
+    /** 4.3 虚拟屏画面码率档位（kbps，设置页可选 1500/3000/5000/10000），映射截图分辨率与画质。 */
     val vscreenBitrateKbps: Int = 3000,
     /** E7a 当前工具调用的 call id（executeCall 每次执行前更新），供子代理上报关联 UI 卡片。 */
     val currentCallId: String? = null,

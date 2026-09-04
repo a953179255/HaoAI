@@ -1421,38 +1421,19 @@ private fun LazyListScope.privacyItems(
     item {
         val mode = settings.permissionMode
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf(
-                    PermissionMode.ALWAYS_ASK to "全部询问",
-                    PermissionMode.ASK_WRITES to "写入时询问",
-                    PermissionMode.YOLO to "全自动"
-                ).forEach { (m, label) ->
-                    val selected = mode == m
-                    com.haoai.agent.ui.common.LiquidGlassButton(
-                        onClick = { vm.setPermissionMode(m) },
-                        backdrop = backdrop,
-                        shape = RoundedCornerShape(percent = 50),
-                        modifier = Modifier.weight(1f),
-                        surfaceColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                        else Color.White.copy(alpha = 0.10f)
-                    ) {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
-                            maxLines = 1,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-            }
+            // AndroidLiquidGlass 选项卡：玻璃胶囊容器 + 弹性滑动液态指示器（同 LiquidTabRow 统一样式）
+            val permModes = listOf(
+                PermissionMode.ALWAYS_ASK to "全部询问",
+                PermissionMode.ASK_WRITES to "写入时询问",
+                PermissionMode.YOLO to "全自动"
+            )
+            com.haoai.agent.ui.common.LiquidTabRow(
+                tabs = permModes.map { it.second },
+                selectedIndex = permModes.indexOfFirst { it.first == mode },
+                onSelected = { i -> vm.setPermissionMode(permModes[i].first) },
+                backdrop = backdrop,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+            )
         }
     }
     item { SectionTitle("无障碍自动化") }
@@ -1517,35 +1498,25 @@ private fun LazyListScope.privacyItems(
                     Column(Modifier.weight(1f)) {
                         Text("虚拟屏画面码率", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "档位越高截图越清晰，喂给模型的图片越大（当前 ${settings.vscreenBitrateKbps / 1000f} Mbps）",
+                            "档位 = 截图分辨率与画质，越高越清晰、喂给模型的图也越大（当前 ${settings.vscreenBitrateKbps / 1000f} Mbps · ${com.haoai.agent.platform.vdisplay.VirtualScreenController.presetFor(settings.vscreenBitrateKbps).first}px）",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf(1500, 3000, 5000, 10000, 20000).forEach { kbps ->
-                        val selected = settings.vscreenBitrateKbps == kbps
-                        com.haoai.agent.ui.common.LiquidGlassButton(
-                            onClick = { vm.setVscreenBitrate(kbps) },
-                            backdrop = backdrop,
-                            shape = RoundedCornerShape(percent = 50),
-                            surfaceColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
-                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                        ) {
-                            Text(
-                                if (kbps % 1000 == 0) "${kbps / 1000} Mbps" else "1.5 Mbps",
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
+                // 同款 LiquidTabRow 选项卡；20 Mbps 档已移除：映射的 1920px 截图会被视觉模型
+                // 内部再降采样，清晰度无收益、单图 token 开销翻倍（存量 20000 配置就近落到 10 Mbps 高亮）
+                val bitrateOptions = listOf(1500, 3000, 5000, 10000)
+                val selIdx = bitrateOptions.indexOf(settings.vscreenBitrateKbps).takeIf { it >= 0 }
+                    ?: bitrateOptions.indexOfFirst { it >= settings.vscreenBitrateKbps }.takeIf { it >= 0 }
+                    ?: bitrateOptions.lastIndex
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = bitrateOptions.map { if (it % 1000 == 0) "${it / 1000} Mbps" else "1.5 Mbps" },
+                    selectedIndex = selIdx,
+                    onSelected = { i -> vm.setVscreenBitrate(bitrateOptions[i]) },
+                    backdrop = backdrop,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
+                )
                 ToggleRow(
                     title = "运行时任务视图隐藏",
                     subtitle = if (settings.vscreenHideTask) "已开：Agent 运行期间本应用任务从最近任务隐藏，运行结束自动恢复"
