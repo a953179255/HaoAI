@@ -435,27 +435,42 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 transitionSpec = {
                     val from = levelOf(initialState)
                     val to = levelOf(targetState)
+                    // 方向二：聊天页(0)参与的转场用纯滑动——聊天页不缩放不淡出
+                    // （重页面最简单的运动最不容易露馅：缩放+淡出会放大重组延迟
+                    // 的可见性，直线滑动则完全掩盖）。仅非聊天页之间保留
+                    // slide+scale+fade 纵深（用户确认设置↔技能库观感好）
+                    val chatInvolved = initialState == 0 || targetState == 0
                     when {
-                        // push（聊天→设置 / 设置→二级页，同级 1→1 段内切换也走这条）：
-                        // 新页全速滑入；旧页向左滑出 + 缩小沉底 + 变暗
+                        // push（聊天→设置等）：设置页全速滑入盖上来；
+                        // 聊天页（含抽屉）直线左滑出，无缩放无变暗
                         to >= from && initialState != 0 || (from == 0 && to == 1) -> {
                             (androidx.compose.animation.slideInHorizontally(slideSpec) { it })
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
-                                    androidx.compose.animation.scaleOut(
-                                        targetScale = 0.92f, animationSpec = scaleSpec
-                                    ) +
-                                    androidx.compose.animation.fadeOut(fadeSpec)
+                                if (chatInvolved) {
+                                    androidx.compose.animation.slideOutHorizontally(slideSpec) { -it }
+                                } else {
+                                    androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
+                                        androidx.compose.animation.scaleOut(
+                                            targetScale = 0.92f, animationSpec = scaleSpec
+                                        ) +
+                                        androidx.compose.animation.fadeOut(fadeSpec)
+                                }
                             ).apply { targetContentZIndex = 1f }
                         }
-                        // pop（返回聊天 / 返回设置）：旧页全速右滑出；
-                        // 下层页从 0.92 迎上来放大回位 + 淡入（双向运动）
+                        // pop（返回聊天 / 返回设置）：上层页全速右滑出；
+                        // 非聊天下层页从 0.92 迎上来放大回位（双向运动）；
+                        // 聊天页则直线滑回（重页面不做缩放，快照+直线最稳）
                         else -> {
-                            (androidx.compose.animation.slideInHorizontally(slideSpec) { -it / 5 } +
-                                androidx.compose.animation.scaleIn(
-                                    initialScale = 0.92f, animationSpec = scaleSpec
-                                ) +
-                                androidx.compose.animation.fadeIn(fadeSpec))
+                            (androidx.compose.animation.slideInHorizontally(slideSpec) { if (chatInvolved) -it / 4 else -it / 5 } +
+                                if (chatInvolved) {
+                                    // 聊天页直线滑回：不加 scale/fade（重页面纯滑动最稳）
+                                    androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(1))
+                                } else {
+                                    androidx.compose.animation.scaleIn(
+                                        initialScale = 0.92f, animationSpec = scaleSpec
+                                    ) +
+                                    androidx.compose.animation.fadeIn(fadeSpec)
+                                })
                                 .togetherWith(
                                 androidx.compose.animation.slideOutHorizontally(slideSpec) { it }
                             ).apply { targetContentZIndex = -1f }
