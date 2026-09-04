@@ -276,21 +276,22 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         "light" -> false
         else -> androidx.compose.foundation.isSystemInDarkTheme()
     }
-    // 壁纸可见性：聊天页(0)或全局壁纸。注意过渡期保护——
-    // 从聊天页切到设置页时若壁纸立即消失，退出中的聊天页（半透明玻璃）
-    // 背后露出的底色突变，右缘出现明暗断裂竖条（用户截图确认）
+    // 壁纸可见性：聊天页(0)或全局壁纸。注意转场期两层要分开处理——
+    // 1) 壁纸 Image 层：从聊天页切走时延迟 400ms 释放（退出中的半透明玻璃
+    //    聊天页背后需要壁纸，否则底色突变出现断裂竖条）
+    // 2) backdrop 采样源：立即跟随 screen——进入页（设置等）的玻璃卡片
+    //    要采样素底 backdrop；若采样壁纸 backdrop，滑入过程会透出清晰壁纸
+    //    且 400ms 后 backdrop 切换时折射内容跳变（闪现壁纸帧，用户截图确认）
     val wallpaperOnScreenBase = settings.wallpaperGlobal || screen == 0
-    // transition 活跃期间保持过渡前的壁纸状态，落位后才跟随 screen 切换
-    var wallpaperOnScreen by androidx.compose.runtime.remember {
+    var wallpaperImageVisible by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(wallpaperOnScreenBase)
     }
     androidx.compose.runtime.LaunchedEffect(wallpaperOnScreenBase) {
-        // 仅在变为 false 时延迟释放（等 380ms 转场走完）；变 true 立即生效
         if (wallpaperOnScreenBase) {
-            wallpaperOnScreen = true
+            wallpaperImageVisible = true
         } else {
             kotlinx.coroutines.delay(400)
-            wallpaperOnScreen = false
+            wallpaperImageVisible = false
         }
     }
     // 素底玻璃的底色跟随主题（动态取色时随 Material You 变化）：
@@ -304,7 +305,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val plainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
         null, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
     )
-    val backdrop = if (wallpaper != null && wallpaperOnScreen) wpBackdrop else plainBackdrop
+    // backdrop 立即跟随 screen（进入页采样素底）；壁纸 Image 层才延迟
+    val backdrop = if (wallpaper != null && wallpaperOnScreenBase) wpBackdrop else plainBackdrop
 
     // 状态栏图标随顶部实际亮度自适应（修复：系统深色 + App 浅色时白图标看不见）
     com.haoai.agent.ui.common.AdaptiveStatusBarIcons(
@@ -331,7 +333,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     var settingsSection by rememberSaveable { mutableStateOf("") }
 
     Box(Modifier.fillMaxSize()) {
-        if (wallpaper != null && wallpaperOnScreen) {
+        // 壁纸 Image 层：延迟释放（转场期退出中的玻璃页需要它垫底）
+        if (wallpaper != null && wallpaperImageVisible) {
             Image(
                 bitmap = wallpaper.asImageBitmap(),
                 contentDescription = null,
