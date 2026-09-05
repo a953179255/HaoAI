@@ -436,14 +436,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
             fun levelOf(s: Int) = screenLevel(s)
             val ease = androidx.compose.animation.core.FastOutSlowInEasing
-            // 上游 未指定 tween：navigation3/AnimatedContent 默认 spring
-            // （stiffness MediumLow 附近）——先快后缓的自然减速，比固定
-            // 380ms tween 的匀速机械感更「丝滑」。visibilityThreshold 保证
-            // 像素级收敛不抖动
+            // spring 而非固定 tween：先快后缓的自然减速比匀速机械感更「丝滑」。
+            // 刚度用 Medium（原 MediumLow）：全宽 1080px 位移下 MediumLow 收敛
+            // 尾巴过长，后段每帧位移只剩亚像素级「蠕行」被读作不跟手/拖沓
             val slideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
                 androidx.compose.animation.core.spring(
                     dampingRatio = 0.9f,
-                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
                     visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
                 )
             val fadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
@@ -451,7 +450,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
                 androidx.compose.animation.core.spring(
                     dampingRatio = 0.9f,
-                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
                     visibilityThreshold = 0.001f
                 )
             androidx.compose.animation.AnimatedContent(
@@ -466,12 +465,27 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     val chatInvolved = initialState == 0 || targetState == 0
                     when {
                         // push（聊天→设置等）：设置页全速滑入盖上来；
-                        // 聊天页（含抽屉）直线左滑出，无缩放无变暗
+                        // 聊天页退出分两种：
+                        // - 快照冻结中（侧边栏→设置，drawer.frozen=true）：
+                        //   走纵深视差——退出层已是静态快照纹理，对它做
+                        //   1/3 滑距+缩小+淡出是纯 GPU 合成，比全宽对滑便宜；
+                        //   旧注释「缩放+淡出放大重组延迟」的前提（实时绘制
+                        //   的重页面）在冻结后不成立。淡出还让后半程只剩单层
+                        // - 未冻结（deep link 直达等实时聊天页）：保持全宽
+                        //   直线滑出——活页面做缩放淡出仍会暴露重组延迟
                         to >= from && initialState != 0 || (from == 0 && to == 1) -> {
                             (androidx.compose.animation.slideInHorizontally(slideSpec) { it })
                                 .togetherWith(
                                 if (chatInvolved) {
-                                    androidx.compose.animation.slideOutHorizontally(slideSpec) { -it }
+                                    if (drawer.frozen) {
+                                        androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
+                                            androidx.compose.animation.scaleOut(
+                                                targetScale = 0.92f, animationSpec = scaleSpec
+                                            ) +
+                                            androidx.compose.animation.fadeOut(fadeSpec)
+                                    } else {
+                                        androidx.compose.animation.slideOutHorizontally(slideSpec) { -it }
+                                    }
                                 } else {
                                     androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
                                         androidx.compose.animation.scaleOut(
