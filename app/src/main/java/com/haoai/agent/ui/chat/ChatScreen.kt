@@ -1043,6 +1043,10 @@ fun ChatScreen(
             title = "编辑并重发",
             onDismiss = { editTarget = null },
             confirmLabel = "重发",
+            onConfirm = {
+                vm.editResend(target.id, editText)
+                editTarget = null
+            },
             confirmEnabled = editText.isNotBlank()
         ) {
             androidx.compose.material3.OutlinedTextField(
