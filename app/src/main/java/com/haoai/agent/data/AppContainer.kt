@@ -192,14 +192,18 @@ class AppContainer(app: Application) {
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
         com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
         // C5：技能落盘迁工作区 skills/<slug>/SKILL.md（人机共编辑权威资源，可 git/用户可读改）；
-        // filesDir/skills/ 存量幂等迁移一次（目标同名技能已存在则保留工作区版本，重复执行不产生重复项）
+        // filesDir/skills/ 存量一次性迁移到工作区（移动语义）：目标已存在（跳过）或复制成功
+        // 均清掉源条目、排空 legacy——否则工作区里删除的技能会在每次冷启动从残影复活
         (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
             val legacy = java.io.File(appFilesDir, "skills")
             val target = java.io.File(ws, "skills")
             if (legacy.isDirectory) {
                 legacy.listFiles { f -> f.isDirectory }?.forEach { d ->
-                    if (java.io.File(java.io.File(target, d.name), "SKILL.md").exists()) return@forEach
-                    runCatching { d.copyRecursively(java.io.File(target, d.name), overwrite = false) }
+                    val dst = java.io.File(target, d.name)
+                    val targetExists = java.io.File(dst, "SKILL.md").exists()
+                    val copied = !targetExists &&
+                        runCatching { d.copyRecursively(dst, overwrite = false) }.isSuccess
+                    if (targetExists || copied) runCatching { d.deleteRecursively() }
                 }
             }
             com.haoai.agent.agent.skills.SkillStore.useWorkspaceDir(target)
