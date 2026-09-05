@@ -2,6 +2,7 @@ package com.haoai.agent.data
 
 import android.content.Context
 import com.haoai.agent.agent.model.ChatMessage
+import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.agent.model.ToolCallData
 import kotlinx.serialization.Serializable
 import java.io.File
@@ -192,7 +193,7 @@ class SessionStore(context: Context) {
             session.updatedAt = System.currentTimeMillis()
             if (session.title == "新会话") {
                 session.messages.firstOrNull { it.role == ChatMessage.ROLE_USER && it.content.isNotBlank() }
-                    ?.let { session.title = it.content.take(24).replace('\n', ' ') }
+                    ?.let { session.title = it.content.takeSafe(24).replace('\n', ' ') }
             }
         }
         // 快照：引擎随时会向 session.messages 追加消息，后台序列化必须基于不可变快照

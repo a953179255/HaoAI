@@ -101,6 +101,21 @@ fun globToRegex(pattern: String): Regex {
     return Regex(sb.toString())
 }
 
+/** UTF-16 安全截断（防切断 emoji 代理对）：截断点落在高代理上时回退一位，宁少勿残。 */
+fun String.takeSafe(n: Int): String {
+    if (length <= n) return this
+    if (n <= 0) return ""
+    return substring(0, if (Character.isHighSurrogate(this[n - 1])) n - 1 else n)
+}
+
+/** UTF-16 安全尾部截断：起点落在低代理上时丢弃孤儿半个 emoji，宁少勿残。 */
+fun String.takeLastSafe(n: Int): String {
+    if (length <= n) return this
+    if (n <= 0) return ""
+    val start = length - n
+    return substring(if (Character.isLowSurrogate(this[start])) start + 1 else start)
+}
+
 object TextCap {
 
     fun middle(text: String, max: Int): String {
@@ -108,12 +123,12 @@ object TextCap {
         val head = (max * 0.65).toInt()
         val tail = (max * 0.25).toInt()
         val omitted = text.length - head - tail
-        return text.take(head) + "\n…［中间省略约 $omitted 字符］…\n" + text.takeLast(tail)
+        return text.takeSafe(head) + "\n…［中间省略约 $omitted 字符］…\n" + text.takeLastSafe(tail)
     }
 
     fun tail(text: String, max: Int): String =
-        if (text.length <= max) text else "…" + text.takeLast(max)
+        if (text.length <= max) text else "…" + text.takeLastSafe(max)
 
     fun head(text: String, max: Int): String =
-        if (text.length <= max) text else text.take(max) + "…"
+        if (text.length <= max) text else text.takeSafe(max) + "…"
 }

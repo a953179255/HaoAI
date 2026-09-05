@@ -11,6 +11,7 @@ import com.haoai.agent.agent.engine.AgentEngine
 import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.agent.policy.PolicyEngine
 import com.haoai.agent.agent.schedule.ScheduleStore
+import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.agent.schedule.Scheduler
 import com.haoai.agent.agent.schedule.ScheduleState
 import com.haoai.agent.agent.schedule.ScheduleTask
@@ -145,8 +146,8 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(com.haoai.agent.R.drawable.ic_notification)
                 .setContentTitle("定时任务完成：$name")
-                .setContentText(result.lineSequence().firstOrNull()?.take(80) ?: "")
-                .setStyle(NotificationCompat.BigTextStyle().bigText(result.take(2000)))
+                .setContentText(result.lineSequence().firstOrNull()?.takeSafe(80) ?: "")
+                .setStyle(NotificationCompat.BigTextStyle().bigText(result.takeSafe(2000)))
                 .setAutoCancel(true)
                 .build()
             manager.notify(name.hashCode() and 0xFFFF, notification)

@@ -18,6 +18,7 @@ import com.haoai.agent.agent.engine.TurnEvent
 import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.policy.ApprovalRequest
 import com.haoai.agent.agent.policy.PolicyEngine
+import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.toModel
@@ -336,7 +337,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 运行时任务视图隐藏：Agent 运行期间把本应用任务移出最近任务（防误清）
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
-        s.runGoal = text.take(200)
+        s.runGoal = text.takeSafe(200)
         s.runTurnsUsed = 0
         s.runState = "running"
         runCatching { c.sessionStore.save(s) }
@@ -430,7 +431,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (implicitLocal) {
             val fallback = s.messages.firstOrNull {
                 it.role == com.haoai.agent.agent.model.ChatMessage.ROLE_USER && it.content.isNotBlank()
-            }?.content?.lineSequence()?.firstOrNull()?.trim()?.take(12)
+            }?.content?.lineSequence()?.firstOrNull()?.trim()?.takeSafe(12)
             if (!fallback.isNullOrBlank()) {
                 s.titleAuto = true
                 s.title = fallback
@@ -464,7 +465,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     val t = sb.toString().trim()
                         .trim('"', '“', '”', '\'', '「', '」', '。', '.', '！', '!', '？', '?')
                         .replace('\n', ' ')
-                        .take(24)
+                        .takeSafe(24)
                     if (t.isNotBlank()) {
                         s.title = t
                         c.sessionStore.save(s)
@@ -811,7 +812,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     private fun previewLine(content: String): String =
-        content.lineSequence().firstOrNull()?.take(160) ?: ""
+        content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
 
     private fun briefFor(toolName: String, argsJson: String): String =
         com.haoai.agent.agent.tools.ToolBrief.of(toolName, argsJson)

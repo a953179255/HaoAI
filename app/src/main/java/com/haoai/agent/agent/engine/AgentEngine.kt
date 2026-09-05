@@ -12,6 +12,7 @@ import com.haoai.agent.agent.provider.SseEvent
 import com.haoai.agent.agent.tools.SubAgentRunner
 import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.agent.tools.TextCap
+import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.agent.tools.optBool
 import com.haoai.agent.agent.tools.Tool
 import com.haoai.agent.agent.tools.ToolContext
@@ -1425,7 +1426,7 @@ class AgentEngine(
         com.haoai.agent.agent.tools.ToolBrief.of(call.name, call.argumentsJson)
 
     private fun previewOf(content: String): String =
-        content.lineSequence().firstOrNull()?.take(160) ?: ""
+        content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
 
     // ── 上下文压缩 ──────────────────────────────────────────────────
 
