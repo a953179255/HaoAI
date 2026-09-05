@@ -525,7 +525,7 @@ class AgentEngine(
                 error = true
             )
             appendAndNotify(msg, onEvent)
-            onEvent(Finished(e.message ?: "未知错误"))
+            onEvent(Finished(friendlyErrorText(e.message ?: "未知错误")))
         }
         if (runEndState == null) runEndState = com.haoai.agent.data.StoredSession.RUN_IDLE
     }
@@ -1488,35 +1488,9 @@ class AgentEngine(
 
     /**
      * 把供应商原始报错翻译成普通用户能看懂、知道下一步该干嘛的话。
-     * 原始信息截短附在括号里，方便反馈给开发者定位。
+     * 实现在文件级 friendlyErrorText（气泡与顶部 SnackBar 共用），技术细节收敛为短摘要。
      */
-    private fun friendlyError(raw: String): String {
-        val m = raw.lowercase()
-        val detail = raw.take(120)
-        return when {
-            // 余额/配额类：余额不足、配额超限
-            "insufficient balance" in m || "balance=" in m || "quota" in m && "exceed" in m ||
-                "insufficient_user_quota" in m || "arrears" in m ->
-                "⚠️ 这个 AI 账号的话费用完了，需要去服务商充值或换一个账号（设置 → 模型供应商）。"
-            // 模型不支持图像（多模态截图发给纯文本模型）
-            "do not support image" in m || "not support image" in m || "image input" in m && "not" in m ->
-                "⚠️ 当前模型看不了图。任务里需要识别屏幕截图，请在设置里换一个支持图像的模型（比如带 vision 的型号）再试。"
-            // 401/403 密钥问题
-            "http 401" in m || "http 403" in m || "invalid api key" in m || "unauthorized" in m ->
-                "⚠️ AI 账号验证失败：密钥可能填错或过期了，请到 设置 → 模型供应商 检查密钥。"
-            // 429 限流（isTransientHttpError 已自动重试，到这里说明重试耗尽）
-            "http 429" in m || "rate limit" in m ->
-                "⏳ AI 服务太忙（限流），自动重试了几次仍失败。等一两分钟再发一次就行。"
-            // 400 参数类：分"带图发给纯文本模型"与其他
-            "http 400" in m ->
-                "⚠️ 请求被 AI 服务拒绝（参数不兼容）。如果刚才在跑屏幕截图类任务，多半是当前模型不支持图像，换个支持图像的模型；否则可能是这个模型与 App 协议不完全兼容，换一个模型供应商试试。（$detail）"
-            // 超时/网络
-            "timeout" in m || "timed out" in m || "connection" in m || "unknownhost" in m || "econnrefused" in m ->
-                "⚠️ 连不上 AI 服务：网络不稳定或服务暂时不可用，稍后再试一次。"
-            // 兜底：保留原文但加人话开头
-            else -> "出错了：$detail"
-        }
-    }
+    private fun friendlyError(raw: String): String = friendlyErrorText(raw)
 
     /** Overflow 恢复：检测 API 返回的 context_length_exceeded 错误，自动压缩后重试。 */
     private suspend fun handleOverflow(
@@ -1676,4 +1650,46 @@ class AgentEngine(
             禁止写入或执行命令。高效检索，最后输出简明、结构化的结论（要点 + 证据路径）。
         """.trimIndent()
     }
+}
+
+/** 引擎错误的人话翻译：气泡与顶部 SnackBar 共用同一份话术（UI 层捕获异常时也调它）。 */
+fun friendlyErrorText(raw: String): String {
+    val m = raw.lowercase()
+    val detail = shortTechDetailShared(raw)
+    return when {
+        // 余额/配额类：余额不足、配额超限
+        "insufficient balance" in m || "balance=" in m || "quota" in m && "exceed" in m ||
+            "insufficient_user_quota" in m || "arrears" in m ->
+            "⚠️ 这个 AI 账号的话费用完了，需要去服务商充值或换一个账号（设置 → 模型供应商）。"
+        // 模型不支持图像（多模态截图发给纯文本模型）
+        "do not support image" in m || "not support image" in m || "image input" in m && "not" in m ->
+            "⚠️ 当前模型看不了图。任务里需要识别屏幕截图，请在设置里换一个支持图像的模型（比如带 vision 的型号）再试。"
+        // 401/403 密钥问题
+        "http 401" in m || "http 403" in m || "invalid api key" in m || "unauthorized" in m ->
+            "⚠️ AI 账号验证失败：密钥可能填错或过期了，请到 设置 → 模型供应商 检查密钥。"
+        // 429 限流（isTransientHttpError 已自动重试，到这里说明重试耗尽）
+        "http 429" in m || "rate limit" in m ->
+            "⏳ AI 服务太忙（限流），自动重试了几次仍失败。等一两分钟再发一次就行。"
+        // 400 参数类：分"带图发给纯文本模型"与其他
+        "http 400" in m ->
+            "⚠️ 请求被 AI 服务拒绝（参数不兼容）。如果刚才在跑屏幕截图类任务，多半是当前模型不支持图像，换个支持图像的模型；否则可能是这个模型与 App 协议不完全兼容，换一个模型供应商试试。（技术详情：$detail）"
+        // DNS 域名解析失败：OkHttp 文案是 "Unable to resolve host"，此前漏翻译直出原文
+        "unable to resolve host" in m || "no address associated" in m || "unknownhost" in m || "unknown host" in m ->
+            "⚠️ 连不上模型服务器（域名解析失败）。请检查手机网络是否可用——Wi-Fi 或流量至少要通一个；如果在用代理/VPN，开关一次再发。"
+        // 超时/网络
+        "timeout" in m || "timed out" in m || "connection" in m || "econnrefused" in m ->
+            "⚠️ 连不上 AI 服务：网络不稳定或服务暂时不可用，稍后再试一次。"
+        // 兜底：人话开头 + 收敛后的技术摘要（不再倾泻半截 JSON）
+        else -> "出错了：$detail"
+    }
+}
+
+/** 技术摘要提取：优先取错误 JSON 的 message 字段值，否则清洗原文；截短到 cap。 */
+private fun shortTechDetailShared(raw: String, cap: Int = 100): String {
+    val fromJson = Regex(""""message"\s*:\s*"([^"]{1,200})""").find(raw)?.groupValues?.get(1)
+    val cleaned = (fromJson ?: raw)
+        .replace(Regex("[{}\"\\r\\n]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    return cleaned.take(cap)
 }

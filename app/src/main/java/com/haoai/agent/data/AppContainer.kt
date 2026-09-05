@@ -108,6 +108,8 @@ class AppContainer(app: Application) {
      * 而不是无 Authorization 照发等供应商 401。
      */
     fun needsApiKey(baseUrl: String): Boolean {
+        // 端侧 llama（local://llama，URI 无 host）永不校验 key
+        if (baseUrl.startsWith("local")) return false
         val host = runCatching { java.net.URI(baseUrl.trim()).host }.getOrNull() ?: return true
         if (host.isEmpty()) return true
         if (host == "localhost" || host == "::1" || host == "10.0.2.2") return false
