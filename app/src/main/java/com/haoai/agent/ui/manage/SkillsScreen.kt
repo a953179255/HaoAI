@@ -243,6 +243,20 @@ fun SkillsScreen(
                                                 .padding(horizontal = 6.dp, vertical = 1.dp)
                                         )
                                     }
+                                    if (s.needsRevision) {
+                                        Text(
+                                            "待修订 · 连续失败",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier
+                                                .padding(start = 6.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                                                    RoundedCornerShape(6.dp)
+                                                )
+                                                .padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
                                     if (s.pinned) {
                                         Text(
                                             "置顶",
@@ -268,7 +282,9 @@ fun SkillsScreen(
                                     )
                                 }
                                 Text(
-                                    "使用 ${s.useCount} 次 · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
+                                    "使用 ${s.useCount} 次" +
+                                        (if (s.successCount + s.failCount > 0) " · 成 ${s.successCount}/败 ${s.failCount}" else "") +
+                                        " · 最近 ${if (s.lastUsedAt > 0) fmt.format(java.util.Date(s.lastUsedAt)) else "从未"}" +
                                         " · 来源 " + when {
                                         s.source == "agent" -> "自进化"
                                         s.source == "import_local" -> "导入（本地文件夹）"

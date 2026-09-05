@@ -25,7 +25,14 @@ data class SkillMeta(
     /** 外部导入时间戳（source 为 import_* 时有值），技能卡片展示用。 */
     val importedAt: Long = 0,
     /** 5.7 最近一次使用结果："success" / "failed: <原因>"（自改进提示依据，技能列表展示）。 */
-    val lastUsedResult: String? = null
+    val lastUsedResult: String? = null,
+    /** 疗效遥测（Phase 2）：按 isError 分桶累计，promptIndex 排序预留。 */
+    val successCount: Int = 0,
+    val failCount: Int = 0,
+    /** 连续失败计数，成功一次清零。 */
+    val failStreak: Int = 0,
+    /** failStreak≥2 置位：不再注入系统提示索引，待人审/修订；一次成功即复位。 */
+    val needsRevision: Boolean = false
 ) {
     /** 最近活动锚点：用过看 lastUsedAt，没用过看创建/更新时间。 */
     fun anchor(): Long = maxOf(lastUsedAt, updatedAt)
@@ -85,10 +92,21 @@ object SkillStore {
 
     private fun skillFile(name: String): File = File(dir, name).apply { mkdirs() }.let { File(it, "SKILL.md") }
 
+    /** 提取 frontmatter 区文本（首个 --- 围栏内，不含围栏本身）；无/未闭合 frontmatter 返回 null。 */
+    private fun frontmatterOf(text: String): String? {
+        if (!text.startsWith("---")) return null
+        val end = text.indexOf("\n---", 3)
+        if (end < 0) return null
+        return text.substring(3, end)
+    }
+
     /** 从既有 SKILL.md 解析 frontmatter 元数据（兼容旧格式与 agentskills.io 外部格式：未知字段忽略、缺省回退）。 */
     private fun parseMeta(text: String, name: String, fallbackMtime: Long): SkillMeta {
+        // 只扫 frontmatter 区：正文出现 "useCount: 3" 之类的示例行不得污染解析
+        val front = frontmatterOf(text) ?: ""
         fun line(key: String): String? =
-            Regex("^$key:\\s*(.+)$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)?.trim()
+            if (front.isEmpty()) null
+            else Regex("^$key:\\s*(.+)$", RegexOption.MULTILINE).find(front)?.groupValues?.get(1)?.trim()
         val desc = cleanDesc(line("description")) ?: firstParagraphOf(bodyTextOf(text))
         return SkillMeta(
             name = name,
@@ -100,7 +118,11 @@ object SkillStore {
             pinned = line("pinned") == "true",
             archived = line("archived") == "true",
             importedAt = line("importedAt")?.toLongOrNull() ?: 0L,
-            lastUsedResult = line("lastUsedResult")?.takeIf { it != "null" }
+            lastUsedResult = line("lastUsedResult")?.takeIf { it != "null" },
+            successCount = line("successCount")?.toIntOrNull() ?: 0,
+            failCount = line("failCount")?.toIntOrNull() ?: 0,
+            failStreak = line("failStreak")?.toIntOrNull() ?: 0,
+            needsRevision = line("needsRevision") == "true"
         )
     }
 
@@ -133,6 +155,10 @@ object SkillStore {
             appendLine("archived: ${meta.archived}")
             if (meta.importedAt > 0) appendLine("importedAt: ${meta.importedAt}")
             if (meta.lastUsedResult != null) appendLine("lastUsedResult: ${meta.lastUsedResult}")
+            if (meta.successCount > 0) appendLine("successCount: ${meta.successCount}")
+            if (meta.failCount > 0) appendLine("failCount: ${meta.failCount}")
+            if (meta.failStreak > 0) appendLine("failStreak: ${meta.failStreak}")
+            if (meta.needsRevision) appendLine("needsRevision: true")
             appendLine("updatedAt: ${meta.updatedAt}")
             appendLine("---")
         }
@@ -170,7 +196,13 @@ object SkillStore {
             source = if (old != null) old.source else source,
             pinned = old?.pinned ?: false,
             archived = false,
-            importedAt = if (old?.importedAt ?: 0L > 0) old!!.importedAt else importedAt
+            importedAt = if (old?.importedAt ?: 0L > 0) old!!.importedAt else importedAt,
+            // 覆盖保存不得丢疗效遥测与上次结果（lastUsedResult 曾在此被静默清掉）
+            lastUsedResult = old?.lastUsedResult,
+            successCount = old?.successCount ?: 0,
+            failCount = old?.failCount ?: 0,
+            failStreak = old?.failStreak ?: 0,
+            needsRevision = old?.needsRevision ?: false
         )
         writeMeta(f, meta, body.trim().take(bodyLimit))
         cachedList = null
@@ -218,6 +250,7 @@ object SkillStore {
     /**
      * 5.7 技能自改进闭环：skill 工具执行后由引擎回写使用结果（不影响 useCount 遥测）。
      * [result] "success" 或 "failed: <原因>"。
+     * Phase 2 疗效分桶：连续失败 2 次置 needsRevision（出索引待人审），一次成功即复位。
      */
     @Synchronized
     fun recordUseResult(name: String, result: String): Boolean {
@@ -226,7 +259,23 @@ object SkillStore {
         if (!sf.exists()) return false
         val text = runCatching { sf.readText() }.getOrNull() ?: return false
         val meta = parseMeta(text, d.name, sf.lastModified())
-        writeMeta(sf, meta.copy(lastUsedResult = result.take(160)), bodyOf(sf))
+        val updated = if (result.startsWith("failed")) {
+            val streak = meta.failStreak + 1
+            meta.copy(
+                lastUsedResult = result.take(160),
+                failCount = meta.failCount + 1,
+                failStreak = streak,
+                needsRevision = meta.needsRevision || streak >= 2
+            )
+        } else {
+            meta.copy(
+                lastUsedResult = result.take(160),
+                successCount = meta.successCount + 1,
+                failStreak = 0,
+                needsRevision = false
+            )
+        }
+        writeMeta(sf, updated, bodyOf(sf))
         cachedList = null
         return true
     }
@@ -285,7 +334,7 @@ object SkillStore {
      * 描述截断 60 字符——上游 同款渐进披露。
      */
     fun promptIndex(): String {
-        val active = list().filter { !it.staleForPrompt() }
+        val active = list().filter { !it.staleForPrompt() && !it.needsRevision }
         if (active.isEmpty()) return ""
         return buildString {
             appendLine("## 已沉淀技能（用 skill 工具的 view 动作按需加载全文）")
