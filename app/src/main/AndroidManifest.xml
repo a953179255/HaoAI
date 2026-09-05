@@ -46,6 +46,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode|colorMode"
             android:windowSoftInputMode="adjustNothing">
             <intent-filter>
