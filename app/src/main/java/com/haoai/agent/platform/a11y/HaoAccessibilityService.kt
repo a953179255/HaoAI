@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
@@ -334,6 +335,64 @@ class HaoAccessibilityService : AccessibilityService() {
             startActivity(intent)
             "已启动 $packageName"
         }.getOrElse { "启动失败：${it.message}" }
+    }
+
+    /** launch_app 扩展：指定应用内页面 + 字符串键值 extras；activity 为空回退首页。 */
+    fun launchComponent(packageName: String, activity: String?, extras: android.os.Bundle?): String {
+        val intent = if (activity.isNullOrBlank()) {
+            packageManager.getLaunchIntentForPackage(packageName)
+                ?: return "未安装应用：$packageName"
+        } else {
+            val cls = if (activity.startsWith(".")) packageName + activity else activity
+            Intent().setClassName(packageName, cls)
+        }
+        extras?.let { intent.putExtras(it) }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching {
+            startActivity(intent)
+            "已启动 $packageName${activity?.let { "/$it" } ?: ""}"
+        }.getOrElse { "启动失败：${it.message}" }
+    }
+
+    /**
+     * open_uri（直达导航）：把三种形态归一为 Intent 以前台豁免启动。
+     * 无障碍服务持有后台启动 Activity 的能力，可在本 App 不在前台时拉起目标页——
+     * 「打开无线调试/蓝牙设置/某网页」类任务一步直达，省掉 screen→tap 视觉循环。
+     * 形态约定：
+     *  - 含 ':' → 有协议，按数据 URI 走 ACTION_VIEW（https/geo/market/tel 等）；
+     *    intent: 开头用系统解析器展开成目标 Intent
+     *  - 无 ':' 含 '/' → "包名/类名" 指名组件（相对类名自动补包名前缀）
+     *  - 两者皆无 → 视为 Android action（android.settings.* / android.intent.action.*）
+     * 失败时回显系统异常描述（如 ActivityNotFound），模型可据此换路径。
+     */
+    fun openUri(uri: String): String {
+        val s = uri.trim()
+        if (s.isEmpty()) return "缺少 uri"
+        val intent = runCatching {
+            when {
+                s.startsWith("intent:") ->
+                    Intent.parseUri(s, Intent.URI_INTENT_SCHEME)
+                s.contains(':') ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse(s))
+                s.contains('/') -> {
+                    val pkg = s.substringBefore('/')
+                    val cls = s.substringAfter('/').let { if (it.startsWith(".")) pkg + it else it }
+                    Intent().setClassName(pkg, cls)
+                }
+                else ->
+                    Intent(s)
+            }
+        }.getOrElse { return "无法解析 uri：$s（${it.message}）" }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (intent.action.isNullOrEmpty() && intent.component == null) intent.action = Intent.ACTION_VIEW
+        return runCatching {
+            android.util.Log.i("OpenUri", "startActivity act=${intent.action} cmp=${intent.component} data=${intent.data}")
+            startActivity(intent)
+            "已打开 $s"
+        }.getOrElse {
+            android.util.Log.w("OpenUri", "startActivity failed for $s", it)
+            "打开失败：${it.javaClass.simpleName}${it.message?.let { m -> "：$m" } ?: ""}"
+        }
     }
 
     fun listApps(limit: Int = 60): String {

@@ -15,7 +15,7 @@ object ToolRegistry {
 
     /** extended 组成员（a11y/内置浏览器/虚拟屏/相机定位/设备工具包/工作流）。 */
     private val EXTENDED_TOOLS = setOf(
-        // 无障碍自动化
+        // 无障碍自动化（open_uri 在 core 组：直达导航是基础能力，常驻注入免 tools_enable 绕行）
         "screen", "tap", "swipe", "scroll", "find", "wait", "type_text", "key", "launch_app", "list_apps",
         // 系统浏览器 + 内置浏览器
         "browser_search", "browser_open", "browser_navigate", "browser_read", "browser_click",
@@ -64,6 +64,7 @@ object ToolRegistry {
         add(TypeTextTool())
         add(KeyTool())
         add(LaunchAppTool())
+        add(OpenUriTool())
         add(ListAppsTool())
         // 4.1 浏览器工具组：拉起系统浏览器，读取/操作复用上面 a11y 组合
         add(BrowserSearchTool())

@@ -109,6 +109,8 @@ class PolicyEngine(private val mode: PermissionMode) {
         "vscreen_screen" -> RiskLevel.READ
         "vscreen_tap", "vscreen_text", "vscreen_scroll", "vscreen_back", "vscreen_home", "vscreen_close" -> RiskLevel.WRITE
         "launch_app" -> RiskLevel.WRITE
+        // open_uri 拉起系统页/外部组件，与 launch_app 同级
+        "open_uri" -> RiskLevel.WRITE
         "calendar_create" -> RiskLevel.WRITE
         "alarm_set" -> RiskLevel.EXEC
         else -> RiskLevel.READ

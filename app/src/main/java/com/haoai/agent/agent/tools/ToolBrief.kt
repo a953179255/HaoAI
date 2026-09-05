@@ -50,7 +50,9 @@ object ToolBrief {
                 args.optString("text").takeIf { it.isNotBlank() }?.let { "「$it」" }.orEmpty()
             "type_text" -> "输入：${args.optString("text").take(40)}"
             "key" -> args.optString("action")
-            "launch_app" -> args.optString("package")
+            "launch_app" -> args.optString("package") +
+                args.optString("activity").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+            "open_uri" -> args.optString("uri").take(50)
             "list_apps" -> "列出应用"
             "browser_search" -> "搜索「${args.optString("query")}」"
             "browser_open", "browser_navigate" -> args.optString("url")

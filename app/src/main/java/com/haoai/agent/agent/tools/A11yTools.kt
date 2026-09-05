@@ -302,11 +302,20 @@ class KeyTool : Tool {
 class LaunchAppTool : Tool {
 
     override val name = "launch_app"
-    override val description = "按包名启动应用（可用 list_apps 先查询包名）。"
+    override val description =
+        "启动应用（可用 list_apps 先查询包名）。默认打开应用首页；activity 可指定应用内页面（如 com.android.settings/.Settings\$BluetoothSettingsActivity），extras 传启动键值参数。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("package") { put("type", "string") }
+            putJsonObject("activity") {
+                put("type", "string")
+                put("description", "可选，目标页面类名（pkg/.Sub 或完整类名），直达应用内子页")
+            }
+            putJsonObject("extras") {
+                put("type", "object")
+                put("description", "可选，启动参数键值对（值按字符串传递）")
+            }
         }
     }
 
@@ -315,8 +324,55 @@ class LaunchAppTool : Tool {
         val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
         val pkg = args.optString("package")
         if (pkg.isEmpty()) return ToolResult("缺少 package", true)
-        return ToolResult(svc.launchApp(pkg))
+        val activity = args.optString("activity")
+        val extras = args["extras"] as? JsonObject
+        if (activity.isEmpty() && extras.isNullOrEmpty()) {
+            return ToolResult(svc.launchApp(pkg))
+        }
+        val bundle = android.os.Bundle().apply {
+            extras?.forEach { key, element ->
+                val v = (element as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@forEach
+                when {
+                    v == "true" -> putBoolean(key, true)
+                    v == "false" -> putBoolean(key, false)
+                    v.toIntOrNull() != null -> putInt(key, v.toInt())
+                    v.toDoubleOrNull() != null -> putDouble(key, v.toDouble())
+                    else -> putString(key, v)
+                }
+            }
+        }
+        return ToolResult(svc.launchComponent(pkg, activity.ifEmpty { null }, bundle))
     }
+
+}
+
+class OpenUriTool : Tool {
+
+    override val name = "open_uri"
+    override val description =
+        "直达打开目标页面（打开系统设置/网页/应用子页优先用它，一步到位，代替 screen→tap 视觉循环）。uri 三种写法：" +
+            "① 系统设置 action，如 android.settings.APPLICATION_DEVELOPMENT_SETTINGS（开发者选项）、" +
+            "android.settings.WIRELESS_DEBUGGING_SETTINGS（无线调试，Android13+）、BLUETOOTH_SETTINGS、WIFI_SETTINGS、SETTINGS（设置首页）；" +
+            "② 包名/类名 指定应用内页面，如 com.android.settings/.Settings\$WirelessDebuggingActivity；" +
+            "③ 普通协议 https://网页、geo:经度,纬度、market://应用详情、tel: 等。失败会返回原因，可换写法重试。"
+    override val parameters = buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+            putJsonObject("uri") {
+                put("type", "string")
+                put("description", "设置 action（android.settings.XXX）/ 组件（pkg/cls）/ 协议 URI 三选一")
+            }
+        }
+    }
+
+    override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        a11yGate(ctx)?.let { return it }
+        val svc = HaoAccessibilityService.instance ?: return ToolResult(HaoAccessibilityService.enableHint(), true)
+        val uri = args.optString("uri").trim()
+        if (uri.isEmpty()) return ToolResult("缺少 uri", true)
+        return ToolResult(svc.openUri(uri))
+    }
+
 }
 
 class ListAppsTool : Tool {
