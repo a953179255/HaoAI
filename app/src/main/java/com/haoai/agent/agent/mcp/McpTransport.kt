@@ -40,6 +40,11 @@ class StreamableHttpTransport(
     private val extraHeaders: Map<String, String> = emptyMap()
 ) : McpTransport {
 
+    companion object {
+        /** 响应体上限：正常 JSON-RPC 响应远小于此；超限视为服务异常，防超大响应拖垮内存。 */
+        const val MAX_RESPONSE_BYTES = 8L * 1024 * 1024
+    }
+
     @Volatile private var sessionId: String? = null
     @Volatile private var protocolVersion: String? = null
 
@@ -63,7 +68,11 @@ class StreamableHttpTransport(
             if (resp.code == 202) return@use McpHttpResponse(202, null)
 
             val contentType = resp.header("Content-Type") ?: ""
-            val raw = resp.body?.string() ?: ""
+            // 上限前置检查：Content-Length 明示超限直接拒收，不启动读取
+            resp.body?.contentLength()?.takeIf { it > MAX_RESPONSE_BYTES }?.let {
+                throw IOException("响应体 ${it / 1024 / 1024}MB 超过上限（${MAX_RESPONSE_BYTES / 1024 / 1024}MB）")
+            }
+            val raw = resp.body?.let { readBounded(it) } ?: ""
             if (!resp.isSuccessful) {
                 // 非 2xx：尽量把 body 里的错误信息带给上层，便于 UI 展示可读原因
                 val detail = parseSseOrJson(raw)?.toString()?.take(300) ?: raw.take(300)
@@ -73,6 +82,20 @@ class StreamableHttpTransport(
                 ?: throw IOException("响应体不是有效 JSON 或 SSE（Content-Type: $contentType）")
             McpHttpResponse(resp.code, body)
         }
+    }
+
+    /** 有界读取：最多读 MAX_RESPONSE_BYTES+1 字节即判超限中止，等效替代无上限的 body.string()。 */
+    private fun readBounded(body: okhttp3.ResponseBody): String {
+        val src = body.source()
+        val buf = okio.Buffer()
+        val limit = MAX_RESPONSE_BYTES + 1
+        while (buf.size < limit) {
+            if (src.read(buf, limit - buf.size) == -1L) break
+        }
+        if (buf.size > MAX_RESPONSE_BYTES) {
+            throw IOException("响应体超过 ${MAX_RESPONSE_BYTES / 1024 / 1024}MB 上限，已中止读取")
+        }
+        return buf.readUtf8()
     }
 
     override suspend fun close() {

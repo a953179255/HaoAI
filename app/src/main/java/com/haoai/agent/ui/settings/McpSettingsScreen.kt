@@ -29,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -356,6 +357,8 @@ private fun McpEditView(
             initial?.headers?.filterKeys { !it.equals("Authorization", true) }?.values?.toList() ?: emptyList()
         )
     }
+    // header 值常含凭据：默认掩码，节级开关临时显示
+    var showHeaderValues by remember { mutableStateOf(false) }
     var approvalLevel by remember { mutableStateOf(initial?.approvalLevel ?: "write") }
     var allowPlaintext by remember { mutableStateOf(initial?.allowPlaintext ?: false) }
     var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -479,6 +482,15 @@ private fun McpEditView(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f)
                                 )
+                                TextButton(
+                                    onClick = { showHeaderValues = !showHeaderValues },
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
+                                ) {
+                                    Text(
+                                        if (showHeaderValues) "隐藏" else "显示",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
                                 IconButton(onClick = {
                                     headerKeys = headerKeys + ""
                                     headerValues = headerValues + ""
@@ -512,7 +524,10 @@ private fun McpEditView(
                                         modifier = Modifier.weight(1.4f),
                                         singleLine = true,
                                         placeholder = { Text("值", style = MaterialTheme.typography.bodySmall) },
-                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        // header 值常含凭据：默认掩码，节级开关临时显示（与 Bearer Token 同待遇）
+                                        visualTransformation = if (showHeaderValues) androidx.compose.ui.text.input.VisualTransformation.None
+                                        else PasswordVisualTransformation()
                                     )
                                     IconButton(onClick = {
                                         headerKeys = headerKeys.toMutableList().also { if (i < it.size) it.removeAt(i) }
