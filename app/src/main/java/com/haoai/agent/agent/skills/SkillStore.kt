@@ -32,7 +32,14 @@ data class SkillMeta(
     /** 连续失败计数，成功一次清零。 */
     val failStreak: Int = 0,
     /** failStreak≥2 置位：不再注入系统提示索引，待人审/修订；一次成功即复位。 */
-    val needsRevision: Boolean = false
+    val needsRevision: Boolean = false,
+    /**
+     * 隔离晋升（Phase 5）：false=候选态——不进系统提示索引，等技能库页人工"验证并启用"。
+     * 存量与用户手建缺省 true；仅导入（import_*）与 agent 新建（source=agent）默认 false。
+     */
+    val validated: Boolean = true,
+    /** 导入内容扫描（SkillGuard）命中标签，供人审参考；验证启用时清除。 */
+    val reviewNotes: String? = null
 ) {
     /** 最近活动锚点：用过看 lastUsedAt，没用过看创建/更新时间。 */
     fun anchor(): Long = maxOf(lastUsedAt, updatedAt)
@@ -122,7 +129,10 @@ object SkillStore {
             successCount = line("successCount")?.toIntOrNull() ?: 0,
             failCount = line("failCount")?.toIntOrNull() ?: 0,
             failStreak = line("failStreak")?.toIntOrNull() ?: 0,
-            needsRevision = line("needsRevision") == "true"
+            needsRevision = line("needsRevision") == "true",
+            // 旧文件无此字段 → 存量默认 true（零迁移成本）
+            validated = line("validated")?.let { it == "true" } ?: true,
+            reviewNotes = line("reviewNotes")?.takeIf { it != "null" }
         )
     }
 
@@ -159,6 +169,9 @@ object SkillStore {
             if (meta.failCount > 0) appendLine("failCount: ${meta.failCount}")
             if (meta.failStreak > 0) appendLine("failStreak: ${meta.failStreak}")
             if (meta.needsRevision) appendLine("needsRevision: true")
+            // 只在候选态落盘：validated=true 为默认值，避免给存量文件添噪
+            if (!meta.validated) appendLine("validated: false")
+            if (meta.reviewNotes != null) appendLine("reviewNotes: ${meta.reviewNotes}")
             appendLine("updatedAt: ${meta.updatedAt}")
             appendLine("---")
         }
@@ -180,7 +193,8 @@ object SkillStore {
         body: String,
         source: String = "user",
         importedAt: Long = 0,
-        bodyLimit: Int = 8000
+        bodyLimit: Int = 8000,
+        reviewNotes: String? = null
     ): File {
         val safe = sanitizeName(name)
         val f = skillFile(safe)
@@ -202,7 +216,10 @@ object SkillStore {
             successCount = old?.successCount ?: 0,
             failCount = old?.failCount ?: 0,
             failStreak = old?.failStreak ?: 0,
-            needsRevision = old?.needsRevision ?: false
+            needsRevision = old?.needsRevision ?: false,
+            // 候选门控：新建时仅用户手建免验；agent 新建/导入走 false。覆盖更新保留原状（agent 修订不得给技能解禁）
+            validated = old?.validated ?: (source == "user"),
+            reviewNotes = reviewNotes?.ifBlank { null } ?: old?.reviewNotes
         )
         writeMeta(f, meta, body.trim().take(bodyLimit))
         cachedList = null
@@ -301,6 +318,19 @@ object SkillStore {
         return true
     }
 
+    /** Phase 5 候选晋升：人工确认后进系统提示索引；启用时清 reviewNotes（审阅完成）。 */
+    @Synchronized
+    fun setValidated(name: String, validated: Boolean): Boolean {
+        val d = resolve(name) ?: return false
+        val sf = File(d, "SKILL.md")
+        if (!sf.exists()) return false
+        val text = runCatching { sf.readText() }.getOrNull() ?: return false
+        val meta = parseMeta(text, d.name, sf.lastModified())
+        writeMeta(sf, meta.copy(validated = validated, reviewNotes = if (validated) null else meta.reviewNotes), bodyOf(sf))
+        cachedList = null
+        return true
+    }
+
     /**
      * curator 式时间衰减归档：90 天无活动的非置顶技能移入归档态（不物理删除）。
      * 每天最多执行一次。返回本次新归档数量。
@@ -334,7 +364,7 @@ object SkillStore {
      * 描述截断 60 字符——上游 同款渐进披露。
      */
     fun promptIndex(): String {
-        val active = list().filter { !it.staleForPrompt() && !it.needsRevision }
+        val active = list().filter { !it.staleForPrompt() && !it.needsRevision && it.validated }
         if (active.isEmpty()) return ""
         return buildString {
             appendLine("## 已沉淀技能（用 skill 工具的 view 动作按需加载全文）")
@@ -401,7 +431,10 @@ object SkillStore {
         val base = sanitizeName(nameOverride ?: doc.name ?: suggestedName ?: "imported")
         if (base.isBlank()) return ImportOutcome.Failed("技能名无效")
         if (exists(base) && !overwrite) return ImportOutcome.Conflict(base)
-        save(base, doc.description, doc.body, source = importSource, importedAt = System.currentTimeMillis(), bodyLimit = 20_000)
+        // 内容扫描：命中不阻断导入，记入 reviewNotes 供人审（候选态本就不进索引）
+        val hits = SkillGuard.scan(doc.description + "\n" + doc.body)
+        save(base, doc.description, doc.body, source = importSource, importedAt = System.currentTimeMillis(),
+            bodyLimit = 20_000, reviewNotes = hits.joinToString("、").ifBlank { null })
         return ImportOutcome.Done(base)
     }
 }

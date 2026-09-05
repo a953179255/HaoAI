@@ -257,6 +257,20 @@ fun SkillsScreen(
                                                 .padding(horizontal = 6.dp, vertical = 1.dp)
                                         )
                                     }
+                                    if (!s.validated) {
+                                        Text(
+                                            "候选 · 待验证",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.tertiary,
+                                            modifier = Modifier
+                                                .padding(start = 6.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
+                                                    RoundedCornerShape(6.dp)
+                                                )
+                                                .padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
                                     if (s.pinned) {
                                         Text(
                                             "置顶",
@@ -281,6 +295,14 @@ fun SkillsScreen(
                                         modifier = Modifier.padding(top = 2.dp)
                                     )
                                 }
+                                if (!s.validated && !s.reviewNotes.isNullOrBlank()) {
+                                    Text(
+                                        "⚠ 内容扫描：${s.reviewNotes}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
                                 Text(
                                     "使用 ${s.useCount} 次" +
                                         (if (s.successCount + s.failCount > 0) " · 成 ${s.successCount}/败 ${s.failCount}" else "") +
@@ -297,6 +319,12 @@ fun SkillsScreen(
                                 )
                             }
                             Column {
+                                if (!s.validated) {
+                                    TextButton(onClick = {
+                                        store.setValidated(s.name, true)
+                                        refresh()
+                                    }) { Text("验证并启用") }
+                                }
                                 TextButton(onClick = {
                                     store.setPinned(s.name, !s.pinned)
                                     refresh()
