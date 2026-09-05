@@ -73,7 +73,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -103,6 +102,7 @@ import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.GlassTextButton
+import com.haoai.agent.ui.common.LiquidSlider
 import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 
@@ -2213,11 +2213,13 @@ private fun LazyListScope.generalItems(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                androidx.compose.material3.Slider(
-                    value = settings.bubbleOpacity.coerceIn(0.3f, 1f),
-                    onValueChange = { vm.setBubbleOpacity(it) },
+                LiquidSlider(
+                    value = { settings.bubbleOpacity.coerceIn(0.3f, 1f) },
+                    onValueChange = { v -> vm.setBubbleOpacity(v) },
                     valueRange = 0.3f..1f,
-                    modifier = Modifier.fillMaxWidth()
+                    visibilityThreshold = 0.01f,
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
                 )
             }
             HorizontalDivider(
@@ -3071,13 +3073,13 @@ private fun ProviderDialog(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             SwitchParamField("temperature", draft.sendTemperature, draft.temperature,
-                                { onChange(draft.copy(sendTemperature = it)) }, { onChange(draft.copy(temperature = it)) })
+                                { onChange(draft.copy(sendTemperature = it)) }, { onChange(draft.copy(temperature = it)) }, backdrop)
                             SwitchParamField("top_p", draft.sendTopP, draft.topP,
-                                { onChange(draft.copy(sendTopP = it)) }, { onChange(draft.copy(topP = it)) })
+                                { onChange(draft.copy(sendTopP = it)) }, { onChange(draft.copy(topP = it)) }, backdrop)
                             SwitchParamField("presence_penalty", draft.sendPresencePenalty, draft.presencePenalty,
-                                { onChange(draft.copy(sendPresencePenalty = it)) }, { onChange(draft.copy(presencePenalty = it)) })
+                                { onChange(draft.copy(sendPresencePenalty = it)) }, { onChange(draft.copy(presencePenalty = it)) }, backdrop)
                             SwitchParamField("frequency_penalty", draft.sendFrequencyPenalty, draft.frequencyPenalty,
-                                { onChange(draft.copy(sendFrequencyPenalty = it)) }, { onChange(draft.copy(frequencyPenalty = it)) })
+                                { onChange(draft.copy(sendFrequencyPenalty = it)) }, { onChange(draft.copy(frequencyPenalty = it)) }, backdrop)
                             HorizontalDivider(Modifier.padding(vertical = 4.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
                             // 点5：备用 Key 池（借鉴 上游）
@@ -3163,8 +3165,12 @@ private fun ProviderDialog(
                             // 点3：余额查询（借鉴 上游）
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("余额查询", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                                Switch(checked = draft.balanceEnabled,
-                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) })
+                                com.haoai.agent.ui.common.LiquidToggle(
+                                    checked = draft.balanceEnabled,
+                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) },
+                                    backdrop = backdrop,
+                                    modifier = Modifier.scale(0.85f)
+                                )
                             }
                             if (draft.balanceEnabled) {
                                 com.haoai.agent.ui.common.CompactGlassField(
@@ -3498,10 +3504,16 @@ private fun SwitchParamField(
     enabled: Boolean,
     value: String,
     onToggle: (Boolean) -> Unit,
-    onValue: (String) -> Unit
+    onValue: (String) -> Unit,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Switch(checked = enabled, onCheckedChange = onToggle, modifier = Modifier.scale(0.8f))
+        com.haoai.agent.ui.common.LiquidToggle(
+            checked = enabled,
+            onCheckedChange = onToggle,
+            backdrop = backdrop,
+            modifier = Modifier.scale(0.75f)
+        )
         Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
         if (enabled) {
             OutlinedTextField(

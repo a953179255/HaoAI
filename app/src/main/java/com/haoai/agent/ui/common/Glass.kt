@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.graphicsLayer
@@ -462,11 +463,17 @@ fun GlassCard(
  */
 private fun DrawScope.drawCapsule(fraction: Float, press: Float, accent: Color) {
     val pad = 2.dp.toPx()
+    // 胶囊圆角：磨砂回退路径（对话框内 refract=false）与折射路径同形，杜绝直角矩形开关
+    val corner = CornerRadius(size.height / 2f, size.height / 2f)
 
-    // 轨道：关=雾白磨砂，开=主题色浸染
-    drawRect(lerp(Color.White.copy(alpha = 0.18f), accent.copy(alpha = 0.72f), fraction))
+    // 轨道：关=雾白磨砂，开=主题色浸染（近实心，与按钮主绿饱和度一致）
     drawRoundRect(
-        color = Color.White.copy(alpha = lerp(0.38f, 0.14f, fraction)),
+        color = lerp(Color.White.copy(alpha = 0.18f), accent.copy(alpha = 0.95f), fraction),
+        cornerRadius = corner
+    )
+    drawRoundRect(
+        color = Color.White.copy(alpha = lerp(0.38f, 0.10f, fraction)),
+        cornerRadius = corner,
         style = Stroke(1.dp.toPx())
     )
 

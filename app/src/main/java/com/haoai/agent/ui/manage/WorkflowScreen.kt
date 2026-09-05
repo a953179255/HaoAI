@@ -583,7 +583,8 @@ private fun StepEditorCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 6.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -619,14 +620,12 @@ private fun StepEditorCard(
                     .clickable { onRemove() }
             )
         }
-        Spacer(Modifier.size(6.dp))
         LiquidTabRow(
             tabs = listOf("指令（Agent）", "工具直调"),
             selectedIndex = if (step.type == "tool") 1 else 0,
             onSelected = { onChange(step.copy(type = if (it == 1) "tool" else "prompt")) },
             backdrop = backdrop
         )
-        Spacer(Modifier.size(8.dp))
         if (step.type == "tool") {
             OutlinedTextField(
                 value = step.tool,
@@ -664,7 +663,10 @@ private fun StepEditorCard(
             supportingText = { Text("prev_contains:X / prev_not_contains:X，不满足则跳过此步", style = MaterialTheme.typography.labelSmall) },
             modifier = Modifier.fillMaxWidth()
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             LiquidToggle(
                 checked = step.stopOnError,
                 onCheckedChange = { onChange(step.copy(stopOnError = it)) },
