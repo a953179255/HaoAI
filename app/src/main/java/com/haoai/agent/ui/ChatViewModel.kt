@@ -881,10 +881,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             vscreenBitrateKbps = st.vscreenBitrateKbps,
             budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) },
             // E5 单轮熔断：token 上限 + 圈数上限 + 连续工具失败阈值（设置-模型行为）
-            // 交互聊天用设置值（默认 25 万，0=不限）；无人值守（定时/工作流）走引擎默认 15 万硬限
-            turnTokenCap = st.turnTokenCap,
-            toolCallCap = st.toolCallCap,
-            softBudgetWarn = st.softBudgetWarn,
+            // 交互聊天用设置值（默认 25 万，0=不限）；无人值守（定时/工作流）走引擎默认 15 万硬限；
+            // 总开关关闭时交互聊天完全不熔断
+            turnTokenCap = if (st.costBreakerEnabled) st.turnTokenCap else 0,
+            toolCallCap = if (st.costBreakerEnabled) st.toolCallCap else 0,
+            softBudgetWarn = st.costBreakerEnabled && st.softBudgetWarn,
             toolFailCap = st.consecutiveToolFailCap,
             memoryTarget = {
                 c.resolvePurposeTargets(st.memoryExtractProviderId, st.memoryExtractFallbackIds)

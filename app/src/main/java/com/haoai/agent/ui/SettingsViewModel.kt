@@ -535,6 +535,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(dailyTokenBudgetK = k.coerceIn(0, 10_000)) }
     }
 
+    /** E5b 成本熔断总开关：关闭后交互聊天与无人值守任务均不再自动收尾。 */
+    fun setCostBreakerEnabled(on: Boolean) {
+        c.updateSettings { it.copy(costBreakerEnabled = on) }
+    }
+
     /** E5b 单轮 token 熔断上限（交互聊天）；0=不限。无人值守固定 15 万硬限不受此影响。 */
     fun setTurnTokenCap(v: Int) {
         c.updateSettings { it.copy(turnTokenCap = v.coerceIn(0, 10_000_000)) }

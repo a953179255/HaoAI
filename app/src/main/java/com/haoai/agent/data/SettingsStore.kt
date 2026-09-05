@@ -178,6 +178,8 @@ data class AppSettings(
     val summarizeFallbackIds: List<String> = emptyList(),
     /** 聊天模型备用链（同 purpose 结构，元素可为 "providerId" 或 "providerId|modelId"）。 */
     val chatFallbackIds: List<String> = emptyList(),
+    /** E5b 成本熔断总开关：关闭后交互聊天与无人值守（定时/工作流）均不再自动收尾（失控任务会持续消耗 token）。 */
+    val costBreakerEnabled: Boolean = true,
     /** E5 单轮 LLM token 累计上限（prompt+completion，交互聊天口径）；0=不限。无人值守（定时/工作流）固定 15 万硬限，不受此项影响。 */
     val turnTokenCap: Int = 250_000,
     /** E5b 圈数熔断：单轮工具调用累计上限；0=不限。 */

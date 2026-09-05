@@ -165,6 +165,9 @@ object WorkflowRunner {
             okHttpClient = container.okHttpClient,
             appContext = container.appContext,
             backgroundScope = container.applicationScope,
+            // E5b 成本熔断总开关：无人值守默认 15 万/80 次硬限，开关关闭则完全不熔断
+            turnTokenCap = if (st.costBreakerEnabled) 150_000 else 0,
+            toolCallCap = if (st.costBreakerEnabled) 80 else 0,
             vscreenEnabled = st.vscreenEnabled && android.os.Build.VERSION.SDK_INT >= 30,
             vscreenBitrateKbps = st.vscreenBitrateKbps,
             budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) }

@@ -2358,7 +2358,16 @@ private fun LazyListScope.generalItems(
     item {
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text("单轮 Token 上限（成本熔断）", style = MaterialTheme.typography.bodyMedium)
+                ToggleRow(
+                    title = "成本熔断",
+                    subtitle = "达到上限时让 Agent 总结进度并收尾，防止失控任务烧 token。关闭后交互聊天与定时任务/工作流均不再自动收尾。",
+                    checked = settings.costBreakerEnabled,
+                    onChange = { vm.setCostBreakerEnabled(it) },
+                    backdrop = backdrop
+                )
+                if (settings.costBreakerEnabled) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("单轮 Token 上限", style = MaterialTheme.typography.bodyMedium)
                 Text(
                     "一轮对话累计消耗（含每次工具调用重发的上下文）达到上限即收尾。0 = 不限；定时任务/工作流不受此项影响（固定 15 万）。",
                     style = MaterialTheme.typography.labelSmall,
@@ -2415,6 +2424,7 @@ private fun LazyListScope.generalItems(
                     onChange = { vm.setSoftBudgetWarn(it) },
                     backdrop = backdrop
                 )
+                }
             }
         }
     }

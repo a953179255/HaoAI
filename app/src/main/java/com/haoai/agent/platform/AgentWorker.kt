@@ -64,11 +64,12 @@ class AgentWorker(context: Context, params: WorkerParameters) :
 
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "⏰ ${task.name}"
+        val st = container.settingsFlow.value
         val engine = AgentEngine(
             httpClient = container.clientFor(provider),
             provider = provider,
             apiKey = container.resolveApiKey(provider),
-            customPrompt = container.settingsFlow.value.customPrompt,
+            customPrompt = st.customPrompt,
             policy = PolicyEngine(mode),
             approve = { mode == PermissionMode.YOLO },
             session = session,
@@ -77,14 +78,17 @@ class AgentWorker(context: Context, params: WorkerParameters) :
             appFilesDir = container.appFilesDir,
             workspaceLabel = container.workspace.current?.displayName ?: "定时任务",
             memoryBank = container.memoryBank,
-            memoryEnabled = container.settingsFlow.value.memoryEnabled,
+            memoryEnabled = st.memoryEnabled,
             journal = container.journal,
             okHttpClient = container.okHttpClient,
             appContext = container.appContext,
             backgroundScope = null,
-            vscreenEnabled = container.settingsFlow.value.vscreenEnabled &&
+            // E5b 成本熔断总开关：无人值守默认 15 万/80 次硬限，开关关闭则完全不熔断
+            turnTokenCap = if (st.costBreakerEnabled) 150_000 else 0,
+            toolCallCap = if (st.costBreakerEnabled) 80 else 0,
+            vscreenEnabled = st.vscreenEnabled &&
                 android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
-            vscreenBitrateKbps = container.settingsFlow.value.vscreenBitrateKbps
+            vscreenBitrateKbps = st.vscreenBitrateKbps
         )
 
         var resultText: String? = null
