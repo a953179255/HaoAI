@@ -59,7 +59,9 @@ fun LiquidSlider(
     valueRange: ClosedFloatingPointRange<Float>,
     visibilityThreshold: Float,
     backdrop: Backdrop,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 拖动结束/点按提交后回调一次：持久化等重操作放这里，不要放 onValueChange（逐帧调用） */
+    onValueChangeFinished: (() -> Unit)? = null
 ) {
     val isLightTheme = androidx.compose.material3.MaterialTheme.colorScheme.background.luminance() > 0.5f
     val accentColor = androidx.compose.material3.MaterialTheme.colorScheme.primary
@@ -139,6 +141,7 @@ fun LiquidSlider(
                                 .coerceIn(valueRange)
                         dampedDragAnimation.animateToValue(targetValue)
                         onValueChange(targetValue)
+                        onValueChangeFinished?.invoke()
                     }
                 }
                 .pointerInput(animationScope) {
@@ -151,6 +154,7 @@ fun LiquidSlider(
                         onDragEnd = {
                             dragActive = false
                             dampedDragAnimation.release()
+                            onValueChangeFinished?.invoke()
                         },
                         onDragCancel = {
                             dragActive = false

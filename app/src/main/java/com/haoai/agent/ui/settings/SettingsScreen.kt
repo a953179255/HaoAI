@@ -77,6 +77,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -2202,20 +2203,25 @@ private fun LazyListScope.generalItems(
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
             )
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                // 拖动走本地状态（逐帧只重组本区块），松手才落盘——
+                // updateSettings 每帧全量 JSON 序列化 + 配置桥镜像双文件写 + 整页重组，是滑块掉帧根因
+                var bubbleLocal by remember { mutableStateOf(settings.bubbleOpacity.coerceIn(0.3f, 1f)) }
+                LaunchedEffect(settings.bubbleOpacity) {
+                    bubbleLocal = settings.bubbleOpacity.coerceIn(0.3f, 1f)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val bubbleValue = settings.bubbleOpacity.coerceIn(0.3f, 1f)
-                    val pct = bubbleValue.times(100).toInt()
                     Text("气泡 / 卡片不透明度", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.weight(1f))
                     Text(
-                        "$pct%",
+                        "${(bubbleLocal * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 LiquidSlider(
-                    value = { settings.bubbleOpacity.coerceIn(0.3f, 1f) },
-                    onValueChange = { v -> vm.setBubbleOpacity(v) },
+                    value = { bubbleLocal },
+                    onValueChange = { v -> bubbleLocal = v },
+                    onValueChangeFinished = { vm.setBubbleOpacity(bubbleLocal) },
                     valueRange = 0.3f..1f,
                     visibilityThreshold = 0.01f,
                     backdrop = backdrop,
