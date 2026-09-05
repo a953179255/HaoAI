@@ -330,6 +330,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             _error.value = "请先在「设置」里配置模型服务（Base URL / 模型 ID / API Key）"
             return
         }
+        // 发送门控：公网供应商未配 key 就地拦截（此前无 Authorization 照发、等供应商 401 才报错）
+        if (c.resolveApiKey(provider0).isBlank() && c.needsApiKey(provider0.baseUrl)) {
+            _error.value = "模型服务「${provider0.name}」未配置 API Key，请到「设置」填写后再发送"
+            return
+        }
         val s = currentSession ?: return
         _running.value = true
         _streamingText.value = null

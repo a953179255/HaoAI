@@ -352,7 +352,7 @@ class AgentEngine(
                         // 清掉首次失败已累积的半截流式输出，避免重试答案拼接在残句后面
                         streamBuf.setLength(0)
                         handleOverflow(emsg, onEvent) { collectStream() }
-                    } else if (isTransientHttpError(emsg)) {
+                    } else if (isTransientHttpError(e)) {
                         // 429/超时/网关抖动：供应商限流在多轮工具任务里很常见（每步一请求），
                         // 退避重试而不是整轮失败；等待期可被取消，清残句避免拼接错乱
                         val backoffsSec = intArrayOf(5, 12, 25)
@@ -370,7 +370,7 @@ class AgentEngine(
                                 break
                             } catch (re: Exception) {
                                 last = re
-                                if (!isTransientHttpError(re.message ?: "")) throw re
+                                if (!isTransientHttpError(re)) throw re
                             }
                         }
                         last?.let { throw it }
@@ -1458,10 +1458,17 @@ class AgentEngine(
         )))
     }
 
-    /** 供应商瞬态错误（值得退避重试）：429 限流 / 5xx 网关 / 超时。 */
-    private fun isTransientHttpError(msg: String): Boolean {
-        val m = msg.lowercase()
-        return "http 429" in m || "http 5" in m || "timeout" in m ||
+    /**
+     * 供应商瞬态错误（值得退避重试）：优先用异常携带的结构化状态码（429/408/5xx），
+     * 无码时退回保守文本匹配（仅显式关键字，不再含 "http 5" 宽匹配——
+     * 防 400 错误体里碰巧含 "http 500" 字样被误判而重发全上下文）。
+     */
+    private fun isTransientHttpError(e: Exception): Boolean {
+        (e as? com.haoai.agent.agent.provider.ProviderHttpException)?.httpCode?.let { code ->
+            return code == 429 || code == 408 || code >= 500
+        }
+        val m = e.message.orEmpty().lowercase()
+        return "http 429" in m || "timeout" in m ||
             "timed out" in m || "connection reset" in m || "eofexception" in m || "stream stall" in m
     }
 

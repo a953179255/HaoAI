@@ -59,10 +59,16 @@ class ValidateWriteHook : ToolHook {
 /**
  * E3 失败升级 hook（迁移自 executeCall 内联逻辑）：连续失败 ≥2 引导验证前置条件、
  * ≥3 禁止同参重试；bash 失败 ≥2 提示先看 stderr。
+ * 批次5-G 参数指纹防护：同工具+同参数连续 ≥3 次（无论成败）注入禁令——
+ * 成功的重复调用此前不设防，只靠 token/圈数上限间接兜底。
  */
 class EscalationHook(
     private val conFailCount: ConcurrentHashMap<String, Int>
 ) : ToolHook {
+
+    // 指纹 = 工具名 + args 串 hash；换指纹即清零。引擎生命周期存续，与 conFailCount 同语义
+    private val lastFingerprint = java.util.concurrent.atomic.AtomicReference<String>("")
+    private val repeatCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     override suspend fun after(
         call: ToolCallData,
@@ -70,9 +76,17 @@ class EscalationHook(
         ctx: ToolContext,
         result: ToolResult
     ): ToolResult {
+        var content = result.content
+        val fp = call.name + "#" + args.toString().hashCode()
+        val repeats = if (lastFingerprint.getAndSet(fp) == fp) repeatCount.incrementAndGet()
+        else { repeatCount.set(0); 0 }
+        if (repeats >= 2) { // 0=首次、1=第2次、2=第3次起
+            content += "\n\n[循环防护] 相同参数的 ${call.name} 已连续调用 ${repeats + 1} 次。" +
+                "停止相同重试：修正参数、换方法，或向用户说明。"
+            repeatCount.set(0)
+        }
         if (result.isError) {
             val n = conFailCount.merge(call.name, 1) { a, b -> a + b } ?: 1
-            var content = result.content
             when {
                 n == 2 -> content += "\n\n[恢复提示] 工具 ${call.name} 已连续失败 2 次。先验证前置条件（路径存在？参数格式？权限模式？），或改用替代工具。"
                 n >= 3 -> content += "\n\n[升级] 该步骤已失败 ${n} 次。禁止用相同参数重试。二选一：a) 换方法达成同一目标；b) 直接向用户说明阻塞点并请求指示。"
@@ -83,7 +97,7 @@ class EscalationHook(
             return result.copy(content = content)
         }
         conFailCount.remove(call.name)
-        return result
+        return result.copy(content = content)
     }
 }
 

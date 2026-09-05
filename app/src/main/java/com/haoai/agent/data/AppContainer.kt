@@ -102,6 +102,24 @@ class AppContainer(app: Application) {
         return runCatching { cipher.decrypt(pool[idx]) }.getOrDefault("")
     }
 
+    /**
+     * 该供应商地址是否必须配置 API Key：回环/私有网段/本机 hostname（本机或局域网
+     * 推理服务器，如 Ollama、LM Studio）免 key；公网地址空 key 会在发送前被拦截，
+     * 而不是无 Authorization 照发等供应商 401。
+     */
+    fun needsApiKey(baseUrl: String): Boolean {
+        val host = runCatching { java.net.URI(baseUrl.trim()).host }.getOrNull() ?: return true
+        if (host.isEmpty()) return true
+        if (host == "localhost" || host == "::1" || host == "10.0.2.2") return false
+        if (host.startsWith("127.") || host.endsWith(".local") || host.endsWith(".lan")) return false
+        val parts = host.split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size == 4) {
+            val (a, b) = parts
+            if (a == 10 || (a == 192 && b == 168) || (a == 172 && b in 16..31)) return false
+        }
+        return true
+    }
+
     val llama = LlamaServerController(app, okHttpClient)
 
     val settingsFlow = MutableStateFlow(settingsStore.load())
