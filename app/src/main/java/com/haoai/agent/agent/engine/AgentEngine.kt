@@ -102,8 +102,12 @@ class AgentEngine(
     private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
     /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
     private val planGate: () -> Boolean = { false },
-    /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。 */
+    /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。无人值守默认 15 万，交互聊天走设置（默认 25 万）。 */
     private val turnTokenCap: Int = 150_000,
+    /** E5b 圈数熔断：单轮工具调用累计上限；0=不限。防失控循环的主力（行业默认 20~500，取 80）。 */
+    private val toolCallCap: Int = 80,
+    /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒（不中断循环）。 */
+    private val softBudgetWarn: Boolean = true,
     /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
     private val toolFailCap: Int = 8,
     /** E8 循环内插话队列：生成期间用户新指令入队，引擎在安全间隙合并注入。 */
@@ -206,6 +210,12 @@ class AgentEngine(
         val turnStartMs = System.currentTimeMillis()
         var turnPrompt = 0L
         var turnCompletion = 0L
+        /** E5b 单轮工具调用累计（圈数熔断计数）。 */
+        var turnToolCalls = 0
+        /** E5b 软提醒只注入一次。 */
+        var softWarned = false
+        /** 熔断触发后置位：本轮不执行工具，下一轮无工具纯文本总结后结束。 */
+        var forceFinish = false
         appendAndNotify(
             ChatMessage(
                 role = ChatMessage.ROLE_USER,
@@ -302,20 +312,35 @@ class AgentEngine(
                 maybeNudgeHandoff(onEvent)
 
                 // 单轮流式收集（overflow 自动压缩后的重试复用同一段逻辑，避免双份维护）
+                var lastStreamEventAt = 0L
                 suspend fun collectStream() {
-                    httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
-                        .collect { ev ->
-                            when (ev) {
-                                is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
-                                is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
-                                is SseEvent.Completed -> calls = ev.toolCalls
-                                is SseEvent.Usage -> {
-                                    turnPrompt += ev.promptTokens
-                                    turnCompletion += ev.completionTokens
-                                    onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                    lastStreamEventAt = System.currentTimeMillis()
+                    coroutineScope {
+                        val collectJob = launch {
+                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
+                                .collect { ev ->
+                                    lastStreamEventAt = System.currentTimeMillis()
+                                    when (ev) {
+                                        is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
+                                        is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
+                                        is SseEvent.Completed -> calls = ev.toolCalls
+                                        is SseEvent.Usage -> {
+                                            turnPrompt += ev.promptTokens
+                                            turnCompletion += ev.completionTokens
+                                            onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
+                                        }
+                                    }
                                 }
+                        }
+                        // E9b 流式看门狗：90 秒无任何事件判定流挂死（供应商断流/SSE 假活），
+                        // 中断后按瞬态错误走退避重试，而不是让整轮永远停在"正在思考"
+                        while (collectJob.isActive) {
+                            delay(5_000)
+                            if (System.currentTimeMillis() - lastStreamEventAt > 90_000L) {
+                                throw java.io.IOException("stream stall: 流式响应超过 90 秒无数据（看门狗中断）")
                             }
                         }
+                    }
                 }
                 try {
                     collectStream()
@@ -353,24 +378,34 @@ class AgentEngine(
                     }
                 }
 
-                // E5 单轮成本熔断：turnPrompt+turnCompletion 达上限 → 注入收尾指令 + break
-                if (turnTokenCap > 0 && turnPrompt + turnCompletion >= turnTokenCap) {
+                // E5 单轮成本熔断（100%）：保留模型已生成内容，注入收尾指令，
+                // 下一轮 apiTools 已清空 → 纯文本总结后自然结束（比直接 break 多一次调用，换来可用收场）。
+                // forceFinish 已置位时跳过：否则累计值恒 ≥ 上限，收尾轮会在 [A] 再次触发熔断形成死循环
+                if (!forceFinish && turnTokenCap > 0 && turnPrompt + turnCompletion >= turnTokenCap) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
+                    if (streamBuf.isNotBlank()) {
+                        appendAndNotify(
+                            ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = streamBuf.toString()),
+                            onEvent
+                        )
+                    }
                     appendAndNotify(
                         ChatMessage(
-                            role = ChatMessage.ROLE_ASSISTANT,
-                            content = "[成本熔断] 本轮已消耗约 ${turnPrompt + turnCompletion} tokens，达到上限（${turnTokenCap}）。请立即总结当前进度与剩余步骤，然后结束本轮。"
+                            role = ChatMessage.ROLE_USER,
+                            content = "[成本熔断] 本轮已消耗约 ${turnPrompt + turnCompletion} tokens，达到上限（${turnTokenCap}）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
                         ),
                         onEvent
                     )
                     onEvent(ToolChanged(ToolUpdate("cap-break", ToolRunState.DONE, "成本熔断", "token 上限")))
-                    break
+                    apiTools = emptyList()
+                    forceFinish = true
+                    continue
                 }
 
                 if (streamBuf.isNotBlank() || calls.isNotEmpty()) {
-                    // calls 为空 = 本轮无工具调用、循环即将 break：这是最终回复，
+                    // calls 为空（或熔断收尾轮）= 本轮无工具调用、循环即将 break：这是最终回复，
                     // 把整轮累计的 token/耗时/模型名挂上（中间轮的 assistant 片段不带，避免重复展示）
-                    val isFinal = calls.isEmpty()
+                    val isFinal = calls.isEmpty() || forceFinish
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
@@ -387,7 +422,9 @@ class AgentEngine(
                 }
                 currentCoroutineContext().ensureActive()
 
-                if (calls.isEmpty()) break
+                if (calls.isEmpty() || forceFinish) break
+
+                turnToolCalls += calls.size
 
                 // E6 同轮多工具并行分组：READ 且在白名单内的调用并发执行
                 // （ALWAYS_ASK 模式 READ 也审批，审批弹窗必须在主协程，不能进并发块）。
@@ -425,6 +462,36 @@ class AgentEngine(
                     )
                     onEvent(ToolChanged(ToolUpdate("fail-cap", ToolRunState.DONE, "失败熔断", "连续工具失败")))
                     break
+                }
+
+                // E5b 圈数熔断：单轮工具调用累计达上限 → 注入收尾指令，下一轮无工具纯文本总结
+                if (!forceFinish && toolCallCap > 0 && turnToolCalls >= toolCallCap) {
+                    runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_USER,
+                            content = "[圈数熔断] 本轮已执行 $turnToolCalls 次工具调用，达到上限（$toolCallCap）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
+                        ),
+                        onEvent
+                    )
+                    onEvent(ToolChanged(ToolUpdate("call-cap", ToolRunState.DONE, "圈数熔断", "工具调用次数")))
+                    apiTools = emptyList()
+                    forceFinish = true
+                }
+
+                // E5b 软提醒（70%）：一次性注入，只提醒不熔断；已熔断或关闭软提醒时跳过
+                if (softBudgetWarn && !softWarned && !forceFinish && turnTokenCap > 0 &&
+                    turnPrompt + turnCompletion >= turnTokenCap * 0.7
+                ) {
+                    softWarned = true
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_USER,
+                            content = "[成本提醒] 本轮已消耗约 ${turnPrompt + turnCompletion} tokens，达到上限（${turnTokenCap}）的 70%。请精简后续步骤，尽快收尾任务。"
+                        ),
+                        onEvent
+                    )
+                    onEvent(ToolChanged(ToolUpdate("budget-warn", ToolRunState.DONE, "成本提醒", "70%")))
                 }
             }
             onEvent(Finished(null))
@@ -1394,7 +1461,7 @@ class AgentEngine(
     private fun isTransientHttpError(msg: String): Boolean {
         val m = msg.lowercase()
         return "http 429" in m || "http 5" in m || "timeout" in m ||
-            "timed out" in m || "connection reset" in m || "eofexception" in m
+            "timed out" in m || "connection reset" in m || "eofexception" in m || "stream stall" in m
     }
 
     /**

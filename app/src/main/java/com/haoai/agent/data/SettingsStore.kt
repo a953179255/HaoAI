@@ -178,8 +178,14 @@ data class AppSettings(
     val summarizeFallbackIds: List<String> = emptyList(),
     /** 聊天模型备用链（同 purpose 结构，元素可为 "providerId" 或 "providerId|modelId"）。 */
     val chatFallbackIds: List<String> = emptyList(),
-    /** E5 单轮 LLM token 累计上限（prompt+completion）；0=不限。 */
-    val turnTokenCap: Int = 150_000,
+    /** E5 单轮 LLM token 累计上限（prompt+completion，交互聊天口径）；0=不限。无人值守（定时/工作流）固定 15 万硬限，不受此项影响。 */
+    val turnTokenCap: Int = 250_000,
+    /** E5b 圈数熔断：单轮工具调用累计上限；0=不限。 */
+    val toolCallCap: Int = 80,
+    /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒。 */
+    val softBudgetWarn: Boolean = true,
+    /** 设置结构版本（迁移用）：1 = 熔断分级改造，旧默认 150k 一次性放宽到 250k。 */
+    val settingsVersion: Int = 0,
     /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */
     val consecutiveToolFailCap: Int = 8
 )
@@ -194,8 +200,18 @@ class SettingsStore(context: Context) {
     @Serializable
     private data class Wrapped(val settings: AppSettings = AppSettings())
 
-    fun load(): AppSettings =
-        HaoJson.readJsonSafe(file, Wrapped.serializer())?.settings ?: AppSettings()
+    fun load(): AppSettings {
+        val loaded = HaoJson.readJsonSafe(file, Wrapped.serializer())?.settings ?: AppSettings()
+        var s = loaded
+        if (s.settingsVersion < 1) {
+            // 一次性迁移：settingsVersion 引入前，用户没显式改过（仍是旧默认 150k）的交互上限放宽到 250k。
+            // 显式设过其他值（含 0=不限）的尊重原值；迁移后版本号置 1，下次保存落盘。
+            if (s.turnTokenCap == 150_000) s = s.copy(turnTokenCap = 250_000)
+            s = s.copy(settingsVersion = 1)
+            save(s)
+        }
+        return s
+    }
 
     fun save(settings: AppSettings) {
         io.execute {

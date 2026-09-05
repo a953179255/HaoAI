@@ -535,6 +535,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(dailyTokenBudgetK = k.coerceIn(0, 10_000)) }
     }
 
+    /** E5b 单轮 token 熔断上限（交互聊天）；0=不限。无人值守固定 15 万硬限不受此影响。 */
+    fun setTurnTokenCap(v: Int) {
+        c.updateSettings { it.copy(turnTokenCap = v.coerceIn(0, 10_000_000)) }
+    }
+
+    /** E5b 圈数熔断上限（单轮工具调用次数）；0=不限。 */
+    fun setToolCallCap(v: Int) {
+        c.updateSettings { it.copy(toolCallCap = v.coerceIn(0, 100_000)) }
+    }
+
+    /** E5b 软提醒开关（70% 预警）。 */
+    fun setSoftBudgetWarn(on: Boolean) {
+        c.updateSettings { it.copy(softBudgetWarn = on) }
+    }
+
     /** 5.3 内部任务模型路由设置（purpose: memory/title/summarize/chat；""=主模型，"local"=端侧，"pid|model"=同供应商指定模型）。 */
     fun setPurposeModel(purpose: String, id: String) {
         c.updateSettings { st ->

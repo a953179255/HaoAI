@@ -31,13 +31,14 @@ class VScreenLaunchTool : Tool {
 
     override val name = "vscreen_launch"
     override val description =
-        "把目标 App（包名）或网页（URL）启动到后台虚拟屏：用户主屏不被占用、可继续用手机。虚拟屏自动化第一步；启动失败（App 拒绝多屏）时按提示降级前台 screen/tap 流程。"
+        "把目标 App 启动到后台虚拟屏：用户主屏不被占用、可继续用手机。虚拟屏自动化第一步。target 支持：应用名（如「掌上英雄联盟」，自动按已安装应用解析）、包名（如 com.android.notes）或 http(s) 网址。" +
+            "启动失败（App 拒绝多屏）时按提示降级前台 screen/tap 流程。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("target") {
                 put("type", "string")
-                put("description", "应用包名（如 com.android.notes）或 http(s) 网址")
+                put("description", "应用名、应用包名或 http(s) 网址。不确定包名时直接传应用名，工具会按桌面应用标签解析并在结果中回显【应用名】供核对")
             }
         }
         put("required", kotlinx.serialization.json.JsonArray(listOf(
@@ -50,13 +51,30 @@ class VScreenLaunchTool : Tool {
         val app = ctx.appContext ?: return ToolResult("无应用上下文", true)
         val target = args.optString("target")
         if (target.isBlank()) return ToolResult("缺少 target", true)
-        VirtualScreenController.launch(app, target)?.let { return ToolResult(it, true) }
+
+        // 应用名/包名双轨解析：URL 直通；包名形态直接用（顺带查标签用于回显核对）；
+        // 其余按桌面应用标签匹配（避免模型猜包名——猜错会把同类 App 拉起来）
+        var launchTarget = target
+        var appLabel: String? = null
+        if (!target.startsWith("http")) {
+            val resolution = resolveAppTarget(app, target)
+            when (resolution) {
+                is AppTarget.Resolved -> { launchTarget = resolution.pkg; appLabel = resolution.label }
+                is AppTarget.NotFound -> return ToolResult(
+                    "未找到与「$target」匹配的已安装应用（按桌面应用名解析）。" +
+                        "若它是游戏/系统组件请改传准确包名；已安装应用名样例：${resolution.samples}",
+                    true
+                )
+            }
+        }
+
+        VirtualScreenController.launch(app, launchTarget)?.let { return ToolResult(it, true) }
         // 硬性故障检查：启动后虚拟屏上仍无目标窗口（App 拒绝多屏/系统把重投递主屏等）。
         // 轮询等待而非一次判死——App 冷启动普遍要 2~5s，过早检查会把"还没起来"误报成"没出现"。
         // 双通道：无障碍（快）+ shell 枚举（am stack list，不依赖 a11y——App 重启后服务未重连是
         // Flyme 常态，单靠 a11y 会把启动成功的任务误判失败，agent 随即降级主屏 = 用户看到的"窜屏"）
         val svc = HaoAccessibilityService.instance
-        val targetPkg = if (target.startsWith("http")) "" else target.substringBefore('/')
+        val targetPkg = if (launchTarget.startsWith("http")) "" else launchTarget.substringBefore('/')
         var onVscreen = false
         var channelUsable = false
         for (i in 1..12) { // 12 × 500ms = 最长 6s
@@ -94,10 +112,57 @@ class VScreenLaunchTool : Tool {
         val visualNote = if (VirtualScreenController.frameIsDegenerate())
             "；注意：当前画面可能为纯色（本 ROM 不合成应用画面），操作以 vscreen_screen 的控件树为准"
             else ""
+        val labelEcho = appLabel?.let { "【$it】" } ?: ""
         return ToolResult(
-            "已启动 $target 到虚拟屏（displayId=${activeDisplayId()}）。用 vscreen_screen 读取界面树与截图$visualNote。"
+            "已启动 $launchTarget$labelEcho 到虚拟屏（displayId=${activeDisplayId()}）。用 vscreen_screen 读取界面树与截图$visualNote。" +
+                "若回显的应用名与你以为的目标不符，说明 target 传错了，请用正确应用名重试。" +
+                "另注意：部分游戏/App 的开屏公告会以深度链接把页面弹到用户主屏——那是应用自身行为，不是你打开的，请勿转去主屏操作，如实向用户说明即可。"
         )
     }
+}
+
+/** vscreen_launch 目标解析结果。 */
+private sealed class AppTarget {
+    data class Resolved(val pkg: String, val label: String?) : AppTarget()
+    data class NotFound(val samples: String) : AppTarget()
+}
+
+/**
+ * 把 vscreen_launch 的 target 解析为包名：
+ * 包名形态（xxx.yyy…）直接用并顺带查标签；否则按桌面应用标签做包含匹配（忽略大小写）。
+ * 只枚举 LAUNCHER 活动即可拿到全部用户可见应用，无需任何权限——shell `pm list` 被拒也不影响。
+ */
+private fun resolveAppTarget(app: android.content.Context, target: String): AppTarget {
+    val pm = app.packageManager
+    val launchables = runCatching {
+        pm.queryIntentActivities(
+            android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER),
+            0
+        )
+    }.getOrDefault(emptyList())
+        .mapNotNull { ri ->
+            val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+            val label = runCatching { ri.loadLabel(pm).toString() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            pkg to label
+        }
+        .distinctBy { it.first }
+
+    val pkgLike = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
+    if (pkgLike.matches(target)) {
+        val label = launchables.firstOrNull { it.first == target }?.second
+        return AppTarget.Resolved(target, label)
+    }
+
+    val q = target.trim()
+    val exact = launchables.filter { it.second.equals(q, ignoreCase = true) }
+    val partial = launchables.filter { it.second.contains(q, ignoreCase = true) && it.second != q }
+    val candidates = (exact + partial).ifEmpty { null }
+        ?: return AppTarget.NotFound(
+            launchables.map { it.second }.shuffled().take(6).joinToString("、")
+        )
+    // 多个候选：精确匹配优先，其次取标签最短的（最贴近查询词）
+    val best = candidates.minByOrNull { it.second.length }!!
+    return AppTarget.Resolved(best.first, best.second)
 }
 
 class VScreenScreenTool : Tool {

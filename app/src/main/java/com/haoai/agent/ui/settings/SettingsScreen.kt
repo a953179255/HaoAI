@@ -2348,6 +2348,70 @@ private fun LazyListScope.generalItems(
             }
         }
     }
+    // E5b 成本熔断：交互聊天与无人值守分级——聊天用这里设置（默认 25 万），定时任务/工作流固定 15 万硬限
+    item {
+        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text("单轮 Token 上限（成本熔断）", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "一轮对话累计消耗（含每次工具调用重发的上下文）达到上限即收尾。0 = 不限；定时任务/工作流不受此项影响（固定 15 万）。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    var capText by androidx.compose.runtime.remember(settings.turnTokenCap) {
+                        androidx.compose.runtime.mutableStateOf(settings.turnTokenCap.let { if (it == 0) "" else it.toString() })
+                    }
+                    OutlinedTextField(
+                        value = capText,
+                        onValueChange = { t ->
+                            capText = t.filter { ch -> ch.isDigit() }.take(7)
+                            vm.setTurnTokenCap(capText.toIntOrNull() ?: 0)
+                        },
+                        modifier = Modifier.width(150.dp),
+                        singleLine = true,
+                        placeholder = { Text("不限") },
+                        trailingIcon = { Text("tok/轮", style = MaterialTheme.typography.labelSmall) },
+                        colors = com.haoai.agent.ui.common.glassFieldColors()
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("圈数上限（工具调用次数）", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "一轮对话累计工具调用达到上限即收尾，防失控循环。0 = 不限。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    var callText by androidx.compose.runtime.remember(settings.toolCallCap) {
+                        androidx.compose.runtime.mutableStateOf(settings.toolCallCap.let { if (it == 0) "" else it.toString() })
+                    }
+                    OutlinedTextField(
+                        value = callText,
+                        onValueChange = { t ->
+                            callText = t.filter { ch -> ch.isDigit() }.take(6)
+                            vm.setToolCallCap(callText.toIntOrNull() ?: 0)
+                        },
+                        modifier = Modifier.width(150.dp),
+                        singleLine = true,
+                        placeholder = { Text("不限") },
+                        trailingIcon = { Text("次/轮", style = MaterialTheme.typography.labelSmall) },
+                        colors = com.haoai.agent.ui.common.glassFieldColors()
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                ToggleRow(
+                    title = "熔断前软提醒",
+                    subtitle = "达单轮上限 70% 时先提醒 Agent 精简收尾，到 100% 才强制结束",
+                    checked = settings.softBudgetWarn,
+                    onChange = { vm.setSoftBudgetWarn(it) },
+                    backdrop = backdrop
+                )
+            }
+        }
+    }
     item { SectionTitle("后台") }
     item {
         GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
