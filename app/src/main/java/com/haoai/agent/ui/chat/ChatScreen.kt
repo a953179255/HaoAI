@@ -363,6 +363,45 @@ fun ChatScreen(
         }
     }
 
+    // 系统分享接入（R2.2）：文本预填输入框；图片 Uri 走与相册选择相同的解码管线
+    androidx.compose.runtime.LaunchedEffect(vm) {
+        vm.shareText.collect { t ->
+            if (t != null) {
+                input = if (input.isBlank()) t else "$input\n$t"
+                vm.shareText.value = null
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(vm) {
+        vm.shareImageUri.collect { uriStr ->
+            if (uriStr != null) {
+                vm.shareImageUri.value = null
+                runCatching {
+                    val uri = android.net.Uri.parse(uriStr)
+                    val resolver = context.contentResolver
+                    resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                runCatching {
+                    val resolver = context.contentResolver
+                    val uri = android.net.Uri.parse(uriStr)
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                    val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+                    if (bmp != null) {
+                        val bos = java.io.ByteArrayOutputStream()
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
+                        bmp.recycle()
+                        pendingImage = "data:image/jpeg;base64," +
+                            android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+                    }
+                }
+            }
+        }
+    }
+
     // 拍照：动态权限 → TakePicture 到 FileProvider Uri → 采样解码压缩为 base64 附件
     val cameraLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.TakePicture()

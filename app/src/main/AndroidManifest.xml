@@ -58,6 +58,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="haoai" android:host="debug" />
             </intent-filter>
+            <!-- 系统分享接入（R2.2）：其他 app 分享文本/图片到 HaoAI -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
 
         <!-- 2.4 notifications_read：通知使用权服务（用户在系统设置中授权） -->

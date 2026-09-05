@@ -81,15 +81,28 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         // setIntent 不触发重组：已运行实例的深链改走 flow 投递（单靠 LaunchedEffect(intent.data) 会漏）
         deepLinkFlow.value = intent.data
+        handleSendIntent(intent)
     }
 
     /** onNewIntent 投递的深链（含冷启动 intent 之外的所有重投递）。 */
     internal val deepLinkFlow = kotlinx.coroutines.flow.MutableStateFlow<android.net.Uri?>(null)
 
+    /** 系统分享接入（R2.2）：(文本, 图片Uri)，ChatScreen 导航层消费。 */
+    internal val shareFlow = kotlinx.coroutines.flow.MutableStateFlow<Pair<String?, android.net.Uri?>?>(null)
+
+    private fun handleSendIntent(intent: android.content.Intent?) {
+        if (intent?.action != android.content.Intent.ACTION_SEND) return
+        val text = intent.getStringExtra(android.content.Intent.EXTRA_TEXT)
+        @Suppress("DEPRECATION")
+        val stream = intent.getParcelableExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
+        if (text != null || stream != null) shareFlow.value = text to stream
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestNotificationIfNeeded()
+        handleSendIntent(intent)
         com.haoai.agent.platform.PermissionBridge.requestRuntime = { perms, cb ->
             runOnUiThread {
                 pendingRuntimeCb = cb
@@ -264,6 +277,17 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             if (uri != null) {
                 consumeDeepLink(uri)
                 act.deepLinkFlow.value = null
+            }
+        }
+    }
+    // 系统分享接入（R2.2）：切到聊天页并转存到 ChatViewModel，ChatScreen 负责预填
+    LaunchedEffect(Unit) {
+        (act as? MainActivity)?.shareFlow?.collect { s ->
+            if (s != null) {
+                screen = 0
+                s.first?.let { chatVm.shareText.value = it }
+                s.second?.let { chatVm.shareImageUri.value = it.toString() }
+                act.shareFlow.value = null
             }
         }
     }

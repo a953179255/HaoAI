@@ -82,6 +82,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _interjectCount.value = interjectQueue.size
     }
 
+    /** 系统分享接入（R2.2）：导航层把 ACTION_SEND 内容转存 here，ChatScreen 消费后清空。 */
+    val shareText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val shareImageUri = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
     /** E8 引擎结束（/stop 或 Finished）时清空队列。 */
     private fun clearInterjections() {
         interjectQueue.clear()
