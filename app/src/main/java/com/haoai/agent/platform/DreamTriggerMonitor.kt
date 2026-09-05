@@ -39,6 +39,23 @@ object DreamTriggerMonitor {
         }
         ContextCompat.registerReceiver(app, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         registered = true
+        // Flyme 广播防火墙会拦掉系统 SCREEN_OFF/ON 广播（用户实测：
+        // "skipped by policy at enqueue: Firewall blocked ... SCREEN_OFF"），
+        // 补一条 DisplayManager binder 回调通道（不经过广播，不受防火墙管辖）。
+        runCatching {
+            val dm = app.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            dm.registerDisplayListener(
+                object : android.hardware.display.DisplayManager.DisplayListener {
+                    override fun onDisplayAdded(displayId: Int) {}
+                    override fun onDisplayRemoved(displayId: Int) {}
+                    override fun onDisplayChanged(displayId: Int) {
+                        if (isScreenOff(app)) armIfCharging(app) else disarm(app)
+                    }
+                },
+                handler
+            )
+        }
         // 冷启动即处于充电+灭屏（如夜间被系统杀掉后重启），补排一次
         if (isScreenOff(app)) armIfCharging(app)
     }
