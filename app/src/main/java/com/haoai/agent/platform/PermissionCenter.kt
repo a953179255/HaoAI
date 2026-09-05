@@ -76,13 +76,22 @@ object PermissionCenter {
         special = true,
         settingsAction = Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
     )
+    val BATTERY_OPT = PermSpec(
+        "battery_opt", "电池优化白名单",
+        "国产 ROM（Flyme 等）杀后台/饿死定时任务与梦境固化的解药，强烈建议开",
+        special = true
+    )
 
     // MEDIA（READ_MEDIA_*）已删除：壁纸选择走 SAF 临时授权、图片识别走文件路径+所有文件访问，
     // 没有任何代码直接查 MediaStore，该权限是纯僵尸项
-    val ALL = listOf(CAMERA, LOCATION, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, CALENDAR, CONTACTS)
+    val ALL = listOf(CAMERA, LOCATION, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, BATTERY_OPT, CALENDAR, CONTACTS)
 
     fun granted(context: Context, spec: PermSpec): Boolean = when {
         spec.key == "storage" -> Environment.isExternalStorageManager()
+        spec.key == "battery_opt" -> runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            pm.isIgnoringBatteryOptimizations(context.packageName)
+        }.getOrDefault(false)
         spec.key == "notif_listener" -> Settings.Secure.getString(
             context.contentResolver, "enabled_notification_listeners"
         )?.contains(context.packageName) == true
@@ -126,6 +135,19 @@ object PermissionCenter {
             }.recoverCatching {
                 context.startActivity(
                     Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.isSuccess
+        } else if (spec.key == "battery_opt") {
+            // 直达确认对话框（弹「允许忽略电池优化？」一键允许），比设置列表页友好
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.recoverCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }.isSuccess
@@ -175,6 +197,11 @@ object PermissionCenter {
         runCatching {
             when {
                 spec.key == "storage" -> openStorageSettings(context)
+                // 已授权后的管理入口：电池优化走系统全列表页（在列表里可反向移除）
+                spec.key == "battery_opt" -> context.startActivity(
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
                 spec.special -> context.startActivity(
                     Intent(spec.settingsAction).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
