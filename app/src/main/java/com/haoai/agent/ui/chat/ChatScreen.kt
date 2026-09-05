@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.abs
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -96,6 +97,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -244,6 +246,7 @@ fun ChatScreen(
     val rows by vm.rows.collectAsState()
     val streaming by vm.streamingText.collectAsState()
     val streamingReasoning by vm.streamingReasoning.collectAsState()
+    val thinkingMs by vm.thinkingMs.collectAsState()
     val running by vm.running.collectAsState()
     val error by vm.error.collectAsState()
     val sessions by vm.sessions.collectAsState()
@@ -587,9 +590,11 @@ fun ChatScreen(
                         if (msg != null) vm.showError(msg)
                     }
                 },
+                onStopRun = { vm.stop() },
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
+                thinkingMs = thinkingMs,
                 thinkingHint = if (running && vm.isLocalProviderActive())
                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
                 listState = listState,
@@ -1792,10 +1797,12 @@ private fun MessageList(
     onQuickEdit: (ChatRow) -> Unit,
     onToolViewDiff: (String) -> Unit,
     onToolRollback: (String) -> Unit = {},
+    onStopRun: () -> Unit = {},
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
     thinkingHint: String? = null,
+    thinkingMs: Long? = null,
     listState: androidx.compose.foundation.lazy.LazyListState,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
@@ -1874,7 +1881,8 @@ private fun MessageList(
     val justFinished = prevRunning.value && !running
     prevRunning.value = running
 
-    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
+    Box(modifier.fillMaxWidth()) {
+    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
         val finalRowKey = if (!running) rows.lastOrNull()?.key else null
@@ -1889,6 +1897,7 @@ private fun MessageList(
                 running = running,
                 onViewDiff = onToolViewDiff,
                 onRollback = onToolRollback,
+                onStopRun = onStopRun,
                 showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
                 growIn = row.key == growInKey,
                 onFooterReveal = { footerRevealTick++ }
@@ -1896,9 +1905,39 @@ private fun MessageList(
         }
         if (showStreaming) {
             item(key = "streaming") {
-                StreamingItem(streamingText, streamingReasoning, thinkingHint)
+                StreamingItem(streamingText, streamingReasoning, thinkingHint, thinkingMs)
             }
         }
+    }
+    // ⑧ 回到底部浮钮：用户上滑断开粘滞后浮现，点击回底并复位粘滞恢复跟随
+    val scope = rememberCoroutineScope()
+    AnimatedVisibility(
+        visible = userScrolledAway && totalItems > 0,
+        enter = fadeIn(tween(180)) + expandVertically(tween(180)),
+        exit = androidx.compose.animation.fadeOut(tween(140)),
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
+            shape = CircleShape,
+            tonalElevation = 3.dp,
+            modifier = Modifier
+                .size(38.dp)
+                .clickable {
+                    userScrolledAway = false
+                    scope.launch { listState.scrollToEnd(guard = scrollGuard) }
+                }
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "回到底部",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    }
     }
 }
 
@@ -1965,6 +2004,7 @@ private fun RowItem(
     running: Boolean,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
+    onStopRun: () -> Unit = {},
     showActions: Boolean = true,
     growIn: Boolean = false,
     onFooterReveal: () -> Unit = {}
@@ -1978,7 +2018,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, showActions, growIn, onFooterReveal)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, growIn, onFooterReveal)
     }
 }
 
@@ -2008,51 +2048,111 @@ private fun SystemEventBar(text: String) {
     }
 }
 
-/** 思考中指示器：模型还在 prefill / 推理、尚未吐出正文时给用户明确反馈。 */
+/**
+ * ⑤ 等待状态行（上游 waiting line 同思路）：连接点 + 短语轮播（shimmer 渐变）+
+ * 已用时长计时。prefill 慢（端侧模型数十秒）时给用户持续"活着"的信号。
+ */
 @Composable
-private fun ThinkingIndicator(text: String = "正在思考") {
-    val transition = rememberInfiniteTransition(label = "think")
-    val dotAlpha by transition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(850, easing = LinearEasing)),
-        label = "dots"
+private fun ThinkingIndicator(hint: String? = null) {
+    val phrases = hint?.let { listOf(it) } ?: listOf(
+        "正在连接模型…", "正在理解上下文…", "预热推理中…", "组织回答…"
     )
+    var idx by remember { mutableIntStateOf(0) }
+    var elapsedMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(phrases) {
+        while (true) {
+            kotlinx.coroutines.delay(2600)
+            idx = (idx + 1) % phrases.size
+        }
+    }
+    LaunchedEffect(Unit) {
+        val t0 = System.currentTimeMillis()
+        while (true) {
+            elapsedMs = System.currentTimeMillis() - t0
+            kotlinx.coroutines.delay(100)
+        }
+    }
+    // shimmer：渐变高光横扫文字（animateFloat 驱动 Brush 偏移）
+    val shimmer by androidx.compose.animation.core.rememberInfiniteTransition(label = "shim")
+        .animateFloat(
+            initialValue = 0f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
+            label = "shimmer"
+        )
+    val base = MaterialTheme.colorScheme.onSurfaceVariant
+    val hi = MaterialTheme.colorScheme.primary
     Row(verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(14.dp),
-            strokeWidth = 2.dp,
-            color = MaterialTheme.colorScheme.primary
+        // 连接状态点（呼吸）
+        val breathe by androidx.compose.animation.core.rememberInfiniteTransition(label = "conn")
+            .animateFloat(0.4f, 1f, infiniteRepeatable(tween(900)), label = "breathe")
+        Box(
+            Modifier
+                .size(7.dp)
+                .graphicsLayer { alpha = breathe }
+                .background(MaterialTheme.colorScheme.primary, CircleShape)
         )
         Spacer(Modifier.size(9.dp))
         Text(
-            text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = phrases[idx % phrases.size],
+            style = MaterialTheme.typography.bodyMedium.copy(
+                brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                    colors = listOf(base, hi, base),
+                    start = androidx.compose.ui.geometry.Offset((shimmer * 2f - 0.5f) * 240f, 0f),
+                    end = androidx.compose.ui.geometry.Offset((shimmer * 2f + 0.5f) * 240f, 0f)
+                )
+            )
         )
-        Spacer(Modifier.size(3.dp))
+        Spacer(Modifier.size(8.dp))
         Text(
-            "···",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.graphicsLayer { this.alpha = dotAlpha }
+            String.format(Locale.US, "%.1fs", elapsedMs / 1000.0),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
         )
     }
 }
 
+/** ① 流式光标：渲染层独立元素，1.06s steps 闪烁，不混入 markdown 源文本。 */
+@Composable
+private fun BlinkCursor() {
+    val transition = rememberInfiniteTransition(label = "cursor")
+    val phase by transition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1060, easing = LinearEasing)),
+        label = "phase"
+    )
+    Box(
+        Modifier
+            .width(2.5.dp)
+            .height(15.dp)
+            // 二值切换：亮 0.53s → 灭 0.53s（终端光标节奏）
+            .graphicsLayer { alpha = if (phase < 0.5f) 1f else 0f }
+            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.5.dp))
+    )
+}
+
 /**
- * 思考过程面板：流式阶段（live）默认展开实时滚动显示推理内容；
- * 正文开始后自动收起；历史消息里默认收起，点击可展开。
+ * ④ 思考过程面板（上游 ChainOfThought 同思路）：
+ * - live（正文未出）：标题 shimmer「正在思考」，内容只显示约 66dp 的底部渐隐预览，
+ *   不再全展开把正文顶出屏幕；
+ * - 正文开始（autoCollapse）后自动收起为「💭 已思考 N 秒 ▸」，点击可展开看全文；
+ * - 历史消息默认收起，点击展开。
  */
 @Composable
-private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = false) {
+private fun ReasoningPanel(
+    text: String,
+    live: Boolean,
+    autoCollapse: Boolean = false,
+    thinkingMs: Long? = null
+) {
     var userToggled by rememberSaveable { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(live) }
     // 正文开始输出时自动收起（除非用户手动展开过）
     LaunchedEffect(autoCollapse, live) {
         if (autoCollapse && !userToggled) expanded = false
     }
+    // live 且未展开全文时：受限高度 + 底部渐隐预览
+    val previewMode = live && !userToggled
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
         shape = RoundedCornerShape(13.dp),
@@ -2075,12 +2175,35 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                     )
                     Spacer(Modifier.size(8.dp))
                 }
-                Text(
-                    if (live) "正在思考…" else "思考过程",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (live) {
+                    // 标题 shimmer：渐变高光横扫
+                    val shim by androidx.compose.animation.core.rememberInfiniteTransition(label = "rshim")
+                        .animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "rp")
+                    Text(
+                        "正在思考",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                start = androidx.compose.ui.geometry.Offset((shim * 2f - 0.5f) * 160f, 0f),
+                                end = androidx.compose.ui.geometry.Offset((shim * 2f + 0.5f) * 160f, 0f)
+                            )
+                        )
+                    )
+                } else {
+                    // 收起态：显示思考用时（有值时），否则「思考过程」
+                    Text(
+                        thinkingMs?.let { "已思考 ${String.format(Locale.US, "%.1f", it / 1000.0)} 秒" }
+                            ?: "思考过程",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 Icon(
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -2091,20 +2214,57 @@ private fun ReasoningPanel(text: String, live: Boolean, autoCollapse: Boolean = 
                 Spacer(Modifier.size(12.dp))
             }
             androidx.compose.animation.AnimatedVisibility(expanded) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    lineHeight = 17.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                    modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
-                )
+                if (previewMode) {
+                    // live 预览：限高 + 底部渐隐遮罩，内容自动滚到底跟随最新推理
+                    val previewScroll = rememberScrollState()
+                    LaunchedEffect(text) { previewScroll.scrollTo(previewScroll.maxValue) }
+                    Box(Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)) {
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 17.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                            modifier = Modifier
+                                .heightIn(max = 66.dp)
+                                .verticalScroll(previewScroll)
+                        )
+                        // 底部渐隐（与面板底色一致）
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(28.dp)
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second)
+                                        )
+                                    )
+                                )
+                        )
+                    }
+                } else {
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                        modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StreamingItem(streamingText: String?, streamingReasoning: String?, thinkingHint: String? = null) {
+private fun StreamingItem(
+    streamingText: String?,
+    streamingReasoning: String?,
+    thinkingHint: String? = null,
+    thinkingMs: Long? = null
+) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -2115,7 +2275,8 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
             ReasoningPanel(
                 text = streamingReasoning,
                 live = !hasContent,
-                autoCollapse = hasContent
+                autoCollapse = hasContent,
+                thinkingMs = thinkingMs
             )
             if (hasContent) Spacer(Modifier.size(5.dp))
         }
@@ -2125,10 +2286,17 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                MarkdownText(
-                    streamingText + " ▍",
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
+                // ① 光标不再拼进 markdown 源文本（避免污染行内正则/解析），
+                // 改为正文块之后追加一个闪烁光标行；③ streaming=true 启用冻结前缀增量解析
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    MarkdownText(
+                        streamingText.orEmpty(),
+                        streaming = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Row(Modifier.padding(start = 1.dp)) { BlinkCursor() }
+                }
             }
         } else if (streamingReasoning.isNullOrBlank()) {
             // 什么都还没有：prefill / 等首 token
@@ -2138,7 +2306,7 @@ private fun StreamingItem(streamingText: String?, streamingReasoning: String?, t
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Box(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-                    ThinkingIndicator(thinkingHint ?: "正在思考")
+                    ThinkingIndicator(thinkingHint)
                 }
             }
         }
@@ -2200,6 +2368,7 @@ private fun AssistantBlock(
     running: Boolean,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
+    onStopRun: () -> Unit = {},
     showActions: Boolean = true,
     growIn: Boolean = false,
     onFooterReveal: () -> Unit = {}
@@ -2213,7 +2382,7 @@ private fun AssistantBlock(
             ReasoningPanel(text = it, live = false)
             Spacer(Modifier.size(5.dp))
         }
-        row.tools.forEach { tool -> ToolChip(tool, onViewDiff, onRollback) }
+        row.tools.forEach { tool -> ToolChip(tool, onViewDiff, onRollback, onStopRun) }
         if (row.text.isNotBlank()) {
             if (row.error) {
                 Surface(
@@ -2347,12 +2516,13 @@ private fun fmtTokens(n: Int): String =
 private fun ToolChip(
     tool: com.haoai.agent.ui.UiTool,
     onViewDiff: (String) -> Unit,
-    onRollback: (String) -> Unit = {}
+    onRollback: (String) -> Unit = {},
+    onStopRun: () -> Unit = {}
 ) {
     var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
     val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
     val stateColor = when (tool.state) {
-        ToolRunState.RUNNING -> MaterialTheme.colorScheme.primary
+        ToolRunState.RUNNING -> MaterialTheme.colorScheme.error
         ToolRunState.DONE -> Color(0xFF7BD88F)
         ToolRunState.ERROR -> MaterialTheme.colorScheme.error
         ToolRunState.DENIED -> Color(0xFFFFC46B)
@@ -2374,11 +2544,23 @@ private fun ToolChip(
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when (tool.state) {
-                    ToolRunState.RUNNING -> CircularProgressIndicator(
-                        modifier = Modifier.size(13.dp),
-                        strokeWidth = 1.8.dp,
-                        color = stateColor
-                    )
+                    // ⑥ 运行中：红色停止方块（上游 ToolCallPill 同思路），点按即中断本轮
+                    ToolRunState.RUNNING -> Box(
+                        Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .clickable { onStopRun() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "stop")
+                            .animateFloat(0.55f, 1f, infiniteRepeatable(tween(1100)), label = "sp")
+                        Box(
+                            Modifier
+                                .size(9.dp)
+                                .graphicsLayer { alpha = pulse }
+                                .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp))
+                        )
+                    }
                     else -> Box(
                         Modifier
                             .size(9.dp)

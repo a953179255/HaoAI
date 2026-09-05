@@ -5,6 +5,11 @@ import android.content.Context
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -52,6 +57,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.animation.core.animateFloat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -61,9 +67,12 @@ sealed class MdBlock {
     data class Code(val lang: String, val code: String, val closed: Boolean) : MdBlock()
     data class Mermaid(val code: String, val closed: Boolean) : MdBlock()
 
-    /** LaTeX 公式（块级 $$...$$）。 */
-    data class Math(val latex: String) : MdBlock()
+    /** LaTeX 公式（块级 $$...$$）；流式未闭合 $$ 时 closed=false（⑦ 保守按永久开启处理）。 */
+    data class Math(val latex: String, val closed: Boolean = true) : MdBlock()
     data class Table(val header: List<String>, val rows: List<List<String>>, val aligns: List<Int>) : MdBlock()
+
+    /** 表格骨架占位（⑦）：表头已到、分隔行未齐时先占位，避免"纯文本闪现→跳变成表格"。 */
+    data class TableSkeleton(val header: List<String>) : MdBlock()
 }
 
 /** 对齐方式：0 左 / 1 中 / 2 右。 */
@@ -74,6 +83,28 @@ private const val ALIGN_RIGHT = 2
 private val fenceLine = Regex("^```(.*)$")
 private val tableDivider = Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$")
 private val mathLine = Regex("^\\s*\\$\\$(.+?)\\$\\$\\s*$")
+
+/**
+ * ③ 已结算边界（上游/上游 式 frozen-prefix）：返回 src 中最后一个
+ * 「代码围栏与块级公式之外」的空行末尾偏移。该偏移之前的块均已定型、不会再被
+ * 后续 token 改变，可冻结复用；之后的尾部文本才需要随流式重解析。
+ * 返回 0 表示尚无可冻结前缀。
+ */
+fun settledBoundary(src: String): Int {
+    var inFence = false
+    var inMath = false
+    var offset = 0
+    var settled = 0
+    for (line in src.split('\n')) {
+        val trimmed = line.trim()
+        if (fenceLine.matches(line)) inFence = !inFence
+        else if (!inFence && (trimmed == "$$" || mathLine.matches(line))) inMath = !inMath
+        offset += line.length + 1
+        if (!inFence && !inMath && trimmed.isEmpty()) settled = offset
+    }
+    // 边界不能落在未闭合围栏/公式内部（上面的状态扫描已保证）
+    return if (inFence || inMath) 0 else settled
+}
 
 /** 解析 Markdown 为块列表；未闭合围栏标记 closed=false（流式输出兼容）。 */
 fun parseMarkdownBlocks(src: String): List<MdBlock> {
@@ -138,15 +169,18 @@ fun parseMarkdownBlocks(src: String): List<MdBlock> {
             flushText()
             val body = StringBuilder()
             i++
+            var closed = false
             while (i < lines.size) {
                 if (lines[i].trim() == "$$") {
+                    closed = true
                     i++
                     break
                 }
                 body.append(lines[i]).append('\n')
                 i++
             }
-            blocks += MdBlock.Math(body.toString().trim())
+            // ⑦ 未闭合 $$ 按永久开启保守处理：整段按公式渲染，闭合后原地定型
+            blocks += MdBlock.Math(body.toString().trim(), closed)
             continue
         }
 
@@ -176,6 +210,17 @@ fun parseMarkdownBlocks(src: String): List<MdBlock> {
             continue
         }
 
+        // 3b) ⑦ 疑似表格首行：含 | 的行已到末尾、分隔行还没流出来 → 骨架占位，
+        // 避免表头先以普通文本闪现、分隔行到达后又跳变成表格
+        if (isTableRow(line) && i + 1 >= lines.size && line.count { it == '|' } >= 2) {
+            flushText()
+            val header = line.trim().removePrefix("|").removeSuffix("|")
+                .split('|').map { it.trim() }.filter { it.isNotEmpty() }
+            if (header.isNotEmpty()) blocks += MdBlock.TableSkeleton(header)
+            i++
+            continue
+        }
+
         // 4) 普通文本段落
         textBuffer.append(line).append('\n')
         i++
@@ -185,15 +230,41 @@ fun parseMarkdownBlocks(src: String): List<MdBlock> {
 }
 
 @Composable
-fun MarkdownText(text: String, modifier: Modifier = Modifier) {
+fun MarkdownText(
+    text: String,
+    modifier: Modifier = Modifier,
+    streaming: Boolean = false
+) {
     // 结构解析挪后台线程 + mapLatest 语义（上游 同款）：LaunchedEffect(text) 每次
     // 文本变化重启并取消在途解析，只提交最新完成版；首帧同步解析防闪烁。
     // parseMarkdownBlocks 是纯字符串处理（Regex/String），后台线程安全
+    //
+    // ③ 已结算块冻结（上游/上游 式）：streaming 时以「围栏/公式外的空行」为
+    // 结算边界，边界之前的块冻结复用（frozenSrc/frozenBlocks），每次 token 只重解析
+    // 未定型尾部——解析成本从 O(全文) 降到 O(尾部)。文本非追加式变化（重生成/编辑）
+    // 时前缀校验失败自动回退全量解析。
     var blocks by remember { mutableStateOf(parseMarkdownBlocks(text)) }
     var parsedFor by remember { mutableStateOf(text) }
-    LaunchedEffect(text) {
+    var frozenSrc by remember { mutableStateOf("") }
+    var frozenBlocks by remember { mutableStateOf<List<MdBlock>>(emptyList()) }
+    LaunchedEffect(text, streaming) {
         if (parsedFor == text) return@LaunchedEffect
-        val result = withContext(Dispatchers.Default) { parseMarkdownBlocks(text) }
+        val result = withContext(Dispatchers.Default) {
+            if (streaming && text.startsWith(frozenSrc)) {
+                val b = settledBoundary(text)
+                if (b > frozenSrc.length) {
+                    // 结算边界推进：把新定型的部分并入冻结前缀（每段落一次全量级解析）
+                    frozenBlocks = parseMarkdownBlocks(text.take(b))
+                    frozenSrc = text.take(b)
+                }
+                if (frozenSrc.isEmpty()) parseMarkdownBlocks(text)
+                else frozenBlocks + parseMarkdownBlocks(text.substring(frozenSrc.length))
+            } else {
+                frozenSrc = ""
+                frozenBlocks = emptyList()
+                parseMarkdownBlocks(text)
+            }
+        }
         blocks = result
         parsedFor = text
     }
@@ -205,6 +276,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier) {
                 is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
                 is MdBlock.Math -> FormulaBlock(block.latex, dark)
                 is MdBlock.Table -> TableBlock(block)
+                is MdBlock.TableSkeleton -> TableSkeletonBlock(block.header)
                 is MdBlock.Text -> {
                     // 块级缓存：行内正则/AnnotatedString 仅在块文本变化时重算。
                     // 流式期 blocks 列表每次都是新对象但历史块文本不变 → 缓存命中，
@@ -356,6 +428,51 @@ private fun alignOf(aligns: List<Int>, col: Int): TextAlign = when (aligns.getOr
     ALIGN_CENTER -> TextAlign.Center
     ALIGN_RIGHT -> TextAlign.Right
     else -> TextAlign.Left
+}
+
+/** ⑦ 表格骨架占位：表头已到、分隔行未齐时显示 shimmer 灰条，分隔行到达后无缝换成真表格。 */
+@Composable
+private fun TableSkeletonBlock(header: List<String>) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val bg = if (dark) Color(0xFF141A24) else Color(0xFFF4F6FA)
+    val base = if (dark) Color(0xFF2A3342) else Color(0xFFDDE3EC)
+    val hi = if (dark) Color(0xFF3D4A61) else Color(0xFFC3CCDA)
+    val phase by androidx.compose.animation.core.rememberInfiniteTransition(label = "skel")
+        .animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1400)), label = "p")
+    val brush = androidx.compose.ui.graphics.Brush.linearGradient(
+        colors = listOf(base, hi, base),
+        start = androidx.compose.ui.geometry.Offset((phase * 2f - 0.5f) * 360f, 0f),
+        end = androidx.compose.ui.geometry.Offset((phase * 2f + 0.5f) * 360f, 0f)
+    )
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(
+                "表格生成中…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            )
+            Spacer(Modifier.height(6.dp))
+            // 表头 + 三行骨架条（列宽按表头文字长度粗略加权）
+            val widths = header.map { (it.length.coerceIn(3, 14) / 14f) }
+            repeat(4) { r ->
+                Row(Modifier.padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    widths.forEach { w ->
+                        Box(
+                            Modifier
+                                .weight(w)
+                                .height(if (r == 0) 11.dp else 9.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(brush)
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** 公式块：KaTeX 离线资产就绪时走 WebView 渲染，未就绪降级为浅底等宽样式。 */
