@@ -2378,11 +2378,16 @@ private fun LazyListScope.generalItems(
                     var capText by androidx.compose.runtime.remember(settings.turnTokenCap) {
                         androidx.compose.runtime.mutableStateOf(settings.turnTokenCap.let { if (it == 0) "" else it.toString() })
                     }
+                    // 防抖：停止输入 600ms 才落盘（逐键击 updateSettings=全量 JSON+双文件写+整页重组）
+                    LaunchedEffect(capText) {
+                        if ((capText.toIntOrNull() ?: 0) == settings.turnTokenCap) return@LaunchedEffect
+                        kotlinx.coroutines.delay(600)
+                        vm.setTurnTokenCap(capText.toIntOrNull() ?: 0)
+                    }
                     OutlinedTextField(
                         value = capText,
                         onValueChange = { t ->
                             capText = t.filter { ch -> ch.isDigit() }.take(7)
-                            vm.setTurnTokenCap(capText.toIntOrNull() ?: 0)
                         },
                         modifier = Modifier.width(150.dp),
                         singleLine = true,
@@ -2403,11 +2408,15 @@ private fun LazyListScope.generalItems(
                     var callText by androidx.compose.runtime.remember(settings.toolCallCap) {
                         androidx.compose.runtime.mutableStateOf(settings.toolCallCap.let { if (it == 0) "" else it.toString() })
                     }
+                    LaunchedEffect(callText) {
+                        if ((callText.toIntOrNull() ?: 0) == settings.toolCallCap) return@LaunchedEffect
+                        kotlinx.coroutines.delay(600)
+                        vm.setToolCallCap(callText.toIntOrNull() ?: 0)
+                    }
                     OutlinedTextField(
                         value = callText,
                         onValueChange = { t ->
                             callText = t.filter { ch -> ch.isDigit() }.take(6)
-                            vm.setToolCallCap(callText.toIntOrNull() ?: 0)
                         },
                         modifier = Modifier.width(150.dp),
                         singleLine = true,
@@ -2449,9 +2458,17 @@ private fun LazyListScope.generalItems(
         Column(Modifier.padding(horizontal = 16.dp)) {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    var promptLocal by androidx.compose.runtime.remember(settings.customPrompt) {
+                        androidx.compose.runtime.mutableStateOf(settings.customPrompt)
+                    }
+                    LaunchedEffect(promptLocal) {
+                        if (promptLocal == settings.customPrompt) return@LaunchedEffect
+                        kotlinx.coroutines.delay(600)
+                        vm.setCustomPrompt(promptLocal)
+                    }
                     OutlinedTextField(
-                        value = settings.customPrompt,
-                        onValueChange = { vm.setCustomPrompt(it) },
+                        value = promptLocal,
+                        onValueChange = { promptLocal = it },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("附加到系统提示末尾的个人偏好…") },
                         minLines = 2,
@@ -2576,11 +2593,15 @@ private fun LazyListScope.usageItems(
                             var budgetText by androidx.compose.runtime.remember(settings.dailyTokenBudgetK) {
                                 androidx.compose.runtime.mutableStateOf(settings.dailyTokenBudgetK.let { if (it == 0) "" else it.toString() })
                             }
+                            LaunchedEffect(budgetText) {
+                                if ((budgetText.toIntOrNull() ?: 0) == settings.dailyTokenBudgetK) return@LaunchedEffect
+                                kotlinx.coroutines.delay(600)
+                                vm.setDailyTokenBudgetK(budgetText.toIntOrNull() ?: 0)
+                            }
                             OutlinedTextField(
                                 value = budgetText,
                                 onValueChange = { t ->
                                     budgetText = t.filter { ch -> ch.isDigit() }.take(5)
-                                    vm.setDailyTokenBudgetK(budgetText.toIntOrNull() ?: 0)
                                 },
                                 modifier = Modifier.width(140.dp),
                                 singleLine = true,
