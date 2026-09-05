@@ -627,6 +627,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 4 -> com.haoai.agent.ui.sessions.SessionsScreen(
                     vm = chatVm,
                     backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     // 全部会话只能从侧边栏进入：返回（箭头/系统手势）回到聊天并重新展开侧边栏
                     onBack = {
                         screen = 0

@@ -88,7 +88,12 @@ fun BrowserScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            // 平移转场页面必须有实底：否则转场中本页滑入时透出下层页面
+            .background(MaterialTheme.colorScheme.background)
+    ) {
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
