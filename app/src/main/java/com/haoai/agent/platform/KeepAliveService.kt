@@ -10,6 +10,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.haoai.agent.MainActivity
 import com.haoai.agent.R
 
 class KeepAliveService : Service() {
@@ -32,10 +33,21 @@ class KeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 点通知回聊天页：复用 debug 深链路由（MainActivity.consumeDeepLink 的 "chat"）
+        val backIntent = android.content.Intent(this, MainActivity::class.java).apply {
+            action = android.content.Intent.ACTION_VIEW
+            data = android.net.Uri.parse("haoai://debug/chat")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val pi = android.app.PendingIntent.getActivity(
+            this, 0, backIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("HaoAI 正在运行")
             .setContentText("任务将在后台继续执行")
+            .setContentIntent(pi)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
