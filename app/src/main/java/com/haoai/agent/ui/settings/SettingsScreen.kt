@@ -126,6 +126,10 @@ fun SettingsScreen(
      */
     lockedSection: String? = null,
     onSectionBack: () -> Unit = {},
+    /** 主页列表滚动状态由 RootApp 提升传入：进子页销毁重建也不丢位置
+     *  （rememberSaveable 在 AnimatedContent 销毁分支时不恢复，实测无效） */
+    rootListState: androidx.compose.foundation.lazy.LazyListState =
+        androidx.compose.foundation.lazy.rememberLazyListState(),
     initialSection: String = "",
     onSectionChange: (String) -> Unit = {},
     onOpenMemories: () -> Unit = {},
@@ -151,19 +155,18 @@ fun SettingsScreen(
     var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
 
     // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）。
-    // lockedSection 非空（独立 screen 模式）时 section 恒为该值、不可变
+    // lockedSection 非空（独立 screen 模式）时 section 恒为该值、不可变，
+    // 且不得触发 onSectionChange——否则会把 settingsSection 污染成锁定值，
+    // 返回设置主页时直接渲染子页而非菜单列表
     var section by rememberSaveable { mutableStateOf(lockedSection ?: initialSection) }
-    androidx.compose.runtime.LaunchedEffect(section) { if (section != initialSection) onSectionChange(section) }
+    androidx.compose.runtime.LaunchedEffect(section) {
+        if (lockedSection == null && section != initialSection) onSectionChange(section)
+    }
     // 用量页「清空账本」确认弹窗：状态提在根级（弹窗不能渲染在 LazyColumn item 内——
     // fillMaxSize 遮罩会受 item 高度约束，实测只盖住下半屏）
     var confirmClearLedger by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     // 「模型大脑 → 内部任务模型」选择弹窗：同样必须在根级渲染
     var purposePicker by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    // 设置根页列表滚动状态：独立 screen 化后进子页会销毁重建本组件，
-    // 必须 rememberSaveable（滚动位置写入 saved state）才能在返回后恢复
-    val rootListState = androidx.compose.runtime.saveable.rememberSaveable(
-        saver = androidx.compose.foundation.lazy.LazyListState.Saver
-    ) { androidx.compose.foundation.lazy.LazyListState() }
     // Linux 环境（3.2）：发行版状态/安装进度/弹窗路由集中在一处
     val linuxState = androidx.compose.runtime.remember { LinuxEnvState() }
     androidx.compose.runtime.LaunchedEffect(section) {
@@ -208,7 +211,9 @@ fun SettingsScreen(
         }
     }
 
-    // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）
+    // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）。
+    // 关键：不能 early return——供应商编辑/删除确认/模型选择等弹窗渲染在函数
+    // 尾部，early return 会让独立模式下所有触发弹窗的按钮「点了没反应」
     if (lockedSection != null) {
         SectionPage(
             section = lockedSection,
@@ -225,10 +230,7 @@ fun SettingsScreen(
             onOpenMemories = onOpenMemories,
             onBack = onSectionBack
         )
-        return
-    }
-
-    if (section.isEmpty()) {
+    } else if (section.isEmpty()) {
         Box(
             Modifier
                 .fillMaxSize()

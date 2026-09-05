@@ -400,6 +400,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
     ) { androidx.compose.foundation.lazy.LazyListState() }
 
+    // 设置主页滚动状态提升到 RootApp：进子页（独立 screen）会销毁重建设置
+    // 组件，rememberSaveable 在 AnimatedContent 销毁分支不恢复（实测），
+    // 提升到不随 screen 销毁的层级才能真正记住位置
+    val settingsRootListState = androidx.compose.runtime.saveable.rememberSaveable(
+        saver = androidx.compose.foundation.lazy.LazyListState.Saver
+    ) { androidx.compose.foundation.lazy.LazyListState() }
+
     // 设置二级页状态提升：从设置子页进入管理页（记忆库等）后，返回时回到原子页而非设置根
     var settingsSection by rememberSaveable { mutableStateOf("") }
 
@@ -527,6 +534,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // 全局壁纸开时设置页自带对齐的壁纸底（页面自己的 Image 层，
                     // 随页面整体滑动）——「壁纸应用于所有页面」真正生效
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    rootListState = settingsRootListState,
                     initialSection = settingsSection,
                     onSectionChange = { settingsSection = it },
                     // 从设置返回聊天：恢复抽屉展开态（与预览方案一致——返回后侧边栏在）。
@@ -599,8 +607,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,
-                    // 记忆/任务/技能入口已收进设置页，返回回设置
-                    onBack = { screen = 1 },
+                    // 记忆库唯一入口是「记忆与梦境」页，返回上一级=回该页
+                    // （此前回设置主页，用户反馈「不是返回上一级」）
+                    onBack = { screen = 11 },
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null
                 )
                 3 -> com.haoai.agent.ui.manage.ScheduleScreen(

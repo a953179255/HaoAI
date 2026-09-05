@@ -1,6 +1,7 @@
 package com.haoai.agent.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -78,7 +79,29 @@ fun McpSettingsScreen(
     BackHandler(enabled = editing != null) { editing = null }
     BackHandler(enabled = editing == null) { onBack() }
 
-    if (editing != null) {
+    // 添加/编辑视图与列表视图切换：包一层 AnimatedContent 获得与页面级
+    // 转场一致的滑动动画（此前是组件内部状态瞬切，用户反馈「进出无动画」）
+    androidx.compose.animation.AnimatedContent(
+        targetState = editing != null,
+        transitionSpec = {
+            val spec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+                androidx.compose.animation.core.spring(
+                    dampingRatio = 0.9f,
+                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                    visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
+                )
+            val fade260 = androidx.compose.animation.core.tween<Float>(260)
+            (
+                androidx.compose.animation.slideInHorizontally(spec) { it } +
+                    androidx.compose.animation.fadeIn(fade260)
+            ).togetherWith(
+                androidx.compose.animation.slideOutHorizontally(spec) { -it } +
+                    androidx.compose.animation.fadeOut(fade260)
+            )
+        },
+        label = "mcpEditView"
+    ) { isEditing ->
+    if (isEditing) {
         val existing = servers.find { it.id == editing }
         McpEditView(
             backdrop = backdrop,
@@ -254,6 +277,7 @@ fun McpSettingsScreen(
                 }
             )
         }
+    }
     }
 }
 
