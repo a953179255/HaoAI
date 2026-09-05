@@ -80,7 +80,9 @@ fun McpSettingsScreen(
     BackHandler(enabled = editing == null) { onBack() }
 
     // 添加/编辑视图与列表视图切换：包一层 AnimatedContent 获得与页面级
-    // 转场一致的滑动动画（此前是组件内部状态瞬切，用户反馈「进出无动画」）
+    // 转场一致的滑动动画（此前是组件内部状态瞬切，用户反馈「进出无动画」）。
+    // 方向感知：进入编辑=push（新视图右滑入、列表左滑出）；
+    // 返回=pop（编辑视图右滑出、列表从左迎回）——与页面级转场语义一致
     androidx.compose.animation.AnimatedContent(
         targetState = editing != null,
         transitionSpec = {
@@ -91,12 +93,28 @@ fun McpSettingsScreen(
                     visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
                 )
             val fade260 = androidx.compose.animation.core.tween<Float>(260)
+            val entering = targetState
             (
-                androidx.compose.animation.slideInHorizontally(spec) { it } +
-                    androidx.compose.animation.fadeIn(fade260)
+                if (entering) {
+                    androidx.compose.animation.slideInHorizontally(spec) { it }
+                } else {
+                    androidx.compose.animation.slideInHorizontally(spec) { -it / 4 } +
+                        androidx.compose.animation.scaleIn(
+                            initialScale = 0.92f,
+                            animationSpec = androidx.compose.animation.core.spring(
+                                dampingRatio = 0.9f,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                                visibilityThreshold = 0.001f
+                            )
+                        )
+                } + androidx.compose.animation.fadeIn(fade260)
             ).togetherWith(
-                androidx.compose.animation.slideOutHorizontally(spec) { -it } +
-                    androidx.compose.animation.fadeOut(fade260)
+                if (entering) {
+                    androidx.compose.animation.slideOutHorizontally(spec) { -it } +
+                        androidx.compose.animation.fadeOut(fade260)
+                } else {
+                    androidx.compose.animation.slideOutHorizontally(spec) { it }
+                }
             )
         },
         label = "mcpEditView"
