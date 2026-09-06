@@ -1033,42 +1033,34 @@ fun ChatScreen(
                     maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp() + 10.dp
                 })
         ) {
-            // v5 方案 A：深色玻璃胶囊「↓ N 条新动态」——语义完整、点按面积大；
-            // 无新动态时收窄成「↓ 最新」
-            Surface(
+            // v5.1：AndroidLiquidGlass 胶囊（GlassCard 全 app 统一玻璃材质）——
+            // 「↓ N 条新动态」，无新动态时收窄成「↓ 最新」；按压折射缩放同发送钮
+            GlassCard(
                 onClick = {
                     userScrolledAway.value = false
                     newContentTicker.value = 0
                     scope.launch { listState.scrollToEnd(guard = scrollGuard) }
                 },
-                color = Color(0xFF1E2834).copy(alpha = 0.88f),
-                shape = RoundedCornerShape(19.dp),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp, Color.White.copy(alpha = 0.14f)
-                ),
-                modifier = Modifier
-                    .shadow(
-                        elevation = 6.dp,
-                        shape = RoundedCornerShape(19.dp),
-                        ambientColor = Color.Black.copy(alpha = 0.3f),
-                        spotColor = Color.Black.copy(alpha = 0.25f)
-                    )
+                backdrop = backdrop,
+                shape = RoundedCornerShape(percent = 50),
+                surfaceAlpha = 0.28f,
+                lensRadius = 14.dp
             ) {
                 Row(
-                    Modifier.padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                    Modifier.padding(start = 16.dp, end = 18.dp, top = 9.dp, bottom = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Text(
                         "↓",
-                        color = Color(0xFF3DDC84),
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
                     val n = newContentTicker.value
                     Text(
                         if (n > 0) "$n 条新动态" else "最新",
-                        color = Color(0xFFE8EDF4),
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1
@@ -2829,20 +2821,20 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
         Spacer(Modifier.size(8.dp))
-        // 旋钮视口：horizontalScroll 驱动（内容宽超出才滚），中央清晰两侧淡出对称蒙版
-        val hscroll = rememberScrollState()
-        LaunchedEffect(text) {
-            // 文本推进时跟随到尾部（旋钮持续转动）
-            if (knobScroll) hscroll.scrollTo(hscroll.maxValue)
-        }
-        Box(
-            Modifier
-                .weight(1f)
-                .height(16.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .drawWithContent {
-                    drawContent()
-                    if (knobScroll) {
+        // 旋钮视口（live）：horizontalScroll 驱动，中央清晰两侧渐隐至透明。
+        // v5.1：历史态不用任何蒙版（DstIn 蒙版叠浅色卡曾渲出黑块）——纯文字省略
+        if (knobScroll) {
+            val hscroll = rememberScrollState()
+            LaunchedEffect(text) {
+                // 文本推进时跟随到尾部（旋钮持续转动）
+                hscroll.scrollTo(hscroll.maxValue)
+            }
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(16.dp)
+                    .drawWithContent {
+                        drawContent()
                         // 中央清晰 → 两侧淡出至透明（对称七段）
                         drawRect(
                             brush = Brush.horizontalGradient(
@@ -2856,27 +2848,28 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
                             ),
                             blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
                         )
-                    } else {
-                        // 静态（历史）：仅末端淡出省略感
-                        drawRect(
-                            brush = Brush.horizontalGradient(
-                                0f to Color.Black,
-                                0.86f to Color.Black,
-                                1f to Color.Transparent
-                            ),
-                            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
-                        )
                     }
-                }
-        ) {
+            ) {
+                Text(
+                    text,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                    modifier = Modifier.horizontalScroll(hscroll)
+                )
+            }
+        } else {
+            // 历史：静态单行省略（无蒙版无滚动，与卡片同底无色差）
             Text(
                 text,
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
                 maxLines = 1,
-                softWrap = false,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                modifier = if (knobScroll) Modifier.horizontalScroll(hscroll) else Modifier
+                modifier = Modifier.weight(1f)
             )
         }
     }
