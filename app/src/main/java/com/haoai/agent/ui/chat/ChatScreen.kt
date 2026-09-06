@@ -184,6 +184,19 @@ class DrawerController {
      */
     var frozen by androidx.compose.runtime.mutableStateOf(false)
 
+    /**
+     * 快照有效性标志（仅绘制期读写，故用普通 var 不走快照订阅）：frozen 置 true 后
+     * 首帧补录一次（true），期间各帧只 drawLayer；解除 frozen 时复位（false）。
+     */
+    var snapshotFresh = false
+
+    /**
+     * 纵深视差动画标志（v0.18.1 与 frozen 解耦）：仅「侧边栏→设置」保留
+     * 1/3 滑距+缩放+淡出的纵深退出；其他离开聊天页的路径同样冻结快照
+     * （退出层变静态纹理），但动画保持全宽直线滑出——观感与旧版逐路径一致。
+     */
+    var frozenParallax = false
+
     /** 打开态弹性参数：中低刚度+轻微回弹（damping 0.85），有「果冻到位」感而不狂振荡 */
     private fun settleSpec() = androidx.compose.animation.core.spring(
         dampingRatio = 0.85f,
@@ -592,20 +605,26 @@ fun ChatScreen(
 
     Box(Modifier.fillMaxSize()) {
     val drawerFraction = drawer.fraction.value
-    // 转场快照层：常态每帧把整页内容记录进 GraphicsLayer（record 只在有
-    // 重绘时发生，无额外开销）；drawer.frozen=true（push 到设置转场中）时
-    // 改为绘制上次记录的静态图像——重组照跑但绘制被快照替代，重页面
-    // 组合延迟不再被看穿。转场结束 frozen 置回 false 恢复实时绘制
+    // 转场快照层（v0.18.1 优化：按需录制）：常态只 drawContent()——旧实现每帧
+    // 额外把整页再 record 进 GraphicsLayer 一遍，等于全页 DisplayList 每帧录两次，
+    // 聊天滚动/抽屉/转场三个场景的每帧成本被凭空放大近一倍（实测聊天滚动 jank 82%）。
+    // 快照唯一消费点是 frozen（push 转场退出层），改为：进入 frozen 的那一帧补录
+    // 一次（该帧成本与旧常态持平），之后各帧只 drawLayer 静态纹理（纯 GPU 合成）。
+    // 视觉输出与旧实现逐帧一致：frozen 首帧录的就是转场起点画面。
     val snapshotLayer = rememberGraphicsLayer()
     Box(
         Modifier
             .fillMaxSize()
             .drawWithContent {
                 if (drawer.frozen) {
+                    if (!drawer.snapshotFresh) {
+                        snapshotLayer.record { this@drawWithContent.drawContent() }
+                        drawer.snapshotFresh = true
+                    }
                     drawLayer(snapshotLayer)
                 } else {
+                    drawer.snapshotFresh = false
                     drawContent()
-                    snapshotLayer.record { this@drawWithContent.drawContent() }
                 }
             }
     ) {

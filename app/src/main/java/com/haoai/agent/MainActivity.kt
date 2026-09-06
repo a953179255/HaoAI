@@ -136,8 +136,13 @@ class MainActivity : ComponentActivity() {
             }
             // 壁纸提升到主题层：开动态颜色时直接从聊天壁纸取色（换壁纸配色即变）
             val wpVersion by com.haoai.agent.platform.WallpaperStore.changes.collectAsState()
-            val wallpaper = androidx.compose.runtime.remember(wpVersion) {
-                com.haoai.agent.platform.WallpaperStore.loadBitmap(applicationContext)
+            val dm = androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics
+            val wallpaper = androidx.compose.runtime.remember(wpVersion, dm.widthPixels, dm.heightPixels) {
+                // 预缩放到屏幕 cover 尺寸：backdrop 画布每帧 1:1 贴图，
+                // 消除每帧现算缩放（实测转场期 Slow bitmap uploads 71+ 次/10 轮）
+                com.haoai.agent.platform.WallpaperStore.loadBitmapCover(
+                    applicationContext, dm.widthPixels, dm.heightPixels
+                )
             }
             HaoTheme(
                 darkTheme = dark,
@@ -208,20 +213,38 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // 来源有二：冷启动 getIntent（LaunchedEffect 初值）+ 运行中 onNewIntent（deepLinkFlow）
     val rootScope = androidx.compose.runtime.rememberCoroutineScope()
     val act = context as? android.app.Activity
+    // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
+    // （v0.18.1：声明提前到深链路由之前，供 leaveChat/enterChat 统一冻结入口使用）
+    val drawer = remember { com.haoai.agent.ui.chat.DrawerController() }
+    // v0.18.1 转场冻结统一入口：凡「离开聊天页」的切页，先把聊天页 frozen=true
+    // （退出层变静态快照纹理，动画期间不再每帧实时重绘整页），再改 screen。
+    // parallax=true 仅侧边栏→设置：退出层走 1/3 视差+缩放+淡出；其余保持全宽直线。
+    // 返回聊天（screen→0）时由各自逻辑解除冻结。
+    fun leaveChat(parallax: Boolean = false) {
+        if (screen == 0) {
+            drawer.frozen = true
+            drawer.frozenParallax = parallax
+        }
+    }
+    fun enterChat() {
+        drawer.frozen = false
+        drawer.frozenParallax = false
+    }
     suspend fun consumeDeepLink(uri: android.net.Uri) {
         if (uri.host != "debug") return
         val target = uri.lastPathSegment ?: ""
         when (target) {
-            "chat" -> screen = 0
-            "settings" -> screen = 1
-            "memory" -> screen = 2
-            "schedules" -> screen = 3
-            "sessions" -> screen = 4
-            "skills" -> screen = 5
-            "mcp" -> screen = 6
-            "browser" -> screen = 7
-            "workflows" -> screen = 8
+            "chat" -> { enterChat(); screen = 0 }
+            "settings" -> { leaveChat(); screen = 1 }
+            "memory" -> { leaveChat(); screen = 2 }
+            "schedules" -> { leaveChat(); screen = 3 }
+            "sessions" -> { leaveChat(); screen = 4 }
+            "skills" -> { leaveChat(); screen = 5 }
+            "mcp" -> { leaveChat(); screen = 6 }
+            "browser" -> { leaveChat(); screen = 7 }
+            "workflows" -> { leaveChat(); screen = 8 }
             "vscreen" -> {
+                enterChat()
                 screen = 0
                 rootScope.launch(kotlinx.coroutines.Dispatchers.Default) {
                     val appCtx = container.appContext
@@ -262,15 +285,18 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 }
             }
             "new" -> {
+                enterChat()
                 screen = 0
                 chatVm.newSession()
             }
             "ask" -> {
                 // 调试直达：haoai://debug/ask?text=...（URL 编码）——绕过 IME 注入直接派任务
+                enterChat()
                 screen = 0
                 uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { chatVm.send(it) }
             }
             "vsclose" -> {
+                enterChat()
                 screen = 0
                 rootScope.launch(kotlinx.coroutines.Dispatchers.Default) {
                     com.haoai.agent.platform.vdisplay.VirtualScreenController.destroy()
@@ -295,6 +321,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     LaunchedEffect(Unit) {
         (act as? MainActivity)?.shareFlow?.collect { s ->
             if (s != null) {
+                enterChat()
                 screen = 0
                 s.first?.let { chatVm.shareText.value = it }
                 s.second?.let { chatVm.shareImageUri.value = it.toString() }
@@ -381,14 +408,6 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         kotlinx.coroutines.delay(100)   // 转场 spring 收尾
         screenSettled = screen
     }
-    val scrimAlpha = androidx.compose.animation.core.animateFloatAsState(
-        targetValue = scrimLevel,
-        animationSpec = androidx.compose.animation.core.tween(
-            durationMillis = if (scrimLevel > 0f) 0 else 450,
-            easing = androidx.compose.animation.core.FastOutSlowInEasing
-        ),
-        label = "transitionScrim"
-    ).value
     val plainTop = scheme.surface
     val plainBottom = scheme.surfaceVariant
     val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
@@ -436,8 +455,6 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             com.haoai.agent.agent.browser.BrowserController.openPreview()
         }
     }
-    // 抽屉状态提升：设置页返回时可恢复「侧边栏呼出」的来源状态
-    val drawer = remember { com.haoai.agent.ui.chat.DrawerController() }
     // 聊天滚动状态提升到 RootApp（不随 screen 切换销毁），进设置再返回时保持位置
     val chatListState = androidx.compose.runtime.saveable.rememberSaveable(
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
@@ -464,13 +481,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             )
             // 转场纱幕：净色盖在壁纸上（页面层之下），旧页淡出时溶进净色
             // 而非花壁纸——上游 丝滑的关键（其底就是净色实底）
-            if (scrimAlpha > 0.01f) {
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .background(scheme.background.copy(alpha = scrimAlpha))
-                )
-            }
+            // v0.18.1：动画收进子组合——旧实现 animateFloatAsState().value 在
+            // RootApp 顶层解包，450ms 淡出期间每帧重组整个 RootApp（含 AnimatedContent
+            // 全部页面）；现在只传离散 scrimLevel，逐帧 alpha 只重组这个 10 行的小组件
+            TransitionScrim(
+                level = scrimLevel,
+                color = scheme.background,
+                modifier = Modifier.matchParentSize()
+            )
         }
         if (!settings.onboarded) {
             OnboardingGlass(
@@ -515,19 +533,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     val chatInvolved = initialState == 0 || targetState == 0
                     when {
                         // push（聊天→设置等）：设置页全速滑入盖上来；
-                        // 聊天页退出分两种：
-                        // - 快照冻结中（侧边栏→设置，drawer.frozen=true）：
-                        //   走纵深视差——退出层已是静态快照纹理，对它做
-                        //   1/3 滑距+缩小+淡出是纯 GPU 合成，比全宽对滑便宜；
-                        //   旧注释「缩放+淡出放大重组延迟」的前提（实时绘制
-                        //   的重页面）在冻结后不成立。淡出还让后半程只剩单层
-                        // - 未冻结（deep link 直达等实时聊天页）：保持全宽
-                        //   直线滑出——活页面做缩放淡出仍会暴露重组延迟
+                        // 聊天页退出（v0.18.1：所有离开聊天页路径统一 frozen 快照，
+                        // 退出层是静态纹理，动画成本≈0）：
+                        // - 侧边栏→设置（frozenParallax）：纵深视差——1/3 滑距+缩小+
+                        //   淡出，静态纹理上做这些是纯 GPU 合成
+                        // - 其他路径：保持全宽直线滑出（与旧版实时滑出观感一致）
                         to >= from && initialState != 0 || (from == 0 && to == 1) -> {
                             (androidx.compose.animation.slideInHorizontally(slideSpec) { it })
                                 .togetherWith(
                                 if (chatInvolved) {
-                                    if (drawer.frozen) {
+                                    if (drawer.frozenParallax) {
                                         androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
                                             androidx.compose.animation.scaleOut(
                                                 targetScale = 0.92f, animationSpec = scaleSpec
@@ -584,8 +599,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // snapOpen 无动画瞬位，与 pop 过渡同帧；聊天页带展开抽屉一起视差回来。
                     // 同时解除冻结：返回后聊天页恢复实时绘制
                     onBack = {
+                        enterChat()
                         screen = 0
-                        drawer.frozen = false
                         rootScope.launch { drawer.snapOpen() }
                     },
                     onOpenMemories = { screen = 2 },
@@ -682,6 +697,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     // 全部会话只能从侧边栏进入：返回（箭头/系统手势）回到聊天并重新展开侧边栏
                     onBack = {
+                        enterChat()
                         screen = 0
                         rootScope.launch { drawer.open() }
                     }
@@ -689,7 +705,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 // 4.2 内置浏览器：与工具共用 BrowserController WebView 池
                 7 -> com.haoai.agent.ui.browser.BrowserScreen(
                     backdrop = backdrop,
-                    onBack = { screen = 0 }
+                    onBack = { enterChat(); screen = 0 }
                 )
                 else -> ChatScreen(
                     vm = chatVm,
@@ -697,18 +713,22 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     drawer = drawer,
                     listState = chatListState,
                     // 侧边栏点设置：push 转场开始——先冻结聊天页（后续帧绘制
-                    // 静态快照，重页面组合延迟不再被看穿），切页触发转场
+                    // 静态快照，重页面组合延迟不再被看穿），切页触发转场。
+                    // parallax=true：此路径退出层保留 1/3 视差+缩放+淡出纵深
                     onOpenSettings = {
-                        drawer.frozen = true
+                        leaveChat(parallax = true)
                         screen = 1
                     },
-                    // 先收起抽屉再切页：否则返回时 drawerState 仍是 Open，抽屉会原样展开
+                    // 先收起抽屉再切页：否则返回时 drawerState 仍是 Open，抽屉会原样展开。
+                    // 此路径不冻结——退出动画期间抽屉正在关闭，冻结会把抽屉
+                    // 「定格在展开态」滑出（观感改变）；且该入口低频，保持实时绘制
                     onOpenSessions = {
                         rootScope.launch { drawer.close() }
                         screen = 4
                     },
                     onOpenBrowser = {
                         // 顶栏 🌐 直达全屏：先收预览面板，避免浮层叠在全屏浏览器上
+                        leaveChat()
                         com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
                         screen = 7
                     },
@@ -739,6 +759,28 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
             }
         }
+    }
+}
+
+/**
+ * 转场纱幕：盖在壁纸上的主题净色层。level>0 立即升起（tween 0），归零时 450ms
+ * 缓退。动画订阅只发生在本组件内——父组合只传离散 level，淡出逐帧不再重组页面树。
+ */
+@Composable
+private fun TransitionScrim(level: Float, color: Color, modifier: Modifier = Modifier) {
+    val alpha = androidx.compose.animation.core.animateFloatAsState(
+        targetValue = level,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (level > 0f) 0 else 450,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
+        label = "transitionScrim"
+    ).value
+    if (alpha > 0.01f) {
+        Box(
+            modifier
+                .background(color.copy(alpha = alpha))
+        )
     }
 }
 

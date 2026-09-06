@@ -58,4 +58,20 @@ object WallpaperStore {
         setScale(scale, scale)
         postTranslate((viewW - bmp.width * scale) / 2f, (viewH - bmp.height * scale) / 2f)
     }
+
+    /**
+     * 预缩放到屏幕 cover 尺寸的壁纸（v0.18.1 性能）：backdrop 画布每帧 drawImage
+     * 现算 cover-fit 缩放，壁纸小于屏幕时每帧走放大采样路径；先一次性双线性缩到
+     * cover 尺寸，之后每帧 1:1 贴图（观感一致——同为双线性，只是从每帧一次变为一世一次）。
+     * 结果超过 12M 像素（约 48MB）时放弃预缩放，保持原图交给 GPU 过滤。
+     */
+    fun loadBitmapCover(context: Context, targetW: Int, targetH: Int): Bitmap? {
+        val bmp = loadBitmap(context) ?: return null
+        val scale = maxOf(targetW.toFloat() / bmp.width, targetH.toFloat() / bmp.height)
+        if (scale > 0.999f && scale < 1.001f) return bmp
+        val w = (bmp.width * scale).toInt().coerceAtLeast(1)
+        val h = (bmp.height * scale).toInt().coerceAtLeast(1)
+        if (w.toLong() * h > 12_000_000L) return bmp
+        return runCatching { Bitmap.createScaledBitmap(bmp, w, h, true) }.getOrDefault(bmp)
+    }
 }
