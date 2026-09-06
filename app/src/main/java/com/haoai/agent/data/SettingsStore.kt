@@ -195,6 +195,13 @@ data class AppSettings(
     val titleProviderId: String = "",
     /** 5.3 上下文压缩摘要模型。 */
     val summarizeProviderId: String = "",
+    /**
+     * 能力委派（对齐 上游 Vision/Voice Group）：主模型缺某模态时由委派模型代看/代听。
+     * 值为 "providerId" 或 "providerId|modelId"；空=不启用委派（仅靠 shell 绕行）。
+     * vision=图像代看（模型需支持 image-in）；asr=音频转写（模型需支持 audio-in）。
+     */
+    val visionProviderId: String = "",
+    val asrProviderId: String = "",
     /** 5.4 聊天会话模型：格式 "providerId" 或 "providerId|modelId"（同供应商多模型时精确到模型）。空=跟随供应商默认。 */
     val chatPurposeId: String = "",
     /** 用途模型备用链（借鉴 上游 模型组）：主目标请求失败时按序降级。 */

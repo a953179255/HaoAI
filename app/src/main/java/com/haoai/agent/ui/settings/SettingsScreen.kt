@@ -1370,10 +1370,12 @@ private fun LazyListScope.brainItems(
                     purposeRow("会话标题", "title", settings.titleProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("记忆提取", "memory", settings.memoryExtractProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("上下文压缩", "summarize", settings.summarizeProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
+                    purposeRow("👁 视觉委派", "vision", settings.visionProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
+                    purposeRow("🎙 语音转写", "asr", settings.asrProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                 }
             }
             Text(
-                "为不同任务指定模型：聊天会话可精确到某供应商的某个模型；辅助任务建议用更廉价的模型。「主模型」= 跟随当前供应商默认，「端侧」= 本机 llama.cpp。",
+                "为不同任务指定模型：聊天会话可精确到某供应商的某个模型；辅助任务建议用更廉价的模型。「主模型」= 跟随当前供应商默认，「端侧」= 本机 llama.cpp。\n能力委派：主模型不支持图像/音频时，Agent 会自动调用委派模型代看（delegate_to_vision）或转写（transcribe_audio），任务不用中断。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)

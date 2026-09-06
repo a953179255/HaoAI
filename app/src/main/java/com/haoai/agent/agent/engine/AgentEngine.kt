@@ -101,6 +101,11 @@ class AgentEngine(
     private val summarizeTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.3 专用目标的协议客户端解析（缺省仍用主 httpClient）。 */
     private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
+    /**
+     * P2 能力委派：按 kind（"vision"/"asr"）返回委派目标链（provider+key），由 VM 解析设置。
+     * 空链/null = 未配置，委派工具不注册（省工具 token）。
+     */
+    private val delegateTarget: (suspend (String) -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
     private val planGate: () -> Boolean = { false },
     /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。无人值守默认 15 万，交互聊天走设置（默认 25 万）。 */
@@ -262,8 +267,15 @@ class AgentEngine(
             enableToolGroup(group)
         }
         // E4b 工具分层：按会话 activeGroups 注入（null=全开兼容旧会话）；handoff/tools_enable 恒在
+        // P2 委派工具：仅当设置里配了委派模型才注册（未配置时不占工具清单 token）
+        val delegateTools = buildList<com.haoai.agent.agent.tools.Tool> {
+            if (delegateTarget != null) {
+                add(com.haoai.agent.agent.tools.DelegateVisionTool { p, q -> delegateVisionRequest(p, q) })
+                add(com.haoai.agent.agent.tools.TranscribeAudioTool { p -> delegateAsrRequest(p) })
+            }
+        }
         var tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
-            handoffTool + toolsEnableTool
+            handoffTool + toolsEnableTool + delegateTools
         var apiTools = gateTools(tools.map { it.toApi() })
 
         // E4a 工具定义 token 估算动态化：真实序列化各工具 JSON 求和（兜底下限 3500；门控清空则记 0）
@@ -1131,9 +1143,12 @@ class AgentEngine(
         // 能力声明片段（对齐 上游 capabilityPromptFragment）：把当前模型的输入/输出
         // 模态与工具支持显式写进系统提示词，让模型知道边界并主动绕行，而非中途引用被剥离
         // 的能力导致任务断裂报错。端侧模型（llama）不走此注入（本地能力另由 vision 探测）。
+        // 配置了委派模型时提示词会点名 delegate_to_vision/transcribe_audio 工具；
+        // delegateTarget 是 suspend 闭包，此处直接检查设置字符串（buildSystemText 非挂起上下文）
+        val delegateReady = delegateTarget != null
         val capabilityNote =
             if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) ""
-            else com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(provider.caps()).orEmpty()
+            else com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(provider.caps(), delegateReady).orEmpty()
         val full = SystemPrompt.PREFIX +
             SystemPrompt.buildSuffix(
                 workspaceLabel, shellAvailable, dateText, customPrompt, memory,
@@ -1514,6 +1529,105 @@ class AgentEngine(
         val m = e.message.orEmpty().lowercase()
         return "http 429" in m || "timeout" in m ||
             "timed out" in m || "connection reset" in m || "eofexception" in m || "stream stall" in m
+    }
+
+    /**
+     * P2 委派：把图片交给视觉委派模型代看，返回描述文本。
+     * 主模型不支持图像输入时，Agent 调 delegate_to_vision 走这里，任务不中断。
+     */
+    private suspend fun delegateVisionRequest(path: String, question: String): String {
+        val f = File(path)
+        if (!f.exists() || !f.canRead()) return "委派失败：读不到文件 $path"
+        if (f.length() > 8L * 1024 * 1024) return "委派失败：图片超过 8MB（${f.length() / 1024}KB）"
+        val mime = when (path.substringAfterLast('.', "").lowercase()) {
+            "png" -> "png"; "webp" -> "webp"; "gif" -> "gif"; else -> "jpeg"
+        }
+        val b64 = android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
+        val q = question.ifBlank { "请详细描述这张图片的内容。" }
+        return delegateCall("vision", "图像") { _ ->
+            listOf(
+                ApiMessage(
+                    role = "system",
+                    content = "你是视觉分析助手。仔细观察图片，用中文准确、详细地描述所见内容并回答用户的问题。只输出描述与结论，不要客套话。"
+                ),
+                ApiMessage(
+                    role = "user",
+                    content = null,
+                    parts = listOf(
+                        com.haoai.agent.agent.provider.ApiContentPart(type = "text", text = q),
+                        com.haoai.agent.agent.provider.ApiContentPart(
+                            type = "image_url",
+                            imageUrl = com.haoai.agent.agent.provider.ApiImageUrl("data:image/$mime;base64,$b64")
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    /** P2 委派：把音频交给语音委派模型转写，返回文本。 */
+    private suspend fun delegateAsrRequest(path: String): String {
+        val f = File(path)
+        if (!f.exists() || !f.canRead()) return "委派失败：读不到文件 $path"
+        if (f.length() > 8L * 1024 * 1024) return "委派失败：音频超过 8MB"
+        val fmt = when (path.substringAfterLast('.', "").lowercase()) {
+            "wav" -> "wav"; "flac" -> "flac"; "ogg" -> "ogg"; "m4a", "mp4", "aac" -> "m4a"; else -> "mp3"
+        }
+        val b64 = android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
+        return delegateCall("asr", "音频") { _ ->
+            listOf(
+                ApiMessage(
+                    role = "system",
+                    content = "你是语音转写引擎。把音频完整转写成文字，保留原始语言；无人声时输出 [无人声]。不要添加任何解释。"
+                ),
+                ApiMessage(
+                    role = "user",
+                    content = null,
+                    parts = listOf(
+                        com.haoai.agent.agent.provider.ApiContentPart(
+                            type = "input_audio",
+                            inputAudio = com.haoai.agent.agent.provider.ApiInputAudio(data = b64, format = fmt)
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    /** 委派请求公共路径：按链序尝试（最多 2 个目标），收集文本；用量入账本。 */
+    private suspend fun delegateCall(
+        kind: String,
+        label: String,
+        build: (ProviderConfig) -> List<ApiMessage>
+    ): String {
+        val chain = runCatching { delegateTarget?.invoke(kind) }.getOrNull().orEmpty()
+        if (chain.isEmpty()) return "委派…未配置：请在 设置 → 模型大脑 → 模型切换 里指定${label}委派模型。"
+        var lastErr = ""
+        for ((dp, dkey) in chain.take(2)) {
+            val r = runCatching {
+                val client = auxClientFor?.invoke(dp) ?: httpClient
+                val buf = StringBuilder()
+                var pin = 0L
+                var pout = 0L
+                val t0 = System.currentTimeMillis()
+                client.chatStream(dp, dkey, build(dp), emptyList()).collect { ev ->
+                    when (ev) {
+                        is SseEvent.Delta -> buf.append(ev.text)
+                        is SseEvent.Usage -> {
+                            pin += ev.promptTokens.toLong()
+                            pout += ev.completionTokens.toLong()
+                        }
+                        else -> {}
+                    }
+                }
+                ledgerLlm("delegate", pin, pout, System.currentTimeMillis() - t0, ok = true, model = dp.model)
+                buf.toString().trim()
+            }
+            if (r.isSuccess && r.getOrNull().isNullOrBlank().not()) return r.getOrThrow()
+            lastErr = r.exceptionOrNull()?.message?.take(120) ?: "委派模型返回空内容"
+            android.util.Log.w("HaoDelegate", "委派($kind) 目标 ${dp.name}/${dp.model} 失败：$lastErr")
+        }
+        return "委派…失败：$lastErr（可改用 shell ffmpeg 等工具绕行）"
     }
 
     /**

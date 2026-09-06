@@ -1081,9 +1081,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     .map { it.provider to it.apiKey }
             },
             auxClientFor = { p -> c.clientFor(p) },
+            // P2 能力委派：主模型缺图像/音频模态时，delegate_to_vision/transcribe_audio
+            // 工具经此解析设置的委派模型（"pid" 或 "pid|modelId"）；空配置→引擎不注册工具
+            delegateTarget = { kind ->
+                val id = when (kind) {
+                    "vision" -> st.visionProviderId.trim()
+                    else -> st.asrProviderId.trim()
+                }
+                if (id.isBlank()) emptyList()
+                else c.resolvePurposeTargets(id, emptyList()).map { it.provider to it.apiKey }
+            },
             planGate = { _planMode.value }
         )
     }
+
 
     /**
      * 自身运行状态全文（上游 session_status 式）：由 app_status 工具按需读取，

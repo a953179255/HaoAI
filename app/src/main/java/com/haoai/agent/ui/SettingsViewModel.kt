@@ -718,6 +718,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 "memory" -> st.copy(memoryExtractProviderId = id)
                 "title" -> st.copy(titleProviderId = id)
                 "chat" -> st.copy(chatPurposeId = id)
+                // P2 能力委派：主模型缺模态时的代看/代听模型
+                "vision" -> st.copy(visionProviderId = id)
+                "asr" -> st.copy(asrProviderId = id)
                 else -> st.copy(summarizeProviderId = id)
             }
         }
