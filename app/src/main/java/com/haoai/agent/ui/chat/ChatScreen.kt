@@ -2408,10 +2408,10 @@ private fun StreamingItem(
 }
 
 /**
- * 方案 C · 执行流时间轴卡：竖线 + 节点（思考/工具交错按到达序排列）。
- * - 卡限高 ~40% 屏，超出在卡内自动跟随最新活动（外层列表不动）；
- * - 运行中收起为单行摘要 + 最近一条活动 ticker；点开展开时间轴；
- * - 结束后收成「已执行 N 步」摘要行，点击可回看。
+ * 方案 A · 执行流聚合卡（骨架）：整回合思考+工具收进一张玻璃卡，紧凑行动作流。
+ * - 新活动永远追加在最底，顺序确定（根治"工具跑到思考上面"）；
+ * - 卡限高 ~40% 屏，超出在卡内滚动跟随；外层列表只随正文气泡生长（根治弹底）；
+ * - 正文开始后自动收成摘要行；结束后收成「已完成 N 个动作」，点击回看。
  */
 @Composable
 private fun ActivityTimelineCard(
@@ -2422,10 +2422,10 @@ private fun ActivityTimelineCard(
     onStopRun: () -> Unit = {},
     onViewDiff: (String) -> Unit = {}
 ) {
-    // 活动总数：思考段数记 1（流式思考是连续一段），工具按个数
     val doneCount = tools.count { it.state != ToolRunState.RUNNING }
     val runningCount = tools.count { it.state == ToolRunState.RUNNING }
     val live = streaming == false && (runningCount > 0 || reasoning != null)
+    val actionCount = doneCount + runningCount
 
     var expanded by rememberSaveable { mutableStateOf(true) }
     // 正文开始后若从未手动展开过，自动收成摘要（正文是主角）
@@ -2445,10 +2445,10 @@ private fun ActivityTimelineCard(
                 expanded = !expanded
             }
     ) {
-        Column(Modifier.padding(vertical = 8.dp)) {
-            // ── 头部：状态 + 摘要 ──
+        Column(Modifier.padding(vertical = 6.dp)) {
+            // ── 头部：状态 + 动作计数 ──
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (live) {
@@ -2476,10 +2476,19 @@ private fun ActivityTimelineCard(
                     )
                     Spacer(Modifier.size(8.dp))
                     Text(
-                        "已执行 $doneCount 步",
+                        "已完成 $actionCount 个动作",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (actionCount > 0) {
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "$actionCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                     )
                 }
                 Spacer(Modifier.weight(1f))
@@ -2490,12 +2499,11 @@ private fun ActivityTimelineCard(
                     modifier = Modifier.size(18.dp)
                 )
             }
-            // 收起态摘要：最近一条活动的单行 ticker
+            // 收起态摘要：最近一条活动的单行（思考 ticker / 工具行）
             if (!expanded) {
-                Spacer(Modifier.size(4.dp))
                 val lastTool = tools.lastOrNull()
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (reasoning != null && lastTool == null) {
@@ -2506,7 +2514,7 @@ private fun ActivityTimelineCard(
                     }
                 }
             } else {
-                Spacer(Modifier.size(6.dp))
+                Spacer(Modifier.size(4.dp))
                 TimelineBody(
                     reasoning = reasoning,
                     tools = tools,
@@ -2519,25 +2527,9 @@ private fun ActivityTimelineCard(
     }
 }
 
-/** 收起态单行工具摘要（图标 + 中文动词 + 状态）。须在 RowScope 内调用。 */
+/** 收起态单行工具摘要（状态点 + 图标 + 中文动词加粗）。须在 RowScope 内调用。 */
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.TimelineToolRowCompact(tool: com.haoai.agent.ui.UiTool) {
-    val icon = toolIcon(tool.name)
-    Text(
-        icon,
-        fontSize = 12.sp
-    )
-    Spacer(Modifier.size(7.dp))
-    Text(
-        toolVerb(tool),
-        fontSize = 12.sp,
-        color = if (tool.state == ToolRunState.RUNNING) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.onSurfaceVariant,
-        fontWeight = if (tool.state == ToolRunState.RUNNING) FontWeight.SemiBold else FontWeight.Normal,
-        maxLines = 1,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        modifier = Modifier.weight(1f)
-    )
     if (tool.state == ToolRunState.RUNNING) {
         CircularProgressIndicator(
             modifier = Modifier.size(11.dp),
@@ -2547,13 +2539,25 @@ private fun androidx.compose.foundation.layout.RowScope.TimelineToolRowCompact(t
     } else {
         Box(
             Modifier
-                .size(7.dp)
+                .size(8.dp)
                 .background(
                     if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F),
                     CircleShape
                 )
         )
     }
+    Spacer(Modifier.size(7.dp))
+    Text(toolIcon(tool.name), fontSize = 12.sp)
+    Spacer(Modifier.size(7.dp))
+    Text(
+        toolVerb(tool),
+        fontSize = 12.sp,
+        color = MaterialTheme.colorScheme.onSurface,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f)
+    )
 }
 
 /** 工具中文动词行文本（简报已是中文动词层，直接用；空则回退原名）。 */
@@ -2564,7 +2568,7 @@ private fun toolVerb(tool: com.haoai.agent.ui.UiTool): String =
 private fun toolIcon(name: String): String =
     runCatching { com.haoai.agent.agent.tools.ToolBrief.iconOf(name) }.getOrDefault("🔧")
 
-/** 展开态时间轴主体：竖线 + 交错的思考/工具节点。 */
+/** 展开态主体：紧凑行动作流（无竖线无节点），思考/工具按到达序排列。 */
 @Composable
 private fun TimelineBody(
     reasoning: String?,
@@ -2578,81 +2582,74 @@ private fun TimelineBody(
     LaunchedEffect(reasoning?.length, tools.size, tools.lastOrNull()?.state) {
         scroll.animateScrollTo(scroll.maxValue)
     }
-    Box(
+    Column(
         Modifier
-            .padding(horizontal = 8.dp)
+            .padding(horizontal = 6.dp)
             .heightIn(max = 340.dp)
+            .verticalScroll(scroll)
     ) {
-        Column(
-            Modifier
-                .verticalScroll(scroll)
-                .padding(start = 14.dp, end = 6.dp, bottom = 2.dp)
-        ) {
-            // 思考节点（流式思考是连续一段，放最前；工具执行中的 reasoning 为空）
-            if (!reasoning.isNullOrBlank()) {
-                TimelineThinkNode(reasoning, thinkingMs)
-            }
-            // 工具节点按到达序排列
-            tools.forEach { tool ->
-                TimelineToolNode(tool, onViewDiff = onViewDiff, onStopRun = onStopRun)
-            }
+        // 思考行（B 式玻璃行；流式思考是连续一段，放最前；工具执行中的 reasoning 为空）
+        if (!reasoning.isNullOrBlank()) {
+            ReasoningRow(reasoning, thinkingMs)
         }
-        // 竖轴线：沿左侧贯穿（画在 padding 区域）
-        Box(
-            Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 17.dp, top = 8.dp, bottom = 8.dp)
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-                        )
-                    ),
-                    RoundedCornerShape(1.dp)
-                )
-        )
+        // 工具行按到达序排列
+        tools.forEach { tool ->
+            ToolStreamRow(tool, onViewDiff = onViewDiff, onStopRun = onStopRun)
+        }
     }
 }
 
-/** 时间轴 · 思考节点：单行 ticker（右侧滚动跟随最新推理），点开看全文。 */
+/**
+ * B 式思考行：玻璃底行——spinner/shimmer「正在思考」+ 实时计时 + 右侧单行滚动跟随
+ * 最新推理（两端渐隐），点击展开全文（限高渐隐）。2 秒无新 token 视为"已思考"。
+ */
 @Composable
-private fun TimelineThinkNode(
+private fun ReasoningRow(
     text: String,
     thinkingMs: Long? = null
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
+    // 2s 无新内容 → live 语气转"已思考"（正文未出时的自然停顿）
+    var recentUpdate by remember { mutableStateOf(true) }
+    LaunchedEffect(text) {
+        recentUpdate = true
+        kotlinx.coroutines.delay(2000)
+        recentUpdate = false
+    }
+    val live = recentUpdate
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(12.dp))
             .clickable { open = !open }
-            .padding(vertical = 4.dp, horizontal = 6.dp)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.35f))
+            .padding(horizontal = 10.dp, vertical = 7.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ReasoningTickerInline(text = text, thinkingMs = thinkingMs)
+            ReasoningTickerInline(text = text, thinkingMs = thinkingMs, live = live)
         }
         AnimatedVisibility(open) {
-            Text(
-                text,
-                style = MaterialTheme.typography.bodySmall,
-                lineHeight = 17.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                modifier = Modifier
-                    .padding(top = 5.dp)
-                    .heightIn(max = 220.dp)
-                    .verticalScroll(rememberScrollState())
-            )
+            Column {
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 17.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                    modifier = Modifier
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+            }
         }
     }
     Spacer(Modifier.size(2.dp))
 }
 
 /**
- * 思考 ticker：固定「正在思考」标签 + 右侧单行滚动跟随最新推理文本（两端渐隐）。
- * opencode 思路的精修版：实时计时、随文本自动滚到尾部。须在 RowScope 内调用。
+ * 思考 ticker：固定「正在思考」标签（shimmer 高光横扫）+ 右侧单行滚动跟随
+ * 最新推理文本（两端渐隐）+ 实时计时。须在 RowScope 内调用。
  */
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
@@ -2662,6 +2659,20 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
 ) {
     // ticker 视口只显示行尾 ~160 字符，文本超长时滚动到尾部
     val tail = text.takeLast(160)
+    // 实时计时（live 时每 100ms 刷新；结束态用定格的 thinkingMs）
+    var elapsed by remember { mutableLongStateOf(0L) }
+    if (live) {
+        LaunchedEffect(Unit) {
+            val t0 = System.currentTimeMillis()
+            while (true) {
+                elapsed = System.currentTimeMillis() - t0
+                kotlinx.coroutines.delay(100)
+            }
+        }
+    }
+    // shimmer：渐变高光横扫标题（B 式）
+    val shim by androidx.compose.animation.core.rememberInfiniteTransition(label = "rshim")
+        .animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "rp")
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
         if (live) {
             CircularProgressIndicator(
@@ -2671,20 +2682,45 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             )
             Spacer(Modifier.size(6.dp))
         }
-        Text(
-            if (live) "正在思考" else "已思考",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = if (live) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (!live && thinkingMs != null) {
-            Spacer(Modifier.size(4.dp))
+        if (live) {
             Text(
-                String.format(Locale.US, " %.1fs", thinkingMs / 1000.0),
+                "正在思考",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        start = androidx.compose.ui.geometry.Offset((shim * 2f - 0.5f) * 160f, 0f),
+                        end = androidx.compose.ui.geometry.Offset((shim * 2f + 0.5f) * 160f, 0f)
+                    )
+                )
+            )
+            Spacer(Modifier.size(5.dp))
+            Text(
+                String.format(Locale.US, "%.1fs", elapsed / 1000.0),
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
             )
+        } else {
+            Text(
+                "已思考",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (thinkingMs != null) {
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    String.format(Locale.US, "%.1fs", thinkingMs / 1000.0),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
         }
         Spacer(Modifier.size(8.dp))
         // 滚动跟随视口
@@ -2718,9 +2754,9 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
     }
 }
 
-/** 时间轴 · 工具节点：状态点/停止块 + 类别图标 + 中文动词行 + 展开。 */
+/** A 式工具行：图标盒 + 停止块/状态点 + 中文动词加粗 + 对象灰字，点击展开参数。 */
 @Composable
-private fun TimelineToolNode(
+private fun ToolStreamRow(
     tool: com.haoai.agent.ui.UiTool,
     onViewDiff: (String) -> Unit = {},
     onStopRun: () -> Unit = {}
@@ -2730,21 +2766,23 @@ private fun TimelineToolNode(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.35f))
                 .clickable { expanded = !expanded }
-                .padding(vertical = 4.dp, horizontal = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             when (tool.state) {
                 ToolRunState.RUNNING -> Box(
                     Modifier
-                        .size(20.dp)
+                        .size(22.dp)
                         .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.error.copy(alpha = 0.14f))
                         .clickable { onStopRun() },
                     contentAlignment = Alignment.Center
                 ) {
@@ -2752,33 +2790,45 @@ private fun TimelineToolNode(
                         .animateFloat(0.55f, 1f, infiniteRepeatable(tween(1100)), label = "sp")
                     Box(
                         Modifier
-                            .size(9.dp)
+                            .size(8.dp)
                             .graphicsLayer { alpha = pulse }
                             .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp))
                     )
                 }
                 else -> Box(
                     Modifier
-                        .size(9.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
                         .background(
-                            if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F),
-                            CircleShape
-                        )
-                )
+                            (if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F))
+                                .copy(alpha = 0.14f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .background(
+                                if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F),
+                                CircleShape
+                            )
+                    )
+                }
             }
-            Spacer(Modifier.size(7.dp))
+            Spacer(Modifier.size(8.dp))
             Text(toolIcon(tool.name), fontSize = 12.sp)
             Spacer(Modifier.size(7.dp))
+            // 中文动词加粗主位，对象灰字跟随（A 卡内行布局：动词不动、对象截断）
             Text(
                 toolVerb(tool),
                 fontSize = 12.5.sp,
-                fontWeight = if (tool.state == ToolRunState.RUNNING) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (tool.state == ToolRunState.RUNNING) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f, fill = false)
             )
+            Spacer(Modifier.size(6.dp))
             if (canReview) {
                 Text(
                     "查看变更",
@@ -2789,7 +2839,7 @@ private fun TimelineToolNode(
                         .clickable { onViewDiff(tool.callId) }
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 )
-                Spacer(Modifier.size(4.dp))
+                Spacer(Modifier.size(2.dp))
             }
             Icon(
                 if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -2799,7 +2849,7 @@ private fun TimelineToolNode(
             )
         }
         AnimatedVisibility(expanded) {
-            Column(Modifier.padding(start = 26.dp, top = 2.dp, bottom = 4.dp)) {
+            Column(Modifier.padding(start = 38.dp, top = 2.dp, bottom = 4.dp)) {
                 if (tool.subagents.isNotEmpty()) {
                     tool.subagents.forEach { sub ->
                         val subColor = when (sub.state) {
