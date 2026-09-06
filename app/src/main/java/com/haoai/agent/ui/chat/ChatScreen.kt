@@ -2617,12 +2617,13 @@ private fun ActivityTimelineCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (reasoning != null && lastTool == null) {
-                        // 思考中：旋钮式滚动跟随（收起态也跟随；历史静态）
+                        // 思考中：旋钮形态 C 滚动跟随（收起态也跟随；思考完定格）
                         ReasoningTickerInline(
                             text = reasoning,
                             thinkingMs = thinkingMs,
                             live = live,
-                            knobScroll = live
+                            showTicker = true,
+                            scrolling = live
                         )
                     } else if (lastTool != null) {
                         TimelineToolRowCompact(lastTool)
@@ -2748,7 +2749,15 @@ private fun ReasoningRow(
             .padding(horizontal = 10.dp, vertical = 7.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ReasoningTickerInline(text = text, thinkingMs = thinkingMs, live = isLive, knobScroll = live)
+            // v6.2 形态 C：思考中滚动；思考完（live 转 false）立即停住定格（仍在旋钮形态内，
+            // 不切省略）——只在历史消息（showTicker=false）才走静态省略
+            ReasoningTickerInline(
+                text = text,
+                thinkingMs = thinkingMs,
+                live = isLive,
+                showTicker = true,
+                scrolling = live
+            )
         }
         AnimatedVisibility(open) {
             Column {
@@ -2769,11 +2778,11 @@ private fun ReasoningRow(
 }
 
 /**
- * 思考 ticker v5「旋钮式」（用户命名）：
+ * 思考 ticker v6.2「旋钮形态 C」（用户选型）：
  * - 文本从左侧开始往右显示（不满一行时静止）；
  * - 超过一行后持续向左滚动（最新内容从右侧进入）；
- * - 中央清晰、两端渐隐至透明的对称蒙版——像旋钮刻度转过窗口。
- * live=false（历史）时静态显示首行省略文本，不滚动。
+ * - 形态 C：中央最清晰、向两侧对称渐隐（SpanStyle alpha 曲线，无 draw 蒙版零黑块）；
+ * - 思考结束（scrolling=false）滚动立即停住定格，保持渐隐形态；历史消息走静态省略。
  * 须在 RowScope 内调用。
  */
 @Composable
@@ -2781,8 +2790,10 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
     text: String,
     thinkingMs: Long? = null,
     live: Boolean = true,
-    /** 旋钮滚动开关（运行中的思考段=开；历史/结束段=关，静态省略）。 */
-    knobScroll: Boolean = true
+    /** 是否渲染 ticker（聚合卡收起态/思考行= true；历史消息=false 走纯省略）。 */
+    showTicker: Boolean = true,
+    /** 滚动跟随开关：思考中 true（跟随尾部）；已思考/历史 false（立即定格）。 */
+    scrolling: Boolean = live
 ) {
     // 实时计时（live 时每 100ms 刷新；结束态用定格的 thinkingMs）
     var elapsed by remember { mutableLongStateOf(0L) }
@@ -2848,30 +2859,37 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
         Spacer(Modifier.size(8.dp))
-        // v6 无蒙版旋钮：DstIn 蒙版在浅色卡上叠出黑带（两轮踩坑确认），彻底弃用。
-        // 改用「只显示尾部 ~90 字符」+ 首字符 SpanStyle alpha 淡出（无 draw 蒙版），
-        // 滚动跟随逻辑不变；历史态纯文字省略
-        if (knobScroll) {
+        // v6.2 旋钮形态 C（用户选型）：中央最清晰、向两侧对称渐隐。
+        // 实现：文字 SpanStyle alpha 逐字符上色（无 draw 蒙版——DstIn 黑带两轮教训），
+        // alpha 曲线中段最实、两端淡出；文字始终跟随尾部（新内容从右进入）。
+        // 思考结束（scrolling=false）滚动立即定格：文本不再移动，渐隐形态保留。
+        if (showTicker) {
             val hscroll = rememberScrollState()
-            LaunchedEffect(text) {
-                // 文本推进时跟随到尾部（旋钮持续转动）
-                hscroll.scrollTo(hscroll.maxValue)
+            // 只在滚动期跟随尾部；定格后不再动（text 变化也不触发）
+            LaunchedEffect(text, scrolling) {
+                if (scrolling) hscroll.scrollTo(hscroll.maxValue)
             }
             Box(
                 Modifier
                     .weight(1f)
                     .height(16.dp)
             ) {
-                val tailText = text.takeLast(90)
+                // 尾部窗口：思考中取 120 字符；定格后取定格瞬间的尾部（text 不再变）
+                val tailText = text.takeLast(120)
+                val base = MaterialTheme.colorScheme.onSurfaceVariant
                 val ann = buildAnnotatedString {
                     append(tailText)
-                    // 首字符淡出（模拟左侧渐隐，无蒙版）
-                    for (i in 0 until minOf(14, tailText.length)) {
-                        val a = 0f + (i / 14f) * 0.85f
-                        addStyle(
-                            SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = a.coerceIn(0f, 0.85f))),
-                            i, i + 1
-                        )
+                    // 形态 C alpha 曲线：左端 28% 淡入（0→0.85），右端 18% 淡出
+                    // （0.85→0.12）——右侧是"正在离开"的方向，略保留可见度
+                    val n = tailText.length
+                    for (i in 0 until n) {
+                        val t = if (n <= 1) 1f else i.toFloat() / (n - 1)
+                        val a = when {
+                            t < 0.28f -> (t / 0.28f) * 0.85f
+                            t > 0.82f -> 0.85f - ((t - 0.82f) / 0.18f) * 0.73f
+                            else -> 0.85f
+                        }
+                        addStyle(SpanStyle(color = base.copy(alpha = a.coerceIn(0f, 0.85f))), i, i + 1)
                     }
                 }
                 Text(
@@ -2884,7 +2902,7 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
                 )
             }
         } else {
-            // 历史：静态单行省略（无蒙版无滚动，与卡片同底无色差）
+            // 历史/已思考：静态单行省略（无蒙版无滚动，与卡片同底无色差）
             Text(
                 text,
                 fontSize = 11.sp,
