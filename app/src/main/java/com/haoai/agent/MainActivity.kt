@@ -356,8 +356,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         lastScreen = screen
         if (!chatInvolved) {
             scrimLevel = 0.9f
-            kotlinx.coroutines.delay(420)
-            scrimLevel = 0f
+            try {
+                kotlinx.coroutines.delay(420)
+            } finally {
+                // 取消兜底：快速连点返回（如 模型大脑→设置→聊天 两跳间隔 <420ms）时，
+                // 本协程在 delay(420) 中被下一个 screen 转场取消，原「delay 后置 0」
+                // 永远执行不到；而下一个转场若聊天参与会整体跳过纱幕逻辑，scrimLevel
+                // 就永久停在 0.9——净色纱幕罩住聊天页（白遮罩 bug）。finally 保证
+                // 任何取消路径都把纱幕落下
+                scrimLevel = 0f
+            }
         }
         kotlinx.coroutines.delay(100)   // 转场 spring 收尾
         screenSettled = screen

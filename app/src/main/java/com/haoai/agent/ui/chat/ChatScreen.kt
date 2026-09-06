@@ -252,6 +252,14 @@ fun ChatScreen(
     val sessions by vm.sessions.collectAsState()
     val deletedSessions by vm.deletedSessions.collectAsState()
     val settings by vm.settings.collectAsState()
+
+    // ⑧ 回到底部浮钮状态：粘滞标志提升到 ChatScreen 级（MessageList 内维护、
+    // 浮钮画在 appLayer 采样层之外——Box 包裹会破坏 drawBackdrop 采样链，
+    // 与「玻璃顶栏不能进 appLayer 子树」同理）。用 MutableState 对象（非 by 委托）
+    // 以便同时传给 MessageList 读写与浮钮读取
+    val userScrolledAway = remember { mutableStateOf(false) }
+    // 程序化滚动标志（MessageList 的跟随/补滚与浮钮回底共用）
+    val scrollGuard = remember { mutableStateOf(false) }
     val approval by vm.approval.collectAsState()
     val todoItems by vm.todoItems.collectAsState()
     val planMode by vm.planMode.collectAsState()
@@ -598,6 +606,8 @@ fun ChatScreen(
                 thinkingHint = if (running && vm.isLocalProviderActive())
                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
                 listState = listState,
+                userScrolledAway = userScrolledAway,
+                scrollGuard = scrollGuard,
                 sessionId = vm.session.collectAsState().value?.id,
                 modifier = Modifier
                     .weight(1f)
@@ -910,6 +920,45 @@ fun ChatScreen(
                     TextButton(onClick = { vm.dismissError() }) { Text("关闭") }
                 }
             ) { Text(msg, maxLines = 4) }
+        }
+
+        // ⑧ 回到底部浮钮：用户上滑断开粘滞后浮现，点击回底并恢复跟随。
+        // 必须画在 appLayer 采样层之外（与玻璃顶栏同级）——放进 MessageList 的
+        // Box 包裹会切断 drawBackdrop 采样链，整屏透出白色遮罩（实测踩坑）
+        androidx.compose.animation.AnimatedVisibility(
+            visible = userScrolledAway.value && rows.isNotEmpty() && drawerFraction < 0.01f,
+            enter = androidx.compose.animation.fadeIn(tween(180)) +
+                androidx.compose.animation.expandVertically(tween(180)),
+            exit = androidx.compose.animation.fadeOut(tween(140)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = with(density) {
+                    maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp() + 10.dp
+                })
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                shape = CircleShape,
+                tonalElevation = 3.dp,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                ),
+                modifier = Modifier
+                    .size(38.dp)
+                    .clickable {
+                        userScrolledAway.value = false
+                        scope.launch { listState.scrollToEnd(guard = scrollGuard) }
+                    }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Filled.KeyboardArrowDown,
+                        contentDescription = "回到底部",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
         }
     }
         // 抽屉 scrim：透明度随 fraction，点击收起
@@ -1804,6 +1853,8 @@ private fun MessageList(
     thinkingHint: String? = null,
     thinkingMs: Long? = null,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
+    scrollGuard: androidx.compose.runtime.MutableState<Boolean>,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -1816,7 +1867,6 @@ private fun MessageList(
     // 程序化滚动标志：跟随/补滚期间为 true。isScrollInProgress 不区分滚动来源，
     // 不加这层守卫，流式跟随/键盘抬升补滚会被当成"用户滑动"而 clearFocus 收起输入法
     // （表现为点输入框键盘刚弹出就被关），也会误断粘滞
-    val scrollGuard = remember { mutableStateOf(false) }
     // 用户滑动列表时收起输入法（程序化滚动不触发）
     LaunchedEffect(listState) {
         androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }
@@ -1824,16 +1874,23 @@ private fun MessageList(
     }
 
     // 粘滞标志：只有用户亲手把列表拖离底部才断开跟随；键盘抬升/内容增高/补滚动画不算
-    var userScrolledAway by remember { mutableStateOf(false) }
+    // ⑧ 判定：isScrollInProgress 与布局状态合并成单一 snapshotFlow 持续评估——
+    // 手势开始瞬间列表还在底部、结束瞬间才「离开」，分开采样会漏掉置位时机；
+    // 「末项不可见」覆盖历史消息上滑（末项整体滚出视口），dist>200 覆盖流式末项生长
     LaunchedEffect(listState) {
-        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }
-            .distinctUntilChanged().collect { inProgress ->
+        androidx.compose.runtime.snapshotFlow {
+            val inProgress = listState.isScrollInProgress
+            val info = listState.layoutInfo
+            val lv = info.visibleItemsInfo.lastOrNull()
+            val contentEnd = info.viewportEndOffset - info.afterContentPadding
+            val away = lv != null &&
+                (lv.index < info.totalItemsCount - 1 || lv.offset + lv.size - contentEnd > 200)
+            inProgress to away
+        }
+            .distinctUntilChanged().collect { (inProgress, away) ->
                 if (scrollGuard.value) return@collect
-                val info = listState.layoutInfo
-                val lv = info.visibleItemsInfo.lastOrNull() ?: return@collect
-                val dist = lv.offset + lv.size - (info.viewportEndOffset - info.afterContentPadding)
-                if (inProgress) { if (dist > 200) userScrolledAway = true }
-                else if (dist <= 200) userScrolledAway = false
+                if (inProgress) { if (away) userScrolledAway.value = true }
+                else if (!away) userScrolledAway.value = false
             }
     }
 
@@ -1855,7 +1912,7 @@ private fun MessageList(
         // 用户发送新消息（最后一条是 user）→ 强制滚底并复位粘滞
         val isUserMessage = rows.lastOrNull()?.role == "user"
         if (isUserMessage) {
-            userScrolledAway = false
+            userScrolledAway.value = false
             val k = rows.last().key
             if (k != lastSentUserKey) {
                 lastSentUserKey = k
@@ -1863,7 +1920,7 @@ private fun MessageList(
                 focusManager.clearFocus()
             }
         }
-        if (isUserMessage || !userScrolledAway) {
+        if (isUserMessage || !userScrolledAway.value) {
             listState.scrollToEnd(guard = scrollGuard)
         }
     }
@@ -1881,8 +1938,7 @@ private fun MessageList(
     val justFinished = prevRunning.value && !running
     prevRunning.value = running
 
-    Box(modifier.fillMaxWidth()) {
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
+    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
         val finalRowKey = if (!running) rows.lastOrNull()?.key else null
@@ -1908,36 +1964,6 @@ private fun MessageList(
                 StreamingItem(streamingText, streamingReasoning, thinkingHint, thinkingMs)
             }
         }
-    }
-    // ⑧ 回到底部浮钮：用户上滑断开粘滞后浮现，点击回底并复位粘滞恢复跟随
-    val scope = rememberCoroutineScope()
-    AnimatedVisibility(
-        visible = userScrolledAway && totalItems > 0,
-        enter = fadeIn(tween(180)) + expandVertically(tween(180)),
-        exit = androidx.compose.animation.fadeOut(tween(140)),
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)
-    ) {
-        Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
-            shape = CircleShape,
-            tonalElevation = 3.dp,
-            modifier = Modifier
-                .size(38.dp)
-                .clickable {
-                    userScrolledAway = false
-                    scope.launch { listState.scrollToEnd(guard = scrollGuard) }
-                }
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "回到底部",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
-    }
     }
 }
 
