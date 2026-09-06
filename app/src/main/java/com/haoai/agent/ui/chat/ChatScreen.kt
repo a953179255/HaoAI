@@ -141,6 +141,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -891,6 +893,39 @@ fun ChatScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
                     )
+                }
+            }
+            // v6 Agent 实时工作状态行（上游 式）：输入框左上方玻璃小胶囊，
+            // 显示「正在连接模型… 2.5s」等实时状态；随 ComposerBar 一起被键盘/增高上抬
+            // （同一 Column 内自然跟随）；斜杠面板会暂时盖住它（可接受，输完即关）。
+            // 仅连接阶段显示（无思考/工具活动时）——活动阶段由消息流聚合卡负责，避免双份
+            androidx.compose.animation.AnimatedVisibility(
+                visible = running && streaming == null &&
+                    streamingReasoning == null && liveToolsSnapshot.isEmpty(),
+                enter = androidx.compose.animation.fadeIn(tween(160)) +
+                    androidx.compose.animation.expandVertically(tween(200)),
+                exit = androidx.compose.animation.fadeOut(tween(140)) +
+                    androidx.compose.animation.shrinkVertically(tween(160))
+            ) {
+                Row(
+                    Modifier.padding(start = 8.dp, bottom = 6.dp)
+                ) {
+                    GlassPanel(
+                        backdrop = backdrop,
+                        radius = 14.dp,
+                        surfaceAlpha = 0.30f
+                    ) {
+                        Row(
+                            Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ThinkingIndicator(
+                                if (running && vm.isLocalProviderActive())
+                                    "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
+                                else null
+                            )
+                        }
+                    }
                 }
             }
             ComposerBar(
@@ -2209,22 +2244,9 @@ private fun SystemEventBar(text: String) {
     }
 }
 
-/** 轻量等待行（等首 token / prefill）：无边框无底色的细行，替代旧空"正在思考"气泡。 */
-@Composable
-private fun ThinkingLine(hint: String? = null) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        ThinkingIndicator(hint)
-    }
-}
-
 /**
- * ⑤ 等待状态行（上游 waiting line 同思路）：连接点 + 短语轮播（shimmer 渐变）+
- * 已用时长计时。prefill 慢（端侧模型数十秒）时给用户持续"活着"的信号。
+ * ⑤ 等待状态行（v6 移到输入框左上方玻璃胶囊内，上游 式）：连接点 + 短语轮播
+ * （shimmer 渐变）+ 已用时长计时。prefill 慢（端侧模型数十秒）时给用户持续"活着"的信号。
  */
 @Composable
 private fun ThinkingIndicator(hint: String? = null) {
@@ -2462,9 +2484,9 @@ private fun StreamingItem(
                 onViewDiff = onViewDiff,
                 running = running
             )
-        } else if (!hasContent) {
-            ThinkingLine(thinkingHint)
         }
+        // v6：等首 token 的「正在连接模型…」等待行移到输入框左上方（ComposerBar
+        // 上方玻璃胶囊），消息流里不再渲染，列表更干净
         if (hasContent) {
             if (hasActivity) Spacer(Modifier.size(5.dp))
             Surface(
@@ -2821,8 +2843,9 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
         Spacer(Modifier.size(8.dp))
-        // 旋钮视口（live）：horizontalScroll 驱动，中央清晰两侧渐隐至透明。
-        // v5.1：历史态不用任何蒙版（DstIn 蒙版叠浅色卡曾渲出黑块）——纯文字省略
+        // v6 无蒙版旋钮：DstIn 蒙版在浅色卡上叠出黑带（两轮踩坑确认），彻底弃用。
+        // 改用「只显示尾部 ~90 字符」+ 首字符 SpanStyle alpha 淡出（无 draw 蒙版），
+        // 滚动跟随逻辑不变；历史态纯文字省略
         if (knobScroll) {
             val hscroll = rememberScrollState()
             LaunchedEffect(text) {
@@ -2833,30 +2856,25 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
                 Modifier
                     .weight(1f)
                     .height(16.dp)
-                    .drawWithContent {
-                        drawContent()
-                        // 中央清晰 → 两侧淡出至透明（对称七段）
-                        drawRect(
-                            brush = Brush.horizontalGradient(
-                                0f to Color.Transparent,
-                                0.14f to Color.Black.copy(alpha = 0.15f),
-                                0.32f to Color.Black.copy(alpha = 0.6f),
-                                0.5f to Color.Black,
-                                0.68f to Color.Black.copy(alpha = 0.6f),
-                                0.86f to Color.Black.copy(alpha = 0.15f),
-                                1f to Color.Transparent
-                            ),
-                            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+            ) {
+                val tailText = text.takeLast(90)
+                val ann = buildAnnotatedString {
+                    append(tailText)
+                    // 首字符淡出（模拟左侧渐隐，无蒙版）
+                    for (i in 0 until minOf(14, tailText.length)) {
+                        val a = 0f + (i / 14f) * 0.85f
+                        addStyle(
+                            SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = a.coerceIn(0f, 0.85f))),
+                            i, i + 1
                         )
                     }
-            ) {
+                }
                 Text(
-                    text,
+                    ann,
                     fontSize = 11.sp,
                     lineHeight = 16.sp,
                     maxLines = 1,
                     softWrap = false,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                     modifier = Modifier.horizontalScroll(hscroll)
                 )
             }
@@ -2936,7 +2954,11 @@ private fun ToolStreamRow(
                 }
             }
             Spacer(Modifier.size(8.dp))
-            Text(toolIcon(tool.name), fontSize = 12.sp)
+            // v6：错误行不再显示类别图标（🔧 扳手观感差），错误行统一显示 ⚠️
+            Text(
+                if (tool.state == ToolRunState.ERROR) "⚠️" else toolIcon(tool.name),
+                fontSize = 12.sp
+            )
             Spacer(Modifier.size(7.dp))
             // 中文动词加粗主位，对象灰字跟随（A 卡内行布局：动词不动、对象截断）
             Text(

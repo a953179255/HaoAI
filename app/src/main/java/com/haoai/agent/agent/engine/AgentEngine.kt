@@ -376,17 +376,20 @@ class AgentEngine(
                     } else if (isTransientHttpError(e)) {
                         // 429/超时/网关抖动：供应商限流在多轮工具任务里很常见（每步一请求），
                         // 退避重试而不是整轮失败；等待期可被取消，清残句避免拼接错乱
+                        // v6：简报区分真实限流（429）与其他瞬态网络错误，不再一律报「限流」
+                        val isRealRateLimit = (e as? com.haoai.agent.agent.provider.ProviderHttpException)?.httpCode == 429
+                        val brief = if (isRealRateLimit) "供应商限流" else "网络波动"
                         val backoffsSec = intArrayOf(5, 12, 25)
                         var last: Exception? = e
                         for (sec in backoffsSec) {
-                            onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.RUNNING, "供应商限流", "HTTP 错误，${sec}s 后自动重试")))
+                            onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.RUNNING, brief, if (isRealRateLimit) "HTTP 429，${sec}s 后自动重试" else "网络错误，${sec}s 后自动重试")))
                             delay(sec * 1000L)
                             currentCoroutineContext().ensureActive()
                             streamBuf.setLength(0)
                             reasoningBuf.setLength(0)
                             try {
                                 collectStream()
-                                onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.DONE, "供应商限流", "已恢复")))
+                                onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.DONE, brief, "已恢复")))
                                 last = null
                                 break
                             } catch (re: Exception) {

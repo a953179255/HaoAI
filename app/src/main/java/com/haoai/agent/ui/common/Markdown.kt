@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -311,8 +312,8 @@ fun MarkdownText(
                             mapOf(
                                 "\uFFFC" to InlineTextContent(
                                     Placeholder(
-                                        width = 10.sp,
-                                        height = 15.sp,
+                                        width = 3.sp,
+                                        height = 14.sp,
                                         placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
                                     )
                                 ) { _ -> StreamingCursorGlyph() }
@@ -826,13 +827,12 @@ private fun StreamingCursorGlyph() {
         Modifier
             .fillMaxWidth()
             .height(14.dp)
-            .graphicsLayer { alpha = phase },
-        contentAlignment = Alignment.CenterStart
+            .graphicsLayer { alpha = phase }
     ) {
+        // 占位宽 3sp，细线撑满占位 = 2~3dp 绿色一竖（v6 修方块观感）
         Box(
             Modifier
-                .padding(start = 1.dp)
-                .size(width = 2.dp, height = 14.dp)
+                .fillMaxSize()
                 .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp))
         )
     }
