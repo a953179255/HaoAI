@@ -35,7 +35,8 @@ object SystemPrompt {
         mcpSummary: String = "",
         shellNote: String = "",
         vscreenAvailable: Boolean = false,
-        toolsGroupHint: String = ""
+        toolsGroupHint: String = "",
+        capabilityNote: String = ""
     ): String = buildString {
         if (identity.isNotBlank()) {
             appendLine()
@@ -73,6 +74,10 @@ object SystemPrompt {
         }
         if (mcpSummary.isNotBlank()) {
             appendLine("- MCP 外部工具：$mcpSummary")
+        }
+        if (capabilityNote.isNotBlank()) {
+            appendLine()
+            appendLine(capabilityNote.trim())
         }
         if (toolsGroupHint.isNotBlank()) {
             appendLine()

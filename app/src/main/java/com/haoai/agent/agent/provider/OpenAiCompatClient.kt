@@ -52,11 +52,16 @@ data class ApiMessage(
 data class ApiContentPart(
     val type: String,
     val text: String? = null,
-    @SerialName("image_url") val imageUrl: ApiImageUrl? = null
+    @SerialName("image_url") val imageUrl: ApiImageUrl? = null,
+    /** 音频输入（OpenAI 兼容 input_audio 形态）：data=base64，format=wav/mp3 等。 */
+    @SerialName("input_audio") val inputAudio: ApiInputAudio? = null
 )
 
 @Serializable
 data class ApiImageUrl(val url: String)
+
+@Serializable
+data class ApiInputAudio(val data: String, val format: String = "mp3")
 
 /** content 字段按需序列化为字符串（纯文本）或数组（多模态）。 */
 object ApiMessageSerializer : kotlinx.serialization.KSerializer<ApiMessage> {
@@ -86,6 +91,12 @@ object ApiMessageSerializer : kotlinx.serialization.KSerializer<ApiMessage> {
                                 p.text?.let { put("text", it) }
                                 p.imageUrl?.let { iu ->
                                     putJsonObject("image_url") { put("url", iu.url) }
+                                }
+                                p.inputAudio?.let { ia ->
+                                    putJsonObject("input_audio") {
+                                        put("data", ia.data)
+                                        put("format", ia.format)
+                                    }
                                 }
                             }
                         }
@@ -267,7 +278,6 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
         val url = normalizeUrl(provider.baseUrl)
         val isLocal = provider.baseUrl.contains("127.0.0.1")
         // 能力门控（借鉴 上游/上游）：模型标记不支持 reasoning 时不发 effort 参数
-        val entry = provider.modelEntry()
         val requestJson = HaoJson.json.encodeToString(
             ChatCompletionRequest.serializer(),
             ChatCompletionRequest(
@@ -280,7 +290,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                 maxTokens = provider.effectiveMaxTokens().takeIf { it > 0 },
                 streamOptions = StreamOptions(),
                 reasoningEffort = reasoningEffort?.takeIf {
-                    it.isNotBlank() && !isLocal && entry?.reasoning != false
+                    it.isNotBlank() && !isLocal && provider.caps().reasoning != false
                 },
                 // 采样参数「是否发送」开关（借鉴 上游）：关=请求体不带该字段，与旧行为一致
                 temperature = provider.temperature.toDouble().takeIf { provider.sendTemperature },

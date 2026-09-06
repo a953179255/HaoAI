@@ -9,6 +9,7 @@ import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.AppSettings
+import com.haoai.agent.data.CapabilityResolver
 import com.haoai.agent.data.ProviderConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -149,7 +150,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var detectResult by mutableStateOf<Pair<Boolean, String>?>(null)
         private set
 
-    /** 云端模型能力自动检测（上游 同款目录数据源，含上下文/输出上限/多模态）。 */
+    /** 云端模型能力自动检测（models.dev 目录：上下文/输出上限/输入输出模态/工具/思考等级）。 */
     fun detectCapabilities() {
         val d = draft ?: return
         if (d.baseUrl.isBlank() || d.model.isBlank()) {
@@ -163,22 +164,32 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             detectingCaps = false
             r.fold(
                 onSuccess = { caps ->
-                    // 点4：目录能力写回当前模型条目（vision/reasoning 显式标记，请求侧据此门控）
-                    val entry = com.haoai.agent.data.ModelEntry(
-                        id = d.model.trim(),
-                        vision = caps.inputModalities.any { it == "image" || it == "video" },
-                        reasoning = caps.reasoning,
-                        contextLength = if (caps.contextWindow > 0) caps.contextWindow.toInt() else 0,
-                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.toInt().coerceAtMost(1_000_000) else 0
-                    )
-                    draft = draft?.copy(
-                        contextLength = if (caps.contextWindow > 0) caps.contextWindow.toString() else draft?.contextLength ?: "",
-                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.coerceAtMost(1_000_000).toString() else draft?.maxTokens ?: "",
-                        models = (draft?.models ?: emptyList()).filterNot { it.id == entry.id } + entry
-                    )
-                    detectResult = true to "✓ ${caps.describe()}"
+                    // 目录能力写回当前模型条目（模态/工具/推理显式标记，请求侧据此门控）。
+                    // 已是手动覆盖（manual）的条目不被自动检测覆盖——恢复自动检测后才可刷新。
+                    val curId = d.model.trim()
+                    val old = d.models.find { it.id == curId }
+                    if (old?.capsSource == "manual") {
+                        detectResult = true to "✓ ${caps.describe()}\n（当前模型为手动设置，未覆盖；在能力编辑页「恢复自动检测」后生效）"
+                    } else {
+                        val entry = (old ?: com.haoai.agent.data.ModelEntry(curId)).copy(
+                            inputModalities = caps.inputModalities,
+                            outputModalities = caps.outputModalities,
+                            reasoning = caps.reasoning,
+                            tools = caps.toolCall ?: old?.tools,
+                            effortValues = caps.effortValues,
+                            capsSource = "models.dev",
+                            contextLength = if (caps.contextWindow > 0) caps.contextWindow.toInt() else (old?.contextLength ?: 0),
+                            maxTokens = if (caps.maxOutput > 0) caps.maxOutput.toInt().coerceAtMost(1_000_000) else (old?.maxTokens ?: 0)
+                        )
+                        draft = draft?.copy(
+                            contextLength = if (caps.contextWindow > 0) caps.contextWindow.toString() else draft?.contextLength ?: "",
+                            maxTokens = if (caps.maxOutput > 0) caps.maxOutput.coerceAtMost(1_000_000).toString() else draft?.maxTokens ?: "",
+                            models = draft?.models?.filterNot { it.id == entry.id }?.plus(entry) ?: listOf(entry)
+                        )
+                        detectResult = true to "✓ ${caps.describe()}"
+                    }
                 },
-                onFailure = { detectResult = false to "✗ ${it.message ?: "检测失败"}（可手动填写）" }
+                onFailure = { detectResult = false to "✗ ${it.message ?: "检测失败"}（可手动勾选模态）" }
             )
         }
     }
@@ -492,6 +503,146 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             if (modelId == p.model) return@updateSettings s
             val updated = p.copy(models = p.models.filterNot { it.id == modelId })
             s.copy(providers = s.providers.map { if (it.id == providerId) updated else it })
+        }
+    }
+
+    // ── 模型能力编辑页：手动覆盖模态 / 恢复自动检测（直接写回 settings，非草稿） ──
+
+    /** 更新某供应商下某模型的能力条目（不存在则追加）。 */
+    fun updateModelEntry(providerId: String, entry: com.haoai.agent.data.ModelEntry) {
+        c.updateSettings { s ->
+            val p = s.providers.find { it.id == providerId } ?: return@updateSettings s
+            val rest = p.models.filterNot { it.id == entry.id }
+            val updated = p.copy(models = rest + entry)
+            s.copy(providers = s.providers.map { if (it.id == providerId) updated else it })
+        }
+    }
+
+    /** 切换单个输入模态（image/audio/video/pdf）：写回即标记 manual，脱离自动检测。 */
+    fun toggleInputModality(providerId: String, modelId: String, mod: String) {
+        val p = providers().find { it.id == providerId } ?: return
+        val entry = p.models.find { it.id == modelId }
+            ?: com.haoai.agent.data.ModelEntry(modelId)
+        val cur = CapabilityResolver.resolve(entry, modelId)
+        val next = if (mod in cur.inputs) cur.inputs - mod else cur.inputs + mod
+        updateModelEntry(
+            providerId,
+            entry.copy(
+                inputModalities = next.distinct(),
+                outputModalities = cur.outputs,
+                capsSource = "manual"
+            )
+        )
+    }
+
+    /** 切换单个输出模态（image/audio）。 */
+    fun toggleOutputModality(providerId: String, modelId: String, mod: String) {
+        val p = providers().find { it.id == providerId } ?: return
+        val entry = p.models.find { it.id == modelId }
+            ?: com.haoai.agent.data.ModelEntry(modelId)
+        val cur = CapabilityResolver.resolve(entry, modelId)
+        val next = if (mod in cur.outputs) cur.outputs - mod else cur.outputs + mod
+        updateModelEntry(
+            providerId,
+            entry.copy(
+                inputModalities = cur.inputs,
+                outputModalities = next.distinct(),
+                capsSource = "manual"
+            )
+        )
+    }
+
+    /** 恢复自动检测：清掉手动标记与模态覆盖，下次「检测能力」重新填充。 */
+    fun resetModelCaps(providerId: String, modelId: String) {
+        val p = providers().find { it.id == providerId } ?: return
+        val entry = p.models.find { it.id == modelId } ?: return
+        updateModelEntry(
+            providerId,
+            entry.copy(inputModalities = null, outputModalities = null, capsSource = null, effortValues = null)
+        )
+    }
+
+    /** 批量检测该供应商全部模型的能力（详情页「检测全部能力」）。 */
+    fun detectAllCapabilities(providerId: String) {
+        val p = providers().find { it.id == providerId } ?: return
+        if (p.baseUrl.isBlank()) return
+        detectingCaps = true
+        detectResult = null
+        viewModelScope.launch {
+            val ids = p.modelIds()
+            var ok = 0
+            val failed = mutableListOf<String>()
+            for (id in ids) {
+                val old = p.models.find { it.id == id }
+                if (old?.capsSource == "manual") { ok++; continue } // 手动的不覆盖，计入成功
+                val r = com.haoai.agent.data.ModelCatalog.lookup(c.okHttpClient, p.baseUrl, id)
+                r.fold(
+                    onSuccess = { caps ->
+                        val entry = (old ?: com.haoai.agent.data.ModelEntry(id)).copy(
+                            inputModalities = caps.inputModalities,
+                            outputModalities = caps.outputModalities,
+                            reasoning = caps.reasoning,
+                            tools = caps.toolCall ?: old?.tools,
+                            effortValues = caps.effortValues,
+                            capsSource = "models.dev",
+                            contextLength = if (caps.contextWindow > 0) caps.contextWindow.toInt() else (old?.contextLength ?: 0),
+                            maxTokens = if (caps.maxOutput > 0) caps.maxOutput.toInt().coerceAtMost(1_000_000) else (old?.maxTokens ?: 0)
+                        )
+                        c.updateSettings { s ->
+                            val pp = s.providers.find { it.id == providerId } ?: return@updateSettings s
+                            pp.let {
+                                val rest = it.models.filterNot { m -> m.id == entry.id }
+                                val updated = it.copy(models = rest + entry)
+                                s.copy(providers = s.providers.map { x -> if (x.id == providerId) updated else x })
+                            }
+                        }
+                        ok++
+                    },
+                    onFailure = { failed += id }
+                )
+            }
+            detectingCaps = false
+            detectResult = if (failed.isEmpty()) true to "✓ 已检测 $ok 个模型"
+            else false to "✓ $ok 个 · 未收录：${failed.joinToString("、").take(60)}（可手动勾选模态）"
+        }
+    }
+
+    /** 当前供应商某模型的能力解析视图（供能力编辑页渲染）。 */
+    fun capsOf(providerId: String, modelId: String): CapabilityResolver.Caps =
+        CapabilityResolver.resolve(
+            providers().find { it.id == providerId }?.models?.find { it.id == modelId }, modelId
+        )
+
+    /** 单模型能力检测（能力编辑页「自动检测」按钮；不依赖草稿通道）。 */
+    fun detectSingleCaps(providerId: String, modelId: String) {
+        val p = providers().find { it.id == providerId } ?: return
+        if (p.baseUrl.isBlank()) {
+            detectResult = false to "供应商缺少 Base URL，无法检测"
+            return
+        }
+        detectingCaps = true
+        detectResult = null
+        viewModelScope.launch {
+            val old = p.models.find { it.id == modelId }
+            val r = com.haoai.agent.data.ModelCatalog.lookup(c.okHttpClient, p.baseUrl, modelId)
+            detectingCaps = false
+            r.fold(
+                onSuccess = { caps ->
+                    val entry = (old ?: com.haoai.agent.data.ModelEntry(modelId)).copy(
+                        inputModalities = caps.inputModalities,
+                        outputModalities = caps.outputModalities,
+                        reasoning = caps.reasoning,
+                        tools = caps.toolCall ?: old?.tools,
+                        effortValues = caps.effortValues,
+                        capsSource = "models.dev",
+                        contextLength = if (caps.contextWindow > 0) caps.contextWindow.toInt() else (old?.contextLength ?: 0),
+                        maxTokens = if (caps.maxOutput > 0) caps.maxOutput.toInt().coerceAtMost(1_000_000) else (old?.maxTokens ?: 0)
+                    )
+                    updateModelEntry(providerId, entry)
+                    detectResult = true to "✓ ${caps.describe()}"
+                },
+                onFailure = { detectResult = false to "✗ ${it.message ?: "检测失败"}（可手动勾选模态）" }
+            )
         }
     }
 

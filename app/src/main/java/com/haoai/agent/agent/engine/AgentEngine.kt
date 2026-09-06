@@ -205,6 +205,8 @@ class AgentEngine(
         onDelta: (String) -> Unit,
         onEvent: (TurnEvent) -> Unit,
         imageData: String? = null,
+        audioPath: String? = null,
+        videoPath: String? = null,
         onReasoning: (String) -> Unit = {}
     ) {
         // 整轮统计起点：用户发出 → 最终回复落库（含工具循环全部 LLM 调用与工具执行）
@@ -220,8 +222,15 @@ class AgentEngine(
         appendAndNotify(
             ChatMessage(
                 role = ChatMessage.ROLE_USER,
-                content = if (imageData != null) "[图片]\n$userText".trim() else userText,
-                imageData = imageData
+                content = when {
+                    imageData != null -> "[图片]\n$userText".trim()
+                    audioPath != null -> "[音频]\n$userText".trim()
+                    videoPath != null -> "[视频]\n$userText".trim()
+                    else -> userText
+                },
+                imageData = imageData,
+                audioPath = audioPath,
+                videoPath = videoPath
             ),
             onEvent
         )
@@ -1119,6 +1128,12 @@ class AgentEngine(
         val journalBlock = journalSnippet()
         val mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary()
         val budget = budgetHint()
+        // 能力声明片段（对齐 上游 capabilityPromptFragment）：把当前模型的输入/输出
+        // 模态与工具支持显式写进系统提示词，让模型知道边界并主动绕行，而非中途引用被剥离
+        // 的能力导致任务断裂报错。端侧模型（llama）不走此注入（本地能力另由 vision 探测）。
+        val capabilityNote =
+            if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) ""
+            else com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(provider.caps()).orEmpty()
         val full = SystemPrompt.PREFIX +
             SystemPrompt.buildSuffix(
                 workspaceLabel, shellAvailable, dateText, customPrompt, memory,
@@ -1129,9 +1144,10 @@ class AgentEngine(
                 mcpSummary = mcpSummary,
                 shellNote = shellNote,
                 vscreenAvailable = vscreenEnabled,
-                toolsGroupHint = toolsGroupHintText()
+                toolsGroupHint = toolsGroupHintText(),
+                capabilityNote = capabilityNote
             ) + budget + todoProgressLine(consume = markMemoryUse)
-        val injected = memory + skillIndex + journalBlock + mcpSummary + budget
+        val injected = memory + skillIndex + journalBlock + mcpSummary + budget + capabilityNote
         return full to injected
     }
 
@@ -1155,9 +1171,9 @@ class AgentEngine(
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
     private var _toolsTokenCache: Int? = null
 
-    /** 能力门控（借鉴 上游/上游）：模型标记不支持 tools 时清空工具清单，降级纯对话。 */
+    /** 能力门控（统一走 CapabilityResolver）：模型标记不支持 tools 时清空工具清单，降级纯对话。 */
     private fun gateTools(apiTools: List<com.haoai.agent.agent.provider.ApiTool>): List<com.haoai.agent.agent.provider.ApiTool> =
-        if (provider.modelEntry()?.tools == false) emptyList() else apiTools
+        if (provider.caps().tools == false) emptyList() else apiTools
 
     fun estimateOverheadTokens(): Pair<Int, Int> =
         com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to
@@ -1187,24 +1203,52 @@ class AgentEngine(
             .pairSanitized()
             .mapNotNull { m ->
                 when (m.role) {
-                    ChatMessage.ROLE_USER ->
-                        if (!m.imageData.isNullOrBlank() && providerSupportsVision()) ApiMessage(
-                            role = "user",
-                            content = null,
-                            parts = listOf(
-                                com.haoai.agent.agent.provider.ApiContentPart(type = "text", text = m.content),
+                    ChatMessage.ROLE_USER -> {
+                        val caps = provider.caps()
+                        val parts = mutableListOf<com.haoai.agent.agent.provider.ApiContentPart>()
+                        val notes = StringBuilder()
+                        var text = m.content
+                        // 图像：有 image-in 直发，否则注记降级
+                        if (!m.imageData.isNullOrBlank()) {
+                            if (caps.hasImage) parts.add(
                                 com.haoai.agent.agent.provider.ApiContentPart(
                                     type = "image_url",
                                     imageUrl = com.haoai.agent.agent.provider.ApiImageUrl(url = m.imageData)
                                 )
-                            )
-                        )
-                        else ApiMessage(
-                            role = "user",
-                            content = if (!m.imageData.isNullOrBlank())
-                                "$m.content\n[系统] 截图已省略（当前模型不支持图像输入），请依据文字/控件树信息操作。"
-                            else m.content
-                        )
+                            ) else notes.append("\n[系统] 用户附带了一张图片，但当前模型不支持图像输入，图片未发送。不要假装看到，按「模型能力声明」绕行（shell 转码/screen 读控件树），必要时提示换支持图像的模型。")
+                        }
+                        // 音频：有 audio-in 时读文件转 input_audio 直发（OpenAI 兼容），否则注记降级
+                        if (!m.audioPath.isNullOrBlank()) {
+                            if (caps.hasAudio) {
+                                val b64 = runCatching {
+                                    val f = java.io.File(m.audioPath)
+                                    if (f.exists() && f.length() <= 8L * 1024 * 1024)
+                                        android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
+                                    else null
+                                }.getOrNull()
+                                if (b64 != null) {
+                                    val fmt = m.audioPath.substringAfterLast('.', "mp3").lowercase()
+                                        .let { if (it == "mpeg") "mp3" else it }
+                                    parts.add(
+                                        com.haoai.agent.agent.provider.ApiContentPart(
+                                            type = "input_audio",
+                                            inputAudio = com.haoai.agent.agent.provider.ApiInputAudio(data = b64, format = fmt)
+                                        )
+                                    )
+                                } else notes.append("\n[系统] 用户附带了音频，但文件过大/不可读，未发送。请用 shell 工具处理本机文件 ${m.audioPath}（转码/截取片段），不要中断任务。")
+                            } else notes.append("\n[系统] 用户附带了音频（本机文件 ${m.audioPath}），但当前模型不支持音频输入，未发送。请用 shell/ASR 工具转写文本后再处理，不要中断任务。")
+                        }
+                        // 视频：几乎无 chat 模型原生支持，统一给本地路径让 Agent 用 ffmpeg 抽帧/抽音轨绕行
+                        if (!m.videoPath.isNullOrBlank()) {
+                            notes.append("\n[系统] 用户附带了视频文件，本机路径：${m.videoPath}。当前模型不直接处理视频，请用 shell 工具（ffmpeg 抽关键帧后逐帧当图像分析、或抽音轨转写）提取信息，不要中断任务。")
+                        }
+                        text = text + notes.toString()
+                        if (parts.isEmpty()) ApiMessage(role = "user", content = text)
+                        else {
+                            parts.add(0, com.haoai.agent.agent.provider.ApiContentPart(type = "text", text = text))
+                            ApiMessage(role = "user", content = null, parts = parts)
+                        }
+                    }
                     ChatMessage.ROLE_ASSISTANT -> {
                         if (m.content.isBlank() && m.toolCalls.isEmpty()) null
                         else ApiMessage(
@@ -1473,18 +1517,10 @@ class AgentEngine(
     }
 
     /**
-     * 当前供应商模型是否支持图像输入。无配置字段可依时按模型名保守推测：
-     * 命中已知 vision 型号关键词 → true；命中明确纯文本型号 → false；未知 → true（乐观，
-     * 失败会得到供应商 400，friendlyError 已翻译成"换 vision 模型"指引）。
+     * 当前供应商模型是否支持图像输入——统一走 CapabilityResolver
+     * （手动覆盖 > models.dev 检测 > 旧 vision > 名称启发式 > 乐观默认）。
      */
-    private fun providerSupportsVision(): Boolean {
-        // 能力门控：模型条目显式标记优先于名字推测
-        provider.modelEntry()?.vision?.let { return it }
-        val m = provider.model.lowercase()
-        if (Regex("vision|vl|-v[0-9]|multimodal|4o|4\\.1|gpt-5|o1|o3|o4|gemini|claude|glm-4v|qwen.*vl|llava|pixtral").containsMatchIn(m)) return true
-        if (Regex("deepseek-v[0-9]+$|deepseek-chat|deepseek-r\\d|qwen2?\\.5$|miniax-text|text-embed").containsMatchIn(m)) return false
-        return true
-    }
+    private fun providerSupportsVision(): Boolean = provider.caps().hasImage
 
     /**
      * 把供应商原始报错翻译成普通用户能看懂、知道下一步该干嘛的话。

@@ -22,6 +22,9 @@ data class StoredMessage(
     val toolName: String? = null,
     val error: Boolean = false,
     val imageData: String? = null,
+    /** 音频/视频附件的本机文件路径（不存 base64，避免会话 JSON 膨胀）。 */
+    val audioPath: String? = null,
+    val videoPath: String? = null,
     val reasoning: String? = null,
     /** 本轮（含工具循环）累计输入/输出 tokens 与整轮耗时、模型名；旧 JSON 缺省 null。 */
     val promptTokens: Int? = null,
@@ -90,6 +93,8 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
     toolName = toolName,
     error = error,
     imageData = imageData,
+    audioPath = audioPath,
+    videoPath = videoPath,
     reasoning = reasoning,
     promptTokens = promptTokens,
     completionTokens = completionTokens,
@@ -107,6 +112,8 @@ fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     toolName = toolName,
     error = error,
     imageData = imageData,
+    audioPath = audioPath,
+    videoPath = videoPath,
     reasoning = reasoning,
     promptTokens = promptTokens,
     completionTokens = completionTokens,

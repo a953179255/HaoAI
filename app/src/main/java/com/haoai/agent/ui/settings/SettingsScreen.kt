@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -94,6 +95,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.data.AppSettings
 import com.haoai.agent.platform.KeepAliveService
@@ -150,6 +152,8 @@ fun SettingsScreen(
     var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
     // 待删除的供应商 id：点击删除先弹确认（防止误触直接删库）
     var pendingDelete by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
+    // 模型能力编辑弹层目标（providerId to modelId）——设计稿 ③：输入/输出模态勾选
+    var capsTarget by androidx.compose.runtime.remember { mutableStateOf<Pair<String, String>?>(null) }
     // 记忆专用端侧模型选择弹窗
     var showDreamPicker by androidx.compose.runtime.remember { mutableStateOf(false) }
     var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
@@ -229,6 +233,7 @@ fun SettingsScreen(
             confirmClearLedger = confirmClearLedger, onConfirmClearLedger = { confirmClearLedger = true },
             treePickerLaunch = { treePicker.launch(null) },
             onOpenMemories = onOpenMemories,
+            onEditCaps = { pid, mid -> capsTarget = pid to mid },
             onBack = onSectionBack
         )
     } else if (section.isEmpty()) {
@@ -430,6 +435,7 @@ fun SettingsScreen(
             confirmClearLedger = confirmClearLedger, onConfirmClearLedger = { confirmClearLedger = true },
             treePickerLaunch = { treePicker.launch(null) },
             onOpenMemories = onOpenMemories,
+            onEditCaps = { pid, mid -> capsTarget = pid to mid },
             onBack = { section = "" }
         )
     }
@@ -454,6 +460,22 @@ fun SettingsScreen(
             onTest = { vm.testDraftConnection() },
             onDismiss = { vm.cancelDraft() }
         )
+    }
+
+    // 模型能力编辑弹层（设计稿 ③）：输入/输出模态勾选 + 能力来源 + 恢复自动检测
+    capsTarget?.let { (pid, mid) ->
+        val p = vm.providers().find { it.id == pid }
+        if (p == null) {
+            capsTarget = null
+        } else {
+            ModelCapsDialog(
+                backdrop = backdrop,
+                vm = vm,
+                providerId = pid,
+                modelId = mid,
+                onDismiss = { capsTarget = null }
+            )
+        }
     }
 
     if (showScan) {
@@ -1060,6 +1082,7 @@ private fun SectionPage(
     onConfirmClearLedger: () -> Unit,
     treePickerLaunch: () -> Unit,
     onOpenMemories: () -> Unit,
+    onEditCaps: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     Box(
@@ -1092,7 +1115,7 @@ private fun SectionPage(
             ) {
                 when (section) {
                     "brain" -> {
-                        brainItems(vm, settings, backdrop, onDeleteRequest = { onPendingDelete(it) }, onPickPurposeModel = { onPickPurposeModel(it) })
+                        brainItems(vm, settings, backdrop, onDeleteRequest = { onPendingDelete(it) }, onPickPurposeModel = { onPickPurposeModel(it) }, onEditCaps = onEditCaps)
                         localItems(vm, backdrop, onOpenScan = onShowScan)
                     }
                     "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
@@ -1150,15 +1173,16 @@ private fun LazyListScope.brainItems(
     settings: AppSettings,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onDeleteRequest: (String) -> Unit = {},
-    onPickPurposeModel: (String) -> Unit = {}
+    onPickPurposeModel: (String) -> Unit = {},
+    onEditCaps: (String, String) -> Unit = { _, _ -> }
 ) {
     item { SectionTitle("模型供应商") }
     item {
         val ps = settings.providers.filter { it.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID }
         val activeId = settings.activeProviderId
-        // 供应商视角（用户反馈）：行=供应商+模型数徽标；点击行展开该供应商的
-        // 全部模型清单，点模型即切换默认——「glm-5.3-flash 加了两个模型怎么切」
-        // 的答案就在展开区里，不再需要进编辑弹窗
+        // 供应商视角（用户反馈）：行=供应商+模型数徽标+能力徽章；点击行展开该供应商的
+        // 全部模型清单，点模型即切换默认。行内不再放编辑/删除按钮（视觉噪音、功能重复）——
+        // 编辑/删除收进长按菜单与展开区「编辑供应商」文字链（设计稿 ① 屏）。
         var expandedId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
         Column(Modifier.padding(horizontal = 16.dp)) {
             GlassGroup(backdrop) {
@@ -1166,6 +1190,7 @@ private fun LazyListScope.brainItems(
                     ps.forEachIndexed { idx, p ->
                         val expanded = expandedId == p.id
                         val isActive = p.id == activeId
+                        var menuOpen by androidx.compose.runtime.remember(p.id) { mutableStateOf(false) }
                         Column {
                             Row(
                                 Modifier
@@ -1177,8 +1202,11 @@ private fun LazyListScope.brainItems(
                                             RoundedCornerShape(12.dp)
                                         ) else Modifier
                                     )
-                                    .clickable { expandedId = if (expanded) null else p.id }
-                                    .padding(start = 8.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
+                                    .combinedClickable(
+                                        onClick = { expandedId = if (expanded) null else p.id },
+                                        onLongClick = { menuOpen = true }
+                                    )
+                                    .padding(start = 8.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 RadioButton(
@@ -1212,25 +1240,34 @@ private fun LazyListScope.brainItems(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1
                                     )
+                                    // 能力徽章外显（设计稿 ①）：图/音/视/工具/思考，划线=明确不支持
+                                    ProviderCapBadges(p)
                                 }
-                                // 展开指示：点击行=展开模型清单（主操作），编辑/删除独立按钮
+                                // 展开指示：点击行=展开模型清单（主操作）；编辑/删除走长按菜单
                                 Icon(
                                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                                     contentDescription = if (expanded) "收起模型列表" else "展开模型列表",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(Modifier.size(2.dp))
-                                IconButton(onClick = { vm.editProvider(p) }) {
-                                    Icon(Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(19.dp))
-                                }
-                                if (p.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID) {
-                                    IconButton(onClick = { onDeleteRequest(p.id) }) {
-                                        Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(19.dp))
+                                // 长按菜单：编辑 / 删除（删除仍走原确认对话框）
+                                androidx.compose.material3.DropdownMenu(
+                                    expanded = menuOpen,
+                                    onDismissRequest = { menuOpen = false }
+                                ) {
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("编辑供应商") },
+                                        onClick = { menuOpen = false; vm.editProvider(p) }
+                                    )
+                                    if (p.id != com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID) {
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = { Text("删除供应商", color = MaterialTheme.colorScheme.error) },
+                                            onClick = { menuOpen = false; onDeleteRequest(p.id) }
+                                        )
                                     }
                                 }
                             }
-                            // 展开区：该供应商的全部模型，点=切换默认，×=移除备选
+                            // 展开区：该供应商的全部模型，点=切换默认，×=移除备选；行尾「编辑能力」进能力页
                             if (expanded) {
                                 Column(Modifier.padding(start = 52.dp, end = 8.dp, bottom = 8.dp)) {
                                     ModelSwitchRow(
@@ -1238,7 +1275,8 @@ private fun LazyListScope.brainItems(
                                         isDefault = true,
                                         enabled = p.model.isNotBlank(),
                                         onClick = {},
-                                        onRemove = null
+                                        onRemove = null,
+                                        onEditCaps = { onEditCaps(p.id, p.model) }
                                     )
                                     // 排除与默认同 ID 的条目：能力覆盖数据仍留在 models 里
                                     // （modelEntry() 依赖），只是不重复渲染成可点的幽灵行
@@ -1248,7 +1286,32 @@ private fun LazyListScope.brainItems(
                                             isDefault = false,
                                             enabled = true,
                                             onClick = { vm.setProviderDefaultModel(p.id, m.id) },
-                                            onRemove = { vm.removeProviderModel(p.id, m.id) }
+                                            onRemove = { vm.removeProviderModel(p.id, m.id) },
+                                            onEditCaps = { onEditCaps(p.id, m.id) }
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                        Text(
+                                            "编辑供应商",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable { vm.editProvider(p) }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        )
+                                        // 批量检测：目录数据源 models.dev，手动覆盖的模型不被覆盖
+                                        Text(
+                                            if (vm.detectingCaps) "检测中…" else "检测全部能力",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (vm.detectingCaps) MaterialTheme.colorScheme.onSurfaceVariant
+                                            else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable(enabled = !vm.detectingCaps) { vm.detectAllCapabilities(p.id) }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
                                         )
                                     }
                                 }
@@ -1289,7 +1352,7 @@ private fun LazyListScope.brainItems(
                 }
             }
             Text(
-                "点击行展开模型清单并切换默认模型；编辑内可测试连接、拉取列表与配置密钥。",
+                "点行展开模型清单并切换默认 · 点「能力」勾选输入/输出模态 · 长按行或展开区「编辑供应商」可测试连接、拉取列表与配置密钥。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
@@ -3108,22 +3171,36 @@ private fun ProviderDialog(
                     // 同一供应商的多模型直接在这里录入（原收在「高级选项」折叠区里，
                     // 配一个供应商要连续加好几个模型 ID 时得先展开，够不着）
                     ModelIdQuickAdd(draft = draft, onChange = onChange)
-                    // 当前模型能力三态（自动=不门控 / 支持 / 不支持=请求侧裁剪）
+                    // 当前模型能力（模态勾选 + 工具/推理三态；勾选即手动覆盖，脱离自动检测）
                     val curId = draft.model.trim()
                     val curEntry = draft.models.find { it.id == curId }
                     if (curId.isNotBlank()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CapTriChip("图像", curEntry?.vision) { v ->
-                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(vision = v)
-                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                        val curCaps = com.haoai.agent.data.CapabilityResolver.resolve(curEntry, curId)
+                        fun patchEntry(next: com.haoai.agent.data.ModelEntry) =
+                            onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + next))
+                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("image" to "图像", "audio" to "音频", "video" to "视频").forEach { (mod, label) ->
+                                val on = mod in curCaps.inputs
+                                FilterChip(
+                                    selected = on,
+                                    onClick = {
+                                        val ins = if (on) curCaps.inputs - mod else curCaps.inputs + mod
+                                        patchEntry(
+                                            (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(
+                                                inputModalities = ins.distinct(),
+                                                outputModalities = curCaps.outputs,
+                                                capsSource = "manual"
+                                            )
+                                        )
+                                    },
+                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                )
                             }
                             CapTriChip("工具", curEntry?.tools) { v ->
-                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v)
-                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                                patchEntry((curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v))
                             }
                             CapTriChip("推理", curEntry?.reasoning) { v ->
-                                val e = (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v)
-                                onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + e))
+                                patchEntry((curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v))
                             }
                         }
                     }
@@ -3393,7 +3470,8 @@ private fun ModelSwitchRow(
     isDefault: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
-    onRemove: (() -> Unit)?
+    onRemove: (() -> Unit)?,
+    onEditCaps: (() -> Unit)? = null
 ) {
     if (id.isBlank()) return
     Row(
@@ -3438,6 +3516,20 @@ private fun ModelSwitchRow(
             maxLines = 1,
             modifier = Modifier.weight(1f)
         )
+        // 能力编辑入口（设计稿 ③）：进模型能力页勾选输入/输出模态
+        if (onEditCaps != null) {
+            Text(
+                "能力",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onEditCaps() }
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            )
+            Spacer(Modifier.size(2.dp))
+        }
         if (isDefault) {
             Text(
                 "默认",
@@ -3612,10 +3704,223 @@ private fun CapTriChip(label: String, value: Boolean?, onChange: (Boolean?) -> U
     )
 }
 
+/** 供应商行能力徽章（设计稿 ①）：图/音/视/工具/思考小芯片；划线=明确不支持，不显示=未知。 */@Composable
+private fun ProviderCapBadges(p: com.haoai.agent.data.ProviderConfig) {
+    val caps = p.caps()
+    val items = buildList {
+        fun chip(label: String, v: Boolean?) {
+            if (v != null) add(label to v)
+        }
+        chip("图", caps.hasImage)
+        chip("音", caps.hasAudio)
+        chip("视", caps.hasVideo)
+        chip("工具", caps.tools)
+        chip("思考", caps.reasoning)
+    }
+    if (items.isEmpty()) return
+    Row(
+        Modifier.padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        items.forEach { (label, ok) ->
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = if (ok) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                modifier = Modifier
+                    .background(
+                        if (ok) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f),
+                        RoundedCornerShape(5.dp)
+                    )
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 模型能力编辑弹层（设计稿 ③）：输入/输出模态勾选芯片 + 工具/思考开关 +
+ * 能力来源显示与「恢复自动检测」。勾选即写回 settings（capsSource=manual），
+ * 请求门控与系统提示词能力声明实时反映。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ModelCapsDialog(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    vm: SettingsViewModel,
+    providerId: String,
+    modelId: String,
+    onDismiss: () -> Unit
+) {
+    val p = vm.providers().find { it.id == providerId } ?: return
+    val entry = p.models.find { it.id == modelId }
+    val caps = vm.capsOf(providerId, modelId)
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.haoai.agent.ui.common.LocalGlassRefract provides false
+    ) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.30f))
+            .imePadding()
+            .clickable(interactionSource = null, indication = null) { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .heightIn(max = 560.dp),
+            radius = 28.dp,
+            surfaceAlpha = 0.92f,
+            blurRadius = 28.dp,
+            chromaticAberration = true
+        ) {
+            Column(
+                Modifier
+                    .clickable(interactionSource = null, indication = null) {}
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 16.dp, bottom = 12.dp)
+            ) {
+                Text("模型能力 · $modelId", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                // 能力来源条（设计稿 ③ 顶部）：manual 才给「恢复自动检测」
+                val srcLabel = when (caps.source) {
+                    "manual" -> "手动设置"
+                    "models.dev" -> "models.dev 自动检测"
+                    "legacy" -> "旧版检测数据"
+                    "guess" -> "按模型名推测"
+                    else -> "未检测（默认乐观）"
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "✨ 能力来源：$srcLabel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (caps.source == "manual") {
+                        Text(
+                            "恢复自动检测",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { vm.resetModelCaps(providerId, modelId) }
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+                Column(
+                    Modifier
+                        .padding(top = 10.dp)
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("输入模态", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("image" to "图像", "audio" to "音频", "video" to "视频", "pdf" to "PDF").forEach { (mod, label) ->
+                            val on = mod in caps.inputs
+                            FilterChip(
+                                selected = on,
+                                onClick = { vm.toggleInputModality(providerId, modelId, mod) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
+                    }
+                    Text("输出模态", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("image" to "图像", "audio" to "音频").forEach { (mod, label) ->
+                            val on = mod in caps.outputs
+                            FilterChip(
+                                selected = on,
+                                onClick = { vm.toggleOutputModality(providerId, modelId, mod) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
+                    }
+                    Text("能力", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CapTriChip("工具", entry?.tools) { v ->
+                            vm.updateModelEntry(
+                                providerId,
+                                (entry ?: com.haoai.agent.data.ModelEntry(modelId)).copy(tools = v)
+                            )
+                        }
+                        CapTriChip("推理", entry?.reasoning) { v ->
+                            vm.updateModelEntry(
+                                providerId,
+                                (entry ?: com.haoai.agent.data.ModelEntry(modelId)).copy(reasoning = v)
+                            )
+                        }
+                    }
+                    // Agent 感知预览（设计稿 ③ 底部）：当前配置将注入系统提示词的能力声明
+                    val frag = com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(caps)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            "Agent 感知预览",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            frag ?: "模型能力齐备（全模态输入 + 工具调用），无需注入能力声明。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    GlassTextButton(
+                        text = if (vm.detectingCaps) "检测中…" else "自动检测",
+                        onClick = {
+                            // 单模型检测：借用草稿通道不可行（无草稿），直接目录查询写回
+                            vm.detectSingleCaps(providerId, modelId)
+                        },
+                        enabled = !vm.detectingCaps,
+                        backdrop = backdrop,
+                        modifier = Modifier.weight(1f)
+                    )
+                    GlassTextButton(text = "完成", onClick = onDismiss, backdrop = backdrop, modifier = Modifier.weight(1f))
+                }
+                vm.detectResult?.let { (ok, msg) ->
+                    Text(
+                        msg,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+            }
+        }
+    }
+    }
+}
+
 /** 采样参数行：开关 + 数值输入（借鉴 上游 的参数级发送控制）。 */
 @Composable
-private fun SwitchParamField(
-    label: String,
+private fun SwitchParamField(    label: String,
     enabled: Boolean,
     value: String,
     onToggle: (Boolean) -> Unit,

@@ -21,6 +21,11 @@ class AppContainer(app: Application) {
 
     val appContext: android.content.Context = app
 
+    init {
+        // models.dev 目录三级缓存需要 Context（磁盘缓存 + 内置 asset 兜底）
+        ModelCatalog.init(app)
+    }
+
     val cipher = KeystoreCipher()
     val settingsStore = SettingsStore(app)
     val sessionStore = SessionStore(app)

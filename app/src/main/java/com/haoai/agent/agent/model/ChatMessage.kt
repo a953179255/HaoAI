@@ -22,6 +22,10 @@ data class ChatMessage(
     val error: Boolean = false,
     /** 用户附加图片的 data URL（base64），仅端侧多模态模型使用。 */
     val imageData: String? = null,
+    /** 用户附加音频的本机文件路径（应用私有 attachments 目录）；模型有 audio-in 时读取转 input_audio。 */
+    val audioPath: String? = null,
+    /** 用户附加视频的本地文件路径（应用私有目录）；引擎注记路径让 Agent 用 ffmpeg 抽帧/抽音轨绕行。 */
+    val videoPath: String? = null,
     /** 思考过程文本（reasoning_content / <think>），仅展示用，不回传 API。 */
     val reasoning: String? = null,
     /** 本轮（含工具循环多次调用）累计输入 tokens，assistant 消息统计行用。 */

@@ -405,16 +405,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val text = newText.trim()
         if (text.isEmpty()) return
         val imageData = m.imageData
+        val audioPath = m.audioPath
+        val videoPath = m.videoPath
         while (s.messages.size > idx) s.messages.removeAt(s.messages.size - 1)
         c.sessionStore.save(s)
         rebuildRows()
-        send(text, imageData)
+        send(text, imageData, audioPath, videoPath)
     }
 
-    fun send(rawText: String, imageData: String? = null) {
+    fun send(rawText: String, imageData: String? = null, audioPath: String? = null, videoPath: String? = null) {
         val text = rawText.trim()
         // 纯图片发送（无文字）也允许：否则 UI 已清掉 pendingImage，图片会静默丢失
-        if (text.isEmpty() && imageData == null) return
+        if (text.isEmpty() && imageData == null && audioPath == null && videoPath == null) return
         // E8 循环内插话：生成期间用户发送 → 入队等引擎间隙注入（不入历史、不立即执行）
         if (_running.value) {
             if (text.isNotEmpty()) {
@@ -484,6 +486,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     onDelta = ::appendDelta,
                     onEvent = ::handleEvent,
                     imageData = imageData,
+                    audioPath = audioPath,
+                    videoPath = videoPath,
                     onReasoning = ::appendReasoning
                 )
             } finally {

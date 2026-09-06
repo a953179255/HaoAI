@@ -8,6 +8,11 @@ import java.io.File
 /**
  * 供应商下的单个模型条目（借鉴 上游/上游 的「供应商→模型」两级结构）。
  * 能力三态：null=未知/自动（不做门控），true=支持，false=不支持（请求侧据此裁剪参数）。
+ *
+ * 模态字段（对齐 上游 LLMModel）：inputModalities/outputModalities 存裸名
+ * （text/image/audio/video/pdf），null=未检测（CapabilityResolver 回退目录/启发式/旧 vision）。
+ * capsSource 记录能力来源（models.dev / guess / manual），manual 时不再被自动检测覆盖，
+ * 可在能力编辑页「恢复自动检测」清掉。
  */
 @Serializable
 data class ModelEntry(
@@ -19,8 +24,23 @@ data class ModelEntry(
     /** 0=沿用供应商配置/按模型名推测 */
     val contextLength: Int = 0,
     /** 0=沿用供应商配置 */
-    val maxTokens: Int = 0
-)
+    val maxTokens: Int = 0,
+    /** 输入模态裸名列表；null=未检测 */
+    val inputModalities: List<String>? = null,
+    /** 输出模态裸名列表；null=未检测（视为 text） */
+    val outputModalities: List<String>? = null,
+    /** 能力来源：null=自动/未设置 | "models.dev" | "guess" | "manual" */
+    val capsSource: String? = null,
+    /** 目录声明的思考等级白名单（如 low/medium/high）；null=未知 */
+    val effortValues: List<String>? = null
+) {
+    /** 是否含某输入模态（vision 旧字段兼容：image 查询回退 vision）。 */
+    fun hasInput(mod: String): Boolean? {
+        inputModalities?.let { return it.contains(mod) }
+        if (mod == "image" || mod == "video") return vision
+        return null
+    }
+}
 
 @Serializable
 data class ProviderConfig(
@@ -72,6 +92,9 @@ data class ProviderConfig(
 
     /** 全部可选模型 ID（当前 model 排最前，去重）。 */
     fun modelIds(): List<String> = (listOf(model) + models.map { it.id }).distinct()
+
+    /** 当前模型统一能力视图（手动覆盖 > 检测写回 > 旧 vision > 名称启发式 > 默认）。 */
+    fun caps(): CapabilityResolver.Caps = CapabilityResolver.resolve(modelEntry(), model)
 
     companion object {
         /** 按模型名推测上下文窗口（常见模型速查，未命中给保守默认）。 */
@@ -188,7 +211,7 @@ data class AppSettings(
     val toolCallCap: Int = 80,
     /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒。 */
     val softBudgetWarn: Boolean = true,
-    /** 设置结构版本（迁移用）：1 = 熔断分级改造，旧默认 150k 一次性放宽到 250k。 */
+    /** 设置结构版本（迁移用）：1 = 熔断分级改造；2 = 模型条目模态字段（vision 物化为 inputModalities）。 */
     val settingsVersion: Int = 0,
     /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */
     val consecutiveToolFailCap: Int = 8
@@ -212,6 +235,24 @@ class SettingsStore(context: Context) {
             // 显式设过其他值（含 0=不限）的尊重原值；迁移后版本号置 1，下次保存落盘。
             if (s.turnTokenCap == 150_000) s = s.copy(turnTokenCap = 250_000)
             s = s.copy(settingsVersion = 1)
+            save(s)
+        }
+        if (s.settingsVersion < 2) {
+            // 一次性迁移：旧 vision 三态物化为 inputModalities（image 维度），UI 徽章与
+            // CapabilityResolver 从此有确定数据；vision 字段保留不删（兼容回滚与旧读取点）。
+            s = s.copy(
+                providers = s.providers.map { p ->
+                    p.copy(models = p.models.map { e ->
+                        if (e.inputModalities == null && e.vision != null) {
+                            e.copy(
+                                inputModalities = if (e.vision == true) listOf("text", "image") else listOf("text"),
+                                outputModalities = e.outputModalities ?: listOf("text")
+                            )
+                        } else e
+                    })
+                },
+                settingsVersion = 2
+            )
             save(s)
         }
         return s

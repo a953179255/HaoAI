@@ -85,6 +85,8 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.filled.SmartDisplay
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
@@ -281,6 +283,12 @@ fun ChatScreen(
     // 大体积 base64 / 文档正文绝不能进 rememberSaveable：会被写入 savedInstanceState
     // Bundle，超过 ~1MB 直接 TransactionTooLargeException 崩溃；进程重建丢失待发附件可接受
     var pendingImage by remember { mutableStateOf<String?>(null) }
+    // 音频/视频附件本机路径（应用私有 attachments 目录）——base64 不进会话 JSON 防膨胀；
+    // 引擎按当前模型能力决定直发（audio-in）或注记绕行（ffmpeg/ASR）
+    var pendingAudioPath by remember { mutableStateOf<String?>(null) }
+    var pendingAudioName by remember { mutableStateOf<String?>(null) }
+    var pendingVideoPath by remember { mutableStateOf<String?>(null) }
+    var pendingVideoName by remember { mutableStateOf<String?>(null) }
     // 相机临时文件：filesDir 下（file_paths.xml 的 internal_files 已覆盖）
     val cameraShotFile = java.io.File(context.filesDir, "camera_shot.jpg")
     var pendingDocumentName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -506,6 +514,57 @@ fun ChatScreen(
                     pendingDocumentContent = "[文件附件: $fileName ($mimeType)]"
                 }
             }
+        }
+    }
+
+    // 音频附件：复制到应用私有目录存本机路径（base64 不进会话 JSON 防膨胀）；
+    // 模型有 audio-in 时引擎读取转 input_audio 直发，无则注记让 Agent 走 ASR/转写绕行
+    val audioPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val resolver = context.contentResolver
+                val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
+                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    c.moveToFirst()
+                    if (nameIndex >= 0) c.getString(nameIndex) else "audio.mp3"
+                } ?: "audio.mp3"
+                val dir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
+                val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + fileName.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+                resolver.openInputStream(uri)?.use { ins -> dest.outputStream().use { ins.copyTo(it) } }
+                if (dest.exists() && dest.length() <= 8L * 1024 * 1024) {
+                    pendingAudioPath = dest.absolutePath
+                    pendingAudioName = fileName
+                } else {
+                    dest.delete()
+                    vm.showError("音频过大（>8MB），请先用 shell 工具压缩或截取片段")
+                }
+            }.onFailure { vm.showError("读取音频失败：${it.message}") }
+        }
+    }
+
+    // 视频附件：复制到应用私有目录存本机路径——chat 模型几乎不原生吃视频，
+    // 引擎把路径注记给 Agent，由 shell ffmpeg 抽关键帧/抽音轨绕行（能力声明已告知）
+    val videoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val resolver = context.contentResolver
+                val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
+                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    c.moveToFirst()
+                    if (nameIndex >= 0) c.getString(nameIndex) else "video.mp4"
+                } ?: "video.mp4"
+                val dir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
+                val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + fileName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_"))
+                resolver.openInputStream(uri)?.use { ins -> dest.outputStream().use { ins.copyTo(it) } }
+                if (dest.exists()) {
+                    pendingVideoPath = dest.absolutePath
+                    pendingVideoName = fileName
+                }
+            }.onFailure { vm.showError("读取视频失败：${it.message}") }
         }
     }
 
@@ -851,6 +910,12 @@ fun ChatScreen(
                 },
                 onPickDocument = { documentPicker.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml")) },
                 onClearImage = { pendingImage = null },
+                pendingAudio = pendingAudioPath,
+                pendingVideoName = pendingVideoName,
+                onPickAudio = { audioPicker.launch(arrayOf("audio/*")) },
+                onPickVideo = { videoPicker.launch(arrayOf("video/*")) },
+                onClearAudio = { pendingAudioPath = null; pendingAudioName = null },
+                onClearVideo = { pendingVideoPath = null; pendingVideoName = null },
                 onSlashCommand = {
                     slashFilterQuery = ""
                     slashMenuVisible = !slashMenuVisible
@@ -909,10 +974,14 @@ fun ChatScreen(
                         "[附件: $pendingDocumentName]\n```\n$pendingDocumentContent\n```\n"
                     } else ""
                     val fullText = docPrefix + trimmed
-                    if (fullText.isNotBlank() || pendingImage != null) {
-                        vm.send(fullText, pendingImage)
+                    if (fullText.isNotBlank() || pendingImage != null || pendingAudioPath != null || pendingVideoPath != null) {
+                        vm.send(fullText, pendingImage, pendingAudioPath, pendingVideoPath)
                         input = ""
                         pendingImage = null
+                        pendingAudioPath = null
+                        pendingAudioName = null
+                        pendingVideoPath = null
+                        pendingVideoName = null
                         pendingDocumentName = null
                         pendingDocumentContent = null
                     }
@@ -3298,6 +3367,12 @@ private fun ComposerBar(
     onTakePhoto: () -> Unit = {},
     onPickDocument: () -> Unit,
     onClearImage: () -> Unit,
+    pendingAudio: String? = null,
+    pendingVideoName: String? = null,
+    onPickAudio: () -> Unit = {},
+    onPickVideo: () -> Unit = {},
+    onClearAudio: () -> Unit = {},
+    onClearVideo: () -> Unit = {},
     onSlashCommand: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -3369,6 +3444,66 @@ private fun ComposerBar(
                     }
                 }
             }
+            if (pendingAudio != null) {
+                Row(
+                    Modifier.padding(horizontal = 18.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Mic,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        "已附加音频",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 6.dp),
+                        maxLines = 1
+                    )
+                    IconButton(onClick = onClearAudio, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "移除音频",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+            if (pendingVideoName != null) {
+                Row(
+                    Modifier.padding(horizontal = 18.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Movie,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        "已附加视频 · $pendingVideoName",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 6.dp),
+                        maxLines = 1
+                    )
+                    IconButton(onClick = onClearVideo, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "移除视频",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
             Row(
                 Modifier.padding(start = 6.dp, end = 6.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -3405,7 +3540,7 @@ private fun ComposerBar(
                         }
                     }
                 )
-                val actionable = running || text.isNotBlank() || pendingImage != null
+                val actionable = running || text.isNotBlank() || pendingImage != null || pendingAudio != null || pendingVideoName != null
                 LiquidGlassButton(
                     onClick = { if (running) onStop() else onSend() },
                     backdrop = backdrop,
@@ -3423,6 +3558,7 @@ private fun ComposerBar(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -3433,6 +3569,14 @@ private fun ComposerBar(
                     ToolbarButton(icon = Icons.Filled.AddPhotoAlternate, label = "图片", onClick = {
                         toolbarExpanded = false
                         onPickImage()
+                    })
+                    ToolbarButton(icon = Icons.Filled.Mic, label = "音频", onClick = {
+                        toolbarExpanded = false
+                        onPickAudio()
+                    })
+                    ToolbarButton(icon = Icons.Filled.Movie, label = "视频", onClick = {
+                        toolbarExpanded = false
+                        onPickVideo()
                     })
                     ToolbarButton(icon = Icons.Filled.Description, label = "文档", onClick = {
                         toolbarExpanded = false
