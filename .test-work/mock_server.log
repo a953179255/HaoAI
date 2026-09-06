@@ -1,0 +1,44 @@
+mock server on :8802
+CHAT mode=normal step=1 auth='Bearer sk-test-mock' body=30183B img_parts=3
+MODE -> tooltest
+CHAT mode=tooltest step=1 auth='Bearer sk-test-mock' body=30638B img_parts=3
+CHAT mode=tooltest step=2 auth='Bearer sk-test-mock' body=30942B img_parts=3
+CHAT mode=tooltest step=3 auth='Bearer sk-test-mock' body=31214B img_parts=3
+CHAT mode=tooltest step=4 auth='Bearer sk-test-mock' body=2139B img_parts=0
+MODE -> normal
+CHAT mode=normal step=1 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=2 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=3 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=4 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=5 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=6 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=7 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=8 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=9 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=10 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=11 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=12 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=13 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=14 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=15 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=16 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=17 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=18 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=19 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=20 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=21 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=22 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=23 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=24 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=25 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=26 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=27 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=28 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=29 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=30 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=31 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=32 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=33 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=34 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=35 auth='Bearer sk-test-mock' body=19752B img_parts=0
+CHAT mode=normal step=36 auth='Bearer sk-test-mock' body=19752B img_parts=0

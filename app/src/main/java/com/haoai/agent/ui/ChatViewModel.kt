@@ -103,6 +103,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private var job: Job? = null
     private val liveTools = mutableMapOf<String, UiTool>()
 
+    /**
+     * 时间轴卡快照：liveTools 普通可变 Map，直接读会有并发/重组一致性问题，
+     * 也无法触发 Compose 重组。镜像一份到 StateFlow（ToolChanged 时同步）。
+     */
+    private val _liveToolsSnapshot =
+        MutableStateFlow<List<UiTool>>(emptyList())
+    val liveToolsSnapshotFlow = _liveToolsSnapshot.asStateFlow()
+
+    /** 时间轴卡用的工具快照（UI collectAsState）。 */
+    fun liveToolsSnapshot(): List<UiTool> = _liveToolsSnapshot.value
+
+    private fun publishLiveTools() {
+        _liveToolsSnapshot.value = liveTools.values.toList()
+    }
+
     private val _session = MutableStateFlow<StoredSession?>(null)
     val session = _session.asStateFlow()
 
@@ -430,6 +445,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 新回合清空上一轮的工具活动态：liveTools 跨轮次保留会把旧工具当成
         // 「刚完成」灌进任务卡/悬浮窗（旧消息的完成态由落库结果兜底渲染，清掉无碍）
         liveTools.clear()
+        publishLiveTools()
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
@@ -724,6 +740,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _thinkingMs.value = null
         turnStartAt = System.currentTimeMillis()
         startStreamFlusher()
+        publishLiveTools()
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         // D16: /btw 同样登记（与 send 共用同一停止句柄，finally 对称摘除）
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
@@ -865,6 +882,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 ev.message.toolCalls.forEach { call ->
                     liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson))
                 }
+                publishLiveTools()
                 rebuildRows()
             }
             is ToolChanged -> {
@@ -876,6 +894,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     ev.update.preview,
                     liveTools[ev.update.callId]?.subagents ?: emptyList()
                 )
+                publishLiveTools()
                 rebuildRows()
                 publishSteps()
             }
@@ -894,6 +913,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     prev?.preview,
                     lines.sortedBy { it.index }
                 )
+                publishLiveTools()
                 rebuildRows()
                 publishSteps()
             }

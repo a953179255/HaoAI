@@ -1,0 +1,108 @@
+diff --git a/app/src/main/java/com/haoai/agent/ui/settings/SettingsScreen.kt b/app/src/main/java/com/haoai/agent/ui/settings/SettingsScreen.kt
+index 1a4078b..d1f14de 100644
+--- a/app/src/main/java/com/haoai/agent/ui/settings/SettingsScreen.kt
++++ b/app/src/main/java/com/haoai/agent/ui/settings/SettingsScreen.kt
+@@ -2,12 +2,15 @@
+ 
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.foundation.Image
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.border
+ import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.draw.scale
++import androidx.compose.ui.graphics.asImageBitmap
++import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+@@ -113,6 +116,8 @@ fun SettingsScreen(
+     vm: SettingsViewModel,
+     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+     onBack: () -> Unit,
++    /** 全局壁纸开时传入：页面自带对齐的壁纸底（随页面整体滑动，玻璃采样与之一致） */
++    wallpaper: android.graphics.Bitmap? = null,
+     initialSection: String = "",
+     onSectionChange: (String) -> Unit = {},
+     onOpenMemories: () -> Unit = {},
+@@ -187,11 +192,20 @@ fun SettingsScreen(
+         Box(
+             Modifier
+                 .fillMaxSize()
+-                // 不透明页面底：转场（B+ 推进/返回）期间本页会被平移到屏幕边缘外，
+-                // 其半透明玻璃卡片需要实底垫背——否则露出 AnimatedContent 空黑，
+-                // 出现「背景缺失只显示按钮」「按钮效果断裂」（录屏帧标注确认）
++                // 不透明净色兜底：转场期间本页整体平移，页面自带实底垫背。
++                // 全局壁纸开时上面再铺对齐的壁纸 Image（与 backdrop 采样画布
++                // 同源同位，玻璃卡透出对位的壁纸磨砂——「壁纸应用于所有页面」
++                // 真正生效且无错位）
+                 .background(MaterialTheme.colorScheme.background)
+         ) {
++            if (wallpaper != null) {
++                Image(
++                    bitmap = wallpaper.asImageBitmap(),
++                    contentDescription = null,
++                    contentScale = ContentScale.Crop,
++                    modifier = Modifier.matchParentSize()
++                )
++            }
+             Column(
+                 Modifier
+                     .fillMaxSize()
+@@ -363,9 +377,17 @@ fun SettingsScreen(
+         Box(
+             Modifier
+                 .fillMaxSize()
+-                // 同上：二级页转场期也需要实底
++                // 同上：二级页转场期也需要实底；全局壁纸开时同样铺对齐壁纸
+                 .background(MaterialTheme.colorScheme.background)
+         ) {
++            if (wallpaper != null) {
++                Image(
++                    bitmap = wallpaper.asImageBitmap(),
++                    contentDescription = null,
++                    contentScale = ContentScale.Crop,
++                    modifier = Modifier.matchParentSize()
++                )
++            }
+             Column(
+                 Modifier
+                     .fillMaxSize()
+@@ -2121,15 +2143,31 @@ private fun LazyListScope.generalItems(
+                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                     )
+                 }
+-                val wpPicker = rememberLauncherForActivityResult(
+-                    ActivityResultContracts.GetContent()
+-                ) { uri ->
++                // ACTION_PICK 分发给默认图库（Flyme 图库等），与聊天「图片」入口一致；
++                // 兜底：图库 intent 无人处理时（极少数无图库的设备）回退 SAF 文档选择器
++                val wpApply: (android.net.Uri?) -> Unit = { uri ->
+                     uri?.let {
+                         vm.setWallpaper(context, it.toString())
+                         onWpVersionChange(vm.wallpaperSet(context))
+                     }
+                 }
+-                TextButton(onClick = { wpPicker.launch("image/*") }) { Text("选择图片") }
++                val wpPick = rememberLauncherForActivityResult(
++                    ActivityResultContracts.StartActivityForResult()
++                ) { result -> wpApply(result.data?.data) }
++                val wpFallback = rememberLauncherForActivityResult(
++                    ActivityResultContracts.GetContent()
++                ) { uri -> wpApply(uri) }
++                TextButton(onClick = {
++                    val intent = android.content.Intent(
++                        android.content.Intent.ACTION_PICK,
++                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
++                    )
++                    if (intent.resolveActivity(context.packageManager) != null) {
++                        wpPick.launch(intent)
++                    } else {
++                        wpFallback.launch("image/*")
++                    }
++                }) { Text("选择图片") }
+                 if (wpVersion) {
+                     TextButton(onClick = onRequestClearWallpaper) { Text("清除") }
+                 }

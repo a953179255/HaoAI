@@ -1,0 +1,1 @@
+com.haoai.agent/com.haoai.agent.platform.a11y.HaoAccessibilityService
