@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.animation.core.animateFloat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 /** 解析后的 Markdown 块：类型化区分，渲染端按类型分发。 */
@@ -282,8 +284,15 @@ fun MarkdownText(
                     // 流式期 blocks 列表每次都是新对象但历史块文本不变 → 缓存命中，
                     // Text 拿到同一 AnnotatedString 实例 → 文本布局缓存复用不重排
                     val ann = remember(block.text) { buildInline(block.text) }
+                    // v4-3 字符渐显打字机：流式期对最后一个文本块的尾部 N 字符按
+                    // 「字符年龄」做 alpha 爬升（新字符从 0.15 淡入到 1，~300ms），
+                    // 上游 式墨水洇入感；帧驱动用 produceState 读帧时钟。
+                    val isLastText = block === blocks.lastOrNull { it is MdBlock.Text }
+                    val typeInAnn = if (streaming && isLastText) {
+                        typeInTail(ann, block.text)
+                    } else ann
                     Text(
-                        text = ann,
+                        text = typeInAnn,
                         style = when (block.heading) {
                             1 -> MaterialTheme.typography.headlineSmall
                             2 -> MaterialTheme.typography.titleLarge
@@ -723,4 +732,52 @@ fun buildInline(text: String): AnnotatedString = buildAnnotatedString {
         index = m.range.last + 1
     }
     if (index < normalizedLines.length) append(normalizedLines.substring(index))
+}
+
+/**
+ * v4-3 打字机渐显：尾部 [TYPE_IN_TAIL] 字符按到达批次做 alpha 爬升（0.15→1，~300ms）。
+ * SpanStyle 用 CurrentPositionalAlpha——无法直接拿主题色，改用 composition local
+ * 不行（Text 的 color 在上层），故通过 LocalContentColor 读取前景色。
+ */
+private const val TYPE_IN_TAIL = 10
+private const val TYPE_IN_FADE_MS = 300
+
+@Composable
+private fun typeInTail(ann: AnnotatedString, rawText: String): AnnotatedString {
+    // 文本变化时刻：尾部字符同批到达（40ms flusher 批），共享同一到达时刻
+    var batchAt by remember { mutableLongStateOf(0L) }
+    var lastLen by remember { mutableStateOf(-1) }
+    if (rawText.length != lastLen) {
+        lastLen = rawText.length
+        batchAt = System.currentTimeMillis()
+    }
+    // 帧时钟：驱动 300ms 淡入过程，结束后停止循环
+    var now by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(rawText.length) {
+        while (isActive) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(32)
+            if (now - batchAt > TYPE_IN_FADE_MS + 64) break
+        }
+    }
+    val fg = androidx.compose.material3.LocalContentColor.current
+    val plain = ann.text
+    val tailStart = (plain.length - TYPE_IN_TAIL).coerceAtLeast(0)
+    if (tailStart >= plain.length) return ann
+    val age = now - batchAt
+    if (age >= TYPE_IN_FADE_MS) return ann // 全部已定格
+    return buildAnnotatedString {
+        append(ann)
+        val fadeSpan = TYPE_IN_FADE_MS.toFloat()
+        for (i in tailStart until plain.length) {
+            // 同批字符按批内相对位置错峰：批首字符先完成淡入
+            val offsetRatio = (i - tailStart).toFloat() / TYPE_IN_TAIL.coerceAtLeast(1)
+            val charAge = age - offsetRatio * (TYPE_IN_FADE_MS * 0.6f)
+            val alpha = if (charAge <= 0f) 0.15f
+            else (charAge / fadeSpan).coerceIn(0f, 1f).let { 0.15f + 0.85f * it }
+            if (alpha < 0.999f) {
+                addStyle(SpanStyle(color = fg.copy(alpha = alpha)), i, i + 1)
+            }
+        }
+    }
 }

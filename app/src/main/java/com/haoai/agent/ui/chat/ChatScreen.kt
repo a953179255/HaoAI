@@ -263,15 +263,28 @@ fun ChatScreen(
     val userScrolledAway = remember { mutableStateOf(false) }
     // 程序化滚动标志（MessageList 的跟随/补滚与浮钮回底共用）
     val scrollGuard = remember { mutableStateOf(false) }
-    // v2 回底胶囊徽标：断开跟随期间新增的内容量（delta 字符数粗略换算"新增"），
-    // 点回底或恢复跟随时清零。估算用，不追求精确
+    // v4-4 回底徽标：断开瞬间拍 baseline 快照（行数+流式长度），
+    // 只统计之后的真增量——上滑动作本身不再被误计为「1 条新动态」。
     val newContentTicker = remember { mutableStateOf(0) }
-    LaunchedEffect(userScrolledAway.value, streaming?.length, rows.size) {
+    var contentBaseline by remember { mutableStateOf(0L) }
+    // ① 断开/恢复跟随时重拍基线
+    LaunchedEffect(userScrolledAway.value) {
         if (userScrolledAway.value) {
-            // 粗略计数：每个流式 delta 批 +1 条动态；新消息行 +1
-            if (rows.isNotEmpty() || streaming != null) newContentTicker.value++
-        } else {
+            contentBaseline = rows.size.toLong() * 1_000_000L + (streaming?.length ?: 0)
             newContentTicker.value = 0
+        }
+    }
+    // ② 断开期间内容变化：与基线求差（行数变化记 1 条，流式增长 400 字记 1 条）
+    LaunchedEffect(rows.size, streaming?.length) {
+        if (!userScrolledAway.value) return@LaunchedEffect
+        val now = rows.size.toLong() * 1_000_000L + (streaming?.length ?: 0)
+        val deltaRows = rows.size - (contentBaseline / 1_000_000L).toInt()
+        if (deltaRows > 0) {
+            newContentTicker.value = deltaRows
+        } else {
+            // 行数没变但流式在长：按 400 字一条粗算
+            val deltaChars = now - contentBaseline
+            if (deltaChars > 0) newContentTicker.value = (deltaChars / 400).toInt().coerceAtLeast(1)
         }
     }
     val approval by vm.approval.collectAsState()
@@ -2274,22 +2287,21 @@ private fun ThinkingIndicator(hint: String? = null) {
     }
 }
 
-/** ① 流式光标：渲染层独立元素，1.06s steps 闪烁，不混入 markdown 源文本。 */
+/** ① 流式光标：2dp 细线柔和呼吸（0.15↔0.7 缓动），v4-3 不再硬闪抢戏。 */
 @Composable
 private fun BlinkCursor() {
     val transition = rememberInfiniteTransition(label = "cursor")
     val phase by transition.animateFloat(
-        initialValue = 0f, targetValue = 1f,
+        initialValue = 0.15f, targetValue = 0.7f,
         animationSpec = infiniteRepeatable(tween(1060, easing = LinearEasing)),
         label = "phase"
     )
     Box(
         Modifier
-            .width(2.5.dp)
-            .height(15.dp)
-            // 二值切换：亮 0.53s → 灭 0.53s（终端光标节奏）
-            .graphicsLayer { alpha = if (phase < 0.5f) 1f else 0f }
-            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.5.dp))
+            .width(2.dp)
+            .height(14.dp)
+            .graphicsLayer { alpha = phase }
+            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp))
     )
 }
 
@@ -2496,8 +2508,8 @@ private fun ActivityTimelineCard(
     val live = streaming == false && (runningCount > 0 || reasoning != null)
     val actionCount = doneCount + runningCount
 
-    var expanded by rememberSaveable { mutableStateOf(true) }
-    // 正文开始后若从未手动展开过，自动收成摘要（正文是主角）
+    // 展开态：流式中默认展开（活动是主角），历史消息/正文已出默认收起成摘要头
+    var expanded by rememberSaveable { mutableStateOf(streaming == false && live) }
     var userToggled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(streaming) {
         if (streaming && !userToggled) expanded = false
@@ -2669,8 +2681,9 @@ private fun TimelineBody(
 }
 
 /**
- * B 式思考行：玻璃底行——spinner/shimmer「正在思考」+ 实时计时 + 右侧单行滚动跟随
- * 最新推理（两端渐隐），点击展开全文（限高渐隐）。2 秒无新 token 视为"已思考"。
+ * B 式思考行：无底色（v4-1 去黑块）——spinner/shimmer「正在思考」+ 实时计时 +
+ * 右侧单行滚动跟随最新推理（中央渐亮两侧透明渐隐），点击展开全文。
+ * 2 秒无新 token 视为"已思考"。
  */
 @Composable
 private fun ReasoningRow(
@@ -2692,7 +2705,6 @@ private fun ReasoningRow(
             .padding(horizontal = 4.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable { open = !open }
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.35f))
             .padding(horizontal = 10.dp, vertical = 7.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2792,7 +2804,7 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
         Spacer(Modifier.size(8.dp))
-        // 滚动跟随视口
+        // 滚动跟随视口：中央全亮、向两侧渐隐到透明的对称蒙版（v4-1，浮出感）
         val hscroll = rememberScrollState()
         LaunchedEffect(tail) { hscroll.scrollTo(hscroll.maxValue) }
         Box(
@@ -2800,12 +2812,17 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
                 .weight(1f)
                 .height(16.dp)
                 .drawWithContent {
-                    // 两端渐隐遮罩
                     drawContent()
+                    // 七段对称渐变：0 → .18 → .62 → 1（中央）→ .62 → .18 → 0
                     drawRect(
                         brush = Brush.horizontalGradient(
-                            listOf(Color.Transparent, Color.Black, Color.Black, Color.Transparent),
-                            startX = 0f, endX = size.width
+                            0f to Color.Transparent,
+                            0.16f to Color.Black.copy(alpha = 0.18f),
+                            0.34f to Color.Black.copy(alpha = 0.62f),
+                            0.5f to Color.Black,
+                            0.66f to Color.Black.copy(alpha = 0.62f),
+                            0.84f to Color.Black.copy(alpha = 0.18f),
+                            1f to Color.Transparent
                         ),
                         blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
                     )
@@ -2841,7 +2858,6 @@ private fun ToolStreamRow(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.35f))
                 .clickable { expanded = !expanded }
                 .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -3043,11 +3059,25 @@ private fun AssistantBlock(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 5.dp)
     ) {
-        row.reasoning?.takeIf { it.isNotBlank() }?.let {
-            ReasoningPanel(text = it, live = false)
+        // v4-2 聚合卡持久化：reasoning+tools 用流式期同一张活动卡渲染（收起态），
+        // 流式→历史只换头部文案（正在执行→已完成 N 个动作），不再散架成
+        // 「思考过程面板 + N 个散装工具条」。纯思考消息（无工具）保留旧 ReasoningPanel。
+        val hasTools = row.tools.isNotEmpty()
+        val hasReasoning = row.reasoning?.takeIf { it.isNotBlank() } != null
+        if (hasTools) {
+            ActivityTimelineCard(
+                reasoning = row.reasoning,
+                tools = row.tools,
+                streaming = false,
+                thinkingMs = null,
+                onStopRun = onStopRun,
+                onViewDiff = onViewDiff
+            )
+            Spacer(Modifier.size(5.dp))
+        } else if (hasReasoning) {
+            ReasoningPanel(text = row.reasoning.orEmpty(), live = false)
             Spacer(Modifier.size(5.dp))
         }
-        row.tools.forEach { tool -> ToolChip(tool, onViewDiff, onRollback, onStopRun) }
         if (row.text.isNotBlank()) {
             if (row.error) {
                 Surface(
