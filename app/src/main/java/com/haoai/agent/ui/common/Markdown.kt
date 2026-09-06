@@ -43,11 +43,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -55,6 +59,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -235,7 +240,9 @@ fun parseMarkdownBlocks(src: String): List<MdBlock> {
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
-    streaming: Boolean = false
+    streaming: Boolean = false,
+    /** v4 光标内联：streaming 时把光标挂在文本末尾（InlineTextContent），不单独占一行。 */
+    showCursor: Boolean = false
 ) {
     // 结构解析挪后台线程 + mapLatest 语义（上游 同款）：LaunchedEffect(text) 每次
     // 文本变化重启并取消在途解析，只提交最新完成版；首帧同步解析防闪烁。
@@ -291,8 +298,29 @@ fun MarkdownText(
                     val typeInAnn = if (streaming && isLastText) {
                         typeInTail(ann, block.text)
                     } else ann
+                    // v4 光标内联：最后一个文本块且需要光标 → 末尾追加占位符并注册
+                    // InlineTextContent（细竖线贴在最后一个字符后面，不占独立行）
+                    val cursorAnn = if (showCursor && streaming && isLastText) {
+                        buildAnnotatedString {
+                            append(typeInAnn)
+                            append("\uFFFC")
+                        }
+                    } else typeInAnn
+                    val cursorContent: Map<String, InlineTextContent> =
+                        if (showCursor && streaming && isLastText) {
+                            mapOf(
+                                "\uFFFC" to InlineTextContent(
+                                    Placeholder(
+                                        width = 10.sp,
+                                        height = 15.sp,
+                                        placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
+                                    )
+                                ) { _ -> StreamingCursorGlyph() }
+                            )
+                        } else emptyMap()
                     Text(
-                        text = typeInAnn,
+                        text = cursorAnn,
+                        inlineContent = cursorContent,
                         style = when (block.heading) {
                             1 -> MaterialTheme.typography.headlineSmall
                             2 -> MaterialTheme.typography.titleLarge
@@ -779,5 +807,33 @@ private fun typeInTail(ann: AnnotatedString, rawText: String): AnnotatedString {
                 addStyle(SpanStyle(color = fg.copy(alpha = alpha)), i, i + 1)
             }
         }
+    }
+}
+
+/**
+ * v4 内联流式光标：2dp 细竖线柔和呼吸（0.15↔0.7 缓动），经 InlineTextContent
+ * 渲染在文本最后一个字符之后——替代旧「正文下方独立光标行」的错位实现。
+ */
+@Composable
+private fun StreamingCursorGlyph() {
+    val phase by rememberInfiniteTransition(label = "cursor")
+        .animateFloat(
+            0.15f, 0.7f,
+            infiniteRepeatable(tween(1060, easing = LinearEasing)),
+            label = "phase"
+        )
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(14.dp)
+            .graphicsLayer { alpha = phase },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            Modifier
+                .padding(start = 1.dp)
+                .size(width = 2.dp, height = 14.dp)
+                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp))
+        )
     }
 }

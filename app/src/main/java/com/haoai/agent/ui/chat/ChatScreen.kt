@@ -1033,38 +1033,37 @@ fun ChatScreen(
                 })
         ) {
             Surface(
+                onClick = {
+                    userScrolledAway.value = false
+                    newContentTicker.value = 0
+                    scope.launch { listState.scrollToEnd(guard = scrollGuard) }
+                },
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                shape = RoundedCornerShape(20.dp),
+                shape = CircleShape,
                 tonalElevation = 3.dp,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
                 ),
-                modifier = Modifier
-                    .clickable {
-                        userScrolledAway.value = false
-                        newContentTicker.value = 0
-                        scope.launch { listState.scrollToEnd(guard = scrollGuard) }
-                    }
+                modifier = Modifier.size(38.dp)
             ) {
-                Row(
-                    Modifier.padding(start = 10.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Filled.KeyboardArrowDown,
-                        contentDescription = "回到底部",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    val n = newContentTicker.value
-                    if (n > 0) {
-                        Spacer(Modifier.size(3.dp))
-                        Text(
-                            "$n 条新动态",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
+                Box(contentAlignment = Alignment.Center) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "回到底部",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
                         )
+                        val n = newContentTicker.value
+                        if (n > 0) {
+                            Spacer(Modifier.size(1.dp))
+                            Text(
+                                "$n",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
@@ -2472,17 +2471,15 @@ private fun StreamingItem(
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // ① 光标不再拼进 markdown 源文本（避免污染行内正则/解析），
-                // 改为正文块之后追加一个闪烁光标行；③ streaming=true 启用冻结前缀增量解析
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    MarkdownText(
-                        streamingText.orEmpty(),
-                        streaming = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Row(Modifier.padding(start = 1.dp)) { BlinkCursor() }
-                }
+                // ① 光标不再拼进 markdown 源文本（避免污染行内正则/解析）；
+                // v4-3 起光标经 InlineTextContent 内联在最后一个字符后（showCursor），
+                // ③ streaming=true 启用冻结前缀增量解析
+                MarkdownText(
+                    streamingText.orEmpty(),
+                    streaming = true,
+                    showCursor = true,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
             }
         }
     }

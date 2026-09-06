@@ -562,6 +562,17 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         )
     }
 
+    /**
+     * 按模型思考等级覆盖（上游 ReasoningLevel 式）：""=跟随全局，
+     * "off"=显式关闭，low/medium/high=覆盖全局。目录 effortValues 是可选项参考。
+     */
+    fun setModelEffort(providerId: String, modelId: String, effort: String) {
+        val p = providers().find { it.id == providerId } ?: return
+        val entry = p.models.find { it.id == modelId }
+            ?: com.haoai.agent.data.ModelEntry(modelId)
+        updateModelEntry(providerId, entry.copy(reasoningEffortOverride = effort))
+    }
+
     /** 批量检测该供应商全部模型的能力（详情页「检测全部能力」）。 */
     fun detectAllCapabilities(providerId: String) {
         val p = providers().find { it.id == providerId } ?: return

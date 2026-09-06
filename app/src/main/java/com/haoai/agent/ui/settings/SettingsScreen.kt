@@ -3868,51 +3868,107 @@ private fun ModelCapsDialog(
                             )
                         }
                     }
-                    // Agent 感知预览（设计稿 ③ 底部）：当前配置将注入系统提示词的能力声明
+                    // 按模型思考等级覆盖（上游 ReasoningPicker 式）：
+                    // 跟随全局 / off / low / medium / high；目录给了 effortValues 时优先用目录档位
+                    Text(
+                        "思考等级（本模型覆盖全局）",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val dirEfforts = entry?.effortValues.orEmpty()
+                    val effortOptions = buildList {
+                        add("" to "跟随全局")
+                        if (dirEfforts.isEmpty()) {
+                            add("off" to "关闭")
+                            add("low" to "低")
+                            add("medium" to "中")
+                            add("high" to "高")
+                        } else {
+                            // 目录档位白名单（如 zhipuai glm-5.3-flash = low/high/max）
+                            add("off" to "关闭")
+                            dirEfforts.forEach { add(it to it.replaceFirstChar { c -> c.uppercase() }) }
+                        }
+                    }
+                    val curEffort = entry?.reasoningEffortOverride.orEmpty()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        effortOptions.forEach { (value, label) ->
+                            val selected = curEffort == value
+                            FilterChip(
+                                selected = selected,
+                                onClick = { vm.setModelEffort(providerId, modelId, value) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
+                    }
+                    // Agent 感知预览（默认折叠）：这段文字即对话时注入系统提示词的能力声明原文，
+                    // 展开可核对当前配置将如何告知模型——平时折叠省空间
                     val frag = com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(caps)
+                    var previewOpen by remember { mutableStateOf(false) }
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 4.dp)
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                            .padding(10.dp)
                     ) {
-                        Text(
-                            "Agent 感知预览",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            frag ?: "模型能力齐备（全模态输入 + 工具调用），无需注入能力声明。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 16.sp
-                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { previewOpen = !previewOpen }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Agent 感知预览",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                if (previewOpen) "收起 ▲" else "展开 ▼",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (previewOpen) {
+                            Text(
+                                frag ?: "模型能力齐备（全模态输入 + 工具调用），无需注入能力声明。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 10.dp)
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    GlassTextButton(
-                        text = if (vm.detectingCaps) "检测中…" else "自动检测",
-                        onClick = {
-                            // 单模型检测：借用草稿通道不可行（无草稿），直接目录查询写回
-                            vm.detectSingleCaps(providerId, modelId)
-                        },
-                        enabled = !vm.detectingCaps,
-                        backdrop = backdrop,
-                        modifier = Modifier.weight(1f)
-                    )
-                    GlassTextButton(text = "完成", onClick = onDismiss, backdrop = backdrop, modifier = Modifier.weight(1f))
-                }
+                // 检测结果就地处（按钮上方一行小字），操作栏钉底：按钮贴弹层底边等宽
                 vm.detectResult?.let { (ok, msg) ->
                     Text(
                         msg,
                         style = MaterialTheme.typography.labelSmall,
                         color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 6.dp)
+                        modifier = Modifier.padding(bottom = 6.dp)
                     )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    GlassTextButton(
+                        text = if (vm.detectingCaps) "检测中…" else "自动检测",
+                        onClick = { vm.detectSingleCaps(providerId, modelId) },
+                        enabled = !vm.detectingCaps,
+                        backdrop = backdrop,
+                        modifier = Modifier.weight(1f)
+                    )
+                    GlassTextButton(text = "完成", onClick = onDismiss, backdrop = backdrop, modifier = Modifier.weight(1f))
                 }
             }
         }

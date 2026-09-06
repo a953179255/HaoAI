@@ -32,7 +32,9 @@ data class ModelEntry(
     /** 能力来源：null=自动/未设置 | "models.dev" | "guess" | "manual" */
     val capsSource: String? = null,
     /** 目录声明的思考等级白名单（如 low/medium/high）；null=未知 */
-    val effortValues: List<String>? = null
+    val effortValues: List<String>? = null,
+    /** 本模型思考等级覆盖：空=跟随全局设置（"off"/low/medium/high/…）；上游 ReasoningLevel 式按模型控制 */
+    val reasoningEffortOverride: String = ""
 ) {
     /** 是否含某输入模态（vision 旧字段兼容：image 查询回退 vision）。 */
     fun hasInput(mod: String): Boolean? {
@@ -95,6 +97,15 @@ data class ProviderConfig(
 
     /** 当前模型统一能力视图（手动覆盖 > 检测写回 > 旧 vision > 名称启发式 > 默认）。 */
     fun caps(): CapabilityResolver.Caps = CapabilityResolver.resolve(modelEntry(), model)
+
+    /**
+     * 实际生效的思考等级：模型条目覆盖 > 全局设置。
+     * "off" 显式关闭（不发 reasoning_effort）；空=全局；条目未配置时回落全局。
+     */
+    fun effectiveReasoningEffort(globalEffort: String): String {
+        val ov = modelEntry()?.reasoningEffortOverride.orEmpty()
+        return if (ov.isNotBlank()) ov else globalEffort
+    }
 
     companion object {
         /** 按模型名推测上下文窗口（常见模型速查，未命中给保守默认）。 */

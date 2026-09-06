@@ -339,7 +339,7 @@ class AgentEngine(
                     lastStreamEventAt = System.currentTimeMillis()
                     coroutineScope {
                         val collectJob = launch {
-                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, reasoningEffort.ifBlank { null })
+                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, effectiveEffort())
                                 .collect { ev ->
                                     lastStreamEventAt = System.currentTimeMillis()
                                     when (ev) {
@@ -877,7 +877,7 @@ class AgentEngine(
             val buf = StringBuilder()
             var calls: List<ToolCallData> = emptyList()
             try {
-                httpClient.chatStream(provider, apiKey, msgs, apiTools, reasoningEffort.ifBlank { null }).collect { ev ->
+                httpClient.chatStream(provider, apiKey, msgs, apiTools, effectiveEffort()).collect { ev ->
                     when (ev) {
                         is SseEvent.Delta -> buf.append(ev.text)
                         is SseEvent.Reasoning -> Unit
@@ -1628,6 +1628,15 @@ class AgentEngine(
             android.util.Log.w("HaoDelegate", "委派($kind) 目标 ${dp.name}/${dp.model} 失败：$lastErr")
         }
         return "委派…失败：$lastErr（可改用 shell ffmpeg 等工具绕行）"
+    }
+
+    /**
+     * 实际生效的思考等级（上游 式按模型控制）：模型条目覆盖 > 全局设置。
+     * "off" 返回 null（请求不发 reasoning_effort，即使用户全局配了等级）。
+     */
+    private fun effectiveEffort(): String? {
+        val v = provider.effectiveReasoningEffort(reasoningEffort)
+        return v.takeIf { it.isNotBlank() && it != "off" }
     }
 
     /**
