@@ -114,8 +114,45 @@ fun settledBoundary(src: String): Int {
     return if (inFence || inMath) 0 else settled
 }
 
-/** 解析 Markdown 为块列表；未闭合围栏标记 closed=false（流式输出兼容）。 */
+// ---------- 解析/行内构建 LRU 缓存（v0.18.1 优化⑤）----------
+// pop 返回聊天时整页重组，所有可见消息在首帧同步重跑 parseMarkdownBlocks（首帧防
+// 闪烁的同步路径）与 buildInline——两者均为纯函数（输出仅由输入决定），却没有任何
+// 跨实例缓存，真机实测 pop 侧 preSync 尖峰 55ms。加 LRU 后重建首帧直接命中。
+// MdBlock/AnnotatedString 均为不可变对象，跨实例共享安全（remember(block.text) 本就
+// 依赖同一假设）。流式后台解析与主线程共用缓存，须同步；容量上限防长会话膨胀。
+private val mdParseCache: MutableMap<String, List<MdBlock>> =
+    java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, List<MdBlock>>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MdBlock>>) =
+                size > 48
+        }
+    )
+
+private val mdInlineCache: MutableMap<String, androidx.compose.ui.text.AnnotatedString> =
+    java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, androidx.compose.ui.text.AnnotatedString>(256, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, androidx.compose.ui.text.AnnotatedString>) =
+                size > 192
+        }
+    )
+
+/** 解析 Markdown 为块列表（带 LRU 缓存）；未闭合围栏标记 closed=false（流式输出兼容）。 */
 fun parseMarkdownBlocks(src: String): List<MdBlock> {
+    mdParseCache[src]?.let { return it }
+    val result = parseMarkdownBlocksUncached(src)
+    mdParseCache[src] = result
+    return result
+}
+
+/** 行内标记构建（带 LRU 缓存）：同 parseMarkdownBlocks，纯函数跨实例共享。 */
+fun buildInline(text: String): androidx.compose.ui.text.AnnotatedString {
+    mdInlineCache[text]?.let { return it }
+    val result = buildInlineUncached(text)
+    mdInlineCache[text] = result
+    return result
+}
+
+private fun parseMarkdownBlocksUncached(src: String): List<MdBlock> {
     val blocks = mutableListOf<MdBlock>()
     val lines = src.split('\n')
     var i = 0
@@ -327,8 +364,10 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
     val bg = if (dark) Color(0xFF06080D).copy(alpha = 0.88f) else Color(0xFFF7F8FA)
     val plain = colors.plain
     // 块级缓存：语法高亮全量正则扫描只在代码/语言/配色变化时重算（Colors 为 data class）
+    // v0.18.1：闭合块走全局 LRU——pop 重建聊天页时历史代码块命中缓存不再重扫
     val highlighted = remember(code, lang, colors) {
-        CodeHighlight.highlight(code.trimEnd('\n'), lang, colors)
+        if (closed) CodeHighlight.highlightCached(code.trimEnd('\n'), lang, colors)
+        else CodeHighlight.highlight(code.trimEnd('\n'), lang, colors)
     }
 
     Surface(
@@ -687,7 +726,7 @@ private val inlineRegex = Regex(
 )
 
 /** 行内样式：code/粗/斜/删除线/链接 + 行内公式降级（浅底等宽，KaTeX 只做块级）。 */
-fun buildInline(text: String): AnnotatedString = buildAnnotatedString {
+private fun buildInlineUncached(text: String): AnnotatedString = buildAnnotatedString {
     val normalizedLines = text.split('\n').joinToString("\n") { line ->
         when {
             line.startsWith("- ") || line.startsWith("* ") -> "•  " + line.substring(2)

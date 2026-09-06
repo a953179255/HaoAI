@@ -248,8 +248,10 @@ fun SettingsScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             if (wallpaper != null) {
+                // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
-                    bitmap = wallpaper.asImageBitmap(),
+                    bitmap = wpImage,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.matchParentSize()
@@ -1094,8 +1096,9 @@ private fun SectionPage(
             .background(MaterialTheme.colorScheme.background)
     ) {
         if (wallpaper != null) {
+            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
             Image(
-                bitmap = wallpaper.asImageBitmap(),
+                bitmap = wpImage,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize()

@@ -88,8 +88,9 @@ fun WorkflowScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         if (wallpaper != null) {
+            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
             Image(
-                bitmap = wallpaper.asImageBitmap(),
+                bitmap = wpImage,
                 contentDescription = null,
                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                 modifier = Modifier.matchParentSize()

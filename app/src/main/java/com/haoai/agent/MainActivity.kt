@@ -473,8 +473,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     Box(Modifier.fillMaxSize()) {
         // 壁纸 Image 层：延迟释放（转场期退出中的玻璃页需要它垫底）
         if (wallpaper != null && wallpaperImageVisible) {
+            // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap 触发整屏重绘
+            val wpImage = remember(wallpaper) { wallpaper.asImageBitmap() }
             Image(
-                bitmap = wallpaper.asImageBitmap(),
+                bitmap = wpImage,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize()

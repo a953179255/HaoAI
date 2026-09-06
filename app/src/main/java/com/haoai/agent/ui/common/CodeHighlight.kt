@@ -137,6 +137,25 @@ object CodeHighlight {
             "|\\b\\w+\\b"                             // 标识符（再筛关键字）
     )
 
+    // 高亮结果 LRU（v0.18.1 优化⑤）：Colors 为 data class 可作 key；仅闭合代码块
+    // 走缓存（调用方控制），流式分片不进来防污染。pop 重建聊天页时历史代码块直接命中。
+    private val highlightCache: MutableMap<Triple<String, String, Colors>, AnnotatedString> =
+        java.util.Collections.synchronizedMap(
+            object : LinkedHashMap<Triple<String, String, Colors>, AnnotatedString>(48, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Triple<String, String, Colors>, AnnotatedString>) =
+                    size > 48
+            }
+        )
+
+    /** 带缓存的版本：仅用于已闭合（closed=true）的代码块。 */
+    fun highlightCached(code: String, langRaw: String, colors: Colors): AnnotatedString {
+        val key = Triple(code, langRaw, colors)
+        highlightCache[key]?.let { return it }
+        val result = highlight(code, langRaw, colors)
+        highlightCache[key] = result
+        return result
+    }
+
     /** 生成高亮 AnnotatedString；lang 不在支持表内时返回纯文本色。 */
     fun highlight(code: String, langRaw: String, colors: Colors): AnnotatedString {
         val lang = langAlias[langRaw.lowercase()] ?: langRaw.lowercase()

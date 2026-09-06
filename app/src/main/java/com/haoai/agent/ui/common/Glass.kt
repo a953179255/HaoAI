@@ -116,16 +116,20 @@ fun rememberAppBackdrop(
     dark: Boolean = false,
     baseTop: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(0xFFEDF4EF),
     baseBottom: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(0xFFD9E8DF)
-): LayerBackdrop = rememberLayerBackdrop {
-        if (wallpaper != null) {
+): LayerBackdrop {
+    // v0.18.1：ImageBitmap 包装提前到组合期——draw 块每帧执行，裸调 asImageBitmap()
+    // 每帧每画布分配一次包装对象（3 个 backdrop × 60fps），白增 GC 压力
+    val wpImage = remember(wallpaper) { wallpaper?.asImageBitmap() }
+    return rememberLayerBackdrop {
+        if (wpImage != null) {
             // 壁纸 cover-fit 铺满，给玻璃提供可折射的真实纹理（不加压层，保持通透）
             val canvasW = size.width
             val canvasH = size.height
-            val scale = maxOf(canvasW / wallpaper.width, canvasH / wallpaper.height)
-            val dw = wallpaper.width * scale
-            val dh = wallpaper.height * scale
+            val scale = maxOf(canvasW / wpImage.width, canvasH / wpImage.height)
+            val dw = wpImage.width * scale
+            val dh = wpImage.height * scale
             drawImage(
-                wallpaper.asImageBitmap(),
+                wpImage,
                 dstOffset = androidx.compose.ui.unit.IntOffset(
                     ((canvasW - dw) / 2f).toInt().coerceAtMost(0),
                     ((canvasH - dh) / 2f).toInt().coerceAtMost(0)
@@ -142,6 +146,7 @@ fun rememberAppBackdrop(
         }
         drawContent()
     }
+}
 
 fun Modifier.appLayer(backdrop: LayerBackdrop): Modifier = this.layerBackdrop(backdrop)
 
