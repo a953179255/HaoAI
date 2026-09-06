@@ -1,1 +1,0 @@
-{"items":[{"id":"t1m1","name":"test-minute","spec":"every:1m","prompt":"执行 bash echo minute-tick 并告诉我输出","enabled":true,"lastRunAt":0,"lastResult":""}]}

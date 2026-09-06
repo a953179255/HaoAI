@@ -1,8 +1,0 @@
-mock server on :8802
-MODE -> opentest
-CHAT mode=opentest step=1 auth='Bearer sk-mock' body=47881B img_parts=0
-CHAT mode=opentest step=2 auth='Bearer sk-mock' body=48898B img_parts=0
-MODE -> opentest
-CHAT mode=opentest step=1 auth=None body=63B img_parts=0
-MODE -> opentest
-CHAT mode=opentest step=1 auth=None body=57B img_parts=0

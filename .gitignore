@@ -14,3 +14,5 @@ keystore.properties
 .zcode/
 .verify/
 .tmp_phone/
+.test-work/
+.kotlin/

@@ -1,6 +1,0 @@
-{"model":"glm-5.3-flash","stream":true,"max_tokens":12800,
- "messages":[{"role":"user","content":"建立任务清单"}],
- "tools":[
-  {"type":"function","function":{"name":"todo","description":"任务清单","parameters":{"type":"object","properties":{"todos":{"type":"array","description":"完整任务列表","items":{"type":"object","properties":{"text":{"type":"string","description":"任务描述"},"status":{"type":"string","description":"pending/in_progress/completed/cancelled"},"priority":{"type":"string","description":"high/medium/low"}}}}}}}},
-  {"type":"function","function":{"name":"screen","description":"截屏","parameters":{"type":"object","properties":{}}}}
- ]}
