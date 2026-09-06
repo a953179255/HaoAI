@@ -242,8 +242,7 @@ fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
     streaming: Boolean = false,
-    /** v4 光标内联：streaming 时把光标挂在文本末尾（InlineTextContent），不单独占一行。 */
-    showCursor: Boolean = false
+    @Suppress("UNUSED_PARAMETER") showCursor: Boolean = false
 ) {
     // 结构解析挪后台线程 + mapLatest 语义（上游 同款）：LaunchedEffect(text) 每次
     // 文本变化重启并取消在途解析，只提交最新完成版；首帧同步解析防闪烁。
@@ -296,32 +295,14 @@ fun MarkdownText(
                     // 「字符年龄」做 alpha 爬升（新字符从 0.15 淡入到 1，~300ms），
                     // 上游 式墨水洇入感；帧驱动用 produceState 读帧时钟。
                     val isLastText = block === blocks.lastOrNull { it is MdBlock.Text }
+                    // v6.1：光标彻底移除——U+FFFC 占位符在 SelectionContainer 内被
+                    // 渲染成「OBJ」方框字形（inline content 不生效），打字机渐显本身
+                    // 已足够表达流式进行中
                     val typeInAnn = if (streaming && isLastText) {
                         typeInTail(ann, block.text)
                     } else ann
-                    // v4 光标内联：最后一个文本块且需要光标 → 末尾追加占位符并注册
-                    // InlineTextContent（细竖线贴在最后一个字符后面，不占独立行）
-                    val cursorAnn = if (showCursor && streaming && isLastText) {
-                        buildAnnotatedString {
-                            append(typeInAnn)
-                            append("\uFFFC")
-                        }
-                    } else typeInAnn
-                    val cursorContent: Map<String, InlineTextContent> =
-                        if (showCursor && streaming && isLastText) {
-                            mapOf(
-                                "\uFFFC" to InlineTextContent(
-                                    Placeholder(
-                                        width = 3.sp,
-                                        height = 14.sp,
-                                        placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
-                                    )
-                                ) { _ -> StreamingCursorGlyph() }
-                            )
-                        } else emptyMap()
                     Text(
-                        text = cursorAnn,
-                        inlineContent = cursorContent,
+                        text = typeInAnn,
                         style = when (block.heading) {
                             1 -> MaterialTheme.typography.headlineSmall
                             2 -> MaterialTheme.typography.titleLarge
@@ -811,29 +792,6 @@ private fun typeInTail(ann: AnnotatedString, rawText: String): AnnotatedString {
     }
 }
 
-/**
- * v4 内联流式光标：2dp 细竖线柔和呼吸（0.15↔0.7 缓动），经 InlineTextContent
- * 渲染在文本最后一个字符之后——替代旧「正文下方独立光标行」的错位实现。
- */
-@Composable
-private fun StreamingCursorGlyph() {
-    val phase by rememberInfiniteTransition(label = "cursor")
-        .animateFloat(
-            0.15f, 0.7f,
-            infiniteRepeatable(tween(1060, easing = LinearEasing)),
-            label = "phase"
-        )
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(14.dp)
-            .graphicsLayer { alpha = phase }
-    ) {
-        // 占位宽 3sp，细线撑满占位 = 2~3dp 绿色一竖（v6 修方块观感）
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp))
-        )
-    }
-}
+// v6.1：StreamingCursorGlyph 已删除——U+FFFC 占位符在 SelectionContainer 内被
+// 渲染成「OBJ」方框（inline content 不生效），流式光标方案整体废弃；
+// 打字机字符渐显（typeInTail）本身即"进行中"信号

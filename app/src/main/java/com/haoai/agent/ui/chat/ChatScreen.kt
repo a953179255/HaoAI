@@ -895,20 +895,19 @@ fun ChatScreen(
                     )
                 }
             }
-            // v6 Agent 实时工作状态行（上游 式）：输入框左上方玻璃小胶囊，
-            // 显示「正在连接模型… 2.5s」等实时状态；随 ComposerBar 一起被键盘/增高上抬
-            // （同一 Column 内自然跟随）；斜杠面板会暂时盖住它（可接受，输完即关）。
-            // 仅连接阶段显示（无思考/工具活动时）——活动阶段由消息流聚合卡负责，避免双份
+            // v6.1 Agent 实时工作状态行（上游 式常驻）：输入框左上方玻璃小胶囊，
+            // 从发出消息起显示到回合结束；文案跟随阶段切换
+            // （连接模型 → 思考中 → 执行第 N 个工具 → 生成回答）。
+            // 随 ComposerBar 一起被键盘/增高上抬；斜杠面板会暂时盖住它（可接受）
             androidx.compose.animation.AnimatedVisibility(
-                visible = running && streaming == null &&
-                    streamingReasoning == null && liveToolsSnapshot.isEmpty(),
+                visible = running,
                 enter = androidx.compose.animation.fadeIn(tween(160)) +
                     androidx.compose.animation.expandVertically(tween(200)),
                 exit = androidx.compose.animation.fadeOut(tween(140)) +
                     androidx.compose.animation.shrinkVertically(tween(160))
             ) {
                 Row(
-                    Modifier.padding(start = 8.dp, bottom = 6.dp)
+                    Modifier.padding(start = 2.dp, bottom = 6.dp)
                 ) {
                     GlassPanel(
                         backdrop = backdrop,
@@ -919,11 +918,17 @@ fun ChatScreen(
                             Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            ThinkingIndicator(
-                                if (running && vm.isLocalProviderActive())
+                            // 阶段文案：连接（无任何流）→ 思考（有推理流）→ 工具（有工具在跑）→ 生成（正文流中）
+                            val phaseText = when {
+                                streaming != null -> "正在生成回答"
+                                streamingReasoning != null -> "正在思考"
+                                liveToolsSnapshot.isNotEmpty() ->
+                                    "正在执行工具 · ${liveToolsSnapshot.count { it.state == ToolRunState.RUNNING }} 个进行中"
+                                else -> if (vm.isLocalProviderActive())
                                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
-                                else null
-                            )
+                                else "正在连接模型"
+                            }
+                            ThinkingIndicator(phaseText)
                         }
                     }
                 }
