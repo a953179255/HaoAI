@@ -889,7 +889,7 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "$interjectCount 条插话已排队 · 当前步骤结束后送达（点此撤回）",
+                        "已排队 $interjectCount 条 · 当前任务完成后自动执行（点此撤回最新一条）",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
                     )
@@ -912,7 +912,11 @@ fun ChatScreen(
                     GlassPanel(
                         backdrop = backdrop,
                         radius = 14.dp,
-                        surfaceAlpha = 0.30f
+                        surfaceAlpha = 0.30f,
+                        // v7.2：文案长短切换时胶囊宽度平滑过渡（180ms 弹性），不再瞬跳
+                        modifier = Modifier.animateContentSize(
+                            animationSpec = tween(180, easing = LinearEasing)
+                        )
                     ) {
                         Row(
                             Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
@@ -3619,7 +3623,8 @@ private fun ComposerBar(
                 Modifier.padding(start = 6.dp, end = 6.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { toolbarExpanded = !toolbarExpanded }, enabled = !running) {
+                // v7：运行中也允许展开工具栏（排队发消息时可能还要带图/音频等附件）
+                IconButton(onClick = { toolbarExpanded = !toolbarExpanded }) {
                     Icon(
                         if (toolbarExpanded) Icons.Filled.ExpandMore else Icons.Filled.Add,
                         contentDescription = "展开工具栏",

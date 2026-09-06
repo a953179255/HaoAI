@@ -307,22 +307,9 @@ class AgentEngine(
                 val reasoningBuf = StringBuilder()
                 var calls: List<ToolCallData> = emptyList()
 
-                // E8 间隙 A：本轮工具执行结束、下一轮 LLM 请求前——合并注入插话
-                val interjections = mutableListOf<String>()
-                interjectQueue?.let { q ->
-                    while (true) q.poll()?.let { interjections += it } ?: break
-                }
-                if (interjections.isNotEmpty()) {
-                    appendAndNotify(
-                        ChatMessage(
-                            role = ChatMessage.ROLE_USER,
-                            content = "[用户插话] " + interjections.joinToString(
-                                separator = "\n"
-                            )
-                        ),
-                        onEvent
-                    )
-                }
+                // v7：循环内插话已升级为「排队任务」语义（ChatViewModel 全权管理队列）——
+                // 引擎不再在间隙 A 消费队列；排队消息在回合正常结束后由 VM 自动作为
+                // 新任务执行（上游/上游 式）。保留队列引用仅为兼容旧构造签名。
 
                 // E9 todo 变更检测：本轮执行过 todo 工具 → 下一轮注入进度行
                 val todoNow = todoStore.load(session.id)

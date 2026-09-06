@@ -22,6 +22,7 @@ import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.toModel
+import com.haoai.agent.data.toStored
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,10 +78,23 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _interjectCount = kotlinx.coroutines.flow.MutableStateFlow(0)
     val interjectCount = _interjectCount.asStateFlow()
 
-    /** E8 撤回单条插话（最新一条）。 */
+    /** v7 撤回单条排队消息（最新一条）：出队并从历史移除对应的用户消息。 */
     fun withdrawInterjection() {
-        interjectQueue.poll()
+        val text = interjectQueue.poll()
         _interjectCount.value = interjectQueue.size
+        // 同步移除历史里最后一条内容匹配且未消费的用户消息（排队消息在入队时已可见）
+        if (text != null) {
+            val s = currentSession ?: return
+            for (i in s.messages.indices.reversed()) {
+                val m = s.messages[i]
+                if (m.role == ChatMessage.ROLE_USER && m.content == text) {
+                    s.messages.removeAt(i)
+                    runCatching { c.sessionStore.save(s) }
+                    rebuildRows()
+                    return
+                }
+            }
+        }
     }
 
     /** 系统分享接入（R2.2）：导航层把 ACTION_SEND 内容转存 here，ChatScreen 消费后清空。 */
@@ -417,11 +431,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val text = rawText.trim()
         // 纯图片发送（无文字）也允许：否则 UI 已清掉 pendingImage，图片会静默丢失
         if (text.isEmpty() && imageData == null && audioPath == null && videoPath == null) return
-        // E8 循环内插话：生成期间用户发送 → 入队等引擎间隙注入（不入历史、不立即执行）
+        // E8/v7 循环内插话+排队：生成期间用户发送 → 入队（引擎间隙 A 注入当轮跟进；
+        // 若任务结束仍未消费，作为新任务自动执行）。入队同时落一条可见用户消息，
+        // 让用户看到自己的消息已排队（上游/上游 式反馈）
         if (_running.value) {
             if (text.isNotEmpty()) {
                 interjectQueue.add(text)
                 _interjectCount.value = interjectQueue.size
+                val s0 = currentSession
+                if (s0 != null) {
+                    s0.messages.add(ChatMessage(role = ChatMessage.ROLE_USER, content = text).toStored())
+                    runCatching { c.sessionStore.save(s0) }
+                    rebuildRows()
+                }
             }
             return
         }
@@ -520,8 +542,31 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     }?.content.orEmpty()
                     if (plan.isNotBlank()) _planProposal.value = plan
                 }
+                // v7 排队任务：回合正常结束且队列还有排队消息 → 自动作为新任务执行
+                // （上游/上游 式：运行中可继续派活，队列在任务完成后逐条落地）。
+                // 非正常结束（停止/失败）不清队列也不自动续跑——用户按停止即表态中止。
+                val autoNext = interjectQueue.poll()
+                if (autoNext != null && endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
+                    _interjectCount.value = interjectQueue.size
+                    // 落一条系统提示说明排队语义（历史可见，非静默）
+                    appendAndNotifyLocal(autoNext)
+                    send(autoNext)
+                } else if (autoNext != null) {
+                    // 停止/失败：放回队列头不丢消息，等用户手动重发
+                    val q = java.util.concurrent.ConcurrentLinkedQueue<String>()
+                    q.add(autoNext); q.addAll(interjectQueue)
+                    interjectQueue.clear(); interjectQueue.addAll(q)
+                }
             }
         }
+    }
+
+    /** v7 排队续跑：把排队消息落为正式用户消息（入历史），再作为新任务发送。 */
+    private fun appendAndNotifyLocal(text: String) {
+        val s = currentSession ?: return
+        s.messages.add(ChatMessage(role = ChatMessage.ROLE_USER, content = text).toStored())
+        runCatching { c.sessionStore.save(s) }
+        rebuildRows()
     }
 
     private suspend fun resolveProvider(
@@ -1091,7 +1136,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 if (id.isBlank()) emptyList()
                 else c.resolvePurposeTargets(id, emptyList()).map { it.provider to it.apiKey }
             },
-            planGate = { _planMode.value }
+            planGate = { _planMode.value },
+            // E8 循环内插话队列：生成期间用户新指令入队，引擎在安全间隙合并注入
+            interjectQueue = interjectQueue
         )
     }
 
