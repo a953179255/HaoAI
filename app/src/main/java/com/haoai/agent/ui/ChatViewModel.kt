@@ -143,6 +143,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         if (t != null) _streamingText.value = (_streamingText.value ?: "") + t
         if (r != null) _streamingReasoning.value = (_streamingReasoning.value ?: "") + r
+        // 悬浮窗展开态正文：同一 40ms 节拍顺带镜像尾部（RunObserver 内部再截 400 字）
+        if (t != null) com.haoai.agent.platform.RunObserver.setStreamTail(
+            (_streamingText.value ?: "").takeLast(400)
+        )
     }
 
     private fun appendDelta(frag: String) {
@@ -423,6 +427,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return
         }
         val s = currentSession ?: return
+        // 新回合清空上一轮的工具活动态：liveTools 跨轮次保留会把旧工具当成
+        // 「刚完成」灌进任务卡/悬浮窗（旧消息的完成态由落库结果兜底渲染，清掉无碍）
+        liveTools.clear()
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
@@ -431,6 +438,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         startStreamFlusher()
         // D16: 登记到进程级注册表——其他实例据此显示停止键、路由停止、豁免「死亡」误判
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
+        // 编排层可观测性：进程级任务卡开始采集（通知/悬浮窗的唯一数据源）
+        com.haoai.agent.platform.RunObserver.start(s.id, text.takeSafe(80))
+        if (c.settingsFlow.value.keepAlive) com.haoai.agent.platform.KeepAliveService.start(c.appContext)
+        if (c.settingsFlow.value.runOverlay) {
+            com.haoai.agent.platform.AgentOverlayService.start(c.appContext)
+        }
         // 运行时任务视图隐藏：Agent 运行期间把本应用任务移出最近任务（防误清）
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
@@ -464,6 +477,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 消失时又触发一轮滚动修正，表现为结束瞬间先冲过头再弹回的抖动
                 _running.value = false
                 com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+                com.haoai.agent.platform.RunObserver.end()
                 flushUsage()
                 com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
@@ -602,6 +616,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return
         }
         _todoItems.value = todoStore.load(s.id)
+        // 上游 持久进度卡思想：todo 清单镜像进任务卡（通知显示 N/M 完成）。
+        // 仅当查看的正是运行中的会话时才镜像，防止切走会话后把别的清单灌进任务卡
+        val obs = com.haoai.agent.platform.RunObserver.state.value
+        if (obs.sessionId == s.id) {
+            com.haoai.agent.platform.RunObserver.setTodos(
+                _todoItems.value.map { Triple(it.text, it.status, it.priority) }
+            )
+        }
     }
 
     /**
@@ -705,6 +727,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         // D16: /btw 同样登记（与 send 共用同一停止句柄，finally 对称摘除）
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
+        com.haoai.agent.platform.RunObserver.start(s.id, "附带问题：${question.takeSafe(60)}")
+        if (c.settingsFlow.value.runOverlay) {
+            com.haoai.agent.platform.AgentOverlayService.start(c.appContext)
+        }
         job = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
@@ -721,6 +747,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 _running.value = false
                 endStreaming()
                 com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+                com.haoai.agent.platform.RunObserver.end()
                 com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
             }
         }
@@ -791,11 +818,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private suspend fun requestApproval(req: ApprovalRequest): Boolean {
         val gate = CompletableDeferred<Boolean>()
         _approval.value = req to gate
+        // 后台可见性：通知升级高优 + 悬浮窗变橙「等待确认」（不弹窗口，仅状态呈现）
+        com.haoai.agent.platform.RunObserver.setApproval(req.title, req.detail)
         // try/finally：协程被取消（如用户按停止）时也要清掉弹层状态
         try {
             return gate.await()
         } finally {
             _approval.value = null
+            com.haoai.agent.platform.RunObserver.setApproval(null)
         }
     }
 
@@ -847,6 +877,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     liveTools[ev.update.callId]?.subagents ?: emptyList()
                 )
                 rebuildRows()
+                publishSteps()
             }
             is SubagentUpdate -> {
                 // E7a：按 callId 聚合各路子代理状态（并发到达，同 index 覆盖旧态）
@@ -864,6 +895,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     lines.sortedBy { it.index }
                 )
                 rebuildRows()
+                publishSteps()
             }
             is Finished -> {
                 if (ev.error != null && ev.error != "已停止") _error.value = ev.error
@@ -874,6 +906,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 }
             }
         }
+    }
+
+    /** 把当前活动工具状态镜像给 RunObserver（通知/悬浮窗消费）。 */
+    private fun publishSteps() {
+        val running = liveTools.values.filter { it.state == ToolRunState.RUNNING }
+        val steps = if (running.isNotEmpty()) {
+            running.map { com.haoai.agent.platform.RunObserver.Step(it.callId, it.name, it.brief, "running") }
+        } else {
+            // 全部已结算：取最近完成的 1 条作为「刚完成」提示（含错误态）
+            liveTools.values.maxByOrNull { it.callId }?.let {
+                listOf(com.haoai.agent.platform.RunObserver.Step(it.callId, it.name, it.brief, if (it.state == ToolRunState.ERROR) "error" else "done"))
+            } ?: emptyList()
+        }
+        com.haoai.agent.platform.RunObserver.setSteps(steps)
     }
 
     private fun rebuildRows() {

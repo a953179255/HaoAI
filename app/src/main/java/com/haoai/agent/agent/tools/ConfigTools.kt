@@ -109,8 +109,8 @@ private fun JsonObjectBuilder.putJsonArrayDesc(key: String, description: String)
     putJsonObject(key) {
         put("type", "array")
         put("description", description)
-        putJsonArray("items") {
-            add(buildJsonObject { put("type", "object") })
-        }
+        // JSON Schema 规范：items 必须是单个 schema 对象，写成数组会被
+        // GLM（b.ai 网关）直接 400 拒绝（宽容网关 MiniMax/DeepSeek 掩盖了它）
+        putJsonObject("items") { put("type", "object") }
     }
 }

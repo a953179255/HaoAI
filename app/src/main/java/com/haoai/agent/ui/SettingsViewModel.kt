@@ -503,6 +503,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(keepAlive = enabled) }
     }
 
+    /** 任务悬浮窗开关。 */
+    fun setRunOverlay(enabled: Boolean) {
+        c.updateSettings { it.copy(runOverlay = enabled) }
+    }
+
     fun setMemoryEnabled(enabled: Boolean) {
         c.updateSettings { it.copy(memoryEnabled = enabled) }
     }

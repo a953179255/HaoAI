@@ -2450,6 +2450,20 @@ private fun LazyListScope.generalItems(
                 },
                 backdrop = backdrop
             )
+            ToggleRow(
+                title = "任务悬浮窗",
+                subtitle = if (com.haoai.agent.platform.PermissionCenter.granted(context, com.haoai.agent.platform.PermissionCenter.OVERLAY))
+                    "切到其他应用时，悬浮胶囊实时显示 Agent 当前步骤，可展开查看与停止"
+                else "需要「悬浮窗」权限（点击去授权）；不授权不影响任务后台运行",
+                checked = settings.runOverlay,
+                onChange = { enabled ->
+                    vm.setRunOverlay(enabled)
+                    if (enabled && !com.haoai.agent.platform.PermissionCenter.granted(context, com.haoai.agent.platform.PermissionCenter.OVERLAY)) {
+                        com.haoai.agent.platform.PermissionCenter.openManagement(context, com.haoai.agent.platform.PermissionCenter.OVERLAY)
+                    }
+                },
+                backdrop = backdrop
+            )
         }
     }
     item { SectionTitle("自定义指令") }

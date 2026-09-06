@@ -81,13 +81,20 @@ object PermissionCenter {
         "国产 ROM（Flyme 等）杀后台/饿死定时任务与梦境固化的解药，强烈建议开",
         special = true
     )
+    val OVERLAY = PermSpec(
+        "overlay", "悬浮窗",
+        "Agent 后台执行任务时，在其他应用上层显示实时进度胶囊（当前步骤/清单进度/停止按钮）；不授权不影响任务运行，只是切后台看不到进度",
+        special = true,
+        settingsAction = Settings.ACTION_MANAGE_OVERLAY_PERMISSION
+    )
 
     // MEDIA（READ_MEDIA_*）已删除：壁纸选择走 SAF 临时授权、图片识别走文件路径+所有文件访问，
     // 没有任何代码直接查 MediaStore，该权限是纯僵尸项
-    val ALL = listOf(CAMERA, LOCATION, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, BATTERY_OPT, CALENDAR, CONTACTS)
+    val ALL = listOf(CAMERA, LOCATION, STORAGE, NOTIF_LISTENER, NOTIFICATIONS, EXACT_ALARM, BATTERY_OPT, OVERLAY, CALENDAR, CONTACTS)
 
     fun granted(context: Context, spec: PermSpec): Boolean = when {
         spec.key == "storage" -> Environment.isExternalStorageManager()
+        spec.key == "overlay" -> Settings.canDrawOverlays(context)
         spec.key == "battery_opt" -> runCatching {
             val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             pm.isIgnoringBatteryOptimizations(context.packageName)
@@ -151,6 +158,19 @@ object PermissionCenter {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }.isSuccess
+        } else if (spec.key == "overlay") {
+            // 悬浮窗管理页带包名直达本应用的开关（不带则落到全列表）
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.recoverCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.isSuccess
         } else {
             runCatching {
                 context.startActivity(
@@ -200,6 +220,10 @@ object PermissionCenter {
                 // 已授权后的管理入口：电池优化走系统全列表页（在列表里可反向移除）
                 spec.key == "battery_opt" -> context.startActivity(
                     Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                spec.key == "overlay" -> context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
                 spec.special -> context.startActivity(

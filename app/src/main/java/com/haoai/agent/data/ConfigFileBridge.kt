@@ -57,7 +57,7 @@ class ConfigFileBridge(
             "permission_mode", "fallback_chain",
             "memory_extract_provider", "title_provider", "summarize_provider",
             "memory_extract_fallback", "title_fallback", "summarize_fallback",
-            "daily_token_budget_k", "keep_alive", "dream_provider", "dream_idle_minutes",
+            "daily_token_budget_k", "keep_alive", "run_overlay", "dream_provider", "dream_idle_minutes",
             // 外观主题组（枚举/范围校验，改错可即时回改，无安全风险）
             "theme_mode", "theme_seed", "amoled_mode", "bubble_opacity",
             "wallpaper_global", "dynamic_color", "reasoning_effort"
@@ -200,6 +200,7 @@ class ConfigFileBridge(
             putJsonArray("summarize_fallback") { settings.summarizeFallbackIds.forEach { add(it) } }
             put("daily_token_budget_k", settings.dailyTokenBudgetK)
             put("keep_alive", settings.keepAlive)
+            put("run_overlay", settings.runOverlay)
             put("dream_provider", settings.dreamProviderId)
             put("dream_idle_minutes", settings.dreamIdleMinutes)
             // 外观主题组
@@ -481,6 +482,7 @@ class ConfigFileBridge(
             next = next.copy(dailyTokenBudgetK = v.coerceIn(0, 10_000))
         }
         st["keep_alive"]?.booleanOrNullOr()?.let { next = next.copy(keepAlive = it) }
+        st["run_overlay"]?.booleanOrNullOr()?.let { next = next.copy(runOverlay = it) }
         st["dream_provider"]?.let { el ->
             val s = (el as? JsonPrimitive)?.content?.trim().orEmpty()
             if (s.isNotEmpty() && s != "local" && next.providers.none { it.id == s }) {
@@ -678,6 +680,7 @@ class ConfigFileBridge(
         cmpProvider("压缩摘要模型", old.summarizeProviderId, new.summarizeProviderId)
         cmp("每日 token 预算（千）", old.dailyTokenBudgetK, new.dailyTokenBudgetK)
         cmp("后台常驻", old.keepAlive, new.keepAlive)
+        cmp("任务悬浮窗", old.runOverlay, new.runOverlay)
         cmpProvider("记忆整理模型", old.dreamProviderId, new.dreamProviderId)
         cmp("灭屏闲置触发（分钟）", old.dreamIdleMinutes, new.dreamIdleMinutes)
         cmp("外观主题", humanTheme(old.themeMode), humanTheme(new.themeMode))

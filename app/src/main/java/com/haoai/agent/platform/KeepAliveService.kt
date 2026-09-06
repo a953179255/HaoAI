@@ -3,6 +3,7 @@ package com.haoai.agent.platform
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -12,8 +13,25 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.haoai.agent.MainActivity
 import com.haoai.agent.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
+/**
+ * 前台服务：①保活（沿用）②任务卡通知（新增）。
+ *
+ * 通知不再是一成不变的「任务将在后台继续执行」，而是 上游 单条任务卡 +
+ * 上游 动态文案的组合：标题=目标、正文=当前步骤/todo 进度、运行中挂
+ * 「停止」action、有待审批时升级高优先级提示。1s 节拍刷新（上游：
+ * notify 是 binder IPC 且系统限流，无脑高频会被丢弃）。
+ */
 class KeepAliveService : Service() {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -30,20 +48,108 @@ class KeepAliveService : Service() {
                 setShowBadge(false)
             }
         )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_APPROVAL,
+                "任务待确认",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Agent 等待你确认危险操作时提醒"
+            }
+        )
+        scope.launch { observe() }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 点通知回聊天页：复用 debug 深链路由（MainActivity.consumeDeepLink 的 "chat"）
-        val backIntent = android.content.Intent(this, MainActivity::class.java).apply {
-            action = android.content.Intent.ACTION_VIEW
-            data = android.net.Uri.parse("haoai://debug/chat")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    /** 1s 节拍：RunObserver 变化 → 重建通知。 */
+    private suspend fun observe() {
+        var lastRender: RunObserver.RunState? = null
+        while (scope.isActive) {
+            val st = RunObserver.state.value
+            val changed = st != lastRender
+            val throttled = System.currentTimeMillis() - RunObserver.lastNotifyAt < 1000
+            if (changed && !throttled) {
+                RunObserver.lastNotifyAt = System.currentTimeMillis()
+                lastRender = st
+                runCatching { notify(st) }
+            }
+            delay(500)
         }
-        val pi = android.app.PendingIntent.getActivity(
-            this, 0, backIntent,
-            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+    }
+
+    private fun notify(st: RunObserver.RunState) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (!st.active) {
+            // 任务结束：通知回落为静态保活文案（特殊审批渠道随之清空）
+            nm.cancel(CHANNEL_APPROVAL, APPROVAL_ID)
+            nm.notify(NOTIFICATION_ID, idleNotification())
+            return
+        }
+        val pi = chatPendingIntent()
+        val stopPi = PendingIntent.getBroadcast(
+            this, 1,
+            Intent(this, RunActionReceiver::class.java).setAction(RunActionReceiver.ACTION_STOP_RUN),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val sb = StringBuilder()
+        st.steps.take(3).forEach { step ->
+            sb.append(when (step.state) {
+                "running" -> "▸ "
+                "error" -> "✕ "
+                else -> "✓ "
+            }).append(step.brief.ifBlank { step.name }).append('\n')
+        }
+        val inProgress = st.todos.filter { it.second == "in_progress" }.size
+        val done = st.todos.count { it.second == "completed" }
+        val content = buildString {
+            if (sb.isNotBlank()) append(sb.toString().trimEnd())
+            if (st.todos.isNotEmpty()) {
+                if (isNotEmpty()) append('\n')
+                append("任务清单 $done/${st.todos.size} 完成")
+                if (inProgress > 0) append(" · $inProgress 项进行中")
+            }
+            if (st.approvalTitle != null) {
+                if (isNotEmpty()) append('\n')
+                append("⏸ 等待确认：${st.approvalTitle}")
+            }
+            if (isEmpty()) append("正在思考…")
+        }
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(st.goal.ifBlank { "HaoAI 正在运行" })
+            .setContentText(content)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+        if (content.length > 40 || st.steps.isNotEmpty()) builder.setStyle(
+            NotificationCompat.BigTextStyle().bigText(content)
+        )
+        builder.addAction(
+            0, "停止",
+            stopPi
+        )
+        if (st.approvalTitle != null) {
+            // 审批门控：升级到高优渠道（响铃/横幅）单独发一条，点按直达聊天页批准
+            nm.notify(
+                CHANNEL_APPROVAL, APPROVAL_ID,
+                NotificationCompat.Builder(this, CHANNEL_APPROVAL)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle("等待你的确认")
+                    .setContentText(st.approvalTitle)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(st.approvalDetail ?: st.approvalTitle))
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .build()
+            )
+        } else {
+            nm.cancel(CHANNEL_APPROVAL, APPROVAL_ID)
+        }
+        nm.notify(NOTIFICATION_ID, builder.build())
+    }
+
+    private fun idleNotification(): Notification {
+        val pi = chatPendingIntent()
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("HaoAI 正在运行")
             .setContentText("任务将在后台继续执行")
@@ -51,6 +157,22 @@ class KeepAliveService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
+    }
+
+    private fun chatPendingIntent(): PendingIntent {
+        val backIntent = Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = android.net.Uri.parse("haoai://debug/chat")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        return PendingIntent.getActivity(
+            this, 0, backIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val notification: Notification = idleNotification()
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -64,9 +186,16 @@ class KeepAliveService : Service() {
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
     companion object {
         const val CHANNEL_ID = "haoai_keepalive"
+        const val CHANNEL_APPROVAL = "haoai_run_approval"
         const val NOTIFICATION_ID = 4201
+        private const val APPROVAL_ID = 4202
 
         fun start(context: android.content.Context) {
             ContextCompat.startForegroundService(

@@ -98,6 +98,17 @@ class MainActivity : ComponentActivity() {
         if (text != null || stream != null) shareFlow.value = text to stream
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 悬浮窗仅后台显示的判定源：回到前台即隐藏（聊天页内有完整进度）
+        com.haoai.agent.platform.RunObserver.appForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        com.haoai.agent.platform.RunObserver.appForeground = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

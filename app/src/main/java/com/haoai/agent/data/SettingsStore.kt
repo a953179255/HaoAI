@@ -105,6 +105,8 @@ data class AppSettings(
     val activeProviderId: String? = null,
     val permissionMode: PermissionMode = PermissionMode.ASK_WRITES,
     val keepAlive: Boolean = true,
+    /** 任务悬浮窗（Agent 后台运行时显示进度胶囊；权限缺失自动失效）。 */
+    val runOverlay: Boolean = true,
     val customPrompt: String = "",
     val memoryEnabled: Boolean = true,
     val deepDream: Boolean = false,
