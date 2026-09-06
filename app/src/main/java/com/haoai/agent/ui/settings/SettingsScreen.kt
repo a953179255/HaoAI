@@ -3989,14 +3989,23 @@ private fun ModelCapsDialog(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    GlassTextButton(
-                        text = if (vm.detectingCaps) "检测中…" else "自动检测",
-                        onClick = { vm.detectSingleCaps(providerId, modelId) },
-                        enabled = !vm.detectingCaps,
+                    // 液态玻璃胶囊按钮（与编辑对话框「取消/保存」同款，内容居中）：
+                    // GlassTextButton 的裸描边样式与全应用按钮观感不统一（用户反馈）
+                    LiquidPillButton(
                         backdrop = backdrop,
+                        text = if (vm.detectingCaps) "检测中…" else "自动检测",
+                        enabled = !vm.detectingCaps,
+                        emphasized = false,
+                        onClick = { vm.detectSingleCaps(providerId, modelId) },
                         modifier = Modifier.weight(1f)
                     )
-                    GlassTextButton(text = "完成", onClick = onDismiss, backdrop = backdrop, modifier = Modifier.weight(1f))
+                    LiquidPillButton(
+                        backdrop = backdrop,
+                        text = "完成",
+                        onClick = onDismiss,
+                        emphasized = true,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
