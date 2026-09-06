@@ -229,13 +229,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         val d = draft ?: return
         val newId = id.trim()
         if (newId.isBlank() || newId == d.model.trim()) return
-        // 旧模型保留为备选（同供应商多模型），新模型从备选里出列。
-        // 此前只在旧模型「已有能力条目」时才保留，首次点选会把上一个模型直接丢掉
+        // 保序切换（用户反馈：切默认后列表顺序乱跳）：只改 model 指向；models 列表
+        // 不搬动既有条目，仅为缺失条目补位（新模型、旧默认——补在尾部，原本也不在展示列表里）
+        var models = d.models
+        if (models.none { it.id == newId }) models = models + com.haoai.agent.data.ModelEntry(newId)
         val oldId = d.model.trim()
-        val oldEntry = d.models.find { it.id == oldId }
-            ?: oldId.takeIf { it.isNotBlank() }?.let { com.haoai.agent.data.ModelEntry(it) }
-        val models = d.models.filterNot { it.id == newId } + listOfNotNull(oldEntry)
-        draft = d.copy(model = newId, models = models.distinctBy { it.id })
+        if (oldId.isNotBlank() && models.none { it.id == oldId }) {
+            models = models + com.haoai.agent.data.ModelEntry(oldId)
+        }
+        draft = d.copy(model = newId, models = models)
         draftError = null
         // 列表保持展开：可以连着点选好几个模型，选完一个不用重新拉一次
     }
@@ -482,16 +484,17 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     /**
      * 设置供应商的默认模型（同供应商多模型切换入口）。
-     * 把 models 里的目标模型提为 provider.model，原默认退回备选列表。
+     * 保序（用户反馈）：只改 model 指向，models 列表原样保留——展开区渲染时
+     * 会排除当前默认行，条目无需搬动，切换后顺序不再变化。
      */
     fun setProviderDefaultModel(providerId: String, modelId: String) {
         c.updateSettings { s ->
             val p = s.providers.find { it.id == providerId } ?: return@updateSettings s
             if (modelId == p.model || p.models.none { it.id == modelId }) return@updateSettings s
-            val oldEntry = p.models.find { it.id == p.model }
-                ?: p.model.takeIf { it.isNotBlank() }?.let { com.haoai.agent.data.ModelEntry(it) }
-            val rest = p.models.filterNot { it.id == modelId }
-            val updated = p.copy(model = modelId, models = (rest + listOfNotNull(oldEntry)).distinctBy { it.id })
+            // 旧默认若无条目（老数据）补插到尾部保能力数据；已有则列表原样不动（保序）
+            val models = if (p.models.any { it.id == p.model }) p.models
+            else p.models + com.haoai.agent.data.ModelEntry(p.model)
+            val updated = p.copy(model = modelId, models = models)
             s.copy(providers = s.providers.map { if (it.id == providerId) updated else it })
         }
     }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -1370,8 +1371,8 @@ private fun LazyListScope.brainItems(
                     purposeRow("会话标题", "title", settings.titleProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("记忆提取", "memory", settings.memoryExtractProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                     purposeRow("上下文压缩", "summarize", settings.summarizeProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
-                    purposeRow("👁 视觉委派", "vision", settings.visionProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
-                    purposeRow("🎙 语音转写", "asr", settings.asrProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
+                    purposeRow("视觉委派", "vision", settings.visionProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
+                    purposeRow("语音转写", "asr", settings.asrProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                 }
             }
             Text(
@@ -3048,15 +3049,15 @@ private fun ProviderDialog(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        FilterChip(
+                        GlassCapChip(
                             selected = draft.protocol == "openai_compat",
-                            onClick = { onChange(draft.copy(protocol = "openai_compat")) },
-                            label = { Text("OpenAI 兼容") }
+                            label = "OpenAI 兼容",
+                            onClick = { onChange(draft.copy(protocol = "openai_compat")) }
                         )
-                        FilterChip(
+                        GlassCapChip(
                             selected = draft.protocol == "anthropic",
-                            onClick = { onChange(draft.copy(protocol = "anthropic")) },
-                            label = { Text("Anthropic 原生") }
+                            label = "Anthropic 原生",
+                            onClick = { onChange(draft.copy(protocol = "anthropic")) }
                         )
                     }
                     com.haoai.agent.ui.common.CompactGlassField(
@@ -3183,8 +3184,9 @@ private fun ProviderDialog(
                         androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             listOf("image" to "图像", "audio" to "音频", "video" to "视频").forEach { (mod, label) ->
                                 val on = mod in curCaps.inputs
-                                FilterChip(
+                                GlassCapChip(
                                     selected = on,
+                                    label = label,
                                     onClick = {
                                         val ins = if (on) curCaps.inputs - mod else curCaps.inputs + mod
                                         patchEntry(
@@ -3194,8 +3196,7 @@ private fun ProviderDialog(
                                                 capsSource = "manual"
                                             )
                                         )
-                                    },
-                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                                    }
                                 )
                             }
                             CapTriChip("工具", curEntry?.tools) { v ->
@@ -3347,12 +3348,12 @@ private fun ProviderDialog(
                                 )
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                FilterChip(selected = draft.keyRotation == "ROUND_ROBIN",
-                                    onClick = { onChange(draft.copy(keyRotation = "ROUND_ROBIN")) },
-                                    label = { Text("轮询", style = MaterialTheme.typography.labelSmall) })
-                                FilterChip(selected = draft.keyRotation == "RANDOM",
-                                    onClick = { onChange(draft.copy(keyRotation = "RANDOM")) },
-                                    label = { Text("随机", style = MaterialTheme.typography.labelSmall) })
+                                GlassCapChip(selected = draft.keyRotation == "ROUND_ROBIN",
+                                    label = "轮询",
+                                    onClick = { onChange(draft.copy(keyRotation = "ROUND_ROBIN")) })
+                                GlassCapChip(selected = draft.keyRotation == "RANDOM",
+                                    label = "随机",
+                                    onClick = { onChange(draft.copy(keyRotation = "RANDOM")) })
                             }
                             HorizontalDivider(Modifier.padding(vertical = 4.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
@@ -3699,11 +3700,50 @@ private fun CapTriChip(label: String, value: Boolean?, onChange: (Boolean?) -> U
         true -> "$label·支持"
         false -> "$label·不支持"
     }
-    FilterChip(
+    GlassCapChip(
         selected = value != null,
-        onClick = { onChange(when (value) { null -> true; true -> false; false -> null }) },
-        label = { Text(text, style = MaterialTheme.typography.labelSmall) }
+        label = text,
+        onClick = { onChange(when (value) { null -> true; true -> false; false -> null }) }
     )
+}
+
+/**
+ * 玻璃弹层内芯片：替代 Material3 FilterChip——后者的边框+涟漪在玻璃弹窗里按压会
+ * 突显一个方框（用户反馈）。改用纯背景色切换 + 按压缩放（GlassTextButton 同款动效）。
+ */
+@Composable
+private fun GlassCapChip(
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (pressed) 0.95f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(120),
+        label = "glassCapChipScale"
+    )
+    Box(
+        modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 /** 供应商行能力徽章（设计稿 ①）：图/音/视/工具/思考小芯片；划线=明确不支持，不显示=未知。 */@Composable
@@ -3835,22 +3875,14 @@ private fun ModelCapsDialog(
                     androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("image" to "图像", "audio" to "音频", "video" to "视频", "pdf" to "PDF").forEach { (mod, label) ->
                             val on = mod in caps.inputs
-                            FilterChip(
-                                selected = on,
-                                onClick = { vm.toggleInputModality(providerId, modelId, mod) },
-                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                            )
+                            GlassCapChip(selected = on, label = label, onClick = { vm.toggleInputModality(providerId, modelId, mod) })
                         }
                     }
                     Text("输出模态", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("image" to "图像", "audio" to "音频").forEach { (mod, label) ->
                             val on = mod in caps.outputs
-                            FilterChip(
-                                selected = on,
-                                onClick = { vm.toggleOutputModality(providerId, modelId, mod) },
-                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                            )
+                            GlassCapChip(selected = on, label = label, onClick = { vm.toggleOutputModality(providerId, modelId, mod) })
                         }
                     }
                     Text("能力", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -3899,11 +3931,7 @@ private fun ModelCapsDialog(
                     ) {
                         effortOptions.forEach { (value, label) ->
                             val selected = curEffort == value
-                            FilterChip(
-                                selected = selected,
-                                onClick = { vm.setModelEffort(providerId, modelId, value) },
-                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
-                            )
+                            GlassCapChip(selected = selected, label = label, onClick = { vm.setModelEffort(providerId, modelId, value) })
                         }
                     }
                     // Agent 感知预览（默认折叠）：这段文字即对话时注入系统提示词的能力声明原文，

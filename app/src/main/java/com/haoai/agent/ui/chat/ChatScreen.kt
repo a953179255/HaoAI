@@ -59,6 +59,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -1032,39 +1033,46 @@ fun ChatScreen(
                     maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp() + 10.dp
                 })
         ) {
+            // v5 方案 A：深色玻璃胶囊「↓ N 条新动态」——语义完整、点按面积大；
+            // 无新动态时收窄成「↓ 最新」
             Surface(
                 onClick = {
                     userScrolledAway.value = false
                     newContentTicker.value = 0
                     scope.launch { listState.scrollToEnd(guard = scrollGuard) }
                 },
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                shape = CircleShape,
-                tonalElevation = 3.dp,
+                color = Color(0xFF1E2834).copy(alpha = 0.88f),
+                shape = RoundedCornerShape(19.dp),
                 border = androidx.compose.foundation.BorderStroke(
-                    1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                    1.dp, Color.White.copy(alpha = 0.14f)
                 ),
-                modifier = Modifier.size(38.dp)
+                modifier = Modifier
+                    .shadow(
+                        elevation = 6.dp,
+                        shape = RoundedCornerShape(19.dp),
+                        ambientColor = Color.Black.copy(alpha = 0.3f),
+                        spotColor = Color.Black.copy(alpha = 0.25f)
+                    )
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.KeyboardArrowDown,
-                            contentDescription = "回到底部",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        val n = newContentTicker.value
-                        if (n > 0) {
-                            Spacer(Modifier.size(1.dp))
-                            Text(
-                                "$n",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
+                Row(
+                    Modifier.padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        "↓",
+                        color = Color(0xFF3DDC84),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    val n = newContentTicker.value
+                    Text(
+                        if (n > 0) "$n 条新动态" else "最新",
+                        color = Color(0xFFE8EDF4),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
                 }
             }
         }
@@ -2459,7 +2467,8 @@ private fun StreamingItem(
                 streaming = hasContent,
                 thinkingMs = thinkingMs,
                 onStopRun = onStopRun,
-                onViewDiff = onViewDiff
+                onViewDiff = onViewDiff,
+                running = running
             )
         } else if (!hasContent) {
             ThinkingLine(thinkingHint)
@@ -2498,15 +2507,19 @@ private fun ActivityTimelineCard(
     streaming: Boolean,
     thinkingMs: Long? = null,
     onStopRun: () -> Unit = {},
-    onViewDiff: (String) -> Unit = {}
+    onViewDiff: (String) -> Unit = {},
+    /** v5 修复：回合级运行态。历史消息 running=false → 永远不显示"正在执行/正在思考"。 */
+    running: Boolean = false
 ) {
     val doneCount = tools.count { it.state != ToolRunState.RUNNING }
     val runningCount = tools.count { it.state == ToolRunState.RUNNING }
-    val live = streaming == false && (runningCount > 0 || reasoning != null)
+    // live = 本回合真的在跑、且正文还没开始（工具/思考阶段）。
+    // 旧判断 streaming==false && (有活动) 会把历史消息误判成 live（bug：滚上去全是"正在执行"）
+    val live = running && !streaming
     val actionCount = doneCount + runningCount
 
-    // 展开态：流式中默认展开（活动是主角），历史消息/正文已出默认收起成摘要头
-    var expanded by rememberSaveable { mutableStateOf(streaming == false && live) }
+    // 展开态：live（工具/思考阶段）默认展开看动作流；正文阶段/历史默认收成摘要头
+    var expanded by rememberSaveable { mutableStateOf(live) }
     var userToggled by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(streaming) {
         if (streaming && !userToggled) expanded = false
@@ -2585,8 +2598,13 @@ private fun ActivityTimelineCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (reasoning != null && lastTool == null) {
-                        // 思考中：右侧滚动跟随（收起态也跟随）
-                        ReasoningTickerInline(text = reasoning, thinkingMs = thinkingMs)
+                        // 思考中：旋钮式滚动跟随（收起态也跟随；历史静态）
+                        ReasoningTickerInline(
+                            text = reasoning,
+                            thinkingMs = thinkingMs,
+                            live = live,
+                            knobScroll = live
+                        )
                     } else if (lastTool != null) {
                         TimelineToolRowCompact(lastTool)
                     }
@@ -2598,7 +2616,8 @@ private fun ActivityTimelineCard(
                     tools = tools,
                     thinkingMs = thinkingMs,
                     onStopRun = onStopRun,
-                    onViewDiff = onViewDiff
+                    onViewDiff = onViewDiff,
+                    live = live
                 )
             }
         }
@@ -2653,7 +2672,9 @@ private fun TimelineBody(
     tools: List<com.haoai.agent.ui.UiTool>,
     thinkingMs: Long? = null,
     onStopRun: () -> Unit = {},
-    onViewDiff: (String) -> Unit = {}
+    onViewDiff: (String) -> Unit = {},
+    /** 回合级运行态：传给思考行（历史=静态不滚动不计时）。 */
+    live: Boolean = false
 ) {
     val scroll = rememberScrollState()
     // 新活动到达自动滚到卡内底部（跟随最新动作）
@@ -2666,9 +2687,9 @@ private fun TimelineBody(
             .heightIn(max = 340.dp)
             .verticalScroll(scroll)
     ) {
-        // 思考行（B 式玻璃行；流式思考是连续一段，放最前；工具执行中的 reasoning 为空）
+        // 思考行（旋钮式 ticker；流式思考是连续一段，放最前；工具执行中的 reasoning 为空）
         if (!reasoning.isNullOrBlank()) {
-            ReasoningRow(reasoning, thinkingMs)
+            ReasoningRow(reasoning, thinkingMs, live = live)
         }
         // 工具行按到达序排列
         tools.forEach { tool ->
@@ -2678,24 +2699,27 @@ private fun TimelineBody(
 }
 
 /**
- * B 式思考行：无底色（v4-1 去黑块）——spinner/shimmer「正在思考」+ 实时计时 +
- * 右侧单行滚动跟随最新推理（中央渐亮两侧透明渐隐），点击展开全文。
- * 2 秒无新 token 视为"已思考"。
+ * 思考行（v5 旋钮式 ticker）：spinner/shimmer「正在思考」+ 实时计时 + 旋钮滚动
+ * （先从左往右填充，满后持续左滚、中央清晰两侧淡出至透明），点击展开全文。
+ * 2 秒无新 token 视为"已思考"。历史消息 live=false 直接静态显示。
  */
 @Composable
 private fun ReasoningRow(
     text: String,
-    thinkingMs: Long? = null
+    thinkingMs: Long? = null,
+    /** 回合是否真的在跑（历史消息=false：不转圈、不计时、不滚动）。 */
+    live: Boolean = true
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
-    // 2s 无新内容 → live 语气转"已思考"（正文未出时的自然停顿）
-    var recentUpdate by remember { mutableStateOf(true) }
+    // 2s 无新内容 → live 语气转"已思考"（仅运行中有意义；历史直接 false）
+    var recentUpdate by remember { mutableStateOf(live) }
     LaunchedEffect(text) {
+        if (!live) return@LaunchedEffect
         recentUpdate = true
         kotlinx.coroutines.delay(2000)
         recentUpdate = false
     }
-    val live = recentUpdate
+    val isLive = live && recentUpdate
     Column(
         Modifier
             .fillMaxWidth()
@@ -2705,7 +2729,7 @@ private fun ReasoningRow(
             .padding(horizontal = 10.dp, vertical = 7.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ReasoningTickerInline(text = text, thinkingMs = thinkingMs, live = live)
+            ReasoningTickerInline(text = text, thinkingMs = thinkingMs, live = isLive, knobScroll = live)
         }
         AnimatedVisibility(open) {
             Column {
@@ -2726,17 +2750,21 @@ private fun ReasoningRow(
 }
 
 /**
- * 思考 ticker：固定「正在思考」标签（shimmer 高光横扫）+ 右侧单行滚动跟随
- * 最新推理文本（两端渐隐）+ 实时计时。须在 RowScope 内调用。
+ * 思考 ticker v5「旋钮式」（用户命名）：
+ * - 文本从左侧开始往右显示（不满一行时静止）；
+ * - 超过一行后持续向左滚动（最新内容从右侧进入）；
+ * - 中央清晰、两端渐隐至透明的对称蒙版——像旋钮刻度转过窗口。
+ * live=false（历史）时静态显示首行省略文本，不滚动。
+ * 须在 RowScope 内调用。
  */
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
     text: String,
     thinkingMs: Long? = null,
-    live: Boolean = true
+    live: Boolean = true,
+    /** 旋钮滚动开关（运行中的思考段=开；历史/结束段=关，静态省略）。 */
+    knobScroll: Boolean = true
 ) {
-    // ticker 视口只显示行尾 ~160 字符，文本超长时滚动到尾部
-    val tail = text.takeLast(160)
     // 实时计时（live 时每 100ms 刷新；结束态用定格的 thinkingMs）
     var elapsed by remember { mutableLongStateOf(0L) }
     if (live) {
@@ -2748,7 +2776,7 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
     }
-    // shimmer：渐变高光横扫标题（B 式）
+    // shimmer：渐变高光横扫标题（live 时）
     val shim by androidx.compose.animation.core.rememberInfiniteTransition(label = "rshim")
         .animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "rp")
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
@@ -2801,37 +2829,54 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
         Spacer(Modifier.size(8.dp))
-        // 滚动跟随视口：中央全亮、向两侧渐隐到透明的对称蒙版（v4-1，浮出感）
+        // 旋钮视口：horizontalScroll 驱动（内容宽超出才滚），中央清晰两侧淡出对称蒙版
         val hscroll = rememberScrollState()
-        LaunchedEffect(tail) { hscroll.scrollTo(hscroll.maxValue) }
+        LaunchedEffect(text) {
+            // 文本推进时跟随到尾部（旋钮持续转动）
+            if (knobScroll) hscroll.scrollTo(hscroll.maxValue)
+        }
         Box(
             Modifier
                 .weight(1f)
                 .height(16.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .drawWithContent {
                     drawContent()
-                    // 七段对称渐变：0 → .18 → .62 → 1（中央）→ .62 → .18 → 0
-                    drawRect(
-                        brush = Brush.horizontalGradient(
-                            0f to Color.Transparent,
-                            0.16f to Color.Black.copy(alpha = 0.18f),
-                            0.34f to Color.Black.copy(alpha = 0.62f),
-                            0.5f to Color.Black,
-                            0.66f to Color.Black.copy(alpha = 0.62f),
-                            0.84f to Color.Black.copy(alpha = 0.18f),
-                            1f to Color.Transparent
-                        ),
-                        blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
-                    )
+                    if (knobScroll) {
+                        // 中央清晰 → 两侧淡出至透明（对称七段）
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                0f to Color.Transparent,
+                                0.14f to Color.Black.copy(alpha = 0.15f),
+                                0.32f to Color.Black.copy(alpha = 0.6f),
+                                0.5f to Color.Black,
+                                0.68f to Color.Black.copy(alpha = 0.6f),
+                                0.86f to Color.Black.copy(alpha = 0.15f),
+                                1f to Color.Transparent
+                            ),
+                            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+                        )
+                    } else {
+                        // 静态（历史）：仅末端淡出省略感
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                0f to Color.Black,
+                                0.86f to Color.Black,
+                                1f to Color.Transparent
+                            ),
+                            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+                        )
+                    }
                 }
         ) {
             Text(
-                tail,
+                text,
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
                 maxLines = 1,
+                softWrap = false,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                modifier = Modifier.horizontalScroll(hscroll)
+                modifier = if (knobScroll) Modifier.horizontalScroll(hscroll) else Modifier
             )
         }
     }
@@ -3068,7 +3113,8 @@ private fun AssistantBlock(
                 streaming = false,
                 thinkingMs = null,
                 onStopRun = onStopRun,
-                onViewDiff = onViewDiff
+                onViewDiff = onViewDiff,
+                running = false // v5 修复：历史消息永不为 live
             )
             Spacer(Modifier.size(5.dp))
         } else if (hasReasoning) {
