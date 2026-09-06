@@ -106,23 +106,19 @@ object CapabilityResolver {
             if (!caps.hasPdf) add("PDF")
         }
         return buildString {
-            appendLine("## 当前模型能力声明")
-            appendLine("- 你当前使用的模型可直接处理：文本${if (natives.isEmpty()) "" else "、" + natives.joinToString("、")}。")
+            appendLine("## 模型能力声明")
+            appendLine("- 可直接处理：文本${if (natives.isEmpty()) "" else "、" + natives.joinToString("、")}。")
             if (missing.isNotEmpty()) {
-                appendLine("- 无法直接处理：${missing.joinToString("、")}。涉及这些内容时【不要中断任务、不要假装看到了】，按以下顺序绕行：")
+                // 精简单行版（~90-105 token）：指令密度优先，替代旧的 4 条编号绕行清单（~220 token）
+                append("- 无法直接处理：${missing.joinToString("、")}——不要假装看到/听到，也不要中断任务：")
                 if (delegateAvailable) {
-                    appendLine("  1. 用委派工具交给专用模型处理：delegate_to_vision(path, question) 代看图片、transcribe_audio(path) 转写音频；")
-                    appendLine("  2. 用 shell 工具转码提取（如 ffmpeg 抽视频关键帧后逐帧当图像分析、抽音轨转文字；pdftotext/pdftoppm 处理 PDF）；")
-                    appendLine("  3. 用 screen/无障碍等运行时工具获取等效信息（如界面内容读控件树而非截图）；")
-                    appendLine("  4. 确实无路可走时，明确告知用户该限制并给出替代方案（如换用支持该模态的模型），而不是让任务报错终止。")
-                } else {
-                    appendLine("  1. 用 shell 工具转码提取（如 ffmpeg 抽视频关键帧后逐帧当图像分析、抽音轨转文字；pdftotext/pdftoppm 处理 PDF）；")
-                    appendLine("  2. 用 screen/无障碍等运行时工具获取等效信息（如界面内容读控件树而非截图）；")
-                    appendLine("  3. 确实无路可走时，明确告知用户该限制并给出替代方案（如换用支持该模态的模型），而不是让任务报错终止。")
+                    append("优先 delegate_to_vision(path,问题) 代看图片、transcribe_audio(path) 转写音频；")
                 }
+                append("其次用 shell（ffmpeg 抽帧/抽音轨、pdftotext 提取 PDF、screen 读控件树替代截图）；无路可走再告知用户换模型。")
+                appendLine()
             }
             if (caps.tools == false) {
-                appendLine("- 本模型不支持工具调用：你只能纯对话，不要输出工具调用格式的文本。需要操作类任务时引导用户切换模型。")
+                appendLine("- 本模型不支持工具调用：纯对话作答，不要输出工具调用格式的文本。")
             }
         }.trim()
     }
