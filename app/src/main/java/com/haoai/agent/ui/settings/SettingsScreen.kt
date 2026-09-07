@@ -81,11 +81,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
+import com.haoai.agent.ui.theme.toHex
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -2232,13 +2242,25 @@ private fun LazyListScope.generalItems(
                 )
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text("主题色", style = MaterialTheme.typography.bodyMedium)
+                    var pickerSeed by remember { mutableStateOf<String?>(null) }
+                    var pickerSlot by remember { mutableIntStateOf(-1) }
+                    val activeCustom = settings.customSeedActive
+                    // 色盘初始色：当前生效主题色（自定义色或预设 primary），所见即所选
+                    val currentSeedHex = if (activeCustom.isNotBlank()) activeCustom
+                    else {
+                        val cur = com.haoai.agent.ui.theme.THEME_SEEDS
+                            .getOrElse(settings.themeSeed) { com.haoai.agent.ui.theme.THEME_SEEDS[0] }
+                        (if (darkNow) cur.darkPrimary else cur.lightPrimary).toHex()
+                    }
                     Row(
                         Modifier.padding(top = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp)
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // 5 颗固定种子：绿/蓝保留原版，橙/黄/粉为年轻活力色
                         com.haoai.agent.ui.theme.THEME_SEEDS.forEachIndexed { i, seed ->
                             val color = if (darkNow) seed.darkPrimary else seed.lightPrimary
-                            val selected = settings.themeSeed == i
+                            val selected = activeCustom.isBlank() && settings.themeSeed == i
                             Box(
                                 Modifier
                                     .size(28.dp)
@@ -2253,6 +2275,75 @@ private fun LazyListScope.generalItems(
                                     .clickable { vm.setThemeSeed(i) }
                             )
                         }
+                        // 3 个自定义槽：空=加号圈（点击开色盘），已存=点击应用、长按重挑
+                        repeat(3) { slot ->
+                            val hex = settings.customSeedColors.getOrNull(slot).orEmpty()
+                            val parsed = com.haoai.agent.ui.theme.parseHexColor(hex)
+                            if (parsed == null) {
+                                Box(
+                                    Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f), CircleShape)
+                                        .combinedClickable(
+                                            onClick = { pickerSlot = slot; pickerSeed = currentSeedHex },
+                                            onLongClick = { pickerSlot = slot; pickerSeed = currentSeedHex }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Add, null,
+                                        Modifier.size(15.dp),
+                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f)
+                                    )
+                                }
+                            } else {
+                                val selected = activeCustom == hex
+                                Box(
+                                    Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(parsed, CircleShape)
+                                        .border(
+                                            if (selected) 2.5.dp else 1.dp,
+                                            if (selected) parsed
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                                            CircleShape
+                                        )
+                                        .combinedClickable(
+                                            onClick = { vm.applyCustomSeed(hex) },
+                                            onLongClick = { pickerSlot = slot; pickerSeed = hex }
+                                        )
+                                )
+                            }
+                        }
+                        // 彩色色轮入口：打开色盘挑新颜色
+                        Box(
+                            Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Brush.sweepGradient(PickerHueColors), CircleShape)
+                                .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f), CircleShape)
+                                .clickable { pickerSlot = -1; pickerSeed = currentSeedHex },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.background)
+                            )
+                        }
+                    }
+                    if (pickerSeed != null) {
+                        ColorPickerDialog(
+                            backdrop = backdrop,
+                            settings = settings,
+                            initialHex = pickerSeed.orEmpty(),
+                            initialSlot = pickerSlot,
+                            vm = vm,
+                            onDismiss = { pickerSeed = null }
+                        )
                     }
                 }
             }
@@ -4207,5 +4298,275 @@ private fun purposeRow(
             )
         }
         Text("更换 ›", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+/** 色相条 / 色轮共用彩虹色序（首尾同色，sweep 与 horizontal 均无缝衔接）。 */
+private val PickerHueColors = listOf(
+    Color(0xFFFF3B30), Color(0xFFFF9500), Color(0xFFFFCC00), Color(0xFF34C759),
+    Color(0xFF00C7BE), Color(0xFF007AFF), Color(0xFF5856D6), Color(0xFFAF52DE),
+    Color(0xFFFF2D55), Color(0xFFFF3B30)
+)
+
+/**
+ * 自定义主题色盘弹层（液态玻璃材质，弹窗内降级磨砂——禁自引用折射防崩溃）。
+ * HSV 选色：大方块调饱和度/明度 + 色相条；选色后指定槽位保存并立即应用。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ColorPickerDialog(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    settings: AppSettings,
+    initialHex: String,
+    initialSlot: Int,
+    vm: SettingsViewModel,
+    onDismiss: () -> Unit
+) {
+    val init = com.haoai.agent.ui.theme.parseHexColor(initialHex) ?: Color(0xFFFF7A45)
+    val initHsv = FloatArray(3).also { android.graphics.Color.colorToHSV(init.toArgb(), it) }
+    var hue by remember { mutableFloatStateOf(initHsv[0]) }
+    var sat by remember { mutableFloatStateOf(initHsv[1]) }
+    var vel by remember { mutableFloatStateOf(initHsv[2]) }
+    var pickedSlot by remember { mutableIntStateOf(initialSlot) }
+    val cur = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel)))
+    val hexText = cur.toHex()
+
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.haoai.agent.ui.common.LocalGlassRefract provides false
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.30f))
+                .clickable(interactionSource = null, indication = null) { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            GlassPanel(
+                backdrop = backdrop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 22.dp),
+                radius = 28.dp,
+                surfaceAlpha = 0.92f,
+                blurRadius = 28.dp,
+                chromaticAberration = true
+            ) {
+                Column(
+                    Modifier
+                        .clickable(interactionSource = null, indication = null) {}
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 16.dp, bottom = 14.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "自定义颜色",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            hexText,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        "拖动选色，存入槽位后作为主题色生效",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
+                    )
+
+                    // SV 面板：横向=饱和度，纵向=明度；背景双层渐变（白→纯色 再叠 透明→黑）
+                    BoxWithConstraints(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .pointerInput(Unit) {
+                                detectTapGestures { pos ->
+                                    sat = (pos.x / size.width).coerceIn(0f, 1f)
+                                    vel = (1f - pos.y / size.height).coerceIn(0f, 1f)
+                                }
+                            }
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, _ ->
+                                    change.consume()
+                                    sat = (change.position.x / size.width).coerceIn(0f, 1f)
+                                    vel = (1f - change.position.y / size.height).coerceIn(0f, 1f)
+                                }
+                            }
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(listOf(Color.White, Color.hsv(hue, 1f, 1f)))
+                                )
+                        )
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+                        )
+                        Box(
+                            Modifier
+                                .offset(x = maxWidth * sat - 9.dp, y = maxHeight * (1f - vel) - 9.dp)
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(cur.copy(alpha = 0.4f))
+                        )
+                        Box(
+                            Modifier
+                                .offset(x = maxWidth * sat - 9.dp, y = maxHeight * (1f - vel) - 9.dp)
+                                .size(18.dp)
+                                .border(2.5.dp, Color.White, CircleShape)
+                        )
+                    }
+
+                    // 色相条
+                    BoxWithConstraints(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .height(16.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Brush.horizontalGradient(PickerHueColors))
+                            .pointerInput(Unit) {
+                                detectTapGestures { pos ->
+                                    hue = (pos.x / size.width * 360f).coerceIn(0f, 359.9f)
+                                }
+                            }
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, _ ->
+                                    change.consume()
+                                    hue = (change.position.x / size.width * 360f).coerceIn(0f, 359.9f)
+                                }
+                            }
+                    ) {
+                        Box(
+                            Modifier
+                                .offset(x = maxWidth * (hue / 360f) - 10.dp, y = (-2).dp)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(Color.hsv(hue, 1f, 1f))
+                                .border(2.5.dp, Color.White, CircleShape)
+                        )
+                    }
+
+                    // 预览 + 槽位选择
+                    Row(
+                        Modifier.padding(top = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(cur)
+                                .border(1.5.dp, MaterialTheme.colorScheme.background, CircleShape)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                "保存到",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                Modifier.padding(top = 5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                repeat(3) { i ->
+                                    val savedHex = settings.customSeedColors.getOrNull(i).orEmpty()
+                                    val savedColor = com.haoai.agent.ui.theme.parseHexColor(savedHex)
+                                    val selected = pickedSlot == i
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(percent = 50))
+                                            .background(
+                                                if (selected) MaterialTheme.colorScheme.primaryContainer
+                                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (selected) cur
+                                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                                                RoundedCornerShape(percent = 50)
+                                            )
+                                            .clickable { pickedSlot = i }
+                                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        if (savedColor != null) {
+                                            Box(
+                                                Modifier
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .background(savedColor)
+                                            )
+                                        } else {
+                                            Box(
+                                                Modifier
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .border(
+                                                        1.2.dp,
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                                        CircleShape
+                                                    )
+                                            )
+                                        }
+                                        Text(
+                                            "槽 ${i + 1}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        when {
+                            pickedSlot < 0 -> "先选择要保存到的槽位"
+                            com.haoai.agent.ui.theme.parseHexColor(settings.customSeedColors.getOrNull(pickedSlot).orEmpty()) != null &&
+                                settings.customSeedColors.getOrNull(pickedSlot).orEmpty() != hexText ->
+                                "槽 ${pickedSlot + 1} 已有颜色，保存将覆盖"
+                            else -> "将保存到槽 ${pickedSlot + 1}"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        LiquidPillButton(
+                            backdrop,
+                            "取消",
+                            Modifier.weight(1f),
+                            emphasized = false
+                        ) { onDismiss() }
+                        LiquidPillButton(
+                            backdrop,
+                            "保存",
+                            Modifier.weight(1f),
+                            enabled = pickedSlot >= 0
+                        ) {
+                            vm.saveCustomSeed(pickedSlot, hexText)
+                            onDismiss()
+                        }
+                    }
+                }
+            }
+        }
     }
 }

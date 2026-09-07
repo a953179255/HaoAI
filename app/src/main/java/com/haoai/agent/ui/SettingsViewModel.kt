@@ -789,7 +789,37 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun setThemeSeed(index: Int) {
-        c.updateSettings { it.copy(themeSeed = index.coerceIn(0, 100)) }
+        // 选预设色即退出自定义色模式（两者互斥：customSeedActive 空=预设生效）
+        c.updateSettings { it.copy(themeSeed = index.coerceIn(0, 100), customSeedActive = "") }
+    }
+
+    /** 应用一个自定义主题色（HEX，须已存在于槽位或正准备保存）。 */
+    fun applyCustomSeed(hex: String) {
+        c.updateSettings { it.copy(customSeedActive = hex) }
+    }
+
+    /** 保存自定义色到槽位（0-2）并立即应用；已占用槽位覆盖。 */
+    fun saveCustomSeed(slot: Int, hex: String) {
+        if (slot !in 0..2) return
+        c.updateSettings { s ->
+            val list = s.customSeedColors.toMutableList()
+            while (list.size < 3) list.add("")
+            list[slot] = hex
+            s.copy(customSeedColors = list, customSeedActive = hex)
+        }
+    }
+
+    /** 清除槽位颜色；若该色正在生效则回退到预设种子。 */
+    fun clearCustomSeed(slot: Int) {
+        if (slot !in 0..2) return
+        c.updateSettings { s ->
+            val list = s.customSeedColors.toMutableList()
+            while (list.size < 3) list.add("")
+            val removed = list[slot]
+            list[slot] = ""
+            val stillActive = if (s.customSeedActive == removed) "" else s.customSeedActive
+            s.copy(customSeedColors = list, customSeedActive = stillActive)
+        }
     }
 
     fun setAmoledMode(enabled: Boolean) {

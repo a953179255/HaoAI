@@ -154,6 +154,10 @@ data class AppSettings(
     val dynamicColor: Boolean = false,
     /** 主题色种子索引（THEME_SEEDS 下标，0=默认液态玻璃绿）；动态色关闭时生效。 */
     val themeSeed: Int = 0,
+    /** 自定义主题色槽位（固定 3 个，HEX 如 "#FF7A45"；空串=未保存）。 */
+    val customSeedColors: List<String> = listOf("", "", ""),
+    /** 当前应用中的自定义主题色（HEX）；空 = 使用 themeSeed 预设。 */
+    val customSeedActive: String = "",
     /** AMOLED 纯黑模式（仅深色主题下生效：背景/表面换纯黑）。 */
     val amoledMode: Boolean = false,
     /** 聊天气泡不透明度（0.3-1.0，100% 时气泡几乎不透明）。 */

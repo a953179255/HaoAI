@@ -2408,9 +2408,13 @@ private fun ReasoningPanel(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    // v7.8.2：ripple 裁剪成完整 16dp 胶囊圆角（收起态标题行=整个面板，
-                    // 方形下角 ripple 与胶囊长条不匹配）——clip 须在 clickable 之前
-                    .clip(RoundedCornerShape(16.dp))
+                    // v7.8.3 状态感知 ripple clip（用户确认稿）：收起态标题行=独立胶囊
+                    // （16dp 全圆角）；展开态标题行=面板顶部（下连内容，只圆上角、下角
+                    // 方角衔接）——此前固定全圆角，展开态点击下角圆弧悬在内容中间脱节
+                    .clip(
+                        if (expanded) RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                        else RoundedCornerShape(16.dp)
+                    )
                     .clickable { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {

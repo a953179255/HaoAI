@@ -29,7 +29,44 @@ data class SeedPalette(
     val lightSecondary: Color, val darkSecondary: Color
 )
 
-/** 预设主题色（index 即 SettingsStore.themeSeed）。 */
+/**
+ * 由任意主色派生一套 SeedPalette（HSV 调制，浅/深两套）：
+ * 预设活力色与色盘自定义色走同一条派生路径，观感统一。
+ * 浅色 primary 压明度保证 onPrimary 白字对比度；深色 primary 提亮。
+ */
+fun seedPaletteFromColor(label: String, color: Color): SeedPalette {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(color.toArgb(), hsv)
+    val h = hsv[0]; val s = hsv[1].coerceIn(0f, 1f); val v = hsv[2].coerceIn(0f, 1f)
+    fun c(sh: Float = h, ss: Float, vv: Float) =
+        Color(android.graphics.Color.HSVToColor(floatArrayOf(sh, ss.coerceIn(0f, 1f), vv.coerceIn(0f, 1f))))
+    return SeedPalette(
+        label,
+        lightPrimary = c(ss = (s + 0.06f).coerceAtMost(1f), vv = v.coerceAtMost(0.72f)),
+        lightOnPrimary = Color(0xFFFFFFFF),
+        lightContainer = c(ss = s * 0.45f, vv = 0.92f),
+        lightOnContainer = c(ss = (s * 1.15f).coerceAtMost(1f), vv = (v * 0.45f + 0.06f)),
+        darkPrimary = c(ss = s * 0.82f, vv = (v * 1.2f + 0.12f)),
+        darkOnPrimary = c(ss = s, vv = 0.13f),
+        darkContainer = c(ss = (s * 1.02f).coerceAtMost(1f), vv = 0.33f),
+        darkOnContainer = c(ss = s * 0.5f, vv = 0.88f),
+        lightSecondary = c(ss = s * 0.55f, vv = (v * 0.72f + 0.05f)),
+        darkSecondary = c(ss = s * 0.5f, vv = (v * 1.2f + 0.1f))
+    )
+}
+
+/** 解析 "#RRGGBB"（兼容 0xRRGGBB）为 Color；非法返回 null。 */
+fun parseHexColor(hex: String): Color? {
+    val s = hex.removePrefix("#").removePrefix("0x").removePrefix("0X")
+    if (s.length != 6) return null
+    val v = s.toLongOrNull(16) ?: return null
+    return Color(0xFF000000L or v)
+}
+
+/** Color → "#RRGGBB"。 */
+fun Color.toHex(): String = "#%06X".format(0xFFFFFF and this.toArgb())
+
+/** 预设主题色（index 即 SettingsStore.themeSeed）：绿/蓝保留原版，后三颗为年轻活力色。 */
 val THEME_SEEDS: List<SeedPalette> = listOf(
     SeedPalette(
         "液态玻璃绿",
@@ -43,42 +80,9 @@ val THEME_SEEDS: List<SeedPalette> = listOf(
         Color(0xFF9FC3FF), Color(0xFF003062), Color(0xFF00478E), Color(0xFFD3E4FF),
         Color(0xFF545F70), Color(0xFFBBC7DB)
     ),
-    SeedPalette(
-        "典雅紫",
-        Color(0xFF7B4BC8), Color(0xFFFFFFFF), Color(0xFFEADDFF), Color(0xFF25005A),
-        Color(0xFFD6BBFF), Color(0xFF3F1B80), Color(0xFF57329E), Color(0xFFEADDFF),
-        Color(0xFF655B70), Color(0xFFCFC2DC)
-    ),
-    SeedPalette(
-        "暖阳橙",
-        Color(0xFF8F4C00), Color(0xFFFFFFFF), Color(0xFFFFDCC2), Color(0xFF2E1500),
-        Color(0xFFFFB77C), Color(0xFF4E2600), Color(0xFF6F3A00), Color(0xFFFFDCC2),
-        Color(0xFF74593F), Color(0xFFE3C0A4)
-    ),
-    SeedPalette(
-        "樱花粉",
-        Color(0xFF984061), Color(0xFFFFFFFF), Color(0xFFFFD9E2), Color(0xFF3E001D),
-        Color(0xFFFFB1C8), Color(0xFF5E1133), Color(0xFF7B2949), Color(0xFFFFD9E2),
-        Color(0xFF74565F), Color(0xFFE3BDC7)
-    ),
-    SeedPalette(
-        "珊瑚红",
-        Color(0xFF9C4145), Color(0xFFFFFFFF), Color(0xFFFFDAD6), Color(0xFF410002),
-        Color(0xFFFFB4AB), Color(0xFF5F1512), Color(0xFF7E2A2E), Color(0xFFFFDAD6),
-        Color(0xFF775652), Color(0xFFFFDAD5)
-    ),
-    SeedPalette(
-        "青碧",
-        Color(0xFF00696D), Color(0xFFFFFFFF), Color(0xFF6FF6FB), Color(0xFF002022),
-        Color(0xFF4CDADE), Color(0xFF003739), Color(0xFF004F53), Color(0xFF6FF6FB),
-        Color(0xFF4A6365), Color(0xFFB1CBCD)
-    ),
-    SeedPalette(
-        "天青",
-        Color(0xFF006780), Color(0xFFFFFFFF), Color(0xFFB4EBFF), Color(0xFF001F2A),
-        Color(0xFF5CD5F4), Color(0xFF003544), Color(0xFF004D61), Color(0xFFB4EBFF),
-        Color(0xFF4C616B), Color(0xFFB3C9D4)
-    )
+    seedPaletteFromColor("活力橙", Color(0xFFFF7A45)),
+    seedPaletteFromColor("柠檬黄", Color(0xFFFFC53D)),
+    seedPaletteFromColor("蜜桃粉", Color(0xFFFF5C8A))
 )
 
 private val HaoDarkColors = darkColorScheme(
@@ -128,6 +132,7 @@ fun HaoTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
     seedIndex: Int = 0,
+    customSeed: String = "",
     amoled: Boolean = false,
     wallpaper: android.graphics.Bitmap? = null,
     content: @Composable () -> Unit
@@ -135,7 +140,7 @@ fun HaoTheme(
     val context = LocalContext.current
     var colorScheme = when {
         // 动态取色，优先级：App 聊天壁纸主色（用户直接可见，换壁纸配色即变）
-        // → 系统壁纸 Material You（Android 12+）→ 种子色板
+        // → 系统壁纸 Material You（Android 12+）→ 种子色板 / 自定义色
         dynamicColor && wallpaper != null ->
             if (darkTheme) schemeFromSeed(wallpaperSeedColor(wallpaper), dark = true)
             else schemeFromSeed(wallpaperSeedColor(wallpaper), dark = false)
@@ -143,8 +148,11 @@ fun HaoTheme(
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         else -> {
             val base = if (darkTheme) HaoDarkColors else HaoLightColors
-            val seed = THEME_SEEDS.getOrElse(seedIndex) { THEME_SEEDS[0] }
-            if (seedIndex == 0) base else base.copy(
+            // 自定义色盘色优先于预设种子（themeSeed=0 仍代表默认绿，仅在未选自定义色时生效）
+            val custom = parseHexColor(customSeed)?.let { seedPaletteFromColor("自定义", it) }
+            val seed = custom
+                ?: THEME_SEEDS.getOrNull(seedIndex)?.takeIf { seedIndex != 0 }
+            if (seed == null) base else base.copy(
                 primary = if (darkTheme) seed.darkPrimary else seed.lightPrimary,
                 onPrimary = if (darkTheme) seed.darkOnPrimary else seed.lightOnPrimary,
                 primaryContainer = if (darkTheme) seed.darkContainer else seed.lightContainer,

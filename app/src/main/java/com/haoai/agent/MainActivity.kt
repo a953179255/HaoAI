@@ -148,6 +148,7 @@ class MainActivity : ComponentActivity() {
                 darkTheme = dark,
                 dynamicColor = settings.dynamicColor,
                 seedIndex = settings.themeSeed,
+                customSeed = settings.customSeedActive,
                 amoled = settings.amoledMode,
                 wallpaper = wallpaper
             ) {
