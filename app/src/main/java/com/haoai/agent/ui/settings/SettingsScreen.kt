@@ -4318,8 +4318,9 @@ private val PickerHueColors = listOf(
 
 /**
  * 自定义主题色盘弹层（液态玻璃材质，弹窗内降级磨砂——禁自引用折射防崩溃）。
- * 交互：点槽位=把当前预览色直接存入该槽并立即应用为主题色；
- * 选中槽位后拖动色盘=实时调整该槽颜色（拖动中本地反馈，松手落盘生效，避免逐帧 JSON 写盘）。
+ * 简化交互（三步）：拖色盘=纯预览（不写任何槽）→ 点槽位=仅选中（零写入）→
+ * 「保存」=当前色写入选中槽+应用+关闭。全程无长按、无中途写入、无快照回滚。
+ * 选中态用 primary 描边（稳定色，不随预览色变）；保存成功后槽圆点回弹动效确认。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -4344,14 +4345,25 @@ private fun ColorPickerDialog(
             while (size < 3) add("")
         }
     }
-    // 打开时快照：取消=整体回滚（含已实时落盘的拖动调整）
-    val snapSlots = remember { settings.customSeedColors.take(3).toMutableList().apply { while (size < 3) add("") } }
-    val snapActive = remember { settings.customSeedActive }
     val cur = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel)))
     val hexText = cur.toHex()
-
-    fun commitSlot(i: Int) {
-        if (i in 0..2) vm.saveCustomSeed(i, slotColors[i])
+    // 保存成功动效：被保存槽的圆点 1→1.3→1 回弹（index 或 -1）
+    var bumpSlot by remember { mutableIntStateOf(-1) }
+    val bumpScale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (bumpSlot >= 0) 1.3f else 1f,
+        animationSpec = androidx.compose.animation.core.keyframes {
+            durationMillis = 300
+            0f to 1f
+            120 to 1.3f
+            300 to 1f
+        },
+        label = "slotBump"
+    )
+    androidx.compose.runtime.LaunchedEffect(bumpSlot) {
+        if (bumpSlot >= 0) {
+            kotlinx.coroutines.delay(320)
+            bumpSlot = -1
+        }
     }
 
     androidx.compose.runtime.CompositionLocalProvider(
@@ -4395,8 +4407,8 @@ private fun ColorPickerDialog(
                         )
                     }
                     Text(
-                        if (activeSlot < 0) "点槽位切换编辑目标 · 长按槽位存入当前色"
-                        else "正在调整槽 ${activeSlot + 1} · 拖动实时调整，松手生效 · 长按其他槽写入当前色",
+                        if (activeSlot < 0) "拖动选色 → 点要保存的槽 → 保存"
+                        else "将把 $hexText 保存到槽 ${activeSlot + 1}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
@@ -4412,28 +4424,14 @@ private fun ColorPickerDialog(
                                 detectTapGestures { pos ->
                                     sat = (pos.x / size.width).coerceIn(0f, 1f)
                                     vel = (1f - pos.y / size.height).coerceIn(0f, 1f)
-                                    if (activeSlot >= 0) {
-                                        slotColors[activeSlot] = Color(
-                                            android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
-                                        ).toHex()
-                                        commitSlot(activeSlot)
-                                    }
                                 }
                             }
                             .pointerInput(Unit) {
-                                detectDragGestures(
-                                    onDrag = { change, _ ->
-                                        change.consume()
-                                        sat = (change.position.x / size.width).coerceIn(0f, 1f)
-                                        vel = (1f - change.position.y / size.height).coerceIn(0f, 1f)
-                                        if (activeSlot >= 0) {
-                                            slotColors[activeSlot] = Color(
-                                                android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
-                                            ).toHex()
-                                        }
-                                    },
-                                    onDragEnd = { if (activeSlot >= 0) commitSlot(activeSlot) }
-                                )
+                                detectDragGestures { change, _ ->
+                                    change.consume()
+                                    sat = (change.position.x / size.width).coerceIn(0f, 1f)
+                                    vel = (1f - change.position.y / size.height).coerceIn(0f, 1f)
+                                }
                             }
                     ) {
                         Box(
@@ -4474,27 +4472,13 @@ private fun ColorPickerDialog(
                             .pointerInput(Unit) {
                                 detectTapGestures { pos ->
                                     hue = (pos.x / size.width * 360f).coerceIn(0f, 359.9f)
-                                    if (activeSlot >= 0) {
-                                        slotColors[activeSlot] = Color(
-                                            android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
-                                        ).toHex()
-                                        commitSlot(activeSlot)
-                                    }
                                 }
                             }
                             .pointerInput(Unit) {
-                                detectDragGestures(
-                                    onDrag = { change, _ ->
-                                        change.consume()
-                                        hue = (change.position.x / size.width * 360f).coerceIn(0f, 359.9f)
-                                        if (activeSlot >= 0) {
-                                            slotColors[activeSlot] = Color(
-                                                android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
-                                            ).toHex()
-                                        }
-                                    },
-                                    onDragEnd = { if (activeSlot >= 0) commitSlot(activeSlot) }
-                                )
+                                detectDragGestures { change, _ ->
+                                    change.consume()
+                                    hue = (change.position.x / size.width * 360f).coerceIn(0f, 359.9f)
+                                }
                             }
                     ) {
                         Box(
@@ -4542,20 +4526,15 @@ private fun ColorPickerDialog(
                                                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                                             )
                                             .border(
+                                                // 选中描边用 primary（稳定色）——不随预览色变，预览色做
+                                                // UI 状态色会遇浅色不可见/深色过重，且与主题色行语义冲突
                                                 if (selected) 1.5.dp else 1.dp,
                                                 if (selected) MaterialTheme.colorScheme.primary
                                                 else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                                                 RoundedCornerShape(percent = 50)
                                             )
-                                            .combinedClickable(
-                                                // 单击=仅切换编辑目标（零写入，防误覆盖其他槽）；长按=当前色写入该槽
-                                                onClick = { activeSlot = if (activeSlot == i) -1 else i },
-                                                onLongClick = {
-                                                    slotColors[i] = hexText
-                                                    activeSlot = i
-                                                    commitSlot(i)
-                                                }
-                                            )
+                                            // 单击=仅切换选中（零写入）；写入只发生在「保存」
+                                            .clickable { activeSlot = if (activeSlot == i) -1 else i }
                                             .padding(horizontal = 10.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -4564,6 +4543,7 @@ private fun ColorPickerDialog(
                                             Box(
                                                 Modifier
                                                     .size(12.dp)
+                                                    .scale(if (bumpSlot == i) bumpScale else 1f)
                                                     .clip(CircleShape)
                                                     .background(savedColor)
                                             )
@@ -4596,20 +4576,27 @@ private fun ColorPickerDialog(
                             .padding(top = 14.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        // 取消=直接关闭（本次未写入任何内容，无需回滚）
                         LiquidPillButton(
                             backdrop,
                             "取消",
                             Modifier.weight(1f),
                             emphasized = false
-                        ) {
-                            vm.restoreSeedSnapshot(snapSlots, snapActive)
-                            onDismiss()
-                        }
-                        LiquidPillButton(
-                            backdrop,
-                            "完成",
-                            Modifier.weight(1f)
                         ) { onDismiss() }
+                        // 保存=唯一写入点：当前色写入选中槽+应用；未选槽禁用
+                        LiquidPillButton(
+                            backdrop = backdrop,
+                            text = "保存",
+                            modifier = Modifier.weight(1f),
+                            enabled = activeSlot >= 0
+                        ) {
+                            if (activeSlot >= 0) {
+                                vm.saveCustomSeed(activeSlot, hexText)
+                                bumpSlot = activeSlot
+                                activeSlot = -1
+                                onDismiss()
+                            }
+                        }
                     }
                 }
             }
