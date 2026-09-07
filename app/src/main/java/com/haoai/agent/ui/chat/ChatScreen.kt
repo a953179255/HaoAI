@@ -2432,7 +2432,10 @@ private fun ReasoningPanel(
                     .drawBehind {
                         if (headerHighlight > 0.01f) {
                             drawRect(
-                                brush = SolidColor(hlColor.copy(alpha = 0.12f * headerHighlight)),
+                                // v7.8.6：18%——面板底 66% 半透明透壁纸，12% 在亮壁纸
+                                // 区域几乎不可见（工具胶囊是 94% 实底所以 12% 够用）；
+                                // 半透明底需要更高不透明度才达到同等观感
+                                brush = SolidColor(hlColor.copy(alpha = 0.18f * headerHighlight)),
                                 size = size
                             )
                         }
