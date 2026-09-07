@@ -304,4 +304,62 @@ object ModelCatalog {
             parse(text).takeIf { it.isNotEmpty() }
         }.onFailure { Log.w(TAG, "内置目录加载失败: ${it.message}") }.getOrNull()
     }
+
+    // ---------- 费率查询（用量页估算费用） ----------
+
+    /** 解析后的单模型费率（USD / 每百万 token）：first=输入 second=输出；无定价=空串。 */
+    private data class RawPrice(val inPrice: String, val outPrice: String)
+
+    @Volatile
+    private var priceCache: Map<String, Pair<Double, Double>>? = null
+
+    /**
+     * 模型费率查询（USD/百万 token，输入 to 输出）。
+     * 匹配链同 lookup()：精确 id → 去供应商前缀 → 双向包含；未命中或目录无定价返回 null。
+     */
+    fun pricePerMillion(modelId: String): Pair<Double, Double>? {
+        val q = modelId.trim().lowercase()
+        if (q.isEmpty()) return null
+        priceCache?.let { return it[q] ?: fuzzyPrice(it, q) }
+        val text: String = appContext?.let { ctx ->
+            runCatching { File(ctx.cacheDir, "models-dev-cache/api.json").takeIf { f -> f.exists() }?.readText() }.getOrNull()
+        } ?: appContext?.let { ctx ->
+            runCatching { ctx.assets.open("models-dev-api.json").bufferedReader().readText() }.getOrNull()
+        } ?: return null
+        val prices = parsePrices(text)
+        priceCache = prices
+        return prices[q] ?: fuzzyPrice(prices, q)
+    }
+
+    private fun fuzzyPrice(prices: Map<String, Pair<Double, Double>>, q: String): Pair<Double, Double>? {
+        prices.entries.firstOrNull { it.key.substringAfterLast('/') == q }?.let { return it.value }
+        return prices.entries
+            .firstOrNull { it.key.contains(q) || q.contains(it.key) }
+            ?.value
+    }
+
+    /** 从目录 JSON 抽取全量费率表：模型 id（小写）→ (输入价, 输出价)。 */
+    private fun parsePrices(text: String): Map<String, Pair<Double, Double>> {
+        val root = runCatching { HaoJson.json.parseToJsonElement(text).jsonObject }.getOrNull()
+            ?: return emptyMap()
+        val out = HashMap<String, Pair<Double, Double>>()
+        fun priceOf(o: kotlinx.serialization.json.JsonObject): Pair<Double, Double>? {
+            val cost = runCatching { o["cost"]?.jsonObject }.getOrNull() ?: return null
+            fun dbl(k: String): Double =
+                runCatching { cost[k]?.jsonPrimitive?.content?.toDoubleOrNull() }.getOrNull() ?: 0.0
+            val p = dbl("input") to dbl("output")
+            return if (p.first > 0.0 || p.second > 0.0) p else null
+        }
+        for ((_, pv) in root) {
+            val obj = runCatching { pv.jsonObject }.getOrNull() ?: continue
+            val models = runCatching { obj["models"]?.jsonObject }.getOrNull() ?: continue
+            for ((modelKey, mv) in models) {
+                runCatching {
+                    val o = mv.jsonObject
+                    priceOf(o)?.let { out[modelKey.lowercase()] = it }
+                }
+            }
+        }
+        return out
+    }
 }

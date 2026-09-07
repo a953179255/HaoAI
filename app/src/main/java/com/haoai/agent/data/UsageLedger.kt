@@ -39,6 +39,38 @@ object UsageLedger {
     data class SessionAgg(val sessionId: String, val promptTokens: Long, val completionTokens: Long, val calls: Int)
     data class PurposeAgg(val purpose: String, val promptTokens: Long, val completionTokens: Long, val calls: Int)
 
+    /** 方案B 仪表盘：工具调用聚合（按时段窗口内）。 */
+    data class ToolAgg(val tool: String, val calls: Int)
+
+    /** 方案B 仪表盘：趋势图单桶（今日=4小时段 / 本周=日 / 本月=日），peak=窗口内峰值桶。 */
+    data class DayBar(val label: String, val tokens: Long, val peak: Boolean = false)
+
+    /**
+     * 方案B 时段仪表盘单时段聚合（0=今日 1=本周 2=本月）。
+     * 成功率/耗时/速度来自账本已有的 ok 与 durationMs 字段（此前未展示）。
+     */
+    data class PeriodStats(
+        val range: Int,
+        val inTok: Long, val outTok: Long,
+        val llmCalls: Int, val toolCalls: Int,
+        val failCalls: Int,
+        val llmDurationMs: Long,
+        val prevTotal: Long,
+        val rangeLabel: String,
+        val byModel: List<ModelAgg>,
+        val byPurpose: List<PurposeAgg>,
+        val bySession: List<SessionAgg>,
+        val byTool: List<ToolAgg>,
+        val approved: Int, val denied: Int, val blocked: Int,
+        val days: List<DayBar>
+    ) {
+        val total: Long get() = inTok + outTok
+        val calls: Int get() = llmCalls + toolCalls
+        fun successPct(): Int? = if (calls <= 0) null else ((calls - failCalls) * 100 / calls)
+        fun avgSeconds(): Double? = if (llmCalls <= 0 || llmDurationMs <= 0) null else llmDurationMs / 1000.0 / llmCalls
+        fun tps(): Double? = if (llmDurationMs <= 0) null else outTok / (llmDurationMs / 1000.0)
+    }
+
     data class Summary(
         val totalIn: Long, val totalOut: Long,
         val todayIn: Long, val todayOut: Long,
@@ -181,6 +213,189 @@ object UsageLedger {
     fun clearAll() {
         val d = dir ?: return
         synchronized(lock) { d.listFiles()?.forEach { runCatching { it.delete() } } }
+    }
+
+    // ---------- 方案B 时段仪表盘 ----------
+
+    private class PAcc {
+        var inTok = 0L; var outTok = 0L
+        var llmCalls = 0; var toolCalls = 0
+        var failCalls = 0
+        var llmDurationMs = 0L
+        val models = HashMap<String, LongArray>()     // [in,out,count]
+        val purposes = HashMap<String, LongArray>()
+        val sessions = HashMap<String, LongArray>()
+        val tools = HashMap<String, Int>()
+        var approved = 0; var denied = 0; var blocked = 0
+        val bars = LinkedHashMap<Long, LongArray>()   // bucketKey -> [tokens, llmDurationMs, outTok]
+    }
+
+    /** 桶起始毫秒：今日/本周=自然日；本月=自然日（30 格）。 */
+    private fun bucketStart(ts: Long, range: Int, dayStart: Long, weekStart: Long, monthStart: Long): Long? {
+        val cal = java.util.Calendar.getInstance()
+        fun dayFloor(t: Long): Long {
+            cal.timeInMillis = t
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+            return cal.timeInMillis
+        }
+        return when (range) {
+            0 -> { // 今日按 4 小时分 6 桶：00,04,08,12,16,20
+                val d = dayFloor(ts)
+                if (d != dayStart) null
+                else d + ((ts - d) / (4L * 3600_000L)) * 4L * 3600_000L
+            }
+            1 -> { val d = dayFloor(ts); if (d >= weekStart) d else null }   // 本周按日 7 桶
+            2 -> { val d = dayFloor(ts); if (d >= monthStart) d else null }  // 本月按日 30 桶
+            else -> null
+        }
+    }
+
+    private fun bucketLabel(bucket: Long, range: Int): String = when (range) {
+        0 -> "${bucket / 3600_000L % 24 * 4}"
+        1, 2 -> {
+            val cal = java.util.Calendar.getInstance()
+            cal.timeInMillis = bucket
+            "${cal.get(java.util.Calendar.DAY_OF_MONTH)}日"
+        }
+        else -> ""
+    }
+
+    /** 遍历本月全部日期桶（用于补齐空桶，让柱状图无数据日也占位）。 */
+    private fun expectedBuckets(range: Int, dayStart: Long, weekStart: Long, monthStart: Long): List<Long> {
+        val out = mutableListOf<Long>()
+        when (range) {
+            0 -> for (h in 0 until 24 step 4) out.add(dayStart + h * 3600_000L)
+            1 -> {
+                var d = weekStart
+                val cal = java.util.Calendar.getInstance()
+                while (d <= dayStart) { out.add(d); cal.timeInMillis = d; cal.add(java.util.Calendar.DAY_OF_MONTH, 1); d = cal.timeInMillis }
+            }
+            2 -> {
+                var d = monthStart
+                val cal = java.util.Calendar.getInstance()
+                while (d <= dayStart) { out.add(d); cal.timeInMillis = d; cal.add(java.util.Calendar.DAY_OF_MONTH, 1); d = cal.timeInMillis }
+            }
+        }
+        return out
+    }
+
+    /**
+     * 方案B 仪表盘聚合：一次读账本，三个时段各出一份 PeriodStats。
+     * prevTotal 取上一窗口总 token（今日→昨日 / 本周→上周 / 本月→上月），供环比。
+     */
+    fun dashboard(): List<PeriodStats> {
+        val entries = readAll()
+        val cal = java.util.Calendar.getInstance()
+        val dayStart = cal.clone().let { c ->
+            c as java.util.Calendar
+            c.set(java.util.Calendar.HOUR_OF_DAY, 0); c.set(java.util.Calendar.MINUTE, 0)
+            c.set(java.util.Calendar.SECOND, 0); c.set(java.util.Calendar.MILLISECOND, 0)
+            c.timeInMillis
+        }
+        val weekStart = cal.clone().let { c ->
+            c as java.util.Calendar
+            c.set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.MONDAY)
+            c.set(java.util.Calendar.HOUR_OF_DAY, 0); c.set(java.util.Calendar.MINUTE, 0)
+            c.set(java.util.Calendar.SECOND, 0); c.set(java.util.Calendar.MILLISECOND, 0)
+            c.timeInMillis
+        }
+        val monthStart = cal.clone().let { c ->
+            c as java.util.Calendar
+            c.set(java.util.Calendar.DAY_OF_MONTH, 1)
+            c.set(java.util.Calendar.HOUR_OF_DAY, 0); c.set(java.util.Calendar.MINUTE, 0)
+            c.set(java.util.Calendar.SECOND, 0); c.set(java.util.Calendar.MILLISECOND, 0)
+            c.timeInMillis
+        }
+        val offsets = longArrayOf(dayStart, weekStart, monthStart)
+        val prevStart = longArrayOf(
+            dayStart - 24L * 3600_000L,
+            weekStart - 7L * 24L * 3600_000L,
+            run {
+                cal.timeInMillis = monthStart
+                cal.add(java.util.Calendar.MONTH, -1)
+                cal.timeInMillis
+            }
+        )
+        val accs = Array(3) { PAcc() }
+        val prevTotals = LongArray(3)
+
+        for (e in entries) {
+            val pin = e.promptTokens.toLong().coerceAtLeast(0)
+            val pout = e.completionTokens.toLong().coerceAtLeast(0)
+            val total = pin + pout
+            for (r in 0..2) {
+                if (e.ts >= offsets[r] && e.ts < prevStart[r]) prevTotals[r] += total
+            }
+            for (r in 0..2) {
+                val start = offsets[r]
+                if (e.ts < start) continue
+                val end = when (r) { 0 -> dayStart + 24L * 3600_000L; 1 -> weekStart + 7L * 24L * 3600_000L; else -> monthStart + 31L * 24L * 3600_000L }
+                if (e.ts >= end) continue
+                val a = accs[r]
+                a.inTok += pin; a.outTok += pout
+                when (e.kind) {
+                    "llm" -> {
+                        a.llmCalls++
+                        if (!e.ok) a.failCalls++
+                        if (e.durationMs > 0) a.llmDurationMs += e.durationMs
+                        val mk = e.model.orEmpty().ifBlank { "unknown" }
+                        a.models.getOrPut(mk) { LongArray(3) }.let { it[0] += pin; it[1] += pout; it[2]++ }
+                        val pk = e.purpose.orEmpty().ifBlank { "chat" }
+                        a.purposes.getOrPut(pk) { LongArray(3) }.let { it[0] += pin; it[1] += pout; it[2]++ }
+                        val sk = e.sessionId.orEmpty().ifBlank { "无会话" }
+                        a.sessions.getOrPut(sk) { LongArray(3) }.let { it[0] += pin; it[1] += pout; it[2]++ }
+                        val bucket = bucketStart(e.ts, r, dayStart, weekStart, monthStart)
+                        if (bucket != null) a.bars.getOrPut(bucket) { LongArray(3) }.let {
+                            it[0] += total; it[1] += if (e.durationMs > 0) e.durationMs else 0L; it[2] += pout
+                        }
+                    }
+                    "tool" -> {
+                        a.toolCalls++
+                        if (!e.ok) a.failCalls++
+                        val tk = e.tool.orEmpty().ifBlank { "unknown" }
+                        a.tools.merge(tk, 1, Int::plus)
+                        when (e.policyDecision) {
+                            "approved", "direct" -> a.approved++
+                            "denied" -> a.denied++
+                            "blocked" -> a.blocked++
+                        }
+                        val sk = e.sessionId.orEmpty().ifBlank { "无会话" }
+                        a.sessions.getOrPut(sk) { LongArray(3) }.let { it[2]++ }
+                    }
+                }
+            }
+        }
+
+        val rangeLabels = listOf("今日", "本周", "本月")
+        return (0..2).map { r ->
+            val a = accs[r]
+            val expected = expectedBuckets(r, dayStart, weekStart, monthStart)
+            var maxTok = 0L
+            expected.forEach { b -> maxTok = maxOf(maxTok, a.bars[b]?.get(0) ?: 0L) }
+            val days = expected.map { b ->
+                val v = a.bars[b]?.get(0) ?: 0L
+                DayBar(bucketLabel(b, r), v, peak = v > 0 && v == maxTok)
+            }
+            PeriodStats(
+                range = r,
+                inTok = a.inTok, outTok = a.outTok,
+                llmCalls = a.llmCalls, toolCalls = a.toolCalls,
+                failCalls = a.failCalls,
+                llmDurationMs = a.llmDurationMs,
+                prevTotal = prevTotals[r],
+                rangeLabel = rangeLabels[r],
+                byModel = a.models.map { ModelAgg(it.key, it.value[0], it.value[1], it.value[2].toInt()) }
+                    .sortedByDescending { it.promptTokens + it.completionTokens },
+                byPurpose = a.purposes.map { PurposeAgg(it.key, it.value[0], it.value[1], it.value[2].toInt()) }
+                    .sortedByDescending { it.promptTokens + it.completionTokens },
+                bySession = a.sessions.map { SessionAgg(it.key, it.value[0], it.value[1], it.value[2].toInt()) }
+                    .sortedByDescending { it.promptTokens + it.completionTokens },
+                byTool = a.tools.map { ToolAgg(it.key, it.value) }.sortedByDescending { it.calls },
+                approved = a.approved, denied = a.denied, blocked = a.blocked,
+                days = days
+            )
+        }
     }
 
     /** 今日（输入+输出）token 合计，供 5.1 预算判定。 */

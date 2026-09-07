@@ -2665,7 +2665,13 @@ private fun LazyListScope.generalItems(
     }
 }
 
-/** 「用量」页（5.4）：今日/本周/本月汇总 + 按模型/用途分布条形（Canvas 自绘）+ 会话 Top5 + 清空账本。 */
+/**
+ * 「用量」页（5.4 · 方案B 时段仪表盘）：
+ * 顶部今日/本周/本月胶囊切换联动全页——大数字+环比 → 时段柱状趋势（峰值高亮）→
+ * 4 指标卡（调用/成功率/平均耗时/估算费用）→ 每日预算（保留 5.1）→ 分布卡
+ * （按模型/按用途/会话 chip 切换）→ 健康度（成功率/工具审批/生成速度）→ 会话排行 → 维护。
+ * 全部数据来自 UsageLedger.dashboard()（账本原有 ok/durationMs/tool 字段首次上屏）。
+ */
 private fun LazyListScope.usageItems(
     vm: SettingsViewModel,
     settings: AppSettings,
@@ -2674,99 +2680,188 @@ private fun LazyListScope.usageItems(
 ) {
     item {
         // 读文件较重：进入页面时计算一次（清空后重进更新）
-        val summary = androidx.compose.runtime.remember {
-            com.haoai.agent.data.UsageLedger.summarize()
+        val periods = androidx.compose.runtime.remember {
+            com.haoai.agent.data.UsageLedger.dashboard()
         }
+        var range by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(2) }
+        var distTab by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+        val stat = periods[range]
 
         Column {
-            SectionTitle("Token 汇总")
+            // 时段胶囊选择器（全局第一层筛选，联动全页）
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f),
+                        RoundedCornerShape(percent = 50)
+                    )
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                GlassStatTile(
-                    backdrop = backdrop,
-                    number = formatTokens(summary.todayIn + summary.todayOut),
-                    label = "今日合计",
-                    tint = Color(0xFF5B8DEF),
-                    modifier = Modifier.weight(1f)
-                )
-                GlassStatTile(
-                    backdrop = backdrop,
-                    number = formatTokens(summary.weekIn + summary.weekOut),
-                    label = "本周",
-                    tint = Color(0xFF3FA37A),
-                    modifier = Modifier.weight(1f)
-                )
-                GlassStatTile(
-                    backdrop = backdrop,
-                    number = formatTokens(summary.monthIn + summary.monthOut),
-                    label = "本月",
-                    tint = Color(0xFF8B7BEF),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Text(
-                "共 ${summary.entries} 条记录 · 输入 ${formatTokens(summary.monthIn)} / 输出 ${formatTokens(summary.monthOut)}（本月）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
-            )
-
-            if (summary.byModel.isNotEmpty()) {
-                SectionTitle("按模型")
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    summary.byModel.take(6).forEach { m ->
-                        UsageBar(
-                            label = m.model,
-                            value = m.promptTokens + m.completionTokens,
-                            maxValue = summary.byModel.maxOf { it.promptTokens + it.completionTokens },
-                            detail = "${formatTokens(m.promptTokens + m.completionTokens)} · ${m.calls} 次",
-                            tint = Color(0xFF5B8DEF)
+                listOf("今日", "本周", "本月").forEachIndexed { i, label ->
+                    val on = range == i
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(percent = 50))
+                            .background(
+                                if (on) MaterialTheme.colorScheme.primary
+                                else Color.Transparent
+                            )
+                            .clickable { range = i }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                            color = if (on) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
 
-            if (summary.byPurpose.isNotEmpty()) {
-                SectionTitle("按用途")
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    summary.byPurpose.take(6).forEach { p ->
-                        UsageBar(
-                            label = purposeLabel(p.purpose),
-                            value = p.promptTokens + p.completionTokens,
-                            maxValue = summary.byPurpose.maxOf { it.promptTokens + it.completionTokens },
-                            detail = "${formatTokens(p.promptTokens + p.completionTokens)} · ${p.calls} 次",
-                            tint = Color(0xFF3FA37A)
+            // 大数字 + 环比
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        formatTokens(stat.total),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        "token",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Spacer(Modifier.weight(1f))
+                    val pct = periodDeltaPct(stat)
+                    Text(
+                        when {
+                            stat.prevTotal <= 0L -> ""
+                            pct == null -> "—"
+                            else -> {
+                                val p = pct.toInt()
+                                if (p >= 0) "▲ $p%" else "▼ ${-p}%"
+                            }
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (pct != null && pct < 0.0) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 3.dp)
+                    )
+                    if (stat.prevTotal > 0L) {
+                        Text(
+                            "vs ${prevRangeLabel(stat.range)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 3.dp)
                         )
                     }
                 }
+                Text(
+                    "输入 ${formatTokens(stat.inTok)} · 输出 ${formatTokens(stat.outTok)} · LLM ${stat.llmCalls} 次 / 工具 ${stat.toolCalls} 次",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
 
-            if (summary.bySession.size > 1) {
-                SectionTitle("会话排行")
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    summary.bySession.take(5).forEach { s ->
-                        val title = runCatching {
-                            vm.sessionTitleOf(s.sessionId)
-                        }.getOrNull().orEmpty().ifBlank { "会话 ${s.sessionId.take(8)}" }
-                        UsageBar(
-                            label = title,
-                            value = s.promptTokens + s.completionTokens,
-                            maxValue = summary.bySession.maxOf { it.promptTokens + it.completionTokens },
-                            detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
-                            tint = Color(0xFFD9913F)
-                        )
-                    }
+            // 时段柱状趋势（Canvas 自绘，峰值高亮）
+            GlassGroup(backdrop) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    Text(
+                        trendRangeLabel(stat),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    UsageTrendChart(
+                        bars = stat.days,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
 
-            SectionTitle("每日预算（5.1）")
+            // 4 指标卡：调用 / 成功率 / 平均耗时 / 估算费用
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DashboardMetric(backdrop, stat.calls.toString(), "调用", Modifier.weight(1f))
+                DashboardMetric(
+                    backdrop,
+                    stat.successPct()?.let { "$it%" } ?: "—",
+                    "成功率",
+                    Modifier.weight(1f),
+                    tint = Color(0xFF3FA37A)
+                )
+                DashboardMetric(
+                    backdrop,
+                    stat.avgSeconds()?.let { String.format(java.util.Locale.US, "%.1fs", it) } ?: "—",
+                    "平均耗时",
+                    Modifier.weight(1f)
+                )
+                DashboardMetric(
+                    backdrop,
+                    estimatePeriodCost(stat),
+                    "估算费用",
+                    Modifier.weight(1f),
+                    tint = Color(0xFFB06A12)
+                )
+            }
+
+            // 每日预算（保留 5.1，加进度可视化）
+            SectionTitle("每日预算")
             Column(Modifier.padding(horizontal = 16.dp)) {
                 GlassGroup(backdrop) {
                     Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        val budgetK = settings.dailyTokenBudgetK
+                        val usedToday = periods[0].total
+                        if (budgetK > 0) {
+                            val budget = budgetK * 1000L
+                            val pct = (usedToday * 100 / budget).toInt().coerceAtMost(100)
+                            Row(Modifier.fillMaxWidth()) {
+                                Text(
+                                    "今日已用 ${formatTokens(usedToday)} / ${formatTokens(budget)}",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    "$pct%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when {
+                                        pct >= 100 -> MaterialTheme.colorScheme.error
+                                        pct >= 70 -> Color(0xFFB06A12)
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            UsageBar(
+                                label = "",
+                                value = usedToday.coerceAtMost(budget),
+                                maxValue = budget,
+                                detail = "",
+                                tint = when {
+                                    pct >= 100 -> MaterialTheme.colorScheme.error
+                                    pct >= 70 -> Color(0xFFB06A12)
+                                    else -> Color(0xFFD9913F)
+                                },
+                                compact = true
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
                         Text(
                             "超 70% 提醒精简；达 100% 后定时任务与云端梦境固化自动跳过（手动对话不中断）。0 = 不限。",
                             style = MaterialTheme.typography.labelSmall,
@@ -2793,6 +2888,152 @@ private fun LazyListScope.usageItems(
                                 trailingIcon = { Text("K tok/日", style = MaterialTheme.typography.labelSmall) },
                                 colors = com.haoai.agent.ui.common.glassFieldColors()
                             )
+                        }
+                    }
+                }
+            }
+
+            // 分布卡：按模型 / 按用途 / 会话 chip 二级切换
+            SectionTitle("分布")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                GlassGroup(backdrop) {
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("按模型", "按用途", "会话").forEachIndexed { i, label ->
+                                GlassCapChip(selected = distTab == i, label = label, onClick = { distTab = i })
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        when (distTab) {
+                            0 -> {
+                                if (stat.byModel.isEmpty()) EmptyHint("本时段无 LLM 调用")
+                                else stat.byModel.take(6).forEach { m ->
+                                    UsageBar(
+                                        label = m.model,
+                                        value = m.promptTokens + m.completionTokens,
+                                        maxValue = stat.byModel.maxOf { it.promptTokens + it.completionTokens },
+                                        detail = "${formatTokens(m.promptTokens + m.completionTokens)} · ${m.calls} 次",
+                                        tint = Color(0xFF5B8DEF)
+                                    )
+                                }
+                            }
+                            1 -> {
+                                if (stat.byPurpose.isEmpty()) EmptyHint("本时段无记录")
+                                else stat.byPurpose.take(6).forEach { p ->
+                                    UsageBar(
+                                        label = purposeLabel(p.purpose),
+                                        value = p.promptTokens + p.completionTokens,
+                                        maxValue = stat.byPurpose.maxOf { it.promptTokens + it.completionTokens },
+                                        detail = "${formatTokens(p.promptTokens + p.completionTokens)} · ${p.calls} 次",
+                                        tint = Color(0xFF3FA37A)
+                                    )
+                                }
+                            }
+                            else -> {
+                                val list = stat.bySession.filter { it.promptTokens + it.completionTokens > 0 }.ifEmpty { stat.bySession }
+                                if (list.size < 1) EmptyHint("本时段无会话记录")
+                                else list.take(5).forEach { s ->
+                                    val title = runCatching {
+                                        vm.sessionTitleOf(s.sessionId)
+                                    }.getOrNull().orEmpty().ifBlank { "会话 ${s.sessionId.take(8)}" }
+                                    UsageBar(
+                                        label = title,
+                                        value = s.promptTokens + s.completionTokens,
+                                        maxValue = list.maxOf { it.promptTokens + it.completionTokens },
+                                        detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
+                                        tint = Color(0xFFD9913F)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 健康度：成功率 / 工具审批 / 生成速度（账本 ok/durationMs/policyDecision 首次上屏）
+            SectionTitle("健康度")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                GlassGroup(backdrop) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        val total = stat.calls
+                        val succ = stat.successPct()
+                        HealthRow(
+                            label = "成功率",
+                            value = if (succ == null) "—" else "$succ% · 失败 ${stat.failCalls} 次",
+                            ratio = (succ ?: 0) / 100f,
+                            tint = Color(0xFF3FA37A)
+                        )
+                        Spacer(Modifier.height(9.dp))
+                        if (stat.toolCalls > 0) {
+                            HealthRow(
+                                label = "工具审批",
+                                value = "通过 ${stat.approved} · 拒绝 ${stat.denied} · 拦截 ${stat.blocked}",
+                                ratio = if (stat.approved + stat.denied + stat.blocked == 0) 0f
+                                else stat.approved.toFloat() / (stat.approved + stat.denied + stat.blocked),
+                                tint = Color(0xFF3FA37A)
+                            )
+                            Spacer(Modifier.height(9.dp))
+                        }
+                        val speed = stat.tps()
+                        HealthRow(
+                            label = "平均生成速度",
+                            value = speed?.let { String.format(java.util.Locale.US, "%.1f tok/s", it) } ?: "—",
+                            ratio = ((speed ?: 0.0) / 40.0).coerceIn(0.0, 1.0).toFloat(),
+                            tint = Color(0xFF8B7BEF)
+                        )
+                        if (total == 0) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "本时段无调用记录",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 工具调用 TopN（tool 字段首次上屏）
+            if (stat.byTool.isNotEmpty()) {
+                SectionTitle("工具调用")
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    GlassGroup(backdrop) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            stat.byTool.take(5).forEach { t ->
+                                UsageBar(
+                                    label = t.tool,
+                                    value = t.calls.toLong(),
+                                    maxValue = stat.byTool.maxOf { it.calls }.toLong().coerceAtLeast(1),
+                                    detail = "${t.calls} 次",
+                                    tint = Color(0xFF8B7BEF)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 会话排行（独立保留：时段内 Top5）
+            SectionTitle("会话排行")
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                GlassGroup(backdrop) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        val list = stat.bySession
+                        if (list.size < 2) {
+                            EmptyHint("本时段会话不足")
+                        } else {
+                            list.take(5).forEach { s ->
+                                val title = runCatching {
+                                    vm.sessionTitleOf(s.sessionId)
+                                }.getOrNull().orEmpty().ifBlank { "会话 ${s.sessionId.take(8)}" }
+                                UsageBar(
+                                    label = title,
+                                    value = s.promptTokens + s.completionTokens,
+                                    maxValue = list.maxOf { it.promptTokens + it.completionTokens },
+                                    detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
+                                    tint = Color(0xFFD9913F)
+                                )
+                            }
                         }
                     }
                 }
@@ -2830,22 +3071,209 @@ private fun LazyListScope.usageItems(
     }
 }
 
+/** 环比对比文案（今日→昨天 / 本周→上周 / 本月→上月）。 */
+private fun prevRangeLabel(range: Int): String = when (range) {
+    0 -> "昨天"; 1 -> "上周"; else -> "上月"
+}
+
+/** 环比百分比（null=无法计算）。 */
+private fun periodDeltaPct(s: com.haoai.agent.data.UsageLedger.PeriodStats): Double? {
+    if (s.prevTotal <= 0L) return null
+    return (s.total - s.prevTotal).toDouble() / s.prevTotal * 100.0
+}
+
+/**
+ * 时段估算费用：费率来自内置 models.dev 目录快照（app/src/main/assets/models-dev-api.json），
+ * 仅匹配到目录条目时计费，未收录的模型（mock/私有名）按 0 计——「估算」口径，不承诺精确。
+ * 单价单位：USD / 百万 token（目录 spec 原生单位），展示折算 CNY（≈7.2 汇率）。
+ */
+private fun estimatePeriodCost(s: com.haoai.agent.data.UsageLedger.PeriodStats): String {
+    if (s.total <= 0L) return "—"
+    var usd = 0.0
+    var priced = false
+    for (m in s.byModel) {
+        val rate = com.haoai.agent.data.ModelCatalog.pricePerMillion(m.model) ?: continue
+        priced = true
+        usd += m.promptTokens / 1_000_000.0 * rate.first + m.completionTokens / 1_000_000.0 * rate.second
+    }
+    if (!priced) return "—"
+    val cny = usd * 7.2
+    return if (cny >= 100) "¥${cny.toInt()}" else String.format(java.util.Locale.US, "¥%.2f", cny)
+}
+
+/** 趋势卡标题：按时段描述范围。 */
+private fun trendRangeLabel(s: com.haoai.agent.data.UsageLedger.PeriodStats): String = when (s.range) {
+    0 -> "今日 · 每 4 小时"
+    1 -> "本周 · 按日（周一至今）"
+    else -> "本月 · 按日（1 日至今）"
+}
+
+/** 4 指标卡单格（磨砂底，无玻璃折射避免高频重组开销）。 */
 @Composable
-private fun UsageBar(label: String, value: Long, maxValue: Long, detail: String, tint: Color) {
-    Column(Modifier.padding(vertical = 5.dp)) {
-        Row(Modifier.fillMaxWidth()) {
+private fun DashboardMetric(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.primary
+) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f))
+            .padding(horizontal = 8.dp, vertical = 9.dp)
+    ) {
+        Column {
             Text(
-                label,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = tint,
+                maxLines = 1
             )
             Text(
-                detail,
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/** 健康度单行：左标签右数值 + 底部比例条。 */
+@Composable
+private fun HealthRow(label: String, value: String, ratio: Float, tint: Color) {
+    Column {
+        Row(Modifier.fillMaxWidth()) {
+            Text(label, style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.weight(1f))
+            Text(
+                value,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(ratio.coerceIn(0f, 1f))
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(tint)
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyHint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(vertical = 6.dp)
+    )
+}
+
+/**
+ * 时段柱状趋势图（Canvas 自绘，对齐 MemoryScreen 健康度条绘制风格）：
+ * 今日=6 桶（4 小时）/ 本周=7 桶 / 本月=按日桶；峰值桶用深色强调 + 峰值文案。
+ */
+@Composable
+private fun UsageTrendChart(bars: List<com.haoai.agent.data.UsageLedger.DayBar>, tint: Color) {
+    val maxTok = bars.maxOfOrNull { it.tokens } ?: 0L
+    val peak = bars.firstOrNull { it.peak }
+    Column {
+        if (bars.isNotEmpty()) {
+            Text(
+                if (peak != null && peak.tokens > 0) "峰值 ${peak.label} · ${formatTokens(peak.tokens)}"
+                else "本时段暂无数据",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+        }
+        androidx.compose.foundation.Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(88.dp)
+        ) {
+            if (bars.isEmpty() || maxTok <= 0L) return@Canvas
+            val n = bars.size
+            val gap = 4.dp.toPx()
+            val barW = (size.width - gap * (n - 1)) / n
+            bars.forEachIndexed { i, b ->
+                val h = if (maxTok > 0) (b.tokens.toFloat() / maxTok) * (size.height - 14.dp.toPx()) else 0f
+                if (b.tokens > 0L) {
+                    drawRoundRect(
+                        color = if (b.peak) tint.copy(alpha = 0.75f) else tint.copy(alpha = 0.45f),
+                        topLeft = androidx.compose.ui.geometry.Offset(i * (barW + gap), size.height - 12.dp.toPx() - h),
+                        size = androidx.compose.ui.geometry.Size(barW, h.coerceAtLeast(3.dp.toPx())),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
+                    )
+                } else {
+                    drawRoundRect(
+                        color = tint.copy(alpha = 0.10f),
+                        topLeft = androidx.compose.ui.geometry.Offset(i * (barW + gap), size.height - 12.dp.toPx() - 3.dp.toPx()),
+                        size = androidx.compose.ui.geometry.Size(barW, 3.dp.toPx()),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                    )
+                }
+            }
+        }
+        // 桶标签：桶多时隔一个标注，避免重叠
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            val step = if (bars.size > 10) ((bars.size + 4) / 5) else 1
+            bars.forEachIndexed { i, b ->
+                androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f)) {
+                    if (i % step == 0 || i == bars.size - 1) {
+                        Text(
+                            b.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageBar(
+    label: String,
+    value: Long,
+    maxValue: Long,
+    detail: String,
+    tint: Color,
+    compact: Boolean = false
+) {
+    Column(Modifier.padding(vertical = 5.dp)) {
+        if (!compact || label.isNotEmpty() || detail.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth()) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         androidx.compose.foundation.Canvas(
             Modifier
