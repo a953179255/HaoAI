@@ -2381,18 +2381,13 @@ private fun ReasoningPanel(
     // live 且未展开全文时：受限高度 + 底部渐隐预览
     val previewMode = live && !userToggled
     // 揭幕进度：0=遮罩全盖 1=完全揭开（仅展开动画期间可见）
-    val reveal by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.7f, 0.3f, 1f)),
-        label = "reveal"
-    )
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.66f * chatBubbleAlphas().second.coerceIn(0f, 1f) + 0.10f),
         shape = RoundedCornerShape(13.dp),
-        // v7.7：与气泡/胶囊同体系描边
+        // v7.7：与气泡/胶囊同体系描边；v7.7.1 统一 8%（原 10% 略深）
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -2401,9 +2396,10 @@ private fun ReasoningPanel(
     ) {
         Column(
             Modifier.padding(vertical = 8.dp)
-                // 方案 3 容器撑开：高度变化平滑过渡（收起/展开都走这里）
+                // v7.7.1 方案 2（用户换选）：纯高度展开——只有容器高度 300ms 过渡，
+                // 文字原地被"揭"出，零位移零淡入（Material 3 accordion 标准式）
                 .animateContentSize(
-                    animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.7f, 0.3f, 1f))
+                    animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
                 )
         ) {
             Row(
@@ -2489,25 +2485,14 @@ private fun ReasoningPanel(
                         )
                     }
                 } else {
-                    // v7.7 方案 3 揭幕：文字层整体 scaleY(reveal) 自上而下揭开（transformOrigin
-                    // 固定 top），内容零位移；animateContentSize 已负责容器高度跟随
-                    Box(
-                        Modifier
-                            .padding(horizontal = 12.dp)
-                            .padding(top = 5.dp)
-                            .graphicsLayer {
-                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
-                                scaleY = reveal
-                                alpha = reveal.coerceIn(0f, 1f)
-                            }
-                    ) {
-                        Text(
-                            text,
-                            style = MaterialTheme.typography.bodySmall,
-                            lineHeight = 17.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f)
-                        )
-                    }
+                    // v7.7.1 方案 2：纯高度展开——文字原地不动，无 scaleY 无 alpha 动画
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                        modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
+                    )
                 }
             }
         }
@@ -2613,7 +2598,14 @@ private fun ReasoningRow(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
+            // v7.7.1：与工具胶囊同体系底+描边（此前是无框裸文本行，与胶囊/气泡不统一）
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                RoundedCornerShape(16.dp)
+            )
             .clickable { open = !open }
             .padding(horizontal = 10.dp, vertical = 7.dp)
     ) {
