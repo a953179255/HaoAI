@@ -1,5 +1,6 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Size
@@ -2431,12 +2432,19 @@ private fun ReasoningPanel(
                     )
                     .drawBehind {
                         if (headerHighlight > 0.01f) {
+                            // v7.8.7 高亮区域=可见胶囊按钮 1:1：Row 被面板 Column 的
+                            // vertical 8dp padding 内缩——高亮矩形必须向外扩展补齐，
+                            // 否则比按钮小一圈且下偏（用户指出的"大小不一致"真根因）。
+                            // 收起态：上下各扩 8dp = 整个胶囊；展开态：只向上扩 8dp
+                            // （到面板顶缘），下缘停在标题行底部与内容分界。
+                            // Surface 的 clip(16dp) 负责裁出圆角。
+                            val padPx = 8.dp.toPx()
+                            val top = -padPx
+                            val height = size.height + padPx + if (expanded) 0f else padPx
                             drawRect(
-                                // v7.8.6：18%——面板底 66% 半透明透壁纸，12% 在亮壁纸
-                                // 区域几乎不可见（工具胶囊是 94% 实底所以 12% 够用）；
-                                // 半透明底需要更高不透明度才达到同等观感
                                 brush = SolidColor(hlColor.copy(alpha = 0.18f * headerHighlight)),
-                                size = size
+                                topLeft = Offset(0f, top),
+                                size = Size(size.width, height)
                             )
                         }
                     }
