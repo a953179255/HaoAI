@@ -2392,7 +2392,8 @@ private fun ReasoningPanel(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(13.dp))
-            .clickable { userToggled = true; expanded = !expanded }
+            // v7.8：clickable 移除——只允许标题行响应收起（点按区拆分），
+            // 面板正文完全释放给文本选择/复制
     ) {
         Column(
             Modifier.padding(vertical = 8.dp)
@@ -2403,7 +2404,10 @@ private fun ReasoningPanel(
                 )
         ) {
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxWidth()
+                    // v7.8：唯一点击收起区 = 标题行
+                    .clickable { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.size(12.dp))
@@ -2485,14 +2489,28 @@ private fun ReasoningPanel(
                         )
                     }
                 } else {
-                    // v7.7.1 方案 2：纯高度展开——文字原地不动，无 scaleY 无 alpha 动画
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodySmall,
-                        lineHeight = 17.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                        modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
-                    )
+                    // v7.8 方案 3（用户选型）：思考竖线 + 浅底——竖线用 colorScheme.primary
+                    // （随设置主题种子色/壁纸取色联动），引文式与正式回复分层
+                    Box(
+                        Modifier
+                            .padding(horizontal = 10.dp)
+                            .padding(top = 6.dp, bottom = 2.dp)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            .border(
+                                2.5.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                            )
+                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+                    ) {
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 17.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f)
+                        )
+                    }
                 }
             }
         }
