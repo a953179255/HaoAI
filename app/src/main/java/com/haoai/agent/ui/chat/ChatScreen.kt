@@ -1,7 +1,6 @@
 package com.haoai.agent.ui.chat
 
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.drawBehind
@@ -2400,58 +2399,27 @@ private fun ReasoningPanel(
             // 面板正文完全释放给文本选择/复制
     ) {
         Column(
-            Modifier.padding(vertical = 8.dp)
-                // v7.7.1 方案 2（用户换选）：纯高度展开——只有容器高度 300ms 过渡，
-                // 文字原地被"揭"出，零位移零淡入（Material 3 accordion 标准式）
-                .animateContentSize(
-                    animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
-                )
-        ) {
-            // v7.8.5 整行高亮指示（用户定稿）：颜色=工具胶囊标准 ripple 同色调
-            // （onSurface 12%）；区域=drawRect(size=size) 行 bounds 1:1（inset:0，
-            // 数学上强制与按钮等大等宽）；时序=按住保持、松手 380ms 淡出
-            val headerInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-            val headerPressed by headerInteraction.collectIsPressedAsState()
-            val headerHighlight by androidx.compose.animation.core.animateFloatAsState(
-                targetValue = if (headerPressed) 1f else 0f,
-                animationSpec = androidx.compose.animation.core.tween(
-                    durationMillis = if (headerPressed) 90 else 380,
-                    easing = androidx.compose.animation.core.LinearEasing
-                ),
-                label = "headerHl"
+            // v7.8.8：原 vertical 8dp padding 挪进标题行（见下）——点击区=可见胶囊 1:1
+            Modifier.animateContentSize(
+                animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
             )
-            val hlColor = MaterialTheme.colorScheme.onSurface
+        ) {
+            // v7.8.8 标题行改用与 ToolChip 完全相同的链路：clip(胶囊形) + 普通
+            // clickable（默认 ripple）。此前手写高亮（indication=null + drawBehind
+            // 自绘矩形 + 90/380ms 调参）两个顽疾：①18% 灰太淡、快点一下肉眼无反馈；
+            // ②向外扩 8dp 的补偿画在 clip 之外被裁掉，高亮永远比标题栏小一圈。
+            // 改回原生 ripple 后触发时机/颜色/形状与工具胶囊同源天然一致，零调参。
             Row(
                 Modifier
                     .fillMaxWidth()
-                    // v7.8.3 状态感知 clip：收起态=独立胶囊（16dp 全圆角）；展开态=面板
-                    // 顶部（只圆上角、下角方角衔接内容）
                     .clip(
                         if (expanded) RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                         else RoundedCornerShape(16.dp)
                     )
-                    .drawBehind {
-                        if (headerHighlight > 0.01f) {
-                            // v7.8.7 高亮区域=可见胶囊按钮 1:1：Row 被面板 Column 的
-                            // vertical 8dp padding 内缩——高亮矩形必须向外扩展补齐，
-                            // 否则比按钮小一圈且下偏（用户指出的"大小不一致"真根因）。
-                            // 收起态：上下各扩 8dp = 整个胶囊；展开态：只向上扩 8dp
-                            // （到面板顶缘），下缘停在标题行底部与内容分界。
-                            // Surface 的 clip(16dp) 负责裁出圆角。
-                            val padPx = 8.dp.toPx()
-                            val top = -padPx
-                            val height = size.height + padPx + if (expanded) 0f else padPx
-                            drawRect(
-                                brush = SolidColor(hlColor.copy(alpha = 0.18f * headerHighlight)),
-                                topLeft = Offset(0f, top),
-                                size = Size(size.width, height)
-                            )
-                        }
-                    }
-                    .clickable(
-                        interactionSource = headerInteraction,
-                        indication = null
-                    ) { userToggled = true; expanded = !expanded },
+                    .clickable { userToggled = true; expanded = !expanded }
+                    // 上下 8dp 在 clip/clickable 内侧 → ripple 与点击区都覆盖到胶囊
+                    // 全缘（含原面板 padding 区），死区随之消失
+                    .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.size(12.dp))
@@ -2506,7 +2474,8 @@ private fun ReasoningPanel(
                     // live 预览：限高 + 底部渐隐遮罩，内容自动滚到底跟随最新推理
                     val previewScroll = rememberScrollState()
                     LaunchedEffect(text) { previewScroll.scrollTo(previewScroll.maxValue) }
-                    Box(Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)) {
+                    // 底部 8dp 补回：原由面板 Column 的 vertical padding 提供（v7.8.8 挪进了标题行）
+                    Box(Modifier.padding(horizontal = 12.dp).padding(top = 5.dp, bottom = 8.dp)) {
                         Text(
                             text,
                             style = MaterialTheme.typography.bodySmall,
@@ -2538,8 +2507,9 @@ private fun ReasoningPanel(
                     val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
                     Box(
                         Modifier
+                            // bottom 2→10dp：补回原面板 Column 的底部 8dp（v7.8.8 挪进了标题行）
                             .padding(horizontal = 10.dp)
-                            .padding(top = 6.dp, bottom = 2.dp)
+                            .padding(top = 6.dp, bottom = 10.dp)
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
                             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
