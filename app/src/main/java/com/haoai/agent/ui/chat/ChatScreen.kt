@@ -30,6 +30,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
@@ -2536,169 +2537,6 @@ private fun StreamingItem(
     }
 }
 
-/**
- * 方案 A · 执行流聚合卡（骨架）：整回合思考+工具收进一张玻璃卡，紧凑行动作流。
- * - 新活动永远追加在最底，顺序确定（根治"工具跑到思考上面"）；
- * - 卡限高 ~40% 屏，超出在卡内滚动跟随；外层列表只随正文气泡生长（根治弹底）；
- * - 正文开始后自动收成摘要行；结束后收成「已完成 N 个动作」，点击回看。
- */
-@Composable
-private fun ActivityTimelineCard(
-    reasoning: String?,
-    tools: List<com.haoai.agent.ui.UiTool>,
-    streaming: Boolean,
-    thinkingMs: Long? = null,
-    onStopRun: () -> Unit = {},
-    onViewDiff: (String) -> Unit = {},
-    /** v5 修复：回合级运行态。历史消息 running=false → 永远不显示"正在执行/正在思考"。 */
-    running: Boolean = false
-) {
-    val doneCount = tools.count { it.state != ToolRunState.RUNNING }
-    val runningCount = tools.count { it.state == ToolRunState.RUNNING }
-    // live = 本回合真的在跑、且正文还没开始（工具/思考阶段）。
-    // 旧判断 streaming==false && (有活动) 会把历史消息误判成 live（bug：滚上去全是"正在执行"）
-    val live = running && !streaming
-    val actionCount = doneCount + runningCount
-
-    // 展开态：live（工具/思考阶段）默认展开看动作流；正文阶段/历史默认收成摘要头
-    var expanded by rememberSaveable { mutableStateOf(live) }
-    var userToggled by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(streaming) {
-        if (streaming && !userToggled) expanded = false
-    }
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .clickable {
-                userToggled = true
-                expanded = !expanded
-            }
-    ) {
-        Column(Modifier.padding(vertical = 6.dp)) {
-            // ── 头部：状态 + 动作计数 ──
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (live) {
-                    val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
-                        .animateFloat(0.55f, 1f, infiniteRepeatable(tween(900)), label = "p")
-                    Box(
-                        Modifier
-                            .size(8.dp)
-                            .graphicsLayer { scaleX = pulse; scaleY = pulse; alpha = pulse }
-                            .background(MaterialTheme.colorScheme.primary, CircleShape)
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        "正在执行",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    Icon(
-                        Icons.Filled.Checklist,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        "已完成 $actionCount 个动作",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (actionCount > 0) {
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        "$actionCount",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Icon(
-                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            // 收起态摘要：最近一条活动的单行（思考 ticker / 工具行）
-            if (!expanded) {
-                val lastTool = tools.lastOrNull()
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (reasoning != null && lastTool == null) {
-                        // 思考中：旋钮形态 C 滚动跟随（收起态也跟随；思考完定格）
-                        ReasoningTickerInline(
-                            text = reasoning,
-                            thinkingMs = thinkingMs,
-                            live = live,
-                            showTicker = true,
-                            scrolling = live
-                        )
-                    } else if (lastTool != null) {
-                        TimelineToolRowCompact(lastTool)
-                    }
-                }
-            } else {
-                Spacer(Modifier.size(4.dp))
-                TimelineBody(
-                    reasoning = reasoning,
-                    tools = tools,
-                    thinkingMs = thinkingMs,
-                    onStopRun = onStopRun,
-                    onViewDiff = onViewDiff,
-                    live = live
-                )
-            }
-        }
-    }
-}
-
-/** 收起态单行工具摘要（状态点 + 图标 + 中文动词加粗）。须在 RowScope 内调用。 */
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.TimelineToolRowCompact(tool: com.haoai.agent.ui.UiTool) {
-    if (tool.state == ToolRunState.RUNNING) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(11.dp),
-            strokeWidth = 1.5.dp,
-            color = MaterialTheme.colorScheme.primary
-        )
-    } else {
-        Box(
-            Modifier
-                .size(8.dp)
-                .background(
-                    if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F),
-                    CircleShape
-                )
-        )
-    }
-    Spacer(Modifier.size(7.dp))
-    Text(toolIcon(tool.name), fontSize = 12.sp)
-    Spacer(Modifier.size(7.dp))
-    Text(
-        toolVerb(tool),
-        fontSize = 12.sp,
-        color = MaterialTheme.colorScheme.onSurface,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-        modifier = Modifier.weight(1f)
-    )
-}
 
 /** 工具中文动词行文本（简报已是中文动词层，直接用；空则回退原名）。 */
 private fun toolVerb(tool: com.haoai.agent.ui.UiTool): String =
@@ -2713,42 +2551,6 @@ private fun toolVerbOnly(tool: com.haoai.agent.ui.UiTool): String {
     return b.substringBefore('·').trim()
 }
 
-/** 工具类别图标：ToolBrief.iconOf 的 UI 侧兜底。 */
-private fun toolIcon(name: String): String =
-    runCatching { com.haoai.agent.agent.tools.ToolBrief.iconOf(name) }.getOrDefault("🔧")
-
-/** 展开态主体：紧凑行动作流（无竖线无节点），思考/工具按到达序排列。 */
-@Composable
-private fun TimelineBody(
-    reasoning: String?,
-    tools: List<com.haoai.agent.ui.UiTool>,
-    thinkingMs: Long? = null,
-    onStopRun: () -> Unit = {},
-    onViewDiff: (String) -> Unit = {},
-    /** 回合级运行态：传给思考行（历史=静态不滚动不计时）。 */
-    live: Boolean = false
-) {
-    val scroll = rememberScrollState()
-    // 新活动到达自动滚到卡内底部（跟随最新动作）
-    LaunchedEffect(reasoning?.length, tools.size, tools.lastOrNull()?.state) {
-        scroll.animateScrollTo(scroll.maxValue)
-    }
-    Column(
-        Modifier
-            .padding(horizontal = 6.dp)
-            .heightIn(max = 340.dp)
-            .verticalScroll(scroll)
-    ) {
-        // 思考行（旋钮式 ticker；流式思考是连续一段，放最前；工具执行中的 reasoning 为空）
-        if (!reasoning.isNullOrBlank()) {
-            ReasoningRow(reasoning, thinkingMs, live = live)
-        }
-        // 工具行按到达序排列
-        tools.forEach { tool ->
-            ToolStreamRow(tool, onViewDiff = onViewDiff, onStopRun = onStopRun)
-        }
-    }
-}
 
 /**
  * 思考行（v5 旋钮式 ticker）：spinner/shimmer「正在思考」+ 实时计时 + 旋钮滚动
@@ -2949,9 +2751,35 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
 }
 
 /**
- * v7.3 方案 B（用户选型）：行内工具小胶囊——状态点 + 中文动词加粗 + 对象截断 + 状态标。
- * 贴在正文气泡之间，不套卡；点击展开参数/结果明细。运行中蓝点呼吸，完成绿点+✓，
- * 失败红点+⚠。maxWidth 限制防长 URL 撑满整行。
+ * v7.5 方案 3：智能缩写对象——按工具类型做「可辨认的缩写」而非硬截断：
+ * URL → 只留域名（lpl.qq.com）；命令 → 前段（curl -s --max-time 10）；
+ * 查询词/其余 → 首尾保留 16 字符。比一律 take(12) 可读性高一个档次。
+ */
+private fun smartObj(tool: com.haoai.agent.ui.UiTool): String {
+    val raw = toolObjPreview(tool)
+    val obj = raw.trim().removeSurrounding("「", "」").ifBlank { raw.trim() }
+    return when {
+        // URL：协议去掉，路径很长只留域名+首段路径
+        obj.startsWith("http://") || obj.startsWith("https://") -> {
+            val noProto = obj.substringAfter("://")
+            val host = noProto.substringBefore('/')
+            val path = noProto.substringAfter('/', "")
+            if (path.isBlank()) host
+            else host + "/" + path.substringBefore('?').take(14) + if (path.length > 14) "…" else ""
+        }
+        // 命令：前 24 字符（通常参数头都在前段）
+        tool.name == "bash" || tool.name == "shell" ->
+            obj.take(24) + if (obj.length > 24) "…" else ""
+        // 其余（查询词、文件路径等）：16 字符
+        else -> obj.take(16) + if (obj.length > 16) "…" else ""
+    }
+}
+
+/**
+ * v7.3 方案 B（用户选型）：行内工具小胶囊——状态点 + 中文动词加粗 + 对象 + 状态标。
+ * v7.5 方案 3：单行放宽到 ~92% 行宽，对象超长时胶囊内**横向滚动**查看全文
+ * （点击即滚，不再狠截认不出）；点击展开参数/结果明细改为长按（避免与滚动冲突）。
+ * 运行中蓝点呼吸，完成绿点+✓，失败红点+⚠。
  */
 @Composable
 private fun InlineToolPill(
@@ -2968,23 +2796,28 @@ private fun InlineToolPill(
         Modifier
             .fillMaxWidth()
             // v7.4.1：调用方（AssistantBlock/StreamingItem 的 Column）已提供 14dp 水平
-            // padding——这里不能再加（双重 14dp = 胶囊比气泡缩进 14dp 的对齐 bug）
-            .padding(vertical = 2.dp)
+            // padding——这里不能再加（双重 14dp = 胶囊比气泡缩进 14dp 的对齐 bug）。
+            // v7.5：垂直间距统一 3dp（间隔不一致修复的一半）
+            .padding(vertical = 3.dp)
     ) {
-        Row {
+        // 胶囊本体：宽度上限 92% 行宽（fillMaxWidth 上限比例用 BoxWithConstraints 处理）
+        BoxWithConstraints {
+            val maxW = maxWidth * 0.92f
             Row(
                 Modifier
-                    // v7.4.2：胶囊宽度由内容决定（配合对象文本字符数截断），
-                    // 不再设 widthIn 上限——上限会拉出「✓ 后大段空白」的怪相
+                    .widthIn(max = maxW)
                     .clip(RoundedCornerShape(16.dp))
-                    // v7.4：实底surface + 细描边——花壁纸上文字可读（原 5% 透明度直接混壁纸）
+                    // 实底surface + 细描边——花壁纸上文字可读
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
                     .border(
                         1.dp,
                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                         RoundedCornerShape(16.dp)
                     )
-                    .clickable { if (!isRunning) expanded = !expanded }
+                    .combinedClickable(
+                        onClick = { if (!isRunning) expanded = !expanded },
+                        onLongClick = { if (!isRunning) expanded = true }
+                    )
                     .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -3012,8 +2845,7 @@ private fun InlineToolPill(
                     )
                 }
                 Spacer(Modifier.size(7.dp))
-                // v7.4.3：只显示动词段（第一个 · 前）——旧 toolVerb 返回整个 brief，
-                // 动词后拖着一长串对象把 ✓ 顶到胶囊最右
+                // 动词：只取 brief 第一个 · 前的动词段
                 Text(
                     toolVerbOnly(tool),
                     fontSize = 11.sp,
@@ -3021,17 +2853,28 @@ private fun InlineToolPill(
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
                 )
-                // v7.4.3 对象：brief 中第一个 · 后的第一段（到下一个 · 为止），
-                // 12 字符截断——多查询合并的简报（A · B · C）只取 A
-                val obj = toolObjPreview(tool)
-                if (obj.isNotBlank()) {
+                // v7.5 方案 3：对象超长时胶囊内横向滚动（scrollTo 跟尾），✓ 固定在右
+                val fullObj = smartObj(tool)
+                val rawObj = toolObjPreview(tool).trim()
+                if (fullObj.isNotBlank()) {
                     Spacer(Modifier.size(5.dp))
+                    val hscroll = rememberScrollState()
+                    var pillMax by remember { mutableIntStateOf(0) }
+                    LaunchedEffect(rawObj) {
+                        // 内容变化时滚到尾部（最新内容可见），停留 1.2s 后回头部
+                        hscroll.scrollTo(hscroll.maxValue)
+                        kotlinx.coroutines.delay(1200)
+                        hscroll.animateScrollTo(0)
+                    }
                     Text(
-                        obj.take(12) + if (obj.length > 12) "…" else "",
+                        fullObj,
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Clip
+                        softWrap = false,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .horizontalScroll(hscroll)
                     )
                 }
                 Spacer(Modifier.size(6.dp))
@@ -3101,163 +2944,6 @@ private fun toolBriefDetail(tool: com.haoai.agent.ui.UiTool): String {
     return "[${tool.name}] $st\n${tool.brief.ifBlank { "（无详情）" }}"
 }
 
-/** A 式工具行：图标盒 + 停止块/状态点 + 中文动词加粗 + 对象灰字，点击展开参数。 */
-@Composable
-private fun ToolStreamRow(
-    tool: com.haoai.agent.ui.UiTool,
-    onViewDiff: (String) -> Unit = {},
-    onStopRun: () -> Unit = {}
-) {
-    var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
-    val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable { expanded = !expanded }
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            when (tool.state) {
-                ToolRunState.RUNNING -> Box(
-                    Modifier
-                        .size(22.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.error.copy(alpha = 0.14f))
-                        .clickable { onStopRun() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "stop")
-                        .animateFloat(0.55f, 1f, infiniteRepeatable(tween(1100)), label = "sp")
-                    Box(
-                        Modifier
-                            .size(8.dp)
-                            .graphicsLayer { alpha = pulse }
-                            .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp))
-                    )
-                }
-                else -> Box(
-                    Modifier
-                        .size(22.dp)
-                        .clip(CircleShape)
-                        .background(
-                            (if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F))
-                                .copy(alpha = 0.14f)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        Modifier
-                            .size(7.dp)
-                            .background(
-                                if (tool.state == ToolRunState.ERROR) MaterialTheme.colorScheme.error else Color(0xFF7BD88F),
-                                CircleShape
-                            )
-                    )
-                }
-            }
-            Spacer(Modifier.size(8.dp))
-            // v6：错误行不再显示类别图标（🔧 扳手观感差），错误行统一显示 ⚠️
-            Text(
-                if (tool.state == ToolRunState.ERROR) "⚠️" else toolIcon(tool.name),
-                fontSize = 12.sp
-            )
-            Spacer(Modifier.size(7.dp))
-            // 中文动词加粗主位，对象灰字跟随（A 卡内行布局：动词不动、对象截断）
-            Text(
-                toolVerb(tool),
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-            Spacer(Modifier.size(6.dp))
-            if (canReview) {
-                Text(
-                    "查看变更",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { onViewDiff(tool.callId) }
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                )
-                Spacer(Modifier.size(2.dp))
-            }
-            Icon(
-                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-        AnimatedVisibility(expanded) {
-            Column(Modifier.padding(start = 38.dp, top = 2.dp, bottom = 4.dp)) {
-                if (tool.subagents.isNotEmpty()) {
-                    tool.subagents.forEach { sub ->
-                        val subColor = when (sub.state) {
-                            "RUNNING" -> MaterialTheme.colorScheme.primary
-                            "DONE" -> Color(0xFF7BD88F)
-                            else -> MaterialTheme.colorScheme.error
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp)
-                        ) {
-                            if (sub.state == "RUNNING") {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(10.dp),
-                                    strokeWidth = 1.5.dp,
-                                    color = subColor
-                                )
-                            } else {
-                                Box(
-                                    Modifier
-                                        .size(7.dp)
-                                        .background(subColor, CircleShape)
-                                )
-                            }
-                            Spacer(Modifier.size(6.dp))
-                            Text(
-                                "子代理 ${sub.index}/${sub.total}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.size(5.dp))
-                            Text(
-                                sub.brief,
-                                fontSize = 10.5.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.size(2.dp))
-                }
-                Text(
-                    tool.preview ?: toolVerb(tool),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-    Spacer(Modifier.size(2.dp))
-}
 
 /** 气泡不透明度（设置 30%-100%）映射为 (用户气泡 alpha, 助手气泡 alpha)；100% 时几乎不透明。 */
 @Composable
@@ -4087,22 +3773,37 @@ private fun SessionsDrawer(
                         }
                     },
                     content = { cardClick ->
-                        // 卡面：真折射玻璃（v0.17.0 容器化时误降级为普通色块，用户要求恢复
-                        // AndroidLiquidGlass 折射质感）；active 带主题色浸染，不按压缩放（避免
-                        // 按压层变换被 backdrop 采样回画成四角残影）
-                        com.haoai.agent.ui.common.GlassCard(
-                            onClick = cardClick,
-                            backdrop = backdrop,
-                            shape = RoundedCornerShape(14.dp),
-                            // 恢复 v0.14 薄透折射玻璃质感：面板保持磨砂（lensRadius=0）不叠
-                            // 动态玻璃故文字不糊；折射渲染已被常驻隔离层兜底，四角无残影。
-                            // active 用 secondary 浸染（与旧版一致），按压缩放恢复（隔离层已根治残影）
-                            refract = true,
-                            surfaceAlpha = if (active) 0.30f else 0.16f,
-                            lensRadius = 14.dp,
-                            tint = if (active) MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f) else null,
-                            pressScale = true,
-                            modifier = Modifier.fillMaxWidth()
+                        // v7.6 方案 2（用户选型）：高透白玻璃卡——86% 白底 + 亮描边 +
+                        // 内高光（iOS 控制中心滑块风格），白亮边框把卡从磨砂底上"托"出来。
+                        // 旧双层薄玻璃（面板 28% + 卡 16%）叠加后卡与底无对比、标题混壁纸。
+                        // 折射关（refract=false 走本地绘制路径）：卡已是高透白，再采样壁纸
+                        // 反而搅浑文字层；选中态用绿浸染+绿描边。
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (active) Color(0xFF7BDC9C).copy(alpha = 0.30f)
+                                    else Color(0xFFFFFFFF).copy(alpha = 0.86f)
+                                )
+                                .border(
+                                    1.2.dp,
+                                    if (active) Color(0xFF3FAE5C).copy(alpha = 0.55f)
+                                    else Color(0xFFFFFFFF).copy(alpha = 0.90f),
+                                    RoundedCornerShape(14.dp)
+                                )
+                                // 内高光：顶部 40% 高度的白色渐变（玻璃"顶光"）
+                                .drawWithContent {
+                                    drawContent()
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            0f to Color.White.copy(alpha = 0.35f),
+                                            0.4f to Color.White.copy(alpha = 0.06f),
+                                            1f to Color.Transparent
+                                        )
+                                    )
+                                }
+                                .clickable { cardClick() }
                         ) {
                         Row(
                             Modifier
@@ -4123,7 +3824,7 @@ private fun SessionsDrawer(
                                 Text(
                                     s.title,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                                     color = if (active) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onBackground,
                                     maxLines = 1
