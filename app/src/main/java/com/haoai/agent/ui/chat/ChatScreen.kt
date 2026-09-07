@@ -2496,7 +2496,7 @@ private fun StreamingItem(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 5.dp)
+            .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
         val hasContent = !streamingText.isNullOrBlank()
         // v7.3 方案 B（行内小胶囊流）：流式期与历史同构——工具动作逐个渲染行内胶囊
@@ -2797,8 +2797,9 @@ private fun InlineToolPill(
             .fillMaxWidth()
             // v7.4.1：调用方（AssistantBlock/StreamingItem 的 Column）已提供 14dp 水平
             // padding——这里不能再加（双重 14dp = 胶囊比气泡缩进 14dp 的对齐 bug）。
-            // v7.5：垂直间距统一 3dp（间隔不一致修复的一半）
-            .padding(vertical = 3.dp)
+            // v7.6.1 间隔统一：胶囊 vertical=2dp → 胶囊-胶囊 4dp、气泡-胶囊 5+2=7dp
+            // 仍不等——气泡列顶部配 3dp 上间距（见调用处 spacing 修复），全局节奏 4dp。
+            .padding(vertical = 2.dp)
     ) {
         // 胶囊本体：宽度上限 92% 行宽（fillMaxWidth 上限比例用 BoxWithConstraints 处理）
         BoxWithConstraints {
@@ -2965,7 +2966,7 @@ private fun UserBubble(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 5.dp),
+            .padding(horizontal = 14.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.End
     ) {
         Surface(
@@ -3008,7 +3009,7 @@ private fun AssistantBlock(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 5.dp)
+            .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
         // v7.3 方案 B（行内小胶囊流，用户选型）：每个工具动作一个行内胶囊
         // （状态点 + 动词加粗 + 对象截断 + ✓），贴在正文气泡之间；不再渲染聚合卡。
@@ -3783,13 +3784,15 @@ private fun SessionsDrawer(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(
-                                    if (active) Color(0xFF7BDC9C).copy(alpha = 0.30f)
-                                    else Color(0xFFFFFFFF).copy(alpha = 0.86f)
+                                    // v7.6.1：86% 太白（透光感没了像实心白条），降 62%
+                                    // 保留磨砂透光；描边提亮补层次
+                                    if (active) Color(0xFF7BDC9C).copy(alpha = 0.38f)
+                                    else Color(0xFFFFFFFF).copy(alpha = 0.62f)
                                 )
                                 .border(
                                     1.2.dp,
                                     if (active) Color(0xFF3FAE5C).copy(alpha = 0.55f)
-                                    else Color(0xFFFFFFFF).copy(alpha = 0.90f),
+                                    else Color(0xFFFFFFFF).copy(alpha = 0.95f),
                                     RoundedCornerShape(14.dp)
                                 )
                                 // 内高光：顶部 40% 高度的白色渐变（玻璃"顶光"）
