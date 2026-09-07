@@ -2958,8 +2958,9 @@ private fun InlineToolPill(
     Column(
         Modifier
             .fillMaxWidth()
-            // v7.4：与正文气泡同起点同宽（horizontal=14dp），视觉左缘对齐
-            .padding(horizontal = 14.dp, vertical = 2.dp)
+            // v7.4.1：调用方（AssistantBlock/StreamingItem 的 Column）已提供 14dp 水平
+            // padding——这里不能再加（双重 14dp = 胶囊比气泡缩进 14dp 的对齐 bug）
+            .padding(vertical = 2.dp)
     ) {
         Row {
             Row(
