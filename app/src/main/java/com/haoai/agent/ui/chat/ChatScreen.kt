@@ -1,5 +1,8 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -2406,7 +2409,9 @@ private fun ReasoningPanel(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    // v7.8：唯一点击收起区 = 标题行
+                    // v7.8.1：ripple 裁剪成面板同款圆角（裸 clickable 的方形水波纹
+                    // 与胶囊长条不匹配）——clip 须在 clickable 之前
+                    .clip(RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp))
                     .clickable { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -2491,6 +2496,7 @@ private fun ReasoningPanel(
                 } else {
                     // v7.8 方案 3（用户选型）：思考竖线 + 浅底——竖线用 colorScheme.primary
                     // （随设置主题种子色/壁纸取色联动），引文式与正式回复分层
+                    val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
                     Box(
                         Modifier
                             .padding(horizontal = 10.dp)
@@ -2498,11 +2504,15 @@ private fun ReasoningPanel(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
                             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                            .border(
-                                2.5.dp,
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                            )
-                            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+                            // v7.8.1：只画左侧竖线（border 无 shape 默认四边框——上一版四边
+                            // 全包的 bug）；竖线 = primary 45%，随主题种子/壁纸取色联动
+                            .drawBehind {
+                                drawRect(
+                                    brush = SolidColor(lineColor),
+                                    size = Size(2.5.dp.toPx(), size.height)
+                                )
+                            }
+                            .padding(start = 12.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
                     ) {
                         Text(
                             text,
