@@ -1098,6 +1098,10 @@ private fun SectionPage(
     onEditCaps: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
+    // 色盘弹窗状态必须提在根级：LazyColumn item 内 fillMaxSize 遮罩会被 item 约束，
+    // 渲染成内容流内的一块（弹窗不能渲染在 LazyColumn item 内——同账本确认弹窗教训）
+    var pickerSeed by remember { mutableStateOf<String?>(null) }
+    var pickerSlot by remember { mutableIntStateOf(-1) }
     Box(
         Modifier
             .fillMaxSize()
@@ -1140,7 +1144,8 @@ private fun SectionPage(
                         vm, settings, context, backdrop,
                         wpVersion, onWpVersionChange = { },
                         onRequestClearWallpaper = onConfirmWpClear,
-                        onWpChanged = { }
+                        onWpChanged = { },
+                        onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex }
                     )
                     "about" -> aboutItems(vm, settings, backdrop)
                     "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = onConfirmClearLedger)
@@ -1154,6 +1159,16 @@ private fun SectionPage(
             modifier = Modifier
                 .align(Alignment.TopCenter)
         )
+        if (pickerSeed != null) {
+            ColorPickerDialog(
+                backdrop = backdrop,
+                settings = settings,
+                initialHex = pickerSeed.orEmpty(),
+                initialSlot = pickerSlot,
+                vm = vm,
+                onDismiss = { pickerSeed = null }
+            )
+        }
     }
 }
 
@@ -2200,7 +2215,8 @@ private fun LazyListScope.generalItems(
     wpVersion: Boolean,
     onWpVersionChange: (Boolean) -> Unit,
     onRequestClearWallpaper: () -> Unit,
-    onWpChanged: () -> Unit = {}
+    onWpChanged: () -> Unit = {},
+    onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> }
 ) {
     item { SectionTitle("外观") }
     item {
@@ -2242,8 +2258,6 @@ private fun LazyListScope.generalItems(
                 )
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text("主题色", style = MaterialTheme.typography.bodyMedium)
-                    var pickerSeed by remember { mutableStateOf<String?>(null) }
-                    var pickerSlot by remember { mutableIntStateOf(-1) }
                     val activeCustom = settings.customSeedActive
                     // 色盘初始色：当前生效主题色（自定义色或预设 primary），所见即所选
                     val currentSeedHex = if (activeCustom.isNotBlank()) activeCustom
@@ -2287,8 +2301,8 @@ private fun LazyListScope.generalItems(
                                         .clip(CircleShape)
                                         .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f), CircleShape)
                                         .combinedClickable(
-                                            onClick = { pickerSlot = slot; pickerSeed = currentSeedHex },
-                                            onLongClick = { pickerSlot = slot; pickerSeed = currentSeedHex }
+                                            onClick = { onOpenColorPicker(currentSeedHex, slot) },
+                                            onLongClick = { onOpenColorPicker(currentSeedHex, slot) }
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -2313,7 +2327,7 @@ private fun LazyListScope.generalItems(
                                         )
                                         .combinedClickable(
                                             onClick = { vm.applyCustomSeed(hex) },
-                                            onLongClick = { pickerSlot = slot; pickerSeed = hex }
+                                            onLongClick = { onOpenColorPicker(hex, slot) }
                                         )
                                 )
                             }
@@ -2325,7 +2339,7 @@ private fun LazyListScope.generalItems(
                                 .clip(CircleShape)
                                 .background(Brush.sweepGradient(PickerHueColors), CircleShape)
                                 .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f), CircleShape)
-                                .clickable { pickerSlot = -1; pickerSeed = currentSeedHex },
+                                .clickable { onOpenColorPicker(currentSeedHex, -1) },
                             contentAlignment = Alignment.Center
                         ) {
                             Box(
@@ -2335,16 +2349,6 @@ private fun LazyListScope.generalItems(
                                     .background(MaterialTheme.colorScheme.background)
                             )
                         }
-                    }
-                    if (pickerSeed != null) {
-                        ColorPickerDialog(
-                            backdrop = backdrop,
-                            settings = settings,
-                            initialHex = pickerSeed.orEmpty(),
-                            initialSlot = pickerSlot,
-                            vm = vm,
-                            onDismiss = { pickerSeed = null }
-                        )
                     }
                 }
             }
@@ -4311,7 +4315,8 @@ private val PickerHueColors = listOf(
 
 /**
  * 自定义主题色盘弹层（液态玻璃材质，弹窗内降级磨砂——禁自引用折射防崩溃）。
- * HSV 选色：大方块调饱和度/明度 + 色相条；选色后指定槽位保存并立即应用。
+ * 交互：点槽位=把当前预览色直接存入该槽并立即应用为主题色；
+ * 选中槽位后拖动色盘=实时调整该槽颜色（拖动中本地反馈，松手落盘生效，避免逐帧 JSON 写盘）。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -4328,9 +4333,20 @@ private fun ColorPickerDialog(
     var hue by remember { mutableFloatStateOf(initHsv[0]) }
     var sat by remember { mutableFloatStateOf(initHsv[1]) }
     var vel by remember { mutableFloatStateOf(initHsv[2]) }
-    var pickedSlot by remember { mutableIntStateOf(initialSlot) }
+    var activeSlot by remember { mutableIntStateOf(initialSlot) }
+    // 槽位本地镜像：拖动中逐帧改这个（重组仅限弹层），落盘走离散的 saveCustomSeed
+    val slotColors = remember {
+        androidx.compose.runtime.mutableStateListOf<String>().apply {
+            addAll(settings.customSeedColors.take(3))
+            while (size < 3) add("")
+        }
+    }
     val cur = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel)))
     val hexText = cur.toHex()
+
+    fun commitSlot(i: Int) {
+        if (i in 0..2) vm.saveCustomSeed(i, slotColors[i])
+    }
 
     androidx.compose.runtime.CompositionLocalProvider(
         com.haoai.agent.ui.common.LocalGlassRefract provides false
@@ -4373,7 +4389,8 @@ private fun ColorPickerDialog(
                         )
                     }
                     Text(
-                        "拖动选色，存入槽位后作为主题色生效",
+                        if (activeSlot < 0) "点槽位保存当前颜色；选中槽后拖动色盘可实时调整"
+                        else "正在调整槽 ${activeSlot + 1} · 松手生效",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
@@ -4389,14 +4406,28 @@ private fun ColorPickerDialog(
                                 detectTapGestures { pos ->
                                     sat = (pos.x / size.width).coerceIn(0f, 1f)
                                     vel = (1f - pos.y / size.height).coerceIn(0f, 1f)
+                                    if (activeSlot >= 0) {
+                                        slotColors[activeSlot] = Color(
+                                            android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
+                                        ).toHex()
+                                        commitSlot(activeSlot)
+                                    }
                                 }
                             }
                             .pointerInput(Unit) {
-                                detectDragGestures { change, _ ->
-                                    change.consume()
-                                    sat = (change.position.x / size.width).coerceIn(0f, 1f)
-                                    vel = (1f - change.position.y / size.height).coerceIn(0f, 1f)
-                                }
+                                detectDragGestures(
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        sat = (change.position.x / size.width).coerceIn(0f, 1f)
+                                        vel = (1f - change.position.y / size.height).coerceIn(0f, 1f)
+                                        if (activeSlot >= 0) {
+                                            slotColors[activeSlot] = Color(
+                                                android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
+                                            ).toHex()
+                                        }
+                                    },
+                                    onDragEnd = { if (activeSlot >= 0) commitSlot(activeSlot) }
+                                )
                             }
                     ) {
                         Box(
@@ -4437,13 +4468,27 @@ private fun ColorPickerDialog(
                             .pointerInput(Unit) {
                                 detectTapGestures { pos ->
                                     hue = (pos.x / size.width * 360f).coerceIn(0f, 359.9f)
+                                    if (activeSlot >= 0) {
+                                        slotColors[activeSlot] = Color(
+                                            android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
+                                        ).toHex()
+                                        commitSlot(activeSlot)
+                                    }
                                 }
                             }
                             .pointerInput(Unit) {
-                                detectDragGestures { change, _ ->
-                                    change.consume()
-                                    hue = (change.position.x / size.width * 360f).coerceIn(0f, 359.9f)
-                                }
+                                detectDragGestures(
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        hue = (change.position.x / size.width * 360f).coerceIn(0f, 359.9f)
+                                        if (activeSlot >= 0) {
+                                            slotColors[activeSlot] = Color(
+                                                android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel))
+                                            ).toHex()
+                                        }
+                                    },
+                                    onDragEnd = { if (activeSlot >= 0) commitSlot(activeSlot) }
+                                )
                             }
                     ) {
                         Box(
@@ -4456,7 +4501,7 @@ private fun ColorPickerDialog(
                         )
                     }
 
-                    // 预览 + 槽位选择
+                    // 预览 + 槽位选择：点槽位=当前色直接存入并应用；再点已选槽=取消选中
                     Row(
                         Modifier.padding(top = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -4480,9 +4525,8 @@ private fun ColorPickerDialog(
                                 horizontalArrangement = Arrangement.spacedBy(7.dp)
                             ) {
                                 repeat(3) { i ->
-                                    val savedHex = settings.customSeedColors.getOrNull(i).orEmpty()
-                                    val savedColor = com.haoai.agent.ui.theme.parseHexColor(savedHex)
-                                    val selected = pickedSlot == i
+                                    val savedColor = com.haoai.agent.ui.theme.parseHexColor(slotColors[i])
+                                    val selected = activeSlot == i
                                     Row(
                                         Modifier
                                             .clip(RoundedCornerShape(percent = 50))
@@ -4492,11 +4536,21 @@ private fun ColorPickerDialog(
                                             )
                                             .border(
                                                 1.dp,
-                                                if (selected) cur
-                                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                                                when {
+                                                    selected -> cur
+                                                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                                                },
                                                 RoundedCornerShape(percent = 50)
                                             )
-                                            .clickable { pickedSlot = i }
+                                            .clickable {
+                                                if (activeSlot == i) {
+                                                    activeSlot = -1
+                                                } else {
+                                                    activeSlot = i
+                                                    slotColors[i] = hexText
+                                                    commitSlot(i)
+                                                }
+                                            }
                                             .padding(horizontal = 10.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -4531,41 +4585,13 @@ private fun ColorPickerDialog(
                         }
                     }
 
-                    Text(
-                        when {
-                            pickedSlot < 0 -> "先选择要保存到的槽位"
-                            com.haoai.agent.ui.theme.parseHexColor(settings.customSeedColors.getOrNull(pickedSlot).orEmpty()) != null &&
-                                settings.customSeedColors.getOrNull(pickedSlot).orEmpty() != hexText ->
-                                "槽 ${pickedSlot + 1} 已有颜色，保存将覆盖"
-                            else -> "将保存到槽 ${pickedSlot + 1}"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-
-                    Row(
+                    LiquidPillButton(
+                        backdrop,
+                        "完成",
                         Modifier
                             .fillMaxWidth()
-                            .padding(top = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        LiquidPillButton(
-                            backdrop,
-                            "取消",
-                            Modifier.weight(1f),
-                            emphasized = false
-                        ) { onDismiss() }
-                        LiquidPillButton(
-                            backdrop,
-                            "保存",
-                            Modifier.weight(1f),
-                            enabled = pickedSlot >= 0
-                        ) {
-                            vm.saveCustomSeed(pickedSlot, hexText)
-                            onDismiss()
-                        }
-                    }
+                            .padding(top = 14.dp)
+                    ) { onDismiss() }
                 }
             }
         }
