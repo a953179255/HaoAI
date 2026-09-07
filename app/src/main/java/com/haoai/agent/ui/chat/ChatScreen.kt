@@ -2519,6 +2519,11 @@ private fun StreamingItem(
             Surface(
                 color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                 shape = RoundedCornerShape(18.dp),
+                // v7.6.4：与历史气泡/工具胶囊同体系描边
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                ),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 // ① 光标不再拼进 markdown 源文本（避免污染行内正则/解析）；
@@ -3049,6 +3054,12 @@ private fun AssistantBlock(
                 Surface(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                     shape = RoundedCornerShape(18.dp),
+                    // v7.6.4：与工具胶囊同体系描边（onSurface 8%）——气泡轮廓在任何
+                    // 壁纸/背景下都可辨，与胶囊的视觉语言统一
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     // 长按正文 = 系统文本选择（上游 交互）；代码块内已嵌套
