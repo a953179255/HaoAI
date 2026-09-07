@@ -1,5 +1,6 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.drawBehind
@@ -2405,17 +2406,41 @@ private fun ReasoningPanel(
                     animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
                 )
         ) {
+            // v7.8.4 整行高亮指示（用户确认稿）：默认 ripple 是触点圆形扩散、
+            // 永远铺不满宽扁整行——改为自绘全 bounds 高亮，按下淡入/松开淡出，
+            // 形状/时机与确认稿完全一致（clip 仍按 expanded 状态切换）
+            val headerInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            val headerPressed by headerInteraction.collectIsPressedAsState()
+            val headerHighlight by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (headerPressed) 1f else 0f,
+                animationSpec = androidx.compose.animation.core.tween(
+                    durationMillis = if (headerPressed) 90 else 380,
+                    easing = androidx.compose.animation.core.LinearEasing
+                ),
+                label = "headerHl"
+            )
+            val hlColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
             Row(
                 Modifier
                     .fillMaxWidth()
-                    // v7.8.3 状态感知 ripple clip（用户确认稿）：收起态标题行=独立胶囊
-                    // （16dp 全圆角）；展开态标题行=面板顶部（下连内容，只圆上角、下角
-                    // 方角衔接）——此前固定全圆角，展开态点击下角圆弧悬在内容中间脱节
+                    // v7.8.3 状态感知 clip：收起态=独立胶囊（16dp 全圆角）；展开态=面板
+                    // 顶部（只圆上角、下角方角衔接内容）
                     .clip(
                         if (expanded) RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                         else RoundedCornerShape(16.dp)
                     )
-                    .clickable { userToggled = true; expanded = !expanded },
+                    .drawBehind {
+                        if (headerHighlight > 0.01f) {
+                            drawRect(
+                                brush = SolidColor(hlColor.copy(alpha = 0.10f * headerHighlight)),
+                                size = size
+                            )
+                        }
+                    }
+                    .clickable(
+                        interactionSource = headerInteraction,
+                        indication = null
+                    ) { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.size(12.dp))
