@@ -2383,10 +2383,9 @@ private fun ReasoningPanel(
     }
     // live 且未展开全文时：受限高度 + 底部渐隐预览
     val previewMode = live && !userToggled
-    // 揭幕进度：0=遮罩全盖 1=完全揭开（仅展开动画期间可见）
     Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.66f * chatBubbleAlphas().second.coerceIn(0f, 1f) + 0.10f),
-        shape = RoundedCornerShape(13.dp),
+        shape = RoundedCornerShape(16.dp),
         // v7.7：与气泡/胶囊同体系描边；v7.7.1 统一 8%（原 10% 略深）
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
@@ -2394,7 +2393,7 @@ private fun ReasoningPanel(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
+            .clip(RoundedCornerShape(16.dp))
             // v7.8：clickable 移除——只允许标题行响应收起（点按区拆分），
             // 面板正文完全释放给文本选择/复制
     ) {
@@ -2409,9 +2408,9 @@ private fun ReasoningPanel(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    // v7.8.1：ripple 裁剪成面板同款圆角（裸 clickable 的方形水波纹
-                    // 与胶囊长条不匹配）——clip 须在 clickable 之前
-                    .clip(RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp))
+                    // v7.8.2：ripple 裁剪成完整 16dp 胶囊圆角（收起态标题行=整个面板，
+                    // 方形下角 ripple 与胶囊长条不匹配）——clip 须在 clickable 之前
+                    .clip(RoundedCornerShape(16.dp))
                     .clickable { userToggled = true; expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically
             ) {
