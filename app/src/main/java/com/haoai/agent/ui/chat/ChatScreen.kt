@@ -2704,6 +2704,15 @@ private fun androidx.compose.foundation.layout.RowScope.TimelineToolRowCompact(t
 private fun toolVerb(tool: com.haoai.agent.ui.UiTool): String =
     tool.brief.ifBlank { tool.name }
 
+/**
+ * v7.4.3 胶囊专用动词：只取 brief 第一个「·」前的动词段——旧 toolVerb 返回整个
+ * brief（动词+对象全在里），是胶囊里「动词后还拖着一长串对象」导致 ✓ 甩尾的元凶。
+ */
+private fun toolVerbOnly(tool: com.haoai.agent.ui.UiTool): String {
+    val b = tool.brief.ifBlank { tool.name }
+    return b.substringBefore('·').trim()
+}
+
 /** 工具类别图标：ToolBrief.iconOf 的 UI 侧兜底。 */
 private fun toolIcon(name: String): String =
     runCatching { com.haoai.agent.agent.tools.ToolBrief.iconOf(name) }.getOrDefault("🔧")
@@ -3003,22 +3012,22 @@ private fun InlineToolPill(
                     )
                 }
                 Spacer(Modifier.size(7.dp))
+                // v7.4.3：只显示动词段（第一个 · 前）——旧 toolVerb 返回整个 brief，
+                // 动词后拖着一长串对象把 ✓ 顶到胶囊最右
                 Text(
-                    toolVerb(tool),
+                    toolVerbOnly(tool),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
                 )
+                // v7.4.3 对象：brief 中第一个 · 后的第一段（到下一个 · 为止），
+                // 12 字符截断——多查询合并的简报（A · B · C）只取 A
                 val obj = toolObjPreview(tool)
                 if (obj.isNotBlank()) {
                     Spacer(Modifier.size(5.dp))
                     Text(
-                        // v7.4.2：按字符数截断（22 字符 + …）——widthIn 限宽方案下
-                        // 被省略的 Text 仍占满上限宽度，✓ 会被推到胶囊最右端
-                        // （搜索网络/执行命令等长对象必现）；字符截断让胶囊宽度
-                        // 始终由实际内容决定，✓ 永远紧跟文字
-                        obj.take(22) + if (obj.length > 22) "…" else "",
+                        obj.take(12) + if (obj.length > 12) "…" else "",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         maxLines = 1,
@@ -3073,11 +3082,13 @@ private fun InlineToolPill(
     }
 }
 
-/** 工具对象预览（胶囊内截断显示）：优先简报对象，回退工具名。 */
+/** 工具对象预览（胶囊内显示）：取 brief 第一个 · 后、下一个 · 前的第一段对象。 */
 private fun toolObjPreview(tool: com.haoai.agent.ui.UiTool): String {
     val brief = tool.brief
-    // 简报形如「抓取网页 · https://…」：取 · 后的对象段；无 · 则整体为对象
-    return if (brief.contains("·")) brief.substringAfter('·').trim() else ""
+    if (!brief.contains("·")) return ""
+    val after = brief.substringAfter('·').trim()
+    // 多段简报（A · B · C）只取第一段
+    return after.substringBefore('·').trim()
 }
 
 /** 胶囊展开明细：完整简报 + 状态。 */
