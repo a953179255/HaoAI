@@ -173,6 +173,9 @@ fun GlassPanel(
     val border2 = glassBorderColor(0.45f)
     val panelModifier = if (r) {
         modifier
+            // v7.1 硬裁剪：drawBackdrop 的 blur/lens 与表面填充会溢出圆角外的方形区域
+            // （平色背景上呈四角灰块，GlassCard 同款修复——小尺寸圆角面板上最明显）
+            .clip(shape ?: RoundedCornerShape(radius))
             .drawBackdrop(
                 backdrop = backdrop,
                 shape = { shape ?: RoundedCornerShape(radius) },
