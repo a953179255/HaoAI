@@ -2498,19 +2498,19 @@ private fun StreamingItem(
             .padding(horizontal = 14.dp, vertical = 5.dp)
     ) {
         val hasContent = !streamingText.isNullOrBlank()
-        // 方案 C 时间轴聚合卡：思考/工具按真实时间序进同一张卡，卡内滚动，
-        // 外层列表只随正文气泡生长——顺序错乱与自动弹底从机制上消除。
-        // 无任何活动且无正文时（prefill/等首 token）显示轻量等待行，不再渲染空泡。
+        // v7.3 方案 B（行内小胶囊流）：流式期与历史同构——工具动作逐个渲染行内胶囊
+        //（运行中蓝点呼吸），思考段仍用旋钮式思考行；不再渲染聚合卡。
         val hasActivity = streamingReasoning != null || liveTools.isNotEmpty()
-        if (hasActivity) {
-            ActivityTimelineCard(
-                reasoning = streamingReasoning,
-                tools = liveTools,
-                streaming = hasContent,
-                thinkingMs = thinkingMs,
-                onStopRun = onStopRun,
+        if (!streamingReasoning.isNullOrBlank()) {
+            ReasoningRow(streamingReasoning, thinkingMs, live = true)
+            Spacer(Modifier.size(3.dp))
+        }
+        liveTools.forEach { tool ->
+            InlineToolPill(
+                tool = tool,
+                live = true,
                 onViewDiff = onViewDiff,
-                running = running
+                onStopRun = onStopRun
             )
         }
         // v6：等首 token 的「正在连接模型…」等待行移到输入框左上方（ComposerBar
@@ -2939,6 +2939,144 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
     }
 }
 
+/**
+ * v7.3 方案 B（用户选型）：行内工具小胶囊——状态点 + 中文动词加粗 + 对象截断 + 状态标。
+ * 贴在正文气泡之间，不套卡；点击展开参数/结果明细。运行中蓝点呼吸，完成绿点+✓，
+ * 失败红点+⚠。maxWidth 限制防长 URL 撑满整行。
+ */
+@Composable
+private fun InlineToolPill(
+    tool: com.haoai.agent.ui.UiTool,
+    live: Boolean,
+    onViewDiff: (String) -> Unit = {},
+    onStopRun: () -> Unit = {}
+) {
+    var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
+    val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
+    val isRunning = tool.state == ToolRunState.RUNNING && live
+    val isError = tool.state == ToolRunState.ERROR
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 2.dp)
+    ) {
+        Row {
+            Row(
+                Modifier
+                    .weight(1f, fill = false)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    .clickable { if (!isRunning) expanded = !expanded }
+                    .padding(horizontal = 11.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 状态点：运行中蓝色呼吸 / 完成绿色 / 失败红色
+                when {
+                    isRunning -> {
+                        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "pillRun")
+                            .animateFloat(0.35f, 1f, infiniteRepeatable(tween(900)), label = "pp")
+                        Box(
+                            Modifier
+                                .size(7.dp)
+                                .graphicsLayer { alpha = pulse }
+                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        )
+                    }
+                    isError -> Box(
+                        Modifier
+                            .size(7.dp)
+                            .background(MaterialTheme.colorScheme.error, CircleShape)
+                    )
+                    else -> Box(
+                        Modifier
+                            .size(7.dp)
+                            .background(Color(0xFF7BD88F), CircleShape)
+                    )
+                }
+                Spacer(Modifier.size(7.dp))
+                Text(
+                    toolVerb(tool),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+                val obj = toolObjPreview(tool)
+                if (obj.isNotBlank()) {
+                    Spacer(Modifier.size(5.dp))
+                    Text(
+                        obj,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.size(6.dp))
+                // 状态标：完成 ✓ / 失败 ⚠；运行中不显示（呼吸点即状态）
+                if (!isRunning) {
+                    Text(
+                        if (isError) "⚠" else "✓",
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isError) MaterialTheme.colorScheme.error
+                        else Color(0xFF3FAE5C).copy(alpha = 0.85f)
+                    )
+                }
+            }
+        }
+        // 展开明细：参数/结果（运行中不展开——数据未定型）
+        AnimatedVisibility(expanded && !isRunning) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, top = 4.dp, bottom = 4.dp)
+            ) {
+                if (canReview) {
+                    Text(
+                        "查看变更",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onViewDiff(tool.callId) }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                    Spacer(Modifier.size(3.dp))
+                }
+                Text(
+                    toolBriefDetail(tool),
+                    fontSize = 10.5.sp,
+                    lineHeight = 15.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 140.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+            }
+        }
+    }
+}
+
+/** 工具对象预览（胶囊内截断显示）：优先简报对象，回退工具名。 */
+private fun toolObjPreview(tool: com.haoai.agent.ui.UiTool): String {
+    val brief = tool.brief
+    // 简报形如「抓取网页 · https://…」：取 · 后的对象段；无 · 则整体为对象
+    return if (brief.contains("·")) brief.substringAfter('·').trim() else ""
+}
+
+/** 胶囊展开明细：完整简报 + 状态。 */
+private fun toolBriefDetail(tool: com.haoai.agent.ui.UiTool): String {
+    val st = when (tool.state) {
+        ToolRunState.RUNNING -> "执行中"
+        ToolRunState.ERROR -> "失败"
+        else -> "已完成"
+    }
+    return "[${tool.name}] $st\n${tool.brief.ifBlank { "（无详情）" }}"
+}
+
 /** A 式工具行：图标盒 + 停止块/状态点 + 中文动词加粗 + 对象灰字，点击展开参数。 */
 @Composable
 private fun ToolStreamRow(
@@ -3162,22 +3300,19 @@ private fun AssistantBlock(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 5.dp)
     ) {
-        // v4-2 聚合卡持久化：reasoning+tools 用流式期同一张活动卡渲染（收起态），
-        // 流式→历史只换头部文案（正在执行→已完成 N 个动作），不再散架成
-        // 「思考过程面板 + N 个散装工具条」。纯思考消息（无工具）保留旧 ReasoningPanel。
+        // v7.3 方案 B（行内小胶囊流，用户选型）：每个工具动作一个行内胶囊
+        // （状态点 + 动词加粗 + 对象截断 + ✓），贴在正文气泡之间；不再渲染聚合卡。
         val hasTools = row.tools.isNotEmpty()
         val hasReasoning = row.reasoning?.takeIf { it.isNotBlank() } != null
         if (hasTools) {
-            ActivityTimelineCard(
-                reasoning = row.reasoning,
-                tools = row.tools,
-                streaming = false,
-                thinkingMs = null,
-                onStopRun = onStopRun,
-                onViewDiff = onViewDiff,
-                running = false // v5 修复：历史消息永不为 live
-            )
-            Spacer(Modifier.size(5.dp))
+            row.tools.forEach { tool ->
+                InlineToolPill(
+                    tool = tool,
+                    live = false,
+                    onViewDiff = onViewDiff,
+                    onStopRun = onStopRun
+                )
+            }
         } else if (hasReasoning) {
             ReasoningPanel(text = row.reasoning.orEmpty(), live = false)
             Spacer(Modifier.size(5.dp))
