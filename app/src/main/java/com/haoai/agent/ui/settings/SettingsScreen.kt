@@ -2688,39 +2688,36 @@ private fun LazyListScope.usageItems(
         val stat = periods[range]
 
         Column {
-            // 时段胶囊选择器（全局第一层筛选，联动全页）
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .background(
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f),
-                        RoundedCornerShape(percent = 50)
-                    )
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                listOf("今日", "本周", "本月").forEachIndexed { i, label ->
-                    val on = range == i
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(percent = 50))
-                            .background(
-                                if (on) MaterialTheme.colorScheme.primary
-                                else Color.Transparent
-                            )
-                            .clickable { range = i }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
+            // 时段胶囊选择器（全局第一层筛选，联动全页）：液态玻璃轨道 + 选中实心胶囊
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                GlassGroup(backdrop) {
+                    Row(
+                        Modifier.padding(horizontal = 5.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                            color = if (on) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        listOf("今日", "本周", "本月").forEachIndexed { i, label ->
+                            val on = range == i
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(percent = 50))
+                                    .background(
+                                        if (on) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.06f)
+                                    )
+                                    .clickable { range = i }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (on) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -3108,7 +3105,7 @@ private fun trendRangeLabel(s: com.haoai.agent.data.UsageLedger.PeriodStats): St
     else -> "本月 · 按日（1 日至今）"
 }
 
-/** 4 指标卡单格（磨砂底，无玻璃折射避免高频重组开销）。 */
+/** 4 指标卡单格：液态玻璃质感（GlassCard 折射采样，与全 App 玻璃语言一致）。 */
 @Composable
 private fun DashboardMetric(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
@@ -3117,13 +3114,16 @@ private fun DashboardMetric(
     modifier: Modifier = Modifier,
     tint: Color = MaterialTheme.colorScheme.primary
 ) {
-    Box(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.07f))
-            .padding(horizontal = 8.dp, vertical = 9.dp)
+    com.haoai.agent.ui.common.GlassCard(
+        onClick = {},
+        backdrop = backdrop,
+        shape = RoundedCornerShape(14.dp),
+        surfaceAlpha = 0.20f,
+        tint = tint.copy(alpha = 0.10f),
+        lensRadius = 12.dp,
+        modifier = modifier
     ) {
-        Column {
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 9.dp)) {
             Text(
                 value,
                 style = MaterialTheme.typography.titleSmall,
