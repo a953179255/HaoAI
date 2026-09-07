@@ -26,7 +26,9 @@ data class SeedPalette(
     val lightContainer: Color, val lightOnContainer: Color,
     val darkPrimary: Color, val darkOnPrimary: Color,
     val darkContainer: Color, val darkOnContainer: Color,
-    val lightSecondary: Color, val darkSecondary: Color
+    val lightSecondary: Color, val darkSecondary: Color,
+    /** 主题色圆点展示色：null=用 lightPrimary（绿/蓝原版）；活力色与自定义色给鲜艳原色。 */
+    val display: Color? = null
 )
 
 /**
@@ -51,7 +53,8 @@ fun seedPaletteFromColor(label: String, color: Color): SeedPalette {
         darkContainer = c(ss = (s * 1.02f).coerceAtMost(1f), vv = 0.33f),
         darkOnContainer = c(ss = s * 0.5f, vv = 0.88f),
         lightSecondary = c(ss = s * 0.55f, vv = (v * 0.72f + 0.05f)),
-        darkSecondary = c(ss = s * 0.5f, vv = (v * 1.2f + 0.1f))
+        darkSecondary = c(ss = s * 0.5f, vv = (v * 1.2f + 0.1f)),
+        display = color
     )
 }
 

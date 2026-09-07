@@ -2250,7 +2250,7 @@ private fun LazyListScope.generalItems(
                     else {
                         val cur = com.haoai.agent.ui.theme.THEME_SEEDS
                             .getOrElse(settings.themeSeed) { com.haoai.agent.ui.theme.THEME_SEEDS[0] }
-                        (if (darkNow) cur.darkPrimary else cur.lightPrimary).toHex()
+                        (cur.display ?: (if (darkNow) cur.darkPrimary else cur.lightPrimary)).toHex()
                     }
                     Row(
                         Modifier.padding(top = 10.dp),
@@ -2259,7 +2259,8 @@ private fun LazyListScope.generalItems(
                     ) {
                         // 5 颗固定种子：绿/蓝保留原版，橙/黄/粉为年轻活力色
                         com.haoai.agent.ui.theme.THEME_SEEDS.forEachIndexed { i, seed ->
-                            val color = if (darkNow) seed.darkPrimary else seed.lightPrimary
+                            val color = seed.display
+                                ?: (if (darkNow) seed.darkPrimary else seed.lightPrimary)
                             val selected = activeCustom.isBlank() && settings.themeSeed == i
                             Box(
                                 Modifier
