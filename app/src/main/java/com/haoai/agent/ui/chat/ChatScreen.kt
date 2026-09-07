@@ -1,5 +1,7 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
@@ -1205,18 +1207,36 @@ fun ChatScreen(
                     val drawerEdge = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
                         Color.White.copy(alpha = 0.28f)
                     else Color.Black.copy(alpha = 0.20f)
+                    // v7.9.2 右缘分界线：形状必须与面板一致（右上/右下 28dp 圆角）——
+                    // 上一版画全高矩形条，圆角段超出玻璃边界"悬空"成两截多余线（用户截图实锤）。
+                    // 用同形状 Stroke 描边：只露出右缘直线段+两段圆角弧，左缘直段被
+                    // 画布裁掉（面板贴屏幕左缘），顶/底水平段因描边中心线在边界上、
+                    // 只漏进 0.75dp 内侧，肉眼不可见
+                    val drawerShape = RoundedCornerShape(
+                        topStart = 0.dp, topEnd = 28.dp, bottomEnd = 28.dp, bottomStart = 0.dp
+                    )
                     GlassPanel(
                         backdrop = backdrop,
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(1f)
-                            // v7.9.1：右缘分界线（替代整圈描边）——面板与聊天区的
-                            // 唯一分界；浅色=黑 20%、深色=白 28%（发丝级）
+                            .clip(drawerShape)
                             .drawBehind {
-                                drawRect(
+                                val outline = drawerShape.createOutline(size, LayoutDirection.Ltr, this)
+                                val p = when (outline) {
+                                    is androidx.compose.ui.graphics.Outline.Rectangle -> {
+                                        androidx.compose.ui.graphics.Path().apply { addRect(outline.rect) }
+                                    }
+                                    is androidx.compose.ui.graphics.Outline.Rounded -> {
+                                        androidx.compose.ui.graphics.Path().apply { addRoundRect(outline.roundRect) }
+                                    }
+                                    is androidx.compose.ui.graphics.Outline.Generic -> outline.path
+                                    else -> androidx.compose.ui.graphics.Path()
+                                }
+                                drawPath(
+                                    path = p,
                                     brush = SolidColor(drawerEdge),
-                                    topLeft = Offset(size.width - 1.5f.dp.toPx(), 0f),
-                                    size = Size(1.5f.dp.toPx(), size.height)
+                                    style = Stroke(width = 1.5f.dp.toPx())
                                 )
                             },
                         surfaceAlpha = 0.28f,
