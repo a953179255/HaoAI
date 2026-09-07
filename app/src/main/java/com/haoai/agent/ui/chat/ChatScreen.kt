@@ -2361,6 +2361,9 @@ private fun BlinkCursor() {
  *   不再全展开把正文顶出屏幕；
  * - 正文开始（autoCollapse）后自动收起为「💭 已思考 N 秒 ▸」，点击可展开看全文；
  * - 历史消息默认收起，点击展开。
+ * v7.7 统一样式：白底 66% + onSurface 10% 描边（与气泡/胶囊同体系，弃灰蓝 surfaceVariant）。
+ * v7.7 展开动画 = 方案 3 揭幕式（用户选型）：animateContentSize 撑开容器 +
+ * 文字层 graphicsLayer scaleY 揭幕（内容零位移，遮罩自上而下揭开，Notion/Linear 质感）。
  */
 @Composable
 private fun ReasoningPanel(
@@ -2377,15 +2380,32 @@ private fun ReasoningPanel(
     }
     // live 且未展开全文时：受限高度 + 底部渐隐预览
     val previewMode = live && !userToggled
+    // 揭幕进度：0=遮罩全盖 1=完全揭开（仅展开动画期间可见）
+    val reveal by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(320, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.7f, 0.3f, 1f)),
+        label = "reveal"
+    )
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.66f * chatBubbleAlphas().second.coerceIn(0f, 1f) + 0.10f),
         shape = RoundedCornerShape(13.dp),
+        // v7.7：与气泡/胶囊同体系描边
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(13.dp))
             .clickable { userToggled = true; expanded = !expanded }
     ) {
-        Column(Modifier.padding(vertical = 8.dp)) {
+        Column(
+            Modifier.padding(vertical = 8.dp)
+                // 方案 3 容器撑开：高度变化平滑过渡（收起/展开都走这里）
+                .animateContentSize(
+                    animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.7f, 0.3f, 1f))
+                )
+        ) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -2437,7 +2457,7 @@ private fun ReasoningPanel(
                 )
                 Spacer(Modifier.size(12.dp))
             }
-            androidx.compose.animation.AnimatedVisibility(expanded) {
+            if (expanded || previewMode) {
                 if (previewMode) {
                     // live 预览：限高 + 底部渐隐遮罩，内容自动滚到底跟随最新推理
                     val previewScroll = rememberScrollState()
@@ -2462,20 +2482,32 @@ private fun ReasoningPanel(
                                     androidx.compose.ui.graphics.Brush.verticalGradient(
                                         colors = listOf(
                                             Color.Transparent,
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = chatBubbleAlphas().second)
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.76f)
                                         )
                                     )
                                 )
                         )
                     }
                 } else {
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodySmall,
-                        lineHeight = 17.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                        modifier = Modifier.padding(horizontal = 12.dp).padding(top = 5.dp)
-                    )
+                    // v7.7 方案 3 揭幕：文字层整体 scaleY(reveal) 自上而下揭开（transformOrigin
+                    // 固定 top），内容零位移；animateContentSize 已负责容器高度跟随
+                    Box(
+                        Modifier
+                            .padding(horizontal = 12.dp)
+                            .padding(top = 5.dp)
+                            .graphicsLayer {
+                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
+                                scaleY = reveal
+                                alpha = reveal.coerceIn(0f, 1f)
+                            }
+                    ) {
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodySmall,
+                            lineHeight = 17.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f)
+                        )
+                    }
                 }
             }
         }
