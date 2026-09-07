@@ -316,7 +316,10 @@ private fun MemoryDashboardCard(
                 progress = {
                     if (vm.capacity > 0) (vm.items.size.toFloat() / vm.capacity).coerceIn(0f, 1f) else 0f
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                // M3 1.4 默认轨道末端 stopIndicator 小圆，与 Linux 下载条一并关闭
+                gapSize = 0.dp,
+                drawStopIndicator = {}
             )
             Text(
                 "上次固化：" + if (vm.lastConsolidationAt > 0) {

@@ -168,7 +168,9 @@ fun TaskPanel(
                         .height(2.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                    strokeCap = StrokeCap.Round
+                    strokeCap = StrokeCap.Round,
+                    gapSize = 0.dp,
+                    drawStopIndicator = {}
                 )
             }
             AnimatedVisibility(

@@ -1500,7 +1500,9 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                         progress = { dl ?: 0f },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp)
+                            .padding(top = 8.dp),
+                        gapSize = 0.dp,
+                        drawStopIndicator = {}
                     )
                     Text(
                         "下载中 ${(100 * (dl ?: 0f)).toInt()}%（约 470MB，请耐心等待）",
@@ -4239,7 +4241,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.linuxItems(
                         androidx.compose.material3.LinearProgressIndicator(
                             progress = { frac },
                             modifier = Modifier.fillMaxWidth().height(4.dp),
-                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            // M3 1.4 默认在轨道末端画 stopIndicator 小圆（Material You 规范），
+                            // 用户反馈像"多出一个绿点"——置空关闭
+                            gapSize = 0.dp,
+                            drawStopIndicator = {}
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
