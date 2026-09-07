@@ -2385,7 +2385,9 @@ private fun ReasoningPanel(
     // live 且未展开全文时：受限高度 + 底部渐隐预览
     val previewMode = live && !userToggled
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.66f * chatBubbleAlphas().second.coerceIn(0f, 1f) + 0.10f),
+        // v7.8.9：底色对齐工具胶囊（surface 94% 实底）——原动态公式
+        // 0.66*气泡alpha+10% 在气泡透明度低时只有 ~56%，明显比工具胶囊透
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         shape = RoundedCornerShape(16.dp),
         // v7.7：与气泡/胶囊同体系描边；v7.7.1 统一 8%（原 10% 略深）
         border = androidx.compose.foundation.BorderStroke(
@@ -2495,7 +2497,7 @@ private fun ReasoningPanel(
                                     androidx.compose.ui.graphics.Brush.verticalGradient(
                                         colors = listOf(
                                             Color.Transparent,
-                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.76f)
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
                                         )
                                     )
                                 )
