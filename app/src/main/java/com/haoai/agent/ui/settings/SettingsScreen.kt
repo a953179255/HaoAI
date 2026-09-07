@@ -2688,38 +2688,15 @@ private fun LazyListScope.usageItems(
         val stat = periods[range]
 
         Column {
-            // 时段胶囊选择器（全局第一层筛选，联动全页）：液态玻璃轨道 + 选中实心胶囊
+            // 时段胶囊选择器（全局第一层筛选，联动全页）：
+            // LiquidTabRow——通用设置「模型行为」同款底部选项卡效果（玻璃轨道+主题色液态指示器弹性滑动）
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                GlassGroup(backdrop) {
-                    Row(
-                        Modifier.padding(horizontal = 5.dp, vertical = 5.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        listOf("今日", "本周", "本月").forEachIndexed { i, label ->
-                            val on = range == i
-                            Box(
-                                Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(percent = 50))
-                                    .background(
-                                        if (on) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.06f)
-                                    )
-                                    .clickable { range = i }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    label,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (on) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = listOf("今日", "本周", "本月"),
+                    selectedIndex = range,
+                    onSelected = { range = it },
+                    backdrop = backdrop
+                )
             }
 
             // 大数字 + 环比
