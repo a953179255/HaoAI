@@ -2406,9 +2406,9 @@ private fun ReasoningPanel(
                     animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
                 )
         ) {
-            // v7.8.4 整行高亮指示（用户确认稿）：默认 ripple 是触点圆形扩散、
-            // 永远铺不满宽扁整行——改为自绘全 bounds 高亮，按下淡入/松开淡出，
-            // 形状/时机与确认稿完全一致（clip 仍按 expanded 状态切换）
+            // v7.8.5 整行高亮指示（用户定稿）：颜色=工具胶囊标准 ripple 同色调
+            // （onSurface 12%）；区域=drawRect(size=size) 行 bounds 1:1（inset:0，
+            // 数学上强制与按钮等大等宽）；时序=按住保持、松手 380ms 淡出
             val headerInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             val headerPressed by headerInteraction.collectIsPressedAsState()
             val headerHighlight by androidx.compose.animation.core.animateFloatAsState(
@@ -2419,7 +2419,7 @@ private fun ReasoningPanel(
                 ),
                 label = "headerHl"
             )
-            val hlColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+            val hlColor = MaterialTheme.colorScheme.onSurface
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -2432,7 +2432,7 @@ private fun ReasoningPanel(
                     .drawBehind {
                         if (headerHighlight > 0.01f) {
                             drawRect(
-                                brush = SolidColor(hlColor.copy(alpha = 0.10f * headerHighlight)),
+                                brush = SolidColor(hlColor.copy(alpha = 0.12f * headerHighlight)),
                                 size = size
                             )
                         }
