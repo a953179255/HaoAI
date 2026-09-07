@@ -2958,14 +2958,23 @@ private fun InlineToolPill(
     Column(
         Modifier
             .fillMaxWidth()
+            // v7.4：与正文气泡同起点同宽（horizontal=14dp），视觉左缘对齐
             .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
         Row {
             Row(
                 Modifier
-                    .weight(1f, fill = false)
+                    // v7.4：胶囊宽度有上限（最长 ~78% 行宽），对象文本限宽截断——
+                    // 长 URL 不再把胶囊撑满整行（✓ 紧跟对象之后，不再甩到最右）
+                    .widthIn(max = 300.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    // v7.4：实底surface + 细描边——花壁纸上文字可读（原 5% 透明度直接混壁纸）
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        RoundedCornerShape(16.dp)
+                    )
                     .clickable { if (!isRunning) expanded = !expanded }
                     .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -3007,8 +3016,10 @@ private fun InlineToolPill(
                     Text(
                         obj,
                         fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         maxLines = 1,
+                        // v7.4：对象最长 ~190dp，超出省略——✓ 紧跟其后不甩尾
+                        modifier = Modifier.widthIn(max = 190.dp),
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
