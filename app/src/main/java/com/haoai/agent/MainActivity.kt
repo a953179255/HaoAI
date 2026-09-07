@@ -171,11 +171,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// 页面层级：转场方向判定与纱幕升降共用（push = 层级升高）
-private fun screenLevel(s: Int) = when (s) {
+// 页面导航深度：转场方向判定用（push = 进入更深一层）。
+// v0.18.2 修复：旧 screenLevel 把记忆库(2)与记忆与梦境(11)粗归同一层，
+// 两个方向都命中「to>=from」→ 进入和返回播同一个动画（用户反馈）。
+// 记忆库是记忆与梦境的下一级（唯一入口在其中，onBack 回 11），深度必须更高。
+private fun screenDepth(s: Int) = when (s) {
     0 -> 0          // 聊天（根）
-    1, 4, 7 -> 1    // 设置 / 会话列表 / 浏览器
-    else -> 2       // 记忆 / 定时 / 技能 / MCP / 工作流
+    1, 4, 7 -> 1    // 设置根 / 会话列表 / 浏览器
+    2 -> 3          // 记忆库（记忆与梦境的下级）
+    in 9..16 -> 2   // 设置 section 子页（记忆与梦境/模型大脑/…）
+    else -> 2       // 定时 / 技能 / MCP / 工作流（设置根直接进入）
 }
 
 @Composable
@@ -437,6 +442,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     } else {
         plainBackdrop
     }
+    // v0.18.1 修复：聊天页专用画布。转场期退出层聊天页的 appLayer 会把它收到的
+    // backdrop 画布整页写入（frozen 快照首帧 record / 实时绘制都是），若此时它
+    // 收到的是按 screen 计算的共享画布（settingsBackdrop/plainBackdrop），聊天
+    // 消息与抽屉就会残留进设置系页面的采样源——设置页玻璃卡「透出聊天画面」
+    // （用户截图确认）。聊天页无论进出转场一律只写自己的画布：壁纸在 → wpBackdrop；
+    // 无壁纸 → 专用 chatPlainBackdrop（与二级页 plainBackdrop 内容相同但物理隔离）。
+    val chatPlainBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+        null, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
+    )
+    val chatBackdrop = if (wallpaper != null) wpBackdrop else chatPlainBackdrop
 
     // 状态栏图标随顶部实际亮度自适应（修复：系统深色 + App 浅色时白图标看不见）
     // 采样键用 screenSettled 而非 screen：PixelCopy 是 GPU 回读，压在转场
@@ -504,7 +519,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 上游 流畅感来源。
             // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
             // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
-            fun levelOf(s: Int) = screenLevel(s)
+            fun levelOf(s: Int) = screenDepth(s)
             val ease = androidx.compose.animation.core.FastOutSlowInEasing
             // spring 而非固定 tween：先快后缓的自然减速比匀速机械感更「丝滑」。
             // 刚度用 Medium（原 MediumLow）：全宽 1080px 位移下 MediumLow 收敛
@@ -528,6 +543,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 transitionSpec = {
                     val from = levelOf(initialState)
                     val to = levelOf(targetState)
+                    // 方向判定（v0.18.2）：深度更高 = push，更低 = pop；
+                    // 同深（理论不存在）按编号兜底，保证任何一对页面方向确定。
+                    // 修复：记忆库(2,深度3)↔记忆与梦境(11,深度2) 旧版同层双向同动画
+                    val isPush = to > from || (to == from && targetState > initialState)
                     // 方向二：聊天页(0)参与的转场用纯滑动——聊天页不缩放不淡出
                     // （重页面最简单的运动最不容易露馅：缩放+淡出会放大重组延迟
                     // 的可见性，直线滑动则完全掩盖）。仅非聊天页之间保留
@@ -540,7 +559,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         // - 侧边栏→设置（frozenParallax）：纵深视差——1/3 滑距+缩小+
                         //   淡出，静态纹理上做这些是纯 GPU 合成
                         // - 其他路径：保持全宽直线滑出（与旧版实时滑出观感一致）
-                        to >= from && initialState != 0 || (from == 0 && to == 1) -> {
+                        isPush -> {
                             (androidx.compose.animation.slideInHorizontally(slideSpec) { it })
                                 .togetherWith(
                                 if (chatInvolved) {
@@ -711,7 +730,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
                 else -> ChatScreen(
                     vm = chatVm,
-                    backdrop = backdrop,
+                    // v0.18.1：聊天页固定采样自己的画布（chatBackdrop），转场退出层
+                    // 的 appLayer 写入不再触及设置系页面共享的 settingsBackdrop/
+                    // plainBackdrop——修「设置页玻璃透出聊天画面」
+                    backdrop = chatBackdrop,
                     drawer = drawer,
                     listState = chatListState,
                     // 侧边栏点设置：push 转场开始——先冻结聊天页（后续帧绘制
