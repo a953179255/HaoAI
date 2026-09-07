@@ -2501,7 +2501,6 @@ private fun StreamingItem(
         val hasContent = !streamingText.isNullOrBlank()
         // v7.3 方案 B（行内小胶囊流）：流式期与历史同构——工具动作逐个渲染行内胶囊
         //（运行中蓝点呼吸），思考段仍用旋钮式思考行；不再渲染聚合卡。
-        val hasActivity = streamingReasoning != null || liveTools.isNotEmpty()
         if (!streamingReasoning.isNullOrBlank()) {
             ReasoningRow(streamingReasoning, thinkingMs, live = true)
             Spacer(Modifier.size(3.dp))
@@ -2514,10 +2513,9 @@ private fun StreamingItem(
                 onStopRun = onStopRun
             )
         }
-        // v6：等首 token 的「正在连接模型…」等待行移到输入框左上方（ComposerBar
-        // 上方玻璃胶囊），消息流里不再渲染，列表更干净
+        // v7.6.3 分组节奏：动作组结束、正文开始前的"呼吸"（组间 10dp 观感）
         if (hasContent) {
-            if (hasActivity) Spacer(Modifier.size(5.dp))
+            if (liveTools.isNotEmpty()) Spacer(Modifier.size(6.dp))
             Surface(
                 color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                 shape = RoundedCornerShape(18.dp),
@@ -3013,6 +3011,8 @@ private fun AssistantBlock(
     ) {
         // v7.3 方案 B（行内小胶囊流，用户选型）：每个工具动作一个行内胶囊
         // （状态点 + 动词加粗 + 对象截断 + ✓），贴在正文气泡之间；不再渲染聚合卡。
+        // v7.6.3 分组节奏：胶囊↔胶囊 4dp（胶囊自带 vertical 2dp×2），
+        // 胶囊组↔气泡 10dp（组尾额外 Spacer 6dp + 气泡顶 2dp + 胶囊底 2dp）
         val hasTools = row.tools.isNotEmpty()
         val hasReasoning = row.reasoning?.takeIf { it.isNotBlank() } != null
         if (hasTools) {
@@ -3024,6 +3024,8 @@ private fun AssistantBlock(
                     onStopRun = onStopRun
                 )
             }
+            // 组间距：动作组结束、正文（或思考面板）开始前的"呼吸"
+            Spacer(Modifier.size(6.dp))
         } else if (hasReasoning) {
             ReasoningPanel(text = row.reasoning.orEmpty(), live = false)
             Spacer(Modifier.size(5.dp))
@@ -3791,8 +3793,10 @@ private fun SessionsDrawer(
                                 )
                                 .border(
                                     1.2.dp,
-                                    if (active) Color(0xFF3FAE5C).copy(alpha = 0.55f)
-                                    else Color(0xFFFFFFFF).copy(alpha = 0.95f),
+                                    // v7.6.2：白描边在白色气泡背景上融化（卡与背景融为一体）
+                                    // → 深蓝灰 18%（onSurface 系）：白底隐形、深底勾边
+                                    if (active) Color(0xFF3FAE5C).copy(alpha = 0.60f)
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
                                     RoundedCornerShape(14.dp)
                                 )
                                 // 内高光：顶部 40% 高度的白色渐变（玻璃"顶光"）
