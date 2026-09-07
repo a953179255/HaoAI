@@ -1,5 +1,6 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Size
@@ -1201,11 +1202,23 @@ fun ChatScreen(
                 .clickable(interactionSource = null, indication = null) { }
         ) {
         Box(Modifier.fillMaxSize()) {
+                    val drawerEdge = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+                        Color.White.copy(alpha = 0.28f)
+                    else Color.Black.copy(alpha = 0.20f)
                     GlassPanel(
                         backdrop = backdrop,
                         modifier = Modifier
                             .fillMaxHeight()
-                            .fillMaxWidth(1f),
+                            .fillMaxWidth(1f)
+                            // v7.9.1：右缘分界线（替代整圈描边）——面板与聊天区的
+                            // 唯一分界；浅色=黑 20%、深色=白 28%（发丝级）
+                            .drawBehind {
+                                drawRect(
+                                    brush = SolidColor(drawerEdge),
+                                    topLeft = Offset(size.width - 1.5f.dp.toPx(), 0f),
+                                    size = Size(1.5f.dp.toPx(), size.height)
+                                )
+                            },
                         surfaceAlpha = 0.28f,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
@@ -1215,7 +1228,10 @@ fun ChatScreen(
                             bottomStart = 0.dp
                         ),
                         // 关闭 lens 折射：方角处其采样内边距会产生弧形高光，形成"伪圆角"
-                        lensRadius = 0.dp
+                        lensRadius = 0.dp,
+                        // v7.9.1：关掉整圈发丝描边——左缘贴屏幕边，描边成了贴边白线
+                        // （用户指出）；右缘分界线在下方单独画
+                        border = false
                     ) {
                         SessionsDrawer(
                             agentName = vm.agentName(),
