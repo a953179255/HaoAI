@@ -3860,16 +3860,17 @@ private fun SessionsDrawer(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(
-                                    // v7.6.1：86% 太白（透光感没了像实心白条），降 62%
-                                    // 保留磨砂透光；描边提亮补层次
-                                    if (active) Color(0xFF7BDC9C).copy(alpha = 0.38f)
+                                    // v7.9 主题联动（用户确认稿）：选中浸染=primary 38%
+                                    // （原硬编码 #7BDC9C 绿——切主题种子/壁纸取色/自定义色
+                                    // 不跟随）；未选中保持白 62% 中性
+                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
                                     else Color(0xFFFFFFFF).copy(alpha = 0.62f)
                                 )
                                 .border(
                                     1.2.dp,
-                                    // v7.6.2：白描边在白色气泡背景上融化（卡与背景融为一体）
-                                    // → 深蓝灰 18%（onSurface 系）：白底隐形、深底勾边
-                                    if (active) Color(0xFF3FAE5C).copy(alpha = 0.60f)
+                                    // v7.9：选中描边=primary 60%（原硬编码 #3FAE5C）；
+                                    // 未选中 onSurface 18% 深蓝灰（白底隐形、深底勾边）
+                                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.60f)
                                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
                                     RoundedCornerShape(14.dp)
                                 )
