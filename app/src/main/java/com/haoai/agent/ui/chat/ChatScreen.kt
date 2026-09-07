@@ -2965,9 +2965,8 @@ private fun InlineToolPill(
         Row {
             Row(
                 Modifier
-                    // v7.4：胶囊宽度有上限（最长 ~78% 行宽），对象文本限宽截断——
-                    // 长 URL 不再把胶囊撑满整行（✓ 紧跟对象之后，不再甩到最右）
-                    .widthIn(max = 300.dp)
+                    // v7.4.2：胶囊宽度由内容决定（配合对象文本字符数截断），
+                    // 不再设 widthIn 上限——上限会拉出「✓ 后大段空白」的怪相
                     .clip(RoundedCornerShape(16.dp))
                     // v7.4：实底surface + 细描边——花壁纸上文字可读（原 5% 透明度直接混壁纸）
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
@@ -3015,13 +3014,15 @@ private fun InlineToolPill(
                 if (obj.isNotBlank()) {
                     Spacer(Modifier.size(5.dp))
                     Text(
-                        obj,
+                        // v7.4.2：按字符数截断（22 字符 + …）——widthIn 限宽方案下
+                        // 被省略的 Text 仍占满上限宽度，✓ 会被推到胶囊最右端
+                        // （搜索网络/执行命令等长对象必现）；字符截断让胶囊宽度
+                        // 始终由实际内容决定，✓ 永远紧跟文字
+                        obj.take(22) + if (obj.length > 22) "…" else "",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         maxLines = 1,
-                        // v7.4：对象最长 ~190dp，超出省略——✓ 紧跟其后不甩尾
-                        modifier = Modifier.widthIn(max = 190.dp),
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Clip
                     )
                 }
                 Spacer(Modifier.size(6.dp))
