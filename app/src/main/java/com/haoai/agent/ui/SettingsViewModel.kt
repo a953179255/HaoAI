@@ -809,6 +809,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /** 色盘「取消」：整体回滚到弹层打开时的快照（槽位 + 激活色）。 */
+    fun restoreSeedSnapshot(slots: List<String>, active: String) {
+        c.updateSettings { s ->
+            val list = slots.take(3).toMutableList()
+            while (list.size < 3) list.add("")
+            s.copy(customSeedColors = list, customSeedActive = active)
+        }
+    }
+
     /** 清除槽位颜色；若该色正在生效则回退到预设种子。 */
     fun clearCustomSeed(slot: Int) {
         if (slot !in 0..2) return

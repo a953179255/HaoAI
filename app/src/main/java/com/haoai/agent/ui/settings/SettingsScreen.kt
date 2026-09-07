@@ -4341,6 +4341,9 @@ private fun ColorPickerDialog(
             while (size < 3) add("")
         }
     }
+    // 打开时快照：取消=整体回滚（含已实时落盘的拖动调整）
+    val snapSlots = remember { settings.customSeedColors.take(3).toMutableList().apply { while (size < 3) add("") } }
+    val snapActive = remember { settings.customSeedActive }
     val cur = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, vel)))
     val hexText = cur.toHex()
 
@@ -4389,8 +4392,8 @@ private fun ColorPickerDialog(
                         )
                     }
                     Text(
-                        if (activeSlot < 0) "点槽位保存当前颜色；选中槽后拖动色盘可实时调整"
-                        else "正在调整槽 ${activeSlot + 1} · 松手生效",
+                        if (activeSlot < 0) "点槽位切换编辑目标 · 长按槽位存入当前色"
+                        else "正在调整槽 ${activeSlot + 1} · 拖动实时调整，松手生效 · 长按其他槽写入当前色",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
@@ -4434,7 +4437,7 @@ private fun ColorPickerDialog(
                             Modifier
                                 .fillMaxSize()
                                 .background(
-                                    Brush.verticalGradient(listOf(Color.White, Color.hsv(hue, 1f, 1f)))
+                                    Brush.horizontalGradient(listOf(Color.White, Color.hsv(hue, 1f, 1f)))
                                 )
                         )
                         Box(
@@ -4493,7 +4496,8 @@ private fun ColorPickerDialog(
                     ) {
                         Box(
                             Modifier
-                                .offset(x = maxWidth * (hue / 360f) - 10.dp, y = (-2).dp)
+                                .align(Alignment.CenterStart)
+                                .offset(x = maxWidth * (hue / 360f) - 10.dp)
                                 .size(20.dp)
                                 .clip(CircleShape)
                                 .background(Color.hsv(hue, 1f, 1f))
@@ -4535,22 +4539,20 @@ private fun ColorPickerDialog(
                                                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                                             )
                                             .border(
-                                                1.dp,
-                                                when {
-                                                    selected -> cur
-                                                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-                                                },
+                                                if (selected) 1.5.dp else 1.dp,
+                                                if (selected) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                                                 RoundedCornerShape(percent = 50)
                                             )
-                                            .clickable {
-                                                if (activeSlot == i) {
-                                                    activeSlot = -1
-                                                } else {
-                                                    activeSlot = i
+                                            .combinedClickable(
+                                                // 单击=仅切换编辑目标（零写入，防误覆盖其他槽）；长按=当前色写入该槽
+                                                onClick = { activeSlot = if (activeSlot == i) -1 else i },
+                                                onLongClick = {
                                                     slotColors[i] = hexText
+                                                    activeSlot = i
                                                     commitSlot(i)
                                                 }
-                                            }
+                                            )
                                             .padding(horizontal = 10.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -4585,13 +4587,27 @@ private fun ColorPickerDialog(
                         }
                     }
 
-                    LiquidPillButton(
-                        backdrop,
-                        "完成",
+                    Row(
                         Modifier
                             .fillMaxWidth()
-                            .padding(top = 14.dp)
-                    ) { onDismiss() }
+                            .padding(top = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        LiquidPillButton(
+                            backdrop,
+                            "取消",
+                            Modifier.weight(1f),
+                            emphasized = false
+                        ) {
+                            vm.restoreSeedSnapshot(snapSlots, snapActive)
+                            onDismiss()
+                        }
+                        LiquidPillButton(
+                            backdrop,
+                            "完成",
+                            Modifier.weight(1f)
+                        ) { onDismiss() }
+                    }
                 }
             }
         }
