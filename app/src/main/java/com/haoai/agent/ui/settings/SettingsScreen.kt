@@ -2267,8 +2267,10 @@ private fun LazyListScope.generalItems(
                         (cur.display ?: (if (darkNow) cur.darkPrimary else cur.lightPrimary)).toHex()
                     }
                     Row(
-                        Modifier.padding(top = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        // 内容 9×26dp 在窄屏会超出可用宽，固定 spacedBy 下尾元素溢出被玻璃容器
+                        // 采样变形（模拟器 411dp 实测色轮成竖条）——改 SpaceBetween 自适应分布
+                        Modifier.fillMaxWidth().padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 5 颗固定种子：绿/蓝保留原版，橙/黄/粉为年轻活力色
@@ -2278,7 +2280,7 @@ private fun LazyListScope.generalItems(
                             val selected = activeCustom.isBlank() && settings.themeSeed == i
                             Box(
                                 Modifier
-                                    .size(28.dp)
+                                    .size(26.dp)
                                     .clip(CircleShape)
                                     .background(color, CircleShape)
                                     .border(
@@ -2297,7 +2299,7 @@ private fun LazyListScope.generalItems(
                             if (parsed == null) {
                                 Box(
                                     Modifier
-                                        .size(28.dp)
+                                        .size(26.dp)
                                         .clip(CircleShape)
                                         .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f), CircleShape)
                                         .combinedClickable(
@@ -2308,7 +2310,7 @@ private fun LazyListScope.generalItems(
                                 ) {
                                     Icon(
                                         Icons.Filled.Add, null,
-                                        Modifier.size(15.dp),
+                                        Modifier.size(14.dp),
                                         tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f)
                                     )
                                 }
@@ -2316,7 +2318,7 @@ private fun LazyListScope.generalItems(
                                 val selected = activeCustom == hex
                                 Box(
                                     Modifier
-                                        .size(28.dp)
+                                        .size(26.dp)
                                         .clip(CircleShape)
                                         .background(parsed, CircleShape)
                                         .border(
@@ -2333,9 +2335,10 @@ private fun LazyListScope.generalItems(
                             }
                         }
                         // 彩色色轮入口：打开色盘挑新颜色
+                        // 彩色色轮入口：打开色盘挑新颜色
                         Box(
                             Modifier
-                                .size(28.dp)
+                                .size(26.dp)
                                 .clip(CircleShape)
                                 .background(Brush.sweepGradient(PickerHueColors), CircleShape)
                                 .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f), CircleShape)
@@ -2344,7 +2347,7 @@ private fun LazyListScope.generalItems(
                         ) {
                             Box(
                                 Modifier
-                                    .size(10.dp)
+                                    .size(9.dp)
                                     .clip(CircleShape)
                                     .background(MaterialTheme.colorScheme.background)
                             )
