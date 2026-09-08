@@ -693,7 +693,11 @@ private fun TableBlock(table: MdBlock.Table) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
     ) {
-        // Surface 内容是 BoxScope：头部栏 + 表格必须显式纵向排列
+        // Surface 内容是 BoxScope：头部栏 + 表格必须显式纵向排列。
+        // BoxWithConstraints 提供卡片真实可用宽度——横滚容器内 SubcomposeLayout
+        // 的约束是 Infinity，"窄表拉伸铺满"必须由这层宽度驱动（否则窄表右侧露底）
+        androidx.compose.foundation.layout.BoxWithConstraints {
+        val cardMaxW = maxWidth
         Column {
         // 头部动作栏（上游 TableNode 同款）：固定不随表格横滚，底部分隔线
         Row(
@@ -808,11 +812,14 @@ private fun TableBlock(table: MdBlock.Table) {
                         .coerceIn(minColPx, maxColPx)
                     if (w > natural[c]) natural[c] = w
                 }
-                // 窄表拉伸：仅在容器宽有界时把列宽按比例拉伸铺满。
-                // 注意本表在 horizontalScroll 内——unbounded 时 maxWidth=Infinity，
-                // 绝不能参与算术（会把 natural 撑成天文数字 → Constraints 非法崩溃）
+                // 窄表拉伸：目标宽度优先取横滚约束（直接嵌入场景），Infinity 时
+                // 退回 BoxWithConstraints 给的卡片可用宽度（horizontalScroll 内约束无界）
                 val naturalSum = natural.sum()
-                val boundedMax = if (constraints.maxWidth != Constraints.Infinity) constraints.maxWidth else 0
+                val boundedMax = if (constraints.maxWidth != Constraints.Infinity) {
+                    constraints.maxWidth
+                } else {
+                    with(density) { cardMaxW.toPx() }.toInt()
+                }
                 if (boundedMax > 0 && naturalSum < boundedMax) {
                     val deficit = boundedMax - naturalSum
                     val totalWeight = natural.sum().toFloat().coerceAtLeast(1f)
@@ -866,6 +873,7 @@ private fun TableBlock(table: MdBlock.Table) {
                     }
                 }
             }
+        }
         }
         }
     }
