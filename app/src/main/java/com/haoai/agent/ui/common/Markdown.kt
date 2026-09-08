@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
@@ -673,18 +674,27 @@ private fun TableBlock(table: MdBlock.Table) {
             androidx.compose.ui.layout.SubcomposeLayout(
                 modifier = Modifier.drawBehind {
                     gridRef.get()?.let { g ->
-                        // 外框：顶边+左边（行底线/列右线由循环覆盖，边线内缩半像素防裁剪）
-                        drawLine(gridLine, Offset(0f, linePx / 2), Offset(g.contentW.toFloat(), linePx / 2), linePx)
-                        drawLine(gridLine, Offset(linePx / 2, 0f), Offset(linePx / 2, g.totalH.toFloat()), linePx)
+                        val w = g.contentW.toFloat()
+                        val h = g.totalH.toFloat()
+                        // 外框：与 Surface 同半径的圆角描边（内缩半线宽防被圆角裁剪切口感）
+                        val r = with(density) { 12.dp.toPx() }
+                        drawRoundRect(
+                            gridLine,
+                            topLeft = Offset(linePx / 2, linePx / 2),
+                            size = androidx.compose.ui.geometry.Size(w - linePx, h - linePx),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r),
+                            style = Stroke(width = linePx)
+                        )
+                        // 内部分隔线：仅行间/列间（外缘由圆角框负责，避免直角破圆角）
                         var yy = 0f
-                        for (h in g.rowHeights) {
-                            yy += h
-                            drawLine(gridLine, Offset(0f, yy - linePx / 2), Offset(g.contentW.toFloat(), yy - linePx / 2), linePx)
+                        for (rowH in g.rowHeights.dropLast(1)) {
+                            yy += rowH
+                            drawLine(gridLine, Offset(0f, yy), Offset(w, yy), linePx)
                         }
                         var xx = 0f
-                        for (w in g.colWidths) {
-                            xx += w
-                            drawLine(gridLine, Offset(xx - linePx / 2, 0f), Offset(xx - linePx / 2, g.totalH.toFloat()), linePx)
+                        for (colW in g.colWidths.dropLast(1)) {
+                            xx += colW
+                            drawLine(gridLine, Offset(xx, 0f), Offset(xx, h), linePx)
                         }
                     }
                 }
