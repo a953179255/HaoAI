@@ -3,6 +3,7 @@ package com.haoai.agent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import com.haoai.agent.platform.WebViewWarmer
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -126,6 +127,14 @@ class MainActivity : ComponentActivity() {
                 activityLauncher.launch(intent)
             }
         }
+        // WebView 预热：网页渲染预览首次打开若现场拉起渲染进程会黑屏+卡 ~1s。
+        // 首帧稳定后创建 1px 壳 WebView 加载空白页，让进程/Provider 提前就绪
+        // （app 级 context 持有，不随 Activity 销毁；进程存活即预热有效）
+        window.decorView.postDelayed({
+            runCatching {
+                WebViewWarmer.warm(applicationContext)
+            }
+        }, 2500)
         setContent {
             val app = applicationContext as HaoApplication
             val settings by app.container.settingsFlow.collectAsState()

@@ -673,6 +673,9 @@ private fun TableBlock(table: MdBlock.Table) {
             androidx.compose.ui.layout.SubcomposeLayout(
                 modifier = Modifier.drawBehind {
                     gridRef.get()?.let { g ->
+                        // 外框：顶边+左边（行底线/列右线由循环覆盖，边线内缩半像素防裁剪）
+                        drawLine(gridLine, Offset(0f, linePx / 2), Offset(g.contentW.toFloat(), linePx / 2), linePx)
+                        drawLine(gridLine, Offset(linePx / 2, 0f), Offset(linePx / 2, g.totalH.toFloat()), linePx)
                         var yy = 0f
                         for (h in g.rowHeights) {
                             yy += h

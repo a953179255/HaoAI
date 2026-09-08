@@ -26,7 +26,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +57,8 @@ fun HtmlPreviewModal(
     val context = LocalContext.current
     // 内容只与消息文本有关，recomposition 不重建/不重载 WebView
     val html = remember(row.text, dark) { buildPreviewHtml(row.text, dark) }
+    // 加载进度（上游 同款 LinearProgressIndicator）：有反馈就不像卡死
+    var progress by remember { mutableFloatStateOf(0f) }
     val webView = remember {
         WebView(context).apply {
             @SuppressLint("SetJavaScriptEnabled")
@@ -67,8 +72,13 @@ fun HtmlPreviewModal(
             settings.loadWithOverviewMode = true
             settings.builtInZoomControls = true
             settings.displayZoomControls = false
+            // 首绘前 WebView 默认底色是黑/白闪：预置成页面同款底色
+            setBackgroundColor(if (dark) 0xFF0D1117.toInt() else 0xFFFFFFFF.toInt())
             // 网页 console 打进 logcat（上游 同款），排查渲染问题不再盲猜
             webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    progress = newProgress / 100f
+                }
                 override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
                     android.util.Log.d(
                         "HtmlPreview",
@@ -79,6 +89,7 @@ fun HtmlPreviewModal(
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String) {
+                    progress = 0f
                     android.util.Log.d("HtmlPreview", "onPageFinished url=$url")
                 }
             }
@@ -132,6 +143,15 @@ fun HtmlPreviewModal(
                             .clickable(onClick = onDismiss)
                     )
                 }
+            }
+            // 上游 同款加载进度条：WebView 初始化/加载期间给反馈，不再"黑一下"
+            if (progress in 0.01f..0.99f) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp)
+                )
             }
             AndroidView(
                 factory = { webView },
