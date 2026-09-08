@@ -12,9 +12,6 @@ serializationJson = "1.9.0"
 backdrop = "2.0.0"
 junit = "4.13.2"
 work = "2.10.1"
-markdown = "d79a97cc8e"
-jsoup = "1.23.1"
-jlatexmath = "1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -37,11 +34,6 @@ androidx-work = { group = "androidx.work", name = "work-runtime-ktx", version.re
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version = "13.1.5" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version = "13.1.5" }
-jetbrains-markdown = { module = "com.github.上游:markdown", version.ref = "markdown" }
-jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
-jlatexmath = { module = "com.github.上游.jlatexmath-android:jlatexmath", version.ref = "jlatexmath" }
-jlatexmath-font-greek = { module = "com.github.上游.jlatexmath-android:jlatexmath-font-greek", version.ref = "jlatexmath" }
-jlatexmath-font-cyrillic = { module = "com.github.上游.jlatexmath-android:jlatexmath-font-cyrillic", version.ref = "jlatexmath" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

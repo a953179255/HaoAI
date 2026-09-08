@@ -161,7 +161,7 @@ import com.haoai.agent.ui.ChatViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.LiquidGlassButton
-import com.haoai.agent.ui.common.richtext.MarkdownText
+import com.haoai.agent.ui.common.MarkdownText
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.theme.wallpaperAdaptiveGray
