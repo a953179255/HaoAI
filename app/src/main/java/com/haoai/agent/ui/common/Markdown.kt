@@ -695,10 +695,19 @@ private fun TableBlock(table: MdBlock.Table) {
     ) {
         // Surface 内容是 BoxScope：头部栏 + 表格必须显式纵向排列
         Column {
-        // 头部动作栏（上游 TableNode 同款）：固定不随表格横滚
+        // 头部动作栏（上游 TableNode 同款）：固定不随表格横滚，底部分隔线
         Row(
             Modifier
                 .fillMaxWidth()
+                .drawBehind {
+                    // 与表格网格同色系（onBackground 22%），宽线更清晰
+                    drawLine(
+                        textColor.copy(alpha = 0.22f),
+                        Offset(0f, size.height - 0.5f),
+                        Offset(size.width, size.height - 0.5f),
+                        1.5f
+                    )
+                }
                 .padding(horizontal = 12.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -810,6 +819,8 @@ private fun TableBlock(table: MdBlock.Table) {
                     natural = IntArray(colCount) { c ->
                         natural[c] + (deficit * (natural[c] / totalWeight)).toInt()
                     }
+                    // Int 舍入差补到最后一列：保证列宽和 == 容器宽（否则右缘缺线露底）
+                    natural[natural.size - 1] += boundedMax - natural.sum()
                 }
                 // contentW 取有限值（无界时不拉伸，就是自然总宽）
                 val sum = natural.sum()
