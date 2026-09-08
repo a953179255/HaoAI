@@ -434,7 +434,15 @@ class AgentEngine(
                 }
                 currentCoroutineContext().ensureActive()
 
-                if (calls.isEmpty() || forceFinish) break
+                if (calls.isEmpty() || forceFinish) {
+                    // todo 兜底收尾：面板/通知卡只在 todo 工具被调用时刷新，而多数模型建完清单后
+                    // 不再回头更新——自然结束（已产出最终回答）仍有 pending/in_progress 残留时，
+                    // 引擎代为收尾，让任务面板与实际产出同步归位。
+                    // 仅 depth==0 主循环触发（子代理共享父会话 todoStore，不得收父清单）；
+                    // 成本熔断收尾轮 runEndState 已置位、用户停止走取消异常、失败走异常分支——都不经过此处。
+                    if (depth == 0 && runEndState == null) finalizeTodos()
+                    break
+                }
 
                 turnToolCalls += calls.size
 
@@ -1171,6 +1179,25 @@ class AgentEngine(
         val head = active?.text?.take(30) ?: ""
         val human = if (done == items.size) "全部完成" else "待办 ${items.size} 项：已完成 $done、进行中 ${items.count { it.status == "in_progress" }}"
         return "\n[任务进度] $human${if (head.isNotEmpty()) "（$head）" else ""}"
+    }
+
+    /**
+     * todo 兜底收尾：把残留的 in_progress/pending 项标为 completed——模型已给出最终回答，
+     * 此时残留即漏标。保存后触发 onToolChange，任务面板/通知卡立即刷新。
+     */
+    private fun finalizeTodos() {
+        runCatching {
+            val items = todoStore.load(session.id)
+            if (items.isNotEmpty() && items.any { it.status == "in_progress" || it.status == "pending" }) {
+                todoStore.save(
+                    session.id,
+                    items.map {
+                        if (it.status == "in_progress" || it.status == "pending") it.copy(status = "completed") else it
+                    }
+                )
+                onToolChange?.invoke()
+            }
+        }
     }
 
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */

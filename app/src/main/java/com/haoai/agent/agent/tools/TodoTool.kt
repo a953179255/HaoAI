@@ -51,7 +51,8 @@ class TodoTool : Tool {
     override val description =
         """创建和维护当前会话的任务清单。传入完整的 todo 列表进行全量替换。
 每个条目包含：text(任务描述)、status(pending/in_progress/completed/cancelled)、priority(high/medium/low)。
-仅传入 todos 参数即可更新清单；不传则查看当前清单。"""
+仅传入 todos 参数即可更新清单；不传则查看当前清单。
+更新时机：开始某项前把它标为 in_progress；每完成一项立即调用本工具把它标为 completed，不要攒到最后；放弃的项标为 cancelled。给出最终回答前，清单必须已与实际进度一致。"""
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
