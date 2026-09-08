@@ -74,6 +74,8 @@ dependencies {
     implementation(libs.backdrop)
     implementation(libs.androidx.work)
     implementation(libs.jetbrains.markdown)
+    implementation(libs.jlatexmath.android)
+    implementation(libs.jlatexmath.android.font.greek)
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)

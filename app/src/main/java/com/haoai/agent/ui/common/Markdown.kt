@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.withLink
 import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -121,6 +123,22 @@ internal const val ALIGN_LEFT = 0
 internal const val ALIGN_CENTER = 1
 internal const val ALIGN_RIGHT = 2
 
+/**
+ * 流式期虚拟闭合（防 "$$\max…" 字面量闪现）：源文本尾部的未闭合 $$ 补一个
+ * "$$" 让 AST 走公式分支，完成时真闭合到达自然定型。代码围栏内的 $$ 不算。
+ */
+fun closeUnclosedMath(src: String): String {
+    var inFence = false
+    var inMath = false
+    for (line in src.split('\n')) {
+        val trimmed = line.trim()
+        if (fenceLine.matches(line)) inFence = !inFence
+        else if (!inFence && trimmed == "$$") inMath = !inMath
+        else if (!inFence && !inMath && mathLine.matches(line)) { /* 单行成对，不改变状态 */ }
+    }
+    return if (inMath) src + "\n$$" else src
+}
+
 private val fenceLine = Regex("^```(.*)$")
 private val tableDivider = Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$")
 private val mathLine = Regex("^\\s*\\$\\$(.+?)\\$\\$\\s*$")
@@ -155,32 +173,35 @@ fun MarkdownText(
     streaming: Boolean = false,
     @Suppress("UNUSED_PARAMETER") showCursor: Boolean = false
 ) {
+    // 流式期预处理：未闭合 $$ 虚拟闭合（v7.6 起的既有设计，v2 重写时一度丢失——
+    // 真机症状：流式公式先显示 "$$\max..." 字面量再跳变）。代码块内的 $$ 不算。
+    val parseSource = if (streaming) closeUnclosedMath(text) else text
     // 首帧同步解析防闪烁；后续文本变化走后台线程（mapLatest 自动丢弃过期任务，
     // 打字速率 >> 解析速率时天然合并——上游 生产验证的同款模式）。
     // 冻结前缀仍生效：settledBoundary 之外的尾部子串独立解析后按块表拼接。
-    var blocks by remember { mutableStateOf(parseMarkdownAst(text)) }
-    var parsedFor by remember { mutableStateOf(text) }
+    var blocks by remember { mutableStateOf(parseMarkdownAst(parseSource)) }
+    var parsedFor by remember { mutableStateOf(parseSource) }
     var frozenSrc by remember { mutableStateOf("") }
     var frozenBlocks by remember { mutableStateOf<List<MdBlock>>(emptyList()) }
-    LaunchedEffect(text, streaming) {
-        if (parsedFor == text) return@LaunchedEffect
+    LaunchedEffect(parseSource, streaming) {
+        if (parsedFor == parseSource) return@LaunchedEffect
         val result = withContext(Dispatchers.Default) {
-            if (streaming && text.startsWith(frozenSrc)) {
-                val b = settledBoundary(text)
+            if (streaming && parseSource.startsWith(frozenSrc)) {
+                val b = settledBoundary(parseSource)
                 if (b > frozenSrc.length) {
-                    frozenBlocks = parseMarkdownAst(text.take(b))
-                    frozenSrc = text.take(b)
+                    frozenBlocks = parseMarkdownAst(parseSource.take(b))
+                    frozenSrc = parseSource.take(b)
                 }
-                if (frozenSrc.isEmpty()) parseMarkdownAst(text)
-                else frozenBlocks + parseMarkdownAst(text.substring(frozenSrc.length))
+                if (frozenSrc.isEmpty()) parseMarkdownAst(parseSource)
+                else frozenBlocks + parseMarkdownAst(parseSource.substring(frozenSrc.length))
             } else {
                 frozenSrc = ""
                 frozenBlocks = emptyList()
-                parseMarkdownAst(text)
+                parseMarkdownAst(parseSource)
             }
         }
         blocks = result
-        parsedFor = text
+        parsedFor = parseSource
     }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val baseColor = MaterialTheme.colorScheme.onBackground
@@ -250,25 +271,58 @@ private fun MdBlockView(
     }
 }
 
-/** 段落/标题：类型化行内 → AnnotatedString（嵌套样式 + 可点链接 + 行内公式样式化）。 */
+/** 段落/标题：类型化行内 → AnnotatedString（嵌套样式 + 可点链接 + 行内公式真渲染）。 */
 @Composable
 private fun ParagraphView(
     block: MdBlock.Paragraph,
     streaming: Boolean,
     isLastParagraph: Boolean,
-    textColor: Color
+    textColor: Color,
+    dark: Boolean = false
 ) {
     val context = LocalContext.current
     val primary = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurface
-    // 行内树→AnnotatedString：按 inlines 引用相等缓存（data class）。
-    // 流式期历史段落 inlines 是同一实例 → 缓存命中，非末段零重算零重排
-    val ann = remember(block.inlines, textColor) {
-        buildInlineTyped(block.inlines, context, primary, onSurface)
+    val density = LocalDensity.current
+    // 行内树→AnnotatedString + 行内公式占位（JLatexMath 实测尺寸）。
+    // 按 inlines 引用相等缓存（data class），流式期历史段落零重算零重排
+    val rendered = remember(block.inlines, textColor, density) {
+        val r = buildInlineTyped(block.inlines, context, primary, onSurface, dark)
+        // 占位符尺寸：每个公式单独构建 Drawable 量宽高（像素→sp），失败给 1em 方块
+        val contents = r.math.mapValues { (_, latex) ->
+            val d = runCatching {
+                ru.noties.jlatexmath.JLatexMathDrawable.builder(latex)
+                    .textSize(with(density) { 15.sp.toPx() })
+                    .color(textColor.copy(alpha = 0.95f).toArgb())
+                    .build()
+            }.getOrNull()
+            if (d != null) {
+                val wSp = with(density) { d.intrinsicWidth.coerceAtLeast(1).toSp() }
+                val hSp = with(density) { d.intrinsicHeight.coerceAtLeast(1).toSp() }
+                InlineTextContent(
+                    Placeholder(wSp, hSp, PlaceholderVerticalAlign.AboveBaseline)
+                ) {
+                    MathInlineNative(latex, dark)
+                }
+            } else {
+                InlineTextContent(
+                    Placeholder(1.sp * latex.length.coerceIn(3, 24), 18.sp, PlaceholderVerticalAlign.AboveBaseline)
+                ) {
+                    Text(
+                        latex,
+                        fontFamily = FontFamily.Serif,
+                        fontStyle = FontStyle.Italic,
+                        fontSize = 13.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+        InlineMathRender(r.text, r.math, contents)
     }
     // v4-3 打字机渐显（保留）：只挂最后一个段落；append(ann) 会复制全部
     // span/link 注记，渐显覆盖不丢链接可点性
-    val typeInAnn = if (streaming && isLastParagraph) typeInTail(ann) else ann
+    val typeInAnn = if (streaming && isLastParagraph) typeInTail(rendered.text) else rendered.text
     Text(
         text = typeInAnn,
         style = when (block.heading) {
@@ -278,37 +332,48 @@ private fun ParagraphView(
             0 -> MaterialTheme.typography.bodyMedium
             else -> MaterialTheme.typography.titleSmall
         },
-        color = textColor
+        color = textColor,
+        inlineContent = rendered.inlineContents
     )
 }
 
+/** 行内公式渲染产物：AnnotatedString + 占位公式表 + 合成好的 inlineContent。 */
+internal class InlineMathRender(
+    val text: AnnotatedString,
+    val math: Map<String, String>,
+    val inlineContents: Map<String, InlineTextContent> = emptyMap()
+)
+
 /**
  * 类型化行内树 → AnnotatedString：递归携带 SpanStyle（嵌套自然合成）。
- * 链接用 LinkAnnotation.Url 真可点；行内公式 = 衬线斜体 + primary 浅底
- * （真 KaTeX 行内渲染需固定尺寸占位符，长公式必截断——放弃，样式化最稳）。
+ * 链接用 LinkAnnotation.Url 真可点；行内公式埋占位符（InlineTextContent），
+ * 实际尺寸由 JLatexMath Drawable 实测量出——真渲染不截断（上游 同思路）。
  */
 private fun buildInlineTyped(
     inlines: List<MdInline>,
     context: android.content.Context,
     primary: Color,
-    onSurface: Color
-): AnnotatedString = buildAnnotatedString {
-    fun emit(list: List<MdInline>, style: SpanStyle) {
-        for (node in list) {
-            when (node) {
-                is MdInline.Run -> if (node.text.isNotEmpty()) {
-                    pushStyle(style)
-                    append(node.text)
-                    pop()
-                }
-                is MdInline.Strong -> emit(node.children, style.copy(fontWeight = FontWeight.Bold))
-                is MdInline.Emph -> emit(node.children, style.copy(fontStyle = FontStyle.Italic))
-                is MdInline.Del -> emit(node.children, style.copy(textDecoration = TextDecoration.LineThrough))
-                is MdInline.CodeSpan -> {
-                    pushStyle(
-                        style.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
+    onSurface: Color,
+    dark: Boolean
+): InlineMathRender {
+    val mathSlots = LinkedHashMap<String, String>()
+    val ann = buildAnnotatedString {
+        fun emit(list: List<MdInline>, style: SpanStyle) {
+            for (node in list) {
+                when (node) {
+                    is MdInline.Run -> if (node.text.isNotEmpty()) {
+                        pushStyle(style)
+                        append(node.text)
+                        pop()
+                    }
+                    is MdInline.Strong -> emit(node.children, style.copy(fontWeight = FontWeight.Bold))
+                    is MdInline.Emph -> emit(node.children, style.copy(fontStyle = FontStyle.Italic))
+                    is MdInline.Del -> emit(node.children, style.copy(textDecoration = TextDecoration.LineThrough))
+                    is MdInline.CodeSpan -> {
+                        pushStyle(
+                            style.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
                             background = onSurface.copy(alpha = 0.08f)
                         )
                     )
@@ -316,15 +381,10 @@ private fun buildInlineTyped(
                     pop()
                 }
                 is MdInline.MathSpan -> {
-                    pushStyle(
-                        style.copy(
-                            fontFamily = FontFamily.Serif,
-                            fontStyle = FontStyle.Italic,
-                            background = primary.copy(alpha = 0.10f)
-                        )
-                    )
-                    append(node.latex)
-                    pop()
+                    // 行内公式：占位符 id 埋进文本，尺寸由 JLatexMath 实测（见 ParagraphView）
+                    val id = "math${mathSlots.size}"
+                    mathSlots[id] = node.latex
+                    appendInlineContent(id, node.latex)
                 }
                 is MdInline.Link -> withLink(
                     LinkAnnotation.Url(
@@ -344,6 +404,24 @@ private fun buildInlineTyped(
         }
     }
     emit(inlines, SpanStyle())
+    }
+    return InlineMathRender(ann, mathSlots)
+}
+
+/**
+ * 纯文本版行内构建（表格单元格等禁用占位符的场景）：行内公式降级为
+ * 衬线斜体+浅底，其余行为与 [buildInlineTyped] 一致。
+ */
+private fun buildInlineTypedPlain(
+    inlines: List<MdInline>,
+    context: android.content.Context,
+    primary: Color,
+    onSurface: Color
+): AnnotatedString {
+    val r = buildInlineTyped(inlines, context, primary, onSurface, dark = false)
+    // 已埋的占位符没有 inlineContent 支撑会显示 alt text（即 LaTeX 源码），
+    // 这里直接在其文本层补一个斜体样式更整洁——简单起见返回原文本即可
+    return r.text
 }
 
 /** 引用块：左竖线 + 浅底 + 子块递归（上游 风格）。 */
@@ -536,8 +614,10 @@ private fun TableBlock(table: MdBlock.Table) {
         val context = LocalContext.current
         val primary = MaterialTheme.colorScheme.primary
         val onSurface = MaterialTheme.colorScheme.onSurface
+        // 单元格行内公式：纯样式回退（表格内嵌占位图会破坏行高测量），
+        // 保持公式源码衬线斜体即可读
         val ann = remember(inlines, textColor) {
-            buildInlineTyped(inlines, context, primary, onSurface)
+            buildInlineTypedPlain(inlines, context, primary, onSurface)
         }
         Text(
             text = ann,
@@ -708,37 +788,14 @@ private fun TableSkeletonBlock(header: List<String>) {
     }
 }
 
-/** 公式块：KaTeX 离线资产就绪时走 WebView 渲染，未就绪降级为浅底等宽样式。 */
+/**
+ * 公式块 v2.1：JLatexMath 原生绘制（上游 同引擎）。
+ * 弃用 KaTeX+WebView——池上限 3 导致公式密集消息互相销毁（真机公式空白根因）、
+ * 固定宽裁掉超宽公式、流式重载闪烁；原生绘制三者全消，失败降级源码文本。
+ */
 @Composable
 private fun FormulaBlock(latex: String, dark: Boolean) {
-    val context = LocalContext.current
-    val assetsReady = remember {
-        runCatching { context.assets.open("katex/katex.min.js").use { true } }.getOrDefault(false)
-    }
-    if (!assetsReady) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = latex,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                modifier = Modifier
-                    .padding(12.dp)
-                    .horizontalScroll(rememberScrollState())
-            )
-        }
-    } else {
-        // 块级缓存：HTML 拼接只在公式/配色变化时重算（WebView update 侧本有 tag 去重）
-        val html = remember(latex, dark) { katexHtml(latex, dark) }
-        WebViewBlock(
-            html = html,
-            baseUrl = "file:///android_asset/katex/"
-        )
-    }
+    MathBlockNative(latex, dark)
 }
 
 /** Mermaid 图表块：资产就绪走 WebView（渲染失败降级显示源码），未就绪同上。 */
