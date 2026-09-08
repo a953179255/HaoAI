@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -46,6 +47,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,7 +104,8 @@ sealed class MdBlock {
     data class Table(
         val header: List<List<MdInline>>,
         val rows: List<List<List<MdInline>>>,
-        val aligns: List<Int>
+        val aligns: List<Int>,
+        val raw: String = ""
     ) : MdBlock()
 
     /** 表格骨架占位（⑦）：表头已到、分隔行未齐时先占位，避免"纯文本闪现→跳变成表格"。 */
@@ -621,6 +624,35 @@ private fun TableBlock(table: MdBlock.Table) {
     val textColor = MaterialTheme.colorScheme.onBackground
     val density = LocalDensity.current
     val colCount = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0, 1)
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    // 头部动作（上游 同款）：复制原始 markdown；下载走 SAF 存 CSV
+    fun cellText(cells: List<MdInline>): String = cells.joinToString("") { text ->
+        when (text) {
+            is MdInline.Run -> text.text
+            is MdInline.CodeSpan -> text.code
+            is MdInline.MathSpan -> "$${text.latex}$"
+            else -> ""
+        }
+    }
+    val tableCsv = remember(table) {
+        fun esc(f: String) = if (f.any { it == ',' || it == '"' || it == '\n' }) "\"${f.replace("\"", "\"\"")}\"" else f
+        buildString {
+            appendLine(table.header.joinToString(",") { esc(cellText(it)) })
+            table.rows.forEach { row -> appendLine(row.joinToString(",") { esc(cellText(it)) }) }
+        }
+    }
+    val csvLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.openOutputStream(uri)?.use { it.write(tableCsv.toByteArray()) }
+        }.onFailure {
+            android.widget.Toast.makeText(context, "保存失败", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // 单元格文本测量器：自然宽度（maxLines=1）与限宽换行高度两用
     @Composable
@@ -656,10 +688,53 @@ private fun TableBlock(table: MdBlock.Table) {
     Surface(
         color = bg,
         shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(0.75.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f)),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
     ) {
+        // Surface 内容是 BoxScope：头部栏 + 表格必须显式纵向排列
+        Column {
+        // 头部动作栏（上游 TableNode 同款）：固定不随表格横滚
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "表格",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = textColor.copy(alpha = 0.55f)
+            )
+            Spacer(Modifier.weight(1f))
+            val iconTint = textColor.copy(alpha = 0.5f)
+            Icon(
+                Icons.Filled.ContentCopy,
+                contentDescription = "复制表格",
+                tint = iconTint,
+                modifier = Modifier
+                    .size(17.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable {
+                        clipboard.setText(AnnotatedString(table.raw.ifBlank { tableCsv }))
+                        android.widget.Toast.makeText(context, "已复制表格 Markdown", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+            )
+            Spacer(Modifier.width(14.dp))
+            Icon(
+                Icons.Filled.Download,
+                contentDescription = "下载表格 CSV",
+                tint = iconTint,
+                modifier = Modifier
+                    .size(17.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable {
+                        csvLauncher.launch("table_" + java.time.LocalDateTime.now().toString().replace(":", "").replace("-", "").take(12) + ".csv")
+                    }
+            )
+        }
         val scroll = rememberScrollState()
         Column(
             Modifier
@@ -676,16 +751,7 @@ private fun TableBlock(table: MdBlock.Table) {
                     gridRef.get()?.let { g ->
                         val w = g.contentW.toFloat()
                         val h = g.totalH.toFloat()
-                        // 外框：与 Surface 同半径的圆角描边（内缩半线宽防被圆角裁剪切口感）
-                        val r = with(density) { 12.dp.toPx() }
-                        drawRoundRect(
-                            gridLine,
-                            topLeft = Offset(linePx / 2, linePx / 2),
-                            size = androidx.compose.ui.geometry.Size(w - linePx, h - linePx),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r),
-                            style = Stroke(width = linePx)
-                        )
-                        // 内部分隔线：仅行间/列间（外缘由圆角框负责，避免直角破圆角）
+                        // 外缘已由 Surface border 提供（含头部栏整体圆角），这里只画内部行/列分隔
                         var yy = 0f
                         for (rowH in g.rowHeights.dropLast(1)) {
                             yy += rowH
@@ -789,6 +855,7 @@ private fun TableBlock(table: MdBlock.Table) {
                     }
                 }
             }
+        }
         }
     }
 }

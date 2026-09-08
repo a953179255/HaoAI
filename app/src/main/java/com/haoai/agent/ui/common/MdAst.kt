@@ -191,7 +191,7 @@ private fun table(node: ASTNode, src: String): MdBlock {
         }
     val header = headerRow?.let { rowCells(it) } ?: emptyList()
     val body = bodyRows.map { rowCells(it) }
-    return MdBlock.Table(header, body, aligns)
+    return MdBlock.Table(header, body, aligns, src.substring(node.startOffset, node.endOffset).trim())
 }
 
 // ---------- 行内映射 ----------
