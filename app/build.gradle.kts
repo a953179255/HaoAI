@@ -73,6 +73,12 @@ dependencies {
     implementation(libs.serialization.json)
     implementation(libs.backdrop)
     implementation(libs.androidx.work)
+    // 方案 A 渲染管线：intellij-markdown fork（task-list/math 扩展）+ Jsoup DOM + JLatexMath 原生公式
+    implementation(libs.jetbrains.markdown)
+    implementation(libs.jsoup)
+    implementation(libs.jlatexmath)
+    implementation(libs.jlatexmath.font.greek)
+    implementation(libs.jlatexmath.font.cyrillic)
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
