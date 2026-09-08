@@ -7,7 +7,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * 技能工具（上游 式自进化）：把走通的多步流程、踩坑经验沉淀为可复用技能。
+ * 技能工具（自进化）：把走通的多步流程、踩坑经验沉淀为可复用技能。
  * list=索引 / view=全文 / save=创建或更新 / delete=删除。
  */
 class SkillTool(private val store: SkillStore) : Tool {

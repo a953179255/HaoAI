@@ -8,7 +8,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * C6/C1 统一配置工具（对标 上游 `上游 config get/set`）：
+ * C6/C1 统一配置工具（config get/set 语义）：
  * 配置真源在状态目录（app 私有），agent 的 read/write/edit 摸不到——改配置唯一入口
  * 是这两个工具。config_set 每次调用都由引擎强制审批（executeCall 特判恒审批），
  * 批准后走 ConfigFileBridge 同源严格校验 + 钳制 + 掩码语义，当轮返回

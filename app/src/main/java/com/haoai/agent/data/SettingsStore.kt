@@ -6,10 +6,10 @@ import kotlinx.serialization.Serializable
 import java.io.File
 
 /**
- * 供应商下的单个模型条目（借鉴 上游/上游 的「供应商→模型」两级结构）。
+ * 供应商下的单个模型条目（「供应商→模型」两级结构）。
  * 能力三态：null=未知/自动（不做门控），true=支持，false=不支持（请求侧据此裁剪参数）。
  *
- * 模态字段（对齐 上游 LLMModel）：inputModalities/outputModalities 存裸名
+ * 模态字段：inputModalities/outputModalities 存裸名
  * （text/image/audio/video/pdf），null=未检测（CapabilityResolver 回退目录/启发式/旧 vision）。
  * capsSource 记录能力来源（models.dev / guess / manual），manual 时不再被自动检测覆盖，
  * 可在能力编辑页「恢复自动检测」清掉。
@@ -33,7 +33,7 @@ data class ModelEntry(
     val capsSource: String? = null,
     /** 目录声明的思考等级白名单（如 low/medium/high）；null=未知 */
     val effortValues: List<String>? = null,
-    /** 本模型思考等级覆盖：空=跟随全局设置（"off"/low/medium/high/…）；上游 ReasoningLevel 式按模型控制 */
+    /** 本模型思考等级覆盖：空=跟随全局设置（"off"/low/medium/high/…）；按模型控制 */
     val reasoningEffortOverride: String = ""
 ) {
     /** 是否含某输入模态（vision 旧字段兼容：image 查询回退 vision）。 */
@@ -59,7 +59,7 @@ data class ProviderConfig(
     val maxTokens: Int = 0,
     /** 同供应商下的可选模型列表（不含当前 model；聊天与设置均可直接切换，无需新建条目）。 */
     val models: List<ModelEntry> = emptyList(),
-    // ── 采样参数「是否发送」开关（借鉴 上游）：默认全关=与旧行为一致，请求体不带该字段 ──
+    // ── 采样参数「是否发送」开关：默认全关=与旧行为一致，请求体不带该字段 ──
     val sendTemperature: Boolean = false,
     val temperature: Float = 1.0f,
     val sendTopP: Boolean = false,
@@ -68,11 +68,11 @@ data class ProviderConfig(
     val presencePenalty: Float = 0f,
     val sendFrequencyPenalty: Boolean = false,
     val frequencyPenalty: Float = 0f,
-    // ── API Key 池（借鉴 上游）：主 Key 之外追加备用密文，按策略轮换分摊限流 ──
+    // ── API Key 池：主 Key 之外追加备用密文，按策略轮换分摊限流 ──
     val apiKeyPoolCiphers: List<String> = emptyList(),
     /** ROUND_ROBIN=逐请求轮询 | RANDOM=随机 */
     val keyRotation: String = "ROUND_ROBIN",
-    // ── 余额查询（借鉴 上游）：GET baseUrl+path，按点分 JSON 路径取值展示 ──
+    // ── 余额查询：GET baseUrl+path，按点分 JSON 路径取值展示 ──
     val balanceEnabled: Boolean = false,
     val balanceApiPath: String = "/credits",
     val balanceJsonPath: String = "data.total_usage"
@@ -211,7 +211,7 @@ data class AppSettings(
     /** 5.3 上下文压缩摘要模型。 */
     val summarizeProviderId: String = "",
     /**
-     * 能力委派（对齐 上游 Vision/Voice Group）：主模型缺某模态时由委派模型代看/代听。
+     * 能力委派：主模型缺某模态时由委派模型代看/代听。
      * 值为 "providerId" 或 "providerId|modelId"；空=不启用委派（仅靠 shell 绕行）。
      * vision=图像代看（模型需支持 image-in）；asr=音频转写（模型需支持 audio-in）。
      */
@@ -219,7 +219,7 @@ data class AppSettings(
     val asrProviderId: String = "",
     /** 5.4 聊天会话模型：格式 "providerId" 或 "providerId|modelId"（同供应商多模型时精确到模型）。空=跟随供应商默认。 */
     val chatPurposeId: String = "",
-    /** 用途模型备用链（借鉴 上游 模型组）：主目标请求失败时按序降级。 */
+    /** 用途模型备用链：主目标请求失败时按序降级。 */
     val memoryExtractFallbackIds: List<String> = emptyList(),
     val titleFallbackIds: List<String> = emptyList(),
     val summarizeFallbackIds: List<String> = emptyList(),

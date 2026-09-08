@@ -79,7 +79,7 @@ fun BrowserScreen(
     }
 
     // 界面可见期间挂起 5 分钟空闲回收（正在看，别销毁）；离开时摘下 WebView
-    // 回 detached 态（上游 模式：无隐藏宿主，下次打开再换挂）
+    // 回 detached 态（无隐藏宿主，下次打开再换挂）
     LaunchedEffect(Unit) { BrowserController.uiVisible = true }
     DisposableEffect(Unit) {
         onDispose {
@@ -183,7 +183,7 @@ fun BrowserScreen(
                 }
             }
         }
-        // 上游 BrowserWebView 同款：factory 只建空容器（factory 不会重跑），
+        // factory 只建空容器（factory 不会重跑），
         // update 里把活动标签的 detached WebView swap 进来（幂等）；离开界面时
         // Compose 移除容器，WebView 随之回到 detached 池，工具继续无头可用
         AndroidView(

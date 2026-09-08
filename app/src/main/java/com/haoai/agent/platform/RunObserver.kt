@@ -10,9 +10,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * 消费端：KeepAliveService（动态通知）、AgentOverlayService（悬浮窗）——两者都
  * 可能活在 Activity 已销毁的时刻，所以放进程级 object 而非 ViewModel。
  *
- * 借鉴：上游 InputProcessingState（唯一进度广播源，主界面/悬浮窗/通知共用）+
- * 上游 SessionActivityTracker（服务订阅工具状态）+ 上游 _TaskCardState
- * （单条任务卡 upsert）。
+ * 架构：唯一进度广播源（主界面/悬浮窗/通知共用）+ 服务订阅工具状态 +
+ * 单条任务卡 upsert。
  */
 object RunObserver {
 
@@ -32,7 +31,7 @@ object RunObserver {
         val steps: List<Step> = emptyList(),
         /** 流式回答当前累积（节流版，用于悬浮窗展开态正文）。 */
         val streamTail: String = "",
-        /** todo 清单镜像（上游 持久进度卡思想：步骤清单 pending/in_progress/completed）。 */
+        /** todo 清单镜像（持久进度卡：步骤清单 pending/in_progress/completed）。 */
         val todos: List<Triple<String, String, String>> = emptyList(), // (text,status,priority)
         /** 非空 = 有待审批操作，通知升级为高优先级并挂「查看/批准」动作。 */
         val approvalTitle: String? = null,
@@ -49,7 +48,7 @@ object RunObserver {
     /** 应用是否在前台（MainActivity onResume/onPause 维护）：悬浮窗仅后台显示。 */
     @Volatile var appForeground: Boolean = true
 
-    /** 通知/悬浮窗刷新节流（上游：notify 是 binder IPC 且系统限流）。 */
+    /** 通知/悬浮窗刷新节流（notify 是 binder IPC 且系统限流）。 */
     @Volatile var lastNotifyAt: Long = 0
 
     /** 停止当前任务：路由到 AgentRunRegistry（D16 跨实例停止句柄）。 */

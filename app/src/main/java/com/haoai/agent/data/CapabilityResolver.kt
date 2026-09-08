@@ -1,7 +1,7 @@
 package com.haoai.agent.data
 
 /**
- * 统一能力解析器（对齐 上游 的「目录 > 启发式 > 默认」合并链，替代三套并存逻辑）。
+ * 统一能力解析器（「目录 > 启发式 > 默认」合并链，替代三套并存逻辑）。
  *
  * 解析优先级：
  *   1. 用户手动覆盖（capsSource=manual，UI 勾选的模态，最高优先级，不被自动检测覆盖）
@@ -87,7 +87,7 @@ object CapabilityResolver {
     }
 
     /**
-     * 能力声明提示词片段（移植 上游 LLMModel.capabilityPromptFragment 思路，
+     * 能力声明提示词片段（移植成熟实现思路，
      * 按 HaoAI 工具生态改写绕行建议）。全模态齐备时返回 null 不注入，省 token。
      */
     fun capabilityPromptFragment(caps: Caps, delegateAvailable: Boolean = false): String? {

@@ -6,7 +6,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * 自我状态查询（上游 session_status 式）：按需读取，不占每轮系统提示 token。
+ * 自我状态查询：按需读取，不占每轮系统提示 token。
  * 数据由 ChatViewModel 注入的 statusProvider 动态渲染。
  */
 class AppStatusTool(private val statusProvider: (() -> String)?) : Tool {

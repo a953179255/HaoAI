@@ -175,7 +175,7 @@ import kotlinx.coroutines.launch
  * 不用 ModalNavigationDrawer——其 sheet 的 graphicsLayer 平移动画会被玻璃 backdrop
  * 采样滞后回画，关抽屉时卡片四角闪直角残影；且动画期间禁折射又会造成暗→亮跳变。
  *
- * 支持跟手拖动（dragTo/snapTo）与松手速度判定（settle）——上游/上游 式丝滑：
+ * 支持跟手拖动（dragTo/snapTo）与松手速度判定（settle）的丝滑手感：
  * 手势期间每帧 snapTo 跟手，松手按当前位置+速度决定开或关，spring 带轻微回弹。
  */
 class DrawerController {
@@ -652,7 +652,7 @@ fun ChatScreen(
                     }
                 }
                 .pointerInput(Unit) {
-                    // 左缘右滑开抽屉：跟手拖动（上游/上游 式）——越过 slop 且方向为右后
+                    // 左缘右滑开抽屉：跟手拖动——越过 slop 且方向为右后
                     // 每帧把 fraction 钉到 位移/面板宽度，松手按位置+速度结算开或关
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -922,7 +922,7 @@ fun ChatScreen(
                     )
                 }
             }
-            // v6.1 Agent 实时工作状态行（上游 式常驻）：输入框左上方玻璃小胶囊，
+            // v6.1 Agent 实时工作状态行（常驻）：输入框左上方玻璃小胶囊，
             // 从发出消息起显示到回合结束；文案跟随阶段切换
             // （连接模型 → 思考中 → 执行第 N 个工具 → 生成回答）。
             // 随 ComposerBar 一起被键盘/增高上抬；斜杠面板会暂时盖住它（可接受）
@@ -1486,7 +1486,7 @@ fun ChatScreen(
                         )
                     }
                 }
-                // 点1（借鉴 上游/上游）：供应商下的模型直接点选切换，无需进设置
+                // 点1：供应商下的模型直接点选切换，无需进设置
                 if (p.models.isNotEmpty()) {
                     Row(
                         Modifier
@@ -1892,7 +1892,7 @@ private fun TopBar(
     val density = LocalDensity.current
     val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
     val scrimColor = MaterialTheme.colorScheme.background
-    // 通栏方角顶栏（上游 式）：无左右边距、无圆角、无四周描边（底缘发丝线由内容
+    // 通栏方角顶栏：无左右边距、无圆角、无四周描边（底缘发丝线由内容
     // Row 下方的 Box 画出）；任务面板在同一块玻璃内向下一体生长（animateContentSize）
     GlassPanel(
         backdrop = backdrop,
@@ -2205,7 +2205,7 @@ private fun MessageList(
 }
 
 /**
- * 滚到列表末端：末项底边对齐内容末端（视口末端-后 padding），上游 animateScrollToEnd 同思路。
+ * 滚到列表末端：末项底边对齐内容末端（视口末端-后 padding），平滑追加滚动。
  * animateScrollToItem(last) 是顶边对齐——流式条目长过一屏后，最新内容留在视口下方外，
  * 近底判定也随之失真，表现为"流式快结束时停住、结束不滚到底"。
  * 末项增高（操作按钮/统计行出现、Markdown 异步布局）晚于本次 layoutInfo 快照，
@@ -2288,7 +2288,7 @@ private fun RowItem(
 }
 
 /**
- * 系统事件条（居中小字胶囊，上游/同类工具 式）：压缩、交接等引擎级事件
+ * 系统事件条（居中小字胶囊）：压缩、交接等引擎级事件
  * 与对话内容在视觉上分层，透明度跟随设置的「气泡 / 卡片不透明度」。
  */
 @Composable
@@ -2314,7 +2314,7 @@ private fun SystemEventBar(text: String) {
 }
 
 /**
- * ⑤ 等待状态行（v6 移到输入框左上方玻璃胶囊内，上游 式）：连接点 + 短语轮播
+ * ⑤ 等待状态行（v6 移到输入框左上方玻璃胶囊内）：连接点 + 短语轮播
  * （shimmer 渐变）+ 已用时长计时。prefill 慢（端侧模型数十秒）时给用户持续"活着"的信号。
  */
 @Composable
@@ -2396,7 +2396,7 @@ private fun BlinkCursor() {
 }
 
 /**
- * ④ 思考过程面板（上游 ChainOfThought 同思路）：
+ * ④ 思考过程面板：
  * - live（正文未出）：标题 shimmer「正在思考」，内容只显示约 66dp 的底部渐隐预览，
  *   不再全展开把正文顶出屏幕；
  * - 正文开始（autoCollapse）后自动收起为「💭 已思考 N 秒 ▸」，点击可展开看全文；
@@ -3076,7 +3076,7 @@ private fun UserBubble(
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
-            // 长按正文 = 系统文本选择（上游 交互），不再弹操作菜单
+            // 长按正文 = 系统文本选择，不再弹操作菜单
             SelectionContainer {
                 Text(
                     row.text,
@@ -3161,7 +3161,7 @@ private fun AssistantBlock(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // 长按正文 = 系统文本选择（上游 交互）；代码块内已嵌套
+                    // 长按正文 = 系统文本选择；代码块内已嵌套
                     // SelectionContainer（内层优先），复制按钮用 disableSelection 隔离
                     SelectionContainer {
                         MarkdownText(
@@ -3226,7 +3226,7 @@ private fun QuickActionButton(
 }
 
 /**
- * 统计行（上游 NerdLine 同款）：细小灰字展示整轮 token 用量 / 速度 / 耗时。
+ * 统计行：细小灰字展示整轮 token 用量 / 速度 / 耗时。
  * 旧消息或无数据（usage 缺省）时不渲染；口径 = 整轮累计（含工具循环全部 LLM 调用）。
  */
 @Composable
@@ -3301,7 +3301,7 @@ private fun ToolChip(
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when (tool.state) {
-                    // ⑥ 运行中：红色停止方块（上游 ToolCallPill 同思路），点按即中断本轮
+                    // ⑥ 运行中：红色停止方块，点按即中断本轮
                     ToolRunState.RUNNING -> Box(
                         Modifier
                             .size(22.dp)
@@ -3767,7 +3767,7 @@ private fun SessionsDrawer(
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
-    // 上游 式三段结构：档案头部 → 最近会话列表（主体，点击即切换）→ 底部导航
+    // 三段结构：档案头部 → 最近会话列表（主体，点击即切换）→ 底部导航
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     // 当前滑出操作按钮的会话（同时只允许一张）+ 重命名目标
     var openCardId by remember { mutableStateOf<String?>(null) }
@@ -4178,7 +4178,7 @@ private fun MessageActionPanel(
                         onClick = { onCopy(code) }
                     )
                 }
-                // 网页渲染预览（上游 同款）：有文本即可用
+                // 网页渲染预览：有文本即可用
                 if (row.text.isNotBlank()) {
                     MessageActionItem(
                         icon = Icons.Filled.Web,
@@ -4215,7 +4215,7 @@ private fun MessageActionPanel(
                     enabled = !running,
                     onClick = onQuote
                 )
-                // 元信息行（上游 同款）：时间 + 模型名
+                // 元信息行：时间 + 模型名
                 val meta = buildString {
                     append(SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(row.ts)))
                     row.model?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }

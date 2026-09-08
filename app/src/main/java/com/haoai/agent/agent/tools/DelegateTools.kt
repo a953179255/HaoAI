@@ -10,7 +10,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * 能力委派工具（P2，对齐 上游 的 Vision Group / Voice Group）：
+ * 能力委派工具（P2，视觉组/语音组）：
  * 主模型缺某模态时，把媒体交给设置里配置的「委派模型」代看/代听，
  * 结果以文本回传主模型——能力缺失不等于任务失败。
  *

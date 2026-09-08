@@ -44,7 +44,7 @@ import com.haoai.agent.platform.vdisplay.VirtualScreenController
 import com.haoai.agent.ui.common.GlassPanel
 
 /**
- * 4.3 增强：虚拟屏实时预览面板（上游 两段式第三段）。vscreen_launch 成功
+ * 4.3 增强：虚拟屏实时预览面板（两段式第三段）。vscreen_launch 成功
  * 自动弹出，聊天区保持可见；帧来自 VirtualScreenController.previewFrame
  * （ImageReader 帧管线降采样），仅观看——节点操作仍由 Agent 的 vscreen_* 工具
  * 完成，用户要手动接管时可等任务结束 vscreen_close，或临时用系统分屏。

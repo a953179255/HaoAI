@@ -58,7 +58,7 @@ data class ProviderPreset(
     val name: String,
     val baseUrl: String,
     val model: String,
-    /** 卡片副注：参考 上游 shortDescription——写「能拿到什么模型」而非「已预填」 */
+    /** 卡片副注：写「能拿到什么模型」而非「已预填」 */
     val sub: String = ""
 )
 
@@ -258,7 +258,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var balanceResults by mutableStateOf<Map<String, String>>(emptyMap())
         private set
 
-    /** 点3（借鉴 上游）：GET baseUrl+path，按点分 JSON 路径取余额展示。 */
+    /** 点3：GET baseUrl+path，按点分 JSON 路径取余额展示。 */
     fun checkBalance(p: ProviderConfig) {
         balanceResults = balanceResults + (p.id to "查询中…")
         viewModelScope.launch {
@@ -566,7 +566,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     /**
-     * 按模型思考等级覆盖（上游 ReasoningLevel 式）：""=跟随全局，
+     * 按模型思考等级覆盖：""=跟随全局，
      * "off"=显式关闭，low/medium/high=覆盖全局。目录 effortValues 是可选项参考。
      */
     fun setModelEffort(providerId: String, modelId: String, effort: String) {
@@ -740,7 +740,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** 点6（借鉴 上游 模型组）：用途模型备用链——主目标失败按序降级。 */
+    /** 点6：用途模型备用链——主目标失败按序降级。 */
     fun setPurposeFallback(purpose: String, ids: List<String>) {
         c.updateSettings { st ->
             when (purpose) {

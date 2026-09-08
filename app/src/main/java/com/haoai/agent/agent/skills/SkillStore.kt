@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 import java.io.File
 
 /**
- * 技能元数据（上游 curator 式生命周期）：
+ * 技能元数据（策展式生命周期）：
  * - useCount/lastUsedAt：view 时自动累计
  * - source：user=用户手动创建（不参与自动归档），agent=自进化生成
  * - archived：闲置 90 天自动归档（不物理删除，可随时恢复）；pinned 豁免
@@ -362,7 +362,7 @@ object SkillStore {
     /**
      * 供系统提示词注入的索引（Level-0）：
      * 只列活跃技能（排除已归档与长期闲置的自进化技能），按最近活动排序取前 15 条，
-     * 描述截断 60 字符——上游 同款渐进披露。
+     * 描述截断 60 字符——渐进披露。
      */
     fun promptIndex(): String {
         val active = list().filter { !it.staleForPrompt() && !it.needsRevision && it.validated }

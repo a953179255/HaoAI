@@ -26,11 +26,11 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
- * 配置桥（对标 上游 上游.json，C6：配置源位于状态目录 filesDir/state/haoai.config.json）：
+ * 配置桥（C6：配置源位于状态目录 filesDir/state/haoai.config.json）：
  * - render：把 AppSettings + MCP/SSH 分区渲染成状态目录镜像（apiKey/headers 一律 `****` 掩码）
  * - 监听：文件被外部（adb/文件管理器）改动后自动解析校验 → 经 AppContainer.updateSettings 合并入库
  * - agent 侧入口是 config_get/config_set 工具（恒审批，见 ConfigTools）；本桥保留 2s 轮询兜底
- * - 严格校验（上游 式）：未知键/非法值/缺必填 → 整体拒绝并保留上次配置，结果写 config-bridge.log
+ * - 严格校验：未知键/非法值/缺必填 → 整体拒绝并保留上次配置，结果写 config-bridge.log
  * - 回滚兜底：每次 apply 前把当前配置存滚动快照（state/config-snapshots/，保留 10 份），
  *   设置页可一键回退——改坏配置不再依赖对话修复（自锁死保护）
  */

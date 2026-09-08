@@ -30,12 +30,11 @@ import kotlinx.coroutines.launch
 /**
  * 任务悬浮窗（用户点名的编排层缺口：切后台看不到 Agent 在干嘛）。
  *
- * 形态与交互抄自三家成熟实现：上游 OverlayService（前台载体 + 胶囊实时文案 +
- * 内置停止键）、上游 ToolOverlayController（仅后台显示 + 完成态停留）、
- * 上游 FloatingWindowManager（位置持久化）。
+ * 形态与交互融合多家成熟实现：前台载体 + 胶囊实时文案 + 内置停止键、
+ * 仅后台显示 + 完成态停留、位置记忆持久化。
  *
  * 刻意用传统 View 而非 ComposeView：服务窗口挂 Compose 需要注入
- * LifecycleOwner/SavedStateRegistry 三件套（上游 做法），胶囊这点内容不值得
+ * LifecycleOwner/SavedStateRegistry 三件套，胶囊这点内容不值得
  * 引入那份复杂度和崩溃面。
  *
  * 生命周期：send() 时尝试启动；RunObserver.state 转非活动 → 显示完成态停留
@@ -94,7 +93,7 @@ class AgentOverlayService : Service() {
                     render(st)
                 }
             } else if (wasActive) {
-                // 完成态停留（上游 linger）：已停止/已完成 可见几秒再消失
+                // 完成态停留（linger）：已停止/已完成 可见几秒再消失
                 if (stopAt == 0L) stopAt = System.currentTimeMillis()
                 if (stopAt > 0 && System.currentTimeMillis() - stopAt > 3500) {
                     removeViews()

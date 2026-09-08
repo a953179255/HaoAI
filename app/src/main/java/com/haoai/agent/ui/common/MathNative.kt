@@ -26,13 +26,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import ru.noties.jlatexmath.JLatexMathDrawable
 
 /**
- * v2.1 公式原生渲染（上游 同引擎 JLatexMath）：替代 KaTeX+WebView 管线。
+ * v2.1 公式原生渲染（JLatexMath 引擎）：替代 KaTeX+WebView 管线。
  * 根因回顾：WebView 池上限 3 → 公式密集消息互相销毁出现空白；固定 fillMaxWidth
  * 裁掉超宽公式；流式重载闪烁。原生 Drawable 绘制零上述问题，且行内公式可以真渲染。
  * 依赖 GPL-2.0+Classpath 例外（com.github.noties:jlatexmath-android，可合法链接）。
  */
 
-/** 块级公式：居中原生绘制，超宽横向滚动（对齐 上游 MathBlock 行为）。 */
+/** 块级公式：居中原生绘制，超宽横向滚动。 */
 @Composable
 fun MathBlockNative(latex: String, dark: Boolean, textSizeSp: Float = 17f) {
     val textColor = if (dark) androidx.compose.ui.graphics.Color(0xFFE6EBF5) else androidx.compose.ui.graphics.Color(0xFF171B26)
@@ -44,7 +44,7 @@ fun MathBlockNative(latex: String, dark: Boolean, textSizeSp: Float = 17f) {
         buildMathDrawable(latex, textColor.toArgb(), bg, textSizeSp * density, context)
     }
     if (drawable == null) {
-        // 非法 LaTeX 降级：源码文本（上游 LatexText 同款回退）
+        // 非法 LaTeX 降级：源码文本回退
         FormulaFallback(latex, dark)
         return
     }

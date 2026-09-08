@@ -21,7 +21,7 @@ data class JournalDay(
 )
 
 /**
- * 每日情景记忆（episodic 层），上游 式 Markdown 日记：
+ * 每日情景记忆（episodic 层），Markdown 日记：
  * 存储于 <appFilesDir>/memory/YYYY-MM-DD.md，每行一条：
  *   `- HH:mm | imp=N | src=xxx | 内容`
  * 纯文本可直接查看/手动补充；程序解析失败的行为忽略，不会崩溃。

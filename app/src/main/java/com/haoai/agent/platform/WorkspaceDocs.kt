@@ -9,7 +9,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 上游 式工作区文档层：把记忆/身份/能力渲染成用户可直接查看编辑的 Markdown 文件，
+ * 工作区文档层：把记忆/身份/能力渲染成用户可直接查看编辑的 Markdown 文件，
  * 落在默认工作区（Android/data/com.haoai.agent/files/workspace）：
  *   MEMORY.md   长期记忆库
  *   USER.md     用户画像（偏好类记忆）

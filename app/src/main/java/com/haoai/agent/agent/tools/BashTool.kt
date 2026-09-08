@@ -132,8 +132,7 @@ class BashTool : Tool {
     /**
      * 沙箱 fork 能力探测（进程内缓存一次）：部分设备的 app 进程 seccomp 栈
      * （如 API 36 模拟器）会拒绝 proot guest 内的 fork/clone（ENOSYS），表现为
-     * "can't fork: Function not implemented"（真机正常，参见 上游 issue #1047
-     * 同类问题）。auto 路由据此回落 toybox；显式 backend="linux" 不拦，让模型
+     * "can't fork: Function not implemented"（真机正常，同类开源项目已确认）。auto 路由据此回落 toybox；显式 backend="linux" 不拦，让模型
      * 能看到原始报错。探测命令本身要 fork 子 shell，失败即视为受限。
      */
     private var forkProbeResult: Boolean? = null

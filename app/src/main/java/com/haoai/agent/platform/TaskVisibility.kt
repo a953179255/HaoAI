@@ -6,7 +6,7 @@ import android.content.Context
 /**
  * 4.3 运行时任务视图隐藏：Agent 运行期间把本应用任务从系统「最近任务」中移除，
  * 避免用户误滑关闭中断进行中的自动化。公共 API ActivityManager.getAppTasks() +
- * AppTask.setExcludeFromRecents（上游 同款机制，只作用于本应用自己的任务）。
+ * AppTask.setExcludeFromRecents（只作用于本应用自己的任务）。
  *
  * 兜底恢复：上次被系统强杀时任务可能留在隐藏态，应用下次打开时若无 Agent 运行则恢复可见。
  */

@@ -145,7 +145,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _streamingReasoning = MutableStateFlow<String?>(null)
     val streamingReasoning = _streamingReasoning.asStateFlow()
 
-    // ── ② token 批处理（上游 RenderBatchCoordinator / 同类 60ms 同思路）──
+    // ── ② token 批处理（60ms 节拍批刷）──
     // 引擎回调线程直接逐 token 写 StateFlow 会让 MarkdownText 每帧重组+重解析；
     // 改为 token 先进缓冲，flusher 每 40ms 合并一次上屏（肉眼仍是连续流，重组降 ~4 倍）。
     private val textBuf = StringBuilder()
@@ -433,7 +433,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (text.isEmpty() && imageData == null && audioPath == null && videoPath == null) return
         // E8/v7 循环内插话+排队：生成期间用户发送 → 入队（引擎间隙 A 注入当轮跟进；
         // 若任务结束仍未消费，作为新任务自动执行）。入队同时落一条可见用户消息，
-        // 让用户看到自己的消息已排队（上游/上游 式反馈）
+        // 让用户看到自己的消息已排队（排队态反馈）
         if (_running.value) {
             if (text.isNotEmpty()) {
                 interjectQueue.add(text)
@@ -543,7 +543,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     if (plan.isNotBlank()) _planProposal.value = plan
                 }
                 // v7 排队任务：回合正常结束且队列还有排队消息 → 自动作为新任务执行
-                // （上游/上游 式：运行中可继续派活，队列在任务完成后逐条落地）。
+                // （运行中可继续派活，队列在任务完成后逐条落地）。
                 // 非正常结束（停止/失败）不清队列也不自动续跑——用户按停止即表态中止。
                 val autoNext = interjectQueue.poll()
                 if (autoNext != null && endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
@@ -681,7 +681,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return
         }
         _todoItems.value = todoStore.load(s.id)
-        // 上游 持久进度卡思想：todo 清单镜像进任务卡（通知显示 N/M 完成）。
+        // todo 清单镜像进任务卡（通知显示 N/M 完成）。
         // 仅当查看的正是运行中的会话时才镜像，防止切走会话后把别的清单灌进任务卡
         val obs = com.haoai.agent.platform.RunObserver.state.value
         if (obs.sessionId == s.id) {
@@ -1144,7 +1144,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
 
     /**
-     * 自身运行状态全文（上游 session_status 式）：由 app_status 工具按需读取，
+     * 自身运行状态全文：由 app_status 工具按需读取，
      * 不再每轮注入系统提示——省 token，数据仍然实时。
      */
     private fun buildStatusText(): String {
@@ -1376,7 +1376,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(activeProviderId = id) }
     }
 
-    /** 点1（借鉴 上游/上游）：切换供应商并选中其下指定模型（聊天 /model 切换器）。 */
+    /** 点1：切换供应商并选中其下指定模型（聊天 /model 切换器）。 */
     fun selectModel(providerId: String, modelId: String) {
         c.updateSettings { s ->
             s.copy(

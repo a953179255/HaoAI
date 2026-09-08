@@ -58,7 +58,7 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 
 /**
- * 4.2 呼出优化：底部非全屏预览面板（上游 两段式第一段）。Agent 无头浏览时
+ * 4.2 呼出优化：底部非全屏预览面板（两段式第一段）。Agent 无头浏览时
  * 经 uiOpener 自动弹出，聊天区保持可见可继续对话；预览区触摸屏蔽（仅观看，用户
  * 选定交互方式），链接条点击直接复制网址，点 🌐 换挂全屏 BrowserScreen 完整操作。
  *

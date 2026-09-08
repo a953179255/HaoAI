@@ -13,7 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * 记忆固化（上游 "dreaming" 的本地安全版）：
+ * 记忆固化（"梦境固化"的本地安全版）：
  * 规则层（零成本，始终执行）：
  * 1) 每日日志中 importance>=4 的条目晋升为长期 event 记忆
  * 2) 过期日志清理（默认保留 7 天）

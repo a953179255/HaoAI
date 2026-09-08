@@ -35,7 +35,7 @@ class ToyboxBackend(private val workdir: File?) : ShellBackend {
 }
 
 /**
- * linux 后端：**常驻 guest shell**（上游 hiddenExec 同款架构）。
+ * linux 后端：**常驻 guest shell**（驻留进程架构）。
  *
  * 为什么常驻：同一宿主进程内起第二个 proot 会话时，guest 内 fork/clone 会被
  * 内核拒绝（"can't fork: Function not implemented"）——首个会话一切正常，之后
@@ -111,7 +111,7 @@ class ProotBackend private constructor(
         val s = ensureSession()
         seq += 1
         val token = "HAOAI_END_${seq}_${System.currentTimeMillis()}"
-        // 上游 hiddenExec 同款：命令原文经引号 heredoc 写临时脚本（零展开、防注入），
+        // 命令原文经引号 heredoc 写临时脚本（零展开、防注入），
         // 执行后回传 END 标记 + exit code
         val payload = buildString {
             append("cat > /tmp/.haoai_")

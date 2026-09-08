@@ -30,7 +30,7 @@ data class MemoryState(
 )
 
 /**
- * 长期记忆库（上游 式"文件即记忆"）：
+ * 长期记忆库（"文件即记忆"）：
  * 真源 = 工作区 MEMORY.md（markdown），内存态为工作副本；旧版 memories.json 首启自动迁移。
  * 行格式（人读部分与镜像一致，行尾 HTML 注释承载无损元数据）：
  *   `- [c4a9e667 · 重要度4] 内容 [tags] <!-- id:.. imp:4 type:event created:.. lastUsed:.. uses:0 src:.. -->`
@@ -131,7 +131,7 @@ class MemoryBank(
 
     /**
      * 写入长期记忆。返回写入/命中的条目；返回 null 表示记忆库已满且无低价值条目可驱逐
-     * （上游 式：把整理责任交还模型，由其 forget/合并后再写）。
+     * （把整理责任交还模型，由其 forget/合并后再写）。
      */
     @Synchronized
     fun remember(
@@ -378,7 +378,7 @@ class MemoryBank(
         promptSnippetIds(query, k, capPerItem).first
 
     /**
-     * 注入片段（上游 触发式注入的本地版）：query 非空时打分 =
+     * 注入片段（触发式注入）：query 非空时打分 =
      * 词面重叠*2.5 + 全局重要性/新鲜度/useCount；零重叠时自然退化为原全局排序。
      * 同时返回命中的 id 列表，供真实请求路径回写 lastUsedAt/useCount（估算调用不回写）。
      */

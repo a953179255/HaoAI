@@ -95,7 +95,7 @@ class AgentEngine(
     private val vscreenBitrateKbps: Int = 3000,
     /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
     private val budgetHint: () -> String = { "" },
-    /** 5.3 模型路由：记忆提取专用链（主+备用，借鉴 上游 模型组）；空=回落主模型。 */
+    /** 5.3 模型路由：记忆提取专用链（主+备用）；空=回落主模型。 */
     private val memoryTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.3 模型路由：上下文压缩摘要专用链。 */
     private val summarizeTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
@@ -309,7 +309,7 @@ class AgentEngine(
 
                 // v7：循环内插话已升级为「排队任务」语义（ChatViewModel 全权管理队列）——
                 // 引擎不再在间隙 A 消费队列；排队消息在回合正常结束后由 VM 自动作为
-                // 新任务执行（上游/上游 式）。保留队列引用仅为兼容旧构造签名。
+                // 新任务执行（运行中排队语义）。保留队列引用仅为兼容旧构造签名。
 
                 // E9 todo 变更检测：本轮执行过 todo 工具 → 下一轮注入进度行
                 val todoNow = todoStore.load(session.id)
@@ -1138,7 +1138,7 @@ class AgentEngine(
         val journalBlock = journalSnippet()
         val mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary()
         val budget = budgetHint()
-        // 能力声明片段（对齐 上游 capabilityPromptFragment）：把当前模型的输入/输出
+        // 能力声明片段：把当前模型的输入/输出
         // 模态与工具支持显式写进系统提示词，让模型知道边界并主动绕行，而非中途引用被剥离
         // 的能力导致任务断裂报错。端侧模型（llama）不走此注入（本地能力另由 vision 探测）。
         // 配置了委派模型时提示词会点名 delegate_to_vision/transcribe_audio 工具；
@@ -1648,7 +1648,7 @@ class AgentEngine(
     }
 
     /**
-     * 实际生效的思考等级（上游 式按模型控制）：模型条目覆盖 > 全局设置。
+     * 实际生效的思考等级（按模型控制）：模型条目覆盖 > 全局设置。
      * "off" 返回 null（请求不发 reasoning_effort，即使用户全局配了等级）。
      */
     private fun effectiveEffort(): String? {

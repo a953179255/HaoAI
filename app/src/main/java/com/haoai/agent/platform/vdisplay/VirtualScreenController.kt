@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
  * 4.3 虚拟屏后台自动化：DisplayManager 创建与主屏同规格的公共虚拟屏，
  * 目标 App 经 ActivityOptions.setLaunchDisplayId 启动到屏上（本 App 自己
  * 创建的虚拟屏，caller 即 owner，普通权限可启动）；ImageReader surface
- * 收帧供截图（上游 逆向确认的帧管线模式）。操作主轴走无障碍节点
+ * 收帧供截图（VirtualDisplay+ImageReader 帧管线）。操作主轴走无障碍节点
  * （API 30+ getWindowsOnAllDisplays，见 HaoAccessibilityService），本类
  * 只管屏的生命周期与画面。
  *

@@ -100,7 +100,7 @@ sealed class MdBlock {
 
     /** LaTeX 公式（块级 $$...$$）；流式未闭合 $$ 时 closed=false（⑦ 保守按永久开启处理）。 */
     data class Math(val latex: String, val closed: Boolean = true) : MdBlock()
-    /** v2：类型化单元格（行内样式可进表格，对齐 上游 工艺）。 */
+    /** v2：类型化单元格（行内样式可进表格）。 */
     data class Table(
         val header: List<List<MdInline>>,
         val rows: List<List<List<MdInline>>>,
@@ -153,7 +153,7 @@ private val tableDivider = Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s
 private val mathLine = Regex("^\\s*\\$\\$(.+?)\\$\\$\\s*$")
 
 /**
- * ③ 已结算边界（上游/上游 式 frozen-prefix）：返回 src 中最后一个
+ * ③ 已结算边界（frozen-prefix）：返回 src 中最后一个
  * 「代码围栏与块级公式之外」的空行末尾偏移。该偏移之前的块均已定型、不会再被
  * 后续 token 改变，可冻结复用；之后的尾部文本才需要随流式重解析。
  * 返回 0 表示尚无可冻结前缀。
@@ -186,7 +186,7 @@ fun MarkdownText(
     // 真机症状：流式公式先显示 "$$\max..." 字面量再跳变）。代码块内的 $$ 不算。
     val parseSource = if (streaming) closeUnclosedMath(text) else text
     // 首帧同步解析防闪烁；后续文本变化走后台线程（mapLatest 自动丢弃过期任务，
-    // 打字速率 >> 解析速率时天然合并——上游 生产验证的同款模式）。
+    // 打字速率 >> 解析速率时天然合并）。
     // 冻结前缀仍生效：settledBoundary 之外的尾部子串独立解析后按块表拼接。
     var blocks by remember { mutableStateOf(parseMarkdownAst(parseSource)) }
     var parsedFor by remember { mutableStateOf(parseSource) }
@@ -370,7 +370,7 @@ private fun buildMathContents(
 /**
  * 类型化行内树 → AnnotatedString：递归携带 SpanStyle（嵌套自然合成）。
  * 链接用 LinkAnnotation.Url 真可点；行内公式埋占位符（InlineTextContent），
- * 实际尺寸由 JLatexMath Drawable 实测量出——真渲染不截断（上游 同思路）。
+ * 实际尺寸由 JLatexMath Drawable 实测量出——真渲染不截断。
  */
 private fun buildInlineTyped(
     inlines: List<MdInline>,
@@ -394,7 +394,7 @@ private fun buildInlineTyped(
                     is MdInline.Emph -> emit(node.children, style.copy(fontStyle = FontStyle.Italic))
                     is MdInline.Del -> emit(node.children, style.copy(textDecoration = TextDecoration.LineThrough))
                     is MdInline.CodeSpan -> {
-                        // 上游 观感：行内代码蓝字浅底（inlineCodeColor 覆盖时）
+                        // 行内代码蓝字浅底（inlineCodeColor 覆盖时）
                         pushStyle(
                             style.copy(
                                 fontFamily = FontFamily.Monospace,
@@ -439,7 +439,7 @@ private fun buildInlineTyped(
  * 固定列宽下照常参与测量换行），仅行内代码颜色由调用方决定。
  */
 
-/** 引用块：左竖线 + 浅底 + 子块递归（上游 风格）。 */
+/** 引用块：左竖线 + 浅底 + 子块递归。 */
 @Composable
 private fun QuoteBlockView(
     block: MdBlock.Quote,
@@ -530,7 +530,7 @@ private fun ListBlockView(
     }
 }
 
-/** 代码等宽字体：JetBrains Mono（OFL），带 -> → / => ⇒ 连字，上游 同观感。 */
+/** 代码等宽字体：JetBrains Mono（OFL），带 -> → / => ⇒ 连字。 */
 private val CodeFontFamily = FontFamily(
     Font(R.font.jetbrains_mono_regular)
 )
@@ -582,7 +582,7 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                     tint = plain.copy(alpha = 0.65f),
                     modifier = Modifier
                         // 点按复制可用；长按会进入正文选择态（新版 Compose 已移除
-                        // disableSelection，与 上游 行为一致，可接受）
+                        // disableSelection，行为一致，可接受）
                         .size(16.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .clickable {
@@ -597,7 +597,7 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                     fontFamily = CodeFontFamily,
                     fontSize = 12.5.sp,
                     lineHeight = 18.sp,
-                    // 软换行（上游 同款）：长行折行不横滚，手机上不用双向找内容
+                    // 软换行：长行折行不横滚，手机上不用双向找内容
                     softWrap = true,
                     modifier = Modifier
                         .padding(horizontal = 12.dp)
@@ -610,7 +610,7 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
 }
 
 /**
- * 表格 v2（上游 DataTable 工艺）：SubcomposeLayout 两阶段测量——
+ * 表格 v2：SubcomposeLayout 两阶段测量——
  * ① 各单元格自然宽度估列宽；② 固定列宽重测出行高，行内 Row 对齐排布。
  * 列宽 [72,240]dp 限幅，长单元格自动换行不再拉爆横滚；整表超宽才横向滚动。
  * 单元格经类型化行内渲染（粗体/代码/行内公式都可在表格内）。
@@ -627,7 +627,7 @@ private fun TableBlock(table: MdBlock.Table) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
 
-    // 头部动作（上游 同款）：复制原始 markdown；下载走 SAF 存 CSV
+    // 头部动作：复制原始 markdown；下载走 SAF 存 CSV
     fun cellText(cells: List<MdInline>): String = cells.joinToString("") { text ->
         when (text) {
             is MdInline.Run -> text.text
@@ -699,7 +699,7 @@ private fun TableBlock(table: MdBlock.Table) {
         androidx.compose.foundation.layout.BoxWithConstraints {
         val cardMaxW = maxWidth
         Column {
-        // 头部动作栏（上游 TableNode 同款）：固定不随表格横滚，底部分隔线
+        // 头部动作栏：固定不随表格横滚，底部分隔线
         Row(
             Modifier
                 .fillMaxWidth()
@@ -756,7 +756,7 @@ private fun TableBlock(table: MdBlock.Table) {
         ) {
             // 两阶段测量容器（网格线：几何在 measure 产出、drawBehind 消费）
             val gridRef = remember { java.util.concurrent.atomic.AtomicReference<GridGeom?>(null) }
-            // 上游 网格观感：中等浅灰（比底色明显、比文字淡得多）
+            // 网格观感：中等浅灰（比底色明显、比文字淡得多）
             val gridLine = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f)
             val linePx = with(density) { 0.75.dp.toPx() }.coerceAtLeast(1f)
             androidx.compose.ui.layout.SubcomposeLayout(
@@ -939,7 +939,7 @@ private fun TableSkeletonBlock(header: List<String>) {
 }
 
 /**
- * 公式块 v2.1：JLatexMath 原生绘制（上游 同引擎）。
+ * 公式块 v2.1：JLatexMath 原生绘制。
  * 弃用 KaTeX+WebView——池上限 3 导致公式密集消息互相销毁（真机公式空白根因）、
  * 固定宽裁掉超宽公式、流式重载闪烁；原生绘制三者全消，失败降级源码文本。
  */

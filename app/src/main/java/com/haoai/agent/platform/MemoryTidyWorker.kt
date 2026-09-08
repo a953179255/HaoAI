@@ -8,7 +8,7 @@ import com.haoai.agent.HaoApplication
 import com.haoai.agent.agent.memory.MemoryConsolidation
 
 /**
- * 记忆固化（上游 "dreaming" 的本地实现）：
+ * 记忆固化（"梦境固化"的本地实现）：
  * - 规则层（始终执行）：重要日志晋升长期库 → 过期日志清理 → 去重整理，零成本
  * - 深度梦境层（设置开启时）：按用户选择的「记忆管理模型」（默认端侧小模型，
  *   也可选云端服务）对长期记忆做语义去重合并；不可用自动回退规则层。

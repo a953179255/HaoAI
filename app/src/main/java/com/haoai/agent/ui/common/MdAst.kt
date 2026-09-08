@@ -11,9 +11,9 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
 
 /**
- * v2 Markdown 渲染升级（对齐 上游 观感）：
- * 解析层从自写逐行状态机换成 intellij-markdown 的 GFM fork（Apache-2.0，
- * 上游/markdown 仓库自带 Apache LICENSE——主仓库 AGPL 不涉及此依赖），
+ * v2 Markdown 渲染升级：
+ * 解析层从自写逐行状态机换成 intellij-markdown 的 GFM fork（Apache-2.0
+ * 宽松许可第三方开源库，与主项目 AGPL 无涉），
  * 拿到真 AST：引用块/嵌套列表/任务列表/hr/表格单元格行内样式从此全部可得。
  *
  * 设计约束：

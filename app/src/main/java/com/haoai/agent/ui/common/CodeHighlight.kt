@@ -95,7 +95,7 @@ object CodeHighlight {
     /**
      * 内置函数/类型表（对齐 highlight.js 的 built_in 类，渲染橙色）：
      * print/len/range/int/list（Python）、console/JSON（JS）、len/make（Go）等。
-     * 注意 JS 的 fetch/Error 不在内——上游 实测它们走函数名蓝（调用处染色）。
+     * 注意 JS 的 fetch/Error 不在内——实测它们走函数名蓝（调用处染色）。
      */
     private val builtins = mapOf(
         "python" to setOf(
@@ -178,7 +178,7 @@ object CodeHighlight {
         literal = Color(0xFFC678DD)
     )
 
-    /** 浅色主题配色（AtomOne Light 官方值，上游 同款：紫关键字/绿串/赭黄内置/蓝函数名）。 */
+    /** 浅色主题配色（AtomOne Light 官方值：紫关键字/绿串/赭黄内置/蓝函数名）。 */
     fun lightColors() = Colors(
         keyword = Color(0xFFA626A4),
         string = Color(0xFF50A14F),
@@ -278,7 +278,7 @@ object CodeHighlight {
                     // 注释优先（避免 // 被当除号、# 被当普通符号）
                     token.startsWith("//") || token.startsWith("#") || token.startsWith("-- ") ->
                         colors.comment to null
-                    // 字符串（含 """docstring"""、`模板串`，上游 实测均绿）
+                    // 字符串（含 """docstring"""、`模板串`，实测均绿）
                     token.startsWith("\"") || token.startsWith("'") || token.startsWith("`") ->
                         colors.string to null
                     token.startsWith("@") -> colors.annotation to null

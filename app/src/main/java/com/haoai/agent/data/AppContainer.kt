@@ -30,7 +30,7 @@ class AppContainer(app: Application) {
     val settingsStore = SettingsStore(app)
     val sessionStore = SessionStore(app)
     val workspace = WorkspaceManager(app)
-    // 长期记忆真源 = 工作区 MEMORY.md（上游 式"文件即记忆"）；SAF 工作区时回退内部目录
+    // 长期记忆真源 = 工作区 MEMORY.md（"文件即记忆"）；SAF 工作区时回退内部目录
     val memoryBank = MemoryBank(
         appFilesDir,
         storageFile = (workspace.current as? com.haoai.agent.platform.RawFileBackend)
@@ -88,7 +88,7 @@ class AppContainer(app: Application) {
     /** 5.2 最近一次降级通知（UI 轮询显示「已降级到 X」）；null=无。 */
     @Volatile var lastFallbackNotice: String? = null
 
-    // ── API Key 池（借鉴 上游）：主 Key + 备用池按策略逐请求轮换，分摊单 Key 限流 ──
+    // ── API Key 池：主 Key + 备用池按策略逐请求轮换，分摊单 Key 限流 ──
     private val keyCursor = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /** 解密供应商当前应使用的 API Key（池内轮换；解密失败回退空串）。 */
@@ -132,7 +132,7 @@ class AppContainer(app: Application) {
     val settingsFlow = MutableStateFlow(settingsStore.load())
 
     /**
-     * C6 配置源迁状态目录（app 私有，对齐 上游「config 归 state dir」）：
+     * C6 配置源迁状态目录（app 私有，config 归状态目录）：
      * 工作区不再出现 haoai.config.json，agent 的 read/write/edit 摸不到它——
      * agent 改配置唯一入口是 config_get/config_set 工具（恒审批）。
      * state/agents/ 为多 Agent 预留骨架（将来每个 Agent 一个子目录：config + sessions）。
@@ -268,7 +268,7 @@ class AppContainer(app: Application) {
         runCatching { configBridge.onSettingsChanged() }
     }
 
-    /** 把记忆/身份等渲染为工作区 Markdown（上游 式文件层），异步执行。 */
+    /** 把记忆/身份等渲染为工作区 Markdown（文件层），异步执行。 */
     fun syncWorkspaceDocs() {
         applicationScope.launch { runCatching { WorkspaceDocs.syncAll(this@AppContainer) } }
     }
@@ -357,7 +357,7 @@ class AppContainer(app: Application) {
     }
 
     /**
-     * 用途模型链解析（借鉴 上游 模型组）：主目标 + 备用链按序去重，返回全部可用目标。
+     * 用途模型链解析：主目标 + 备用链按序去重，返回全部可用目标。
      * 调用方按序尝试、失败降级；主目标为空配置时返回空列表（调用方回落主模型）。
      */
     suspend fun resolvePurposeTargets(primaryId: String, fallbackIds: List<String>): List<DreamTarget> {

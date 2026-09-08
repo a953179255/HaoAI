@@ -277,7 +277,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
     ): Flow<SseEvent> = flow {
         val url = normalizeUrl(provider.baseUrl)
         val isLocal = provider.baseUrl.contains("127.0.0.1")
-        // 能力门控（借鉴 上游/上游）：模型标记不支持 reasoning 时不发 effort 参数
+        // 能力门控：模型标记不支持 reasoning 时不发 effort 参数
         val requestJson = HaoJson.json.encodeToString(
             ChatCompletionRequest.serializer(),
             ChatCompletionRequest(
@@ -292,7 +292,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                 reasoningEffort = reasoningEffort?.takeIf {
                     it.isNotBlank() && !isLocal && provider.caps().reasoning != false
                 },
-                // 采样参数「是否发送」开关（借鉴 上游）：关=请求体不带该字段，与旧行为一致
+                // 采样参数「是否发送」开关：关=请求体不带该字段，与旧行为一致
                 temperature = provider.temperature.toDouble().takeIf { provider.sendTemperature },
                 topP = provider.topP.toDouble().takeIf { provider.sendTopP },
                 presencePenalty = provider.presencePenalty.toDouble().takeIf { provider.sendPresencePenalty },

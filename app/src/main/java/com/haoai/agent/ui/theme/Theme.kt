@@ -126,7 +126,7 @@ private val HaoLightColors = lightColorScheme(
     onError = Color(0xFFFFFFFF)
 )
 
-/** AMOLED 纯黑底（上游 同款思路：只换中性底色，主色保持）。 */
+/** AMOLED 纯黑底（只换中性底色，主色保持）。 */
 private val AmoledBlack = Color(0xFF000000)
 private val AmoledSurface = Color(0xFF0A0A0C)
 

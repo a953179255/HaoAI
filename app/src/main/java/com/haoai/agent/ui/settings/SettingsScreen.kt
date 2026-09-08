@@ -121,7 +121,7 @@ import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 
 /**
- * 设置主页（上游 移动端式分组导航）：
+ * 设置主页（分组导航）：
  * 根页面只列分类入口，具体设置项进各子页，避免功能增多后平铺混乱。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -3525,7 +3525,7 @@ private fun ProviderDialog(
                                 val selected = draft.name == p.name && draft.baseUrl == p.baseUrl
                                 PresetCard(
                                     label = p.label,
-                                    // 副注写「能拿到什么模型」（参考 上游 shortDescription），
+                                    // 副注写「能拿到什么模型」，
                                     // 选中后统一显示「已预填」确认反馈
                                     sub = p.sub,
                                     selected = selected,
@@ -3770,7 +3770,7 @@ private fun ProviderDialog(
                     }
                     androidx.compose.animation.AnimatedVisibility(visible = advanced) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            // 点2：采样参数发送开关（借鉴 上游：关=请求体不带该字段）
+                            // 点2：采样参数发送开关（关=请求体不带该字段）
                             Text(
                                 "采样参数（默认不发送；开启才随请求下发）",
                                 style = MaterialTheme.typography.labelSmall,
@@ -3786,7 +3786,7 @@ private fun ProviderDialog(
                                 { onChange(draft.copy(sendFrequencyPenalty = it)) }, { onChange(draft.copy(frequencyPenalty = it)) }, backdrop)
                             HorizontalDivider(Modifier.padding(vertical = 4.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-                            // 点5：备用 Key 池（借鉴 上游）
+                            // 点5：备用 Key 池
                             Text(
                                 "备用 Key 池（逐请求轮换，分摊单 Key 限流）",
                                 style = MaterialTheme.typography.labelSmall,
@@ -3866,7 +3866,7 @@ private fun ProviderDialog(
                             }
                             HorizontalDivider(Modifier.padding(vertical = 4.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-                            // 点3：余额查询（借鉴 上游）
+                            // 点3：余额查询
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("余额查询", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
                                 com.haoai.agent.ui.common.LiquidToggle(
@@ -4409,7 +4409,7 @@ private fun ModelCapsDialog(
                             )
                         }
                     }
-                    // 按模型思考等级覆盖（上游 ReasoningPicker 式）：
+                    // 按模型思考等级覆盖：
                     // 跟随全局 / off / low / medium / high；目录给了 effortValues 时优先用目录档位
                     Text(
                         "思考等级（本模型覆盖全局）",
@@ -4522,7 +4522,7 @@ private fun ModelCapsDialog(
     }
 }
 
-/** 采样参数行：开关 + 数值输入（借鉴 上游 的参数级发送控制）。 */
+/** 采样参数行：开关 + 数值输入（参数级发送控制）。 */
 @Composable
 private fun SwitchParamField(    label: String,
     enabled: Boolean,

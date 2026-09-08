@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 模型能力目录（数据源 models.dev/api.json，对齐 上游 架构）：
+ * 模型能力目录（数据源 models.dev/api.json）：
  * 三级缓存——内存(48h TTL) → 磁盘(cacheDir/models-dev-cache) → 内置 asset(models-dev-api.json)，
  * 过期时后台刷新，离线也可用。端侧模型不走此目录。
  */
@@ -99,7 +99,7 @@ object ModelCatalog {
         "openai" to "openai"
     )
 
-    /** 模态名归一：OpenAI 系 "image_input"/"text_output" → 裸名（对齐 上游 normalizeModalityName）。 */
+    /** 模态名归一：OpenAI 系 "image_input"/"text_output" → 裸名。 */
     fun normalizeModality(raw: String): String =
         raw.lowercase().removeSuffix("_input").removeSuffix("_output")
 

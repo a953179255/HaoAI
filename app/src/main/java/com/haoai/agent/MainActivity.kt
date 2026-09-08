@@ -382,10 +382,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // 素底玻璃的底色跟随主题（动态取色时随 Material You 变化）：
     // 上浅下深两级 surface，玻璃 vibrancy 透出的即主题背景色
     val scheme = androidx.compose.material3.MaterialTheme.colorScheme
-    // 转场纱幕：上游 旧页淡出溶进的是「净色实底」（其根布局
+    // 转场纱幕：旧页淡出溶进的是「净色实底」（其根布局
     // background(colorScheme.background)），HaoAI 淡出溶进的是花壁纸
     // ——彩色图案残影。push 期间在壁纸上盖一层主题净色「纱」
-    // （alpha 0.9 近实底，转场完缓退），转场瞬间借用 上游 的净底。
+    // （alpha 0.9 近实底，转场完缓退），转场瞬间借用同样的净底。
     // 只在 push（离开聊天/设置根）时升起：pop 是「揭开」语义，聊天页
     // 滑回时壁纸应同步回归——纱幕若在，会把落位的聊天页罩灰（实测确认）
     var lastScreen by androidx.compose.runtime.remember {
@@ -507,7 +507,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 modifier = Modifier.matchParentSize()
             )
             // 转场纱幕：净色盖在壁纸上（页面层之下），旧页淡出时溶进净色
-            // 而非花壁纸——上游 丝滑的关键（其底就是净色实底）
+            // 而非花壁纸——丝滑的关键（底就是净色实底）
             // v0.18.1：动画收进子组合——旧实现 animateFloatAsState().value 在
             // RootApp 顶层解包，450ms 淡出期间每帧重组整个 RootApp（含 AnimatedContent
             // 全部页面）；现在只传离散 scrimLevel，逐帧 alpha 只重组这个 10 行的小组件
@@ -523,10 +523,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 onSave = { name, soul -> chatVm.completeOnboarding(name, soul) }
             )
         } else {
-            // 页面切换过渡（上游 同款：slide + scale + fade，有纵深感）：
+            // 页面切换过渡（slide + scale + fade，有纵深感）：
             // push——新页全屏滑入；旧页缩小(1→0.92)+变暗淡出沉底（不是全 0.7，
             // HaoAI 旧页带着展开抽屉，缩太多会露出边缘）。pop 反向——旧页全速
-            // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 上游 流畅感来源。
+            // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 流畅感来源。
             // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
             // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
             fun levelOf(s: Int) = screenDepth(s)
@@ -829,7 +829,7 @@ private fun OnboardingGlass(
     val canConfirm = step == 1 || name.isNotBlank()
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // 首启引导：液态玻璃卡片悬浮在壁纸之上（上游 式"出生仪式"）
+        // 首启引导：液态玻璃卡片悬浮在壁纸之上（"出生仪式"）
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier

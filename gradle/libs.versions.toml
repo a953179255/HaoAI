@@ -13,11 +13,11 @@ backdrop = "2.0.0"
 junit = "4.13.2"
 work = "2.10.1"
 # markdown 渲染升级：intellij-markdown 的 GFM fork（task-list/math 扩展），Apache-2.0
-# （上游/markdown 仓库保留 Apache LICENSE，fork 自 JetBrains/markdown；主仓库 AGPL 不涉及）
+# （上游仓库保留 Apache LICENSE，fork 自 JetBrains/markdown；与主项目 AGPL 无涉）
 jetbrainsMarkdown = "d79a97cc8e"
 # 公式原生渲染（GPL-2.0 + Classpath 例外，fork 保留例外声明，已核实 LICENSE）：替代
 # KaTeX WebView——池上限 3 导致公式密集消息互相销毁出现空白、宽公式被裁、流式闪烁。
-# 用 noties 的 fork（上游 组，JitPack 构建了含 Android 封装的 AAR；noties 原组
+# 用 noties 的 fork（JitPack 构建了含 Android 封装的 AAR；noties 原组
 # 的 JitPack 产物是空壳 jar）。版本 1.5
 jlatexmathAndroid = "1.5"
 

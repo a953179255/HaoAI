@@ -40,7 +40,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.haoai.agent.ui.ChatRow
 
 /**
- * 网页渲染预览（上游 render_with_webview 同款交互）：
+ * 网页渲染预览：
  * - 消息含 ```html 代码块 → 直接渲染代码块内容（可运行的 artifact 预览）
  * - 无代码块 → markdown → HTML（fork HtmlGenerator，结构正确：嵌套列表/表格/
  *   标题层级）+ KaTeX 公式渲染（assets/katex 本地）+ highlight.js 代码高亮
@@ -57,7 +57,7 @@ fun HtmlPreviewModal(
     val context = LocalContext.current
     // 内容只与消息文本有关，recomposition 不重建/不重载 WebView
     val html = remember(row.text, dark) { buildPreviewHtml(row.text, dark) }
-    // 加载进度（上游 同款 LinearProgressIndicator）：有反馈就不像卡死
+    // 加载进度（LinearProgressIndicator）：有反馈就不像卡死
     var progress by remember { mutableFloatStateOf(0f) }
     val webView = remember {
         WebView(context).apply {
@@ -66,7 +66,7 @@ fun HtmlPreviewModal(
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.domStorageEnabled = true
-            // 上游 WebViewPage 同款：标准浏览器视口行为（无 viewport meta 的
+            // 标准浏览器视口行为（无 viewport meta 的
             // artifact 按宽布局缩放适配，避免 ICB 失常导致的裁切/白屏）
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
@@ -74,7 +74,7 @@ fun HtmlPreviewModal(
             settings.displayZoomControls = false
             // 首绘前 WebView 默认底色是黑/白闪：预置成页面同款底色
             setBackgroundColor(if (dark) 0xFF0D1117.toInt() else 0xFFFFFFFF.toInt())
-            // 网页 console 打进 logcat（上游 同款），排查渲染问题不再盲猜
+            // 网页 console 打进 logcat，排查渲染问题不再盲猜
             webChromeClient = object : android.webkit.WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     progress = newProgress / 100f
@@ -144,7 +144,7 @@ fun HtmlPreviewModal(
                     )
                 }
             }
-            // 上游 同款加载进度条：WebView 初始化/加载期间给反馈，不再"黑一下"
+            // 加载进度条：WebView 初始化/加载期间给反馈，不再"黑一下"
             if (progress in 0.01f..0.99f) {
                 androidx.compose.material3.LinearProgressIndicator(
                     progress = { progress },
@@ -156,11 +156,11 @@ fun HtmlPreviewModal(
             AndroidView(
                 factory = { webView },
                 update = { wv ->
-                    // 上游 同款加载方式：明文 data + 虚拟 https 域名提供 origin
+                    // 加载方式：明文 data + 虚拟 https 域名提供 origin
                     // （loadDataWithBaseURL 不做任何解码，此前白屏真因是模拟器 vh 固化
                     // bug，已由 fixVhUnits 解决，与加载方式无关）。
                     // update 先于布局执行，vh shim 依赖 innerHeight，故推迟到首次布局
-                    // 完成后加载；tag 记录已加载内容避免重组重复加载（对应 上游 的
+                    // 完成后加载；tag 记录已加载内容避免重组重复加载（
                     // lastLoadedData 守卫）
                     if (wv.tag != html) {
                         wv.tag = html

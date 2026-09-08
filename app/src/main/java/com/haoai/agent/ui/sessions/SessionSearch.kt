@@ -18,7 +18,7 @@ data class SessionSearchResult(
 
 /**
  * 定位 [query] 在 [text] 中首个出现位置，返回 ±[radius] 字符窗口：换行折叠为空格，
- * 截断处加省略号；无命中返回 null。（上游 snippetAround 同款）
+ * 截断处加省略号；无命中返回 null。
  */
 fun snippetAround(text: String, query: String, radius: Int = 50): String? {
     if (query.isBlank() || text.isEmpty()) return null
@@ -35,7 +35,7 @@ fun snippetAround(text: String, query: String, radius: Int = 50): String? {
 
 /**
  * 双模式搜索：标题命中优先（不再扫正文）；标题未命中的会话才扫 user/assistant
- * 消息正文，每会话取首个命中消息的摘要。（上游 同策略：标题已命中无需摘要）
+ * 消息正文，每会话取首个命中消息的摘要。（标题已命中则无需摘要）
  */
 fun searchSessions(sessions: List<StoredSession>, query: String): SessionSearchResult {
     val q = query.trim()
@@ -58,7 +58,7 @@ fun searchSessions(sessions: List<StoredSession>, query: String): SessionSearchR
 
 /**
  * 构建把 [query] 所有不区分大小写命中处标上 tertiaryContainer 背景的 [AnnotatedString]；
- * 空白 query 原样返回。（上游 highlightedAnnotatedString 同款）
+ * 空白 query 原样返回。
  */
 @Composable
 fun highlightedAnnotatedString(text: String, query: String): AnnotatedString {

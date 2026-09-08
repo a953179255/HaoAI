@@ -53,18 +53,18 @@ object BrowserController {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
-     * 托管模式（2026-08-31 去泊车重构，上游 同款）：WebView 用应用上下文
+     * 托管模式（2026-08-31 去泊车重构）：WebView 用应用上下文
      * 创建后保持 detached（parent == null，不挂任何窗口），**没有隐藏宿主**。
      * 旧方案（全屏 VISIBLE 宿主垫在 content 底层被 Compose 盖住泊车）在魅族
      * 20 Pro/Android 16 上出现「导航停摆」：可见容器里 loadUrl 后 onPageFinished
      * 永不回调（fa8ab01 原版同样复现、重启手机/清 app_webview 均无效，而同机
-     * 系统浏览器与 上游 正常）——泊车态 Chromium 合成器进入抑制态后换挂
-     * 可见容器也无法恢复。三方调研（上游/上游/上游）证实无项目采用
+     * 系统浏览器正常）——泊车态 Chromium 合成器进入抑制态后换挂
+     * 可见容器也无法恢复。三方同类项目调研证实无项目采用
      * 「已挂载但被遮挡」的泊车模式：
-     * - 上游：全程 detached，每次 loadUrl 前手动 measure(EXACTLY)+layout
+     * - 方案A：全程 detached，每次 loadUrl 前手动 measure(EXACTLY)+layout
      *   合成布局，导航/JS/截图全通（同机实证可用）；活跃性靠进程级 FGS。
-     * - 上游：WindowManager 1x1 悬浮窗（SYSTEM_ALERT_WINDOW）+ 伪全屏 measure。
-     * - 上游：VirtualDisplay + ImageReader。
+     * - 方案B：WindowManager 1x1 悬浮窗（SYSTEM_ALERT_WINDOW）+ 伪全屏 measure。
+     * - 方案C：VirtualDisplay + ImageReader。
      * 无头导航的活跃性由进程承担（本应用 KeepAliveService 前台服务已有），
      * 视图树层面只保证「可见容器内导航」（预览面板自动弹出即为此设计）。
      */
@@ -146,7 +146,7 @@ object BrowserController {
     }
 
     /**
-     * detached WebView 的合成布局（上游 BrowserUseManager.applyViewport 同款）：
+     * detached WebView 的合成布局：
      * WebView 不挂任何窗口时永远不会自动 layout，viewport 为 0、页面不排版。
      * 手动按屏幕尺寸 EXACTLY measure+layout 后，JS 布局数据与导航均可推进。
      */
@@ -207,7 +207,7 @@ object BrowserController {
         val ctx = appContext ?: error("BrowserController 未初始化")
         val wv = createWebView(ctx)
         val tab = Tab(nextTabId++, wv)
-        // detached 创建（上游 模式）：不挂任何宿主；无头导航前由
+        // detached 创建：不挂任何宿主；无头导航前由
         // ensureLaidOut 合成布局，UI 打开时由可见容器换挂
         ensureLaidOut(wv)
         return tab
@@ -327,7 +327,7 @@ object BrowserController {
         // WebView 不可见 ~10s 即被 cached-app freezer 冻结 → loadUrl 停在
         // onPageStarted、网络请求永不发出（日志与 dumpsys 进程状态实锤）。
         return WebView(ctx).apply {
-            // 上游 实战加固：OEM GPU 合成在弹层/换挂场景下白屏，强制硬件层
+            // 实战加固：OEM GPU 合成在弹层/换挂场景下白屏，强制硬件层
             setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -354,7 +354,7 @@ object BrowserController {
                     tab.loadSignal = null
                     bump()
                 }
-                // 上游 加固：主帧加载失败也完成 loadSignal——否则错误页
+                // 加固：主帧加载失败也完成 loadSignal——否则错误页
                 // 永不触发 onPageFinished，navigate 白白等满 20s 超时
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                     if (!request.isForMainFrame) return
@@ -365,7 +365,7 @@ object BrowserController {
                     tab.loadSignal = null
                     bump()
                 }
-                // 上游/上游 同款自愈：渲染进程崩死后该实例永久假加载，
+                // 自愈：渲染进程崩死后该实例永久假加载，
                 // 原地销毁重建一个新标签替换，导航管线恢复
                 override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
                     val idx = tabs.indexOfFirst { it.webView === view }
@@ -413,7 +413,7 @@ object BrowserController {
     /** 加载 url：等 onPageFinished（超时 20s）+ 固定渲染余量，返回最终 title/url。 */
     suspend fun navigate(url: String, index: Int? = null): String {
         // 平台说明（2026-08-31 去泊车重构定案）：可见容器内导航（预览面板/全屏）
-        // 为主路径；面板唤起失败时降级为 detached + 合成布局导航（上游
+        // 为主路径；面板唤起失败时降级为 detached + 合成布局导航（
         // 同机实证可推进），不再直接报错。
         if (!uiVisible) {
             // 自动弹出底部预览面板让用户看到浏览过程
