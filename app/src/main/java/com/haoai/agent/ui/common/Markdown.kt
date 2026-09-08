@@ -291,10 +291,13 @@ private fun ParagraphView(
         // 占位符尺寸：每个公式单独构建 Drawable 量宽高（像素→sp），失败给 1em 方块
         val contents = r.math.mapValues { (_, latex) ->
             val d = runCatching {
+                ru.noties.jlatexmath.JLatexMathAndroid.init(context)
                 ru.noties.jlatexmath.JLatexMathDrawable.builder(latex)
                     .textSize(with(density) { 15.sp.toPx() })
                     .color(textColor.copy(alpha = 0.95f).toArgb())
                     .build()
+            }.onFailure {
+                android.util.Log.e("MdInlineMath", "latex build failed: ${it.message} | latex=${latex.take(60)}", it)
             }.getOrNull()
             if (d != null) {
                 val wSp = with(density) { d.intrinsicWidth.coerceAtLeast(1).toSp() }

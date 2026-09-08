@@ -104,24 +104,24 @@ object CodeHighlight {
         val plain: Color
     )
 
-    /** 深色主题配色（对齐主流 IDE 深色系，代码底为深色面板）。 */
+    /** 深色主题配色（AtomOne Dark，与浅色同一体系）。 */
     fun darkColors() = Colors(
-        keyword = Color(0xFFCF8E6D),
-        string = Color(0xFF6AAB73),
-        comment = Color(0xFF7A7E85),
-        number = Color(0xFF2AACB8),
-        annotation = Color(0xFFB3AE60),
-        plain = Color(0xFFBCBEC4)
+        keyword = Color(0xFFC678DD),
+        string = Color(0xFF98C379),
+        comment = Color(0xFF5C6370),
+        number = Color(0xFFD19A66),
+        annotation = Color(0xFF61AFEF),
+        plain = Color(0xFFABB2BF)
     )
 
-    /** 浅色主题配色（代码底为浅色面板时用）。 */
+    /** 浅色主题配色（AtomOne Light，对齐 上游 代码块观感：紫关键字/绿字符串/橙数字/蓝函数名）。 */
     fun lightColors() = Colors(
-        keyword = Color(0xFF0033B3),
-        string = Color(0xFF067D17),
-        comment = Color(0xFF8C8C8C),
-        number = Color(0xFF1750EB),
-        annotation = Color(0xFF9E880D),
-        plain = Color(0xFF080808)
+        keyword = Color(0xFFA626A4),
+        string = Color(0xFF50A14F),
+        comment = Color(0xFFA0A1A7),
+        number = Color(0xFF986801),
+        annotation = Color(0xFF4078F2),
+        plain = Color(0xFF383A42)
     )
 
     private val tokenRegex = Regex(

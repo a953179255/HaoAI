@@ -109,12 +109,17 @@ private fun buildMathDrawable(
     textSizePx: Float,
     context: android.content.Context
 ): Drawable? = runCatching {
+    // noties 库要求初始化（字体资源经 assets 加载）；库自带 InitProvider 自动注册，
+    // 显式调用幂等兜底（ContentProvider 未合并进 manifest 的构建变体防漏）
+    ru.noties.jlatexmath.JLatexMathAndroid.init(context)
     JLatexMathDrawable.builder(latex)
         .textSize(textSizePx)
         .color(colorArgb)
         .background(bgArgb)
         .align(JLatexMathDrawable.ALIGN_CENTER)
         .build()
+}.onFailure {
+    android.util.Log.e("MathNative", "latex build failed: ${it.message} | latex=${latex.take(60)}", it)
 }.getOrNull()
 
 /** 公式渲染失败时的源码回退（等宽 + 浅底）。 */
