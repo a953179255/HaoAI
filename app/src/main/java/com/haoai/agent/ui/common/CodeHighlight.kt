@@ -47,7 +47,7 @@ object CodeHighlight {
             "for", "while", "break", "continue", "pass", "in", "is", "not", "and",
             "or", "None", "True", "False", "try", "except", "finally", "raise",
             "with", "lambda", "yield", "global", "nonlocal", "self", "async", "await",
-            "print", "del", "assert"
+            "del", "assert"
         ),
         "js" to setOf(
             "const", "let", "var", "function", "class", "return", "if", "else", "for",
@@ -94,6 +94,63 @@ object CodeHighlight {
         )
     )
 
+    /**
+     * 内置函数/类型表（对齐 highlight.js 的 built_in 类，渲染橙色）：
+     * print/len/range/int/list（Python）、console/JSON/fetch（JS）、fmt/len/make（Go）等。
+     * 之前 print 归在关键字表导致与 上游 观感不一致（内置应为橙非紫）。
+     */
+    private val builtins = mapOf(
+        "python" to setOf(
+            "print", "len", "range", "int", "float", "str", "bool", "list", "dict",
+            "set", "tuple", "sum", "min", "max", "sorted", "reversed", "enumerate",
+            "zip", "map", "filter", "abs", "round", "open", "type", "isinstance",
+            "hasattr", "getattr", "setattr", "input", "any", "all", "ord", "chr",
+            "bytes", "bytearray", "staticmethod", "classmethod", "super"
+        ),
+        "js" to setOf(
+            "console", "JSON", "Math", "Date", "Promise", "Array", "Object", "String",
+            "Number", "Boolean", "Set", "Map", "fetch", "parseInt", "parseFloat",
+            "setTimeout", "setInterval", "clearTimeout", "clearInterval", "require",
+            "alert", "Error", "TypeError", "Symbol", "Reflect", "Proxy"
+        ),
+        "ts" to setOf(
+            "console", "JSON", "Math", "Date", "Promise", "Array", "Object", "String",
+            "Number", "Boolean", "Set", "Map", "fetch", "parseInt", "parseFloat",
+            "setTimeout", "setInterval", "Partial", "Readonly", "Record", "Pick", "Omit"
+        ),
+        "java" to setOf(
+            "System", "String", "Math", "Integer", "Long", "Double", "Float", "Boolean",
+            "Character", "Byte", "Short", "StringBuilder", "StringBuffer", "List",
+            "Map", "Set", "ArrayList", "HashMap", "HashSet", "Optional", "Objects"
+        ),
+        "kotlin" to setOf(
+            "println", "print", "listOf", "mapOf", "setOf", "mutableListOf", "mutableMapOf",
+            "mutableSetOf", "arrayOf", "intArrayOf", "emptyList", "emptyMap", "emptySet",
+            "requireNotNull", "checkNotNull", "lazy", "run", "let", "also", "apply",
+            "with", "takeIf", "takeUnless", "repeat", "String", "Int", "Long", "Double",
+            "Float", "Boolean", "Char", "Byte", "Short", "Any", "Unit", "Pair", "Triple"
+        ),
+        "go" to setOf(
+            "fmt", "len", "cap", "make", "new", "append", "copy", "delete", "panic",
+            "recover", "print", "println", "close", "complex", "real", "imag", "min", "max",
+            "string", "int", "int8", "int16", "int32", "int64", "uint", "float32", "float64",
+            "bool", "byte", "rune", "error"
+        ),
+        "bash" to setOf(
+            "cat", "ls", "grep", "sed", "awk", "find", "sort", "uniq", "head", "tail",
+            "wc", "chmod", "chown", "mkdir", "rmdir", "rm", "cp", "mv", "touch",
+            "systemctl", "journalctl", "docker", "kubectl", "ssh", "scp", "tar", "zip", "unzip"
+        ),
+        "sql" to setOf(
+            "count", "sum", "avg", "min", "max", "coalesce", "nullif", "cast", "now",
+            "date", "string_agg", "row_number", "rank", "round", "abs", "lower", "upper"
+        ),
+        "cpp" to setOf(
+            "std", "cout", "cin", "endl", "vector", "string", "map", "set", "pair",
+            "make_pair", "make_shared", "make_unique", "sort", "find", "size_t", "uint32_t", "uint64_t"
+        )
+    )
+
     /** 高亮配色：跟随深浅色主题由调用方传入（MarkdownText 按当前主题取色）。 */
     data class Colors(
         val keyword: Color,
@@ -101,7 +158,11 @@ object CodeHighlight {
         val comment: Color,
         val number: Color,
         val annotation: Color,
-        val plain: Color
+        val plain: Color,
+        /** v2.2：内置函数/类型（print/len/int/console，对齐 highlight.js built_in，橙）。 */
+        val builtin: Color = Color.Unspecified,
+        /** v2.2：函数名（定义与调用处，对齐 highlight.js title，蓝）。 */
+        val function: Color = Color.Unspecified
     )
 
     /** 深色主题配色（AtomOne Dark，与浅色同一体系）。 */
@@ -111,7 +172,9 @@ object CodeHighlight {
         comment = Color(0xFF5C6370),
         number = Color(0xFFD19A66),
         annotation = Color(0xFF61AFEF),
-        plain = Color(0xFFABB2BF)
+        plain = Color(0xFFABB2BF),
+        builtin = Color(0xFFE5C07B),
+        function = Color(0xFF61AFEF)
     )
 
     /** 浅色主题配色（AtomOne Light，对齐 上游 代码块观感：紫关键字/绿字符串/橙数字/蓝函数名）。 */
@@ -121,7 +184,9 @@ object CodeHighlight {
         comment = Color(0xFFA0A1A7),
         number = Color(0xFF986801),
         annotation = Color(0xFF4078F2),
-        plain = Color(0xFF383A42)
+        plain = Color(0xFF383A42),
+        builtin = Color(0xFF986801),
+        function = Color(0xFF4078F2)
     )
 
     private val tokenRegex = Regex(
@@ -160,6 +225,7 @@ object CodeHighlight {
     fun highlight(code: String, langRaw: String, colors: Colors): AnnotatedString {
         val lang = langAlias[langRaw.lowercase()] ?: langRaw.lowercase()
         val kw = keywords[lang]
+        val bi = builtins[lang]
         val annotated = buildAnnotatedString {
             var index = 0
             for (m in tokenRegex.findAll(code)) {
@@ -167,6 +233,7 @@ object CodeHighlight {
                     appendStyle(code.substring(index, m.range.first), colors.plain, null)
                 }
                 val token = m.value
+                val nextCh = code.getOrNull(m.range.last + 1)
                 val (color, weight) = when {
                     // 注释优先（避免 // 被当除号、# 被当普通符号）
                     token.startsWith("//") || token.startsWith("#") ||
@@ -176,6 +243,9 @@ object CodeHighlight {
                     token.startsWith("@") -> colors.annotation to FontWeight.Medium
                     token.firstOrNull()?.isDigit() == true -> colors.number to null
                     kw != null && token in kw -> colors.keyword to FontWeight.Medium
+                    // 内置函数/类型（橙）；函数名=标识符紧邻左括号（定义与调用都命中，蓝）
+                    bi != null && token in bi -> colors.builtin to null
+                    nextCh == '(' -> colors.function to FontWeight.Medium
                     else -> colors.plain to null
                 }
                 appendStyle(token, color, weight)
