@@ -10,19 +10,24 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -46,10 +51,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
@@ -71,22 +80,46 @@ import kotlinx.coroutines.withContext
 
 /** 解析后的 Markdown 块：类型化区分，渲染端按类型分发。 */
 sealed class MdBlock {
+    /** v2：类型化段落（heading 0-6）。行内是 MdInline 树，支持嵌套/可点链接/行内公式。 */
+    data class Paragraph(val inlines: List<MdInline>, val heading: Int = 0) : MdBlock()
+
+    /** v2 兼容旧文本路径的段落（内部工具/兜底用）。 */
     data class Text(val text: String, val heading: Int = 0) : MdBlock()
     data class Code(val lang: String, val code: String, val closed: Boolean) : MdBlock()
     data class Mermaid(val code: String, val closed: Boolean) : MdBlock()
 
     /** LaTeX 公式（块级 $$...$$）；流式未闭合 $$ 时 closed=false（⑦ 保守按永久开启处理）。 */
     data class Math(val latex: String, val closed: Boolean = true) : MdBlock()
-    data class Table(val header: List<String>, val rows: List<List<String>>, val aligns: List<Int>) : MdBlock()
+    /** v2：类型化单元格（行内样式可进表格，对齐 上游 工艺）。 */
+    data class Table(
+        val header: List<List<MdInline>>,
+        val rows: List<List<List<MdInline>>>,
+        val aligns: List<Int>
+    ) : MdBlock()
 
     /** 表格骨架占位（⑦）：表头已到、分隔行未齐时先占位，避免"纯文本闪现→跳变成表格"。 */
     data class TableSkeleton(val header: List<String>) : MdBlock()
+
+    /** v2：引用块（内容是子块列表，可嵌套任意块）。 */
+    data class Quote(val children: List<MdBlock>) : MdBlock()
+
+    /** v2：列表（ordered 区分有序/无序；loose=松散列表项间距大；item.checked 非空=任务列表项）。 */
+    data class ListBlock(
+        val ordered: Boolean,
+        val loose: Boolean,
+        val items: List<Item>
+    ) : MdBlock() {
+        data class Item(val checked: Boolean?, val children: List<MdBlock>)
+    }
+
+    /** v2：水平分隔线 ---。 */
+    data object Rule : MdBlock()
 }
 
 /** 对齐方式：0 左 / 1 中 / 2 右。 */
-private const val ALIGN_LEFT = 0
-private const val ALIGN_CENTER = 1
-private const val ALIGN_RIGHT = 2
+internal const val ALIGN_LEFT = 0
+internal const val ALIGN_CENTER = 1
+internal const val ALIGN_RIGHT = 2
 
 private val fenceLine = Regex("^```(.*)$")
 private val tableDivider = Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$")
@@ -114,166 +147,7 @@ fun settledBoundary(src: String): Int {
     return if (inFence || inMath) 0 else settled
 }
 
-// ---------- 解析/行内构建 LRU 缓存（v0.18.1 优化⑤）----------
-// pop 返回聊天时整页重组，所有可见消息在首帧同步重跑 parseMarkdownBlocks（首帧防
-// 闪烁的同步路径）与 buildInline——两者均为纯函数（输出仅由输入决定），却没有任何
-// 跨实例缓存，真机实测 pop 侧 preSync 尖峰 55ms。加 LRU 后重建首帧直接命中。
-// MdBlock/AnnotatedString 均为不可变对象，跨实例共享安全（remember(block.text) 本就
-// 依赖同一假设）。流式后台解析与主线程共用缓存，须同步；容量上限防长会话膨胀。
-private val mdParseCache: MutableMap<String, List<MdBlock>> =
-    java.util.Collections.synchronizedMap(
-        object : LinkedHashMap<String, List<MdBlock>>(64, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MdBlock>>) =
-                size > 48
-        }
-    )
-
-private val mdInlineCache: MutableMap<String, androidx.compose.ui.text.AnnotatedString> =
-    java.util.Collections.synchronizedMap(
-        object : LinkedHashMap<String, androidx.compose.ui.text.AnnotatedString>(256, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, androidx.compose.ui.text.AnnotatedString>) =
-                size > 192
-        }
-    )
-
-/** 解析 Markdown 为块列表（带 LRU 缓存）；未闭合围栏标记 closed=false（流式输出兼容）。 */
-fun parseMarkdownBlocks(src: String): List<MdBlock> {
-    mdParseCache[src]?.let { return it }
-    val result = parseMarkdownBlocksUncached(src)
-    mdParseCache[src] = result
-    return result
-}
-
-/** 行内标记构建（带 LRU 缓存）：同 parseMarkdownBlocks，纯函数跨实例共享。 */
-fun buildInline(text: String): androidx.compose.ui.text.AnnotatedString {
-    mdInlineCache[text]?.let { return it }
-    val result = buildInlineUncached(text)
-    mdInlineCache[text] = result
-    return result
-}
-
-private fun parseMarkdownBlocksUncached(src: String): List<MdBlock> {
-    val blocks = mutableListOf<MdBlock>()
-    val lines = src.split('\n')
-    var i = 0
-    val textBuffer = StringBuilder()
-
-    fun flushText() {
-        val chunk = textBuffer.toString()
-        textBuffer.setLength(0)
-        chunk.split(Regex("\n[ \t]*\n+"))
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .forEach { para ->
-                val h = Regex("^#{1,6}\\s").find(para)
-                val level = h?.value?.count { it == '#' } ?: 0
-                blocks += MdBlock.Text(
-                    text = if (level > 0) para.substringAfter(' ').trim() else para,
-                    heading = level
-                )
-            }
-    }
-
-    fun isTableRow(line: String): Boolean =
-        line.trim().startsWith("|") || (line.contains('|') && line.trim().endsWith("|"))
-
-    while (i < lines.size) {
-        val line = lines[i]
-
-        // 1) 代码围栏 / mermaid
-        val fence = fenceLine.find(line)
-        if (fence != null) {
-            flushText()
-            val lang = fence.groupValues[1].trim().lowercase()
-            val body = StringBuilder()
-            i++
-            var closed = false
-            while (i < lines.size) {
-                if (lines[i].trimEnd() == "```") {
-                    closed = true
-                    i++
-                    break
-                }
-                body.append(lines[i]).append('\n')
-                i++
-            }
-            if (lang == "mermaid") blocks += MdBlock.Mermaid(body.toString(), closed)
-            else blocks += MdBlock.Code(lang, body.toString(), closed)
-            continue
-        }
-
-        // 2) 块级公式：$$ 单行成对 或 $$ 起始到 $$ 结束
-        val inlineMath = mathLine.find(line)
-        if (inlineMath != null) {
-            flushText()
-            blocks += MdBlock.Math(inlineMath.groupValues[1].trim())
-            i++
-            continue
-        }
-        if (line.trim() == "$$") {
-            flushText()
-            val body = StringBuilder()
-            i++
-            var closed = false
-            while (i < lines.size) {
-                if (lines[i].trim() == "$$") {
-                    closed = true
-                    i++
-                    break
-                }
-                body.append(lines[i]).append('\n')
-                i++
-            }
-            // ⑦ 未闭合 $$ 按永久开启保守处理：整段按公式渲染，闭合后原地定型
-            blocks += MdBlock.Math(body.toString().trim(), closed)
-            continue
-        }
-
-        // 3) 表格：当前行含 | 且下一行是 --- 分隔行
-        if (isTableRow(line) && i + 1 < lines.size && tableDivider.containsMatchIn(lines[i + 1])) {
-            flushText()
-            fun splitRow(row: String): List<String> =
-                row.trim().removePrefix("|").removeSuffix("|").split('|').map { it.trim() }
-            val header = splitRow(line)
-            val aligns = splitRow(lines[i + 1]).map { cell ->
-                val t = cell.trim()
-                when {
-                    t.startsWith(":") && t.endsWith(":") -> ALIGN_CENTER
-                    t.endsWith(":") -> ALIGN_RIGHT
-                    else -> ALIGN_LEFT
-                }
-            }
-            i += 2
-            val rows = mutableListOf<List<String>>()
-            while (i < lines.size && isTableRow(lines[i]) && lines[i].trim().isNotEmpty()) {
-                val cells = splitRow(lines[i]).toMutableList()
-                while (cells.size < header.size) cells.add("")
-                rows.add(cells.take(header.size))
-                i++
-            }
-            blocks += MdBlock.Table(header, rows, aligns)
-            continue
-        }
-
-        // 3b) ⑦ 疑似表格首行：含 | 的行已到末尾、分隔行还没流出来 → 骨架占位，
-        // 避免表头先以普通文本闪现、分隔行到达后又跳变成表格
-        if (isTableRow(line) && i + 1 >= lines.size && line.count { it == '|' } >= 2) {
-            flushText()
-            val header = line.trim().removePrefix("|").removeSuffix("|")
-                .split('|').map { it.trim() }.filter { it.isNotEmpty() }
-            if (header.isNotEmpty()) blocks += MdBlock.TableSkeleton(header)
-            i++
-            continue
-        }
-
-        // 4) 普通文本段落
-        textBuffer.append(line).append('\n')
-        i++
-    }
-    flushText()
-    return blocks
-}
-
+/** Markdown 渲染入口（v2 AST 管线）：ChatScreen 两处调用点的唯一门面。 */
 @Composable
 fun MarkdownText(
     text: String,
@@ -281,15 +155,10 @@ fun MarkdownText(
     streaming: Boolean = false,
     @Suppress("UNUSED_PARAMETER") showCursor: Boolean = false
 ) {
-    // 结构解析挪后台线程 + mapLatest 语义（上游 同款）：LaunchedEffect(text) 每次
-    // 文本变化重启并取消在途解析，只提交最新完成版；首帧同步解析防闪烁。
-    // parseMarkdownBlocks 是纯字符串处理（Regex/String），后台线程安全
-    //
-    // ③ 已结算块冻结（上游/上游 式）：streaming 时以「围栏/公式外的空行」为
-    // 结算边界，边界之前的块冻结复用（frozenSrc/frozenBlocks），每次 token 只重解析
-    // 未定型尾部——解析成本从 O(全文) 降到 O(尾部)。文本非追加式变化（重生成/编辑）
-    // 时前缀校验失败自动回退全量解析。
-    var blocks by remember { mutableStateOf(parseMarkdownBlocks(text)) }
+    // 首帧同步解析防闪烁；后续文本变化走后台线程（mapLatest 自动丢弃过期任务，
+    // 打字速率 >> 解析速率时天然合并——上游 生产验证的同款模式）。
+    // 冻结前缀仍生效：settledBoundary 之外的尾部子串独立解析后按块表拼接。
+    var blocks by remember { mutableStateOf(parseMarkdownAst(text)) }
     var parsedFor by remember { mutableStateOf(text) }
     var frozenSrc by remember { mutableStateOf("") }
     var frozenBlocks by remember { mutableStateOf<List<MdBlock>>(emptyList()) }
@@ -299,56 +168,269 @@ fun MarkdownText(
             if (streaming && text.startsWith(frozenSrc)) {
                 val b = settledBoundary(text)
                 if (b > frozenSrc.length) {
-                    // 结算边界推进：把新定型的部分并入冻结前缀（每段落一次全量级解析）
-                    frozenBlocks = parseMarkdownBlocks(text.take(b))
+                    frozenBlocks = parseMarkdownAst(text.take(b))
                     frozenSrc = text.take(b)
                 }
-                if (frozenSrc.isEmpty()) parseMarkdownBlocks(text)
-                else frozenBlocks + parseMarkdownBlocks(text.substring(frozenSrc.length))
+                if (frozenSrc.isEmpty()) parseMarkdownAst(text)
+                else frozenBlocks + parseMarkdownAst(text.substring(frozenSrc.length))
             } else {
                 frozenSrc = ""
                 frozenBlocks = emptyList()
-                parseMarkdownBlocks(text)
+                parseMarkdownAst(text)
             }
         }
         blocks = result
         parsedFor = text
     }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val baseColor = MaterialTheme.colorScheme.onBackground
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEach { block ->
-            when (block) {
-                is MdBlock.Code -> CodeBlock(block.lang, block.code, block.closed, dark)
-                is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
-                is MdBlock.Math -> FormulaBlock(block.latex, dark)
-                is MdBlock.Table -> TableBlock(block)
-                is MdBlock.TableSkeleton -> TableSkeletonBlock(block.header)
-                is MdBlock.Text -> {
-                    // 块级缓存：行内正则/AnnotatedString 仅在块文本变化时重算。
-                    // 流式期 blocks 列表每次都是新对象但历史块文本不变 → 缓存命中，
-                    // Text 拿到同一 AnnotatedString 实例 → 文本布局缓存复用不重排
-                    val ann = remember(block.text) { buildInline(block.text) }
-                    // v4-3 字符渐显打字机：流式期对最后一个文本块的尾部 N 字符按
-                    // 「字符年龄」做 alpha 爬升（新字符从 0.15 淡入到 1，~300ms），
-                    // 上游 式墨水洇入感；帧驱动用 produceState 读帧时钟。
-                    val isLastText = block === blocks.lastOrNull { it is MdBlock.Text }
-                    // v6.1：光标彻底移除——U+FFFC 占位符在 SelectionContainer 内被
-                    // 渲染成「OBJ」方框字形（inline content 不生效），打字机渐显本身
-                    // 已足够表达流式进行中
-                    val typeInAnn = if (streaming && isLastText) {
-                        typeInTail(ann, block.text)
-                    } else ann
-                    Text(
-                        text = typeInAnn,
-                        style = when (block.heading) {
-                            1 -> MaterialTheme.typography.headlineSmall
-                            2 -> MaterialTheme.typography.titleLarge
-                            3 -> MaterialTheme.typography.titleMedium
-                            0 -> MaterialTheme.typography.bodyMedium
-                            else -> MaterialTheme.typography.titleSmall
-                        },
-                        color = MaterialTheme.colorScheme.onBackground
+        blocks.forEachIndexed { blockIndex, block ->
+            MdBlockView(
+                block = block,
+                dark = dark,
+                streaming = streaming,
+                listLevel = 0,
+                // 打字机渐显只挂在整个消息最后一个段落上
+                isLastParagraph = block is MdBlock.Paragraph && blockIndex == blocks.lastIndex,
+                textColor = baseColor
+            )
+        }
+    }
+}
+
+// ================= v2 渲染组件：递归块视图 + 类型化行内 =================
+
+/** 链接点击处理：系统浏览器打开（URI 失败回退 Toast）。 */
+private fun openLink(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        android.widget.Toast.makeText(context, "无法打开链接", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
+ * 递归块视图：所有块类型统一入口（Quote/List 内层复用同一渲染）。
+ * @param listLevel 嵌套层级（bullet 分级 •◦▪ 用）
+ */
+@Composable
+private fun MdBlockView(
+    block: MdBlock,
+    dark: Boolean,
+    streaming: Boolean,
+    listLevel: Int,
+    isLastParagraph: Boolean,
+    textColor: Color
+) {
+    when (block) {
+        is MdBlock.Code -> CodeBlock(block.lang, block.code, block.closed, dark)
+        is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
+        is MdBlock.Math -> FormulaBlock(block.latex, dark)
+        is MdBlock.Table -> TableBlock(block)
+        is MdBlock.TableSkeleton -> TableSkeletonBlock(block.header)
+        is MdBlock.Rule -> Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+                .height(1.dp)
+                .background(textColor.copy(alpha = 0.12f))
+        )
+        is MdBlock.Quote -> QuoteBlockView(block, dark, streaming, listLevel, textColor)
+        is MdBlock.ListBlock -> ListBlockView(block, dark, streaming, listLevel, textColor)
+        is MdBlock.Paragraph -> ParagraphView(block, streaming, isLastParagraph, textColor)
+        is MdBlock.Text -> Text(
+            text = if (block.heading > 0) block.text else block.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor
+        )
+    }
+}
+
+/** 段落/标题：类型化行内 → AnnotatedString（嵌套样式 + 可点链接 + 行内公式样式化）。 */
+@Composable
+private fun ParagraphView(
+    block: MdBlock.Paragraph,
+    streaming: Boolean,
+    isLastParagraph: Boolean,
+    textColor: Color
+) {
+    val context = LocalContext.current
+    val primary = MaterialTheme.colorScheme.primary
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    // 行内树→AnnotatedString：按 inlines 引用相等缓存（data class）。
+    // 流式期历史段落 inlines 是同一实例 → 缓存命中，非末段零重算零重排
+    val ann = remember(block.inlines, textColor) {
+        buildInlineTyped(block.inlines, context, primary, onSurface)
+    }
+    // v4-3 打字机渐显（保留）：只挂最后一个段落；append(ann) 会复制全部
+    // span/link 注记，渐显覆盖不丢链接可点性
+    val typeInAnn = if (streaming && isLastParagraph) typeInTail(ann) else ann
+    Text(
+        text = typeInAnn,
+        style = when (block.heading) {
+            1 -> MaterialTheme.typography.headlineSmall
+            2 -> MaterialTheme.typography.titleLarge
+            3 -> MaterialTheme.typography.titleMedium
+            0 -> MaterialTheme.typography.bodyMedium
+            else -> MaterialTheme.typography.titleSmall
+        },
+        color = textColor
+    )
+}
+
+/**
+ * 类型化行内树 → AnnotatedString：递归携带 SpanStyle（嵌套自然合成）。
+ * 链接用 LinkAnnotation.Url 真可点；行内公式 = 衬线斜体 + primary 浅底
+ * （真 KaTeX 行内渲染需固定尺寸占位符，长公式必截断——放弃，样式化最稳）。
+ */
+private fun buildInlineTyped(
+    inlines: List<MdInline>,
+    context: android.content.Context,
+    primary: Color,
+    onSurface: Color
+): AnnotatedString = buildAnnotatedString {
+    fun emit(list: List<MdInline>, style: SpanStyle) {
+        for (node in list) {
+            when (node) {
+                is MdInline.Run -> if (node.text.isNotEmpty()) {
+                    pushStyle(style)
+                    append(node.text)
+                    pop()
+                }
+                is MdInline.Strong -> emit(node.children, style.copy(fontWeight = FontWeight.Bold))
+                is MdInline.Emph -> emit(node.children, style.copy(fontStyle = FontStyle.Italic))
+                is MdInline.Del -> emit(node.children, style.copy(textDecoration = TextDecoration.LineThrough))
+                is MdInline.CodeSpan -> {
+                    pushStyle(
+                        style.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            background = onSurface.copy(alpha = 0.08f)
+                        )
                     )
+                    append(node.code)
+                    pop()
+                }
+                is MdInline.MathSpan -> {
+                    pushStyle(
+                        style.copy(
+                            fontFamily = FontFamily.Serif,
+                            fontStyle = FontStyle.Italic,
+                            background = primary.copy(alpha = 0.10f)
+                        )
+                    )
+                    append(node.latex)
+                    pop()
+                }
+                is MdInline.Link -> withLink(
+                    LinkAnnotation.Url(
+                        node.url,
+                        TextLinkStyles(SpanStyle(color = primary, textDecoration = TextDecoration.Underline))
+                    ) { _ -> openLink(context, node.url) }
+                ) {
+                    emit(node.children, style)
+                }
+                is MdInline.Image -> {
+                    pushStyle(style.copy(color = primary, fontStyle = FontStyle.Italic))
+                    append("🖼 ")
+                    append(node.alt.ifBlank { "图片" })
+                    pop()
+                }
+            }
+        }
+    }
+    emit(inlines, SpanStyle())
+}
+
+/** 引用块：左竖线 + 浅底 + 子块递归（上游 风格）。 */
+@Composable
+private fun QuoteBlockView(
+    block: MdBlock.Quote,
+    dark: Boolean,
+    streaming: Boolean,
+    listLevel: Int,
+    textColor: Color
+) {
+    val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+            .background(textColor.copy(alpha = 0.05f))
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(lineColor)
+        )
+        Column(
+            Modifier
+                .padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
+                .animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            block.children.forEach { child ->
+                MdBlockView(child, dark, streaming, listLevel, isLastParagraph = false, textColor = textColor.copy(alpha = 0.92f))
+            }
+        }
+    }
+}
+
+/** 列表：无序 bullet 按层级 •◦▪，有序用数字，任务列表带勾选标记。 */
+@Composable
+private fun ListBlockView(
+    block: MdBlock.ListBlock,
+    dark: Boolean,
+    streaming: Boolean,
+    level: Int,
+    textColor: Color
+) {
+    val bullets = listOf("•", "◦", "▪")
+    Column(
+        Modifier.animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(if (block.loose) 6.dp else 2.dp)
+    ) {
+        block.items.forEachIndexed { index, item ->
+            Row {
+                val marker: String = when {
+                    item.checked == true -> "☑"
+                    item.checked == false -> "☐"
+                    block.ordered -> "${index + 1}."
+                    else -> bullets[level % bullets.size]
+                }
+                val markerColor = when {
+                    item.checked == true -> Color(0xFF7BD88F)
+                    item.checked == false -> textColor.copy(alpha = 0.55f)
+                    else -> textColor.copy(alpha = 0.6f)
+                }
+                Text(
+                    text = marker,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = markerColor,
+                    modifier = Modifier
+                        .widthIn(min = 18.dp)
+                        .padding(top = 1.dp)
+                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(if (block.loose) 6.dp else 2.dp)
+                ) {
+                    item.children.forEach { child ->
+                        if (child is MdBlock.Paragraph) {
+                            ParagraphView(
+                                child, streaming,
+                                isLastParagraph = false,
+                                textColor = textColor
+                            )
+                        } else {
+                            MdBlockView(child, dark, streaming, level + 1, isLastParagraph = false, textColor)
+                        }
+                    }
                 }
             }
         }
@@ -427,55 +509,148 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
     }
 }
 
-/** 表格：简单网格渲染，超宽横向滚动，奇偶行底色区分。 */
+/**
+ * 表格 v2（上游 DataTable 工艺）：SubcomposeLayout 两阶段测量——
+ * ① 各单元格自然宽度估列宽；② 固定列宽重测出行高，行内 Row 对齐排布。
+ * 列宽 [72,240]dp 限幅，长单元格自动换行不再拉爆横滚；整表超宽才横向滚动。
+ * 单元格经类型化行内渲染（粗体/代码/行内公式都可在表格内）。
+ */
 @Composable
 private fun TableBlock(table: MdBlock.Table) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val bg = if (dark) Color(0xFF141A24) else Color(0xFFF4F6FA)
-    val altBg = if (dark) Color(0xFF1A2130) else Color(0xFFEAEFF7)
-    // 块级缓存：单元格行内样式整表一次构建；MdBlock.Table 是 data class，
-    // 流式期表格内容不变时按 equals 命中缓存
-    val inlined = remember(table) {
-        table.header.map { buildInline(it) } to table.rows.map { row -> row.map { buildInline(it) } }
+    val bg = if (dark) Color(0xFF141A24) else Color(0xFFF7F9FC)
+    val altBg = if (dark) Color(0xFF1A2130) else Color(0xFFEFF3F9)
+    val lineColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
+    val textColor = MaterialTheme.colorScheme.onBackground
+    val density = LocalDensity.current
+    val colCount = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0, 1)
+
+    // 单元格文本测量器：自然宽度（maxLines=1）与限宽换行高度两用
+    @Composable
+    fun CellText(
+        inlines: List<MdInline>,
+        align: TextAlign,
+        header: Boolean,
+        modifier: Modifier
+    ) {
+        val context = LocalContext.current
+        val primary = MaterialTheme.colorScheme.primary
+        val onSurface = MaterialTheme.colorScheme.onSurface
+        val ann = remember(inlines, textColor) {
+            buildInlineTyped(inlines, context, primary, onSurface)
+        }
+        Text(
+            text = ann,
+            style = if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
+            fontWeight = if (header) FontWeight.Bold else FontWeight.Normal,
+            color = textColor.copy(alpha = if (header) 1f else 0.92f),
+            textAlign = align,
+            modifier = modifier
+        )
     }
 
     Surface(
         color = bg,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
     ) {
+        val scroll = rememberScrollState()
         Column(
             Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(vertical = 4.dp)
+                .horizontalScroll(scroll)
+                .padding(vertical = 2.dp)
         ) {
-            Row(Modifier.padding(horizontal = 8.dp)) {
-                table.header.forEachIndexed { c, _ ->
-                    Text(
-                        text = inlined.first[c],
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        textAlign = alignOf(table.aligns, c),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
+            // 两阶段测量容器
+            androidx.compose.ui.layout.SubcomposeLayout { constraints ->
+                val densityF = density.density
+                val maxW = constraints.maxWidth
+                val minColPx = (72 * densityF).toInt()
+                val maxColPx = (240 * densityF).toInt()
+                val padPx = (10 * densityF).toInt()
+                val alignOf = { c: Int ->
+                    when (table.aligns.getOrElse(c) { ALIGN_LEFT }) {
+                        ALIGN_CENTER -> TextAlign.Center
+                        ALIGN_RIGHT -> TextAlign.Right
+                        else -> TextAlign.Left
+                    }
                 }
-            }
-            table.rows.forEachIndexed { r, cells ->
-                Row(
-                    Modifier
-                        .padding(horizontal = 8.dp)
-                        .background(altBg, RoundedCornerShape(8.dp))
-                ) {
-                    cells.forEachIndexed { c, _ ->
-                        Text(
-                            text = inlined.second[r][c],
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f),
-                            textAlign = alignOf(table.aligns, c),
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                // 阶段 1：自然宽度测列宽（maxLines=1 的样式测量）
+                var natural = IntArray(colCount)
+                val allRows = listOf(true to table.header) + table.rows.map { false to it }
+                subcompose("measure") {
+                    allRows.forEach { (isHeader, cells) ->
+                        cells.forEachIndexed { c, cell ->
+                            Box {
+                                CellText(
+                                    cell, alignOf(c), isHeader,
+                                    Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+                }.forEachIndexed { idx, measurable ->
+                    val c = idx % colCount
+                    // maxIntrinsicWidth 可能为 0（空单元格）——列宽下限在 minColPx 兜底
+                    val w = measurable.maxIntrinsicWidth(0)
+                        .coerceAtLeast(1)
+                        .coerceIn(minColPx, maxColPx)
+                    if (w > natural[c]) natural[c] = w
+                }
+                // 窄表拉伸：仅在容器宽有界时把列宽按比例拉伸铺满。
+                // 注意本表在 horizontalScroll 内——unbounded 时 maxWidth=Infinity，
+                // 绝不能参与算术（会把 natural 撑成天文数字 → Constraints 非法崩溃）
+                val naturalSum = natural.sum()
+                val boundedMax = if (constraints.maxWidth != Constraints.Infinity) constraints.maxWidth else 0
+                if (boundedMax > 0 && naturalSum < boundedMax) {
+                    val deficit = boundedMax - naturalSum
+                    val totalWeight = natural.sum().toFloat().coerceAtLeast(1f)
+                    natural = IntArray(colCount) { c ->
+                        natural[c] + (deficit * (natural[c] / totalWeight)).toInt()
+                    }
+                }
+                // contentW 取有限值（无界时不拉伸，就是自然总宽）
+                val sum = natural.sum()
+                val contentW = if (boundedMax > 0) maxOf(sum, boundedMax) else sum
+                // 阶段 2：固定列宽测行高并摆放（slot id 用稳定行号）
+                val rowPlaceables = allRows.mapIndexed { ri, (isHeader, cells) ->
+                    val placeables = subcompose("row$ri") {
+                        cells.forEachIndexed { c, cell ->
+                            Box {
+                                CellText(
+                                    cell, alignOf(c), isHeader,
+                                    Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }.mapIndexed { idx, measurable ->
+                        val c = idx % colCount
+                        // Constraints() 全新构造（不用 constraints.copy——Infinity 位面
+                        // 混入具体值会编码出 632461575 这类非法宽度直接崩）
+                        measurable.measure(
+                            Constraints(
+                                minWidth = natural[c].coerceAtLeast(1),
+                                maxWidth = natural[c].coerceAtLeast(1),
+                                minHeight = 0,
+                                maxHeight = Constraints.Infinity
+                            )
                         )
                     }
+                    placeables to (placeables.maxOfOrNull { it.height } ?: 0)
+                }
+                val totalH = rowPlaceables.sumOf { it.second }
+                layout(contentW, totalH) {
+                    var y = 0
+                    rowPlaceables.forEach { (placeables, rowH) ->
+                        var x = 0
+                        placeables.forEachIndexed { c, p ->
+                            p.place(x, y + (rowH - p.height) / 2)
+                            x += natural[c]
+                        }
+                        y += rowH
+                    }
+                    // 行分隔线：在 layout 后画不了，改由下方 Column 的 Box 叠加（见外层）
                 }
             }
         }
@@ -715,74 +890,6 @@ private fun WebViewBlock(html: String, baseUrl: String) {
     check(context != null)
 }
 
-private val inlineRegex = Regex(
-    "`([^`\n]+)`" +
-        "|\\*\\*([^*\n]+)\\*\\*" +
-        "|__([^_\n]+)__" +
-        "|(?<![*\\w])\\*([^*\n]+)\\*(?!\\*)" +
-        "|~~(.+?)~~" +
-        "|\\$([^$\n]+?)\\$(?!\\$)" +
-        "|\\[([^\\]\n]+)]\\((https?://[^)\n]+)\\)"
-)
-
-/** 行内样式：code/粗/斜/删除线/链接 + 行内公式降级（浅底等宽，KaTeX 只做块级）。 */
-private fun buildInlineUncached(text: String): AnnotatedString = buildAnnotatedString {
-    val normalizedLines = text.split('\n').joinToString("\n") { line ->
-        when {
-            line.startsWith("- ") || line.startsWith("* ") -> "•  " + line.substring(2)
-            line.startsWith("+ ") -> "•  " + line.substring(2)
-            Regex("^\\d+[.)]\\s").containsMatchIn(line) -> line
-            else -> line
-        }
-    }
-
-    var index = 0
-    for (m in inlineRegex.findAll(normalizedLines)) {
-        append(normalizedLines.substring(index, m.range.first))
-        val code = m.groups[1]?.value
-        val bold1 = m.groups[2]?.value
-        val bold2 = m.groups[3]?.value
-        val italic = m.groups[4]?.value
-        val strike = m.groups[5]?.value
-        val inlineMath = m.groups[6]?.value
-        val linkText = m.groups[7]?.value
-        val linkUrl = m.groups[8]?.value
-        when {
-            code != null -> pushStyle(
-                SpanStyle(
-                    fontFamily = FontFamily.Monospace,
-                    background = Color(0x3A8AB4FF),
-                    fontSize = 13.sp
-                )
-            ).also { append(code); pop() }
-
-            bold1 != null || bold2 != null -> pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                .also { append(bold1 ?: bold2 ?: ""); pop() }
-
-            italic != null -> pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
-                .also { append(italic); pop() }
-
-            strike != null -> pushStyle(SpanStyle(textDecoration = TextDecoration.LineThrough))
-                .also { append(strike); pop() }
-
-            // 行内公式降级：浅底等宽斜体（内联不嵌 WebView，保证行内排版稳定）
-            inlineMath != null -> pushStyle(
-                SpanStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontStyle = FontStyle.Italic,
-                    background = Color(0x2A7A8CA8)
-                )
-            ).also { append(inlineMath); pop() }
-
-            linkText != null && linkUrl != null -> pushStyle(
-                SpanStyle(color = Color(0xFF8AB4FF), textDecoration = TextDecoration.Underline)
-            ).also { append(linkText); pop() }
-        }
-        index = m.range.last + 1
-    }
-    if (index < normalizedLines.length) append(normalizedLines.substring(index))
-}
-
 /**
  * v4-3 打字机渐显：尾部 [TYPE_IN_TAIL] 字符按到达批次做 alpha 爬升（0.15→1，~300ms）。
  * SpanStyle 用 CurrentPositionalAlpha——无法直接拿主题色，改用 composition local
@@ -792,17 +899,17 @@ private const val TYPE_IN_TAIL = 10
 private const val TYPE_IN_FADE_MS = 300
 
 @Composable
-private fun typeInTail(ann: AnnotatedString, rawText: String): AnnotatedString {
+private fun typeInTail(ann: AnnotatedString): AnnotatedString {
     // 文本变化时刻：尾部字符同批到达（40ms flusher 批），共享同一到达时刻
     var batchAt by remember { mutableLongStateOf(0L) }
     var lastLen by remember { mutableStateOf(-1) }
-    if (rawText.length != lastLen) {
-        lastLen = rawText.length
+    if (ann.text.length != lastLen) {
+        lastLen = ann.text.length
         batchAt = System.currentTimeMillis()
     }
     // 帧时钟：驱动 300ms 淡入过程，结束后停止循环
     var now by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(rawText.length) {
+    LaunchedEffect(ann.text.length) {
         while (isActive) {
             now = System.currentTimeMillis()
             kotlinx.coroutines.delay(32)
