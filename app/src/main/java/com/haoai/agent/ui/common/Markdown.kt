@@ -1,5 +1,7 @@
 package com.haoai.agent.ui.common
 
+import com.haoai.agent.R
+
 import android.annotation.SuppressLint
 import android.content.Context
 import android.webkit.JavascriptInterface
@@ -49,6 +51,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
@@ -67,6 +71,7 @@ import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -262,7 +267,7 @@ private fun MdBlockView(
         )
         is MdBlock.Quote -> QuoteBlockView(block, dark, streaming, listLevel, textColor)
         is MdBlock.ListBlock -> ListBlockView(block, dark, streaming, listLevel, textColor)
-        is MdBlock.Paragraph -> ParagraphView(block, streaming, isLastParagraph, textColor)
+        is MdBlock.Paragraph -> ParagraphView(block, streaming, isLastParagraph, textColor, dark)
         is MdBlock.Text -> Text(
             text = if (block.heading > 0) block.text else block.text,
             style = MaterialTheme.typography.bodyMedium,
@@ -286,41 +291,12 @@ private fun ParagraphView(
     val density = LocalDensity.current
     // 行内树→AnnotatedString + 行内公式占位（JLatexMath 实测尺寸）。
     // 按 inlines 引用相等缓存（data class），流式期历史段落零重算零重排
-    val rendered = remember(block.inlines, textColor, density) {
-        val r = buildInlineTyped(block.inlines, context, primary, onSurface, dark)
-        // 占位符尺寸：每个公式单独构建 Drawable 量宽高（像素→sp），失败给 1em 方块
-        val contents = r.math.mapValues { (_, latex) ->
-            val d = runCatching {
-                ru.noties.jlatexmath.JLatexMathAndroid.init(context)
-                ru.noties.jlatexmath.JLatexMathDrawable.builder(latex)
-                    .textSize(with(density) { 15.sp.toPx() })
-                    .color(textColor.copy(alpha = 0.95f).toArgb())
-                    .build()
-            }.onFailure {
-                android.util.Log.e("MdInlineMath", "latex build failed: ${it.message} | latex=${latex.take(60)}", it)
-            }.getOrNull()
-            if (d != null) {
-                val wSp = with(density) { d.intrinsicWidth.coerceAtLeast(1).toSp() }
-                val hSp = with(density) { d.intrinsicHeight.coerceAtLeast(1).toSp() }
-                InlineTextContent(
-                    Placeholder(wSp, hSp, PlaceholderVerticalAlign.AboveBaseline)
-                ) {
-                    MathInlineNative(latex, dark)
-                }
-            } else {
-                InlineTextContent(
-                    Placeholder(1.sp * latex.length.coerceIn(3, 24), 18.sp, PlaceholderVerticalAlign.AboveBaseline)
-                ) {
-                    Text(
-                        latex,
-                        fontFamily = FontFamily.Serif,
-                        fontStyle = FontStyle.Italic,
-                        fontSize = 13.sp,
-                        maxLines = 1
-                    )
-                }
-            }
-        }
+    val rendered = remember(block.inlines, textColor, density, dark) {
+        val r = buildInlineTyped(
+            block.inlines, context, primary, onSurface, dark,
+            inlineCodeColor = if (dark) Color(0xFF61AFEF) else Color(0xFF4078F2)
+        )
+        val contents = buildMathContents(r.math, context, textColor, density, dark)
         InlineMathRender(r.text, r.math, contents)
     }
     // v4-3 打字机渐显（保留）：只挂最后一个段落；append(ann) 会复制全部
@@ -347,6 +323,46 @@ internal class InlineMathRender(
     val inlineContents: Map<String, InlineTextContent> = emptyMap()
 )
 
+/** 公式占位符→InlineTextContent：JLatexMath 实测量尺寸，失败降级衬线斜体源码。 */
+private fun buildMathContents(
+    math: Map<String, String>,
+    context: android.content.Context,
+    textColor: Color,
+    density: androidx.compose.ui.unit.Density,
+    dark: Boolean
+): Map<String, InlineTextContent> = math.mapValues { (_, latex) ->
+        val d = runCatching {
+            ru.noties.jlatexmath.JLatexMathAndroid.init(context)
+            ru.noties.jlatexmath.JLatexMathDrawable.builder(latex)
+                .textSize(with(density) { 15.sp.toPx() })
+                .color(textColor.copy(alpha = 0.95f).toArgb())
+                .build()
+        }.onFailure {
+            android.util.Log.e("MdInlineMath", "latex build failed: ${it.message} | latex=${latex.take(60)}", it)
+        }.getOrNull()
+        if (d != null) {
+            val wSp = with(density) { d.intrinsicWidth.coerceAtLeast(1).toSp() }
+            val hSp = with(density) { d.intrinsicHeight.coerceAtLeast(1).toSp() }
+            InlineTextContent(
+                Placeholder(wSp, hSp, PlaceholderVerticalAlign.AboveBaseline)
+            ) {
+                MathInlineNative(latex, dark)
+            }
+        } else {
+            InlineTextContent(
+                Placeholder(1.sp * latex.length.coerceIn(3, 24), 18.sp, PlaceholderVerticalAlign.AboveBaseline)
+            ) {
+                Text(
+                    latex,
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    fontSize = 13.sp,
+                    maxLines = 1
+                )
+            }
+        }
+}
+
 /**
  * 类型化行内树 → AnnotatedString：递归携带 SpanStyle（嵌套自然合成）。
  * 链接用 LinkAnnotation.Url 真可点；行内公式埋占位符（InlineTextContent），
@@ -357,7 +373,8 @@ private fun buildInlineTyped(
     context: android.content.Context,
     primary: Color,
     onSurface: Color,
-    dark: Boolean
+    dark: Boolean,
+    inlineCodeColor: Color? = null
 ): InlineMathRender {
     val mathSlots = LinkedHashMap<String, String>()
     val ann = buildAnnotatedString {
@@ -373,13 +390,15 @@ private fun buildInlineTyped(
                     is MdInline.Emph -> emit(node.children, style.copy(fontStyle = FontStyle.Italic))
                     is MdInline.Del -> emit(node.children, style.copy(textDecoration = TextDecoration.LineThrough))
                     is MdInline.CodeSpan -> {
+                        // 上游 观感：行内代码蓝字浅底（inlineCodeColor 覆盖时）
                         pushStyle(
                             style.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
-                            background = onSurface.copy(alpha = 0.08f)
+                                color = inlineCodeColor ?: style.color,
+                                background = onSurface.copy(alpha = 0.08f)
+                            )
                         )
-                    )
                     append(node.code)
                     pop()
                 }
@@ -412,20 +431,9 @@ private fun buildInlineTyped(
 }
 
 /**
- * 纯文本版行内构建（表格单元格等禁用占位符的场景）：行内公式降级为
- * 衬线斜体+浅底，其余行为与 [buildInlineTyped] 一致。
+ * 纯样式差异说明：表格单元格与正文共用 [buildInlineTyped]（行内公式占位符在
+ * 固定列宽下照常参与测量换行），仅行内代码颜色由调用方决定。
  */
-private fun buildInlineTypedPlain(
-    inlines: List<MdInline>,
-    context: android.content.Context,
-    primary: Color,
-    onSurface: Color
-): AnnotatedString {
-    val r = buildInlineTyped(inlines, context, primary, onSurface, dark = false)
-    // 已埋的占位符没有 inlineContent 支撑会显示 alt text（即 LaTeX 源码），
-    // 这里直接在其文本层补一个斜体样式更整洁——简单起见返回原文本即可
-    return r.text
-}
 
 /** 引用块：左竖线 + 浅底 + 子块递归（上游 风格）。 */
 @Composable
@@ -518,7 +526,12 @@ private fun ListBlockView(
     }
 }
 
-/** 代码块：顶部条（语言标签 + 复制）+ 语法高亮 + 横向滚动；流式未闭合时提示生成中。 */
+/** 代码等宽字体：JetBrains Mono（OFL），带 -> → / => ⇒ 连字，上游 同观感。 */
+private val CodeFontFamily = FontFamily(
+    Font(R.font.jetbrains_mono_regular)
+)
+
+/** 代码块：顶部条（语言标签 + 复制）+ 语法高亮 + 软换行；流式未闭合时提示生成中。 */
 @Composable
 private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean) {
     val clipboard = LocalClipboardManager.current
@@ -577,13 +590,15 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
             SelectionContainer {
                 Text(
                     text = highlighted,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = CodeFontFamily,
                     fontSize = 12.5.sp,
                     lineHeight = 18.sp,
+                    // 软换行（上游 同款）：长行折行不横滚，手机上不用双向找内容
+                    softWrap = true,
                     modifier = Modifier
                         .padding(horizontal = 12.dp)
                         .padding(bottom = 10.dp)
-                        .horizontalScroll(rememberScrollState())
+                        .fillMaxWidth()
                 )
             }
         }
@@ -617,17 +632,22 @@ private fun TableBlock(table: MdBlock.Table) {
         val context = LocalContext.current
         val primary = MaterialTheme.colorScheme.primary
         val onSurface = MaterialTheme.colorScheme.onSurface
-        // 单元格行内公式：纯样式回退（表格内嵌占位图会破坏行高测量），
-        // 保持公式源码衬线斜体即可读
-        val ann = remember(inlines, textColor) {
-            buildInlineTypedPlain(inlines, context, primary, onSurface)
+        val density = LocalDensity.current
+        // 单元格与正文同一条渲染管线：行内公式真渲染（占位符在固定列宽下照常换行测量）
+        val rendered = remember(inlines, textColor, density, dark) {
+            val r = buildInlineTyped(
+                inlines, context, primary, onSurface, dark,
+                inlineCodeColor = if (dark) Color(0xFF61AFEF) else Color(0xFF4078F2)
+            )
+            InlineMathRender(r.text, r.math, buildMathContents(r.math, context, textColor, density, dark))
         }
         Text(
-            text = ann,
+            text = rendered.text,
             style = if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
             fontWeight = if (header) FontWeight.Bold else FontWeight.Normal,
             color = textColor.copy(alpha = if (header) 1f else 0.92f),
             textAlign = align,
+            inlineContent = rendered.inlineContents,
             modifier = modifier
         )
     }
@@ -645,8 +665,27 @@ private fun TableBlock(table: MdBlock.Table) {
                 .horizontalScroll(scroll)
                 .padding(vertical = 2.dp)
         ) {
-            // 两阶段测量容器
-            androidx.compose.ui.layout.SubcomposeLayout { constraints ->
+            // 两阶段测量容器（网格线：几何在 measure 产出、drawBehind 消费）
+            val gridRef = remember { java.util.concurrent.atomic.AtomicReference<GridGeom?>(null) }
+            // 上游 网格观感：中等浅灰（比底色明显、比文字淡得多）
+            val gridLine = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f)
+            val linePx = with(density) { 0.75.dp.toPx() }.coerceAtLeast(1f)
+            androidx.compose.ui.layout.SubcomposeLayout(
+                modifier = Modifier.drawBehind {
+                    gridRef.get()?.let { g ->
+                        var yy = 0f
+                        for (h in g.rowHeights) {
+                            yy += h
+                            drawLine(gridLine, Offset(0f, yy - linePx / 2), Offset(g.contentW.toFloat(), yy - linePx / 2), linePx)
+                        }
+                        var xx = 0f
+                        for (w in g.colWidths) {
+                            xx += w
+                            drawLine(gridLine, Offset(xx - linePx / 2, 0f), Offset(xx - linePx / 2, g.totalH.toFloat()), linePx)
+                        }
+                    }
+                }
+            ) { constraints ->
                 val densityF = density.density
                 val maxW = constraints.maxWidth
                 val minColPx = (72 * densityF).toInt()
@@ -723,6 +762,8 @@ private fun TableBlock(table: MdBlock.Table) {
                     placeables to (placeables.maxOfOrNull { it.height } ?: 0)
                 }
                 val totalH = rowPlaceables.sumOf { it.second }
+                // 网格线几何（px）在测量期产出，绘制期消费（同帧 UI 线程，顺序有保证）
+                gridRef.set(GridGeom(rowPlaceables.map { it.second }, natural.toList(), contentW, totalH))
                 layout(contentW, totalH) {
                     var y = 0
                     rowPlaceables.forEach { (placeables, rowH) ->
@@ -733,7 +774,6 @@ private fun TableBlock(table: MdBlock.Table) {
                         }
                         y += rowH
                     }
-                    // 行分隔线：在 layout 后画不了，改由下方 Column 的 Box 叠加（见外层）
                 }
             }
         }
@@ -745,6 +785,14 @@ private fun alignOf(aligns: List<Int>, col: Int): TextAlign = when (aligns.getOr
     ALIGN_RIGHT -> TextAlign.Right
     else -> TextAlign.Left
 }
+
+/** 表格网格线几何（px，测量期产出供 drawBehind 消费）。 */
+private data class GridGeom(
+    val rowHeights: List<Int>,
+    val colWidths: List<Int>,
+    val contentW: Int,
+    val totalH: Int
+)
 
 /** ⑦ 表格骨架占位：表头已到、分隔行未齐时显示 shimmer 灰条，分隔行到达后无缝换成真表格。 */
 @Composable
