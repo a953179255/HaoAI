@@ -304,6 +304,11 @@ code{font-family:monospace;font-size:.92em}
 ul,ol{margin:.3em 0;padding-left:1.6em}
 li{margin:.15em 0}
 li>ul,li>ol{margin:.1em 0}
+/* 任务清单：自绘勾选框对齐聊天内绿色（disabled 原生控件在部分 WebView 忽略 accent-color），去列表圆点 */
+li:has(>input[type=checkbox]){list-style:none;margin-left:-1.35em}
+input[type=checkbox]{-webkit-appearance:none;appearance:none;width:15px;height:15px;vertical-align:-2px;margin-right:5px;border:1.5px solid rgba(128,128,128,.55);border-radius:3px;background:transparent}
+input[type=checkbox]:checked{background:#7BD88F;border-color:#7BD88F;position:relative}
+input[type=checkbox]:checked::after{content:"";position:absolute;left:4.5px;top:1.5px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
 table{border-collapse:collapse;margin:.5em 0}
 td,th{border:1px solid $border;padding:5px 10px}
 a{color:$link}
