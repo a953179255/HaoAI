@@ -40,9 +40,9 @@ serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serializ
 backdrop = { group = "io.github.kyant0", name = "backdrop", version.ref = "backdrop" }
 androidx-work = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
-jetbrains-markdown = { module = "com.github.上游:markdown", version.ref = "jetbrainsMarkdown" }
-jlatexmath-android = { module = "com.github.上游.jlatexmath-android:jlatexmath", version.ref = "jlatexmathAndroid" }
-jlatexmath-android-font-greek = { module = "com.github.上游.jlatexmath-android:jlatexmath-font-greek", version.ref = "jlatexmathAndroid" }
+jetbrains-markdown = { module = "com.github.a953179255:markdown", version.ref = "jetbrainsMarkdown" }
+jlatexmath-android = { module = "com.github.a953179255.jlatexmath-android:jlatexmath", version.ref = "jlatexmathAndroid" }
+jlatexmath-android-font-greek = { module = "com.github.a953179255.jlatexmath-android:jlatexmath-font-greek", version.ref = "jlatexmathAndroid" }
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version = "13.1.5" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version = "13.1.5" }
 
