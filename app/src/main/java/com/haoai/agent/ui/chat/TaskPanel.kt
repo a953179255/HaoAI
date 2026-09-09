@@ -262,16 +262,18 @@ fun TaskFloat(
                         }
                     }
                     //  chevron：位置随宽度滑到右缘，旋转由 morph 驱动（0°=⌃收起 / 180°=⌄展开）。
-                    //  用 LiquidGlassButton（玻璃缩放+指尖辉光，无 ripple）——ripple 画在
-                    //  clickable 层且其后的 clip 裁不到它，按压必出方形光晕（两次翻车教训）
+                    //  磨砂降级（refract=false）：真折射会隔着胶囊采到身后高饱和内容
+                    //  （如绿色消息泡），比磨砂后的胶囊表面深一大截、喧宾夺主；
+                    //  26dp（r13）与胶囊端帽 r17 同心（右距 4dp = 17-13），弧度吻合
                     com.haoai.agent.ui.common.LiquidGlassButton(
                         onClick = onToggle,
                         backdrop = backdrop,
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .padding(end = 4.dp)
-                            .size(30.dp),
+                            .size(26.dp),
                         shape = CircleShape,
+                        refract = false,
                         surfaceColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
                     ) {
                         Icon(
