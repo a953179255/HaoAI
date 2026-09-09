@@ -844,9 +844,11 @@ fun ChatScreen(
             }
         }
 
-        // 上下文详情覆盖层（Z3 最上位）：无遮罩——点 0% 环，面板从顶栏下沿滑出
-        // （expandVertically 260ms，原版观感）；点面板外任意处关闭（透明点击层，
-        // 仅负责捕获外部点击，视觉零打扰）。声明在顶栏容器之后 = Z 序高于任务面板。
+        // 上下文详情覆盖层（Z3 最上位）：无遮罩——点 0% 环，面板从顶栏下沿滑出/
+        // 收回顶栏下沿（expand/shrinkVertically 均以「顶栏下沿」为固定边：外层容器
+        // 必须从顶栏下沿开始向下延展，内层 Box 顶对齐，收起时高度向顶部收拢才不会
+        // 视觉上往顶栏上方缩——此前整屏容器顶对齐导致收起方向朝上，用户反馈 2026-09-10）。
+        // 点面板外任意处关闭（透明点击层，视觉零打扰）。声明在顶栏容器后 = Z 最高。
         androidx.compose.animation.AnimatedVisibility(
             visible = showContextDetail,
             enter = androidx.compose.animation.fadeIn(tween(120)),
@@ -864,6 +866,19 @@ fun ChatScreen(
                         indication = null
                     ) { showContextDetail = false }
             ) {
+                Column(
+                    // 从顶栏下沿开始向下占满：面板在此容器顶部展开/收起，
+                    // 固定边=顶栏下沿，收起动画视觉上「收回顶栏里」
+                    Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight()
+                ) {
+                    Spacer(
+                        Modifier
+                            .statusBarsPadding()
+                            .fillMaxWidth()
+                            .height(52.dp)
+                    )
                     androidx.compose.animation.AnimatedVisibility(
                         visible = showContextDetail,
                         enter = androidx.compose.animation.expandVertically(tween(260)) +
@@ -872,11 +887,7 @@ fun ChatScreen(
                             androidx.compose.animation.fadeOut()
                     ) {
                         Box(
-                            Modifier
-                                .fillMaxWidth()
-                                // 面板落点=顶栏下沿（状态栏+顶栏行高度），与原布局流位置一致
-                                .statusBarsPadding()
-                                .padding(top = 52.dp),
+                            Modifier.fillMaxWidth(),
                             contentAlignment = Alignment.TopCenter
                         ) {
                             ContextUsagePanel(
@@ -886,6 +897,7 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
             }
         }
 
