@@ -15,7 +15,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
@@ -28,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
@@ -60,23 +64,38 @@ import com.haoai.agent.agent.tools.TodoItem
 import com.haoai.agent.ui.common.GlassPanel
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
+/** 方案 A 统一缓动：easeOutQuint 近似（一镜到底、尾段轻落）。 */
+private val MorphEase = androidx.compose.animation.core.CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
 /**
- * 任务悬浮胶囊（两层版第一层，用户选型 2026-09）：收起态唯一可见物，右上悬浮。
- * 内容 = 呼吸绿点（有进行中/待办时）+ 进行中任务名（截断）+ N/M 计数 + ⌄。
- * 全部完成时不显示任务名与呼吸点，只剩「任务 N/M ⌄」收窄形态。
- * 点胶囊 → 外层从胶囊位置 scale 撑开完整面板（同轴形变）。
+ * 任务悬浮件（方案 A · 形状连续形变，用户选型 2026-09）：
+ * 胶囊 ⇄ 面板是同一颗玻璃——宽度从胶囊固有宽插值到全宽、圆角/折射半径跟随，
+ * 高度由清单 AnimatedVisibility 生长（animateContentSize 平滑），420ms easeOutQuint。
+ * 收起态内容：呼吸点 + 进行中任务名（截断）+ N/M + ⌄；展开态内容交叉淡入：
+ * 「任务」+ N/M + 通栏进度条 + ⌃（旋转由形变进度驱动，非独立动画）。
+ * 细线/直角阴影修复：lensRadius 压到 13dp（折射环宽 15.6dp ≤ 圆角半径，圆角外
+ * 不溢出方形光晕）；surfaceAlpha 提到 0.50（顶栏底缘发丝线不再透进胶囊）。
  */
 @Composable
-fun TaskPill(
+fun TaskFloat(
     items: List<TodoItem>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     backdrop: LayerBackdrop,
-    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val doneCount = items.count { it.status == "completed" }
     val total = items.size
+    val progress = if (total > 0) doneCount.toFloat() / total else 0f
     val activeTask = items.firstOrNull { it.status == "in_progress" }
     val hasPending = items.any { it.status != "completed" && it.status != "cancelled" }
+
+    // 形变主进度：0=胶囊 1=面板（单一真源驱动宽/圆角/图标旋转/内容交叉淡入）
+    val morph by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = tween(420, easing = MorphEase),
+        label = "taskFloatMorph"
+    )
 
     val infinite = androidx.compose.animation.core.rememberInfiniteTransition(label = "pillDot")
     val breath by infinite.animateFloat(
@@ -87,58 +106,192 @@ fun TaskPill(
         ), label = "pillBreath"
     )
 
-    GlassPanel(
-        backdrop = backdrop,
-        radius = 20.dp,
-        surfaceAlpha = 0.34f,
-        modifier = modifier.clickable(onClick = onClick)
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    // 胶囊固有宽（收起态内容实测；首次测量前直接用全宽避免 0 宽闪跳）
+    var pillPx by remember { mutableFloatStateOf(0f) }
+
+    BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, end = 12.dp, start = 12.dp),
+        contentAlignment = Alignment.TopEnd
     ) {
-        Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
+        val fullPx = with(density) { maxWidth.toPx() }
+        val wPx = if (pillPx <= 0f) fullPx else pillPx + (fullPx - pillPx) * morph
+        val corner = androidx.compose.ui.unit.lerp(17.dp, 15.dp, morph)
+
+        // 隐形测量行（alpha=0 不渲染但保持自然布局）：与收起版内容同构，在玻璃外量固有宽。
+        // 三个关键坑（均已踩过）：
+        // 1) 放玻璃内 → 节点尺寸被父约束 coerce 成玻璃宽 →「玻璃宽→测量→玻璃宽」自锁；
+        // 2) 容器 height(0.dp) → Text 在高度 0 约束下宽度同样塌缩，量到的只有 padding；
+        // 3) onSizeChanged 放在 padding 之后（链上内层）→ 量到的是去掉 50dp padding 的
+        //    纯文字宽，玻璃按此设宽装不下内容。挂在 Box 外层量「含 padding 完整宽」。
+        Box(
+            Modifier
+                .alpha(0f)
+                .onSizeChanged { if (it.width > 0) pillPx = it.width.toFloat() }
         ) {
-            if (hasPending) {
-                Box(
-                    Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
-                )
-                Spacer(Modifier.width(7.dp))
-            }
-            if (activeTask != null) {
+            Row(
+                Modifier.padding(start = 12.dp, end = 38.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (hasPending) {
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
+                    )
+                    Spacer(Modifier.width(7.dp))
+                }
                 Text(
-                    activeTask.text,
+                    activeTask?.text ?: "任务",
                     style = MaterialTheme.typography.labelMedium,
                     fontSize = 11.5.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.widthIn(max = 130.dp)
                 )
                 Spacer(Modifier.width(7.dp))
-            } else {
                 Text(
-                    "任务",
+                    "$doneCount/$total",
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
-                Spacer(Modifier.width(5.dp))
             }
-            Text(
-                "$doneCount/$total",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.width(5.dp))
-            Icon(
-                Icons.Filled.ExpandMore,
-                contentDescription = "展开任务",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(15.dp)
-            )
+        }
+
+        GlassPanel(
+            backdrop = backdrop,
+            radius = corner,
+            lensRadius = 13.dp,
+            surfaceAlpha = 0.50f,
+            modifier = Modifier
+                .width(with(density) { wPx.toDp() })
+                .animateContentSize(animationSpec = tween(420, easing = MorphEase))
+        ) {
+            Column {
+                // ── 头部：两版内容按形变进度交叉淡入，整行可点切换 ──
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(corner))
+                        .clickable { onToggle() },
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    // 收起版：● 进行中任务名 · N/M（纯显示，宽度由玻璃外的隐形测量行驱动；
+                    // 右距 38dp = chevron 圆钮区 30dp + 8dp 间隙，内容与圆钮互不叠压）
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 38.dp)
+                            .alpha(1f - morph),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (hasPending) {
+                            Box(
+                                Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
+                            )
+                            Spacer(Modifier.width(7.dp))
+                        }
+                        Text(
+                            activeTask?.text ?: "任务",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontSize = 11.5.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 130.dp)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            "$doneCount/$total",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    // 展开版：任务 · N/M · 通栏进度条
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .alpha(morph),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "任务",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "$doneCount/$total",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(progress)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                    }
+                    //  chevrons：位置随宽度滑到右缘，旋转由 morph 驱动（0°=⌃收起 / 180°=⌄展开）
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 8.dp)
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.ExpandLess,
+                            contentDescription = if (expanded) "收起任务" else "展开任务",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(14.dp)
+                                .graphicsLayer { rotationZ = 180f - morph * 180f }
+                        )
+                    }
+                }
+                // ── 清单：展开时纵向生长（头部高度不变，总高由 animateContentSize 平滑）──
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = expandVertically(animationSpec = tween(420, easing = MorphEase)) + androidx.compose.animation.fadeIn(),
+                    exit = shrinkVertically(tween(240)) + androidx.compose.animation.fadeOut(tween(160))
+                ) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .padding(bottom = 6.dp)
+                    ) {
+                        itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
+                            TaskItemRow(item)
+                        }
+                    }
+                }
+            }
         }
     }
 }

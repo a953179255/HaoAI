@@ -763,67 +763,21 @@ fun ChatScreen(
                     onToggleContextDetail = { showContextDetail = !showContextDetail },
                     modifier = Modifier
                 )
-                // 任务浮层（两层版，用户选型 2026-09）：收起态=右上悬浮小胶囊（●进行中任务名·N/M ⌄），
-                // 展开态=浮层面板（TopTaskSection 标题行+清单）。收起态不再常驻整行任务栏——
-                // 修复消息少不可滚时任务栏遮挡首条消息的 bug；胶囊⇄面板从右上角同轴 scale 形变。
+                // 任务浮层（方案 A · 形状连续形变）：胶囊⇄面板是同一颗玻璃，
+                // 宽/圆角/图标旋转/内容交叉由 morph 单值驱动（420ms easeOutQuint），
+                // 高度由清单 AnimatedVisibility + animateContentSize 生长。
                 val taskFloatVisible = todoItems.isNotEmpty() || taskPanelForcedVisible
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = taskFloatVisible && !taskPanelExpanded,
-                    enter = androidx.compose.animation.fadeIn() +
-                        androidx.compose.animation.scaleIn(
-                            animationSpec = androidx.compose.animation.core.spring(
-                                dampingRatio = 0.6f,
-                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                            ),
-                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-                        ),
-                    exit = androidx.compose.animation.fadeOut(tween(140)) +
-                        androidx.compose.animation.scaleOut(
-                            animationSpec = tween(160),
-                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-                        ),
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .padding(top = 4.dp, end = 12.dp)
+                    visible = taskFloatVisible,
+                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
                 ) {
-                    TaskPill(
+                    TaskFloat(
                         items = todoItems,
-                        backdrop = backdrop,
-                        onClick = { taskPanelExpanded = true }
+                        expanded = taskPanelExpanded,
+                        onToggle = { taskPanelExpanded = !taskPanelExpanded },
+                        backdrop = backdrop
                     )
-                }
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = taskFloatVisible && taskPanelExpanded,
-                    enter = androidx.compose.animation.scaleIn(
-                        animationSpec = androidx.compose.animation.core.spring(
-                            dampingRatio = 0.6f,
-                            stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-                        ),
-                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-                    ) + androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.scaleOut(
-                        animationSpec = tween(160),
-                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-                    ) + androidx.compose.animation.fadeOut(tween(140)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp)
-                        .padding(horizontal = 12.dp)
-                ) {
-                    com.haoai.agent.ui.common.GlassPanel(
-                        backdrop = backdrop,
-                        radius = 16.dp,
-                        surfaceAlpha = 0.34f,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
-                            TopTaskSection(
-                                items = todoItems,
-                                expanded = true,
-                                onToggle = { taskPanelExpanded = false }
-                            )
-                        }
-                    }
                 }
                 // 上下文用量详情：从顶栏玻璃下沿向下展开、水平居中。
                 // 顶栏展开面板层级（自上而下）：任务面板（与玻璃一体生长，常驻工作状态）
