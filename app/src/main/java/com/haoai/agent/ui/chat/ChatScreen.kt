@@ -384,9 +384,15 @@ fun ChatScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     // /task 强制展开任务面板（即使清单为空或已全部完成）
+    // v9 方案B：按会话绑定——切换/新建会话时重置，杜绝他处开过的面板残留到新会话
     var taskPanelExpanded by remember { mutableStateOf(false) }
-    // /task 命令强制展开标记（无任务时也能看空态）
     var taskPanelForcedVisible by remember { mutableStateOf(false) }
+    val taskSession = vm.session.collectAsState().value
+    val taskSessionKey = taskSession?.id
+    androidx.compose.runtime.LaunchedEffect(taskSessionKey) {
+        taskPanelExpanded = false
+        taskPanelForcedVisible = false
+    }
 
     // 新任务清单到达（首条 id 变化）时自动展开一次顶栏任务面板
     LaunchedEffect(todoItems.firstOrNull()?.id) {
@@ -841,9 +847,11 @@ fun ChatScreen(
                     }
                 }
             }
-            // 右下角耳片：面板收起时凸起一小块玻璃，点开任务面板（与顶栏连体贴合）
+            // 右下角耳片（方案B）：面板收起时的重开入口——玻璃凸片带「任务 N/M」标签
+            // + 呼吸绿点。显示条件 = 有任务清单（无论是否全部完成）或 /task 强制：
+            // 全部完成时用户仍可能想回看清单（用户反馈"收起后没地方重新打开"）
             androidx.compose.animation.AnimatedVisibility(
-                visible = !taskPanelExpanded && (hasActiveTask || taskPanelForcedVisible),
+                visible = !taskPanelExpanded && (todoItems.isNotEmpty() || taskPanelForcedVisible),
                 enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
                 exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
                 modifier = Modifier.align(Alignment.BottomEnd)
@@ -865,7 +873,7 @@ fun ChatScreen(
                     lensRadius = 0.dp,
                     surfaceAlpha = 0.20f,
                     border = false,
-                    modifier = Modifier.size(width = 116.dp, height = 46.dp)
+                    modifier = Modifier.size(width = 132.dp, height = 32.dp)
                 ) {
                     Row(
                         Modifier
@@ -877,17 +885,23 @@ fun ChatScreen(
                         if (hasActiveTask) {
                             Box(
                                 Modifier
-                                    .size(8.dp)
+                                    .size(7.dp)
                                     .clip(androidx.compose.foundation.shape.CircleShape)
                                     .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
                             )
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(6.dp))
                         }
+                        Text(
+                            "任务 ${todoItems.count { it.status == "completed" }}/${todoItems.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                        )
+                        Spacer(Modifier.width(6.dp))
                         Icon(
                             Icons.Filled.ExpandMore,
                             contentDescription = "展开任务",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
                         )
                     }
                 }
@@ -2004,10 +2018,11 @@ private fun TopBar(
             enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
             exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
         ) {
+            // 底部 padding 由拉手自身承担（拉手要贴玻璃底缘，外层只留水平 18dp）
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 10.dp)
+                    .padding(horizontal = 18.dp)
             ) {
                 // 与顶栏行的细分隔线
                 Box(
@@ -2017,30 +2032,7 @@ private fun TopBar(
                         .height(1.dp)
                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
                 )
-                TopTaskSection(items = todoItems)
-                // 右下角收起圆钮（向上箭头）
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End
-                ) {
-                    androidx.compose.material3.Surface(
-                        onClick = onToggleTask,
-                        shape = androidx.compose.foundation.shape.CircleShape,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                        modifier = Modifier.size(38.dp)
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            Icon(
-                                Icons.Filled.ExpandLess,
-                                contentDescription = "收起任务",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
+                TopTaskSection(items = todoItems, onCollapse = onToggleTask)
             }
         }
         }
