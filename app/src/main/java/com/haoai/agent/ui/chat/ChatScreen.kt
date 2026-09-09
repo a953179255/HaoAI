@@ -740,7 +740,6 @@ fun ChatScreen(
 
         // 玻璃顶栏不能进入上面的 appLayer 子树——drawBackdrop 采样自层会递归崩溃
         val activeSession = vm.session.collectAsState().value
-        val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
         Box(Modifier.align(Alignment.TopCenter)) {
             Column {
                 TopBar(
@@ -760,14 +759,72 @@ fun ChatScreen(
                     onOpenBrowser = onOpenBrowser,
                     onOpenVscreen = onOpenVscreen,
                     planMode = planMode,
-                    todoItems = todoItems,
-                    taskExpanded = taskPanelExpanded,
-                    taskBarForced = taskPanelForcedVisible,
-                    onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
                     contextDetailExpanded = showContextDetail,
                     onToggleContextDetail = { showContextDetail = !showContextDetail },
                     modifier = Modifier
                 )
+                // 任务浮层（两层版，用户选型 2026-09）：收起态=右上悬浮小胶囊（●进行中任务名·N/M ⌄），
+                // 展开态=浮层面板（TopTaskSection 标题行+清单）。收起态不再常驻整行任务栏——
+                // 修复消息少不可滚时任务栏遮挡首条消息的 bug；胶囊⇄面板从右上角同轴 scale 形变。
+                val taskFloatVisible = todoItems.isNotEmpty() || taskPanelForcedVisible
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = taskFloatVisible && !taskPanelExpanded,
+                    enter = androidx.compose.animation.fadeIn() +
+                        androidx.compose.animation.scaleIn(
+                            animationSpec = androidx.compose.animation.core.spring(
+                                dampingRatio = 0.6f,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                            ),
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+                        ),
+                    exit = androidx.compose.animation.fadeOut(tween(140)) +
+                        androidx.compose.animation.scaleOut(
+                            animationSpec = tween(160),
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+                        ),
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(top = 4.dp, end = 12.dp)
+                ) {
+                    TaskPill(
+                        items = todoItems,
+                        backdrop = backdrop,
+                        onClick = { taskPanelExpanded = true }
+                    )
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = taskFloatVisible && taskPanelExpanded,
+                    enter = androidx.compose.animation.scaleIn(
+                        animationSpec = androidx.compose.animation.core.spring(
+                            dampingRatio = 0.6f,
+                            stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                        ),
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+                    ) + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.scaleOut(
+                        animationSpec = tween(160),
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+                    ) + androidx.compose.animation.fadeOut(tween(140)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                        .padding(horizontal = 12.dp)
+                ) {
+                    com.haoai.agent.ui.common.GlassPanel(
+                        backdrop = backdrop,
+                        radius = 16.dp,
+                        surfaceAlpha = 0.34f,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
+                            TopTaskSection(
+                                items = todoItems,
+                                expanded = true,
+                                onToggle = { taskPanelExpanded = false }
+                            )
+                        }
+                    }
+                }
                 // 上下文用量详情：从顶栏玻璃下沿向下展开、水平居中。
                 // 顶栏展开面板层级（自上而下）：任务面板（与玻璃一体生长，常驻工作状态）
                 // > 上下文详情（用户点环形指示器主动弹出的瞬时信息，贴近触发点）
@@ -1831,19 +1888,12 @@ private fun TopBar(
     onOpenBrowser: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
     planMode: Boolean = false,
-    // 一体任务面板：todoItems 驱动内容；expanded 由外部控制（标题行旋转钮/耳片//task 命令）
-    todoItems: List<com.haoai.agent.agent.tools.TodoItem> = emptyList(),
-    taskExpanded: Boolean = false,
-    // /task 强制显示标记（空清单也能看标题行）
-    taskBarForced: Boolean = false,
-    onToggleTask: () -> Unit = {},
     // 上下文详情面板：开关状态提升到 ChatScreen（面板在顶栏下方布局流里展开），
     // TopBar 只留触发点
     contextDetailExpanded: Boolean = false,
     onToggleContextDetail: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val hasActiveTask = todoItems.any { it.status != "completed" && it.status != "cancelled" }
     val vscreenId by com.haoai.agent.platform.vdisplay.VirtualScreenController.displayIdFlow.collectAsState()
     val density = LocalDensity.current
     val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
@@ -1955,34 +2005,6 @@ private fun TopBar(
                 onClick = onToggleContextDetail,
                 expanded = contextDetailExpanded
             )
-        }
-        // 任务面板（方案二）：有清单即常驻标题行（玻璃一体生长），清单区按需展开；
-        // 旋转钮锚定标题行最右，收起后入口原地不变——右下耳片与底缘拉手全部废弃
-        val taskBarVisible = todoItems.isNotEmpty() || taskBarForced
-        androidx.compose.animation.AnimatedVisibility(
-            visible = taskBarVisible,
-            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
-            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
-        ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp)
-            ) {
-                // 与顶栏行的细分隔线
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp)
-                        .height(1.dp)
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                )
-                TopTaskSection(
-                    items = todoItems,
-                    expanded = taskExpanded,
-                    onToggle = onToggleTask
-                )
-            }
         }
         }
     }

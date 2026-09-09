@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
@@ -58,6 +59,89 @@ import androidx.compose.ui.unit.sp
 import com.haoai.agent.agent.tools.TodoItem
 import com.haoai.agent.ui.common.GlassPanel
 import com.kyant.backdrop.backdrops.LayerBackdrop
+
+/**
+ * 任务悬浮胶囊（两层版第一层，用户选型 2026-09）：收起态唯一可见物，右上悬浮。
+ * 内容 = 呼吸绿点（有进行中/待办时）+ 进行中任务名（截断）+ N/M 计数 + ⌄。
+ * 全部完成时不显示任务名与呼吸点，只剩「任务 N/M ⌄」收窄形态。
+ * 点胶囊 → 外层从胶囊位置 scale 撑开完整面板（同轴形变）。
+ */
+@Composable
+fun TaskPill(
+    items: List<TodoItem>,
+    backdrop: LayerBackdrop,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val doneCount = items.count { it.status == "completed" }
+    val total = items.size
+    val activeTask = items.firstOrNull { it.status == "in_progress" }
+    val hasPending = items.any { it.status != "completed" && it.status != "cancelled" }
+
+    val infinite = androidx.compose.animation.core.rememberInfiniteTransition(label = "pillDot")
+    val breath by infinite.animateFloat(
+        0.35f, 1f,
+        androidx.compose.animation.core.infiniteRepeatable(
+            androidx.compose.animation.core.tween(900),
+            androidx.compose.animation.core.RepeatMode.Reverse
+        ), label = "pillBreath"
+    )
+
+    GlassPanel(
+        backdrop = backdrop,
+        radius = 20.dp,
+        surfaceAlpha = 0.34f,
+        modifier = modifier.clickable(onClick = onClick)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (hasPending) {
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
+                )
+                Spacer(Modifier.width(7.dp))
+            }
+            if (activeTask != null) {
+                Text(
+                    activeTask.text,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 130.dp)
+                )
+                Spacer(Modifier.width(7.dp))
+            } else {
+                Text(
+                    "任务",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                "$doneCount/$total",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(5.dp))
+            Icon(
+                Icons.Filled.ExpandMore,
+                contentDescription = "展开任务",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+    }
+}
 
 @Composable
 fun TaskPanel(
