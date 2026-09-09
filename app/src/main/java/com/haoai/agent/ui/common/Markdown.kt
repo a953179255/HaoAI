@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -1081,12 +1082,16 @@ private fun WebViewBlock(html: String, baseUrl: String) {
 }
 
 /**
- * v4-3 打字机渐显：尾部 [TYPE_IN_TAIL] 字符按到达批次做 alpha 爬升（0.15→1，~300ms）。
+ * 流式打字机动效 v9（方案S「星布 + 墨色偏移」，用户选型）：
+ * 尾部 [TYPE_IN_TAIL] 字符随机延迟淡入（40~220ms 错开），且先以主题色低透明度
+ * 出现，随机延迟（140~300ms）后翻转为正文色——「变色苏醒」双色两段式。
+ * 帧时钟窗口 = 最大淡入延迟 + 淡入时长 + 翻转时长。
  * SpanStyle 用 CurrentPositionalAlpha——无法直接拿主题色，改用 composition local
  * 不行（Text 的 color 在上层），故通过 LocalContentColor 读取前景色。
  */
-private const val TYPE_IN_TAIL = 10
-private const val TYPE_IN_FADE_MS = 300
+private const val TYPE_IN_TAIL = 12
+private const val TYPE_IN_FADE_MS = 180
+private const val TYPE_IN_FLIP_MS = 220
 
 @Composable
 private fun typeInTail(ann: AnnotatedString): AnnotatedString {
@@ -1097,33 +1102,58 @@ private fun typeInTail(ann: AnnotatedString): AnnotatedString {
         lastLen = ann.text.length
         batchAt = System.currentTimeMillis()
     }
-    // 帧时钟：驱动 300ms 淡入过程，结束后停止循环
+    // 随机时钟：按「批号」缓存每字符的淡入/翻转延迟（同批同延迟=星布错落来自批次差）
+    // 用 length 哈希派生伪随机——重组稳定，不因重组重掷（避免字符来回跳变）
+    val delayFor = { idx: Int ->
+        val h = (idx * 2654435761L) xor (batchAt / 1000L)
+        ((h ushr 16) % 181).toInt() // 0..180ms 随机淡入延迟
+    }
+    val flipFor = { idx: Int ->
+        val h = (idx * 40503L) xor (batchAt / 997L)
+        140 + ((h ushr 12) % 161).toInt() // 140..300ms 随机翻转延迟
+    }
+    // 帧时钟：驱动动效全程，结束后停止循环
     var now by remember { mutableLongStateOf(0L) }
+    val totalWindow = 220L + TYPE_IN_FLIP_MS + 64
     LaunchedEffect(ann.text.length) {
         while (isActive) {
             now = System.currentTimeMillis()
             kotlinx.coroutines.delay(32)
-            if (now - batchAt > TYPE_IN_FADE_MS + 64) break
+            if (now - batchAt > totalWindow) break
         }
     }
     val fg = androidx.compose.material3.LocalContentColor.current
+    val primary = MaterialTheme.colorScheme.primary
     val plain = ann.text
     val tailStart = (plain.length - TYPE_IN_TAIL).coerceAtLeast(0)
     if (tailStart >= plain.length) return ann
     val age = now - batchAt
-    if (age >= TYPE_IN_FADE_MS) return ann // 全部已定格
+    if (age >= totalWindow) return ann // 全部已定格
     return buildAnnotatedString {
         append(ann)
         val fadeSpan = TYPE_IN_FADE_MS.toFloat()
+        val flipSpan = TYPE_IN_FLIP_MS.toFloat()
         for (i in tailStart until plain.length) {
-            // 同批字符按批内相对位置错峰：批首字符先完成淡入
-            val offsetRatio = (i - tailStart).toFloat() / TYPE_IN_TAIL.coerceAtLeast(1)
-            val charAge = age - offsetRatio * (TYPE_IN_FADE_MS * 0.6f)
-            val alpha = if (charAge <= 0f) 0.15f
-            else (charAge / fadeSpan).coerceIn(0f, 1f).let { 0.15f + 0.85f * it }
-            if (alpha < 0.999f) {
-                addStyle(SpanStyle(color = fg.copy(alpha = alpha)), i, i + 1)
+            val d = delayFor(i)
+            val f = flipFor(i)
+            val charAge = age - d
+            val alpha = if (charAge <= 0f) 0f
+            else (charAge / fadeSpan).coerceIn(0f, 1f).let { 0.1f + 0.9f * it }
+            if (alpha <= 0.01f) {
+                // 尚未浮现：完全透明（保留占位，避免右侧文字突然跳入）
+                addStyle(SpanStyle(color = fg.copy(alpha = 0f)), i, i + 1)
+                continue
             }
+            val flipAge = age - f
+            val color = if (flipAge <= 0f) {
+                // 阶段一：主题色墨滴
+                primary.copy(alpha = 0.75f)
+            } else {
+                // 阶段二：翻转向正文色
+                val t = (flipAge / flipSpan).coerceIn(0f, 1f)
+                lerp(primary, fg, t)
+            }
+            addStyle(SpanStyle(color = color.copy(alpha = alpha)), i, i + 1)
         }
     }
 }

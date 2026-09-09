@@ -2793,19 +2793,69 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
                 // 尾部窗口：思考中取 120 字符；定格后取定格瞬间的尾部（text 不再变）
                 val tailText = text.takeLast(120)
                 val base = MaterialTheme.colorScheme.onSurfaceVariant
+                val primaryC = MaterialTheme.colorScheme.primary
+                // v9 方案S 同步（用户选型）：ticker 右端新进入的字符也走「主题色墨滴→
+                // 翻转正文色」双色两段（与正文流式同一动效语言）。右端 16 字符为动效区，
+                // 按字符索引哈希派生随机翻转延迟（重组稳定，不重掷）。
+                // 思考结束（scrolling=false）立即定格：不再做动效，直接静态 alpha 曲线。
+                var tickerAt by remember { mutableLongStateOf(0L) }
+                var tickerLen by remember { mutableStateOf(-1) }
+                if (scrolling && tailText.length != tickerLen) {
+                    tickerLen = tailText.length
+                    tickerAt = System.currentTimeMillis()
+                }
+                var tickerNow by remember { mutableLongStateOf(0L) }
+                if (scrolling) {
+                    LaunchedEffect(tailText.length) {
+                        val startAt = System.currentTimeMillis()
+                        while (true) {
+                            tickerNow = System.currentTimeMillis()
+                            if (tickerNow - startAt > 480) break
+                            kotlinx.coroutines.delay(32)
+                        }
+                    }
+                }
                 val ann = buildAnnotatedString {
                     append(tailText)
                     // 形态 C alpha 曲线：左端 28% 淡入（0→0.85），右端 18% 淡出
                     // （0.85→0.12）——右侧是"正在离开"的方向，略保留可见度
                     val n = tailText.length
-                    for (i in 0 until n) {
+                    val effectStart = (n - 16).coerceAtLeast(0)
+                    val baseAlpha = { i: Int ->
                         val t = if (n <= 1) 1f else i.toFloat() / (n - 1)
-                        val a = when {
+                        when {
                             t < 0.28f -> (t / 0.28f) * 0.85f
                             t > 0.82f -> 0.85f - ((t - 0.82f) / 0.18f) * 0.73f
                             else -> 0.85f
+                        }.coerceIn(0f, 0.85f)
+                    }
+                    if (scrolling) {
+                        for (i in 0 until n) {
+                            if (i < effectStart) {
+                                addStyle(SpanStyle(color = base.copy(alpha = baseAlpha(i))), i, i + 1)
+                            } else {
+                                // 动效区：随机延迟淡入 + 主题色→正文色翻转
+                                val seed = i * 2654435761L
+                                val d = ((seed ushr 16) % 121).toInt()          // 0..120ms 淡入延迟
+                                val f = 140 + ((seed ushr 8) % 121).toInt()      // 140..260ms 翻转延迟
+                                val age = tickerNow - tickerAt - d
+                                val aIn = if (age <= 0f) 0f else (age / 160f).coerceIn(0f, 1f)
+                                val alpha = 0.85f * aIn
+                                if (alpha <= 0.02f) {
+                                    addStyle(SpanStyle(color = base.copy(alpha = baseAlpha(i) * 0.1f)), i, i + 1)
+                                } else {
+                                    val flipAge = age - f
+                                    val col = if (flipAge <= 0f) primaryC.copy(alpha = 0.8f)
+                                    else androidx.compose.ui.graphics.lerp(primaryC, base, (flipAge / 200f).coerceIn(0f, 1f))
+                                    addStyle(SpanStyle(color = col.copy(alpha = alpha)), i, i + 1)
+                                }
+                            }
                         }
-                        addStyle(SpanStyle(color = base.copy(alpha = a.coerceIn(0f, 0.85f))), i, i + 1)
+                    } else {
+                        // 定格/历史：纯 alpha 曲线（v6.2 形态 C 原样）
+                        for (i in 0 until n) {
+                            addStyle(SpanStyle(color = base.copy(alpha = baseAlpha(i))), i, i + 1)
+                        }
                     }
                 }
                 Text(
