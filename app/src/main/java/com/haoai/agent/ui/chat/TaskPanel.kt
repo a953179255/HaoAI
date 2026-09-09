@@ -109,6 +109,8 @@ fun TaskFloat(
     val density = androidx.compose.ui.platform.LocalDensity.current
     // 胶囊固有宽（收起态内容实测；首次测量前直接用全宽避免 0 宽闪跳）
     var pillPx by remember { mutableFloatStateOf(0f) }
+    // 清单固有高（方案 E：morph 单一进度源插值高度的目标基准）
+    var listPx by remember { mutableFloatStateOf(0f) }
 
     BoxWithConstraints(
         modifier
@@ -119,13 +121,16 @@ fun TaskFloat(
         val fullPx = with(density) { maxWidth.toPx() }
         val wPx = if (pillPx <= 0f) fullPx else pillPx + (fullPx - pillPx) * morph
         val corner = androidx.compose.ui.unit.lerp(17.dp, 15.dp, morph)
+        // 方案 E：高度 = 头部 34dp + 清单高 × morphEase(morph)，单一进度源驱动，
+        // 圆角全程恒定——中间帧四角全圆（双动画叠加时底角会被拉直，已翻车）
+        val headerPx = with(density) { 34.dp.toPx() }
+        val targetListPx = if (listPx <= 0f) 0f else listPx
+        val revealEase = MorphEase.transform(morph)
+        val hPx = headerPx + targetListPx * revealEase
 
-        // 隐形测量行（alpha=0 不渲染但保持自然布局）：与收起版内容同构，在玻璃外量固有宽。
-        // 三个关键坑（均已踩过）：
-        // 1) 放玻璃内 → 节点尺寸被父约束 coerce 成玻璃宽 →「玻璃宽→测量→玻璃宽」自锁；
-        // 2) 容器 height(0.dp) → Text 在高度 0 约束下宽度同样塌缩，量到的只有 padding；
-        // 3) onSizeChanged 放在 padding 之后（链上内层）→ 量到的是去掉 50dp padding 的
-        //    纯文字宽，玻璃按此设宽装不下内容。挂在 Box 外层量「含 padding 完整宽」。
+        // 隐形测量区（alpha=0 不渲染但保持自然布局）：玻璃外量固有尺寸。
+        // 四坑全集（3 宽度 + 1 高度）：玻璃内测量会被玻璃自身 fixed 约束 coerce
+        // （宽高同理——height(34dp) 的玻璃内子项量高度永远得 0，死锁）。
         Box(
             Modifier
                 .alpha(0f)
@@ -161,6 +166,18 @@ fun TaskFloat(
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+            // 清单固有高测量（同宽测量四坑策略）：与玻璃内显示清单同构同宽
+            //（BoxWithConstraints 宽 - 0 内边距），量得的 listPx 作 morph 插值目标
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { if (it.height > 0) listPx = it.height.toFloat() }
+                    .padding(bottom = 6.dp)
+            ) {
+                items.forEach { item ->
+                    TaskItemRow(item)
+                }
+            }
         }
 
         GlassPanel(
@@ -170,22 +187,16 @@ fun TaskFloat(
             surfaceAlpha = 0.50f,
             modifier = Modifier
                 .width(with(density) { wPx.toDp() })
-                .animateContentSize(animationSpec = tween(420, easing = MorphEase))
+                .height(with(density) { hPx.toDp() })
         ) {
             Column {
-                // ── 头部：两版内容按形变进度交叉淡入。收起态整行可点展开；
-                // 展开态仅右上圆钮触发收起（整行可点会让圆钮形同虚设，用户反馈 2026-09-10）。
+                // ── 头部：两版内容按形变进度交叉淡入。两态都只有右侧圆钮触发切换
+                // （整行可点会让圆钮形同虚设，用户反馈 2026-09-10；胶囊态同样仅圆钮）。
                 // indication=null 禁 ripple：玻璃件按压语言统一为形变/辉光，不出方形涟漪
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(corner))
-                        .clickable(
-                            interactionSource = null,
-                            indication = null,
-                            enabled = !expanded
-                        ) { onToggle() },
+                        .height(34.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     // 收起版：● 进行中任务名 · N/M（纯显示，宽度由玻璃外的隐形测量行驱动；
@@ -286,19 +297,17 @@ fun TaskFloat(
                         )
                     }
                 }
-                // ── 清单：展开时纵向生长（头部高度不变，总高由 animateContentSize 平滑）──
-                AnimatedVisibility(
-                    visible = expanded,
-                    enter = expandVertically(animationSpec = tween(420, easing = MorphEase)) + androidx.compose.animation.fadeIn(),
-                    exit = shrinkVertically(tween(240)) + androidx.compose.animation.fadeOut(tween(160))
-                ) {
-                    LazyColumn(
-                        modifier = Modifier
+                // ── 清单（方案 E）：纯显示，固有高由玻璃外隐形区量得（listPx），
+                // 玻璃高度 morph 插值裁到哪露到哪——无独立动画源，边界形状全程受控。
+                // 完全收起后移出组合；淡入与高度生长同步（reveal 驱动）。
+                if (expanded || morph > 0.01f) {
+                    Column(
+                        Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 160.dp)
+                            .alpha(((morph - 0.3f) / 0.7f).coerceIn(0f, 1f))
                             .padding(bottom = 6.dp)
                     ) {
-                        itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
+                        items.forEach { item ->
                             TaskItemRow(item)
                         }
                     }
@@ -456,6 +465,9 @@ private fun TaskItemRow(item: TodoItem) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // 左距 14dp：✓/○ 图标列与头部「任务」标题对齐（此前 0dp 顶到玻璃缘，
+            // 用户反馈 2026-09-10）
+            .padding(start = 14.dp, end = 12.dp)
             .padding(vertical = 3.dp)
             .alpha(alpha),
         verticalAlignment = Alignment.CenterVertically
