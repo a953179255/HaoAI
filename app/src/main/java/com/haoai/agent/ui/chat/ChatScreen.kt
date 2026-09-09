@@ -784,22 +784,31 @@ fun ChatScreen(
                 // > 上下文详情（用户点环形指示器主动弹出的瞬时信息，贴近触发点）
                 // > E1 断点恢复横幅（系统被动通知，优先级最低）。
                 // 三者同在布局流里堆叠，互不遮挡。
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = showContextDetail,
-                    enter = androidx.compose.animation.expandVertically() +
-                        androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.shrinkVertically() +
-                        androidx.compose.animation.fadeOut()
-                ) {
+                // 上下文用量详情（Z3 最上位，用户反馈 2026-09-10）：手动开、看一眼就关，
+                // 改为全屏遮罩弹窗呈现——压暗背景、点外部关闭，保证展开期间完全可见，
+                // 不与任务面板/E1 横幅抢布局流位置（此前纵向堆叠会被任务面板顶下去）
+                if (showContextDetail) {
                     Box(
-                        Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.TopCenter
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                MaterialTheme.colorScheme.scrim.copy(alpha = 0.28f)
+                            )
+                            .clickable(
+                                interactionSource = null,
+                                indication = null
+                            ) { showContextDetail = false }
                     ) {
-                        ContextUsagePanel(
-                            usage = contextUsage,
-                            backdrop = backdrop,
-                            modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)
-                        )
+                        Box(
+                            Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 96.dp, start = 24.dp, end = 24.dp)
+                        ) {
+                            ContextUsagePanel(
+                                usage = contextUsage,
+                                backdrop = backdrop
+                            )
+                        }
                     }
                 }
                 // E1 断点恢复横幅：从顶栏下沿延展出现（running 标记由 selectSession 死亡检测置入）
@@ -1932,6 +1941,10 @@ private fun TopBar(
                 )
             }
             Spacer(Modifier.size(2.dp))
+            // 右侧按钮组统一 4dp 间距（IconButton 自带 12dp 视觉边距，叠加后实际
+            // 图标间隙≈16dp，与左侧对称）；此前浏览器钮 2dp/虚拟屏 0dp/新会话 0dp
+            // 间距不一致（用户反馈 2026-09-10）
+            Spacer(Modifier.size(4.dp))
             IconButton(onClick = onOpenBrowser) {
                 Icon(
                     Icons.Filled.Public,
@@ -1942,6 +1955,7 @@ private fun TopBar(
             }
             // 4.3 增强：虚拟屏活跃时显示入口，点开实时预览面板
             if (vscreenId != null) {
+                Spacer(Modifier.size(4.dp))
                 IconButton(onClick = onOpenVscreen) {
                     Icon(
                         Icons.Filled.SmartDisplay,
@@ -1954,6 +1968,7 @@ private fun TopBar(
             IconButton(onClick = onNewChat) {
                 Icon(Icons.Filled.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)
             }
+            Spacer(Modifier.size(4.dp))
             CircularContextIndicator(
                 usage = contextUsage,
                 onClick = onToggleContextDetail,
