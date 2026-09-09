@@ -312,10 +312,19 @@ fun BrowserPreviewPanel(
 /**
  * WebView 挂载容器（缩略/浮窗共用）：factory 空 FrameLayout，update 幂等 swap
  * 活动 WebView + 仅观看触摸遮罩。两个容器互斥组合，WebView 一次只挂一处。
+ *
+ * 缩放适配（2026-09-10）：WebView 被无头模式合成为全屏尺寸（screenW×screenH），
+ * 直接塞进小容器只显示左上角一块（比例不对、内容不缩小，用户反馈）。
+ * 挂载后按「容器宽 / WebView 宽」等比 scaleX/scaleY（pivot 左上角），
+ * 让整页内容完整缩进容器；容器高度不够的部分由页面自身滚动语义裁剪。
  */
 @Composable
 private fun PreviewWebView(modifier: Modifier = Modifier) {
-    Box(modifier) {
+    var containerW by remember { mutableStateOf(0f) }
+    Box(
+        modifier
+            .onGloballyPositioned { containerW = it.size.width.toFloat() }
+    ) {
         AndroidView(
             factory = { ctx ->
                 android.widget.FrameLayout(ctx).apply {
@@ -336,6 +345,19 @@ private fun PreviewWebView(modifier: Modifier = Modifier) {
             },
             modifier = Modifier.fillMaxSize()
         )
+        // 等比缩放：pivot 左上角，scale = 容器宽 / WebView 实际宽。
+        // 在子层（AndroidView 外包一层 Box graphicsLayer）缩放整棵 WebView 树。
+        androidx.compose.runtime.LaunchedEffect(containerW) {
+            val wv = BrowserController.webViewAtSync()
+            if (containerW > 0f && wv.width > 0f) {
+                val scale = containerW / wv.width
+                wv.scaleX = scale
+                wv.scaleY = scale
+                wv.pivotX = 0f
+                wv.pivotY = 0f
+            }
+        }
+        // 仅观看遮罩
         Box(
             Modifier
                 .fillMaxSize()
