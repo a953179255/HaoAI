@@ -13,8 +13,8 @@ android {
         applicationId = "com.haoai.agent"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
-        versionName = "0.18.1"
+        versionCode = 35
+        versionName = "0.18.2"
     }
 
     buildTypes {
