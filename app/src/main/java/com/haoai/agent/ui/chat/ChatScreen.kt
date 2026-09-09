@@ -844,21 +844,21 @@ fun ChatScreen(
             }
         }
 
-        // 上下文详情覆盖层（Z3 最上位）：顶栏容器的兄弟节点、声明在后 = Z 序更高。
-        // 全屏遮罩（点外部关闭）+ 面板从顶栏下沿 expandVertically 滑出（保留原动画）。
-        // 不占任何布局流空间——任务面板/E1 横幅保持原位，上下文展开时盖在它们上面。
+        // 上下文详情覆盖层（Z3 最上位）：无遮罩——点 0% 环，面板从顶栏下沿滑出
+        // （expandVertically 260ms，原版观感）；点面板外任意处关闭（透明点击层，
+        // 仅负责捕获外部点击，视觉零打扰）。声明在顶栏容器之后 = Z 序高于任务面板。
         androidx.compose.animation.AnimatedVisibility(
             visible = showContextDetail,
-            enter = androidx.compose.animation.fadeIn(tween(180)),
-            exit = androidx.compose.animation.fadeOut(tween(180)),
+            enter = androidx.compose.animation.fadeIn(tween(120)),
+            exit = androidx.compose.animation.fadeOut(tween(120)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxSize()
         ) {
+            // 透明点击捕获层（无背景色）：外部点击关闭面板
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.28f))
                     .clickable(
                         interactionSource = null,
                         indication = null
