@@ -224,9 +224,6 @@ class AgentEngine(
         var softWarned = false
         /** B3 轮次预算软提醒只注入一次（上限 80%）。 */
         var turnBudgetWarned = false
-        /** D 研究软提醒只注入一次：检索类工具累计次数。 */
-        var researchCalls = 0
-        var researchWarned = false
         /** 熔断触发后置位：本轮不执行工具，下一轮无工具纯文本总结后结束。 */
         var forceFinish = false
         appendAndNotify(
@@ -479,18 +476,8 @@ class AgentEngine(
                     currentCoroutineContext().ensureActive()
                     executeCall(call, tools, ctx, onEvent)
                 }
-                // D 研究软提醒：检索类工具累计 12 次仍未收敛 → 注入一次收敛提醒（不熔断）
-                researchCalls += calls.count { it.name in RESEARCH_TOOLS }
-                if (!researchWarned && researchCalls >= RESEARCH_SOFT_WARN_AT) {
-                    researchWarned = true
-                    appendAndNotify(
-                        ChatMessage(
-                            role = ChatMessage.ROLE_USER,
-                            content = "[研究提醒] 本任务已进行 $researchCalls 次检索。已有资料通常已足够，请停止扩大搜索面，综合现有信息给出结论；确实还缺关键事实时再补一次针对性检索。"
-                        ),
-                        onEvent
-                    )
-                }
+                // 检索纪律靠系统提示（研究收敛契约）+ webCache 去重兜底，不注入次数提醒
+                // （openclaw 同款：对话循环里不打扰，重复目标由缓存挡掉）
                 // E4b tools_enable 生效点：组变更后重建工具清单，下一轮请求即带新组
                 if (_groupsDirty) {
                     _groupsDirty = false
@@ -1898,9 +1885,6 @@ class AgentEngine(
 
     companion object {
         const val MAX_TURNS = 60
-        /** D 研究软提醒：检索类工具名单与累计阈值。 */
-        val RESEARCH_TOOLS = setOf("web_search", "web_fetch", "browser_search", "browser_open", "browser_navigate", "browser_read")
-        const val RESEARCH_SOFT_WARN_AT = 12
         const val MAX_HISTORY = 80
         const val TOOL_TIMEOUT_MS = 180_000L
 

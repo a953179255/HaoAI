@@ -478,8 +478,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         startStreamFlusher()
         // D16: 登记到进程级注册表——其他实例据此显示停止键、路由停止、豁免「死亡」误判
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
+        // 恢复注入（[系统恢复] 前缀）不作为新目标：目标已在 resumeRun 里剥壳保留。
+        // 否则恢复横幅把上一次的恢复文本当目标，断一次叠一层（真机实测套娃 bug）
+        val isResumeInject = text.startsWith("[系统恢复]")
         // 编排层可观测性：进程级任务卡开始采集（通知/悬浮窗的唯一数据源）
-        com.haoai.agent.platform.RunObserver.start(s.id, text.takeSafe(80))
+        com.haoai.agent.platform.RunObserver.start(
+            s.id,
+            (if (isResumeInject) s.runGoal else null)?.takeSafe(80) ?: text.takeSafe(80)
+        )
         if (c.settingsFlow.value.keepAlive) com.haoai.agent.platform.KeepAliveService.start(c.appContext)
         if (c.settingsFlow.value.runOverlay) {
             com.haoai.agent.platform.AgentOverlayService.start(c.appContext)
@@ -487,7 +493,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 运行时任务视图隐藏：Agent 运行期间把本应用任务移出最近任务（防误清）
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
-        s.runGoal = text.takeSafe(200)
+        if (!isResumeInject) s.runGoal = text.takeSafe(200)
         s.runTurnsUsed = 0
         s.runState = "running"
         runCatching { c.sessionStore.save(s) }
@@ -1410,15 +1416,24 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (_running.value) return
         // D16：引擎还在其他实例上跑着同一会话，谈不上「恢复」
         if (com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) return
-        val goal = s.runGoal ?: "未记录目标".take(80)
+        // 剥掉历史恢复包装（点击继续后再次中断会嵌套），还原最初的任务目标
+        val goal = (s.runGoal?.let { stripResumeNesting(it) } ?: "未记录目标").take(200)
         val turns = s.runTurnsUsed
         val resumeText = "[系统恢复] 上次任务在第 $turns 轮中断，未完成目标：$goal。请先评估当前进度（可读文件/记忆核实），再继续执行。"
-        val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = null)
+        val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = goal)
         currentSession = view
         c.sessionStore.save(view)
         _session.value = view
         send(resumeText, null)
     }
+
+    /** 恢复文本的包裹层（可嵌套）：剥掉全部恢复包装，还原最初的任务目标。 */
+    private val resumeWrapper = Regex(
+        "\\[系统恢复\\] 上次任务在第 \\d+ 轮中断，未完成目标：|。?请先评估当前进度（可读文件/记忆核实），再继续执行。"
+    )
+
+    private fun stripResumeNesting(t: String): String =
+        t.replace(resumeWrapper, "").trim().ifBlank { t }
 
     /** E1 忽略恢复：清状态不注入（copy 实例使 StateFlow 必然重发射，否则横幅不消失）。 */
     fun dismissResume() {
