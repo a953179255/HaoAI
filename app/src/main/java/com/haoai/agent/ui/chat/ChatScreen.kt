@@ -779,38 +779,12 @@ fun ChatScreen(
                         backdrop = backdrop
                     )
                 }
-                // 上下文用量详情：从顶栏玻璃下沿向下展开、水平居中。
-                // 顶栏展开面板层级（自上而下）：任务面板（与玻璃一体生长，常驻工作状态）
-                // > 上下文详情（用户点环形指示器主动弹出的瞬时信息，贴近触发点）
-                // > E1 断点恢复横幅（系统被动通知，优先级最低）。
-                // 三者同在布局流里堆叠，互不遮挡。
-                // 上下文用量详情（Z3 最上位，用户反馈 2026-09-10）：手动开、看一眼就关，
-                // 改为全屏遮罩弹窗呈现——压暗背景、点外部关闭，保证展开期间完全可见，
-                // 不与任务面板/E1 横幅抢布局流位置（此前纵向堆叠会被任务面板顶下去）
-                if (showContextDetail) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(
-                                MaterialTheme.colorScheme.scrim.copy(alpha = 0.28f)
-                            )
-                            .clickable(
-                                interactionSource = null,
-                                indication = null
-                            ) { showContextDetail = false }
-                    ) {
-                        Box(
-                            Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 96.dp, start = 24.dp, end = 24.dp)
-                        ) {
-                            ContextUsagePanel(
-                                usage = contextUsage,
-                                backdrop = backdrop
-                            )
-                        }
-                    }
-                }
+                // 上下文用量详情（Z3 最上位，2026-09-10 三次修正）：保留「顶栏下沿从上
+                // 往下滑出」动画与位置。关键：遮罩 Box 不得在 Column 流里占无限高度
+                // （此前 fillMaxSize 占位把消息区整屏顶走、环钮点不到）。方案：覆盖层
+                // 不放布局流，移到外层全屏 Box（顶栏容器同级、声明在后 = Z 最高），
+                // 见 ChatScreen 外层「上下文覆盖层」注释处。
+                // E1 横幅仍留本布局流（被上下文盖住是可接受瞬时态）。
                 // E1 断点恢复横幅：从顶栏下沿延展出现（running 标记由 selectSession 死亡检测置入）
                 val runStateNow = activeSession?.runState
                 val runGoalNow = activeSession?.runGoal
@@ -867,6 +841,51 @@ fun ChatScreen(
                         }
                     }
                 }
+            }
+        }
+
+        // 上下文详情覆盖层（Z3 最上位）：顶栏容器的兄弟节点、声明在后 = Z 序更高。
+        // 全屏遮罩（点外部关闭）+ 面板从顶栏下沿 expandVertically 滑出（保留原动画）。
+        // 不占任何布局流空间——任务面板/E1 横幅保持原位，上下文展开时盖在它们上面。
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showContextDetail,
+            enter = androidx.compose.animation.fadeIn(tween(180)),
+            exit = androidx.compose.animation.fadeOut(tween(180)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxSize()
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.28f))
+                    .clickable(
+                        interactionSource = null,
+                        indication = null
+                    ) { showContextDetail = false }
+            ) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showContextDetail,
+                        enter = androidx.compose.animation.expandVertically(tween(260)) +
+                            androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.shrinkVertically(tween(200)) +
+                            androidx.compose.animation.fadeOut()
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                // 面板落点=顶栏下沿（状态栏+顶栏行高度），与原布局流位置一致
+                                .statusBarsPadding()
+                                .padding(top = 52.dp),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            ContextUsagePanel(
+                                usage = contextUsage,
+                                backdrop = backdrop,
+                                modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)
+                            )
+                        }
+                    }
             }
         }
 
