@@ -72,7 +72,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -102,7 +101,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
@@ -2375,24 +2373,6 @@ private fun ThinkingIndicator(hint: String? = null) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
         )
     }
-}
-
-/** ① 流式光标：2dp 细线柔和呼吸（0.15↔0.7 缓动），v4-3 不再硬闪抢戏。 */
-@Composable
-private fun BlinkCursor() {
-    val transition = rememberInfiniteTransition(label = "cursor")
-    val phase by transition.animateFloat(
-        initialValue = 0.15f, targetValue = 0.7f,
-        animationSpec = infiniteRepeatable(tween(1060, easing = LinearEasing)),
-        label = "phase"
-    )
-    Box(
-        Modifier
-            .width(2.dp)
-            .height(14.dp)
-            .graphicsLayer { alpha = phase }
-            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp))
-    )
 }
 
 /**

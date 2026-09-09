@@ -3,7 +3,6 @@ package com.haoai.agent.platform
 import android.service.notification.NotificationListenerService
 import com.haoai.agent.HaoApplication
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.launch
 import android.service.notification.StatusBarNotification
 
 /**

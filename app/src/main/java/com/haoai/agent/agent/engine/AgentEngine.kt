@@ -650,8 +650,9 @@ class AgentEngine(
                 decision = "unknown"
             }
 
-            call.name == "bash" && policy.checkShellBlocked(args.optString("command")) != null -> {
-                result = ToolResult(policy.checkShellBlocked(args.optString("command")) ?: "被拦截", true)
+            // bash 拦截检查（正则扫描+递归切分，非廉价）：结果存局部变量避免同一命令查两次
+            call.name == "bash" -> policy.checkShellBlocked(args.optString("command"))?.let { blocked ->
+                result = ToolResult(blocked, true)
                 finalState = ToolRunState.DENIED
                 decision = "blocked"
             }
@@ -871,7 +872,7 @@ class AgentEngine(
             ToolResult("工具执行失败：${e.message ?: e.javaClass.simpleName}", true)
         }
 
-    /** E6 并行段辅助：在 CoroutineScope 接收者内 map async（并发 ≤4 由调用方分桶）。 */
+    /** 运行单个只读子代理（E7a）：独立工具集+轮数上限，结论回传主代理。 */
     private suspend fun runSubAgent(task: String, parentCtx: ToolContext, index: Int = 1, total: Int = 1): String {
         val childCtx = ToolContext(
             parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
@@ -1253,8 +1254,8 @@ class AgentEngine(
 
     /**
      * B 终态收口：回合结束路径共用的收尾出口。
-     * 自然完成（natural=true）→ 残留清单项代标 completed；停止/失败 → in_progress 回滚 pending；
-     * 熔断 turncapped 不在此调用（收尾轮仍可能推进清单）。子代理不得动父清单（depth>0 跳过）。
+     * 自然完成（natural=true）→ 残留清单项代标 completed；停止/失败/熔断收尾轮结束
+     * （natural=false）→ in_progress 回滚 pending。子代理不得动父清单（depth>0 跳过）。
      */
     private fun finishTurn(natural: Boolean) {
         if (depth != 0) return
@@ -1569,7 +1570,6 @@ class AgentEngine(
 
     // ── 上下文压缩 ──────────────────────────────────────────────────
 
-    /** 检查是否需要压缩，需要则执行。 */
     /**
      * E 压缩前记忆冲刷轮：独立单轮 LLM 调用，只允许 memory 工具。
      * 输入=当前对话，要求模型沉淀值得长期化的事实/偏好/决定；没有可沉淀时直接返回。
@@ -1605,21 +1605,19 @@ class AgentEngine(
         )
         for (call in calls) {
             val tool = flushTools.firstOrNull { it.name == call.name } ?: continue
+            // 结果只记日志不落会话——assistant 侧没存，tool 消息入库即成孤儿（API 构建时
+            // 会被 pairSanitized 裁掉，白占存储与估算）。沉淀本身已经由 tool.run 落盘完成。
             runCatching {
                 val result = tool.run(parseArgs(call.argumentsJson), ctx)
-                appendAndNotify(
-                    ChatMessage(
-                        role = ChatMessage.ROLE_TOOL,
-                        content = "[记忆冲刷] ${call.name}: ${TextCap.middle(result.content, 200)}",
-                        toolCallId = call.id,
-                        toolName = call.name
-                    ),
-                    { }
+                android.util.Log.d(
+                    "HaoEngine",
+                    "memory flush: ${call.name} → ${TextCap.middle(result.content, 120)}"
                 )
             }
         }
     }
 
+    /** 检查是否需要压缩，需要则执行（压缩前先跑一轮记忆冲刷）。 */
     private suspend fun maybeCompact(onEvent: (TurnEvent) -> Unit) {
         if (compactionManager.isCoolingDown()) return
         val chain = summarizerChain()
@@ -1777,12 +1775,6 @@ class AgentEngine(
     }
 
     /**
-     * 当前供应商模型是否支持图像输入——统一走 CapabilityResolver
-     * （手动覆盖 > models.dev 检测 > 旧 vision > 名称启发式 > 乐观默认）。
-     */
-    private fun providerSupportsVision(): Boolean = provider.caps().hasImage
-
-    /**
      * 把供应商原始报错翻译成普通用户能看懂、知道下一步该干嘛的话。
      * 实现在文件级 friendlyErrorText（气泡与顶部 SnackBar 共用），技术细节收敛为短摘要。
      */
@@ -1857,9 +1849,6 @@ class AgentEngine(
         /** 5.4 账本用途标记；5.3 标题路由传 "title"。 */
         purpose: String = "btw"
     ) {
-        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
-
         val sysParts = mutableListOf<String>()
         if (customPrompt.isNotBlank()) sysParts.add(customPrompt)
         if (identity.isNotBlank()) sysParts.add(identity)

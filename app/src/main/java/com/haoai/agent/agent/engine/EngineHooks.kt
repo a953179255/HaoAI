@@ -23,9 +23,10 @@ class ValidateWriteHook : ToolHook {
         result: ToolResult
     ): ToolResult {
         if (result.isError) return result
-        val path = args.optString("path") ?: return result
-        if (!isCodeFile(path)) return result
-        val content = args.optString("content") ?: return result
+        val path = args.optString("path")
+        if (path.isBlank() || !isCodeFile(path)) return result
+        val content = args.optString("content")
+        if (content.isBlank()) return result
         val code = if (call.name == "edit") null else content // edit 无整段 content
         val err = validate(path, content)
         if (err == null) return result
@@ -117,7 +118,7 @@ class SkillHintHook(
         ctx: ToolContext,
         result: ToolResult
     ): ToolResult {
-        val skillName = args.optString("name").orEmpty().ifBlank { "unknown" }
+        val skillName = args.optString("name").ifBlank { "unknown" }
         val resultTag = if (result.isError) "failed: ${result.content.take(80)}" else "success"
         runCatching { store.recordUseResult(skillName, resultTag) }
         val hintKey = skillName
@@ -150,13 +151,15 @@ class SnapshotHook(
         ctx: ToolContext
     ): ToolHook.HookDecision? {
         runCatching {
-            val path = args.optString("path") ?: return null
+            val path = args.optString("path")
+            if (path.isBlank()) return null
             val before = runCatching { backend?.readText(path) }.getOrNull()
             val after = when (call.name) {
                 "write" -> args.optString("content")
                 else -> {
-                    val old = args.optString("old_string") ?: return null
-                    val new = args.optString("new_string") ?: return null
+                    val old = args.optString("old_string")
+                    val new = args.optString("new_string")
+                    if (old.isBlank() || new.isBlank()) return null
                     val replaceAll = args.optBool("replace_all")
                     before?.let {
                         if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new)

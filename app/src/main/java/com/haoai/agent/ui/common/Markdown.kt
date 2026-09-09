@@ -83,7 +83,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.animation.core.animateFloat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -1028,22 +1027,6 @@ private fun jsString(s: String): String =
 /** HTML 文本转义：用于把不可信内容（模型输出）放进 HTML 文档的文本位。 */
 private fun htmlEscape(s: String): String =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
-
-private fun katexHtml(latex: String, dark: Boolean): String {
-    val lat = jsString(latex)
-    val textColor = if (dark) "#E6EBF5" else "#171B26"
-    return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
-        "<link rel=\"stylesheet\" href=\"katex.min.css\">" +
-        "<script src=\"katex.min.js\"></script>" +
-        "<style>body{margin:0;padding:4px;background:transparent;overflow:hidden}" +
-        "#content{color:" + textColor + "}</style></head><body>" +
-        "<div id=\"content\"></div><script>" +
-        "function renderDone(){HeightBridge.reportHeight(document.body.scrollHeight);}" +
-        "try{katex.render(" + lat + ",document.getElementById('content')," +
-        "{displayMode:true,throwOnError:false});}catch(e){" +
-        "document.getElementById('content').textContent=" + lat + ";}" +
-        "renderDone();</script></body></html>"
-}
 
 private fun mermaidHtml(code: String, dark: Boolean): String {
     val codeJs = jsString(code)

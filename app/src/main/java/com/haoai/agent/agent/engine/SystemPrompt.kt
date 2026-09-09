@@ -65,7 +65,7 @@ object SystemPrompt {
             else "- 无障碍自动化：未启用（browser_search/browser_open 仍可打开浏览器，但读不到屏幕内容）"
         )
         appendLine("- 定时任务：可用（schedule 工具，spec 如 every:30m / daily:09:30）")
-        appendLine("- 工作流：可用（workflow_save 起草 / workflow_list 列表）。把用户确认过的重复任务沉淀为多步工作流（prompt 步=完整代理循环，tool 步=直调工具）。起草的工作流处于待确认态，需用户在 设置→工作流 确认后才启用，你不能自行启用。")
+        appendLine("- 工作流：可用（workflow_save 起草，action=list 查看列表）。把用户确认过的重复任务沉淀为多步工作流（prompt 步=完整代理循环，tool 步=直调工具）。起草的工作流处于待确认态，需用户在 设置→工作流 确认后才启用，你不能自行启用。")
         if (vscreenAvailable) {
             appendLine(
                 "- 后台自动化（虚拟屏）：可用——vscreen_launch(包名|URL) 把目标 App 启动到后台虚拟屏" +

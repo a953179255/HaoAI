@@ -47,11 +47,13 @@ object ToolBrief {
             }
             "screen" -> "读取屏幕"
             "tap" -> "点击 · " + tapTarget(args)
-            "swipe" -> "滑动" + args.optString("direction").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            "scroll" -> "滚动" + when (val d = args.optString("direction", "down")) {
-                "up" -> " ↑" + (args.optInt("page")?.takeIf { it > 1 }?.let { " · ${it}屏" } ?: "")
-                else -> " ↓" + (args.optInt("page")?.takeIf { it > 1 }?.let { " · ${it}屏" } ?: "")
-            }
+            "swipe" -> "滑动 · (${args.optInt("x1") ?: "?"},${args.optInt("y1") ?: "?"})→(${args.optInt("x2") ?: "?"},${args.optInt("y2") ?: "?"})"
+            "scroll" -> "滚动" + when (args.optString("direction", "down")) {
+                "up" -> " ↑"
+                "left" -> " ←"
+                "right" -> " →"
+                else -> " ↓"
+            } + (args.optDouble("amount")?.takeIf { it != 0.5 }?.let { " · 幅度$it" } ?: "")
             "find" -> "查找控件 · 「" + args.optString("text").take(20) + "」"
             "wait" -> when (args.optString("mode", "text")) {
                 "idle" -> "等待页面稳定"

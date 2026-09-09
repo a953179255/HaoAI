@@ -80,7 +80,7 @@ class MemoryTool : Tool {
                 val ids = args.optString("ids").split(',', '，', ' ')
                     .map { it.trim() }.filter { it.isNotEmpty() }
                 val content = args.optString("content").trim()
-                if (ids.size < 2 && args.optString("ids").isBlank()) {
+                if (ids.isEmpty() || content.isEmpty()) {
                     return ToolResult("merge 需要 ids（逗号分隔的旧记忆 id）与 content（合并后表述）", true)
                 }
                 val importance = args.optInt("importance")

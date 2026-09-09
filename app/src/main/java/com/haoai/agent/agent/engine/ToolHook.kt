@@ -21,7 +21,7 @@ interface ToolHook {
     val names: Set<String>
         get() = emptySet()
 
-    /** before 阶段：返回非 null 时直接作为最终结果（跳过工具执行），不再执行工具。 */
+    /** before 阶段：返回非 null Handled 时直接作为最终结果（跳过工具执行）；null=继续正常执行。 */
     suspend fun before(
         call: ToolCallData,
         args: JsonObject,
@@ -38,6 +38,5 @@ interface ToolHook {
 
     sealed interface HookDecision {
         data class Handled(val result: ToolResult) : HookDecision
-        data object Proceed : HookDecision
     }
 }

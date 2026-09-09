@@ -66,8 +66,7 @@ class CompactionManager(
             CompactionPrompts.initialSummaryPrompt(context, budget)
         } else {
             // 全量传入：只取尾部会造成两轮压缩之间的消息既不在旧摘要也不进新摘要，信息无声丢失
-            val newText = messagesToText(messages)
-            CompactionPrompts.incrementalSummaryPrompt(existingSummary, newText, budget)
+            CompactionPrompts.incrementalSummaryPrompt(existingSummary, context, budget)
         }
 
         val summary = try {

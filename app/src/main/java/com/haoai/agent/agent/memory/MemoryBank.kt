@@ -414,7 +414,7 @@ class MemoryBank(
     }
 
     private fun normalize(s: String): String =
-        s.lowercase().replace(Regex("[\\s，。、；：！？,.:;!?()（）\\[\\]\"']"), "")
+        s.lowercase().replace(NORMALIZE_NOISE, "")
 
     @Synchronized
     fun clear() {
@@ -443,7 +443,7 @@ class MemoryBank(
         // M2 注入同主题去重：词面重叠 >0.6 的近似记忆只注入排名最高的一条——
         // 三条变体挤进 top8 时每轮重复三遍，是"记忆啰嗦"的直接来源
         val items = mutableListOf<Memory>()
-        val totalChars = java.util.concurrent.atomic.AtomicInteger(0)
+        var totalChars = 0
         for (m in ranked) {
             if (items.size >= k) break
             val toks = tokenize(m.content)
@@ -454,9 +454,9 @@ class MemoryBank(
             }
             if (dup) continue
             // M2 字符预算：注入块总量 1200 字符封顶，超预算整条丢弃不切半
-            if (totalChars.get() + capPerItem > 1200 && items.isNotEmpty()) break
+            if (totalChars + capPerItem > 1200 && items.isNotEmpty()) break
             items.add(m)
-            totalChars.addAndGet(minOf(m.content.length, capPerItem))
+            totalChars += minOf(m.content.length, capPerItem)
         }
         if (items.isEmpty()) return "" to emptyList()
         val text = buildString {
@@ -629,9 +629,15 @@ class MemoryBank(
         /** 降级遗忘标记（同类 式 subconscious）：不参与注入/检索，保留 30 天后物理清理。 */
         const val DORMANT = "dormant"
 
+        /** normalize 的噪声字符表：提到类常量，避免热路径（每条记忆循环调用）重复编译正则。 */
+        private val NORMALIZE_NOISE = Regex("[\\s，。、；：！？,.:;!?()（）\\[\\]\"']")
+
+        /** tokenize 的分隔正则：同上，热路径提为常量。 */
+        private val TOKEN_SPLIT = Regex("[^a-z0-9\\u4e00-\\u9fff]+")
+
         fun tokenize(text: String): Set<String> {
             val out = HashSet<String>()
-            val latin = text.lowercase().split(Regex("[^a-z0-9\\u4e00-\\u9fff]+"))
+            val latin = text.lowercase().split(TOKEN_SPLIT)
                 .filter { it.length in 2..24 }
             out.addAll(latin)
             val cjk = text.filter { it.code in 0x4e00..0x9fff }

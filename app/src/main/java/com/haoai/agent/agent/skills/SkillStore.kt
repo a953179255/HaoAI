@@ -280,7 +280,7 @@ object SkillStore {
             "browser_click", "browser_input", "browser_navigate", "browser_search",
             "browser_open", "browser_scroll", "browser_back", "browser_screenshot",
             "vscreen_launch", "vscreen_tap", "vscreen_text", "vscreen_scroll", "vscreen_close",
-            "schedule", "workflow_save", "delegate_to_vision", "delegate_to_transcribe_audio",
+            "schedule", "workflow_save", "delegate_to_vision", "transcribe_audio",
             "camera", "calendar", "contacts", "clipboard", "notifications", "alarm"
         ).any { Regex("\\b${Regex.escape(it)}\\b").containsMatchIn(body) }
         return !risky
