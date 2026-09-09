@@ -173,13 +173,14 @@ fun TaskFloat(
                 .animateContentSize(animationSpec = tween(420, easing = MorphEase))
         ) {
             Column {
-                // ── 头部：两版内容按形变进度交叉淡入，整行可点切换 ──
+                // ── 头部：两版内容按形变进度交叉淡入。收起态整行可点展开；
+                // 展开态仅右上圆钮触发收起（整行可点会让圆钮形同虚设，用户反馈 2026-09-10）──
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .height(34.dp)
                         .clip(RoundedCornerShape(corner))
-                        .clickable { onToggle() },
+                        .clickable(enabled = !expanded) { onToggle() },
                     contentAlignment = Alignment.CenterStart
                 ) {
                     // 收起版：● 进行中任务名 · N/M（纯显示，宽度由玻璃外的隐形测量行驱动；
@@ -217,11 +218,12 @@ fun TaskFloat(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    // 展开版：任务 · N/M · 通栏进度条
+                    // 展开版：任务 · N/M · 短进度条（固定 64dp，不通栏——通栏会顶到圆钮
+                    // 且视觉上"一条线横贯整个面板"，用户反馈 2026-09-10；右距 38dp 让位圆钮）
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
+                            .padding(start = 12.dp, end = 38.dp)
                             .alpha(morph),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -240,7 +242,7 @@ fun TaskFloat(
                         Spacer(Modifier.width(10.dp))
                         Box(
                             Modifier
-                                .weight(1f)
+                                .width(64.dp)
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
@@ -258,8 +260,10 @@ fun TaskFloat(
                     Box(
                         Modifier
                             .align(Alignment.CenterEnd)
-                            .padding(end = 8.dp)
-                            .size(22.dp)
+                            .padding(end = 4.dp)
+                            .size(34.dp)
+                            .clickable { onToggle() }
+                            .padding(6.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)),
                         contentAlignment = Alignment.Center
