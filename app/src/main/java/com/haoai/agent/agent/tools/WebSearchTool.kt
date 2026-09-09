@@ -36,6 +36,9 @@ class WebSearchTool : Tool {
         val query = args.optString("query").trim()
         if (query.isEmpty()) return ToolResult("需要 query 参数", true)
         val count = (args.optInt("count") ?: 6).coerceIn(1, 10)
+        // D 检索卫生：同一任务内同关键词命中 TTL 缓存直接返回（防重复搜索烧轮次）
+        val cacheKey = "search:${query.lowercase()}"
+        ctx.webCacheGet(cacheKey)?.let { return ToolResult("$it\n\n（缓存）") }
 
         // Bing 优先（国内可达），DuckDuckGo 兜底
         val errors = mutableListOf<String>()
@@ -51,13 +54,15 @@ class WebSearchTool : Tool {
         val hits = results ?: return ToolResult("搜索失败（${errors.joinToString("; ")}）", true)
         return when {
             hits.isEmpty() -> ToolResult("没有搜到相关结果")
-            else -> ToolResult(
-                hits.take(count)
+            else -> {
+                val out = hits.take(count)
                     .mapIndexed { i, h ->
                         "${i + 1}. ${h.title}\n${h.url}\n${h.snippet.take(220)}"
                     }
                     .joinToString("\n\n")
-            )
+                ctx.webCachePut(cacheKey, out)
+                ToolResult(out)
+            }
         }
     }
 

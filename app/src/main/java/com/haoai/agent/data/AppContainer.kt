@@ -215,6 +215,10 @@ class AppContainer(app: Application) {
             }
             com.haoai.agent.agent.skills.SkillStore.useWorkspaceDir(target)
         }
+        // C 出厂预置联网调研技能（迁移落定后播种，用户删除后凭标记不复活）
+        com.haoai.agent.agent.skills.SkillStore.seedBundledResearchSkill(
+            java.io.File(appFilesDir, ".bundled_skills")
+        )
         // 5.4 运行账本（LLM/工具调用 JSONL，按月分文件 + 90 天清理）
         UsageLedger.init(appFilesDir)
         // Phase 6 工作流存储 + schedule 触发重入队（冷启/进程重建后恢复调度链）

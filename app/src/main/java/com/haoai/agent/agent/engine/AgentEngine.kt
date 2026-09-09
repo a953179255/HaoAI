@@ -222,6 +222,11 @@ class AgentEngine(
         var turnToolCalls = 0
         /** E5b 软提醒只注入一次。 */
         var softWarned = false
+        /** B3 轮次预算软提醒只注入一次（上限 80%）。 */
+        var turnBudgetWarned = false
+        /** D 研究软提醒只注入一次：检索类工具累计次数。 */
+        var researchCalls = 0
+        var researchWarned = false
         /** 熔断触发后置位：本轮不执行工具，下一轮无工具纯文本总结后结束。 */
         var forceFinish = false
         appendAndNotify(
@@ -291,8 +296,20 @@ class AgentEngine(
                 currentCoroutineContext().ensureActive()
                 // E1：已完成请求轮数持久化（turncapped 续跑参考）
                 session.runTurnsUsed = turns
+                // B3 轮次预算软提醒：达上限 80% 一次性注入（对齐 E5b 70% 成本提醒机制）
+                if (!turnBudgetWarned && MAX_TURNS >= 10 && turns >= MAX_TURNS * 8 / 10) {
+                    turnBudgetWarned = true
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_USER,
+                            content = "[轮次提醒] 本任务已进行 $turns 轮（上限 $MAX_TURNS）。请在剩余轮次内收敛：完成关键步骤并准备给出最终回答，未完成项在任务清单中如实标注。"
+                        ),
+                        onEvent
+                    )
+                }
                 if (++turns > MAX_TURNS) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
+                    finishTurn(natural = false)
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
@@ -436,11 +453,11 @@ class AgentEngine(
 
                 if (calls.isEmpty() || forceFinish) {
                     // todo 兜底收尾：面板/通知卡只在 todo 工具被调用时刷新，而多数模型建完清单后
-                    // 不再回头更新——自然结束（已产出最终回答）仍有 pending/in_progress 残留时，
-                    // 引擎代为收尾，让任务面板与实际产出同步归位。
-                    // 仅 depth==0 主循环触发（子代理共享父会话 todoStore，不得收父清单）；
-                    // 成本熔断收尾轮 runEndState 已置位、用户停止走取消异常、失败走异常分支——都不经过此处。
-                    if (depth == 0 && runEndState == null) finalizeTodos()
+                    // 不再回头更新——B 终态收口统一处理：自然结束（已产出最终回答）残留 pending/
+                    // in_progress 代收 completed；熔断收尾轮结束则回滚 pending（任务没做完）。
+                    // 用户停止走取消异常、失败走异常分支——各自在 catch 里收口。
+                    // 仅 depth==0 主循环触发（子代理共享父会话 todoStore，不得收父清单）。
+                    finishTurn(natural = runEndState == null)
                     break
                 }
 
@@ -462,6 +479,18 @@ class AgentEngine(
                     currentCoroutineContext().ensureActive()
                     executeCall(call, tools, ctx, onEvent)
                 }
+                // D 研究软提醒：检索类工具累计 12 次仍未收敛 → 注入一次收敛提醒（不熔断）
+                researchCalls += calls.count { it.name in RESEARCH_TOOLS }
+                if (!researchWarned && researchCalls >= RESEARCH_SOFT_WARN_AT) {
+                    researchWarned = true
+                    appendAndNotify(
+                        ChatMessage(
+                            role = ChatMessage.ROLE_USER,
+                            content = "[研究提醒] 本任务已进行 $researchCalls 次检索。已有资料通常已足够，请停止扩大搜索面，综合现有信息给出结论；确实还缺关键事实时再补一次针对性检索。"
+                        ),
+                        onEvent
+                    )
+                }
                 // E4b tools_enable 生效点：组变更后重建工具清单，下一轮请求即带新组
                 if (_groupsDirty) {
                     _groupsDirty = false
@@ -473,6 +502,7 @@ class AgentEngine(
                 // E5 连续工具失败熔断：达到阈值直接 break 输出失败总结
                 if (_loopFailedCap) {
                     _loopFailedCap = false
+                    finishTurn(natural = false)
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
@@ -519,6 +549,8 @@ class AgentEngine(
             maybeExtractMemory()
         } catch (ce: CancellationException) {
             ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
+            // B 终态收口：用户停止 → in_progress 回滚 pending（非挂起操作，取消态下安全）
+            finishTurn(natural = false)
             if (streamBuf.isNotBlank()) {
                 appendAndNotify(
                     ChatMessage(
@@ -538,6 +570,8 @@ class AgentEngine(
         } catch (e: Exception) {
             runEndState = com.haoai.agent.data.StoredSession.RUN_FAILED
             ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
+            // B 终态收口：失败 → in_progress 回滚 pending
+            finishTurn(natural = false)
             val msg = ChatMessage(
                 role = ChatMessage.ROLE_ASSISTANT,
                 content = friendlyError(e.message ?: e.javaClass.simpleName),
@@ -1200,6 +1234,35 @@ class AgentEngine(
         }
     }
 
+    /**
+     * todo 回滚：非自然结束（用户停止/失败）时，in_progress 回 pending——
+     * 任务已死但清单还显示"进行中"是失真；诚实状态便于续跑时接续。
+     */
+    private fun rollbackTodos() {
+        runCatching {
+            val items = todoStore.load(session.id)
+            if (items.isNotEmpty() && items.any { it.status == "in_progress" }) {
+                todoStore.save(
+                    session.id,
+                    items.map { if (it.status == "in_progress") it.copy(status = "pending") else it }
+                )
+                onToolChange?.invoke()
+            }
+        }
+    }
+
+    /**
+     * B 终态收口：回合结束路径共用的收尾出口。
+     * 自然完成（natural=true）→ 残留清单项代标 completed；停止/失败 → in_progress 回滚 pending；
+     * 熔断 turncapped 不在此调用（收尾轮仍可能推进清单）。子代理不得动父清单（depth>0 跳过）。
+     */
+    private fun finishTurn(natural: Boolean) {
+        if (depth != 0) return
+        runCatching {
+            if (natural) finalizeTodos() else rollbackTodos()
+        }
+    }
+
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
     private var _toolsTokenCache: Int? = null
 
@@ -1507,6 +1570,56 @@ class AgentEngine(
     // ── 上下文压缩 ──────────────────────────────────────────────────
 
     /** 检查是否需要压缩，需要则执行。 */
+    /**
+     * E 压缩前记忆冲刷轮：独立单轮 LLM 调用，只允许 memory 工具。
+     * 输入=当前对话，要求模型沉淀值得长期化的事实/偏好/决定；没有可沉淀时直接返回。
+     * 失败静默（冲刷是锦上添花，绝不阻塞压缩主流程）；沉淀结果即时落盘，压缩随后照常执行。
+     */
+    private suspend fun memoryFlushTurn() {
+        val flushTools = listOf(
+            com.haoai.agent.agent.tools.MemoryTool()
+        )
+        val msgs = mutableListOf(
+            ApiMessage(role = "system", content = MEMORY_FLUSH_SYSTEM),
+            ApiMessage(
+                role = "user",
+                content = "以下对话即将被压缩。请把其中值得长期保留的事实/偏好/决定（若无则直接回答\"无\"）" +
+                    "用 memory 工具的 save/merge 写入长期记忆。只沉淀长期有效的信息，不要记录任务过程。\n\n" +
+                    session.messages.takeLast(40).joinToString("\n\n") {
+                        "[${it.role}] ${it.content.take(600)}"
+                    }
+            )
+        )
+        var calls: List<ToolCallData> = emptyList()
+        httpClient.chatStream(provider, apiKey, msgs, gateTools(flushTools.map { it.toApi() }), effectiveEffort())
+            .collect { ev ->
+                when (ev) {
+                    is SseEvent.Completed -> calls = ev.toolCalls
+                    else -> {}
+                }
+            }
+        val ctx = ToolContext(
+            backend = null, shellDir = null, todoStore = todoStore, appFilesDir = appFilesDir,
+            sessionId = session.id, memoryBank = memoryBank, journal = journal, depth = depth,
+            appContext = appContext
+        )
+        for (call in calls) {
+            val tool = flushTools.firstOrNull { it.name == call.name } ?: continue
+            runCatching {
+                val result = tool.run(parseArgs(call.argumentsJson), ctx)
+                appendAndNotify(
+                    ChatMessage(
+                        role = ChatMessage.ROLE_TOOL,
+                        content = "[记忆冲刷] ${call.name}: ${TextCap.middle(result.content, 200)}",
+                        toolCallId = call.id,
+                        toolName = call.name
+                    ),
+                    { }
+                )
+            }
+        }
+    }
+
     private suspend fun maybeCompact(onEvent: (TurnEvent) -> Unit) {
         if (compactionManager.isCoolingDown()) return
         val chain = summarizerChain()
@@ -1520,6 +1633,13 @@ class AgentEngine(
         val usedTokens = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) } +
             sysTok + toolsTok
         if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
+
+        // E 压缩前记忆冲刷（openclaw memory-flush 同思路）：压缩会丢过程细节，而值得长期化的
+        // 事实/偏好恰可能只存在于过程里——压缩前先让主模型把重要上下文写进记忆/日志。
+        // 只允许 memory 工具（写路径白名单），独立小轮不进主对话历史。
+        runCatching {
+            memoryFlushTurn()
+        }.onFailure { android.util.Log.w("HaoEngine", "memory flush failed: ${it.message}") }
 
         // 预修剪工具输出
         val prunedMsgs = compactionManager.prePruneToolOutputs(chatMsgs)
@@ -1789,6 +1909,9 @@ class AgentEngine(
 
     companion object {
         const val MAX_TURNS = 60
+        /** D 研究软提醒：检索类工具名单与累计阈值。 */
+        val RESEARCH_TOOLS = setOf("web_search", "web_fetch", "browser_search", "browser_open", "browser_navigate", "browser_read")
+        const val RESEARCH_SOFT_WARN_AT = 12
         const val MAX_HISTORY = 80
         const val TOOL_TIMEOUT_MS = 180_000L
 
@@ -1824,6 +1947,14 @@ class AgentEngine(
         val SUBAGENT_SYSTEM = """
             [SUBAGENT] 你是被主代理派出的只读研究子代理。只做调研与只读操作（read/grep/glob/web_fetch/memory），
             禁止写入或执行命令。高效检索，最后输出简明、结构化的结论（要点 + 证据路径）。
+        """.trimIndent()
+
+        /** E 压缩前记忆冲刷：单轮、只 memory 工具、只沉淀长期事实。 */
+        val MEMORY_FLUSH_SYSTEM = """
+            [记忆冲刷] 压缩前的记忆整理助手。只做一件事：从对话中提取值得长期保留的信息
+            （用户偏好/稳定事实/重要决定），用 memory 工具写入；相近旧记忆用 merge 合并。
+            禁止记录：任务过程、代码命令、临时状态、寒暄、你自己的回答。
+            没有值得沉淀的内容时直接回答"无"。
         """.trimIndent()
     }
 }

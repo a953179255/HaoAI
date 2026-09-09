@@ -37,8 +37,28 @@ data class ToolContext(
     /** E7a 当前工具调用的 call id（executeCall 每次执行前更新），供子代理上报关联 UI 卡片。 */
     val currentCallId: String? = null,
     /** E7a 子代理进度上报（RUNNING/完成/失败 + token 用量），引擎桥接为 SubagentUpdate 事件。 */
-    val onSubagentEvent: ((com.haoai.agent.agent.engine.SubagentReport) -> Unit)? = null
-)
+    val onSubagentEvent: ((com.haoai.agent.agent.engine.SubagentReport) -> Unit)? = null,
+    /** D 检索卫生：同一次任务内 web_fetch/web_search 的 TTL 去重缓存（key → (时间戳, 结果)）。
+     *  引擎每回合新建 ToolContext，缓存随任务结束自然失效；容量硬顶防膨胀。 */
+    val webCache: java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>> = java.util.concurrent.ConcurrentHashMap()
+) {
+    /** 命中未过期缓存则返回结果；过期条目顺带清除。 */
+    fun webCacheGet(key: String, ttlMs: Long = 10 * 60_000L): String? {
+        val hit = webCache[key] ?: return null
+        if (System.currentTimeMillis() - hit.first > ttlMs) {
+            webCache.remove(key)
+            return null
+        }
+        return hit.second
+    }
+
+    fun webCachePut(key: String, value: String) {
+        if (webCache.size >= 24) { // 硬顶 24 条：淘汰最早写入
+            webCache.minByOrNull { it.value.first }?.let { webCache.remove(it.key) }
+        }
+        webCache[key] = System.currentTimeMillis() to value
+    }
+}
 
 data class ToolResult(
     val content: String,

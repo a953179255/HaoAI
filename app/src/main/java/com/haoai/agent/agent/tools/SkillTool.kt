@@ -17,7 +17,9 @@ class SkillTool(private val store: SkillStore) : Tool {
         "技能库：沉淀与复用做事方法。action: save(name, description, content) 把值得复用的多步流程/踩坑经验沉淀为技能；" +
             "list 列出全部技能索引；view(name) 读全文；delete(name) 删除。" +
             "何时 save：走通了值得复用的多步流程、踩坑后找到可行路径、被用户纠正了做法。" +
-            "content 建议结构：When to Use（适用场景）/ Procedure（步骤）/ Pitfalls（坑与注意）。"
+            "content 建议结构：When to Use（适用场景）/ Procedure（步骤）/ Pitfalls（坑与注意）。" +
+            "沉淀纪律：同一教训只存一条——先 view 检查已有技能，强化旧条目而不是追加复制品；" +
+            "环境故障要记『修复方法』而不是『该工具不可用』（环境会变，永久负面断言会误导后续所有任务）；未解决的失败不要存。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -38,7 +40,11 @@ class SkillTool(private val store: SkillStore) : Tool {
                 val content = args.optString("content").trim()
                 if (content.isEmpty()) return ToolResult("save 需要 content（技能正文）", true)
                 store.save(name, desc, content, source = "agent")
-                ToolResult("技能「$name」已保存（候选态：不注入索引，待用户在技能库页验证启用）。下次遇到同类任务可先 view 复用。")
+                // C 只读技能免确认：晋升结果按正文工具面即时反馈，模型下一步即可复用
+                val auto = com.haoai.agent.agent.skills.SkillStore.isReadOnlyBody(content)
+                val msg = if (auto) "技能「$name」已保存并生效（只读技能自动启用）。下次遇到同类任务先 view 复用。"
+                else "技能「$name」已保存（候选态：含写入/执行/设备操作，待用户在技能库页验证启用）。"
+                ToolResult(msg)
             }
             "view" -> {
                 val name = args.optString("name").trim()

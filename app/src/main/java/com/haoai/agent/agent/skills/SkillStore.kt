@@ -74,6 +74,42 @@ object SkillStore {
         baseDir = fallbackDir
     }
 
+    /**
+     * C 出厂预置：联网调研技能（mercury 式种子）。首次启动播种一次；
+     * markerDir 里的标记文件保证用户删除后不复活。source=user：免验生效、不参与自动归档。
+     */
+    fun seedBundledResearchSkill(markerDir: File) {
+        val marker = File(markerDir, "bundled_web_research_seeded")
+        if (marker.exists()) return
+        runCatching {
+            if (!exists("web-research")) {
+                save(
+                    name = "web-research",
+                    description = "联网调研标准流程：搜索→精读→交叉验证→收敛回答",
+                    body = """
+                        # 联网调研
+
+                        需要查资料/新闻/对比/总结/预测时按此流程执行。
+
+                        ## Procedure（步骤）
+                        1. 用 web_search 搜索关键词；结果为空或质量差时换关键词重搜一次。
+                        2. 从结果中挑最相关的 2-4 个 url，用 web_fetch 精读（同一轮可并行发多个）。
+                        3. 关键事实至少交叉验证 2 个来源；来源互相矛盾时明说，不硬选。
+                        4. 综合给出简洁回答：结论先行，附来源链接；不确定就明说不确定。
+
+                        ## Pitfalls（坑与注意）
+                        - 优先一手权威来源（官方文档/原始公告/权威媒体），不堆二手转述。
+                        - 简单事实一次搜索加一两个来源即可，不要扩大搜索面。
+                        - 永远不编造来源链接；引用必须来自实际抓取过的页面。
+                    """.trimIndent(),
+                    source = "user"
+                )
+            }
+            markerDir.mkdirs()
+            marker.writeText("seeded")
+        }
+    }
+
     /** C5：切落到工作区 skills/ 目录（幂等迁移由调用方完成）；null 回退状态目录（SAF 工作区场景）。 */
     @Synchronized
     fun useWorkspaceDir(dir: File?) {
@@ -202,6 +238,11 @@ object SkillStore {
         // 覆盖更新时保留历史计数；新建时记录来源
         val old = if (f.exists()) parseMeta(runCatching { f.readText() }.getOrDefault(""), safe, 0) else null
         val now = System.currentTimeMillis()
+        // C 只读技能免确认：agent 新建的技能若正文只引用只读工具（调研/检索/读取类），
+        // 自动晋升进索引——最坏情况只是搜得不好，且有疗效遥测兜底（连续失败 2 次出索引）。
+        // 涉及写入/执行/设备控制的技能照旧走候选态人审；SkillGuard 扫描命中可疑内容的不放行。
+        val autoValidate = old?.validated
+            ?: (source == "user" || (source == "agent" && reviewNotes.isNullOrBlank() && isReadOnlyBody(body)))
         val meta = SkillMeta(
             name = safe,
             description = description.trim().replace(Regex("[\\r\\n]+"), " ").take(120),
@@ -218,13 +259,31 @@ object SkillStore {
             failCount = old?.failCount ?: 0,
             failStreak = old?.failStreak ?: 0,
             needsRevision = old?.needsRevision ?: false,
-            // 候选门控：新建时仅用户手建免验；agent 新建/导入走 false。覆盖更新保留原状（agent 修订不得给技能解禁）
-            validated = old?.validated ?: (source == "user"),
+            // 候选门控：新建时仅用户手建与只读 agent 技能免验；其余导入/写入类 agent 新建走 false。
+            // 覆盖更新保留原状（agent 修订不得给技能解禁）
+            validated = autoValidate,
             reviewNotes = reviewNotes?.ifBlank { null } ?: old?.reviewNotes
         )
         writeMeta(f, meta, body.trim().take(bodyLimit))
         cachedList = null
         return f
+    }
+
+    /**
+     * C 只读判定：正文不得提及任何写入/执行/设备控制类工具名（提及即视为有副作用风险，
+     * 走候选态人审）。只查英文工具名——中文叙述（"写入文件"）不构成工具引用。
+     */
+    fun isReadOnlyBody(body: String): Boolean {
+        val risky = listOf(
+            "bash", "edit", "write", "spawn_agents", "screen", "tap", "type_text", "key",
+            "scroll", "wait", "find", "launch_app", "open_uri", "config_set", "config_get",
+            "browser_click", "browser_input", "browser_navigate", "browser_search",
+            "browser_open", "browser_scroll", "browser_back", "browser_screenshot",
+            "vscreen_launch", "vscreen_tap", "vscreen_text", "vscreen_scroll", "vscreen_close",
+            "schedule", "workflow_save", "delegate_to_vision", "delegate_to_transcribe_audio",
+            "camera", "calendar", "contacts", "clipboard", "notifications", "alarm"
+        ).any { Regex("\\b${Regex.escape(it)}\\b").containsMatchIn(body) }
+        return !risky
     }
 
     /** 技能名净化：与 save 一致，供导入通道预检/重命名使用（去尾部连字符避免 "name-" 形态）。 */
@@ -367,9 +426,16 @@ object SkillStore {
     fun promptIndex(): String {
         val active = list().filter { !it.staleForPrompt() && !it.needsRevision && it.validated }
         if (active.isEmpty()) return ""
+        // C 披露排序：常用（useCount 降序）> 常青（无活跃度数据时按最近活动）；
+        // 疗效差的（failStreak>0 但未到 needsRevision 线）沉底。
+        val ranked = active.sortedWith(
+            compareByDescending<SkillMeta> { it.successCount > 0 || it.failCount == 0 }
+                .thenByDescending { it.useCount }
+                .thenByDescending { it.anchor() }
+        )
         return buildString {
             appendLine("## 已沉淀技能（用 skill 工具的 view 动作按需加载全文）")
-            active.take(15).forEach { appendLine("- ${it.name}：${it.description.take(60)}") }
+            ranked.take(15).forEach { appendLine("- ${it.name}：${it.description.take(60)}") }
         }.trimEnd()
     }
 

@@ -41,6 +41,9 @@ class WebFetchTool : Tool {
                 return@withContext ToolResult("仅支持 http(s) 链接", true)
             }
             val maxChars = (args.optInt("max_chars") ?: 8000).coerceIn(200, 30_000)
+            // D 检索卫生：同一任务内同 URL 命中 TTL 缓存直接返回（防模型重复抓同一页烧轮次）
+            val cacheKey = "fetch:${url.trimEnd('/')}"
+            ctx.webCacheGet(cacheKey)?.let { return@withContext ToolResult("$url（缓存）\n\n$it") }
             runCatching {
                 val request = Request.Builder()
                     .url(url)
@@ -53,12 +56,12 @@ class WebFetchTool : Tool {
                     val bytes = readCapped(resp, MAX_DOWNLOAD_BYTES)
                     // 按 HTTP 头 / HTML meta 声明的字符集解码：国内大量站点仍是 GBK，硬解 UTF-8 全是乱码
                     val body = String(bytes, charsetOf(contentType, bytes))
-                    if (contentType.contains("html", ignoreCase = true) || body.trimStart().startsWith("<")) {
-                        val text = HtmlText.convert(body)
-                        ToolResult("$url（HTTP ${resp.code}）\n\n${TextCap.middle(text, maxChars)}")
-                    } else {
-                        ToolResult("$url（HTTP ${resp.code}）\n\n${TextCap.middle(body, maxChars)}")
-                    }
+                    val text = if (contentType.contains("html", ignoreCase = true) || body.trimStart().startsWith("<")) {
+                        HtmlText.convert(body)
+                    } else body
+                    val out = TextCap.middle(text, maxChars)
+                    ctx.webCachePut(cacheKey, out)
+                    ToolResult("$url（HTTP ${resp.code}）\n\n$out")
                 }
             }.getOrElse { ToolResult("抓取失败：${it.message}", true) }
         }
