@@ -762,6 +762,7 @@ fun ChatScreen(
                     planMode = planMode,
                     todoItems = todoItems,
                     taskExpanded = taskPanelExpanded,
+                    taskBarForced = taskPanelForcedVisible,
                     onToggleTask = { taskPanelExpanded = !taskPanelExpanded },
                     contextDetailExpanded = showContextDetail,
                     onToggleContextDetail = { showContextDetail = !showContextDetail },
@@ -844,65 +845,6 @@ fun ChatScreen(
                                 Text("忽略", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                    }
-                }
-            }
-            // 右下角耳片（方案B）：面板收起时的重开入口——玻璃凸片带「任务 N/M」标签
-            // + 呼吸绿点。显示条件 = 有任务清单（无论是否全部完成）或 /task 强制：
-            // 全部完成时用户仍可能想回看清单（用户反馈"收起后没地方重新打开"）
-            androidx.compose.animation.AnimatedVisibility(
-                visible = !taskPanelExpanded && (todoItems.isNotEmpty() || taskPanelForcedVisible),
-                enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
-                exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(),
-                modifier = Modifier.align(Alignment.BottomEnd)
-            ) {
-                val infinite = rememberInfiniteTransition(label = "ear")
-                val breath by infinite.animateFloat(
-                    0.35f, 1f,
-                    androidx.compose.animation.core.infiniteRepeatable(
-                        androidx.compose.animation.core.tween(900),
-                        androidx.compose.animation.core.RepeatMode.Reverse
-                    ), label = "earA"
-                )
-                GlassPanel(
-                    backdrop = backdrop,
-                    radius = 0.dp,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(
-                        bottomStart = 16.dp, bottomEnd = 16.dp
-                    ),
-                    lensRadius = 0.dp,
-                    surfaceAlpha = 0.20f,
-                    border = false,
-                    modifier = Modifier.size(width = 132.dp, height = 32.dp)
-                ) {
-                    Row(
-                        Modifier
-                            .fillMaxSize()
-                            .clickable { taskPanelExpanded = true },
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (hasActiveTask) {
-                            Box(
-                                Modifier
-                                    .size(7.dp)
-                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
-                            )
-                            Spacer(Modifier.width(6.dp))
-                        }
-                        Text(
-                            "任务 ${todoItems.count { it.status == "completed" }}/${todoItems.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Icon(
-                            Icons.Filled.ExpandMore,
-                            contentDescription = "展开任务",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
-                        )
                     }
                 }
             }
@@ -1889,9 +1831,11 @@ private fun TopBar(
     onOpenBrowser: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
     planMode: Boolean = false,
-    // 一体任务面板：todoItems 驱动内容；expanded 由外部控制（任务按钮/右下耳片//task 命令）
+    // 一体任务面板：todoItems 驱动内容；expanded 由外部控制（标题行旋转钮/耳片//task 命令）
     todoItems: List<com.haoai.agent.agent.tools.TodoItem> = emptyList(),
     taskExpanded: Boolean = false,
+    // /task 强制显示标记（空清单也能看标题行）
+    taskBarForced: Boolean = false,
     onToggleTask: () -> Unit = {},
     // 上下文详情面板：开关状态提升到 ChatScreen（面板在顶栏下方布局流里展开），
     // TopBar 只留触发点
@@ -2012,13 +1956,14 @@ private fun TopBar(
                 expanded = contextDetailExpanded
             )
         }
-        // 任务面板：同一块玻璃向下一体生长（顶栏加宽效果），无独立卡片、无关闭钮
+        // 任务面板（方案二）：有清单即常驻标题行（玻璃一体生长），清单区按需展开；
+        // 旋转钮锚定标题行最右，收起后入口原地不变——右下耳片与底缘拉手全部废弃
+        val taskBarVisible = todoItems.isNotEmpty() || taskBarForced
         androidx.compose.animation.AnimatedVisibility(
-            visible = taskExpanded,
+            visible = taskBarVisible,
             enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
             exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
         ) {
-            // 底部 padding 由拉手自身承担（拉手要贴玻璃底缘，外层只留水平 18dp）
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -2028,11 +1973,15 @@ private fun TopBar(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp)
+                        .padding(bottom = 6.dp)
                         .height(1.dp)
                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
                 )
-                TopTaskSection(items = todoItems, onCollapse = onToggleTask)
+                TopTaskSection(
+                    items = todoItems,
+                    expanded = taskExpanded,
+                    onToggle = onToggleTask
+                )
             }
         }
         }

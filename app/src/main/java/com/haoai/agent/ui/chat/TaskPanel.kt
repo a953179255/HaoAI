@@ -275,50 +275,57 @@ private fun TaskStatusIcon(status: String, priority: String) {
 
 
 /**
- * 顶栏一体任务区（方案B · 底缘耳片，用户选型 2026-09）：
- * - 标题行「任务 N/M」+ 细进度条（+进行中任务名）；
- * - 默认只列未完成任务（滚动窗口 ≤140dp、底部渐隐暗示可滚、自动定位到进行中项）；
- *   已完成项收进「展开已完成 N 条 ⌄」，点开追加显示；
- * - 底缘中央拉手（横条把手+⌃）= 收起，点整条拉手或标题行均可；拉手常驻不随滚动走；
- * - 长清单策略：20 条任务时展开态最大约 190dp，消息区保留可见空间。
- * 展开回调由外部（ChatScreen）持有状态，收起走 onCollapse。
+ * 顶栏一体任务区（方案二 · 锚定标题行旋转钮，用户选型 2026-09）：
+ * - 标题行 = 玻璃面板唯一常驻部分：「任务」+ N/M + 进行中提示 + 进度条 + 旋转钮；
+ * - 旋转钮永远锚定标题行最右，收展只做图标 180° spring 旋转（展开⌃/收起⌄）——
+ *   位置零变动，收起后入口就在原地，不存在"没地方打开"；
+ * - 清单 AnimatedVisibility 挂标题行下：滚动窗口 ≤140dp + 底部渐隐 + 自动定位进行中项；
+ * - 已完成项收进「展开已完成 N 条 ⌄」，点开追加显示；
+ * - 无底缘拉手、无右下耳片（旧方案B悬挂件全部废弃）。
  */
 @Composable
 fun TopTaskSection(
     items: List<TodoItem>,
-    onCollapse: () -> Unit = {},
+    expanded: Boolean,
+    onToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val doneCount = items.count { it.status == "completed" }
     val total = items.size
     val progress = if (total > 0) doneCount.toFloat() / total else 0f
-    val activeIndex = items.indexOfFirst { it.status == "in_progress" }
-    val activeTask = items.getOrNull(activeIndex)
+    val activeTask = items.firstOrNull { it.status == "in_progress" }
 
     // 已完成项收纳：默认只列未完成；showDone 时全部显示
     var showDone by remember { mutableStateOf(false) }
     val pendingItems = remember(items) { items.filterNot { it.status == "completed" } }
     val displayItems = if (showDone) items else pendingItems
-    val doneVisible = doneCount > 0
 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    // 新清单/进行中项变化时自动滚到进行中任务（默认视图以未完成任务开头）
-    LaunchedEffect(activeIndex, showDone, pendingItems.size) {
-        if (!showDone && pendingItems.isNotEmpty()) {
-            // 未完成视图里进行中项的相对位置
-            val target = pendingItems.indexOfFirst { it.status == "in_progress" }
-            if (target > 0) listState.animateScrollToItem(target.coerceAtLeast(0))
-        } else if (showDone && activeIndex >= 0) {
-            listState.animateScrollToItem(activeIndex.coerceAtLeast(0))
+    LaunchedEffect(expanded, showDone, pendingItems.size) {
+        if (!expanded) return@LaunchedEffect
+        if (showDone) {
+            val ai = items.indexOfFirst { it.status == "in_progress" }
+            if (ai > 0) listState.animateScrollToItem(ai)
+        } else {
+            val pi = pendingItems.indexOfFirst { it.status == "in_progress" }
+            if (pi > 0) listState.animateScrollToItem(pi)
         }
     }
 
-    Column(modifier.fillMaxWidth()) {
-        // 标题行（点击 = 收起；也可只点底部拉手）
+    // 旋转钮：展开 0°（⌃=向上收起）/ 收起 180°（⌄=向下展开），spring 回弹
+    val rot by animateFloatAsState(
+        targetValue = if (expanded) 0f else 180f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow),
+        label = "taskToggleRot"
+    )
+
+    Column(modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        // 标题行（整行可点切换，右侧旋转钮为显式 affordance）
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable { onCollapse() },
+                .clickable { onToggle() }
+                .padding(horizontal = 2.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -333,13 +340,13 @@ fun TopTaskSection(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
-            if (!showDone && activeTask != null) {
+            if (!expanded && activeTask != null) {
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "进行中: ${activeTask.text}",
+                    activeTask.text,
                     style = MaterialTheme.typography.labelSmall,
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -347,105 +354,93 @@ fun TopTaskSection(
             } else {
                 Spacer(Modifier.weight(1f))
             }
-        }
-        Spacer(Modifier.height(6.dp))
-        // 自绘进度条（无 stopIndicator 圆点）
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-        ) {
+            // 细进度条（收起态也在标题行里常驻，一眼看进度）
             Box(
                 Modifier
-                    .fillMaxWidth(progress)
+                    .width(56.dp)
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
-        }
-        Spacer(Modifier.height(4.dp))
-        // 清单：滚动窗口 ≤140dp；底部渐隐暗示可滚
-        Box {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 140.dp)
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
             ) {
-                itemsIndexed(displayItems, key = { _, item -> item.id }) { _, item ->
-                    TaskItemRow(item)
-                }
-            }
-            // 底部渐隐（内容可滚时才画）
-            val canScroll = listState.canScrollForward || listState.canScrollBackward
-            if (canScroll) {
                 Box(
                     Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(16.dp)
-                        .background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0f),
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                )
-                            )
-                        )
-                )
-            }
-        }
-        // 已完成收纳开关
-        if (doneVisible) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { showDone = !showDone }
-                    .padding(vertical = 5.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
-            ) {
-                Text(
-                    if (showDone) "收起已完成 ⌃" else "展开已完成 $doneCount 条 ⌄",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-    }
-    // 底缘拉手：贴玻璃底缘（外层 Column 只剩水平 padding，拉手下探 8dp 抵消原
-    // vertical padding，圆角底缘与玻璃一体）；点整条收起（常驻、不随清单滚动）
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
-    ) {
-        androidx.compose.material3.Surface(
-            onClick = onCollapse,
-            shape = RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp),
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
-            modifier = Modifier.size(width = 120.dp, height = 30.dp)
-        ) {
-            Row(
-                Modifier.fillMaxSize(),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 横条把手
-                Box(
-                    Modifier
-                        .size(width = 26.dp, height = 3.5.dp)
+                        .fillMaxWidth(progress)
+                        .height(4.dp)
                         .clip(RoundedCornerShape(2.dp))
-                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f))
+                        .background(MaterialTheme.colorScheme.primary)
                 )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "⌃",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                    .clickable { onToggle() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.ExpandLess,
+                    contentDescription = if (expanded) "收起任务" else "展开任务",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(17.dp)
+                        .graphicsLayer { rotationZ = rot }
                 )
+            }
+        }
+        // 清单区
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(spring(stiffness = Spring.StiffnessMedium)) + androidx.compose.animation.fadeIn(),
+            exit = shrinkVertically(spring(stiffness = Spring.StiffnessMedium)) + androidx.compose.animation.fadeOut()
+        ) {
+            Column {
+                Box {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 140.dp)
+                    ) {
+                        itemsIndexed(displayItems, key = { _, item -> item.id }) { _, item ->
+                            TaskItemRow(item)
+                        }
+                    }
+                    val canScroll = listState.canScrollForward || listState.canScrollBackward
+                    if (canScroll) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(16.dp)
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                        )
+                                    )
+                                )
+                        )
+                    }
+                }
+                if (doneCount > 0) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { showDone = !showDone }
+                            .padding(vertical = 5.dp),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+                    ) {
+                        Text(
+                            if (showDone) "收起已完成 ⌃" else "展开已完成 $doneCount 条 ⌄",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+                        )
+                    }
+                }
             }
         }
     }
