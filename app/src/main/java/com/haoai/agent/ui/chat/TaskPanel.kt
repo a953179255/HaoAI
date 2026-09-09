@@ -275,12 +275,12 @@ private fun TaskStatusIcon(status: String, priority: String) {
 
 
 /**
- * 顶栏一体任务区（方案二 · 锚定标题行旋转钮，用户选型 2026-09）：
- * - 标题行 = 玻璃面板唯一常驻部分：「任务」+ N/M + 进行中提示 + 进度条 + 旋转钮；
+ * 顶栏一体任务区（方案二原版 · 锚定标题行旋转钮，用户验收 2026-09）：
+ * - 标题行一行排完：「任务」+ N/M + 通栏进度条（拉满中间空间）+ 28dp 旋转钮；
  * - 旋转钮永远锚定标题行最右，收展只做图标 180° spring 旋转（展开⌃/收起⌄）——
  *   位置零变动，收起后入口就在原地，不存在"没地方打开"；
- * - 清单 AnimatedVisibility 挂标题行下：滚动窗口 ≤140dp + 底部渐隐 + 自动定位进行中项；
- * - 已完成项收进「展开已完成 N 条 ⌄」，点开追加显示；
+ * - 展开态清单直接全列（完成项划线置灰、进行中呼吸点），无二级收纳开关；
+ *   超 140dp 面板内滚动 + 底部渐隐 + 自动定位进行中项；
  * - 无底缘拉手、无右下耳片（旧方案B悬挂件全部废弃）。
  */
 @Composable
@@ -293,23 +293,12 @@ fun TopTaskSection(
     val doneCount = items.count { it.status == "completed" }
     val total = items.size
     val progress = if (total > 0) doneCount.toFloat() / total else 0f
-    val activeTask = items.firstOrNull { it.status == "in_progress" }
-
-    // 已完成项收纳：默认只列未完成；showDone 时全部显示
-    var showDone by remember { mutableStateOf(false) }
-    val pendingItems = remember(items) { items.filterNot { it.status == "completed" } }
-    val displayItems = if (showDone) items else pendingItems
 
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    LaunchedEffect(expanded, showDone, pendingItems.size) {
+    LaunchedEffect(expanded, items.size) {
         if (!expanded) return@LaunchedEffect
-        if (showDone) {
-            val ai = items.indexOfFirst { it.status == "in_progress" }
-            if (ai > 0) listState.animateScrollToItem(ai)
-        } else {
-            val pi = pendingItems.indexOfFirst { it.status == "in_progress" }
-            if (pi > 0) listState.animateScrollToItem(pi)
-        }
+        val ai = items.indexOfFirst { it.status == "in_progress" }
+        if (ai > 0) listState.animateScrollToItem(ai)
     }
 
     // 旋转钮：展开 0°（⌃=向上收起）/ 收起 180°（⌄=向下展开），spring 回弹
@@ -340,24 +329,11 @@ fun TopTaskSection(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
-            if (!expanded && activeTask != null) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    activeTask.text,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-            // 细进度条（收起态也在标题行里常驻，一眼看进度）
+            Spacer(Modifier.width(10.dp))
+            // 通栏进度条：拉满「计数」与旋转钮之间的整段中间空间（两态常驻）
             Box(
                 Modifier
-                    .width(56.dp)
+                    .weight(1f)
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
@@ -370,7 +346,7 @@ fun TopTaskSection(
                         .background(MaterialTheme.colorScheme.primary)
                 )
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             Box(
                 Modifier
                     .size(28.dp)
@@ -389,57 +365,39 @@ fun TopTaskSection(
                 )
             }
         }
-        // 清单区
+        // 清单区：展开即全列（一层结构，无二级收纳开关）
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(spring(stiffness = Spring.StiffnessMedium)) + androidx.compose.animation.fadeIn(),
             exit = shrinkVertically(spring(stiffness = Spring.StiffnessMedium)) + androidx.compose.animation.fadeOut()
         ) {
-            Column {
-                Box {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 140.dp)
-                    ) {
-                        itemsIndexed(displayItems, key = { _, item -> item.id }) { _, item ->
-                            TaskItemRow(item)
-                        }
-                    }
-                    val canScroll = listState.canScrollForward || listState.canScrollBackward
-                    if (canScroll) {
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .height(16.dp)
-                                .background(
-                                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        listOf(
-                                            MaterialTheme.colorScheme.surface.copy(alpha = 0f),
-                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                                        )
-                                    )
-                                )
-                        )
+            Box {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 140.dp)
+                ) {
+                    itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
+                        TaskItemRow(item)
                     }
                 }
-                if (doneCount > 0) {
-                    Row(
+                val canScroll = listState.canScrollForward || listState.canScrollBackward
+                if (canScroll) {
+                    Box(
                         Modifier
+                            .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .clickable { showDone = !showDone }
-                            .padding(vertical = 5.dp),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
-                    ) {
-                        Text(
-                            if (showDone) "收起已完成 ⌃" else "展开已完成 $doneCount 条 ⌄",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
-                        )
-                    }
+                            .height(16.dp)
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                                    )
+                                )
+                            )
+                    )
                 }
             }
         }
