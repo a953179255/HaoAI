@@ -174,13 +174,18 @@ fun TaskFloat(
         ) {
             Column {
                 // ── 头部：两版内容按形变进度交叉淡入。收起态整行可点展开；
-                // 展开态仅右上圆钮触发收起（整行可点会让圆钮形同虚设，用户反馈 2026-09-10）──
+                // 展开态仅右上圆钮触发收起（整行可点会让圆钮形同虚设，用户反馈 2026-09-10）。
+                // indication=null 禁 ripple：玻璃件按压语言统一为形变/辉光，不出方形涟漪
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .height(34.dp)
                         .clip(RoundedCornerShape(corner))
-                        .clickable(enabled = !expanded) { onToggle() },
+                        .clickable(
+                            interactionSource = null,
+                            indication = null,
+                            enabled = !expanded
+                        ) { onToggle() },
                     contentAlignment = Alignment.CenterStart
                 ) {
                     // 收起版：● 进行中任务名 · N/M（纯显示，宽度由玻璃外的隐形测量行驱动；
@@ -256,17 +261,18 @@ fun TaskFloat(
                             )
                         }
                     }
-                    //  chevrons：位置随宽度滑到右缘，旋转由 morph 驱动（0°=⌃收起 / 180°=⌄展开）
-                    Box(
-                        Modifier
+                    //  chevron：位置随宽度滑到右缘，旋转由 morph 驱动（0°=⌃收起 / 180°=⌄展开）。
+                    //  用 LiquidGlassButton（玻璃缩放+指尖辉光，无 ripple）——ripple 画在
+                    //  clickable 层且其后的 clip 裁不到它，按压必出方形光晕（两次翻车教训）
+                    com.haoai.agent.ui.common.LiquidGlassButton(
+                        onClick = onToggle,
+                        backdrop = backdrop,
+                        modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .padding(end = 4.dp)
-                            .size(34.dp)
-                            .clickable { onToggle() }
-                            .padding(6.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)),
-                        contentAlignment = Alignment.Center
+                            .size(30.dp),
+                        shape = CircleShape,
+                        surfaceColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
                     ) {
                         Icon(
                             Icons.Filled.ExpandLess,
