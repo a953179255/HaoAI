@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
@@ -129,8 +130,9 @@ fun TaskFloat(
         val hPx = headerPx + targetListPx * revealEase
 
         // 隐形测量区（alpha=0 不渲染但保持自然布局）：玻璃外量固有尺寸。
-        // 四坑全集（3 宽度 + 1 高度）：玻璃内测量会被玻璃自身 fixed 约束 coerce
-        // （宽高同理——height(34dp) 的玻璃内子项量高度永远得 0，死锁）。
+        // 五坑全集：玻璃内测量会被玻璃自身 fixed 约束 coerce（宽度三坑 + 高度第四坑）；
+        // 同一容器混测两个维度会互相污染——清单 fillMaxWidth 撑满父宽，
+        // 把胶囊宽测量的 Box 一起撑成通栏（胶囊变全宽第五坑），必须拆开各自 wrap。
         Box(
             Modifier
                 .alpha(0f)
@@ -166,17 +168,20 @@ fun TaskFloat(
                     color = MaterialTheme.colorScheme.primary
                 )
             }
-            // 清单固有高测量（同宽测量四坑策略）：与玻璃内显示清单同构同宽
-            //（BoxWithConstraints 宽 - 0 内边距），量得的 listPx 作 morph 插值目标
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .onSizeChanged { if (it.height > 0) listPx = it.height.toFloat() }
-                    .padding(bottom = 6.dp)
-            ) {
-                items.forEach { item ->
-                    TaskItemRow(item)
-                }
+        }
+
+        // 清单固有高测量：独立容器 + wrapContentSize 钉在右上（不占布局空间），
+        // 宽度给足（BoxWithConstraints 全宽）保证行内文本不折行、行高真实
+        Column(
+            Modifier
+                .alpha(0f)
+                .wrapContentSize(Alignment.TopStart, unbounded = true)
+                .width(with(density) { fullPx.toDp() })
+                .onSizeChanged { if (it.height > 0) listPx = it.height.toFloat() }
+                .padding(bottom = 6.dp)
+        ) {
+            items.forEach { item ->
+                TaskItemRow(item)
             }
         }
 
