@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -56,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -113,6 +115,8 @@ fun BrowserPreviewPanel(
     DisposableEffect(Unit) {
         onDispose {
             BrowserController.uiVisible = false
+            // 先复位缩放，否则全屏浏览器/无头工具会继承缩小的画面
+            BrowserController.resetPreviewScale()
             BrowserController.detachAll()
         }
     }
@@ -120,6 +124,11 @@ fun BrowserPreviewPanel(
     BackHandler(onBack = onClose)
 
     var expanded by remember { mutableStateOf(false) }
+    // 屏幕宽高比：迷你窗按整屏比例裁切，画面 = 整屏缩微（不回流、不变形）
+    val screenAspect = remember {
+        val (sw, sh) = BrowserController.screenSizePx()
+        if (sw > 0 && sh > 0) sw.toFloat() / sh.toFloat() else 1080f / 2400f
+    }
 
     // ── 迷你态位置：归一化持久化（拖动落盘）──
     val prefs = remember { context.getSharedPreferences("float_windows", android.content.Context.MODE_PRIVATE) }
@@ -313,8 +322,9 @@ fun BrowserPreviewPanel(
                         }
                     }
                 }
-                // WebView：按半屏宽真实排版（重排视口），页面与全屏浏览器同构
-                RealScaleWebView(
+                // WebView：整屏排版 + 等比收缩绘制（半屏时容器=屏宽 → 比例 1:1，
+                // 与全屏浏览器画面完全一致；下方超出部分自然裁切）
+                PreviewWebView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
@@ -337,11 +347,13 @@ fun BrowserPreviewPanel(
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
                     .clickable { expanded = true }
             ) {
+                // 标题栏：整行 = 放大热区（页区在 interop 层上拦不到触摸，标题栏是
+                // 可靠的 Compose 触摸面），同时作拖拽手柄（按住拖动移动窗口）
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                         .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = { },
@@ -358,22 +370,22 @@ fun BrowserPreviewPanel(
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier.weight(1f)
                     )
                     Icon(
                         Icons.Filled.OpenInFull,
                         "放大预览",
                         modifier = Modifier
-                            .padding(start = 3.dp)
-                            .size(10.dp)
-                            .alpha(0.6f)
+                            .padding(start = 4.dp)
+                            .size(12.dp)
+                            .alpha(0.7f)
                     )
                 }
-                RealScaleWebView(
+                PreviewWebView(
                     onTap = { expanded = true },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(178.dp)
+                        .aspectRatio(screenAspect)
                 )
             }
         }
@@ -384,31 +396,30 @@ fun BrowserPreviewPanel(
 private fun Modifier.shadowOrCreate(): Modifier = this
 
 /**
- * 真实排版 WebView：挂载时把 WebView 布局视口设为「容器实际 px」（替代
- * detached 全屏合成布局），页面按容器宽度回流——比例与真机一致；
- * 容器尺寸变化（迷你⇄半屏切换）时重设视口并触发重排版。
+ * 预览 WebView（迷你/半屏共用）：**整屏排版 + 等比收缩绘制**。
  *
- * 触摸策略：Agent 是页面操作者，用户看而不点——遮罩层消费所有指针事件，
- * 防止误触改变页面状态；onTap 非空时遮罩改为 clickable（点窗即放大到半屏），
- * 保证整窗任意位置都能点开（此前只有标题栏可点，用户反馈难点开）。
+ * 做法：容器内放一个固定为「屏幕物理尺寸」的 WebView（与全屏浏览器、无头
+ * 工具完全同一套布局，页面不做任何回流），再按 `容器宽 / 屏宽` 设置
+ * scaleX/scaleY（pivot 左上角）——用户看到的画面就是 Agent 操作的浏览器
+ * 整屏画面按比例缩小，比例天然正确，不会出现「极窄视口重排」的怪异观感。
+ *
+ * 容器高宽比决定可视范围：迷你窗按整屏比例（aspectRatio）→ 完整整屏缩微；
+ * 半屏宽=屏宽 → 比例 1:1 等同全屏浏览器，仅底部多余部分裁切。
+ *
+ * 触摸：Agent 是页面操作者，用户「看而不点」——触摸由 Android 侧
+ * OnTouchListener 统一消费（Compose 覆盖层在 AndroidView 之上收不到事件，
+ * interop 视图会直接吃掉触摸，这是迷你态此前点不开的根因）；
+ * onTap 非空时抬手触发它（迷你态：点窗任意处放大到半屏）。
  */
 @Composable
-private fun RealScaleWebView(
+private fun PreviewWebView(
     modifier: Modifier = Modifier,
     onTap: (() -> Unit)? = null
 ) {
-    var viewportW by remember { mutableFloatStateOf(0f) }
-    var viewportH by remember { mutableFloatStateOf(0f) }
+    var cw by remember { mutableFloatStateOf(0f) }
     Box(
         modifier
-            .onGloballyPositioned {
-                val w = it.size.width.toFloat()
-                val h = it.size.height.toFloat()
-                if (w != viewportW || h != viewportH) {
-                    viewportW = w
-                    viewportH = h
-                }
-            }
+            .onGloballyPositioned { cw = it.size.width.toFloat() }
     ) {
         AndroidView(
             factory = { ctx ->
@@ -416,53 +427,59 @@ private fun RealScaleWebView(
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
                     )
+                    // 子视图（整屏尺寸的 WebView）溢出部分裁掉，避免画到窗外
                     clipChildren = true
+                    clipToPadding = true
+                    // 触摸层：真实 Android View 放在 interop 层内部（Compose 覆盖层
+                    // 盖在 AndroidView 上收不到触摸、WebView 的 OnTouchListener 亦
+                    // 实测不触发），它是容器同尺寸的透明可点层，稳定拦截全部触摸
+                    val touchLayer = android.view.View(ctx).apply {
+                        layoutParams = android.widget.FrameLayout.LayoutParams(
+                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                        isClickable = true
+                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    }
+                    addView(touchLayer)
                 }
             },
             update = { container ->
                 val wv = BrowserController.webViewAtSync()
-                if (container.childCount == 1 && container.getChildAt(0) === wv) return@AndroidView
-                (wv.parent as? ViewGroup)?.removeView(wv)
-                container.removeAllViews()
-                wv.layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                container.addView(wv)
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-        // 视口重排：容器尺寸确定后把 WebView measure/layout 到容器 px。
-        // 手动布局后 WebView 按小宽度回流（mobile 视口），内容完整可见、比例正确。
-        LaunchedEffect(viewportW, viewportH) {
-            if (viewportW > 0f && viewportH > 0f) {
-                BrowserController.relayoutWebViewTo(viewportW.toInt(), viewportH.toInt())
-            }
-        }
-        if (onTap != null) {
-            // 点窗任意处放大（遮罩不消费，转为点击手势）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Transparent)
-                    .clickable(
-                        interactionSource = null,
-                        indication = null
-                    ) { onTap() }
-            )
-        } else {
-            // 仅观看遮罩：消费全部指针，用户点按不穿透到页面
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Transparent)
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                awaitPointerEvent().changes.forEach { it.consume() }
-                            }
-                        }
+                val (sw, sh) = BrowserController.screenSizePx()
+                val touchLayer = container.getChildAt(0)
+                touchLayer?.setOnClickListener { onTap?.invoke() }
+                if (container.childCount != 2 || container.getChildAt(1) !== wv) {
+                    (wv.parent as? ViewGroup)?.removeView(wv)
+                    while (container.childCount > 1) container.removeViewAt(container.childCount - 1)
+                    container.addView(wv)
+                }
+                // 固定为整屏尺寸：容器更小 → 溢出被裁，靠 scale 缩小显示
+                if (sw > 0 && sh > 0) {
+                    val lp = wv.layoutParams
+                    if (lp == null || lp.width != sw || lp.height != sh) {
+                        wv.layoutParams = android.widget.FrameLayout.LayoutParams(sw, sh)
                     }
-            )
+                }
+                // 保证触摸层始终在最上层（后加入的 WebView 会盖住它）
+                touchLayer?.bringToFront()
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                // 官方 interop 触摸拦截口：AndroidView 上的触摸由此进入 Compose，
+                // 既能拦下「看而不点」的误触，也能在迷你态把点击转成「放大」
+                .pointerInteropFilter { ev ->
+                    if (ev.actionMasked == android.view.MotionEvent.ACTION_UP) onTap?.invoke()
+                    true
+                }
+        )
+        // 尺寸确定后按「容器宽 / 屏宽」等比收缩（整屏缩微，不是回流）
+        LaunchedEffect(cw) {
+            if (cw > 0f) {
+                val wv = BrowserController.webViewAtSync()
+                val (sw, _) = BrowserController.screenSizePx()
+                if (sw > 0) BrowserController.applyPreviewScale(wv, cw / sw.toFloat())
+            }
         }
     }
 }

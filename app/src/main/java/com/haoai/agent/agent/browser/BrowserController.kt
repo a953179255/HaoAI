@@ -169,25 +169,60 @@ object BrowserController {
     }
 
     /**
-     * 预览面板专用：把活动 WebView 的布局视口重设为「容器实际 px」
-     * （迷你 132dp / 半屏宽），页面按容器宽回流——比例与真机一致。
-     * 与 ensureLaidOut 的区别：一个是 detached 态全屏合成布局（工具用），
-     * 这个是 UI 可见时的小视口重排（用户看）。uiVisible=true 时 ensureLaidOut
-     * 不会抢回全屏，两条路径互不打架。
+     * 预览面板专用：WebView **保持整屏尺寸排版**（与全屏浏览器/无头工具完全一致，
+     * 不做视口回流），仅按 scale 做视觉等比收缩——这就是「整屏缩微」：
+     * 用户看到的画面 = Agent 操作的浏览器整屏画面按比例缩小，比例天然正确。
+     *
+     * ⚠️ 反面做法（已翻车）：把 WebView 重排到小窗宽度——WebView 会按
+     * 密度换算成极窄 CSS 视口（132dp ≈ 132 CSS px），页面按「132px 宽的
+     * 微型手机」重排，元素巨大、文字错乱，看着完全不像缩小（用户两次反馈）。
+     * 另：回流还改变了页面本身，Agent 读到的结构与全屏浏览不一致。
      */
-    fun relayoutWebViewTo(w: Int, h: Int) {
+    fun applyPreviewScale(wv: WebView, scale: Float) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { relayoutWebViewTo(w, h) }
+            mainHandler.post { applyPreviewScale(wv, scale) }
             return
         }
+        val ctx = appContext ?: return
+        val dm = ctx.resources.displayMetrics
+        val w = if (screenW > 0) screenW else dm.widthPixels
+        val h = if (screenH > 0) screenH else dm.heightPixels
         if (w <= 0 || h <= 0) return
-        val tab = tabs.getOrNull(activeIndex.value) ?: return
-        val wv = tab.webView
-        if (wv.width == w && wv.height == h && wv.isLaidOut) return
-        val specW = android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY)
-        val specH = android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY)
-        wv.measure(specW, specH)
-        wv.layout(0, 0, w, h)
+        if (wv.width != w || wv.height != h || !wv.isLaidOut) {
+            val specW = android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY)
+            val specH = android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY)
+            wv.measure(specW, specH)
+            wv.layout(0, 0, w, h)
+        }
+        val s = if (scale > 0f) scale else 1f
+        wv.pivotX = 0f
+        wv.pivotY = 0f
+        if (wv.scaleX != s) wv.scaleX = s
+        if (wv.scaleY != s) wv.scaleY = s
+    }
+
+    /** 退出预览时把缩放复位（否则全屏浏览器/工具会继承缩小的画面）。 */
+    fun resetPreviewScale() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { resetPreviewScale() }
+            return
+        }
+        for (tab in tabs) {
+            val v = tab.webView
+            if (v.scaleX != 1f) v.scaleX = 1f
+            if (v.scaleY != 1f) v.scaleY = 1f
+            v.pivotX = 0f
+            v.pivotY = 0f
+        }
+    }
+
+    /** 屏幕物理尺寸 px（预览窗计算缩放比例用）。 */
+    fun screenSizePx(): Pair<Int, Int> {
+        val ctx = appContext ?: return 0 to 0
+        val dm = ctx.resources.displayMetrics
+        val w = if (screenW > 0) screenW else dm.widthPixels
+        val h = if (screenH > 0) screenH else dm.heightPixels
+        return w to h
     }
 
     /** 当前标签数（预览面板判断是否有可显示内容）。 */
