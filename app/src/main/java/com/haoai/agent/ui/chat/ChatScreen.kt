@@ -260,7 +260,10 @@ fun ChatScreen(
     /** 浏览器悬浮预览浮层（画在抽屉之下：抽屉打开时盖住它）。 */
     browserPreview: @Composable () -> Unit = {},
     /** 虚拟屏悬浮预览浮层（同上，纯观看）。 */
-    vscreenPreview: @Composable () -> Unit = {},
+    /** 虚拟屏迷你窗（画在采样层内：抽屉玻璃可透出它的模糊实时画面）。 */
+    vscreenMini: @Composable () -> Unit = {},
+    /** 虚拟屏全屏查看页（画在顶栏之上：展开时盖住顶栏）。 */
+    vscreenFull: @Composable () -> Unit = {},
     /** 顶栏 🌐 长按：直接进全屏浏览器。 */
     onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {}
@@ -646,6 +649,9 @@ fun ChatScreen(
                 }
             }
     ) {
+        // 采样宿主：把消息列表与两个悬浮预览窗一起录进 backdrop，
+        // 抽屉玻璃即可透出它们的模糊实时画面（玻璃元素本身留在外面防递归）
+        Box(Modifier.fillMaxSize().appLayer(backdrop)) {
         // 采样层根保持静止（无 offset/graphicsLayer 外层变换）：字节码确认采样 offset
         // = layerCoordinates.localPositionOf(glass, Zero)，任何外层平移都会整体错位。
         // 键盘抬升不再平移列表，改为增大 MessageList 底部留白（见 bottomPadding），
@@ -653,7 +659,6 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .appLayer(backdrop)
                 .pointerInput(Unit) {
                     detectTapGestures {
                         focusManager.clearFocus()
@@ -742,6 +747,9 @@ fun ChatScreen(
                     maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp()
                 }
             )
+        }
+            browserPreview()
+            vscreenMini()
         }
 
         // 玻璃顶栏不能进入上面的 appLayer 子树——drawBackdrop 采样自层会递归崩溃
@@ -1152,10 +1160,8 @@ fun ChatScreen(
             }
         }
     }
-        // 浏览器悬浮预览：画在抽屉 scrim/sheet 之前 → 抽屉打开时盖住它
-        browserPreview()
-        // 虚拟屏悬浮预览：同上（纯观看）
-        vscreenPreview()
+        // 虚拟屏全屏查看页：盖住顶栏（展开态），在 scrim 之前
+        vscreenFull()
         // 抽屉 scrim：透明度随 fraction，点击收起
         if (drawerFraction > 0.01f) {
             Box(

@@ -222,6 +222,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val wpVersion by com.haoai.agent.platform.WallpaperStore.changes.collectAsState()
     androidx.compose.runtime.remember(wpVersion) { wallpaper }
     var screen by rememberSaveable { mutableIntStateOf(0) }
+    // 虚拟屏全屏查看页展开态（迷你窗 ⤢ 展开 / 全屏页 ↩ 收起），供两个槽位共享
+    var vscreenFullOpen by rememberSaveable { mutableStateOf(false) }
 
     // debug deep link 路由：adb shell am start -a android.intent.action.VIEW -d "haoai://debug/<target>"
     // 验证直达（跳过导航点击）。仅响应 host=debug（Manifest intent-filter 限定）
@@ -777,12 +779,21 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
                         screen = 7
                     },
-                    vscreenPreview = {
+                    // 虚拟屏：迷你窗画在采样层内（抽屉可透视）；全屏查看页画在顶栏之上
+                    vscreenMini = {
                         val vscreenOpen by com.haoai.agent.platform.vdisplay.VirtualScreenController.previewOpen.collectAsState()
                         if (vscreenOpen) {
-                            com.haoai.agent.ui.browser.VScreenPreviewPanel(
-                                backdrop = chatBackdrop,
+                            com.haoai.agent.ui.browser.VScreenMiniPanel(
+                                onExpand = { vscreenFullOpen = true },
                                 onClose = { com.haoai.agent.platform.vdisplay.VirtualScreenController.closePreview() }
+                            )
+                        }
+                    },
+                    vscreenFull = {
+                        val vscreenOpen by com.haoai.agent.platform.vdisplay.VirtualScreenController.previewOpen.collectAsState()
+                        if (vscreenOpen && vscreenFullOpen) {
+                            com.haoai.agent.ui.browser.VScreenFullPanel(
+                                onCollapse = { vscreenFullOpen = false }
                             )
                         }
                     },
