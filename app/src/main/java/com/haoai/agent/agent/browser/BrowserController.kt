@@ -230,17 +230,20 @@ object BrowserController {
      * 实现。位图是纯 Compose 内容，手势全部走 Compose，稳定可靠；
      * 代价是需要按帧刷新（调用方 1s 左右拉一次即可，观感足够）。
      */
-    fun captureSnapshot(scale: Float = 0.3f): android.graphics.Bitmap? {
+    fun captureSnapshot(scale: Float = 0.3f, topFraction: Float = 1f): android.graphics.Bitmap? {
         if (Looper.myLooper() != Looper.getMainLooper()) return null
         val tab = tabs.getOrNull(activeIndex.value) ?: return null
         val wv = tab.webView
         if (wv.width <= 0 || wv.height <= 0) return null
+        // 只取顶部一段（topFraction<1）：小窗按浏览器可视区比例显示时，
+        // 取整屏顶部这一段，比例与窗口一致，不拉伸不变形
+        val srcH = (wv.height * topFraction.coerceIn(0.1f, 1f)).toInt().coerceAtLeast(1)
         val bw = (wv.width * scale).toInt().coerceIn(64, 1600)
-        val bh = (wv.height * scale).toInt().coerceIn(64, 3200)
+        val bh = (srcH * scale).toInt().coerceIn(64, 3200)
         return runCatching {
             val bmp = android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bmp)
-            canvas.scale(bw.toFloat() / wv.width, bh.toFloat() / wv.height)
+            canvas.scale(bw.toFloat() / wv.width, bh.toFloat() / srcH)
             // 抓帧前临时降级为软件层：GPU 合成的分块（固定/粘性头部等）在 draw()
             // 里抓不全，会出现白块（用户实测反馈）；软件层强制整页重绘。抓完还原。
             val prevLayer = wv.layerType

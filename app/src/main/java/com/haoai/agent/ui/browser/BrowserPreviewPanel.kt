@@ -132,6 +132,9 @@ fun BrowserPreviewPanel(
         if (sw > 0 && sh > 0) sw.toFloat() / sh.toFloat() else 1080f / 2400f
     }
 
+    // 抓帧只取整屏顶部这一段，使画面比例 == 窗口比例（2:3）
+    val previewTopFraction = remember { (screenAspect / PREVIEW_ASPECT).coerceIn(0.2f, 1f) }
+
     val density = context.resources.displayMetrics.density
     // 安全区：顶部让开顶栏、底部让开输入框（用户要求窗口不得压在这两块上）
     val topInset = 96f * density
@@ -200,7 +203,7 @@ fun BrowserPreviewPanel(
         // 缩放/移动结束后立刻补一帧清晰位图（拖动中位图被拉伸会发虚，补帧后恢复清晰）
         delay(220)
         if (!expanded) {
-            snapshot = BrowserController.captureSnapshot(0.42f)?.asImageBitmap()
+            snapshot = BrowserController.captureSnapshot(0.42f, previewTopFraction)?.asImageBitmap()
         }
     }
     LaunchedEffect(Unit) {
@@ -210,7 +213,7 @@ fun BrowserPreviewPanel(
                 // 再抓一帧位图显示
                 val wv = BrowserController.webViewAtSync()
                 BrowserController.ensureLaidOutForPreview(wv)
-                snapshot = BrowserController.captureSnapshot(0.42f)?.asImageBitmap()
+                snapshot = BrowserController.captureSnapshot(0.42f, previewTopFraction)?.asImageBitmap()
             }
             delay(700)
         }
@@ -450,7 +453,7 @@ fun BrowserPreviewPanel(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .aspectRatio(screenAspect)
+                        .aspectRatio(PREVIEW_ASPECT)
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoomChange, _ ->
@@ -483,6 +486,10 @@ private fun Modifier.shadowOrCreate(): Modifier = this
 
 /** 迷你窗基础宽度与缩放范围（双指捏合）。 */
 private const val MINI_BASE_DP = 132f
+/** 小窗画面比例（宽/高）= 2:3，对齐半屏/全屏里「网页可视区」那一块（方案 A）。
+ *  抓帧时只取整屏顶部「同比例那一段」（screenAspect / PREVIEW_ASPECT），
+ *  于是窗口与画面比例一致——不拉伸、不变形，也不会把整屏缩略的留白带进来。 */
+private const val PREVIEW_ASPECT = 2f / 3f
 private const val MIN_ZOOM = 0.7f
 private const val MAX_ZOOM = 2.4f
 

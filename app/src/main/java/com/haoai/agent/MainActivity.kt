@@ -760,11 +760,35 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         rootScope.launch { drawer.close() }
                         screen = 4
                     },
+                    // 顶栏 🌐 单击：唤出悬浮预览窗（方案 A）；池里没页面时退回全屏
                     onOpenBrowser = {
-                        // 顶栏 🌐 直达全屏：先收预览面板，避免浮层叠在全屏浏览器上
+                        val hasPage = com.haoai.agent.agent.browser.BrowserController.tabCount() > 0
+                        if (hasPage) {
+                            com.haoai.agent.agent.browser.BrowserController.previewOpen.value = true
+                        } else {
+                            leaveChat()
+                            com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
+                            screen = 7
+                        }
+                    },
+                    // 顶栏 🌐 长按：直接进全屏浏览器
+                    onOpenBrowserFullscreen = {
                         leaveChat()
                         com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
                         screen = 7
+                    },
+                    browserPreview = {
+                        val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
+                        if (previewOpen) {
+                            com.haoai.agent.ui.browser.BrowserPreviewPanel(
+                                backdrop = chatBackdrop,
+                                onClose = { com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false },
+                                onFullscreen = {
+                                    com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
+                                    screen = 7
+                                }
+                            )
+                        }
                     },
                     onOpenVscreen = {
                         com.haoai.agent.platform.vdisplay.VirtualScreenController.openPreview()
@@ -772,20 +796,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
             }
             } // AnimatedContent content lambda
-            // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
-            val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
-            // 仅聊天页悬浮（2026-09-11 用户定稿）：设置/会话列表等页面不显示，
-            // 避免预览窗压在别的页面上；回到聊天页自动恢复
-            if (previewOpen && screen == 0) {
-                com.haoai.agent.ui.browser.BrowserPreviewPanel(
-                    backdrop = backdrop,
-                    onClose = { com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false },
-                    onFullscreen = {
-                        com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
-                        screen = 7
-                    }
-                )
-            }
+            // 4.2 预览浮层已移入 ChatScreen（browserPreview 槽位）：保证它画在
+            // 侧边栏抽屉之下（抽屉打开时盖住它），且只在聊天页存在。
             // 4.3 增强：虚拟屏实时预览浮层（vscreen_launch 成功自动弹出）
             val vscreenOpen by com.haoai.agent.platform.vdisplay.VirtualScreenController.previewOpen.collectAsState()
             if (vscreenOpen) {

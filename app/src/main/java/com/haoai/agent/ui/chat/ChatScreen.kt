@@ -257,6 +257,10 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
     onOpenSessions: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
+    /** 浏览器悬浮预览浮层（画在抽屉之下：抽屉打开时盖住它）。 */
+    browserPreview: @Composable () -> Unit = {},
+    /** 顶栏 🌐 长按：直接进全屏浏览器。 */
+    onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -757,6 +761,7 @@ fun ChatScreen(
                         showRenameDialog = true
                     },
                     onOpenBrowser = onOpenBrowser,
+                    onOpenBrowserFullscreen = onOpenBrowserFullscreen,
                     onOpenVscreen = onOpenVscreen,
                     planMode = planMode,
                     contextDetailExpanded = showContextDetail,
@@ -1145,6 +1150,8 @@ fun ChatScreen(
             }
         }
     }
+        // 浏览器悬浮预览：画在抽屉 scrim/sheet 之前 → 抽屉打开时盖住它
+        browserPreview()
         // 抽屉 scrim：透明度随 fraction，点击收起
         if (drawerFraction > 0.01f) {
             Box(
@@ -1880,6 +1887,7 @@ private fun TopBar(
     // 点击标题区（会话名副标题）→ 重命名当前会话
     onRenameSubtitle: () -> Unit,
     onOpenBrowser: () -> Unit = {},
+    onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
     planMode: Boolean = false,
     // 上下文详情面板：开关状态提升到 ChatScreen（面板在顶栏下方布局流里展开），
@@ -1976,10 +1984,21 @@ private fun TopBar(
             // 图标间隙≈16dp，与左侧对称）；此前浏览器钮 2dp/虚拟屏 0dp/新会话 0dp
             // 间距不一致（用户反馈 2026-09-10）
             Spacer(Modifier.size(4.dp))
-            IconButton(onClick = onOpenBrowser) {
+            // 单击 = 唤出悬浮预览窗（有页面时）/ 长按 = 直接进全屏（用户定稿方案 A）
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { onOpenBrowser() },
+                            onLongPress = { onOpenBrowserFullscreen() }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
                     Icons.Filled.Public,
-                    contentDescription = "内置浏览器",
+                    contentDescription = "内置浏览器（长按全屏）",
                     modifier = Modifier.size(22.dp),
                     tint = MaterialTheme.colorScheme.onBackground
                 )
