@@ -223,8 +223,8 @@ fun TaskFloat(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    // 展开版：任务 · N/M · 短进度条（固定 64dp，不通栏——通栏会顶到圆钮
-                    // 且视觉上"一条线横贯整个面板"，用户反馈 2026-09-10；右距 38dp 让位圆钮）
+                    // 展开版：任务 · N/M · 进度条（占满"任务 N/M"右侧的剩余宽度；
+                    // 2026-09-11 用户反馈固定 64dp 太短。右距 38dp 仍为圆钮让位）
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -247,7 +247,7 @@ fun TaskFloat(
                         Spacer(Modifier.width(10.dp))
                         Box(
                             Modifier
-                                .width(64.dp)
+                                .weight(1f)
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
