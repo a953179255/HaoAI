@@ -168,6 +168,31 @@ object BrowserController {
         wv.layout(0, 0, w, h)
     }
 
+    /**
+     * 预览面板专用：把活动 WebView 的布局视口重设为「容器实际 px」
+     * （迷你 132dp / 半屏宽），页面按容器宽回流——比例与真机一致。
+     * 与 ensureLaidOut 的区别：一个是 detached 态全屏合成布局（工具用），
+     * 这个是 UI 可见时的小视口重排（用户看）。uiVisible=true 时 ensureLaidOut
+     * 不会抢回全屏，两条路径互不打架。
+     */
+    fun relayoutWebViewTo(w: Int, h: Int) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { relayoutWebViewTo(w, h) }
+            return
+        }
+        if (w <= 0 || h <= 0) return
+        val tab = tabs.getOrNull(activeIndex.value) ?: return
+        val wv = tab.webView
+        if (wv.width == w && wv.height == h && wv.isLaidOut) return
+        val specW = android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY)
+        val specH = android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY)
+        wv.measure(specW, specH)
+        wv.layout(0, 0, w, h)
+    }
+
+    /** 当前标签数（预览面板判断是否有可显示内容）。 */
+    fun tabCount(): Int = tabs.size
+
     // ---------- 标签管理 ----------
 
     private fun assertMain() {
