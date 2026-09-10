@@ -2,6 +2,8 @@ package com.haoai.agent.ui.browser
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -213,6 +215,14 @@ fun BrowserPreviewPanel(
         if (containerW > 0f) (containerW / density) - 16f else MINI_BASE_DP * MAX_ZOOM
     )
 
+    // 重新打开时从保存的位置原地淡入：首帧布局回调（读取保存位置）生效前
+    // 不显示——否则窗口会先画在 (0,0) 左上角再跳到原位（用户反馈的过渡 bug）
+    val winAlpha by animateFloatAsState(
+        targetValue = if (placed) 1f else 0f,
+        animationSpec = tween(150),
+        label = "winIn"
+    )
+
     Box(
         Modifier
             .fillMaxSize()
@@ -231,6 +241,7 @@ fun BrowserPreviewPanel(
                 }
                 .width(miniWidthDp.dp)
                 .offset { IntOffset(offX.roundToInt(), offY.roundToInt()) }
+                .alpha(winAlpha)
                 .shadowOrCreate()
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
