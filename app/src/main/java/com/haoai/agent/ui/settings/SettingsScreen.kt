@@ -1296,27 +1296,32 @@ private fun LazyListScope.brainItems(
                                     }
                                 }
                             }
-                            // 展开区：该供应商的全部模型，点=切换默认，×=移除备选；行尾「编辑能力」进能力页
+                            // 展开区：该供应商的全部模型按「加入顺序」渲染——默认行原位
+                            // 高亮（2026-09-11 用户反馈：旧版把默认行置顶 + filter 重排，
+                            // 切一次默认整个列表顺序就乱）。点行=切换默认（只改指针、
+                            // 不搬条目，VM 侧 setProviderDefaultModel 已是保序语义）；
+                            // ✕=移除备选，默认行的 ✕ 隐藏（先切走才能删）；
+                            // 单模型能力微调走长按菜单（见下方 LongPressMenu）。
                             if (expanded) {
                                 Column(Modifier.padding(start = 52.dp, end = 8.dp, bottom = 8.dp)) {
-                                    ModelSwitchRow(
-                                        id = p.model,
-                                        isDefault = true,
-                                        enabled = p.model.isNotBlank(),
-                                        onClick = {},
-                                        onRemove = null,
-                                        onEditCaps = { onEditCaps(p.id, p.model) }
-                                    )
-                                    // 排除与默认同 ID 的条目：能力覆盖数据仍留在 models 里
-                                    // （modelEntry() 依赖），只是不重复渲染成可点的幽灵行
-                                    p.models.filter { it.id != p.model }.forEach { m ->
+                                    // 渲染序列 = p.models 原样保序；默认模型不在 models
+                                    // （老数据仅单模型字段）时才补在最前。⚠️ 2026-09-11 修：
+                                    // 旧条件把默认条目从渲染列表里排掉了，导致「3 个模型只显示
+                                    // 2 个、默认那个只在供应商标题上」——这里必须全量渲染
+                                    val orderedModels = buildList {
+                                        if (p.model.isNotBlank() && p.models.none { it.id == p.model }) add(p.model)
+                                        p.models.forEach { add(it.id) }
+                                    }.distinct()
+                                    orderedModels.forEach { mId ->
+                                        val isDefault = mId == p.model
                                         ModelSwitchRow(
-                                            id = m.id,
-                                            isDefault = false,
+                                            id = mId,
+                                            isDefault = isDefault,
                                             enabled = true,
-                                            onClick = { vm.setProviderDefaultModel(p.id, m.id) },
-                                            onRemove = { vm.removeProviderModel(p.id, m.id) },
-                                            onEditCaps = { onEditCaps(p.id, m.id) }
+                                            onClick = { vm.setProviderDefaultModel(p.id, mId) },
+                                            onRemove = if (isDefault) null
+                                                else { { vm.removeProviderModel(p.id, mId) } },
+                                            onEditCaps = if (isDefault) null else { { onEditCaps(p.id, mId) } }
                                         )
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -3601,19 +3606,30 @@ private fun ProviderDialog(
                     )
                     // 测试连接：紧跟 Key 之后（设计稿位置），填完即测，结果就地显示，
                     // 不用滚到底部找按钮再滚回来
-                    testResult?.let { (ok, msg) ->
-                        Text(
-                            msg,
-                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelSmall
+                    // 测试连接：状态 chip 就地显示 + 按钮同行（2026-09-11 重排：
+                    // 旧版结果占一行、按钮又占一行，纵向拉太长）
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        when {
+                            testing -> GlassCapChip(selected = true, label = "测试中…", onClick = {})
+                            testResult != null -> {
+                                val (ok, msg) = testResult
+                                GlassCapChip(
+                                    selected = true,
+                                    label = if (ok) "● ${msg.take(14)}" else "✕ ${msg.take(14)}",
+                                    onClick = {}
+                                )
+                            }
+                        }
+                        GlassTextButton(
+                            text = if (testing) "重新测试" else "测试连接",
+                            onClick = onTest,
+                            enabled = !testing,
+                            backdrop = backdrop
                         )
                     }
-                    GlassTextButton(
-                        text = if (testing) "测试中…" else "测试连接",
-                        onClick = onTest,
-                        enabled = !testing,
-                        backdrop = backdrop
-                    )
                     // ── 分区：模型 ──
                     Text(
                         "模型",
@@ -3649,33 +3665,135 @@ private fun ProviderDialog(
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
+                    // 拉取的模型列表：可折叠面板（2026-09-11 用户反馈：旧版展开后
+                    // 不能收起、只能单点）。标题栏常显已拉取状态与数量，点按收/展；
+                    // 列表勾选多选 + 「完成」一次性并入（勾过的默认选中）。
                     modelChoices?.let { list ->
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                                    RoundedCornerShape(10.dp)
-                                )
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text(
-                                "点击加入并设为默认 · 可连续点选多个（共 ${list.size} 个）",
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                            Column(Modifier.heightIn(max = 180.dp)) {
-                                list.forEach { id ->
+                        if (list.isNotEmpty()) {
+                            var open by remember(draft.id) { mutableStateOf(true) }
+                            // 已并入 draft 的 ID 默认勾选
+                            val knownIds = remember(draft.id, list) {
+                                (listOf(draft.model.trim()) + draft.models.map { it.id }.filter { it.isNotBlank() })
+                                    .filter { it.isNotBlank() }.toSet()
+                            }
+                            val selected = remember(draft.id, list) {
+                                mutableStateOf(knownIds.filter { it in list.toSet() })
+                            }
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
+                            ) {
+                                // 折叠标题栏
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { open = !open }
+                                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
-                                        id,
+                                        if (fetchingModels) "拉取中…" else "拉取的模型列表",
                                         style = MaterialTheme.typography.labelSmall,
-                                        fontFamily = FontFamily.Monospace,
-                                        maxLines = 1,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { onPickModel(id) }
-                                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                                        fontWeight = FontWeight.Bold
                                     )
+                                    Spacer(Modifier.size(6.dp))
+                                    Text(
+                                        "共 ${list.size} 个 · 已选 ${selected.value.size}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Text(
+                                        if (open) "收起 ▲" else "展开 ▼",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = open,
+                                    enter = androidx.compose.animation.expandVertically(
+                                        expandFrom = Alignment.Top
+                                    ) + androidx.compose.animation.fadeIn(),
+                                    exit = androidx.compose.animation.shrinkVertically(
+                                        shrinkTowards = Alignment.Top
+                                    ) + androidx.compose.animation.fadeOut()
+                                ) {
+                                    Column {
+                                        Column(Modifier.heightIn(max = 168.dp)) {
+                                            list.forEach { id ->
+                                                val checked = id in selected.value
+                                                Row(
+                                                    Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            selected.value =
+                                                                if (checked) selected.value - id else selected.value + id
+                                                        }
+                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Box(
+                                                        Modifier
+                                                            .size(15.dp)
+                                                            .border(
+                                                                1.5.dp,
+                                                                if (checked) MaterialTheme.colorScheme.primary
+                                                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f),
+                                                                RoundedCornerShape(4.dp)
+                                                            ),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        if (checked) Text(
+                                                            "✓",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Black,
+                                                            color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                    Spacer(Modifier.size(9.dp))
+                                                    Text(
+                                                        id,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        maxLines = 1
+                                                    )
+                                                    if (id in knownIds) {
+                                                        Spacer(Modifier.weight(1f))
+                                                        Text(
+                                                            "已加入",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // 完成：把勾选未加入的并进 models（首个若默认位为空则补默认）
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                                            horizontalArrangement = Arrangement.End
+                                        ) {
+                                            GlassTextButton(
+                                                text = "加入所选（${selected.value.count { it !in knownIds }}）",
+                                                onClick = {
+                                                    val additions = selected.value.filter { it !in knownIds }
+                                                    if (additions.isNotEmpty()) {
+                                                        val newEntries = additions.map { com.haoai.agent.data.ModelEntry(it) }
+                                                        onChange(
+                                                            if (draft.model.isBlank()) draft.copy(model = additions.first(), models = draft.models + newEntries.drop(1))
+                                                            else draft.copy(models = draft.models + newEntries)
+                                                        )
+                                                    }
+                                                },
+                                                enabled = selected.value.any { it !in knownIds },
+                                                backdrop = backdrop
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3688,8 +3806,13 @@ private fun ProviderDialog(
                     val curEntry = draft.models.find { it.id == curId }
                     if (curId.isNotBlank()) {
                         val curCaps = com.haoai.agent.data.CapabilityResolver.resolve(curEntry, curId)
-                        fun patchEntry(next: com.haoai.agent.data.ModelEntry) =
-                            onChange(draft.copy(models = draft.models.filterNot { it.id == curId } + next))
+                        // 原位替换（2026-09-11）：勾能力不再 filterNot+追加，避免 models 重排
+                        fun patchEntry(next: com.haoai.agent.data.ModelEntry) {
+                            val idx = draft.models.indexOfFirst { it.id == next.id }
+                            val models = if (idx >= 0) draft.models.toMutableList().also { l -> l[idx] = next }
+                            else draft.models + next
+                            onChange(draft.copy(models = models))
+                        }
                         androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             listOf("image" to "图像", "audio" to "音频", "video" to "视频").forEach { (mod, label) ->
                                 val on = mod in curCaps.inputs
@@ -3997,7 +4120,12 @@ private fun ModelSwitchRow(
                     RoundedCornerShape(10.dp)
                 ) else Modifier
             )
-            .clickable(enabled = enabled && !isDefault, onClick = onClick)
+            .combinedClickable(
+                // 点行 = 切默认（原位高亮不重排）；长按 = 能力编辑（入口收敛：
+                // 行内不再放「能力」文字入口，与「检测全部能力」职责分离）
+                onClick = { if (!isDefault) onClick() },
+                onLongClick = { if (!isDefault) onEditCaps?.invoke() }
+            )
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -4028,25 +4156,20 @@ private fun ModelSwitchRow(
             maxLines = 1,
             modifier = Modifier.weight(1f)
         )
-        // 能力编辑入口（设计稿 ③）：进模型能力页勾选输入/输出模态
-        if (onEditCaps != null) {
-            Text(
-                "能力",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable { onEditCaps() }
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
-            )
-            Spacer(Modifier.size(2.dp))
-        }
         if (isDefault) {
+            // 「默认」pill 标记（2026-09-11 用户反馈：原文字按钮无作用）。
+            // 纯标识不可点——切换走点行、能力编辑走长按，职责唯一。
             Text(
                 "默认",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .background(
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                        RoundedCornerShape(999.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
             )
         } else {
             Box(
@@ -4107,12 +4230,8 @@ private fun ModelIdQuickAdd(
                     ModelIdChip(
                         id = m.id,
                         onPromote = {
-                            // 被点选的升为默认，原默认模型退回备选，两者互换
-                            val oldEntry = draft.models.find { it.id == currentId }
-                                ?: currentId.takeIf { it.isNotBlank() }
-                                    ?.let { com.haoai.agent.data.ModelEntry(it) }
-                            val rest = draft.models.filterNot { it.id == m.id }
-                            onChange(draft.copy(model = m.id, models = (rest + listOfNotNull(oldEntry)).distinctBy { it.id }))
+                            // 升为默认只改 model 指针，models 顺序原样保留（2026-09-11 保序）
+                            onChange(draft.copy(model = m.id))
                         },
                         onRemove = { onChange(draft.copy(models = draft.models.filterNot { it.id == m.id })) }
                     )

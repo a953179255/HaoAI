@@ -511,12 +511,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     // ── 模型能力编辑页：手动覆盖模态 / 恢复自动检测（直接写回 settings，非草稿） ──
 
-    /** 更新某供应商下某模型的能力条目（不存在则追加）。 */
+    /** 更新某供应商下某模型的能力条目（原位替换保序；不存在则追加尾部）。 */
     fun updateModelEntry(providerId: String, entry: com.haoai.agent.data.ModelEntry) {
         c.updateSettings { s ->
             val p = s.providers.find { it.id == providerId } ?: return@updateSettings s
-            val rest = p.models.filterNot { it.id == entry.id }
-            val updated = p.copy(models = rest + entry)
+            val idx = p.models.indexOfFirst { it.id == entry.id }
+            val models = if (idx >= 0) p.models.toMutableList().also { l -> l[idx] = entry }
+            else p.models + entry
+            val updated = p.copy(models = models)
             s.copy(providers = s.providers.map { if (it.id == providerId) updated else it })
         }
     }
@@ -605,8 +607,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                         c.updateSettings { s ->
                             val pp = s.providers.find { it.id == providerId } ?: return@updateSettings s
                             pp.let {
-                                val rest = it.models.filterNot { m -> m.id == entry.id }
-                                val updated = it.copy(models = rest + entry)
+                                // 保序写入：原位替换该模型条目（2026-09-11 用户反馈：
+                                // 旧版 filterNot + 尾部追加，检测能力一次全列表重排）
+                                val idx = it.models.indexOfFirst { m -> m.id == entry.id }
+                                val models = if (idx >= 0)
+                                    it.models.toMutableList().also { l -> l[idx] = entry }
+                                else it.models + entry
+                                val updated = it.copy(models = models)
                                 s.copy(providers = s.providers.map { x -> if (x.id == providerId) updated else x })
                             }
                         }
