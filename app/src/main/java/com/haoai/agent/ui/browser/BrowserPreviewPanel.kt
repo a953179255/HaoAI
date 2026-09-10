@@ -315,12 +315,12 @@ fun BrowserPreviewPanel(
 }
 
 /** 迷你窗基础宽度与缩放范围（双指捏合）。 */
-private const val MINI_BASE_DP = 132f
-private const val MIN_ZOOM = 0.7f
-private const val MAX_ZOOM = 2.4f
+internal const val MINI_BASE_DP = 132f
+internal const val MIN_ZOOM = 0.7f
+internal const val MAX_ZOOM = 2.4f
 
 /** 小窗画面比例（宽/高）= 2:3，对齐半屏/全屏里「网页可视区」那一块（方案 A）。 */
 private const val PREVIEW_ASPECT = 2f / 3f
 
 /** 阴影占位（真实阴影由窗口 surface 与背景对比承担）。 */
-private fun Modifier.shadowOrCreate(): Modifier = this
+internal fun Modifier.shadowOrCreate(): Modifier = this

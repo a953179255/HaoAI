@@ -777,6 +777,15 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false
                         screen = 7
                     },
+                    vscreenPreview = {
+                        val vscreenOpen by com.haoai.agent.platform.vdisplay.VirtualScreenController.previewOpen.collectAsState()
+                        if (vscreenOpen) {
+                            com.haoai.agent.ui.browser.VScreenPreviewPanel(
+                                backdrop = chatBackdrop,
+                                onClose = { com.haoai.agent.platform.vdisplay.VirtualScreenController.closePreview() }
+                            )
+                        }
+                    },
                     browserPreview = {
                         val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
                         if (previewOpen) {
@@ -798,14 +807,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             } // AnimatedContent content lambda
             // 4.2 预览浮层已移入 ChatScreen（browserPreview 槽位）：保证它画在
             // 侧边栏抽屉之下（抽屉打开时盖住它），且只在聊天页存在。
-            // 4.3 增强：虚拟屏实时预览浮层（vscreen_launch 成功自动弹出）
-            val vscreenOpen by com.haoai.agent.platform.vdisplay.VirtualScreenController.previewOpen.collectAsState()
-            if (vscreenOpen) {
-                com.haoai.agent.ui.browser.VScreenPreviewPanel(
-                    backdrop = backdrop,
-                    onClose = { com.haoai.agent.platform.vdisplay.VirtualScreenController.closePreview() }
-                )
-            }
+            // 4.3 虚拟屏预览浮层已移入 ChatScreen（vscreenPreview 槽位）：与浏览器
+            // 同样画在抽屉之下、仅聊天页存在。
         }
     }
 }

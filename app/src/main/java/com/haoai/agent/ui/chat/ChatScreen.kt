@@ -259,6 +259,8 @@ fun ChatScreen(
     onOpenBrowser: () -> Unit = {},
     /** 浏览器悬浮预览浮层（画在抽屉之下：抽屉打开时盖住它）。 */
     browserPreview: @Composable () -> Unit = {},
+    /** 虚拟屏悬浮预览浮层（同上，纯观看）。 */
+    vscreenPreview: @Composable () -> Unit = {},
     /** 顶栏 🌐 长按：直接进全屏浏览器。 */
     onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {}
@@ -1152,6 +1154,8 @@ fun ChatScreen(
     }
         // 浏览器悬浮预览：画在抽屉 scrim/sheet 之前 → 抽屉打开时盖住它
         browserPreview()
+        // 虚拟屏悬浮预览：同上（纯观看）
+        vscreenPreview()
         // 抽屉 scrim：透明度随 fraction，点击收起
         if (drawerFraction > 0.01f) {
             Box(
