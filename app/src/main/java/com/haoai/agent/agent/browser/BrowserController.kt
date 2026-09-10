@@ -554,17 +554,6 @@ object BrowserController {
         return unwrapJsString(result)
     }
 
-    /**
-     * 当前页可见链接（预览面板链接条用）：独立 __haoaiLinks JS，只读、不给元素
-     * 打 data-haoai-index 编号（避免与模型进行中的 read→click 编号序列竞争），
-     * 可见优先排序 + href 去重，返回 JSON 数组 [{"text","href"}]。
-     */
-    suspend fun collectLinks(max: Int = 10): String {
-        if (tabs.isEmpty()) return "[]"
-        val wv = webViewAt()
-        return unwrapJsString(evalJs(wv, "(function(){$LINKS_FUNC_JS;return window.__haoaiLinks($max);})()"))
-    }
-
     /** 点击编号元素：滚动到可视区 → focus → 完整鼠标事件序列（React 等框架兼容）。 */
     suspend fun clickElement(index: Int, tabIndex: Int? = null): String {
         headlessGuard()?.let { return it }
@@ -759,38 +748,6 @@ object BrowserController {
           pageHeight:Math.round(document.documentElement.scrollHeight),
           viewport:[window.innerWidth,window.innerHeight],
           totalInteractive:items.length,elements:els});
-      };
-    """
-
-    /**
-     * 链接提取（预览面板链接条）：与 __haoaiMark 分离——只读不编号，页面绝对
-     * http(s) 链接，可见优先排序 + href 去重；Kotlin raw string 内 JS 用 + 拼接。
-     */
-    private const val LINKS_FUNC_JS = """
-      window.__haoaiLinks=function(max){
-        var nodes=document.querySelectorAll('a[href]'),seen={},out=[];
-        var items=[];
-        for(var i=0;i<nodes.length;i++){
-          var el=nodes[i],r=el.getBoundingClientRect(),st=window.getComputedStyle(el);
-          if(st.display==='none'||st.visibility==='hidden')continue;
-          if(r.width===0&&r.height===0)continue;
-          var h=el.href||'';   // property 取绝对 URL（相对 href 由浏览器解析）；attribute 会拿到相对路径
-          if(h.indexOf('http')!==0)continue;
-          var txt=(el.innerText||el.getAttribute('aria-label')||el.title||'').trim().replace(/\s+/g,' ');
-          if(!txt)txt=h.replace(/^https?:\/\//,'').slice(0,30);
-          if(txt.length>24)txt=txt.slice(0,24);
-          items.push({el:el,txt:txt,h:h,vis:r.bottom>0&&r.top<window.innerHeight});
-        }
-        items.sort(function(a,b){
-          if(a.vis!==b.vis)return a.vis?-1:1;
-          return 0;
-        });
-        for(var j=0;j<items.length&&out.length<max;j++){
-          if(seen[items[j].h])continue;
-          seen[items[j].h]=1;
-          out.push({text:items[j].txt,href:items[j].h});
-        }
-        return JSON.stringify(out);
       };
     """
 

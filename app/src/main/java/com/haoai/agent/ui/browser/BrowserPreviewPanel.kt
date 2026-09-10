@@ -52,7 +52,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.haoai.agent.agent.browser.BrowserController
 import kotlinx.coroutines.delay
-import org.json.JSONArray
 import kotlin.math.roundToInt
 
 /**
@@ -77,7 +76,6 @@ fun BrowserPreviewPanel(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val revision by BrowserController.revision.collectAsState()
     val active by BrowserController.activeIndex.collectAsState()
 
     fun copyAndToast(text: String, what: String) {
@@ -164,26 +162,6 @@ fun BrowserPreviewPanel(
 
     val title = BrowserController.tabTitles().getOrNull(active).orEmpty()
     val url = BrowserController.activeUrl()
-
-    // 链接条：加载完成后延时提取（点按复制去向）
-    var linksJson by remember { mutableStateOf("[]") }
-    LaunchedEffect(revision, active) {
-        val u = BrowserController.activeUrl()
-        if (u.isBlank() || u == "about:blank") {
-            linksJson = "[]"
-        } else {
-            delay(900)
-            runCatching { linksJson = BrowserController.collectLinks(10) }
-        }
-    }
-    val links = remember(linksJson) {
-        runCatching {
-            val arr = JSONArray(linksJson)
-            (0 until arr.length()).map { i ->
-                arr.getJSONObject(i).let { it.optString("text") to it.optString("href") }
-            }.filter { it.second.isNotBlank() }
-        }.getOrDefault(emptyList())
-    }
 
     // 捏合后窗口尺寸变化 → 夹取位置
     LaunchedEffect(zoom) {
@@ -331,30 +309,6 @@ fun BrowserPreviewPanel(
                             }
                         }
                 )
-                // 底部链接条：点按复制去向（不遮挡画面主体）
-                if (links.isNotEmpty()) {
-                    Row(
-                        Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.75f))
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        links.take(3).forEach { (text, href) ->
-                            Text(
-                                text = "🔗 " + text.ifBlank { href.substringAfter("//").substringBefore('/') },
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
-                                    .clickable { copyAndToast(href, "链接") }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
             }
         }
     }
