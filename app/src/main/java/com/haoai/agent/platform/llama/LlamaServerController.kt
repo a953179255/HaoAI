@@ -15,7 +15,8 @@ import java.util.concurrent.TimeUnit
 
 sealed interface LlamaState {
     data object Stopped : LlamaState
-    data class Starting(val detail: String = "") : LlamaState
+    /** progress：0-100 启动进度（由 server 日志里程碑驱动）；-1 = 未知（旧语义）。 */
+    data class Starting(val detail: String = "", val progress: Int = -1) : LlamaState
     data class Running(val modelFile: String, val pid: Int = 0) : LlamaState
     data class Failed(val message: String) : LlamaState
 }
@@ -261,8 +262,17 @@ class LlamaServerController(
                 useHtp = hex != null
                 if (useHtp) cmd.addAll(listOf("-ngl", "99", "-dev", "HTP0", "--device", "HTP0"))
                 fullCmd = cmd
+                // 进度（百分比方案）：由日志排水线程按 llama.cpp 里程碑推进，
+                // 健康检查循环每 500ms 把当前百分比刷进 Starting 状态
+                val progress = java.util.concurrent.atomic.AtomicInteger(4)
+                val stage = java.util.concurrent.atomic.AtomicReference("启动服务进程")
+                fun setP(pct: Int, note: String) {
+                    progress.updateAndGet { if (pct > it) pct else it }
+                    stage.set(note)
+                }
                 _state.value = LlamaState.Starting(
-                    if (useHtp) "加载模型 ${model.name}（Hexagon $hex NPU）…" else "加载模型 ${model.name}（CPU）…"
+                    if (useHtp) "加载模型 ${model.name}（Hexagon $hex NPU）… 4%" else "加载模型 ${model.name}（CPU）… 4%",
+                    4
                 )
                 val pb = ProcessBuilder(cmd).redirectErrorStream(true)
                 if (useHtp) {
@@ -286,6 +296,15 @@ class LlamaServerController(
                                 var written = 0
                                 reader.forEachLine { line ->
                                     if (written++ < MAX_LOG_LINES) writer.println(line)
+                                    // 里程碑 → 百分比（llama.cpp 稳定日志串）
+                                    when {
+                                        "build: " in line -> setP(10, "推理引擎已启动")
+                                        "system_info" in line -> setP(14, "读取运行环境")
+                                        "load_tensors: loading model tensors" in line -> setP(20, "读取模型文件")
+                                        "load_tensors:" in line && "loaded" in line -> setP(70, "模型张量就绪")
+                                        "warmup" in line -> setP(88, "预热")
+                                        "listening" in line -> setP(96, "等待服务就绪")
+                                    }
                                 }
                                 writer.flush()
                             }
@@ -313,7 +332,9 @@ class LlamaServerController(
                             }
                         }
                     }
-                    _state.value = LlamaState.Starting("启动中… ${(attempt + 1) * HEALTH_INTERVAL_MS / 1000}s")
+                    _state.value = LlamaState.Starting(
+                        "启动 ${progress.get()}%（${stage.get()}）", progress.get()
+                    )
                     delay(HEALTH_INTERVAL_MS)
                 }
                 throw IllegalStateException("健康检查超时（${HEALTH_TRIES * HEALTH_INTERVAL_MS / 1000}s）")
@@ -335,7 +356,7 @@ class LlamaServerController(
                     val pb2 = ProcessBuilder(retry).redirectErrorStream(true)
                     val env2 = pb2.environment()
                     env2["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env2["LD_LIBRARY_PATH"] ?: "")
-                    _state.value = LlamaState.Starting("NPU 不可用，CPU 兜底加载 ${model.name}…")
+                    _state.value = LlamaState.Starting("NPU 不可用，CPU 兜底加载 ${model.name}… 12%", 12)
                     val proc2 = pb2.start()
                     process = proc2
                     Thread {

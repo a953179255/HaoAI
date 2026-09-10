@@ -1464,6 +1464,18 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                             )
                         }
                     }
+                    // 端侧启动进度条（百分比由 server 日志里程碑驱动，v0.18.3）
+                    val startingProgress = (llama as? LlamaState.Starting)?.progress ?: -1
+                    if (startingProgress in 0..99) {
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { startingProgress / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            gapSize = 0.dp,
+                            drawStopIndicator = {}
+                        )
+                    }
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.padding(top = 10.dp)
