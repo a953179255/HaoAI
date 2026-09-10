@@ -196,6 +196,13 @@ fun BrowserPreviewPanel(
 
     // 缩略位图：预览打开期间按帧刷新（约 1s 一次，够看过程）
     var snapshot by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(zoom) {
+        // 缩放/移动结束后立刻补一帧清晰位图（拖动中位图被拉伸会发虚，补帧后恢复清晰）
+        delay(220)
+        if (!expanded) {
+            snapshot = BrowserController.captureSnapshot(0.42f)?.asImageBitmap()
+        }
+    }
     LaunchedEffect(Unit) {
         while (true) {
             if (!expanded) {
@@ -203,9 +210,9 @@ fun BrowserPreviewPanel(
                 // 再抓一帧位图显示
                 val wv = BrowserController.webViewAtSync()
                 BrowserController.ensureLaidOutForPreview(wv)
-                snapshot = BrowserController.captureSnapshot(0.3f)?.asImageBitmap()
+                snapshot = BrowserController.captureSnapshot(0.42f)?.asImageBitmap()
             }
-            delay(900)
+            delay(700)
         }
     }
 
@@ -263,19 +270,26 @@ fun BrowserPreviewPanel(
                     .imePadding()
             ) {
                 // 标签标题行：拖拽区视觉 + 标题 ｜ 收起 ▼
-                Row(
+                // 标准居中拖拽条（顶部分隔提示）
+                Box(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(top = 6.dp, bottom = 2.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     Box(
                         Modifier
-                            .size(width = 32.dp, height = 4.dp)
+                            .size(width = 34.dp, height = 4.dp)
                             .clip(RoundedCornerShape(2.dp))
                             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f))
                     )
-                    Spacer(Modifier.size(8.dp))
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
                         title.ifBlank { "内置浏览器" },
                         style = MaterialTheme.typography.labelLarge,
@@ -440,8 +454,13 @@ fun BrowserPreviewPanel(
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoomChange, _ ->
-                                onDrag(pan.x, pan.y)
-                                onZoom(zoomChange)
+                                // 双指捏合期间不叠加平移：否则缩放时窗口会跟着手指乱飘，
+                                // 缩放手感很"生硬"（用户反馈）。单指时才移动窗口。
+                                if (zoomChange == 1f) {
+                                    onDrag(pan.x, pan.y)
+                                } else {
+                                    onZoom(zoomChange)
+                                }
                             }
                         }
                 ) {

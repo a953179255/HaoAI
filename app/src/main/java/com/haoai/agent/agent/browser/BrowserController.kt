@@ -241,7 +241,19 @@ object BrowserController {
             val bmp = android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bmp)
             canvas.scale(bw.toFloat() / wv.width, bh.toFloat() / wv.height)
-            wv.draw(canvas)
+            // 抓帧前临时降级为软件层：GPU 合成的分块（固定/粘性头部等）在 draw()
+            // 里抓不全，会出现白块（用户实测反馈）；软件层强制整页重绘。抓完还原。
+            val prevLayer = wv.layerType
+            if (prevLayer != android.view.View.LAYER_TYPE_SOFTWARE) {
+                wv.setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+            }
+            try {
+                wv.draw(canvas)
+            } finally {
+                if (prevLayer != android.view.View.LAYER_TYPE_SOFTWARE) {
+                    wv.setLayerType(prevLayer, null)
+                }
+            }
             bmp
         }.getOrNull()
     }
