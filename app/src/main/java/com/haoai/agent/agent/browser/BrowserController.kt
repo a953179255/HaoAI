@@ -154,8 +154,10 @@ object BrowserController {
     @Volatile private var screenH = 0
 
     internal fun ensureLaidOut(wv: WebView) {
-        // UI 可见时 WebView 在可见容器里有真实布局，交给容器（手动改成全屏会撑变形）
-        if (uiVisible) return
+        // 已挂在可见容器里时交给容器（手动改成全屏会撑变形）；注意必须判 parent：
+        // 迷你预览态用位图显示，WebView 是 detached 的——此时仍需全屏合成布局，
+        // 否则 Agent 的加载/读取会挂在 0 尺寸上（2026-09-11 位图方案配套修复）
+        if (uiVisible && wv.parent != null) return
         val ctx = appContext ?: return
         val dm = ctx.resources.displayMetrics
         val w = if (screenW > 0) screenW else dm.widthPixels
@@ -199,6 +201,49 @@ object BrowserController {
         wv.pivotY = 0f
         if (wv.scaleX != s) wv.scaleX = s
         if (wv.scaleY != s) wv.scaleY = s
+    }
+
+    /** 预览（位图态）下强制保证 WebView 全屏合成布局：无论 uiVisible 与否。 */
+    fun ensureLaidOutForPreview(wv: WebView) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { ensureLaidOutForPreview(wv) }
+            return
+        }
+        if (wv.parent != null) return
+        val ctx = appContext ?: return
+        val dm = ctx.resources.displayMetrics
+        val w = if (screenW > 0) screenW else dm.widthPixels
+        val h = if (screenH > 0) screenH else dm.heightPixels
+        if (w <= 0 || h <= 0) return
+        if (wv.width == w && wv.height == h && wv.isLaidOut) return
+        val specW = android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY)
+        val specH = android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY)
+        wv.measure(specW, specH)
+        wv.layout(0, 0, w, h)
+    }
+
+    /**
+     * 迷你预览用位图快照：把活动 WebView 当前画面按 scale 绘制成 Bitmap。
+     *
+     * 为什么用位图而不是把 WebView 直接挂进小窗：小窗内的 interop 视图实测收不到
+     * 触摸事件（全屏浏览器同一套挂法却正常），导致「拖动移动窗口/双指缩放」无法
+     * 实现。位图是纯 Compose 内容，手势全部走 Compose，稳定可靠；
+     * 代价是需要按帧刷新（调用方 1s 左右拉一次即可，观感足够）。
+     */
+    fun captureSnapshot(scale: Float = 0.3f): android.graphics.Bitmap? {
+        if (Looper.myLooper() != Looper.getMainLooper()) return null
+        val tab = tabs.getOrNull(activeIndex.value) ?: return null
+        val wv = tab.webView
+        if (wv.width <= 0 || wv.height <= 0) return null
+        val bw = (wv.width * scale).toInt().coerceIn(64, 1600)
+        val bh = (wv.height * scale).toInt().coerceIn(64, 3200)
+        return runCatching {
+            val bmp = android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp)
+            canvas.scale(bw.toFloat() / wv.width, bh.toFloat() / wv.height)
+            wv.draw(canvas)
+            bmp
+        }.getOrNull()
     }
 
     /** 退出预览时把缩放复位（否则全屏浏览器/工具会继承缩小的画面）。 */

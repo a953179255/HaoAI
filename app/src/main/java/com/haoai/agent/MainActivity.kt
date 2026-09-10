@@ -774,7 +774,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             } // AnimatedContent content lambda
             // 4.2 呼出优化：底部预览浮层（叠在任意 screen 之上，工具无头浏览自动弹出）
             val previewOpen by com.haoai.agent.agent.browser.BrowserController.previewOpen.collectAsState()
-            if (previewOpen) {
+            // 仅聊天页悬浮（2026-09-11 用户定稿）：设置/会话列表等页面不显示，
+            // 避免预览窗压在别的页面上；回到聊天页自动恢复
+            if (previewOpen && screen == 0) {
                 com.haoai.agent.ui.browser.BrowserPreviewPanel(
                     backdrop = backdrop,
                     onClose = { com.haoai.agent.agent.browser.BrowserController.previewOpen.value = false },

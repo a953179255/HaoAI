@@ -8,6 +8,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -130,7 +132,12 @@ fun BrowserPreviewPanel(
         if (sw > 0 && sh > 0) sw.toFloat() / sh.toFloat() else 1080f / 2400f
     }
 
-    // ── 迷你态位置：归一化持久化（拖动落盘）──
+    val density = context.resources.displayMetrics.density
+    // 安全区：顶部让开顶栏、底部让开输入框（用户要求窗口不得压在这两块上）
+    val topInset = 96f * density
+    val bottomInset = 104f * density
+
+    // ── 迷你态位置/大小：位置归一化持久化，双指捏合改缩放 ──
     val prefs = remember { context.getSharedPreferences("float_windows", android.content.Context.MODE_PRIVATE) }
     var containerW by remember { mutableStateOf(0f) }
     var containerH by remember { mutableStateOf(0f) }
@@ -138,33 +145,69 @@ fun BrowserPreviewPanel(
     var miniH by remember { mutableStateOf(0f) }
     var offX by remember { mutableStateOf(0f) }
     var offY by remember { mutableStateOf(0f) }
+    // 双指捏合缩放（窗口尺寸等比变化，内容随之缩放）
+    var zoom by remember { mutableFloatStateOf(prefs.getFloat("browser_zoom", 1f).coerceIn(MIN_ZOOM, MAX_ZOOM)) }
+    var placed by remember { mutableStateOf(false) }
+
+    /** 把当前位置夹在安全区内（容器尺寸/窗口尺寸变化后调用）。 */
+    fun clampOffsets() {
+        if (containerW <= 0f || containerH <= 0f || miniW <= 0f || miniH <= 0f) return
+        val maxX = maxOf(0f, containerW - miniW)
+        val maxY = maxOf(0f, containerH - bottomInset - miniH)
+        offX = offX.coerceIn(0f, maxX)
+        offY = offY.coerceIn(topInset.coerceAtMost(maxOf(0f, containerH - miniH)), maxY.coerceAtLeast(topInset))
+    }
 
     fun place() {
-        if (containerW <= 0f || containerH <= 0f || miniW <= 0f || miniH <= 0f) return
+        if (placed || containerW <= 0f || containerH <= 0f || miniW <= 0f || miniH <= 0f) return
+        placed = true
         val nx = prefs.getFloat("browser_x", -1f)
         val ny = prefs.getFloat("browser_y", -1f)
         if (nx >= 0f && ny >= 0f) {
-            offX = (nx * containerW).coerceIn(0f, maxOf(0f, containerW - miniW))
-            offY = (ny * containerH).coerceIn(0f, maxOf(0f, containerH - miniH))
+            offX = nx * containerW
+            offY = ny * containerH
+            clampOffsets()
         } else {
-            val d = context.resources.displayMetrics.density
-            offX = (containerW - miniW - 10f * d).coerceAtLeast(10f)
-            offY = 96f * d
+            offX = (containerW - miniW - 10f * density).coerceAtLeast(10f)
+            offY = topInset
         }
     }
 
     fun onDrag(dx: Float, dy: Float) {
         if (containerW <= 0f || miniW <= 0f) return
-        offX = (offX + dx).coerceIn(0f, maxOf(0f, containerW - miniW))
-        offY = (offY + dy).coerceIn(0f, maxOf(0f, containerH - miniH))
+        offX += dx
+        offY += dy
+        clampOffsets()
         prefs.edit()
             .putFloat("browser_x", if (containerW > 0) offX / containerW else 0f)
             .putFloat("browser_y", if (containerH > 0) offY / containerH else 0f)
             .apply()
     }
 
+    /** 双指捏合：factor>1 放大窗口。窗口变大后重新夹取位置。 */
+    fun onZoom(factor: Float) {
+        if (factor <= 0f) return
+        zoom = (zoom * factor).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        prefs.edit().putFloat("browser_zoom", zoom).apply()
+    }
+
     val title = BrowserController.tabTitles().getOrNull(active).orEmpty()
     val url = BrowserController.activeUrl()
+
+    // 缩略位图：预览打开期间按帧刷新（约 1s 一次，够看过程）
+    var snapshot by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (!expanded) {
+                // 迷你态 WebView 未被挂载：保持全屏合成布局（Agent 侧导航/读取依赖），
+                // 再抓一帧位图显示
+                val wv = BrowserController.webViewAtSync()
+                BrowserController.ensureLaidOutForPreview(wv)
+                snapshot = BrowserController.captureSnapshot(0.3f)?.asImageBitmap()
+            }
+            delay(900)
+        }
+    }
 
     // 链接条：加载完成（revision 变化）后延时提取，给页面渲染留余量
     var linksJson by remember { mutableStateOf("[]") }
@@ -332,28 +375,33 @@ fun BrowserPreviewPanel(
                 )
             }
         } else {
-            // ── 迷你态：132dp 真实缩微预览（WebView 按小窗宽排版，比例=手机）──
+            // ── 迷你态：整屏缩微预览窗。交互（用户定稿 2026-09-11）：
+            //    · 只有右上角「放大」按钮能展开半屏（点别处不再展开）
+            //    · 窗口任意处可拖动移动位置（拖动由 interop 触摸层转发）
+            //    · 双指捏合缩放窗口大小；位置/缩放均持久化
+            //    · 位置夹在安全区内（不压顶栏、不压输入框）──
+            val miniWidthDp = (MINI_BASE_DP * zoom).coerceAtMost(
+                if (containerW > 0f) (containerW / density) - 16f else MINI_BASE_DP * MAX_ZOOM
+            )
             Column(
                 Modifier
                     .onGloballyPositioned {
                         miniW = it.size.width.toFloat()
                         miniH = it.size.height.toFloat()
-                        place()
+                        if (!placed) place() else clampOffsets()
                     }
-                    .width(132.dp)
+                    .width(miniWidthDp.dp)
                     .offset { IntOffset(offX.roundToInt(), offY.roundToInt()) }
                     .shadowOrCreate()
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
-                    .clickable { expanded = true }
             ) {
-                // 标题栏：整行 = 放大热区（页区在 interop 层上拦不到触摸，标题栏是
-                // 可靠的 Compose 触摸面），同时作拖拽手柄（按住拖动移动窗口）
+                // 标题栏：拖动移动窗口 + 右侧「放大」按钮（唯一展开入口）
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 2.dp)
                         .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = { },
@@ -372,21 +420,40 @@ fun BrowserPreviewPanel(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    Icon(
-                        Icons.Filled.OpenInFull,
-                        "放大预览",
-                        modifier = Modifier
-                            .padding(start = 4.dp)
-                            .size(12.dp)
-                            .alpha(0.7f)
-                    )
+                    IconButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.OpenInFull,
+                            "放大预览",
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
-                PreviewWebView(
-                    onTap = { expanded = true },
-                    modifier = Modifier
+                // 位图缩略画面（纯 Compose）：手势可靠——单指拖动移动窗口、
+                // 双指捏合缩放窗口；点按不触发放大（只有标题栏按钮能放大）
+                Box(
+                    Modifier
                         .fillMaxWidth()
                         .aspectRatio(screenAspect)
-                )
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoomChange, _ ->
+                                onDrag(pan.x, pan.y)
+                                onZoom(zoomChange)
+                            }
+                        }
+                ) {
+                    snapshot?.let { bmp ->
+                        androidx.compose.foundation.Image(
+                            bitmap = bmp,
+                            contentDescription = "网页缩略预览",
+                            contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
             }
         }
     }
@@ -395,26 +462,36 @@ fun BrowserPreviewPanel(
 /** 阴影修饰（独立小函数避免与玻璃面板样式冲突）。 */
 private fun Modifier.shadowOrCreate(): Modifier = this
 
+/** 迷你窗基础宽度与缩放范围（双指捏合）。 */
+private const val MINI_BASE_DP = 132f
+private const val MIN_ZOOM = 0.7f
+private const val MAX_ZOOM = 2.4f
+
+/** 双指间距（捏合缩放用）。 */
+private fun pointerSpan(ev: android.view.MotionEvent): Float {
+    if (ev.pointerCount < 2) return 0f
+    return kotlin.math.hypot(ev.getX(0) - ev.getX(1), ev.getY(0) - ev.getY(1))
+}
+
 /**
  * 预览 WebView（迷你/半屏共用）：**整屏排版 + 等比收缩绘制**。
  *
  * 做法：容器内放一个固定为「屏幕物理尺寸」的 WebView（与全屏浏览器、无头
- * 工具完全同一套布局，页面不做任何回流），再按 `容器宽 / 屏宽` 设置
- * scaleX/scaleY（pivot 左上角）——用户看到的画面就是 Agent 操作的浏览器
- * 整屏画面按比例缩小，比例天然正确，不会出现「极窄视口重排」的怪异观感。
+ * 工具完全同一套布局，页面不做任何回流），再按 `容器宽 ÷ 屏宽` 设置
+ * scaleX/scaleY（pivot 左上角）——画面就是 Agent 操作的浏览器整屏画面按
+ * 比例缩小，比例天然正确。
  *
- * 容器高宽比决定可视范围：迷你窗按整屏比例（aspectRatio）→ 完整整屏缩微；
- * 半屏宽=屏宽 → 比例 1:1 等同全屏浏览器，仅底部多余部分裁切。
- *
- * 触摸：Agent 是页面操作者，用户「看而不点」——触摸由 Android 侧
- * OnTouchListener 统一消费（Compose 覆盖层在 AndroidView 之上收不到事件，
- * interop 视图会直接吃掉触摸，这是迷你态此前点不开的根因）；
- * onTap 非空时抬手触发它（迷你态：点窗任意处放大到半屏）。
+ * 触摸：Compose 覆盖层盖在 AndroidView 上收不到触摸（interop 视图会先吃掉
+ * 事件），因此**触摸全部交给 interop 层内的透明触摸层**处理：
+ * 单指拖动 → onDragBy（移动窗口）；双指捏合 → onZoomBy（缩放窗口）；
+ * 未传回调时只消费（半屏态「看而不点」）。点击不在此处理——放大只走标题栏
+ * 的按钮（用户定稿），避免误触。
  */
 @Composable
 private fun PreviewWebView(
     modifier: Modifier = Modifier,
-    onTap: (() -> Unit)? = null
+    onDragBy: ((Float, Float) -> Unit)? = null,
+    onZoomBy: ((Float) -> Unit)? = null
 ) {
     var cw by remember { mutableFloatStateOf(0f) }
     Box(
@@ -430,9 +507,8 @@ private fun PreviewWebView(
                     // 子视图（整屏尺寸的 WebView）溢出部分裁掉，避免画到窗外
                     clipChildren = true
                     clipToPadding = true
-                    // 触摸层：真实 Android View 放在 interop 层内部（Compose 覆盖层
-                    // 盖在 AndroidView 上收不到触摸、WebView 的 OnTouchListener 亦
-                    // 实测不触发），它是容器同尺寸的透明可点层，稳定拦截全部触摸
+                    // 触摸层：interop 层内的真实 Android View —— 手势（单指拖动移动
+                    // 窗口 / 双指捏合缩放）在这一层处理。WebView 收不到触摸（看而不点）。
                     val touchLayer = android.view.View(ctx).apply {
                         layoutParams = android.widget.FrameLayout.LayoutParams(
                             android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
@@ -440,6 +516,35 @@ private fun PreviewWebView(
                         )
                         isClickable = true
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        var lastX = 0f
+                        var lastY = 0f
+                        var lastSpan = 0f
+                        setOnTouchListener { _, ev ->
+                            when (ev.actionMasked) {
+                                android.view.MotionEvent.ACTION_DOWN -> {
+                                    lastX = ev.rawX
+                                    lastY = ev.rawY
+                                    lastSpan = 0f
+                                }
+                                android.view.MotionEvent.ACTION_POINTER_DOWN ->
+                                    lastSpan = pointerSpan(ev)
+                                android.view.MotionEvent.ACTION_MOVE -> {
+                                    if (ev.pointerCount >= 2) {
+                                        val span = pointerSpan(ev)
+                                        if (lastSpan > 0f && span > 0f) {
+                                            onZoomBy?.invoke(span / lastSpan)
+                                        }
+                                        lastSpan = span
+                                    } else {
+                                        onDragBy?.invoke(ev.rawX - lastX, ev.rawY - lastY)
+                                        lastX = ev.rawX
+                                        lastY = ev.rawY
+                                    }
+                                }
+                                android.view.MotionEvent.ACTION_POINTER_UP -> lastSpan = 0f
+                            }
+                            true
+                        }
                     }
                     addView(touchLayer)
                 }
@@ -447,8 +552,6 @@ private fun PreviewWebView(
             update = { container ->
                 val wv = BrowserController.webViewAtSync()
                 val (sw, sh) = BrowserController.screenSizePx()
-                val touchLayer = container.getChildAt(0)
-                touchLayer?.setOnClickListener { onTap?.invoke() }
                 if (container.childCount != 2 || container.getChildAt(1) !== wv) {
                     (wv.parent as? ViewGroup)?.removeView(wv)
                     while (container.childCount > 1) container.removeViewAt(container.childCount - 1)
@@ -462,18 +565,11 @@ private fun PreviewWebView(
                     }
                 }
                 // 保证触摸层始终在最上层（后加入的 WebView 会盖住它）
-                touchLayer?.bringToFront()
+                container.getChildAt(0)?.bringToFront()
             },
-            modifier = Modifier
-                .fillMaxSize()
-                // 官方 interop 触摸拦截口：AndroidView 上的触摸由此进入 Compose，
-                // 既能拦下「看而不点」的误触，也能在迷你态把点击转成「放大」
-                .pointerInteropFilter { ev ->
-                    if (ev.actionMasked == android.view.MotionEvent.ACTION_UP) onTap?.invoke()
-                    true
-                }
+            modifier = Modifier.fillMaxSize()
         )
-        // 尺寸确定后按「容器宽 / 屏宽」等比收缩（整屏缩微，不是回流）
+        // 尺寸确定后按「容器宽 ÷ 屏宽」等比收缩（整屏缩微，不是回流）
         LaunchedEffect(cw) {
             if (cw > 0f) {
                 val wv = BrowserController.webViewAtSync()
