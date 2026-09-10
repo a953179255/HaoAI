@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -41,9 +40,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -59,14 +58,16 @@ import kotlin.math.roundToInt
 /**
  * 内置浏览器悬浮预览（用户定稿 2026-09-11 晚）：只有「迷你窗」一种形态。
  *
- * - 画面：位图快照（每 ~0.7s 一帧，按 2:3 浏览器可视区比例裁剪），
- *   与半屏/全屏里看到的页面一致，不留整屏缩略的多余空白。
- *   （小窗内放 interop WebView 收不到触摸——实测；位图是纯 Compose 内容，
- *   拖动/捏合手势才稳定。）
- * - 手势：单指拖动 = 移动窗口；双指捏合 = 缩放窗口（0.7~2.4，持久化）；
- *   位置夹在安全区内（不压顶栏、不压输入框）。
+ * - 画面：**实时 WebView 挂载**（方案 A，2026-09-11 定稿）——WebView 以全屏虚拟尺寸
+ *   （screenW×screenH EXACTLY）挂进小窗容器，graphicsLayer 等比缩放适配；
+ *   页面排版与全屏完全一致（Agent 的 a11y 树/坐标体系不受小窗影响），动画满帧流畅。
+ *   （旧位图快照方案每 0.7s 一帧、动画卡顿，已废弃。）
+ * - 触摸：观看模式——小窗不与页面交互。顶层 Compose 手势层拦截全部触摸：
+ *   单指拖动 = 移动窗口；双指捏合 = 缩放窗口（0.7~2.4，持久化）；页面触摸被吃掉，
+ *   防误触干扰 Agent 正在进行的操作。
  * - 按钮（用户定稿）：↗ 全屏（可操作的那种，直接进全屏浏览器，半屏 Sheet
  *   已删除），放在最小化左侧一位；▼ 最小化 = 收起悬浮窗（顶栏 🌐 单击随时唤回）。
+ *   关闭/最小化后 WebView 回到 detached 无头态，Agent 工具继续可用。
  */
 @Composable
 fun BrowserPreviewPanel(
@@ -97,13 +98,11 @@ fun BrowserPreviewPanel(
 
     BackHandler(onBack = onClose)
 
-    // 屏幕宽高比：抓帧只取整屏顶部与窗口同比例的一段
-    val screenAspect = remember {
-        val (sw, sh) = BrowserController.screenSizePx()
-        if (sw > 0 && sh > 0) sw.toFloat() / sh.toFloat() else 1080f / 2400f
-    }
-    // 小窗画面比例（宽/高）= 2:3，对齐半屏/全屏里「网页可视区」那一块（方案 A）
-    val previewTopFraction = remember { (screenAspect / PREVIEW_ASPECT).coerceIn(0.2f, 1f) }
+    // WebView 的虚拟布局尺寸：保持全屏尺寸 EXACTLY，页面排版与全屏一致
+    // （Agent 点击坐标/a11y 节点几何不因小窗改变）；显示适配靠 graphicsLayer 等比缩放
+    val screen = remember { BrowserController.screenSizePx() }
+    val screenW = screen.first.coerceAtLeast(1)
+    val screenH = screen.second.coerceAtLeast(1)
 
     val density = context.resources.displayMetrics.density
     // 安全区：顶部让开顶栏、底部让开输入框（窗口不得压在这两块上）
@@ -165,23 +164,6 @@ fun BrowserPreviewPanel(
 
     val title = BrowserController.tabTitles().getOrNull(active).orEmpty()
     val url = BrowserController.activeUrl()
-
-    // 缩略位图：预览打开期间按帧刷新（约 0.7s 一帧）
-    var snapshot by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    LaunchedEffect(zoom) {
-        // 缩放/移动结束后立刻补一帧清晰位图（手势中位图被拉伸会发虚）
-        delay(220)
-        snapshot = BrowserController.captureSnapshot(0.42f, previewTopFraction)?.asImageBitmap()
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            // 位图态 WebView 未被挂载：保持全屏合成布局（Agent 导航/读取依赖）再抓帧
-            val wv = BrowserController.webViewAtSync()
-            BrowserController.ensureLaidOutForPreview(wv)
-            snapshot = BrowserController.captureSnapshot(0.42f, previewTopFraction)?.asImageBitmap()
-            delay(700)
-        }
-    }
 
     // 链接条：加载完成后延时提取（点按复制去向）
     var linksJson by remember { mutableStateOf("[]") }
@@ -298,31 +280,57 @@ fun BrowserPreviewPanel(
                     )
                 }
             }
-            // 位图缩略画面（纯 Compose）：单指拖动移动、双指捏合缩放；点按不穿透
+            // 实时画面：WebView 以全屏虚拟尺寸挂载、graphicsLayer 等比缩放进小窗
+            // （观看模式）。顶层手势 overlay 吃掉全部触摸：单指拖动移动窗口、双指捏合
+            // 缩放窗口，页面触摸被拦截（防误触干扰 Agent 操作）。
             Box(
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(PREVIEW_ASPECT)
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoomChange, _ ->
-                            // 双指期间只缩放不平移：否则窗口跟着手指乱飘、手感生硬
-                            if (zoomChange == 1f) {
-                                onDrag(pan.x, pan.y)
-                            } else {
-                                onZoom(zoomChange)
+            ) {
+                androidx.compose.ui.viewinterop.AndroidView(
+                    factory = { ctx ->
+                        android.widget.FrameLayout(ctx).apply {
+                            // 超出小窗的部分由外层 clip 裁掉（WebView 是全屏尺寸）
+                            clipChildren = false
+                        }
+                    },
+                    update = { container ->
+                        val wv = BrowserController.webViewAtSync()
+                        if (container.childCount == 1 && container.getChildAt(0) === wv) return@AndroidView
+                        (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                        container.removeAllViews()
+                        // EXACT 全屏虚拟尺寸：页面排版与全屏一致，Agent 坐标/节点几何不变
+                        wv.layoutParams = android.view.ViewGroup.LayoutParams(screenW, screenH)
+                        container.addView(wv)
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            // 等比缩放：宽度铺满小窗，顶部对齐（pivot 左上）——可见区域与
+                            // 旧位图方案取的「整屏顶部 2:3 段」一致
+                            val s = if (screenW > 0) size.width / screenW else 1f
+                            scaleX = s
+                            scaleY = s
+                            transformOrigin = TransformOrigin(0f, 0f)
+                        }
+                )
+                // 手势拦截层：盖在 WebView 之上，单指拖动/双指捏合操作窗口，触摸不下发页面
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoomChange, _ ->
+                                // 双指期间只缩放不平移：否则窗口跟着手指乱飘、手感生硬
+                                if (zoomChange == 1f) {
+                                    onDrag(pan.x, pan.y)
+                                } else {
+                                    onZoom(zoomChange)
+                                }
                             }
                         }
-                    }
-            ) {
-                snapshot?.let { bmp ->
-                    Image(
-                        bitmap = bmp,
-                        contentDescription = "网页缩略预览",
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                )
                 // 底部链接条：点按复制去向（不遮挡画面主体）
                 if (links.isNotEmpty()) {
                     Row(
