@@ -359,8 +359,11 @@ class AgentEngine(
                         // 中断后按瞬态错误走退避重试，而不是让整轮永远停在"正在思考"
                         while (collectJob.isActive) {
                             delay(5_000)
-                            if (System.currentTimeMillis() - lastStreamEventAt > 90_000L) {
-                                throw java.io.IOException("stream stall: 流式响应超过 90 秒无数据（看门狗中断）")
+                            // 180s：原 90s 会误杀 glm 的长思考（实测思考 97.8s 无 delta 合法存在），
+                            // 且看门狗重试会让 turn 内已执行的工具重放（e2e P2-5）。
+                            // 网络真死时 120s readTimeout 先兜底，这里只防 SSE 假活。
+                            if (System.currentTimeMillis() - lastStreamEventAt > 180_000L) {
+                                throw java.io.IOException("stream stall: 流式响应超过 180 秒无数据（看门狗中断）")
                             }
                         }
                     }

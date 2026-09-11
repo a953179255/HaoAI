@@ -265,17 +265,39 @@ object VirtualScreenController {
         }
         PrivilegedShell.refresh(context)
         // 目标 App 已在主屏运行时，am start --display 会被系统送回主屏实例（"delivered to
-        // currently running"），虚拟屏收不到内容 → 用户看到白屏/空帧，须明确报错
-        fun redeliveryCheck(out: String): String? = if (out.contains("delivered to currently running") ||
-            out.contains("Activity not started")
-        ) {
-            "目标 App 正在主屏运行：无法投递到虚拟屏（系统会把启动送回主屏实例）。请让用户先关闭主屏上的该 App，再重试；不要擅自 force-stop 打断用户当前操作。"
-        } else null
+        // currently running"），虚拟屏收不到内容 → 用户看到白屏/空帧。
+        fun isRedelivered(out: String): Boolean =
+            out.contains("delivered to currently running") || out.contains("Activity not started")
+        // 目标 App 在主屏有活任务时的自动处置（用户裁定 2026-09-12）：
+        // 前台=用户正在用 → 不打扰，报错说明；仅后台残留 → force-stop 清旧任务后原命令重投。
+        // 仅包名目标可定位宿主；URL 目标无从清理，维持报错。
+        suspend fun redeliveryAutoResolve(exec: suspend (String) -> PrivilegedShell.ExecResult): String? {
+            if (isUrl) {
+                return "目标 URL 的宿主 App 正在主屏运行，无法投递到虚拟屏。请先关闭主屏上的该 App 再重试。"
+            }
+            val focusOut = exec("dumpsys window | grep -E 'mCurrentFocus|mFocusedWindow'").output
+            val foreground = focusOut.split('\n').any { it.contains(target) }
+            if (foreground) {
+                return "目标 App「$target」正在主屏前台使用中——为避免打断你，未自动关闭。请切走该应用后再投虚拟屏。"
+            }
+            exec("am force-stop $target")
+            debugLog("redelivery auto-resolve: force-stop $target → retry on display $id")
+            val r2 = exec(shellCmd)
+            if (isRedelivered(r2.output)) {
+                return "自动清理后台后重投仍被送回主屏。请手动关闭该 App 后重试。"
+            }
+            if (r2.exitCode != 0) return "自动清理后台后重投失败：${r2.output.take(160)}"
+            onLaunched()
+            val frameErr = firstFrameOrHeal(id, target)
+            if (frameErr != null) return frameErr
+            debugLog("redelivery auto-resolve: relaunched $target on display $id")
+            return null
+        }
         if (PrivilegedShell.shizukuUsable()) {
             val r = PrivilegedShell.shizukuExec(shellCmd)
-            redeliveryCheck(r.output)?.let {
-                debugLog("launch redelivered (shizuku): ${target}")
-                return it
+            if (isRedelivered(r.output)) {
+                debugLog("launch redelivered (shizuku): $target → auto-resolve")
+                return redeliveryAutoResolve { PrivilegedShell.shizukuExec(it) }
             }
             if (r.ok) {
                 onLaunched()
@@ -288,9 +310,9 @@ object VirtualScreenController {
         }
         if (PrivilegedShell.hasRoot()) {
             val r = PrivilegedShell.rootExec(shellCmd)
-            redeliveryCheck(r.output)?.let {
-                debugLog("launch redelivered (root): ${target}")
-                return it
+            if (isRedelivered(r.output)) {
+                debugLog("launch redelivered (root): $target → auto-resolve")
+                return redeliveryAutoResolve { PrivilegedShell.rootExec(it) }
             }
             if (r.ok) {
                 onLaunched()
@@ -308,7 +330,13 @@ object VirtualScreenController {
             return "特权启动失败：系统拒绝了本次启动（虚拟屏可能已失效或目标 App 不允许上屏）。请重试一次，若仍失败请让用户检查 Shizuku。原始信息：${lastErr.take(160)}"
         }
         val directError = synchronized(lock) {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // CLEAR_TASK：目标在主屏有旧任务时，无特权通道做前台判定/force-stop，
+            // 直启会被任务亲和送回主屏（窜到手机主屏打断用户，e2e 反馈 Problem B）。
+            // 清掉旧任务直接在虚拟屏起新实例；代价是目标 App 未保存状态丢失——
+            // 调用方本就是"把 App 挪上虚拟屏"的明确意图，可接受。
+            launchIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            )
             val options = ActivityOptions.makeBasic().apply { launchDisplayId = id }
             runCatching { context.startActivity(launchIntent, options.toBundle()) }
                 .fold(

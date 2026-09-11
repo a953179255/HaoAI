@@ -72,6 +72,8 @@ data class ChatRow(
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private var currentSession: StoredSession? = null
+    /** 思考阶段打断（无上屏内容）时置位；turn finally 里落一条"已停止"标记后清零。 */
+    private var stopHintPending = false
 
     /** E8 循环内插话队列（引擎间隙 A 消费；StateFlow 驱动 UI 排队提示）。 */
     private val interjectQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
@@ -458,11 +460,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val provider0 = c.activeChatProvider() ?: c.activeProvider()
         if (provider0 == null) {
             _error.value = "请先在「设置」里配置模型服务（Base URL / 模型 ID / API Key）"
+            // 深链/后台发送的消息此前会被静默丢弃（错误条 8s 即逝），留下痕迹供用户看到（P2-6）
+            appendAndNotifyLocal(text)
             return
         }
         // 发送门控：公网供应商未配 key 就地拦截（此前无 Authorization 照发、等供应商 401 才报错）
         if (c.resolveApiKey(provider0).isBlank() && c.needsApiKey(provider0.baseUrl)) {
             _error.value = "模型服务「${provider0.name}」未配置 API Key，请到「设置」填写后再发送"
+            appendAndNotifyLocal(text)
             return
         }
         val s = currentSession ?: return
@@ -508,6 +513,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         (it as? com.haoai.agent.platform.llama.LlamaState.Failed)?.message
                             ?: "端侧模型启动失败"
                     }
+                    // 消息保留进历史：此前只弹 8s 错误条，深链/排队发送会看似凭空消失（P2-6）
+                    appendAndNotifyLocal(text)
                     return@launch
                 }
                 val engine = buildEngine(s, provider).also { turnEngine = it }
@@ -532,6 +539,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
                 val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
+                // 思考阶段被打断：历史里补可见的停止标记（P3-1），别让用户消息孤零零挂着
+                if (stopHintPending) {
+                    stopHintPending = false
+                    val lastAssistant = s.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT }
+                    if (lastAssistant == null || lastAssistant.content.isBlank()) {
+                        s.messages.add(
+                            ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = "⏹ 已手动停止").toStored()
+                        )
+                    }
+                }
                 // 落盘前回填 store 里较新的标题状态：打断/结束时标题协程可能已写 store，
                 // 用发送前的旧副本直接 save 会把新标题盖回旧值（e2e P2-1 打断标题回退根因）
                 syncTitleFromStore(s)
@@ -707,6 +724,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 return
             }
         }
+        // 思考阶段打断（尚无任何上屏内容）时补一条可见的停止标记——否则用户消息
+        // 孤零零挂着，看不出是被打断还是没响应（e2e P3-1）
+        val noContentYet = synchronized(textBuf) { textBuf.isBlank() } &&
+            _streamingText.value.isNullOrBlank()
+        if (_running.value && noContentYet) stopHintPending = true
         job?.cancel()
         job = null
         _approval.value = null
