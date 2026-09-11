@@ -3507,27 +3507,11 @@ private fun ProviderDialog(
                     .padding(horizontal = 16.dp)
                     .padding(top = 16.dp, bottom = 12.dp)
             ) {
-                // 标题行右侧 = 操作栏（对齐定稿原型：取消/保存与标题同行，
-                // 不再放弹窗底部——底部空间让给内容区）
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
-                    LiquidPillButton(
-                        backdrop = backdrop,
-                        // 按钮写明副作用：新建保存后会自动设为当前使用的服务
-                        text = if (draft.id == null) "保存并启用" else "保存",
-                        emphasized = true
-                    ) { onSave() }
-                }
                 Text(
                     if (draft.id == null) "添加模型供应商" else "编辑模型供应商",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(top = 2.dp)
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 // ── 三段分段（方案一定稿 2026-09-11）：连接 / 模型 / 高级 ──
                 // 添加默认落「连接」（第一步选服务商）、编辑默认落「模型」（最高频）
@@ -4099,6 +4083,22 @@ private fun ProviderDialog(
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
+                }
+                // 操作栏：右下角（定稿原型 2026-09-11：取消/保存钉在弹窗底部右侧）
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
+                    LiquidPillButton(
+                        backdrop = backdrop,
+                        // 按钮写明副作用：新建保存后会自动设为当前使用的服务
+                        text = if (draft.id == null) "保存并启用" else "保存",
+                        emphasized = true
+                    ) { onSave() }
                 }
             }
         }
