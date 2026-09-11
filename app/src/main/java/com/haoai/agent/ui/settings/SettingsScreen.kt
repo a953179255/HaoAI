@@ -3513,6 +3513,20 @@ private fun ProviderDialog(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
+                // ── 三段分段（方案一定稿 2026-09-11）：连接 / 模型 / 高级 ──
+                // 添加默认落「连接」（第一步选服务商）、编辑默认落「模型」（最高频）
+                var pane by remember(draft.id) { mutableStateOf(if (draft.id == null) 0 else 1) }
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = listOf(
+                        "连接",
+                        if (draft.id == null) "模型" else "模型 · " + (listOf(draft.model).filter { it.isNotBlank() }.size + draft.models.size),
+                        "高级"
+                    ),
+                    selectedIndex = pane,
+                    onSelected = { pane = it },
+                    backdrop = backdrop,
+                    modifier = Modifier.padding(top = 10.dp)
+                )
                 Column(
                     Modifier
                         .padding(top = 10.dp)
@@ -3522,389 +3536,423 @@ private fun ProviderDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    // ── 分区：服务商（设计稿网格卡片，选中态主题色描边）──
-                    Text(
-                        "服务商",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    // 3 列自适应网格（设计稿 vgrid）：新增服务商自动换行，不再写死两行 chips。
-                    // 编辑已有服务时不显示——改的是连接参数，不是换供应商
-                    if (draft.id == null) {
-                        androidx.compose.foundation.layout.FlowRow(
-                            // 卡片张数不足一行时整体居中（设计稿 vgrid 视觉）
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            com.haoai.agent.ui.ProviderPresets.all.forEach { p ->
-                                val selected = draft.name == p.name && draft.baseUrl == p.baseUrl
-                                PresetCard(
-                                    label = p.label,
-                                    // 副注写「能拿到什么模型」，
-                                    // 选中后统一显示「已预填」确认反馈
-                                    sub = p.sub,
-                                    selected = selected,
-                                    onClick = { onPreset(p) }
-                                )
-                            }
-                        }
-                    }
-                    // ── 分区：连接 ──
-                    Text(
-                        "连接",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    com.haoai.agent.ui.common.CompactGlassField(
-                        value = draft.name,
-                        onValueChange = { v -> onChange(draft.copy(name = v)) },
-                        label = "名称",
-                        placeholder = "留空自动命名"
-                    )
-                    // 协议选择（2.3）：anthropic 原生 Messages / openai_compat 默认。
-                    // 紧凑排版：chip 薄化（少上下 padding），与「名称」同占一行的密度
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            "协议",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        GlassCapChip(
-                            selected = draft.protocol == "openai_compat",
-                            label = "OpenAI 兼容",
-                            onClick = { onChange(draft.copy(protocol = "openai_compat")) }
-                        )
-                        GlassCapChip(
-                            selected = draft.protocol == "anthropic",
-                            label = "Anthropic 原生",
-                            onClick = { onChange(draft.copy(protocol = "anthropic")) }
-                        )
-                    }
-                    com.haoai.agent.ui.common.CompactGlassField(
-                        value = draft.baseUrl,
-                        onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
-                        label = "Base URL",
-                        placeholder = if (draft.protocol == "anthropic") "https://api.anthropic.com"
-                        else "https://openrouter.ai/api/v1"
-                    )
-                    // API Key 默认掩码显示：防止旁人瞥见或截屏泄露；可切换明文核对。
-                    // 编辑态区分「已存过 Key」（占位符明示留空即保留）与「从未存过」
-                    var showKey by remember { mutableStateOf(false) }
-                    com.haoai.agent.ui.common.CompactGlassField(
-                        value = draft.apiKeyPlain,
-                        onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
-                        label = "API Key",
-                        placeholder = when {
-                            draft.id != null && draft.hasSavedKey -> "已保存 · 留空保持不变"
-                            draft.id != null -> "未保存过 · 该服务可能免密"
-                            else -> "sk-…"
-                        },
-                        visualTransformation =
-                            if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailing = {
-                            TextButton(onClick = { showKey = !showKey }) {
-                                Text(
-                                    if (showKey) "隐藏" else "显示",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
-                        }
-                    )
-                    // 测试连接：紧跟 Key 之后（设计稿位置），填完即测，结果就地显示，
-                    // 不用滚到底部找按钮再滚回来
-                    // 测试连接：状态 chip 就地显示 + 按钮同行（2026-09-11 重排：
-                    // 旧版结果占一行、按钮又占一行，纵向拉太长）
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        when {
-                            testing -> GlassCapChip(selected = true, label = "测试中…", onClick = {})
-                            testResult != null -> {
-                                val (ok, msg) = testResult
-                                GlassCapChip(
-                                    selected = true,
-                                    label = if (ok) "● ${msg.take(14)}" else "✕ ${msg.take(14)}",
-                                    onClick = {}
-                                )
-                            }
-                        }
-                        GlassTextButton(
-                            text = if (testing) "重新测试" else "测试连接",
-                            onClick = onTest,
-                            enabled = !testing,
-                            backdrop = backdrop
-                        )
-                    }
-                    // ── 分区：模型 ──
-                    Text(
-                        "模型",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    com.haoai.agent.ui.common.CompactGlassField(
-                        value = draft.model,
-                        onValueChange = { v -> onChange(draft.copy(model = v)) },
-                        label = "模型 ID",
-                        placeholder = "默认使用 · 如 deepseek-chat"
-                    )
-                    // 拉取列表入口也归入模型分区（它拉的就是模型）
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        GlassTextButton(
-                            text = if (fetchingModels) "拉取中…" else "拉取模型列表",
-                            onClick = onFetchModels,
-                            enabled = !fetchingModels && draft.baseUrl.isNotBlank(),
-                            backdrop = backdrop
-                        )
-                        GlassTextButton(
-                            text = if (detectingCaps) "检测中…" else "自动检测能力",
-                            onClick = onDetectCaps,
-                            enabled = !detectingCaps && draft.model.isNotBlank(),
-                            backdrop = backdrop
-                        )
-                    }
-                    detectResult?.let { (ok, msg) ->
-                        Text(
-                            msg,
-                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                    // 拉取的模型列表：可折叠面板（2026-09-11 用户反馈：旧版展开后
-                    // 不能收起、只能单点）。标题栏常显已拉取状态与数量，点按收/展；
-                    // 列表勾选多选 + 「完成」一次性并入（勾过的默认选中）。
-                    modelChoices?.let { list ->
-                        if (list.isNotEmpty()) {
-                            var open by remember(draft.id) { mutableStateOf(true) }
-                            // 已并入 draft 的 ID 默认勾选
-                            val knownIds = remember(draft.id, list) {
-                                (listOf(draft.model.trim()) + draft.models.map { it.id }.filter { it.isNotBlank() })
-                                    .filter { it.isNotBlank() }.toSet()
-                            }
-                            val selected = remember(draft.id, list) {
-                                mutableStateOf(knownIds.filter { it in list.toSet() })
-                            }
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
+                    // ═════════ 段 0：连接 ═════════
+                    if (pane == 0) {
+                        // ── 服务商预设（仅添加模式；编辑=改连接参数，不是换供应商）──
+                        if (draft.id == null) {
+                            Text(
+                                "服务商预设 · 点选即预填",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            androidx.compose.foundation.layout.FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                // 折叠标题栏
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { open = !open }
-                                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        if (fetchingModels) "拉取中…" else "拉取的模型列表",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(Modifier.size(6.dp))
-                                    Text(
-                                        "共 ${list.size} 个 · 已选 ${selected.value.size}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.weight(1f))
-                                    Text(
-                                        if (open) "收起 ▲" else "展开 ▼",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                com.haoai.agent.ui.ProviderPresets.all.forEach { p ->
+                                    val selected = draft.name == p.name && draft.baseUrl == p.baseUrl
+                                    PresetCard(
+                                        label = p.label,
+                                        sub = p.sub,
+                                        selected = selected,
+                                        onClick = { onPreset(p) }
                                     )
                                 }
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = open,
-                                    enter = androidx.compose.animation.expandVertically(
-                                        expandFrom = Alignment.Top
-                                    ) + androidx.compose.animation.fadeIn(),
-                                    exit = androidx.compose.animation.shrinkVertically(
-                                        shrinkTowards = Alignment.Top
-                                    ) + androidx.compose.animation.fadeOut()
+                            }
+                        }
+                        // ── 连接字段（名称 / 协议 / Base URL / API Key）──
+                        Text(
+                            "连接",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        com.haoai.agent.ui.common.CompactGlassField(
+                            value = draft.name,
+                            onValueChange = { v -> onChange(draft.copy(name = v)) },
+                            label = "名称",
+                            placeholder = "留空自动命名"
+                        )
+                        // 协议选择：独立一行（用户反馈：状态与协议不挤）
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                "协议",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            GlassCapChip(
+                                selected = draft.protocol == "openai_compat",
+                                label = "OpenAI 兼容",
+                                onClick = { onChange(draft.copy(protocol = "openai_compat")) }
+                            )
+                            GlassCapChip(
+                                selected = draft.protocol == "anthropic",
+                                label = "Anthropic 原生",
+                                onClick = { onChange(draft.copy(protocol = "anthropic")) }
+                            )
+                        }
+                        com.haoai.agent.ui.common.CompactGlassField(
+                            value = draft.baseUrl,
+                            onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
+                            label = "Base URL",
+                            placeholder = if (draft.protocol == "anthropic") "https://api.anthropic.com"
+                            else "https://openrouter.ai/api/v1"
+                        )
+                        // API Key 默认掩码显示；编辑态区分「已存过 Key」与「从未存过」
+                        var showKey by remember { mutableStateOf(false) }
+                        com.haoai.agent.ui.common.CompactGlassField(
+                            value = draft.apiKeyPlain,
+                            onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
+                            label = "API Key",
+                            placeholder = when {
+                                draft.id != null && draft.hasSavedKey -> "已保存 · 留空保持不变"
+                                draft.id != null -> "未保存过 · 该服务可能免密"
+                                else -> "sk-…"
+                            },
+                            visualTransformation =
+                                if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailing = {
+                                TextButton(onClick = { showKey = !showKey }) {
+                                    Text(
+                                        if (showKey) "隐藏" else "显示",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        )
+                        // 测试连接：状态 chip + 按钮同行（结果就地显示）
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            when {
+                                testing -> GlassCapChip(selected = true, label = "测试中…", onClick = {})
+                                testResult != null -> {
+                                    val (ok, msg) = testResult
+                                    GlassCapChip(
+                                        selected = true,
+                                        label = (if (ok) "✓ " else "✕ ") + msg.take(14),
+                                        onClick = {}
+                                    )
+                                }
+                            }
+                            GlassTextButton(
+                                text = if (testing) "重新测试" else "测试连接",
+                                onClick = onTest,
+                                enabled = !testing,
+                                backdrop = backdrop
+                            )
+                        }
+                    }
+
+                    // ═════════ 段 1：模型 ═════════
+                    if (pane == 1) {
+                        if (draft.id == null) {
+                            // 添加模式：空态引导
+                            Text(
+                                "先在「连接」段填好 Base URL / Key，然后 ⇣ 拉取勾选加入，或在下面手动输入模型 ID",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.06f),
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 12.dp)
+                            )
+                        }
+                        // 默认模型 ID（清单点选即提升为默认）
+                        com.haoai.agent.ui.common.CompactGlassField(
+                            value = draft.model,
+                            onValueChange = { v -> onChange(draft.copy(model = v)) },
+                            label = "默认模型 ID",
+                            placeholder = "如 deepseek-chat"
+                        )
+                        // 手动快捷录入（chip 列表 + 输入框 +）
+                        ModelIdQuickAdd(draft = draft, onChange = onChange)
+                        // 拉取入口：显式按钮（此前重构把旧「拉取模型列表」按钮删掉后，
+                        // modelChoices 永远为 null → 面板永不出现，用户反馈"看不见这个功能"）
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(percent = 50))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                                    .border(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                                        RoundedCornerShape(percent = 50)
+                                    )
+                                    .clickable(enabled = !fetchingModels && draft.baseUrl.isNotBlank()) { onFetchModels() }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    if (fetchingModels) "⇣ 拉取中…" else "⇣ 拉取模型列表",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (fetchingModels || draft.baseUrl.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant
+                                    else MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        // 拉取模型列表：可折叠 + 勾选多选（上一轮已实现）
+                        modelChoices?.let { list ->
+                            if (list.isNotEmpty()) {
+                                var open by remember(draft.id) { mutableStateOf(true) }
+                                val knownIds = remember(draft.id, list) {
+                                    (listOf(draft.model.trim()) + draft.models.map { it.id }.filter { it.isNotBlank() })
+                                        .filter { it.isNotBlank() }.toSet()
+                                }
+                                val selected = remember(draft.id, list) {
+                                    mutableStateOf(knownIds.filter { it in list.toSet() })
+                                }
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
                                 ) {
-                                    Column {
-                                        Column(Modifier.heightIn(max = 168.dp)) {
-                                            list.forEach { id ->
-                                                val checked = id in selected.value
-                                                Row(
-                                                    Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable {
-                                                            selected.value =
-                                                                if (checked) selected.value - id else selected.value + id
-                                                        }
-                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Box(
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable { open = !open }
+                                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            if (fetchingModels) "拉取中…" else "拉取的模型列表",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(Modifier.size(6.dp))
+                                        Text(
+                                            "共 ${list.size} 个 · 已选 ${selected.value.size}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(Modifier.weight(1f))
+                                        Text(
+                                            if (open) "收起 ▲" else "展开 ▼",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = open,
+                                        enter = androidx.compose.animation.expandVertically(
+                                            expandFrom = Alignment.Top
+                                        ) + androidx.compose.animation.fadeIn(),
+                                        exit = androidx.compose.animation.shrinkVertically(
+                                            shrinkTowards = Alignment.Top
+                                        ) + androidx.compose.animation.fadeOut()
+                                    ) {
+                                        Column {
+                                            Column(Modifier.heightIn(max = 168.dp)) {
+                                                list.forEach { id ->
+                                                    val checked = id in selected.value
+                                                    Row(
                                                         Modifier
-                                                            .size(15.dp)
-                                                            .border(
-                                                                1.5.dp,
-                                                                if (checked) MaterialTheme.colorScheme.primary
-                                                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f),
-                                                                RoundedCornerShape(4.dp)
-                                                            ),
-                                                        contentAlignment = Alignment.Center
+                                                            .fillMaxWidth()
+                                                            .clickable {
+                                                                selected.value =
+                                                                    if (checked) selected.value - id else selected.value + id
+                                                            }
+                                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        if (checked) Text(
-                                                            "✓",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            fontWeight = FontWeight.Black,
-                                                            color = MaterialTheme.colorScheme.primary
-                                                        )
-                                                    }
-                                                    Spacer(Modifier.size(9.dp))
-                                                    Text(
-                                                        id,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontFamily = FontFamily.Monospace,
-                                                        maxLines = 1
-                                                    )
-                                                    if (id in knownIds) {
-                                                        Spacer(Modifier.weight(1f))
+                                                        Box(
+                                                            Modifier
+                                                                .size(15.dp)
+                                                                .border(
+                                                                    1.5.dp,
+                                                                    if (checked) MaterialTheme.colorScheme.primary
+                                                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f),
+                                                                    RoundedCornerShape(4.dp)
+                                                                ),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            if (checked) Text(
+                                                                "✓",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontWeight = FontWeight.Black,
+                                                                color = MaterialTheme.colorScheme.primary
+                                                            )
+                                                        }
+                                                        Spacer(Modifier.size(9.dp))
                                                         Text(
-                                                            "已加入",
+                                                            id,
                                                             style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                            fontFamily = FontFamily.Monospace,
+                                                            maxLines = 1
                                                         )
+                                                        if (id in knownIds) {
+                                                            Spacer(Modifier.weight(1f))
+                                                            Text(
+                                                                "已加入",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
-                                        // 完成：把勾选未加入的并进 models（首个若默认位为空则补默认）
-                                        Row(
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 12.dp, vertical = 7.dp),
-                                            horizontalArrangement = Arrangement.End
-                                        ) {
-                                            GlassTextButton(
-                                                text = "加入所选（${selected.value.count { it !in knownIds }}）",
-                                                onClick = {
-                                                    val additions = selected.value.filter { it !in knownIds }
-                                                    if (additions.isNotEmpty()) {
-                                                        val newEntries = additions.map { com.haoai.agent.data.ModelEntry(it) }
-                                                        onChange(
-                                                            if (draft.model.isBlank()) draft.copy(model = additions.first(), models = draft.models + newEntries.drop(1))
-                                                            else draft.copy(models = draft.models + newEntries)
-                                                        )
-                                                    }
-                                                },
-                                                enabled = selected.value.any { it !in knownIds },
-                                                backdrop = backdrop
-                                            )
+                                            Row(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                                horizontalArrangement = Arrangement.End
+                                            ) {
+                                                GlassTextButton(
+                                                    text = "加入所选（${selected.value.count { it !in knownIds }}）",
+                                                    onClick = {
+                                                        val additions = selected.value.filter { it !in knownIds }
+                                                        if (additions.isNotEmpty()) {
+                                                            val newEntries = additions.map { com.haoai.agent.data.ModelEntry(it) }
+                                                            onChange(
+                                                                if (draft.model.isBlank()) draft.copy(model = additions.first(), models = draft.models + newEntries.drop(1))
+                                                                else draft.copy(models = draft.models + newEntries)
+                                                            )
+                                                        }
+                                                    },
+                                                    enabled = selected.value.any { it !in knownIds },
+                                                    backdrop = backdrop
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    // 同一供应商的多模型直接在这里录入（原收在「高级选项」折叠区里，
-                    // 配一个供应商要连续加好几个模型 ID 时得先展开，够不着）
-                    ModelIdQuickAdd(draft = draft, onChange = onChange)
-                    // 当前模型能力（模态勾选 + 工具/推理三态；勾选即手动覆盖，脱离自动检测）
-                    val curId = draft.model.trim()
-                    val curEntry = draft.models.find { it.id == curId }
-                    if (curId.isNotBlank()) {
-                        val curCaps = com.haoai.agent.data.CapabilityResolver.resolve(curEntry, curId)
-                        // 原位替换（2026-09-11）：勾能力不再 filterNot+追加，避免 models 重排
-                        fun patchEntry(next: com.haoai.agent.data.ModelEntry) {
-                            val idx = draft.models.indexOfFirst { it.id == next.id }
-                            val models = if (idx >= 0) draft.models.toMutableList().also { l -> l[idx] = next }
-                            else draft.models + next
-                            onChange(draft.copy(models = models))
-                        }
-                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("image" to "图像", "audio" to "音频", "video" to "视频").forEach { (mod, label) ->
-                                val on = mod in curCaps.inputs
-                                GlassCapChip(
-                                    selected = on,
-                                    label = label,
-                                    onClick = {
-                                        val ins = if (on) curCaps.inputs - mod else curCaps.inputs + mod
-                                        patchEntry(
-                                            (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(
-                                                inputModalities = ins.distinct(),
-                                                outputModalities = curCaps.outputs,
-                                                capsSource = "manual"
-                                            )
+                        // ── 能力 + 生效参数：跟随当前默认模型（draft.model）──
+                        val curId = draft.model.trim()
+                        val curEntry = draft.models.find { it.id == curId }
+                        if (curId.isNotBlank()) {
+                            val curCaps = com.haoai.agent.data.CapabilityResolver.resolve(curEntry, curId)
+                            fun patchEntry(next: com.haoai.agent.data.ModelEntry) {
+                                val idx = draft.models.indexOfFirst { it.id == next.id }
+                                val models = if (idx >= 0) draft.models.toMutableList().also { l -> l[idx] = next }
+                                else draft.models + next
+                                onChange(draft.copy(models = models))
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "能力 · ",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    curId,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Spacer(Modifier.weight(1f))
+                                // 检测按钮：胶囊描边样式（对齐定稿原型；GlassTextButton
+                                // 的 percent=50 胶囊在 labelSmall 下高度不齐，这里用
+                                // 固定 padding 的胶囊 chip 保持行内紧凑）
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(percent = 50))
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                                        .border(
+                                            1.dp,
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.30f),
+                                            RoundedCornerShape(percent = 50)
                                         )
-                                    }
+                                        .clickable(enabled = !detectingCaps) { onDetectCaps() }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        if (detectingCaps) "检测中…" else "⚡ 检测该模型",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (detectingCaps) MaterialTheme.colorScheme.onSurfaceVariant
+                                        else MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                listOf("image" to "图像", "audio" to "音频", "video" to "视频").forEach { (mod, label) ->
+                                    val on = mod in curCaps.inputs
+                                    GlassCapChip(
+                                        selected = on,
+                                        label = label,
+                                        onClick = {
+                                            val ins = if (on) curCaps.inputs - mod else curCaps.inputs + mod
+                                            patchEntry(
+                                                (curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(
+                                                    inputModalities = ins.distinct(),
+                                                    outputModalities = curCaps.outputs,
+                                                    capsSource = "manual"
+                                                )
+                                            )
+                                        }
+                                    )
+                                }
+                                CapTriChip("工具", curEntry?.tools) { v ->
+                                    patchEntry((curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v))
+                                }
+                                CapTriChip("推理", curEntry?.reasoning) { v ->
+                                    patchEntry((curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v))
+                                }
+                            }
+                            detectResult?.let { (ok, msg) ->
+                                Text(
+                                    msg,
+                                    color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall
                                 )
                             }
-                            CapTriChip("工具", curEntry?.tools) { v ->
-                                patchEntry((curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(tools = v))
-                            }
-                            CapTriChip("推理", curEntry?.reasoning) { v ->
-                                patchEntry((curEntry ?: com.haoai.agent.data.ModelEntry(curId)).copy(reasoning = v))
+                            // 生效参数：跟随当前模型（编辑态可编辑，上下文等就地显示）
+                            if (draft.id != null) {
+                                val ctxK = draft.contextLength.trim().toIntOrNull()
+                                    ?.takeIf { it > 0 }?.div(1024)
+                                val maxT = draft.maxTokens.trim().toIntOrNull()?.takeIf { it > 0 }
+                                Text(
+                                    "生效参数 · 跟随「$curId」",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    com.haoai.agent.ui.common.CompactGlassField(
+                                        value = draft.contextLength,
+                                        onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
+                                        label = "上下文",
+                                        placeholder = ctxK?.let { "${it}K（自动推测）" } ?: "自动推测",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    com.haoai.agent.ui.common.CompactGlassField(
+                                        value = draft.maxTokens,
+                                        onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
+                                        label = "回复上限",
+                                        placeholder = maxT?.toString() ?: "默认",
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
                             }
                         }
                     }
-                    // 列表行瘦身下沉的详情：ctx/max 常驻摘要（只在编辑已有服务时显示）
-                    if (draft.id != null) {
-                        val ctxK = draft.contextLength.trim().toIntOrNull()
-                            ?.takeIf { it > 0 }?.div(1024)
-                        val maxT = draft.maxTokens.trim().toIntOrNull()?.takeIf { it > 0 }
-                        Text(
-                            "生效参数 · ctx ${ctxK?.let { "${it}K" } ?: "自动"}" +
-                                (maxT?.let { " · max $it" } ?: ""),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            com.haoai.agent.ui.common.CompactGlassField(
-                                value = draft.contextLength,
-                                onValueChange = { v -> onChange(draft.copy(contextLength = v.filter { it.isDigit() }.take(8))) },
-                                label = "上下文",
-                                placeholder = "自动推测",
-                                modifier = Modifier.weight(1f)
-                            )
-                            com.haoai.agent.ui.common.CompactGlassField(
-                                value = draft.maxTokens,
-                                onValueChange = { v -> onChange(draft.copy(maxTokens = v.filter { it.isDigit() }.take(7))) },
-                                label = "回复上限",
-                                placeholder = "默认",
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    // ── 分区：高级（默认折叠，设计稿第四分区）──
-                    var advanced by remember(draft.id) { mutableStateOf(false) }
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { advanced = !advanced }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "高级",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            if (advanced) "收起 ▲" else "采样参数 / Key 池 / 余额 ▼",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    androidx.compose.animation.AnimatedVisibility(visible = advanced) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+
+                    // ═════════ 段 2：高级（采样参数 / Key 池 / 余额）═════════
+                    if (pane == 2) {
+
                             // 点2：采样参数发送开关（关=请求体不带该字段）
                             Text(
                                 "采样参数（默认不发送；开启才随请求下发）",
@@ -4027,6 +4075,7 @@ private fun ProviderDialog(
                             }
                         }
                     }
+
                     if (draftError != null) {
                         Text(
                             draftError,
@@ -4035,10 +4084,11 @@ private fun ProviderDialog(
                         )
                     }
                 }
+                // 操作栏：始终显示（钉在弹窗底部；此前被误嵌进 draftError 分支
+                // 导致正常状态看不到「取消/保存」——2026-09-11 修复）
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        // 操作栏钉在弹窗底部：滚动区收缩时它仍在键盘上方的可见区内
                         .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
@@ -4053,7 +4103,6 @@ private fun ProviderDialog(
                 }
             }
         }
-    }
     }
 }
 
@@ -4228,7 +4277,7 @@ private fun ModelIdQuickAdd(
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            "同一供应商的多个模型（聊天内直接切换，无需新建服务）",
+            "同一供应商的多个模型 · 点 chip 设为默认",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -4292,7 +4341,7 @@ private fun ModelIdChip(id: String, onPromote: () -> Unit, onRemove: () -> Unit)
     val shape = RoundedCornerShape(percent = 50)
     Row(
         Modifier
-            .height(40.dp)
+            .height(32.dp)
             .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f), shape)
             .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f), shape)
             .clickable(

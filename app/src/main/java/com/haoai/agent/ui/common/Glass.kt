@@ -927,7 +927,9 @@ fun CompactGlassField(
     androidx.compose.foundation.layout.Row(
         modifier
             .fillMaxWidth()
-            .height(48.dp)
+            // 高度 40dp（原 48）：弹窗内密度优化——48dp 在三段分段布局里
+            // 单屏能看的行数太少（2026-09-11 用户反馈输入框太大空余多）
+            .height(40.dp)
             .background(container, shape)
             .border(if (focused) 1.5.dp else 1.dp, borderColor, shape)
             .padding(end = 4.dp),
