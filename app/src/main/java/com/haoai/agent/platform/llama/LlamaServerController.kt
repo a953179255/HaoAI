@@ -270,6 +270,10 @@ class LlamaServerController(
                     progress.updateAndGet { if (pct > it) pct else it }
                     stage.set(note)
                 }
+                // 时间插值基线：server stdout 被管道全缓冲，日志里程碑要攒 4KB 才刷出来、
+                // 解析会滞后——按模型体积估算加载时长做平滑推进（里程碑命中则向上跳变）
+                val loadStartMs = android.os.SystemClock.elapsedRealtime()
+                val durationEstMs = (model.length() / (50L * 1024 * 1024)).coerceIn(8L, 300L) * 1000
                 _state.value = LlamaState.Starting(
                     if (useHtp) "加载模型 ${model.name}（Hexagon $hex NPU）… 4%" else "加载模型 ${model.name}（CPU）… 4%",
                     4
@@ -332,8 +336,13 @@ class LlamaServerController(
                             }
                         }
                     }
+                    // 百分比 = max(日志里程碑, 时间插值)：插值平滑、里程碑跳变兜底
+                    val elapsed = android.os.SystemClock.elapsedRealtime() - loadStartMs
+                    val timePct = 4 + ((91L * elapsed / durationEstMs).toInt().coerceIn(0, 91))
+                    val pct = maxOf(progress.get(), if (progress.get() < 96) timePct else progress.get())
+                    if (pct > progress.get()) progress.set(pct)
                     _state.value = LlamaState.Starting(
-                        "启动 ${progress.get()}%（${stage.get()}）", progress.get()
+                        "启动 ${pct}%（${stage.get()}）", pct
                     )
                     delay(HEALTH_INTERVAL_MS)
                 }
