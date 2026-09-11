@@ -4083,22 +4083,24 @@ private fun ProviderDialog(
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
-                }
-                // 操作栏：右下角（定稿原型 2026-09-11：取消/保存钉在弹窗底部右侧）
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
-                    LiquidPillButton(
-                        backdrop = backdrop,
-                        // 按钮写明副作用：新建保存后会自动设为当前使用的服务
-                        text = if (draft.id == null) "保存并启用" else "保存",
-                        emphasized = true
-                    ) { onSave() }
+                    // 操作栏：右下角（定稿原型 2026-09-11：取消/保存钉在弹窗底部右侧）
+                    // 注意必须在 Column(3504) 内部——放外面会变成 GlassPanel Box 的
+                    // 直接子组件，被叠到面板右上角（8e8147a 的教训）
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GlassTextButton(text = "取消", onClick = onDismiss, backdrop = backdrop)
+                        LiquidPillButton(
+                            backdrop = backdrop,
+                            // 按钮写明副作用：新建保存后会自动设为当前使用的服务
+                            text = if (draft.id == null) "保存并启用" else "保存",
+                            emphasized = true
+                        ) { onSave() }
+                    }
                 }
             }
         }
