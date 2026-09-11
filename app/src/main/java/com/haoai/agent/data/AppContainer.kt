@@ -51,7 +51,9 @@ class AppContainer(app: Application) {
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(300, TimeUnit.SECONDS)
+        // 120s：流式期间静默死亡的网络（如飞行模式静默断连）最长拖 2 分钟就报错，
+        // 300s 会让用户误判卡死（e2e P2-4）。推理思考的静默间隙远小于此（reasoning 持续出 delta）
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .addInterceptor(com.haoai.agent.platform.NetGuard.interceptor())
         .build()

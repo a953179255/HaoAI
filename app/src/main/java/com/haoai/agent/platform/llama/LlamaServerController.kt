@@ -179,6 +179,44 @@ class LlamaServerController(
         return if (f.exists()) f.absolutePath else null
     }
 
+    /** ELF 完整性预检：可执行 .so 的 PT_DYNAMIC 必须含 DT_HASH(4)/DT_GNU_HASH(0x6ffffef5)，
+     *  否则 bionic linker 报 "empty/missing DT_HASH" 拒绝加载。 */
+    private fun isElfLinked(path: String): Boolean = runCatching {
+        java.io.RandomAccessFile(path, "r").use { f ->
+            val head = ByteArray(64)
+            if (f.read(head) < 64) return@use false
+            if (head[0] != 0x7F.toByte() || head[1] != 'E'.code.toByte() || head[2] != 'L'.code.toByte()) return@use false
+            val buf = java.nio.ByteBuffer.wrap(head).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            val phoff = buf.getLong(0x20)
+            val phentsize = buf.getShort(0x36).toInt()
+            val phnum = buf.getShort(0x38).toInt()
+            if (phoff <= 0 || phentsize < 56) return@use false
+            repeat(phnum) { i ->
+                val ph = ByteArray(56)
+                f.seek(phoff + i.toLong() * phentsize)
+                if (f.read(ph) < 56) return@use false
+                val p = java.nio.ByteBuffer.wrap(ph).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                if (p.getInt(0) == 2) { // PT_DYNAMIC
+                    val pOffset = p.getLong(0x08)
+                    val pFilesz = p.getLong(0x20)
+                    var j = 0L
+                    while (j + 16 <= pFilesz) {
+                        f.seek(pOffset + j)
+                        val entry = ByteArray(16)
+                        if (f.read(entry) < 16) return@use false
+                        val e = java.nio.ByteBuffer.wrap(entry).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        val tag = e.getLong(0)
+                        if (tag == 0L) break
+                        if (tag == 4L || tag == 0x6ffffef5L) return@use true
+                        j += 16
+                    }
+                    return@use false
+                }
+            }
+            false
+        }
+    }.getOrDefault(true)
+
     suspend fun ensureStarted(preferredFile: String? = null): Boolean = withContext(Dispatchers.IO) {
         val current = _state.value
         if (current is LlamaState.Running) {
@@ -205,6 +243,12 @@ class LlamaServerController(
             val bin = binaryPath()
             if (bin == null) {
                 _state.value = LlamaState.Failed("此设备缺少端侧推理组件（ABI 不支持）")
+                return@withLock false
+            }
+            // 二进制完整性预检：坏 .so（缺动态符号表）bionic linker 直接拒绝，症状只是
+            // "server 进程退出"难排查（e2e 2026-09-11 P3-4）。解析异常不拦截，保守放行走原错误路径。
+            if (!isElfLinked(bin)) {
+                _state.value = LlamaState.Failed("端侧推理组件损坏（缺少动态符号表），请卸载后重新安装 APK")
                 return@withLock false
             }
             val model = preferredFile

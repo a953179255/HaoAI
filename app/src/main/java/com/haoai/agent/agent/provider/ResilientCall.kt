@@ -72,7 +72,13 @@ class ResilientCall(
             // 429 / 5xx 可重试；400/401/403 业务错误不重试
             return code == 429 || code >= 500
         }
-        // 无 HTTP 标记：连接/读超时/DNS 等网络错误
+        // DNS 解析失败：断网/飞行模式下重试必然再失败，只会让用户干等
+        // （实测断网 ~5 分钟才报错，e2e P2-4）——立即失败给人话报错
+        if (e is java.net.UnknownHostException ||
+            msg.contains("unable to resolve host", ignoreCase = true) ||
+            msg.contains("no address associated", ignoreCase = true)
+        ) return false
+        // 无 HTTP 标记：连接/读超时等其他网络错误
         return true
     }
 

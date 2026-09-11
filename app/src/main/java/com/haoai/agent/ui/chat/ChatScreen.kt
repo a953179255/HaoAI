@@ -1098,6 +1098,11 @@ fun ChatScreen(
         }
 
         error?.let { msg ->
+            // 8 秒自动消失：此前只能手动关，断网报错会挂屏很久（e2e P3-6）
+            LaunchedEffect(msg) {
+                kotlinx.coroutines.delay(8000)
+                vm.dismissError()
+            }
             Snackbar(
                 modifier = Modifier
                     .align(Alignment.TopCenter)

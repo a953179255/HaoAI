@@ -496,6 +496,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (!isResumeInject) s.runGoal = text.takeSafe(200)
         s.runTurnsUsed = 0
         s.runState = "running"
+        // 落盘前回填 store 里较新的标题状态（上一轮标题协程可能刚写完，副本是旧的）
+        syncTitleFromStore(s)
         runCatching { c.sessionStore.save(s) }
         job = viewModelScope.launch {
             var turnEngine: AgentEngine? = null
@@ -530,6 +532,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
                 // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
                 val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
+                // 落盘前回填 store 里较新的标题状态：打断/结束时标题协程可能已写 store，
+                // 用发送前的旧副本直接 save 会把新标题盖回旧值（e2e P2-1 打断标题回退根因）
+                syncTitleFromStore(s)
                 s.runState = endState
                 runCatching { c.sessionStore.save(s) }
                 // 用户可能已切换会话：仅在仍看该会话时回写视图（copy 确保 StateFlow 重发射）
@@ -589,7 +594,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * 智能会话标题：首轮对话完成后用当前模型总结 ≤12 字标题。
      * 只生成一次（titleAuto 标记），异步执行、静默失败，不阻塞下一次对话。
      */
+    /** 把 store 里较新的标题状态回填进会话副本。标题协程是异步写 store 的，而
+     *  send/resume 持有的是发送前捕获的副本——直接 save(旧副本) 会把新生成的标题
+     *  盖回旧值，陈旧 titleAuto 还会触发重复生成（打断后标题回退的根因，e2e P2-1）。 */
+    private fun syncTitleFromStore(s: StoredSession) {
+        if (s.titleAuto) return
+        runCatching { c.sessionStore.load(s.id) }.getOrNull()?.let { fresh ->
+            if (fresh.titleAuto) {
+                s.titleAuto = true
+                if (fresh.title.isNotBlank()) s.title = fresh.title
+            }
+        }
+    }
+
     private fun maybeGenerateTitle(s: StoredSession) {
+        syncTitleFromStore(s)
         if (s.titleAuto) return
         val hasUser = s.messages.any {
             it.role == com.haoai.agent.agent.model.ChatMessage.ROLE_USER && it.content.isNotBlank()
@@ -621,9 +640,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
             return
         }
-        // 先落标记再请求：失败也不重试，避免每轮都烧 token
-        s.titleAuto = true
-        c.sessionStore.save(s)
+        // 先落标记再请求：失败也不重试，避免每轮都烧 token。
+        // 用 store 最新实例落盘：直接 save(旧副本) 会盖掉期间其他写入（P2-1 同源）
+        runCatching {
+            val latest = c.sessionStore.load(s.id) ?: s
+            latest.titleAuto = true
+            s.titleAuto = true
+            c.sessionStore.save(latest)
+        }
         viewModelScope.launch {
             // 点6：标题模型链式降级——主+备用按序尝试，拿到非空标题即止
             val chain = if (titleCfgId.isEmpty()) emptyList()
@@ -647,11 +671,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         .replace('\n', ' ')
                         .takeSafe(24)
                     if (t.isNotBlank()) {
+                        // 落盘用 store 最新实例：期间可能有 runState 等其他写入，
+                        // 标题/titleAuto 字段以本次为准；副本与 currentSession 同步更新
+                        val latest = c.sessionStore.load(s.id) ?: s
+                        latest.titleAuto = true
+                        latest.title = t
+                        s.titleAuto = true
                         s.title = t
-                        c.sessionStore.save(s)
+                        c.sessionStore.save(latest)
                         refreshSessions()
                         // copy() 强制 StateFlow 发射（同引用修改不会触发更新）
-                        if (_session.value?.id == s.id) _session.value = s.copy()
+                        if (_session.value?.id == s.id) _session.value = latest.copy()
+                        if (currentSession?.id == s.id) currentSession = latest.copy()
                         true
                     } else false
                 } catch (e: kotlinx.coroutines.CancellationException) {
