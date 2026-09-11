@@ -128,6 +128,11 @@ class AgentEngine(
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
     private var _loopFailedCap = false
 
+    /** P2-5 重放保护状态：turn 内最后一次非 READ 工具执行的签名与结果。
+     *  LLM 流瞬态重试会重发同一工具序列，紧邻同名同参的写类调用直接返回上次结果。 */
+    private var lastExecutedSig: String? = null
+    private var lastExecutedResult: ToolResult? = null
+
     /** E4b tools_enable 生效标记：工具组变更后主循环尾重建工具清单（下一轮 LLM 请求生效）。 */
     @Volatile private var _groupsDirty = false
 
@@ -218,6 +223,9 @@ class AgentEngine(
         val turnStartMs = System.currentTimeMillis()
         var turnPrompt = 0L
         var turnCompletion = 0L
+        // P2-5 重放保护按 turn 归零（跨 turn 的合法重复调用不受影响）
+        lastExecutedSig = null
+        lastExecutedResult = null
         /** E5b 单轮工具调用累计（圈数熔断计数）。 */
         var turnToolCalls = 0
         /** E5b 软提醒只注入一次。 */
@@ -579,6 +587,25 @@ class AgentEngine(
         ctx: ToolContext,
         onEvent: (TurnEvent) -> Unit
     ) {
+        // P2-5 重放保护：LLM 流瞬态重试（网络波动/看门狗）会把同一轮已执行的工具
+        // 序列重新发送。"非 READ 工具 + 同名同参 + 紧邻上一次执行"→ 判定为重放，
+        // 返回上次结果不再执行（写类重复可能产生真实副作用）；READ 类放行（连续
+        // 滚动/重复读页是合法操作）。
+        val replaySig = call.name + "|" + call.argumentsJson.trim()
+        val isReplay = replaySig == lastExecutedSig &&
+            lastExecutedResult != null &&
+            policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ
+        if (isReplay) {
+            val prev = lastExecutedResult!!
+            onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.DONE, briefOf(call), "重放跳过：与上一次调用相同，返回已有结果")))
+            val storedP = TextCap.middle(prev.content, STORED_CAP)
+            appendAndNotify(
+                ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, toolCallId = call.id, toolName = call.name),
+                onEvent
+            )
+            return
+        }
+
         onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.RUNNING, briefOf(call))))
 
         val tool = tools.firstOrNull { it.name == call.name }
@@ -694,6 +721,11 @@ class AgentEngine(
                 result = invokeTool(tool, args, callCtx)
                 if (result.isError) finalState = ToolRunState.ERROR
             }
+        }
+        // 记录签名供重放保护比对（仅非 READ 工具参与判定）
+        if (policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ) {
+            lastExecutedSig = replaySig
+            lastExecutedResult = result
         }
         finishCall(call, args, callCtx, result, finalState, toolStartMs, decision, onEvent)
     }
