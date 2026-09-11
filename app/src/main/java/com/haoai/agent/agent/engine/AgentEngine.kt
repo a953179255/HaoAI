@@ -1063,6 +1063,14 @@ class AgentEngine(
             }
             .trim()
         if (transcript.length < 80) return
+        // M-1 修复①：提取提示词携带现有记忆清单——换述级重复在源头就不让提
+        // （remember() 的归一化去重只抓标点/空白差异，"的/。"差异与措辞改写必然穿透）
+        val existingBlock = run {
+            val actives = bank.all() // 已滤软失效，createdAt 降序：最近讨论过的事实正是重复风险最高的
+            if (actives.isEmpty()) ""
+            else "\n\n[已有记忆清单]（提取前逐条对照，与下列相同或仅措辞不同的内容一律不要输出）：" +
+                actives.take(30).joinToString("\n") { "- ${it.content.take(60)}" }
+        }
         scope.launch {
             // 5.3 记忆提取路由链（点6）：主+备用按序尝试，空配置回落主模型
             val memChain = runCatching { memoryTarget?.invoke() }.getOrNull() ?: emptyList()
@@ -1076,7 +1084,7 @@ class AgentEngine(
                     memClient.chatStream(
                         memProv, memKey,
                         listOf(
-                            ApiMessage(role = "system", content = EXTRACT_SYSTEM),
+                            ApiMessage(role = "system", content = EXTRACT_SYSTEM + existingBlock),
                             ApiMessage(role = "user", content = TextCap.middle(transcript, 4000))
                         ),
                         emptyList()
@@ -1089,7 +1097,18 @@ class AgentEngine(
                     }
                     ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true, model = memProv.model)
                     parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
-                        bank.remember(content, tags, importance = 2, source = "auto")
+                        // M-1 修复②：入库前近冲突闸门——与既有条目词面相近（换述）即跳过。
+                        // auto 记忆 imp=2 定位是兜底而非主通道：真正的信息更新由模型在对话里
+                        // 主动 save（M3 近冲突提示引导 merge），提取层漏记一条可接受、污染一条难清理。
+                        val nearDup = bank.nearConflicts(content).firstOrNull()
+                        if (nearDup != null) {
+                            android.util.Log.i(
+                                "HaoMemory",
+                                "auto 提取跳过（与 ${nearDup.id} 近冲突）：${content.take(40)}"
+                            )
+                        } else {
+                            bank.remember(content, tags, importance = 2, source = "auto")
+                        }
                     }
                 }
                 if (r.isSuccess) break
@@ -1947,7 +1966,8 @@ class AgentEngine(
             1) 用户明确表达的长期偏好、身份信息（名字/职业/城市）、长期项目背景、重要约定或纠正你的教训；
             2) 半年后仍然有效；
             3) 不查资料就能复述价值。
-            严禁提取：本次任务的执行细节、代码/命令、临时状态、寒暄、你自己的回答内容、常识。
+            严禁提取：本次任务的执行细节、代码/命令、临时状态、寒暄、你自己的回答内容、常识，
+            以及消息末尾[已有记忆清单]里已有的内容——相同或仅措辞不同的换述都算重复（M-1：重复入库只会污染记忆库）。
             只输出 JSON 数组，每项 {"content":"...","tags":["..."]}，最多 2 条，每条一句话且自包含；
             没有符合条件的内容必须输出 []。拿不准就不记——漏记一条无关紧要，记错会永久污染记忆库。
         """.trimIndent()
