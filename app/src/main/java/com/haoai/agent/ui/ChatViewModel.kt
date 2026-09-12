@@ -131,7 +131,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun liveToolsSnapshot(): List<UiTool> = _liveToolsSnapshot.value
 
     private fun publishLiveTools() {
-        _liveToolsSnapshot.value = liveTools.values.toList()
+        // 会话门控：仅当查看的正是本实例 job 的归属会话才透出工具时间轴。
+        // 引擎事件在切走后仍持续更新 liveTools（切回时时间轴无缝续上）；
+        // 无运行任务（owner=null）时也透空，防止上一轮残留（与 selectSession 的 clear 对齐）。
+        val owner = _runSessionId.value
+        _liveToolsSnapshot.value =
+            if (owner != null && _session.value?.id == owner) liveTools.values.toList() else emptyList()
     }
 
     private val _session = MutableStateFlow<StoredSession?>(null)
@@ -205,21 +210,40 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private val _running = MutableStateFlow(false)
 
+    /** 本实例 job 归属的会话：send/compact/btw 入口记入、finally 清空。
+     *  会话渗漏修复（切到别的会话不再显示后台任务的进度）的归属依据。 */
+    private val _runSessionId = MutableStateFlow<String?>(null)
+
     /** D16 跨实例停止句柄：注册表按 identity 条件摘除，须全程同一实例。 */
     private val runStopHandle: () -> Unit = { stop() }
 
     /**
-     * D16 UI 运行态：本实例有 job，或当前会话仍被进程内其他实例的引擎持有
-     * （实例分裂场景）——两种情况停止键都必须出现且可用。
+     * D16 UI 运行态（会话门控版）：仅当「查看的正是本实例 job 的归属会话」，
+     * 或「该会话被进程内其他实例的引擎持有」（实例分裂场景）时为真。
+     * 停止键在后者仍可用（D16 语义保留）；查看其他会话时进度不再渗漏，
+     * 后台任务的停止入口在通知任务卡/悬浮窗（全局面，属设计）。
      */
     val running = kotlinx.coroutines.flow.combine(
-        _running, _session, com.haoai.agent.platform.AgentRunRegistry.activeIds
-    ) { own, s, ids -> own || (s != null && s.id in ids) }
-        .stateIn(
-            viewModelScope,
-            kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
-            false
-        )
+        _running, _runSessionId, _session, com.haoai.agent.platform.AgentRunRegistry.activeIds
+    ) { own, owner, s, ids ->
+        (own && owner != null && s?.id == owner) || (s != null && s.id in ids)
+    }.stateIn(
+        viewModelScope,
+        kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+        false
+    )
+
+    /** 会话门控的流式展示：切走后为 null（别的会话不再渲染本任务的流式气泡），
+     *  切回归属会话时带全量继续（_streamingText 后台照常累积，也是悬浮窗尾部的数据源）。 */
+    val visibleStreamingText = kotlinx.coroutines.flow.combine(
+        _streamingText, _runSessionId, _session
+    ) { t, owner, s -> if (owner != null && s?.id == owner) t else null }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
+
+    val visibleStreamingReasoning = kotlinx.coroutines.flow.combine(
+        _streamingReasoning, _runSessionId, _session
+    ) { r, owner, s -> if (owner != null && s?.id == owner) r else null }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
 
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
@@ -296,7 +320,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val s = StoredSession.create(c.workspace.workspaceUriForSession)
         currentSession = s
         c.sessionStore.save(s)
-        liveTools.clear()
+        // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定
+        publishLiveTools()
         sessionIn = 0
         sessionOut = 0
         _session.value = s
@@ -316,7 +341,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             runCatching { c.sessionStore.save(s) }
         }
         currentSession = s
-        liveTools.clear()
+        // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定：
+        // 切到其他会话透空，切回运行会话时间轴无缝续上
+        publishLiveTools()
         sessionIn = 0
         sessionOut = 0
         _session.value = s
@@ -475,6 +502,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 「刚完成」灌进任务卡/悬浮窗（旧消息的完成态由落库结果兜底渲染，清掉无碍）
         liveTools.clear()
         publishLiveTools()
+        _runSessionId.value = s.id
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
@@ -533,6 +561,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // showStreaming(=running) 仍真 → 最终行下方渲染空"正在思考"占位气泡，
                 // 消失时又触发一轮滚动修正，表现为结束瞬间先冲过头再弹回的抖动
                 _running.value = false
+                _runSessionId.value = null
+                publishLiveTools() // 归属清空 → 门控立即透空，防上一轮工具卡残留
                 com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
                 com.haoai.agent.platform.RunObserver.end()
                 flushUsage()
@@ -771,6 +801,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     return true
                 }
                 val engine = buildEngine(s, provider)
+                _runSessionId.value = s.id
                 _running.value = true
                 // 挂到 job 上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
                 job = viewModelScope.launch {
@@ -782,6 +813,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         }
                     } finally {
                         _running.value = false
+                        _runSessionId.value = null
                         _streamingText.value = null
                         refreshSessions()
                     }
@@ -842,6 +874,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return
         }
         val s = currentSession ?: return
+        _runSessionId.value = s.id
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
@@ -870,6 +903,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 )
             } finally {
                 _running.value = false
+                _runSessionId.value = null
                 endStreaming()
                 com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
                 com.haoai.agent.platform.RunObserver.end()
@@ -1026,14 +1060,22 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 publishSteps()
             }
             is Finished -> {
-                if (ev.error != null && ev.error != "已停止") _error.value = ev.error
+                // 运行期错误走会话门控：仅当用户仍看着运行会话才弹 Snackbar——
+                // 切到别的会话时不再把 A 的失败提示弹进 B（归属会话的历史里有失败痕迹）
+                if (ev.error != null && ev.error != "已停止") runError(ev.error)
                 // 5.2 降级提示：回合结束消费（SnackBar 显示「已降级到 X」）
                 c.lastFallbackNotice?.let { name ->
                     c.lastFallbackNotice = null
-                    _error.value = "已降级到 $name（主服务请求失败）"
+                    runError("已降级到 $name（主服务请求失败）")
                 }
             }
         }
+    }
+
+    /** 运行期错误的会话门控弹出：查看的正是运行会话（或无运行任务）才弹，否则留给历史/通知卡兜底。 */
+    private fun runError(msg: String) {
+        val owner = _runSessionId.value
+        if (owner == null || owner == _session.value?.id) _error.value = msg
     }
 
     /** 把当前活动工具状态镜像给 RunObserver（通知/悬浮窗消费）。 */
@@ -1507,6 +1549,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         job?.cancel()
         job = null
         _running.value = false
+        // 取消是异步的（send/compact/btw 的 finally 会迟到一拍），归属先摘，
+        // 防止停止瞬间门控流仍把该会话判为运行中
+        _runSessionId.value = null
+        publishLiveTools()
         // 停 flusher 并丢弃缓冲残余（任务已取消，未上屏的尾部 token 不再有意义）
         streamFlusher?.cancel()
         streamFlusher = null

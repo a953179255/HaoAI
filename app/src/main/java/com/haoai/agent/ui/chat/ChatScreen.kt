@@ -277,8 +277,9 @@ fun ChatScreen(
     }
 
     val rows by vm.rows.collectAsState()
-    val streaming by vm.streamingText.collectAsState()
-    val streamingReasoning by vm.streamingReasoning.collectAsState()
+    // 会话门控版流式展示：切到其他会话时为 null，不渲染别的会话正在生成的回答
+    val streaming by vm.visibleStreamingText.collectAsState()
+    val streamingReasoning by vm.visibleStreamingReasoning.collectAsState()
     val thinkingMs by vm.thinkingMs.collectAsState()
     val running by vm.running.collectAsState()
     val liveToolsSnapshot by vm.liveToolsSnapshotFlow.collectAsState()
