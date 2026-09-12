@@ -118,11 +118,16 @@ class SkillHintHook(
         ctx: ToolContext,
         result: ToolResult
     ): ToolResult {
+        val action = args.optString("action", "list").lowercase()
+        // M-2 修复：疗效遥测与自改进提示只跟真正的"取用"（view）走。此前 save/list/delete
+        // 也被 recordUseResult 记成成功/失败——"存了个技能"算成"用成功一次"，成/败计数与
+        // useCount 口径分裂（技能页出现"使用 0 次 · 成 1/败 0"）。
+        if (action != "view") return result
         val skillName = args.optString("name").ifBlank { "unknown" }
         val resultTag = if (result.isError) "failed: ${result.content.take(80)}" else "success"
-        runCatching { store.recordUseResult(skillName, resultTag) }
-        val hintKey = skillName
-        if (hintedSkills.add(hintKey)) {
+        // 仅当技能确实存在（记录成功）才追加自改进提示：view 不存在的技能名不该提示"修订该技能"
+        val recorded = runCatching { store.recordUseResult(skillName, resultTag) }.getOrDefault(false)
+        if (recorded && hintedSkills.add(skillName)) {
             val hint = if (result.isError) {
                 "\n\n[技能自改进] 技能「$skillName」刚被使用（结果：失败——${result.content.take(80)}）。若失败暴露了技能步骤缺陷，用 skill save 修订该技能。"
             } else {

@@ -12,10 +12,11 @@ class MemoryTool : Tool {
 
     override val name = "memory"
     override val description =
-        "记忆系统（两层）。action: save / journal / search(query) / list / forget(id 或关键词) / merge(ids, content)。" +
+        "记忆系统（两层）。action: save / journal / search(query) / list / forget / merge(ids, content)。" +
             "save=长期记忆库（容量有限，宁缺毋滥）：content 一句话、type 取 preference(用户偏好)/fact(稳定事实)/decision(重要决定)/event(带日期事件)，importance 1-5。" +
             "journal=每日日志（当天发生的事，7 天后过期）：content 一句话、importance 1-5；夜间重要日志(importance>=4)会自动晋升为长期记忆。" +
             "merge=把多条相近旧记忆合并成一条新记忆（ids 逗号分隔旧条目 id，content 为合并后的表述）：新旧信息冲突、或收到相近记忆提示时优先用 merge，一步完成取代。" +
+            "forget=删除记忆：传 id（精确匹配，也接受 ids 逗号分隔多个）优先；或传 query 按内容关键词删。" +
             "save 只记：用户明确说出的偏好与习惯、纠正你的教训、重要约定与决定、项目长期背景。" +
             "journal 记：今天完成的重要进展、遇到的问题与解决方式、用户交代的事项。" +
             "两者都不要记：闲聊内容、能随时查到的信息、当前会话的临时状态、与已有记录重复的内容、" +
@@ -36,6 +37,7 @@ class MemoryTool : Tool {
             }
             putJsonObject("content") { put("type", "string") }
             putJsonObject("ids") { put("type", "string") }
+            putJsonObject("id") { put("type", "string") }
             putJsonObject("tags") { put("type", "string") }
             putJsonObject("query") { put("type", "string") }
             putJsonObject("type") { put("type", "string") }
@@ -107,7 +109,10 @@ class MemoryTool : Tool {
             "search" -> {
                 val hits = bank.search(args.optString("query"), 5)
                 if (hits.isEmpty()) ToolResult("没有匹配的记忆")
-                else ToolResult(hits.joinToString("\n") { "- (${it.id}) ${it.content}" })
+                else ToolResult(hits.joinToString("\n") {
+                    // M-4：带上重要度/类型，模型判断取舍不再需要自己去 grep 文件
+                    "- (${it.id} · imp${it.importance} · ${it.type}) ${it.content}"
+                })
             }
 
             "list" -> {
@@ -115,14 +120,34 @@ class MemoryTool : Tool {
                 if (items.isEmpty()) ToolResult("记忆为空")
                 else ToolResult(
                     "共 ${items.size} 条：\n" + items.take(30)
-                        .joinToString("\n") { "- (${it.id}) ${it.content.take(120)}" }
+                        .joinToString("\n") {
+                            "- (${it.id} · imp${it.importance} · ${it.type}) ${it.content.take(120)}"
+                        }
                 )
             }
 
             "forget" -> {
-                val n = bank.forget(args.optString("query").ifBlank { args.optString("content") })
-                if (n == 0) ToolResult("未找到匹配的记忆", true)
-                else ToolResult("已删除 $n 条记忆")
+                // M-3 修复：id/ids 参数此前被静默丢弃（描述写了"forget(id 或关键词)"但实现只读
+                // query/content，模型按 id 删→"未找到"连败只能靠关键词摸索）。bank.forget 本就
+                // 支持 id 精确/前缀匹配，这里把参数接上；多 id 用 removeIds 精确批量删。
+                val idHint = args.optString("id").ifBlank { args.optString("ids") }
+                val idList = idHint.split(',', '，', ' ')
+                    .map { it.trim() }.filter { it.isNotEmpty() }
+                val n = when {
+                    idList.size > 1 -> bank.removeIds(idList)
+                    idList.size == 1 -> bank.forget(idList[0])
+                    else -> bank.forget(
+                        args.optString("query").ifBlank { args.optString("content") }
+                    )
+                }
+                if (n == 0) {
+                    ToolResult(
+                        "未找到匹配的记忆。" +
+                            (if (idHint.isNotBlank()) "传入的 id（$idHint）可能不存在或已失效，用 list 确认最新 id；"
+                            else "换更独特的关键词重试，或用 list 拿到 id 后按 id 删。"),
+                        true
+                    )
+                } else ToolResult("已删除 $n 条记忆")
             }
 
             else -> ToolResult("未知 action", true)
