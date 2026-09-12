@@ -65,9 +65,34 @@ data class StoredSession(
         const val RUN_TURNCAPPED = "turncapped"
         const val RUN_FAILED = "failed"
 
+        /** 中断尾部形态（OpenMinis InterruptedTailDetector 式）：断在哪决定恢复横幅说什么。 */
+        const val TAIL_CLEAN = "clean"
+        const val TAIL_UNANSWERED_USER = "unanswered_user"
+        const val TAIL_TOOL = "tool"
+        const val TAIL_PARTIAL_ASSISTANT = "partial_assistant"
+
         /** 是否需要展示恢复入口（显式主动停止/完成除外）。 */
         fun resumable(runState: String?): Boolean =
             runState == RUN_INTERRUPTED || runState == RUN_TURNCAPPED || runState == RUN_FAILED
+
+        /**
+         * 从消息尾部判定中断形态：最后一条实质消息是什么，任务就断在哪一步。
+         * 用户消息没有回复=还没开始干；停在 tool=工具循环中断；assistant=回答生成到一半。
+         * 纯函数、运行时判定不入库；判定与活性分离（是否在跑由调用方先行 gate，
+         * 把两者混在一起会把"还在等回复的 turn"误报成中断）。
+         */
+        fun tailShapeOf(messages: List<StoredMessage>): String {
+            for (i in messages.indices.reversed()) {
+                val m = messages[i]
+                if (m.content.isBlank() && m.toolName == null) continue
+                return when {
+                    m.role == ChatMessage.ROLE_USER -> TAIL_UNANSWERED_USER
+                    m.role == ChatMessage.ROLE_TOOL || (m.role == ChatMessage.ROLE_ASSISTANT && m.toolName != null) -> TAIL_TOOL
+                    else -> TAIL_PARTIAL_ASSISTANT
+                }
+            }
+            return TAIL_CLEAN
+        }
 
         fun create(workspaceUri: String?): StoredSession {
             val now = System.currentTimeMillis()

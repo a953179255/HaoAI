@@ -116,6 +116,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)
     }
 
+    /**
+     * 代际栅栏（OpenClaw isCurrent 模式）：异步回调把结果写入会话 UI 前，
+     * 必须确认"发起时的会话仍是当前查看的会话"，否则丢弃——防 diff/快照等
+     * 慢回包落到切换后的别的会话界面上（跨会话渗漏的异步形态）。
+     */
+    fun isCurrentSession(sessionId: String?): Boolean =
+        sessionId != null && sessionId == _session.value?.id
+
     private var job: Job? = null
     private val liveTools = mutableMapOf<String, UiTool>()
 
@@ -264,6 +272,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val snap = c.sessionStore.let {
             com.haoai.agent.agent.tools.snapshot.FileSnapshot.read(c.appFilesDir, sid, callId)
         } ?: return null
+        // 代际栅栏：读快照期间切走了会话 → diff 不落地（否则会显示在别的会话界面上）
+        if (!isCurrentSession(sid)) return null
         val (meta, before, after) = snap
         return meta.path to com.haoai.agent.ui.common.TextDiff.diffText(before ?: "", after ?: "").lines
     }

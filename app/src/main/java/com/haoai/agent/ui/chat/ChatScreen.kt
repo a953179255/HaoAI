@@ -346,6 +346,11 @@ fun ChatScreen(
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
     // 工具卡"查看变更"（1.3）：从写前快照现算 diff
     var diffViewer by remember { mutableStateOf<Pair<String, List<com.haoai.agent.ui.common.DiffLine>>?>(null) }
+    // 代际栅栏（显示侧）：diff 属于打开它的那个会话，切会话即关，防旧会话的变更弹窗盖在别的会话上
+    val diffViewerSessionId = vm.session.collectAsState().value?.id
+    androidx.compose.runtime.LaunchedEffect(diffViewerSessionId) {
+        diffViewer = null
+    }
     val snapshotScope = rememberCoroutineScope()
 
     val scope = rememberCoroutineScope()
@@ -720,7 +725,14 @@ fun ChatScreen(
                 onQuickRegenerate = { vm.regenerateFrom(it.id) },
                 onQuickEdit = { editTarget = it },
                 onToolViewDiff = { callId ->
-                    snapshotScope.launch { diffViewer = vm.snapshotDiff(callId) }
+                    snapshotScope.launch {
+                        val sidAtRequest = vm.session.value?.id
+                        val diff = vm.snapshotDiff(callId)
+                        // 双保险：snapshotDiff 内部已栅栏，这里再校验一次防窗口间隙
+                        if (diff != null && sidAtRequest != null && vm.isCurrentSession(sidAtRequest)) {
+                            diffViewer = diff
+                        }
+                    }
                 },
                 onToolRollback = { callId ->
                     snapshotScope.launch {
@@ -804,6 +816,14 @@ fun ChatScreen(
                 // E1 断点恢复横幅：从顶栏下沿延展出现（running 标记由 selectSession 死亡检测置入）
                 val runStateNow = activeSession?.runState
                 val runGoalNow = activeSession?.runGoal
+                // 中断尾部形态：按会话+消息数记忆，避免每次重组重扫消息列表
+                val tailShape = remember(
+                    activeSession?.id, activeSession?.messages?.size, runStateNow
+                ) {
+                    if (com.haoai.agent.data.StoredSession.resumable(runStateNow))
+                        com.haoai.agent.data.StoredSession.tailShapeOf(activeSession?.messages ?: emptyList())
+                    else com.haoai.agent.data.StoredSession.TAIL_CLEAN
+                }
                 androidx.compose.animation.AnimatedVisibility(
                     visible = com.haoai.agent.data.StoredSession.resumable(runStateNow) && runGoalNow != null,
                     enter = androidx.compose.animation.fadeIn() +
@@ -838,9 +858,16 @@ fun ChatScreen(
                                     maxLines = 2
                                 )
                                 Text(
-                                    when (runStateNow) {
-                                        com.haoai.agent.data.StoredSession.RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
-                                        com.haoai.agent.data.StoredSession.RUN_FAILED -> "执行出错，可继续尝试"
+                                    // 尾部形态优先：断在哪一步比"哪种结束状态"更值得说（OpenMinis 式）
+                                    when {
+                                        tailShape == com.haoai.agent.data.StoredSession.TAIL_UNANSWERED_USER ->
+                                            "消息已发出但任务未开始执行，可继续"
+                                        tailShape == com.haoai.agent.data.StoredSession.TAIL_TOOL ->
+                                            "停在工具执行中，可继续任务"
+                                        tailShape == com.haoai.agent.data.StoredSession.TAIL_PARTIAL_ASSISTANT ->
+                                            "回答生成到一半中断，可继续生成"
+                                        runStateNow == com.haoai.agent.data.StoredSession.RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
+                                        runStateNow == com.haoai.agent.data.StoredSession.RUN_FAILED -> "执行出错，可继续尝试"
                                         else -> "进程中断，可继续执行"
                                     },
                                     style = MaterialTheme.typography.labelSmall,
