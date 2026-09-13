@@ -118,6 +118,7 @@ object ToolRegistry {
             if (subagentControl != null) {
                 add(StopAgentTool(subagentControl))
                 add(SteerAgentTool(subagentControl))
+                add(CollectAgentTool(subagentControl))
             }
         }
         }

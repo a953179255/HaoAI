@@ -22,6 +22,8 @@ class SubagentHandle(
     val steps: ConcurrentLinkedQueue<String> = ConcurrentLinkedQueue(),
     /** 最近一次模型中间输出（未定稿的结论草稿）。 */
     @Volatile var lastAssistant: String = "",
+    /** P3 最终结果（完成/失败/被终止时写入；collect_agent 读取）。 */
+    @Volatile var finalResult: String? = null,
     val steering: ConcurrentLinkedQueue<String> = ConcurrentLinkedQueue()
 ) {
     /** P1.2 部分结果回收：失败/终止时不白干——已完成步骤+中间结论一并返回。 */
@@ -46,4 +48,7 @@ interface SubagentControl {
 
     /** 纠偏：消息入队，子代理下一轮开始前消费（不打断当前执行）。 */
     fun steer(id: String, message: String): Boolean
+
+    /** P3 预分配句柄 id（后台派发需在 run 启动前把 id 交给调用方）。 */
+    fun newId(): String
 }

@@ -153,6 +153,8 @@ class AgentEngine(
             h.steering.add(message)
             return true
         }
+
+        override fun newId(): String = "sa_${subagentSeq.incrementAndGet()}"
     }
 
     /** 任务卡终止按钮通路：终止单个运行中的子代理（部分结果随 spawn 调用回收）。 */
@@ -294,8 +296,8 @@ class AgentEngine(
             vscreenBitrateKbps = vscreenBitrateKbps
         )
         val subAgentRunner: SubAgentRunner? =
-            if (depth == 0) SubAgentRunner { task, parentCtx, index, total ->
-                runSubAgent(task, parentCtx, index, total)
+            if (depth == 0) SubAgentRunner { task, parentCtx, index, total, mode, id ->
+                runSubAgent(task, parentCtx, index, total, mode, id)
             } else null
         val handoffTool = com.haoai.agent.agent.tools.HandoffTool { summary, imp ->
             runCatching {
@@ -950,22 +952,34 @@ class AgentEngine(
             ToolResult("工具执行失败：${e.message ?: e.javaClass.simpleName}", true)
         }
 
-    /** 运行单个只读子代理（E7a + P1/P2）：独立工具集+轮数上限，逐工具进度上报、
-     *  失败/终止回收部分结果、转录落盘（.haoai-jobs/subagent_<id>.md），可被 stop/steer 干预。 */
-    private suspend fun runSubAgent(task: String, parentCtx: ToolContext, index: Int = 1, total: Int = 1): String {
-        val id = "sa_${subagentSeq.incrementAndGet()}"
+    /** 运行单个子代理（E7a + P1/P2/P3）：独立工具集+轮数上限，逐工具进度上报、
+     *  失败/终止回收部分结果、转录落盘（.haoai-jobs/subagent_<id>.md），可被 stop/steer 干预。
+     *  P3 mode=work：主代理工具面（继承权限，写盘快照+审批闸同主循环），research 维持只读。 */
+    private suspend fun runSubAgent(
+        task: String,
+        parentCtx: ToolContext,
+        index: Int = 1,
+        total: Int = 1,
+        mode: String = "research",
+        id: String? = null
+    ): String {
+        val fid = id ?: "sa_${subagentSeq.incrementAndGet()}"
+        // 计划模式：work 子代理会执行改动，与 Plan 语义冲突，直接拒绝
+        if (mode == "work" && planGate()) {
+            return "计划模式下不派出 work 子代理（会执行改动）；请先结束计划阶段再派。"
+        }
         val handle = SubagentHandle(
-            id, parentCtx.currentCallId, index, total, task,
+            fid, parentCtx.currentCallId, index, total, task,
             currentCoroutineContext()[kotlinx.coroutines.Job] ?: kotlinx.coroutines.Job()
         )
-        activeSubagents[id] = handle
+        activeSubagents[fid] = handle
         var subPrompt = 0L
         var subCompletion = 0L
         val subStart = System.currentTimeMillis()
         fun report(state: String, tokens: Long, brief: String) {
             try {
                 parentCtx.onSubagentEvent?.invoke(
-                    com.haoai.agent.agent.engine.SubagentReport(id, index, total, state, tokens, brief)
+                    com.haoai.agent.agent.engine.SubagentReport(fid, index, total, state, tokens, brief)
                 )
             } catch (_: Exception) {
             }
@@ -976,7 +990,7 @@ class AgentEngine(
             val dir = parentCtx.shellDir?.let { java.io.File(it, ".haoai-jobs") } ?: return ""
             return runCatching {
                 dir.mkdirs()
-                val f = java.io.File(dir, "subagent_$id.md")
+                val f = java.io.File(dir, "subagent_$fid.md")
                 f.writeText(
                     buildString {
                         appendLine("# 子代理 $id（$status）")
@@ -994,25 +1008,25 @@ class AgentEngine(
                         }
                     }
                 )
-                "\n\n（过程日志：.haoai-jobs/subagent_$id.md）"
+                "\n\n（过程日志：.haoai-jobs/subagent_$fid.md）"
             }.getOrDefault("")
         }
-        val childCtx = ToolContext(
-            parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
-            parentCtx.appFilesDir, sessionId = parentCtx.sessionId,
-            memoryBank = parentCtx.memoryBank, journal = parentCtx.journal, depth = parentCtx.depth + 1,
-            httpClient = parentCtx.httpClient, appContext = parentCtx.appContext,
-            statusProvider = parentCtx.statusProvider
-        )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位与设置修改
+        // P3：childCtx 用 copy 全量继承（work 模式的 config 通道/webCache 复用）；depth+1 且去嵌套上报
+        val childCtx = parentCtx.copy(depth = parentCtx.depth + 1, onSubagentEvent = null)
         // E7a 进度上报（经 parentCtx 回调；失败也上报 ERROR，不拖垮整卡）
         report("RUNNING", 0, task.take(80))
-        val tools = ToolRegistry.readOnly(childCtx)
+        // P3-A：work 模式=主代理工具面（depth+1 已天然排除 spawn 防嵌套；再减配置/清单纪律项），
+        // research 维持只读清单
+        val tools = if (mode == "work") {
+            ToolRegistry.build(childCtx, null, session.activeGroups?.toSet(), null)
+                .filter { it.name !in setOf("config_set", "tools_enable", "todo") }
+        } else ToolRegistry.readOnly(childCtx)
         val apiTools = gateTools(tools.map { it.toApi() })
         // 注意：不更新引擎级 _toolsTokenCache——那是主循环工具清单的开销估算，
         // 子代理只读工具集远小于主清单，覆写会让压缩/催办判断在本轮剩余时间持续低估
 
         val msgs = mutableListOf(
-            ApiMessage(role = "system", content = SUBAGENT_SYSTEM),
+            ApiMessage(role = "system", content = if (mode == "work") SUBAGENT_WORK_SYSTEM else SUBAGENT_SYSTEM),
             ApiMessage(role = "user", content = task)
         )
         var finalText = ""
@@ -1044,6 +1058,7 @@ class AgentEngine(
                 subOk = false
                 ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
                 report("STOPPED", subPrompt + subCompletion, "已终止（${handle.steps.size} 步已回收）")
+                handle.finalResult = "子代理 ${handle.id} 被终止。\n\n${handle.partialSummary()}"
                 transcriptTail("被终止")
                 throw ce
             } catch (e: Exception) {
@@ -1053,7 +1068,9 @@ class AgentEngine(
                 report("ERROR", subPrompt + subCompletion, "失败：${e.message ?: e.javaClass.simpleName}")
                 transcriptTail("失败：${e.message ?: e.javaClass.simpleName}")
                 // P1.2 失败不白干：回收已完成步骤与中间结论（而非裸错误）
-                return "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${handle.partialSummary()}"
+                val failOut = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${handle.partialSummary()}"
+                handle.finalResult = failOut
+                return failOut
             }
             finalText = buf.toString()
             handle.lastAssistant = finalText
@@ -1074,6 +1091,20 @@ class AgentEngine(
                 report("RUNNING", subPrompt + subCompletion, "工具 ${call.name} · ${TextCap.middle(call.argumentsJson, 60)}")
                 val tool = tools.firstOrNull { it.name == call.name }
                 val childArgs = parseArgs(call.argumentsJson)
+                // P3-A work 模式：before hooks（写盘快照，回滚依赖）与主循环同源
+                var hookHandled: ToolResult? = null
+                if (mode == "work" && tool != null && childArgs != null) {
+                    runCatching {
+                        for (h in hooks) {
+                            if (h.names.isNotEmpty() && call.name !in h.names) continue
+                            val d = h.before(call, childArgs, childCtx)
+                            if (d is ToolHook.HookDecision.Handled) {
+                                hookHandled = d.result
+                                break
+                            }
+                        }
+                    }
+                }
                 val result = try {
                     withTimeout(TOOL_TIMEOUT_MS) {
                         when {
@@ -1083,6 +1114,13 @@ class AgentEngine(
                                 "工具参数 JSON 损坏（截断/编码错误）：${call.argumentsJson.take(120)}。请完整重新调用 ${call.name}。",
                                 true
                             )
+                            hookHandled != null -> hookHandled
+                            // P3-A work 模式审批闸：与主循环同策略（ASK_WRITES/ALWAYS_ASK 下逐次审批）
+                            mode == "work" && policy.requiresApproval(call.name) -> {
+                                val granted = approve(buildApprovalRequest(call, childArgs))
+                                if (!granted) ToolResult("用户拒绝了本次操作。", true)
+                                else tool.run(childArgs, childCtx)
+                            }
                             else -> tool.run(childArgs, childCtx)
                         }
                     }
@@ -1118,7 +1156,9 @@ class AgentEngine(
             "\n\n（注意：达到 $SUB_MAX_TURNS 轮上限被截断，以上为部分结论。已完成步骤：\n" +
                 handle.steps.joinToString("\n- ", prefix = "- ") + "）"
         } else ""
-        return finalText.ifBlank { "子代理未给出结论" } + capNote + logNote
+        val out = finalText.ifBlank { "子代理未给出结论" } + capNote + logNote
+        handle.finalResult = out
+        return out
     }
 
     /** 注入记忆时带上当前用户消息做主题相关性打分；markMemoryUse 仅在真实请求路径为 true（token 估算不计数）。 */
@@ -2115,6 +2155,14 @@ class AgentEngine(
         val SUBAGENT_SYSTEM = """
             [SUBAGENT] 你是被主代理派出的只读研究子代理。只做调研与只读操作（read/grep/glob/web_fetch/memory），
             禁止写入或执行命令。高效检索，最后输出简明、结构化的结论（要点 + 证据路径）。
+        """.trimIndent()
+
+        // P3-A work 子代理系统提示词：可写执行，纪律与产物导向
+        val SUBAGENT_WORK_SYSTEM = """
+            [SUBAGENT-WORK] 你是被主代理派出的执行子代理：可读写文件、执行命令来完成分配的任务。
+            写权限随主代理（write/edit 改动经快照可回滚；config_set/tools_enable/todo 不可用）。
+            高效执行：完成或受阻时输出简明结论（做了什么/产物路径/卡在哪），不要复读过程。
+            禁止再派子代理。
         """.trimIndent()
 
         /** E 压缩前记忆冲刷：单轮、只 memory 工具、只沉淀长期事实。 */
