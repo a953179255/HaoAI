@@ -50,7 +50,9 @@ fun SkillsScreen(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onBack: () -> Unit,
     /** 全局壁纸开时传入：页面自带对齐的壁纸底 */
-    wallpaper: android.graphics.Bitmap? = null
+    wallpaper: android.graphics.Bitmap? = null,
+    /** OpenClaw Skill Workshop「Learn from past conversations」对标：跳回聊天开一个可见的复盘任务 */
+    onLearnFromHistory: () -> Unit = {}
 ) {
     val store = SkillStore
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -198,6 +200,19 @@ fun SkillsScreen(
                     Text(
                         if (importing) "导入中…" else "导入技能",
                         color = MaterialTheme.colorScheme.onTertiary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                    )
+                }
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = onLearnFromHistory,
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    surfaceColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f)
+                ) {
+                    Text(
+                        "从历史会话学习",
+                        color = MaterialTheme.colorScheme.onSecondary,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
                     )

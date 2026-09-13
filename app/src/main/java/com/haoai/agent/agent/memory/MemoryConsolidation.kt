@@ -52,6 +52,10 @@ object MemoryConsolidation {
     /** 使用次数晋升阈值：被反复检索/注入的高频 imp=3 记忆也能升级（痛点：imp=3 永不晋升）。 */
     const val PROMOTE_USE_COUNT = 20
 
+    /** 去重查询门槛（OpenClaw #119624 对标）：晋升还需被 ≥N 个"不同查询"命中过——
+     *  一条记忆只因常驻注入被反复计数（哪怕跨了小时限流）不算跨上下文有用。 */
+    const val PROMOTE_MIN_UNIQUE_QUERIES = 5
+
     /** 规则固化（快速、零成本）。 */
     fun run(bank: MemoryBank, journal: DailyJournal): Report {
         val promoted = promoteFromJournal(bank, journal)
@@ -102,7 +106,8 @@ object MemoryConsolidation {
     private fun promoteByUseCount(bank: MemoryBank): Int {
         var n = 0
         for (m in bank.all()) {
-            if (m.useCount >= PROMOTE_USE_COUNT && m.importance < 5) {
+            // 双门槛：次数够 + 跨上下文（不同查询）也够。旧条目 uq 从 0 起步，会随日常使用自然累积
+            if (m.useCount >= PROMOTE_USE_COUNT && m.uniqQueries >= PROMOTE_MIN_UNIQUE_QUERIES && m.importance < 5) {
                 if (bank.updateContent(m.id, m.content, m.importance + 1)) n++
             }
         }

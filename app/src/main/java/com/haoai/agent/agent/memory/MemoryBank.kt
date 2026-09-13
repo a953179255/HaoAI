@@ -15,6 +15,9 @@ data class Memory(
     val createdAt: Long = System.currentTimeMillis(),
     var lastUsedAt: Long = 0,
     var useCount: Int = 0,
+    /** 去重后的召回查询数（OpenClaw #119624 对标）：晋升需"被 ≥N 个不同查询命中过"，
+     *  防止一条记忆只因常驻系统提示被反复注入而自我强化转正。指纹在内存去重、计数持久化。 */
+    var uniqQueries: Int = 0,
     /** 来源：model(模型主动)/auto(每轮自动提取)/manual(手动)/consolidation(固化晋升)。 */
     val source: String? = null,
     var updatedAt: Long = 0,
@@ -279,15 +282,35 @@ class MemoryBank(
         return true
     }
 
-    /** 注入命中标记：每条至多每小时 +1 次 useCount 并刷新 lastUsedAt；token 估算等只读调用不计数。 */
+    /** 召回查询指纹（内存去重集，每条封顶 32 个；重启后计数保留、指纹重算——漂移受小时级限流约束）。 */
+    private val queryFingerprints = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+
+    private fun fingerprint(query: String?): String? {
+        val q = query?.trim()?.lowercase() ?: return null
+        if (q.isEmpty()) return null
+        return Integer.toHexString(q.take(160).hashCode())
+    }
+
+    /** 注入命中标记：每条至多每小时 +1 次 useCount 并刷新 lastUsedAt；去重查询计数独立于小时限流；
+     *  token 估算等只读调用不计数。 */
     @Synchronized
-    fun markInjected(ids: Collection<String>) {
+    fun markInjected(ids: Collection<String>, query: String? = null) {
         if (ids.isEmpty()) return
         val now = System.currentTimeMillis()
+        val fp = fingerprint(query)
         val state = load()
         var changed = false
         ids.forEach { id ->
             state.items.firstOrNull { it.id == id }?.let { m ->
+                // 去重查询计数：新指纹（本进程内未见过的查询文本）才计入
+                if (fp != null) {
+                    val set = queryFingerprints.getOrPut(id) { java.util.LinkedHashSet() }
+                    if (set.add(fp)) {
+                        if (set.size > 32) set.remove(set.firstOrNull())
+                        m.uniqQueries += 1
+                        changed = true
+                    }
+                }
                 val last = if (m.lastUsedAt > 0) m.lastUsedAt else 0L
                 if (now - last > 3_600_000L) {
                     m.lastUsedAt = now
@@ -313,11 +336,19 @@ class MemoryBank(
             m to score
         }.sortedByDescending { it.second }.take(k)
         if (scored.isNotEmpty()) {
+            val fp = fingerprint(query)
             val state = load()
             scored.forEach { (m, _) ->
-                state.items.find { it.id == m.id }?.let {
-                    it.lastUsedAt = now
-                    it.useCount += 1
+                state.items.find { it.id == m.id }?.let { it2 ->
+                    it2.lastUsedAt = now
+                    it2.useCount += 1
+                    if (fp != null) {
+                        val set = queryFingerprints.getOrPut(it2.id) { java.util.LinkedHashSet() }
+                        if (set.add(fp)) {
+                            if (set.size > 32) set.remove(set.firstOrNull())
+                            it2.uniqQueries += 1
+                        }
+                    }
                 }
             }
             save(state)
@@ -510,6 +541,7 @@ class MemoryBank(
         append("- [${m.id} · 重要度${m.importance}] $oneLine")
         append(" <!-- id:${m.id} imp:${m.importance} type:${m.type} created:${m.createdAt}")
         append(" lastUsed:${m.lastUsedAt} uses:${m.useCount}")
+        if (m.uniqQueries > 0) append(" uq:${m.uniqQueries}")
         if (!m.source.isNullOrBlank()) append(" src:${m.source}")
         if (m.updatedAt > 0) append(" upd:${m.updatedAt}")
         if (!m.supersededBy.isNullOrBlank()) append(" sup:${m.supersededBy}")
@@ -615,6 +647,7 @@ class MemoryBank(
             createdAt = meta["created"]?.toLongOrNull() ?: now,
             lastUsedAt = meta["lastused"]?.toLongOrNull() ?: 0L,
             useCount = (meta["uses"]?.toIntOrNull() ?: 0).coerceAtLeast(0),
+            uniqQueries = (meta["uq"]?.toIntOrNull() ?: 0).coerceAtLeast(0),
             source = meta["src"]?.take(20),
             updatedAt = meta["upd"]?.toLongOrNull() ?: 0L,
             supersededBy = supersededBy

@@ -711,7 +711,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 5 -> com.haoai.agent.ui.manage.SkillsScreen(
                     backdrop = backdrop,
                     onBack = { screen = 1 },
-                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onLearnFromHistory = {
+                        // 回到聊天开复盘任务：过程在会话里可见（可插话/停止），产出走技能候选态
+                        chatVm.learnFromHistory()
+                        enterChat()
+                        screen = 0
+                    }
                 )
                 6 -> com.haoai.agent.ui.settings.McpSettingsScreen(
                     backdrop = backdrop,

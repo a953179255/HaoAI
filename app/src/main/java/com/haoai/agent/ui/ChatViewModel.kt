@@ -1549,6 +1549,61 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _session.value = view
     }
 
+    /**
+     * 技能复盘（OpenClaw Skill Workshop「Learn from past conversations」#142909 对标）：
+     * 把最近会话的对话节选打包成一个可见的聊天任务——过程可观察、可插话纠偏、可停止；
+     * 产出走 skill save，由 SkillGuard 自动分流（只读技能直接启用，写入类进候选态人审）。
+     * 手动触发不会打开任何"自动自学习"开关。
+     */
+    fun learnFromHistory() {
+        if (_running.value) {
+            _error.value = "当前有任务在跑，请先停止或等它结束再开始复盘"
+            return
+        }
+        val digest = buildHistoryDigest()
+        if (digest.isBlank()) {
+            _error.value = "还没有可复盘的会话历史"
+            return
+        }
+        newSession()
+        currentSession?.title = "技能复盘 · ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+        send(
+            buildString {
+                appendLine("[技能复盘] 下面附上了最近几个会话的对话节选。请通读后提炼值得沉淀为技能的可复用经验：")
+                appendLine("走通的多步流程、踩坑后找到的修复路径、被用户纠正过的做法。")
+                appendLine("纪律：先用 skill list/view 查重，强化旧条目而不是追加复制品；")
+                appendLine("没有值得沉淀的就明确回答\"无\"，不要硬凑；每条技能正文按 When to Use / Procedure / Pitfalls 结构写。")
+                appendLine()
+                append(digest)
+            },
+            null
+        )
+    }
+
+    /** 近期会话对话节选：最多 6 个会话，每个取尾部 8 条实质消息，全局 8000 字封顶。 */
+    private fun buildHistoryDigest(): String {
+        val recent = c.sessionStore.list().sortedByDescending { it.updatedAt }.take(6)
+        val sb = StringBuilder()
+        for (s in recent) {
+            val msgs = s.messages.filter {
+                (it.role == ChatMessage.ROLE_USER || it.role == ChatMessage.ROLE_ASSISTANT) &&
+                    it.content.isNotBlank()
+            }
+            if (msgs.isEmpty()) continue
+            sb.appendLine("── 会话「${s.title}」（共 ${msgs.size} 条）──")
+            var budget = 1400
+            for (m in msgs.takeLast(8)) {
+                if (budget <= 0) break
+                val who = if (m.role == ChatMessage.ROLE_USER) "用户" else "助手"
+                val text = m.content.replace(Regex("\\s+"), " ").trim().take(260)
+                sb.appendLine("$who：$text")
+                budget -= text.length
+            }
+            if (sb.length > 8000) break
+        }
+        return sb.toString().trim()
+    }
+
     /** 摘除当前会话的流式展示（切换/新建会话时调用；任务继续在后台跑，不中断）。 */
     private fun detachStreaming() {
         _streamingText.value = null

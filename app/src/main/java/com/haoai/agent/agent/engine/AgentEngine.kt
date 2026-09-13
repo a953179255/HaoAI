@@ -610,6 +610,20 @@ class AgentEngine(
 
         val tool = tools.firstOrNull { it.name == call.name }
         val args = parseArgs(call.argumentsJson)
+        // 畸形参数防护（OpenClaw #142176 精神）：解析失败不静默当空参跑——那会把
+        // memory save 误变成默认的 list 之类的动作且模型毫不知情。此刻没有任何动作
+        // 执行过（replay-safe），给显性错误让模型重新完整调用。走 finishCall 落历史，
+        // 模型下一轮就能看到错误并自愈。
+        if (args == null) {
+            val err = ToolResult(
+                "工具参数 JSON 损坏（模型输出被截断或编码错误）：${call.argumentsJson.take(160)}。" +
+                    "请完整重新调用 ${call.name}，参数必须是合法 JSON。",
+                true
+            )
+            onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.ERROR, briefOf(call), TextCap.middle(err.content, 80))))
+            finishCall(call, buildJsonObject {}, ctx, err, ToolRunState.ERROR, 0L, "direct", onEvent)
+            return
+        }
         // E7a：按调用注入 callId 与子代理进度上报桥（子代理工具经 parentCtx 回调 → SubagentUpdate 事件）
         val callCtx = subagentBridge(ctx, call, onEvent)
 
@@ -822,7 +836,8 @@ class AgentEngine(
     private class PreparedCall(
         val call: ToolCallData,
         val tool: Tool?,
-        val args: JsonObject,
+        /** null = 参数 JSON 损坏，执行点必须出显性错误（不得当空参运行）。 */
+        val args: JsonObject?,
         val ctx: ToolContext
     )
 
@@ -857,7 +872,8 @@ class AgentEngine(
             }
             prepared.zip(bodies).forEach { (p, body) ->
                 val (result, state, elapsed) = body.await()
-                finishCall(p.call, p.args, p.ctx, result, state, elapsed, "direct", onEvent)
+                // 参数损坏时 runParallelBody 已产出错误结果；args 传空对象仅为完成历史记录
+                finishCall(p.call, p.args ?: buildJsonObject {}, p.ctx, result, state, elapsed, "direct", onEvent)
             }
         }
     }
@@ -865,6 +881,16 @@ class AgentEngine(
     /** E6 并行工具体：白名单调用均为 READ 免审批，直接执行即可。 */
     private suspend fun runParallelBody(p: PreparedCall): Triple<ToolResult, ToolRunState, Long> {
         if (p.tool == null) return Triple(unknownToolResult(p.call.name), ToolRunState.ERROR, 0L)
+        if (p.args == null) {
+            return Triple(
+                ToolResult(
+                    "工具参数 JSON 损坏（模型输出被截断或编码错误）：${p.call.argumentsJson.take(160)}。" +
+                        "请完整重新调用 ${p.call.name}，参数必须是合法 JSON。",
+                    true
+                ),
+                ToolRunState.ERROR, 0L
+            )
+        }
         val start = System.currentTimeMillis()
         val result = invokeTool(p.tool, p.args, p.ctx)
         return Triple(result, if (result.isError) ToolRunState.ERROR else ToolRunState.DONE, System.currentTimeMillis() - start)
@@ -959,10 +985,19 @@ class AgentEngine(
             for (call in calls) {
                 currentCoroutineContext().ensureActive()
                 val tool = tools.firstOrNull { it.name == call.name }
+                val childArgs = parseArgs(call.argumentsJson)
                 val result = try {
                     withTimeout(TOOL_TIMEOUT_MS) {
-                        tool?.run(parseArgs(call.argumentsJson), childCtx)
-                    } ?: ToolResult("未知工具：${call.name}", true)
+                        when {
+                            tool == null -> ToolResult("未知工具：${call.name}", true)
+                            // 子代理同样不得拿损坏参数当空参跑（畸形参数显性报错）
+                            childArgs == null -> ToolResult(
+                                "工具参数 JSON 损坏（截断/编码错误）：${call.argumentsJson.take(120)}。请完整重新调用 ${call.name}。",
+                                true
+                            )
+                            else -> tool.run(childArgs, childCtx)
+                        }
+                    }
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (e: Exception) {
@@ -989,7 +1024,7 @@ class AgentEngine(
         val bank = memoryBank ?: return ""
         val query = session.messages.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content
         val (snippet, ids) = bank.promptSnippetIds(query?.take(300))
-        if (markMemoryUse) bank.markInjected(ids)
+        if (markMemoryUse) bank.markInjected(ids, query)
         return snippet
     }
 
@@ -1539,10 +1574,11 @@ class AgentEngine(
         return out
     }
 
-    private fun parseArgs(json: String): JsonObject =
+    /** 参数解析：null = 原始 JSON 损坏（截断/编码错误），调用方必须显性报错而不是当空参执行。 */
+    private fun parseArgs(json: String): JsonObject? =
         runCatching {
             HaoJson.json.parseToJsonElement(json.ifBlank { "{}" })
-        }.getOrNull() as? JsonObject ?: buildJsonObject {}
+        }.getOrNull() as? JsonObject
 
     /**
      * C2 补口：config_set 补丁里的明文密钥不进会话 JSON 与压缩摘要上下文
@@ -1649,7 +1685,8 @@ class AgentEngine(
             // 结果只记日志不落会话——assistant 侧没存，tool 消息入库即成孤儿（API 构建时
             // 会被 pairSanitized 裁掉，白占存储与估算）。沉淀本身已经由 tool.run 落盘完成。
             runCatching {
-                val result = tool.run(parseArgs(call.argumentsJson), ctx)
+                val flushArgs = parseArgs(call.argumentsJson) ?: return@runCatching
+                val result = tool.run(flushArgs, ctx)
                 android.util.Log.d(
                     "HaoEngine",
                     "memory flush: ${call.name} → ${TextCap.middle(result.content, 120)}"
