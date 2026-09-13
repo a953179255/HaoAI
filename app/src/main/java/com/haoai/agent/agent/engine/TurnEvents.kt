@@ -27,6 +27,8 @@ data class Finished(val error: String?) : TurnEvent
  */
 data class SubagentUpdate(
     val callId: String,
+    /** P2 子代理句柄 id（sa_N），任务卡终止按钮按此定位。 */
+    val id: String,
     val index: Int,
     val total: Int,
     val state: String,
@@ -36,6 +38,8 @@ data class SubagentUpdate(
 
 /** E7a 工具侧上报载荷（ToolContext.onSubagentEvent），引擎补 callId 后转成 SubagentUpdate。 */
 data class SubagentReport(
+    /** P2 子代理句柄 id（sa_N）。 */
+    val id: String = "",
     val index: Int = 1,
     val total: Int = 1,
     val state: String,

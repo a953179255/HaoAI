@@ -1,8 +1,10 @@
 package com.haoai.agent.agent.tools
 
+import com.haoai.agent.agent.engine.SubagentControl
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -11,11 +13,15 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
-class SubAgentsTool(private val runner: SubAgentRunner) : Tool {
+class SubAgentsTool(
+    private val runner: SubAgentRunner,
+    /** P2：终止/纠偏句柄查找（单路被 stop_agent 终止时回收部分结果，兄弟路不受牵连）。 */
+    private val controls: SubagentControl? = null
+) : Tool {
 
     override val name = "spawn_agents"
     override val description =
-        "并行派出多个只读研究子代理（每个可用 read/grep/glob/web_fetch/memory），全部完成后汇总返回。tasks 为任务字符串数组（2~4 个，每个任务描述必须自包含）。适合互不依赖的多路调研；单个任务用 spawn_agent。"
+        "并行派出多个只读研究子代理（每个可用 read/grep/glob/web_fetch/memory），全部完成后汇总返回。tasks 为任务字符串数组（2~4 个，每个任务描述必须自包含）。适合互不依赖的多路调研；单个任务用 spawn_agent。运行中可用 steer_agent 纠偏、stop_agent 终止单路（id 见各路标注，被终止的路会回收已完成步骤）。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -35,12 +41,26 @@ class SubAgentsTool(private val runner: SubAgentRunner) : Tool {
         if (tasks.isEmpty()) return ToolResult("缺少 tasks 数组", true)
         if (tasks.size > MAX_PARALLEL) return ToolResult("一次最多 $MAX_PARALLEL 个子代理", true)
 
-        val results = coroutineScope {
-            tasks.mapIndexed { i, task -> async { task to runOne(task, i + 1, tasks.size, ctx) } }.awaitAll()
+        // P2：supervisorScope——单路被 stop_agent 取消不再连坐整批；await 侧按句柄状态区分
+        // 「被终止（回收部分结果）」与「整轮取消（原样传播）」。
+        val results = supervisorScope {
+            tasks.mapIndexed { i, task ->
+                async {
+                    try {
+                        task to runOne(task, i + 1, tasks.size, ctx)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        val h = controls?.find(ctx.currentCallId, i + 1)
+                        if (h?.state == "STOPPED") {
+                            task to "子代理 ${h.id} 被终止。\n\n${h.partialSummary()}"
+                        } else throw e
+                    }
+                }
+            }.awaitAll()
         }
         return ToolResult(
             results.mapIndexed { i, (task, r) ->
-                "【子代理 ${i + 1}/${tasks.size}】任务：${task.take(100)}\n$r"
+                val hid = controls?.find(ctx.currentCallId, i + 1)?.id ?: "?"
+                "【子代理 ${i + 1}/${tasks.size} · $hid】任务：${task.take(100)}\n$r"
             }.joinToString("\n\n────────\n\n")
         )
     }

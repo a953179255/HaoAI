@@ -741,6 +741,7 @@ fun ChatScreen(
                     }
                 },
                 onStopRun = { vm.stop() },
+                onStopSubagent = { vm.stopSubagent(it) },
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
@@ -2082,6 +2083,8 @@ private fun MessageList(
     onToolViewDiff: (String) -> Unit,
     onToolRollback: (String) -> Unit = {},
     onStopRun: () -> Unit = {},
+    /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
+    onStopSubagent: (String) -> Unit = {},
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
@@ -2220,7 +2223,8 @@ private fun MessageList(
                     liveTools = liveToolsSnapshot,
                     running = running,
                     onStopRun = onStopRun,
-                    onViewDiff = onToolViewDiff
+                    onViewDiff = onToolViewDiff,
+                    onStopSubagent = onStopSubagent
                 )
             }
         }
@@ -2588,7 +2592,9 @@ private fun StreamingItem(
     liveTools: List<com.haoai.agent.ui.UiTool> = emptyList(),
     running: Boolean = false,
     onStopRun: () -> Unit = {},
-    onViewDiff: (String) -> Unit = {}
+    onViewDiff: (String) -> Unit = {},
+    /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
+    onStopSubagent: (String) -> Unit = {}
 ) {
     Column(
         Modifier
@@ -2607,7 +2613,8 @@ private fun StreamingItem(
                 tool = tool,
                 live = true,
                 onViewDiff = onViewDiff,
-                onStopRun = onStopRun
+                onStopRun = onStopRun,
+                onStopSubagent = onStopSubagent
             )
         }
         // v7.6.3 分组节奏：动作组结束、正文开始前的"呼吸"（组间 10dp 观感）
@@ -2943,7 +2950,9 @@ private fun InlineToolPill(
     tool: com.haoai.agent.ui.UiTool,
     live: Boolean,
     onViewDiff: (String) -> Unit = {},
-    onStopRun: () -> Unit = {}
+    onStopRun: () -> Unit = {},
+    /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
+    onStopSubagent: (String) -> Unit = {}
 ) {
     var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
     val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
@@ -3045,6 +3054,81 @@ private fun InlineToolPill(
                         color = if (isError) MaterialTheme.colorScheme.error
                         else Color(0xFF3FAE5C).copy(alpha = 0.85f)
                     )
+                }
+            }
+        }
+        // P1/P2：spawn 工具的逐路子代理状态——运行中常显（含当前工具与终止按钮），
+        // 结束后点胶囊展开仍可回看
+        val showSubs = tool.subagents.isNotEmpty() && (isRunning || expanded)
+        androidx.compose.animation.AnimatedVisibility(showSubs) {
+            Column(Modifier.padding(start = 14.dp, top = 2.dp)) {
+                tool.subagents.forEach { sub ->
+                    val subColor = when (sub.state) {
+                        "RUNNING" -> MaterialTheme.colorScheme.primary
+                        "DONE" -> Color(0xFF7BD88F)
+                        "STOPPED" -> Color(0xFFFFC46B)
+                        else -> MaterialTheme.colorScheme.error
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                    ) {
+                        if (sub.state == "RUNNING") {
+                            Box(
+                                Modifier
+                                    .size(7.dp)
+                                    .graphicsLayer {
+                                        alpha = 0.55f + 0.45f * (System.currentTimeMillis() % 900 / 900f)
+                                    }
+                                    .background(subColor, CircleShape)
+                            )
+                        } else {
+                            Box(
+                                Modifier
+                                    .size(7.dp)
+                                    .background(subColor, CircleShape)
+                            )
+                        }
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            "子代理 ${sub.index}/${sub.total}" + if (sub.id.isNotEmpty()) " · ${sub.id}" else "",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            sub.brief,
+                            fontSize = 10.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (sub.tokensUsed > 0) {
+                            Spacer(Modifier.size(5.dp))
+                            Text(
+                                fmtTokens(sub.tokensUsed.toInt()) + " tok",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                        if (sub.state == "RUNNING" && sub.id.isNotEmpty()) {
+                            androidx.compose.material3.IconButton(
+                                onClick = { onStopSubagent(sub.id) },
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                androidx.compose.material3.Icon(
+                                    androidx.compose.material.icons.Icons.Filled.Close,
+                                    contentDescription = "终止子代理 ${sub.id}",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3329,7 +3413,9 @@ private fun ToolChip(
     tool: com.haoai.agent.ui.UiTool,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
-    onStopRun: () -> Unit = {}
+    onStopRun: () -> Unit = {},
+    /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
+    onStopSubagent: (String) -> Unit = {}
 ) {
     var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
     val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
@@ -3485,6 +3571,21 @@ private fun ToolChip(
                                         fontSize = 10.5.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                     )
+                                }
+                                // P2：运行中的子代理可单独终止（部分结果随 spawn 返回）
+                                if (sub.state == "RUNNING" && sub.id.isNotEmpty()) {
+                                    Spacer(Modifier.size(4.dp))
+                                    androidx.compose.material3.IconButton(
+                                        onClick = { onStopSubagent(sub.id) },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        androidx.compose.material3.Icon(
+                                            androidx.compose.material.icons.Icons.Filled.Close,
+                                            contentDescription = "终止子代理 ${sub.id}",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -41,8 +41,9 @@ data class UiTool(
     val subagents: List<SubagentLine> = emptyList()
 )
 
-/** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）。 */
+/** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）；id 供任务卡终止按钮定位。 */
 data class SubagentLine(
+    val id: String = "",
     val index: Int,
     val total: Int,
     val state: String,
@@ -555,7 +556,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     appendAndNotifyLocal(text)
                     return@launch
                 }
-                val engine = buildEngine(s, provider).also { turnEngine = it }
+                val engine = buildEngine(s, provider).also { turnEngine = it; activeEngine = it }
                 engine.runTurn(
                     userText = text,
                     onDelta = ::appendDelta,
@@ -1055,7 +1056,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val prev = liveTools[ev.callId]
                 val lines = prev?.subagents.orEmpty().toMutableList()
                 val at = lines.indexOfFirst { it.index == ev.index }
-                val line = SubagentLine(ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief)
+                val line = SubagentLine(ev.id, ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief)
                 if (at >= 0) lines[at] = line else lines.add(line)
                 liveTools[ev.callId] = UiTool(
                     ev.callId,
@@ -1547,6 +1548,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentSession = view
         c.sessionStore.save(view)
         _session.value = view
+    }
+
+    /** P2：当前回合引擎（任务卡终止子代理用；回合结束随会话收尾自然失效）。 */
+    @Volatile private var activeEngine: AgentEngine? = null
+
+    /** P2：任务卡终止按钮 → 引擎句柄注册表，终止单个运行中的子代理。 */
+    fun stopSubagent(id: String) {
+        runCatching { activeEngine?.stopSubagent(id) }
     }
 
     /**

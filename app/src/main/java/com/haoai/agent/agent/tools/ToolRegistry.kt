@@ -42,7 +42,9 @@ object ToolRegistry {
     fun build(
         ctx: ToolContext,
         subAgentRunner: SubAgentRunner? = null,
-        activeGroups: Set<String>? = null
+        activeGroups: Set<String>? = null,
+        /** P2：子代理干预接口（stop/steer 工具与 spawn 同批注册，depth=0 且有 runner 时）。 */
+        subagentControl: com.haoai.agent.agent.engine.SubagentControl? = null
     ): List<Tool> {
         val all = buildList {
         add(ReadTool())
@@ -111,8 +113,12 @@ object ToolRegistry {
         // MCP 外部工具：enabled 服务器全部展开（未连接时用 toolCache 占位，调用报不可用）
         addAll(com.haoai.agent.agent.mcp.McpManager.toolInstances())
         if (ctx.depth == 0 && subAgentRunner != null) {
-            add(SubAgentTool(subAgentRunner))
-            add(SubAgentsTool(subAgentRunner))
+            add(SubAgentTool(subAgentRunner, subagentControl))
+            add(SubAgentsTool(subAgentRunner, subagentControl))
+            if (subagentControl != null) {
+                add(StopAgentTool(subagentControl))
+                add(SteerAgentTool(subagentControl))
+            }
         }
         }
         // E4b 分层过滤：core 恒开；activeGroups=null 视为全开（旧会话零感知）

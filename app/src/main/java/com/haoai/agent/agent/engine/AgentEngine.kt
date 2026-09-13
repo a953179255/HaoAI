@@ -128,6 +128,36 @@ class AgentEngine(
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
     private var _loopFailedCap = false
 
+    /** P2 运行中子代理注册表（key=handle id，生命周期=引擎实例即一个回合）。 */
+    private val activeSubagents = java.util.concurrent.ConcurrentHashMap<String, SubagentHandle>()
+    private val subagentSeq = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** P2 干预实现：stop=协作标志+取消协程；steer=消息入队下一轮消费。 */
+    private val subagentControl = object : SubagentControl {
+        override fun find(callId: String?, index: Int): SubagentHandle? =
+            activeSubagents.values.firstOrNull { it.callId != null && it.callId == callId && it.index == index }
+
+        override fun byId(id: String): SubagentHandle? = activeSubagents[id]
+
+        override fun stop(id: String): Boolean {
+            val h = activeSubagents[id] ?: return false
+            if (h.state != "RUNNING") return false
+            h.state = "STOPPING"
+            h.job.cancel()
+            return true
+        }
+
+        override fun steer(id: String, message: String): Boolean {
+            val h = activeSubagents[id] ?: return false
+            if (h.state != "RUNNING") return false
+            h.steering.add(message)
+            return true
+        }
+    }
+
+    /** 任务卡终止按钮通路：终止单个运行中的子代理（部分结果随 spawn 调用回收）。 */
+    fun stopSubagent(id: String): Boolean = subagentControl.stop(id)
+
     /** P2-5 重放保护状态：turn 内最后一次非 READ 工具执行的签名与结果。
      *  LLM 流瞬态重试会重发同一工具序列，紧邻同名同参的写类调用直接返回上次结果。 */
     private var lastExecutedSig: String? = null
@@ -284,7 +314,7 @@ class AgentEngine(
                 add(com.haoai.agent.agent.tools.TranscribeAudioTool { p -> delegateAsrRequest(p) })
             }
         }
-        var tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
+        var tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet(), subagentControl) +
             handoffTool + toolsEnableTool + delegateTools
         var apiTools = gateTools(tools.map { it.toApi() })
 
@@ -751,7 +781,7 @@ class AgentEngine(
             onSubagentEvent = { report ->
                 onEvent(
                     SubagentUpdate(
-                        call.id, report.index, report.total,
+                        call.id, report.id, report.index, report.total,
                         report.state, report.tokensUsed, report.brief
                     )
                 )
@@ -920,8 +950,53 @@ class AgentEngine(
             ToolResult("工具执行失败：${e.message ?: e.javaClass.simpleName}", true)
         }
 
-    /** 运行单个只读子代理（E7a）：独立工具集+轮数上限，结论回传主代理。 */
+    /** 运行单个只读子代理（E7a + P1/P2）：独立工具集+轮数上限，逐工具进度上报、
+     *  失败/终止回收部分结果、转录落盘（.haoai-jobs/subagent_<id>.md），可被 stop/steer 干预。 */
     private suspend fun runSubAgent(task: String, parentCtx: ToolContext, index: Int = 1, total: Int = 1): String {
+        val id = "sa_${subagentSeq.incrementAndGet()}"
+        val handle = SubagentHandle(
+            id, parentCtx.currentCallId, index, total, task,
+            currentCoroutineContext()[kotlinx.coroutines.Job] ?: kotlinx.coroutines.Job()
+        )
+        activeSubagents[id] = handle
+        var subPrompt = 0L
+        var subCompletion = 0L
+        val subStart = System.currentTimeMillis()
+        fun report(state: String, tokens: Long, brief: String) {
+            try {
+                parentCtx.onSubagentEvent?.invoke(
+                    com.haoai.agent.agent.engine.SubagentReport(id, index, total, state, tokens, brief)
+                )
+            } catch (_: Exception) {
+            }
+        }
+        // P1.3 转录落盘：过程写到工作区 .haoai-jobs/subagent_<id>.md（agent 可用 read 复查；
+        //  shellDir 为空=SAF 目录时静默跳过）。返回结果尾注。
+        fun transcriptTail(status: String): String {
+            val dir = parentCtx.shellDir?.let { java.io.File(it, ".haoai-jobs") } ?: return ""
+            return runCatching {
+                dir.mkdirs()
+                val f = java.io.File(dir, "subagent_$id.md")
+                f.writeText(
+                    buildString {
+                        appendLine("# 子代理 $id（$status）")
+                        appendLine("- 任务：$task")
+                        appendLine("- 时间：${System.currentTimeMillis()} · index $index/$total")
+                        if (handle.steps.isNotEmpty()) {
+                            appendLine()
+                            appendLine("## 已完成步骤")
+                            handle.steps.forEach { appendLine("- $it") }
+                        }
+                        if (handle.lastAssistant.isNotBlank()) {
+                            appendLine()
+                            appendLine("## 最近中间结论")
+                            appendLine(handle.lastAssistant.take(2000))
+                        }
+                    }
+                )
+                "\n\n（过程日志：.haoai-jobs/subagent_$id.md）"
+            }.getOrDefault("")
+        }
         val childCtx = ToolContext(
             parentCtx.backend, parentCtx.shellDir, parentCtx.todoStore,
             parentCtx.appFilesDir, sessionId = parentCtx.sessionId,
@@ -930,15 +1005,7 @@ class AgentEngine(
             statusProvider = parentCtx.statusProvider
         )  // httpClient/appContext 随 parentCtx 透传；子代理只读工具集，不注册相机定位与设置修改
         // E7a 进度上报（经 parentCtx 回调；失败也上报 ERROR，不拖垮整卡）
-        fun report(state: String, tokens: Long, brief: String) {
-            try {
-                parentCtx.onSubagentEvent?.invoke(
-                    com.haoai.agent.agent.engine.SubagentReport(index, total, state, tokens, brief)
-                )
-            } catch (_: Exception) {
-            }
-        }
-        report("RUNNING", 0, task)
+        report("RUNNING", 0, task.take(80))
         val tools = ToolRegistry.readOnly(childCtx)
         val apiTools = gateTools(tools.map { it.toApi() })
         // 注意：不更新引擎级 _toolsTokenCache——那是主循环工具清单的开销估算，
@@ -950,11 +1017,14 @@ class AgentEngine(
         )
         var finalText = ""
         var turns = 0
-        var subPrompt = 0L
-        var subCompletion = 0L
-        val subStart = System.currentTimeMillis()
+        var hitTurnCap = false
+        var subOk = true
         while (turns++ < SUB_MAX_TURNS) {
             currentCoroutineContext().ensureActive()
+            // P2 steer：主代理的纠偏指令在子代理下一轮开始前注入（不打断当前执行）
+            handle.steering.poll()?.let { m ->
+                msgs.add(ApiMessage(role = "user", content = "[主代理插话] $m"))
+            }
             val buf = StringBuilder()
             var calls: List<ToolCallData> = emptyList()
             try {
@@ -967,13 +1037,26 @@ class AgentEngine(
                     }
                 }
             } catch (ce: CancellationException) {
+                val ourStop = handle.state == "STOPPING"
+                if (!ourStop) throw ce
+                // stop_agent 的终止：部分结果挂在句柄上，spawn 层回收后返回主代理
+                handle.state = "STOPPED"
+                subOk = false
+                ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
+                report("STOPPED", subPrompt + subCompletion, "已终止（${handle.steps.size} 步已回收）")
+                transcriptTail("被终止")
                 throw ce
             } catch (e: Exception) {
+                subOk = false
+                handle.state = "ERROR"
                 ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
                 report("ERROR", subPrompt + subCompletion, "失败：${e.message ?: e.javaClass.simpleName}")
-                throw e
+                transcriptTail("失败：${e.message ?: e.javaClass.simpleName}")
+                // P1.2 失败不白干：回收已完成步骤与中间结论（而非裸错误）
+                return "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${handle.partialSummary()}"
             }
             finalText = buf.toString()
+            handle.lastAssistant = finalText
             if (calls.isEmpty()) break
             msgs.add(
                 ApiMessage(
@@ -983,7 +1066,12 @@ class AgentEngine(
                 )
             )
             for (call in calls) {
+                // 协作停止检查点（job.cancel 也会在下个挂起点生效，双保险）
+                if (handle.state == "STOPPING") break
                 currentCoroutineContext().ensureActive()
+                // P1.1 逐工具进度：子代理此刻在干什么直接上任务卡
+                handle.currentTool = briefOf(call)
+                report("RUNNING", subPrompt + subCompletion, "工具 ${call.name} · ${TextCap.middle(call.argumentsJson, 60)}")
                 val tool = tools.firstOrNull { it.name == call.name }
                 val childArgs = parseArgs(call.argumentsJson)
                 val result = try {
@@ -1003,6 +1091,13 @@ class AgentEngine(
                 } catch (e: Exception) {
                     ToolResult("失败：${e.message ?: e.javaClass.simpleName}", true)
                 }
+                handle.currentTool = null
+                // P1.2 步骤留痕：失败/终止时的部分结果由此构成
+                handle.steps.add(
+                    "${call.name}(${TextCap.middle(call.argumentsJson, 60)}) → ${TextCap.middle(result.content, 90)}" +
+                        if (result.isError) " [错误]" else ""
+                )
+                report("RUNNING", subPrompt + subCompletion, "已完成 ${call.name}（第 ${handle.steps.size} 步）")
                 msgs.add(
                     ApiMessage(
                         role = "tool",
@@ -1012,10 +1107,18 @@ class AgentEngine(
                     )
                 )
             }
+            if (handle.state == "STOPPING") break
+            if (turns >= SUB_MAX_TURNS && calls.isNotEmpty()) hitTurnCap = true
         }
-        ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = true)
-        report("DONE", subPrompt + subCompletion, finalText.ifBlank { "（未给出结论）" })
-        return finalText.ifBlank { "子代理未给出结论" }
+        handle.state = if (subOk) "DONE" else "ERROR"
+        ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = subOk)
+        report("DONE", subPrompt + subCompletion, finalText.ifBlank { "（未给出结论）" }.take(120))
+        val logNote = transcriptTail("完成")
+        val capNote = if (hitTurnCap) {
+            "\n\n（注意：达到 $SUB_MAX_TURNS 轮上限被截断，以上为部分结论。已完成步骤：\n" +
+                handle.steps.joinToString("\n- ", prefix = "- ") + "）"
+        } else ""
+        return finalText.ifBlank { "子代理未给出结论" } + capNote + logNote
     }
 
     /** 注入记忆时带上当前用户消息做主题相关性打分；markMemoryUse 仅在真实请求路径为 true（token 估算不计数）。 */
