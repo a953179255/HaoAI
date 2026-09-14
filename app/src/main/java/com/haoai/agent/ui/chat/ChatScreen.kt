@@ -344,6 +344,9 @@ fun ChatScreen(
     var previewTarget by remember { mutableStateOf<ChatRow?>(null) }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
+    // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
+    // 在 appLayer 外渲染 ToolDetailSheet+GlassPanel 真玻璃（独立窗口采样不到 backdrop）
+    var toolSheet by remember { mutableStateOf<com.haoai.agent.ui.UiTool?>(null) }
     // 工具卡"查看变更"（1.3）：从写前快照现算 diff
     var diffViewer by remember { mutableStateOf<Pair<String, List<com.haoai.agent.ui.common.DiffLine>>?>(null) }
     // 代际栅栏（显示侧）：diff 属于打开它的那个会话，切会话即关，防旧会话的变更弹窗盖在别的会话上
@@ -718,6 +721,12 @@ fun ChatScreen(
         ) {
             // 顶部不再占位：列表物理延伸到玻璃顶栏下方（含状态栏区域），
             // 初始首条消息位置由 MessageList 的 topPadding 保证
+            // provide 工具弹层回调：深层工具步骤（ChainCard 的 ToolStep）经
+            // LocalOpenToolSheet 上抛要开哪个工具，由 ChatScreen 顶层（appLayer 外）
+            // 渲染 ToolDetailSheet+GlassPanel 真玻璃——独立 Popup/Dialog 窗口采样不到 backdrop
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t }
+            ) {
             MessageList(
                 rows = rows,
                 onOpenMenu = { msgAction = it },
@@ -761,6 +770,7 @@ fun ChatScreen(
                     maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp()
                 }
             )
+            }
         }
             browserPreview()
             vscreenMini()
@@ -1336,6 +1346,25 @@ fun ChatScreen(
                     }
         }
         }
+
+    // 工具详情弹层（v8 思维链）：appLayer 外渲染 → GlassPanel 真玻璃折射消息流
+    toolSheet?.let { t ->
+        ToolDetailSheet(
+            tool = t,
+            backdrop = backdrop,
+            onDismiss = { toolSheet = null },
+            onViewDiff = { callId ->
+                snapshotScope.launch {
+                    val sidAtRequest = vm.session.value?.id
+                    val diff = vm.snapshotDiff(callId)
+                    if (diff != null && sidAtRequest != null && vm.isCurrentSession(sidAtRequest)) {
+                        diffViewer = diff
+                    }
+                }
+            },
+            onStopSubagent = { vm.stopSubagent(it) }
+        )
+    }
 
     // 工具卡"查看变更"弹层（1.3）：diff 从写前快照现算
     diffViewer?.let { (path, diffLines) ->
@@ -2611,9 +2640,7 @@ private fun StreamingItem(
                 reasoningLive = !hasContent,
                 tools = liveTools,
                 toolsLive = true,
-                finished = false,
-                onViewDiff = onViewDiff,
-                onStopSubagent = onStopSubagent
+                finished = false
             )
         }
         // 分组节奏：链卡与正文气泡之间 6dp 呼吸
@@ -3262,9 +3289,7 @@ private fun AssistantBlock(
                 reasoningLive = false,
                 tools = row.tools,
                 toolsLive = false,
-                finished = true,
-                onViewDiff = onViewDiff,
-                onStopSubagent = {}
+                finished = true
             )
             Spacer(Modifier.size(6.dp))
         }

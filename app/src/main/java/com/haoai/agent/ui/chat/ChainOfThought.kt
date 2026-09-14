@@ -55,9 +55,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -114,6 +112,13 @@ import java.util.Locale
 private const val COLLAPSED_VISIBLE = 2
 
 /**
+ * 打开工具详情弹层的回调（ToolStep 点击 → ChatScreen 顶层在 appLayer 外渲染
+ * ToolDetailSheet + GlassPanel 真玻璃）。独立 Popup/Dialog 窗口采样不到 appLayer
+ * backdrop（实测弹层内为均匀死灰），必须在主窗口组合树内、appLayer 外渲染才出玻璃。
+ */
+val LocalOpenToolSheet = androidx.compose.runtime.staticCompositionLocalOf<(UiTool) -> Unit> { {} }
+
+/**
  * 链卡行按压反馈（替代裸 ripple，2026-09-15 v4 定稿）：
  * 默认 ripple 8dp 圆角与链卡 18dp 不匹配；v1-v3 给行自设圆角都错——
  * 两套几何必打架。定稿（规格图 chain-press-target）：**行通栏**（卡片不留
@@ -149,9 +154,7 @@ fun ChainCard(
     toolsLive: Boolean,
     /** 回合是否结束（历史/结束态 → 整卡默认折叠为控制条一行） */
     finished: Boolean,
-    modifier: Modifier = Modifier,
-    onViewDiff: (String) -> Unit = {},
-    onStopSubagent: (String) -> Unit = {}
+    modifier: Modifier = Modifier
 ) {
     val hasReasoning = !reasoning.isNullOrBlank()
     if (!hasReasoning && tools.isEmpty()) return
@@ -235,9 +238,7 @@ fun ChainCard(
                         } else {
                             ToolStep(
                                 tool = payload as UiTool,
-                                live = toolsLive,
-                                onViewDiff = onViewDiff,
-                                onStopSubagent = onStopSubagent
+                                live = toolsLive
                             )
                         }
                     }
@@ -448,20 +449,19 @@ private fun ReasoningStep(
 @Composable
 private fun ToolStep(
     tool: UiTool,
-    live: Boolean,
-    onViewDiff: (String) -> Unit,
-    onStopSubagent: (String) -> Unit
+    live: Boolean
 ) {
-    var sheet by rememberSaveable(tool.callId) { mutableStateOf(false) }
     val running = tool.state == ToolRunState.RUNNING && live
     val isError = tool.state == ToolRunState.ERROR
     val denied = tool.state == ToolRunState.DENIED
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
+    // CompositionLocal 读取须在组合期（onClick 是普通 lambda，不能现场 .current）
+    val openTool = LocalOpenToolSheet.current
     Row(
         Modifier
             .fillMaxWidth()
-            .chainPressable(enabled = !running) { sheet = true }
+            .chainPressable(enabled = !running) { openTool(tool) }
             // 高亮通栏，内容自缩 12dp
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -533,153 +533,6 @@ private fun ToolStep(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     modifier = Modifier.size(14.dp)
                 )
-            }
-        }
-    }
-    // ── 工具详情底部弹层（取舍②：行内不展开）──
-    if (sheet) {
-        ModalBottomSheet(
-            onDismissRequest = { sheet = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Column(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        toolIcon(tool.name),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        verb.ifBlank { tool.name },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        tool.name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
-                Spacer(Modifier.size(10.dp))
-                // 截图大图（可捏合/双击放大）——方案 A
-                tool.imageData?.let { shot ->
-                    ZoomableShot(shot)
-                    Spacer(Modifier.size(10.dp))
-                }
-                // 参数简报：仅当简报里带对象/参数（「动词 · 对象」的「·」后段）时才显示——
-                // 截图类工具简报只有动词本身，标题已含同名文字，再渲染一遍就是重复
-                //（用户反馈 2026-09-15：弹层里「网页截图 / 网页截图」出现两次）
-                if (obj.isNotBlank()) {
-                    Text(
-                        tool.brief,
-                        fontSize = 11.5.sp,
-                        lineHeight = 17.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                            .heightIn(max = 200.dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(10.dp)
-                    )
-                }
-                val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
-                ) {
-                    tool.imageData?.let { shot ->
-                        val ctx = LocalContext.current
-                        Text(
-                            "保存到相册",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
-                                .clickable { saveShotToGallery(ctx, shot) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
-                    }
-                    if (canReview) {
-                        Text(
-                            "查看变更",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
-                                .clickable { sheet = false; onViewDiff(tool.callId) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
-                    }
-                    Text(
-                        "关闭",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .clickable { sheet = false }
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
-                // 子代理状态（spawn 工具）
-                if (tool.subagents.isNotEmpty()) {
-                    Column(Modifier.padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        tool.subagents.forEach { sub ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    Modifier
-                                        .size(7.dp)
-                                        .background(
-                                            when (sub.state) {
-                                                "RUNNING" -> MaterialTheme.colorScheme.primary
-                                                "DONE" -> Color(0xFF7BD88F)
-                                                "STOPPED" -> Color(0xFFFFC46B)
-                                                else -> MaterialTheme.colorScheme.error
-                                            }, CircleShape
-                                        )
-                                )
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    "子代理 ${sub.index}/${sub.total}" + if (sub.id.isNotEmpty()) " · ${sub.id}" else "",
-                                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    sub.brief, fontSize = 10.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (sub.state == "RUNNING" && sub.id.isNotEmpty()) {
-                                    Text(
-                                        "终止",
-                                        fontSize = 10.5.sp,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .clickable { onStopSubagent(sub.id) }
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -846,5 +699,192 @@ private fun saveShotToGallery(context: android.content.Context, dataUrl: String)
         android.widget.Toast.makeText(
             context, "保存失败：${it.message}", android.widget.Toast.LENGTH_SHORT
         ).show()
+    }
+}
+
+/**
+ * 工具详情底部弹层（顶层渲染，取舍②）。由 ChatScreen 在 **appLayer 之外**挂载
+ * （与 MessageActionPanel 同位）：backdrop 传入 GlassPanel 做真液态玻璃，透出下方
+ * 消息流实时折射。Popup/Dialog 独立窗口采样不到 appLayer backdrop（实测弹层内为
+ * 均匀死灰），故必须在主窗口组合树内、appLayer 外渲染。
+ */
+@Composable
+fun ToolDetailSheet(
+    tool: UiTool,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onDismiss: () -> Unit,
+    onViewDiff: (String) -> Unit = {},
+    onStopSubagent: (String) -> Unit = {}
+) {
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
+    val obj = tool.brief.substringAfter('·', "").trim()
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.30f))
+            .clickable(interactionSource = null, indication = null, onClick = onDismiss),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        com.haoai.agent.ui.common.GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(interactionSource = null, indication = null) {},
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            surfaceAlpha = 0.92f,
+            blurRadius = 24.dp
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
+            ) {
+                Box(
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(width = 34.dp, height = 4.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
+                )
+                Spacer(Modifier.size(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        toolIcon(tool.name),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        verb.ifBlank { tool.name },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        tool.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+                Spacer(Modifier.size(10.dp))
+                // 截图大图（可捏合/双击放大）——方案 A
+                tool.imageData?.let { shot ->
+                    ZoomableShot(shot)
+                    Spacer(Modifier.size(10.dp))
+                }
+                // 参数简报：仅当简报带对象/参数（「动词 · 对象」的「·」后段）时才显示——
+                // 截图类工具简报只有动词本身，标题已含同名文字，再渲染一遍就是重复
+                if (obj.isNotBlank()) {
+                    Text(
+                        tool.brief,
+                        fontSize = 11.5.sp,
+                        lineHeight = 17.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            .padding(10.dp)
+                    )
+                }
+                val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
+                ) {
+                    tool.imageData?.let { shot ->
+                        val ctx = LocalContext.current
+                        Text(
+                            "保存到相册",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                .clickable { saveShotToGallery(ctx, shot) }
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+                    if (canReview) {
+                        Text(
+                            "查看变更",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                .clickable { onDismiss(); onViewDiff(tool.callId) }
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+                    Text(
+                        "关闭",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable(onClick = onDismiss)
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
+                // 子代理状态（spawn 工具）
+                if (tool.subagents.isNotEmpty()) {
+                    Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        tool.subagents.forEach { sub ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    Modifier
+                                        .size(7.dp)
+                                        .background(
+                                            when (sub.state) {
+                                                "RUNNING" -> MaterialTheme.colorScheme.primary
+                                                "DONE" -> Color(0xFF7BD88F)
+                                                "STOPPED" -> Color(0xFFFFC46B)
+                                                else -> MaterialTheme.colorScheme.error
+                                            }, CircleShape
+                                        )
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    "子代理 ${sub.index}/${sub.total}" + if (sub.id.isNotEmpty()) " · ${sub.id}" else "",
+                                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    sub.brief, fontSize = 10.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (sub.state == "RUNNING" && sub.id.isNotEmpty()) {
+                                    Text(
+                                        "终止",
+                                        fontSize = 10.5.sp,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { onStopSubagent(sub.id) }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
