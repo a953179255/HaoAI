@@ -20,6 +20,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -110,6 +112,29 @@ import java.util.Locale
 
 /** 折叠态保留的尾部步骤数（RikkaHub 同款阈值） */
 private const val COLLAPSED_VISIBLE = 2
+
+/**
+ * 链卡行按压反馈（替代裸 ripple，2026-09-15）：默认 ripple 是 8dp 圆角矩形，
+ * 与链卡 18dp 圆角对不上，按压会出现形状不符的灰斑（用户截图反馈）。
+ * 按铁律改 indication=null + collectIsPressedAsState 自绘与行同形状的浅色底。
+ */
+@Composable
+private fun Modifier.chainPressable(enabled: Boolean = true, onClick: () -> Unit): Modifier {
+    val ips = remember { MutableInteractionSource() }
+    val pressed by ips.collectIsPressedAsState()
+    return this
+        .clip(RoundedCornerShape(12.dp))
+        .background(
+            if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+            else Color.Transparent
+        )
+        .clickable(
+            interactionSource = ips,
+            indication = null,
+            enabled = enabled,
+            onClick = onClick
+        )
+}
 
 @Composable
 fun ChainCard(
@@ -226,8 +251,7 @@ private fun ChainControlRow(text: String, opened: Boolean, onClick: () -> Unit) 
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            .chainPressable(onClick = onClick)
             .padding(vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -318,8 +342,7 @@ private fun ReasoningStep(
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(enabled = !live, onClick = onToggle)
+                .chainPressable(enabled = !live, onClick = onToggle)
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -434,8 +457,7 @@ private fun ToolStep(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = !running) { sheet = true }
+            .chainPressable(enabled = !running) { sheet = true }
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
