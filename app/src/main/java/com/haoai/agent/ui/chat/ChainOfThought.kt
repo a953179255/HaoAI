@@ -548,20 +548,25 @@ private fun ToolStep(
                     ZoomableShot(shot)
                     Spacer(Modifier.size(10.dp))
                 }
-                Text(
-                    tool.brief.ifBlank { "（无详情）" },
-                    fontSize = 11.5.sp,
-                    lineHeight = 17.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                        .heightIn(max = 200.dp)
-                        .verticalScroll(rememberScrollState())
-                        .padding(10.dp)
-                )
+                // 参数简报：仅当简报里带对象/参数（「动词 · 对象」的「·」后段）时才显示——
+                // 截图类工具简报只有动词本身，标题已含同名文字，再渲染一遍就是重复
+                //（用户反馈 2026-09-15：弹层里「网页截图 / 网页截图」出现两次）
+                if (obj.isNotBlank()) {
+                    Text(
+                        tool.brief,
+                        fontSize = 11.5.sp,
+                        lineHeight = 17.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            .heightIn(max = 200.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(10.dp)
+                    )
+                }
                 val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
