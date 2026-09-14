@@ -116,14 +116,15 @@ private const val COLLAPSED_VISIBLE = 2
 /**
  * 链卡行按压反馈（替代裸 ripple，2026-09-15）：默认 ripple 是 8dp 圆角矩形，
  * 与链卡 18dp 圆角对不上，按压会出现形状不符的灰斑（用户截图反馈）。
- * 按铁律改 indication=null + collectIsPressedAsState 自绘与行同形状的浅色底。
+ * 按铁律改 indication=null + collectIsPressedAsState 自绘按压底。
+ * 注意：这里**不要**给行自己 clip 圆角——高亮的圆角必须由链卡的 18dp 裁切
+ * 统一成型（v2：自带 12dp 圆角会与卡片圆角打架，用户复测仍反馈形状/长度不对）。
  */
 @Composable
 private fun Modifier.chainPressable(enabled: Boolean = true, onClick: () -> Unit): Modifier {
     val ips = remember { MutableInteractionSource() }
     val pressed by ips.collectIsPressedAsState()
     return this
-        .clip(RoundedCornerShape(12.dp))
         .background(
             if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
             else Color.Transparent
