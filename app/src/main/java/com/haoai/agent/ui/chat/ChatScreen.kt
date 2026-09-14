@@ -2602,24 +2602,23 @@ private fun StreamingItem(
             .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
         val hasContent = !streamingText.isNullOrBlank()
-        // v7.3 方案 B（行内小胶囊流）：流式期与历史同构——工具动作逐个渲染行内胶囊
-        //（运行中蓝点呼吸），思考段仍用旋钮式思考行；不再渲染聚合卡。
-        if (!streamingReasoning.isNullOrBlank()) {
-            ReasoningRow(streamingReasoning, thinkingMs, live = true)
-            Spacer(Modifier.size(3.dp))
-        }
-        liveTools.forEach { tool ->
-            InlineToolPill(
-                tool = tool,
-                live = true,
+        // v8 思维链重构（参考 RikkaHub ChainOfThought，2026-09-14 定稿）：
+        // 思考 + 工具混排进一张玻璃链卡（时间轴/流式折叠），正文气泡独立在卡外。
+        if (!streamingReasoning.isNullOrBlank() || liveTools.isNotEmpty()) {
+            ChainCard(
+                reasoning = streamingReasoning,
+                thinkingMs = thinkingMs,
+                reasoningLive = !hasContent,
+                tools = liveTools,
+                toolsLive = true,
+                finished = false,
                 onViewDiff = onViewDiff,
-                onStopRun = onStopRun,
                 onStopSubagent = onStopSubagent
             )
         }
-        // v7.6.3 分组节奏：动作组结束、正文开始前的"呼吸"（组间 10dp 观感）
+        // 分组节奏：链卡与正文气泡之间 6dp 呼吸
         if (hasContent) {
-            if (liveTools.isNotEmpty()) Spacer(Modifier.size(6.dp))
+            if (liveTools.isNotEmpty() || !streamingReasoning.isNullOrBlank()) Spacer(Modifier.size(6.dp))
             Surface(
                 color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                 shape = RoundedCornerShape(18.dp),
@@ -3252,26 +3251,22 @@ private fun AssistantBlock(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
-        // v7.3 方案 B（行内小胶囊流，用户选型）：每个工具动作一个行内胶囊
-        // （状态点 + 动词加粗 + 对象截断 + ✓），贴在正文气泡之间；不再渲染聚合卡。
-        // v7.6.3 分组节奏：胶囊↔胶囊 4dp（胶囊自带 vertical 2dp×2），
-        // 胶囊组↔气泡 10dp（组尾额外 Spacer 6dp + 气泡顶 2dp + 胶囊底 2dp）
+        // v8 思维链重构：历史消息与流式同构——思考 + 工具混排进一张链卡（finished=true
+        // → 默认折叠为控制条，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
         val hasTools = row.tools.isNotEmpty()
         val hasReasoning = row.reasoning?.takeIf { it.isNotBlank() } != null
-        if (hasTools) {
-            row.tools.forEach { tool ->
-                InlineToolPill(
-                    tool = tool,
-                    live = false,
-                    onViewDiff = onViewDiff,
-                    onStopRun = onStopRun
-                )
-            }
-            // 组间距：动作组结束、正文（或思考面板）开始前的"呼吸"
+        if (hasTools || hasReasoning) {
+            ChainCard(
+                reasoning = row.reasoning?.takeIf { it.isNotBlank() },
+                thinkingMs = null,
+                reasoningLive = false,
+                tools = row.tools,
+                toolsLive = false,
+                finished = true,
+                onViewDiff = onViewDiff,
+                onStopSubagent = {}
+            )
             Spacer(Modifier.size(6.dp))
-        } else if (hasReasoning) {
-            ReasoningPanel(text = row.reasoning.orEmpty(), live = false)
-            Spacer(Modifier.size(5.dp))
         }
         if (row.text.isNotBlank()) {
             if (row.error) {
