@@ -114,18 +114,18 @@ import java.util.Locale
 private const val COLLAPSED_VISIBLE = 2
 
 /**
- * 链卡行按压反馈（替代裸 ripple，2026-09-15）：默认 ripple 是 8dp 圆角矩形，
- * 与链卡 18dp 圆角对不上，按压会出现形状不符的灰斑（用户截图反馈）。
- * 按铁律改 indication=null + collectIsPressedAsState 自绘按压底。
- * v3：按压底自带 14dp 圆角（v2 无圆角是直角条、v1 的 12dp 又与卡片不协调，
- * 14dp 与卡片 18dp 视觉一致且中段行呈圆角胶囊）。
+ * 链卡行按压反馈（替代裸 ripple，2026-09-15 v4 定稿）：
+ * 默认 ripple 8dp 圆角与链卡 18dp 不匹配；v1-v3 给行自设圆角都错——
+ * 两套几何必打架。定稿（规格图 chain-press-target）：**行通栏**（卡片不留
+ * 水平/垂直 padding，内缩移到行内容上），高亮形状完全由链卡的 clip(18dp)
+ * 裁切成型——首行自动圆上两角、末行自动圆下两角、中间行为直角带、
+ * 单行卡=完整胶囊。观感="胶囊本身变暗"，轮廓与卡片逐像素重合。
  */
 @Composable
 private fun Modifier.chainPressable(enabled: Boolean = true, onClick: () -> Unit): Modifier {
     val ips = remember { MutableInteractionSource() }
     val pressed by ips.collectIsPressedAsState()
     return this
-        .clip(RoundedCornerShape(14.dp))
         .background(
             if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
             else Color.Transparent
@@ -190,7 +190,6 @@ fun ChainCard(
             .animateContentSize(
                 animationSpec = tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
             )
-            .padding(horizontal = 12.dp, vertical = 2.dp)
     ) {
         // ── 控制条：仅当步骤数超过阈值才出现 ──
         // 只有 1~2 步时不折叠（否则"显示 1 个步骤"还要点一下才看到内容，反而累赘）；
@@ -213,7 +212,8 @@ fun ChainCard(
             val lineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
             Box(
                 Modifier.drawBehind {
-                    val x = 12.dp.toPx()
+                    // 行通栏后内容自缩 12dp：竖线 x = 12(行内缩)+12(图标半宽)=24dp
+                    val x = 24.dp.toPx()
                     drawLine(
                         color = lineColor,
                         start = Offset(x, 18.dp.toPx()),
@@ -254,7 +254,8 @@ private fun ChainControlRow(text: String, opened: Boolean, onClick: () -> Unit) 
         Modifier
             .fillMaxWidth()
             .chainPressable(onClick = onClick)
-            .padding(vertical = 7.dp),
+            // 高亮通栏（形状由卡片 clip 成型），内容自缩 12dp
+            .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
@@ -345,7 +346,8 @@ private fun ReasoningStep(
             Modifier
                 .fillMaxWidth()
                 .chainPressable(enabled = !live, onClick = onToggle)
-                .padding(vertical = 8.dp),
+                // 高亮通栏，内容自缩 12dp（图标中心落 24dp，与竖线对齐）
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -392,7 +394,7 @@ private fun ReasoningStep(
         if (live) {
             val scroll = rememberScrollState()
             LaunchedEffect(text) { scroll.scrollTo(scroll.maxValue) }
-            Box(Modifier.padding(start = 32.dp, bottom = 8.dp)) {
+            Box(Modifier.padding(start = 44.dp, end = 12.dp, bottom = 8.dp)) {
                 Text(
                     text,
                     style = MaterialTheme.typography.bodySmall,
@@ -429,7 +431,7 @@ private fun ReasoningStep(
                     lineHeight = 17.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
                     modifier = Modifier
-                        .padding(start = 32.dp, bottom = 8.dp)
+                        .padding(start = 44.dp, end = 12.dp, bottom = 8.dp)
                         .fillMaxWidth()
                         .heightIn(max = 240.dp)
                         .clip(RoundedCornerShape(10.dp))
@@ -460,7 +462,8 @@ private fun ToolStep(
         Modifier
             .fillMaxWidth()
             .chainPressable(enabled = !running) { sheet = true }
-            .padding(vertical = 8.dp),
+            // 高亮通栏，内容自缩 12dp
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
