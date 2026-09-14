@@ -732,7 +732,7 @@ fun ToolDetailSheet(
                 .fillMaxWidth()
                 .clickable(interactionSource = null, indication = null) {},
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            surfaceAlpha = 0.92f,
+            surfaceAlpha = 0.72f,
             blurRadius = 24.dp
         ) {
             Column(
