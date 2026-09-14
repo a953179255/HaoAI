@@ -16,14 +16,18 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -55,7 +59,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,8 +71,15 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +87,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haoai.agent.agent.engine.ToolRunState
 import com.haoai.agent.ui.UiTool
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
@@ -479,12 +494,19 @@ private fun ToolStep(
                     else -> Color(0xFF3FAE5C).copy(alpha = 0.85f)
                 }
             )
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowRight,
-                contentDescription = "查看工具详情",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.size(14.dp)
-            )
+            // 截图类工具（browser_screenshot / vscreen_*）：行尾换成缩略图，
+            // 点缩略图或点整行 → 详情弹层看大图（方案 A，2026-09-15）
+            val shot = tool.imageData
+            if (shot != null) {
+                ShotThumb(shot)
+            } else {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowRight,
+                    contentDescription = "查看工具详情",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(14.dp)
+                )
+            }
         }
     }
     // ── 工具详情底部弹层（取舍②：行内不展开）──
@@ -521,6 +543,11 @@ private fun ToolStep(
                     )
                 }
                 Spacer(Modifier.size(10.dp))
+                // 截图大图（可捏合/双击放大）——方案 A
+                tool.imageData?.let { shot ->
+                    ZoomableShot(shot)
+                    Spacer(Modifier.size(10.dp))
+                }
                 Text(
                     tool.brief.ifBlank { "（无详情）" },
                     fontSize = 11.5.sp,
@@ -540,6 +567,20 @@ private fun ToolStep(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
                 ) {
+                    tool.imageData?.let { shot ->
+                        val ctx = LocalContext.current
+                        Text(
+                            "保存到相册",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                .clickable { saveShotToGallery(ctx, shot) }
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
                     if (canReview) {
                         Text(
                             "查看变更",
@@ -621,4 +662,157 @@ private fun toolIcon(name: String): ImageVector = when {
     name == "read" || name.contains("file") || name.contains("grep") -> Icons.Filled.Article
     name.contains("spawn") || name.contains("agent") -> Icons.Filled.AccountTree
     else -> Icons.Filled.Build
+}
+
+// ═══════════ 截图展示（方案 A：步骤缩略图 + 弹层大图，2026-09-15）═══════════
+
+/** 截图解码缓存：按 dataUrl 哈希键，容量 6 张（1024px JPEG 单张解码后约 1–4MB）。 */
+private val shotCache = android.util.LruCache<String, ImageBitmap>(6)
+
+/** data URL → ImageBitmap（Base64 解码放 IO 线程，结果进 LruCache，滚动不重复解码）。 */
+private suspend fun decodeShot(dataUrl: String): ImageBitmap? {
+    val key = dataUrl.hashCode().toString()
+    shotCache.get(key)?.let { return it }
+    val bmp = withContext(Dispatchers.IO) {
+        runCatching {
+            val b64 = dataUrl.substringAfter("base64,", "")
+            if (b64.isEmpty()) return@runCatching null
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+    } ?: return null
+    shotCache.put(key, bmp)
+    return bmp
+}
+
+/** 步骤行缩略图 46×58（触控热区由整行 clickable 覆盖，≥48dp）。 */
+@Composable
+private fun ShotThumb(dataUrl: String) {
+    var bmp by remember(dataUrl) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(dataUrl) { bmp = decodeShot(dataUrl) }
+    Box(
+        Modifier
+            .size(width = 46.dp, height = 58.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f),
+                RoundedCornerShape(8.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        bmp?.let {
+            Image(
+                it,
+                contentDescription = "网页截图缩略图，点按查看大图",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+/**
+ * 弹层大图：铺满宽度（最高 420dp），支持双指捏合 1×–4×、双击放大/复原、
+ * 放大后拖动平移（位移按缩放倍数夹取，不会把图拖出视野）。
+ */
+@Composable
+private fun ZoomableShot(dataUrl: String) {
+    var bmp by remember(dataUrl) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(dataUrl) { bmp = decodeShot(dataUrl) }
+    var scale by remember(dataUrl) { mutableFloatStateOf(1f) }
+    var off by remember(dataUrl) { mutableStateOf(Offset.Zero) }
+    var boxW by remember { mutableFloatStateOf(0f) }
+    var boxH by remember { mutableFloatStateOf(0f) }
+    fun clamp() {
+        val maxX = ((scale - 1f).coerceAtLeast(0f)) * boxW / 2f
+        val maxY = ((scale - 1f).coerceAtLeast(0f)) * boxH / 2f
+        off = Offset(off.x.coerceIn(-maxX, maxX), off.y.coerceIn(-maxY, maxY))
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 420.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .onSizeChanged { boxW = it.width.toFloat(); boxH = it.height.toFloat() }
+            .pointerInput(dataUrl) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 4f)
+                    off = if (scale <= 1.001f) Offset.Zero else Offset(off.x + pan.x, off.y + pan.y)
+                    clamp()
+                }
+            }
+            .pointerInput(dataUrl) {
+                detectTapGestures(onDoubleTap = {
+                    scale = if (scale > 1.001f) 1f else 2.5f
+                    if (scale <= 1.001f) off = Offset.Zero
+                    clamp()
+                })
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        bmp?.let {
+            Image(
+                it,
+                contentDescription = "网页截图大图，可双指放大或双击缩放",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = off.x,
+                        translationY = off.y
+                    )
+            )
+        }
+        if (bmp != null && scale <= 1.001f) {
+            Text(
+                "双指放大 · 双击缩放",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+/** 保存截图为相册图片（MediaStore，API 29+ 免权限写 Pictures/HaoAI）。 */
+private fun saveShotToGallery(context: android.content.Context, dataUrl: String) {
+    runCatching {
+        val b64 = dataUrl.substringAfter("base64,", "")
+        val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+        val values = android.content.ContentValues().apply {
+            put(
+                android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+                "haoai_shot_${System.currentTimeMillis()}.jpg"
+            )
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(
+                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_PICTURES + "/HaoAI"
+                )
+            }
+        }
+        val uri = context.contentResolver.insert(
+            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+        ) ?: error("无法在相册创建条目")
+        context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            ?: error("无法写入相册")
+        android.widget.Toast.makeText(
+            context, "已保存到相册 Pictures/HaoAI", android.widget.Toast.LENGTH_SHORT
+        ).show()
+    }.onFailure {
+        android.widget.Toast.makeText(
+            context, "保存失败：${it.message}", android.widget.Toast.LENGTH_SHORT
+        ).show()
+    }
 }

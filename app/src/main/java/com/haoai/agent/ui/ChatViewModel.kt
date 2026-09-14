@@ -38,7 +38,13 @@ data class UiTool(
     val state: ToolRunState = ToolRunState.RUNNING,
     val preview: String? = null,
     /** E7a spawn_agents/spawn_agent 逐路子代理状态（index 从 1 起；按到达序刷新）。 */
-    val subagents: List<SubagentLine> = emptyList()
+    val subagents: List<SubagentLine> = emptyList(),
+    /**
+     * 该工具产出的截图（browser_screenshot / vscreen_* 的 data URL，2026-09-15）。
+     * 由引擎注入的 user 图像消息在 rebuildRows 里配对回这一步 → 步骤行显示缩略图、
+     * 点开在详情弹层看大图；占位文字气泡不再单独成行。
+     */
+    val imageData: String? = null
 )
 
 /** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）；id 供任务卡终止按钮定位。 */
@@ -67,7 +73,9 @@ data class ChatRow(
     val promptTokens: Int? = null,
     val completionTokens: Int? = null,
     val durationMs: Long? = null,
-    val model: String? = null
+    val model: String? = null,
+    /** 引擎注入的截图消息携带的图像（未能配对到工具步骤时的兜底；正常已挂到 UiTool.imageData）。 */
+    val imageData: String? = null
 )
 
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
@@ -1035,6 +1043,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 ev.message.toolCalls.forEach { call ->
                     liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson))
                 }
+                // 截图消息（方案 A）：流式期就把它挂到对应工具的步骤上，卡片即刻出缩略图
+                screenshotToolName(ev.message.content, ev.message.imageData)?.let { shotName ->
+                    val target = liveTools.values.lastOrNull {
+                        it.name == shotName && it.imageData.isNullOrBlank()
+                    }
+                    if (target != null) {
+                        liveTools[target.callId] = target.copy(imageData = ev.message.imageData)
+                    }
+                }
                 publishLiveTools()
                 rebuildRows()
             }
@@ -1045,7 +1062,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     ev.update.brief ?: "",
                     ev.update.state,
                     ev.update.preview,
-                    liveTools[ev.update.callId]?.subagents ?: emptyList()
+                    liveTools[ev.update.callId]?.subagents ?: emptyList(),
+                    liveTools[ev.update.callId]?.imageData
                 )
                 publishLiveTools()
                 rebuildRows()
@@ -1113,6 +1131,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
 
         val rows = ArrayList<ChatRow>()
+        // 截图配对的宿主：最近一条 assistant 行（引擎把截图作为独立 user 图像消息追加，
+        // 位置紧跟产出它的工具结果之后）——2026-09-15 方案 A
+        var lastAssistantIdx = -1
         s.messages.forEachIndexed { i, m ->
             when (m.role) {
                 ChatMessage.ROLE_ASSISTANT -> {
@@ -1125,7 +1146,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             stored != null -> base.copy(
                                 state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
                                 preview = previewLine(stored.first),
-                                subagents = live?.subagents ?: emptyList()
+                                subagents = live?.subagents ?: emptyList(),
+                                imageData = live?.imageData
                             )
                             live != null -> live
                             else -> base
@@ -1142,9 +1164,30 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             model = m.model
                         )
                     )
+                    lastAssistantIdx = rows.lastIndex
                 }
-                ChatMessage.ROLE_USER ->
-                    rows.add(ChatRow(m.id.ifBlank { "m$i" }, m.id, m.role, m.content, ts = m.ts))
+                ChatMessage.ROLE_USER -> {
+                    // 引擎注入的截图消息（"[工具名] 页面截图（当前视觉状态，供图像分析）"）：
+                    // 配对回上一条 assistant 行里同名工具的步骤 → 不再单独成一条气泡，
+                    // 图片改挂在工具步骤（缩略图 + 详情弹层大图）
+                    val shotName = screenshotToolName(m.content, m.imageData)
+                    val host = rows.getOrNull(lastAssistantIdx)
+                    val attachAt = if (shotName != null && host != null) {
+                        host.tools.indexOfLast { it.name == shotName && it.imageData.isNullOrBlank() }
+                    } else -1
+                    if (shotName != null && attachAt >= 0 && host != null) {
+                        val newTools = host.tools.toMutableList()
+                        newTools[attachAt] = newTools[attachAt].copy(imageData = m.imageData)
+                        rows[lastAssistantIdx] = host.copy(tools = newTools)
+                    } else {
+                        rows.add(
+                            ChatRow(
+                                m.id.ifBlank { "m$i" }, m.id, m.role, m.content,
+                                imageData = m.imageData, ts = m.ts
+                            )
+                        )
+                    }
+                }
                 else -> Unit
             }
         }
@@ -1154,6 +1197,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun previewLine(content: String): String =
         content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
+
+    /**
+     * 引擎注入的截图消息识别：content = "[<工具名>] …（…供图像分析）" 且带 imageData。
+     * 返回工具名（配对用），非截图消息返回 null。
+     */
+    private fun screenshotToolName(content: String, imageData: String?): String? {
+        if (imageData.isNullOrBlank()) return null
+        if (!content.startsWith("[")) return null
+        val end = content.indexOf(']')
+        if (end <= 1) return null
+        return content.substring(1, end).trim().ifBlank { null }
+    }
 
     private fun briefFor(toolName: String, argsJson: String): String =
         com.haoai.agent.agent.tools.ToolBrief.of(toolName, argsJson)
