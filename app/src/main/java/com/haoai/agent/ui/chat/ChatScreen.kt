@@ -158,6 +158,7 @@ import com.haoai.agent.ui.ChatRow
 import com.haoai.agent.ui.ChatViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
 import com.haoai.agent.ui.common.SwipeRevealCard
@@ -1367,59 +1368,38 @@ fun ChatScreen(
     }
 
     // 工具卡"查看变更"弹层（1.3）：diff 从写前快照现算
-    // v8 审计修复：原 Popup + Surface 是独立窗口+实心底（采样不到 backdrop），
-    // 改与 ToolDetailSheet 同范式：appLayer 外全屏 scrim + GlassPanel 真玻璃
+    // v8 审计修复：原 Popup + Surface 是独立窗口+实心底；现用 GlassBottomSheet 通用壳
+    // （appLayer 外真玻璃 + 滑入滑出 + 拖横杠收起）
     diffViewer?.let { (path, diffLines) ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.30f))
-                .clickable(interactionSource = null, indication = null) { diffViewer = null },
-            contentAlignment = Alignment.BottomCenter
+        GlassBottomSheet(
+            backdrop = backdrop,
+            onDismiss = { diffViewer = null }
         ) {
-            GlassPanel(
-                backdrop = backdrop,
-                modifier = Modifier
+            Column(
+                Modifier
                     .fillMaxWidth()
-                    .clickable(interactionSource = null, indication = null) {},
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                surfaceAlpha = 0.72f,
-                blurRadius = 24.dp
+                    .heightIn(max = 640.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 14.dp)
+                    .padding(top = 4.dp, bottom = 24.dp)
             ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 640.dp)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 14.dp)
-                        .padding(top = 12.dp, bottom = 28.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .size(width = 34.dp, height = 4.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
-                    )
-                    Spacer(Modifier.size(10.dp))
-                    DiffReviewView(
-                        path = path,
-                        isNewFile = false,
-                        diff = diffLines,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.size(12.dp))
-                    Text(
-                        "关闭",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .align(Alignment.End)
-                            .clip(RoundedCornerShape(999.dp))
-                            .clickable { diffViewer = null }
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
+                DiffReviewView(
+                    path = path,
+                    isNewFile = false,
+                    diff = diffLines,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.size(12.dp))
+                Text(
+                    "关闭",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { diffViewer = null }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                )
             }
         }
     }

@@ -1,17 +1,22 @@
 package com.haoai.agent.ui.common
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -62,6 +67,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -741,6 +747,103 @@ fun GlassPopup(
             surfaceAlpha = surfaceAlpha
         ) {
             content { leaving = true }
+        }
+    }
+}
+
+/**
+ * 液态玻璃底部弹层（v8 思维链弹层通用壳，2026-09-15）：
+ * 必须在 **appLayer 之外的主窗口组合树内**渲染（独立 Popup/Dialog 窗口采样不到
+ * backdrop，只能死灰/磨砂）。行为对齐 ModalBottomSheet：
+ * - 进场：自下而上滑入（240ms）+ 遮罩渐显；
+ * - 顶部横杠可拖：跟手下滑，超阈值或快速甩动松手 → 滑出收起（退出动画播完才回调
+ *   onDismiss）；未达阈值回弹；
+ * - 点遮罩 / 系统返回：同样走滑出动画后关闭。
+ * 内容放在 content（ColumnScope），横杠由本组件提供，调用方不要再画。
+ */
+@Composable
+fun GlassBottomSheet(
+    backdrop: LayerBackdrop,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    surfaceAlpha: Float = 0.72f,
+    blurRadius: Dp = 24.dp,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var dismissed by remember { mutableStateOf(false) }
+    var panelH by remember { mutableFloatStateOf(0f) }
+    // 滑移量（px）：slide 为进场/退场动画值，dragY 为拖横杠跟手值，eff 叠加生效
+    val slide = remember { Animatable(2200f) }
+    val dragY = remember { mutableFloatStateOf(0f) }
+    // 关闭：把退场起点定格在当前位移，滑出屏幕后（动画播完）才真正卸载
+    fun requestClose() {
+        if (dismissed) return
+        dismissed = true
+        scope.launch {
+            slide.snapTo(slide.value + dragY.floatValue)
+            dragY.floatValue = 0f
+            slide.animateTo(
+                if (panelH > 0f) panelH + 60f else 2200f,
+                tween(190, easing = LinearOutSlowInEasing)
+            )
+            onDismiss()
+        }
+    }
+    androidx.activity.compose.BackHandler(onBack = { requestClose() })
+    LaunchedEffect(Unit) {
+        slide.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
+    }
+    val eff = slide.value + dragY.floatValue
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(
+                Color.Black.copy(
+                    alpha = 0.30f * (1f - eff / panelH.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                )
+            )
+            .clickable(interactionSource = null, indication = null) { requestClose() },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer { translationY = eff }
+                .clickable(interactionSource = null, indication = null) {},
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            surfaceAlpha = surfaceAlpha,
+            blurRadius = blurRadius
+        ) {
+            Column(Modifier.onSizeChanged { panelH = it.height.toFloat() }) {
+                // 拖拽横杠（跟手下滑；超 120px 或甩速 > 900 收起，否则回弹）
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(26.dp)
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures(
+                                onDragEnd = {
+                                    if (dragY.floatValue > 120f) requestClose()
+                                    else dragY.floatValue = 0f
+                                },
+                                onDragCancel = { dragY.floatValue = 0f }
+                            ) { _, dy ->
+                                dragY.floatValue = (dragY.floatValue + dy).coerceAtLeast(0f)
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 34.dp, height = 4.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
+                    )
+                }
+                content()
+            }
         }
     }
 }

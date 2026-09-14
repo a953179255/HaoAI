@@ -716,40 +716,21 @@ fun ToolDetailSheet(
     onViewDiff: (String) -> Unit = {},
     onStopSubagent: (String) -> Unit = {}
 ) {
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.30f))
-            .clickable(interactionSource = null, indication = null, onClick = onDismiss),
-        contentAlignment = Alignment.BottomCenter
+    // v8：滑入/滑出 + 拖横杠跟手收起（GlassBottomSheet 通用壳，横杠由壳提供）
+    com.haoai.agent.ui.common.GlassBottomSheet(
+        backdrop = backdrop,
+        onDismiss = onDismiss
     ) {
-        com.haoai.agent.ui.common.GlassPanel(
-            backdrop = backdrop,
-            modifier = Modifier
+        Column(
+            Modifier
                 .fillMaxWidth()
-                .clickable(interactionSource = null, indication = null) {},
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            surfaceAlpha = 0.72f,
-            blurRadius = 24.dp
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(top = 4.dp, bottom = 16.dp)
         ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 560.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 18.dp, vertical = 12.dp)
-            ) {
-                Box(
-                    Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .size(width = 34.dp, height = 4.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
-                )
-                Spacer(Modifier.size(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         toolIcon(tool.name),
@@ -884,7 +865,6 @@ fun ToolDetailSheet(
                         }
                     }
                 }
-            }
         }
     }
 }
