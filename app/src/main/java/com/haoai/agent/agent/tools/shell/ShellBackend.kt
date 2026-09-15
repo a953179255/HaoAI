@@ -110,32 +110,45 @@ class ProotBackend private constructor(
         val reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8), ShellRunner.MAX_OUTPUT)
         val endTag = "__HAOAI_RC_${token}_"
         val buf = StringBuilder()
-        var exit = -1
-        var terminated = false
-        try {
-            while (true) {
-                val elapsed = System.currentTimeMillis() - start
-                if (elapsed > timeoutMs) {
-                    terminated = true
-                    break
+        val exitRef = java.util.concurrent.atomic.AtomicInteger(-1)
+        val done = java.util.concurrent.CountDownLatch(1)
+        // 异步读：readLine 会阻塞，若 proot 既不输出又不退（挂死），同步读会让超时检查失效、
+        // 工具调用被引擎层超时取消且拿不到任何输出（真机/模拟器「无回显」根因）。改由读线程
+        // 负责读尽/命中 END，主线程按超时等待并在超时后强杀进程（杀进程会关流，读线程随之退出）。
+        val readerThread = Thread {
+            try {
+                while (true) {
+                    val line = reader.readLine() ?: break // 输出关闭 → 读尽
+                    if (line.startsWith(endTag)) {
+                        exitRef.set(line.removePrefix(endTag).trim().toIntOrNull() ?: -1)
+                        break
+                    }
+                    if (buf.length < ShellRunner.MAX_OUTPUT) buf.appendLine(line)
                 }
-                val line = reader.readLine() ?: break // 进程输出关闭 → 读尽
-                if (line.startsWith(endTag)) {
-                    exit = line.removePrefix(endTag).trim().toIntOrNull() ?: -1
-                    break
-                }
-                if (buf.length < ShellRunner.MAX_OUTPUT) buf.appendLine(line)
+            } catch (_: Exception) {
+                // 进程被杀/流中断：按已读输出返回
+            } finally {
+                done.countDown()
             }
-        } catch (e: Exception) {
-            // 读异常按已读输出返回
-        } finally {
-            if (proc.isAlive) {
-                repairPending = true // 未干净退出（超时/中断）→ 可能打断 dpkg 事务
-                proc.destroy()
-                if (!proc.waitFor(2_000, java.util.concurrent.TimeUnit.MILLISECONDS)) proc.destroyForcibly()
-            }
-            runCatching { reader.close() }
+        }.apply { isDaemon = true; name = "proot-read-$token" }
+        readerThread.start()
+        val finished = try {
+            done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            // 用户停止 / 协程取消：清理后原样抛出，交由上层识别为取消
+            runCatching { proc.destroyForcibly() }
+            runCatching { done.await(1, java.util.concurrent.TimeUnit.SECONDS) }
+            throw e
         }
+        val terminated = !finished
+        if (terminated) repairPending = true // 未干净退出（超时）→ 可能打断 dpkg 事务，下次自愈
+        if (proc.isAlive) {
+            proc.destroy()
+            if (!proc.waitFor(2_000, java.util.concurrent.TimeUnit.MILLISECONDS)) proc.destroyForcibly()
+        }
+        runCatching { done.await(2, java.util.concurrent.TimeUnit.SECONDS) } // 等读线程收尾
+        runCatching { reader.close() }
+        val exit = exitRef.get()
         val dur = System.currentTimeMillis() - start
         return if (terminated) {
             ShellBackend.ExecResult(

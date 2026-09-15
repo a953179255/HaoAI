@@ -320,6 +320,132 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog("route: vsclose done")
                 }
             }
+            "sbox" -> {
+                // 沙箱链路自检（app 进程内真实执行，结果落 files/sbox-probe.txt 供 adb 取回）：
+                //   adb shell am start -a android.intent.action.VIEW -d "haoai://debug/sbox"
+                enterChat()
+                screen = 0
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val ctx = container.appContext
+                    val out = StringBuilder()
+                    fun log(s: String) { out.append(s).append('\n') }
+                    try {
+                        val nativeDir = ctx.applicationInfo?.nativeLibraryDir
+                        val ws = container.workspace.current?.shellWorkdir()
+                            ?: java.io.File(ctx.filesDir, "shell-home").apply { mkdirs() }
+                        log("[sbox] filesDir=${ctx.filesDir}")
+                        log("[sbox] nativeDir=$nativeDir")
+                        log("[sbox] workspace=${ws.absolutePath} exists=${ws.exists()} canRead=${ws.canRead()}")
+                        val install = com.haoai.agent.platform.sandbox.Proot.ensureReady(ctx.filesDir, nativeDir)
+                        log("[sbox] Proot.ensureReady=${if (install == null) "null（ABI 无打包二进制或 sha256 不符）" else "${install.abi} bin=${install.binary.absolutePath}"}")
+                        val sb = com.haoai.agent.platform.sandbox.SandboxEnv.resolve(ctx.filesDir, nativeDir, ws)
+                        if (sb == null) {
+                            log("[sbox] SandboxEnv.resolve=null（沙箱不可用）")
+                        } else {
+                            log("[sbox] resolve ok: distro=${sb.distroId} rootfs=${sb.rootfs.absolutePath}")
+                            val argv = sb.buildArgs("echo SBOX_OK; uname -a; pwd; id")
+                            log("[sbox] argv=${argv.joinToString(" ")}")
+                            val env = com.haoai.agent.platform.sandbox.Proot.environmentOf(sb.install)
+                                .plus(mapOf("PATH" to "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "HOME" to "/root", "TMPDIR" to "/tmp"))
+                            log("[sbox] env=$env")
+                            val t0 = System.currentTimeMillis()
+                            // 带 -v 详细跟踪：保留尾部 12000 字符（proot 每 syscall 一行，前段会刷屏）
+                            val vArgv = sb.buildArgs("-v").toMutableList()
+                            // buildArgs 末尾是 [haoai-env, /bin/sh, -c, cmd]，把 -v 插到 proot 选项区（index 1 之后）
+                            vArgv.removeAt(vArgv.size - 1)
+                            vArgv.add("apt-get --version | head -1; dpkg --version | head -1; uname -m; echo PROD_OK")
+                            vArgv.add(1, "3")
+                            vArgv.add(1, "-v")
+                            val pb = ProcessBuilder(vArgv).redirectErrorStream(true)
+                            pb.directory(sb.install.libDir)
+                            pb.environment().apply { clear(); for ((k, v) in env) put(k, v) }
+                            val p = pb.start()
+                            val done = java.util.concurrent.CountDownLatch(1)
+                            val rawOut = StringBuilder()
+                            Thread {
+                                runCatching {
+                                    p.inputStream.bufferedReader().forEachLine {
+                                        rawOut.appendLine(it)
+                                        // 尾部缓冲：超 12000 就从头部砍 4000，保证看到最后发生的 syscall
+                                        if (rawOut.length > 12000) rawOut.delete(0, 4000)
+                                    }
+                                }
+                                done.countDown()
+                            }.apply { isDaemon = true }.start()
+                            val fin = done.await(60, java.util.concurrent.TimeUnit.SECONDS)
+                            val alive = p.isAlive
+                            if (alive) { p.destroy(); if (!p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly() }
+                            log("[sbox] raw exec: finished=$fin stillAlive=$alive exit=${runCatching { p.exitValue() }.getOrNull()} dur=${System.currentTimeMillis() - t0}ms")
+                            log("[sbox] raw output >>>")
+                            log(rawOut.toString().ifBlank { "(空)" })
+                            log("[sbox] <<< raw output end")
+
+                            // 生产路径验证：ProotBackend.exec（含一次性进程模型 + 异步读）
+                            runCatching {
+                                val be = com.haoai.agent.agent.tools.shell.ProotBackend.forSandbox(sb)
+                                val r = be.exec("uname -m; echo PROD_OK", 90_000)
+                                log("[sbox] ProotBackend.exec exit=${r.exitCode} dur=${r.durationMs}ms out=${r.output.trim().replace("\n", " | ")}")
+                            }.onFailure { log("[sbox] ProotBackend 异常 ${it.javaClass.simpleName}: ${it.message}") }
+
+                            // —— 配置矩阵：定位 fork ENOSYS 由哪个开关导致 ——
+                            // 每个配置跑同一组命令：内建(echo) + 需 fork 的外部程序(uname)
+                            data class Cfg(val name: String, val fakeRoot: Boolean, val noSeccomp: Boolean, val extra: List<String>)
+                            val cfgs = listOf(
+                                Cfg("base(-0,NoSec)", true, true, emptyList()),
+                                Cfg("noNoSeccomp", true, false, emptyList()),
+                                Cfg("noFakeRoot", false, true, emptyList()),
+                                Cfg("noFakeRoot+noNoSeccomp", false, false, emptyList()),
+                                Cfg("sysvipc", true, true, listOf("--sysvipc")),
+                                Cfg("nf+ns+sysvipc", false, false, listOf("--sysvipc")),
+                                // proot-distro 实际用法：不用 -0，改用真实 uid 映射 --change-id=0:0
+                                Cfg("change-id=0:0", false, false, listOf("--change-id=0:0")),
+                                Cfg("change-id=0:0+sysvipc", false, false, listOf("--change-id=0:0", "--sysvipc"))
+                            )
+                            for (cfg in cfgs) {
+                                try {
+                                    val argv = com.haoai.agent.platform.sandbox.Proot.buildCommand(
+                                        sb.install, sb.rootfs, "echo BUILTIN_OK; uname -a; ls /; echo DONE",
+                                        binds = listOf(
+                                            "/storage/emulated/0/Android/data/com.haoai.agent/files/workspace" to "/workspace",
+                                            "/dev" to "/dev", "/proc" to "/proc", "/sys" to "/sys"
+                                        ),
+                                        workdir = "/workspace",
+                                        envWrapper = true,
+                                        fakeRoot = cfg.fakeRoot
+                                    ).toMutableList()
+                                    if (cfg.extra.isNotEmpty()) argv.addAll(2, cfg.extra)
+                                    val env = com.haoai.agent.platform.sandbox.Proot.environmentOf(sb.install).toMutableMap()
+                                    env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/usr/bin"
+                                    env["HOME"] = "/root"
+                                    env["TMPDIR"] = "/tmp"
+                                    if (!cfg.noSeccomp) env.remove("PROOT_NO_SECCOMP")
+                                    val pb = ProcessBuilder(argv).redirectErrorStream(true)
+                                    pb.directory(sb.install.libDir)
+                                    pb.environment().apply { clear(); for ((k, v) in env) put(k, v) }
+                                    val p = pb.start()
+                                    val dl = java.util.concurrent.CountDownLatch(1)
+                                    val o = StringBuilder()
+                                    Thread {
+                                        runCatching { p.inputStream.bufferedReader().forEachLine { if (o.length < 4000) o.appendLine(it) } }
+                                        dl.countDown()
+                                    }.apply { isDaemon = true }.start()
+                                    val fin = dl.await(45, java.util.concurrent.TimeUnit.SECONDS)
+                                    if (p.isAlive) { p.destroy(); if (!p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly() }
+                                    log("[MX:${cfg.name}] finished=$fin exit=${runCatching { p.exitValue() }.getOrNull()} noSeccomp=${cfg.noSeccomp} fakeRoot=${cfg.fakeRoot} extra=${cfg.extra}")
+                                    o.toString().trim().lines().take(6).forEach { log("    | $it") }
+                                } catch (e: Throwable) {
+                                    log("[MX:${cfg.name}] EXC ${e.javaClass.simpleName}: ${e.message}")
+                                }
+                            }
+                        }
+                    } catch (e: Throwable) {
+                        log("[sbox] EXCEPTION ${e.javaClass.name}: ${e.message}")
+                        log(e.stackTraceToString().take(3000))
+                    }
+                    java.io.File(ctx.filesDir, "sbox-probe.txt").writeText(out.toString())
+                    android.util.Log.w("SboxProbe", out.toString())
+                }
+            }
         }
     }
     LaunchedEffect(Unit) {
