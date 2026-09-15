@@ -320,6 +320,47 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog("route: vsclose done")
                 }
             }
+            "bashtool" -> {
+                // BashTool 全路径自检（复现 Agent 的工具调用，非直连 ProotBackend）：
+                //   adb shell am start -d "haoai://debug/bashtool?cmd=<urlencoded>&backend=auto|linux"
+                // 结果落 files/bashtool-probe.txt
+                enterChat()
+                screen = 0
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val ctx = container.appContext
+                    val out = StringBuilder()
+                    fun log(s: String) { out.append(s).append('\n') }
+                    try {
+                        val cmd = uri.getQueryParameter("cmd") ?: "uname -a; echo TOOL_OK"
+                        val backendArg = uri.getQueryParameter("backend") ?: "auto"
+                        val ws = container.workspace.current?.shellWorkdir()
+                            ?: java.io.File(ctx.filesDir, "shell-home").apply { mkdirs() }
+                        val tctx = com.haoai.agent.agent.tools.ToolContext(
+                            backend = container.workspace.current,
+                            shellDir = ws,
+                            todoStore = com.haoai.agent.agent.tools.TodoStore(ctx.filesDir),
+                            appFilesDir = ctx.filesDir,
+                            appContext = ctx
+                        )
+                        val args = kotlinx.serialization.json.buildJsonObject {
+                            put("command", kotlinx.serialization.json.JsonPrimitive(cmd))
+                            put("timeout_ms", kotlinx.serialization.json.JsonPrimitive(120_000))
+                            if (backendArg != "auto") put("backend", kotlinx.serialization.json.JsonPrimitive(backendArg))
+                        }
+                        log("[bt] shellDir=${ws.absolutePath} backend=$backendArg")
+                        log("[bt] cmd=$cmd")
+                        val r = com.haoai.agent.agent.tools.BashTool().run(args, tctx)
+                        log("[bt] isError=${r.isError}")
+                        log("[bt] output >>>")
+                        log(r.content.take(3000))
+                        log("[bt] <<< output")
+                    } catch (e: Throwable) {
+                        log("[bt] EXC ${e.javaClass.name}: ${e.message}")
+                    }
+                    java.io.File(ctx.filesDir, "bashtool-probe.txt").writeText(out.toString())
+                    android.util.Log.w("BashToolProbe", out.toString())
+                }
+            }
             "sbox" -> {
                 // 沙箱链路自检（app 进程内真实执行，结果落 files/sbox-probe.txt 供 adb 取回）：
                 //   adb shell am start -a android.intent.action.VIEW -d "haoai://debug/sbox"

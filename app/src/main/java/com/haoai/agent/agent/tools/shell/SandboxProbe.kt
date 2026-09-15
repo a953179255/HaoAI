@@ -30,9 +30,13 @@ object SandboxProbe {
             val r = runCatching {
                 ProotBackend.forSandbox(sandbox).exec(cmd, 20_000)
             }.getOrNull()
-            val names = r?.takeIf { it.exitCode == 0 }
-                ?.output?.trim()?.split(Regex("\\s+"))?.filter { it.isNotBlank() }
-                .orEmpty()
+            // base 镜像里这些工具通常一个都没有：循环不打印任何名字，末位 echo 只回一个空行，
+            // ProotBackend 会把「仅空白」的输出回退成 "(无输出)"（人读友好）。此处必须把它
+            // 当空处理，否则系统提示会出现「沙箱内可用：（无输出）」误导模型与调试者
+            //（用户反馈 2026-09-16）。
+            val raw = r?.takeIf { it.exitCode == 0 }?.output?.trim().orEmpty()
+            val cleaned = raw.removePrefix("(无输出)").trim()
+            val names = cleaned.split(Regex("\\s+")).filter { it.isNotBlank() }
             cached = if (names.isEmpty()) "（暂无常见开发工具，可 apk add / apt install 安装）" else names.joinToString(", ")
         }
     }
