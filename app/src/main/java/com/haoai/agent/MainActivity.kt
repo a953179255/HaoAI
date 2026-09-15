@@ -338,7 +338,15 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         log("[sbox] workspace=${ws.absolutePath} exists=${ws.exists()} canRead=${ws.canRead()}")
                         val install = com.haoai.agent.platform.sandbox.Proot.ensureReady(ctx.filesDir, nativeDir)
                         log("[sbox] Proot.ensureReady=${if (install == null) "null（ABI 无打包二进制或 sha256 不符）" else "${install.abi} bin=${install.binary.absolutePath}"}")
-                        val sb = com.haoai.agent.platform.sandbox.SandboxEnv.resolve(ctx.filesDir, nativeDir, ws)
+                        val sb = run {
+                            val want = uri.getQueryParameter("distro")
+                            if (want.isNullOrBlank()) {
+                                com.haoai.agent.platform.sandbox.SandboxEnv.resolve(ctx.filesDir, nativeDir, ws)
+                            } else if (install == null) null else {
+                                val root = java.io.File(ctx.filesDir, "proot/distros/$want/rootfs")
+                                if (root.exists()) com.haoai.agent.platform.sandbox.SandboxEnv.Sandbox(install, root, want, ws) else null
+                            }
+                        }
                         if (sb == null) {
                             log("[sbox] SandboxEnv.resolve=null（沙箱不可用）")
                         } else {
@@ -386,6 +394,20 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                                 val r = be.exec("uname -m; echo PROD_OK", 90_000)
                                 log("[sbox] ProotBackend.exec exit=${r.exitCode} dur=${r.durationMs}ms out=${r.output.trim().replace("\n", " | ")}")
                             }.onFailure { log("[sbox] ProotBackend 异常 ${it.javaClass.simpleName}: ${it.message}") }
+
+                            // apt 端到端（用户最关心的链路）：二进制可用 → 索引 → 装包 → 运行
+                            if (uri.getQueryParameter("apt") != null) {
+                                runCatching {
+                                    val be = com.haoai.agent.agent.tools.shell.ProotBackend.forSandbox(sb)
+                                    val r0 = be.exec("dpkg --configure -a >/dev/null 2>&1; apt-get --version | head -1; dpkg --version | head -1", 180_000)
+                                    log("[apt] bin exit=${r0.exitCode} dur=${r0.durationMs}ms out=${r0.output.trim().replace("\n", " | ")}")
+                                    val r1 = be.exec("DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 | tail -2; echo UPDATE_DONE", 600_000)
+                                    log("[apt] update exit=${r1.exitCode} dur=${r1.durationMs}ms out=${r1.output.trim().take(600)}")
+                                    val r2 = be.exec("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq hello 2>&1 | tail -3; echo INSTALL_DONE; hello", 600_000)
+                                    log("[apt] install exit=${r2.exitCode} dur=${r2.durationMs}ms")
+                                    log("[apt] install out >>>"); log(r2.output.trim().take(1500)); log("[apt] <<< install out")
+                                }.onFailure { log("[apt] 异常 ${it.javaClass.simpleName}: ${it.message}") }
+                            }
 
                             // —— 配置矩阵：定位 fork ENOSYS 由哪个开关导致 ——
                             // 每个配置跑同一组命令：内建(echo) + 需 fork 的外部程序(uname)
