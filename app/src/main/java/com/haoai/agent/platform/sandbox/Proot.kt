@@ -74,7 +74,10 @@ object Proot {
     /**
      * 组装 proot 命令行（3.3 ProotBackend 复用）：
      * --kill-on-exit 保证进程清理；-0 伪装 root；-w 指定沙箱内初始工作目录；
-     * -b 绑定目录（宿主:沙箱内路径）。
+     * -b 绑定目录（宿主:沙箱内路径）；
+     * --link2symlink：dpkg/apt 在假根下建备份（如 status-old）用硬链接，跨 proot
+     * 翻译树会 EACCES → "Permission denied" 且 dpkg 自锁 interrupted（实测 Ubuntu
+     * 无法安装任何包，proot-distro 同款处理）。
      * @param envWrapper true 时经 /usr/local/bin/haoai-env 启动（注入 HOME/LANG/TERM/TZ/PATH/TMPDIR）。
      */
     fun buildCommand(
@@ -88,6 +91,7 @@ object Proot {
     ): List<String> = buildList {
         add(install.binary.absolutePath)
         add("--kill-on-exit")
+        add("--link2symlink")
         add("-r"); add(rootfsDir.absolutePath)
         if (fakeRoot) add("-0")
         add("-w"); add(workdir)
