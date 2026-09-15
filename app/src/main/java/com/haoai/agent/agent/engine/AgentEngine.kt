@@ -702,6 +702,14 @@ class AgentEngine(
             android.util.Log.w("HaoEngine", "hook before failed: ${e.message}")
         }
 
+        // bash 拦截检查（正则扫描+递归切分，非廉价）：结果存局部变量避免同一命令查两次。
+        // 注意必须放在 when 之外：曾经的写法 `call.name == "bash" -> checkShellBlocked(...)?.let{}`
+        // 让「未拦截」也命中该分支并使分支体空转 → 工具从不执行、结果恒为空串且 error=false，
+        // 表现为所有 bash 调用「无回显」（2026-09-09 6de47f3 引入，2026-09-16 修复），
+        // 同时导致拦截规则形同虚设、bash 审批被跳过。
+        val shellBlocked: String? =
+            if (call.name == "bash") policy.checkShellBlocked(args.optString("command")) else null
+
         when {
             // hook 已处理（如 Plan 拦截的等价 case），跳过工具执行
             handledByHook -> Unit
@@ -713,9 +721,8 @@ class AgentEngine(
                 decision = "unknown"
             }
 
-            // bash 拦截检查（正则扫描+递归切分，非廉价）：结果存局部变量避免同一命令查两次
-            call.name == "bash" -> policy.checkShellBlocked(args.optString("command"))?.let { blocked ->
-                result = ToolResult(blocked, true)
+            shellBlocked != null -> {
+                result = ToolResult(shellBlocked, true)
                 finalState = ToolRunState.DENIED
                 decision = "blocked"
             }
