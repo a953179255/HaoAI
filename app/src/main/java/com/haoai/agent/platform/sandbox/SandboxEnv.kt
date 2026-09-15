@@ -19,6 +19,8 @@ object SandboxEnv {
         /**
          * 组装 proot argv：工作区 + /dev /proc /sys 基础绑定，命令经 haoai-env
          * 包装（guest 内 PATH/TZ/HOME 才正确）。extraBinds 供 3.5 stdio 注入。
+         * v8：ProotBackend 每条命令起一次性 proot 进程用此方法（对齐 proot-distro run）；
+         * 旧的常驻 buildSessionArgs（曾致 haoai-env 双包 + 死会话吞命令）已删除。
          */
         /** fakeRoot=false 供实验对照（-0 与 app uid 下 fork 的交互排查）。 */
         var fakeRoot: Boolean = true
@@ -38,23 +40,6 @@ object SandboxEnv {
                 envWrapper = true,
                 fakeRoot = fakeRoot
             )
-        }
-
-        /** 常驻会话启动参数（3.3 ProotBackend）：proot 直接 exec guest 登录 sh，后续命令走 stdin。 */
-        fun buildSessionArgs(): List<String> {
-            val binds = listOf(
-                workspaceHostDir.absolutePath to guestWorkspace,
-                "/dev" to "/dev",
-                "/proc" to "/proc",
-                "/sys" to "/sys"
-            )
-            return Proot.buildCommand(
-                install, rootfs, "ignored",
-                binds = binds,
-                workdir = guestWorkspace,
-                envWrapper = true,
-                fakeRoot = fakeRoot
-            ).dropLast(3) + listOf("/usr/local/bin/haoai-env", "sh")
         }
     }
 

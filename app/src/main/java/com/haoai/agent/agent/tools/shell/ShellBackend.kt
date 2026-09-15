@@ -7,7 +7,6 @@ import kotlinx.coroutines.sync.withLock
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
-import java.io.OutputStreamWriter
 
 /**
  * bash 多后端抽象（3.3）：toybox（Android 原生）/ linux（PRoot 沙箱）/ ssh（远程）。
@@ -35,14 +34,16 @@ class ToyboxBackend(private val workdir: File?) : ShellBackend {
 }
 
 /**
- * linux 后端：**常驻 guest shell**（驻留进程架构）。
+ * linux 后端：**每条命令一次性 proot 进程**（对齐 termux proot-distro 的 `run` 模型）。
  *
- * 为什么常驻：同一宿主进程内起第二个 proot 会话时，guest 内 fork/clone 会被
- * 内核拒绝（"can't fork: Function not implemented"）——首个会话一切正常，之后
- * 的会话恒定失败，疑似 proot 退出后 ptrace/tracer 状态未完全清理（API 36 模拟器
- * 实锤复现：首个会话 probe-ok，第二个会话必挂；真机单会话正常）。因此每宿主
- * 进程只启动一个 proot，所有命令写入同一 guest shell 的 stdin，用 BEGIN/END
- * 标记协议取回输出与退出码。
+ * 为什么不再常驻（2026-09-15 重构）：旧实现维持一个常驻 guest shell、命令写 stdin
+ * 用 BEGIN/END 标记协议取输出——真机实测「会话活着但僵死」：guest sh 卡 pipe_read、
+ * 命令写进死管道石沉大海（用户反馈 Ubuntu「用不了」、手机端 Agent 报「无回显」的根因）。
+ * proot 用 --kill-on-exit + ptrace，进程彻底退出即回收，一次性模型无死会话残留风险，
+ * 也是业界（proot-distro/Termux）的标准做法。
+ *
+ * 顺序化：mutex 保证同一宿主进程内 proot 串行（满足「仅一个活跃 proot」的约束），
+ * 每条命令 proot 进程结束后才起下一条，正常不会有并发 proot。
  */
 class ProotBackend private constructor(
     private val sandbox: SandboxEnv.Sandbox
@@ -50,183 +51,119 @@ class ProotBackend private constructor(
 
     override val id = "linux"
 
-    private data class Session(
-        val process: Process,
-        val stdin: OutputStreamWriter,
-        val stdout: BufferedReader
-    )
-
-    private var session: Session? = null
-    private var seq = 0
-
-    // 同一会话的 stdin/stdout 是单流水线：系统提示探测、用户命令等并发调用必须串行
+    // 串行化并发 exec（探测 / 用户命令）：同一时刻仅一个 proot 进程存活
     private val mutex = kotlinx.coroutines.sync.Mutex()
 
-    private fun startSession(): Session {
-        val argv = sandbox.buildSessionArgs()
-        val env = com.haoai.agent.platform.sandbox.Proot.environmentOf(sandbox.install) +
-            mapOf(
-                "PATH" to "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-                "HOME" to "/root",
-                "TMPDIR" to "/tmp"
-            )
-        val pb = ProcessBuilder(argv).redirectErrorStream(true)
-        pb.directory(sandbox.install.libDir)
-        val pe = pb.environment()
-        pe.clear()
-        for ((k, v) in env) pe[k] = v
-        val p = pb.start()
-        return Session(
-            p,
-            OutputStreamWriter(p.outputStream, Charsets.UTF_8),
-            BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8), ShellRunner.MAX_OUTPUT)
-        )
-    }
+    /** 上次命令被超时/停止击杀（可能打断 dpkg 事务）→ 下次命令前先静默 dpkg --configure -a 自愈。 */
+    @Volatile private var repairPending = false
 
-    @Synchronized
-    private fun ensureSession(): Session {
-        val s = session
-        if (s != null && s.process.isAlive) return s
-        runCatching { s?.process?.destroy() }
-        return startSession().also { session = it }
-    }
+    private fun envOf(): Map<String, String> =
+        com.haoai.agent.platform.sandbox.Proot.environmentOf(sandbox.install) + mapOf(
+            "PATH" to "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME" to "/root",
+            "TMPDIR" to "/tmp"
+        )
 
     override suspend fun exec(command: String, timeoutMs: Long): ShellBackend.ExecResult {
         val start = System.currentTimeMillis()
         return mutex.withLock {
             runInterruptible {
-                try {
-                    runCommand(command, timeoutMs, start)
-                } catch (e: java.io.IOException) {
-                    // 会话已死（proot 被系统回收等）：重建一次重试
-                    runCatching { session?.process?.destroy() }
-                    session = null
-                    runCommand(command, timeoutMs, System.currentTimeMillis())
+                // 自愈紧跟在击杀之后：单独跑一次 configure -a（自身也可能慢，给足预算）
+                if (repairPending) {
+                    repairPending = false
+                    runOnce("[ -x /usr/bin/dpkg ] && dpkg --configure -a >/dev/null 2>&1; true", 90_000)
                 }
+                // 若仍有上次中断残留的 dpkg 事务，命令前先自愈（幂等、快）
+                runOnce(command, timeoutMs, start)
             }
         }
     }
 
-    private fun runCommand(command: String, timeoutMs: Long, start: Long): ShellBackend.ExecResult {
-        val s = ensureSession()
-        // 上次执行被超时/停止击杀（可能打断 dpkg 事务）→ 新命令前先静默自愈一次
-        if (repairPending) {
-            repairPending = false
-            runCommandInternal(
-                s, "[ -x /usr/bin/dpkg ] && dpkg --configure -a >/dev/null 2>&1; true",
-                90_000, System.currentTimeMillis()
-            )
-        }
-        return runCommandInternal(s, command, timeoutMs, start)
-    }
-
-    /** dpkg 自愈挂起标志：killSession（超时/停止击杀）置位，下次 exec 前消费。 */
-    @Volatile private var repairPending = false
-
-    private fun runCommandInternal(s: Session, command: String, timeoutMs: Long, start: Long): ShellBackend.ExecResult {
-        seq += 1
-        val token = "HAOAI_END_${seq}_${System.currentTimeMillis()}"
-        // 命令原文经引号 heredoc 写临时脚本（零展开、防注入），
-        // 执行后回传 END 标记 + exit code
-        val payload = buildString {
-            append("cat > /tmp/.haoai_")
-            append(token)
-            appendLine(" <<'EOF_HAOAI_CMD'")
+    /**
+     * 起一个一次性 proot 跑 command：命令经引号 heredoc 落成 guest 临时脚本执行
+     * （零展开、防注入），末尾 `; echo __HAOAI_RC_$?` 回传退出码，读进程输出直到退出，
+     * 超时 destroyForcibly 杀进程（置 repairPending 供下次自愈）。
+     */
+    private fun runOnce(command: String, timeoutMs: Long, startMs: Long = System.currentTimeMillis()): ShellBackend.ExecResult {
+        val token = "HAOAI_" + java.lang.Long.toString(System.currentTimeMillis(), 36)
+        val guestScript = "/tmp/.haoai_$token.sh"
+        val wrapped = buildString {
+            append("cat > ").append(guestScript).append(" <<'EOF_HAOAI_CMD'\n")
             append(command)
-            appendLine()
+            if (!command.endsWith("\n")) append("\n")
             appendLine("EOF_HAOAI_CMD")
             appendLine("cd /workspace 2>/dev/null || cd /root")
-            append("sh /tmp/.haoai_")
-            append(token)
-            appendLine(" 2>&1")
-            appendLine("rc=$?")
-            append("rm -f /tmp/.haoai_")
-            append(token)
-            appendLine()
-            appendLine("echo \"__HAOAI_END_" + token + "_\$rc\"")
+            append("sh ").append(guestScript).append(" 2>&1; rc=$?; rm -f ").append(guestScript)
+            appendLine("; echo \"__HAOAI_RC_${token}_\$rc\"")
         }
-        try {
-            s.stdin.write(payload + "\n")
-            s.stdin.flush()
-        } catch (e: java.io.IOException) {
-            throw e
+        val argv = sandbox.buildArgs(wrapped)
+        val env = envOf()
+        val pb = ProcessBuilder(argv).redirectErrorStream(true)
+        pb.directory(sandbox.install.libDir)
+        pb.environment().apply { clear(); for ((k, v) in env) put(k, v) }
+        val start = if (startMs == 0L) System.currentTimeMillis() else startMs
+        val proc = try {
+            pb.start()
+        } catch (e: Exception) {
+            return ShellBackend.ExecResult(-1, "proot 启动失败：${e.message}", System.currentTimeMillis() - start)
         }
-        return readUntilEnd(s, token, timeoutMs, start)
-    }
-
-    private fun readUntilEnd(s: Session, token: String, timeoutMs: Long, start: Long): ShellBackend.ExecResult {
+        val reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8), ShellRunner.MAX_OUTPUT)
+        val endTag = "__HAOAI_RC_${token}_"
         val buf = StringBuilder()
-        val endTag = "__HAOAI_END_${token}_"
-        while (true) {
-            val elapsed = System.currentTimeMillis() - start
-            if (elapsed > timeoutMs) {
-                killSession(s)
-                return ShellBackend.ExecResult(
-                    -1,
-                    (if (buf.isNotEmpty()) buf.toString() + "\n" else "") + "[执行超时（${timeoutMs}ms），已终止会话]",
-                    elapsed
-                )
-            }
-            if (!s.stdout.ready()) {
-                if (!s.process.isAlive) {
-                    session = null
-                    return ShellBackend.ExecResult(
-                        -1,
-                        buf.toString().ifBlank { "proot 会话异常退出" },
-                        elapsed
-                    )
+        var exit = -1
+        var terminated = false
+        try {
+            while (true) {
+                val elapsed = System.currentTimeMillis() - start
+                if (elapsed > timeoutMs) {
+                    terminated = true
+                    break
                 }
-                Thread.sleep(40)
-                continue
+                val line = reader.readLine() ?: break // 进程输出关闭 → 读尽
+                if (line.startsWith(endTag)) {
+                    exit = line.removePrefix(endTag).trim().toIntOrNull() ?: -1
+                    break
+                }
+                if (buf.length < ShellRunner.MAX_OUTPUT) buf.appendLine(line)
             }
-            val line = s.stdout.readLine() ?: run {
-                session = null
-                return ShellBackend.ExecResult(
-                    -1,
-                    buf.toString().ifBlank { "proot 会话已关闭" },
-                    elapsed
-                )
+        } catch (e: Exception) {
+            // 读异常按已读输出返回
+        } finally {
+            if (proc.isAlive) {
+                repairPending = true // 未干净退出（超时/中断）→ 可能打断 dpkg 事务
+                proc.destroy()
+                if (!proc.waitFor(2_000, java.util.concurrent.TimeUnit.MILLISECONDS)) proc.destroyForcibly()
             }
-            if (line.startsWith(endTag)) {
-                val rc = line.removePrefix(endTag).trim().toIntOrNull() ?: -1
-                return ShellBackend.ExecResult(rc, buf.toString().ifBlank { "(无输出)" }, elapsed)
-            }
-            if (buf.length < ShellRunner.MAX_OUTPUT) buf.appendLine(line)
+            runCatching { reader.close() }
         }
-    }
-
-    private fun killSession(s: Session) {
-        // 会话被击杀可能留下半截 dpkg 事务（interrupted）→ 下次 exec 前自愈
-        repairPending = true
-        runCatching { s.process.destroy() }
-        runCatching { s.process.waitFor(2_000, java.util.concurrent.TimeUnit.MILLISECONDS) }
-        if (s.process.isAlive) runCatching { s.process.destroyForcibly() }
-        if (session === s) session = null
+        val dur = System.currentTimeMillis() - start
+        return if (terminated) {
+            ShellBackend.ExecResult(
+                -1,
+                (if (buf.isNotEmpty()) buf.toString() + "\n" else "") + "[执行超时（${timeoutMs}ms），已终止]",
+                dur
+            )
+        } else {
+            ShellBackend.ExecResult(if (exit == -1 && buf.isBlank()) -1 else exit, buf.toString().ifBlank { "(无输出)" }, dur)
+        }
     }
 
     companion object {
-        /** 进程级单例（核心约束：同一宿主进程只允许一个活跃 proot 会话，见类注释）。
-         *  但 rootfs 变化（用户换装/重装发行版）必须重建会话，否则永远绑旧 rootfs
-         *  （旧版纯单例把首次 resolve 的发行版固化到进程寿命，用户反馈 2026-09-15）。 */
+        /** 每 rootfs 一个实例（无残留进程状态，仅承载串行 mutex 与自愈标志）；
+         *  换装/重装发行版（rootfs 路径变）自动切到新实例。 */
         @Volatile private var shared: ProotBackend? = null
 
         fun forSandbox(sandbox: SandboxEnv.Sandbox): ProotBackend {
             shared?.takeIf { it.sandbox.rootfs == sandbox.rootfs }?.let { return it }
             return synchronized(this) {
-                shared?.takeIf { it.sandbox.rootfs == sandbox.rootfs }?.let { return it }
-                // rootfs 已变：先杀旧会话再建新的（维持"同进程仅一个活跃 proot"）
-                shared?.session?.let { oldS -> shared?.killSession(oldS) }
-                ProotBackend(sandbox).also { shared = it }
+                shared?.takeIf { it.sandbox.rootfs == sandbox.rootfs }
+                    ?: ProotBackend(sandbox).also { shared = it }
             }
         }
 
-        /** 发行版安装/删除后调用：强制重建会话。 */
+        /** 发行版安装/删除后调用：丢弃缓存实例（下一命令重建）。一次性进程无残留，无需杀会话。 */
         fun invalidate() {
-            synchronized(this) {
-                // killSession 只收非空 Session；session 已为 null（进程已死）时也不能跳过 shared = null
-                shared?.let { backend -> backend.session?.let { backend.killSession(it) } }
-                shared = null
-            }
+            synchronized(this) { shared = null }
         }
     }
 }
