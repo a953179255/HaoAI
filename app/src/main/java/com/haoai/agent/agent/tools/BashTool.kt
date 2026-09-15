@@ -21,6 +21,17 @@ class BashTool : Tool {
     companion object {
         /** 后台任务日志保留时长：投递新任务时顺手清理超期日志。 */
         const val JOB_LOG_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+
+        /**
+         * 包管理命令最短超时保底（2026-09-15）：真机 Ubuntu 上首次 update+install
+         * 轻松超过默认 30s；超时击杀 proot 会话会把 dpkg 事务拦腰打断、留
+         * interrupted 锁（用户反馈「Ubuntu 用不了」的主要触发路径之一）。
+         * 返回该命令要求的最短执行预算 ms（0 = 非包管理命令）。
+         */
+        fun pkgMgmtTimeoutFloorMs(command: String): Long =
+            if (Regex("""\b(apt|apt-get|dpkg|apk)\b.*\b(install|update|add|remove|upgrade|configure)\b""")
+                    .containsMatchIn(command)
+            ) 300_000L else 0L
     }
 
     override val name = "bash"
@@ -53,7 +64,7 @@ class BashTool : Tool {
         withContext(Dispatchers.IO) {
             val command = args.reqString("command")
             // 引擎层 invokeTool 按 bash 的 timeout_ms+20s 动态包裹（3.3 放宽至 600s，长构建可用）
-            val timeout = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000).toLong()
+            var timeout = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000).toLong()
             val backendArg = args.optString("backend").ifBlank { "auto" }
             val nativeDir = ctx.appContext?.applicationInfo?.nativeLibraryDir
 
@@ -79,6 +90,13 @@ class BashTool : Tool {
                     val sb = SandboxEnv.resolve(ctx.appFilesDir, nativeDir, ctx.shellDir)
                     if (sb != null && sandboxForkOk(sb)) ProotBackend.forSandbox(sb) else ToyboxBackend(ctx.shellDir)
                 }
+            }
+
+            // 包管理命令保底超时：apt/dpkg/apk 首次 update+install 常超 30s，
+            // 模型不传 timeout_ms 时超时击杀会把 dpkg 事务拦腰打断留 interrupted 锁
+            //（用户反馈 2026-09-15：Ubuntu「用不了」的主要触发路径之一）
+            if (backend.id == "linux" && pkgMgmtTimeoutFloorMs(command) > timeout) {
+                timeout = pkgMgmtTimeoutFloorMs(command)
             }
 
             // 访问工作空间之外的共享存储时，先引导「文件管理」权限（沙箱场景操作 /workspace 无此需求，检查幂等无害）

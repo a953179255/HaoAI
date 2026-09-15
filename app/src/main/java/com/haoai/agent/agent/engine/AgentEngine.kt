@@ -932,7 +932,15 @@ class AgentEngine(
         try {
             // bash（3.3 多后端）允许显式放宽到 600s（长构建），按请求 +20s 余量；其余工具维持 180s
             val budget = if (tool.name == "bash") {
-                (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000) + 20_000L
+                var t = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000).toLong()
+                // 包管理命令与 BashTool 同步保底抬升（引擎先超时会连 dpkg 一起杀，
+                // 留 interrupted 锁；toybox/ssh 误抬无害——工具内部自有 exec 超时）
+                runCatching {
+                    val cmd = args["command"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val floorMs = com.haoai.agent.agent.tools.BashTool.pkgMgmtTimeoutFloorMs(cmd)
+                    if (floorMs > t) t = floorMs
+                }
+                t + 20_000L
             } else TOOL_TIMEOUT_MS
             // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
             // （browser_* 工具内部自行 withContext(Main) 操作 WebView，嵌套切换安全）

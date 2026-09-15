@@ -109,6 +109,21 @@ class ProotBackend private constructor(
 
     private fun runCommand(command: String, timeoutMs: Long, start: Long): ShellBackend.ExecResult {
         val s = ensureSession()
+        // 上次执行被超时/停止击杀（可能打断 dpkg 事务）→ 新命令前先静默自愈一次
+        if (repairPending) {
+            repairPending = false
+            runCommandInternal(
+                s, "[ -x /usr/bin/dpkg ] && dpkg --configure -a >/dev/null 2>&1; true",
+                90_000, System.currentTimeMillis()
+            )
+        }
+        return runCommandInternal(s, command, timeoutMs, start)
+    }
+
+    /** dpkg 自愈挂起标志：killSession（超时/停止击杀）置位，下次 exec 前消费。 */
+    @Volatile private var repairPending = false
+
+    private fun runCommandInternal(s: Session, command: String, timeoutMs: Long, start: Long): ShellBackend.ExecResult {
         seq += 1
         val token = "HAOAI_END_${seq}_${System.currentTimeMillis()}"
         // 命令原文经引号 heredoc 写临时脚本（零展开、防注入），
@@ -181,6 +196,8 @@ class ProotBackend private constructor(
     }
 
     private fun killSession(s: Session) {
+        // 会话被击杀可能留下半截 dpkg 事务（interrupted）→ 下次 exec 前自愈
+        repairPending = true
         runCatching { s.process.destroy() }
         runCatching { s.process.waitFor(2_000, java.util.concurrent.TimeUnit.MILLISECONDS) }
         if (s.process.isAlive) runCatching { s.process.destroyForcibly() }
@@ -188,13 +205,20 @@ class ProotBackend private constructor(
     }
 
     companion object {
-        /** 进程级单例（核心约束：同一宿主进程只允许一个活跃 proot 会话，见类注释）。 */
+        /** 进程级单例（核心约束：同一宿主进程只允许一个活跃 proot 会话，见类注释）。
+         *  但 rootfs 变化（用户换装/重装发行版）必须重建会话，否则永远绑旧 rootfs
+         *  （旧版纯单例把首次 resolve 的发行版固化到进程寿命，用户反馈 2026-09-15）。 */
         @Volatile private var shared: ProotBackend? = null
 
-        fun forSandbox(sandbox: SandboxEnv.Sandbox): ProotBackend =
-            shared ?: synchronized(this) {
-                shared ?: ProotBackend(sandbox).also { shared = it }
+        fun forSandbox(sandbox: SandboxEnv.Sandbox): ProotBackend {
+            shared?.takeIf { it.sandbox.rootfs == sandbox.rootfs }?.let { return it }
+            return synchronized(this) {
+                shared?.takeIf { it.sandbox.rootfs == sandbox.rootfs }?.let { return it }
+                // rootfs 已变：先杀旧会话再建新的（维持"同进程仅一个活跃 proot"）
+                shared?.session?.let { oldS -> shared?.killSession(oldS) }
+                ProotBackend(sandbox).also { shared = it }
             }
+        }
 
         /** 发行版安装/删除后调用：强制重建会话。 */
         fun invalidate() {
