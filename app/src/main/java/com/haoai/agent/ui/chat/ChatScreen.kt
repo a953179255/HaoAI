@@ -1013,7 +1013,14 @@ fun ChatScreen(
                             // 用户实测：「工具在跑，这里却一直显示正在思考」。
                             // 有工具在跑 → 报告具体是哪个（动词 + 对象，带第几步）
                             val runningTool = liveToolsSnapshot.lastOrNull { it.state == ToolRunState.RUNNING }
+                            // 引擎把"供应商限流/网络波动"这类瞬态重试也建模成了一个工具步骤
+                            // （ToolUpdate("rate-limit", …)，见 AgentEngine 重试分支）。
+                            // 它并不是"在执行某工具"，所以状态框要单独措辞——
+                            // 否则会说出"正在执行 供应商限流"这种话（真机实测）。
+                            val retrying = runningTool?.takeIf { it.callId.startsWith("rate-limit") }
                             val phaseText = when {
+                                retrying != null ->
+                                    (retrying.brief.ifBlank { "网络波动" }) + " · 自动重试中"
                                 runningTool != null -> {
                                     val brief = runningTool.brief.ifBlank { runningTool.name }
                                     val verb = brief.substringBefore('·').trim()
@@ -2185,6 +2192,9 @@ private fun MessageList(
     //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
     //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
     val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
+    // 跟随探针落盘文件（诊断用：魅族 ROM 屏蔽 app logcat，只能写文件后用 run-as 读）
+    val probeCtx = androidx.compose.ui.platform.LocalContext.current
+    val probeFile = remember(probeCtx) { java.io.File(probeCtx.filesDir, "follow-probe.txt") }
 
     // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
@@ -2222,28 +2232,69 @@ private fun MessageList(
         }
     }
 
-    // ── 跟随：位置派生订阅（rikkahub 同款）────────────────────────────
-    // 规则只有一条：**此刻贴着底 → 继续钉住**。
-    // 订阅 visibleItemsInfo（布局一变就来一帧）而不是手写帧循环——
-    // rikkahub 也是这么做的：`snapshotFlow { layoutInfo.visibleItemsInfo }`。
-    // 为什么不会误判成"离开底部"：贴底时末项底边正落在内容末端（差 0），
-    // 新内容每帧只长几个像素（animateContentSize 把块级跳变摊成 280ms），
-    // 远小于 bottomSlackPx(48dp)，判定不会掉出去。
-    // 为什么能自愈：用户上滑 → 位置立刻离开底部 → 判定为假 → 停手；
-    // 拖回底部 → 判定为真 → 自动接上。任何一帧都在重新判定，没有可卡死的状态。
+    // ── 跟随：位置派生 + 单帧宽限（2026-09-16 第四版，真机探针定案）────────────
+    // 真机探针（files/follow-probe.txt）抓到的原始数据：
+    //   FREEZE delta=2816 slack=163 lastIdx=15/15 itemSize=5336   ← 回合收尾"流式项→正式行"整体换位
+    //   FREEZE delta=197  slack=163 lastIdx=17/17 itemSize=659    ← 只超了 34px 就冻住
+    // 结论：不是判定方向错，而是**一次结构性大跳变就永久停手**——位置判定无状态，
+    // 一旦偏离底部，除非用户拖回去，否则永远不会再判为真（比"标志卡死"更隐蔽）。
+    // 修法：加单帧宽限——只要**上一帧还贴着底**，本帧的超大位移就当作结构跳变照旧钉住
+    // （位移会在本帧被消化）；真正的用户拖动会连续多帧偏离，第 2 帧就停手。
+    // 之所以不能用"标志"来记"最近贴过底"：那又回到会卡死的老路。这里 prev 每帧都由
+    // 当前位置重新算出，不含任何可累积状态，因此永远能自愈。
     LaunchedEffect(listState, bottomSlackPx) {
+        var prevAtBottom = true
+        var lastLogAt = 0L
         androidx.compose.runtime.snapshotFlow { listState.layoutInfo.visibleItemsInfo }
             .collect {
-                if (!listState.isAtBottom(bottomSlackPx)) return@collect
+                val info = listState.layoutInfo
+                val last = info.visibleItemsInfo.lastOrNull()
+                val contentEnd = info.viewportEndOffset - info.afterContentPadding
+                val delta = last?.let { it.offset + it.size - contentEnd }
+                val atBottom = listState.isAtBottom(bottomSlackPx)
+                // 调试探针落盘（魅族 ROM 屏蔽 app logcat，只能写文件后 run-as 读）：
+                //   adb shell run-as com.haoai.agent cat files/follow-probe.txt
+                if (!atBottom || !prevAtBottom) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (!atBottom && prevAtBottom) {
+                        lastLogAt = now
+                        runCatching {
+                            probeFile.appendText(
+                                "JUMPS  delta=$delta slack=$bottomSlackPx " +
+                                    "lastIdx=${last?.index}/${info.totalItemsCount - 1} " +
+                                    "itemSize=${last?.size} afterPad=${info.afterContentPadding} " +
+                                    "visible=${info.visibleItemsInfo.size}（单帧宽限：继续跟随）\n"
+                            )
+                        }
+                    } else if (!atBottom && now - lastLogAt > 500L) {
+                        lastLogAt = now
+                        runCatching {
+                            probeFile.appendText(
+                                "STOP   delta=$delta slack=$bottomSlackPx 连续两帧离开底部 → 停手\n"
+                            )
+                        }
+                    }
+                }
+                if (!atBottom && !prevAtBottom) {
+                    prevAtBottom = atBottom
+                    return@collect
+                }
+                prevAtBottom = atBottom
                 listState.pinToBottom()
             }
     }
 
-    // 粘滞标志：**仅**用于「回到底部」浮钮的显隐，同样由位置派生——
-    // 与跟随判定同一判据，因此"浮钮出现"⇔"已停止跟随"，两者语义天然一致。
+    // 粘滞标志：**仅**用于「回到底部」浮钮的显隐。同样加单帧宽限，
+    // 否则收尾/大重排时浮钮会闪一下（"↓ 最新"凭空冒出来）。
     LaunchedEffect(listState, bottomSlackPx) {
+        var prevAway = false
         androidx.compose.runtime.snapshotFlow { listState.isAtBottom(bottomSlackPx) }
-            .collect { userScrolledAway.value = !it }
+            .collect {
+                val away = !it
+                if (away && prevAway) userScrolledAway.value = true
+                else if (!away) userScrolledAway.value = false
+                prevAway = away
+            }
     }
 
     // 流式刚结束的那次重组（running true→false 与最终行入列同帧发生）：最终行 footer
