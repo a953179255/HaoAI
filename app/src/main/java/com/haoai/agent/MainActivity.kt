@@ -312,6 +312,18 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 screen = 0
                 uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { chatVm.send(it) }
             }
+            "followdump" -> {
+                // 导出跟随判定的**内存**轨迹（滚动期不落盘，避免主线程 IO 卡顿）：
+                //   adb shell am start -d "haoai://debug/followdump" com.haoai.agent
+                //   adb shell run-as com.haoai.agent cat files/follow-probe.txt
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val txt = com.haoai.agent.ui.chat.FollowTrace.dump()
+                    runCatching {
+                        java.io.File(container.appContext.filesDir, "follow-probe.txt")
+                            .writeText(txt)
+                    }
+                }
+            }
             "fakestream" -> {
                 // 调试直达：本地合成流式输出（不走模型），用于可复现地调流式渲染与滚动跟随：
                 //   adb shell am start -d "haoai://debug/fakestream?sec=22"

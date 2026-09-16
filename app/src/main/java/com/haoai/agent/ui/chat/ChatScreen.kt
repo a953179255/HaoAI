@@ -2192,6 +2192,11 @@ private fun MessageList(
     //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
     //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
     val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
+    // 「本轮用户是否主动滚动过」——发消息/新一轮生成/切会话时复位。
+    // 唯一目的：让"用户全程没碰屏幕"时**永远允许贴底**，于是任何结构跳变
+    // （收尾换位、长行落行）都只造成一帧偏差、下一帧自愈，不会再出现
+    // "我根本没打断它，它却停在半路不动"（用户实测）。
+    val userScrolledThisRun = remember { mutableStateOf(false) }
 
     // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
@@ -2210,12 +2215,14 @@ private fun MessageList(
         if (sessionId != null && sessionId != lastSessionKey) {
             lastSessionKey = sessionId
             userScrolledAway.value = false
+            userScrolledThisRun.value = false
             listState.pinToBottom()
             return@LaunchedEffect
         }
         val isUserMessage = rows.lastOrNull()?.role == "user"
         if (isUserMessage) {
             userScrolledAway.value = false
+            userScrolledThisRun.value = false
             val k = rows.last().key
             if (k != lastSentUserKey) {
                 lastSentUserKey = k
@@ -2229,41 +2236,42 @@ private fun MessageList(
         }
     }
 
-    // ── 跟随：位置派生 + 单帧宽限（2026-09-16 第四版，真机探针定案）────────────
-    // 真机探针（files/follow-probe.txt）抓到的原始数据：
-    //   FREEZE delta=2816 slack=163 lastIdx=15/15 itemSize=5336   ← 回合收尾"流式项→正式行"整体换位
-    //   FREEZE delta=197  slack=163 lastIdx=17/17 itemSize=659    ← 只超了 34px 就冻住
-    // 结论：不是判定方向错，而是**一次结构性大跳变就永久停手**——位置判定无状态，
-    // 一旦偏离底部，除非用户拖回去，否则永远不会再判为真（比"标志卡死"更隐蔽）。
-    // 修法：加单帧宽限——只要**上一帧还贴着底**，本帧的超大位移就当作结构跳变照旧钉住
-    // （位移会在本帧被消化）；真正的用户拖动会连续多帧偏离，第 2 帧就停手。
-    // 之所以不能用"标志"来记"最近贴过底"：那又回到会卡死的老路。这里 prev 每帧都由
-    // 当前位置重新算出，不含任何可累积状态，因此永远能自愈。
+    // ── 跟随判定（2026-09-16 第五版）──────────────────────────────────
+    // 允许贴底的条件（三选一）：
+    //   ① 本帧贴着底                 —— 正常跟随
+    //   ② 上一帧贴着底（单帧宽限）   —— 吸收结构跳变造成的千 px 位移
+    //   ③ 本轮用户从未滚动过         —— 用户没打断就不能停，任何"停住"都能自愈
+    // 另加：手指/惯性滚动期间一律让位（自己的一次性贴底只占 1 帧，不会误伤跟随）。
+    // 三者叠加后，"停住"只可能发生在用户自己滚走之后 —— 那正是期望行为。
+    // 为什么不再单纯依赖位置：真机探针实测 delta=2816/197（收尾换位、长行落行）
+    // 会让纯位置判定永久停手（位置判定无状态、不会自己回来）；③ 就是那副解药。
     LaunchedEffect(listState, bottomSlackPx) {
         var prevAtBottom = true
         var busyFrames = 0
         androidx.compose.runtime.snapshotFlow { listState.layoutInfo.visibleItemsInfo }
             .collect {
+                val info = listState.layoutInfo
+                val last = info.visibleItemsInfo.lastOrNull()
+                val contentEnd = info.viewportEndOffset - info.afterContentPadding
+                val delta = last?.let { it.offset + it.size - contentEnd } ?: 0
                 val atBottom = listState.isAtBottom(bottomSlackPx)
-                // ① 让位给手指/惯性：连续 ≥2 帧 isScrollInProgress 才算"用户在滚"
-                //    （自己的一次性 pinToBottom 只占 1 帧，不会误伤跟随）。
-                //    不加这层会与 fling 抢滚动 —— 用户实测：快速上下滚动卡顿、
-                //    在底部快速上滑时偶发"突然跳回最底部"（就是 pin 把 fling 拽回去了）。
                 busyFrames = if (listState.isScrollInProgress) busyFrames + 1 else 0
-                if (busyFrames >= 2) {
-                    prevAtBottom = atBottom
-                    return@collect
-                }
-                // ② 单帧宽限：上一帧还贴着底 → 本帧的超大位移按结构跳变处理（收尾换位、
-                //    长行落行会产生千 px 位移），照旧钉住；真拖动会连续多帧偏离，第 2 帧停手。
-                if (!atBottom && !prevAtBottom) {
-                    prevAtBottom = atBottom
-                    return@collect
-                }
+                if (busyFrames >= 2 && !atBottom) userScrolledThisRun.value = true
+                val follow = atBottom || prevAtBottom || !userScrolledThisRun.value
+                var pinned = false
+                if (busyFrames < 1 && follow) pinned = listState.pinToBottom()
+                // 诊断走**内存**（不落盘：滚动路径上做主线程 IO 会卡顿），
+                // 需要时用 haoai://debug/followdump 一次性导出。
+                FollowTrace.add(
+                    "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
+                        "follow=$follow pinned=$pinned scrolled=${userScrolledThisRun.value} " +
+                        "lastIdx=${last?.index}/${info.totalItemsCount - 1} itemSize=${last?.size} " +
+                        "visible=${info.visibleItemsInfo.size}"
+                )
                 prevAtBottom = atBottom
-                listState.pinToBottom()
             }
     }
+
 
     // 粘滞标志：**仅**用于「回到底部」浮钮的显隐。同样加单帧宽限，
     // 否则收尾/大重排时浮钮会闪一下（"↓ 最新"凭空冒出来）。
@@ -2295,6 +2303,7 @@ private fun MessageList(
     LaunchedEffect(justStarted) {
         if (justStarted) {
             userScrolledAway.value = false
+            userScrolledThisRun.value = false
             listState.pinToBottom()
         }
     }
