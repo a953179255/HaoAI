@@ -220,6 +220,117 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingReasoning.value = null
     }
 
+    // ── 调试用：本地合成流式输出（不走模型）──────────────────────────────
+    // 仅由 adb 深链 haoai://debug/fakestream?sec=N 触发（正式用户不可达）。
+    // 存在的意义：给"流式渲染 / 滚动跟随"一个**可复现、可计量**的输入源——
+    // 否则每次改动只能靠手感判断，判据（单帧跳变 < 6dp 之类）立不住。
+    // 刻意走与真实回合完全相同的通路：appendReasoning/appendDelta + 40ms flusher +
+    // liveTools 快照；收尾同样先 endStreaming() 再落一条真实 ChatRow，
+    // 以复现「流式项(key="streaming") → 正式行(key=row.key)」那次 key 切换。
+    private var fakeJob: Job? = null
+
+    fun debugFakeStream(sec: Int = 22) {
+        fakeJob?.cancel()
+        fakeJob = viewModelScope.launch {
+            if (_session.value == null) { newSession(); kotlinx.coroutines.delay(300) }
+            val sid = _session.value?.id ?: return@launch
+            val t0 = System.currentTimeMillis()
+            _runSessionId.value = sid
+            _running.value = true
+            _thinkingMs.value = null
+            turnStartAt = t0
+            liveTools.clear()
+            publishLiveTools()
+            _streamingReasoning.value = ""
+            _streamingText.value = ""
+            startStreamFlusher()
+
+            val tools = mutableListOf<UiTool>()
+            val reason = "先确认 Application 与 MainActivity 的初始化顺序，再核对 chat 页的流式渲染路径……"
+            val secs = listOf(
+                "第 1 段：HaoApplication.onCreate 里先建 AppContainer，之后才允许任何 UI 触达数据库。" to
+                    "val container = HaoContainer(applicationContext)",
+                "第 2 段：MainActivity 只负责把 Compose 树挂上去，真正的状态都在 ViewModel 与容器里。" to
+                    "setContent { HaoTheme { ChatScreen(vm) } }",
+                "第 3 段：ChatScreen 起流式会话，token 先入 40ms 缓冲再上屏，重组次数降约四倍。" to
+                    "if (textBuf.isNotEmpty()) flushStreamBuf()"
+            )
+            try {
+                // ① 思考逐字（验证 shimmer 与流式跟随同时进行）
+                reason.forEach { ch -> appendReasoning(ch.toString()); kotlinx.coroutines.delay(14) }
+                kotlinx.coroutines.delay(120)
+
+                // ② 工具步骤：运行 → 完成（新步骤入场 + 运行↔完成 crossfade）
+                listOf("读取 · HaoApplication.kt", "搜索 · “container”", "读取 · ChatScreen.kt")
+                    .forEachIndexed { i, brief ->
+                        val id = "fake-t$i"
+                        tools += UiTool(id, if (i == 1) "search" else "read", brief, ToolRunState.RUNNING)
+                        liveTools[id] = tools.last(); publishLiveTools()
+                        kotlinx.coroutines.delay(850)
+                        tools[i] = tools[i].copy(state = ToolRunState.DONE)
+                        liveTools[id] = tools[i]; publishLiveTools()
+                        kotlinx.coroutines.delay(140)
+                    }
+
+                // ③ 正文：先**瞬时预置**一段长前缀（保证从正文一开始就长过一屏——
+                // 否则"上滑看历史"根本无从测起：内容不满屏时 input swipe 什么也滚不动，
+                // 实测踩过两次），再按 sec 的节拍逐字流式追加。
+                // 「预置 N 段」与「第 N 段」标签互不重复，便于把某个段落当位置锚点。
+                val seed = buildString {
+                    repeat(10) { i ->
+                        append("预置 ${i + 1} 段：占位正文，用于把会话内容撑过一屏。").append('\n')
+                        append("1. 预置要点一，用来制造足够的高度。\n")
+                        append("2. 预置要点二，用来制造足够的高度。\n")
+                    }
+                }
+                appendDelta(seed)
+                kotlinx.coroutines.delay(400)
+
+                val body = buildString {
+                    secs.forEach { (para, code) ->
+                        append(para).append('\n')
+                        append("1. 初始化顺序不能倒置，否则拿到的是半成品容器。\n")
+                        append("2. 流式上屏必须节流，否则 Markdown 每帧重解析。\n")
+                        append("```kotlin\n").append(code).append("\n```\n")
+                    }
+                    append("以上就是启动链路的三段式。需要我细看哪一段？")
+                }
+                // 节拍由 sec 反推：按"每次吐 2 字"算迭代数，再摊平到目标时长。
+                // 上界给到 800ms 是为了能把流式拉长到分钟级（长时观测滚动跟随用）；
+                // 想要真实 token 手感就传小 sec（如 12）。
+                val overhead = reason.length * 14L + 3 * 990L + 240L
+                val iters = ((body.length + 1) / 2).coerceAtLeast(1)
+                val perChar = ((sec * 1000L - overhead) / iters).coerceIn(6L, 800L)
+                var i = 0
+                while (i < body.length) {
+                    val step = minOf(2, body.length - i)
+                    appendDelta(body.substring(i, i + step))
+                    i += step
+                    kotlinx.coroutines.delay(perChar)
+                }
+                kotlinx.coroutines.delay(150)
+            } finally {
+                val finalText = _streamingText.value.orEmpty()
+                val finalReason = _streamingReasoning.value
+                endStreaming()
+                liveTools.clear(); publishLiveTools()
+                _running.value = false
+                _runSessionId.value = null
+                if (finalText.isNotBlank()) {
+                    val rid = "fakerow-$t0"
+                    _rows.value = _rows.value + ChatRow(
+                        key = rid, id = rid, role = "assistant", text = finalText,
+                        tools = tools.toList(), reasoning = finalReason,
+                        ts = System.currentTimeMillis(),
+                        promptTokens = 1820, completionTokens = finalText.length / 3,
+                        durationMs = System.currentTimeMillis() - t0, model = "debug-fakestream"
+                    )
+                }
+                fakeJob = null
+            }
+        }
+    }
+
     // ── ④ 思考计时：正文首 token 到达即定格「已思考 N 秒」──
     @Volatile private var turnStartAt = 0L
     private val _thinkingMs = MutableStateFlow<Long?>(null)

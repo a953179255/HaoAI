@@ -294,8 +294,6 @@ fun ChatScreen(
     // 与「玻璃顶栏不能进 appLayer 子树」同理）。用 MutableState 对象（非 by 委托）
     // 以便同时传给 MessageList 读写与浮钮读取
     val userScrolledAway = remember { mutableStateOf(false) }
-    // 程序化滚动标志（MessageList 的跟随/补滚与浮钮回底共用）
-    val scrollGuard = remember { mutableStateOf(false) }
     // v4-4 回底徽标：断开瞬间拍 baseline 快照（行数+流式长度），
     // 只统计之后的真增量——上滑动作本身不再被误计为「1 条新动态」。
     val newContentTicker = remember { mutableStateOf(0) }
@@ -761,7 +759,6 @@ fun ChatScreen(
                 liveToolsSnapshot = liveToolsSnapshot,
                 listState = listState,
                 userScrolledAway = userScrolledAway,
-                scrollGuard = scrollGuard,
                 sessionId = vm.session.collectAsState().value?.id,
                 modifier = Modifier
                     .weight(1f)
@@ -1159,7 +1156,10 @@ fun ChatScreen(
         // Box 包裹会切断 drawBackdrop 采样链，整屏透出白色遮罩（实测踩坑）
         // v2：加新动态计数徽标（ChatGPT/Claude 式「↓ N 条新回复」）
         androidx.compose.animation.AnimatedVisibility(
-            visible = userScrolledAway.value && rows.isNotEmpty() && drawerFraction < 0.01f,
+            // rows 为空但正文正在流式时也要能出现（首条回复就上滑看历史的场景）——
+            // 否则流式中途没有任何"回到底部"的入口，只能手动拖回去
+            visible = userScrolledAway.value && (rows.isNotEmpty() || streaming != null) &&
+                drawerFraction < 0.01f,
             enter = androidx.compose.animation.fadeIn(tween(180)) +
                 androidx.compose.animation.expandVertically(tween(180)),
             exit = androidx.compose.animation.fadeOut(tween(140)),
@@ -1175,7 +1175,7 @@ fun ChatScreen(
                 onClick = {
                     userScrolledAway.value = false
                     newContentTicker.value = 0
-                    scope.launch { listState.scrollToEnd(guard = scrollGuard) }
+                    scope.launch { listState.pinToBottom() }
                 },
                 backdrop = backdrop,
                 shape = RoundedCornerShape(percent = 50),
@@ -2145,7 +2145,6 @@ private fun MessageList(
     liveToolsSnapshot: List<com.haoai.agent.ui.UiTool> = emptyList(),
     listState: androidx.compose.foundation.lazy.LazyListState,
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
-    scrollGuard: androidx.compose.runtime.MutableState<Boolean>,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -2155,31 +2154,24 @@ private fun MessageList(
     val totalItems = rows.size + (if (showStreaming) 1 else 0)
 
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-    // 程序化滚动标志：跟随/补滚期间为 true。isScrollInProgress 不区分滚动来源，
-    // 不加这层守卫，流式跟随/键盘抬升补滚会被当成"用户滑动"而 clearFocus 收起输入法
-    // （表现为点输入框键盘刚弹出就被关），也会误断粘滞
-    // 用户滑动列表时收起输入法（程序化滚动不触发）
-    LaunchedEffect(listState) {
-        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }
-            .collect { if (it && !scrollGuard.value) focusManager.clearFocus() }
-    }
 
-    // 粘滞标志：只有用户亲手把列表拖离底部才断开跟随；键盘抬升/内容增高/补滚动画不算
-    // v2 判定：用户手势期间**任一帧出现向上滚动趋势即断开**（首帧断开，业界标准）——
-    // 旧版要拖离底部 >200px 才算"离开"，流式 delta 每 40ms 重触发 scrollToEnd
-    // 瞬时跳底与用户上拖抢滚动，表现为"自动往下弹、看不了历史"。
-    // 上向趋势 = 本帧位置比手势起点更靠上（firstVisibleItemIndex 或 scrollOffset 减小）。
+    // ── 用户手势判定（2026-09-16 重做）────────────────────────────────
+    // 旧实现用 listState.isScrollInProgress 判"用户在滑"，但它**不区分滚动来源**：
+    // 跟随用的 scrollBy 也会让它为 true。于是流式期它几乎恒真，再叠上 scrollGuard 守卫
+    // （守卫又被 scrollToEnd 自己置真）→ 手势快照全被 return → userScrolledAway 永远设不上
+    // → 用户上滑看历史时仍被持续拉回底部（用户实测；rikkahub 无此问题，它靠位置判定）。
+    // 改为**只看手指**：pointerInput 观察按下/抬起，程序化滚动再无可能被误认成手势。
+    var userDragging by remember(listState) { mutableStateOf(false) }
+    // 另：手指按下即收起输入法（拖动中收起键盘的既有行为，改由真实手势触发而非滚动状态）。
     var gestureAnchor by remember(listState) { mutableStateOf<Pair<Int, Int>?>(null) }
     LaunchedEffect(listState) {
         androidx.compose.runtime.snapshotFlow {
-            val inProgress = listState.isScrollInProgress
             val info = listState.layoutInfo
             val first = info.visibleItemsInfo.firstOrNull()
-            Triple(inProgress, first?.index ?: 0, first?.offset ?: 0)
+            Triple(userDragging, first?.index ?: 0, first?.offset ?: 0)
         }
-            .distinctUntilChanged().collect { (inProgress, idx, off) ->
-                if (scrollGuard.value) return@collect
-                if (inProgress) {
+            .distinctUntilChanged().collect { (dragging, idx, off) ->
+                if (dragging) {
                     val anchor = gestureAnchor
                     if (anchor == null) {
                         gestureAnchor = idx to off
@@ -2200,22 +2192,26 @@ private fun MessageList(
             }
     }
 
-    // 自动滚底：用户发送新消息时无条件滚底；流式内容仅在粘滞（用户未主动滑走）时跟随。
-    // running/durationMs/bottomPadding/footerRevealTick 也入 key：流式结束最终行增高
-    // （usage 常晚于正文落值）、footer 生长动画启动、键盘抬升改 padding 时都要补沉降。
-    // 一律瞬时滚动：animateScrollBy 会被下一帧 delta 取消，快 token 率下进度被饿死
-    // 发送新消息收起键盘：旧版靠强制滚动的 clearFocus 副作用实现，加滚动守卫后需显式收。
-    // 按末条 user 消息 key 去重——流式期间最后一条仍是 user，不能每次都收，
-    // 否则用户流式中打开键盘想插话会被下一个 delta 误关
+    // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
+    // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var lastSentUserKey by rememberSaveable { mutableStateOf<String?>(null) }
-    // footer 展开动画启动的通知：settle 循环若在动画开始前退出（隐藏态本就"贴合"），
-    // 动画增高的 ~45dp 将无人跟进，静止位比真底部高两行（可上拖）。收到通知重启一次
+    var lastSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // footer 展开动画启动的通知（RowItem 生长动画仍会回调，保留供排查）
     var footerRevealTick by remember { mutableStateOf(0) }
 
-    LaunchedEffect(totalItems, rows.lastOrNull()?.text?.length, streamingText?.length, streamingReasoning?.length, running, rows.lastOrNull()?.durationMs, bottomPadding, footerRevealTick) {
+    // 发送新消息 / 切会话：无条件贴底并把粘滞复位。
+    // 只挂这两个 key——流式期的持续跟随交给下面的逐帧循环，不再靠 text.length 之类的 key。
+    LaunchedEffect(rows.lastOrNull()?.key, sessionId) {
         if (totalItems <= 0) return@LaunchedEffect
-        // 用户发送新消息（最后一条是 user）→ 强制滚底并复位粘滞
+        // 切会话：无条件贴底并复位粘滞（切换后停在旧位置；末条未必是 user 消息，
+        // 逐帧循环又会被"已断开粘滞"拦下 → 必须先复位）
+        if (sessionId != null && sessionId != lastSessionKey) {
+            lastSessionKey = sessionId
+            userScrolledAway.value = false
+            listState.pinToBottom()
+            return@LaunchedEffect
+        }
         val isUserMessage = rows.lastOrNull()?.role == "user"
         if (isUserMessage) {
             userScrolledAway.value = false
@@ -2225,16 +2221,26 @@ private fun MessageList(
                 keyboardController?.hide()
                 focusManager.clearFocus()
             }
-        }
-        if (isUserMessage || !userScrolledAway.value) {
-            listState.scrollToEnd(guard = scrollGuard)
+            listState.pinToBottom()
+        } else if (!userScrolledAway.value && !userDragging) {
+            // 新行入列
+            listState.pinToBottom()
         }
     }
 
-    // 会话切换：无条件跳到最新一条（切换后通常停在旧位置，且最后一条未必是 user 消息，
-    // 上面的跟随逻辑不会触发）。新会话无消息时不滚动。
-    LaunchedEffect(sessionId) {
-        if (sessionId != null && totalItems > 0) listState.scrollToEnd(guard = scrollGuard)
+    // ── 流式跟随主循环（2026-09-16 重做）──────────────────────────────
+    // 旧实现：LaunchedEffect(9 个 key) + scrollToEnd 内手写 18 帧 scrollBy 循环 + settled 计数。
+    // 三个问题：① 循环里 `if (isScrollInProgress && !guard.value) break` 是死代码
+    // （guard 在进入函数时刚被自己置真），用户手势永远无法让它让位；
+    // ② 18 帧上限让快 token 率 / 大块 markdown 重排时"越落越远"；
+    // ③ 靠 key 变化触发，覆盖不到 footer 生长、Markdown 异步布局这类非 key 变化。
+    // 改为逐帧贴底：无位移时零成本返回；手指按下或已断开粘滞 → 立即停手（这是本次修复的核心）。
+    LaunchedEffect(listState) {
+        while (true) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (userScrolledAway.value || userDragging) continue
+            listState.pinToBottom()
+        }
     }
 
     // 流式刚结束的那次重组（running true→false 与最终行入列同帧发生）：最终行 footer
@@ -2244,26 +2250,65 @@ private fun MessageList(
     val justFinished = prevRunning.value && !running
     prevRunning.value = running
 
-    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier.pointerInput(Unit) {
+            // 「用户是否在手势中」的唯一判据：手指按下 → 抬起。
+            // 只观察、不消费（requireUnconsumed=false），项点击与列表自身拖动不受影响。
+            // 用它替换旧的 listState.isScrollInProgress：后者把程序化 scrollBy 也算作"用户在滑"，
+            // 于是流式跟随期间手势判据恒真，userScrolledAway 永远设不上（本次修复的核心）。
+            awaitEachGesture {
+                val start = awaitFirstDown(requireUnconsumed = false)
+                userDragging = true
+                var slopPassed = false
+                val slop = 8.dp.toPx()
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
+                    if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
+                        slopPassed = true
+                        // 真正拖动列表（超过 touchSlop）才收起输入法：轻点不该收
+                        focusManager.clearFocus()
+                    }
+                    if (!ch.pressed) break
+                }
+                userDragging = false
+            }
+        },
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)
+    ) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
         val finalRowKey = if (!running) rows.lastOrNull()?.key else null
         val growInKey = if (justFinished) finalRowKey else null
         items(rows, key = { it.key }) { row ->
-            RowItem(
-                row,
-                onOpenMenu = onOpenMenu,
-                onCopyRow = onCopyRow,
-                onQuickRegenerate = onQuickRegenerate,
-                onQuickEdit = onQuickEdit,
-                running = running,
-                onViewDiff = onToolViewDiff,
-                onRollback = onToolRollback,
-                onStopRun = onStopRun,
-                showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
-                growIn = row.key == growInKey,
-                onFooterReveal = { footerRevealTick++ }
-            )
+            // animateItem：新行入场淡入 + 行位移补间。
+            // 关键作用是「流式项(key=\"streaming\") → 正式行(key=row.key)」那次换项——
+            // 旧实现没有它，收尾是"删一项 + 加一项"的硬切换。
+            Box(
+                Modifier.animateItem(
+                    // 交接行（流式项→正式行）不淡入：内容与流式项完全相同，淡入会闪一下；
+                    // 其余新行（用户消息、历史新回复）淡入。
+                    fadeInSpec = if (row.key == growInKey) null else tween(220),
+                    placementSpec = tween<androidx.compose.ui.unit.IntOffset>(240),
+                    fadeOutSpec = tween(140)
+                )
+            ) {
+                RowItem(
+                    row,
+                    onOpenMenu = onOpenMenu,
+                    onCopyRow = onCopyRow,
+                    onQuickRegenerate = onQuickRegenerate,
+                    onQuickEdit = onQuickEdit,
+                    running = running,
+                    onViewDiff = onToolViewDiff,
+                    onRollback = onToolRollback,
+                    onStopRun = onStopRun,
+                    showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
+                    growIn = row.key == growInKey,
+                    onFooterReveal = { footerRevealTick++ }
+                )
+            }
         }
         if (showStreaming) {
             item(key = "streaming") {
@@ -2284,58 +2329,33 @@ private fun MessageList(
 }
 
 /**
- * 滚到列表末端：末项底边对齐内容末端（视口末端-后 padding），平滑追加滚动。
- * animateScrollToItem(last) 是顶边对齐——流式条目长过一屏后，最新内容留在视口下方外，
- * 近底判定也随之失真，表现为"流式快结束时停住、结束不滚到底"。
- * 末项增高（操作按钮/统计行出现、Markdown 异步布局）晚于本次 layoutInfo 快照，
- * 故循环若干帧重读布局微调直至贴合。
+ * 贴底：把末项底边对齐内容末端（视口末端 - 后 padding）。**一次性**，无帧循环。
+ *
+ * 为什么不用 scrollToItem/animateScrollToItem(末项)：那是**顶边对齐**——流式条目长过一屏
+ * 后最新内容会留在视口下方外（历史踩坑）。只有 scrollBy 补差量才对得齐底边。
+ * 无位移时直接返回，因此逐帧调用是安全的（零成本）。
+ *
+ * 旧实现（已删）：18 帧循环 + settled 计数 + `if (isScrollInProgress && !guard.value) break`。
+ * 那个 break 是死代码——guard 在进入函数时刚被自己置真，条件永远为假，
+ * 所以用户手势根本没有让它让位的机会（用户上滑仍被拉回底部的根因之一）。
+ *
+ * @return 是否发生位移（供排查用）
  */
-private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToEnd(
-    guard: androidx.compose.runtime.MutableState<Boolean>
-) {
-    guard.value = true
-    try {
-    // 首轮不先等帧：流式 delta 约每帧一次，先 withFrameNanos 会让 effect 反复在等待中
-    // 被下一个 delta 取消，滚动永远执行不到、列表越落越远（isNearBottom 随之失效断跟随）。
-    // 但 delta≈0 也不能提前返回：流式结束那刻最终行增高（footer 生长动画 200ms≈12 帧、
-    // 长文 Markdown 异步布局）要到之后若干帧才可见，故循环重读布局微调，
-    // 连续两帧贴合才收工（上限 18 帧，覆盖整个 footer 动画期）。
-    var settled = 0
-    var attempt = 0
-    // 至少 8 帧才允许按 settled 退出：footer expand 动画的 tween 缓入段头几帧增高 <1px，
-    // 会被误判"贴合"连续计数提前收工，剩余生长无人追踪（实测静止位比底部差 ~150px 可上拖）
-    while (attempt < 18 && !(attempt >= 8 && settled >= 2)) {
-        // 用户手势插入（首帧断开场景）：立即让位，不与手指抢滚动
-        if (isScrollInProgress && !guard.value) break
-        attempt++
-        val info = layoutInfo
-        val lastIndex = info.totalItemsCount - 1
-        if (lastIndex < 0) return
-        val lastItem = info.visibleItemsInfo.lastOrNull { it.index == lastIndex }
-        if (lastItem == null) {
-            // 末项尚未组合（如切会话停在旧位置）：先跳过去，下一帧再微调
-            scrollToItem(lastIndex)
-            settled = 0
-        } else {
-            val contentEnd = info.viewportEndOffset - info.afterContentPadding
-            val delta = lastItem.offset + lastItem.size - contentEnd
-            if (kotlin.math.abs(delta) > 1) {
-                // 一律瞬时滚动：生长动画本身平滑，逐帧贴住即连续；animateScrollBy
-                // 的动画挂起会让循环落后于生长、且小 delta 被缓入帧骗退
-                scrollBy(delta.toFloat())
-                settled = 0
-            } else {
-                settled++
-            }
-        }
-        withFrameNanos { }
+private suspend fun androidx.compose.foundation.lazy.LazyListState.pinToBottom(): Boolean {
+    val info = layoutInfo
+    val lastIndex = info.totalItemsCount - 1
+    if (lastIndex < 0) return false
+    val lastItem = info.visibleItemsInfo.lastOrNull { it.index == lastIndex }
+    if (lastItem == null) {
+        // 末项尚未组合（如刚切会话停在旧位置）：先跳过去，下一帧再贴底
+        scrollToItem(lastIndex)
+        return true
     }
-        // 多等一帧再复位守卫：scrollBy 触发的 isScrollInProgress 快照可能晚一帧送达，
-        // 提前复位会让这帧被误判成用户滑动而收起输入法
-        withFrameNanos { }
-    } finally {
-        guard.value = false
-    }
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    val delta = lastItem.offset + lastItem.size - contentEnd
+    if (delta == 0) return false
+    scrollBy(delta.toFloat())
+    return true
 }
 
 @Composable
@@ -2677,7 +2697,18 @@ private fun StreamingItem(
                     1.dp,
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 块级高度动画（2026-09-16）：代码围栏闭合、列表成形、段落重排这些
+                    // "块级瞬间长高"用 280ms 缓动吃掉（与链卡同 spec）——
+                    // 配合逐帧贴底，上方内容的位移就从台阶变成连续曲线。
+                    // 这正是 rikkahub「旧内容平滑上推」的核心机制（animateContentSize）。
+                    .animateContentSize(
+                        animationSpec = tween(
+                            280,
+                            easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+                        )
+                    )
             ) {
                 // ① 光标不再拼进 markdown 源文本（避免污染行内正则/解析）；
                 // v4-3 起光标经 InlineTextContent 内联在最后一个字符后（showCursor），

@@ -5,6 +5,7 @@
 
 package com.haoai.agent.ui.chat
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
@@ -16,6 +17,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -227,24 +229,64 @@ fun ChainCard(
             ) {
                 Column {
                     visibleSteps.forEach { (isReasoningStep, payload) ->
-                        if (isReasoningStep) {
-                            ReasoningStep(
-                                text = payload as String,
-                                thinkingMs = thinkingMs,
-                                live = reasoningLive,
-                                expanded = reasoningOpen && !reasoningLive,
-                                onToggle = { if (!reasoningLive) reasoningOpen = !reasoningOpen }
-                            )
-                        } else {
-                            ToolStep(
-                                tool = payload as UiTool,
-                                live = toolsLive
-                            )
+                        // 新步骤入场：Column 没有 animateItem，框架也不给"新插入项"补动画，
+                        // 只能自己包一层（见 StepEnter）。历史/静态渲染不播。
+                        val stepKey: Any = if (isReasoningStep) "reason" else (payload as UiTool).callId
+                        StepEnter(animateIn = reasoningLive || toolsLive, stepKey = stepKey) {
+                            if (isReasoningStep) {
+                                ReasoningStep(
+                                    text = payload as String,
+                                    thinkingMs = thinkingMs,
+                                    live = reasoningLive,
+                                    expanded = reasoningOpen && !reasoningLive,
+                                    onToggle = { if (!reasoningLive) reasoningOpen = !reasoningOpen }
+                                )
+                            } else {
+                                ToolStep(
+                                    tool = payload as UiTool,
+                                    live = toolsLive
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 单个步骤的入场包装：首次出现时 220ms 纵向展开 + 淡入。
+ *
+ * 为什么需要自己包：链卡内是普通 Column（不是 LazyColumn），既没有 animateItem，
+ * 框架也不会给"新插入的项"补动画——此前新工具步骤是"啪"地直接出现。
+ * 做法：先以 visible=false 组合（不渲染），下一帧翻 true → 播 enter 过渡。
+ * animateIn=false（历史消息/静态渲染）时直出，不播动画。
+ */
+@Composable
+private fun StepEnter(
+    animateIn: Boolean,
+    stepKey: Any,
+    content: @Composable () -> Unit
+) {
+    if (!animateIn) {
+        content()
+        return
+    }
+    var shown by remember(stepKey) { mutableStateOf(false) }
+    LaunchedEffect(stepKey) { shown = true }
+    AnimatedVisibility(
+        visible = shown,
+        enter = expandVertically(
+            animationSpec = tween(
+                220,
+                easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+            ),
+            expandFrom = Alignment.Top
+        ) + fadeIn(tween(160)),
+        exit = shrinkVertically(tween(140)) + fadeOut(tween(120))
+    ) {
+        content()
     }
 }
 
@@ -468,22 +510,31 @@ private fun ToolStep(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         StepIconBox {
-            if (running) {
-                DotLoading()
-            } else if (isError || denied) {
-                Icon(
-                    Icons.Filled.ErrorOutline,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(15.dp)
-                )
-            } else {
-                Icon(
-                    toolIcon(tool.name),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    modifier = Modifier.size(15.dp)
-                )
+            // 运行 ↔ 完成 的图标交叉淡入（此前是瞬时替换：三点"啪"地变成 ✓）
+            AnimatedContent(
+                targetState = when {
+                    running -> 0
+                    isError || denied -> 1
+                    else -> 2
+                },
+                transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
+                label = "stepIcon"
+            ) { st ->
+                when (st) {
+                    0 -> DotLoading()
+                    1 -> Icon(
+                        Icons.Filled.ErrorOutline,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    else -> Icon(
+                        toolIcon(tool.name),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
         }
         Text(
@@ -507,20 +558,34 @@ private fun ToolStep(
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
         }
+        // 状态列：运行（无文字）↔ 完成/失败/拒绝 交叉淡入（此前是"啪"地冒出 ✓）
+        AnimatedContent(
+            targetState = when {
+                running -> "run"
+                isError -> "err"
+                denied -> "deny"
+                else -> "ok"
+            },
+            transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
+            label = "stepState"
+        ) { st ->
+            if (st == "run") {
+                Box(Modifier)
+            } else {
+                Text(
+                    when (st) {
+                        "err" -> "✕ 失败"
+                        "deny" -> "已拒绝"
+                        else -> "✓"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (st == "err" || st == "deny") MaterialTheme.colorScheme.error
+                    else Color(0xFF3FAE5C).copy(alpha = 0.85f)
+                )
+            }
+        }
         if (!running) {
-            Text(
-                when {
-                    isError -> "✕ 失败"
-                    denied -> "已拒绝"
-                    else -> "✓"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = when {
-                    isError || denied -> MaterialTheme.colorScheme.error
-                    else -> Color(0xFF3FAE5C).copy(alpha = 0.85f)
-                }
-            )
             // 截图类工具（browser_screenshot / vscreen_*）：行尾换成缩略图，
             // 点缩略图或点整行 → 详情弹层看大图（方案 A，2026-09-15）
             val shot = tool.imageData

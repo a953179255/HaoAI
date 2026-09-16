@@ -312,6 +312,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 screen = 0
                 uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { chatVm.send(it) }
             }
+            "fakestream" -> {
+                // 调试直达：本地合成流式输出（不走模型），用于可复现地调流式渲染与滚动跟随：
+                //   adb shell am start -d "haoai://debug/fakestream?sec=22"
+                enterChat()
+                screen = 0
+                chatVm.debugFakeStream(uri.getQueryParameter("sec")?.toIntOrNull() ?: 22)
+            }
             "vsclose" -> {
                 enterChat()
                 screen = 0
