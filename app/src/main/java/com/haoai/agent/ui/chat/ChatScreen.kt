@@ -1006,12 +1006,30 @@ fun ChatScreen(
                             Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 阶段文案：连接（无任何流）→ 思考（有推理流）→ 工具（有工具在跑）→ 生成（正文流中）
+                            // 阶段文案（2026-09-16 重做）：**从 liveToolsSnapshot 派生**——与链卡同一
+                            // 数据源，因此"屏幕上有几步"和"这里说在第几步"必然一致，不会漏步骤。
+                            // 旧实现优先级写反（streaming/reasoning 排在工具之前），而工具在跑时
+                            // 通常同时存在推理文本 → "正在执行工具"这档几乎永远轮不到，
+                            // 用户实测：「工具在跑，这里却一直显示正在思考」。
+                            // 有工具在跑 → 报告具体是哪个（动词 + 对象，带第几步）
+                            val runningTool = liveToolsSnapshot.lastOrNull { it.state == ToolRunState.RUNNING }
                             val phaseText = when {
+                                runningTool != null -> {
+                                    val brief = runningTool.brief.ifBlank { runningTool.name }
+                                    val verb = brief.substringBefore('·').trim()
+                                    val obj = brief.substringAfter('·', "").trim()
+                                    val label = if (obj.isNotBlank()) "$verb $obj" else verb
+                                    val no = liveToolsSnapshot.indexOf(runningTool) + 1
+                                    "正在执行 $label" + if (no > 1) "（第 $no 步）" else ""
+                                }
+                                // 顺序铁律：先报"此刻在产出什么"，再报"等待"。
+                                // 反过来（已完成 N 步 排在 streaming 之前）会让正文流式中
+                                // 显示"等待模型"——实测就是这么错的。
                                 streaming != null -> "正在生成回答"
                                 streamingReasoning != null -> "正在思考"
+                                // 无工具在跑、也无流 → 才说"已完成几步、在等模型"
                                 liveToolsSnapshot.isNotEmpty() ->
-                                    "正在执行工具 · ${liveToolsSnapshot.count { it.state == ToolRunState.RUNNING }} 个进行中"
+                                    "已完成 ${liveToolsSnapshot.count { it.state == ToolRunState.DONE }} 步 · 等待模型"
                                 else -> if (vm.isLocalProviderActive())
                                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
                                 else "正在连接模型"
@@ -2244,11 +2262,25 @@ private fun MessageList(
     }
 
     // 流式刚结束的那次重组（running true→false 与最终行入列同帧发生）：最终行 footer
-    // （操作按钮+统计行）先隐藏、下一帧起 200ms 生长动画，把 +46dp 硬跳吸收成动画，
-    // 滚动跟随（settle 循环）追的是连续生长而非跳变。历史消息不满足条件、静态直出
+    // （操作按钮+统计行）先隐藏、下一帧起 200ms 生长动画，把 +46dp 硬跳吸收成动画。
+    // 历史消息不满足条件、静态直出
     val prevRunning = remember { mutableStateOf(running) }
     val justFinished = prevRunning.value && !running
+    val justStarted = !prevRunning.value && running
     prevRunning.value = running
+
+    // ── 新一轮开始 → 复位粘滞并贴底（2026-09-16 真机回归修复）──────────────
+    // 缺这一步时的实测症状：用户此前只要上滑过一次（userScrolledAway=true），
+    // 之后每次「重新生成 / 重试」都**不是用户消息**，旧的复位条件（isUserMessage）不成立
+    // → 整个回复过程都不跟随；直到结束那刻流式项被移除、内容骤缩、滚动位置被钳到末端，
+    // 才"啪"地跳到底部（用户描述："回复完毕后才自动跳转到最下方"）。
+    // 语义：发起一轮新生成（无论来自发送还是重新生成）都应当拉回最新输出。
+    LaunchedEffect(justStarted) {
+        if (justStarted) {
+            userScrolledAway.value = false
+            listState.pinToBottom()
+        }
+    }
 
     LazyColumn(
         state = listState,
@@ -2464,7 +2496,12 @@ private fun ThinkingIndicator(hint: String? = null) {
                     start = androidx.compose.ui.geometry.Offset((shimmer * 2f - 0.5f) * 240f, 0f),
                     end = androidx.compose.ui.geometry.Offset((shimmer * 2f + 0.5f) * 240f, 0f)
                 )
-            )
+            ),
+            // 阶段文案现在会带工具名/对象，可能很长：限宽 + 单行截断，
+            // 免得玻璃胶囊被撑成多行把输入栏顶走
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 210.dp)
         )
         Spacer(Modifier.size(8.dp))
         Text(

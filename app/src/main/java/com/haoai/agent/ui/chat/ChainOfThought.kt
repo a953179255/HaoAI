@@ -175,11 +175,12 @@ fun ChainCard(
     }
     val totalSteps = allSteps.size
     val canCollapse = totalSteps > COLLAPSED_VISIBLE
-    // 折叠态只渲染尾部 COLLAPSED_VISIBLE 步（RikkaHub takeLast 同款）；
-    // finished 且收起 → 只留控制条，一步不渲染（定稿规格 D 屏）
+    // 折叠态只渲染尾部 COLLAPSED_VISIBLE 步（RikkaHub takeLast 同款）。
+    // 2026-09-16 对齐 rikkahub：**结束态不再清空步骤**——此前 finished 收起时一步不渲染
+    // （早期"定稿规格 D 屏"），结果回合结束瞬间整卡从多行骤缩成一行，观感是"啪"地抽走；
+    // rikkahub 收起后始终保留尾部 2 步，收纳是连续的。用户要求按 rikkahub 对齐。
     val visibleSteps = when {
         !canCollapse || chainOpen -> allSteps
-        finished -> emptyList()
         else -> allSteps.takeLast(COLLAPSED_VISIBLE)
     }
     Column(
