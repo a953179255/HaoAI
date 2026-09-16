@@ -2173,42 +2173,18 @@ private fun MessageList(
 
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
-    // ── 用户手势判定（2026-09-16 重做）────────────────────────────────
-    // 旧实现用 listState.isScrollInProgress 判"用户在滑"，但它**不区分滚动来源**：
-    // 跟随用的 scrollBy 也会让它为 true。于是流式期它几乎恒真，再叠上 scrollGuard 守卫
-    // （守卫又被 scrollToEnd 自己置真）→ 手势快照全被 return → userScrolledAway 永远设不上
-    // → 用户上滑看历史时仍被持续拉回底部（用户实测；rikkahub 无此问题，它靠位置判定）。
-    // 改为**只看手指**：pointerInput 观察按下/抬起，程序化滚动再无可能被误认成手势。
-    var userDragging by remember(listState) { mutableStateOf(false) }
-    // 另：手指按下即收起输入法（拖动中收起键盘的既有行为，改由真实手势触发而非滚动状态）。
-    var gestureAnchor by remember(listState) { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(listState) {
-        androidx.compose.runtime.snapshotFlow {
-            val info = listState.layoutInfo
-            val first = info.visibleItemsInfo.firstOrNull()
-            Triple(userDragging, first?.index ?: 0, first?.offset ?: 0)
-        }
-            .distinctUntilChanged().collect { (dragging, idx, off) ->
-                if (dragging) {
-                    val anchor = gestureAnchor
-                    if (anchor == null) {
-                        gestureAnchor = idx to off
-                    } else if (idx < anchor.first || (idx == anchor.first && off < anchor.second)) {
-                        // 首帧向上 → 立即断开跟随
-                        userScrolledAway.value = true
-                    }
-                } else {
-                    gestureAnchor = null
-                    // 手势结束后若已停在近底，恢复跟随（温和的自动恢复）
-                    val lv = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                    val contentEnd = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.afterContentPadding
-                    val nearBottom = lv != null &&
-                        lv.index == listState.layoutInfo.totalItemsCount - 1 &&
-                        lv.offset + lv.size - contentEnd < 120
-                    if (nearBottom) userScrolledAway.value = false
-                }
-            }
-    }
+    // ── 跟随判定：位置派生（2026-09-16 第三版定案，照搬 rikkahub）────────────
+    // 三段教训：
+    //  v1 `isScrollInProgress` 判"用户在滑"——它不区分滚动来源（自己的 scrollBy 也算），
+    //     再叠 guard 守卫 → 手势判据被全量吞掉 → 用户上滑仍被拉回底部。
+    //  v2 `pointerInput 只看手指` + `userScrolledAway` 粘滞标志——标志一旦被真实手势置真，
+    //     只有"用户发消息"才复位："重新生成"不复位 → 整个回复过程都不跟随。
+    //  v3（本版）= **跟随只看位置**：不要任何标志参与跟随判定。
+    //     rikkahub 没有这类问题的根本原因就在这里——它是无状态的位置判定
+    //     （`isAtBottom()` → `requestScrollToItem(末项+10)`），任何一帧都能自愈；
+    //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
+    //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
+    val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
 
     // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
@@ -2240,25 +2216,34 @@ private fun MessageList(
                 focusManager.clearFocus()
             }
             listState.pinToBottom()
-        } else if (!userScrolledAway.value && !userDragging) {
-            // 新行入列
-            listState.pinToBottom()
+        } else {
+            // 新行入列：是否跟随交给位置订阅判定，这里只在"仍贴着底"时补一次
+            if (listState.isAtBottom(bottomSlackPx)) listState.pinToBottom()
         }
     }
 
-    // ── 流式跟随主循环（2026-09-16 重做）──────────────────────────────
-    // 旧实现：LaunchedEffect(9 个 key) + scrollToEnd 内手写 18 帧 scrollBy 循环 + settled 计数。
-    // 三个问题：① 循环里 `if (isScrollInProgress && !guard.value) break` 是死代码
-    // （guard 在进入函数时刚被自己置真），用户手势永远无法让它让位；
-    // ② 18 帧上限让快 token 率 / 大块 markdown 重排时"越落越远"；
-    // ③ 靠 key 变化触发，覆盖不到 footer 生长、Markdown 异步布局这类非 key 变化。
-    // 改为逐帧贴底：无位移时零成本返回；手指按下或已断开粘滞 → 立即停手（这是本次修复的核心）。
-    LaunchedEffect(listState) {
-        while (true) {
-            androidx.compose.runtime.withFrameNanos { }
-            if (userScrolledAway.value || userDragging) continue
-            listState.pinToBottom()
-        }
+    // ── 跟随：位置派生订阅（rikkahub 同款）────────────────────────────
+    // 规则只有一条：**此刻贴着底 → 继续钉住**。
+    // 订阅 visibleItemsInfo（布局一变就来一帧）而不是手写帧循环——
+    // rikkahub 也是这么做的：`snapshotFlow { layoutInfo.visibleItemsInfo }`。
+    // 为什么不会误判成"离开底部"：贴底时末项底边正落在内容末端（差 0），
+    // 新内容每帧只长几个像素（animateContentSize 把块级跳变摊成 280ms），
+    // 远小于 bottomSlackPx(48dp)，判定不会掉出去。
+    // 为什么能自愈：用户上滑 → 位置立刻离开底部 → 判定为假 → 停手；
+    // 拖回底部 → 判定为真 → 自动接上。任何一帧都在重新判定，没有可卡死的状态。
+    LaunchedEffect(listState, bottomSlackPx) {
+        androidx.compose.runtime.snapshotFlow { listState.layoutInfo.visibleItemsInfo }
+            .collect {
+                if (!listState.isAtBottom(bottomSlackPx)) return@collect
+                listState.pinToBottom()
+            }
+    }
+
+    // 粘滞标志：**仅**用于「回到底部」浮钮的显隐，同样由位置派生——
+    // 与跟随判定同一判据，因此"浮钮出现"⇔"已停止跟随"，两者语义天然一致。
+    LaunchedEffect(listState, bottomSlackPx) {
+        androidx.compose.runtime.snapshotFlow { listState.isAtBottom(bottomSlackPx) }
+            .collect { userScrolledAway.value = !it }
     }
 
     // 流式刚结束的那次重组（running true→false 与最终行入列同帧发生）：最终行 footer
@@ -2285,13 +2270,11 @@ private fun MessageList(
     LazyColumn(
         state = listState,
         modifier = modifier.pointerInput(Unit) {
-            // 「用户是否在手势中」的唯一判据：手指按下 → 抬起。
-            // 只观察、不消费（requireUnconsumed=false），项点击与列表自身拖动不受影响。
-            // 用它替换旧的 listState.isScrollInProgress：后者把程序化 scrollBy 也算作"用户在滑"，
-            // 于是流式跟随期间手势判据恒真，userScrolledAway 永远设不上（本次修复的核心）。
+            // 只做一件事：真正拖动列表（超过 touchSlop）时收起输入法。
+            // **不参与跟随判定**——跟随完全由位置决定（见 isAtBottom），
+            // 避免"手指标志没复位 → 跟随永久失效"这类不可自愈的状态。
             awaitEachGesture {
                 val start = awaitFirstDown(requireUnconsumed = false)
-                userDragging = true
                 var slopPassed = false
                 val slop = 8.dp.toPx()
                 while (true) {
@@ -2299,12 +2282,10 @@ private fun MessageList(
                     val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
                     if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
                         slopPassed = true
-                        // 真正拖动列表（超过 touchSlop）才收起输入法：轻点不该收
                         focusManager.clearFocus()
                     }
                     if (!ch.pressed) break
                 }
-                userDragging = false
             }
         },
         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = topPadding, bottom = bottomPadding)
@@ -2358,6 +2339,24 @@ private fun MessageList(
             }
         }
     }
+}
+
+/**
+ * 是否贴着底（rikkahub `isAtBottom()` 同款）：末项底边距内容末端的距离 ≤ slackPx。
+ *
+ * 用"位置"而不是任何标志来判定跟随——这是 rikkahub 没有"跟随卡死"类问题的根本原因。
+ * 容差 slackPx 的权衡：太小 → 流式一帧长高就被判成"离开底部"而停手（且位置判定无状态，
+ * 会一直停到你手动拖回）；太大 → 用户小幅上滑会被判成"仍在底部"而被拉回。
+ * 48dp≈一行半文字，能吸收流式逐帧增长，又小于任何有意的拖动。
+ */
+private fun androidx.compose.foundation.lazy.LazyListState.isAtBottom(slackPx: Int): Boolean {
+    val info = layoutInfo
+    if (info.totalItemsCount == 0) return true
+    val last = info.visibleItemsInfo.lastOrNull() ?: return false
+    // 末项没被组合（滚得远）→ 显然不在底部
+    if (last.index != info.totalItemsCount - 1) return false
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    return last.offset + last.size - contentEnd <= slackPx
 }
 
 /**

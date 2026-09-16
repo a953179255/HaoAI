@@ -161,10 +161,14 @@ fun ChainCard(
     val hasReasoning = !reasoning.isNullOrBlank()
     if (!hasReasoning && tools.isEmpty()) return
 
-    // 整卡展开态（用户点控制条切换）。rememberSaveable key 带步骤数签名：
-    // 新一步出现时若回合未结束保持展开；历史消息（finished=true）初值恒为收起
+    // 整卡展开态（用户点控制条切换）。rememberSaveable key 带步骤数签名。
+    // 2026-09-16 对齐 rikkahub：**默认收起（含流式期）**——rikkahub 的 expanded 初值恒为
+    // false，折叠态只渲染尾部 2 步，卡片高度稳定（控制条 + 2 行）。
+    // 旧默认（流式期整卡展开）会导致：步骤越加越多、卡片越长越高，而"显示 N 个步骤"
+    // 控制条要到第 3 步才出现 → 观感是"正在思考时上面突然插进来一张卡"（用户实测反馈）。
+    // 想看全部步骤点控制条展开。
     var chainOpen by rememberSaveable(finished, tools.size, hasReasoning) {
-        mutableStateOf(!finished)
+        mutableStateOf(false)
     }
     // 思考步独立展开态（收起行点击展开全文；仅 finished 态可手动展开）
     var reasoningOpen by rememberSaveable(hasReasoning, finished) { mutableStateOf(false) }
