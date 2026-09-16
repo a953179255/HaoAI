@@ -2192,9 +2192,6 @@ private fun MessageList(
     //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
     //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
     val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
-    // 跟随探针落盘文件（诊断用：魅族 ROM 屏蔽 app logcat，只能写文件后用 run-as 读）
-    val probeCtx = androidx.compose.ui.platform.LocalContext.current
-    val probeFile = remember(probeCtx) { java.io.File(probeCtx.filesDir, "follow-probe.txt") }
 
     // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
@@ -2244,37 +2241,21 @@ private fun MessageList(
     // 当前位置重新算出，不含任何可累积状态，因此永远能自愈。
     LaunchedEffect(listState, bottomSlackPx) {
         var prevAtBottom = true
-        var lastLogAt = 0L
+        var busyFrames = 0
         androidx.compose.runtime.snapshotFlow { listState.layoutInfo.visibleItemsInfo }
             .collect {
-                val info = listState.layoutInfo
-                val last = info.visibleItemsInfo.lastOrNull()
-                val contentEnd = info.viewportEndOffset - info.afterContentPadding
-                val delta = last?.let { it.offset + it.size - contentEnd }
                 val atBottom = listState.isAtBottom(bottomSlackPx)
-                // 调试探针落盘（魅族 ROM 屏蔽 app logcat，只能写文件后 run-as 读）：
-                //   adb shell run-as com.haoai.agent cat files/follow-probe.txt
-                if (!atBottom || !prevAtBottom) {
-                    val now = android.os.SystemClock.uptimeMillis()
-                    if (!atBottom && prevAtBottom) {
-                        lastLogAt = now
-                        runCatching {
-                            probeFile.appendText(
-                                "JUMPS  delta=$delta slack=$bottomSlackPx " +
-                                    "lastIdx=${last?.index}/${info.totalItemsCount - 1} " +
-                                    "itemSize=${last?.size} afterPad=${info.afterContentPadding} " +
-                                    "visible=${info.visibleItemsInfo.size}（单帧宽限：继续跟随）\n"
-                            )
-                        }
-                    } else if (!atBottom && now - lastLogAt > 500L) {
-                        lastLogAt = now
-                        runCatching {
-                            probeFile.appendText(
-                                "STOP   delta=$delta slack=$bottomSlackPx 连续两帧离开底部 → 停手\n"
-                            )
-                        }
-                    }
+                // ① 让位给手指/惯性：连续 ≥2 帧 isScrollInProgress 才算"用户在滚"
+                //    （自己的一次性 pinToBottom 只占 1 帧，不会误伤跟随）。
+                //    不加这层会与 fling 抢滚动 —— 用户实测：快速上下滚动卡顿、
+                //    在底部快速上滑时偶发"突然跳回最底部"（就是 pin 把 fling 拽回去了）。
+                busyFrames = if (listState.isScrollInProgress) busyFrames + 1 else 0
+                if (busyFrames >= 2) {
+                    prevAtBottom = atBottom
+                    return@collect
                 }
+                // ② 单帧宽限：上一帧还贴着底 → 本帧的超大位移按结构跳变处理（收尾换位、
+                //    长行落行会产生千 px 位移），照旧钉住；真拖动会连续多帧偏离，第 2 帧停手。
                 if (!atBottom && !prevAtBottom) {
                     prevAtBottom = atBottom
                     return@collect

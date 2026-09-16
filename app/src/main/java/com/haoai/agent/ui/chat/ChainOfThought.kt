@@ -179,14 +179,13 @@ fun ChainCard(
     }
     val totalSteps = allSteps.size
     val canCollapse = totalSteps > COLLAPSED_VISIBLE
-    // 折叠态只渲染尾部 COLLAPSED_VISIBLE 步（RikkaHub takeLast 同款）。
-    // 2026-09-16 对齐 rikkahub：**结束态不再清空步骤**——此前 finished 收起时一步不渲染
-    // （早期"定稿规格 D 屏"），结果回合结束瞬间整卡从多行骤缩成一行，观感是"啪"地抽走；
-    // rikkahub 收起后始终保留尾部 2 步，收纳是连续的。用户要求按 rikkahub 对齐。
-    val visibleSteps = when {
-        !canCollapse || chainOpen -> allSteps
-        else -> allSteps.takeLast(COLLAPSED_VISIBLE)
-    }
+    // 折叠态只显示尾部 COLLAPSED_VISIBLE 步。
+    // 2026-09-16 对齐 rikkahub + 修"折叠没有过渡动画"（用户实测反馈）：
+    // **不再用 takeLast 删项**——被删掉的项会被瞬间从组合里移除，没有任何过渡，
+    // 表现为"思考一结束，卡片唰地变成显示 3 个步骤"。
+    // 改为始终组合全部步骤，只把折叠掉的前段用 AnimatedVisibility 收起（见 StepToggle），
+    // 于是收起/展开都有 220ms 纵向过渡，配合本卡的 animateContentSize 是连贯的。
+    val firstShownIndex = if (!canCollapse || chainOpen) 0 else (totalSteps - COLLAPSED_VISIBLE)
     Column(
         modifier
             .fillMaxWidth()
@@ -218,7 +217,7 @@ fun ChainCard(
                 onClick = { chainOpen = !chainOpen }
             )
         }
-        if (visibleSteps.isNotEmpty()) {
+        if (totalSteps > 0) {
             val lineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
             Box(
                 Modifier.drawBehind {
@@ -233,11 +232,17 @@ fun ChainCard(
                 }
             ) {
                 Column {
-                    visibleSteps.forEach { (isReasoningStep, payload) ->
-                        // 新步骤入场：Column 没有 animateItem，框架也不给"新插入项"补动画，
-                        // 只能自己包一层（见 StepEnter）。历史/静态渲染不播。
-                        val stepKey: Any = if (isReasoningStep) "reason" else (payload as UiTool).callId
-                        StepEnter(animateIn = reasoningLive || toolsLive, stepKey = stepKey) {
+                    allSteps.forEachIndexed { index, pair ->
+                        val isReasoningStep = pair.first
+                        val payload = pair.second
+                        val stepKey: Any =
+                            if (isReasoningStep) "reason" else (payload as UiTool).callId
+                        StepToggle(
+                            visible = index >= firstShownIndex,
+                            // 新步骤入场只在流式期播（历史/静态渲染直出）
+                            animateIn = (reasoningLive || toolsLive) && !finished,
+                            stepKey = stepKey
+                        ) {
                             if (isReasoningStep) {
                                 ReasoningStep(
                                     text = payload as String,
@@ -261,35 +266,32 @@ fun ChainCard(
 }
 
 /**
- * 单个步骤的入场包装：首次出现时 220ms 纵向展开 + 淡入。
+ * 单个步骤的显隐包装：**入场与收场都有过渡**。
  *
- * 为什么需要自己包：链卡内是普通 Column（不是 LazyColumn），既没有 animateItem，
- * 框架也不会给"新插入的项"补动画——此前新工具步骤是"啪"地直接出现。
- * 做法：先以 visible=false 组合（不渲染），下一帧翻 true → 播 enter 过渡。
- * animateIn=false（历史消息/静态渲染）时直出，不播动画。
+ * 为什么需要它：
+ *  - 链卡内是普通 Column（非 LazyColumn），既没有 animateItem，框架也不给"新插入的项"补动画；
+ *  - 折叠若直接 takeLast 删项，被删的项会瞬间从组合里移除，没有任何过渡——
+ *    用户实测反馈"思考一结束卡片唰地变成显示 3 个步骤，没有过渡动画"。
+ * 做法：始终组合全部步骤，只用 AnimatedVisibility 控可见性：
+ * 首帧以不可见组合（animateIn）→ 下一帧翻真 → 播 enter；折叠时翻假 → 播 exit。
+ * animateIn=false（历史/静态渲染）直出，不播入场。
  */
 @Composable
-private fun StepEnter(
+private fun StepToggle(
+    visible: Boolean,
     animateIn: Boolean,
     stepKey: Any,
     content: @Composable () -> Unit
 ) {
-    if (!animateIn) {
-        content()
-        return
-    }
-    var shown by remember(stepKey) { mutableStateOf(false) }
-    LaunchedEffect(stepKey) { shown = true }
+    var appeared by remember(stepKey) { mutableStateOf(!animateIn) }
+    LaunchedEffect(stepKey) { if (animateIn) appeared = true }
+    val ease = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
     AnimatedVisibility(
-        visible = shown,
-        enter = expandVertically(
-            animationSpec = tween(
-                220,
-                easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
-            ),
-            expandFrom = Alignment.Top
-        ) + fadeIn(tween(160)),
-        exit = shrinkVertically(tween(140)) + fadeOut(tween(120))
+        visible = visible && appeared,
+        enter = expandVertically(animationSpec = tween(220, easing = ease), expandFrom = Alignment.Top) +
+            fadeIn(tween(160)),
+        exit = shrinkVertically(animationSpec = tween(180, easing = ease), shrinkTowards = Alignment.Top) +
+            fadeOut(tween(140))
     ) {
         content()
     }
