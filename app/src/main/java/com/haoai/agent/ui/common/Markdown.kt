@@ -624,6 +624,16 @@ private fun TableBlock(table: MdBlock.Table) {
     val textColor = MaterialTheme.colorScheme.onBackground
     val density = LocalDensity.current
     val colCount = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0, 1)
+    // 缓存键：表格原文 + 会改变 maxIntrinsicWidth(px) 的样式指纹。
+    // 原文空（解析器未填 raw）时退化为"不缓存"，宁可不省也不能算错列宽。
+    val tableTypography = MaterialTheme.typography
+    val widthKey = remember(table.raw, density, dark, tableTypography) {
+        "v1\u0001" + table.raw +
+            "\u0001" + density.density + "|" + density.fontScale +
+            "|" + tableTypography.bodySmall.fontSize.value +
+            "|" + tableTypography.labelMedium.fontSize.value +
+            "|" + (if (dark) 1 else 0)
+    }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
 
@@ -790,10 +800,13 @@ private fun TableBlock(table: MdBlock.Table) {
                         else -> TextAlign.Left
                     }
                 }
-                // 阶段 1：自然宽度测列宽（maxLines=1 的样式测量）
-                var natural = IntArray(colCount)
                 val allRows = listOf(true to table.header) + table.rows.map { false to it }
-                subcompose("measure") {
+                // 列宽自然值只依赖「表格原文 + 样式指纹」，与可用宽度无关 ⇒ 可跨 measure 复用。
+                val __cachedW = if (table.raw.isNotBlank()) TableWidthCache.get(widthKey) else null
+                val __useCache = __cachedW != null && __cachedW.size == colCount
+                // 阶段 1：自然宽度测列宽（maxLines=1 的样式测量）—— 命中缓存则整轮跳过
+                var natural = if (__useCache) __cachedW!!.copyOf() else IntArray(colCount)
+                if (!__useCache) subcompose("measure") {
                     allRows.forEach { (isHeader, cells) ->
                         cells.forEachIndexed { c, cell ->
                             Box {
@@ -812,6 +825,7 @@ private fun TableBlock(table: MdBlock.Table) {
                         .coerceIn(minColPx, maxColPx)
                     if (w > natural[c]) natural[c] = w
                 }
+                if (!__useCache && table.raw.isNotBlank()) TableWidthCache.put(widthKey, natural)
                 // 窄表拉伸：目标宽度优先取横滚约束（直接嵌入场景），Infinity 时
                 // 退回 BoxWithConstraints 给的卡片可用宽度（horizontalScroll 内约束无界）
                 val naturalSum = natural.sum()
@@ -876,6 +890,35 @@ private fun TableBlock(table: MdBlock.Table) {
         }
         }
         }
+    }
+}
+
+/**
+ * 表格「自然列宽」缓存（跨组合、跨 measure 存活）。
+ *
+ * 为什么需要：TableBlock 用 SubcomposeLayout，**measure lambda 每次测量都会重新执行**——
+ * 阶段 1 要对全表每个单元格 subcompose + `maxIntrinsicWidth` 各来一遍。真机实测
+ * （2026-09-18）：一张 5×5 = 25 格的表整体测量 60~80ms，且同一条消息滚回来会**再测一次**
+ * （同一表格实测 80ms → 34ms 两次，历史探针记录）。
+ *
+ * 缓存键 = 表格原文 + 影响文本测量的样式指纹（密度/字体缩放/两级字号/深浅色）。
+ * 自然列宽**与可用宽度无关**（按可用宽度拉伸是阶段 1 之后的纯算术），所以可以安全缓存；
+ * 命中时整轮跳过阶段 1，阶段 2 的子组合与摆放保持原样 —— **视觉零变化**。
+ */
+private object TableWidthCache {
+    private const val MAX_ENTRIES = 24
+    private val lru = object : LinkedHashMap<String, IntArray>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, IntArray>
+        ): Boolean = size > MAX_ENTRIES
+    }
+
+    @Synchronized
+    fun get(key: String): IntArray? = lru[key]?.copyOf()
+
+    @Synchronized
+    fun put(key: String, widths: IntArray) {
+        lru[key] = widths.copyOf()
     }
 }
 

@@ -1232,6 +1232,49 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         com.haoai.agent.platform.RunObserver.setSteps(steps)
     }
 
+    // ── Phase 1：长消息 markdown 预解析（预热）────────────────────────────
+    // 背景：parseMarkdownAst 自身已有 48 条 LRU（MdAst.kt:41），所以**重复解析本来就是 0ms**
+    // （探针里那条 `PARSE_INIT 0ms` 就是命中）。真正的开销是**首次解析**：真机实测
+    // 3191 字符 32ms、3537 字符 45ms，而且它跑在 MarkdownText 的 remember 初始化器里
+    // = **组合期主线程**。
+    //
+    // 所以唯一要补的一步就是"预热"：在 UI 需要之前，先在 Dispatchers.Default 上把长文本
+    // 解析好塞进那个已有的 LRU，让组合期的 parseMarkdownAst 变成缓存命中（≈0ms）。
+    //
+    // 未预热到 / 预热失败时，组合期仍走原来的同步解析 ⇒ 行为与现状等价，**零回归**。
+    // 这不会减少总 CPU 工作量，只是把它从"主线程组合期"挪到"后台线程"。
+    private var prewarmJob: Job? = null
+    private var prewarmSig = ""
+
+    private fun prewarmMarkdownAst(rows: List<ChatRow>) {
+        val minChars = 1_500      // 短消息解析本身几 ms，不值得预热
+        val maxChars = 80_000     // 超大文本会让后台任务长时间占用 CPU，交给兜底
+        val maxCount = 6          // 只预热最可能马上要看的几条
+        val targets = ArrayList<String>(maxCount)
+        // 会话默认停在底部 —— 从最新往回取
+        for (i in rows.indices.reversed()) {
+            val t = rows[i].text
+            if (t.length in minChars..maxChars) {
+                targets.add(t)
+                if (targets.size >= maxCount) break
+            }
+        }
+        if (targets.isEmpty()) return
+        // rebuildRows 一次回合会被调用 12+ 次（handleEvent 等多处），必须去重，
+        // 否则会反复取消/重启预热任务
+        val sig = targets.joinToString("|") { "${it.length}:${it.hashCode()}" }
+        if (sig == prewarmSig) return
+        prewarmSig = sig
+        prewarmJob?.cancel()
+        prewarmJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            for (t in targets) {
+                // 已缓存时这次调用只是查表（≈0ms）；未缓存才真解析
+                runCatching { com.haoai.agent.ui.common.parseMarkdownAst(t) }
+                kotlinx.coroutines.yield()
+            }
+        }
+    }
+
     private fun rebuildRows() {
         val s = _session.value ?: return
         val resultByCall = HashMap<String, Pair<String, Boolean>>()
@@ -1303,6 +1346,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
         _rows.value = rows
+        prewarmMarkdownAst(rows)
         recalcContextUsage()
     }
 
