@@ -4082,6 +4082,16 @@ private fun SessionsDrawer(
     // 抽屉收起时自动收回展开的按钮
     LaunchedEffect(drawerOpen) { if (!drawerOpen) openCardId = null }
 
+    // 抽屉每次打开 → 会话列表回到顶部。
+    // 为什么需要：这个 LazyColumn 此前**没有显式 state**，Compose 内部创建的 state 随抽屉
+    // 常驻组合（抽屉只是平移出屏、并未离开组合），于是上次滚动的位置一直残留。
+    // 症状：新建会话 B 后它确实排在第 0 位，但列表还停在旧偏移，B 在视口上方看不见，
+    // 得手动往下拉才露出来（用户实测）。
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(drawerOpen) {
+        if (drawerOpen && sessions.isNotEmpty()) listState.scrollToItem(0)
+    }
+
     Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
@@ -4131,6 +4141,7 @@ private fun SessionsDrawer(
             Modifier
                 .fillMaxWidth()
                 .weight(1f),
+            state = listState,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
