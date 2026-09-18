@@ -2380,7 +2380,10 @@ private fun MessageList(
                 }
                 val grown = scrollState.maxValue - before
                 if (grown > 0 && scrollState.maxValue != Int.MAX_VALUE) {
-                    scrollState.dispatchRawDelta(grown.toFloat())
+                    // 用 suspend 的 scrollBy 而不是 dispatchRawDelta：后者在"没有活动滚动会话"时
+                    // 不会真的改位置（实测扩窗后 value 仍为 0，补偿等于没生效）。这里是协程，
+                    // scrollBy 会正常排队生效。
+                    runCatching { scrollState.scrollBy(grown.toFloat()) }
                 }
             }
         }
