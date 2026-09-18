@@ -2347,6 +2347,42 @@ private fun MessageList(
         }
     }
 
+    // ── Phase 3：显示窗口 ────────────────────────────────────────────────
+    // B′ 不做虚拟化：窗口内每条消息都会常驻组合（真机/模拟器实测 ≈+4.4MB/条），
+    // 进页面还要把窗口内所有行一次组合 + 测量（24 行时 674~911ms）。
+    // 这里只把**最近 12 条**放进 Column，向上滚到顶部附近再自动扩窗。
+    // 关键：扩窗后把新增内容的高度补进滚动位置，**视口不跳**（否则上方插入会让画面位移）。
+    // 不截断任何内容 —— 只是延后组合；切会话重置。
+    var windowSize by remember(sessionId) { mutableStateOf(12) }
+    // 【必须用 rememberUpdatedState】rows 是**值参数**不是 State：LaunchedEffect 的协程
+    // 只会捕获启动那一刻的 List，之后它在循环里读到的永远是旧数量 ——
+    // 实测症状：造了 6 条新消息，循环里 rows.size 仍恒为 8，于是"自动扩窗"永不触发
+    // （2026-09-19 用临时诊断 WINDOW 定位）。改读 State 才能拿到最新数量。
+    val rowsCount by androidx.compose.runtime.rememberUpdatedState(rows.size)
+    val windowedRows = remember(rows, windowSize) {
+        if (rows.size <= windowSize) rows else rows.takeLast(windowSize)
+    }
+    val hiddenRowCount = rows.size - windowedRows.size
+    LaunchedEffect(sessionId) {
+        while (true) {
+            kotlinx.coroutines.delay(300)
+            if (rowsCount > windowSize && scrollState.value <= 400) {
+                val before = scrollState.maxValue
+                windowSize = minOf(rowsCount, windowSize + 8)
+                // 等新内容测量落地（最多 10 帧），再把它的高度补进位置
+                var waited = 0
+                while (waited < 10 && scrollState.maxValue == before) {
+                    androidx.compose.runtime.withFrameNanos { }
+                    waited++
+                }
+                val grown = scrollState.maxValue - before
+                if (grown > 0 && scrollState.maxValue != Int.MAX_VALUE) {
+                    scrollState.dispatchRawDelta(grown.toFloat())
+                }
+            }
+        }
+    }
+
     // 粘滞标志（userScrolledAway）已并入上面的逐帧跟随循环统一派生 ——
     // 原实现用独立 snapshotFlow，实测会长时间不发导致浮钮永不出现（见循环内注释）。
 
@@ -2402,11 +2438,28 @@ private fun MessageList(
     ) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
-        val finalRowKey = if (!running) rows.lastOrNull()?.key else null
+        val finalRowKey = if (!running) windowedRows.lastOrNull()?.key else null
         val growInKey = if (justFinished) finalRowKey else null
+        // 窗口外还有更早的消息时给一行提示（向上滚即自动加载，不截断内容）
+        if (hiddenRowCount > 0) {
+            androidx.compose.runtime.key("more_history") {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "↑ 更早的消息（还有 $hiddenRowCount 条，向上滑自动加载）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f)
+                    )
+                }
+            }
+        }
         // B′：逐行直出。LazyColumn 的 animateItem（入场淡入/位移补间）是 lazy 专属能力，
         // 这里先只保功能正确、去掉入场动画；要恢复可用 alpha 动画补。
-        rows.forEach { row ->
+        windowedRows.forEach { row ->
             androidx.compose.runtime.key(row.key) {
                 RowItem(
                     row,
