@@ -4409,10 +4409,11 @@ private fun GlassCapChip(
     modifier: Modifier = Modifier
 ) {
     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
+    // 轻点补闪（同深度思考栏那处：collectIsPressedAsState 会被按帧合批吃掉）
+    val pressFb = com.haoai.agent.ui.common.rememberPressFeedback(interaction)
     val scale by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (pressed) 0.95f else 1f,
-        animationSpec = androidx.compose.animation.core.tween(120),
+        targetValue = if (pressFb.pressed) 0.95f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(90),
         label = "glassCapChipScale"
     )
     Box(
@@ -4423,7 +4424,7 @@ private fun GlassCapChip(
                 if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.08f)
             )
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = null, onClick = pressFb.wrap(onClick))
             .padding(horizontal = 12.dp, vertical = 7.dp)
     ) {
         Text(

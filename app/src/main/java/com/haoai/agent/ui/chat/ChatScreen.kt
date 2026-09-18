@@ -2363,6 +2363,9 @@ private fun MessageList(
         if (rows.size <= windowSize) rows else rows.takeLast(windowSize)
     }
     val hiddenRowCount = rows.size - windowedRows.size
+    // 入场动画用（替代 LazyColumn 的 animateItem，见下方 forEach 内注释）。
+    // 初值 = 首帧就存在的 keys ⇒ 首屏/切会话时不会集体淡入；之后 add 成功才是"新行"。
+    val seenRowKeys = remember(sessionId) { rows.mapTo(HashSet<String>()) { it.key } }
     LaunchedEffect(sessionId) {
         while (true) {
             kotlinx.coroutines.delay(300)
@@ -2461,6 +2464,24 @@ private fun MessageList(
         // 这里先只保功能正确、去掉入场动画；要恢复可用 alpha 动画补。
         windowedRows.forEach { row ->
             androidx.compose.runtime.key(row.key) {
+                // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
+                // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
+                // ——不能无条件给每行套淡入，否则首屏组合时所有行都会被判成新行而集体淡入。
+                // 动画结束把 fadingIn 置 false 撤掉 graphicsLayer，不给已定稿的行长期留图层。
+                val isNewRow = remember(row.key) { seenRowKeys.add(row.key) }
+                var fadingIn by remember(row.key) { mutableStateOf(isNewRow) }
+                val appearAlpha = remember(row.key) {
+                    androidx.compose.animation.core.Animatable(if (isNewRow) 0f else 1f)
+                }
+                LaunchedEffect(row.key) {
+                    if (isNewRow) {
+                        appearAlpha.animateTo(1f, tween(220))
+                        fadingIn = false
+                    }
+                }
+                Box(
+                    if (fadingIn) Modifier.graphicsLayer { alpha = appearAlpha.value } else Modifier
+                ) {
                 RowItem(
                     row,
                     onOpenMenu = onOpenMenu,
@@ -2475,6 +2496,7 @@ private fun MessageList(
                     growIn = row.key == growInKey,
                     onFooterReveal = { footerRevealTick++ }
                 )
+                }
             }
         }
         if (showStreaming) {

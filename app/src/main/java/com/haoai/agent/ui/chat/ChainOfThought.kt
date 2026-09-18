@@ -131,17 +131,20 @@ val LocalOpenToolSheet = androidx.compose.runtime.staticCompositionLocalOf<(UiTo
 @Composable
 private fun Modifier.chainPressable(enabled: Boolean = true, onClick: () -> Unit): Modifier {
     val ips = remember { MutableInteractionSource() }
-    val pressed by ips.collectIsPressedAsState()
+    // 【轻点也要有反馈】原先直接用 collectIsPressedAsState：它是按帧合批的，快速轻点的
+    // down/up 落在同一帧内时 pressed 从未渲染为 true → 观感"点一下没反应，按久才有"
+    // （2026-09-19 用户实测反馈）。统一走 Glass 的 rememberPressFeedback 补一个短闪。
+    val pressFb = com.haoai.agent.ui.common.rememberPressFeedback(ips)
     return this
         .background(
-            if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+            if (pressFb.pressed && enabled) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
             else Color.Transparent
         )
         .clickable(
             interactionSource = ips,
             indication = null,
             enabled = enabled,
-            onClick = onClick
+            onClick = pressFb.wrap(onClick)
         )
 }
 

@@ -1095,11 +1095,12 @@ fun GlassTextButton(
     // 的「大阴影」，违背 Catalog 的轻量玻璃美学
     val shape = RoundedCornerShape(percent = 50)
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
+    // 轻点补闪（快速轻点会被按帧合批吃掉，只有按久才有反馈）
+    val pressFb = rememberPressFeedback(interactionSource)
 
     val tintAlpha = androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (isPressed && enabled) 0.10f else 0f,
-        animationSpec = androidx.compose.animation.core.tween(120),
+        targetValue = if (pressFb.pressed && enabled) 0.10f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(90),
         label = "glassTextBtnTint"
     ).value
 
@@ -1108,7 +1109,7 @@ fun GlassTextButton(
             .graphicsLayer {
                 // 按压缩放：Catalog LiquidButton 标配（scale 1.0 → 0.97），
                 // 反馈感强但视觉无负担（不放大、不摇晃）
-                val scale = if (isPressed && enabled) 0.965f else 1f
+                val scale = if (pressFb.pressed && enabled) 0.965f else 1f
                 scaleX = scale
                 scaleY = scale
                 // 禁用观感：与 LiquidGlassButton 统一处理
@@ -1129,7 +1130,7 @@ fun GlassTextButton(
                 indication = null,
                 role = Role.Button,
                 enabled = enabled,
-                onClick = onClick
+                onClick = pressFb.wrap(onClick)
             )
             .padding(horizontal = 14.dp, vertical = 9.dp)
     ) {
@@ -1141,6 +1142,50 @@ fun GlassTextButton(
             else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f)
         )
     }
+}
+
+/**
+ * 轻点也要有按压反馈（2026-09-19 用户实测反馈）。
+ *
+ * 背景：`collectIsPressedAsState()` 是**按帧合批**的 —— 快速轻点的 down/up 可能落在同一帧内，
+ * 收集到的最新值直接就是 false，`pressed` 从未渲染为 true。观感就是
+ * 「点一下完全没反应，必须按久一点或长按才有反馈」（深度思考栏最明显）。
+ *
+ * 用法：按压态用 [PressFeedback.pressed]，onClick 用 [PressFeedback.wrap] 包一层：
+ * ```
+ * val pf = rememberPressFeedback(interactionSource)
+ * Modifier.background(if (pf.pressed) color else Color.Transparent)
+ *     .clickable(interactionSource = interactionSource, indication = null, onClick = pf.wrap(onClick))
+ * ```
+ * 动画时长建议 ≤ [holdMs]（默认 90ms），否则轻点的补闪走不满、反馈仍然弱。
+ */
+class PressFeedback internal constructor(
+    private val flashState: androidx.compose.runtime.MutableState<Boolean>,
+    /** 是否显示按压态：真实按压 **或** 轻点补的闪动 */
+    val pressed: Boolean
+) {
+    /** 包一层 onClick：先补一次轻点闪动，再执行原回调。 */
+    fun wrap(callback: () -> Unit): () -> Unit = {
+        flashState.value = true
+        callback()
+    }
+}
+
+@androidx.compose.runtime.Composable
+fun rememberPressFeedback(
+    interactionSource: androidx.compose.foundation.interaction.InteractionSource,
+    /** 轻点补闪持续时间（ms）：够长才看得见，够短不显拖沓 */
+    holdMs: Long = 90
+): PressFeedback {
+    val raw by interactionSource.collectIsPressedAsState()
+    val flash = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(flash.value) {
+        if (flash.value) {
+            kotlinx.coroutines.delay(holdMs)
+            flash.value = false
+        }
+    }
+    return PressFeedback(flash, raw || flash.value)
 }
 
 /**
