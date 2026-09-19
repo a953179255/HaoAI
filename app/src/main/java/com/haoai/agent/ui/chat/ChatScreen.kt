@@ -161,6 +161,7 @@ import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.LiquidGlassButton
+import com.haoai.agent.ui.common.LocalChatScrollState
 import com.haoai.agent.ui.common.MarkdownText
 import com.haoai.agent.ui.common.SelectableTextBlock
 import com.haoai.agent.ui.common.SwipeRevealCard
@@ -2429,6 +2430,9 @@ private fun MessageList(
     // 取消"滚动时首次测量巨型 item"这个动作：Column 下所有行在进入组合时一次测完，
     // 滚动只是纯位移，因此不再出现"滚到长消息卡一下"。
     // 代价：失去虚拟化（Phase 3 用显示窗口分页兜）与 animateItem 入场动画（先只保功能正确）。
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalChatScrollState provides scrollState
+    ) {
     androidx.compose.foundation.layout.Column(
         modifier = modifier
             .verticalScroll(scrollState)
@@ -2534,6 +2538,7 @@ private fun MessageList(
                 )
             }
         }
+    }
     }
 }
 
