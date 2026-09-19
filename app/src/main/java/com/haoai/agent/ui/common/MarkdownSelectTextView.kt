@@ -13,35 +13,16 @@ import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.view.View
 import android.widget.TextView
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.absoluteOffset
-import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import android.text.Selection
 import android.text.Editable
 import java.text.BreakIterator
-import kotlin.math.max
-import kotlin.math.min
-
-/** 聊天列表滚动状态（供文本块拖选到屏幕边缘时 autoscroll）。MessageList 处 provide。 */
-val LocalChatScrollState = compositionLocalOf<ScrollState?> { null }
 
 /**
  * 段落级原生 TextView 选择渲染（2026-09-19）：
@@ -185,20 +166,6 @@ internal class GestureDrivenTextView(context: android.content.Context) : TextVie
     }
 
     /** 长按起点：选中 offset 所在词（平台 BreakIterator 词边界，与原生选词一致）。 */
-    fun hasActiveSelection(): Boolean {
-        val len = text?.length ?: 0
-        val s = selectionStart.coerceIn(0, len)
-        val e = selectionEnd.coerceIn(0, len)
-        return s < e
-    }
-
-    fun offsetAt(x: Float, y: Float): Int =
-        runCatching { getOffsetForPosition(x, y) }.getOrNull()?.coerceIn(0, text?.length ?: 0) ?: 0
-
-    fun haptic(kind: Int) {
-        performHapticFeedback(kind)
-    }
-
     fun selectWordAt(x: Float, y: Float): Pair<Int, Int> {
         val len = text?.length ?: 0
         if (len == 0) return 0 to 0
@@ -321,50 +288,9 @@ internal fun SelectableTextBlock(
     // 拖选锚点：长按选词的固定范围（扩选期间 start/end 的吸附基准）
     var anchorStart by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var anchorEnd by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    // 选区镜像（驱动把手渲染）
-    var selectionMirror by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Pair<Int, Int>?>(null) }
-    // 拖选进行中（驱动 autoscroll 协程）+ 手指屏幕 y（手指不动列表滚时独立跟踪）
-    var dragActive by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    var fingerScreenY by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(0f) }
-    var fingerBlockX by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(0f) }
-    val scrollState = LocalChatScrollState.current
-    val density = LocalDensity.current
-    val edgePx = with(density) { 88.dp.toPx() }
-    val maxSpeedPx = with(density) { 24f }
 
-    fun mirrorSel(s: Int, e: Int) {
-        selectionMirror = if (s == e) null else min(s, e) to max(s, e)
-    }
-
-    // autoscroll：拖选中手指接近屏幕上/下边缘时按距离加速滚动列表，
-    // 并用「手指屏幕 y - 块屏幕 y」实时换算块内坐标同步扩展选区
-    LaunchedEffect(dragActive, scrollState) {
-        if (!dragActive) return@LaunchedEffect
-        val loc = IntArray(2)
-        while (true) {
-            val tv = textView
-            val ss = scrollState
-            if (tv != null && ss != null && fingerScreenY > 0f) {
-                tv.getLocationOnScreen(loc)
-                val blockY = fingerScreenY - loc[1]
-                if (fingerScreenY < loc[1] + edgePx && ss.value > 0) {
-                    val speed = maxSpeedPx * ((loc[1] + edgePx - fingerScreenY) / edgePx).coerceIn(0.15f, 1f)
-                    ss.dispatchRawDelta(-speed)
-                    tv.extendSelectionTo(fingerBlockX + 40f, blockY, anchorStart, anchorEnd)
-                } else if (fingerScreenY > loc[1] + screenUsableHeightCompat() - edgePx && ss.value < ss.maxValue) {
-                    val speed = maxSpeedPx *
-                        ((fingerScreenY - (loc[1] + screenUsableHeightCompat() - edgePx)) / edgePx).coerceIn(0.15f, 1f)
-                    ss.dispatchRawDelta(speed)
-                    tv.extendSelectionTo(fingerBlockX + 40f, blockY, anchorStart, anchorEnd)
-                }
-            }
-            kotlinx.coroutines.delay(16)
-        }
-    }
-
-    androidx.compose.foundation.layout.Box(modifier) {
     AndroidView(
-        modifier = Modifier
+        modifier = modifier
             .pointerInput(openLink) {
                 // 点击：命中链接 span 则打开（movementMethod 在 DOWN 放行策略下不可达）
                 detectTapGestures(onTap = { pos ->
@@ -391,22 +317,16 @@ internal fun SelectableTextBlock(
                         val tv = textView ?: return@detectDragGesturesAfterLongPress
                         // 选区高亮/把手渲染依赖 focus——程序化 setSelection 前必须先拿焦点
                         tv.requestFocus()
-                        tv.haptic(android.view.HapticFeedbackConstants.LONG_PRESS)
                         val (s, e) = tv.selectWordAt(pos.x, pos.y)
                         anchorStart = s
                         anchorEnd = e
-                        mirrorSel(s, e)
                         lastPosition = pos
                         tv.parent?.requestDisallowInterceptTouchEvent(true)
                     },
                     onDrag = { change, dragAmount ->
                         val tv = textView ?: return@detectDragGesturesAfterLongPress
                         lastPosition += dragAmount
-                        val loc = IntArray(2)
-                        tv.getLocationOnScreen(loc)
-                        fingerScreenY = loc[1] + change.position.y
                         tv.extendSelectionTo(lastPosition.x, lastPosition.y, anchorStart, anchorEnd)
-                        mirrorSel(tv.selectionStart, tv.selectionEnd)
                         change.consume()
                     },
                     onDragEnd = {
@@ -438,124 +358,4 @@ internal fun SelectableTextBlock(
             if (tv.text.toString() != textSpannable.toString()) tv.setText(textSpannable, android.widget.TextView.BufferType.EDITABLE)
         }
     )
-
-        // 把手层：选区非空时渲染左右把手（可拖动微调）
-        val sel = selectionMirror
-        val tv = textView
-        if (sel != null && tv != null) {
-            HandleOverlay(
-                modifier = Modifier.matchParentSize(),
-                textView = tv,
-                selection = sel,
-                onSelectionChange = { s, e -> mirrorSel(s, e) },
-                showToolbar = {
-                    if (it.hasActiveSelection()) {
-                        it.requestFocus()
-                        it.showSelectionToolbar()
-                    }
-                }
-            )
-        }
-    }
 }
-
-/** 选区两端的把手渲染 + 拖动微调触摸区（另一端固定，可交叉）。 */
-@androidx.compose.runtime.Composable
-private fun HandleOverlay(
-    modifier: Modifier,
-    textView: GestureDrivenTextView,
-    selection: Pair<Int, Int>,
-    onSelectionChange: (Int, Int) -> Unit,
-    showToolbar: (GestureDrivenTextView) -> Unit
-) {
-    val radiusPx = with(LocalDensity.current) { 9.dp.toPx() }
-    val color = Color(0xFF34D399)
-
-    Box(modifier) {
-        Canvas(Modifier.matchParentSize()) {
-            val layout = textView.layout ?: return@Canvas
-            fun handlePoint(offset: Int): Offset {
-                val line = layout.getLineForOffset(offset)
-                return Offset(layout.getPrimaryHorizontal(offset), layout.getLineBottom(line).toFloat())
-            }
-            val pS = handlePoint(selection.first)
-            val pE = handlePoint(selection.second)
-            drawLine(color, Offset(pS.x, pS.y - radiusPx * 2.4f), Offset(pS.x, pS.y), strokeWidth = radiusPx / 2.4f)
-            drawLine(color, Offset(pE.x, pE.y - radiusPx * 2.4f), Offset(pE.x, pE.y), strokeWidth = radiusPx / 2.4f)
-            drawCircle(color, radius = radiusPx, center = Offset(pS.x, pS.y + radiusPx * 0.5f))
-            drawCircle(color, radius = radiusPx, center = Offset(pE.x, pE.y + radiusPx * 0.5f))
-        }
-        HandleTouchArea(
-            textView = textView,
-            offset = selection.first,
-            isStart = true,
-            radiusPx = radiusPx,
-            onSelectionChange = onSelectionChange,
-            showToolbar = showToolbar
-        )
-        HandleTouchArea(
-            textView = textView,
-            offset = selection.second,
-            isStart = false,
-            radiusPx = radiusPx,
-            onSelectionChange = onSelectionChange,
-            showToolbar = showToolbar
-        )
-    }
-}
-
-@androidx.compose.runtime.Composable
-private fun HandleTouchArea(
-    textView: GestureDrivenTextView,
-    offset: Int,
-    isStart: Boolean,
-    radiusPx: Float,
-    onSelectionChange: (Int, Int) -> Unit,
-    showToolbar: (GestureDrivenTextView) -> Unit
-) {
-    val layout = textView.layout ?: return
-    val line = layout.getLineForOffset(offset)
-    val cx = layout.getPrimaryHorizontal(offset)
-    val cy = layout.getLineBottom(line)
-    val touch = radiusPx * 3.4f
-    val dragKey = isStart to offset
-
-    Box(
-        Modifier
-            .absoluteOffset {
-                IntOffset((cx - touch / 2).toInt(), (cy - touch / 3).toInt())
-            }
-            .size(with(LocalDensity.current) { touch.toDp() })
-            .pointerInput(dragKey) {
-                detectDragGestures(
-                    onDragStart = {
-                        textView.haptic(android.view.HapticFeedbackConstants.CLOCK_TICK)
-                        textView.parent?.requestDisallowInterceptTouchEvent(true)
-                    },
-                    onDrag = { change, _ ->
-                        val layout2 = textView.layout ?: return@detectDragGestures
-                        val line2 = layout2.getLineForOffset(offset)
-                        val baseX = layout2.getPrimaryHorizontal(offset)
-                        val baseY = layout2.getLineBottom(line2)
-                        val target = Offset(
-                            baseX + (change.position.x - touch / 2),
-                            baseY + (change.position.y - touch / 3)
-                        )
-                        val newOffset = textView.offsetAt(target.x, target.y)
-                        val other = if (isStart) textView.selectionEnd else textView.selectionStart
-                        if (isStart) onSelectionChange(newOffset, other)
-                        else onSelectionChange(other, newOffset)
-                        change.consume()
-                    },
-                    onDragEnd = {
-                        showToolbar(textView)
-                    },
-                    onDragCancel = {
-                    }
-                )
-            }
-    )
-}
-
-private fun screenUsableHeightCompat(): Float =
-    android.content.res.Resources.getSystem().displayMetrics.heightPixels.toFloat()
