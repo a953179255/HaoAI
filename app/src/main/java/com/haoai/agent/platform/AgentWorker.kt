@@ -66,30 +66,19 @@ class AgentWorker(context: Context, params: WorkerParameters) :
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "⏰ ${task.name}"
         val st = container.settingsFlow.value
-        val engine = AgentEngine(
-            httpClient = container.clientFor(provider),
-            provider = provider,
-            apiKey = container.resolveApiKey(provider),
-            customPrompt = st.customPrompt,
-            policy = PolicyEngine(mode),
-            approve = { mode == PermissionMode.YOLO },
+        val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
+            costBreakerEnabled = st.costBreakerEnabled, unattended = true, st = st
+        )
+        // 走 EngineFactory：定时任务此前漏传 configMutator/delegateTarget/summarizeTarget，
+        // 导致 config_set 恒失败、无视觉/语音委派、压缩无备用链。
+        val engine = com.haoai.agent.agent.engine.EngineFactory.newEngine(
+            container = container,
             session = session,
-            persist = { container.sessionStore.save(session) },
-            backend = container.workspace.current,
-            appFilesDir = container.appFilesDir,
+            provider = provider,
+            interaction = com.haoai.agent.agent.engine.EngineFactory.unattended(mode),
             workspaceLabel = container.workspace.current?.displayName ?: "定时任务",
-            memoryBank = container.memoryBank,
-            memoryEnabled = st.memoryEnabled,
-            journal = container.journal,
-            okHttpClient = container.okHttpClient,
-            appContext = container.appContext,
-            backgroundScope = null,
-            // E5b 成本熔断总开关：无人值守默认 15 万/80 次硬限，开关关闭则完全不熔断
-            turnTokenCap = if (st.costBreakerEnabled) 150_000 else 0,
-            toolCallCap = if (st.costBreakerEnabled) 80 else 0,
-            vscreenEnabled = st.vscreenEnabled &&
-                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
-            vscreenBitrateKbps = st.vscreenBitrateKbps
+            turnTokenCap = tokenCap,
+            toolCallCap = callCap
         )
 
         var resultText: String? = null

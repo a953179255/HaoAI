@@ -58,19 +58,9 @@ class SubAgentTool(
 
         if (background) {
             if (controls == null) return ToolResult("后台模式不可用（缺少句柄接口）", true)
-            // P3 后台：挂在当前回合协程树上 launch——不阻塞主代理；回合结束随树取消
-            CoroutineScope(kotlinx.coroutines.currentCoroutineContext()).launch {
-                try {
-                    controls.byId(id)?.finalResult = runner.run(task, ctx, 1, 1, mode, id)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    // 终止/回合取消：句柄状态与部分结果已在 runSubAgent 内落账
-                } catch (e: Exception) {
-                    controls.byId(id)?.let { h ->
-                        h.state = "ERROR"
-                        h.finalResult = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${h.partialSummary()}"
-                    }
-                }
-            }
+            // 交回引擎的独立作用域启动：不能在本工具协程树上 launch，
+            // 否则 withContext 会等子协程、"立即返回"落空，并在 180s 工具超时被连坐取消。
+            controls.launchBackground(task, ctx, mode, id)
             return ToolResult(
                 "子代理 $id 已在后台启动（mode=$mode，任务：${task.take(80)}）。" +
                     "用 collect_agent(id='$id') 收取进度/结果；steer_agent/stop_agent 可干预。注意：回合结束时后台子代理会一并终止。"

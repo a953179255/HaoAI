@@ -132,6 +132,14 @@ class AgentEngine(
     private val activeSubagents = java.util.concurrent.ConcurrentHashMap<String, SubagentHandle>()
     private val subagentSeq = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /**
+     * P3 后台子代理作用域：独立协程树，不挂在工具调用的 withContext/withTimeout 上，
+     * 因此不会被 180s 工具超时连坐取消；回合结束时由 finishTurn 统一收口（工具描述已承诺"回合结束一并终止"）。
+     */
+    private val subagentScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
+
     /** P2 干预实现：stop=协作标志+取消协程；steer=消息入队下一轮消费。 */
     private val subagentControl = object : SubagentControl {
         override fun find(callId: String?, index: Int): SubagentHandle? =
@@ -155,6 +163,29 @@ class AgentEngine(
         }
 
         override fun newId(): String = "sa_${subagentSeq.incrementAndGet()}"
+
+        override fun launchBackground(
+            task: String,
+            parentCtx: com.haoai.agent.agent.tools.ToolContext,
+            mode: String,
+            id: String
+        ) {
+            subagentScope.launch {
+                try {
+                    // 结果由 runSubAgent 自己写进句柄 finalResult（:1205），此处不再重复赋值：
+                    // 写成 `activeSubagents[id]?.finalResult = runSubAgent(...)` 时 Kotlin 先算左侧，
+                    // 那一刻 id 还没注册 → 整条赋值是空操作，后台结果永远收不到。
+                    runSubAgent(task, parentCtx, 1, 1, mode, id)
+                } catch (ce: CancellationException) {
+                    // 终止/回合收口：句柄状态与部分结果已在 runSubAgent 内落账
+                } catch (e: Exception) {
+                    activeSubagents[id]?.let { h ->
+                        h.state = "ERROR"
+                        h.finalResult = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${h.partialSummary()}"
+                    }
+                }
+            }
+        }
     }
 
     /** 任务卡终止按钮通路：终止单个运行中的子代理（部分结果随 spawn 调用回收）。 */
@@ -524,8 +555,10 @@ class AgentEngine(
                 // E4b tools_enable 生效点：组变更后重建工具清单，下一轮请求即带新组
                 if (_groupsDirty) {
                     _groupsDirty = false
-                    tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet()) +
-                        handoffTool + toolsEnableTool
+                    // 与首轮 :319 同构：必须带上 subagentControl（否则 stop/steer/collect_agent 消失）
+                    // 与 delegateTools（否则委派视觉/转写工具消失）——曾漏传导致 tools_enable 后能力静默降级
+                    tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet(), subagentControl) +
+                        handoffTool + toolsEnableTool + delegateTools
                     apiTools = gateTools(tools.map { it.toApi() })
                     _toolsTokenCache = if (apiTools.isEmpty()) 0 else estimateToolsTokens(apiTools)
                 }
@@ -832,16 +865,16 @@ class AgentEngine(
                 ok = !result.isError, decision = decision ?: "direct"
             )
         }
-        // E5 连续工具失败熔断：达到阈值直接 break 并输出失败总结（不交给模型发挥）
-        if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
-            _loopFailedCap = true
-        }
-
         // E7b hooks：E3 失败升级 / 5.7 技能提示 / E7c 写文件校验统一在 after 阶段按列表序执行
         var finalResult = result
         for (h in hooks) {
             if (h.names.isNotEmpty() && call.name !in h.names) continue
             finalResult = h.after(call, args, callCtx, finalResult)
+        }
+        // E5 连续工具失败熔断：必须排在 hooks 之后判定——conFailCount 的自增发生在
+        // EscalationHook.after（EngineHooks.kt:90），先前置读会让阈值 8 拖到第 9 次失败才触发。
+        if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
+            _loopFailedCap = true
         }
         var storedContent = TextCap.middle(finalResult.content, STORED_CAP)
         val message = ChatMessage(
@@ -1493,6 +1526,14 @@ class AgentEngine(
      */
     private fun finishTurn(natural: Boolean) {
         if (depth != 0) return
+        // P3 后台子代理收口：只取消仍在跑的每个子代理 Job，不动 subagentScope 本身——
+        // 取消整个 scope 会让引擎实例的后续回合再也派不出后台子代理（launch 静默不执行）。
+        activeSubagents.values.forEach { h ->
+            if (h.state == "RUNNING") {
+                h.state = "CANCELLED"
+                h.job.cancel()
+            }
+        }
         runCatching {
             if (natural) finalizeTodos() else rollbackTodos()
         }

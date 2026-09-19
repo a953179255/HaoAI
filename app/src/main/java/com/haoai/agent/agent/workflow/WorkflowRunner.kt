@@ -145,32 +145,23 @@ object WorkflowRunner {
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "▶ ${def.name}"
         val st = container.settingsFlow.value
-        val engine = AgentEngine(
-            httpClient = container.clientFor(p),
-            provider = p,
-            apiKey = container.resolveApiKey(p),
-            customPrompt = st.customPrompt,
-            policy = PolicyEngine(mode),
-            approve = approveFor(mode),
+        val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
+            costBreakerEnabled = st.costBreakerEnabled, unattended = true, st = st
+        )
+        // 走 EngineFactory：工作流步骤此前同样漏传能力闭包（config_*/委派/压缩备用链）
+        val engine = com.haoai.agent.agent.engine.EngineFactory.newEngine(
+            container = container,
             session = session,
-            persist = { container.sessionStore.save(session) },
-            backend = container.workspace.current,
-            appFilesDir = container.appFilesDir,
+            provider = p,
+            interaction = com.haoai.agent.agent.engine.EngineFactory.Interaction(
+                policy = PolicyEngine(mode),
+                approve = approveFor(mode)
+            ),
             workspaceLabel = "工作空间",
-            memoryBank = container.memoryBank,
-            memoryEnabled = st.memoryEnabled,
-            journal = container.journal,
+            turnTokenCap = tokenCap,
+            toolCallCap = callCap,
             autoLearn = false, // 工作流辅助运行不自动沉淀记忆（防噪声）
-            reasoningEffort = st.reasoningEffort,
-            okHttpClient = container.okHttpClient,
-            appContext = container.appContext,
-            backgroundScope = container.applicationScope,
-            // E5b 成本熔断总开关：无人值守默认 15 万/80 次硬限，开关关闭则完全不熔断
-            turnTokenCap = if (st.costBreakerEnabled) 150_000 else 0,
-            toolCallCap = if (st.costBreakerEnabled) 80 else 0,
-            vscreenEnabled = st.vscreenEnabled && android.os.Build.VERSION.SDK_INT >= 30,
-            vscreenBitrateKbps = st.vscreenBitrateKbps,
-            budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) }
+            backgroundScope = container.applicationScope
         )
         var out = ""
         engine.runTurn(

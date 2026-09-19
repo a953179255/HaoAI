@@ -1370,97 +1370,32 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun buildEngine(s: StoredSession, provider: com.haoai.agent.data.ProviderConfig): AgentEngine {
         val st = c.settingsFlow.value
-        val identity = buildString {
-            if (st.agentName.isNotBlank()) {
-                append("## 你的身份\n")
-                append("- 你的名字：${st.agentName}（用户给你起的，请以此名字自称）\n")
-                if (st.soul.isNotBlank()) append("- 你的性格：${st.soul}\n")
-            }
-        }
-        return AgentEngine(
-            httpClient = c.clientFor(provider),
-            provider = provider,
-            apiKey = c.resolveApiKey(provider),
-            customPrompt = st.customPrompt,
-            policy = PolicyEngine(st.permissionMode),
-            approve = { req -> requestApproval(req) },
+        val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
+            costBreakerEnabled = st.costBreakerEnabled, unattended = false, st = st
+        )
+        // 能力闭包（config_*、memoryTarget/summarizeTarget/auxClientFor、delegateTarget）已收进 EngineFactory，
+        // 此处只留交互态：审批弹窗、用量上报、状态渲染、todo 刷新、Plan 门、插话队列。
+        return com.haoai.agent.agent.engine.EngineFactory.newEngine(
+            container = c,
             session = s,
-            persist = { c.sessionStore.save(s) },
-            backend = c.workspace.current,
-            appFilesDir = c.appFilesDir,
+            provider = provider,
+            interaction = com.haoai.agent.agent.engine.EngineFactory.Interaction(
+                policy = PolicyEngine(st.permissionMode),
+                approve = { req -> requestApproval(req) },
+                onUsage = { pin, pout -> addUsage(pin, pout) },
+                statusProvider = { buildStatusText() },
+                identity = com.haoai.agent.agent.engine.EngineFactory.identityOf(st.agentName, st.soul),
+                onToolChange = { refreshTodos() },
+                planGate = { _planMode.value },
+                interjectQueue = interjectQueue
+            ),
             workspaceLabel = workspaceName(),
-            memoryBank = c.memoryBank,
-            memoryEnabled = st.memoryEnabled,
-            journal = c.journal,
+            turnTokenCap = tokenCap,
+            toolCallCap = callCap,
             autoLearn = st.autoLearn,
-            reasoningEffort = st.reasoningEffort,
-            okHttpClient = c.okHttpClient,
-            appContext = c.appContext,
-            identity = identity,
-            onUsage = { pin, pout -> addUsage(pin, pout) },
             backgroundScope = c.applicationScope,
-            statusProvider = { buildStatusText() },
-            // C6/C1 统一配置入口：config_get 渲染镜像；config_set 合并补丁→桥严格校验→同步入库
-            configRender = { c.configBridge.render(c.settingsFlow.value) },
-            configPreview = { patch ->
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    runCatching { c.configBridge.previewPatch(patch) }.getOrElse {
-                        com.haoai.agent.data.ConfigFileBridge.Preview(err = it.message ?: "预检失败")
-                    }
-                }
-            },
-            configMutator = { args ->
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    runCatching {
-                        val (merged, err) = c.configBridge.mergePatch(args)
-                        if (err != null) {
-                            com.haoai.agent.agent.tools.ToolResult("配置被拒绝：$err（未生效）", true)
-                        } else {
-                            // applyFull 内部：快照 → 入库 → MCP/SSH 分区同步（含连接状态备注）
-                            val p = c.configBridge.applyFull(merged)
-                            if (!p.ok) com.haoai.agent.agent.tools.ToolResult(
-                                "配置被拒绝：${p.message}（未生效，修正后重新调用 config_set 即可）", true
-                            ) else com.haoai.agent.agent.tools.ToolResult("配置已应用：${p.message}")
-                        }
-                    }.getOrElse {
-                        com.haoai.agent.agent.tools.ToolResult("配置修改失败：${it.message}", true)
-                    }
-                }
-            },
-            onToolChange = { refreshTodos() },
-            vscreenEnabled = st.vscreenEnabled &&
-                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R,
-            vscreenBitrateKbps = st.vscreenBitrateKbps,
-            budgetHint = { com.haoai.agent.data.UsageLedger.budgetHint(st.dailyTokenBudgetK) },
-            // E5 单轮熔断：token 上限 + 圈数上限 + 连续工具失败阈值（设置-模型行为）
-            // 交互聊天用设置值（默认 25 万，0=不限）；无人值守（定时/工作流）走引擎默认 15 万硬限；
-            // 总开关关闭时交互聊天完全不熔断
-            turnTokenCap = if (st.costBreakerEnabled) st.turnTokenCap else 0,
-            toolCallCap = if (st.costBreakerEnabled) st.toolCallCap else 0,
             softBudgetWarn = st.costBreakerEnabled && st.softBudgetWarn,
-            toolFailCap = st.consecutiveToolFailCap,
-            memoryTarget = {
-                c.resolvePurposeTargets(st.memoryExtractProviderId, st.memoryExtractFallbackIds)
-                    .map { it.provider to it.apiKey }
-            },
-            summarizeTarget = {
-                c.resolvePurposeTargets(st.summarizeProviderId, st.summarizeFallbackIds)
-                    .map { it.provider to it.apiKey }
-            },
-            auxClientFor = { p -> c.clientFor(p) },
-            // P2 能力委派：主模型缺图像/音频模态时，delegate_to_vision/transcribe_audio
-            // 工具经此解析设置的委派模型（"pid" 或 "pid|modelId"）；空配置→引擎不注册工具
-            delegateTarget = { kind ->
-                val id = when (kind) {
-                    "vision" -> st.visionProviderId.trim()
-                    else -> st.asrProviderId.trim()
-                }
-                if (id.isBlank()) emptyList()
-                else c.resolvePurposeTargets(id, emptyList()).map { it.provider to it.apiKey }
-            },
-            planGate = { _planMode.value },
-            // E8 循环内插话队列：生成期间用户新指令入队，引擎在安全间隙合并注入
-            interjectQueue = interjectQueue
+            toolFailCap = st.consecutiveToolFailCap
         )
     }
 

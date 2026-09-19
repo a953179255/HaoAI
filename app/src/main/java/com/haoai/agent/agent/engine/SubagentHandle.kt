@@ -51,4 +51,17 @@ interface SubagentControl {
 
     /** P3 预分配句柄 id（后台派发需在 run 启动前把 id 交给调用方）。 */
     fun newId(): String
+
+    /**
+     * P3 后台派发：在**引擎自持的独立作用域**启动子代理。
+     * 必须由实现方提供，不能在工具里 CoroutineScope(currentCoroutineContext()).launch——
+     * 那样子协程挂在工具调用自己的协程树上，withContext 会等它完成，于是 background=true
+     * 既不会"立即返回"，还会在 180s 工具超时时被连坐取消。
+     */
+    fun launchBackground(
+        task: String,
+        parentCtx: com.haoai.agent.agent.tools.ToolContext,
+        mode: String,
+        id: String
+    )
 }
