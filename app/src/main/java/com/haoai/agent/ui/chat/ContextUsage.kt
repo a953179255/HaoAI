@@ -83,6 +83,59 @@ data class ContextUsage(
             toolContentCap: Int
         ): Int = messages.takeLast(maxHistory).sumOf { estimateMessageTokens(it, toolContentCap) }
 
+        /**
+         * 按 token 预算从尾部选出发给模型的历史窗口起点下标（替代「固定取最近 N 条」）。
+         *
+         * 为什么要按 token：80 条既可能是 3 万 token（短问答），也可能是 30 万 token
+         * （带大段工具结果），前者白白丢历史、后者直接撞 overflow。
+         * 返回值会前推到最近一条边界消息（通常是 user），避免把 assistant(tool_calls)+tool
+         * 结果拦腰切开（OpenAI 兼容端会以 400 拒绝孤儿 tool 消息）。
+         *
+         * 做成对类型无感的下标版本：引擎拿 StoredMessage、UI 面板拿 ChatMessage，
+         * 两边共用同一份选窗逻辑，不再各写一遍近似循环（口径漂移就是这么来的）。
+         *
+         * @param budgetTokens 历史可用预算；@param maxMessages 条数硬上限（估算失准时的保险）
+         * @return 窗口起点下标；至少返回一条的起点（单条就超预算也不返回空窗口）
+         */
+        fun <T> windowStart(
+            messages: List<T>,
+            tokenOf: (T) -> Int,
+            isBoundary: (T) -> Boolean,
+            budgetTokens: Int,
+            maxMessages: Int
+        ): Int {
+            if (messages.isEmpty()) return 0
+            val floor = (messages.size - maxMessages).coerceAtLeast(0)
+            var acc = 0
+            var from = messages.size
+            var i = messages.size - 1
+            while (i >= floor) {
+                val t = tokenOf(messages[i])
+                if (from < messages.size && acc + t > budgetTokens) break
+                acc += t
+                from = i
+                i--
+            }
+            val aligned = (from until messages.size).firstOrNull { isBoundary(messages[it]) }
+            return aligned ?: from
+        }
+
+        /** ChatMessage 便捷版：UI 面板用。 */
+        fun selectRequestWindow(
+            messages: List<ChatMessage>,
+            budgetTokens: Int,
+            maxMessages: Int,
+            toolContentCap: Int
+        ): List<ChatMessage> = messages.drop(
+            windowStart(
+                messages,
+                { estimateMessageTokens(it, toolContentCap) },
+                { it.role == ChatMessage.ROLE_USER },
+                budgetTokens,
+                maxMessages
+            )
+        )
+
         fun estimateSystemTokens(systemPrompt: String): Int =
             estimateStringTokens(systemPrompt).coerceAtLeast(SYSTEM_BASE_TOKENS)
 

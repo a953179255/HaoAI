@@ -1602,14 +1602,60 @@ class AgentEngine(
         )
     }
 
+    /** 聊天模型的真实上下文窗口（本地端侧固定按 32K 保守算）。 */
+    private fun chatContextWindow(): Int {
+        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
+        return if (isLocal) 32768 else provider.effectiveContextLength()
+    }
+
+    /**
+     * 还没被摘要覆盖的消息：压缩水位之后的那一段。
+     * 水位 id 找不到（旧会话没这个字段、或那条已被存储上限裁掉）时按整段处理，
+     * 宁可多发一点也不要静默丢掉上下文。
+     */
+    private fun uncompactedMessages(): List<com.haoai.agent.data.StoredMessage> {
+        val all = session.messages
+        val wid = session.compactedThroughId ?: return all
+        val idx = all.indexOfFirst { it.id == wid }
+        return if (idx < 0) all else all.drop(idx + 1)
+    }
+
+    /** 历史可用预算 = 窗口 − 系统提示 − 工具定义 − 已有摘要 − 单次回复上限 − 安全余量。 */
+    private fun historyBudgetTokens(): Int {
+        val (sysTok, toolsTok) = estimateOverheadTokens()
+        val summaryTok = com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
+            session.compactionSummary.orEmpty()
+        )
+        val reserved = provider.effectiveMaxTokens().coerceAtLeast(0)
+        return (chatContextWindow() - sysTok - toolsTok - summaryTok - reserved - HISTORY_MARGIN_TOKENS)
+            .coerceAtLeast(MIN_HISTORY_BUDGET_TOKENS)
+    }
+
+    /** 这一轮真正会发出去的历史：水位之后 + token 预算窗口 + 条数保险上限。 */
+    private fun requestHistoryWindow(): List<com.haoai.agent.data.StoredMessage> {
+        val msgs = uncompactedMessages()
+        val from = com.haoai.agent.ui.chat.ContextUsage.windowStart(
+            msgs,
+            { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP) },
+            { it.role == ChatMessage.ROLE_USER },
+            historyBudgetTokens(),
+            MAX_HISTORY
+        )
+        return msgs.drop(from)
+    }
+
+    /** 供 UI 上下文面板复用：按引擎真实请求口径算「这一轮历史会占多少 token」。
+     *  面板自己另算一份是当初口径漂移的根源，现在统一从这里取。 */
+    fun estimateSentHistoryTokens(): Int = requestHistoryWindow().sumOf {
+        com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
+    }
+
     private fun buildApiMessages(): List<ApiMessage> {
         val systemText = buildSystemText(markMemoryUse = true)
 
         // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
         // OpenAI 兼容端会以 400 拒绝孤儿 tool 消息（且重试复现，会话就此卡死）。
-        val history = session.messages.asReversed()
-            .take(MAX_HISTORY)
-            .asReversed()
+        val history = requestHistoryWindow().asReversed()
             .repairBlankCallIds()
             .pairSanitized()
             .mapNotNull { m ->
@@ -1719,11 +1765,11 @@ class AgentEngine(
         val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
         if (contextWindow <= 0) return
-        // 与 maybeCompact 相同口径：只算真实请求会发出的那个历史窗口
+        // 与 maybeCompact 同口径：还没被摘要覆盖的历史（按真实请求的截断方式算）+ 系统提示 + 工具定义
         val (sysTok, toolsTok) = estimateOverheadTokens()
-        val usedTokens = com.haoai.agent.ui.chat.ContextUsage.estimateRequestHistoryTokens(
-            msgs.map { it.toModel() }, MAX_HISTORY, REQ_CAP
-        ) + sysTok + toolsTok
+        val usedTokens = msgs.sumOf {
+            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
+        } + sysTok + toolsTok
         if (usedTokens.toFloat() / contextWindow < HANDOFF_NUDGE_RATIO) return
         appendAndNotify(
             ChatMessage(
@@ -1941,13 +1987,16 @@ class AgentEngine(
         val sp = chain.first().first
         val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
-        val chatMsgs = session.messages.map { it.toModel() }
+        val chatMsgs = uncompactedMessages().map { it.toModel() }
         // 用真实系统提示估算：记忆/日志/技能索引注入后可达 1 万+ tokens，
         // 旧的固定 3000 底数严重低估，导致压缩触发过晚、频繁撞 overflow
         val (sysTok, toolsTok) = estimateOverheadTokens()
-        val usedTokens = com.haoai.agent.ui.chat.ContextUsage.estimateRequestHistoryTokens(
-            chatMsgs, MAX_HISTORY, REQ_CAP
-        ) + sysTok + toolsTok
+        // 只算「还没被摘要覆盖」的历史，且按请求口径截断 tool 正文；
+        // 两者此前都不对：重复计入已压缩段 + 按 16000 字符全文估 → 高估近一个数量级，
+        // 真实上下文才用一成多就开压。
+        val usedTokens = chatMsgs.sumOf {
+            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it, REQ_CAP)
+        } + sysTok + toolsTok
         if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
 
         // E 压缩前记忆冲刷（openclaw memory-flush 同思路）：压缩会丢过程细节，而值得长期化的
@@ -1962,7 +2011,7 @@ class AgentEngine(
 
         val result = compactWithChain(prunedMsgs, chain)
         session.compactionSummary = result.summary
-        trimCompactedHistory()
+        markCompactedThrough()
         persist()
         onEvent(MessageAdded(ChatMessage(
             role = ChatMessage.ROLE_ASSISTANT,
@@ -2110,12 +2159,12 @@ class AgentEngine(
         val sp = chain.first().first
         val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
-        val chatMsgs = session.messages.map { it.toModel() }
+        val chatMsgs = uncompactedMessages().map { it.toModel() }
 
         // 强制压缩（点6：链式降级）
         val result = compactWithChain(chatMsgs, chain)
         session.compactionSummary = result.summary
-        trimCompactedHistory()
+        markCompactedThrough()
         persist()
         onEvent(MessageAdded(ChatMessage(
             role = ChatMessage.ROLE_ASSISTANT,
@@ -2125,37 +2174,56 @@ class AgentEngine(
     }
 
     /**
-     * 压缩成功后，把已被摘要覆盖的旧消息移出会话，仅保留 keepRecentTokens 内的尾部。
-     * 不裁剪的话请求仍是「摘要 + 全量历史」，token 只增不减，压缩与 overflow 恢复形同虚设。
+     * 压缩落账：把已被摘要代表的那段历史打上水位标记，**不物理删除**。
+     * 构建请求时只取水位之后的消息，所以 token 一样是减下来的；
+     * 但原文仍在会话里 —— 摘要写坏了可以重来，用户也不会看到历史凭空消失。
+     * （旧实现是从 messages 里 drop 掉，压过头就没有补救办法。）
      */
-    private fun trimCompactedHistory() {
+    private fun markCompactedThrough() {
         val msgs = session.messages
         val keep = compactionManager.keepRecentTokens()
         var acc = 0
         var keepFrom = msgs.size
         for (i in msgs.indices.reversed()) {
-            // 按真实请求口径算（tool 结果 REQ_CAP 截断）：这里若按落库全文（可达 STORED_CAP=16000）
-            // 估算，keepRecentTokens 预算会被提前耗尽，结果删掉的历史比设计值多得多。
+            // 按真实请求口径算（tool 结果 REQ_CAP 截断）：若按落库全文（可达 STORED_CAP=16000）估算，
+            // keepRecentTokens 预算会被提前耗尽，水位推进得比设计值更远。
             acc += com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(msgs[i].toModel(), REQ_CAP)
             if (acc > keep) break
             keepFrom = i
         }
-        // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰截断
+        // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰切开
         var start = keepFrom
         while (start < msgs.size && msgs[start].role != ChatMessage.ROLE_USER) start++
         if (start <= 0 || start >= msgs.size) return
-        val kept = msgs.drop(start)
-        msgs.clear()
-        msgs.addAll(kept)
+        session.compactedThroughId = msgs[start - 1].id
+        enforceStoredRetention()
+    }
+
+    /**
+     * 存储上限保险：不再物理删历史意味着会话文件会无界增长（手机端不可接受）。
+     * 只裁水位**之前**的最旧消息 —— 它们已由摘要代表，且远超回查所需的窗口；
+     * 水位之后的一个字都不动。
+     */
+    private fun enforceStoredRetention() {
+        val msgs = session.messages
+        if (msgs.size <= SESSION_MAX_MESSAGES) return
+        val watermarkIdx = session.compactedThroughId?.let { wid ->
+            msgs.indexOfFirst { it.id == wid }
+        } ?: -1
+        if (watermarkIdx <= 0) return
+        val over = (msgs.size - SESSION_MAX_MESSAGES).coerceAtMost(watermarkIdx)
+        if (over > 0) msgs.subList(0, over).clear()
     }
 
     // ── 手动压缩（/compact 命令） ────────────────────────────────────
 
     suspend fun compactNow(): String? {
         val chain = summarizerChain()
-        val chatMsgs = session.messages.map { it.toModel() }
+        val chatMsgs = uncompactedMessages().map { it.toModel() }
         val result = compactWithChain(chatMsgs, chain)
         session.compactionSummary = result.summary
+        // 手动 /compact 以前只写摘要、不推水位：摘要 + 全量历史一起发出去，token 只增不减
+        markCompactedThrough()
         persist()
         return result.summary
     }
@@ -2233,6 +2301,15 @@ class AgentEngine(
 
         /** P3-B research 子代理的检索硬预算（web_search + web_fetch 合计次数），依据见 RetrievalBudget。 */
         const val SUB_RETRIEVAL_CAP = 8
+
+        /** 历史预算的安全余量：估算永远不如供应商准，留出余量避免按窗口边界发请求撞 overflow。 */
+        const val HISTORY_MARGIN_TOKENS = 4096
+
+        /** 历史预算下限：小窗口模型（端侧 4K/8K）也要能带上最近几轮，否则任务无法继续。 */
+        const val MIN_HISTORY_BUDGET_TOKENS = 2048
+
+        /** 会话存储条数上限保险：压缩不再删历史，靠这个数兜住会话文件无界增长（只裁水位之前）。 */
+        const val SESSION_MAX_MESSAGES = 2000
         /** E6 并行安全白名单：纯读无全局状态副作用；新增成员必须逐个评审（a11y/相机/定位永不入列）。 */
         val PARALLEL_SAFE = setOf(
             "read", "grep", "glob", "web_fetch", "web_search", "memory",

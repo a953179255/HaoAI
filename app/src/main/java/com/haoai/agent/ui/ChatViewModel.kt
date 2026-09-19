@@ -1533,14 +1533,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     // 回复上限（max_tokens）占用窗口，从"剩余可用"中扣除
                     val (sysTok, injTok, toolsTok) = engine.estimateOverheadBreakdown()
                     val summaryTok = ContextUsage.estimateStringTokens(s.compactionSummary ?: "")
-                    val histTok = messagesSnapshot
-                        .takeLast(com.haoai.agent.agent.engine.AgentEngine.MAX_HISTORY)
-                        .sumOf {
-                            ContextUsage.estimateMessageTokens(
-                                it.toModel(),
-                                toolContentCap = com.haoai.agent.agent.engine.AgentEngine.REQ_CAP
-                            )
-                        }
+                    // 历史窗口口径直接问引擎：它才知道压缩水位、token 预算与 REQ_CAP 截断。
+                    // 面板此前自己 takeLast(MAX_HISTORY) 算一份，是"数字与实发不符"的漂移源头。
+                    val histTok = engine.estimateSentHistoryTokens()
                     val reservedTok = provider.effectiveMaxTokens().coerceAtLeast(0)
                     com.haoai.agent.ui.chat.ContextUsage(
                         usedTokens = sysTok + injTok + toolsTok + summaryTok + histTok,

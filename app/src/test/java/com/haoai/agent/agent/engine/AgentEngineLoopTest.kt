@@ -1,5 +1,6 @@
 package com.haoai.agent.agent.engine
 
+import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.model.ToolCallData
 import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.agent.policy.PolicyEngine
@@ -65,12 +66,14 @@ class AgentEngineLoopTest {
         client: ProviderClient,
         dir: File,
         toolFailCap: Int = 8,
-        session: StoredSession = StoredSession.create(null)
+        session: StoredSession = StoredSession.create(null),
+        contextLength: Int = 0
     ): AgentEngine =
         AgentEngine(
             httpClient = client,
             provider = ProviderConfig(
-                id = "fake", name = "fake", baseUrl = "http://127.0.0.1:1/v1", model = "fake-model"
+                id = "fake", name = "fake", baseUrl = "http://127.0.0.1:1/v1",
+                model = "fake-model", contextLength = contextLength
             ),
             apiKey = "fake-key",
             customPrompt = "",
@@ -231,6 +234,59 @@ class AgentEngineLoopTest {
             threw = e
         }
         assertTrue("目录不可写时快照必须抛出，交给引擎显式标注不可回滚", threw != null)
+    }
+
+    /**
+     * 造一段历史。chars 控制单条大小：
+     * 默认 4000 字符（40 条 ≈ 4 万 token，足够让 keepRecentTokens=18000 的水位推进）；
+     * 想单独验水位时把 chars 调小，让 token 预算远大于历史，排除选窗逻辑的干扰。
+     */
+    private fun longSession(n: Int = 40, chars: Int = 4000): StoredSession {
+        val s = StoredSession.create(null)
+        repeat(n) { i ->
+            s.messages.add(
+                com.haoai.agent.data.StoredMessage(
+                    role = if (i % 2 == 0) ChatMessage.ROLE_USER else ChatMessage.ROLE_ASSISTANT,
+                    content = "MSG$i|" + "x".repeat(chars)
+                )
+            )
+        }
+        return s
+    }
+
+    /**
+     * 压缩必须是「追加式」：给会话打水位标记，而不是把旧消息物理删掉。
+     * 旧实现压完直接 msgs.clear() 重写，摘要一旦写坏或压过头就没有任何补救办法，
+     * 用户在聊天页也会看到历史凭空消失。
+     */
+    @Test
+    fun compactionMarksWatermarkInsteadOfDeletingHistory() = runBlocking {
+        val s = longSession()
+        val client = FakeClient(listOf(saying("这是一段压缩摘要")))
+        val before = s.messages.size
+        val summary = engine(client, tmpDir(), session = s).compactNow()
+        assertTrue("应生成摘要", !summary.isNullOrBlank())
+        assertEquals("压缩后原文必须仍在会话里（可回查、可重压）", before, s.messages.size)
+        org.junit.Assert.assertNotNull("水位标记应推进到被摘要覆盖的最后一句", s.compactedThroughId)
+        assertTrue("水位应落在真实存在的消息上", s.messages.any { it.id == s.compactedThroughId })
+    }
+
+    /** 水位之前的历史不再进请求；水位之后照常发。 */
+    @Test
+    fun requestSkipsHistoryBeforeWatermark() = runBlocking {
+        // chars 取小：让 token 预算（≈18 万）远大于整段历史（约 6 千），
+        // 这样"发几条"只可能由水位决定，排除选窗预算的干扰。
+        val s = longSession(chars = 600)
+        s.compactedThroughId = s.messages[29].id   // 前 30 条视为已被摘要覆盖
+        val client = FakeClient(listOf(saying("完成")))
+        engine(client, tmpDir(), session = s, contextLength = 200_000).runTurn("继续", {}, {})
+        // 主聊天那一轮 = 工具面最全的那次请求。按系统提示前缀挑会挑错：
+        // 压缩前的记忆冲刷也带同一份系统提示，但它只挂 memory 工具，且按设计带整段历史做提取。
+        val chat = client.requests.maxByOrNull { it.second.size }!!.first
+        val sent = chat.joinToString("\n") { it.content.orEmpty() }
+        val markers = (0..39).map { "MSG$it" }.filter { sent.contains("$it|") }
+        assertEquals("只应发水位之后的 10 条：$markers", (30..39).map { "MSG$it" }, markers)
+        assertTrue("水位之后的 MSG39 必须照发", sent.contains("MSG39|"))
     }
 
     /** 预置调研技能是索引注入的一部分，触发词漏了「作文/报告」就永远不会被选中。 */

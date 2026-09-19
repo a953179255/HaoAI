@@ -44,8 +44,17 @@ data class StoredSession(
     var workspaceUri: String? = null,
     /** 回收站：>0 表示已删除（该时间戳），7 天后自动清理；0=正常会话。 */
     var deletedAt: Long = 0,
-    /** 上下文压缩摘要（CompactionManager 生成）。非空时表示历史已被压缩。 */
+    /** 上下文压缩摘要（CompactionManager 生成）。非空时表示更早的历史已被摘进这段摘要。 */
     var compactionSummary: String? = null,
+    /**
+     * 压缩水位：这条消息**及其之前**的内容已由 [compactionSummary] 覆盖，构建请求时不再发送。
+     *
+     * 为什么用水位而不是把旧消息删掉：原先压缩会从 messages 里物理移除旧消息，
+     * 于是摘要写错了/压过头就没有补救办法，用户在聊天页也会看到历史凭空消失。
+     * 现在原文全部留在会话里（可回查、可再压、可导出），只是不进请求。
+     * null=旧会话未压缩过，按整段历史处理。
+     */
+    var compactedThroughId: String? = null,
     /** 智能标题已生成过（只生成一次，避免每轮都花 token）。 */
     var titleAuto: Boolean = false,
     /** 置顶：列表排序最前（抽屉/全部会话页共用）。 */

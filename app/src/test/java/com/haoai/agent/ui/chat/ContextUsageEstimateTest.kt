@@ -46,6 +46,48 @@ class ContextUsageEstimateTest {
         assertEquals(expected, ContextUsage.estimateMessageTokens(msg, 4_000))
     }
 
+    /** 选窗必须落在用户消息边界上：不能把 assistant(tool_calls)+tool 序列拦腰切开。 */
+    @Test
+    fun windowStartAlignsToBoundary() {
+        val msgs = buildList {
+            add(userMsg("边界0"))
+            repeat(6) { add(toolMsg("c$it", "y".repeat(4000))) }   // 每条约 1000 token
+        }
+        val start = ContextUsage.windowStart(
+            msgs,
+            { ContextUsage.estimateMessageTokens(it, 4_000) },
+            { it.role == ChatMessage.ROLE_USER },
+            budgetTokens = 2500,
+            maxMessages = 80
+        )
+        // 前推只在「后面还有边界消息」时发生；没有就停在原起点——宁可发中段也不返回空历史。
+        // 每条工具结果约 1004 token，预算 2500 → 只容得下尾部 2 条 → 起点 5，其后没有 user 可对齐。
+        assertEquals("预算只够 2 条时，无边界可前推则保持原起点", 5, start)
+        val secondBoundary = buildList {
+            add(userMsg("旧边界")); add(toolMsg("a", "y".repeat(4000)))
+            add(userMsg("新边界")); add(toolMsg("b", "y".repeat(4000)))
+        }
+        val s2 = ContextUsage.windowStart(
+            secondBoundary,
+            { ContextUsage.estimateMessageTokens(it, 4_000) },
+            { it.role == ChatMessage.ROLE_USER },
+            budgetTokens = 1100,
+            maxMessages = 80
+        )
+        assertEquals("应选中最后一个用户边界开始的段落", 2, s2)
+    }
+
+    /** token 预算说话，条数只是保险：短消息可以多发、长消息必须少发。 */
+    @Test
+    fun budgetDrivesSelectionNotMessageCount() {
+        val shorts = List(200) { userMsg("短句 $it") }
+        assertEquals(120, ContextUsage.windowStart(shorts, { 10 }, { true }, 1200, 80))
+        val few = ContextUsage.selectRequestWindow(shorts, 1_000_000, 80, 4_000)
+        assertEquals("预算充足时受条数上限约束", 80, few.size)
+        val tight = ContextUsage.selectRequestWindow(shorts, 20, 80, 4_000)
+        assertTrue("预算极紧时也必须至少发一条，不能返回空历史", tight.isNotEmpty())
+    }
+
     /** 短会话（未越过窗口）两种口径应当只差截断，不该把历史整段丢掉。 */
     @Test
     fun shortSessionIsNotTruncatedByWindow() {
