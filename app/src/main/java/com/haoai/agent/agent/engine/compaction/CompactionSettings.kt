@@ -16,14 +16,8 @@ data class CompactionSettings(
     val summaryBudgetMax: Int = 8000,
     /** 压缩冷却时间（毫秒）。防止压缩失败后立即重试。 */
     val cooldownMs: Long = 30_000L,
-    /** 压缩后若利用率仍超过此比例，视为压缩无效。 */
-    val ineffectiveThreshold: Float = 0.9f,
     /** 工具输出预修剪：保留每个工具结果的前 N 个字符。0 = 不修剪。 */
-    val toolOutputKeepChars: Int = 500,
-    /** 最大压缩重试次数（overflow 恢复时）。 */
-    val maxOverflowRetries: Int = 1,
-    /** 压缩请求自身的 token 预算上限。防止压缩请求本身太大。 */
-    val compactionRequestBudget: Int = 8000
+    val toolOutputKeepChars: Int = 500
 ) {
     fun summaryBudget(contextWindow: Int): Int =
         (contextWindow * summaryBudgetRatio).toInt().coerceIn(summaryBudgetMin, summaryBudgetMax)

@@ -35,8 +35,7 @@ object EngineFactory {
         val statusProvider: () -> String = { "" },
         val identity: String = "",
         val onToolChange: (() -> Unit)? = null,
-        val planGate: () -> Boolean = { false },
-        val interjectQueue: java.util.concurrent.ConcurrentLinkedQueue<String>? = null
+        val planGate: () -> Boolean = { false }
     )
 
     /** 交互身份块：Agent 名字与性格，由设置在 VM 侧渲染成提示词片段。 */
@@ -141,8 +140,7 @@ object EngineFactory {
                 if (id.isBlank()) emptyList()
                 else container.resolvePurposeTargets(id, emptyList()).map { it.provider to it.apiKey }
             },
-            planGate = interaction.planGate,
-            interjectQueue = interaction.interjectQueue
+            planGate = interaction.planGate
         )
     }
 

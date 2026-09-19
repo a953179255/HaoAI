@@ -115,9 +115,7 @@ class AgentEngine(
     /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒（不中断循环）。 */
     private val softBudgetWarn: Boolean = true,
     /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
-    private val toolFailCap: Int = 8,
-    /** E8 循环内插话队列：生成期间用户新指令入队，引擎在安全间隙合并注入。 */
-    private val interjectQueue: java.util.concurrent.ConcurrentLinkedQueue<String>? = null
+    private val toolFailCap: Int = 8
 ) {
 
     private val todoStore = TodoStore(appFilesDir)
@@ -391,8 +389,7 @@ class AgentEngine(
                 var calls: List<ToolCallData> = emptyList()
 
                 // v7：循环内插话已升级为「排队任务」语义（ChatViewModel 全权管理队列）——
-                // 引擎不再在间隙 A 消费队列；排队消息在回合正常结束后由 VM 自动作为
-                // 新任务执行（运行中排队语义）。保留队列引用仅为兼容旧构造签名。
+                // 引擎不再在间隙消费队列，排队消息在回合正常结束后由 VM 作为新任务执行。
 
                 // E9 todo 变更检测：本轮执行过 todo 工具 → 下一轮注入进度行
                 val todoNow = todoStore.load(session.id)
@@ -731,11 +728,11 @@ class AgentEngine(
         } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
             throw ce
         } catch (e: Exception) {
-            // 原先只打一行 logcat 就照常执行改动：用户以为能回滚，其实底片没拍到
-            //（且真机 Flyme 上 logcat 被全量抑制，这行日志用户根本看不到）。
-            // 保持不阻断（可用性优先），但把风险写进工具结果，见下方 finishCall 前的追加。
+            // fail-closed：before hook（写前快照）没做成就不执行改动。旧行为是打一行 logcat 照常写，
+            // 用户以为改错了能 /undo，其实底片没拍到；而真机 Flyme 上 logcat 被全量抑制，那行日志谁也看不见。
+            // 快照是回滚的唯一依据，它失败时"停下报错"比"悄悄失去回滚能力"更可接受。
             hookFailure = e.message ?: e.javaClass.simpleName
-            android.util.Log.w("HaoEngine", "hook before failed: ${e.message}")
+            android.util.Log.w("HaoEngine", "hook before failed, change blocked: $hookFailure")
         }
 
         // bash 拦截检查（正则扫描+递归切分，非廉价）：结果存局部变量避免同一命令查两次。
@@ -747,6 +744,18 @@ class AgentEngine(
             if (call.name == "bash") policy.checkShellBlocked(args.optString("command")) else null
 
         when {
+            // fail-closed：before hook 没做成（如写前快照落不下去）就不执行改动，
+            // 免得留下"以为能回滚其实不能"的改动。
+            hookFailure != null -> {
+                result = ToolResult(
+                    "已取消本次 ${call.name}：执行前检查（写前快照）失败（$hookFailure），" +
+                        "继续改动将无法回滚。请清理应用存储空间或检查权限后重试。",
+                    true
+                )
+                finalState = ToolRunState.ERROR
+                decision = "hook-error"
+            }
+
             // hook 已处理（如 Plan 拦截的等价 case），跳过工具执行
             handledByHook -> Unit
 
@@ -811,16 +820,14 @@ class AgentEngine(
                 if (result.isError) finalState = ToolRunState.ERROR
             }
         }
-        // 记录签名供重放保护比对（仅非 READ 工具参与判定）
-        if (policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ) {
+        // 记录签名供重放保护比对（仅非 READ 工具参与判定）。
+        // fail-closed 拦下的那次不算"执行过"：否则用户清出空间后原样重试会被判成重放，
+        // 直接返回那条陈旧错误、永远没机会真正写。
+        if (hookFailure == null &&
+            policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ
+        ) {
             lastExecutedSig = replaySig
             lastExecutedResult = result
-        }
-        hookFailure?.let {
-            result = result.copy(
-                content = result.content + "\n\n⚠ 执行前检查（写前快照等）未成功：$it。" +
-                    "本次改动可能无法通过回滚恢复，必要时请手动确认结果。"
-            )
         }
         finishCall(call, args, callCtx, result, finalState, toolStartMs, decision, onEvent)
     }

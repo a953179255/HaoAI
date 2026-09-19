@@ -120,48 +120,9 @@ data class ContextUsage(
             return aligned ?: from
         }
 
-        /** ChatMessage 便捷版：UI 面板用。 */
-        fun selectRequestWindow(
-            messages: List<ChatMessage>,
-            budgetTokens: Int,
-            maxMessages: Int,
-            toolContentCap: Int
-        ): List<ChatMessage> = messages.drop(
-            windowStart(
-                messages,
-                { estimateMessageTokens(it, toolContentCap) },
-                { it.role == ChatMessage.ROLE_USER },
-                budgetTokens,
-                maxMessages
-            )
-        )
-
         fun estimateSystemTokens(systemPrompt: String): Int =
             estimateStringTokens(systemPrompt).coerceAtLeast(SYSTEM_BASE_TOKENS)
 
         fun estimateToolsTokens(toolsJson: String): Int = estimateStringTokens(toolsJson)
-
-        /**
-         * 旧的整体估算入口，目前无调用方。
-         * 注意它按「全量消息 + 未截断 tool 正文」算，与真实请求不同口径；
-         * 需要"会发出去多少"请用 [estimateRequestHistoryTokens]，别复用这里。
-         */
-        fun calculate(
-            messages: List<ChatMessage>,
-            systemPrompt: String,
-            toolsJson: String,
-            contextWindow: Int
-        ): ContextUsage {
-            val sysTok = estimateSystemTokens(systemPrompt)
-            val toolsTok = estimateToolsTokens(toolsJson)
-            val histTok = messages.sumOf { estimateMessageTokens(it) }
-            return ContextUsage(
-                usedTokens = sysTok + toolsTok + histTok,
-                totalTokens = contextWindow,
-                systemTokens = sysTok,
-                toolsTokens = toolsTok,
-                historyTokens = histTok
-            )
-        }
     }
 }

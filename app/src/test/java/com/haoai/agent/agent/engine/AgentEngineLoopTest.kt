@@ -335,6 +335,53 @@ class AgentEngineLoopTest {
         )
     }
 
+    /**
+     * fail-closed：写前快照打不出来时，改动不得执行。
+     * 造失败的方式是把 appFilesDir/snapshots 占成一个普通文件（跨平台确定失败，
+     * 不像 setWritable(false) 在 Windows 上会被忽略）。
+     */
+    @Test
+    fun blockedSnapshotPreventsTheWrite() = runBlocking {
+        val dir = tmpDir()
+        File(dir, "snapshots").writeText("我是文件，不是目录")
+        val s = StoredSession.create(null)
+        val client = FakeClient(
+            listOf(
+                callingTool("write", "w1", """{"path":"a.txt","content":"hi"}"""),
+                saying("收尾")
+            )
+        )
+        engine(client, dir, session = s).runTurn("写个文件", {}, {})
+        val toolMsg = s.messages.firstOrNull { it.role == "tool" && it.toolName == "write" }
+        assertTrue("应被 fail-closed 拦下", toolMsg != null && (toolMsg.content ?: "").contains("已取消本次 write"))
+        assertTrue("拦下时要说明原因", (toolMsg!!.content ?: "").contains("无法回滚"))
+        assertTrue("文件不该被写出来", !File(dir, "a.txt").exists())
+    }
+
+    /**
+     * 对偶锁：快照正常时 write 绝不能被 fail-closed 拦掉。
+     * （backend=null 会让工具本身报"无工作区"，这里只断言没走到取消分支。）
+     */
+    @Test
+    fun normalWriteIsNotBlockedWhenSnapshotWorks() = runBlocking {
+        val dir = tmpDir()
+        val s = StoredSession.create(null)
+        val client = FakeClient(
+            listOf(
+                callingTool("write", "w1", """{"path":"a.txt","content":"hi"}"""),
+                saying("收尾")
+            )
+        )
+        engine(client, dir, session = s).runTurn("写个文件", {}, {})
+        val toolMsg = s.messages.firstOrNull { it.role == "tool" && it.toolName == "write" }
+        org.junit.Assert.assertNotNull("write 应有结果落库", toolMsg)
+        assertTrue(
+            "快照目录可正常创建时不该被拦：${toolMsg?.content?.take(80)}",
+            !(toolMsg!!.content ?: "").contains("已取消本次")
+        )
+        assertTrue("快照确实拍到了", File(dir, "snapshots/${s.id}").listFiles()?.isNotEmpty() == true)
+    }
+
     /** 预置调研技能是索引注入的一部分，触发词漏了「作文/报告」就永远不会被选中。 */
     @Test
     fun bundledResearchSkillCarriesWritingTrigger() {

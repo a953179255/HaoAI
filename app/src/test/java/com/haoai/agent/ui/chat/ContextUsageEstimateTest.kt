@@ -81,11 +81,15 @@ class ContextUsageEstimateTest {
     @Test
     fun budgetDrivesSelectionNotMessageCount() {
         val shorts = List(200) { userMsg("短句 $it") }
-        assertEquals(120, ContextUsage.windowStart(shorts, { 10 }, { true }, 1200, 80))
-        val few = ContextUsage.selectRequestWindow(shorts, 1_000_000, 80, 4_000)
-        assertEquals("预算充足时受条数上限约束", 80, few.size)
-        val tight = ContextUsage.selectRequestWindow(shorts, 20, 80, 4_000)
-        assertTrue("预算极紧时也必须至少发一条，不能返回空历史", tight.isNotEmpty())
+        fun start(budget: Int, max: Int) = ContextUsage.windowStart(
+            shorts, { ContextUsage.estimateMessageTokens(it, 4_000) }, { true }, budget, max
+        )
+        assertEquals("预算充足时受条数上限约束", 120, start(1_000_000, 80))
+        // 预算用被测函数自身导出，别手算 token（CJK 混合长度容易差一个）
+        val one = ContextUsage.estimateMessageTokens(shorts.last(), 4_000)
+        assertEquals("预算刚好一条时只留最后一条", shorts.size - 1, start(one, 80))
+        assertEquals("两条预算就带上倒数第二条", shorts.size - 2, start(one * 2, 80))
+        assertTrue("预算极紧也不返回空历史", start(1, 80) < shorts.size)
     }
 
     /** 短会话（未越过窗口）两种口径应当只差截断，不该把历史整段丢掉。 */

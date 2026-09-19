@@ -1388,8 +1388,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 statusProvider = { buildStatusText() },
                 identity = com.haoai.agent.agent.engine.EngineFactory.identityOf(st.agentName, st.soul),
                 onToolChange = { refreshTodos() },
-                planGate = { _planMode.value },
-                interjectQueue = interjectQueue
+                planGate = { _planMode.value }
             ),
             workspaceLabel = workspaceName(),
             turnTokenCap = tokenCap,
