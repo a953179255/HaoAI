@@ -9,7 +9,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 class CompactionManager(
     private val client: com.haoai.agent.agent.provider.ProviderClient,
-    private val settings: CompactionSettings = CompactionSettings()
+    private val settings: CompactionSettings = CompactionSettings(),
+    /** 真实请求的历史窗口与 tool 截断口径（由引擎传 MAX_HISTORY / REQ_CAP），供节省量估算对齐。 */
+    private val maxHistory: Int = Int.MAX_VALUE,
+    private val toolContentCap: Int = 0
 ) {
     private var lastCompactionTime = 0L
 
@@ -143,9 +146,11 @@ class CompactionManager(
     }
 
     private fun estimateSavedTokens(messages: List<ChatMessage>, contextWindow: Int, summaryBudget: Int): Int {
-        val currentTokens = messages.sumOf {
-            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it)
-        }
+        // 只按真实请求口径估算，否则「释放约 N tokens」这条系统消息会把高估的全量历史
+        // 当成节省量报给用户，数字没有意义。
+        val currentTokens = com.haoai.agent.ui.chat.ContextUsage.estimateRequestHistoryTokens(
+            messages, maxHistory, toolContentCap
+        )
         return (currentTokens - summaryBudget).coerceAtLeast(0)
     }
 }

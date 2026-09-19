@@ -3,6 +3,7 @@ package com.haoai.agent.ui.chat
 import androidx.compose.ui.graphics.Color
 import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.model.ToolCallData
+import com.haoai.agent.agent.tools.TextCap
 
 data class ContextUsage(
     val usedTokens: Int,
@@ -48,12 +49,13 @@ data class ContextUsage(
          * @param toolContentCap >0 时按真实请求口径截断 tool 结果内容
          * （AgentEngine.buildApiMessages 对每条 tool 消息做 TextCap.middle(REQ_CAP)），
          * 否则按全文估算——长工具循环会话会显著高估。
+         * 截断必须走同一个 TextCap.middle：head65%/tail25% + 省略标记，自己 take() 会算少。
          */
         fun estimateMessageTokens(msg: ChatMessage, toolContentCap: Int = 0): Int {
             var tokens = MSG_OVERHEAD
             val content =
                 if (toolContentCap > 0 && msg.role == ChatMessage.ROLE_TOOL && msg.content.length > toolContentCap)
-                    msg.content.take(toolContentCap)
+                    TextCap.middle(msg.content, toolContentCap)
                 else msg.content
             tokens += estimateStringTokens(content)
             for (tc in msg.toolCalls) {
@@ -64,11 +66,33 @@ data class ContextUsage(
             return tokens
         }
 
+        /**
+         * 「真实请求会发出去的那部分历史」的 token 估算：只算最近 [maxHistory] 条，
+         * 且 tool 结果按 [toolContentCap] 截断后再算。
+         *
+         * 为什么要有它：AgentEngine.buildApiMessages 发的就是这个窗口，
+         * 但压缩触发（maybeCompact）、handoff 催办、压缩后裁剪（trimCompactedHistory）
+         * 三处此前都在拿「全量消息 + 未截断的 STORED_CAP 正文」估算。一个 100+ 条、
+         * 每条工具结果上万的会话里，这个数能高估好几倍，直接表现是
+         * **远未到窗口就提前压缩**（答得比应有的浅）与**过度裁剪历史**。
+         * 统一走这里，四个消费点（含 UI 面板）口径不再各写一遍。
+         */
+        fun estimateRequestHistoryTokens(
+            messages: List<ChatMessage>,
+            maxHistory: Int,
+            toolContentCap: Int
+        ): Int = messages.takeLast(maxHistory).sumOf { estimateMessageTokens(it, toolContentCap) }
+
         fun estimateSystemTokens(systemPrompt: String): Int =
             estimateStringTokens(systemPrompt).coerceAtLeast(SYSTEM_BASE_TOKENS)
 
         fun estimateToolsTokens(toolsJson: String): Int = estimateStringTokens(toolsJson)
 
+        /**
+         * 旧的整体估算入口，目前无调用方。
+         * 注意它按「全量消息 + 未截断 tool 正文」算，与真实请求不同口径；
+         * 需要"会发出去多少"请用 [estimateRequestHistoryTokens]，别复用这里。
+         */
         fun calculate(
             messages: List<ChatMessage>,
             systemPrompt: String,

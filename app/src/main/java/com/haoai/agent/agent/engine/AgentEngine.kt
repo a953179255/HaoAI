@@ -221,7 +221,11 @@ class AgentEngine(
     var planIntercepted: Boolean = false
         private set
 
-    private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(httpClient).apply {
+    private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(
+        httpClient,
+        maxHistory = MAX_HISTORY,
+        toolContentCap = REQ_CAP
+    ).apply {
         // 5.4 账本：压缩摘要调用记账（purpose=compact）
         onLlmUsage = { pin, pout, ok ->
             com.haoai.agent.data.UsageLedger.add(
@@ -1715,11 +1719,11 @@ class AgentEngine(
         val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
         if (contextWindow <= 0) return
-        // 与 maybeCompact 相同口径：历史 + 系统提示 + 工具定义的真实占用
+        // 与 maybeCompact 相同口径：只算真实请求会发出的那个历史窗口
         val (sysTok, toolsTok) = estimateOverheadTokens()
-        val usedTokens = msgs.sumOf {
-            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel())
-        } + sysTok + toolsTok
+        val usedTokens = com.haoai.agent.ui.chat.ContextUsage.estimateRequestHistoryTokens(
+            msgs.map { it.toModel() }, MAX_HISTORY, REQ_CAP
+        ) + sysTok + toolsTok
         if (usedTokens.toFloat() / contextWindow < HANDOFF_NUDGE_RATIO) return
         appendAndNotify(
             ChatMessage(
@@ -1941,8 +1945,9 @@ class AgentEngine(
         // 用真实系统提示估算：记忆/日志/技能索引注入后可达 1 万+ tokens，
         // 旧的固定 3000 底数严重低估，导致压缩触发过晚、频繁撞 overflow
         val (sysTok, toolsTok) = estimateOverheadTokens()
-        val usedTokens = chatMsgs.sumOf { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it) } +
-            sysTok + toolsTok
+        val usedTokens = com.haoai.agent.ui.chat.ContextUsage.estimateRequestHistoryTokens(
+            chatMsgs, MAX_HISTORY, REQ_CAP
+        ) + sysTok + toolsTok
         if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
 
         // E 压缩前记忆冲刷（openclaw memory-flush 同思路）：压缩会丢过程细节，而值得长期化的
@@ -2129,7 +2134,9 @@ class AgentEngine(
         var acc = 0
         var keepFrom = msgs.size
         for (i in msgs.indices.reversed()) {
-            acc += com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(msgs[i].toModel())
+            // 按真实请求口径算（tool 结果 REQ_CAP 截断）：这里若按落库全文（可达 STORED_CAP=16000）
+            // 估算，keepRecentTokens 预算会被提前耗尽，结果删掉的历史比设计值多得多。
+            acc += com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(msgs[i].toModel(), REQ_CAP)
             if (acc > keep) break
             keepFrom = i
         }
