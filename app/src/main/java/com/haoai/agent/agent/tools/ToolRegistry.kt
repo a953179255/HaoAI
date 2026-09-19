@@ -85,6 +85,8 @@ object ToolRegistry {
             add(VScreenLaunchTool())
             add(VScreenScreenTool())
             add(VScreenTapTool())
+            add(VScreenTapXyTool())
+            add(VScreenSwipeXyTool())
             add(VScreenTextTool())
             add(VScreenScrollTool())
             add(VScreenBackTool())

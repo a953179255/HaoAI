@@ -2,7 +2,11 @@ package com.haoai.agent.agent.tools
 
 import com.haoai.agent.platform.a11y.A11yGate
 import com.haoai.agent.platform.a11y.HaoAccessibilityService
+import com.haoai.agent.platform.vdisplay.PrivilegedShell
 import com.haoai.agent.platform.vdisplay.VirtualScreenController
+import android.graphics.Rect
+import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -169,7 +173,7 @@ class VScreenScreenTool : Tool {
 
     override val name = "vscreen_screen"
     override val description =
-        "读取虚拟屏：输出可交互控件编号列表 [index]（与主屏 screen 同一编号体系）+ 附截图（红框=上一步动作目标）。操作前先读屏；界面变了要重新读。"
+        "读取虚拟屏：输出可交互控件编号列表 [index]（与主屏 screen 同一编号体系）+ 附截图（红框=上一步动作目标）。操作前先读屏；界面变了要重新读。若界面元素不在编号列表里（游戏/自绘内容），改用 vscreen_tap_xy/vscreen_swipe_xy 按截图内相对位置操作。"
     override val parameters = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -193,6 +197,121 @@ class VScreenScreenTool : Tool {
         val head = dump + if (shot != null) "\n（截图已附上，红框标注上一步动作位置）"
         else "\n（暂无截图帧：虚拟屏画面未更新）"
         return ToolResult(head + visualNote, imageDataUrl = shot)
+    }
+}
+
+/**
+ * 坐标点按（归一化 0..1000）：无障碍控件树读不到的界面（游戏/自绘内容）的兜底通道。
+ * 经特权 shell `input -d <displayId> tap` 注入（Android 10+ 支持 display 参数），
+ * 坐标在工具内按虚拟屏像素尺寸换算——模型只报截图内的相对位置，避免缩放换算错误。
+ */
+class VScreenTapXyTool : Tool {
+
+    override val name = "vscreen_tap_xy"
+    override val description =
+        "按坐标点按虚拟屏（无需控件编号）。坐标为 0..1000 归一化值：以最新一张 vscreen_screen 截图为准，" +
+            "左上角 (0,0)、右下角 (1000,1000)，按目标在截图内的相对位置换算。" +
+            "仅用于控件编号读不到的界面（游戏/自绘内容）；普通界面优先用 vscreen_tap（编号点按更稳）。" +
+            "需要 Shizuku 或 Root 授权。"
+    override val parameters = buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+            putJsonObject("x") { put("type", "integer"); put("description", "归一化横坐标 0..1000（截图内相对位置）") }
+            putJsonObject("y") { put("type", "integer"); put("description", "归一化纵坐标 0..1000（截图内相对位置）") }
+        }
+        put("required", kotlinx.serialization.json.JsonArray(listOf(
+            kotlinx.serialization.json.JsonPrimitive("x"),
+            kotlinx.serialization.json.JsonPrimitive("y")
+        )))
+    }
+
+    override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        vscreenGuard(ctx)?.let { return ToolResult(it, true) }
+        val id = activeDisplayId() ?: return ToolResult("虚拟屏未启动，先用 vscreen_launch", true)
+        val x = args.optInt("x") ?: -1
+        val y = args.optInt("y") ?: -1
+        if (x < 0 || y < 0 || x > 1000 || y > 1000) return ToolResult("x/y 必须在 0..1000 范围内", true)
+        val w = VirtualScreenController.displayWidthPx
+        val h = VirtualScreenController.displayHeightPx
+        if (w <= 0 || h <= 0) return ToolResult("虚拟屏尺寸未知，请重新 vscreen_launch", true)
+        val px = (x.toLong() * w / 1000).toInt()
+        val py = (y.toLong() * h / 1000).toInt()
+
+        PrivilegedShell.refresh(ctx.appContext ?: return ToolResult("无应用上下文", true))
+        val exec: suspend (String) -> PrivilegedShell.ExecResult =
+            { cmd -> if (PrivilegedShell.shizukuUsable()) PrivilegedShell.shizukuExec(cmd) else PrivilegedShell.rootExec(cmd) }
+        if (!PrivilegedShell.shizukuUsable() && !PrivilegedShell.hasRoot()) {
+            return ToolResult("坐标点按需要 Shizuku 或 Root 授权（触摸注入无法走无障碍通道）。" +
+                "装好授权后重试；普通界面建议改用 vscreen_tap 控件编号点按。", true)
+        }
+        val r = exec("input -d $id tap $px $py")
+        if (!r.ok) return ToolResult("坐标点按失败：${r.output.take(160)}", true)
+        VirtualScreenController.markAction(
+            Rect(px - 12, py - 12, px + 12, py + 12), "[$x,$y] 坐标点击"
+        )
+        delay(300)
+        return ToolResult("已在虚拟屏 ($x,$y)/1000（像素 $px,$py）处点按")
+    }
+}
+
+/**
+ * 坐标滑动（归一化 0..1000）：自绘/游戏界面的滚动与拖拽兜底，通道同 vscreen_tap_xy。
+ */
+class VScreenSwipeXyTool : Tool {
+
+    override val name = "vscreen_swipe_xy"
+    override val description =
+        "在虚拟屏上按坐标滑动（无需控件编号），用于自绘/游戏界面的滚动或拖拽。" +
+            "坐标为 0..1000 归一化值（同 vscreen_tap_xy：以最新截图为准，左上 (0,0) 右下 (1000,1000)）。" +
+            "durationMs 可选（默认 400，越大越慢）。需要 Shizuku 或 Root 授权。"
+    override val parameters = buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+            putJsonObject("x1") { put("type", "integer"); put("description", "起点归一化横坐标 0..1000") }
+            putJsonObject("y1") { put("type", "integer"); put("description", "起点归一化纵坐标 0..1000") }
+            putJsonObject("x2") { put("type", "integer"); put("description", "终点归一化横坐标 0..1000") }
+            putJsonObject("y2") { put("type", "integer"); put("description", "终点归一化纵坐标 0..1000") }
+            putJsonObject("durationMs") { put("type", "integer"); put("description", "滑动时长毫秒，可选，默认 400") }
+        }
+        put("required", kotlinx.serialization.json.JsonArray(listOf(
+            kotlinx.serialization.json.JsonPrimitive("x1"),
+            kotlinx.serialization.json.JsonPrimitive("y1"),
+            kotlinx.serialization.json.JsonPrimitive("x2"),
+            kotlinx.serialization.json.JsonPrimitive("y2")
+        )))
+    }
+
+    override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
+        vscreenGuard(ctx)?.let { return ToolResult(it, true) }
+        val id = activeDisplayId() ?: return ToolResult("虚拟屏未启动，先用 vscreen_launch", true)
+        fun norm(v: Int): Int = v.coerceIn(0, 1000)
+        fun argOr(key: String): Int = args.optInt(key) ?: -1
+        val x1 = norm(argOr("x1"))
+        val y1 = norm(argOr("y1"))
+        val x2 = norm(argOr("x2"))
+        val y2 = norm(argOr("y2"))
+        val durationMs = (args.optInt("durationMs") ?: 400).coerceIn(100, 5000)
+        if (x1 < 0 || y1 < 0 || x2 < 0 || y2 < 0) return ToolResult("x1/y1/x2/y2 必须在 0..1000 范围内", true)
+        val w = VirtualScreenController.displayWidthPx
+        val h = VirtualScreenController.displayHeightPx
+        if (w <= 0 || h <= 0) return ToolResult("虚拟屏尺寸未知，请重新 vscreen_launch", true)
+        fun px(v: Int, size: Int) = (v.toLong() * size / 1000).toInt()
+        val px1 = px(x1, w); val py1 = px(y1, h); val px2 = px(x2, w); val py2 = px(y2, h)
+
+        PrivilegedShell.refresh(ctx.appContext ?: return ToolResult("无应用上下文", true))
+        val exec: suspend (String) -> PrivilegedShell.ExecResult =
+            { cmd -> if (PrivilegedShell.shizukuUsable()) PrivilegedShell.shizukuExec(cmd) else PrivilegedShell.rootExec(cmd) }
+        if (!PrivilegedShell.shizukuUsable() && !PrivilegedShell.hasRoot()) {
+            return ToolResult("坐标滑动需要 Shizuku 或 Root 授权。普通界面建议改用 vscreen_scroll（编号滚动）。", true)
+        }
+        val r = exec("input -d $id swipe $px1 $py1 $px2 $py2 $durationMs")
+        if (!r.ok) return ToolResult("坐标滑动失败：${r.output.take(160)}", true)
+        VirtualScreenController.markAction(
+            Rect(min(px1, px2) - 12, min(py1, py2) - 12, max(px1, px2) + 12, max(py1, py2) + 12),
+            "[$x1,$y1]→[$x2,$y2] 滑动"
+        )
+        delay(300)
+        return ToolResult("已在虚拟屏 [$x1,$y1]→[$x2,$y2]/1000 完成滑动（${durationMs}ms）")
     }
 }
 

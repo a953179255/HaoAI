@@ -59,6 +59,11 @@ object VirtualScreenController {
     /** 上一步动作的目标控件矩形（虚拟屏坐标，与截图 1:1），供点击标记绘制。 */
     @Volatile var lastMarker: Pair<Rect, String>? = null
         private set
+    /** 虚拟屏像素尺寸（归一化坐标换算用；0=未启动）。 */
+    var displayWidthPx = 0
+        private set
+    var displayHeightPx = 0
+        private set
 
     /** 预览面板开合；vscreen_launch 成功自动弹出（两段式 uiOpener 模式）。 */
     val previewOpen = MutableStateFlow(false)
@@ -196,6 +201,8 @@ object VirtualScreenController {
                 captureThread = th
                 trustedDisplayId = id
                 channel = if (PrivilegedShell.shizukuUsable()) "trusted-shizuku" else "trusted-root"
+                displayWidthPx = w
+                displayHeightPx = h
                 displayIdFlow.value = id
                 touch()
                 debugLog("trusted display created/reused id=$id")
@@ -562,6 +569,8 @@ object VirtualScreenController {
         reader = null
         captureThread = null
         channel = ""
+        displayWidthPx = 0
+        displayHeightPx = 0
         displayIdFlow.value = null
         latestFrame.getAndSet(null)?.recycle()
         previewFrame.value = null
