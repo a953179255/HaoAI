@@ -26,8 +26,11 @@ import java.nio.file.Files
  */
 class AgentEngineLoopTest {
 
-    /** 记录每一轮出站的 messages 与工具清单，按脚本回放流式事件。 */
-    private class FakeClient(private val script: List<List<SseEvent>>) : ProviderClient {
+    /** 记录每一轮出站的 messages 与工具清单，按脚本回放流式事件；failOn 里的调用序号抛瞬态网络错误。 */
+    private class FakeClient(
+        private val script: List<List<SseEvent>>,
+        private val failOn: Set<Int> = emptySet()
+    ) : ProviderClient {
         val requests: MutableList<Pair<List<ApiMessage>, List<String>>> = mutableListOf()
         private var n = 0
 
@@ -39,9 +42,9 @@ class AgentEngineLoopTest {
             reasoningEffort: String?
         ): Flow<SseEvent> {
             requests += messages to tools.map { it.function.name }
-            val events = script[minOf(n, script.lastIndex)]
-            n++
-            return flow { events.forEach { emit(it) } }
+            val idx = n++
+            if (idx in failOn) throw java.io.IOException("connection reset")
+            return flow { script[minOf(idx, script.lastIndex)].forEach { emit(it) } }
         }
 
         override suspend fun testConnection(provider: ProviderConfig, apiKey: String) = Result.success("ok")
@@ -58,7 +61,12 @@ class AgentEngineLoopTest {
         SkillStore.init(tmpDir())
     }
 
-    private fun engine(client: ProviderClient, dir: File, toolFailCap: Int = 8): AgentEngine =
+    private fun engine(
+        client: ProviderClient,
+        dir: File,
+        toolFailCap: Int = 8,
+        session: StoredSession = StoredSession.create(null)
+    ): AgentEngine =
         AgentEngine(
             httpClient = client,
             provider = ProviderConfig(
@@ -68,7 +76,7 @@ class AgentEngineLoopTest {
             customPrompt = "",
             policy = PolicyEngine(PermissionMode.YOLO),
             approve = { true },
-            session = StoredSession.create(null),
+            session = session,
             persist = {},
             backend = null,
             appFilesDir = dir,
@@ -200,5 +208,53 @@ class AgentEngineLoopTest {
         assertTrue("预置技能应落到工作区 skills 目录：${file.absolutePath}", file.exists())
         val text = file.readText()
         assertTrue("技能正文需含产出物判据", text.contains("作文") && text.contains("判据"))
+    }
+
+    /** 主代理拿到的研究纪律不会自动传给子代理——子代理必须自带一份，否则它不收敛。 */
+    @Test
+    fun researchSubagentCarriesItsOwnResearchDiscipline() = runBlocking {
+        val client = FakeClient(
+            listOf(
+                callingTool("spawn_agent", "s1", "{\"task\":\"调研主流 AI Agent 框架\",\"mode\":\"research\"}"),
+                saying("子代理结论：LangGraph、AutoGen、CrewAI。"),
+                saying("主代理收尾")
+            )
+        )
+        engine(client, tmpDir()).runTurn("派个子代理", {}, {})
+        val sub = client.requests.firstOrNull { (msgs, tools) ->
+            !tools.contains("bash") &&
+                msgs.any { it.role == "system" && it.content.orEmpty().startsWith("[SUBAGENT]") }
+        }
+        assertTrue("子代理应收到自己的系统提示", sub != null)
+        val sys = sub!!.first.first { it.role == "system" }.content.orEmpty()
+        assertTrue("子代理提示需含取材判据", sys.contains("取材判据") && sys.contains("web_search"))
+        assertTrue("子代理提示需含收敛预算与劣质来源警示", sys.contains("研究预算") && sys.contains("导航站"))
+    }
+
+    /**
+     * 子代理的模型请求遇瞬态错误须退避重试，而不是当场判 ERROR。
+     * 此前一次网关抖动就废掉整路调研（spawn_agents 并行时表现为兄弟路正常、这一路凭空失败）。
+     */
+    @Test
+    fun subagentRetriesTransientStreamError() = runBlocking {
+        val session = StoredSession.create(null)
+        // 序号 1 = 子代理的首次请求，让它connection reset；重试落到序号 2 拿到结论
+        val client = FakeClient(
+            script = listOf(
+                callingTool("spawn_agent", "s1", "{\"task\":\"调研\",\"mode\":\"research\"}"),
+                saying("这次会被丢掉"),
+                saying("子代理结论：LangGraph、AutoGen、CrewAI。"),
+                saying("主代理收尾")
+            ),
+            failOn = setOf(1)
+        )
+        engine(client, tmpDir(), session = session).runTurn("派个子代理", {}, {})
+        val spawnMsg = session.messages.lastOrNull { it.role == "tool" && it.toolName == "spawn_agent" }
+        assertTrue("spawn_agent 结果应落库", spawnMsg != null)
+        val content = spawnMsg!!.content.orEmpty()
+        assertTrue("瞬态错误应被重试掉，不该以执行失败收场：$content", !content.contains("执行失败"))
+        assertTrue("重试后应拿到子代理结论", content.contains("LangGraph"))
+        // 主1 + 子失败 + 子重试 + 主2 == 4：多一次即重试未生效，少一次即子代理没跑
+        assertEquals(4, client.requests.size)
     }
 }

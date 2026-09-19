@@ -454,7 +454,7 @@ class AgentEngine(
                         // v6：简报区分真实限流（429）与其他瞬态网络错误，不再一律报「限流」
                         val isRealRateLimit = (e as? com.haoai.agent.agent.provider.ProviderHttpException)?.httpCode == 429
                         val brief = if (isRealRateLimit) "供应商限流" else "网络波动"
-                        val backoffsSec = intArrayOf(5, 12, 25)
+                        val backoffsSec = SUB_BACKOFFS_SEC
                         var last: Exception? = e
                         for (sec in backoffsSec) {
                             onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.RUNNING, brief, if (isRealRateLimit) "HTTP 429，${sec}s 后自动重试" else "网络错误，${sec}s 后自动重试")))
@@ -1089,13 +1089,33 @@ class AgentEngine(
             }
             val buf = StringBuilder()
             var calls: List<ToolCallData> = emptyList()
-            try {
+            // 子代理的模型请求单独走一次，失败不再直接判 ERROR：
+            // 主循环有 5/12/25s 瞬态退避，子代理此前一次网关抖动/429 就废掉整路调研
+            //（spawn_agents 并行时表现为兄弟路正常、这一路凭空 ERROR）
+            suspend fun attemptOnce() {
+                buf.setLength(0)
+                calls = emptyList()
                 httpClient.chatStream(provider, apiKey, msgs, apiTools, effectiveEffort()).collect { ev ->
                     when (ev) {
                         is SseEvent.Delta -> buf.append(ev.text)
                         is SseEvent.Reasoning -> Unit
                         is SseEvent.Completed -> calls = ev.toolCalls
                         is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
+                    }
+                }
+            }
+            try {
+                var backoff = 0
+                while (true) {
+                    try {
+                        attemptOnce()
+                        break
+                    } catch (e: Exception) {
+                        if (!isTransientHttpError(e) || backoff >= SUB_BACKOFFS_SEC.size) throw e
+                        if (backoff == 0) report("RUNNING", subPrompt + subCompletion, "网络波动，退避重试中")
+                        delay(SUB_BACKOFFS_SEC[backoff] * 1000L)
+                        backoff++
+                        currentCoroutineContext().ensureActive()
                     }
                 }
             } catch (ce: CancellationException) {
@@ -2184,6 +2204,9 @@ class AgentEngine(
         const val STORED_CAP = 16_000
         const val REQ_CAP = 4_000
         const val SUB_MAX_TURNS = 10
+
+        /** 瞬态错误（429/超时/网关抖动）退避秒数：主循环与子代理共用同一套节奏。 */
+        val SUB_BACKOFFS_SEC = intArrayOf(5, 12, 25)
         /** E6 并行安全白名单：纯读无全局状态副作用；新增成员必须逐个评审（a11y/相机/定位永不入列）。 */
         val PARALLEL_SAFE = setOf(
             "read", "grep", "glob", "web_fetch", "web_search", "memory",
@@ -2209,8 +2232,14 @@ class AgentEngine(
         """.trimIndent()
 
         val SUBAGENT_SYSTEM = """
-            [SUBAGENT] 你是被主代理派出的只读研究子代理。只做调研与只读操作（read/grep/glob/web_fetch/memory），
-            禁止写入或执行命令。高效检索，最后输出简明、结构化的结论（要点 + 证据路径）。
+            [SUBAGENT] 你是被主代理派出的只读研究子代理。只做调研与只读操作（read/grep/glob/web_search/web_fetch/memory），
+            禁止写入或执行命令。
+            取材判据看产出物：结论里会出现具体事实、数据、时效性说法或具名对象时，先 web_search 再对结果里的 url 调
+            web_fetch 精读，不要凭模型记忆直接下结论。检索词用与任务相同的语言；优先一手权威来源
+            （官方文档/原始公告/项目主仓库/权威媒体），别读导航站、词典和聚合榜单页。
+            研究预算：最多 3-4 次聚焦搜索加 2-4 篇精读即须收敛。同一 query 结果无用时至多换词一次，
+            仍无果就基于已拿到的证据给结论并明说查不到什么，不得反复换词重试。
+            最后输出简明、结构化的结论（要点 + 证据来源链接或路径）。
         """.trimIndent()
 
         // P3-A work 子代理系统提示词：可写执行，纪律与产物导向
