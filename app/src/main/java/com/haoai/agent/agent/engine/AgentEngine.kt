@@ -1081,6 +1081,8 @@ class AgentEngine(
         var turns = 0
         var hitTurnCap = false
         var subOk = true
+        // P3-B 检索硬预算：research 子代理强制计数；work 模式不夹（它可能确实要反复抓取）
+        val retrievalBudget = RetrievalBudget(if (mode == "research") SUB_RETRIEVAL_CAP else Int.MAX_VALUE)
         while (turns++ < SUB_MAX_TURNS) {
             currentCoroutineContext().ensureActive()
             // P2 steer：主代理的纠偏指令在子代理下一轮开始前注入（不打断当前执行）
@@ -1173,9 +1175,12 @@ class AgentEngine(
                         }
                     }
                 }
+                // P3-B 预算用完：不执行、不当失败（避免污染 E5 连续失败熔断），只回一条收敛指令
+                val overBudget = retrievalBudget.admit(call.name)
                 val result = try {
                     withTimeout(TOOL_TIMEOUT_MS) {
                         when {
+                            overBudget != null -> ToolResult(overBudget)
                             tool == null -> ToolResult("未知工具：${call.name}", true)
                             // 子代理同样不得拿损坏参数当空参跑（畸形参数显性报错）
                             childArgs == null -> ToolResult(
@@ -2207,6 +2212,9 @@ class AgentEngine(
 
         /** 瞬态错误（429/超时/网关抖动）退避秒数：主循环与子代理共用同一套节奏。 */
         val SUB_BACKOFFS_SEC = intArrayOf(5, 12, 25)
+
+        /** P3-B research 子代理的检索硬预算（web_search + web_fetch 合计次数），依据见 RetrievalBudget。 */
+        const val SUB_RETRIEVAL_CAP = 8
         /** E6 并行安全白名单：纯读无全局状态副作用；新增成员必须逐个评审（a11y/相机/定位永不入列）。 */
         val PARALLEL_SAFE = setOf(
             "read", "grep", "glob", "web_fetch", "web_search", "memory",
@@ -2237,8 +2245,9 @@ class AgentEngine(
             取材判据看产出物：结论里会出现具体事实、数据、时效性说法或具名对象时，先 web_search 再对结果里的 url 调
             web_fetch 精读，不要凭模型记忆直接下结论。检索词用与任务相同的语言；优先一手权威来源
             （官方文档/原始公告/项目主仓库/权威媒体），别读导航站、词典和聚合榜单页。
-            研究预算：最多 3-4 次聚焦搜索加 2-4 篇精读即须收敛。同一 query 结果无用时至多换词一次，
-            仍无果就基于已拿到的证据给结论并明说查不到什么，不得反复换词重试。
+            研究预算（引擎强制计数，不是建议）：web_search 与 web_fetch 合计只有 $SUB_RETRIEVAL_CAP 次，用完即拒绝再检索，
+            所以把每次检索当稀缺资源——先用一次宽搜定位权威来源，再对最相关的两三篇精读，别拿搜索当浏览。
+            同一 query 结果无用时至多换词一次，仍无果就基于已拿到的证据给结论并明说查不到什么。
             最后输出简明、结构化的结论（要点 + 证据来源链接或路径）。
         """.trimIndent()
 

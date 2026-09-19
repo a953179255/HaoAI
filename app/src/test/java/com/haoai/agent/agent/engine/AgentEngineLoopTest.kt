@@ -196,6 +196,18 @@ class AgentEngineLoopTest {
         assertTrue("第二个回合的 background 子代理必须真的启动过", researchRoundSeen())
     }
 
+    /** P3-B 检索硬预算：只夹检索类工具、用完不消耗额度、也不把它算成工具失败。 */
+    @Test
+    fun retrievalBudgetCapsOnlyRetrievalTools() {
+        val b = RetrievalBudget(3)
+        repeat(3) { org.junit.Assert.assertNull("前 3 次检索应放行", b.admit("web_search")) }
+        val denied = b.admit("web_fetch")
+        assertTrue("第 4 次应被预算拦下", denied != null && denied.contains("检索预算已用完"))
+        org.junit.Assert.assertNull("非检索工具不受预算影响", b.admit("read"))
+        assertTrue("超额调用不应继续消耗额度", b.admit("web_search") != null)
+        assertEquals(3, b.usedCount)
+    }
+
     /** 预置调研技能是索引注入的一部分，触发词漏了「作文/报告」就永远不会被选中。 */
     @Test
     fun bundledResearchSkillCarriesWritingTrigger() {

@@ -36,7 +36,9 @@ class WebSearchTool : Tool {
             ?: return ToolResult("搜索功能不可用", true)
         val query = args.optString("query").trim()
         if (query.isEmpty()) return ToolResult("需要 query 参数", true)
-        val count = (args.optInt("count") ?: 6).coerceIn(1, 10)
+        // 结果条数：默认 5、上限 8。原为默认 6/上限 10 —— 实测一次调研 20 次检索 × 10 条
+        // ≈ 5.6 万字符塞进上下文，是 prompt token 膨胀的主要来源，收紧一档。
+        val count = (args.optInt("count") ?: 5).coerceIn(1, 8)
         // D 检索卫生：同一任务内同关键词命中 TTL 缓存直接返回（防重复搜索烧轮次）
         val cacheKey = "search:${query.lowercase()}"
         ctx.webCacheGet(cacheKey)?.let { return ToolResult("$it\n\n（缓存）") }
