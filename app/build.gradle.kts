@@ -37,6 +37,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        // 引擎热点路径含 android.util.Log（压缩/账本/委派降级日志）：
+        // JVM 单测里让框架方法返回默认值而非抛 "Stub!"，才能用脚本化 ProviderClient 驱动真实回合循环。
+        unitTests.isReturnDefaultValues = true
+    }
     buildFeatures {
         compose = true
     }
