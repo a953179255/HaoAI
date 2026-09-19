@@ -156,13 +156,27 @@ fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     ts = ts
 )
 
-class SessionStore(context: Context) {
+/** 会话存储。[dir] 重载供单测用临时目录跑真实 IO；生产走 [AppContainer] 的 Context 构造。 */
+class SessionStore(private val dir: File) {
 
-    private val dir = File(context.filesDir, "sessions").apply { mkdirs() }
+    constructor(context: Context) : this(File(context.filesDir, "sessions").apply { mkdirs() })
 
     // 会话可能很大（数百条消息），主线程每追加一条就同步序列化+写盘会造成明显卡顿：
     // save 只更新内存缓存，序列化与写盘交给单线程后台执行（最新状态覆盖旧写入）。
     private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /**
+     * 待写快照：同一会话只保留最后一次，后写覆盖前写。
+     * 一轮对话里 appendAndNotify 会触发几十次 save，若每次都排队全量序列化，
+     * 队列会越积越长且前面的写入毫无意义（很快就被后面那版覆盖）。
+     */
+    private val pending = java.util.concurrent.ConcurrentHashMap<String, StoredSession>()
+
+    /** 实际发生的写盘次数（观测合并效果用；单测断言它远小于 save 调用次数）。 */
+    internal val writes = java.util.concurrent.atomic.AtomicInteger()
+
+    /** 是否已有 drain 任务排队/执行中；与 [save] 共用 this 锁，见 [takePending]。 */
+    private var drainScheduled = false
 
     /** 最新未落盘状态：save 后、写盘完成前，load/list 必须能看到。 */
     private val latest = java.util.concurrent.ConcurrentHashMap<String, StoredSession>()
@@ -182,38 +196,35 @@ class SessionStore(context: Context) {
     private fun parseFile(f: File): StoredSession? =
         HaoJson.readJsonSafe(f, StoredSession.serializer())
 
-    fun list(): List<StoredSession> {
-        val files = dir.listFiles { f -> f.extension == "json" } ?: return emptyList()
+    /**
+     * 全部会话的最新可见状态 = 磁盘 ∪ 内存。
+     *
+     * 只看磁盘会漏掉「save 之后、写盘落地之前」的新会话：写盘在后台线程排队，
+     * 期间抽屉/会话页列不出来这条会话。所以 latest 里未落盘的也要并进来。
+     */
+    private fun allStored(): List<StoredSession> {
         val merged = LinkedHashMap<String, StoredSession>()
+        val files = dir.listFiles { f -> f.extension == "json" }.orEmpty()
         for (f in files) {
             val id = f.nameWithoutExtension
             if (id in tombstones) continue
-            latest[id]?.let { if (it.deletedAt == 0L) merged[id] = it; continue }
+            latest[id]?.let { merged[id] = it; continue }
             val mtime = f.lastModified()
             val hit = diskCache[id]
             val parsed = if (hit != null && hit.first == mtime) hit.second
             else parseFile(f)?.also { diskCache[id] = mtime to it } ?: continue
-            if (parsed.deletedAt == 0L) merged[id] = parsed
+            merged[id] = parsed
         }
-        return merged.values.sortedByDescending { it.updatedAt }
+        for ((id, s) in latest) if (id !in merged && id !in tombstones) merged[id] = s
+        return merged.values.toList()
     }
 
+    fun list(): List<StoredSession> =
+        allStored().filter { it.deletedAt == 0L }.sortedByDescending { it.updatedAt }
+
     /** 回收站内容（按删除时间倒序）。 */
-    fun listDeleted(): List<StoredSession> {
-        val files = dir.listFiles { f -> f.extension == "json" } ?: return emptyList()
-        val merged = LinkedHashMap<String, StoredSession>()
-        for (f in files) {
-            val id = f.nameWithoutExtension
-            if (id in tombstones) continue
-            latest[id]?.let { if (it.deletedAt > 0L) merged[id] = it; continue }
-            val mtime = f.lastModified()
-            val hit = diskCache[id]
-            val parsed = if (hit != null && hit.first == mtime) hit.second
-            else parseFile(f)?.also { diskCache[id] = mtime to it } ?: continue
-            if (parsed.deletedAt > 0L) merged[id] = parsed
-        }
-        return merged.values.sortedByDescending { it.deletedAt }
-    }
+    fun listDeleted(): List<StoredSession> =
+        allStored().filter { it.deletedAt > 0L }.sortedByDescending { it.deletedAt }
 
     fun load(id: String): StoredSession? {
         if (id in tombstones) return null
@@ -241,7 +252,29 @@ class SessionStore(context: Context) {
         val snapshot = session.copy(messages = session.messages.toMutableList())
         latest[session.id] = session
         diskCache[session.id] = snapshot.updatedAt to snapshot
-        io.execute {
+        pending[session.id] = snapshot
+        if (!drainScheduled) {
+            drainScheduled = true
+            io.execute { drainPending() }
+        }
+    }
+
+    /**
+     * 取一份待写快照；取空时顺手在同一次持锁里清掉调度标记。
+     * 清空必须和"没有待写了"这个判定原子：否则 save 可能刚把快照放进 pending、
+     * 又看到 drainScheduled=true 而不排队，drain 随后清标记退出，那次写入就永远搁置。
+     */
+    @Synchronized
+    private fun takePending(): StoredSession? {
+        val id = pending.keys.firstOrNull() ?: run { drainScheduled = false; return null }
+        return pending.remove(id)
+    }
+
+    private fun drainPending() {
+        while (true) {
+            val snapshot = takePending() ?: return
+            if (snapshot.id in tombstones) continue
+            writes.incrementAndGet()
             runCatching {
                 HaoJson.writeAtomic(
                     fileOf(snapshot.id),
@@ -279,7 +312,7 @@ class SessionStore(context: Context) {
     /** 删除 → 进回收站（软删除），7 天后由 purgeExpired 彻底清理。 */
     fun delete(id: String) {
         val s = load(id) ?: run {
-            latest.remove(id); diskCache.remove(id)
+            latest.remove(id); diskCache.remove(id); pending.remove(id)
             io.execute { runCatching { fileOf(id).delete() } }
             return
         }
@@ -306,6 +339,7 @@ class SessionStore(context: Context) {
         tombstones.add(id)
         latest.remove(id)
         diskCache.remove(id)
+        pending.remove(id)
         io.execute {
             runCatching { fileOf(id).delete() }
             runCatching { File(dir, "$id.json.bak").delete() }
