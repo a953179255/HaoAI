@@ -2434,6 +2434,10 @@ private fun MessageList(
             // 只做一件事：真正拖动列表（超过 touchSlop）时收起输入法。
             // **不参与跟随判定**——跟随完全由位置决定（见 isAtBottom），
             // 避免"手指标志没复位 → 跟随永久失效"这类不可自愈的状态。
+            // clearFocus 必须跳过"已被文本选择层消费的 MOVE"：长按选区出现后
+            // 手指继续拖动=拖选扩选，此时 clearFocus 会直接杀死拖选手势
+            // （选区瞬间消失，用户只能拖把手；demo 实测 .test-work/sel-demo 2026-09-19）。
+            // 普通滚动时没人消费 MOVE，照常收键盘。
             awaitEachGesture {
                 val start = awaitFirstDown(requireUnconsumed = false)
                 var slopPassed = false
@@ -2442,8 +2446,10 @@ private fun MessageList(
                     val ev = awaitPointerEvent()
                     val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
                     if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
-                        slopPassed = true
-                        focusManager.clearFocus()
+                        if (!ch.isConsumed) {
+                            slopPassed = true
+                            focusManager.clearFocus()
+                        }
                     }
                     if (!ch.pressed) break
                 }
