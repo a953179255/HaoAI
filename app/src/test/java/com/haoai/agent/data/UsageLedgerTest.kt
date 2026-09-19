@@ -70,7 +70,18 @@ class UsageLedgerTest {
         val now = System.currentTimeMillis()
         // 当月文件 + 100 天前的月份文件
         UsageLedger.appendNow(entry(ts = now))
-        val oldTs = now - 100L * 24 * 3600 * 1000
+        // 当月文件 + 「4 个月前的月初」：既保证与当月不同月，也保证整月都早于 90 天线。
+        // 原来写死 now-100 天：在月初跑时它会与 now-90 天落在同一个月，
+        // 而 sweep 是按月整删（该月还有更新的日子要保留）→ 断言随机误报。
+        val oldTs = java.util.Calendar.getInstance().apply {
+            timeInMillis = now
+            add(java.util.Calendar.MONTH, -4)
+            set(java.util.Calendar.DAY_OF_MONTH, 1)
+            set(java.util.Calendar.HOUR_OF_DAY, 12)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
         UsageLedger.appendNow(entry(ts = oldTs))
         val d = java.io.File(tmp.root, "files/usage")
         val before = d.listFiles().orEmpty().size
