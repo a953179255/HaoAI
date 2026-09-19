@@ -155,7 +155,7 @@ class SnapshotHook(
         args: JsonObject,
         ctx: ToolContext
     ): ToolHook.HookDecision? {
-        runCatching {
+        val failure = runCatching {
             val path = args.optString("path")
             if (path.isBlank()) return null
             val before = runCatching { backend?.readText(path) }.getOrNull()
@@ -184,6 +184,13 @@ class SnapshotHook(
                     mask(after)
                 )
             }
+        }.exceptionOrNull()
+        if (failure != null) {
+            // 快照是 /undo 的唯一依据。以前这里静默吞掉、照常写文件，用户以为改错了能回滚其实不能
+            //（且真机 logcat 被 Flyme 抑制，连这行日志都看不到）。抛给引擎，
+            // 由 AgentEngine.executeCall 在工具结果里显式标注「本次改动可能无法回滚」。
+            android.util.Log.w("HaoSnapshot", "写前快照失败：${failure.message}")
+            throw failure
         }
         return null
     }

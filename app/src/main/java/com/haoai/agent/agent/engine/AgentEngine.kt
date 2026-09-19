@@ -717,6 +717,7 @@ class AgentEngine(
         }
 
         // E7b before hooks：Plan 门与审批之后、工具执行之前（快照在此拍）。返回 Handled 时直接落库
+        var hookFailure: String? = null
         try {
             for (h in hooks) {
                 if (h.names.isNotEmpty() && call.name !in h.names) continue
@@ -732,6 +733,10 @@ class AgentEngine(
         } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
             throw ce
         } catch (e: Exception) {
+            // 原先只打一行 logcat 就照常执行改动：用户以为能回滚，其实底片没拍到
+            //（且真机 Flyme 上 logcat 被全量抑制，这行日志用户根本看不到）。
+            // 保持不阻断（可用性优先），但把风险写进工具结果，见下方 finishCall 前的追加。
+            hookFailure = e.message ?: e.javaClass.simpleName
             android.util.Log.w("HaoEngine", "hook before failed: ${e.message}")
         }
 
@@ -812,6 +817,12 @@ class AgentEngine(
         if (policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ) {
             lastExecutedSig = replaySig
             lastExecutedResult = result
+        }
+        hookFailure?.let {
+            result = result.copy(
+                content = result.content + "\n\n⚠ 执行前检查（写前快照等）未成功：$it。" +
+                    "本次改动可能无法通过回滚恢复，必要时请手动确认结果。"
+            )
         }
         finishCall(call, args, callCtx, result, finalState, toolStartMs, decision, onEvent)
     }

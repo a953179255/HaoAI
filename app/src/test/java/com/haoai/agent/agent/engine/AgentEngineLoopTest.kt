@@ -208,6 +208,31 @@ class AgentEngineLoopTest {
         assertEquals(3, b.usedCount)
     }
 
+    /**
+     * 写前快照失败必须抛出来，而不是静默返回 null。
+     * 快照是 /undo 的唯一依据：以前 SnapshotHook 用 runCatching 吞掉一切，
+     * 用户以为改错了能回滚，其实底片根本没拍到，而真机 logcat 还被 Flyme 抑制。
+     */
+    @Test
+    fun snapshotFailureIsNotSwallowed() = runBlocking {
+        val parent = tmpDir()
+        val blockedFilesDir = File(parent, "occupied").apply { writeText("我是文件不是目录") }
+        val hook = SnapshotHook(blockedFilesDir, "session-1", null)
+        val call = ToolCallData("c1", "write", """{"path":"a.txt","content":"hello"}""")
+        val args = kotlinx.serialization.json.Json.parseToJsonElement(call.argumentsJson)
+            as kotlinx.serialization.json.JsonObject
+        val ctx = com.haoai.agent.agent.tools.ToolContext(
+            null, null, com.haoai.agent.agent.tools.TodoStore(blockedFilesDir), blockedFilesDir
+        )
+        var threw: Exception? = null
+        try {
+            org.junit.Assert.assertNull("快照成功时应返回 null（不拦截执行）", hook.before(call, args, ctx))
+        } catch (e: Exception) {
+            threw = e
+        }
+        assertTrue("目录不可写时快照必须抛出，交给引擎显式标注不可回滚", threw != null)
+    }
+
     /** 预置调研技能是索引注入的一部分，触发词漏了「作文/报告」就永远不会被选中。 */
     @Test
     fun bundledResearchSkillCarriesWritingTrigger() {
