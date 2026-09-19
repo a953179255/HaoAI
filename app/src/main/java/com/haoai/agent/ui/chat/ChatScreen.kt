@@ -2380,10 +2380,19 @@ private fun MessageList(
                 }
                 val grown = scrollState.maxValue - before
                 if (grown > 0 && scrollState.maxValue != Int.MAX_VALUE) {
-                    // 用 suspend 的 scrollBy 而不是 dispatchRawDelta：后者在"没有活动滚动会话"时
-                    // 不会真的改位置（实测扩窗后 value 仍为 0，补偿等于没生效）。这里是协程，
-                    // scrollBy 会正常排队生效。
-                    runCatching { scrollState.scrollBy(grown.toFloat()) }
+                    // 补偿两步走（2026-09-19 探针实测修正）：
+                    // ① 先用 UserInput 优先级的"空滚动"抢占可能仍在进行的惯性滚动（fling）。
+                    //    fling 持有 Default 优先级会话：不抢占的话，它接下来会继续把 value 拉回 0
+                    //    ——这就是此前 dispatchRawDelta / scrollBy 两种补偿"都没生效"的真因；
+                    //    而 scrollBy 自己还会因拿不到互斥直接抛 CancellationException 被
+                    //    runCatching 静默吞掉（探针实测补偿后 v 仍停在 0 的直接原因）。
+                    //    若当前是手指拖拽（同为 UserInput）抢占会静默失败——无妨，拖拽是
+                    //    相对位移，② 的补偿不会被它重置。
+                    // ② 再用 dispatchRawDelta 立即补偿（不走滚动互斥，任何时刻都能改 value）。
+                    runCatching {
+                        scrollState.scroll(androidx.compose.foundation.MutatePriority.UserInput) { }
+                    }
+                    scrollState.dispatchRawDelta(grown.toFloat())
                 }
             }
         }
