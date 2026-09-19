@@ -1,6 +1,6 @@
 ﻿plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    // AGP 9.0 起内置 Kotlin 支持，kotlin.android 插件不再需要（kotl.in/gradle/agp-built-in-kotlin）
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
