@@ -304,44 +304,20 @@ private fun ParagraphView(
         InlineMathRender(r.text, r.math, contents)
     }
     // v4-3 打字机渐显（保留）：只挂最后一个段落；append(ann) 会复制全部
-    // span/link 注记，渐显覆盖不丢链接可点性。
-    // 流式最后一档保持 Compose Text（渐显动画在 Compose 侧）；其余段落走原生
-    // TextView 选择渲染——Compose 拖选在 CJK 上词边界吸附错乱（选区反向延伸/
-    // 跳行，upstream 未修）且取消选择时浮层"全选"闪现（show/hide 竞态），两者
-    // 均为 foundation 内部缺陷；TextView 的选择/ActionMode 是 View 系统成熟
-    // 实现，长按直接拖动扩选对中文完全正常，两个问题一并根治。
-    if (streaming && isLastParagraph) {
-        val typeInAnn = typeInTail(rendered.text)
-        Text(
-            text = typeInAnn,
-            style = when (block.heading) {
-                1 -> MaterialTheme.typography.headlineSmall
-                2 -> MaterialTheme.typography.titleLarge
-                3 -> MaterialTheme.typography.titleMedium
-                0 -> MaterialTheme.typography.bodyMedium
-                else -> MaterialTheme.typography.titleSmall
-            },
-            color = textColor,
-            inlineContent = rendered.inlineContents
-        )
-    } else {
-        val spannable = remember(block.inlines, textColor, dark) {
-            buildInlineSpannable(
-                block.inlines, context,
-                textColor = textColor.toArgb(),
-                primaryColor = primary.toArgb(),
-                onSurface = onSurface.copy(alpha = 0.08f).toArgb(),
-                inlineCodeColor = (if (dark) Color(0xFF61AFEF) else Color(0xFF4078F2)).toArgb(),
-                openLink = { url -> openLink(context, url) }
-            )
-        }
-        SelectableTextBlock(
-            textSpannable = spannable,
-            textColor = textColor.toArgb(),
-            sizeFactor = headingSizeFactor(block.heading),
-            bold = block.heading in 1..3
-        )
-    }
+    // span/link 注记，渐显覆盖不丢链接可点性
+    val typeInAnn = if (streaming && isLastParagraph) typeInTail(rendered.text) else rendered.text
+    Text(
+        text = typeInAnn,
+        style = when (block.heading) {
+            1 -> MaterialTheme.typography.headlineSmall
+            2 -> MaterialTheme.typography.titleLarge
+            3 -> MaterialTheme.typography.titleMedium
+            0 -> MaterialTheme.typography.bodyMedium
+            else -> MaterialTheme.typography.titleSmall
+        },
+        color = textColor,
+        inlineContent = rendered.inlineContents
+    )
 }
 
 /** 行内公式渲染产物：AnnotatedString + 占位公式表 + 合成好的 inlineContent。 */

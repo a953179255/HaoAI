@@ -71,7 +71,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
@@ -162,7 +161,6 @@ import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
-import com.haoai.agent.ui.common.SelectableTextBlock
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.theme.wallpaperAdaptiveGray
@@ -3523,20 +3521,14 @@ private fun UserBubble(
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
-            // 长按正文 = 原生 TextView 选择（长按直接拖动扩选对中文正常；
-            // Compose SelectionContainer 的 CJK 拖选吸附缺陷见 MarkdownSelectTextView.kt）
-            val bubbleText = remember(row.text) {
-                android.text.SpannableStringBuilder(row.text)
+            // 长按正文 = 系统文本选择，不再弹操作菜单
+            SelectionContainer {
+                Text(
+                    row.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                )
             }
-            SelectableTextBlock(
-                textSpannable = bubbleText,
-                textColor = MaterialTheme.colorScheme.onPrimary.toArgb(),
-                sizeFactor = 1f,
-                bold = false,
-                // 绿底气泡上默认绿高亮不可见，用白半透明
-                highlightColor = 0x66FFFFFF.toInt(),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
-            )
         }
         // 快捷操作行（user：复制 / 编辑重发 / 更多）
         Row(Modifier.padding(top = 1.dp, end = 2.dp)) {
