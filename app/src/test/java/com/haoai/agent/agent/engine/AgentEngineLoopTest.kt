@@ -67,7 +67,9 @@ class AgentEngineLoopTest {
         dir: File,
         toolFailCap: Int = 8,
         session: StoredSession = StoredSession.create(null),
-        contextLength: Int = 0
+        contextLength: Int = 0,
+        turnTokenCap: Int = 150_000,
+        toolCallCap: Int = 80
     ): AgentEngine =
         AgentEngine(
             httpClient = client,
@@ -84,7 +86,9 @@ class AgentEngineLoopTest {
             backend = null,
             appFilesDir = dir,
             workspaceLabel = "test",
-            toolFailCap = toolFailCap
+            toolFailCap = toolFailCap,
+            turnTokenCap = turnTokenCap,
+            toolCallCap = toolCallCap
         )
 
     /** 每轮换参数，避免撞 P2-5 重放保护（同名同参紧邻会被判为重放而不真正执行）。 */
@@ -287,6 +291,48 @@ class AgentEngineLoopTest {
         val markers = (0..39).map { "MSG$it" }.filter { sent.contains("$it|") }
         assertEquals("只应发水位之后的 10 条：$markers", (30..39).map { "MSG$it" }, markers)
         assertTrue("水位之后的 MSG39 必须照发", sent.contains("MSG39|"))
+    }
+
+    /**
+     * 续跑必须连着上次算轮数。
+     * 此前"断点续跑"是重开一轮：每中断一次，MAX_TURNS 预算就重新给满，
+     * 一个跑偏的长任务可以无限续下去而不触顶。
+     */
+    @Test
+    fun resumedTurnCountsAgainstCumulativeRoundBudget() = runBlocking {
+        // 每轮都调一个未知工具（确定失败、无副作用、不触网），把轮数一路推到上限
+        val endless = listOf(
+            listOf(
+                SseEvent.Delta("再试一次"),
+                SseEvent.Completed(listOf(ToolCallData("x", "no_such_tool", "{}"))),
+                SseEvent.Usage(10, 1)
+            )
+        )
+        val s = StoredSession.create(null)
+        s.runTurnsUsed = 58
+        val resuming = FakeClient(endless)
+        // 关掉成本/圈数熔断，只留轮数上限这一条路径
+        engine(resuming, tmpDir(), session = s, turnTokenCap = 0, toolCallCap = 0)
+            .runTurn("继续", {}, {}, resuming = true)
+        assertEquals("已用 58 轮 + 上限 60 → 只该再发 2 次请求", 2, resuming.requests.size)
+        assertTrue(
+            "封顶提示要说清是累计的",
+            s.messages.any { (it.content ?: "").contains("含续跑") && (it.content ?: "").contains("上限（60）") }
+        )
+
+        val s2 = StoredSession.create(null)
+        s2.runTurnsUsed = 58           // 上一轮遗留的计数
+        val fresh = FakeClient(endless)
+        // 不真跑满 60 轮（每轮重建上下文是平方级，会把套件拖到 6 分钟）：
+        // 圈数熔断设 12，只要能证明轮次是从 0 起算、没被遗留的 58 卡住就够了。
+        // toolFailCap=0：每轮都调未知工具，否则 8 次连续失败熔断会先到（那是另一条测试锁的行为）。
+        engine(fresh, tmpDir(), session = s2, turnTokenCap = 0, toolCallCap = 12, toolFailCap = 0)
+            .runTurn("新任务", {}, {})   // 不续跑：必须从 0 重新计
+        assertTrue("新任务不该被遗留计数卡住，实际 ${fresh.requests.size} 轮", fresh.requests.size >= 12)
+        assertTrue(
+            "新任务的封顶文案不该带「含续跑」（那是续跑路径专属）",
+            s2.messages.none { (it.content ?: "").contains("含续跑") }
+        )
     }
 
     /** 预置调研技能是索引注入的一部分，触发词漏了「作文/报告」就永远不会被选中。 */

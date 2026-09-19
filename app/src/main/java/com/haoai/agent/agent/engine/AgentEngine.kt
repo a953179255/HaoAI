@@ -284,23 +284,18 @@ class AgentEngine(
         imageData: String? = null,
         audioPath: String? = null,
         videoPath: String? = null,
-        onReasoning: (String) -> Unit = {}
+        onReasoning: (String) -> Unit = {},
+        /** true=中断后续跑：轮数接着上次算，避免每续一次就把 60 轮上限重新给满。 */
+        resuming: Boolean = false
     ) {
         // 整轮统计起点：用户发出 → 最终回复落库（含工具循环全部 LLM 调用与工具执行）
         val turnStartMs = System.currentTimeMillis()
-        var turnPrompt = 0L
-        var turnCompletion = 0L
+        // 本轮的循环状态集中在 TurnState 里（原先散在 7 个可变局部变量 + StoredSession + 引擎字段）
+        val st = TurnState(resumedTurnsUsed = if (resuming) session.runTurnsUsed else 0)
+        if (!resuming) session.runTurnsUsed = 0
         // P2-5 重放保护按 turn 归零（跨 turn 的合法重复调用不受影响）
         lastExecutedSig = null
         lastExecutedResult = null
-        /** E5b 单轮工具调用累计（圈数熔断计数）。 */
-        var turnToolCalls = 0
-        /** E5b 软提醒只注入一次。 */
-        var softWarned = false
-        /** B3 轮次预算软提醒只注入一次（上限 80%）。 */
-        var turnBudgetWarned = false
-        /** 熔断触发后置位：本轮不执行工具，下一轮无工具纯文本总结后结束。 */
-        var forceFinish = false
         appendAndNotify(
             ChatMessage(
                 role = ChatMessage.ROLE_USER,
@@ -363,29 +358,28 @@ class AgentEngine(
 
         val streamBuf = StringBuilder()
         try {
-            var turns = 0
             while (true) {
                 currentCoroutineContext().ensureActive()
                 // E1：已完成请求轮数持久化（turncapped 续跑参考）
-                session.runTurnsUsed = turns
+                session.runTurnsUsed = st.turns
                 // B3 轮次预算软提醒：达上限 80% 一次性注入（对齐 E5b 70% 成本提醒机制）
-                if (!turnBudgetWarned && MAX_TURNS >= 10 && turns >= MAX_TURNS * 8 / 10) {
-                    turnBudgetWarned = true
+                if (!st.budgetWarned && MAX_TURNS >= 10 && st.turns >= MAX_TURNS * 8 / 10) {
+                    st.budgetWarned = true
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
-                            content = "[轮次提醒] 本任务已进行 $turns 轮（上限 $MAX_TURNS）。请在剩余轮次内收敛：完成关键步骤并准备给出最终回答，未完成项在任务清单中如实标注。"
+                            content = "[轮次提醒] 本任务已进行 ${st.turns} 轮（上限 $MAX_TURNS）。请在剩余轮次内收敛：完成关键步骤并准备给出最终回答，未完成项在任务清单中如实标注。"
                         ),
                         onEvent
                     )
                 }
-                if (++turns > MAX_TURNS) {
+                if (st.beginRound() > MAX_TURNS) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
                     finishTurn(natural = false)
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
-                            content = "已达单次任务轮数上限（$MAX_TURNS）。请拆分任务或开新会话继续。"
+                            content = st.capNotice(MAX_TURNS, resuming)
                         ),
                         onEvent
                     )
@@ -423,8 +417,8 @@ class AgentEngine(
                                         is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
                                         is SseEvent.Completed -> calls = ev.toolCalls
                                         is SseEvent.Usage -> {
-                                            turnPrompt += ev.promptTokens
-                                            turnCompletion += ev.completionTokens
+                                            st.promptTokens += ev.promptTokens
+                                            st.completionTokens += ev.completionTokens
                                             onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
                                         }
                                     }
@@ -484,8 +478,8 @@ class AgentEngine(
 
                 // E5 单轮成本熔断（100%）：保留模型已生成内容，注入收尾指令，
                 // 下一轮 apiTools 已清空 → 纯文本总结后自然结束（比直接 break 多一次调用，换来可用收场）。
-                // forceFinish 已置位时跳过：否则累计值恒 ≥ 上限，收尾轮会在 [A] 再次触发熔断形成死循环
-                if (!forceFinish && turnTokenCap > 0 && turnPrompt + turnCompletion >= turnTokenCap) {
+                // st.forceFinish 已置位时跳过：否则累计值恒 ≥ 上限，收尾轮会在 [A] 再次触发熔断形成死循环
+                if (!st.forceFinish && turnTokenCap > 0 && st.promptTokens + st.completionTokens >= turnTokenCap) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
                     if (streamBuf.isNotBlank()) {
                         appendAndNotify(
@@ -496,28 +490,28 @@ class AgentEngine(
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
-                            content = "[成本熔断] 本轮已消耗约 ${turnPrompt + turnCompletion} tokens，达到上限（${turnTokenCap}）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
+                            content = "[成本熔断] 本轮已消耗约 ${st.promptTokens + st.completionTokens} tokens，达到上限（${turnTokenCap}）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
                         ),
                         onEvent
                     )
                     onEvent(ToolChanged(ToolUpdate("cap-break", ToolRunState.DONE, "成本熔断", "token 上限")))
                     apiTools = emptyList()
-                    forceFinish = true
+                    st.forceFinish = true
                     continue
                 }
 
                 if (streamBuf.isNotBlank() || calls.isNotEmpty()) {
                     // calls 为空（或熔断收尾轮）= 本轮无工具调用、循环即将 break：这是最终回复，
                     // 把整轮累计的 token/耗时/模型名挂上（中间轮的 assistant 片段不带，避免重复展示）
-                    val isFinal = calls.isEmpty() || forceFinish
+                    val isFinal = calls.isEmpty() || st.forceFinish
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
                             content = streamBuf.toString(),
                             toolCalls = maskSecretArgs(calls),
                             reasoning = reasoningBuf.toString().ifBlank { null },
-                            promptTokens = if (isFinal) turnPrompt.toInt() else null,
-                            completionTokens = if (isFinal) turnCompletion.toInt() else null,
+                            promptTokens = if (isFinal) st.promptTokens.toInt() else null,
+                            completionTokens = if (isFinal) st.completionTokens.toInt() else null,
                             durationMs = if (isFinal) System.currentTimeMillis() - turnStartMs else null,
                             model = if (isFinal) provider.model else null
                         ),
@@ -526,7 +520,7 @@ class AgentEngine(
                 }
                 currentCoroutineContext().ensureActive()
 
-                if (calls.isEmpty() || forceFinish) {
+                if (calls.isEmpty() || st.forceFinish) {
                     // todo 兜底收尾：面板/通知卡只在 todo 工具被调用时刷新，而多数模型建完清单后
                     // 不再回头更新——B 终态收口统一处理：自然结束（已产出最终回答）残留 pending/
                     // in_progress 代收 completed；熔断收尾轮结束则回滚 pending（任务没做完）。
@@ -536,7 +530,7 @@ class AgentEngine(
                     break
                 }
 
-                turnToolCalls += calls.size
+                st.toolCalls += calls.size
 
                 // E6 同轮多工具并行分组：READ 且在白名单内的调用并发执行
                 // （ALWAYS_ASK 模式 READ 也审批，审批弹窗必须在主协程，不能进并发块）。
@@ -582,29 +576,29 @@ class AgentEngine(
                 }
 
                 // E5b 圈数熔断：单轮工具调用累计达上限 → 注入收尾指令，下一轮无工具纯文本总结
-                if (!forceFinish && toolCallCap > 0 && turnToolCalls >= toolCallCap) {
+                if (!st.forceFinish && toolCallCap > 0 && st.toolCalls >= toolCallCap) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
-                            content = "[圈数熔断] 本轮已执行 $turnToolCalls 次工具调用，达到上限（$toolCallCap）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
+                            content = "[圈数熔断] 本轮已执行 $st.toolCalls 次工具调用，达到上限（$toolCallCap）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
                         ),
                         onEvent
                     )
                     onEvent(ToolChanged(ToolUpdate("call-cap", ToolRunState.DONE, "圈数熔断", "工具调用次数")))
                     apiTools = emptyList()
-                    forceFinish = true
+                    st.forceFinish = true
                 }
 
                 // E5b 软提醒（70%）：一次性注入，只提醒不熔断；已熔断或关闭软提醒时跳过
-                if (softBudgetWarn && !softWarned && !forceFinish && turnTokenCap > 0 &&
-                    turnPrompt + turnCompletion >= turnTokenCap * 0.7
+                if (softBudgetWarn && !st.softWarned && !st.forceFinish && turnTokenCap > 0 &&
+                    st.promptTokens + st.completionTokens >= turnTokenCap * 0.7
                 ) {
-                    softWarned = true
+                    st.softWarned = true
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
-                            content = "[成本提醒] 本轮已消耗约 ${turnPrompt + turnCompletion} tokens，达到上限（${turnTokenCap}）的 70%。请精简后续步骤，尽快收尾任务。"
+                            content = "[成本提醒] 本轮已消耗约 ${st.promptTokens + st.completionTokens} tokens，达到上限（${turnTokenCap}）的 70%。请精简后续步骤，尽快收尾任务。"
                         ),
                         onEvent
                     )
@@ -612,10 +606,10 @@ class AgentEngine(
                 }
             }
             onEvent(Finished(null))
-            ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = true)
+            ledgerLlm("chat", st.promptTokens, st.completionTokens, System.currentTimeMillis() - turnStartMs, ok = true)
             maybeExtractMemory()
         } catch (ce: CancellationException) {
-            ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
+            ledgerLlm("chat", st.promptTokens, st.completionTokens, System.currentTimeMillis() - turnStartMs, ok = false)
             // B 终态收口：用户停止 → in_progress 回滚 pending（非挂起操作，取消态下安全）
             finishTurn(natural = false)
             if (streamBuf.isNotBlank()) {
@@ -624,8 +618,8 @@ class AgentEngine(
                         role = ChatMessage.ROLE_ASSISTANT,
                         content = streamBuf.toString() + "\n\n*[已停止]*",
                         // 用户中途停止：已消耗的部分也记上（best effort，供统计行展示）
-                        promptTokens = turnPrompt.toInt().takeIf { it > 0 },
-                        completionTokens = turnCompletion.toInt().takeIf { it > 0 },
+                        promptTokens = st.promptTokens.toInt().takeIf { it > 0 },
+                        completionTokens = st.completionTokens.toInt().takeIf { it > 0 },
                         durationMs = System.currentTimeMillis() - turnStartMs,
                         model = provider.model
                     ),
@@ -636,7 +630,7 @@ class AgentEngine(
             throw ce
         } catch (e: Exception) {
             runEndState = com.haoai.agent.data.StoredSession.RUN_FAILED
-            ledgerLlm("chat", turnPrompt, turnCompletion, System.currentTimeMillis() - turnStartMs, ok = false)
+            ledgerLlm("chat", st.promptTokens, st.completionTokens, System.currentTimeMillis() - turnStartMs, ok = false)
             // B 终态收口：失败 → in_progress 回滚 pending
             finishTurn(natural = false)
             val msg = ChatMessage(

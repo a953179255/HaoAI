@@ -683,7 +683,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     imageData = imageData,
                     audioPath = audioPath,
                     videoPath = videoPath,
-                    onReasoning = ::appendReasoning
+                    onReasoning = ::appendReasoning,
+                    // 续跑要连着上次算轮数：否则每中断一次，60 轮上限就重新给满，长任务可无限续
+                    resuming = isResumeInject
                 )
             } finally {
                 endStreaming()
