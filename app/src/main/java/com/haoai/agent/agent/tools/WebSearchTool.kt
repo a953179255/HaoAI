@@ -45,23 +45,42 @@ class WebSearchTool : Tool {
 
         // 引擎链：前一个**请求失败或结果低质**才退到下一个。
         // 只判失败不够——Bing 对爬虫会正常返回 200 和满屏结果块，内容却是日历/导航/词条类
-        // 聚合页（2026-09 实测：同一批 query 拿到"2026年大事要事一览表""AI工具集导航大全"
-        // "year（英文单词）_百度百科"），模型拿着它继续写，用户看到的就是"搜了 18 次没料"。
+        // 聚合页（2026-09-21 国内直连实测：`2026年 AI Agent 新变化` 前 4 条是
+        // "2026年日历全年完整图""国务院2026年节假日安排通知"），模型拿着它继续写，
+        // 用户看到的就是"搜了 18 次没料"。
+        //
+        // 两条国内路径上必须有的保护（都是实测出来的）：
+        // - **短超时**：DuckDuckGo 在国内不是"连不上立刻报错"，而是**挂 16 秒**才超时。
+        //   共享的 OkHttp readTimeout 是 120s，一次坏检索能把一个回合拖死。
+        // - **本轮失败记忆**：一个引擎这轮已经失败（超时/反爬页），后面就不再去试它。
+        //   否则每次搜索都要为同一家不可达的引擎再等一遍。
         val errors = mutableListOf<String>()
         val candidates = ArrayList<Pair<String, List<Hit>>>()
+        val fast = shortLived(client)
         for ((engine, fetch) in ENGINE_CHAIN) {
-            runCatching { fetch(client, query) }.onSuccess { hits ->
+            ctx.deadEngines[engine]?.let {
+                errors.add("$engine: 本轮已判不可用（$it）")
+                continue
+            }
+            runCatching { fetch(fast, query) }.onSuccess { hits ->
                 if (hits.isEmpty()) errors.add("$engine: 0 结果")
                 else {
                     candidates += engine to hits
                     if (qualityIssue(hits, query) == null) break   // 够好就不再试后面的引擎
                 }
-            }.onFailure { errors.add("$engine: ${it.message ?: it.javaClass.simpleName}") }
+            }.onFailure {
+                val why = it.message ?: it.javaClass.simpleName
+                ctx.deadEngines[engine] = why
+                errors.add("$engine: $why")
+            }
         }
         // 没有一家通过质量门时，取"低质条数最少"的那份，并如实告诉模型它不合格
         val pick = candidates.firstOrNull { qualityIssue(it.second, query) == null }
             ?: candidates.minByOrNull { junkCount(it.second) }
-            ?: return ToolResult("搜索失败（${errors.joinToString("; ")}）", true)
+            ?: return ToolResult(
+                if (candidates.isEmpty()) allDeadMessage(ctx.deadEngines, errors)
+                else "搜索失败（${errors.joinToString("; ")}）", true
+            )
         val (engine, results) = pick
         val hits = results
         return when {
@@ -99,12 +118,58 @@ class WebSearchTool : Tool {
     }
 
     /**
-     * 引擎尝试顺序。Bing 放前面是**国内直连可达性**的保守选择（DuckDuckGo 在部分网络下不通），
-     * 差别由上面的质量门兜住：Bing 给的东西不合格就继续往下试，不会停在坏结果上。
+     * 引擎尝试顺序。Bing 放前面是**国内直连可达性**的保守选择：2026-09-21 广州移动网络实测
+     * www.bing.com 0.6s 出结果，而 html.duckduckgo.com 挂 16s 超时、brave/mojeek 同样连不上、
+     * 百度直接弹安全验证页。顺序错了不会变好，只会让每次搜索多等十几秒。
+     * 差别由质量门兜住：Bing 给的东西不合格就继续往下试。
      */
-    private val ENGINE_CHAIN: List<Pair<String, suspend (okhttp3.OkHttpClient, String) -> List<Hit>>> by lazy {
-        listOf("bing" to ::tryBing, "duckduckgo" to ::tryDdg)
+    internal val ENGINE_CHAIN: List<Pair<String, suspend (okhttp3.OkHttpClient, String) -> List<Hit>>> by lazy {
+        listOf("bing" to ::tryBing, "duckduckgo" to ::tryDdg, "sogou" to ::trySogou)
     }
+
+    /**
+     * 搜索专用的短超时客户端。共享的 OkHttp 客户端 readTimeout 是 120s（为模型流式长响应设的），
+     * 用在搜索上一次坏引擎能把一个回合拖死；newBuilder 复用连接池与线程池，只换超时。
+     */
+    private fun shortLived(client: okhttp3.OkHttpClient): okhttp3.OkHttpClient =
+        client.newBuilder()
+            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(9, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+
+    /** 全部引擎本轮都不可用时给模型的说明：让它别再搜了，用手上的材料收尾。 */
+    internal fun allDeadMessage(dead: Map<String, String>, errors: List<String>): String =
+        "联网搜索当前不可用（" +
+            (if (dead.isEmpty()) errors.joinToString("; ")
+             else dead.entries.joinToString("; ") { "${it.key}: ${it.value}" }) +
+            "）。这些引擎本轮不再重试。请二选一：用你已经拿到的材料完成回答并说明信息来源受限；" +
+            "或告诉用户搜索暂时不可用、需要他检查网络/代理后重试。不要反复换关键词空转。"
+
+    /** 反爬/验证码页：HTTP 200 但一个结果都没有，必须判失败而不是"没有搜到相关结果"。 */
+    internal fun looksLikeAntiBot(html: String): Boolean =
+        html.length < 20_000 && listOf("antispider", "验证码", "安全检验", "输入验证码", "异常流量")
+            .any { html.contains(it, ignoreCase = true) }
+
+    /** 搜狗：国内可达（0.6–0.8s），但会周期性弹反爬页——所以只排第三，且失败即被本轮拉黑。 */
+    private suspend fun trySogou(client: okhttp3.OkHttpClient, query: String): List<Hit> =
+        runCatching {
+            val html = fetch(
+                client, "https://www.sogou.com/web?query=" +
+                    java.net.URLEncoder.encode(query, "UTF-8"), null
+            )
+            if (looksLikeAntiBot(html)) throw IllegalStateException("反爬验证页")
+            Regex("<h3[^>]*>\\s*<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", RegexOption.DOT_MATCHES_ALL)
+                .findAll(html).mapNotNull { m ->
+                    val title = stripTags(m.groupValues[2])
+                    var href = m.groupValues[1].replace("&amp;", "&")
+                    // 搜狗也是 /link?url=... 跳转链，解不出就原样（至少同源可点）
+                    if (href.startsWith("/link")) href = "https://www.sogou.com" + href
+                    if (title.isBlank()) null else Hit(title, href, "")
+                }.toList()
+        }.getOrElse { e ->
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw IllegalStateException(e.message ?: "sogou error")
+        }
 
     /** 明显不是调研目标的聚合页特征。判据刻意保守——只在**过半**结果命中时才判低质。 */
     private val JUNK_URL = listOf(
@@ -174,9 +239,13 @@ class WebSearchTool : Tool {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val builder = okhttp3.Request.Builder()
                 .url(url)
+                // 桌面 UA：搜索引擎给移动 UA 与桌面 UA 的结果块结构不同，2026-09-21 国内直连
+                // 实测是按桌面 UA 验证的（www.bing.com 出 10 条 b_algo，移动 UA 的 cn.bing.com
+                // 只解析出 5 条），换 UA 会连带改掉解析命中率。
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 )
                 .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             if (postBody != null) {
@@ -193,8 +262,9 @@ class WebSearchTool : Tool {
     /** Bing 国内可达：解析 b_algo 结果块。 */
     private suspend fun tryBing(client: okhttp3.OkHttpClient, query: String): List<Hit> =
         runCatching {
-            val html = fetch(client, "https://cn.bing.com/search?q=" +
+            val html = fetch(client, "https://www.bing.com/search?q=" +
                 java.net.URLEncoder.encode(query, "UTF-8"), null)
+            if (looksLikeAntiBot(html)) throw IllegalStateException("反爬验证页")
             val blockRe = Regex("<li class=\"b_algo\"[^>]*>(.*?)</li>", RegexOption.DOT_MATCHES_ALL)
             // Bing 结构：<a href="..."><h2>标题</h2></a>（a 在外层）；兼容旧结构
             val linkRe = Regex(

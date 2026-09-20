@@ -128,5 +128,38 @@ class WebHygieneTest {
         assertTrue(qualityIssue(hits, "agent") == null)
     }
 
+    /** 反爬页是 HTTP 200 + 一小段带"验证码/antispider"的壳，必须判失败而不是"没搜到结果"。 */
+    @Test
+    fun antiBotPagesAreDetected() = with(WebSearchTool()) {
+        assertTrue(looksLikeAntiBot("<html><body>搜狗搜索 请输入验证码 antispider</body></html>"))
+        assertTrue(looksLikeAntiBot("<html>安全检验 异常流量 " + "x".repeat(200) + "</html>"))
+        assertFalse(looksLikeAntiBot("<html><body>" + "正常结果块 ".repeat(5000) + "</body></html>"))
+    }
+
+    /** 全部引擎本轮不可用时，要把原因摊开并明确让模型停止空转。 */
+    @Test
+    fun allEnginesDeadTellsTheModelToStopSearching() = with(WebSearchTool()) {
+        val msg = allDeadMessage(
+            mapOf("duckduckgo" to "connect timed out", "sogou" to "反爬验证页"), emptyList()
+        )
+        assertTrue(msg.contains("duckduckgo: connect timed out"))
+        assertTrue(msg.contains("sogou: 反爬验证页"))
+        assertTrue(msg.contains("不要反复换关键词空转"))
+    }
+
+    /**
+     * 引擎顺序锁：bing 必须在最前。
+     * 国内直连实测（2026-09-21 广州移动）：www.bing.com 0.6s 出结果，
+     * html.duckduckgo.com 挂 16s 超时、brave/mojeek 连不上、百度弹验证页。
+     * 把 ddg 提到前面（海外出口下看着更好）会让每次搜索白等十几秒。
+     */
+    @Test
+    fun bingStaysFirstBecauseOfDomesticReachability() {
+        assertEquals(
+            listOf("bing", "duckduckgo", "sogou"),
+            WebSearchTool().ENGINE_CHAIN.map { it.first }
+        )
+    }
+
     private fun assertNotEqualsSig(a: String, b: String) = assertTrue("签名不该把不同结果集判成同一批", a != b)
 }

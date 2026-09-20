@@ -54,7 +54,12 @@ data class ToolContext(
      * 不同 URL 抓回来的开头一字不差，说明本地挑容器挑到的是站点模板而不是文章，
      * 拿它当信号触发一次远端 reader 兜底（见 WebFetchTool）。
      */
-    val fetchHeads: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap()
+    val fetchHeads: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap(),
+    /**
+     * 本轮已经失败过的搜索/抓取引擎 → 失败原因。国内实测：DuckDuckGo 不是"立刻报错"而是
+     * 挂十几秒才超时，不记下来就会每次搜索都再等一遍（见 WebSearchTool）。
+     */
+    val deadEngines: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap()
 ) {
     /** 命中未过期缓存则返回结果；过期条目顺带清除。 */
     fun webCacheGet(key: String, ttlMs: Long = 10 * 60_000L): String? {

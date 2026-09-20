@@ -66,8 +66,10 @@ class WebFetchTool : Tool {
                     val head = text.filterNot { it == '\n' }.take(160)
                     val repeatedTemplate = head.isNotBlank() &&
                         ctx.fetchHeads.putIfAbsent(head, url) != null
-                    if (text.length < MIN_USEFUL_TEXT || repeatedTemplate) {
-                        val via = readerText(url)
+                    if ((text.length < MIN_USEFUL_TEXT || repeatedTemplate) &&
+                        !ctx.deadEngines.containsKey(READER_ENGINE)
+                    ) {
+                        val via = readerText(url, ctx)
                         if (via != null && via.length > text.length * 1.2) {
                             text = via.trim() + "\n\n（正文由远端 reader 提取；本地解析" +
                                 (if (repeatedTemplate) "拿到的与已抓过的页面模板重复" else "没定位到正文") + "）"
@@ -115,20 +117,27 @@ class WebFetchTool : Tool {
     /**
      * 免 key 的远端正文 reader（r.jina.ai/<url>，返回 markdown 纯文本）。
      *
-     * 只在本地挑容器失败时才走，且**任何失败都静默**：这个域名在部分网络下不可达，
-     * 兜底不该把一次本来能返回内容的抓取变成失败。无 key 有速率限制，所以不做默认路径。
+     * 只在本地挑容器失败时才走，且**任何失败都静默**并把 reader 本轮拉黑：
+     * 2026-09-21 国内直连实测 r.jina.ai 是"挂 24 秒超时"而不是快速失败，
+     * 共享客户端的 readTimeout 又是 120s——不记黑名单的话，每次正文短的抓取都要白等二十多秒。
      */
-    private suspend fun readerText(url: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun readerText(url: String, ctx: ToolContext): String? = withContext(Dispatchers.IO) {
         runCatching {
+            val fast = http.newBuilder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(8, TimeUnit.SECONDS)
+                .build()
             val req = Request.Builder()
                 .url("https://r.jina.ai/$url")
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) HaoAI/0.1")
                 .header("Accept", "text/plain")
                 .build()
-            http.newCall(req).execute().use { r ->
-                if (!r.isSuccessful) null else r.body?.string()?.take(200_000)
+            fast.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) error("HTTP ${r.code}")
+                r.body?.string()?.take(200_000)
             }
-        }.getOrNull()
+        }.onFailure { ctx.deadEngines[READER_ENGINE] = it.message ?: it.javaClass.simpleName }
+            .getOrNull()
     }
 
     private companion object {
@@ -136,6 +145,9 @@ class WebFetchTool : Tool {
 
         /** 低于这个长度基本可以断定没挑到正文（导航 + 版权尾巴通常也就几百字）。 */
         const val MIN_USEFUL_TEXT = 600
+
+        /** 失败即本轮拉黑的兜底引擎名（与 WebSearchTool 共用同一张失败表）。 */
+        const val READER_ENGINE = "reader"
     }
 }
 
