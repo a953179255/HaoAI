@@ -7,13 +7,16 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,7 +25,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
@@ -37,6 +39,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -47,6 +56,16 @@ import com.haoai.agent.agent.tools.TodoItem
 import com.haoai.agent.ui.common.GlassPanel
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
+/**
+ * 「进行中」徽标的专用暖色。
+ *
+ * 为什么不用 `colorScheme.tertiary`：本应用主题的 tertiary 是 0xFF256B41（深绿），与 primary
+ * （0xFF1EA84F）同色系 —— 徽标就失去了"颜色冗余强化"（只剩形状差异）。这里取与聊天区既有暖色
+ * 语汇（STOPPED/DENIED 用 0xFFFFC46B、上下文用量用 0xFFFF6D00）同一族、且对白底对比度
+ * ≈4.3:1（非文本 ≥3:1 达标）的琥珀色。深浅主题下都能用（叠在玻璃面上仍可辨）。
+ */
+private val DoingAmber = androidx.compose.ui.graphics.Color(0xFFBA7517)
+
 /** 方案 A 统一缓动：easeOutQuint 近似（一镜到底、尾段轻落）。 */
 private val MorphEase = androidx.compose.animation.core.CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
@@ -55,8 +74,12 @@ private val MorphEase = androidx.compose.animation.core.CubicBezierEasing(0.22f,
  * 胶囊 ⇄ 面板是同一颗玻璃，宽/高/圆角全由 morph 单一进度源插值（420ms easeOutQuint）——
  * 高度 = 34dp 头部 + 清单固有高 × ease(morph)，中间帧边界四角恒定圆角；
  * 清单跟随玻璃高度被裁剪显露，无独立动画源。
- * 收起态内容：呼吸点 + 进行中任务名（截断）+ N/M + 圆钮；展开态交叉淡入：
- * 「任务」+ N/M + 64dp 短进度条。两态都只有右侧 LiquidGlassButton 触发切换。
+ * 收起态：呼吸点 + 进行中任务名（截断）+ N/M + 圆钮，**胶囊宽度固定两档**
+ * （进行中 200dp / 空闲 150dp）——原跟任务名浮动会让形变起点每换一步跳一次
+ * （2026-09-20 用户选型 B：固定宽度 + 名字截断）。
+ * 展开态交叉淡入：「任务」+ N/M + **分段刻度进度条**（每段 = 1 个任务，天然表达 N/M；
+ * total > 8 时字段过窄，退化为等比条 + 3 条刻度 + 填充端圆点）。
+ * 两态都只有右侧 LiquidGlassButton 触发切换。
  * 固有尺寸测量五坑（详见 memory）：测量一律外置玻璃外独立隐形容器（alpha=0
  * 保持自然布局），玻璃 fixed 约束会把内部子项测量 coerce（宽度自锁/高度压扁死锁）。
  * 细线/直角阴影修复：lensRadius 压到 13dp（折射环宽 ≤ 圆角半径）；surfaceAlpha 0.50。
@@ -92,8 +115,6 @@ fun TaskFloat(
     )
 
     val density = androidx.compose.ui.platform.LocalDensity.current
-    // 胶囊固有宽（收起态内容实测；首次测量前直接用全宽避免 0 宽闪跳）
-    var pillPx by remember { mutableFloatStateOf(0f) }
     // 清单固有高（方案 E：morph 单一进度源插值高度的目标基准）
     var listPx by remember { mutableFloatStateOf(0f) }
 
@@ -104,7 +125,11 @@ fun TaskFloat(
         contentAlignment = Alignment.TopEnd
     ) {
         val fullPx = with(density) { maxWidth.toPx() }
-        val wPx = if (pillPx <= 0f) fullPx else pillPx + (fullPx - pillPx) * morph
+        // 收起态胶囊宽度：固定两档（进行中 200dp / 空闲 150dp）。原先由内容实测
+        // （任务名限宽 130dp）驱动：长任务名会把胶囊撑到接近全宽、且任务名每换一步
+        // 形变起点就跳一次。固定后同一轮内恒定，只在"开始/结束任务"两个事件点切档。
+        val pillPx = with(density) { (if (hasPending) 200.dp else 150.dp).toPx() }
+        val wPx = pillPx + (fullPx - pillPx) * morph
         val corner = androidx.compose.ui.unit.lerp(17.dp, 15.dp, morph)
         // 方案 E：高度 = 头部 34dp + 清单高 × morphEase(morph)，单一进度源驱动，
         // 圆角全程恒定——中间帧四角全圆（双动画叠加时底角会被拉直，已翻车）
@@ -113,47 +138,9 @@ fun TaskFloat(
         val revealEase = MorphEase.transform(morph)
         val hPx = headerPx + targetListPx * revealEase
 
-        // 隐形测量区（alpha=0 不渲染但保持自然布局）：玻璃外量固有尺寸。
-        // 五坑全集：玻璃内测量会被玻璃自身 fixed 约束 coerce（宽度三坑 + 高度第四坑）；
-        // 同一容器混测两个维度会互相污染——清单 fillMaxWidth 撑满父宽，
-        // 把胶囊宽测量的 Box 一起撑成通栏（胶囊变全宽第五坑），必须拆开各自 wrap。
-        Box(
-            Modifier
-                .alpha(0f)
-                .onSizeChanged { if (it.width > 0) pillPx = it.width.toFloat() }
-        ) {
-            Row(
-                Modifier.padding(start = 12.dp, end = 38.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (hasPending) {
-                    Box(
-                        Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = breath))
-                    )
-                    Spacer(Modifier.width(7.dp))
-                }
-                Text(
-                    activeTask?.text ?: "任务",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontSize = 11.5.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 130.dp)
-                )
-                Spacer(Modifier.width(7.dp))
-                Text(
-                    "$doneCount/$total",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-
+        // 隐形测量区（alpha=0 不渲染但保持自然布局）：玻璃外量**清单固有高**。
+        // （胶囊宽度已改为固定两档，不再需要宽度实测——2026-09-20 选型 B；
+        //  玻璃内测量五坑的注意事项仍适用于下面这个高度测量容器）
         // 清单固有高测量：独立容器 + wrapContentSize 钉在右上（不占布局空间），
         // 宽度给足（BoxWithConstraints 全宽）保证行内文本不折行、行高真实
         Column(
@@ -164,8 +151,14 @@ fun TaskFloat(
                 .onSizeChanged { if (it.height > 0) listPx = it.height.toFloat() }
                 .padding(bottom = 6.dp)
         ) {
-            items.forEach { item ->
-                TaskItemRow(item)
+            items.forEachIndexed { index, item ->
+                TaskItemRow(
+                    item = item,
+                    isFirst = index == 0,
+                    isLast = index == items.lastIndex,
+                    prevDone = index > 0 && items[index - 1].status == "completed",
+                    breath = breath
+                )
             }
         }
 
@@ -188,8 +181,9 @@ fun TaskFloat(
                         .height(34.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
-                    // 收起版：● 进行中任务名 · N/M（纯显示，宽度由玻璃外的隐形测量行驱动；
-                    // 右距 38dp = chevron 圆钮区 30dp + 8dp 间隙，内容与圆钮互不叠压）
+                    // 收起版：● 进行中任务名 · N/M（纯显示）。胶囊宽度固定两档（见 wPx）；
+                    // 名字用 weight(fill = false) 吃满可用宽后省略号截断——不再写死 130dp 上限，
+                    // 名字再长也撑不破胶囊。右距 38dp = 圆钮 26dp + 4dp 边距 + 8dp 间隙
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -213,7 +207,7 @@ fun TaskFloat(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 130.dp)
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         Spacer(Modifier.width(7.dp))
                         Text(
@@ -223,8 +217,10 @@ fun TaskFloat(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    // 展开版：任务 · N/M · 进度条（占满"任务 N/M"右侧的剩余宽度；
-                    // 2026-09-11 用户反馈固定 64dp 太短。右距 38dp 仍为圆钮让位）
+                    // 展开版：「任务」+ N/M + 分段刻度进度条（2026-09-20 定稿 AD 整合版）。
+                    // 每段 = 1 个任务：等比条撑满时"左半绿、右半空"，长且单调，也读不出共几项；
+                    // 分段后长度有了节拍，且天然表达 N/M。total > 8 时段过窄，退化见下。
+                    // 右距 38dp 为圆钮让位（26dp 圆钮 + 4dp 边距 + 8dp 间隙），进度段不得越过。
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -234,31 +230,91 @@ fun TaskFloat(
                     ) {
                         Text(
                             "任务",
-                            style = MaterialTheme.typography.labelMedium,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
                             "$doneCount/$total",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
                         )
                         Spacer(Modifier.width(10.dp))
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                        ) {
-                            Box(
+                        if (total in 1..8) {
+                            // 正常档：分段刻度条，每段 = 1 个任务（段数即项数）
+                            Row(
+                                Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items.forEach { seg ->
+                                    val segColor = when (seg.status) {
+                                        "completed" -> MaterialTheme.colorScheme.primary
+                                        "in_progress" ->
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                                        "cancelled" ->
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                                    }
+                                    Box(
+                                        Modifier
+                                            .weight(1f)
+                                            .height(6.dp)
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(segColor)
+                                            .then(
+                                                if (seg.status == "in_progress")
+                                                    Modifier.border(
+                                                        1.dp,
+                                                        MaterialTheme.colorScheme.primary,
+                                                        RoundedCornerShape(3.dp)
+                                                    )
+                                                else Modifier
+                                            )
+                                    )
+                                }
+                            }
+                        } else {
+                            // 退化档（> 8 项，段会窄到不可辨）：等比条 + 3 条刻度 + 填充端圆点
+                            val fbTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                            val fbFill = MaterialTheme.colorScheme.primary
+                            val fbTick = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)
+                            Canvas(
                                 Modifier
-                                    .fillMaxWidth(progress)
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
+                                    .weight(1f)
+                                    .height(8.dp)
+                            ) {
+                                val cy = size.height / 2f
+                                val barH = 4.dp.toPx()
+                                val rr = CornerRadius(barH / 2f, barH / 2f)
+                                drawRoundRect(
+                                    color = fbTrack,
+                                    topLeft = Offset(0f, cy - barH / 2f),
+                                    size = Size(size.width, barH),
+                                    cornerRadius = rr
+                                )
+                                val fillW = size.width * progress
+                                if (fillW > 0f) {
+                                    drawRoundRect(
+                                        color = fbFill,
+                                        topLeft = Offset(0f, cy - barH / 2f),
+                                        size = Size(fillW, barH),
+                                        cornerRadius = rr
+                                    )
+                                }
+                                listOf(0.25f, 0.5f, 0.75f).forEach { f ->
+                                    val x = size.width * f
+                                    drawLine(
+                                        fbTick,
+                                        Offset(x, cy - 4.dp.toPx()),
+                                        Offset(x, cy + 4.dp.toPx()),
+                                        1.dp.toPx()
+                                    )
+                                }
+                                if (fillW > 0f) {
+                                    drawCircle(fbFill, 3.5.dp.toPx(), Offset(fillW, cy))
+                                }
+                            }
                         }
                     }
                     //  chevron：位置随宽度滑到右缘，旋转由 morph 驱动（0°=⌃收起 / 180°=⌄展开）。
@@ -296,8 +352,14 @@ fun TaskFloat(
                             .alpha(((morph - 0.3f) / 0.7f).coerceIn(0f, 1f))
                             .padding(bottom = 6.dp)
                     ) {
-                        items.forEach { item ->
-                            TaskItemRow(item)
+                        items.forEachIndexed { index, item ->
+                            TaskItemRow(
+                                item = item,
+                                isFirst = index == 0,
+                                isLast = index == items.lastIndex,
+                                prevDone = index > 0 && items[index - 1].status == "completed",
+                                breath = breath
+                            )
                         }
                     }
                 }
@@ -306,87 +368,144 @@ fun TaskFloat(
     }
 }
 
+/**
+ * 清单行（2026-09-20 定稿：AD 整合版 + 微变体 1）：
+ *
+ * - **废除整行 alpha 0.45**：它与文字自身 alpha 相乘（0.45 × 0.5 = 0.22），把完成项文字
+ *   的实际对比度压到 ≈1.6:1（正文要求 ≥4.5:1）——信息被"抹掉"而不是"弱化"。改为**文字单层
+ *   alpha**：完成/取消 0.62、待办 0.88、进行中 1.0（实测口径 ≈4.8:1 / ≈11:1 / 最高）；
+ * - **左侧 16dp 节点列**：时间轴轨道（上/下段）+ 几何状态徽标，整体读作一条进度轨道；
+ *   段色由相邻节点状态决定（上一节点已完成 → primary，否则 onSurface 12%）；首行不画上段、
+ *   末行不画下段，天然收口；
+ * - **轨道画在行内**：`drawBehind` 置于 `padding` 之前 ⇒ 画布覆盖含 padding 的整行高度，
+ *   相邻行的段首尾相接；**行高不变** ⇒ 玻璃外那个隐形高度测量无需改动（形变零风险）。
+ *   上段止于徽标上缘、下段起于徽标下缘 —— 徽标直径即缺口，空心徽标也无需底色遮罩；
+ * - 微变体 1：进行中行加 primary 8% 圆角底 + 文字半粗体（一眼抓到"正在做的那件"）。
+ */
 @Composable
-private fun TaskItemRow(item: TodoItem) {
+private fun TaskItemRow(
+    item: TodoItem,
+    isFirst: Boolean,
+    isLast: Boolean,
+    /** 上一个节点是否已完成（决定本行"上段"轨道的颜色） */
+    prevDone: Boolean,
+    /** 呼吸值：复用胶囊呼吸点的既有动画源，不新增动画源 */
+    breath: Float
+) {
     val isDone = item.status == "completed"
     val isCancelled = item.status == "cancelled"
     val isDoing = item.status == "in_progress"
 
-    val alpha by animateFloatAsState(
-        targetValue = if (isDone || isCancelled) 0.45f else 1f,
-        label = "taskAlpha"
-    )
+    val railDone = MaterialTheme.colorScheme.primary
+    val railTodo = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+    val badgeHalf = 8.dp
+    val rowTint = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
 
-    Row(
-        modifier = Modifier
+    Box(
+        Modifier
             .fillMaxWidth()
-            // 左距 14dp：✓/○ 图标列与头部「任务」标题对齐（此前 0dp 顶到玻璃缘，
-            // 用户反馈 2026-09-10）
-            .padding(start = 14.dp, end = 12.dp)
-            .padding(vertical = 3.dp)
-            .alpha(alpha),
-        verticalAlignment = Alignment.CenterVertically
+            .then(
+                if (isDoing) {
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(rowTint)
+                } else Modifier
+            )
     ) {
-        TaskStatusIcon(status = item.status, priority = item.priority)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            item.text,
-            style = MaterialTheme.typography.bodySmall,
-            fontSize = 13.sp,
-            color = when {
-                isDone || isCancelled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                else -> MaterialTheme.colorScheme.onSurface
-            },
-            textDecoration = if (isDone || isCancelled) TextDecoration.LineThrough else null,
-            modifier = Modifier.weight(1f)
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    val cx = 14.dp.toPx() + badgeHalf.toPx()
+                    val cy = size.height / 2f
+                    val r = badgeHalf.toPx()
+                    val stroke = 2.dp.toPx()
+                    if (!isFirst) {
+                        drawLine(
+                            if (prevDone) railDone else railTodo,
+                            Offset(cx, 0f), Offset(cx, cy - r), stroke, StrokeCap.Round
+                        )
+                    }
+                    if (!isLast) {
+                        drawLine(
+                            if (isDone) railDone else railTodo,
+                            Offset(cx, cy + r), Offset(cx, size.height), stroke, StrokeCap.Round
+                        )
+                    }
+                }
+                .padding(start = 14.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TaskStatusIcon(status = item.status, priority = item.priority, breath = breath)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                item.text,
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = if (isDoing) 13.5.sp else 13.sp,
+                fontWeight = if (isDoing) FontWeight.SemiBold else FontWeight.Normal,
+                color = when {
+                    isDone || isCancelled ->
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f)
+                    isDoing -> MaterialTheme.colorScheme.onSurface
+                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                },
+                textDecoration = if (isDone || isCancelled) TextDecoration.LineThrough else null,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
     }
 }
 
+/**
+ * 状态徽标（2026-09-20 定稿）：**几何区分四态**，颜色只做冗余强化 ——
+ * 灰度或色觉障碍下仍可辨（WCAG 1.4.1）。直径固定 16dp，与轨道端点对齐
+ * （轨道停在徽标边缘，所以空心徽标不必铺底色遮罩）。
+ * 完成 = 实心圆 + 白勾；进行中 = 2dp 琥珀环 + 内点（脉冲，复用 breath）；
+ * 取消 = 环 + 斜杠；待办 = 1.5dp 空环（高优先用 error 色）。
+ */
 @Composable
-private fun TaskStatusIcon(status: String, priority: String) {
-    val size = 16.dp
-    when (status) {
-        "completed" -> {
-            Text(
-                "✓",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                modifier = Modifier.width(size)
-            )
-        }
-        "in_progress" -> {
-            Text(
-                "●",
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.tertiary,
-                modifier = Modifier.width(size)
-            )
-        }
-        "cancelled" -> {
-            Text(
-                "–",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.error.copy(alpha = 0.6f),
-                modifier = Modifier.width(size)
-            )
-        }
-        else -> {
-            val color = when (priority) {
-                "high" -> MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
-                "low" -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+private fun TaskStatusIcon(status: String, priority: String, breath: Float) {
+    val badgeSize = 16.dp
+    val primary = MaterialTheme.colorScheme.primary
+    val onVar = MaterialTheme.colorScheme.onSurfaceVariant
+    val error = MaterialTheme.colorScheme.error
+    Canvas(Modifier.size(badgeSize)) {
+        val w = size.width
+        when (status) {
+            "completed" -> {
+                drawCircle(primary, radius = w / 2f)
+                val tick = 1.8.dp.toPx()
+                drawLine(
+                    Color.White,
+                    Offset(w * 0.28f, w * 0.52f), Offset(w * 0.44f, w * 0.68f), tick, StrokeCap.Round
+                )
+                drawLine(
+                    Color.White,
+                    Offset(w * 0.44f, w * 0.68f), Offset(w * 0.72f, w * 0.34f), tick, StrokeCap.Round
+                )
             }
-            Text(
-                "○",
-                fontSize = 12.sp,
-                color = color,
-                modifier = Modifier.width(size)
-            )
+            "in_progress" -> {
+                drawCircle(DoingAmber, radius = w / 2f - 1.dp.toPx(), style = Stroke(2.dp.toPx()))
+                drawCircle(DoingAmber.copy(alpha = breath), radius = 2.5.dp.toPx())
+            }
+            "cancelled" -> {
+                val c = onVar.copy(alpha = 0.55f)
+                drawCircle(c, radius = w / 2f - 0.8.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+                drawLine(
+                    c, Offset(w * 0.28f, w * 0.72f), Offset(w * 0.72f, w * 0.28f),
+                    1.5.dp.toPx(), StrokeCap.Round
+                )
+            }
+            else -> {
+                val c = when (priority) {
+                    "high" -> error.copy(alpha = 0.75f)
+                    "low" -> onVar.copy(alpha = 0.4f)
+                    else -> onVar.copy(alpha = 0.65f)
+                }
+                drawCircle(c, radius = w / 2f - 0.8.dp.toPx(), style = Stroke(1.5.dp.toPx()))
+            }
         }
     }
 }
-
-
