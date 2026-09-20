@@ -500,7 +500,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val s = c.sessionStore.load(id) ?: return
         // E1 进程死亡检测：持久化 running 且登记表确认进程内已无引擎持有，才判中断。
         // D16：实例分裂/切走再切回时旧实例的引擎可能仍在跑，误标会弹假「任务中断」横幅
-        if (s.runState == "running" && !com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) {
+        if (s.runState == StoredSession.RUN_RUNNING && !com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) {
             s.runState = com.haoai.agent.data.StoredSession.RUN_INTERRUPTED
             runCatching { c.sessionStore.save(s) }
         }
@@ -713,7 +713,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // E1: 入口置 running + goal（被杀后据此展示恢复横幅）——立即持久化
         if (!isResumeInject) s.runGoal = text.takeSafe(200)
         s.runTurnsUsed = 0
-        s.runState = "running"
+        s.runState = StoredSession.RUN_RUNNING
         // 落盘前回填 store 里较新的标题状态（上一轮标题协程可能刚写完，副本是旧的）
         syncTitleFromStore(s)
         runCatching { c.sessionStore.save(s) }
@@ -1785,7 +1785,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) return
         // 剥掉历史恢复包装（点击继续后再次中断会嵌套），还原最初的任务目标
         val goal = (s.runGoal?.let { stripResumeNesting(it) } ?: "未记录目标").take(200)
-        val turns = s.runTurnsUsed
+        // runTurnsUsed 是"已完成轮数"，中断发生在那一轮的**途中**，报数要 +1，
+        // 否则第一轮里被杀掉会显示成"上次任务在第 0 轮中断"
+        val turns = s.runTurnsUsed + 1
         val resumeText = "[系统恢复] 上次任务在第 $turns 轮中断，未完成目标：$goal。请先评估当前进度（可读文件/记忆核实），再继续执行。"
         val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = goal)
         currentSession = view

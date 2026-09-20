@@ -29,6 +29,13 @@ class AppContainer(app: Application) {
     val cipher = KeystoreCipher()
     val settingsStore = SettingsStore(app)
     val sessionStore = SessionStore(app)
+
+    init {
+        // 冷启动清扫：引擎只活在本进程，上个进程留下的 running 一律判成中断，
+        // 否则那些会话既没有恢复入口也没有停止键，会永久卡住（放在 sessionStore
+        // 之后声明，Kotlin 的 init 块按声明顺序执行）
+        sessionStore.markStaleRunsInterrupted()
+    }
     val workspace = WorkspaceManager(app)
     // 长期记忆真源 = 工作区 MEMORY.md（"文件即记忆"）；SAF 工作区时回退内部目录
     val memoryBank = MemoryBank(

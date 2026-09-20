@@ -318,6 +318,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 // 是必须能自动化验证的路径，而 Compose 的停止键不暴露给 a11y 树、坐标点按不稳。
                 chatVm.stop()
             }
+            "resume" -> {
+                // 调试直达：haoai://debug/resume —— 点恢复横幅上的「继续」。
+                // 同 debug/stop：横幅按钮是 Compose 节点，坐标点按不可靠，而"被杀后续跑"
+                // 这条路径（遗留 running 判中断 → 补未确认工具结果 → 续跑）必须能自动验证。
+                chatVm.resumeRun()
+            }
             "followdump" -> {
                 // 导出跟随判定的**内存**轨迹（滚动期不落盘，避免主线程 IO 卡顿）：
                 //   adb shell am start -d "haoai://debug/followdump" com.haoai.agent

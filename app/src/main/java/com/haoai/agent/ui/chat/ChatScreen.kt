@@ -825,13 +825,16 @@ fun ChatScreen(
                 // E1 断点恢复横幅：从顶栏下沿延展出现（running 标记由 selectSession 死亡检测置入）
                 val runStateNow = activeSession?.runState
                 val runGoalNow = activeSession?.runGoal
-                // 中断尾部形态：按会话+消息数记忆，避免每次重组重扫消息列表
-                val tailShape = remember(
+                // 中断判决文案：判定与措辞都在 StoredSession.interruptionNote 里（纯函数、可单测），
+                // UI 只负责显示。按会话+消息数记忆，避免每次重组重扫消息列表。
+                val interruptionNote = remember(
                     activeSession?.id, activeSession?.messages?.size, runStateNow
                 ) {
                     if (com.haoai.agent.data.StoredSession.resumable(runStateNow))
-                        com.haoai.agent.data.StoredSession.tailShapeOf(activeSession?.messages ?: emptyList())
-                    else com.haoai.agent.data.StoredSession.TAIL_CLEAN
+                        com.haoai.agent.data.StoredSession.interruptionNote(
+                            runStateNow, activeSession?.messages ?: emptyList()
+                        )
+                    else ""
                 }
                 androidx.compose.animation.AnimatedVisibility(
                     visible = com.haoai.agent.data.StoredSession.resumable(runStateNow) && runGoalNow != null,
@@ -867,18 +870,7 @@ fun ChatScreen(
                                     maxLines = 2
                                 )
                                 Text(
-                                    // 尾部形态优先：断在哪一步比"哪种结束状态"更值得说（OpenMinis 式）
-                                    when {
-                                        tailShape == com.haoai.agent.data.StoredSession.TAIL_UNANSWERED_USER ->
-                                            "消息已发出但任务未开始执行，可继续"
-                                        tailShape == com.haoai.agent.data.StoredSession.TAIL_TOOL ->
-                                            "停在工具执行中，可继续任务"
-                                        tailShape == com.haoai.agent.data.StoredSession.TAIL_PARTIAL_ASSISTANT ->
-                                            "回答生成到一半中断，可继续生成"
-                                        runStateNow == com.haoai.agent.data.StoredSession.RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
-                                        runStateNow == com.haoai.agent.data.StoredSession.RUN_FAILED -> "执行出错，可继续尝试"
-                                        else -> "进程中断，可继续执行"
-                                    },
+                                    interruptionNote,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )

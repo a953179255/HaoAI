@@ -275,6 +275,45 @@ class AgentEngine(
         throw lastErr ?: IllegalStateException("压缩摘要无可用模型")
     }
 
+    /**
+     * 续跑入口的修复：把「已发起、没有结果」的工具调用补成一条明确的未确认结果。
+     *
+     * 位置必须在落恢复指令**之前**：tool 消息要紧跟它所属的那条 assistant，中间插一条
+     * user 会让 OpenAI 兼容端以 400 拒掉整次请求。
+     *
+     * 为什么非补不可：
+     * 1. 不补的话 pairSanitized 会把"调用没有结果"的那条 assistant 整条丢出请求
+     *    ——中断前那一轮做了什么，对模型完全不可见；
+     * 2. 模型只记得自己发起过调用，不记得结果没落地，于是要么当它已完成继续往下走，
+     *    要么原样重跑一遍（写类工具就是重复副作用）。
+     * 三家参考实现同一条纪律：**绝不自动重放非幂等工具**（OpenClaw resume-policy 只有
+     * replaySafe 才重放；pi 的 ToolCall 带 replay:"never"|"safe"；Hermes 在破坏性工具
+     * 执行前先把 tool-call 回合落库）。这里按现成的 RiskLevel 分道：只读工具鼓励重试，
+     * 写类工具要求先核实。
+     */
+    private fun closeDanglingCalls(onEvent: (TurnEvent) -> Unit) {
+        com.haoai.agent.data.StoredSession.danglingCalls(session.messages).forEach { call ->
+            val readOnly = policy.riskOf(call.name) == com.haoai.agent.agent.policy.RiskLevel.READ
+            appendAndNotify(
+                ChatMessage(
+                    role = ChatMessage.ROLE_TOOL,
+                    content = if (readOnly) {
+                        "[系统恢复] 上次进程中断，${call.name} 的这次调用没有返回结果。" +
+                            "它是只读工具，重试没有副作用，请重新调用一次拿到结果。"
+                    } else {
+                        "[系统恢复] 上次进程中断，${call.name} 的这次调用没有返回结果，" +
+                            "它的副作用可能已经发生。禁止用相同参数盲目重跑：先用只读方式核实当前状态" +
+                            "（文件是否已存在/内容是否已改、命令是否已生效），确认未完成再重做。"
+                    },
+                    toolCallId = call.id,
+                    toolName = call.name,
+                    error = true
+                ),
+                onEvent
+            )
+        }
+    }
+
     suspend fun runTurn(
         userText: String,
         onDelta: (String) -> Unit,
@@ -300,6 +339,7 @@ class AgentEngine(
         // P2-5 重放保护按 turn 归零（跨 turn 的合法重复调用不受影响）
         lastExecutedSig = null
         lastExecutedResult = null
+        if (resuming) closeDanglingCalls(onEvent)
         if (appendUser) {
             appendAndNotify(
                 ChatMessage(

@@ -90,6 +90,9 @@ data class ContextUsage(
          * （带大段工具结果），前者白白丢历史、后者直接撞 overflow。
          * 返回值会前推到最近一条边界消息（通常是 user），避免把 assistant(tool_calls)+tool
          * 结果拦腰切开（OpenAI 兼容端会以 400 拒绝孤儿 tool 消息）。
+         * **但只在真的切了东西的时候前推**：from==0 表示整段历史都装得下，此时前推会把
+         * 会话开头那段完整的 assistant+tool 组白白扔掉 —— 续跑场景下被扔掉的正是
+         * 「中断前那个没回结果的工具调用」，中断修复等于白做（单测抓到的就是这条）。
          *
          * 做成对类型无感的下标版本：引擎拿 StoredMessage、UI 面板拿 ChatMessage，
          * 两边共用同一份选窗逻辑，不再各写一遍近似循环（口径漂移就是这么来的）。
@@ -116,6 +119,7 @@ data class ContextUsage(
                 from = i
                 i--
             }
+            if (from <= 0) return 0
             val aligned = (from until messages.size).firstOrNull { isBoundary(messages[it]) }
             return aligned ?: from
         }

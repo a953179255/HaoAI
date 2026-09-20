@@ -108,4 +108,25 @@ class SessionStoreTest {
         store.restore("a")
         assertEquals(1, store.list().size)
     }
+
+    /**
+     * 冷启动清扫：引擎只活在本进程，上个进程留下的 running 必然是被杀留下的。
+     * 不转成 interrupted 的话 resumable() 不认它 —— 会话既没有恢复横幅也没有停止键，
+     * 永久卡在那里（真机 force-stop 后实测到的正是这个状态）。
+     */
+    @Test
+    fun `遗留的running在冷启动时判为中断`() {
+        val store = newStore()
+        val running = session("r1", 2).also { it.runState = StoredSession.RUN_RUNNING }
+        val idle = session("r2", 2).also { it.runState = StoredSession.RUN_IDLE }
+        listOf(running, idle).forEach { store.save(it, touch = false) }
+        awaitDisk("r1", 2); awaitDisk("r2", 2)
+
+        val store2 = SessionStore(dir)  // 新实例 = 模拟进程重启
+        assertEquals(1, store2.markStaleRunsInterrupted())
+        assertEquals(StoredSession.RUN_INTERRUPTED, store2.load("r1")?.runState)
+        assertEquals(StoredSession.RUN_IDLE, store2.load("r2")?.runState)
+        assertTrue(StoredSession.resumable(store2.load("r1")?.runState))
+        assertEquals(0, store2.markStaleRunsInterrupted())  // 幂等：扫第二次没有遗留
+    }
 }

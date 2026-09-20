@@ -70,6 +70,8 @@ data class StoredSession(
 ) {
     companion object {
         const val RUN_IDLE = "idle"
+        /** 引擎在跑的标记：只活在本进程里，冷启动还看到它 = 上次是被杀掉的。 */
+        const val RUN_RUNNING = "running"
         const val RUN_INTERRUPTED = "interrupted"
         const val RUN_TURNCAPPED = "turncapped"
         const val RUN_FAILED = "failed"
@@ -79,10 +81,71 @@ data class StoredSession(
         const val TAIL_UNANSWERED_USER = "unanswered_user"
         const val TAIL_TOOL = "tool"
         const val TAIL_PARTIAL_ASSISTANT = "partial_assistant"
+        /** assistant 发起了工具调用却没有任何结果落库：进程死在工具执行中间，副作用可能已经发生。 */
+        const val TAIL_DANGLING_CALLS = "dangling_calls"
 
         /** 是否需要展示恢复入口（显式主动停止/完成除外）。 */
         fun resumable(runState: String?): Boolean =
             runState == RUN_INTERRUPTED || runState == RUN_TURNCAPPED || runState == RUN_FAILED
+
+        /**
+         * 尾部"已发起、无结果"的工具调用。
+         *
+         * 从末尾往回扫：遇到的 tool 结果先记账，遇到带调用的 assistant 就把没人应答的调用
+         * 报出来；碰到纯文本回答或用户消息就到此为止（更早的轮次已经闭合）。
+         *
+         * 为什么必须把它们揪出来：构建请求时 pairSanitized 会把"调用没有结果"的那条
+         * assistant 整条丢出去（供应商以 400 拒绝孤儿 tool 消息），于是中断前那一轮做了
+         * 什么对模型**完全不可见**；而那次调用的副作用可能已经发生（写文件、下命令）。
+         */
+        fun danglingCalls(messages: List<StoredMessage>): List<StoredToolCall> {
+            val answered = HashSet<String>()
+            for (i in messages.indices.reversed()) {
+                val m = messages[i]
+                when {
+                    m.role == ChatMessage.ROLE_TOOL -> m.toolCallId?.let { answered += it }
+                    m.role == ChatMessage.ROLE_ASSISTANT && m.toolCalls.isNotEmpty() -> {
+                        val open = m.toolCalls.filter { it.id !in answered }
+                        if (open.isNotEmpty()) return open
+                    }
+                    else -> return emptyList()
+                }
+            }
+            return emptyList()
+        }
+
+        /**
+         * 上一轮是不是**完整答完**的：只有最终回复才带整轮耗时/用量统计（中间轮的
+         * assistant 片段不带，见 TurnTranscript.buildAssistant 的 isFinal 分支），
+         * 所以这是数据而不是猜测。用来区分"死在生成中途"和"死在答完之后、状态写回之前"
+         * —— 后者续跑等于把一个已完成的任务再烧一遍。
+         */
+        fun lastRoundCompleted(messages: List<StoredMessage>): Boolean {
+            val m = messages.lastOrNull() ?: return false
+            return m.role == ChatMessage.ROLE_ASSISTANT && m.content.isNotBlank() &&
+                m.toolCalls.isEmpty() && m.durationMs != null
+        }
+
+        /**
+         * 恢复横幅第二行：断在哪一步、点「继续」会发生什么。判定全部来自已落库的数据。
+         * 文案集中在这里，UI 只负责显示（原先是一串带全限定名的 when，改一处要翻 Compose）。
+         */
+        fun interruptionNote(runState: String?, messages: List<StoredMessage>): String = when {
+            danglingCalls(messages).isNotEmpty() ->
+                "中断时有工具调用没返回结果，它的副作用可能已经发生；继续时会先核实状态再动手"
+            runState == RUN_INTERRUPTED && lastRoundCompleted(messages) ->
+                "上一轮其实已经答完，只是收尾前进程被中断，直接发新消息即可"
+            else -> when (tailShapeOf(messages)) {
+                TAIL_UNANSWERED_USER -> "消息已发出但任务未开始执行，可继续"
+                TAIL_TOOL -> "停在工具执行中，可继续任务"
+                TAIL_PARTIAL_ASSISTANT -> "回答生成到一半中断，可继续生成"
+                else -> when (runState) {
+                    RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
+                    RUN_FAILED -> "执行出错，可继续尝试"
+                    else -> "进程中断，可继续执行"
+                }
+            }
+        }
 
         /**
          * 从消息尾部判定中断形态：最后一条实质消息是什么，任务就断在哪一步。
@@ -91,12 +154,17 @@ data class StoredSession(
          * 把两者混在一起会把"还在等回复的 turn"误报成中断）。
          */
         fun tailShapeOf(messages: List<StoredMessage>): String {
+            if (danglingCalls(messages).isNotEmpty()) return TAIL_DANGLING_CALLS
             for (i in messages.indices.reversed()) {
                 val m = messages[i]
-                if (m.content.isBlank() && m.toolName == null) continue
+                // 只带工具调用的 assistant 内容也是空的，旧写法把它当"无内容"跳过，
+                // 于是"停在工具循环里"会被误判成更早的形态（甚至 clean）
+                if (m.content.isBlank() && m.toolName == null && m.toolCalls.isEmpty()) continue
                 return when {
                     m.role == ChatMessage.ROLE_USER -> TAIL_UNANSWERED_USER
-                    m.role == ChatMessage.ROLE_TOOL || (m.role == ChatMessage.ROLE_ASSISTANT && m.toolName != null) -> TAIL_TOOL
+                    m.role == ChatMessage.ROLE_TOOL ||
+                        (m.role == ChatMessage.ROLE_ASSISTANT &&
+                            (m.toolName != null || m.toolCalls.isNotEmpty())) -> TAIL_TOOL
                     else -> TAIL_PARTIAL_ASSISTANT
                 }
             }
@@ -282,6 +350,37 @@ class SessionStore(private val dir: File) {
                 )
             }
         }
+    }
+
+    /**
+     * 进程启动清扫：把留在磁盘上的 running 判成 interrupted，返回清扫条数。
+     *
+     * 引擎只活在本进程内（挂在 viewModelScope 上），进程刚起时不可能有任何回合在跑，
+     * 所以文件里的 running 必然是被强杀/LMK/崩溃留下的。不转成 interrupted 的话
+     * `resumable()` 不认它：那些会话既没有恢复横幅、也没有停止键，就这么卡死在那儿，
+     * 用户只能自己重新发一遍（真机 force-stop 后实测到的正是这个状态）。
+     */
+    @Synchronized
+    fun markStaleRunsInterrupted(): Int {
+        var n = 0
+        for (f in dir.listFiles { x -> x.extension == "json" }.orEmpty()) {
+            val id = f.nameWithoutExtension
+            if (id in tombstones) continue
+            // 冷启动时 latest 必为空，但这个函数不假设调用时机：内存里有更新版本就以它为准
+            // （直接信磁盘会把"刚改完还没落盘"的状态又读回旧值，等于自己盖自己）
+            val mem = latest[id]
+            if (mem == null && !f.readText().contains("\"${StoredSession.RUN_RUNNING}\"")) {
+                // 启动路径上的粗筛：只给确实标着 running 的文件做 JSON 解析，
+                // 否则每次冷启都要把全部会话读+解一遍，会话多了是肉眼可见的启动延迟
+                continue
+            }
+            val stale = mem ?: parseFile(f) ?: continue
+            if (stale.runState != StoredSession.RUN_RUNNING) continue
+            stale.runState = StoredSession.RUN_INTERRUPTED
+            save(stale, touch = false)
+            n++
+        }
+        return n
     }
 
     /** 删除单条消息（消息长按操作）。返回是否删除成功。 */

@@ -526,6 +526,48 @@ class AgentEngineLoopTest {
     }
 
     /**
+     * 续跑前必须先把「已发起、无结果」的工具调用补成明确的未确认结果。
+     *
+     * 顺序与内容都关键：tool 消息必须紧跟它所属的 assistant（中间插一条 user 会被
+     * OpenAI 兼容端以 400 拒掉）；不补的话 pairSanitized 会把那条 assistant 整条丢出
+     * 请求（中断前做了什么模型完全看不见），而且写类工具会被原样重跑一遍 —— 重复副作用。
+     * 三家参考实现的同一条纪律：绝不自动重放非幂等工具。
+     */
+    @Test
+    fun resumedTurnClosesDanglingToolCalls() = runBlocking {
+        val session = StoredSession.create(null)
+        session.messages.add(
+            StoredMessage(
+                role = ChatMessage.ROLE_ASSISTANT, content = "",
+                toolCalls = listOf(
+                    StoredToolCall("c1", "bash", "{\"command\":\"rm -f note.txt\"}"),
+                    StoredToolCall("c2", "web_search", "{\"query\":\"x\"}")
+                )
+            )
+        )
+        val client = FakeClient(listOf(saying("已核实并继续")))
+        engine(client, tmpDir(), session = session)
+            .runTurn("[系统恢复] 继续", {}, {}, resuming = true)
+        assertEquals(
+            "先补两条结果，再落恢复指令：${session.messages.map { it.role }}",
+            listOf(
+                ChatMessage.ROLE_ASSISTANT to null,
+                ChatMessage.ROLE_TOOL to "c1",
+                ChatMessage.ROLE_TOOL to "c2",
+                ChatMessage.ROLE_USER to null
+            ),
+            session.messages.take(4).map { it.role to it.toolCallId }
+        )
+        val writeNote = session.messages[1].content
+        val readNote = session.messages[2].content
+        assertTrue("写类调用要禁止盲目重跑：$writeNote", writeNote.contains("禁止") && writeNote.contains("核实"))
+        assertTrue("只读调用可以直接重试：$readNote", readNote.contains("重新调用"))
+        // 补了结果，那条带调用的 assistant 才留得住（不补就会被 pairSanitized 丢掉）
+        val sent = client.requests.maxByOrNull { it.second.size }!!.first
+        assertTrue(sent.any { it.role == "assistant" && !it.toolCalls.isNullOrEmpty() })
+    }
+
+    /**
      * 排队消息提升为任务时不能再落一遍用户指令。
      * 入队那一刻它已经在历史里（用户在气泡里看到了），旧实现没有 appendUser 开关，
      * 于是一条排队指令在会话里出现 3 份（入队 1 + 提升时 VM 补 1 + 引擎再落 1），

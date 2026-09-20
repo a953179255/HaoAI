@@ -77,6 +77,30 @@ class ContextUsageEstimateTest {
         assertEquals("应选中最后一个用户边界开始的段落", 2, s2)
     }
 
+    /**
+     * 整段历史都装得下时不许前推起点。
+     * 前推是为了不切开 assistant(tool_calls)+tool 序列，但 from==0 意味着什么都没切；
+     * 这时前推会把会话开头那段完整的调用组丢掉 —— 续跑场景被丢掉的恰好是
+     * 「中断前那个没回结果的调用」，中断修复等于白做（AgentEngineLoopTest 的
+     * resumedTurnClosesDanglingToolCalls 就是这样失败的）。
+     */
+    @Test
+    fun `预算装得下整段时不前推起点`() {
+        val msgs = listOf(
+            ChatMessage(
+                role = ChatMessage.ROLE_ASSISTANT, content = "",
+                toolCalls = listOf(com.haoai.agent.agent.model.ToolCallData("c1", "bash", "{}"))
+            ),
+            toolMsg("c1", "exit=0"),
+            userMsg("新指令")
+        )
+        val start = ContextUsage.windowStart(
+            msgs, { ContextUsage.estimateMessageTokens(it, 4_000) },
+            { it.role == ChatMessage.ROLE_USER }, 100_000, 80
+        )
+        assertEquals("整段都发，不该丢掉开头那组已配对的调用", 0, start)
+    }
+
     /** token 预算说话，条数只是保险：短消息可以多发、长消息必须少发。 */
     @Test
     fun budgetDrivesSelectionNotMessageCount() {
