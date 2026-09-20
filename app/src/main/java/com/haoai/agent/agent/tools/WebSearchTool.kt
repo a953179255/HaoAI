@@ -43,18 +43,27 @@ class WebSearchTool : Tool {
         val cacheKey = "search:${query.lowercase()}"
         ctx.webCacheGet(cacheKey)?.let { return ToolResult("$it\n\n（缓存）") }
 
-        // Bing 优先（国内可达），DuckDuckGo 兜底
+        // 引擎链：前一个**请求失败或结果低质**才退到下一个。
+        // 只判失败不够——Bing 对爬虫会正常返回 200 和满屏结果块，内容却是日历/导航/词条类
+        // 聚合页（2026-09 实测：同一批 query 拿到"2026年大事要事一览表""AI工具集导航大全"
+        // "year（英文单词）_百度百科"），模型拿着它继续写，用户看到的就是"搜了 18 次没料"。
         val errors = mutableListOf<String>()
-        var results: List<Hit>? = null
-        runCatching { tryBing(client, query) }
-            .onSuccess { results = it }
-            .onFailure { errors.add("bing: ${it.message}") }
-        if (results == null) {
-            runCatching { tryDdg(client, query) }
-                .onSuccess { results = it }
-                .onFailure { errors.add("ddg: ${it.message}") }
+        val candidates = ArrayList<Pair<String, List<Hit>>>()
+        for ((engine, fetch) in ENGINE_CHAIN) {
+            runCatching { fetch(client, query) }.onSuccess { hits ->
+                if (hits.isEmpty()) errors.add("$engine: 0 结果")
+                else {
+                    candidates += engine to hits
+                    if (qualityIssue(hits, query) == null) break   // 够好就不再试后面的引擎
+                }
+            }.onFailure { errors.add("$engine: ${it.message ?: it.javaClass.simpleName}") }
         }
-        val hits = results ?: return ToolResult("搜索失败（${errors.joinToString("; ")}）", true)
+        // 没有一家通过质量门时，取"低质条数最少"的那份，并如实告诉模型它不合格
+        val pick = candidates.firstOrNull { qualityIssue(it.second, query) == null }
+            ?: candidates.minByOrNull { junkCount(it.second) }
+            ?: return ToolResult("搜索失败（${errors.joinToString("; ")}）", true)
+        val (engine, results) = pick
+        val hits = results
         return when {
             hits.isEmpty() -> ToolResult("没有搜到相关结果")
             else -> {
@@ -76,10 +85,55 @@ class WebSearchTool : Tool {
                         "${i + 1}. ${h.title}\n${h.url}\n${h.snippet.take(220)}"
                     }
                     .joinToString("\n\n")
-                ctx.webCachePut(cacheKey, out)
-                ToolResult(out)
+                // 标来源引擎：出问题时能一眼看出是哪家引擎给的东西，模型也会据此降低对结果的信任
+                val body = "$out\n\n（来源：$engine）" +
+                    (qualityIssue(hits, query)?.let {
+                        "\n⚠ 这批结果相关性低（$it），两家引擎都试过了。" +
+                            "别据此硬写：换一个具体得多的角度（机构名/报告名/产品名 + 年份）再试一次，" +
+                            "或者在回答里说明这个信息拿不到。"
+                    }.orEmpty())
+                ctx.webCachePut(cacheKey, body)
+                ToolResult(body)
             }
         }
+    }
+
+    /**
+     * 引擎尝试顺序。Bing 放前面是**国内直连可达性**的保守选择（DuckDuckGo 在部分网络下不通），
+     * 差别由上面的质量门兜住：Bing 给的东西不合格就继续往下试，不会停在坏结果上。
+     */
+    private val ENGINE_CHAIN: List<Pair<String, suspend (okhttp3.OkHttpClient, String) -> List<Hit>>> by lazy {
+        listOf("bing" to ::tryBing, "duckduckgo" to ::tryDdg)
+    }
+
+    /** 明显不是调研目标的聚合页特征。判据刻意保守——只在**过半**结果命中时才判低质。 */
+    private val JUNK_URL = listOf(
+        "calendar", "timeanddate", "wannianrili", "jie假", "hao123", "2345.com",
+        "ai-bot.cn", "baike.", "/item/", "dict.", "douyin", "short-video"
+    )
+    private val JUNK_TITLE = listOf(
+        "日历", "放假安排", "一览表", "节日", "导航", "百科", "词条", "面试", "官网", "下载", "在线观看"
+    )
+
+    internal fun junkCount(hits: List<Hit>): Int = hits.count { h ->
+        val u = h.url.lowercase()
+        JUNK_URL.any { u.contains(it) } || JUNK_TITLE.any { t -> h.title.contains(t) }
+    }
+
+    /** 返回 null = 结果可用；非 null 是一句能直接给模型看的原因。 */
+    internal fun qualityIssue(hits: List<Hit>, query: String): String? {
+        if (hits.isEmpty()) return "没有结果"
+        val junk = junkCount(hits)
+        if (junk * 2 >= hits.size) return "${hits.size} 条里有 $junk 条是日历/导航/词条/面试类聚合页"
+        val keys = query.lowercase().split(Regex("[\\s,，、/]+")).filter { it.length >= 2 }.take(5)
+        if (keys.size >= 2) {
+            val touched = hits.count { h ->
+                val s = (h.title + " " + h.snippet).lowercase()
+                keys.any { k -> s.contains(k) }
+            }
+            if (touched == 0) return "没有一条结果包含查询里的词"
+        }
+        return null
     }
 
     /**
@@ -92,6 +146,27 @@ class WebSearchTool : Tool {
     internal fun String.normalizeForSig(): String = lowercase()
         .removePrefix("https://").removePrefix("http://").removePrefix("www.")
         .substringBefore('#').substringBefore('?').trimEnd('/')
+
+    /**
+     * 还原 Bing 的跳转链 `.../ck/a?...&u=a1<base64url>` → 真实地址。
+     *
+     * 不还原的代价是实打实的：交给模型的是 `bing.com/ck/a` 地址，模型拿去 web_fetch
+     * 就是 403/404（2026-09-20 设备会话里那几次"抓取失败"有一部分是这个），
+     * 而且结果签名也会因为跳转参数每次都变而**认不出重复结果集**。
+     * 解码失败一律原样返回——宁可给个能点的跳转链，也不静默丢结果。
+     */
+    internal fun unwrapBingLink(href: String): String {
+        if (!href.contains("/ck/a")) return href
+        val raw = href.replace("&amp;", "&")
+        val u = Regex("[?&]u=([^&]+)").find(raw)?.groupValues?.get(1) ?: return href
+        val decoded = runCatching { java.net.URLDecoder.decode(u, "UTF-8") }.getOrDefault(u)
+        val body = if (decoded.startsWith("a1")) decoded.substring(2) else decoded
+        if (body.isEmpty()) return href
+        return runCatching {
+            val padded = body.padEnd(body.length + (4 - body.length % 4) % 4, '=')
+            String(java.util.Base64.getUrlDecoder().decode(padded), Charsets.UTF_8)
+        }.getOrDefault(href)
+    }
 
     internal data class Hit(val title: String, val url: String, val snippet: String)
 
@@ -130,7 +205,7 @@ class WebSearchTool : Tool {
             blockRe.findAll(html).mapNotNull { m ->
                 val block = m.groupValues[1]
                 val link = linkRe.find(block) ?: return@mapNotNull null
-                val url = (link.groupValues[1].ifEmpty { link.groupValues[3] })
+                val url = unwrapBingLink(link.groupValues[1].ifEmpty { link.groupValues[3] })
                 val title = stripTags(
                     (link.groupValues[2].ifEmpty { link.groupValues[4] })
                 )

@@ -56,9 +56,23 @@ class WebFetchTool : Tool {
                     val bytes = readCapped(resp, MAX_DOWNLOAD_BYTES)
                     // 按 HTTP 头 / HTML meta 声明的字符集解码：国内大量站点仍是 GBK，硬解 UTF-8 全是乱码
                     val body = String(bytes, charsetOf(contentType, bytes))
-                    val text = if (contentType.contains("html", ignoreCase = true) || body.trimStart().startsWith("<")) {
+                    var text = if (contentType.contains("html", ignoreCase = true) || body.trimStart().startsWith("<")) {
                         HtmlText.convert(body)
                     } else body
+                    // 兜底：本地挑容器挑不出正文时试一次免 key 远端 reader。
+                    // 判据有两条——正文过短；或**开头与本轮已抓过的另一页完全一样**
+                    // （2026-09 实测：5 个不同 IBM 页面返回文本开头都是同一段站点导航，
+                    //  说明挑到的还是模板，不是文章）。远端失败一律静默退回本地结果。
+                    val head = text.filterNot { it == '\n' }.take(160)
+                    val repeatedTemplate = head.isNotBlank() &&
+                        ctx.fetchHeads.putIfAbsent(head, url) != null
+                    if (text.length < MIN_USEFUL_TEXT || repeatedTemplate) {
+                        val via = readerText(url)
+                        if (via != null && via.length > text.length * 1.2) {
+                            text = via.trim() + "\n\n（正文由远端 reader 提取；本地解析" +
+                                (if (repeatedTemplate) "拿到的与已抓过的页面模板重复" else "没定位到正文") + "）"
+                        }
+                    }
                     val out = TextCap.middle(text, maxChars)
                     ctx.webCachePut(cacheKey, out)
                     ToolResult("$url（HTTP ${resp.code}）\n\n$out")
@@ -98,8 +112,30 @@ class WebFetchTool : Tool {
         return Charsets.UTF_8
     }
 
+    /**
+     * 免 key 的远端正文 reader（r.jina.ai/<url>，返回 markdown 纯文本）。
+     *
+     * 只在本地挑容器失败时才走，且**任何失败都静默**：这个域名在部分网络下不可达，
+     * 兜底不该把一次本来能返回内容的抓取变成失败。无 key 有速率限制，所以不做默认路径。
+     */
+    private suspend fun readerText(url: String): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = Request.Builder()
+                .url("https://r.jina.ai/$url")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) HaoAI/0.1")
+                .header("Accept", "text/plain")
+                .build()
+            http.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) null else r.body?.string()?.take(200_000)
+            }
+        }.getOrNull()
+    }
+
     private companion object {
         const val MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024
+
+        /** 低于这个长度基本可以断定没挑到正文（导航 + 版权尾巴通常也就几百字）。 */
+        const val MIN_USEFUL_TEXT = 600
     }
 }
 

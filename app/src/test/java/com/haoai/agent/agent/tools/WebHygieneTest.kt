@@ -76,5 +76,57 @@ class WebHygieneTest {
         assertNotEqualsSig(sigOf("https://a.com/x"), sigOf("https://a.com/x", "https://c.com/z"))
     }
 
+    /** Bing 的结果链接是 ck/a 跳转链：不还原的话模型拿去 web_fetch 必 403，签名也认不出重复。 */
+    @Test
+    fun bingRedirectLinkIsUnwrapped() = with(WebSearchTool()) {
+        assertEquals(
+            "https://example.com/a/b",
+            unwrapBingLink("https://www.bing.com/ck/a?!&&p=acd01b39&ptn=3&ver=2&u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9hL2I&form=HDRSC2")
+        )
+    }
+
+    @Test
+    fun plainLinksAndUndecodableRedirectsAreLeftAlone() = with(WebSearchTool()) {
+        assertEquals("https://a.com/x?y=1", unwrapBingLink("https://a.com/x?y=1"))
+        // 解不动就原样返回：宁可给一条能点的跳转链，也不静默把结果丢掉
+        val broken = "https://www.bing.com/ck/a?u=a1!!!!notbase64!!!!"
+        assertEquals(broken, unwrapBingLink(broken))
+    }
+
+    /** 设备实测到的那批低质结果必须过不了质量门（日历表 / 工具导航站 / 英文单词词条）。 */
+    @Test
+    fun calendarAndNavJunkFailsTheGate() = with(WebSearchTool()) {
+        val junk = listOf(
+            WebSearchTool.Hit("2026年大事、要事、重要节日一览表（附放假安排）", "https://news.qq.com/rain/a/1", "x"),
+            WebSearchTool.Hit("AI工具集官网 | 1000+ AI工具集合，导航大全", "https://ai-bot.cn/", "x"),
+            WebSearchTool.Hit("year（英文单词）_百度百科", "https://baike.baidu.com/item/year", "x"),
+            WebSearchTool.Hit("2026 Calendar - United States", "https://www.timeanddate.com/calendar/", "x")
+        )
+        assertTrue("低质结果集要被判出来：" + qualityIssue(junk, "2026 AI agent trends predictions").orEmpty(),
+            qualityIssue(junk, "2026 AI agent trends predictions") != null)
+    }
+
+    @Test
+    fun relevantResultsPassTheGate() = with(WebSearchTool()) {
+        val good = listOf(
+            WebSearchTool.Hit("Multi-Agent AI Orchestration: Complete 2026 Guide", "https://claritywithai.org/multi-agent-2026", "multi-agent orchestration in 2026"),
+            WebSearchTool.Hit("7 Agentic AI Trends to Watch in 2026", "https://machinelearningmastery.com/agentic-ai-trends/", "agentic AI trends"),
+            WebSearchTool.Hit("Agentic AI trends 2026: how multiagent systems redefine work", "https://www.druid.ai/blog/trends", "multiagent systems"),
+            WebSearchTool.Hit("2026年AI Agent技术最新进展：从工具调用到自主决策", "https://blog.csdn.net/x", "AI Agent 新变化")
+        )
+        val q = "2026 AI agent trends multi-agent orchestration"
+        assertTrue("正常结果不该被判低质：" + qualityIssue(good, q).orEmpty(), qualityIssue(good, q) == null)
+    }
+
+    /** 单词查询（切不出两个关键词）不该触发"没有一条包含查询词"这条判据。 */
+    @Test
+    fun singleKeywordQuerySkipsTheOverlapRule() = with(WebSearchTool()) {
+        val hits = listOf(
+            WebSearchTool.Hit("深度解读：智能体的今年怎么过", "https://some.site/a", "讲编排与协作"),
+            WebSearchTool.Hit("Agent 编排实践", "https://other.site/b", "多路并发")
+        )
+        assertTrue(qualityIssue(hits, "agent") == null)
+    }
+
     private fun assertNotEqualsSig(a: String, b: String) = assertTrue("签名不该把不同结果集判成同一批", a != b)
 }

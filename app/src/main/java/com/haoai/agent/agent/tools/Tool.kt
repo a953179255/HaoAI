@@ -48,7 +48,13 @@ data class ToolContext(
      * query 只拿到 5 种结果（换词没带来新页面，模型却一直在换词重试）。所以这里按**结果链接集合**
      * 建索引，命中就直说"这批链接刚给过你"，把无效重试掐掉——它同时是 token 的主要浪费源。
      */
-    val searchSigs: java.util.concurrent.ConcurrentHashMap<String, Int> = java.util.concurrent.ConcurrentHashMap()
+    val searchSigs: java.util.concurrent.ConcurrentHashMap<String, Int> = java.util.concurrent.ConcurrentHashMap(),
+    /**
+     * 本轮抓过的页面开头 160 字 → 来源 url。
+     * 不同 URL 抓回来的开头一字不差，说明本地挑容器挑到的是站点模板而不是文章，
+     * 拿它当信号触发一次远端 reader 兜底（见 WebFetchTool）。
+     */
+    val fetchHeads: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap()
 ) {
     /** 命中未过期缓存则返回结果；过期条目顺带清除。 */
     fun webCacheGet(key: String, ttlMs: Long = 10 * 60_000L): String? {
