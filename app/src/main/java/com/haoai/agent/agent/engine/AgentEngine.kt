@@ -1,5 +1,25 @@
 package com.haoai.agent.agent.engine
 
+
+/**
+ * HaoAI 的回合引擎：把"用户一句话"跑成一个带工具循环的完整回合。
+ *
+ * 本文件只留三样：构造契约、回合循环 runTurn、以及必须回指循环的状态收口
+ * （finishTurn / todos / 中断修复 / runBtw）。其余按能力域拆在同目录：
+ *   EngineContext.kt    系统提示、开销估算、历史选窗、组装请求
+ *   EngineToolRun.kt    一次工具调用：审批 → hook → 执行 → 落库（含 E6 并行段）
+ *   EngineSubagents.kt  子代理运行时（research / work）
+ *   EngineCompaction.kt 压缩触发、链式摘要、溢出恢复、水位落账
+ *   EngineMemory.kt     记忆提取与运行账本
+ *   EngineDelegation.kt 视觉 / 音频委派
+ *   EngineHistory.kt    历史配对净化（纯函数）   EngineHelpers.kt 无状态的文本与判定小工具
+ *   EngineLimits.kt     常量与阈值               EnginePrompts.kt 辅助系统提示词
+ *
+ * 拆法沿用三家参考实现的共同判据：**能不能回指回合循环**。只读输入、产出数据、
+ * 不起效应的才搬出去；搬出去的函数一律是 AgentEngine 的扩展函数，因此引擎的部分成员
+ * 从 private 降为 internal（模块内可见）—— 这是"一个类跨多文件"的必然代价，
+ * 函数体逐字未改，行为零差异（83 条单测与设备实测同覆盖）。
+ */
 import com.haoai.agent.agent.memory.DailyJournal
 import com.haoai.agent.agent.memory.MemoryBank
 import com.haoai.agent.agent.model.ChatMessage
@@ -7,23 +27,14 @@ import com.haoai.agent.agent.model.ToolCallData
 import com.haoai.agent.agent.policy.ApprovalRequest
 import com.haoai.agent.agent.policy.PolicyEngine
 import com.haoai.agent.agent.provider.ApiMessage
-import com.haoai.agent.agent.provider.OpenAiCompatClient
 import com.haoai.agent.agent.provider.SseEvent
 import com.haoai.agent.agent.tools.SubAgentRunner
 import com.haoai.agent.agent.tools.TodoStore
-import com.haoai.agent.agent.tools.TextCap
-import com.haoai.agent.agent.tools.takeSafe
-import com.haoai.agent.agent.tools.optBool
 import com.haoai.agent.agent.tools.Tool
 import com.haoai.agent.agent.tools.ToolContext
 import com.haoai.agent.agent.tools.ToolRegistry
 import com.haoai.agent.agent.tools.ToolResult
-import com.haoai.agent.agent.tools.optDouble
-import com.haoai.agent.agent.tools.optInt
-import com.haoai.agent.agent.tools.optString
 import com.haoai.agent.agent.tools.toApi
-import com.haoai.agent.agent.tools.toolCallToApi
-import com.haoai.agent.data.HaoJson
 import com.haoai.agent.data.ProviderConfig
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.toModel
@@ -32,103 +43,91 @@ import com.haoai.agent.platform.FileBackend
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class AgentEngine(
-    private val httpClient: com.haoai.agent.agent.provider.ProviderClient,
-    private val provider: ProviderConfig,
-    private val apiKey: String,
-    private val customPrompt: String,
-    private val policy: PolicyEngine,
-    private val approve: suspend (ApprovalRequest) -> Boolean,
-    private val session: StoredSession,
-    private val persist: () -> Unit,
-    private val backend: FileBackend?,
-    private val appFilesDir: File,
-    private val workspaceLabel: String,
-    private val memoryBank: MemoryBank? = null,
-    private val memoryEnabled: Boolean = true,
-    private val journal: DailyJournal? = null,
-    private val autoLearn: Boolean = true,
-    private val reasoningEffort: String = "",
-    private val okHttpClient: okhttp3.OkHttpClient? = null,
-    private val appContext: android.content.Context? = null,
-    private val identity: String = "",
-    private val onUsage: (suspend (Long, Long) -> Unit)? = null,
-    private val depth: Int = 0,
-    private val backgroundScope: CoroutineScope? = null,
+    internal val httpClient: com.haoai.agent.agent.provider.ProviderClient,
+    internal val provider: ProviderConfig,
+    internal val apiKey: String,
+    internal val customPrompt: String,
+    internal val policy: PolicyEngine,
+    internal val approve: suspend (ApprovalRequest) -> Boolean,
+    internal val session: StoredSession,
+    internal val persist: () -> Unit,
+    internal val backend: FileBackend?,
+    internal val appFilesDir: File,
+    internal val workspaceLabel: String,
+    internal val memoryBank: MemoryBank? = null,
+    internal val memoryEnabled: Boolean = true,
+    internal val journal: DailyJournal? = null,
+    internal val autoLearn: Boolean = true,
+    internal val reasoningEffort: String = "",
+    internal val okHttpClient: okhttp3.OkHttpClient? = null,
+    internal val appContext: android.content.Context? = null,
+    internal val identity: String = "",
+    internal val onUsage: (suspend (Long, Long) -> Unit)? = null,
+    internal val depth: Int = 0,
+    internal val backgroundScope: CoroutineScope? = null,
     /** 动态渲染自身运行状态（app_status 工具按需读取，不注入系统提示）。 */
-    private val statusProvider: () -> String = { "" },
+    internal val statusProvider: () -> String = { "" },
     /** C6/C1 config_set 落地（JSON patch → 桥严格校验入库），由 VM 层注入；每次调用引擎强制审批。 */
-    private val configMutator: (suspend (JsonObject) -> com.haoai.agent.agent.tools.ToolResult)? = null,
+    internal val configMutator: (suspend (JsonObject) -> com.haoai.agent.agent.tools.ToolResult)? = null,
     /** C6 config_get 数据源：渲染当前配置镜像（apiKey 掩码）。 */
-    private val configRender: () -> String = { "" },
+    internal val configRender: () -> String = { "" },
     /** C1 config_set 预检：合并补丁→同源解析→语义 diff；err 非空=补丁非法（免审批直接拒绝）。 */
-    private val configPreview: suspend (JsonObject) -> com.haoai.agent.data.ConfigFileBridge.Preview = {
+    internal val configPreview: suspend (JsonObject) -> com.haoai.agent.data.ConfigFileBridge.Preview = {
         com.haoai.agent.data.ConfigFileBridge.Preview(err = "配置预检不可用", diff = "")
     },
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
-    private val onToolChange: (() -> Unit)? = null,
+    internal val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化：设置页总开关 ∧ API 30+（由调用方合并判定）。 */
-    private val vscreenEnabled: Boolean = false,
+    internal val vscreenEnabled: Boolean = false,
     /** 4.3 虚拟屏画面码率档位（kbps），映射截图清晰度（见 VirtualScreenController.presetFor）。 */
-    private val vscreenBitrateKbps: Int = 3000,
+    internal val vscreenBitrateKbps: Int = 3000,
     /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
-    private val budgetHint: () -> String = { "" },
+    internal val budgetHint: () -> String = { "" },
     /** 5.3 模型路由：记忆提取专用链（主+备用）；空=回落主模型。 */
-    private val memoryTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
+    internal val memoryTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.3 模型路由：上下文压缩摘要专用链。 */
-    private val summarizeTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
+    internal val summarizeTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.3 专用目标的协议客户端解析（缺省仍用主 httpClient）。 */
-    private val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
+    internal val auxClientFor: ((ProviderConfig) -> com.haoai.agent.agent.provider.ProviderClient)? = null,
     /**
      * P2 能力委派：按 kind（"vision"/"asr"）返回委派目标链（provider+key），由 VM 解析设置。
      * 空链/null = 未配置，委派工具不注册（省工具 token）。
      */
-    private val delegateTarget: (suspend (String) -> List<Pair<ProviderConfig, String>>)? = null,
+    internal val delegateTarget: (suspend (String) -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
-    private val planGate: () -> Boolean = { false },
+    internal val planGate: () -> Boolean = { false },
     /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。无人值守默认 15 万，交互聊天走设置（默认 25 万）。 */
-    private val turnTokenCap: Int = 150_000,
+    internal val turnTokenCap: Int = 150_000,
     /** E5b 圈数熔断：单轮工具调用累计上限；0=不限。防失控循环的主力（行业默认 20~500，取 80）。 */
-    private val toolCallCap: Int = 80,
+    internal val toolCallCap: Int = 80,
     /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒（不中断循环）。 */
-    private val softBudgetWarn: Boolean = true,
+    internal val softBudgetWarn: Boolean = true,
     /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
-    private val toolFailCap: Int = 8
+    internal val toolFailCap: Int = 8
 ) {
 
-    private val todoStore = TodoStore(appFilesDir)
+    internal val todoStore = TodoStore(appFilesDir)
 
     /** E1 轮次结束状态：由 runTurn 生命周期填写（idle/interrupted/turncapped/failed）；null=进行中。 */
     @Volatile var runEndState: String? = null
 
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
-    private var _loopFailedCap = false
+    internal var _loopFailedCap = false
 
     /** P2 运行中子代理注册表（key=handle id，生命周期=引擎实例即一个回合）。 */
-    private val activeSubagents = java.util.concurrent.ConcurrentHashMap<String, SubagentHandle>()
-    private val subagentSeq = java.util.concurrent.atomic.AtomicInteger(0)
+    internal val activeSubagents = java.util.concurrent.ConcurrentHashMap<String, SubagentHandle>()
+    internal val subagentSeq = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * P3 后台子代理作用域：独立协程树，不挂在工具调用的 withContext/withTimeout 上，
@@ -139,7 +138,7 @@ class AgentEngine(
     )
 
     /** P2 干预实现：stop=协作标志+取消协程；steer=消息入队下一轮消费。 */
-    private val subagentControl = object : SubagentControl {
+    internal val subagentControl = object : SubagentControl {
         override fun find(callId: String?, index: Int): SubagentHandle? =
             activeSubagents.values.firstOrNull { it.callId != null && it.callId == callId && it.index == index }
 
@@ -186,29 +185,26 @@ class AgentEngine(
         }
     }
 
-    /** 任务卡终止按钮通路：终止单个运行中的子代理（部分结果随 spawn 调用回收）。 */
-    fun stopSubagent(id: String): Boolean = subagentControl.stop(id)
-
     /** P2-5 重放保护状态：turn 内最后一次非 READ 工具执行的签名与结果。
      *  LLM 流瞬态重试会重发同一工具序列，紧邻同名同参的写类调用直接返回上次结果。 */
-    private var lastExecutedSig: String? = null
-    private var lastExecutedResult: ToolResult? = null
+    internal var lastExecutedSig: String? = null
+    internal var lastExecutedResult: ToolResult? = null
 
     /** E4b tools_enable 生效标记：工具组变更后主循环尾重建工具清单（下一轮 LLM 请求生效）。 */
-    @Volatile private var _groupsDirty = false
+    @Volatile internal var _groupsDirty = false
 
     /** E9 todo 进度联动：清单变更后的下一轮注入一次进度行。 */
-    private var todoDirty = false
+    internal var todoDirty = false
     private var todoLastSnapshot: List<com.haoai.agent.agent.tools.TodoItem>? = null
 
     /** E3 会话级工具连续失败计数（成功清零）。 */
-    private val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    internal val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /** 5.7 已追加过自改进提示的技能（引擎生命周期=会话，天然满足每会话限一次）。 */
-    private val hintedSkills = mutableSetOf<String>()
+    internal val hintedSkills = mutableSetOf<String>()
 
     /** E7b 横切 hooks：before（快照）+ after（E3 升级/技能提示/写文件校验），列表序执行。 */
-    private val hooks: List<ToolHook> = listOf(
+    internal val hooks: List<ToolHook> = listOf(
         SnapshotHook(appFilesDir, session.id, backend),
         EscalationHook(conFailCount),
         SkillHintHook(hintedSkills),
@@ -217,9 +213,9 @@ class AgentEngine(
 
     /** 5.6 本回合拦截过 WRITE/EXEC（供 UI 判定模型产出的是计划）。 */
     var planIntercepted: Boolean = false
-        private set
+        internal set
 
-    private val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(
+    internal val compactionManager = com.haoai.agent.agent.engine.compaction.CompactionManager(
         httpClient,
         maxHistory = MAX_HISTORY,
         toolContentCap = REQ_CAP
@@ -238,42 +234,7 @@ class AgentEngine(
         clientResolver = { p -> auxClientFor?.invoke(p) ?: httpClient }
     }
 
-    @Volatile private var compactProvider: ProviderConfig? = null
-
-    /** 5.3 压缩摘要路由链（点6 链化）：主+备用按序；空配置回落主模型。 */
-    private suspend fun summarizerChain(): List<Pair<ProviderConfig, String>> {
-        val t = runCatching { summarizeTarget?.invoke() }.getOrNull() ?: emptyList()
-        val chain = if (t.isEmpty()) listOf(provider to apiKey) else t
-        compactProvider = chain.first().first
-        return chain
-    }
-
-    /** 点6：链式压缩——按序尝试各目标，单个失败（非取消）降级下一个；全失败抛最后错误。 */
-    private suspend fun compactWithChain(
-        chatMsgs: List<com.haoai.agent.agent.model.ChatMessage>,
-        chain: List<Pair<ProviderConfig, String>>
-    ): com.haoai.agent.agent.engine.compaction.CompactionResult {
-        var lastErr: Throwable? = null
-        for ((p, k) in chain) {
-            val isLocal = p.baseUrl.contains("127.0.0.1") || p.baseUrl.startsWith("local")
-            val cw = if (isLocal) 32768 else p.effectiveContextLength()
-            try {
-                return compactionManager.compact(
-                    messages = chatMsgs,
-                    existingSummary = session.compactionSummary,
-                    provider = p,
-                    apiKey = k,
-                    contextWindow = cw
-                )
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (e: Throwable) {
-                lastErr = e
-                android.util.Log.w("HaoCompact", "压缩目标 ${p.name}/${p.model} 失败，尝试链上下一个", e)
-            }
-        }
-        throw lastErr ?: IllegalStateException("压缩摘要无可用模型")
-    }
+    @Volatile internal var compactProvider: ProviderConfig? = null
 
     /**
      * 续跑入口的修复：把「已发起、没有结果」的工具调用补成一条明确的未确认结果。
@@ -693,889 +654,6 @@ class AgentEngine(
         if (runEndState == null) runEndState = com.haoai.agent.data.StoredSession.RUN_IDLE
     }
 
-    private suspend fun executeCall(
-        call: ToolCallData,
-        tools: List<Tool>,
-        ctx: ToolContext,
-        onEvent: (TurnEvent) -> Unit
-    ) {
-        // P2-5 重放保护：LLM 流瞬态重试（网络波动/看门狗）会把同一轮已执行的工具
-        // 序列重新发送。"非 READ 工具 + 同名同参 + 紧邻上一次执行"→ 判定为重放，
-        // 返回上次结果不再执行（写类重复可能产生真实副作用）；READ 类放行（连续
-        // 滚动/重复读页是合法操作）。
-        val replaySig = call.name + "|" + call.argumentsJson.trim()
-        val isReplay = replaySig == lastExecutedSig &&
-            lastExecutedResult != null &&
-            policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ
-        if (isReplay) {
-            val prev = lastExecutedResult!!
-            onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.DONE, briefOf(call), "重放跳过：与上一次调用相同，返回已有结果")))
-            val storedP = TextCap.middle(prev.content, STORED_CAP)
-            appendAndNotify(
-                ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, toolCallId = call.id, toolName = call.name),
-                onEvent
-            )
-            return
-        }
-
-        onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.RUNNING, briefOf(call))))
-
-        val tool = tools.firstOrNull { it.name == call.name }
-        val args = parseArgs(call.argumentsJson)
-        // 畸形参数防护（OpenClaw #142176 精神）：解析失败不静默当空参跑——那会把
-        // memory save 误变成默认的 list 之类的动作且模型毫不知情。此刻没有任何动作
-        // 执行过（replay-safe），给显性错误让模型重新完整调用。走 finishCall 落历史，
-        // 模型下一轮就能看到错误并自愈。
-        if (args == null) {
-            val err = ToolResult(
-                "工具参数 JSON 损坏（模型输出被截断或编码错误）：${call.argumentsJson.take(160)}。" +
-                    "请完整重新调用 ${call.name}，参数必须是合法 JSON。",
-                true
-            )
-            onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.ERROR, briefOf(call), TextCap.middle(err.content, 80))))
-            finishCall(call, buildJsonObject {}, ctx, err, ToolRunState.ERROR, 0L, "direct", onEvent)
-            return
-        }
-        // E7a：按调用注入 callId 与子代理进度上报桥（子代理工具经 parentCtx 回调 → SubagentUpdate 事件）
-        val callCtx = subagentBridge(ctx, call, onEvent)
-
-        var result: ToolResult = ToolResult("")
-        var finalState: ToolRunState = ToolRunState.DONE
-        var toolStartMs = 0L
-        var decision: String? = null
-        var handledByHook = false
-
-        // 5.6 Plan 模式：READ 之外的工具一律不执行，引导模型产出计划文本
-        if (planGate() && tool != null && policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ) {
-            this.planIntercepted = true
-            result = ToolResult(
-                "[Plan 模式] 工具 ${call.name} 已被拦截（计划阶段不执行改动）。" +
-                    "请基于已有信息给出完整执行计划：步骤、涉及文件、预期结果，等待用户批准后再执行。",
-                false
-            )
-            finalState = ToolRunState.DONE
-            val storedP = TextCap.middle(result.content, STORED_CAP)
-            appendAndNotify(
-                ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, toolCallId = call.id, toolName = call.name),
-                onEvent
-            )
-            onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.DONE, briefOf(call), "已拦截（Plan 模式）")))
-            return
-        }
-
-        // E7b before hooks：Plan 门与审批之后、工具执行之前（快照在此拍）。返回 Handled 时直接落库
-        var hookFailure: String? = null
-        try {
-            for (h in hooks) {
-                if (h.names.isNotEmpty() && call.name !in h.names) continue
-                val d = h.before(call, args, callCtx)
-                if (d is ToolHook.HookDecision.Handled) {
-                    result = d.result
-                    finalState = if (d.result.isError) ToolRunState.ERROR else ToolRunState.DONE
-                    decision = "hook"
-                    handledByHook = true
-                    break
-                }
-            }
-        } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
-            throw ce
-        } catch (e: Exception) {
-            // fail-closed：before hook（写前快照）没做成就不执行改动。旧行为是打一行 logcat 照常写，
-            // 用户以为改错了能 /undo，其实底片没拍到；而真机 Flyme 上 logcat 被全量抑制，那行日志谁也看不见。
-            // 快照是回滚的唯一依据，它失败时"停下报错"比"悄悄失去回滚能力"更可接受。
-            hookFailure = e.message ?: e.javaClass.simpleName
-            android.util.Log.w("HaoEngine", "hook before failed, change blocked: $hookFailure")
-        }
-
-        // bash 拦截检查（正则扫描+递归切分，非廉价）：结果存局部变量避免同一命令查两次。
-        // 注意必须放在 when 之外：曾经的写法 `call.name == "bash" -> checkShellBlocked(...)?.let{}`
-        // 让「未拦截」也命中该分支并使分支体空转 → 工具从不执行、结果恒为空串且 error=false，
-        // 表现为所有 bash 调用「无回显」（2026-09-09 6de47f3 引入，2026-09-16 修复），
-        // 同时导致拦截规则形同虚设、bash 审批被跳过。
-        val shellBlocked: String? =
-            if (call.name == "bash") policy.checkShellBlocked(args.optString("command")) else null
-
-        when {
-            // fail-closed：before hook 没做成（如写前快照落不下去）就不执行改动，
-            // 免得留下"以为能回滚其实不能"的改动。
-            hookFailure != null -> {
-                result = ToolResult(
-                    "已取消本次 ${call.name}：执行前检查（写前快照）失败（$hookFailure），" +
-                        "继续改动将无法回滚。请清理应用存储空间或检查权限后重试。",
-                    true
-                )
-                finalState = ToolRunState.ERROR
-                decision = "hook-error"
-            }
-
-            // hook 已处理（如 Plan 拦截的等价 case），跳过工具执行
-            handledByHook -> Unit
-
-            tool == null -> {
-                // E4b：模型可能凭系统提示里的分组描述臆测调用未注入的工具 —— 给出 tools_enable 引导
-                result = unknownToolResult(call.name)
-                finalState = ToolRunState.ERROR
-                decision = "unknown"
-            }
-
-            shellBlocked != null -> {
-                result = ToolResult(shellBlocked, true)
-                finalState = ToolRunState.DENIED
-                decision = "blocked"
-            }
-
-            // C6/C1 config_set 恒审批：预检（补丁非法 → 免审批直接拒绝）→ 语义 diff 审批 → 同步 apply。
-            // 无论权限模式如何都必须经用户批准（配置写不变量，含 permission_mode 自提权场景）。
-            call.name == "config_set" -> {
-                val preview = configPreview(args)
-                if (preview.err != null) {
-                    result = ToolResult(
-                        "配置被拒绝：${preview.err}（未生效；修正参数后重新调用 config_set 即可）",
-                        true
-                    )
-                    finalState = ToolRunState.ERROR
-                    decision = "invalid"
-                } else {
-                    val granted = approve(ApprovalRequest.ConfigChange(preview.diff.ifBlank { "（无字段变化）" }))
-                    if (!granted) {
-                        result = ToolResult("用户拒绝了配置修改。", true)
-                        finalState = ToolRunState.DENIED
-                        decision = "denied"
-                    } else {
-                        decision = "approved"
-                        toolStartMs = System.currentTimeMillis()
-                        result = invokeTool(tool, args, callCtx)
-                        if (result.isError) finalState = ToolRunState.ERROR
-                    }
-                }
-            }
-
-            policy.requiresApproval(call.name) -> {
-                val request = buildApprovalRequest(call, args)
-                val granted = approve(request)
-                if (!granted) {
-                    result = ToolResult("用户拒绝了本次操作。", true)
-                    finalState = ToolRunState.DENIED
-                    decision = "denied"
-                } else {
-                    decision = "approved"
-                    toolStartMs = System.currentTimeMillis()
-                    result = invokeTool(tool, args, callCtx)
-                    if (result.isError) finalState = ToolRunState.ERROR
-                }
-            }
-
-            else -> {
-                // YOLO 等免审批模式同样要拍快照（5.5 回滚依赖），否则全自动下写入无档可回
-                toolStartMs = System.currentTimeMillis()
-                result = invokeTool(tool, args, callCtx)
-                if (result.isError) finalState = ToolRunState.ERROR
-            }
-        }
-        // 记录签名供重放保护比对（仅非 READ 工具参与判定）。
-        // fail-closed 拦下的那次不算"执行过"：否则用户清出空间后原样重试会被判成重放，
-        // 直接返回那条陈旧错误、永远没机会真正写。
-        if (hookFailure == null &&
-            policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ
-        ) {
-            lastExecutedSig = replaySig
-            lastExecutedResult = result
-        }
-        finishCall(call, args, callCtx, result, finalState, toolStartMs, decision, onEvent)
-    }
-
-    /** E7a：按调用注入 callId 与子代理进度上报桥（串行/并行两路共用）。 */
-    private fun subagentBridge(ctx: ToolContext, call: ToolCallData, onEvent: (TurnEvent) -> Unit): ToolContext =
-        ctx.copy(
-            currentCallId = call.id,
-            onSubagentEvent = { report ->
-                onEvent(
-                    SubagentUpdate(
-                        call.id, report.id, report.index, report.total,
-                        report.state, report.tokensUsed, report.brief
-                    )
-                )
-            }
-        )
-
-    /** E4b：模型可能凭系统提示里的分组描述臆测调用未注入的工具 —— 给出 tools_enable 引导。 */
-    private fun unknownToolResult(name: String): ToolResult {
-        val g = ToolRegistry.groupOf(name)
-        val groups = session.activeGroups?.toSet()
-        return if (groups != null && g != ToolRegistry.GROUP_CORE && g !in groups) {
-            ToolResult(
-                "工具 $name 属于未启用的「$g」工具组。请先调用 tools_enable（group=\"$g\"）启用后再使用。",
-                true
-            )
-        } else {
-            ToolResult("未知工具：$name", true)
-        }
-    }
-
-    /**
-     * 执行收尾：账本 / E5 连续失败熔断 / E7b after hooks / 结果落库 / 状态事件。
-     * 串行路径（executeCall）与并行段（executeParallelCalls）共用；
-     * 会在主协程按序执行，禁止放进并发块（session.messages 与事件回调非线程安全）。
-     */
-    private suspend fun finishCall(
-        call: ToolCallData,
-        args: JsonObject,
-        callCtx: ToolContext,
-        result: ToolResult,
-        finalState: ToolRunState,
-        toolStartMs: Long,
-        decision: String?,
-        onEvent: (TurnEvent) -> Unit
-    ) {
-        if (toolStartMs > 0) {
-            ledgerTool(
-                call.name, System.currentTimeMillis() - toolStartMs,
-                ok = !result.isError, decision = decision ?: "direct"
-            )
-        }
-        // E7b hooks：E3 失败升级 / 5.7 技能提示 / E7c 写文件校验统一在 after 阶段按列表序执行
-        var finalResult = result
-        for (h in hooks) {
-            if (h.names.isNotEmpty() && call.name !in h.names) continue
-            finalResult = h.after(call, args, callCtx, finalResult)
-        }
-        // E5 连续工具失败熔断：必须排在 hooks 之后判定——conFailCount 的自增发生在
-        // EscalationHook.after（EngineHooks.kt:90），先前置读会让阈值 8 拖到第 9 次失败才触发。
-        if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
-            _loopFailedCap = true
-        }
-        var storedContent = TextCap.middle(finalResult.content, STORED_CAP)
-        val message = ChatMessage(
-            role = ChatMessage.ROLE_TOOL,
-            content = storedContent,
-            toolCallId = call.id,
-            toolName = call.name,
-            error = finalResult.isError
-        )
-        appendAndNotify(message, onEvent)
-        // 图像注入通路（4.2 browser_screenshot）：工具结果带图时追加一条 user 图像消息，
-        // 复用既有 imageData → image_url 转换，OpenAI/Anthropic 两协议均可消费
-        finalResult.imageDataUrl?.let { img ->
-            appendAndNotify(
-                ChatMessage(
-                    role = ChatMessage.ROLE_USER,
-                    content = "[${call.name}] 页面截图（当前视觉状态，供图像分析）",
-                    imageData = img
-                ),
-                onEvent
-            )
-        }
-        onEvent(
-            ToolChanged(
-                ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.content))
-            )
-        )
-    }
-
-    /** E6 并行段单次调用的准备态：参数解析在主协程完成，工具体并发执行。 */
-    private class PreparedCall(
-        val call: ToolCallData,
-        val tool: Tool?,
-        /** null = 参数 JSON 损坏，执行点必须出显性错误（不得当空参运行）。 */
-        val args: JsonObject?,
-        val ctx: ToolContext
-    )
-
-    /**
-     * E6 并行执行：READ 白名单调用在 IO 协程并发跑工具体（信号量限 4），
-     * 结果按原 calls 顺序在主协程经 finishCall 串行收尾（顺序可回放，零数据竞争）。
-     * 单调用退化为完整 executeCall（保留 Plan 门等特判语义）。
-     */
-    private suspend fun executeParallelCalls(
-        calls: List<ToolCallData>,
-        tools: List<Tool>,
-        ctx: ToolContext,
-        onEvent: (TurnEvent) -> Unit
-    ) {
-        if (calls.isEmpty()) return
-        if (calls.size == 1) {
-            executeCall(calls.first(), tools, ctx, onEvent)
-            return
-        }
-        val prepared = calls.map { call ->
-            PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.argumentsJson), ctx)
-        }
-        prepared.forEach { p ->
-            onEvent(ToolChanged(ToolUpdate(p.call.id, ToolRunState.RUNNING, briefOf(p.call))))
-        }
-        val gate = Semaphore(PARALLEL_MAX_CONCURRENCY)
-        coroutineScope {
-            val bodies = prepared.map { p ->
-                async(Dispatchers.IO) {
-                    gate.withPermit { runParallelBody(p) }
-                }
-            }
-            prepared.zip(bodies).forEach { (p, body) ->
-                val (result, state, elapsed) = body.await()
-                // 参数损坏时 runParallelBody 已产出错误结果；args 传空对象仅为完成历史记录
-                finishCall(p.call, p.args ?: buildJsonObject {}, p.ctx, result, state, elapsed, "direct", onEvent)
-            }
-        }
-    }
-
-    /** E6 并行工具体：白名单调用均为 READ 免审批，直接执行即可。 */
-    private suspend fun runParallelBody(p: PreparedCall): Triple<ToolResult, ToolRunState, Long> {
-        if (p.tool == null) return Triple(unknownToolResult(p.call.name), ToolRunState.ERROR, 0L)
-        if (p.args == null) {
-            return Triple(
-                ToolResult(
-                    "工具参数 JSON 损坏（模型输出被截断或编码错误）：${p.call.argumentsJson.take(160)}。" +
-                        "请完整重新调用 ${p.call.name}，参数必须是合法 JSON。",
-                    true
-                ),
-                ToolRunState.ERROR, 0L
-            )
-        }
-        val start = System.currentTimeMillis()
-        val result = invokeTool(p.tool, p.args, p.ctx)
-        return Triple(result, if (result.isError) ToolRunState.ERROR else ToolRunState.DONE, System.currentTimeMillis() - start)
-    }
-
-    private suspend fun invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =
-        try {
-            // bash（3.3 多后端）允许显式放宽到 600s（长构建），按请求 +20s 余量；其余工具维持 180s
-            val budget = if (tool.name == "bash") {
-                var t = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000).toLong()
-                // 包管理命令与 BashTool 同步保底抬升（引擎先超时会连 dpkg 一起杀，
-                // 留 interrupted 锁；toybox/ssh 误抬无害——工具内部自有 exec 超时）
-                runCatching {
-                    val cmd = args["command"]?.jsonPrimitive?.contentOrNull ?: ""
-                    val floorMs = com.haoai.agent.agent.tools.BashTool.pkgMgmtTimeoutFloorMs(cmd)
-                    if (floorMs > t) t = floorMs
-                }
-                t + 20_000L
-            } else TOOL_TIMEOUT_MS
-            // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
-            // （browser_* 工具内部自行 withContext(Main) 操作 WebView，嵌套切换安全）
-            withTimeout(budget) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    tool.run(args, ctx)
-                }
-            }
-        } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
-            // 区分「工具超时」与「用户停止」：超时只作废本次调用，不能静默杀掉整轮任务
-            if (ce is kotlinx.coroutines.TimeoutCancellationException) {
-                ToolResult("工具执行超时，请拆小任务或加大 timeout 重试", true)
-            } else {
-                throw ce
-            }
-        } catch (e: Exception) {
-            ToolResult("工具执行失败：${e.message ?: e.javaClass.simpleName}", true)
-        }
-
-    /** 运行单个子代理（E7a + P1/P2/P3）：独立工具集+轮数上限，逐工具进度上报、
-     *  失败/终止回收部分结果、转录落盘（.haoai-jobs/subagent_<id>.md），可被 stop/steer 干预。
-     *  P3 mode=work：主代理工具面（继承权限，写盘快照+审批闸同主循环），research 维持只读。 */
-    private suspend fun runSubAgent(
-        task: String,
-        parentCtx: ToolContext,
-        index: Int = 1,
-        total: Int = 1,
-        mode: String = "research",
-        id: String? = null
-    ): String {
-        val fid = id ?: "sa_${subagentSeq.incrementAndGet()}"
-        // 计划模式：work 子代理会执行改动，与 Plan 语义冲突，直接拒绝
-        if (mode == "work" && planGate()) {
-            return "计划模式下不派出 work 子代理（会执行改动）；请先结束计划阶段再派。"
-        }
-        val handle = SubagentHandle(
-            fid, parentCtx.currentCallId, index, total, task,
-            currentCoroutineContext()[kotlinx.coroutines.Job] ?: kotlinx.coroutines.Job()
-        )
-        activeSubagents[fid] = handle
-        var subPrompt = 0L
-        var subCompletion = 0L
-        val subStart = System.currentTimeMillis()
-        fun report(state: String, tokens: Long, brief: String) {
-            try {
-                parentCtx.onSubagentEvent?.invoke(
-                    com.haoai.agent.agent.engine.SubagentReport(fid, index, total, state, tokens, brief)
-                )
-            } catch (_: Exception) {
-            }
-        }
-        // P1.3 转录落盘：过程写到工作区 .haoai-jobs/subagent_<id>.md（agent 可用 read 复查；
-        //  shellDir 为空=SAF 目录时静默跳过）。返回结果尾注。
-        fun transcriptTail(status: String): String {
-            val dir = parentCtx.shellDir?.let { java.io.File(it, ".haoai-jobs") } ?: return ""
-            return runCatching {
-                dir.mkdirs()
-                val f = java.io.File(dir, "subagent_$fid.md")
-                f.writeText(
-                    buildString {
-                        appendLine("# 子代理 $id（$status）")
-                        appendLine("- 任务：$task")
-                        appendLine("- 时间：${System.currentTimeMillis()} · index $index/$total")
-                        if (handle.steps.isNotEmpty()) {
-                            appendLine()
-                            appendLine("## 已完成步骤")
-                            handle.steps.forEach { appendLine("- $it") }
-                        }
-                        if (handle.lastAssistant.isNotBlank()) {
-                            appendLine()
-                            appendLine("## 最近中间结论")
-                            appendLine(handle.lastAssistant.take(2000))
-                        }
-                    }
-                )
-                "\n\n（过程日志：.haoai-jobs/subagent_$fid.md）"
-            }.getOrDefault("")
-        }
-        // P3：childCtx 用 copy 全量继承（work 模式的 config 通道/webCache 复用）；depth+1 且去嵌套上报
-        val childCtx = parentCtx.copy(depth = parentCtx.depth + 1, onSubagentEvent = null)
-        // E7a 进度上报（经 parentCtx 回调；失败也上报 ERROR，不拖垮整卡）
-        report("RUNNING", 0, task.take(80))
-        // P3-A：work 模式=主代理工具面（depth+1 已天然排除 spawn 防嵌套；再减配置/清单纪律项），
-        // research 维持只读清单
-        val tools = if (mode == "work") {
-            ToolRegistry.build(childCtx, null, session.activeGroups?.toSet(), null)
-                .filter { it.name !in setOf("config_set", "tools_enable", "todo") }
-        } else ToolRegistry.readOnly(childCtx)
-        val apiTools = gateTools(tools.map { it.toApi() })
-        // 注意：不更新引擎级 _toolsTokenCache——那是主循环工具清单的开销估算，
-        // 子代理只读工具集远小于主清单，覆写会让压缩/催办判断在本轮剩余时间持续低估
-
-        val msgs = mutableListOf(
-            ApiMessage(role = "system", content = if (mode == "work") SUBAGENT_WORK_SYSTEM else SUBAGENT_SYSTEM),
-            ApiMessage(role = "user", content = task)
-        )
-        var finalText = ""
-        var turns = 0
-        var hitTurnCap = false
-        var subOk = true
-        // P3-B 检索硬预算：research 子代理强制计数；work 模式不夹（它可能确实要反复抓取）
-        val retrievalBudget = RetrievalBudget(if (mode == "research") SUB_RETRIEVAL_CAP else Int.MAX_VALUE)
-        while (turns++ < SUB_MAX_TURNS) {
-            currentCoroutineContext().ensureActive()
-            // P2 steer：主代理的纠偏指令在子代理下一轮开始前注入（不打断当前执行）
-            handle.steering.poll()?.let { m ->
-                msgs.add(ApiMessage(role = "user", content = "[主代理插话] $m"))
-            }
-            val subTranscript = TurnTranscript()
-            var calls: List<ToolCallData> = emptyList()
-            // 子代理的模型请求单独走一次，失败不再直接判 ERROR：
-            // 主循环有 5/12/25s 瞬态退避，子代理此前一次网关抖动/429 就废掉整路调研
-            //（spawn_agents 并行时表现为兄弟路正常、这一路凭空 ERROR）
-            suspend fun attemptOnce() {
-                subTranscript.reset()
-                calls = emptyList()
-                httpClient.chatStream(provider, apiKey, msgs, apiTools, effectiveEffort()).collect { ev ->
-                    when (ev) {
-                        is SseEvent.Delta -> subTranscript.delta(ev.text)
-                        is SseEvent.Reasoning -> Unit
-                        is SseEvent.Completed -> calls = ev.toolCalls
-                        is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
-                    }
-                }
-            }
-            try {
-                var backoff = 0
-                while (true) {
-                    try {
-                        attemptOnce()
-                        break
-                    } catch (e: Exception) {
-                        if (!isTransientHttpError(e) || backoff >= SUB_BACKOFFS_SEC.size) throw e
-                        if (backoff == 0) report("RUNNING", subPrompt + subCompletion, "网络波动，退避重试中")
-                        delay(SUB_BACKOFFS_SEC[backoff] * 1000L)
-                        backoff++
-                        currentCoroutineContext().ensureActive()
-                    }
-                }
-            } catch (ce: CancellationException) {
-                val ourStop = handle.state == "STOPPING"
-                if (!ourStop) throw ce
-                // stop_agent 的终止：部分结果挂在句柄上，spawn 层回收后返回主代理
-                handle.state = "STOPPED"
-                subOk = false
-                ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
-                report("STOPPED", subPrompt + subCompletion, "已终止（${handle.steps.size} 步已回收）")
-                handle.finalResult = "子代理 ${handle.id} 被终止。\n\n${handle.partialSummary()}"
-                transcriptTail("被终止")
-                throw ce
-            } catch (e: Exception) {
-                subOk = false
-                handle.state = "ERROR"
-                ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
-                report("ERROR", subPrompt + subCompletion, "失败：${e.message ?: e.javaClass.simpleName}")
-                transcriptTail("失败：${e.message ?: e.javaClass.simpleName}")
-                // P1.2 失败不白干：回收已完成步骤与中间结论（而非裸错误）
-                val failOut = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${handle.partialSummary()}"
-                handle.finalResult = failOut
-                return failOut
-            }
-            finalText = subTranscript.textString()
-            handle.lastAssistant = finalText
-            if (calls.isEmpty()) break
-            msgs.add(
-                ApiMessage(
-                    role = "assistant",
-                    content = finalText.ifBlank { null },
-                    toolCalls = calls.map { toolCallToApi(it.id, it.name, it.argumentsJson) }
-                )
-            )
-            for (call in calls) {
-                // 协作停止检查点（job.cancel 也会在下个挂起点生效，双保险）
-                if (handle.state == "STOPPING") break
-                currentCoroutineContext().ensureActive()
-                // P1.1 逐工具进度：子代理此刻在干什么直接上任务卡
-                handle.currentTool = briefOf(call)
-                report("RUNNING", subPrompt + subCompletion, "工具 ${call.name} · ${TextCap.middle(call.argumentsJson, 60)}")
-                val tool = tools.firstOrNull { it.name == call.name }
-                val childArgs = parseArgs(call.argumentsJson)
-                // P3-A work 模式：before hooks（写盘快照，回滚依赖）与主循环同源
-                var hookHandled: ToolResult? = null
-                if (mode == "work" && tool != null && childArgs != null) {
-                    runCatching {
-                        for (h in hooks) {
-                            if (h.names.isNotEmpty() && call.name !in h.names) continue
-                            val d = h.before(call, childArgs, childCtx)
-                            if (d is ToolHook.HookDecision.Handled) {
-                                hookHandled = d.result
-                                break
-                            }
-                        }
-                    }
-                }
-                // P3-B 预算用完：不执行、不当失败（避免污染 E5 连续失败熔断），只回一条收敛指令
-                val overBudget = retrievalBudget.admit(call.name)
-                val result = try {
-                    withTimeout(TOOL_TIMEOUT_MS) {
-                        when {
-                            overBudget != null -> ToolResult(overBudget)
-                            tool == null -> ToolResult("未知工具：${call.name}", true)
-                            // 子代理同样不得拿损坏参数当空参跑（畸形参数显性报错）
-                            childArgs == null -> ToolResult(
-                                "工具参数 JSON 损坏（截断/编码错误）：${call.argumentsJson.take(120)}。请完整重新调用 ${call.name}。",
-                                true
-                            )
-                            hookHandled != null -> hookHandled
-                            // P3-A work 模式审批闸：与主循环同策略（ASK_WRITES/ALWAYS_ASK 下逐次审批）
-                            mode == "work" && policy.requiresApproval(call.name) -> {
-                                val granted = approve(buildApprovalRequest(call, childArgs))
-                                if (!granted) ToolResult("用户拒绝了本次操作。", true)
-                                else tool.run(childArgs, childCtx)
-                            }
-                            else -> tool.run(childArgs, childCtx)
-                        }
-                    }
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (e: Exception) {
-                    ToolResult("失败：${e.message ?: e.javaClass.simpleName}", true)
-                }
-                handle.currentTool = null
-                // P1.2 步骤留痕：失败/终止时的部分结果由此构成
-                handle.steps.add(
-                    "${call.name}(${TextCap.middle(call.argumentsJson, 60)}) → ${TextCap.middle(result.content, 90)}" +
-                        if (result.isError) " [错误]" else ""
-                )
-                report("RUNNING", subPrompt + subCompletion, "已完成 ${call.name}（第 ${handle.steps.size} 步）")
-                msgs.add(
-                    ApiMessage(
-                        role = "tool",
-                        content = TextCap.middle(result.content, 6000),
-                        toolCallId = call.id,
-                        name = call.name
-                    )
-                )
-            }
-            if (handle.state == "STOPPING") break
-            if (turns >= SUB_MAX_TURNS && calls.isNotEmpty()) hitTurnCap = true
-        }
-        handle.state = if (subOk) "DONE" else "ERROR"
-        ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = subOk)
-        report("DONE", subPrompt + subCompletion, finalText.ifBlank { "（未给出结论）" }.take(120))
-        val logNote = transcriptTail("完成")
-        val capNote = if (hitTurnCap) {
-            "\n\n（注意：达到 $SUB_MAX_TURNS 轮上限被截断，以上为部分结论。已完成步骤：\n" +
-                handle.steps.joinToString("\n- ", prefix = "- ") + "）"
-        } else ""
-        val out = finalText.ifBlank { "子代理未给出结论" } + capNote + logNote
-        handle.finalResult = out
-        return out
-    }
-
-    /** 注入记忆时带上当前用户消息做主题相关性打分；markMemoryUse 仅在真实请求路径为 true（token 估算不计数）。 */
-    private fun memorySnippet(markMemoryUse: Boolean = false): String {
-        if (!memoryEnabled || depth != 0) return ""
-        val bank = memoryBank ?: return ""
-        val query = session.messages.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content
-        val (snippet, ids) = bank.promptSnippetIds(query?.take(300))
-        if (markMemoryUse) bank.markInjected(ids, query)
-        return snippet
-    }
-
-    private fun journalSnippet(): String =
-        if (memoryEnabled && depth == 0) journal?.promptSnippet().orEmpty() else ""
-
-    /** 从五段式交接文档提取「已完成/下一步」要点，作为当日事件落盘。 */
-    private fun handoffEvent(summary: String): String {
-        val picked = mutableListOf<String>()
-        var section = ""
-        for (raw in summary.lineSequence()) {
-            val line = raw.trim()
-            when {
-                line.startsWith("#") -> section = line.trimStart('#').trim()
-                line.startsWith("-") && (section.contains("已完成") || section.contains("下一步")) ->
-                    picked.add(line.drop(1).trim())
-            }
-        }
-        val body = picked.joinToString("；").take(200).ifBlank {
-            summary.replace(Regex("[#*`>]"), "").lineSequence()
-                .filter { it.isNotBlank() }.joinToString("；").take(180)
-        }
-        return "任务进展：$body"
-    }
-
-    /** 5.4 运行账本：LLM 调用记账（写失败静默，绝不影响主流程）。 */
-    private fun ledgerLlm(purpose: String, promptTokens: Long, completionTokens: Long, durationMs: Long, ok: Boolean, model: String? = null, sessionId: String? = null) {
-        if (purpose != "chat") android.util.Log.d("HaoLedger", "llm purpose=$purpose model=${model ?: provider.model} pin=$promptTokens pout=$completionTokens ok=$ok")
-        com.haoai.agent.data.UsageLedger.add(
-            com.haoai.agent.data.UsageLedger.Entry(
-                kind = "llm", ts = System.currentTimeMillis(),
-                sessionId = sessionId ?: session.id,
-                purpose = purpose, model = model ?: provider.model,
-                promptTokens = promptTokens.toInt(), completionTokens = completionTokens.toInt(),
-                durationMs = durationMs, ok = ok
-            )
-        )
-    }
-
-    private fun ledgerTool(name: String, durationMs: Long, ok: Boolean, decision: String) {
-        com.haoai.agent.data.UsageLedger.add(
-            com.haoai.agent.data.UsageLedger.Entry(
-                kind = "tool", ts = System.currentTimeMillis(),
-                sessionId = session.id,
-                tool = name, risk = policy.riskOf(name).name,
-                policyDecision = decision, durationMs = durationMs, ok = ok
-            )
-        )
-    }
-
-    private fun maybeExtractMemory() {
-        val bank = memoryBank ?: return
-        val scope = backgroundScope ?: return
-        if (!memoryEnabled || !autoLearn || depth != 0) return
-        // 端侧模型跳过自动记忆提取：辅助请求会冲掉 llama-server 单 slot 前缀缓存，
-        // 让 Agent 工具循环的每轮请求全量重算 prefill（手机上每轮多花几十秒）
-        if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) return
-        val recent = session.messages
-            .filter {
-                (it.role == ChatMessage.ROLE_USER || it.role == ChatMessage.ROLE_ASSISTANT) &&
-                    it.content.isNotBlank()
-            }
-            .takeLast(8)
-        // 门槛：没有实质用户输入（纯指令/太短）就不值得沉淀，直接跳过
-        val userText = recent.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content.orEmpty()
-        if (userText.length < 12) return
-        val transcript = recent
-            .joinToString("\n") { m ->
-                val who = if (m.role == ChatMessage.ROLE_USER) "用户" else "助手"
-                "$who：${m.content.take(500)}"
-            }
-            .trim()
-        if (transcript.length < 80) return
-        // M-1 修复①：提取提示词携带现有记忆清单——换述级重复在源头就不让提
-        // （remember() 的归一化去重只抓标点/空白差异，"的/。"差异与措辞改写必然穿透）
-        val existingBlock = run {
-            val actives = bank.all() // 已滤软失效，createdAt 降序：最近讨论过的事实正是重复风险最高的
-            if (actives.isEmpty()) ""
-            else "\n\n[已有记忆清单]（提取前逐条对照，与下列相同或仅措辞不同的内容一律不要输出）：" +
-                actives.take(30).joinToString("\n") { "- ${it.content.take(60)}" }
-        }
-        scope.launch {
-            // 5.3 记忆提取路由链（点6）：主+备用按序尝试，空配置回落主模型
-            val memChain = runCatching { memoryTarget?.invoke() }.getOrNull() ?: emptyList()
-            val memTargets = if (memChain.isEmpty()) listOf(provider to apiKey) else memChain
-            for ((memProv, memKey) in memTargets) {
-                val r = runCatching {
-                    val memClient = auxClientFor?.invoke(memProv) ?: httpClient
-                    val buf = StringBuilder()
-                    var mp = 0L; var mc = 0L
-                    val mstart = System.currentTimeMillis()
-                    memClient.chatStream(
-                        memProv, memKey,
-                        listOf(
-                            ApiMessage(role = "system", content = EXTRACT_SYSTEM + existingBlock),
-                            ApiMessage(role = "user", content = TextCap.middle(transcript, 4000))
-                        ),
-                        emptyList()
-                    ).collect { ev ->
-                        when (ev) {
-                            is SseEvent.Delta -> buf.append(ev.text)
-                            is SseEvent.Usage -> { mp += ev.promptTokens; mc += ev.completionTokens }
-                            else -> {}
-                        }
-                    }
-                    ledgerLlm("memory", mp, mc, System.currentTimeMillis() - mstart, ok = true, model = memProv.model)
-                    parseMemories(buf.toString()).take(2).forEach { (content, tags) ->
-                        // M-1 修复②：入库前近冲突闸门——与既有条目词面相近（换述）即跳过。
-                        // auto 记忆 imp=2 定位是兜底而非主通道：真正的信息更新由模型在对话里
-                        // 主动 save（M3 近冲突提示引导 merge），提取层漏记一条可接受、污染一条难清理。
-                        val nearDup = bank.nearConflicts(content).firstOrNull()
-                        if (nearDup != null) {
-                            android.util.Log.i(
-                                "HaoMemory",
-                                "auto 提取跳过（与 ${nearDup.id} 近冲突）：${content.take(40)}"
-                            )
-                        } else {
-                            bank.remember(content, tags, importance = 2, source = "auto")
-                        }
-                    }
-                }
-                if (r.isSuccess) break
-                (r.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
-                android.util.Log.w("HaoMemory", "记忆提取目标 ${memProv.name}/${memProv.model} 失败，降级链上下一个")
-            }
-        }
-    }
-
-    private fun parseMemories(text: String): List<Pair<String, List<String>>> {
-        val start = text.indexOf('[')
-        val end = text.lastIndexOf(']')
-        if (start < 0 || end <= start) return emptyList()
-        return runCatching {
-            val arr = HaoJson.json.parseToJsonElement(text.substring(start, end + 1)).jsonArray
-            arr.mapNotNull { el ->
-                val obj = el as? JsonObject ?: return@mapNotNull null
-                val content = obj["content"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
-                if (content.isEmpty()) return@mapNotNull null
-                val tags = runCatching {
-                    obj["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
-                }.getOrDefault(emptyList())
-                content.take(300) to tags
-            }
-        }.getOrDefault(emptyList())
-    }
-
-    /** E4a/E4b 工具定义 token 估算：真实序列化各工具 JSON 求和（兜底下限 3500）。 */
-    private fun estimateToolsTokens(apiTools: List<com.haoai.agent.agent.provider.ApiTool>): Int = runCatching {
-        apiTools.sumOf { t ->
-            com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
-                com.haoai.agent.data.HaoJson.json.encodeToString(
-                    com.haoai.agent.agent.provider.ApiTool.serializer(), t
-                )
-            )
-        }
-    }.getOrNull()?.coerceAtLeast(TOOLS_BASE_TOKENS) ?: TOOLS_BASE_TOKENS
-
-    /** E4b tools_enable 回调：把组并入会话 activeGroups、持久化并标记主循环重建工具清单。 */
-    private fun enableToolGroup(group: String): String {
-        val g = group.trim().lowercase()
-        if (g == ToolRegistry.GROUP_CORE) {
-            return "core 组是常驻工具组（读写/编辑/bash/搜索/记忆/待办等），无需也无法启用。"
-        }
-        if (g != ToolRegistry.GROUP_EXTENDED && g != ToolRegistry.GROUP_MCP) {
-            return "未知工具组「$group」。可用组：extended（无障碍操作/内置浏览器/虚拟屏/相机/定位/设备工具包/工作流等）、mcp（MCP 外部服务器工具）。"
-        }
-        val current = session.activeGroups?.toSet() ?: ToolRegistry.ALL_GROUPS
-        if (g in current) return "工具组 $g 已处于启用状态。"
-        session.activeGroups = (current + g).toSortedSet().toList()
-        persist()
-        _groupsDirty = true
-        return "已启用 $g 工具组，相关工具已注入（本会话保持）。现在可以直接使用该组的工具。"
-    }
-
-    /** E4b 分层注入提示：告知模型未加载的工具组与启用方式（全开/无缺省时为空）。 */
-    private fun toolsGroupHintText(): String {
-        val active = session.activeGroups?.toSet() ?: return ""
-        val disabled = ToolRegistry.ALL_GROUPS - active
-        if (disabled.isEmpty()) return ""
-        val parts = buildList {
-            if (ToolRegistry.GROUP_EXTENDED in disabled) {
-                add("extended（无障碍操作/内置浏览器/虚拟屏/相机/定位/设备工具包/工作流等）")
-            }
-            if (ToolRegistry.GROUP_MCP in disabled) add("mcp（MCP 外部服务器工具）")
-        }
-        return "## 工具分组\n" +
-            "- 本会话未加载的工具组：${parts.joinToString("；")}。这些组的工具不在你的工具清单里。\n" +
-            "- 需要时先调用 tools_enable（group=\"组名\"）启用：本轮工具执行完成后即生效，本会话保持。\n" +
-            "- 未启用前不要臆测调用这些组的工具。"
-    }
-
-    private fun buildSystemText(markMemoryUse: Boolean = false): String =
-        buildSystemTextWithInjected(markMemoryUse).first
-
-    /**
-     * (系统提示全文, 动态注入块拼接文本[记忆/技能索引/日志/MCP 摘要/预算提示])。
-     * 第二项仅供上下文用量拆分估算（estimateOverheadBreakdown）；真实请求路径只用全文。
-     * token 启发式按字符线性可加减，基础提示 = 全文 − 注入，buildSuffix 为注入块
-     * 加的小标题归入基础提示（误差可忽略）。
-     */
-    private fun buildSystemTextWithInjected(markMemoryUse: Boolean = false): Pair<String, String> {
-        val shellAvailable = backend?.shellWorkdir() != null
-        val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
-        // 3.3：当前 shell 后端说明 + 沙箱能力探测（探测异步跑一次，下一轮注入）
-        val sandbox = com.haoai.agent.platform.sandbox.SandboxEnv.resolve(
-            appFilesDir, appContext?.applicationInfo?.nativeLibraryDir, backend?.shellWorkdir()
-        )
-        val shellNote = when {
-            !shellAvailable -> ""
-            sandbox != null -> {
-                if (backgroundScope != null) {
-                    com.haoai.agent.agent.tools.shell.SandboxProbe.ensureStarted(sandbox, backgroundScope)
-                }
-                com.haoai.agent.platform.sandbox.SandboxEnv.describe(
-                    sandbox, com.haoai.agent.agent.tools.shell.SandboxProbe.summary() ?: ""
-                )
-            }
-            else -> "Shell 后端：toybox（Android /system/bin/sh，工具集有限）；用户在 设置 → Linux 环境 安装发行版后 bash 将自动切换到 glibc 沙箱。"
-        }
-        val memory = memorySnippet(markMemoryUse)
-        val skillIndex = com.haoai.agent.agent.skills.SkillStore.promptIndex()
-        val journalBlock = journalSnippet()
-        val mcpSummary = com.haoai.agent.agent.mcp.McpManager.promptSummary()
-        val budget = budgetHint()
-        // 能力声明片段：把当前模型的输入/输出
-        // 模态与工具支持显式写进系统提示词，让模型知道边界并主动绕行，而非中途引用被剥离
-        // 的能力导致任务断裂报错。端侧模型（llama）不走此注入（本地能力另由 vision 探测）。
-        // 配置了委派模型时提示词会点名 delegate_to_vision/transcribe_audio 工具；
-        // delegateTarget 是 suspend 闭包，此处直接检查设置字符串（buildSystemText 非挂起上下文）
-        val delegateReady = delegateTarget != null
-        val capabilityNote =
-            if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) ""
-            else com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(provider.caps(), delegateReady).orEmpty()
-        val full = SystemPrompt.PREFIX +
-            SystemPrompt.buildSuffix(
-                workspaceLabel, shellAvailable, dateText, customPrompt, memory,
-                a11yAvailable = com.haoai.agent.platform.a11y.HaoAccessibilityService.connected(),
-                identity = identity,
-                skillIndex = skillIndex,
-                journalBlock = journalBlock,
-                mcpSummary = mcpSummary,
-                shellNote = shellNote,
-                vscreenAvailable = vscreenEnabled,
-                toolsGroupHint = toolsGroupHintText(),
-                capabilityNote = capabilityNote
-            ) + budget + todoProgressLine(consume = markMemoryUse)
-        val injected = memory + skillIndex + journalBlock + mcpSummary + budget + capabilityNote
-        return full to injected
-    }
-
-    /**
-     * E9 todo 进度行：仅在真实请求路径（consume=true，buildApiMessages）注入并消费标志；
-     * 估算路径（estimateOverheadTokens/maybeNudgeHandoff）只读不消费——否则标志会被
-     * 估算先行清掉，进度行永远进不了真实请求。
-     */
-    private fun todoProgressLine(consume: Boolean): String {
-        if (!todoDirty || !consume) return ""
-        todoDirty = false
-        val items = todoStore.load(session.id)
-        if (items.isEmpty()) return ""
-        val done = items.count { it.status == "completed" }
-        val active = items.firstOrNull { it.status == "in_progress" } ?: items.firstOrNull { it.status == "pending" }
-        val head = active?.text?.take(30) ?: ""
-        val human = if (done == items.size) "全部完成" else "待办 ${items.size} 项：已完成 $done、进行中 ${items.count { it.status == "in_progress" }}"
-        return "\n[任务进度] $human${if (head.isNotEmpty()) "（$head）" else ""}"
-    }
-
     /**
      * todo 兜底收尾：把残留的 in_progress/pending 项标为 completed——模型已给出最终回答，
      * 此时残留即漏标。保存后触发 onToolChange，任务面板/通知卡立即刷新。
@@ -1633,593 +711,12 @@ class AgentEngine(
     }
 
     /** 真实固定开销估算（系统提示 + 工具定义），供压缩判断与 UI 使用量指示器；不发起网络。 */
-    private var _toolsTokenCache: Int? = null
+    internal var _toolsTokenCache: Int? = null
 
-    /** 能力门控（统一走 CapabilityResolver）：模型标记不支持 tools 时清空工具清单，降级纯对话。 */
-    private fun gateTools(apiTools: List<com.haoai.agent.agent.provider.ApiTool>): List<com.haoai.agent.agent.provider.ApiTool> =
-        if (provider.caps().tools == false) emptyList() else apiTools
-
-    fun estimateOverheadTokens(): Pair<Int, Int> =
-        com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to
-            (_toolsTokenCache ?: TOOLS_BASE_TOKENS)
-
-    /** 拆分估算 (基础系统提示, 动态注入[记忆/技能/日志/MCP/预算], 工具定义)，供上下文详情面板。 */
-    fun estimateOverheadBreakdown(): Triple<Int, Int, Int> {
-        val (full, injected) = buildSystemTextWithInjected()
-        val sysTok = com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(full)
-        val injTok = com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(injected)
-        return Triple(
-            (sysTok - injTok).coerceAtLeast(0),
-            injTok,
-            _toolsTokenCache ?: TOOLS_BASE_TOKENS
-        )
-    }
-
-    /** 聊天模型的真实上下文窗口（本地端侧固定按 32K 保守算）。 */
-    private fun chatContextWindow(): Int {
-        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-        return if (isLocal) 32768 else provider.effectiveContextLength()
-    }
-
-    /**
-     * 还没被摘要覆盖的消息：压缩水位之后的那一段。
-     * 水位 id 找不到（旧会话没这个字段、或那条已被存储上限裁掉）时按整段处理，
-     * 宁可多发一点也不要静默丢掉上下文。
-     */
-    private fun uncompactedMessages(): List<com.haoai.agent.data.StoredMessage> {
-        val all = session.messages
-        val wid = session.compactedThroughId ?: return all
-        val idx = all.indexOfFirst { it.id == wid }
-        return if (idx < 0) all else all.drop(idx + 1)
-    }
-
-    /**
-     * 「下一次请求会发出去多少 token」——压缩触发与 handoff 催办都按这个数决策。
-     *
-     * 优先用供应商真值锚定：上一轮请求的 promptTokens 是**实际计费**的上下文规模，
-     * 它已经包含系统提示 + 工具定义 + 当时那整段历史，所以只需要补上锚点之后新增的
-     * 消息，再把两轮之间上下文开销的变化（记忆/技能注入变动、工具组启用）按当下口径
-     * 加减回去。纯字符估算只在没有锚点时兜底 —— 那套启发式在工具密集会话里能高估
-     * 一个数量级，后果是"远没到窗口就提前压缩"（答得比应有的浅）。
-     *
-     * 锚点自动失效的情况：消息数比锚点还少（编辑重发/删除截断过历史）→ 退回全量估算；
-     * 压缩推进水位时显式置 null（水位之前的段落不再进请求，锚点算出来会偏高）。
-     *
-     * internal 是给单测钉数值用的；UI 上下文面板要的是 system/tools/history 分项，
-     * 那个展示口径别复用这里（真值给不出分项）。
-     */
-    internal fun estimateContextTokens(): Int {
-        val all = session.messages
-        val (sysTok, toolsTok) = estimateOverheadTokens()
-        val a = session.usageAnchor
-        if (a != null && a.promptTokens > 0 && a.messageCount in 0..all.size) {
-            val added = all.subList(a.messageCount, all.size).sumOf {
-                com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
-            }
-            return (a.promptTokens - a.overheadTokens + sysTok + toolsTok + added).coerceAtLeast(0)
-        }
-        val history = uncompactedMessages().sumOf {
-            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
-        }
-        return history + sysTok + toolsTok
-    }
-
-    /** 历史可用预算 = 窗口 − 系统提示 − 工具定义 − 已有摘要 − 单次回复上限 − 安全余量。 */
-    private fun historyBudgetTokens(): Int {
-        val (sysTok, toolsTok) = estimateOverheadTokens()
-        val summaryTok = com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(
-            session.compactionSummary.orEmpty()
-        )
-        val reserved = provider.effectiveMaxTokens().coerceAtLeast(0)
-        return (chatContextWindow() - sysTok - toolsTok - summaryTok - reserved - HISTORY_MARGIN_TOKENS)
-            .coerceAtLeast(MIN_HISTORY_BUDGET_TOKENS)
-    }
-
-    /** 这一轮真正会发出去的历史：水位之后 + token 预算窗口 + 条数保险上限。 */
-    private fun requestHistoryWindow(): List<com.haoai.agent.data.StoredMessage> {
-        val msgs = uncompactedMessages()
-        val from = com.haoai.agent.ui.chat.ContextUsage.windowStart(
-            msgs,
-            { com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP) },
-            { it.role == ChatMessage.ROLE_USER },
-            historyBudgetTokens(),
-            MAX_HISTORY
-        )
-        return msgs.drop(from)
-    }
-
-    /** 供 UI 上下文面板复用：按引擎真实请求口径算「这一轮历史会占多少 token」。
-     *  面板自己另算一份是当初口径漂移的根源，现在统一从这里取。 */
-    fun estimateSentHistoryTokens(): Int = requestHistoryWindow().sumOf {
-        com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
-    }
-
-    private fun buildApiMessages(): List<ApiMessage> {
-        val systemText = buildSystemText(markMemoryUse = true)
-
-        // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
-        // OpenAI 兼容端会以 400 拒绝孤儿 tool 消息（且重试复现，会话就此卡死）。
-        // 注意这里必须是**旧→新**的正序：requestHistoryWindow 已经按预算从前往后截好，
-        // 原先"倒序取 N 条再倒回来"的第二次 asReversed 不能省 —— 少了它整段历史
-        // 会以新→旧发出，模型看到的最后一条变成会话里最老的那句（d55ac4d 引入，
-        // 表现为"追问当没看见、把第一个问题又答一遍"）。repairBlankCallIds 也按正序配对 id。
-        val history = requestHistoryWindow()
-            .repairBlankCallIds()
-            .pairSanitized()
-            .mapNotNull { m ->
-                when (m.role) {
-                    ChatMessage.ROLE_USER -> {
-                        val caps = provider.caps()
-                        val parts = mutableListOf<com.haoai.agent.agent.provider.ApiContentPart>()
-                        val notes = StringBuilder()
-                        var text = m.content
-                        // 图像：有 image-in 直发，否则注记降级
-                        if (!m.imageData.isNullOrBlank()) {
-                            if (caps.hasImage) parts.add(
-                                com.haoai.agent.agent.provider.ApiContentPart(
-                                    type = "image_url",
-                                    imageUrl = com.haoai.agent.agent.provider.ApiImageUrl(url = m.imageData)
-                                )
-                            ) else notes.append("\n[系统] 用户附带了一张图片，但当前模型不支持图像输入，图片未发送。不要假装看到，按「模型能力声明」绕行（shell 转码/screen 读控件树），必要时提示换支持图像的模型。")
-                        }
-                        // 音频：有 audio-in 时读文件转 input_audio 直发（OpenAI 兼容），否则注记降级
-                        if (!m.audioPath.isNullOrBlank()) {
-                            if (caps.hasAudio) {
-                                val b64 = runCatching {
-                                    val f = java.io.File(m.audioPath)
-                                    if (f.exists() && f.length() <= 8L * 1024 * 1024)
-                                        android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
-                                    else null
-                                }.getOrNull()
-                                if (b64 != null) {
-                                    val fmt = m.audioPath.substringAfterLast('.', "mp3").lowercase()
-                                        .let { if (it == "mpeg") "mp3" else it }
-                                    parts.add(
-                                        com.haoai.agent.agent.provider.ApiContentPart(
-                                            type = "input_audio",
-                                            inputAudio = com.haoai.agent.agent.provider.ApiInputAudio(data = b64, format = fmt)
-                                        )
-                                    )
-                                } else notes.append("\n[系统] 用户附带了音频，但文件过大/不可读，未发送。请用 shell 工具处理本机文件 ${m.audioPath}（转码/截取片段），不要中断任务。")
-                            } else notes.append("\n[系统] 用户附带了音频（本机文件 ${m.audioPath}），但当前模型不支持音频输入，未发送。请用 shell/ASR 工具转写文本后再处理，不要中断任务。")
-                        }
-                        // 视频：几乎无 chat 模型原生支持，统一给本地路径让 Agent 用 ffmpeg 抽帧/抽音轨绕行
-                        if (!m.videoPath.isNullOrBlank()) {
-                            notes.append("\n[系统] 用户附带了视频文件，本机路径：${m.videoPath}。当前模型不直接处理视频，请用 shell 工具（ffmpeg 抽关键帧后逐帧当图像分析、或抽音轨转写）提取信息，不要中断任务。")
-                        }
-                        text = text + notes.toString()
-                        if (parts.isEmpty()) ApiMessage(role = "user", content = text)
-                        else {
-                            parts.add(0, com.haoai.agent.agent.provider.ApiContentPart(type = "text", text = text))
-                            ApiMessage(role = "user", content = null, parts = parts)
-                        }
-                    }
-                    ChatMessage.ROLE_ASSISTANT -> {
-                        if (m.content.isBlank() && m.toolCalls.isEmpty()) null
-                        else ApiMessage(
-                            role = "assistant",
-                            content = m.content.ifBlank { null },
-                            toolCalls = m.toolCalls.map {
-                                toolCallToApi(it.id, it.name, it.argumentsJson)
-                            }.ifEmpty { null }
-                        )
-                    }
-                    ChatMessage.ROLE_TOOL -> ApiMessage(
-                        role = "tool",
-                        content = TextCap.middle(m.content, REQ_CAP),
-                        toolCallId = m.toolCallId,
-                        name = m.toolName
-                    )
-                    else -> null
-                }
-            }
-        return listOf(ApiMessage(role = "system", content = systemText)) + history
-    }
-
-    /** 在系统提示前注入压缩摘要（如果有）。 */
-    private fun buildApiMessagesWithSummary(): List<ApiMessage> {
-        val msgs = buildApiMessages()
-        val summary = session.compactionSummary
-        if (summary.isNullOrBlank()) return msgs
-        // 将摘要作为系统消息前缀注入
-        val summaryMsg = ApiMessage(
-            role = "system",
-            content = "[上下文压缩摘要]\n$summary\n[/上下文压缩摘要]\n\n以上是之前对话的压缩摘要，请基于此继续。"
-        )
-        return listOf(summaryMsg) + msgs
-    }
-
-    private fun appendAndNotify(msg: ChatMessage, onEvent: (TurnEvent) -> Unit) {
+    internal fun appendAndNotify(msg: ChatMessage, onEvent: (TurnEvent) -> Unit) {
         session.messages.add(msg.toStored())
         persist()
         onEvent(MessageAdded(session.messages.last().toModel()))
-    }
-
-    /**
-     * token 占用逼近上限时，注入一次性提示让模型主动调用 handoff 压缩上下文。
-     * 与自动压缩同口径按 token 占用比例触发（旧版按消息条数，短消息密集时占用不足 10% 就误触发）；
-     * 以近期是否已有交接文档 / 是否已提示过来去重。
-     */
-    private fun maybeNudgeHandoff(onEvent: (TurnEvent) -> Unit) {
-        val msgs = session.messages
-        if (msgs.size < 8) return
-        val recentNudged = msgs.takeLast(6).any {
-            it.role == ChatMessage.ROLE_USER && it.content.contains("[系统提示]")
-        }
-        val recentHasDoc = msgs.takeLast(20).any {
-            it.role == ChatMessage.ROLE_USER && it.content.startsWith(HANDOFF_MARKER)
-        }
-        if (recentNudged || recentHasDoc) return
-        val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
-        if (contextWindow <= 0) return
-        // 与 maybeCompact 共用同一个口径（真值优先），两处不再各算一份近似
-        val usedTokens = estimateContextTokens()
-        if (usedTokens.toFloat() / contextWindow < HANDOFF_NUDGE_RATIO) return
-        appendAndNotify(
-            ChatMessage(
-                role = ChatMessage.ROLE_USER,
-                content = "[系统提示] 对话历史即将超出上下文窗口。请立即调用 handoff 工具，" +
-                    "用五段式（目标/约束/已完成/关键决定/下一步）总结当前任务，然后继续执行。"
-            ),
-            onEvent
-        )
-    }
-
-    /** 用交接文档替换早期历史：保留文档 + 最近几条消息。 */
-    private fun compactHistory(summary: String) {
-        val msgs = session.messages
-        if (msgs.size <= HANDOFF_KEEP) return
-        val doc = ChatMessage(
-            role = ChatMessage.ROLE_USER,
-            content = "$HANDOFF_MARKER\n$summary\n\n（以上为此前对话的压缩交接，请基于它继续当前任务）"
-        )
-        val kept = msgs.takeLast(HANDOFF_KEEP).pairSanitized()
-        msgs.clear()
-        msgs.add(doc.toStored())
-        msgs.addAll(kept)
-        persist()
-    }
-
-    /**
-     * 剔除因裁剪/压缩而失去配对的消息：
-     * 1) 没有对应 assistant(tool_calls) 的孤儿 tool 结果；
-     * 2) 其全部调用都缺少结果的 assistant(tool_calls)。
-     * 保证发给供应商的历史始终满足严格的调用配对约束。
-     */
-    /**
-     * 修复历史中遗留的空 tool call id（如 deepseek-v4-flash 偶发流式返回 "id": ""）。
-     * 请求要求 assistant.tool_calls[].id 非空且与 tool.tool_call_id 严格配对：
-     * 按最近 assistant 轮次的调用队列、同名优先，为空 id 派生一致的替代 id；
-     * 配不上对的孤儿 tool 结果直接丢弃（后续 pairSanitized 也会兜底清理）。
-     */
-    private fun List<com.haoai.agent.data.StoredMessage>.repairBlankCallIds(): List<com.haoai.agent.data.StoredMessage> {
-        val dirty = any { (it.role == ChatMessage.ROLE_ASSISTANT && it.toolCalls.any { c -> c.id.isBlank() }) ||
-            (it.role == ChatMessage.ROLE_TOOL && it.toolCallId.isNullOrBlank()) }
-        if (!dirty) return this
-        var seq = 0
-        val out = mutableListOf<com.haoai.agent.data.StoredMessage>()
-        // 当前 assistant 轮次可分配的 id：name -> 待消费 id 队列
-        var pendingIds = LinkedHashMap<String, MutableList<String>>()
-        for (m in this) {
-            when (m.role) {
-                ChatMessage.ROLE_ASSISTANT -> {
-                    pendingIds = LinkedHashMap()
-                    val calls = m.toolCalls.map { c ->
-                        val id = if (c.id.isBlank()) "call_fix_${seq++}" else c.id
-                        pendingIds.getOrPut(c.name) { mutableListOf() }.add(id)
-                        c.copy(id = id)
-                    }
-                    out += m.copy(toolCalls = calls)
-                }
-                ChatMessage.ROLE_TOOL -> {
-                    if (!m.toolCallId.isNullOrBlank()) { out += m; continue }
-                    val id = pendingIds[m.toolName]?.removeFirstOrNull()
-                        ?: pendingIds.values.firstOrNull { it.isNotEmpty() }?.removeFirstOrNull()
-                    if (id != null) out += m.copy(toolCallId = id)
-                }
-                else -> out += m
-            }
-        }
-        return out
-    }
-
-    private fun List<com.haoai.agent.data.StoredMessage>.pairSanitized(): List<com.haoai.agent.data.StoredMessage> {
-        val calledIds = flatMap { if (it.role == ChatMessage.ROLE_ASSISTANT) it.toolCalls.map { c -> c.id } else emptyList() }
-            .toSet()
-        val step1 = filterNot { it.role == ChatMessage.ROLE_TOOL && (it.toolCallId == null || it.toolCallId !in calledIds) }
-        val answeredIds = step1.filter { it.role == ChatMessage.ROLE_TOOL }.mapNotNull { it.toolCallId }.toSet()
-        // 逐 call 过滤：多工具调用被中途取消时会产生「部分回答」的 assistant 消息，
-        // 未回答的 call 若保留会导致 API 400，且坏历史已持久化、会话永久卡死
-        val out = mutableListOf<com.haoai.agent.data.StoredMessage>()
-        for (m in step1) {
-            if (m.role == ChatMessage.ROLE_ASSISTANT && m.toolCalls.isNotEmpty()) {
-                val answered = m.toolCalls.filter { it.id in answeredIds }
-                if (answered.isEmpty()) continue
-                out += if (answered.size == m.toolCalls.size) m else m.copy(toolCalls = answered)
-            } else {
-                out += m
-            }
-        }
-        return out
-    }
-
-    /** 参数解析：null = 原始 JSON 损坏（截断/编码错误），调用方必须显性报错而不是当空参执行。 */
-    private fun parseArgs(json: String): JsonObject? =
-        runCatching {
-            HaoJson.json.parseToJsonElement(json.ifBlank { "{}" })
-        }.getOrNull() as? JsonObject
-
-    /**
-     * C2 补口：config_set 补丁里的明文密钥不进会话 JSON 与压缩摘要上下文
-     * （执行已按原始参数完成，历史回放只需协议有效的 arguments）。
-     */
-    private fun maskSecretArgs(calls: List<ToolCallData>): List<ToolCallData> =
-        calls.map { c ->
-            if (c.name == "config_set") {
-                c.copy(argumentsJson = com.haoai.agent.data.ConfigFileBridge.maskApiKeys(c.argumentsJson))
-            } else c
-        }
-
-    private suspend fun buildApprovalRequest(call: ToolCallData, args: JsonObject): ApprovalRequest =
-        when (call.name) {
-            "bash" -> ApprovalRequest.ExecOp(args.optString("command"))
-            "write" -> {
-                val path = args.optString("path")
-                val newContent = args.optString("content")
-                // 审批时文件尚未被改：现读现算 diff（1.3 审查视图数据源）
-                val oldText = runCatching { backend?.readText(path) }.getOrNull()
-                val diff = if (oldText != null) {
-                    com.haoai.agent.ui.common.TextDiff.diffText(oldText, newContent).lines
-                } else emptyList()
-                ApprovalRequest.WriteOp(
-                    "write",
-                    path,
-                    "${newContent.toByteArray(Charsets.UTF_8).size} 字节内容",
-                    isNewFile = oldText == null,
-                    diff = diff
-                )
-            }
-            "edit" -> {
-                val path = args.optString("path")
-                val old = args.optString("old_string")
-                val new = args.optString("new_string")
-                val replaceAll = args.optBool("replace_all")
-                val oldText = runCatching { backend?.readText(path) }.getOrNull()
-                val newText = oldText?.let { if (replaceAll) it.replace(old, new) else it.replaceFirst(old, new) }
-                val diff = if (oldText != null && newText != null) {
-                    com.haoai.agent.ui.common.TextDiff.diffText(oldText, newText).lines
-                } else emptyList()
-                ApprovalRequest.WriteOp(
-                    "edit",
-                    path,
-                    "- ${old.take(300)}\n+ ${new.take(300)}",
-                    isNewFile = false,
-                    diff = diff
-                )
-            }
-            // C1：config_set 审批展示语义 diff（preview 失败时不会走到这里——executeCall 先行拦截）
-            "config_set" -> ApprovalRequest.ConfigChange(configChangeSummary(args))
-            else -> ApprovalRequest.Generic(call.name, args.toString().take(400))
-        }
-
-    /** C1 语义 diff：合并补丁 → 同源解析 → 与当前配置对比生成人读变更清单（后台执行，失败给可读原因）。 */
-    private suspend fun configChangeSummary(args: JsonObject): String =
-        configPreview.invoke(args).let { p ->
-            p.err ?: p.diff.ifBlank { "（无字段变化）" }
-        }
-
-    private fun briefOf(call: ToolCallData): String =
-        com.haoai.agent.agent.tools.ToolBrief.of(call.name, call.argumentsJson)
-
-    private fun previewOf(content: String): String =
-        content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
-
-    // ── 上下文压缩 ──────────────────────────────────────────────────
-
-    /**
-     * E 压缩前记忆冲刷轮：独立单轮 LLM 调用，只允许 memory 工具。
-     * 输入=当前对话，要求模型沉淀值得长期化的事实/偏好/决定；没有可沉淀时直接返回。
-     * 失败静默（冲刷是锦上添花，绝不阻塞压缩主流程）；沉淀结果即时落盘，压缩随后照常执行。
-     */
-    private suspend fun memoryFlushTurn() {
-        val flushTools = listOf(
-            com.haoai.agent.agent.tools.MemoryTool()
-        )
-        val msgs = mutableListOf(
-            ApiMessage(role = "system", content = MEMORY_FLUSH_SYSTEM),
-            ApiMessage(
-                role = "user",
-                content = "以下对话即将被压缩。请把其中值得长期保留的事实/偏好/决定（若无则直接回答\"无\"）" +
-                    "用 memory 工具的 save/merge 写入长期记忆。只沉淀长期有效的信息，不要记录任务过程。\n\n" +
-                    session.messages.takeLast(40).joinToString("\n\n") {
-                        "[${it.role}] ${it.content.take(600)}"
-                    }
-            )
-        )
-        var calls: List<ToolCallData> = emptyList()
-        httpClient.chatStream(provider, apiKey, msgs, gateTools(flushTools.map { it.toApi() }), effectiveEffort())
-            .collect { ev ->
-                when (ev) {
-                    is SseEvent.Completed -> calls = ev.toolCalls
-                    else -> {}
-                }
-            }
-        val ctx = ToolContext(
-            backend = null, shellDir = null, todoStore = todoStore, appFilesDir = appFilesDir,
-            sessionId = session.id, memoryBank = memoryBank, journal = journal, depth = depth,
-            appContext = appContext
-        )
-        for (call in calls) {
-            val tool = flushTools.firstOrNull { it.name == call.name } ?: continue
-            // 结果只记日志不落会话——assistant 侧没存，tool 消息入库即成孤儿（API 构建时
-            // 会被 pairSanitized 裁掉，白占存储与估算）。沉淀本身已经由 tool.run 落盘完成。
-            runCatching {
-                val flushArgs = parseArgs(call.argumentsJson) ?: return@runCatching
-                val result = tool.run(flushArgs, ctx)
-                android.util.Log.d(
-                    "HaoEngine",
-                    "memory flush: ${call.name} → ${TextCap.middle(result.content, 120)}"
-                )
-            }
-        }
-    }
-
-    /** 检查是否需要压缩，需要则执行（压缩前先跑一轮记忆冲刷）。 */
-    private suspend fun maybeCompact(onEvent: (TurnEvent) -> Unit) {
-        if (compactionManager.isCoolingDown()) return
-        val chain = summarizerChain()
-        val sp = chain.first().first
-        val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
-        val chatMsgs = uncompactedMessages().map { it.toModel() }
-        // 触发判定统一走 estimateContextTokens：供应商真值优先、字符估算兜底。
-        // （旧口径在这里现算全量历史 + 系统提示 + 工具定义，工具密集会话能高估一个数量级）
-        val usedTokens = estimateContextTokens()
-        if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
-
-        // E 压缩前记忆冲刷（openclaw memory-flush 同思路）：压缩会丢过程细节，而值得长期化的
-        // 事实/偏好恰可能只存在于过程里——压缩前先让主模型把重要上下文写进记忆/日志。
-        // 只允许 memory 工具（写路径白名单），独立小轮不进主对话历史。
-        runCatching {
-            memoryFlushTurn()
-        }.onFailure { android.util.Log.w("HaoEngine", "memory flush failed: ${it.message}") }
-
-        // 预修剪工具输出
-        val prunedMsgs = compactionManager.prePruneToolOutputs(chatMsgs)
-
-        val result = compactWithChain(prunedMsgs, chain)
-        session.compactionSummary = result.summary
-        // 压掉多少按"决策时用的那个数"记账（真值口径），事后能判断这次压得对不对
-        session.compactedTokensBefore = usedTokens
-        markCompactedThrough()
-        persist()
-        onEvent(MessageAdded(ChatMessage(
-            role = ChatMessage.ROLE_ASSISTANT,
-            content = "[系统] 上下文已压缩，释放约 ${result.tokensSaved} tokens"
-        )))
-    }
-
-    /**
-     * 供应商瞬态错误（值得退避重试）：优先用异常携带的结构化状态码（429/408/5xx），
-     * 无码时退回保守文本匹配（仅显式关键字，不再含 "http 5" 宽匹配——
-     * 防 400 错误体里碰巧含 "http 500" 字样被误判而重发全上下文）。
-     */
-    private fun isTransientHttpError(e: Exception): Boolean {
-        (e as? com.haoai.agent.agent.provider.ProviderHttpException)?.httpCode?.let { code ->
-            return code == 429 || code == 408 || code >= 500
-        }
-        val m = e.message.orEmpty().lowercase()
-        return "http 429" in m || "timeout" in m ||
-            "timed out" in m || "connection reset" in m || "eofexception" in m || "stream stall" in m
-    }
-
-    /**
-     * P2 委派：把图片交给视觉委派模型代看，返回描述文本。
-     * 主模型不支持图像输入时，Agent 调 delegate_to_vision 走这里，任务不中断。
-     */
-    private suspend fun delegateVisionRequest(path: String, question: String): String {
-        val f = File(path)
-        if (!f.exists() || !f.canRead()) return "委派失败：读不到文件 $path"
-        if (f.length() > 8L * 1024 * 1024) return "委派失败：图片超过 8MB（${f.length() / 1024}KB）"
-        val mime = when (path.substringAfterLast('.', "").lowercase()) {
-            "png" -> "png"; "webp" -> "webp"; "gif" -> "gif"; else -> "jpeg"
-        }
-        val b64 = android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
-        val q = question.ifBlank { "请详细描述这张图片的内容。" }
-        return delegateCall("vision", "图像") { _ ->
-            listOf(
-                ApiMessage(
-                    role = "system",
-                    content = "你是视觉分析助手。仔细观察图片，用中文准确、详细地描述所见内容并回答用户的问题。只输出描述与结论，不要客套话。"
-                ),
-                ApiMessage(
-                    role = "user",
-                    content = null,
-                    parts = listOf(
-                        com.haoai.agent.agent.provider.ApiContentPart(type = "text", text = q),
-                        com.haoai.agent.agent.provider.ApiContentPart(
-                            type = "image_url",
-                            imageUrl = com.haoai.agent.agent.provider.ApiImageUrl("data:image/$mime;base64,$b64")
-                        )
-                    )
-                )
-            )
-        }
-    }
-
-    /** P2 委派：把音频交给语音委派模型转写，返回文本。 */
-    private suspend fun delegateAsrRequest(path: String): String {
-        val f = File(path)
-        if (!f.exists() || !f.canRead()) return "委派失败：读不到文件 $path"
-        if (f.length() > 8L * 1024 * 1024) return "委派失败：音频超过 8MB"
-        val fmt = when (path.substringAfterLast('.', "").lowercase()) {
-            "wav" -> "wav"; "flac" -> "flac"; "ogg" -> "ogg"; "m4a", "mp4", "aac" -> "m4a"; else -> "mp3"
-        }
-        val b64 = android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
-        return delegateCall("asr", "音频") { _ ->
-            listOf(
-                ApiMessage(
-                    role = "system",
-                    content = "你是语音转写引擎。把音频完整转写成文字，保留原始语言；无人声时输出 [无人声]。不要添加任何解释。"
-                ),
-                ApiMessage(
-                    role = "user",
-                    content = null,
-                    parts = listOf(
-                        com.haoai.agent.agent.provider.ApiContentPart(
-                            type = "input_audio",
-                            inputAudio = com.haoai.agent.agent.provider.ApiInputAudio(data = b64, format = fmt)
-                        )
-                    )
-                )
-            )
-        }
-    }
-
-    /** 委派请求公共路径：按链序尝试（最多 2 个目标），收集文本；用量入账本。 */
-    private suspend fun delegateCall(
-        kind: String,
-        label: String,
-        build: (ProviderConfig) -> List<ApiMessage>
-    ): String {
-        val chain = runCatching { delegateTarget?.invoke(kind) }.getOrNull().orEmpty()
-        if (chain.isEmpty()) return "委派…未配置：请在 设置 → 模型大脑 → 模型切换 里指定${label}委派模型。"
-        var lastErr = ""
-        for ((dp, dkey) in chain.take(2)) {
-            val r = runCatching {
-                val client = auxClientFor?.invoke(dp) ?: httpClient
-                val buf = StringBuilder()
-                var pin = 0L
-                var pout = 0L
-                val t0 = System.currentTimeMillis()
-                client.chatStream(dp, dkey, build(dp), emptyList()).collect { ev ->
-                    when (ev) {
-                        is SseEvent.Delta -> buf.append(ev.text)
-                        is SseEvent.Usage -> {
-                            pin += ev.promptTokens.toLong()
-                            pout += ev.completionTokens.toLong()
-                        }
-                        else -> {}
-                    }
-                }
-                ledgerLlm("delegate", pin, pout, System.currentTimeMillis() - t0, ok = true, model = dp.model)
-                buf.toString().trim()
-            }
-            if (r.isSuccess && r.getOrNull().isNullOrBlank().not()) return r.getOrThrow()
-            lastErr = r.exceptionOrNull()?.message?.take(120) ?: "委派模型返回空内容"
-            android.util.Log.w("HaoDelegate", "委派($kind) 目标 ${dp.name}/${dp.model} 失败：$lastErr")
-        }
-        return "委派…失败：$lastErr（可改用 shell ffmpeg 等工具绕行）"
-    }
-
-    /**
-     * 实际生效的思考等级（按模型控制）：模型条目覆盖 > 全局设置。
-     * "off" 返回 null（请求不发 reasoning_effort，即使用户全局配了等级）。
-     */
-    private fun effectiveEffort(): String? {
-        val v = provider.effectiveReasoningEffort(reasoningEffort)
-        return v.takeIf { it.isNotBlank() && it != "off" }
     }
 
     /**
@@ -2227,113 +724,6 @@ class AgentEngine(
      * 实现在文件级 friendlyErrorText（气泡与顶部 SnackBar 共用），技术细节收敛为短摘要。
      */
     private fun friendlyError(raw: String): String = friendlyErrorText(raw)
-
-    /** Overflow 恢复：检测 API 返回的 context_length_exceeded 错误，自动压缩后重试。 */
-    private suspend fun handleOverflow(
-        error: String,
-        onEvent: (TurnEvent) -> Unit,
-        retryBlock: suspend () -> Unit
-    ) {
-        if (!compactionManager.isOverflowError(error)) throw Exception(error)
-        if (compactionManager.isCoolingDown()) throw Exception(error)
-        val chain = summarizerChain()
-        val sp = chain.first().first
-        val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
-        val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
-        val chatMsgs = uncompactedMessages().map { it.toModel() }
-
-        // 强制压缩（点6：链式降级）
-        val result = compactWithChain(chatMsgs, chain)
-        session.compactionSummary = result.summary
-        session.compactedTokensBefore = estimateContextTokens()
-        markCompactedThrough()
-        persist()
-        onEvent(MessageAdded(ChatMessage(
-            role = ChatMessage.ROLE_ASSISTANT,
-            content = "[系统] 上下文溢出，已自动压缩并重试"
-        )))
-        retryBlock()
-    }
-
-    /**
-     * 算出「摘要能代表到哪一条消息」——即水位候选；没有任何旧段可丢时返回 null。
-     * 与"推进水位"分开写，是因为手动 /compact 得先知道这次值不值得花模型调用。
-     */
-    private fun prospectiveWatermark(): String? {
-        val msgs = session.messages
-        val keep = compactionManager.keepRecentTokens()
-        var acc = 0
-        var keepFrom = msgs.size
-        for (i in msgs.indices.reversed()) {
-            // 按真实请求口径算（tool 结果 REQ_CAP 截断）：若按落库全文（可达 STORED_CAP=16000）估算，
-            // keepRecentTokens 预算会被提前耗尽，水位推进得比设计值更远。
-            acc += com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(msgs[i].toModel(), REQ_CAP)
-            if (acc > keep) break
-            keepFrom = i
-        }
-        // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰切开
-        var start = keepFrom
-        while (start < msgs.size && msgs[start].role != ChatMessage.ROLE_USER) start++
-        if (start <= 0 || start >= msgs.size) return null
-        return msgs[start - 1].id
-    }
-
-    /**
-     * 压缩落账：把已被摘要代表的那段历史打上水位标记，**不物理删除**。
-     * 构建请求时只取水位之后的消息，所以 token 一样是减下来的；
-     * 但原文仍在会话里 —— 摘要写坏了可以重来，用户也不会看到历史凭空消失。
-     * （旧实现是从 messages 里 drop 掉，压过头就没有补救办法。）
-     */
-    private fun markCompactedThrough(wid: String? = prospectiveWatermark()) {
-        if (wid == null) return
-        session.compactedThroughId = wid
-        // 锚点作废：水位之前的段落不再进请求，那条真值算的已经不是当前这段上下文的规模了
-        session.usageAnchor = null
-        enforceStoredRetention()
-    }
-
-    /**
-     * 存储上限保险：不再物理删历史意味着会话文件会无界增长（手机端不可接受）。
-     * 只裁水位**之前**的最旧消息 —— 它们已由摘要代表，且远超回查所需的窗口；
-     * 水位之后的一个字都不动。
-     */
-    private fun enforceStoredRetention() {
-        val msgs = session.messages
-        if (msgs.size <= SESSION_MAX_MESSAGES) return
-        val watermarkIdx = session.compactedThroughId?.let { wid ->
-            msgs.indexOfFirst { it.id == wid }
-        } ?: -1
-        if (watermarkIdx <= 0) return
-        val over = (msgs.size - SESSION_MAX_MESSAGES).coerceAtMost(watermarkIdx)
-        if (over > 0) msgs.subList(0, over).clear()
-    }
-
-    // ── 手动压缩（/compact 命令） ────────────────────────────────────
-
-    /**
-     * 手动压缩（/compact）。
-     *
-     * @return 这次从上下文里丢出去（改由摘要代表）的 token 数；
-     *   **null = 整段历史都还在"最近保留窗口"里，压不动**。这时直接不花模型调用返回：
-     *   水位推不动而只写摘要的话，摘要会作为 system 消息永久挂在每次请求上，
-     *   token 不减反增 —— 一个语义是"释放空间"的命令做出反效果不诚实
-     *   （设备实测：6 条小消息的会话按 /compact 就产生了 488 字符摘要 + 水位没动）。
-     */
-    suspend fun compactNow(): Int? {
-        val wid = prospectiveWatermark() ?: return null
-        val before = estimateContextTokens()
-        val chain = summarizerChain()
-        val chatMsgs = uncompactedMessages().map { it.toModel() }
-        val result = compactWithChain(chatMsgs, chain)
-        session.compactionSummary = result.summary
-        session.compactedTokensBefore = before
-        // 手动 /compact 以前只写摘要、不推水位：摘要 + 全量历史一起发出去，token 只增不减
-        markCompactedThrough(wid)
-        persist()
-        return (before - estimateContextTokens()).coerceAtLeast(0)
-    }
-
-    // ── /btw 附带问题（不写入历史） ─────────────────────────────────
 
     suspend fun runBtw(
         question: String,
@@ -2389,96 +779,6 @@ class AgentEngine(
         }
     }
 
-    companion object {
-        const val MAX_TURNS = 60
-        const val MAX_HISTORY = 80
-        const val TOOL_TIMEOUT_MS = 180_000L
-
-        /** E4a 工具定义开销兜底下限：正常路径按真实序列化求和（_toolsTokenCache），
-         *  仅异常/未构建时回退此值。 */
-        const val TOOLS_BASE_TOKENS = 3500
-        /**
-         * 工具结果的两段式截断。两级分工不同，动任何一级都要想清楚：
-         *
-         * - [STORED_CAP]：**落库前**。单条工具结果最多 1.6 万字符进会话 JSON。
-         *   不省这一级就是拿手机存储当对象池 —— 几十条几百 KB 的网页抓取会把会话文件
-         *   撑到几十 MB，list()/load() 的解析和写盘全线变慢。OpenClaw 的做法是原文全留、
-         *   只在发请求时截，它有家里的桌面磁盘和 SQLite 账本；移动端**刻意不照抄**（路线图里
-         *   记着这条偏离）。
-         * - [REQ_CAP]：**发请求前**。同一条结果在请求里再截到 4000 字符，落库的那 1.6 万
-         *   仍可回查/导出 —— 别让"发给模型的窗口"决定"用户能看到多少"。
-         *   所有 token 估算一律按 REQ_CAP 口径算：拿落库全文估算会高估到压缩提前触发。
-         */
-        const val STORED_CAP = 16_000
-        const val REQ_CAP = 4_000
-        const val SUB_MAX_TURNS = 10
-
-        /** 瞬态错误（429/超时/网关抖动）退避秒数：主循环与子代理共用同一套节奏。 */
-        val SUB_BACKOFFS_SEC = intArrayOf(5, 12, 25)
-
-        /** P3-B research 子代理的检索硬预算（web_search + web_fetch 合计次数），依据见 RetrievalBudget。 */
-        const val SUB_RETRIEVAL_CAP = 8
-
-        /** 历史预算的安全余量：估算永远不如供应商准，留出余量避免按窗口边界发请求撞 overflow。 */
-        const val HISTORY_MARGIN_TOKENS = 4096
-
-        /** 历史预算下限：小窗口模型（端侧 4K/8K）也要能带上最近几轮，否则任务无法继续。 */
-        const val MIN_HISTORY_BUDGET_TOKENS = 2048
-
-        /** 会话存储条数上限保险：压缩不再删历史，靠这个数兜住会话文件无界增长（只裁水位之前）。 */
-        const val SESSION_MAX_MESSAGES = 2000
-        /** E6 并行安全白名单：纯读无全局状态副作用；新增成员必须逐个评审（a11y/相机/定位永不入列）。 */
-        val PARALLEL_SAFE = setOf(
-            "read", "grep", "glob", "web_fetch", "web_search", "memory",
-            "list_apps", "app_status", "browser_read", "browser_find", "todo"
-        )
-
-        /** E6 并发上限：同时执行的并行工具体数量。 */
-        const val PARALLEL_MAX_CONCURRENCY = 4
-        /** handoff 催办阈值：token 占用比例（自动压缩 0.5 之后、危险线 0.9 之前）。 */
-        const val HANDOFF_NUDGE_RATIO = 0.75f
-        const val HANDOFF_KEEP = 6
-        const val HANDOFF_MARKER = "## 任务交接文档"
-
-        val EXTRACT_SYSTEM = """
-            [MEMORY-EXTRACT] 你是记忆守门员。只提取满足全部条件的稳定信息：
-            1) 用户明确表达的长期偏好、身份信息（名字/职业/城市）、长期项目背景、重要约定或纠正你的教训；
-            2) 半年后仍然有效；
-            3) 不查资料就能复述价值。
-            严禁提取：本次任务的执行细节、代码/命令、临时状态、寒暄、你自己的回答内容、常识，
-            以及消息末尾[已有记忆清单]里已有的内容——相同或仅措辞不同的换述都算重复（M-1：重复入库只会污染记忆库）。
-            只输出 JSON 数组，每项 {"content":"...","tags":["..."]}，最多 2 条，每条一句话且自包含；
-            没有符合条件的内容必须输出 []。拿不准就不记——漏记一条无关紧要，记错会永久污染记忆库。
-        """.trimIndent()
-
-        val SUBAGENT_SYSTEM = """
-            [SUBAGENT] 你是被主代理派出的只读研究子代理。只做调研与只读操作（read/grep/glob/web_search/web_fetch/memory），
-            禁止写入或执行命令。
-            取材判据看产出物：结论里会出现具体事实、数据、时效性说法或具名对象时，先 web_search 再对结果里的 url 调
-            web_fetch 精读，不要凭模型记忆直接下结论。检索词用与任务相同的语言；优先一手权威来源
-            （官方文档/原始公告/项目主仓库/权威媒体），别读导航站、词典和聚合榜单页。
-            研究预算（引擎强制计数，不是建议）：web_search 与 web_fetch 合计只有 $SUB_RETRIEVAL_CAP 次，用完即拒绝再检索，
-            所以把每次检索当稀缺资源——先用一次宽搜定位权威来源，再对最相关的两三篇精读，别拿搜索当浏览。
-            同一 query 结果无用时至多换词一次，仍无果就基于已拿到的证据给结论并明说查不到什么。
-            最后输出简明、结构化的结论（要点 + 证据来源链接或路径）。
-        """.trimIndent()
-
-        // P3-A work 子代理系统提示词：可写执行，纪律与产物导向
-        val SUBAGENT_WORK_SYSTEM = """
-            [SUBAGENT-WORK] 你是被主代理派出的执行子代理：可读写文件、执行命令来完成分配的任务。
-            写权限随主代理（write/edit 改动经快照可回滚；config_set/tools_enable/todo 不可用）。
-            高效执行：完成或受阻时输出简明结论（做了什么/产物路径/卡在哪），不要复读过程。
-            禁止再派子代理。
-        """.trimIndent()
-
-        /** E 压缩前记忆冲刷：单轮、只 memory 工具、只沉淀长期事实。 */
-        val MEMORY_FLUSH_SYSTEM = """
-            [记忆冲刷] 压缩前的记忆整理助手。只做一件事：从对话中提取值得长期保留的信息
-            （用户偏好/稳定事实/重要决定），用 memory 工具写入；相近旧记忆用 merge 合并。
-            禁止记录：任务过程、代码命令、临时状态、寒暄、你自己的回答。
-            没有值得沉淀的内容时直接回答"无"。
-        """.trimIndent()
-    }
 }
 
 /** 引擎错误的人话翻译：气泡与顶部 SnackBar 共用同一份话术（UI 层捕获异常时也调它）。 */
@@ -2522,3 +822,4 @@ private fun shortTechDetailShared(raw: String, cap: Int = 100): String {
         .trim()
     return cleaned.take(cap)
 }
+

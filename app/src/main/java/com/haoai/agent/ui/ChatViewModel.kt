@@ -6,6 +6,10 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.engine.AgentEngine
+import com.haoai.agent.agent.engine.compactNow
+import com.haoai.agent.agent.engine.estimateOverheadBreakdown
+import com.haoai.agent.agent.engine.estimateSentHistoryTokens
+import com.haoai.agent.agent.engine.stopSubagent
 import com.haoai.agent.agent.tools.TodoItem
 import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
