@@ -375,13 +375,9 @@ class AgentEngine(
                 // B3 轮次预算软提醒：达上限 80% 一次性注入（对齐 E5b 70% 成本提醒机制）
                 if (!st.budgetWarned && MAX_TURNS >= 10 && st.turns >= MAX_TURNS * 8 / 10) {
                     st.budgetWarned = true
-                    appendAndNotify(
-                        ChatMessage(
-                            role = ChatMessage.ROLE_USER,
-                            content = "[轮次提醒] 本任务已进行 ${st.turns} 轮（上限 $MAX_TURNS）。请在剩余轮次内收敛：完成关键步骤并准备给出最终回答，未完成项在任务清单中如实标注。"
-                        ),
-                        onEvent
-                    )
+                    st.nudges +=
+                        "[轮次提醒] 本任务已进行 ${st.turns} 轮（上限 $MAX_TURNS）。请在剩余轮次内收敛：" +
+                            "完成关键步骤并准备给出最终回答，未完成项在任务清单中如实标注。"
                 }
                 if (st.beginRound() > MAX_TURNS) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
@@ -417,7 +413,7 @@ class AgentEngine(
                     lastStreamEventAt = System.currentTimeMillis()
                     coroutineScope {
                         val collectJob = launch {
-                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(), apiTools, effectiveEffort())
+                            httpClient.chatStream(provider, apiKey, buildApiMessagesWithSummary(st.nudges), apiTools, effectiveEffort())
                                 .collect { ev ->
                                     lastStreamEventAt = System.currentTimeMillis()
                                     when (ev) {
@@ -603,20 +599,25 @@ class AgentEngine(
                     st.forceFinish = true
                 }
 
-                // E5b 软提醒（70%）：一次性注入，只提醒不熔断；已熔断或关闭软提醒时跳过
-                if (softBudgetWarn && !st.softWarned && !st.forceFinish && turnTokenCap > 0 &&
-                    st.promptTokens + st.completionTokens >= turnTokenCap * 0.7
+                // E5b 软提醒（70%）：一次性、只提醒不熔断；已熔断或关闭软提醒时跳过。
+                // 两个约束都是实测来的：
+                // - **只在还有得省时提**（本轮仍在调工具、任务清单仍有未完成项）。用户截图那次
+                //   是任务 3/3 已完成、文章已交付，提醒还插在中间——模型只能回一句"已交付完毕"，
+                //   提醒本身成了噪音。
+                // - **不落库**（见 TurnState.nudges）：落库的提醒会被后续每一轮反复重传，
+                //   一个"成本提醒"自己制造长期成本，语义上正好相反。
+                if (!st.softWarned && !st.forceFinish && softBudgetWarn && turnTokenCap > 0 &&
+                    st.totalTokens >= turnTokenCap * 0.7 &&
+                    budgetNudgeWorthIt(
+                        calledToolsThisRound = calls.isNotEmpty(),
+                        todoHasOpenItems = todoStore.load(session.id)
+                            .any { it.status != "completed" && it.status != "cancelled" }
+                    )
                 ) {
                     st.softWarned = true
-                    appendAndNotify(
-                        ChatMessage(
-                            role = ChatMessage.ROLE_USER,
-                            content = "[成本提醒] 本轮已累计计费约 ${st.promptTokens + st.completionTokens} tokens，" +
-                                "达到上限（${turnTokenCap}）的 70%。这是逐轮累加的计费量（每次工具往返都要重发整段上下文），" +
-                                "不是上下文占用。请精简后续步骤：别再重复检索同一批结果，尽快收尾任务。"
-                        ),
-                        onEvent
-                    )
+                    st.nudges += "[成本提醒] 本轮已累计计费约 ${st.totalTokens} tokens，" +
+                        "达到上限（${turnTokenCap}）的 70%。这是逐轮累加的计费量（每次工具往返都要重发整段上下文），" +
+                        "不是上下文占用。请精简后续步骤：别再重复检索同一批结果，尽快收尾任务。"
                     onEvent(ToolChanged(ToolUpdate("budget-warn", ToolRunState.DONE, "成本提醒", "70%")))
                 }
             }

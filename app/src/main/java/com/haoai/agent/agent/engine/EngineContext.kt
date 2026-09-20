@@ -315,17 +315,28 @@ internal fun AgentEngine.buildApiMessages(): List<ApiMessage> {
     return listOf(ApiMessage(role = "system", content = systemText)) + history
 }
 
-/** 在系统提示前注入压缩摘要（如果有）。 */
-internal fun AgentEngine.buildApiMessagesWithSummary(): List<ApiMessage> {
+/**
+ * 在系统提示前注入压缩摘要（如果有），并把**本回合的软提醒挂在请求末尾**。
+ *
+ * [nudges] 是成本/轮次这类"让模型接下来收敛一点"的提示：它们只对本次请求有意义，
+ * 所以走这条临时通道，而不是 appendAndNotify 落进会话历史——落库的提醒会被之后每一轮
+ * 反复重传（一条 ≈120 tokens × 剩余所有轮次），而且回合结束后它已经没有任何价值。
+ * 角色仍用 user：与落库版本同形，各家网关的配对校验行为已经过实测，不引入新协议风险。
+ */
+internal fun AgentEngine.buildApiMessagesWithSummary(
+    nudges: List<String> = emptyList()
+): List<ApiMessage> {
     val msgs = buildApiMessages()
+    val tail = nudges.map { ApiMessage(role = "user", content = it) }
+    val base = if (tail.isEmpty()) msgs else msgs + tail
     val summary = session.compactionSummary
-    if (summary.isNullOrBlank()) return msgs
+    if (summary.isNullOrBlank()) return base
     // 将摘要作为系统消息前缀注入
     val summaryMsg = ApiMessage(
         role = "system",
         content = "[上下文压缩摘要]\n$summary\n[/上下文压缩摘要]\n\n以上是之前对话的压缩摘要，请基于此继续。"
     )
-    return listOf(summaryMsg) + msgs
+    return listOf(summaryMsg) + base
 }
 
 /**

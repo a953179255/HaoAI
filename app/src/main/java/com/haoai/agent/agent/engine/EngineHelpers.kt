@@ -97,3 +97,16 @@ internal fun briefOf(call: ToolCallData): String =
 
 internal fun previewOf(content: String): String =
         content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
+
+/**
+ * 成本软提醒值不值得提。两个都成立才提：
+ * - 本轮仍在调工具（否则下一轮就是最终回答，提了也没东西可省）；
+ * - 任务清单还有未完成项（否则任务已经做完，提醒只会变成插在文末的噪音）。
+ *
+ * 判据单独成函数是为了能被测到——真实触发一次 70% 需要攒到十几万 token，
+ * 设备上不构造就没有回归保护。
+ */
+internal fun budgetNudgeWorthIt(
+    calledToolsThisRound: Boolean,
+    todoHasOpenItems: Boolean
+): Boolean = calledToolsThisRound && todoHasOpenItems

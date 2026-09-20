@@ -676,4 +676,75 @@ class AgentEngineLoopTest {
         engine(FakeClient(listOf(saying("行"))), tmpDir(), session = s2).runTurn("新指令", {}, {})
         assertEquals(1, s2.messages.count { it.role == ChatMessage.ROLE_USER })
     }
+
+    /**
+     * 成本软提醒只该影响"接下来这一次请求"，不该落进会话历史。
+     * 落库的代价是实测看到的：一条 ≈120 tokens 的提醒会被之后每一轮反复重传，
+     * 一个成本提醒自己制造长期成本，语义正好相反。
+     *
+     * 每轮用量刻意压到 11（默认 callingTool 是 105）：cap=25 时 70% 线=17.5、100% 线=25
+     * 落在**不同轮次**。同一轮同时越过两条线时熔断在前（:501 早于 :609），软提醒会被跳过——
+     * 那是正确行为（都要停了没必要再提醒），但测不到这条通道，所以用量必须小。
+     */
+    @Test
+    fun budgetNudgeGoesOutWithTheRequestButNotIntoHistory() = runBlocking {
+        val dir = tmpDir()
+        val session = StoredSession.create(null)
+        com.haoai.agent.agent.tools.TodoStore(dir).save(
+            session.id, listOf(com.haoai.agent.agent.tools.TodoItem("联网调研"))
+        )
+        fun callWith(id: String, args: String) = listOf(
+            SseEvent.Delta("思考中"),
+            SseEvent.Completed(listOf(ToolCallData(id, "no_such_tool", args))),
+            SseEvent.Usage(10, 1)
+        )
+        val client = FakeClient(listOf(callWith("a", "{}"), callWith("b", "{\"n\":2}"), saying("完成")))
+        engine(client, dir, session = session, turnTokenCap = 25).runTurn("开始", {}, {})
+        assertTrue(
+            "提醒不该进会话历史：" + session.messages.map { it.content?.take(14) },
+            session.messages.none { (it.content ?: "").contains("[成本提醒]") }
+        )
+        assertTrue("第 2 轮末就该加上提醒", client.requests.size >= 3)
+        assertTrue(
+            "提醒要随下一次请求发出去，否则等于没提醒",
+            client.requests[2].first.any {
+                it.role == "user" && (it.content ?: "").contains("[成本提醒]")
+            }
+        )
+    }
+
+    /** 任务清单已全部完成时不该再弹：用户截图那次是"文章已交付"之后还插一句成本提醒。 */
+    @Test
+    fun budgetNudgeIsSilentWhenTheTaskIsAlreadyDone() = runBlocking {
+        val dir = tmpDir()
+        val session = StoredSession.create(null)
+        com.haoai.agent.agent.tools.TodoStore(dir).save(
+            session.id,
+            listOf(com.haoai.agent.agent.tools.TodoItem("联网调研", status = "completed"))
+        )
+        fun callWith(id: String, args: String) = listOf(
+            SseEvent.Delta("思考中"),
+            SseEvent.Completed(listOf(ToolCallData(id, "no_such_tool", args))),
+            SseEvent.Usage(10, 1)
+        )
+        val client = FakeClient(
+            listOf(callWith("a", "{}"), callWith("b", "{\"n\":2}"), callWith("c", "{\"n\":3}"), saying("完成"))
+        )
+        engine(client, dir, session = session, turnTokenCap = 25).runTurn("开始", {}, {})
+        assertTrue(
+            "任务已做完还提醒，模型只能回一句'已交付'——纯噪音",
+            client.requests.flatMap { it.first }.none {
+                (it.content ?: "").contains("[成本提醒]")
+            }
+        )
+    }
+
+    /** 提醒判据的四种组合（真实触发一次 70% 要攒十几万 token，设备构造不了，靠这里兜）。 */
+    @Test
+    fun budgetNudgeNeedsBothToolsAndOpenTodos() {
+        assertTrue(budgetNudgeWorthIt(calledToolsThisRound = true, todoHasOpenItems = true))
+        assertTrue(!budgetNudgeWorthIt(calledToolsThisRound = false, todoHasOpenItems = true))
+        assertTrue(!budgetNudgeWorthIt(calledToolsThisRound = true, todoHasOpenItems = false))
+        assertTrue(!budgetNudgeWorthIt(calledToolsThisRound = false, todoHasOpenItems = false))
+    }
 }
