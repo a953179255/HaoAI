@@ -324,6 +324,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 // 这条路径（遗留 running 判中断 → 补未确认工具结果 → 续跑）必须能自动验证。
                 chatVm.resumeRun()
             }
+            "compact" -> {
+                // 调试直达：haoai://debug/compact —— 手动压缩当前会话上下文。
+                // 自动压缩要攒到半窗 token 才触发，设备上没法自然复现，而压缩的水位与
+                // 计量字段（compactedTokensBefore、锚点作废）是必须能验证的路径。
+                enterChat()
+                screen = 0
+                com.haoai.agent.ui.chat.SlashCommands.parse("/compact")?.let { (cmd, arg) ->
+                    rootScope.launch { chatVm.handleSlashCommand(cmd, arg) {} }
+                }
+            }
             "followdump" -> {
                 // 导出跟随判定的**内存**轨迹（滚动期不落盘，避免主线程 IO 卡顿）：
                 //   adb shell am start -d "haoai://debug/followdump" com.haoai.agent

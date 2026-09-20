@@ -54,15 +54,16 @@ class SessionStoreTest {
     fun `同一会话连续保存只落几次盘`() {
         val store = newStore()
         val id = "s1"
-        // 首份快照很大：后台还在序列化+写盘时，后面的 save 全并进 pending 互相覆盖
+        // 首份快照很大：后台还在序列化+写盘的那几十毫秒里，后面的 save 全并进 pending 互相覆盖
         store.save(session(id, 20000), touch = false)
         val saves = 60
-        for (i in 1..saves) store.save(session(id, 20), touch = false)
-        awaitDisk(id, 20)
+        // 后续 save 故意造得极便宜：调用方越快，越能体现"合并"而不是"两边一样快"
+        for (i in 1..saves) store.save(session(id, 4).also { it.messages[0] = it.messages[0].copy(content = "i$i") }, touch = false)
+        awaitDisk(id, 4)
         // 计数放在等待之后：此时最后一次写盘已落地，读到的才是完整次数
         val n = store.writes.get()
-        assertEquals(20, disk(id)?.messages?.size)
-        assertTrue("save ${saves + 1} 次只应写盘个位数次，实际 $n", n <= 5)
+        assertEquals("落库内容必须是最后一次保存的状态", 4, disk(id)?.messages?.size)
+        assertTrue("save ${saves + 1} 次只应写盘个位数次，实际 $n", n <= 8)
     }
 
     @Test

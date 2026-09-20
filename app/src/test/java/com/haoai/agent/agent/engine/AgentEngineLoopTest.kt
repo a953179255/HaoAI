@@ -277,11 +277,30 @@ class AgentEngineLoopTest {
         val s = longSession()
         val client = FakeClient(listOf(saying("这是一段压缩摘要")))
         val before = s.messages.size
-        val summary = engine(client, tmpDir(), session = s).compactNow()
-        assertTrue("应生成摘要", !summary.isNullOrBlank())
+        val freed = engine(client, tmpDir(), session = s).compactNow()
+        assertTrue("应报出释放量", freed != null && freed > 0)
         assertEquals("压缩后原文必须仍在会话里（可回查、可重压）", before, s.messages.size)
         org.junit.Assert.assertNotNull("水位标记应推进到被摘要覆盖的最后一句", s.compactedThroughId)
         assertTrue("水位应落在真实存在的消息上", s.messages.any { it.id == s.compactedThroughId })
+        org.junit.Assert.assertNotNull("压缩前规模要留痕（诊断压得对不对）", s.compactedTokensBefore)
+        org.junit.Assert.assertNull("水位推进后旧的真值锚点必须作废", s.usageAnchor)
+    }
+
+    /**
+     * 整段历史都在"最近保留窗口"里时压不动：直接返回 null，不花那次模型调用。
+     * 过去这里会照常写一段摘要，而摘要作为 system 消息永久挂在每次请求上 ——
+     * 一个语义是"释放空间"的命令做出 token 不减反增的反效果（设备实测 6 条小消息会话）。
+     */
+    @Test
+    fun compactIsNoOpWhenNothingFallsOutOfKeepWindow() = runBlocking {
+        val s = StoredSession.create(null)
+        s.messages.add(StoredMessage(role = ChatMessage.ROLE_USER, content = "只有一句话"))
+        val client = FakeClient(listOf(saying("这是一段压缩摘要")))
+        val e = engine(client, tmpDir(), session = s)
+        org.junit.Assert.assertNull("小会话不该压缩", e.compactNow())
+        assertEquals("一次模型调用都不该花", 0, client.requests.size)
+        org.junit.Assert.assertNull(s.compactionSummary)
+        org.junit.Assert.assertNull(s.compactedThroughId)
     }
 
     /** 水位之前的历史不再进请求；水位之后照常发。 */
@@ -565,6 +584,41 @@ class AgentEngineLoopTest {
         // 补了结果，那条带调用的 assistant 才留得住（不补就会被 pairSanitized 丢掉）
         val sent = client.requests.maxByOrNull { it.second.size }!!.first
         assertTrue(sent.any { it.role == "assistant" && !it.toolCalls.isNullOrEmpty() })
+    }
+
+    /**
+     * 上下文规模按供应商真值锚定，不再被字符估算带偏。
+     *
+     * 故意造一个「字符估算 ≫ 真值」的会话：6 万字中文按 1.5 字/token 能估出 9 万 token，
+     * 而供应商报回的 promptTokens 只有 8000。压缩触发用的是前者 —— 等于凭空把上下文
+     * 放大十倍，后果是远没到窗口就提前压缩（答得比应有的浅）。
+     */
+    @Test
+    fun contextEstimateAnchorsOnProviderUsage() = runBlocking {
+        val session = StoredSession.create(null)
+        val big = "中".repeat(60_000)
+        session.messages.add(StoredMessage(role = ChatMessage.ROLE_USER, content = big))
+        val e = engine(FakeClient(listOf()), tmpDir(), session = session)
+        val (sys, tools) = e.estimateOverheadTokens()
+        assertTrue("样例本身要够大才有意义", e.estimateContextTokens() > 50_000)
+
+        // 有锚点：只补锚点之后新增的消息，开销变化按当下口径加减
+        session.usageAnchor = com.haoai.agent.data.UsageAnchor(8_000, session.messages.size, sys + tools)
+        assertEquals(8_000, e.estimateContextTokens())
+        session.messages.add(StoredMessage(role = ChatMessage.ROLE_USER, content = "又加了一条小消息"))
+        val withNew = e.estimateContextTokens()
+        assertTrue("新增消息要计进来但不该回到估算量级：$withNew", withNew in 8_001..9_000)
+
+        // 锚点不可信（编辑重发/删除截断过历史）时退回全量估算，不能拿旧真值低估
+        session.usageAnchor = com.haoai.agent.data.UsageAnchor(8_000, 9_999, sys + tools)
+        assertTrue("锚点失效应退回估算口径", e.estimateContextTokens() > 50_000)
+
+        // 供应商报回 Usage 时锚点要自动落到会话上（真值是从这里来的）
+        val s2 = StoredSession.create(null)
+        s2.messages.add(StoredMessage(role = ChatMessage.ROLE_USER, content = "小问题"))
+        val client = FakeClient(listOf(listOf(SseEvent.Delta("好的"), SseEvent.Usage(8_000, 10))))
+        engine(client, tmpDir(), session = s2).runTurn("继续", {}, {})
+        assertEquals(8_000, s2.usageAnchor?.promptTokens)
     }
 
     /**

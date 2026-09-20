@@ -463,6 +463,18 @@ class AgentEngine(
                                         is SseEvent.Usage -> {
                                             st.promptTokens += ev.promptTokens
                                             st.completionTokens += ev.completionTokens
+                                            // 真值锚点：供应商报的输入 tokens 就是"这次请求实际发出的
+                                            // 上下文规模"（含系统提示+工具定义+当时那整段历史）。
+                                            // 流式期间没有新消息入库，此刻的 size 即那次请求的规模。
+                                            // 每轮一次，与压缩判定同频，不多花一次系统提示构建。
+                                            if (ev.promptTokens > 0) {
+                                                val (sys, tools) = estimateOverheadTokens()
+                                                session.usageAnchor = com.haoai.agent.data.UsageAnchor(
+                                                    promptTokens = ev.promptTokens,
+                                                    messageCount = session.messages.size,
+                                                    overheadTokens = sys + tools
+                                                )
+                                            }
                                             onUsage?.invoke(ev.promptTokens.toLong(), ev.completionTokens.toLong())
                                         }
                                     }
@@ -1661,6 +1673,37 @@ class AgentEngine(
         return if (idx < 0) all else all.drop(idx + 1)
     }
 
+    /**
+     * 「下一次请求会发出去多少 token」——压缩触发与 handoff 催办都按这个数决策。
+     *
+     * 优先用供应商真值锚定：上一轮请求的 promptTokens 是**实际计费**的上下文规模，
+     * 它已经包含系统提示 + 工具定义 + 当时那整段历史，所以只需要补上锚点之后新增的
+     * 消息，再把两轮之间上下文开销的变化（记忆/技能注入变动、工具组启用）按当下口径
+     * 加减回去。纯字符估算只在没有锚点时兜底 —— 那套启发式在工具密集会话里能高估
+     * 一个数量级，后果是"远没到窗口就提前压缩"（答得比应有的浅）。
+     *
+     * 锚点自动失效的情况：消息数比锚点还少（编辑重发/删除截断过历史）→ 退回全量估算；
+     * 压缩推进水位时显式置 null（水位之前的段落不再进请求，锚点算出来会偏高）。
+     *
+     * internal 是给单测钉数值用的；UI 上下文面板要的是 system/tools/history 分项，
+     * 那个展示口径别复用这里（真值给不出分项）。
+     */
+    internal fun estimateContextTokens(): Int {
+        val all = session.messages
+        val (sysTok, toolsTok) = estimateOverheadTokens()
+        val a = session.usageAnchor
+        if (a != null && a.promptTokens > 0 && a.messageCount in 0..all.size) {
+            val added = all.subList(a.messageCount, all.size).sumOf {
+                com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
+            }
+            return (a.promptTokens - a.overheadTokens + sysTok + toolsTok + added).coerceAtLeast(0)
+        }
+        val history = uncompactedMessages().sumOf {
+            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
+        }
+        return history + sysTok + toolsTok
+    }
+
     /** 历史可用预算 = 窗口 − 系统提示 − 工具定义 − 已有摘要 − 单次回复上限 − 安全余量。 */
     private fun historyBudgetTokens(): Int {
         val (sysTok, toolsTok) = estimateOverheadTokens()
@@ -1810,11 +1853,8 @@ class AgentEngine(
         val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
         if (contextWindow <= 0) return
-        // 与 maybeCompact 同口径：还没被摘要覆盖的历史（按真实请求的截断方式算）+ 系统提示 + 工具定义
-        val (sysTok, toolsTok) = estimateOverheadTokens()
-        val usedTokens = msgs.sumOf {
-            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it.toModel(), REQ_CAP)
-        } + sysTok + toolsTok
+        // 与 maybeCompact 共用同一个口径（真值优先），两处不再各算一份近似
+        val usedTokens = estimateContextTokens()
         if (usedTokens.toFloat() / contextWindow < HANDOFF_NUDGE_RATIO) return
         appendAndNotify(
             ChatMessage(
@@ -2033,15 +2073,9 @@ class AgentEngine(
         val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
         val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
         val chatMsgs = uncompactedMessages().map { it.toModel() }
-        // 用真实系统提示估算：记忆/日志/技能索引注入后可达 1 万+ tokens，
-        // 旧的固定 3000 底数严重低估，导致压缩触发过晚、频繁撞 overflow
-        val (sysTok, toolsTok) = estimateOverheadTokens()
-        // 只算「还没被摘要覆盖」的历史，且按请求口径截断 tool 正文；
-        // 两者此前都不对：重复计入已压缩段 + 按 16000 字符全文估 → 高估近一个数量级，
-        // 真实上下文才用一成多就开压。
-        val usedTokens = chatMsgs.sumOf {
-            com.haoai.agent.ui.chat.ContextUsage.estimateMessageTokens(it, REQ_CAP)
-        } + sysTok + toolsTok
+        // 触发判定统一走 estimateContextTokens：供应商真值优先、字符估算兜底。
+        // （旧口径在这里现算全量历史 + 系统提示 + 工具定义，工具密集会话能高估一个数量级）
+        val usedTokens = estimateContextTokens()
         if (!compactionManager.shouldCompact(usedTokens, contextWindow)) return
 
         // E 压缩前记忆冲刷（openclaw memory-flush 同思路）：压缩会丢过程细节，而值得长期化的
@@ -2056,6 +2090,8 @@ class AgentEngine(
 
         val result = compactWithChain(prunedMsgs, chain)
         session.compactionSummary = result.summary
+        // 压掉多少按"决策时用的那个数"记账（真值口径），事后能判断这次压得对不对
+        session.compactedTokensBefore = usedTokens
         markCompactedThrough()
         persist()
         onEvent(MessageAdded(ChatMessage(
@@ -2209,6 +2245,7 @@ class AgentEngine(
         // 强制压缩（点6：链式降级）
         val result = compactWithChain(chatMsgs, chain)
         session.compactionSummary = result.summary
+        session.compactedTokensBefore = estimateContextTokens()
         markCompactedThrough()
         persist()
         onEvent(MessageAdded(ChatMessage(
@@ -2219,12 +2256,10 @@ class AgentEngine(
     }
 
     /**
-     * 压缩落账：把已被摘要代表的那段历史打上水位标记，**不物理删除**。
-     * 构建请求时只取水位之后的消息，所以 token 一样是减下来的；
-     * 但原文仍在会话里 —— 摘要写坏了可以重来，用户也不会看到历史凭空消失。
-     * （旧实现是从 messages 里 drop 掉，压过头就没有补救办法。）
+     * 算出「摘要能代表到哪一条消息」——即水位候选；没有任何旧段可丢时返回 null。
+     * 与"推进水位"分开写，是因为手动 /compact 得先知道这次值不值得花模型调用。
      */
-    private fun markCompactedThrough() {
+    private fun prospectiveWatermark(): String? {
         val msgs = session.messages
         val keep = compactionManager.keepRecentTokens()
         var acc = 0
@@ -2239,8 +2274,21 @@ class AgentEngine(
         // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰切开
         var start = keepFrom
         while (start < msgs.size && msgs[start].role != ChatMessage.ROLE_USER) start++
-        if (start <= 0 || start >= msgs.size) return
-        session.compactedThroughId = msgs[start - 1].id
+        if (start <= 0 || start >= msgs.size) return null
+        return msgs[start - 1].id
+    }
+
+    /**
+     * 压缩落账：把已被摘要代表的那段历史打上水位标记，**不物理删除**。
+     * 构建请求时只取水位之后的消息，所以 token 一样是减下来的；
+     * 但原文仍在会话里 —— 摘要写坏了可以重来，用户也不会看到历史凭空消失。
+     * （旧实现是从 messages 里 drop 掉，压过头就没有补救办法。）
+     */
+    private fun markCompactedThrough(wid: String? = prospectiveWatermark()) {
+        if (wid == null) return
+        session.compactedThroughId = wid
+        // 锚点作废：水位之前的段落不再进请求，那条真值算的已经不是当前这段上下文的规模了
+        session.usageAnchor = null
         enforceStoredRetention()
     }
 
@@ -2262,15 +2310,27 @@ class AgentEngine(
 
     // ── 手动压缩（/compact 命令） ────────────────────────────────────
 
-    suspend fun compactNow(): String? {
+    /**
+     * 手动压缩（/compact）。
+     *
+     * @return 这次从上下文里丢出去（改由摘要代表）的 token 数；
+     *   **null = 整段历史都还在"最近保留窗口"里，压不动**。这时直接不花模型调用返回：
+     *   水位推不动而只写摘要的话，摘要会作为 system 消息永久挂在每次请求上，
+     *   token 不减反增 —— 一个语义是"释放空间"的命令做出反效果不诚实
+     *   （设备实测：6 条小消息的会话按 /compact 就产生了 488 字符摘要 + 水位没动）。
+     */
+    suspend fun compactNow(): Int? {
+        val wid = prospectiveWatermark() ?: return null
+        val before = estimateContextTokens()
         val chain = summarizerChain()
         val chatMsgs = uncompactedMessages().map { it.toModel() }
         val result = compactWithChain(chatMsgs, chain)
         session.compactionSummary = result.summary
+        session.compactedTokensBefore = before
         // 手动 /compact 以前只写摘要、不推水位：摘要 + 全量历史一起发出去，token 只增不减
-        markCompactedThrough()
+        markCompactedThrough(wid)
         persist()
-        return result.summary
+        return (before - estimateContextTokens()).coerceAtLeast(0)
     }
 
     // ── /btw 附带问题（不写入历史） ─────────────────────────────────
@@ -2337,6 +2397,18 @@ class AgentEngine(
         /** E4a 工具定义开销兜底下限：正常路径按真实序列化求和（_toolsTokenCache），
          *  仅异常/未构建时回退此值。 */
         const val TOOLS_BASE_TOKENS = 3500
+        /**
+         * 工具结果的两段式截断。两级分工不同，动任何一级都要想清楚：
+         *
+         * - [STORED_CAP]：**落库前**。单条工具结果最多 1.6 万字符进会话 JSON。
+         *   不省这一级就是拿手机存储当对象池 —— 几十条几百 KB 的网页抓取会把会话文件
+         *   撑到几十 MB，list()/load() 的解析和写盘全线变慢。OpenClaw 的做法是原文全留、
+         *   只在发请求时截，它有家里的桌面磁盘和 SQLite 账本；移动端**刻意不照抄**（路线图里
+         *   记着这条偏离）。
+         * - [REQ_CAP]：**发请求前**。同一条结果在请求里再截到 4000 字符，落库的那 1.6 万
+         *   仍可回查/导出 —— 别让"发给模型的窗口"决定"用户能看到多少"。
+         *   所有 token 估算一律按 REQ_CAP 口径算：拿落库全文估算会高估到压缩提前触发。
+         */
         const val STORED_CAP = 16_000
         const val REQ_CAP = 4_000
         const val SUB_MAX_TURNS = 10

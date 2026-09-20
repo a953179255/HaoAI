@@ -1046,8 +1046,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 挂到 job 上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
                 job = viewModelScope.launch {
                     try {
-                        val summary = engine.compactNow()
-                        if (summary != null) {
+                        val freed = engine.compactNow()
+                        // 命令的反馈走的是应用通用的那条瞬时提示通道（/plan、/model 也用它的
+                        // 信息分支），不是报错。压不动时直说不压，比默默多挂一段摘要诚实。
+                        _error.value = if (freed == null)
+                            "当前历史都在保留窗口内，压缩不会减少上下文，已取消"
+                        else "已压缩会话上下文，本次释放约 $freed tokens"
+                        if (freed != null) {
                             _streamingText.value = null
                             rebuildRows()
                         }

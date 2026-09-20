@@ -34,6 +34,15 @@ data class StoredMessage(
     val ts: Long = System.currentTimeMillis()
 )
 
+/** 用量锚点（见 [StoredSession.usageAnchor]）。overhead = 锚点那次请求的系统提示+工具定义估算，
+ *  用于把"这一轮上下文开销变了多少"从真值里剥出来再按当下口径加回去。 */
+@Serializable
+data class UsageAnchor(
+    val promptTokens: Int,
+    val messageCount: Int,
+    val overheadTokens: Int
+)
+
 @Serializable
 data class StoredSession(
     val id: String,
@@ -65,6 +74,17 @@ data class StoredSession(
     var runGoal: String? = null,
     /** E1 本轮已用轮数（turncapped 时续跑参考）。 */
     var runTurnsUsed: Int = 0,
+    /**
+     * 用量锚点：上一轮请求供应商**真实报回**的输入 tokens，以及那次请求发出时的会话规模。
+     *
+     * 为什么值得记：判断"该不该压缩"要的就是"下一次请求会发多少 token"。这个数以前完全靠
+     * 字符估算（CJK 1.5 字/token 那套启发式），工具密集会话里能高估一个数量级 ——
+     * 真实后果就是"远没到窗口就提前压缩"，答得比应有的浅。供应商既然已经把真值发回来了，
+     * 就该用它当锚点，只对其后新增的消息做估算。旧会话缺字段=null，自动退回全量估算。
+     */
+    var usageAnchor: UsageAnchor? = null,
+    /** 最近一次压缩**前**的历史 token（真值口径）：诊断"这次压掉多少、是不是压过头"用。 */
+    var compactedTokensBefore: Int? = null,
     /** E4b 工具分层：会话内已启用的工具组（core 恒开）。null=全开（升级前旧会话零感知）；新会话默认仅 core。 */
     var activeGroups: List<String>? = null
 ) {
