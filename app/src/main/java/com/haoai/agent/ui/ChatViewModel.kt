@@ -11,6 +11,7 @@ import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
 import com.haoai.agent.agent.engine.Finished
 import com.haoai.agent.agent.engine.MessageAdded
+import com.haoai.agent.agent.engine.StreamReset
 import com.haoai.agent.agent.engine.SubagentUpdate
 import com.haoai.agent.agent.engine.ToolChanged
 import com.haoai.agent.agent.engine.ToolRunState
@@ -218,6 +219,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         flushStreamBuf()
         _streamingText.value = null
         _streamingReasoning.value = null
+    }
+
+    /**
+     * 引擎丢弃残句（失败重发）时同步撤掉 UI 侧的流式文本：缓冲和已上屏的一起清，
+     * 回到「正在思考」占位。留着会让用户盯着一段永远不会成为最终答案的文字。
+     */
+    private fun resetStreamView() {
+        synchronized(textBuf) { textBuf.setLength(0) }
+        synchronized(reasoningBuf) { reasoningBuf.setLength(0) }
+        _streamingText.value = ""
+        _streamingReasoning.value = ""
+        com.haoai.agent.platform.RunObserver.setStreamTail("")
     }
 
     // ── 调试用：本地合成流式输出（不走模型）──────────────────────────────
@@ -586,7 +599,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         send(text, imageData, audioPath, videoPath)
     }
 
-    fun send(rawText: String, imageData: String? = null, audioPath: String? = null, videoPath: String? = null) {
+    fun send(
+        rawText: String,
+        imageData: String? = null,
+        audioPath: String? = null,
+        videoPath: String? = null,
+        /** 排队消息提升为任务：入队时已落过这条用户消息，引擎不要再落一遍。 */
+        alreadyInHistory: Boolean = false
+    ) {
         val text = rawText.trim()
         // 纯图片发送（无文字）也允许：否则 UI 已清掉 pendingImage，图片会静默丢失
         if (text.isEmpty() && imageData == null && audioPath == null && videoPath == null) return
@@ -594,15 +614,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 若任务结束仍未消费，作为新任务自动执行）。入队同时落一条可见用户消息，
         // 让用户看到自己的消息已排队（排队态反馈）
         if (_running.value) {
+            if (imageData != null || audioPath != null || videoPath != null) {
+                // 排队通路只认纯文本。附件此前会被静默吞掉：UI 已清空输入框，
+                // 用户以为发出去了，历史里却只有文字（甚至整条都不在）。
+                runError("生成期间只能排队文字，附件未发送；文字已排队，本轮结束后自动执行")
+            }
             if (text.isNotEmpty()) {
                 interjectQueue.add(text)
                 _interjectCount.value = interjectQueue.size
-                val s0 = currentSession
-                if (s0 != null) {
-                    s0.messages.add(ChatMessage(role = ChatMessage.ROLE_USER, content = text).toStored())
-                    runCatching { c.sessionStore.save(s0) }
-                    rebuildRows()
-                }
+                // 落一条可见用户消息，让用户看到自己的消息已排队（排队态反馈）
+                appendLocalMessage(text)
             }
             return
         }
@@ -618,16 +639,29 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (provider0 == null) {
             _error.value = "请先在「设置」里配置模型服务（Base URL / 模型 ID / API Key）"
             // 深链/后台发送的消息此前会被静默丢弃（错误条 8s 即逝），留下痕迹供用户看到（P2-6）
-            appendAndNotifyLocal(text)
+            appendLocalMessage(text)
             return
         }
         // 发送门控：公网供应商未配 key 就地拦截（此前无 Authorization 照发、等供应商 401 才报错）
         if (c.resolveApiKey(provider0).isBlank() && c.needsApiKey(provider0.baseUrl)) {
             _error.value = "模型服务「${provider0.name}」未配置 API Key，请到「设置」填写后再发送"
-            appendAndNotifyLocal(text)
+            appendLocalMessage(text)
             return
         }
         val s = currentSession ?: return
+        if (alreadyInHistory) {
+            // 排队消息是"上一轮还在跑"时入的历史，位置落在那轮回答**之前**。留在原位，
+            // 模型读到的是「新指令 → 上一个回答」，会把新指令当成对上一轮的追问：
+            // 实测要求"只回答两个字：收到"，它回完"收到"又把上一轮答案整段复述一遍。
+            // 提升为任务时挪到末尾，顺序恢复成「上一个回答 → 新指令」。
+            val at = s.messages.indexOfLast {
+                it.role == ChatMessage.ROLE_USER && it.content == text
+            }
+            if (at >= 0 && at < s.messages.lastIndex) {
+                s.messages.add(s.messages.removeAt(at))
+                rebuildRows()
+            }
+        }
         // 新回合清空上一轮的工具活动态：liveTools 跨轮次保留会把旧工具当成
         // 「刚完成」灌进任务卡/悬浮窗（旧消息的完成态由落库结果兜底渲染，清掉无碍）
         liveTools.clear()
@@ -672,7 +706,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             ?: "端侧模型启动失败"
                     }
                     // 消息保留进历史：此前只弹 8s 错误条，深链/排队发送会看似凭空消失（P2-6）
-                    appendAndNotifyLocal(text)
+                    appendLocalMessage(text)
                     return@launch
                 }
                 val engine = buildEngine(s, provider).also { turnEngine = it; activeEngine = it }
@@ -685,7 +719,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     videoPath = videoPath,
                     onReasoning = ::appendReasoning,
                     // 续跑要连着上次算轮数：否则每中断一次，60 轮上限就重新给满，长任务可无限续
-                    resuming = isResumeInject
+                    resuming = isResumeInject,
+                    appendUser = !alreadyInHistory
                 )
             } finally {
                 endStreaming()
@@ -706,9 +741,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     stopHintPending = false
                     val lastAssistant = s.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT }
                     if (lastAssistant == null || lastAssistant.content.isBlank()) {
-                        s.messages.add(
-                            ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = "⏹ 已手动停止").toStored()
-                        )
+                        appendLocalMessage("⏹ 已手动停止", to = s, role = ChatMessage.ROLE_ASSISTANT)
                     }
                 }
                 // 落盘前回填 store 里较新的标题状态：打断/结束时标题协程可能已写 store，
@@ -738,9 +771,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val autoNext = interjectQueue.poll()
                 if (autoNext != null && endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
                     _interjectCount.value = interjectQueue.size
-                    // 落一条系统提示说明排队语义（历史可见，非静默）
-                    appendAndNotifyLocal(autoNext)
-                    send(autoNext)
+                    // 这条消息在入队时已经落进历史（就是用户在气泡里看到的那条排队项），
+                    // 提升为任务时引擎不得再落一遍：以前同一条指令会有 3 份，
+                    // 模型看到重复指令会把上一个任务又答一遍。
+                    send(autoNext, alreadyInHistory = true)
                 } else if (autoNext != null) {
                     // 停止/失败：放回队列头不丢消息，等用户手动重发
                     val q = java.util.concurrent.ConcurrentLinkedQueue<String>()
@@ -751,12 +785,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** v7 排队续跑：把排队消息落为正式用户消息（入历史），再作为新任务发送。 */
-    private fun appendAndNotifyLocal(text: String) {
-        val s = currentSession ?: return
-        s.messages.add(ChatMessage(role = ChatMessage.ROLE_USER, content = text).toStored())
+    /**
+     * VM 侧写会话内容的唯一入口（引擎写内容走 AgentEngine.appendAndNotify，两条路不交叉）。
+     * 落列表 + 落库 + 重建行必须一起做完：漏掉任一步就会出现"屏上有、文件里没有"，
+     * 或切走会话再回来时消息凭空消失。[to] 显式传会话而不是取 currentSession：
+     * 回合收尾/排队续跑时用户可能已经切走，写到正在看的会话上是串台。
+     */
+    private fun appendLocalMessage(
+        text: String,
+        to: StoredSession? = currentSession,
+        role: String = ChatMessage.ROLE_USER
+    ) {
+        val s = to ?: return
+        s.messages.add(ChatMessage(role = role, content = text).toStored())
         runCatching { c.sessionStore.save(s) }
-        rebuildRows()
+        if (currentSession?.id == s.id) rebuildRows()
     }
 
     private suspend fun resolveProvider(
@@ -1148,6 +1191,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun handleEvent(ev: TurnEvent) {
         when (ev) {
+            StreamReset -> resetStreamView()
             is MessageAdded -> {
                 // 先把缓冲残余落屏再摘流式气泡，避免最后 <40ms 的 token 在
                 // 最终消息接管显示后又闪回流式区（内容已入 rows，不丢数据，纯观感）

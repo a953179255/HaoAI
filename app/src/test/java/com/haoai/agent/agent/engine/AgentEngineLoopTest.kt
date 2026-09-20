@@ -11,7 +11,9 @@ import com.haoai.agent.agent.provider.SseEvent
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.agent.tools.WebSearchTool
 import com.haoai.agent.data.ProviderConfig
+import com.haoai.agent.data.StoredMessage
 import com.haoai.agent.data.StoredSession
+import com.haoai.agent.data.StoredToolCall
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
@@ -30,7 +32,9 @@ class AgentEngineLoopTest {
     /** 记录每一轮出站的 messages 与工具清单，按脚本回放流式事件；failOn 里的调用序号抛瞬态网络错误。 */
     private class FakeClient(
         private val script: List<List<SseEvent>>,
-        private val failOn: Set<Int> = emptySet()
+        private val failOn: Set<Int> = emptySet(),
+        /** 这些调用先按脚本吐完事件再断流：模拟"流到一半网关挂了"，屏幕上会留下残句。 */
+        private val breakAfterEmit: Set<Int> = emptySet()
     ) : ProviderClient {
         val requests: MutableList<Pair<List<ApiMessage>, List<String>>> = mutableListOf()
         private var n = 0
@@ -45,7 +49,12 @@ class AgentEngineLoopTest {
             requests += messages to tools.map { it.function.name }
             val idx = n++
             if (idx in failOn) throw java.io.IOException("connection reset")
-            return flow { script[minOf(idx, script.lastIndex)].forEach { emit(it) } }
+            val events = script[minOf(idx, script.lastIndex)]
+            if (idx in breakAfterEmit) return flow {
+                events.forEach { emit(it) }
+                throw java.io.IOException("connection reset")
+            }
+            return flow { events.forEach { emit(it) } }
         }
 
         override suspend fun testConnection(provider: ProviderConfig, apiKey: String) = Result.success("ok")
@@ -442,5 +451,101 @@ class AgentEngineLoopTest {
         assertTrue("重试后应拿到子代理结论", content.contains("LangGraph"))
         // 主1 + 子失败 + 子重试 + 主2 == 4：多一次即重试未生效，少一次即子代理没跑
         assertEquals(4, client.requests.size)
+    }
+
+    /**
+     * 重发前必须把残句**连同上一截思考**一起丢掉，并通知 UI 撤气泡。
+     *
+     * 两个真实缺陷都在这里被锁住：
+     * 1. 旧实现只清正文不清思考 → 重试成功的"完整答案"会挂着"旧思考链"落库，
+     *    用户在思考区看到一段和答案无关的推理（overflow 重试路径当时就没清）。
+     * 2. 引擎清了但 UI 不知道 → 屏幕上那段残句永远不撤，退避最长 25s 期间它
+     *    冒充正文，而落库的那条消息里根本没有它（屏幕与历史分叉）。
+     */
+    @Test
+    fun retryDropsStaleTextAndReasoning() = runBlocking {
+        val session = StoredSession.create(null)
+        val events = mutableListOf<TurnEvent>()
+        val client = FakeClient(
+            script = listOf(
+                listOf(SseEvent.Reasoning("旧思考链"), SseEvent.Delta("半截答案")),
+                saying("完整答案")
+            ),
+            breakAfterEmit = setOf(0)
+        )
+        engine(client, tmpDir(), session = session).runTurn("开始", {}, { events += it })
+        val assistants = session.messages.filter { it.role == ChatMessage.ROLE_ASSISTANT }
+        assertEquals("重发不该留下两条 assistant（残句那条不该落库）", 1, assistants.size)
+        assertEquals("完整答案", assistants[0].content)
+        org.junit.Assert.assertNull("重试答案不得挂着上一截思考链", assistants[0].reasoning)
+        assertTrue("残句要发事件通知 UI 撤掉", events.contains(StreamReset))
+    }
+
+    /**
+     * 出站历史必须是「旧→新」，最后一条就是本轮正在问的那句。
+     *
+     * d55ac4d 把"取最近 MAX_HISTORY 条"改写成 token 预算窗口时，只留了一层 asReversed
+     * （原写法 `messages.asReversed().take(N).asReversed()` 的第二层是恢复正序用的），
+     * 于是整段历史以**新→旧**发出：模型看到的最后一条变成会话里最老的那句。
+     * 真机外显为"追问当没看见、把第一个问题又答一遍"，单测此前全都查不出来 ——
+     * 只查成员/配对不查顺序的断言，对顺序回归是零保护。
+     */
+    @Test
+    fun outboundHistoryKeepsChronologicalOrder() = runBlocking {
+        val session = StoredSession.create(null)
+        session.messages.add(StoredMessage(role = ChatMessage.ROLE_USER, content = "第一问"))
+        session.messages.add(StoredMessage(role = ChatMessage.ROLE_ASSISTANT, content = "第一答"))
+        session.messages.add(
+            StoredMessage(
+                role = ChatMessage.ROLE_ASSISTANT, content = "",
+                toolCalls = listOf(StoredToolCall("c1", "bash", "{\"command\":\"ls\"}"))
+            )
+        )
+        session.messages.add(
+            StoredMessage(
+                role = ChatMessage.ROLE_TOOL, content = "file.txt",
+                toolCallId = "c1", toolName = "bash"
+            )
+        )
+        // 工具调用要配上结果，否则 pairSanitized 会把这一对全丢掉（那是另一条测试关注点）
+        val client = FakeClient(listOf(saying("第二答")))
+        engine(client, tmpDir(), session = session).runTurn("第二问", {}, {})
+        // 取"主聊天那一轮"：工具面最全的那次请求（记忆冲刷带同一份系统提示且按设计携带整段历史）
+        val sent = client.requests.maxByOrNull { it.second.size }!!.first
+            .filter { it.role != "system" }.map { it.role to it.content }
+        assertEquals(
+            listOf(
+                "user" to "第一问",
+                "assistant" to "第一答",
+                "assistant" to null,
+                "tool" to "file.txt",
+                "user" to "第二问"
+            ),
+            sent
+        )
+    }
+
+    /**
+     * 排队消息提升为任务时不能再落一遍用户指令。
+     * 入队那一刻它已经在历史里（用户在气泡里看到了），旧实现没有 appendUser 开关，
+     * 于是一条排队指令在会话里出现 3 份（入队 1 + 提升时 VM 补 1 + 引擎再落 1），
+     * 模型读到重复指令会把上一个任务又答一遍（模拟器实测）。
+     */
+    @Test
+    fun promotedQueuedTaskDoesNotDuplicateUserMessage() = runBlocking {
+        val session = StoredSession.create(null)
+        session.messages.add(StoredMessage(role = ChatMessage.ROLE_USER, content = "排队中的指令"))
+        val client = FakeClient(listOf(saying("好的")))
+        engine(client, tmpDir(), session = session)
+            .runTurn("排队中的指令", {}, {}, appendUser = false)
+        assertEquals(1, session.messages.count { it.role == ChatMessage.ROLE_USER })
+        assertEquals("好的", session.messages.last().content)
+        // 不落库≠不干活：出站请求里必须仍带着这条指令，否则模型根本不知道要做什么
+        assertTrue(client.requests.last().first.any { it.role == "user" && it.content == "排队中的指令" })
+
+        // 对照：普通回合仍然要落（默认值没被改坏）
+        val s2 = StoredSession.create(null)
+        engine(FakeClient(listOf(saying("行"))), tmpDir(), session = s2).runTurn("新指令", {}, {})
+        assertEquals(1, s2.messages.count { it.role == ChatMessage.ROLE_USER })
     }
 }

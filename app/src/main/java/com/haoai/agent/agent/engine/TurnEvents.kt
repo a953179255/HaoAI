@@ -15,6 +15,13 @@ sealed interface TurnEvent
 
 data class MessageAdded(val message: ChatMessage) : TurnEvent
 
+/**
+ * 引擎丢掉了已上屏的残句（瞬态退避重发 / 溢出压缩重发）。
+ * UI 收到必须把流式气泡清回去：否则用户盯着一段永远不会成为最终答案的文字，
+ * 而落库的那条里没有它 —— 屏幕和历史分叉。
+ */
+object StreamReset : TurnEvent
+
 data class ToolChanged(val update: ToolUpdate) : TurnEvent
 
 data class Finished(val error: String?) : TurnEvent

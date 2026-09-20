@@ -284,7 +284,13 @@ class AgentEngine(
         videoPath: String? = null,
         onReasoning: (String) -> Unit = {},
         /** true=中断后续跑：轮数接着上次算，避免每续一次就把 60 轮上限重新给满。 */
-        resuming: Boolean = false
+        resuming: Boolean = false,
+        /**
+         * false=这条用户指令**已经在会话历史里**了，引擎只负责接着它干活，不再落一遍。
+         * 排队消息在入队那一刻就落进历史让用户看到"已发送"，提升为任务时再落一次
+         * 就会出现同一条指令两条气泡（且模型看到的是重复指令，会再答一遍）。
+         */
+        appendUser: Boolean = true
     ) {
         // 整轮统计起点：用户发出 → 最终回复落库（含工具循环全部 LLM 调用与工具执行）
         val turnStartMs = System.currentTimeMillis()
@@ -294,21 +300,23 @@ class AgentEngine(
         // P2-5 重放保护按 turn 归零（跨 turn 的合法重复调用不受影响）
         lastExecutedSig = null
         lastExecutedResult = null
-        appendAndNotify(
-            ChatMessage(
-                role = ChatMessage.ROLE_USER,
-                content = when {
-                    imageData != null -> "[图片]\n$userText".trim()
-                    audioPath != null -> "[音频]\n$userText".trim()
-                    videoPath != null -> "[视频]\n$userText".trim()
-                    else -> userText
-                },
-                imageData = imageData,
-                audioPath = audioPath,
-                videoPath = videoPath
-            ),
-            onEvent
-        )
+        if (appendUser) {
+            appendAndNotify(
+                ChatMessage(
+                    role = ChatMessage.ROLE_USER,
+                    content = when {
+                        imageData != null -> "[图片]\n$userText".trim()
+                        audioPath != null -> "[音频]\n$userText".trim()
+                        videoPath != null -> "[视频]\n$userText".trim()
+                        else -> userText
+                    },
+                    imageData = imageData,
+                    audioPath = audioPath,
+                    videoPath = videoPath
+                ),
+                onEvent
+            )
+        }
 
         val shellDir = backend?.shellWorkdir()
             ?: File(appFilesDir, "shell-home").apply { mkdirs() }
@@ -354,7 +362,7 @@ class AgentEngine(
         // 压缩检查：在主循环前判断是否需要压缩
         maybeCompact(onEvent)
 
-        val streamBuf = StringBuilder()
+        val transcript = TurnTranscript(onDelta, onReasoning) { onEvent(StreamReset) }
         try {
             while (true) {
                 currentCoroutineContext().ensureActive()
@@ -384,8 +392,7 @@ class AgentEngine(
                     break
                 }
 
-                streamBuf.setLength(0)
-                val reasoningBuf = StringBuilder()
+                transcript.reset()
                 var calls: List<ToolCallData> = emptyList()
 
                 // v7：循环内插话已升级为「排队任务」语义（ChatViewModel 全权管理队列）——
@@ -410,8 +417,8 @@ class AgentEngine(
                                 .collect { ev ->
                                     lastStreamEventAt = System.currentTimeMillis()
                                     when (ev) {
-                                        is SseEvent.Delta -> { streamBuf.append(ev.text); onDelta(ev.text) }
-                                        is SseEvent.Reasoning -> { reasoningBuf.append(ev.text); onReasoning(ev.text) }
+                                        is SseEvent.Delta -> transcript.delta(ev.text)
+                                        is SseEvent.Reasoning -> transcript.reasoningDelta(ev.text)
                                         is SseEvent.Completed -> calls = ev.toolCalls
                                         is SseEvent.Usage -> {
                                             st.promptTokens += ev.promptTokens
@@ -440,8 +447,9 @@ class AgentEngine(
                     // Overflow 检测：自动压缩后重试一次
                     val emsg = e.message ?: ""
                     if (compactionManager.isOverflowError(emsg) && !compactionManager.isCoolingDown()) {
-                        // 清掉首次失败已累积的半截流式输出，避免重试答案拼接在残句后面
-                        streamBuf.setLength(0)
+                        // 清掉首次失败已累积的半截流式输出（正文和思考都要丢：
+                        // 只清正文会让重试答案挂着上一轮的思考链落库），并让 UI 撤掉残句
+                        transcript.discard()
                         handleOverflow(emsg, onEvent) { collectStream() }
                     } else if (isTransientHttpError(e)) {
                         // 429/超时/网关抖动：供应商限流在多轮工具任务里很常见（每步一请求），
@@ -453,10 +461,11 @@ class AgentEngine(
                         var last: Exception? = e
                         for (sec in backoffsSec) {
                             onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.RUNNING, brief, if (isRealRateLimit) "HTTP 429，${sec}s 后自动重试" else "网络错误，${sec}s 后自动重试")))
+                            // 残句在判定要重发的那一刻就先撤掉（含 UI 气泡）：它已经不可能
+                            // 成为答案，却会在 5~25s 的退避里一直挂在屏幕上冒充正文。
+                            transcript.discard()
                             delay(sec * 1000L)
                             currentCoroutineContext().ensureActive()
-                            streamBuf.setLength(0)
-                            reasoningBuf.setLength(0)
                             try {
                                 collectStream()
                                 onEvent(ToolChanged(ToolUpdate("rate-limit", ToolRunState.DONE, brief, "已恢复")))
@@ -478,12 +487,7 @@ class AgentEngine(
                 // st.forceFinish 已置位时跳过：否则累计值恒 ≥ 上限，收尾轮会在 [A] 再次触发熔断形成死循环
                 if (!st.forceFinish && turnTokenCap > 0 && st.promptTokens + st.completionTokens >= turnTokenCap) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
-                    if (streamBuf.isNotBlank()) {
-                        appendAndNotify(
-                            ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = streamBuf.toString()),
-                            onEvent
-                        )
-                    }
+                    transcript.buildAssistant()?.let { appendAndNotify(it, onEvent) }
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
@@ -497,24 +501,18 @@ class AgentEngine(
                     continue
                 }
 
-                if (streamBuf.isNotBlank() || calls.isNotEmpty()) {
-                    // calls 为空（或熔断收尾轮）= 本轮无工具调用、循环即将 break：这是最终回复，
-                    // 把整轮累计的 token/耗时/模型名挂上（中间轮的 assistant 片段不带，避免重复展示）
-                    val isFinal = calls.isEmpty() || st.forceFinish
-                    appendAndNotify(
-                        ChatMessage(
-                            role = ChatMessage.ROLE_ASSISTANT,
-                            content = streamBuf.toString(),
-                            toolCalls = maskSecretArgs(calls),
-                            reasoning = reasoningBuf.toString().ifBlank { null },
-                            promptTokens = if (isFinal) st.promptTokens.toInt() else null,
-                            completionTokens = if (isFinal) st.completionTokens.toInt() else null,
-                            durationMs = if (isFinal) System.currentTimeMillis() - turnStartMs else null,
-                            model = if (isFinal) provider.model else null
-                        ),
-                        onEvent
-                    )
-                }
+                // calls 为空（或熔断收尾轮）= 本轮无工具调用、循环即将 break：这是最终回复，
+                // 把整轮累计的 token/耗时/模型名挂上（中间轮的 assistant 片段不带，避免重复展示）
+                val isFinal = calls.isEmpty() || st.forceFinish
+                transcript.buildAssistant(
+                    toolCalls = maskSecretArgs(calls),
+                    stats = if (isFinal) AssistantStats(
+                        promptTokens = st.promptTokens.toInt(),
+                        completionTokens = st.completionTokens.toInt(),
+                        durationMs = System.currentTimeMillis() - turnStartMs,
+                        model = provider.model
+                    ) else null
+                )?.let { appendAndNotify(it, onEvent) }
                 currentCoroutineContext().ensureActive()
 
                 if (calls.isEmpty() || st.forceFinish) {
@@ -609,11 +607,13 @@ class AgentEngine(
             ledgerLlm("chat", st.promptTokens, st.completionTokens, System.currentTimeMillis() - turnStartMs, ok = false)
             // B 终态收口：用户停止 → in_progress 回滚 pending（非挂起操作，取消态下安全）
             finishTurn(natural = false)
-            if (streamBuf.isNotBlank()) {
+            if (transcript.hasContent) {
                 appendAndNotify(
                     ChatMessage(
                         role = ChatMessage.ROLE_ASSISTANT,
-                        content = streamBuf.toString() + "\n\n*[已停止]*",
+                        content = transcript.textString() + "\n\n*[已停止]*",
+                        // 思考过程一并留下：此前停止会把气泡里的思考链丢掉
+                        reasoning = transcript.reasoningOrNull(),
                         // 用户中途停止：已消耗的部分也记上（best effort，供统计行展示）
                         promptTokens = st.promptTokens.toInt().takeIf { it > 0 },
                         completionTokens = st.completionTokens.toInt().takeIf { it > 0 },
@@ -1105,17 +1105,17 @@ class AgentEngine(
             handle.steering.poll()?.let { m ->
                 msgs.add(ApiMessage(role = "user", content = "[主代理插话] $m"))
             }
-            val buf = StringBuilder()
+            val subTranscript = TurnTranscript()
             var calls: List<ToolCallData> = emptyList()
             // 子代理的模型请求单独走一次，失败不再直接判 ERROR：
             // 主循环有 5/12/25s 瞬态退避，子代理此前一次网关抖动/429 就废掉整路调研
             //（spawn_agents 并行时表现为兄弟路正常、这一路凭空 ERROR）
             suspend fun attemptOnce() {
-                buf.setLength(0)
+                subTranscript.reset()
                 calls = emptyList()
                 httpClient.chatStream(provider, apiKey, msgs, apiTools, effectiveEffort()).collect { ev ->
                     when (ev) {
-                        is SseEvent.Delta -> buf.append(ev.text)
+                        is SseEvent.Delta -> subTranscript.delta(ev.text)
                         is SseEvent.Reasoning -> Unit
                         is SseEvent.Completed -> calls = ev.toolCalls
                         is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
@@ -1158,7 +1158,7 @@ class AgentEngine(
                 handle.finalResult = failOut
                 return failOut
             }
-            finalText = buf.toString()
+            finalText = subTranscript.textString()
             handle.lastAssistant = finalText
             if (calls.isEmpty()) break
             msgs.add(
@@ -1656,7 +1656,11 @@ class AgentEngine(
 
         // 配对感知裁剪：窗口切割可能把 assistant(tool_calls) 切掉却留下它的 tool 结果，
         // OpenAI 兼容端会以 400 拒绝孤儿 tool 消息（且重试复现，会话就此卡死）。
-        val history = requestHistoryWindow().asReversed()
+        // 注意这里必须是**旧→新**的正序：requestHistoryWindow 已经按预算从前往后截好，
+        // 原先"倒序取 N 条再倒回来"的第二次 asReversed 不能省 —— 少了它整段历史
+        // 会以新→旧发出，模型看到的最后一条变成会话里最老的那句（d55ac4d 引入，
+        // 表现为"追问当没看见、把第一个问题又答一遍"）。repairBlankCallIds 也按正序配对 id。
+        val history = requestHistoryWindow()
             .repairBlankCallIds()
             .pairSanitized()
             .mapNotNull { m ->
