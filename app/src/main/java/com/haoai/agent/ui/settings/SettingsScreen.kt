@@ -64,6 +64,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -1102,6 +1103,7 @@ private fun SectionPage(
     // 渲染成内容流内的一块（弹窗不能渲染在 LazyColumn item 内——同账本确认弹窗教训）
     var pickerSeed by remember { mutableStateOf<String?>(null) }
     var pickerSlot by remember { mutableIntStateOf(-1) }
+    var keyExportConfirm by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
@@ -1145,7 +1147,8 @@ private fun SectionPage(
                         wpVersion, onWpVersionChange = { },
                         onRequestClearWallpaper = onConfirmWpClear,
                         onWpChanged = { },
-                        onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex }
+                        onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex },
+                        onRequestKeyExportConfirm = { keyExportConfirm = true }
                     )
                     "about" -> aboutItems(vm, settings, backdrop)
                     "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = onConfirmClearLedger)
@@ -1168,6 +1171,32 @@ private fun SectionPage(
                 vm = vm,
                 onDismiss = { pickerSeed = null }
             )
+        }
+        if (keyExportConfirm) {
+            val named = settings.providers.filter { it.apiKeyCipher.isNotBlank() }
+                .map { it.name.ifBlank { it.model } }
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = backdrop,
+                title = "把 API Key 一起导出？",
+                onDismiss = { keyExportConfirm = false },
+                confirmLabel = "确认包含",
+                onConfirm = { vm.setBackupIncludeKeys(true); keyExportConfirm = false },
+                dismissLabel = "不含 Key"
+            ) {
+                Column {
+                    Text(
+                        "包内将以明文写入这 ${named.size} 家的密钥：${named.joinToString("、")}" +
+                            "。任何拿到这个 zip 的人都能直接用它消费你的额度。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "建议只在换机迁移时勾选，迁完把备份包删掉。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }
@@ -2235,7 +2264,8 @@ private fun LazyListScope.generalItems(
     onWpVersionChange: (Boolean) -> Unit,
     onRequestClearWallpaper: () -> Unit,
     onWpChanged: () -> Unit = {},
-    onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> }
+    onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> },
+    onRequestKeyExportConfirm: () -> Unit = {}
 ) {
     item { SectionTitle("外观") }
     item {
@@ -2473,53 +2503,230 @@ private fun LazyListScope.generalItems(
                 onChange = { vm.setWallpaperGlobal(it) },
                 backdrop = backdrop
             )
-            HorizontalDivider(
-                Modifier.padding(horizontal = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-            )
-            // 配置文件桥状态（C6：配置源在状态目录；agent 改配置走 config_get/config_set 工具恒审批）
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                Text("配置文件", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    vm.configFilePath(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    maxLines = 2
+            // 配置文件桥状态整块搬进「数据与备份」（它管的是同一份 haoai.config.json），
+            // 通用页少一屏；绝对路径默认折叠——正式包里那目录用户根本打不开。
+        }
+    }
+
+    item { SectionTitle("数据与备份") }
+    item {
+        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
+                // 体积是磁盘遍历，别在重组里现算：进页面时 IO 线程取一次
+                val scopes = com.haoai.agent.platform.BackupScope.entries
+                var sizes by remember {
+                    mutableStateOf<Map<com.haoai.agent.platform.BackupScope, Long>>(emptyMap())
+                }
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    sizes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        scopes.associateWith { vm.scopeBytes(it) }
+                    }
+                }
+                scopes.forEach { sc ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable { vm.toggleBackupScope(sc) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = vm.backupSelected(sc),
+                            onCheckedChange = { vm.toggleBackupScope(sc) }
+                        )
+                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(sc.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                sc.hint,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                        Text(
+                            vm.sizeLabel(sizes[sc] ?: 0L),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+                HorizontalDivider(
+                    Modifier.padding(vertical = 6.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
                 )
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "沙箱运行环境 / 写前快照",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                        )
+                        Text(
+                            "proot 环境可重新下载；写前快照只在当前机器用于回滚文件改动，跨机无意义",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    }
+                    Text(
+                        "不含",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
                 Text(
-                    "最近应用：${vm.configFileStatus()}",
+                    "已选 ${scopes.count { vm.backupSelected(it) }} 项 · 约 " +
+                        "${vm.sizeLabel(scopes.filter { vm.backupSelected(it) }.sumOf { sizes[it] ?: 0L })}" +
+                        " · 明文密钥：${if (vm.backupIncludeKeys()) "包含" else "不含"}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                    maxLines = 2
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                    modifier = Modifier.padding(top = 4.dp)
                 )
-                Text(
-                    "新增模型的 API Key 请让代理经 config_set 即时写入（成功后自动加密掩码）；" +
-                        "若配置未通过校验，明文会被自动脱敏为 ****，不会以明文留在状态目录或快照中。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                    maxLines = 4
+            }
+        }
+    }
+    item {
+        val exportLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/zip")
+        ) { uri ->
+            if (uri != null) {
+                vm.exportData(uri) { r ->
+                    android.widget.Toast.makeText(
+                        context,
+                        r.getOrElse { "备份失败：${it.message ?: it.javaClass.simpleName}" },
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+            Column {
+                ToggleRow(
+                    title = "备份包里包含明文 API Key",
+                    subtitle = "Key 由本机 Keystore 加密，换机后旧包解不开。不含则恢复后需重贴；" +
+                        "含则这个 zip 一旦外泄等于账号外泄",
+                    checked = vm.backupIncludeKeys(),
+                    onChange = { want ->
+                        if (!want) vm.setBackupIncludeKeys(false) else onRequestKeyExportConfirm()
+                    },
+                    backdrop = backdrop
                 )
+                HorizontalDivider(
+                    Modifier.padding(horizontal = 14.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                )
+                ToggleRow(
+                    title = "破坏性操作前自动留快照",
+                    subtitle = "手动压缩、彻底删除会话前，先把那条会话原样存到本机 files/backups/，" +
+                        "保留最近 8 份",
+                    checked = vm.backupSnapshots(),
+                    onChange = { vm.setBackupSnapshots(it) },
+                    backdrop = backdrop
+                )
+                HorizontalDivider(
+                    Modifier.padding(horizontal = 14.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("导出到手机或云盘", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            vm.lastExportLabel(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (vm.hasExported())
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f)
+                        )
+                        Text(
+                            "本机快照：${vm.snapshotLabel()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    if (vm.backupBusy) {
+                        CircularProgressIndicator(
+                            Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        TextButton(onClick = {
+                            exportLauncher.launch(
+                                "haoai-backup-" + java.text.SimpleDateFormat(
+                                    "yyyyMMdd-HHmm", java.util.Locale.CHINA
+                                ).format(java.util.Date()) + ".zip"
+                            )
+                        }) { Text("开始备份") }
+                    }
+                }
+            }
+        }
+    }
+
+    item {
+        // 配置文件桥（从「通用」搬来：它管的就是上面这份 haoai.config.json）
+        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("配置桥状态", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "最近应用：${vm.configFileStatus()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            maxLines = 2
+                        )
+                        Text(
+                            "新增模型的 API Key 请让代理经 config_set 即时写入（成功后自动加密掩码）；" +
+                                "若配置未通过校验，明文会被自动脱敏为 ****，不会以明文留在状态目录或快照中。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                            maxLines = 3
+                        )
+                    }
+                }
+                vm.latestConfigSnapshot()?.let { snap ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "上次配置快照：${snap.removeSuffix(".json").take(4)}-${snap.substring(4, 6)}-" +
+                                "${snap.substring(6, 8)} ${snap.substring(9, 11)}:${snap.substring(11, 13)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            if (vm.restoreLatestConfigSnapshot()) {
+                                android.widget.Toast.makeText(
+                                    context, "已回退到上一份配置，重启后完全生效",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }) { Text("回退") }
+                    }
+                }
                 if (vm.rejectedConfigCopies() > 0) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "${vm.rejectedConfigCopies()} 个被拒绝配置的修正副本（已脱敏）",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier.weight(1f)
                         )
                         TextButton(onClick = { vm.clearRejectedConfigCopies() }) { Text("清理") }
                     }
                 }
-                // 回滚兜底：每次配置应用前自动存快照，改坏了一键回退（不依赖对话修复）
-                vm.latestConfigSnapshot()?.let { snap ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "上次配置快照：${snap.removeSuffix(".json").take(4)}-${snap.substring(4, 6)}-${snap.substring(6, 8)} ${snap.substring(9, 11)}:${snap.substring(11, 13)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(onClick = { vm.restoreLatestConfigSnapshot() }) { Text("回退") }
+                // 路径默认收起：正式包不可调试，这个目录在手机上根本打不开，
+                // 只在需要远程排障时展开看一眼
+                var showPath by remember { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (showPath) vm.configFilePath() else "配置文件路径（排障用）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { showPath = !showPath }) {
+                        Text(if (showPath) "收起" else "展开")
                     }
                 }
             }

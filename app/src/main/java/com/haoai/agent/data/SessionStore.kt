@@ -281,6 +281,9 @@ class SessionStore(private val dir: File) {
 
     private fun fileOf(id: String) = File(dir, "$id.json")
 
+    /** 备份用：会话目录（只读遍历，不改任何状态）。 */
+    internal fun sessionsDir(): File = dir
+
     private fun parseFile(f: File): StoredSession? =
         HaoJson.readJsonSafe(f, StoredSession.serializer())
 

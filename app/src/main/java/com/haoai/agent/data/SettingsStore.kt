@@ -189,6 +189,17 @@ data class AppSettings(
     val lastMemoryBackupAt: Long = 0,
     /** 上次记忆导出时间（毫秒）。 */
     val lastMemoryExportAt: Long = 0,
+    /**
+     * 数据备份：勾选的范围（[com.haoai.agent.platform.BackupScope] 名字）。
+     * 空 = 全五个域（默认全备，让用户少一次"我是不是漏勾了"的担心）。
+     */
+    val backupScopes: List<String> = emptyList(),
+    /** 备份包里是否带明文 API Key。默认关：zip 一旦外泄等于账号外泄。 */
+    val backupIncludeKeys: Boolean = false,
+    /** 破坏性操作（压缩/删除会话）前自动留本机快照。 */
+    val backupSnapshots: Boolean = true,
+    /** 上次导出到设备外的时间（毫秒）。0 = 从未导出。 */
+    val lastDataExportAt: Long = 0,
     /** 上次记忆固化时间与结果（健康度仪表盘展示）。 */
     val lastConsolidationAt: Long = 0,
     val lastConsolidationReport: String = "",

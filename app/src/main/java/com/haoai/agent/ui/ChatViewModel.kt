@@ -479,6 +479,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun deleteSessionForever(id: String) {
+        // 回收站里再删一次就是不可逆的，先把那条会话原样留一份
+        com.haoai.agent.platform.DataBackupManager.snapshotSession(c, id, "purge")
         c.sessionStore.deleteForever(id)
         refreshDeletedSessions()
     }
@@ -553,7 +555,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 清空回收站：所有回收站会话彻底删除。 */
     fun emptyTrash() {
-        _deletedSessions.value.forEach { c.sessionStore.deleteForever(it.id) }
+        _deletedSessions.value.forEach {
+            com.haoai.agent.platform.DataBackupManager.snapshotSession(c, it.id, "purge")
+            c.sessionStore.deleteForever(it.id)
+        }
         refreshDeletedSessions()
     }
 
@@ -1050,6 +1055,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 挂到 job 上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
                 job = viewModelScope.launch {
                     try {
+                        // 压缩会推进水位并把老历史摘成摘要：先留一份那条会话的原样副本
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.haoai.agent.platform.DataBackupManager
+                                .snapshotSession(c, s.id, "compact")
+                        }
                         val freed = engine.compactNow()
                         // 命令的反馈走的是应用通用的那条瞬时提示通道（/plan、/model 也用它的
                         // 信息分支），不是报错。压不动时直说不压，比默默多挂一段摘要诚实。

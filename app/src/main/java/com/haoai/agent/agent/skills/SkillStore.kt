@@ -122,6 +122,9 @@ object SkillStore {
     private val dir: File
         get() = (baseDir ?: throw IllegalStateException("SkillStore 未初始化（需先调用 init）")).apply { mkdirs() }
 
+    /** 备份用：当前技能落点（工作区 skills/ 或状态目录回退），只读遍历不改状态。 */
+    fun currentDir(): File = dir
+
     /** 名称 → 目录的受限解析：拒绝路径穿越，只允许 skills/ 直属目录。 */
     private fun resolve(name: String): File? {
         val d = File(dir, name.trim()).canonicalFile

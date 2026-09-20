@@ -116,6 +116,87 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         return c.configBridge.restoreSnapshot(name)
     }
 
+    // ── 数据与备份（导出侧）───────────────────────────────────────────
+
+    /** 勾选状态。设置里没存过（空列表）按"全五个域"处理，所以首次改动要把默认展开成实列表。 */
+    fun backupSelected(scope: com.haoai.agent.platform.BackupScope): Boolean {
+        val sel = settings.value.backupScopes
+        return sel.isEmpty() || scope.name in sel
+    }
+
+    fun toggleBackupScope(scope: com.haoai.agent.platform.BackupScope) {
+        val cur = com.haoai.agent.platform.BackupScope.entries.filter { backupSelected(it) }.toMutableList()
+        if (!cur.remove(scope)) cur += scope
+        // 一项都不勾等于导出一个只有 manifest 的空包，没有意义：拒绝并说明
+        if (cur.isEmpty()) return
+        c.updateSettings { it.copy(backupScopes = cur.map { s -> s.name }) }
+    }
+
+    fun backupIncludeKeys(): Boolean = settings.value.backupIncludeKeys
+    fun setBackupIncludeKeys(v: Boolean) = c.updateSettings { it.copy(backupIncludeKeys = v) }
+    fun backupSnapshots(): Boolean = settings.value.backupSnapshots
+    fun setBackupSnapshots(v: Boolean) = c.updateSettings { it.copy(backupSnapshots = v) }
+
+    /** 单个域的体积（字节）。目录遍历是磁盘活，UI 只在进页面/改动后取一次。 */
+    fun scopeBytes(scope: com.haoai.agent.platform.BackupScope): Long =
+        com.haoai.agent.platform.DataBackupManager.scopeSize(c, scope)
+
+    fun selectedBytes(): Long = com.haoai.agent.platform.BackupScope.entries
+        .filter { backupSelected(it) }.sumOf { scopeBytes(it) }
+
+    /** 备份体积标签。阈值刻意错开一档：用 MB 表达 300 KB 只会显示成"0.0 MB"。 */
+    fun sizeLabel(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / 1024.0 / 1024 / 1024)
+        bytes >= 10L * 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
+        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
+    /** "上次导出"状态行：0 = 从未导出过（换机/重装会全部丢失，这行就是提醒这件事的）。 */
+    fun lastExportLabel(): String {
+        val at = settings.value.lastDataExportAt
+        if (at == 0L) return "从未导出到设备外 —— 卸载重装、换机、清除数据都会全部丢失"
+        val d = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date(at))
+        val days = (System.currentTimeMillis() - at) / 86_400_000L
+        return if (days > 30) "$d 导出 · 已经 ${days} 天没有更新" else "$d 导出"
+    }
+
+    fun hasExported(): Boolean = settings.value.lastDataExportAt > 0L
+
+    /** 本机快照摘要（破坏性操作前自动留的那批）。 */
+    fun snapshotLabel(): String {
+        val list = com.haoai.agent.platform.DataBackupManager.snapshots(c)
+        if (list.isEmpty()) return "暂无 —— 压缩或彻底删除会话前会自动留一份"
+        val latest = list.first()
+        val reason = if (latest.reason == "purge") "删除" else "压缩"
+        val t = latest.at
+        val when0 = "${t.substring(4, 6)}-${t.substring(6, 8)} ${t.substring(9, 11)}:${t.substring(11, 13)}"
+        return "${list.size} 份 · 最近一次（${reason}前）$when0"
+    }
+
+    var backupBusy by mutableStateOf(false)
+        private set
+
+    /** 导出到 SAF 选好的位置。IO 线程跑（打包要读全部会话文件），结果字符串给 UI 弹 Toast。 */
+    fun exportData(uri: android.net.Uri, onResult: (Result<String>) -> Unit) {
+        if (backupBusy) return
+        backupBusy = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val scopes = com.haoai.agent.platform.BackupScope.entries.filter { backupSelected(it) }.toSet()
+            val r = com.haoai.agent.platform.DataBackupManager
+                .exportZip(c, uri, scopes, backupIncludeKeys())
+            withContext(Dispatchers.Main) {
+                backupBusy = false
+                onResult(
+                    r.map { s ->
+                        "已备份 ${s.entries} 项 · ${sizeLabel(s.bytes)}" +
+                            if (s.keysIncluded) "（含明文 Key）" else "（不含 Key）"
+                    }
+                )
+            }
+        }
+    }
+
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
     fun sessionTitleOf(sessionId: String): String =
         runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")
