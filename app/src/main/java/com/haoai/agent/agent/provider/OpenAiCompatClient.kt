@@ -1,5 +1,6 @@
 package com.haoai.agent.agent.provider
 
+import com.haoai.agent.agent.model.newFallbackCallId
 import com.haoai.agent.data.HaoJson
 import com.haoai.agent.data.ProviderConfig
 import kotlinx.coroutines.Dispatchers
@@ -315,7 +316,6 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
             val source = resp.body?.source() ?: throw IOException("响应为空")
 
             var gotAnyContent = false
-            var counter = 0
             var usage: UsageInfo? = null
             data class Pending(
                 var id: String? = null,
@@ -381,12 +381,13 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                 throw IOException("供应商未返回任何内容，请检查模型 ID 与 Base URL 是否匹配")
             }
 
-            val calls = pending.entries.sortedBy { it.key }.mapIndexedNotNull { i, (_, p) ->
-                val name = p.name.toString().ifBlank { return@mapIndexedNotNull null }
+            val calls = pending.entries.sortedBy { it.key }.mapNotNull { (_, p) ->
+                val name = p.name.toString().ifBlank { return@mapNotNull null }
                 com.haoai.agent.agent.model.ToolCallData(
                     // 部分供应商（如 deepseek-v4-flash）会流式返回空字符串 id，
-                    // 回传 "id": "" 会被服务端以 400 missing tool_calls.id 拒绝，必须兜底生成
-                    id = p.id?.takeIf { it.isNotBlank() } ?: "call_${counter++}_$i",
+                    // 回传 "id": "" 会被服务端以 400 missing tool_calls.id 拒绝，必须兜底生成；
+                    // 序号是进程内单调的，**不能按本轮下标**（会跨轮撞号，见 newFallbackCallId 注释）
+                    id = p.id?.takeIf { it.isNotBlank() } ?: newFallbackCallId(),
                     name = name,
                     argumentsJson = p.args.toString().ifBlank { "{}" }
                 )

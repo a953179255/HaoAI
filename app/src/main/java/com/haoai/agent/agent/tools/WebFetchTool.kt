@@ -121,8 +121,34 @@ object HtmlText {
     private val hexEntity = Regex("&#x([0-9a-fA-F]+);")
     private val blankLines = Regex("\n{3,}")
 
+    /** 站点外壳：导航、侧栏、页眉页脚、表单。整页兜底时先剥掉它们。 */
+    private val chromeBlocks = Regex("(?is)<(nav|aside|form|header|footer)[^>]*>.*?</\\1>")
+    private val articleBlock = Regex("(?is)<article[^>]*>.*?</article>")
+    private val mainBlock = Regex("(?is)<main[^>]*>.*?</main>")
+
+    /** 容器 HTML 少于这么多字符就当它是页面上的小卡片（评论框、推荐卡），不认作正文。 */
+    private const val MIN_MAIN_HTML = 1200
+
+    /**
+     * 正文优先：<article>（多个取最长的）→ <main> → 整页去外壳。
+     *
+     * 为什么要挑容器：原先整页一起转文本，`TextCap.middle` 取到的开头永远是站点导航。
+     * 实测一次调研抓了 5 个不同的 IBM 页面，返回文本全部以
+     * "Cost of a Data Breach Report 2026" 那段导航开头——模型看不到正文，只能再抓一个 URL，
+     * 于是"抓了很多页但什么也没拿到"，每轮还要重付整段上下文。
+     */
+    internal fun pickBody(html: String): String {
+        articleBlock.findAll(html).maxByOrNull { it.value.length }?.value?.let {
+            if (it.length >= MIN_MAIN_HTML) return chromeBlocks.replace(it, " ")
+        }
+        mainBlock.find(html)?.value?.let {
+            if (it.length >= MIN_MAIN_HTML) return chromeBlocks.replace(it, " ")
+        }
+        return chromeBlocks.replace(html, " ")
+    }
+
     fun convert(html: String): String {
-        var t = html
+        var t = pickBody(html)
         t = scriptBlock.replace(t, " ")
         t = comments.replace(t, " ")
         t = blockTags.replace(t, "\n")

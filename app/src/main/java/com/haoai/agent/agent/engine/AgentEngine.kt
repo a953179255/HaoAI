@@ -301,6 +301,9 @@ class AgentEngine(
         lastExecutedSig = null
         lastExecutedResult = null
         if (resuming) closeDanglingCalls(onEvent)
+        // 本会话已用过的 tool_call id：新来的调用必须避开，否则跨轮撞号会让 UI 行状态与
+        // pairSanitized 的配对判定互相顶名（详见 uniquifyCallIds 的注释）
+        val usedCallIds = existingCallIds(session.messages).toMutableSet()
         if (appendUser) {
             appendAndNotify(
                 ChatMessage(
@@ -420,7 +423,7 @@ class AgentEngine(
                                     when (ev) {
                                         is SseEvent.Delta -> transcript.delta(ev.text)
                                         is SseEvent.Reasoning -> transcript.reasoningDelta(ev.text)
-                                        is SseEvent.Completed -> calls = ev.toolCalls
+                                        is SseEvent.Completed -> calls = uniquifyCallIds(ev.toolCalls, usedCallIds)
                                         is SseEvent.Usage -> {
                                             st.promptTokens += ev.promptTokens
                                             st.completionTokens += ev.completionTokens
@@ -504,7 +507,9 @@ class AgentEngine(
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
-                            content = "[成本熔断] 本轮已消耗约 ${st.promptTokens + st.completionTokens} tokens，达到上限（${turnTokenCap}）。请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
+                            content = "[成本熔断] 本轮已累计计费约 ${st.promptTokens + st.completionTokens} tokens，达到上限（${turnTokenCap}）。" +
+                                "注意这是**逐轮累加的计费量**（每次工具往返都要把整段上下文重新发一遍），不是上下文窗口占用。" +
+                                "请立即总结当前进度与剩余步骤，然后结束本轮，不要尝试调用工具。"
                         ),
                         onEvent
                     )
@@ -606,7 +611,9 @@ class AgentEngine(
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_USER,
-                            content = "[成本提醒] 本轮已消耗约 ${st.promptTokens + st.completionTokens} tokens，达到上限（${turnTokenCap}）的 70%。请精简后续步骤，尽快收尾任务。"
+                            content = "[成本提醒] 本轮已累计计费约 ${st.promptTokens + st.completionTokens} tokens，" +
+                                "达到上限（${turnTokenCap}）的 70%。这是逐轮累加的计费量（每次工具往返都要重发整段上下文），" +
+                                "不是上下文占用。请精简后续步骤：别再重复检索同一批结果，尽快收尾任务。"
                         ),
                         onEvent
                     )

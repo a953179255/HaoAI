@@ -165,6 +165,38 @@ class AgentEngineLoopTest {
     }
 
     /**
+     * 供应商每轮回传同一个**位置型** call id 时，引擎必须把它改成会话内唯一。
+     *
+     * 症状（2026-09-20 设备实测）：商汤 glm-5.2 经网关给 `call_0_0 / call_1_1…`，15 轮只产出
+     * 4 个不同 id；UI 行状态按 id 查 `liveTools`，上一轮的 ERROR 串到这一轮成功的调用上，
+     * 一次调研 36 次调用里只有 3 次真失败，屏幕上却满屏「✕ 失败」。
+     */
+    @Test
+    fun collidingCallIdsAreMadeUniqueAcrossRounds() = runBlocking {
+        val client = FakeClient(
+            listOf(
+                callingTool("no_such_tool", "call_0_0", "{}"),
+                callingTool("no_such_tool", "call_0_0", "{\"n\":2}"),
+                saying("完成")
+            )
+        )
+        val session = StoredSession.create(null)
+        engine(client, tmpDir(), session = session).runTurn("开始", {}, {})
+        val ids = session.messages
+            .filter { it.role == ChatMessage.ROLE_ASSISTANT }
+            .flatMap { it.toolCalls.map { c -> c.id } }
+        assertEquals("两轮各落一条调用", 2, ids.size)
+        assertEquals("跨轮撞号会让按 id 的查表互相顶名：$ids", ids.toSet().size, ids.size)
+        // 改写必须两侧同步：出站请求里每条 tool 结果都要能配上同一份 assistant 调用
+        val sent = client.requests.last().first
+        val assistantIds = sent.filter { it.role == "assistant" }
+            .flatMap { it.toolCalls?.map { c -> c.id } ?: emptyList() }.toSet()
+        val toolIds = sent.filter { it.role == "tool" }.mapNotNull { it.toolCallId }
+        assertEquals(2, toolIds.size)
+        assertTrue("tool 结果配不上 assistant：$toolIds vs $assistantIds", toolIds.all { it in assistantIds })
+    }
+
+    /**
      * 「先取材再动笔」的判据在三层提示里口径必须一致。
      * 曾经三层各写一遍且只覆盖「查新闻/资料/对比/总结/预测」，
      * 结果写作类任务落在枚举外，模型直接凭记忆成文。

@@ -104,6 +104,8 @@ internal suspend fun AgentEngine.runSubAgent(
     var subOk = true
     // P3-B 检索硬预算：research 子代理强制计数；work 模式不夹（它可能确实要反复抓取）
     val retrievalBudget = RetrievalBudget(if (mode == "research") SUB_RETRIEVAL_CAP else Int.MAX_VALUE)
+    // 子代理这段独立会话内的 tool_call id 台账：撞号会让步骤显示与配对判定跨轮串名
+    val usedCallIds = HashSet<String>()
     while (turns++ < SUB_MAX_TURNS) {
         currentCoroutineContext().ensureActive()
         // P2 steer：主代理的纠偏指令在子代理下一轮开始前注入（不打断当前执行）
@@ -122,7 +124,7 @@ internal suspend fun AgentEngine.runSubAgent(
                 when (ev) {
                     is SseEvent.Delta -> subTranscript.delta(ev.text)
                     is SseEvent.Reasoning -> Unit
-                    is SseEvent.Completed -> calls = ev.toolCalls
+                    is SseEvent.Completed -> calls = uniquifyCallIds(ev.toolCalls, usedCallIds)
                     is SseEvent.Usage -> { subPrompt += ev.promptTokens; subCompletion += ev.completionTokens }
                 }
             }

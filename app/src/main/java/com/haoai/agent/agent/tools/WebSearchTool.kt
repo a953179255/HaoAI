@@ -58,7 +58,20 @@ class WebSearchTool : Tool {
         return when {
             hits.isEmpty() -> ToolResult("没有搜到相关结果")
             else -> {
-                val out = hits.take(count)
+                val picked = hits.take(count)
+                // 换词但拿到的还是同一批链接：直说，别让模型继续空转。
+                // 实测一次调研 18 个不同 query 只出 5 种结果，多出来的 13 次每次都要把整段
+                // 上下文重付一遍（≈19k tokens），是成本见顶的主因。
+                val sig = picked.resultSignature()
+                ctx.searchSigs.putIfAbsent(sig, ctx.searchSigs.size + 1)?.let { earlier ->
+                    return ToolResult(
+                        "这批链接与前面第 $earlier 次搜索完全相同——换关键词没有带来新页面，别再换词重试。\n" +
+                            "接下来只有三条路：对上面已有的链接调 web_fetch 取正文；" +
+                            "换一个明显不同的检索角度（具体机构名/报告名/产品名 + 时间限定）；" +
+                            "或者在回答里直接说明这个信息拿不到。"
+                    )
+                }
+                val out = picked
                     .mapIndexed { i, h ->
                         "${i + 1}. ${h.title}\n${h.url}\n${h.snippet.take(220)}"
                     }
@@ -68,6 +81,17 @@ class WebSearchTool : Tool {
             }
         }
     }
+
+    /**
+     * 结果集签名：只取链接的「host+path」并丢掉 utm/追踪参数与大小写差异。
+     * 为什么不用整段文本：同一批结果在不同 query 下摘要措辞会略变，签名会假性不同。
+     */
+    internal fun List<Hit>.resultSignature(): String =
+        map { it.url.normalizeForSig() }.sorted().joinToString(";")
+
+    internal fun String.normalizeForSig(): String = lowercase()
+        .removePrefix("https://").removePrefix("http://").removePrefix("www.")
+        .substringBefore('#').substringBefore('?').trimEnd('/')
 
     internal data class Hit(val title: String, val url: String, val snippet: String)
 

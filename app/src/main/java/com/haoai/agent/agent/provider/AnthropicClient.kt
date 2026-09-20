@@ -1,6 +1,7 @@
 package com.haoai.agent.agent.provider
 
 import com.haoai.agent.agent.model.ToolCallData
+import com.haoai.agent.agent.model.newFallbackCallId
 import com.haoai.agent.data.HaoJson
 import com.haoai.agent.data.ProviderConfig
 import kotlinx.coroutines.Dispatchers
@@ -106,10 +107,12 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
 
         /** 流结束后汇总工具调用（input_json_delta 的分片 JSON 在此整体 parse）。 */
         fun buildToolCalls(): List<ToolCallData> =
-            pendingTools.entries.sortedBy { it.key }.mapIndexedNotNull { i, (_, p) ->
-                val name = p.name.ifBlank { return@mapIndexedNotNull null }
+            pendingTools.entries.sortedBy { it.key }.mapNotNull { (_, p) ->
+                val name = p.name.ifBlank { return@mapNotNull null }
                 ToolCallData(
-                    id = p.id.ifBlank { "call_$i" },
+                    // Anthropic 正常都带 toolu_ id；万一为空时兜底序号必须进程内单调，
+                    // 用本轮下标会跨轮撞号（见 newFallbackCallId 注释）
+                    id = p.id.ifBlank { newFallbackCallId() },
                     name = name,
                     argumentsJson = p.args.toString().ifBlank { "{}" }
                 )

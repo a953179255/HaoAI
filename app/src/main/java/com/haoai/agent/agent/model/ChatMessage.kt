@@ -2,6 +2,20 @@ package com.haoai.agent.agent.model
 
 import kotlinx.serialization.Serializable
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * 兜底 tool_call id 的序号：**进程内单调**，绝不按轮/按响应重置。
+ *
+ * 为什么单独拎出来：不少供应商流式不带 tool_call id（deepseek-v4-flash 直接回 `"id": ""`，
+ * 回传空 id 会被服务端 400 拒），客户端只能自己生成。原先两个客户端各自用「本轮下标」生成
+ * `call_0_0 / call_1_1 …`，计数器每轮归零 → 一个 15 轮的回合只产出 4 个不同 id，
+ * 引擎与 UI 的按-id 查表全部跨轮串号（后果与根治点见 engine 的 [uniquifyCallIds]）。
+ */
+private val toolCallIdSeq = AtomicLong()
+
+/** 生成一个不会与上一轮重复的兜底 call id。 */
+fun newFallbackCallId(prefix: String = "call"): String = "${prefix}_${toolCallIdSeq.incrementAndGet()}"
 
 @Serializable
 data class ToolCallData(

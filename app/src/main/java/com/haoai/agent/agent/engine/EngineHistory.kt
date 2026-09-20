@@ -72,3 +72,38 @@ internal fun List<com.haoai.agent.data.StoredMessage>.pairSanitized(): List<com.
         }
         return out
     }
+
+/**
+ * 把本轮工具调用的 id 改写成**会话内唯一**，并用掉的 id 记进 [taken]。
+ *
+ * 为什么这一道必须存在（客户端的 `newFallbackCallId` 只堵住了我们自己生成那部分）：
+ * 有些供应商/网关会直接回传**位置型 id 且每轮重复**（2026-09-20 实测商汤 glm-5.2 经网关给
+ * `call_0_0`、`call_1_1`…，15 轮只出现 4 个不同 id）。撞号的代价不是"看着别扭"：
+ *
+ * - UI 行状态按 id 查 `liveTools`，上一轮的 ERROR/RUNNING 会串到这一轮同名的行上 →
+ *   **成功的搜索被显示成「✕ 失败」**（同一次实测：36 次调用其实只有 3 次真失败）。
+ * - [pairSanitized] 的 calledIds / answeredIds 是 id 集合，撞号后"这条调用有没有被回答"
+ *   会跨轮互相顶名，配对守卫等于被放宽。
+ *
+ * 改写是安全的：协议只要求 assistant.tool_calls[].id 与 tool.tool_call_id 在**同一段会话内**
+ * 自洽，模型不会回读 id 的内容。
+ */
+internal fun uniquifyCallIds(
+    calls: List<com.haoai.agent.agent.model.ToolCallData>,
+    taken: MutableSet<String>
+): List<com.haoai.agent.agent.model.ToolCallData> = calls.mapIndexed { i, c ->
+    val base = c.id.ifBlank { "call_$i" }
+    if (taken.add(base)) return@mapIndexed c.copy(id = base)
+    var n = 2
+    var id = "$base#$n"
+    while (!taken.add(id)) { n++; id = "$base#$n" }
+    c.copy(id = id)
+}
+
+/** 会话里已经出现过的全部 tool_call id（回合开始前用来给 [uniquifyCallIds] 打底）。 */
+internal fun existingCallIds(messages: List<com.haoai.agent.data.StoredMessage>): Set<String> = buildSet {
+    messages.forEach { m ->
+        m.toolCalls.forEach { add(it.id) }
+        m.toolCallId?.let { add(it) }
+    }
+}

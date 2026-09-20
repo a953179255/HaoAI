@@ -40,7 +40,15 @@ data class ToolContext(
     val onSubagentEvent: ((com.haoai.agent.agent.engine.SubagentReport) -> Unit)? = null,
     /** D 检索卫生：同一次任务内 web_fetch/web_search 的 TTL 去重缓存（key → (时间戳, 结果)）。
      *  引擎每回合新建 ToolContext，缓存随任务结束自然失效；容量硬顶防膨胀。 */
-    val webCache: java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>> = java.util.concurrent.ConcurrentHashMap()
+    val webCache: java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>> = java.util.concurrent.ConcurrentHashMap(),
+    /**
+     * 本轮已经返回过的搜索结果集签名 → 第几次搜索。
+     *
+     * 与 [webCache] 的区别：webCache 按 **query** 去重，而实测一次 15 轮的调研里 18 个**不同**
+     * query 只拿到 5 种结果（换词没带来新页面，模型却一直在换词重试）。所以这里按**结果链接集合**
+     * 建索引，命中就直说"这批链接刚给过你"，把无效重试掐掉——它同时是 token 的主要浪费源。
+     */
+    val searchSigs: java.util.concurrent.ConcurrentHashMap<String, Int> = java.util.concurrent.ConcurrentHashMap()
 ) {
     /** 命中未过期缓存则返回结果；过期条目顺带清除。 */
     fun webCacheGet(key: String, ttlMs: Long = 10 * 60_000L): String? {
