@@ -312,6 +312,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 screen = 0
                 uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { chatVm.send(it) }
             }
+            "stop" -> {
+                // 调试直达：haoai://debug/stop —— 取消当前会话正在跑的回合。
+                // 存在的意义：停止后的收尾（任务视图恢复、runState 落盘、token 结账）
+                // 是必须能自动化验证的路径，而 Compose 的停止键不暴露给 a11y 树、坐标点按不稳。
+                chatVm.stop()
+            }
             "followdump" -> {
                 // 导出跟随判定的**内存**轨迹（滚动期不落盘，避免主线程 IO 卡顿）：
                 //   adb shell am start -d "haoai://debug/followdump" com.haoai.agent

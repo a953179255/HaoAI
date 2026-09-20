@@ -135,6 +135,27 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         sessionId != null && sessionId == _session.value?.id
 
     private var job: Job? = null
+
+    /**
+     * 运行代次（OpenClaw per-run seq 同款）：每次真正起跑一个回合 +1。
+     *
+     * 为什么需要：回合的回调与收尾都是"闭包 + 全局状态"，而上一代的某些东西会活过本回合
+     * ——后台子代理的进度事件、被取消但尚未跑完 finally 的协程。没有代次时它们会直接
+     * 改写当前回合的状态：旧回合的 finally 把 _running 翻回 false、把 runState 写成
+     * interrupted，盖在新回合头上（停止后立刻重发就能撞上）。
+     */
+    private var runSeq = 0
+
+    /**
+     * 把回调绑到「某个回合」上：只有它仍是最新世代、或它仍是要写入那条会话的归属时才放行。
+     *
+     * 前者挡住被取代的旧回合往当前 UI 上写（后台子代理晚到的进度卡最典型：它会在新回合的
+     * 时间轴里凭空多出一张旧任务卡）；后者保住"切走再切回，时间轴无缝续上"这条既有设计
+     * ——切去别的会话起跑时本回合已不是最新世代，但它仍是自己会话的归属，事件得照常累积。
+     */
+    private inline fun <T> gated(seq: Int, sessionId: String, crossinline f: (T) -> Unit): (T) -> Unit =
+        { if (seq == runSeq || _runSessionId.value == sessionId) f(it) }
+
     private val liveTools = mutableMapOf<String, UiTool>()
 
     /**
@@ -696,6 +717,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 落盘前回填 store 里较新的标题状态（上一轮标题协程可能刚写完，副本是旧的）
         syncTitleFromStore(s)
         runCatching { c.sessionStore.save(s) }
+        // 起跑新回合才换世代：上一代（若有）的收尾自此不再有权动全局状态。
+        // 位置必须在所有"可能中途 return"的门禁之后，否则一次被拒的发送就会把
+        // 正在跑的回合判成过期，它的收尾被跳过 → running 标志/注册表泄漏。
+        val seq = ++runSeq
+        stopHintPending = false  // 上一代的停止标记不该被新回合的收尾误落进历史
         job = viewModelScope.launch {
             var turnEngine: AgentEngine? = null
             try {
@@ -706,82 +732,114 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             ?: "端侧模型启动失败"
                     }
                     // 消息保留进历史：此前只弹 8s 错误条，深链/排队发送会看似凭空消失（P2-6）
-                    appendLocalMessage(text)
+                    if (!alreadyInHistory) appendLocalMessage(text)
                     return@launch
                 }
                 val engine = buildEngine(s, provider).also { turnEngine = it; activeEngine = it }
                 engine.runTurn(
                     userText = text,
-                    onDelta = ::appendDelta,
-                    onEvent = ::handleEvent,
+                    // 回调按世代过滤：后台子代理的进度事件、取消中还没跑完的协程都可能
+                    // 晚于本回合到达，落到新回合的 UI 上就是"凭空冒出的旧工具卡"
+                    onDelta = gated(seq, s.id, ::appendDelta),
+                    onEvent = gated(seq, s.id, ::handleEvent),
                     imageData = imageData,
                     audioPath = audioPath,
                     videoPath = videoPath,
-                    onReasoning = ::appendReasoning,
+                    onReasoning = gated(seq, s.id, ::appendReasoning),
                     // 续跑要连着上次算轮数：否则每中断一次，60 轮上限就重新给满，长任务可无限续
                     resuming = isResumeInject,
                     appendUser = !alreadyInHistory
                 )
             } finally {
-                endStreaming()
-                // running 必须先于 flushUsage 翻：flushUsage 挂 IO 会跨帧，期间
-                // showStreaming(=running) 仍真 → 最终行下方渲染空"正在思考"占位气泡，
-                // 消失时又触发一轮滚动修正，表现为结束瞬间先冲过头再弹回的抖动
-                _running.value = false
-                _runSessionId.value = null
-                publishLiveTools() // 归属清空 → 门控立即透空，防上一轮工具卡残留
-                com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
-                com.haoai.agent.platform.RunObserver.end()
-                flushUsage()
-                com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
-                // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
-                val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
-                // 思考阶段被打断：历史里补可见的停止标记（P3-1），别让用户消息孤零零挂着
-                if (stopHintPending) {
-                    stopHintPending = false
-                    val lastAssistant = s.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT }
-                    if (lastAssistant == null || lastAssistant.content.isBlank()) {
-                        appendLocalMessage("⏹ 已手动停止", to = s, role = ChatMessage.ROLE_ASSISTANT)
-                    }
-                }
-                // 落盘前回填 store 里较新的标题状态：打断/结束时标题协程可能已写 store，
-                // 用发送前的旧副本直接 save 会把新标题盖回旧值（e2e P2-1 打断标题回退根因）
-                syncTitleFromStore(s)
-                s.runState = endState
-                runCatching { c.sessionStore.save(s) }
-                // 用户可能已切换会话：仅在仍看该会话时回写视图（copy 确保 StateFlow 重发射）
-                if (_session.value?.id == s.id) {
-                    val view = s.copy()
-                    currentSession = view
-                    _session.value = view
-                }
-                refreshSessions()
-                c.syncWorkspaceDocs()
-                maybeGenerateTitle(s)
-                // 5.6：Plan 模式下拦截过工具 → 本轮输出即计划，弹确认卡
-                if (_planMode.value && turnEngine?.planIntercepted == true) {
-                    val plan = s.messages.lastOrNull {
-                        it.role == ChatMessage.ROLE_ASSISTANT && it.content.isNotBlank()
-                    }?.content.orEmpty()
-                    if (plan.isNotBlank()) _planProposal.value = plan
-                }
-                // v7 排队任务：回合正常结束且队列还有排队消息 → 自动作为新任务执行
-                // （运行中可继续派活，队列在任务完成后逐条落地）。
-                // 非正常结束（停止/失败）不清队列也不自动续跑——用户按停止即表态中止。
-                val autoNext = interjectQueue.poll()
-                if (autoNext != null && endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
-                    _interjectCount.value = interjectQueue.size
-                    // 这条消息在入队时已经落进历史（就是用户在气泡里看到的那条排队项），
-                    // 提升为任务时引擎不得再落一遍：以前同一条指令会有 3 份，
-                    // 模型看到重复指令会把上一个任务又答一遍。
-                    send(autoNext, alreadyInHistory = true)
-                } else if (autoNext != null) {
-                    // 停止/失败：放回队列头不丢消息，等用户手动重发
-                    val q = java.util.concurrent.ConcurrentLinkedQueue<String>()
-                    q.add(autoNext); q.addAll(interjectQueue)
-                    interjectQueue.clear(); interjectQueue.addAll(q)
+                // 收尾必须跑完，所以放到 NonCancellable 里：本协程已被 cancel，finally 中
+                // 任何挂起点都会立刻抛 CancellationException —— flushUsage 的
+                // withContext(IO) 正是挂起点，它一抛，后面的"恢复任务视图可见性、
+                // runState 落盘、标题生成"整段被跳过（实测：按停止后应用不再出现在
+                // 最近任务里、stopped 会话不生成标题），已烧掉的 token 也会静默丢账。
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    finishRun(seq, s, turnEngine)
                 }
             }
+        }
+    }
+
+    /**
+     * 回合收尾。分两层：**全局运行态**只有最新那一代可以动，**本会话自己的收尾**
+     * 无论是否被取代都必须做完。
+     *
+     * 为什么不能整块用代次一刀切：本实例跑完会话 A 时用户可能已经切到会话 B 起跑，
+     * 此时 A 的收尾里 ——
+     *  - 必须做：给 A 的会话落终态 runState、摘掉 A 在 AgentRunRegistry 的登记
+     *    （不摘就永久占位，之后对 A 的发送会被"任务仍在后台运行"挡死）、结 A 的用量账；
+     *  - 绝不能做：把 _running / 流式气泡 / 任务卡 / 最近任务可见性改回"已结束"，
+     *    那是 B 正在用的东西（旧实现这里会把刚起跑的 B 打成"没在跑"，
+     *    还会顺手 unregister 掉 key 相同的登记）。
+     * 归属只在自己仍是归属时摘（B 起跑后 _runSessionId 已指向 B）。
+     */
+    private suspend fun finishRun(seq: Int, s: StoredSession, turnEngine: AgentEngine?) {
+        val ownsGlobal = seq == runSeq
+        if (ownsGlobal) {
+            endStreaming()
+            // running 必须先于 flushUsage 翻：flushUsage 挂 IO 会跨帧，期间
+            // showStreaming(=running) 仍真 → 最终行下方渲染空"正在思考"占位气泡，
+            // 消失时又触发一轮滚动修正，表现为结束瞬间先冲过头再弹回的抖动
+            _running.value = false
+            publishLiveTools() // 归属清空 → 门控立即透空，防上一轮工具卡残留
+            com.haoai.agent.platform.RunObserver.end()
+        }
+        flushUsage()
+        // 只在自己仍是本会话的归属时摘登记/归属，别替别的会话解绑
+        com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+        if (_runSessionId.value == s.id) _runSessionId.value = null
+        publishLiveTools()
+        if (ownsGlobal) com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
+        // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
+        val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
+        // 思考阶段被打断：历史里补可见的停止标记（P3-1），别让用户消息孤零零挂着
+        if (stopHintPending) {
+            stopHintPending = false
+            val lastAssistant = s.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT }
+            if (lastAssistant == null || lastAssistant.content.isBlank()) {
+                appendLocalMessage("⏹ 已手动停止", to = s, role = ChatMessage.ROLE_ASSISTANT)
+            }
+        }
+        // 落盘前回填 store 里较新的标题状态：打断/结束时标题协程可能已写 store，
+        // 用发送前的旧副本直接 save 会把新标题盖回旧值（e2e P2-1 打断标题回退根因）
+        syncTitleFromStore(s)
+        s.runState = endState
+        runCatching { c.sessionStore.save(s) }
+        // 用户可能已切换会话：仅在仍看该会话时回写视图（copy 确保 StateFlow 重发射）
+        if (_session.value?.id == s.id) {
+            val view = s.copy()
+            currentSession = view
+            _session.value = view
+        }
+        refreshSessions()
+        c.syncWorkspaceDocs()
+        maybeGenerateTitle(s)
+        if (!ownsGlobal) return
+        // 5.6：Plan 模式下拦截过工具 → 本轮输出即计划，弹确认卡
+        if (_planMode.value && turnEngine?.planIntercepted == true) {
+            val plan = s.messages.lastOrNull {
+                it.role == ChatMessage.ROLE_ASSISTANT && it.content.isNotBlank()
+            }?.content.orEmpty()
+            if (plan.isNotBlank()) _planProposal.value = plan
+        }
+        // v7 排队任务：回合正常结束且队列还有排队消息 → 自动作为新任务执行
+        // （运行中可继续派活，队列在任务完成后逐条落地）。
+        // 非正常结束（停止/失败）不清队列也不自动续跑——用户按停止即表态中止。
+        val autoNext = interjectQueue.poll()
+        if (autoNext != null && endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
+            _interjectCount.value = interjectQueue.size
+            // 这条消息在入队时已经落进历史（就是用户在气泡里看到的那条排队项），
+            // 提升为任务时引擎不得再落一遍：以前同一条指令会有 3 份，
+            // 模型看到重复指令会把上一个任务又答一遍。
+            send(autoNext, alreadyInHistory = true)
+        } else if (autoNext != null) {
+            // 停止/失败：放回队列头不丢消息，等用户手动重发
+            val q = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            q.add(autoNext); q.addAll(interjectQueue)
+            interjectQueue.clear(); interjectQueue.addAll(q)
         }
     }
 
@@ -966,6 +1024,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return when (command.name) {
             "compact" -> {
                 val s = currentSession ?: return false
+                if (_running.value) {
+                    // 压缩会改 session.compactionSummary + 水位：与在跑的引擎并发就是两路
+                    // 写同一条历史，而且下面的 finally 会把新回合的流式状态一起清掉。
+                    runError("本轮结束前不能压缩上下文，请先停止或等待本轮完成")
+                    return true
+                }
                 val provider0 = c.activeProvider() ?: return false
                 // 端侧供应商需要拉起/切回本地 server：直接用原始 provider 压缩会请求 local://llama 失败
                 val provider = resolveProvider(provider0) ?: run {
@@ -978,6 +1042,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider)
                 _runSessionId.value = s.id
                 _running.value = true
+                val seq = ++runSeq
                 // 挂到 job 上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
                 job = viewModelScope.launch {
                     try {
@@ -987,10 +1052,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             rebuildRows()
                         }
                     } finally {
-                        _running.value = false
-                        _runSessionId.value = null
-                        _streamingText.value = null
-                        refreshSessions()
+                        if (seq == runSeq) {
+                            _running.value = false
+                            _runSessionId.value = null
+                            _streamingText.value = null
+                            refreshSessions()
+                        }
                     }
                 }
                 true
@@ -1049,6 +1116,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return
         }
         val s = currentSession ?: return
+        if (_running.value || com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) {
+            // /btw 借的是当前会话上下文，和正式回合并发跑就是两路引擎交叉写同一条历史
+            // （此前无守卫：job 被直接覆盖，上一回合的 finally 还会把这一回合的状态改回结束态）
+            runError("本轮结束前无法发起附带问题：/btw 需要空闲的会话")
+            return
+        }
         _runSessionId.value = s.id
         _running.value = true
         _streamingText.value = null
@@ -1064,6 +1137,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (c.settingsFlow.value.runOverlay) {
             com.haoai.agent.platform.AgentOverlayService.start(c.appContext)
         }
+        val seq = ++runSeq
         job = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
@@ -1073,16 +1147,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider)
                 engine.runBtw(
                     question = question,
-                    onDelta = ::appendDelta,
-                    onReasoning = ::appendReasoning
+                    onDelta = gated(seq, s.id, ::appendDelta),
+                    onReasoning = gated(seq, s.id, ::appendReasoning)
                 )
             } finally {
-                _running.value = false
-                _runSessionId.value = null
-                endStreaming()
-                com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
-                com.haoai.agent.platform.RunObserver.end()
-                com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
+                if (seq == runSeq) {
+                    _running.value = false
+                    _runSessionId.value = null
+                    endStreaming()
+                    com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+                    com.haoai.agent.platform.RunObserver.end()
+                    com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
+                }
             }
         }
     }
