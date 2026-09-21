@@ -116,10 +116,18 @@ import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.HaoChip
+import com.haoai.agent.ui.common.HaoGroup
+import com.haoai.agent.ui.common.HaoRow
+import com.haoai.agent.ui.theme.HaoDimens
+import com.haoai.agent.ui.theme.HaoTone
+import com.haoai.agent.ui.theme.haoToneInk
+import com.haoai.agent.ui.theme.haoToneMain
 import com.haoai.agent.ui.common.GlassTextButton
 import com.haoai.agent.ui.common.LiquidSlider
 import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
+import com.haoai.agent.ui.common.appLayer
 
 /**
  * 设置主页（分组导航）：
@@ -258,173 +266,234 @@ fun SettingsScreen(
                 // 真正生效且无错位）
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            if (wallpaper != null) {
-                // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘
-                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-                Image(
-                    bitmap = wpImage,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+            Box(Modifier.matchParentSize().appLayer(backdrop)) {
+                if (wallpaper != null) {
+                    // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘
+                    val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                    Image(
+                        bitmap = wpImage,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize()
+                    )
+                        // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                        com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+                }
             }
             Column(
                 Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                Spacer(Modifier.height(56.dp))
                 LazyColumn(
                     state = rootListState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    // 内容从顶栏**下方穿过**（top padding 占位，而不是 Spacer 把列表顶下去）：
+                    // 原先列表被 56dp Spacer 顶到栏下方，玻璃顶栏底下永远只有壁纸，
+                    // 看起来像"顶栏下有一层不透明遮罩"（用户实测）——透视要成立，
+                    // 前提是先让内容滚到栏底下去
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        top = 56.dp,
+                        start = HaoDimens.pagePaddingH,
+                        end = HaoDimens.pagePaddingH,
+                        bottom = 24.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)
                 ) {
+                // ── 目标 A：三组玻璃卡 ───────────────────────────────────────────────
+                // 规则：底色只表达"是不是异常"——常态入口一律强调色徽标，
+                // 只有需要用户处理（无障碍未启用 / rootfs 损坏）才用琥珀；
+                // 状态不再靠卡片底色表达，改用行尾胶囊（待处理 / 未接入 / 已就绪）。
+                item { com.haoai.agent.ui.common.HaoGroupLabel("智能体能力") }
                 item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.SmartToy,
-                        title = "模型大脑",
-                        subtitle = run {
-                            val p = settings.providers.find { it.id == settings.activeProviderId }
-                                ?: settings.providers.firstOrNull()
-                            val cloud = when {
-                                p == null -> "未配置云端服务"
-                                else -> "${p.name} · ${p.model}"
+                    HaoGroup(backdrop = backdrop) {
+                        HaoRow(
+                            icon = Icons.Filled.SmartToy,
+                            tintIndex = 0,
+                            title = "模型大脑",
+                            subtitle = run {
+                                val p = settings.providers.find { it.id == settings.activeProviderId }
+                                    ?: settings.providers.firstOrNull()
+                                val cloud = when {
+                                    p == null -> "未配置云端服务"
+                                    else -> "${p.name} · ${p.model}"
+                                }
+                                val local = vm.llamaModelFile()?.let { " · 端侧:$it" } ?: ""
+                                "$cloud$local"
+                            },
+                            showChevron = true,
+                            onClick = { onOpenSection(9) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Security,
+                            tintIndex = 3,
+                            tone = if (a11yOn) HaoTone.Accent else HaoTone.Warn,
+                            title = "权限与自动化",
+                            subtitle = permissionLabel(settings.permissionMode) +
+                                if (a11yOn) " · 无障碍已启用" else " · 无障碍未启用",
+                            trailing = {
+                                if (!a11yOn) HaoChip("待处理", HaoTone.Warn)
+                            },
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(10) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.AutoFixHigh,
+                            tintIndex = 2,
+                            title = "记忆与梦境",
+                            subtitle = "${vm.homeCounts.first} 条长期记忆" +
+                                if (settings.deepDream) " · 深度梦境开" else "",
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(11) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Construction,
+                            tintIndex = 4,
+                            title = "技能库",
+                            subtitle = "${vm.homeCounts.third} 个沉淀技能",
+                            showChevron = true,
+                            divider = true,
+                            onClick = onOpenSkills
+                        )
+                    }
+                }
+
+                item { com.haoai.agent.ui.common.HaoGroupLabel("扩展与运行环境") }
+                item {
+                    HaoGroup(backdrop = backdrop) {
+                        HaoRow(
+                            icon = Icons.Filled.Schedule,
+                            tintIndex = 1,
+                            title = "定时任务",
+                            subtitle = "到点自动执行并通知",
+                            showChevron = true,
+                            onClick = onOpenSchedules
+                        )
+                        val mcpServers = com.haoai.agent.agent.mcp.McpManager.listServers()
+                        HaoRow(
+                            icon = Icons.Filled.Extension,
+                            tintIndex = 5,
+                            title = "MCP 服务器",
+                            subtitle = "外部工具扩展",
+                            trailing = {
+                                if (mcpServers.isEmpty()) {
+                                    HaoChip("未接入", HaoTone.Neutral)
+                                } else {
+                                    HaoChip(
+                                        "${mcpServers.count { it.enabled }}/${mcpServers.size} 已启用",
+                                        HaoTone.Accent
+                                    )
+                                }
+                            },
+                            showChevron = true,
+                            divider = true,
+                            onClick = onOpenMcp
+                        )
+                        run {
+                            // Linux 行：状态"需要你处理"才用琥珀，其余走中性；已就绪用强调色
+                            val st = linuxState.statuses
+                            val (label, tone) = when {
+                                linuxState.installingId != null -> "安装中" to HaoTone.Neutral
+                                st.isEmpty() -> "未初始化" to HaoTone.Neutral
+                                st.any { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED } ->
+                                    "rootfs 已损坏" to HaoTone.Warn
+                                st.any { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY } ->
+                                    "已就绪" to HaoTone.Accent
+                                else -> "未安装" to HaoTone.Neutral
                             }
-                            val local = vm.llamaModelFile()?.let { " · 端侧:$it" } ?: ""
-                            "$cloud$local"
-                        },
-                        tint = Color(0xFF5B8DEF),
-                        onClick = { onOpenSection(9) }
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Security,
-                        title = "权限与自动化",
-                        subtitle = permissionLabel(settings.permissionMode) +
-                            if (a11yOn) " · 无障碍已启用" else " · 无障碍未启用",
-                        tint = Color(0xFFEF7D54),
-                        onClick = { onOpenSection(10) }
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.AutoFixHigh,
-                        title = "记忆与梦境",
-                        subtitle = "${vm.homeCounts.first} 条长期记忆" +
-                            if (settings.deepDream) " · 深度梦境开" else "",
-                        tint = Color(0xFF3FA37A),
-                        onClick = { onOpenSection(11) }
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Construction,
-                        title = "技能库",
-                        subtitle = "${vm.homeCounts.third} 个沉淀技能",
-                        tint = Color(0xFFD9539E),
-                        onClick = onOpenSkills
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Schedule,
-                        title = "定时任务",
-                        subtitle = "到点自动执行并通知",
-                        tint = Color(0xFFD9913F),
-                        onClick = onOpenSchedules
-                    )
-                }
-                item {
-                    val mcpServers = com.haoai.agent.agent.mcp.McpManager.listServers()
-                        val mcpLabel = if (mcpServers.isEmpty()) "未接入"
-                        else "${mcpServers.count { it.enabled }}/${mcpServers.size} 个服务器已启用"
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Extension,
-                        title = "MCP 服务器",
-                        subtitle = "外部工具扩展 · $mcpLabel",
-                        tint = Color(0xFF7C6BE8),
-                        onClick = onOpenMcp
-                    )
-                }
-                item {
-                    val linuxLabel = run {
-                        val st = linuxState.statuses
-                        if (linuxState.installingId != null) "正在安装…"
-                        else if (st.isEmpty()) "未初始化 · 点击查看"
-                        else {
-                            val ready = st.count { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY }
-                            if (ready > 0) "${st.first { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY }.distro.name} · 已就绪"
-                            else if (st.any { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED }) "rootfs 已损坏 · 建议重装"
-                            else "未安装 · 点击安装"
+                            val readyName = st.firstOrNull {
+                                it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY
+                            }?.distro?.name
+                            HaoRow(
+                                icon = Icons.Filled.Terminal,
+                                tintIndex = 4,
+                                tone = if (tone == HaoTone.Warn) HaoTone.Warn else HaoTone.Accent,
+                                title = "Linux 环境",
+                                subtitle = "沙箱发行版" + if (readyName != null) " · $readyName" else "",
+                                trailing = { HaoChip(label, tone) },
+                                showChevron = true,
+                                divider = true,
+                                onClick = { onOpenSection(12) }
+                            )
                         }
                     }
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Terminal,
-                        title = "Linux 环境",
-                        subtitle = "沙箱发行版 · $linuxLabel",
-                        tint = Color(0xFF4A6FA5),
-                        onClick = { onOpenSection(12) }
-                    )
                 }
+
+                item { com.haoai.agent.ui.common.HaoGroupLabel("通用与系统") }
                 item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Folder,
-                        title = "工作空间",
-                        subtitle = vm.workspaceName(),
-                        tint = Color(0xFF38A3C7),
-                        onClick = { onOpenSection(13) }
-                    )
+                    // 第三组也是常态入口 ⇒ 同样用强调色徽标。
+                    // （曾试过整组用中性灰做"视觉降级"，用户反馈"图标没有颜色，像坏了"——
+                    //  规则是"底色只表达异常"，不是"按分组分层级"，灰色只该出现在
+                    //  未接入/未初始化这类中性状态胶囊上。）
+                    HaoGroup(backdrop = backdrop) {
+                        HaoRow(
+                            icon = Icons.Filled.Folder,
+                            tintIndex = 3,
+                            title = "工作空间",
+                            subtitle = vm.workspaceName(),
+                            showChevron = true,
+                            onClick = { onOpenSection(13) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Tune,
+                            tintIndex = 5,
+                            title = "通用",
+                            subtitle = "后台保活 · 自定义指令 · 身份",
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(14) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Bolt,
+                            tintIndex = 2,
+                            title = "工作流",
+                            subtitle = "多步自动化 · 定时/开机/通知触发",
+                            showChevron = true,
+                            divider = true,
+                            onClick = onOpenWorkflows
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Equalizer,
+                            tintIndex = 1,
+                            title = "用量",
+                            subtitle = "Token 用量统计 · 内部调用账本",
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(16) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Info,
+                            tintIndex = 0,
+                            title = "关于",
+                            subtitle = "版本信息",
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(15) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Tune,
+                            tintIndex = 5,
+                            tone = HaoTone.Neutral,
+                            title = "玻璃实验室",
+                            subtitle = "实时调节玻璃的模糊 / 折射 / 白雾",
+                            divider = true,
+                            onClick = {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        context,
+                                        com.haoai.agent.glasslab.GlassLabActivity::class.java
+                                    )
+                                )
+                            }
+                        )
+                    }
                 }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Tune,
-                        title = "通用",
-                        subtitle = "后台保活 · 自定义指令 · 身份",
-                        tint = Color(0xFF64748B),
-                        onClick = { onOpenSection(14) }
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Bolt,
-                        title = "工作流",
-                        subtitle = "多步自动化 · 定时/开机/通知触发",
-                        tint = Color(0xFFD9913F),
-                        onClick = onOpenWorkflows
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Equalizer,
-                        title = "用量",
-                        subtitle = "Token 用量统计 · 内部调用账本",
-                        tint = Color(0xFF3FA37A),
-                        onClick = { onOpenSection(16) }
-                    )
-                }
-                item {
-                    MenuCard(
-                        backdrop = backdrop,
-                        icon = Icons.Filled.Info,
-                        title = "关于",
-                        subtitle = "版本信息",
-                        tint = Color(0xFF94A3B8),
-                        onClick = { onOpenSection(15) }
-                    )
-                }
+
             }
             }
             GlassPageBar(
@@ -994,60 +1063,6 @@ fun SettingsScreen(
     }
 }
 
-@Composable
-private fun MenuCard(
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    tint: Color = MaterialTheme.colorScheme.primary,
-    onClick: () -> Unit
-) {
-    GlassCard(
-        onClick = onClick,
-        backdrop = backdrop,
-        shape = RoundedCornerShape(20.dp),
-        surfaceAlpha = 0.26f,
-        tint = tint.copy(alpha = 0.10f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .background(
-                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                            listOf(tint.copy(alpha = 0.16f), tint.copy(alpha = 0.34f))
-                        ),
-                        RoundedCornerShape(14.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
-            }
-            Spacer(Modifier.size(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-            Icon(
-                Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}
-
 private fun permissionLabel(mode: PermissionMode): String = when (mode) {
     PermissionMode.ALWAYS_ASK -> "全部询问"
     PermissionMode.ASK_WRITES -> "写入时询问"
@@ -1111,27 +1126,39 @@ private fun SectionPage(
             // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (wallpaper != null) {
-            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-            Image(
-                bitmap = wpImage,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                    // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                    com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+            }
         }
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            Spacer(Modifier.height(56.dp))
             val listState = androidx.compose.foundation.lazy.rememberLazyListState()
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                // 同首页：top padding 占位让内容从顶栏下穿过（透视成立的前提）
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    top = 56.dp,
+                    start = HaoDimens.pagePaddingH,
+                    end = HaoDimens.pagePaddingH,
+                    bottom = 24.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)
             ) {
                 when (section) {
                     "brain" -> {
@@ -1242,7 +1269,7 @@ private fun LazyListScope.brainItems(
         // 全部模型清单，点模型即切换默认。行内不再放编辑/删除按钮（视觉噪音、功能重复）——
         // 编辑/删除收进长按菜单与展开区「编辑供应商」文字链（设计稿 ① 屏）。
         var expandedId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-        Column(Modifier.padding(horizontal = 16.dp)) {
+        Column {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                     ps.forEachIndexed { idx, p ->
@@ -1414,11 +1441,10 @@ private fun LazyListScope.brainItems(
                     }
                 }
             }
-            Text(
-                "点行展开模型清单并切换默认 · 点「能力」勾选输入/输出模态 · 长按行或展开区「编辑供应商」可测试连接、拉取列表与配置密钥。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "点行展开模型清单并切换默认 · 点「能力」勾选输入/输出模态 · 长按行或展开区「编辑供应商」可测试连接、拉取列表与配置密钥。",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
         }
     }
@@ -1426,7 +1452,7 @@ private fun LazyListScope.brainItems(
     item {
         // purpose 配置行（用户反馈：原「内部任务模型」不够细分）：
         // 新增「聊天会话」行；purpose 值可为 "providerId|modelId" 精确到同供应商的具体模型
-        Column(Modifier.padding(horizontal = 16.dp)) {
+        Column {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                     purposeRow("聊天会话", "chat", settings.chatPurposeId, settings, vm, backdrop) { onPickPurposeModel(it) }
@@ -1437,11 +1463,10 @@ private fun LazyListScope.brainItems(
                     purposeRow("语音转写", "asr", settings.asrProviderId, settings, vm, backdrop) { onPickPurposeModel(it) }
                 }
             }
-            Text(
-                "为不同任务指定模型：聊天会话可精确到某供应商的某个模型；辅助任务建议用更廉价的模型。「主模型」= 跟随当前供应商默认，「端侧」= 本机 llama.cpp。\n能力委派：主模型不支持图像/音频时，Agent 会自动调用委派模型代看（delegate_to_vision）或转写（transcribe_audio），任务不用中断。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "为不同任务指定模型：聊天会话可精确到某供应商的某个模型；辅助任务建议用更廉价的模型。「主模型」= 跟随当前供应商默认，「端侧」= 本机 llama.cpp。\n能力委派：主模型不支持图像/音频时，Agent 会自动调用委派模型代看（delegate_to_vision）或转写（transcribe_audio），任务不用中断。",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
         }
     }
@@ -1452,13 +1477,12 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
     item {
         // Phase 7 阶段2：SoC 后端检测结果
         val detected = remember { com.haoai.agent.platform.llama.LlamaServerController.detectHexagonArch() }
-        Text(
-            "推理后端：三后端单二进制（CPU/GPU/NPU-Hexagon）· " +
+        com.haoai.agent.ui.common.HaoNote(
+            backdrop = backdrop,
+            text = "推理后端：三后端单二进制（CPU/GPU/NPU-Hexagon）· " +
                 (detected?.let { "本机骁龙 → Hexagon $it（arm64 启动时启用，失败自动 CPU 兜底）" } ?: "本机走 CPU/GPU 兜底") +
                 " · 当前生效：${vm.backendLabel()}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+            modifier = Modifier.padding(vertical = 4.dp)
         )
     }
     item {
@@ -1467,7 +1491,7 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
         var dlUrl by androidx.compose.runtime.remember {
             mutableStateOf(com.haoai.agent.platform.llama.LlamaServerController.DEFAULT_MODEL_URL)
         }
-        Column(Modifier.padding(16.dp)) {
+        Column {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1593,12 +1617,11 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
-            Text(
-                "提示：优先用「扫描」或「加载模型文件」直读手机上已有的 GGUF（不复制、不占双份空间）；" +
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "提示：优先用「扫描」或「加载模型文件」直读手机上已有的 GGUF（不复制、不占双份空间）；" +
                     "视觉投影文件与模型同名放置即可自动启用图像识别。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp)
+                modifier = Modifier.padding(vertical = 4.dp)
             )
             Text(
                 "完全离线运行，对话不出设备。模型越大越聪明但越慢，可按需切换。",
@@ -1679,7 +1702,7 @@ private fun LazyListScope.privacyItems(
     item { SectionTitle("权限模式") }
     item {
         val mode = settings.permissionMode
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             // AndroidLiquidGlass 选项卡：玻璃胶囊容器 + 弹性滑动液态指示器（同 LiquidTabRow 统一样式）
             val permModes = listOf(
                 PermissionMode.ALWAYS_ASK to "全部询问",
@@ -1697,7 +1720,7 @@ private fun LazyListScope.privacyItems(
     }
     item { SectionTitle("无障碍自动化") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1752,7 +1775,7 @@ private fun LazyListScope.privacyItems(
     item { SectionTitle("后台自动化（虚拟屏）") }
     item {
         val vscreenSupported = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             ToggleRow(
                 title = "虚拟屏后台自动化",
                 subtitle = if (!vscreenSupported) "需要 Android 11 及以上（当前系统不支持，工具不可用）"
@@ -1802,13 +1825,12 @@ private fun LazyListScope.privacyItems(
                     backdrop = backdrop
                 )
             }
-            Text(
-                "虚拟屏能力边界：点击/输入/滚动走无障碍节点操作，不占用你的主屏；精确手势（拖动滑块、拖拽排序、双指缩放）虚拟屏不支持，" +
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "虚拟屏能力边界：点击/输入/滚动走无障碍节点操作，不占用你的主屏；精确手势（拖动滑块、拖拽排序、双指缩放）虚拟屏不支持，" +
                     "相关操作会明确报受限并引导节点方案。部分 ROM（含 Flyme）虚拟屏可能只渲染纯色/启动画面——截图空白属正常，" +
                     "控件树操作不受影响（工具会提示以控件树为准）；熄屏投屏同样因 ROM 而异。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                modifier = Modifier.padding(vertical = 4.dp)
             )
         }
     }
@@ -1817,7 +1839,7 @@ private fun LazyListScope.privacyItems(
         androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshPermissions(context) }
     }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             com.haoai.agent.platform.PermissionCenter.ALL.forEach { spec ->
                 val granted = vm.permissionStates[spec.key]
                     ?: com.haoai.agent.platform.PermissionCenter.granted(context, spec)
@@ -1846,7 +1868,7 @@ private fun LazyListScope.privacyItems(
                         )
                     }
                     if (granted) {
-                        Text("✓", color = Color(0xFF3E9B5F), fontWeight = FontWeight.Bold)
+                        Text("✓", color = haoToneInk(HaoTone.Accent), fontWeight = FontWeight.Bold)
                     } else {
                         com.haoai.agent.ui.common.LiquidGlassButton(
                             onClick = { vm.requestPermission(spec, context) },
@@ -1878,41 +1900,39 @@ private fun LazyListScope.memoryItems(
     item { SectionTitle("记忆库概览") }
     item {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             GlassStatTile(
                 backdrop = backdrop,
                 number = "${vm.homeCounts.first}",
                 label = "长期记忆",
-                tint = Color(0xFF3FA37A),
+                tint = haoToneMain(HaoTone.Accent),
                 modifier = Modifier.weight(1f)
             )
             GlassStatTile(
                 backdrop = backdrop,
                 number = "${vm.homeCounts.second}",
                 label = "今日日志",
-                tint = Color(0xFF5B8DEF),
+                tint = haoToneMain(HaoTone.Info),
                 modifier = Modifier.weight(1f)
             )
             GlassStatTile(
                 backdrop = backdrop,
                 number = if (settings.deepDream) "开" else "关",
                 label = "梦境整理",
-                tint = Color(0xFFD9913F),
+                tint = haoToneMain(HaoTone.Warn),
                 modifier = Modifier.weight(1f)
             )
         }
     }
     item {
-        Column(Modifier.padding(horizontal = 16.dp)) {
+        Column {
             com.haoai.agent.ui.common.GlassCard(
                 onClick = onOpenMemories,
                 backdrop = backdrop,
                 shape = RoundedCornerShape(18.dp),
-                surfaceAlpha = 0.24f,
+                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                 lensRadius = 14.dp,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1922,7 +1942,7 @@ private fun LazyListScope.memoryItems(
                     Icon(
                         Icons.Filled.Memory,
                         contentDescription = null,
-                        tint = Color(0xFF3FA37A),
+                        tint = haoToneMain(HaoTone.Accent),
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(Modifier.size(12.dp))
@@ -1942,17 +1962,16 @@ private fun LazyListScope.memoryItems(
                     )
                 }
             }
-            Text(
-                "固化规则：每日日志中重要性 ≥4 的条目夜间自动晋升为长期记忆；日志保留 7 天后清理。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, start = 4.dp)
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "固化规则：每日日志中重要性 ≥4 的条目夜间自动晋升为长期记忆；日志保留 7 天后清理。",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
         }
     }
     item { SectionTitle("记录策略") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             ToggleRow(
                 title = "记忆系统",
                 subtitle = "沉淀偏好与背景，回答时注入参考",
@@ -1975,7 +1994,7 @@ private fun LazyListScope.memoryItems(
     }
     item { SectionTitle("梦境整理") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             ToggleRow(
                 title = "闲置时自动整理记忆",
                 subtitle = "充电且灭屏持续所选时间后执行，仅 00:00–7:00 夜间时段生效；亮屏或断电即取消。固化历史写入 DREAMS.md。",
@@ -2002,7 +2021,7 @@ private fun LazyListScope.memoryItems(
     }
     item { SectionTitle("记忆管理模型") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -2184,10 +2203,9 @@ private fun ToggleRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        com.haoai.agent.ui.common.LiquidToggle(
+        com.haoai.agent.ui.common.HaoSwitch(
             checked = checked,
-            onCheckedChange = onChange,
-            backdrop = backdrop
+            onCheckedChange = onChange
         )
     }
 }
@@ -2198,7 +2216,7 @@ private fun LazyListScope.workspaceItems(
     pickFolder: () -> Unit
 ) {
     item {
-        Column(Modifier.padding(16.dp)) {
+        Column {
             // 顶部说明卡片：工作空间是什么、两种目录的差异
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -2206,7 +2224,7 @@ private fun LazyListScope.workspaceItems(
                         Icon(
                             Icons.Filled.Folder,
                             contentDescription = null,
-                            tint = Color(0xFF38A3C7),
+                            tint = haoToneMain(HaoTone.Info),
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.size(10.dp))
@@ -2248,7 +2266,8 @@ private fun LazyListScope.workspaceItems(
                     backdrop = backdrop,
                     text = "恢复默认目录",
                     modifier = Modifier.weight(1f),
-                    emphasized = false
+                    // 回退性操作：用警告级（和"选择文件夹"这种普通次要操作区分开）
+                    level = com.haoai.agent.ui.theme.HaoButtonLevel.Warning
                 ) { vm.useDefaultWorkspace() }
             }
         }
@@ -2269,7 +2288,7 @@ private fun LazyListScope.generalItems(
 ) {
     item { SectionTitle("外观") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Text("主题模式", style = MaterialTheme.typography.bodyMedium)
                 val themeOptions = listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")
@@ -2510,7 +2529,7 @@ private fun LazyListScope.generalItems(
 
     item { SectionTitle("数据与备份") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
                 // 体积是磁盘遍历，别在重组里现算：进页面时 IO 线程取一次
                 val scopes = com.haoai.agent.platform.BackupScope.entries
@@ -2596,7 +2615,7 @@ private fun LazyListScope.generalItems(
                 }
             }
         }
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        GlassGroup(backdrop, modifier = Modifier.padding(vertical = 6.dp)) {
             Column {
                 ToggleRow(
                     title = "备份包里包含明文 API Key",
@@ -2665,7 +2684,7 @@ private fun LazyListScope.generalItems(
 
     item {
         // 配置文件桥（从「通用」搬来：它管的就是上面这份 haoai.config.json）
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+        GlassGroup(backdrop, modifier = Modifier.padding(vertical = 6.dp)) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -2734,7 +2753,7 @@ private fun LazyListScope.generalItems(
     }
     item { SectionTitle("模型行为") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Text("思考等级（reasoning effort，仅支持的云服务生效）", style = MaterialTheme.typography.bodyMedium)
                 val effortOptions = listOf("" to "默认", "low" to "低", "medium" to "中", "high" to "高")
@@ -2750,7 +2769,7 @@ private fun LazyListScope.generalItems(
     }
     // E5b 成本熔断：交互聊天与无人值守分级——聊天用这里设置（默认 25 万），定时任务/工作流固定 15 万硬限
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 ToggleRow(
                     title = "成本熔断",
@@ -2833,7 +2852,7 @@ private fun LazyListScope.generalItems(
     }
     item { SectionTitle("后台") }
     item {
-        GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+        GlassGroup(backdrop) {
             ToggleRow(
                 title = "后台保活",
                 subtitle = "以前台服务保持任务在后台继续运行",
@@ -2863,7 +2882,7 @@ private fun LazyListScope.generalItems(
     item { SectionTitle("自定义指令") }
     item {
         // 裸 OutlinedTextField → 玻璃组包裹：与设置页其他区块视觉一致
-        Column(Modifier.padding(horizontal = 16.dp)) {
+        Column {
             GlassGroup(backdrop) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                     var promptLocal by androidx.compose.runtime.remember(settings.customPrompt) {
@@ -2923,7 +2942,8 @@ private fun LazyListScope.usageItems(
                 )
             }
 
-            // 大数字 + 环比
+            // 大数字 + 环比（放在玻璃卡里：整块是"直接压在壁纸上"的，壁纸模式下会与花纹打架）
+            GlassGroup(backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
             Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
@@ -2964,12 +2984,15 @@ private fun LazyListScope.usageItems(
                         )
                     }
                 }
+                // 与"大数字"同处一张卡：拆成两块卡会读成两段互不相干的信息
                 Text(
-                    "输入 ${formatTokens(stat.inTok)} · 输出 ${formatTokens(stat.outTok)} · LLM ${stat.llmCalls} 次 / 工具 ${stat.toolCalls} 次",
+                    "输入 ${formatTokens(stat.inTok)} · 输出 ${formatTokens(stat.outTok)} · " +
+                        "LLM ${stat.llmCalls} 次 / 工具 ${stat.toolCalls} 次",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(top = 6.dp)
                 )
+            }
             }
 
             // 时段柱状趋势（Canvas 自绘，峰值高亮）
@@ -2988,44 +3011,80 @@ private fun LazyListScope.usageItems(
                 }
             }
 
-            // 4 指标卡：调用 / 成功率 / 平均耗时 / 估算费用
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // 4 指标卡：**2×2 网格**（4 个挤在一行时每个只有 ~90dp，
+            // "35.2s""¥29.40"这种宽度会被压得贴边，数字也只好缩字号）
+            Column(
+                Modifier.padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DashboardMetric(backdrop, stat.calls.toString(), "调用", Modifier.weight(1f))
-                DashboardMetric(
-                    backdrop,
-                    stat.successPct()?.let { "$it%" } ?: "—",
-                    "成功率",
-                    Modifier.weight(1f),
-                    tint = Color(0xFF3FA37A)
-                )
-                DashboardMetric(
-                    backdrop,
-                    stat.avgSeconds()?.let { String.format(java.util.Locale.US, "%.1fs", it) } ?: "—",
-                    "平均耗时",
-                    Modifier.weight(1f)
-                )
-                DashboardMetric(
-                    backdrop,
-                    estimatePeriodCost(stat),
-                    "估算费用",
-                    Modifier.weight(1f),
-                    tint = Color(0xFFB06A12)
-                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DashboardMetric(backdrop, stat.calls.toString(), "调用", Modifier.weight(1f))
+                    DashboardMetric(
+                        backdrop,
+                        stat.successPct()?.let { "$it%" } ?: "—",
+                        "成功率",
+                        Modifier.weight(1f),
+                        tint = haoToneMain(HaoTone.Accent)
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DashboardMetric(
+                        backdrop,
+                        stat.avgSeconds()?.let { String.format(java.util.Locale.US, "%.1fs", it) } ?: "—",
+                        "平均耗时",
+                        Modifier.weight(1f)
+                    )
+                    DashboardMetric(
+                        backdrop,
+                        estimatePeriodCost(stat),
+                        "估算费用",
+                        Modifier.weight(1f),
+                        tint = haoToneInk(HaoTone.Warn)
+                    )
+                }
             }
 
             // 每日预算（保留 5.1，加进度可视化）
             SectionTitle("每日预算")
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column {
                 GlassGroup(backdrop) {
-                    Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                         val budgetK = settings.dailyTokenBudgetK
                         val usedToday = periods[0].total
+                        // 输入框与本行说明并排（原先输入框单独一行、左侧空一大片，重心偏）
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            var budgetText by androidx.compose.runtime.remember(settings.dailyTokenBudgetK) {
+                                androidx.compose.runtime.mutableStateOf(
+                                    settings.dailyTokenBudgetK.let { if (it == 0) "" else it.toString() }
+                                )
+                            }
+                            LaunchedEffect(budgetText) {
+                                if ((budgetText.toIntOrNull() ?: 0) == settings.dailyTokenBudgetK) return@LaunchedEffect
+                                kotlinx.coroutines.delay(600)
+                                vm.setDailyTokenBudgetK(budgetText.toIntOrNull() ?: 0)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text("每日上限", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "超过会先提醒、再自动跳过后台任务",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedTextField(
+                                value = budgetText,
+                                onValueChange = { t ->
+                                    budgetText = t.filter { ch -> ch.isDigit() }.take(5)
+                                },
+                                modifier = Modifier.width(126.dp),
+                                singleLine = true,
+                                placeholder = { Text("不限") },
+                                trailingIcon = { Text("K/日", style = MaterialTheme.typography.labelSmall) },
+                                colors = com.haoai.agent.ui.common.glassFieldColors()
+                            )
+                        }
                         if (budgetK > 0) {
+                            Spacer(Modifier.height(10.dp))
                             val budget = budgetK * 1000L
                             val pct = (usedToday * 100 / budget).toInt().coerceAtMost(100)
                             Row(Modifier.fillMaxWidth()) {
@@ -3040,7 +3099,7 @@ private fun LazyListScope.usageItems(
                                     fontWeight = FontWeight.Bold,
                                     color = when {
                                         pct >= 100 -> MaterialTheme.colorScheme.error
-                                        pct >= 70 -> Color(0xFFB06A12)
+                                        pct >= 70 -> haoToneInk(HaoTone.Warn)
                                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                                     }
                                 )
@@ -3053,47 +3112,26 @@ private fun LazyListScope.usageItems(
                                 detail = "",
                                 tint = when {
                                     pct >= 100 -> MaterialTheme.colorScheme.error
-                                    pct >= 70 -> Color(0xFFB06A12)
-                                    else -> Color(0xFFD9913F)
+                                    pct >= 70 -> haoToneInk(HaoTone.Warn)
+                                    else -> haoToneMain(HaoTone.Warn)
                                 },
                                 compact = true
                             )
                             Spacer(Modifier.height(8.dp))
                         }
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             "超 70% 提醒精简；达 100% 后定时任务与云端梦境固化自动跳过（手动对话不中断）。0 = 不限。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            var budgetText by androidx.compose.runtime.remember(settings.dailyTokenBudgetK) {
-                                androidx.compose.runtime.mutableStateOf(settings.dailyTokenBudgetK.let { if (it == 0) "" else it.toString() })
-                            }
-                            LaunchedEffect(budgetText) {
-                                if ((budgetText.toIntOrNull() ?: 0) == settings.dailyTokenBudgetK) return@LaunchedEffect
-                                kotlinx.coroutines.delay(600)
-                                vm.setDailyTokenBudgetK(budgetText.toIntOrNull() ?: 0)
-                            }
-                            OutlinedTextField(
-                                value = budgetText,
-                                onValueChange = { t ->
-                                    budgetText = t.filter { ch -> ch.isDigit() }.take(5)
-                                },
-                                modifier = Modifier.width(140.dp),
-                                singleLine = true,
-                                placeholder = { Text("不限") },
-                                trailingIcon = { Text("K tok/日", style = MaterialTheme.typography.labelSmall) },
-                                colors = com.haoai.agent.ui.common.glassFieldColors()
-                            )
-                        }
                     }
                 }
             }
 
             // 分布卡：按模型 / 按用途 / 会话 chip 二级切换
             SectionTitle("分布")
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column {
                 GlassGroup(backdrop) {
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3111,7 +3149,7 @@ private fun LazyListScope.usageItems(
                                         value = m.promptTokens + m.completionTokens,
                                         maxValue = stat.byModel.maxOf { it.promptTokens + it.completionTokens },
                                         detail = "${formatTokens(m.promptTokens + m.completionTokens)} · ${m.calls} 次",
-                                        tint = Color(0xFF5B8DEF)
+                                        tint = haoToneMain(HaoTone.Info)
                                     )
                                 }
                             }
@@ -3123,7 +3161,7 @@ private fun LazyListScope.usageItems(
                                         value = p.promptTokens + p.completionTokens,
                                         maxValue = stat.byPurpose.maxOf { it.promptTokens + it.completionTokens },
                                         detail = "${formatTokens(p.promptTokens + p.completionTokens)} · ${p.calls} 次",
-                                        tint = Color(0xFF3FA37A)
+                                        tint = haoToneMain(HaoTone.Accent)
                                     )
                                 }
                             }
@@ -3139,7 +3177,7 @@ private fun LazyListScope.usageItems(
                                         value = s.promptTokens + s.completionTokens,
                                         maxValue = list.maxOf { it.promptTokens + it.completionTokens },
                                         detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
-                                        tint = Color(0xFFD9913F)
+                                        tint = haoToneMain(HaoTone.Warn)
                                     )
                                 }
                             }
@@ -3150,7 +3188,7 @@ private fun LazyListScope.usageItems(
 
             // 健康度：成功率 / 工具审批 / 生成速度（账本 ok/durationMs/policyDecision 首次上屏）
             SectionTitle("健康度")
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column {
                 GlassGroup(backdrop) {
                     Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                         val total = stat.calls
@@ -3159,7 +3197,7 @@ private fun LazyListScope.usageItems(
                             label = "成功率",
                             value = if (succ == null) "—" else "$succ% · 失败 ${stat.failCalls} 次",
                             ratio = (succ ?: 0) / 100f,
-                            tint = Color(0xFF3FA37A)
+                            tint = haoToneMain(HaoTone.Accent)
                         )
                         Spacer(Modifier.height(9.dp))
                         if (stat.toolCalls > 0) {
@@ -3168,7 +3206,7 @@ private fun LazyListScope.usageItems(
                                 value = "通过 ${stat.approved} · 拒绝 ${stat.denied} · 拦截 ${stat.blocked}",
                                 ratio = if (stat.approved + stat.denied + stat.blocked == 0) 0f
                                 else stat.approved.toFloat() / (stat.approved + stat.denied + stat.blocked),
-                                tint = Color(0xFF3FA37A)
+                                tint = haoToneMain(HaoTone.Accent)
                             )
                             Spacer(Modifier.height(9.dp))
                         }
@@ -3177,7 +3215,7 @@ private fun LazyListScope.usageItems(
                             label = "平均生成速度",
                             value = speed?.let { String.format(java.util.Locale.US, "%.1f tok/s", it) } ?: "—",
                             ratio = ((speed ?: 0.0) / 40.0).coerceIn(0.0, 1.0).toFloat(),
-                            tint = Color(0xFF8B7BEF)
+                            tint = haoToneMain(HaoTone.Info)
                         )
                         if (total == 0) {
                             Spacer(Modifier.height(4.dp))
@@ -3194,7 +3232,7 @@ private fun LazyListScope.usageItems(
             // 工具调用 TopN（tool 字段首次上屏）
             if (stat.byTool.isNotEmpty()) {
                 SectionTitle("工具调用")
-                Column(Modifier.padding(horizontal = 16.dp)) {
+                Column {
                     GlassGroup(backdrop) {
                         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                             stat.byTool.take(5).forEach { t ->
@@ -3203,7 +3241,7 @@ private fun LazyListScope.usageItems(
                                     value = t.calls.toLong(),
                                     maxValue = stat.byTool.maxOf { it.calls }.toLong().coerceAtLeast(1),
                                     detail = "${t.calls} 次",
-                                    tint = Color(0xFF8B7BEF)
+                                    tint = haoToneMain(HaoTone.Info)
                                 )
                             }
                         }
@@ -3213,7 +3251,7 @@ private fun LazyListScope.usageItems(
 
             // 会话排行（独立保留：时段内 Top5）
             SectionTitle("会话排行")
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column {
                 GlassGroup(backdrop) {
                     Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                         val list = stat.bySession
@@ -3229,7 +3267,7 @@ private fun LazyListScope.usageItems(
                                     value = s.promptTokens + s.completionTokens,
                                     maxValue = list.maxOf { it.promptTokens + it.completionTokens },
                                     detail = "${formatTokens(s.promptTokens + s.completionTokens)} · ${s.calls} 次调用",
-                                    tint = Color(0xFFD9913F)
+                                    tint = haoToneMain(HaoTone.Warn)
                                 )
                             }
                         }
@@ -3238,7 +3276,7 @@ private fun LazyListScope.usageItems(
             }
 
             SectionTitle("维护")
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column {
                 GlassGroup(backdrop) {
                     // 危险操作行（非开关）：点击弹根级确认窗
                     Row(
@@ -3319,7 +3357,7 @@ private fun DashboardMetric(
         onClick = {},
         backdrop = backdrop,
         shape = RoundedCornerShape(14.dp),
-        surfaceAlpha = 0.20f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoTileSurfaceAlpha(),
         tint = tint.copy(alpha = 0.10f),
         lensRadius = 12.dp,
         modifier = modifier
@@ -3515,33 +3553,237 @@ private fun LazyListScope.aboutItems(
     settings: AppSettings,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
-    item { SectionTitle("Token 概览") }
-    item {
-        Text(
-            "详细统计（今日/本周/本月、按模型与用途分布、会话排行）已移至「用量」页。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
-        )
-    }
-    item { SectionTitle("关于本机大脑") }
+    // ── 1. 品牌头 ───────────────────────────────────────────────
+    // 注意：本函数是 LazyListScope 扩展（非 @Composable），CompositionLocal 与
+    // 可组合调用一律要放进 item { } 里
     item {
         val ctx = androidx.compose.ui.platform.LocalContext.current
         val ver = runCatching {
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
         }.getOrNull() ?: "dev"
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            GlassGroup(backdrop) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text("HaoAI v$ver", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        "云端大脑 + 端侧肌肉\n三层记忆 · 技能自进化 · 手机自动化 · 定时任务",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
+        GlassGroup(backdrop) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    com.haoai.agent.ui.common.HaoBadge(
+                        icon = Icons.Filled.SmartToy,
+                        tone = HaoTone.Accent
                     )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "HaoAI",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "v$ver",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "手机上的 AI Agent —— 云端大脑负责思考，端侧能力负责动手：记事、操作手机、定时执行。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("三层记忆", "技能自进化", "手机自动化").forEach {
+                        com.haoai.agent.ui.common.HaoChip(it, HaoTone.Neutral)
+                    }
                 }
             }
+        }
+    }
+
+    // ── 2. 能力概览 ─────────────────────────────────────────────
+    item { SectionTitle("能力概览") }
+    item {
+        val counts = vm.homeCounts
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlassStatTile(backdrop, "${counts.first}", "长期记忆", haoToneMain(HaoTone.Accent), Modifier.weight(1f))
+            GlassStatTile(backdrop, "${counts.third}", "技能", haoToneMain(HaoTone.Accent), Modifier.weight(1f))
+            GlassStatTile(backdrop, "${vm.sessionCount()}", "会话", haoToneMain(HaoTone.Info), Modifier.weight(1f))
+            GlassStatTile(backdrop, "${counts.second}", "今日日志", haoToneMain(HaoTone.Info), Modifier.weight(1f))
+        }
+    }
+
+    // ── 3. 运行状态 ─────────────────────────────────────────────
+    item { SectionTitle("运行状态") }
+    item {
+        val provider = settings.providers.find { it.id == settings.activeProviderId }
+            ?: settings.providers.firstOrNull()
+        val localModel = vm.llamaModelFile()
+        // 发行版状态要读盘：进页面时取一次（与 Linux 页同一套 state 判定）
+        var distroLabel by androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf("读取中…")
+        }
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            distroLabel = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val st = vm.distros.statuses()
+                    val readyName = st.firstOrNull {
+                        it.state == com.haoai.agent.platform.sandbox.DistroManager.State.READY
+                    }?.distro?.name
+                    when {
+                        st.isEmpty() -> "未安装 · 到「Linux 环境」安装"
+                        readyName != null -> "$readyName · 已就绪"
+                        st.any { it.state == com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED } ->
+                            "rootfs 已损坏 · 建议重装"
+                        else -> "未就绪"
+                    }
+                }
+            }.getOrDefault("不可用")
+        }
+        GlassGroup(backdrop) {
+            HaoRow(
+                icon = Icons.Filled.SmartToy,
+                title = "云端服务",
+                subtitle = if (provider == null) "未配置" else "${provider.name} · ${provider.model}",
+                trailing = {
+                    HaoChip(
+                        if (provider == null) "未配置" else "已配置",
+                        if (provider == null) HaoTone.Warn else HaoTone.Accent
+                    )
+                }
+            )
+            HaoRow(
+                icon = Icons.Filled.Memory,
+                title = "端侧模型",
+                subtitle = localModel ?: "未加载本地 GGUF",
+                trailing = {
+                    HaoChip(
+                        if (localModel == null) "未加载" else "已加载",
+                        if (localModel == null) HaoTone.Neutral else HaoTone.Accent
+                    )
+                },
+                divider = true
+            )
+            HaoRow(
+                icon = Icons.Filled.Terminal,
+                title = "推理后端",
+                subtitle = vm.backendLabel(),
+                divider = true
+            )
+            HaoRow(
+                icon = Icons.Filled.Construction,
+                title = "Linux 沙箱",
+                subtitle = distroLabel,
+                divider = true
+            )
+            HaoRow(
+                icon = Icons.Filled.Folder,
+                title = "工作空间",
+                subtitle = vm.workspaceName(),
+                divider = true
+            )
+            HaoRow(
+                icon = Icons.Filled.Security,
+                title = "权限模式",
+                subtitle = permissionLabel(settings.permissionMode),
+                divider = true
+            )
+        }
+    }
+
+    // ── 4. 数据与存储 ───────────────────────────────────────────
+    item { SectionTitle("数据与存储") }
+    item {
+        GlassGroup(backdrop) {
+            HaoRow(
+                title = "会话记录",
+                subtitle = "${vm.sessionCount()} 个 · ${vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.SESSIONS))}"
+            )
+            HaoRow(
+                title = "记忆与日志",
+                subtitle = "${vm.homeCounts.first} 条记忆 · ${vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.MEMORY))}",
+                divider = true
+            )
+            HaoRow(
+                title = "技能",
+                subtitle = "${vm.homeCounts.third} 个 · ${vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.SKILLS))}",
+                divider = true
+            )
+            HaoRow(
+                title = "待办与用量账本",
+                subtitle = vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.TASKS)),
+                divider = true
+            )
+            HaoRow(
+                title = "配置快照",
+                subtitle = vm.snapshotLabel(),
+                divider = true
+            )
+            HaoRow(
+                title = "上次导出到设备外",
+                subtitle = vm.lastExportLabel(),
+                divider = true
+            )
+        }
+    }
+
+    // ── 5. 运行环境 ─────────────────────────────────────────────
+    item { SectionTitle("运行环境") }
+    item {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var copied by androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf(false)
+        }
+        GlassGroup(backdrop) {
+            HaoRow(
+                title = "系统",
+                subtitle = "Android ${android.os.Build.VERSION.RELEASE}" +
+                    "（API ${android.os.Build.VERSION.SDK_INT}）"
+            )
+            HaoRow(
+                title = "设备",
+                subtitle = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}" +
+                    " · ${android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "-"}",
+                divider = true
+            )
+            HaoRow(
+                title = "数据目录",
+                subtitle = if (copied) "已复制到剪贴板" else vm.dataDirPath(),
+                divider = true,
+                onClick = {
+                    runCatching {
+                        val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                            as android.content.ClipboardManager
+                        cm.setPrimaryClip(
+                            android.content.ClipData.newPlainText("HaoAI 数据目录", vm.dataDirPath())
+                        )
+                    }
+                    copied = true
+                }
+            )
+        }
+    }
+
+    // ── 6. 关于 ─────────────────────────────────────────────────
+    item { SectionTitle("关于") }
+    item {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        GlassGroup(backdrop) {
+            HaoRow(
+                title = "项目主页",
+                subtitle = "github.com/a953179255/HaoAI",
+                showChevron = true,
+                onClick = {
+                    runCatching {
+                        ctx.startActivity(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://github.com/a953179255/HaoAI")
+                            )
+                        )
+                    }
+                }
+            )
+            com.haoai.agent.ui.common.HaoHint(
+                "基于 Kotlin 与 Jetpack Compose 构建；液态玻璃效果来自开源库 Kyant0/AndroidLiquidGlass。" +
+                    "全部数据保存在本机应用目录，除你自己配置的模型服务外不会上传到任何服务器。"
+            )
         }
     }
 }
@@ -3554,24 +3796,22 @@ private fun formatTokens(n: Long): String = when {
 
 @Composable
 private fun SectionTitle(text: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(start = 20.dp, top = 24.dp, bottom = 10.dp)
-    ) {
-        Box(
-            Modifier
-                .size(width = 4.dp, height = 14.dp)
-                .background(
-                    MaterialTheme.colorScheme.primary,
-                    RoundedCornerShape(2.dp)
-                )
-        )
-        Spacer(Modifier.size(8.dp))
-        Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-    }
+    // 统一到共享段落标题（子页与首页同一套间距/竖条规范）
+    com.haoai.agent.ui.common.HaoSectionTitle(text)
 }
 
-/** 二级页通用玻璃分组容器：把一组相关设置项装进同一块液态玻璃。 */
+/**
+ * 二级页通用玻璃分组容器。
+ *
+ * 2026-09-21 统一：委托给共享 [com.haoai.agent.ui.common.HaoGroup]，
+ * 与设置首页同一材质（白 58% 玻璃 + 库原生三件套分层）、同一圆角（16dp）。
+ * 原先这里是 radius 18dp / surfaceAlpha 0.30f 的另一套参数 —— 同一个 App
+ * 两套玻璃语言也是"凌乱"的一部分。
+ *
+ * 注意：HaoGroup 内部已自带行分隔线能力（`HaoRow(divider = true)`），
+ * 老的 `Column(padding(vertical = 6.dp))` 会破坏"行通栏"（按压高亮要贴卡缘），
+ * 故这里不再加垂直内边距。
+ */
 @Composable
 private fun GlassGroup(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
@@ -3579,15 +3819,12 @@ private fun GlassGroup(
     refract: Boolean? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
-    com.haoai.agent.ui.common.GlassPanel(
+    com.haoai.agent.ui.common.HaoGroup(
         backdrop = backdrop,
-        modifier = modifier.fillMaxWidth(),
-        radius = 18.dp,
-        surfaceAlpha = 0.30f,
-        refract = refract
-    ) {
-        Column(Modifier.padding(vertical = 6.dp), content = content)
-    }
+        modifier = modifier,
+        refract = refract,
+        content = content
+    )
 }
 
 /** 液态玻璃胶囊按钮（主操作），替代普通 Material Button。 */
@@ -3598,9 +3835,15 @@ private fun LiquidPillButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     emphasized: Boolean = true,
+    /** 语义档位；null = 按 [emphasized] 推导（兼容老调用）。破坏性操作用 Danger。 */
+    level: com.haoai.agent.ui.theme.HaoButtonLevel? = null,
     refract: Boolean? = null,
     onClick: () -> Unit
 ) {
+    val resolved = level ?: if (emphasized)
+        com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+    else com.haoai.agent.ui.theme.HaoButtonLevel.Secondary
+    val (bgColor, fgColor) = com.haoai.agent.ui.theme.haoButtonColors(resolved)
     com.haoai.agent.ui.common.LiquidGlassButton(
         onClick = onClick,
         backdrop = backdrop,
@@ -3609,15 +3852,12 @@ private fun LiquidPillButton(
         refract = refract,
         // 禁用观感由 LiquidGlassButton 的整体 opacity(0.45) 统一处理，
         // 这里不再针对 enabled 降 surfaceColor（双层降透明会糊成一团）
-        surfaceColor = MaterialTheme.colorScheme.primary.copy(
-            alpha = if (emphasized) 0.85f else 0.25f
-        ),
+        surfaceColor = bgColor,
         modifier = modifier
     ) {
         Text(
             text,
-            color = if (emphasized && enabled) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+            color = if (enabled) fgColor else fgColor.copy(alpha = 0.6f),
             fontWeight = FontWeight.SemiBold,
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
@@ -3639,7 +3879,7 @@ private fun GlassStatTile(
         onClick = {},
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        surfaceAlpha = 0.20f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoTileSurfaceAlpha(),
         tint = tint.copy(alpha = 0.10f),
         lensRadius = 12.dp,
         refract = refract,
@@ -4259,11 +4499,9 @@ private fun ProviderDialog(
                             // 点3：余额查询
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("余额查询", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                                com.haoai.agent.ui.common.LiquidToggle(
+                                com.haoai.agent.ui.common.HaoSwitch(
                                     checked = draft.balanceEnabled,
-                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) },
-                                    backdrop = backdrop,
-                                    modifier = Modifier.scale(0.85f)
+                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) }
                                 )
                             }
                             if (draft.balanceEnabled) {
@@ -4921,11 +5159,9 @@ private fun SwitchParamField(    label: String,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        com.haoai.agent.ui.common.LiquidToggle(
+        com.haoai.agent.ui.common.HaoSwitch(
             checked = enabled,
-            onCheckedChange = onToggle,
-            backdrop = backdrop,
-            modifier = Modifier.scale(0.75f)
+            onCheckedChange = onToggle
         )
         Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
         if (enabled) {
@@ -5006,7 +5242,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.linuxItems(
                                     LiquidPillButton(
                                         backdrop = backdrop,
                                         text = "删除",
-                                        emphasized = false,
+                                        // 破坏性操作：按"按钮五级"必须用危险级，
+                                        // 不能用品牌色（改前是 primary 25% 的浅绿，语义反了）
+                                        level = com.haoai.agent.ui.theme.HaoButtonLevel.Danger,
                                         enabled = !busy
                                     ) { s.pendingDeleteId = d.id }
                                 com.haoai.agent.platform.sandbox.DistroManager.State.DAMAGED -> {
@@ -5021,7 +5259,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.linuxItems(
                                     LiquidPillButton(
                                         backdrop = backdrop,
                                         text = "删除",
-                                        emphasized = false,
+                                        // 破坏性操作：按"按钮五级"必须用危险级，
+                                        // 不能用品牌色（改前是 primary 25% 的浅绿，语义反了）
+                                        level = com.haoai.agent.ui.theme.HaoButtonLevel.Danger,
                                         enabled = !busy
                                     ) { s.pendingDeleteId = d.id }
                                 }

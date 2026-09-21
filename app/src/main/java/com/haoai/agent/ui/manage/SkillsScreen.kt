@@ -41,10 +41,16 @@ import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import kotlinx.coroutines.launch
+import com.haoai.agent.ui.theme.HaoDimens
+import androidx.compose.material.icons.filled.Construction
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import com.haoai.agent.ui.common.appLayer
 
 /**
  * 技能库管理：查看/手动添加/删除 SKILL.md（skill 工具的图形入口）。
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SkillsScreen(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
@@ -141,14 +147,21 @@ fun SkillsScreen(
             // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (wallpaper != null) {
-            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-            Image(
-                bitmap = wpImage,
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                    // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                    com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+            }
         }
         Column(
             Modifier
@@ -156,74 +169,84 @@ fun SkillsScreen(
                 .statusBarsPadding()
         ) {
             Spacer(Modifier.height(56.dp))
-            Text(
-                "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp)
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
-            androidx.compose.foundation.layout.Row(
+            androidx.compose.foundation.layout.FlowRow(
                 Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
             ) {
+                // 按钮五级：一屏只留一个主操作。改前三个都是 0.85 实色，还各用一个品牌色
+                // （primary/tertiary/secondary）—— 三个按钮互相抢注意力，且第三个
+                // 「从历史会话学习」会在行内折成两行、把整行高度顶歪。
+                // FlowRow 让整颗按钮换行（不在文字中间折），配合"次级/轻量"降级。
+                val (addBg, addFg) = com.haoai.agent.ui.theme.haoButtonColors(
+                    com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+                )
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = { showAdd = true },
                     backdrop = backdrop,
                     shape = RoundedCornerShape(percent = 50),
-                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                    surfaceColor = addBg
                 ) {
-                    Row(
+                    androidx.compose.foundation.layout.Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
                     ) {
-                        Text(
-                            "＋",
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text("＋", color = addFg, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.padding(2.dp))
                         Text(
                             "手动添加技能",
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = addFg,
                             fontWeight = FontWeight.SemiBold,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
                 }
+                val (impBg, impFg) = com.haoai.agent.ui.theme.haoButtonColors(
+                    com.haoai.agent.ui.theme.HaoButtonLevel.Secondary
+                )
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = { showImportMenu = true },
                     backdrop = backdrop,
                     shape = RoundedCornerShape(percent = 50),
                     enabled = !importing,
-                    surfaceColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f)
+                    surfaceColor = impBg
                 ) {
                     Text(
                         if (importing) "导入中…" else "导入技能",
-                        color = MaterialTheme.colorScheme.onTertiary,
+                        color = impFg,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
                     )
                 }
+                val (learnBg, learnFg) = com.haoai.agent.ui.theme.haoButtonColors(
+                    com.haoai.agent.ui.theme.HaoButtonLevel.Secondary
+                )
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = onLearnFromHistory,
                     backdrop = backdrop,
                     shape = RoundedCornerShape(percent = 50),
-                    surfaceColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f)
+                    surfaceColor = learnBg
                 ) {
                     Text(
                         "从历史会话学习",
-                        color = MaterialTheme.colorScheme.onSecondary,
+                        color = learnFg,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
                     )
                 }
             }
             if (skills.isEmpty()) {
-                Text(
-                    "暂无技能——当代理踩坑并总结出可复用步骤时会自动沉淀到这里，也可以手动添加。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(24.dp)
+                com.haoai.agent.ui.common.HaoEmptyState(
+                    backdrop = backdrop,
+                    icon = Icons.Filled.Construction,
+                    title = "暂无技能",
+                    hint = "当代理踩坑并总结出可复用步骤时会自动沉淀到这里，也可以手动添加。",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
             LazyColumn(
@@ -236,12 +259,12 @@ fun SkillsScreen(
                         onClick = {},
                         backdrop = backdrop,
                         shape = RoundedCornerShape(16.dp),
-                        surfaceAlpha = if (s.archived) 0.10f else 0.22f,
+                        surfaceAlpha = if (s.archived) 0.34f else com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                         lensRadius = 16.dp,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
-                            Column(Modifier.weight(1f)) {
+                        Column(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 6.dp, end = 6.dp)) {
+                            Column(Modifier.fillMaxWidth()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(s.name, style = MaterialTheme.typography.titleSmall)
                                     Spacer(Modifier.padding(2.dp))
@@ -334,30 +357,53 @@ fun SkillsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Column {
+                            androidx.compose.foundation.layout.Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(
+                                        androidx.compose.foundation.rememberScrollState()
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
+                            ) {
+                                // 动作横排 + 横滑（原先 5 个动作竖排，把每张卡撑到两倍高；
+                                // 横排后卡片只剩"信息 + 一行动作"）
                                 if (!s.validated) {
-                                    TextButton(onClick = {
-                                        store.setValidated(s.name, true)
-                                        refresh()
-                                    }) { Text("验证并启用") }
+                                    com.haoai.agent.ui.common.GlassTextButton(
+                                        text = "验证并启用",
+                                        backdrop = backdrop,
+                                        onClick = {
+                                            store.setValidated(s.name, true)
+                                            refresh()
+                                        }
+                                    )
                                 }
-                                TextButton(onClick = {
-                                    store.setPinned(s.name, !s.pinned)
-                                    refresh()
-                                }) { Text(if (s.pinned) "取消置顶" else "置顶") }
-                                TextButton(onClick = {
-                                    viewBody = s.name to (store.view(s.name) ?: "")
-                                }) { Text("查看") }
-                                TextButton(onClick = {
-                                    val text = runCatching {
-                                        val d = java.io.File(
-                                            context.filesDir, "skills/${s.name}/SKILL.md"
-                                        )
-                                        d.readText()
-                                    }.getOrDefault("")
-                                    pendingExport = s.name to text
-                                    exportLauncher.launch("${s.name}.md")
-                                }) { Text("导出") }
+                                com.haoai.agent.ui.common.GlassTextButton(
+                                    text = if (s.pinned) "取消置顶" else "置顶",
+                                    backdrop = backdrop,
+                                    onClick = {
+                                        store.setPinned(s.name, !s.pinned)
+                                        refresh()
+                                    }
+                                )
+                                com.haoai.agent.ui.common.GlassTextButton(
+                                    text = "查看",
+                                    backdrop = backdrop,
+                                    onClick = { viewBody = s.name to (store.view(s.name) ?: "") }
+                                )
+                                com.haoai.agent.ui.common.GlassTextButton(
+                                    text = "导出",
+                                    backdrop = backdrop,
+                                    onClick = {
+                                        val text = runCatching {
+                                            java.io.File(
+                                                context.filesDir, "skills/${s.name}/SKILL.md"
+                                            ).readText()
+                                        }.getOrDefault("")
+                                        pendingExport = s.name to text
+                                        exportLauncher.launch("${s.name}.md")
+                                    }
+                                )
                                 IconButton(onClick = { pendingDelete = s.name }) {
                                     Icon(
                                         Icons.Filled.Delete,

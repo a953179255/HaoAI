@@ -44,7 +44,10 @@ fun ContextUsagePanel(
         backdrop = backdrop,
         modifier = modifier.width(300.dp),
         radius = 16.dp,
-        surfaceAlpha = 0.72f
+        // 0.72 → 0.58：与任务面板统一材质（0.72 几乎是不透明的白，实测与背景仅 1.03:1）
+        surfaceAlpha = 0.58f,
+        // 浮层强化：与任务面板同一层级语言（库原生三件套）
+        floating = true
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Text(

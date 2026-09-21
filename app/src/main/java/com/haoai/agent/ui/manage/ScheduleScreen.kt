@@ -41,6 +41,9 @@ import com.haoai.agent.ui.common.GlassPageBar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.haoai.agent.ui.theme.HaoDimens
+import androidx.compose.material.icons.filled.Schedule
+import com.haoai.agent.ui.common.appLayer
 
 @Composable
 fun ScheduleScreen(
@@ -65,14 +68,21 @@ fun ScheduleScreen(
             // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (wallpaper != null) {
-            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-            Image(
-                bitmap = wpImage,
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                    // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                    com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+            }
         }
         Column(
             Modifier
@@ -80,19 +90,14 @@ fun ScheduleScreen(
                 .statusBarsPadding()
         ) {
             Spacer(Modifier.height(56.dp))
-        Text(
-            "到点后代理会在后台自动执行任务并通知结果。可在聊天里用 schedule 工具创建。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
-
         if (vm.items.isEmpty()) {
-            Text(
-                "\n暂无定时任务。\n试试对代理说：「每天早上 9 点提醒我查看待办」",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp)
+            com.haoai.agent.ui.common.HaoEmptyState(
+                backdrop = backdrop,
+                icon = Icons.Filled.Schedule,
+                title = "暂无定时任务",
+                hint = "到点后代理会在后台自动执行任务并通知结果。" +
+                    "试试对代理说：「每天早上 9 点提醒我查看待办」",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
 
@@ -131,7 +136,7 @@ private fun TaskCard(
         onClick = onToggle,
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        surfaceAlpha = 0.24f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         lensRadius = 16.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -164,10 +169,9 @@ private fun TaskCard(
                     )
                 }
             }
-            com.haoai.agent.ui.common.LiquidToggle(
+            com.haoai.agent.ui.common.HaoSwitch(
                 checked = t.enabled,
-                onCheckedChange = { onToggle() },
-                backdrop = backdrop
+                onCheckedChange = { onToggle() }
             )
             IconButton(onClick = onDelete) {
                 Icon(

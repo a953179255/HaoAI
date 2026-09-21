@@ -849,7 +849,7 @@ fun ChatScreen(
                         shape = androidx.compose.foundation.shape.RoundedCornerShape(
                             topStart = 0.dp, topEnd = 0.dp, bottomStart = 14.dp, bottomEnd = 14.dp
                         ),
-                        surfaceAlpha = 0.60f,
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                         contentAlignment = androidx.compose.ui.Alignment.CenterStart,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -937,7 +937,9 @@ fun ChatScreen(
                             ContextUsagePanel(
                                 usage = contextUsage,
                                 backdrop = backdrop,
-                                modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)
+                                // bottom 留量同理：本面板外面也是 AnimatedVisibility(clip=true)，
+                                // 竖向只有 8dp 余量时下缘外阴影几乎全被裁掉
+                                modifier = Modifier.padding(top = 6.dp, bottom = 22.dp)
                             )
                         }
                     }
@@ -988,7 +990,7 @@ fun ChatScreen(
                     GlassPanel(
                         backdrop = backdrop,
                         radius = 14.dp,
-                        surfaceAlpha = 0.30f,
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                         // v7.2：文案长短切换时胶囊宽度平滑过渡（180ms 弹性），不再瞬跳
                         modifier = Modifier.animateContentSize(
                             animationSpec = tween(180, easing = LinearEasing)
@@ -1196,7 +1198,7 @@ fun ChatScreen(
                 },
                 backdrop = backdrop,
                 shape = RoundedCornerShape(percent = 50),
-                surfaceAlpha = 0.28f,
+                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                 lensRadius = 14.dp
             ) {
                 Row(
@@ -1323,7 +1325,7 @@ fun ChatScreen(
                                     style = Stroke(width = 1.5f.dp.toPx())
                                 )
                             },
-                        surfaceAlpha = 0.28f,
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
                             topStart = 0.dp,
@@ -2021,10 +2023,10 @@ private fun TopBar(
             .fillMaxWidth()
             .animateContentSize(),
         radius = 0.dp,
-        lensRadius = 0.dp,
+        lensRadius = com.haoai.agent.ui.theme.haoPageBarLensRadius(),
         // blurRadius 默认=radius/3，方角顶栏 radius=0 会得到 blur(0)——显式给模糊量
-        blurRadius = 12.dp,
-        surfaceAlpha = 0.30f,
+        blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
+        surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
         border = false,
         // backdrop blur 在玻璃顶缘采样衰减，高对比文字滚入状态栏带会透出：
         // 顶部叠一条背景色渐变补强，到状态栏底 +20dp（标题行上缘）淡出
@@ -3931,7 +3933,7 @@ private fun ComposerBar(
     GlassPanel(
         backdrop = backdrop,
         radius = 26.dp,
-        surfaceAlpha = 0.22f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         // 键盘抬升值作重绘键：位置变化后强制重绘折射，采样对齐新布局位置，
         // 保持完整液态效果且背景正确（matte 方案观感差已弃）
         redrawKey = redrawKey,

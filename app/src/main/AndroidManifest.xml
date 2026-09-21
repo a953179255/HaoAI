@@ -71,6 +71,10 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".glasslab.GlassLabActivity"
+            android:exported="true"
+            android:label="玻璃实验室" />
 
         <!-- 2.4 notifications_read：通知使用权服务（用户在系统设置中授权） -->
         <receiver

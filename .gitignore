@@ -16,3 +16,5 @@ keystore.properties
 .tmp_phone/
 .test-work/
 .kotlin/
+
+.git-broken-*/

@@ -57,6 +57,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import com.haoai.agent.ui.theme.HaoDimens
+import com.haoai.agent.ui.common.appLayer
 
 @Composable
 fun MemoryScreen(
@@ -100,14 +102,21 @@ fun MemoryScreen(
             // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (wallpaper != null) {
-            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-            Image(
-                bitmap = wpImage,
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                    // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                    com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+            }
         }
         Column(
             Modifier
@@ -115,11 +124,10 @@ fun MemoryScreen(
                 .statusBarsPadding()
         ) {
             Spacer(Modifier.height(56.dp))
-            Text(
-                "近期动态（每日日志，7 天后过期，重要条目夜间固化晋升）+ 长期记忆（按重要性注入）。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp)
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "近期动态（每日日志，7 天后过期，重要条目夜间固化晋升）+ 长期记忆（按重要性注入）。",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
             Text(
                 "概览：偏好 $prefN · 事实 $factN · 决定 $decisionN · 事件 $eventN · 今日日志 ${vm.days.firstOrNull()?.items?.size ?: 0} 条",
@@ -298,7 +306,7 @@ private fun MemoryDashboardCard(
         onClick = {},
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        surfaceAlpha = 0.20f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         lensRadius = 16.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -321,19 +329,19 @@ private fun MemoryDashboardCard(
                 gapSize = 0.dp,
                 drawStopIndicator = {}
             )
-            Text(
-                "上次固化：" + if (vm.lastConsolidationAt > 0) {
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "上次固化：" + if (vm.lastConsolidationAt > 0) {
                     fmt.format(Date(vm.lastConsolidationAt)) +
-                        (vm.lastConsolidationReport.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
-                } else "尚未固化（可点顶栏 ✨ 手动触发，或夜间充电灭屏自动执行）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    (vm.lastConsolidationReport.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+                    } else "尚未固化（可点顶栏 ✨ 手动触发，或夜间充电灭屏自动执行）",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
-            Text(
-                "上次备份：" + if (vm.lastBackupAt > 0) fmt.format(Date(vm.lastBackupAt)) + "（自动，内部 backups/）"
-                else "尚无（固化后自动创建；顶栏 ⬇ 可手动导出 zip）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            com.haoai.agent.ui.common.HaoNote(
+                backdrop = backdrop,
+                text = "上次备份：" + if (vm.lastBackupAt > 0) fmt.format(Date(vm.lastBackupAt)) + "（自动，内部 backups/）"
+                    else "尚无（固化后自动创建；顶栏 ⬇ 可手动导出 zip）",
+                modifier = Modifier.padding(vertical = 4.dp)
             )
             if (vm.promotionCandidates > 0) {
                 Text(
@@ -443,7 +451,7 @@ private fun JournalDayCard(day: JournalDay, backdrop: com.kyant.backdrop.backdro
         onClick = {},
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        surfaceAlpha = 0.20f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         lensRadius = 16.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -479,7 +487,7 @@ private fun MemoryCard(m: Memory, fmt: SimpleDateFormat, onDeleteRequest: (Memor
         onClick = {},
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        surfaceAlpha = 0.20f,
+        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         lensRadius = 16.dp,
         modifier = Modifier.fillMaxWidth()
     ) {

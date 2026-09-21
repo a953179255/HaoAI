@@ -1,0 +1,293 @@
+package com.haoai.agent.glasslab
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.HaoChip
+import com.haoai.agent.ui.common.HaoGroup
+import com.haoai.agent.ui.common.HaoRow
+import com.haoai.agent.ui.theme.GlassTuning
+import com.haoai.agent.ui.theme.HaoTone
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.haoai.agent.ui.common.appLayer
+
+/**
+ * 玻璃实验室：**拖滑杆 = 直接改全 App 的玻璃质感**（GlassTuning 单例，实时生效）。
+ * 上面是"演示配方"参照（固定参数），下面是当前全项目正在用的参数。
+ * 入口：设置首页 → 玻璃实验室；或 adb am start -n com.haoai.agent/.glasslab.GlassLabActivity
+ */
+class GlassLabActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme { GlassLab() }
+        }
+    }
+}
+
+@Composable
+private fun GlassLab() {
+    val context = LocalContext.current
+    val wallpaper = remember {
+        runCatching {
+            com.haoai.agent.platform.WallpaperStore.loadBitmapCover(context, 1080, 2400)
+        }.getOrNull()?.asImageBitmap()
+    }
+    val backdrop = rememberLayerBackdrop()
+    // 设置页同款采样层：rememberAppBackdrop 画块式（壁纸在层的 draw 块里，
+    // 而非节点记录式）—— 用于定位"实验室好看、设置页不行"的差异
+    val appStyleBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+        runCatching {
+            com.haoai.agent.platform.WallpaperStore.loadBitmapCover(context, 1080, 2400)
+        }.getOrNull()
+    )
+
+    // 与主界面同一环境：壁纸模式开（这样调出来的就是真实观感）
+    CompositionLocalProvider(
+        com.haoai.agent.ui.theme.LocalOnWallpaper provides true
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            wallpaper?.let {
+                Image(
+                    bitmap = it,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            // 采样宿主：壁纸挂进采样层（与演示 BackdropDemoScaffold 同构）
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .layerBackdrop(backdrop)
+                    // ②b 的采样源同挂这里：设置页修复路径（appBackdrop + 挂载）的对照
+                    .appLayer(appStyleBackdrop)
+            ) {
+                wallpaper?.let {
+                    Image(
+                        bitmap = it,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 顶栏 + 返回（2026-09-22 用户反馈：此前无顶栏无返回键，
+                // adb 冷启动场景下系统返回键会直接退出 App 而不是回设置页）
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.IconButton(
+                        onClick = { (context as? android.app.Activity)?.finish() }
+                    ) {
+                        androidx.compose.material3.Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "返回",
+                            tint = Color(0xFF26261F)
+                        )
+                    }
+                    Text(
+                        "玻璃实验室 —— 拖滑杆实时改全 App 玻璃质感",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFF26261F)
+                    )
+                }
+
+                // ── 参照：演示 App 配方（固定参数）──
+                Text(
+                    "① 演示 App 配方  blur 4 / lens(16, 32) / 白雾 0.5",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xFF26261F),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                GlassPanel(
+                    backdrop = backdrop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(110.dp),
+                    radius = 24.dp,
+                    surfaceAlpha = 0.5f,
+                    blurRadius = 4.dp,
+                    lensRadius = 16.dp,
+                    lensAmountMul = 2f,
+                    chromaticAberration = true,
+                    floating = true
+                ) { }
+
+                // ── 当前配方（= 全项目正在用的，拖动全局变化）──
+                // ── ②b 设置页同款采样层（rememberAppBackdrop 画块式）──
+                Text(
+                    "②b 设置页同款采样层（rememberAppBackdrop）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xFF26261F),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(120.dp)
+                        .drawBackdrop(
+                            backdrop = appStyleBackdrop,
+                            shape = { RoundedCornerShape(28f.dp) },
+                            effects = {
+                                vibrancy()
+                                blur(4f.dp.toPx())
+                                lens(
+                                    refractionHeight = 16f.dp.toPx(),
+                                    refractionAmount = 32f.dp.toPx(),
+                                    depthEffect = true,
+                                    chromaticAberration = true
+                                )
+                            },
+                            highlight = { Highlight.Plain },
+                            onDrawSurface = { drawRect(Color.White.copy(alpha = 0.5f)) }
+                        )
+                )
+                Text(
+                    "② 当前配方（= 设置页/聊天页正在用的，拖动全局变化）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xFF26261F),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                HaoGroup(backdrop = backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
+                    HaoRow(
+                        title = "模型大脑",
+                        subtitle = "商汤 · glm-5.2",
+                        showChevron = true
+                    )
+                    HaoRow(
+                        title = "权限与自动化",
+                        subtitle = "全自动 · 无障碍未启用",
+                        trailing = { HaoChip("待处理", HaoTone.Warn) },
+                        showChevron = true,
+                        divider = true
+                    )
+                    HaoRow(
+                        title = "Linux 环境",
+                        subtitle = "沙箱发行版 · Ubuntu 24.04 LTS",
+                        trailing = { HaoChip("已就绪", HaoTone.Accent) },
+                        showChevron = true,
+                        divider = true
+                    )
+                }
+
+                LabControls()
+
+                Text(
+                    "定稿后点「复制当前参数」把数值发我，我固化成默认值。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF33332E),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabControls() {
+    val context = LocalContext.current
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        SliderRow("模糊 dp", GlassTuning.blur, 0f, 30f) { GlassTuning.blur = it }
+        SliderRow("折射高度 dp（环带宽）", GlassTuning.lensHeight, 4f, 80f) { GlassTuning.lensHeight = it }
+        SliderRow("强度倍数", GlassTuning.lensAmountMul, 0.5f, 8f) { GlassTuning.lensAmountMul = it }
+        SliderRow("白雾 alpha", GlassTuning.veil, 0f, 0.9f) { GlassTuning.veil = it }
+        SliderRow("圆角 dp", GlassTuning.corner, 8f, 40f) { GlassTuning.corner = it }
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("整面折射", style = MaterialTheme.typography.labelMedium)
+            Switch(checked = GlassTuning.lensFull, onCheckedChange = { GlassTuning.lensFull = it })
+            Text("色差", style = MaterialTheme.typography.labelMedium)
+            Switch(checked = GlassTuning.ca, onCheckedChange = { GlassTuning.ca = it })
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val text = "blur=${GlassTuning.blur} lensHeight=${GlassTuning.lensHeight} " +
+                        "amountMul=${GlassTuning.lensAmountMul} veil=${GlassTuning.veil} " +
+                        "corner=${GlassTuning.corner} lensFull=${GlassTuning.lensFull} ca=${GlassTuning.ca}"
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("玻璃参数", text))
+                },
+                modifier = Modifier.weight(1f)
+            ) { Text("复制当前参数") }
+            OutlinedButton(
+                onClick = { GlassTuning.reset() },
+                modifier = Modifier.weight(1f)
+            ) { Text("还原默认") }
+        }
+    }
+}
+
+@Composable
+private fun SliderRow(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
+    Column(Modifier.padding(vertical = 2.dp)) {
+        Text(
+            "$label   ${"%.2f".format(value)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF33332E)
+        )
+        Slider(value = value, onValueChange = onChange, valueRange = min..max)
+    }
+}

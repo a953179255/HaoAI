@@ -368,7 +368,9 @@ fun SessionsScreen(
                                         onClick = cardClick,
                                         backdrop = backdrop,
                                         shape = RoundedCornerShape(14.dp),
-                                        surfaceAlpha = if (active) 0.30f else 0.16f,
+                                        // 与全项目内容卡同刻度（壁纸模式自动 0.82）；
+                                        // 当前会话用品牌色 tint 区分，不再用"更透"区分
+                                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                                         tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
                                         lensRadius = 14.dp,
                                         pressScale = true,
@@ -433,7 +435,7 @@ fun SessionsScreen(
                                 onClick = {},
                                 backdrop = backdrop,
                                 shape = RoundedCornerShape(14.dp),
-                                surfaceAlpha = 0.16f,
+                                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                                 lensRadius = 14.dp,
                                 pressScale = true,
                                 modifier = Modifier

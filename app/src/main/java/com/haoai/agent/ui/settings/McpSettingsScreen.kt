@@ -55,6 +55,11 @@ import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.LiquidGlassButton
 import kotlinx.coroutines.launch
 import java.util.UUID
+import com.haoai.agent.ui.theme.HaoTone
+import com.haoai.agent.ui.theme.haoToneInk
+import com.haoai.agent.ui.theme.haoToneMain
+import androidx.compose.material.icons.filled.Extension
+import com.haoai.agent.ui.common.appLayer
 
 /**
  * MCP 服务器管理页（2.1）：添加/编辑远程 MCP 服务器、测试连接、查看工具清单、
@@ -148,23 +153,30 @@ fun McpSettingsScreen(
         )
     } else {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        if (wallpaper != null) {
-            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-            Image(
-                bitmap = wpImage,
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                    // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                    com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+            }
         }
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Spacer(Modifier.height(56.dp))
-                Text(
-                    "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；添加后冷启动会自动连接。" +
-                        "MCP 工具属于「mcp」工具组：新会话默认不注入清单，代理需要时会先调用 tools_enable(\"mcp\") 启用（仅当前会话生效）。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+                com.haoai.agent.ui.common.HaoNote(
+                    backdrop = backdrop,
+                    text = "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；" +
+                        "添加后冷启动会自动连接。MCP 工具属于「mcp」工具组：新会话默认不注入清单，" +
+                        "代理需要时会先调用 tools_enable(\"mcp\") 启用（仅当前会话生效）。",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
                     LiquidGlassButton(
@@ -189,11 +201,12 @@ fun McpSettingsScreen(
                     }
                 }
                 if (servers.isEmpty()) {
-                    Text(
-                        "暂无 MCP 服务器。可以添加任何支持 Streamable HTTP 的 MCP 服务器（例如文档查询类只读服务）。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(24.dp)
+                    com.haoai.agent.ui.common.HaoEmptyState(
+                        backdrop = backdrop,
+                        icon = Icons.Filled.Extension,
+                        title = "暂无 MCP 服务器",
+                        hint = "可以添加任何支持 Streamable HTTP 的 MCP 服务器（例如文档查询类只读服务）。",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
                 LazyColumn(
@@ -207,6 +220,7 @@ fun McpSettingsScreen(
                             onClick = { editing = srv.id },
                             backdrop = backdrop,
                             shape = RoundedCornerShape(16.dp),
+                            surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.fillMaxWidth().padding(14.dp)) {
@@ -244,13 +258,14 @@ fun McpSettingsScreen(
                                         backdrop = backdrop
                                     )
                                 }
-                                val (label, color) = stateLabel(st)
+                                val (label, tone) = stateLabel(st)
                                 if (label != null) {
                                     Spacer(Modifier.height(6.dp))
                                     Text(
                                         label,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = color ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = tone?.let { haoToneInk(it) }
+                                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 2
                                     )
                                 }
@@ -304,10 +319,10 @@ fun McpSettingsScreen(
 @Composable
 private fun StatusDot(st: McpConnState) {
     val color = when (st) {
-        is McpConnState.Ready -> Color(0xFF3FA37A)
-        is McpConnState.Connecting -> Color(0xFF5B8DEF)
-        is McpConnState.Error -> Color(0xFFE25555)
-        McpConnState.PendingReady -> Color(0xFFD9913F)
+        is McpConnState.Ready -> haoToneMain(HaoTone.Accent)
+        is McpConnState.Connecting -> haoToneMain(HaoTone.Info)
+        is McpConnState.Error -> haoToneMain(HaoTone.Danger)
+        McpConnState.PendingReady -> haoToneMain(HaoTone.Warn)
         McpConnState.Disconnected -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
     }
     Box(
@@ -317,12 +332,17 @@ private fun StatusDot(st: McpConnState) {
     )
 }
 
-private fun stateLabel(st: McpConnState): Pair<String?, Color?> = when (st) {
+/**
+ * 状态文案 + 语义色调。**返回色调而非颜色**：本函数是普通函数（非组合），
+ * 取不到 MaterialTheme；由调用处的组合上下文用 [haoToneInk] 解析成颜色，
+ * 这样"状态色"就只有一个来源（token），不会再各自硬编码。
+ */
+private fun stateLabel(st: McpConnState): Pair<String?, HaoTone?> = when (st) {
     is McpConnState.Ready -> "已连接（${st.toolCount} 把工具）" to null
     is McpConnState.Connecting -> "连接中…" to null
-    is McpConnState.Error -> "连接失败：${st.message}" to Color(0xFFE25555)
+    is McpConnState.Error -> "连接失败：${st.message}" to HaoTone.Danger
     McpConnState.PendingReady ->
-        "待就绪：需要 Linux 环境（设置 → Linux 环境 安装发行版后自动连接）" to Color(0xFFD9913F)
+        "待就绪：需要 Linux 环境（设置 → Linux 环境 安装发行版后自动连接）" to HaoTone.Warn
     McpConnState.Disconnected -> null to null
 }
 
@@ -421,7 +441,7 @@ private fun McpEditView(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
-                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), pressScale = false) {
+                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(), pressScale = false) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Column {
                             Text(
@@ -461,7 +481,7 @@ private fun McpEditView(
                                 if (sandboxOk) "✓ Linux 沙箱已就绪，保存后自动连接"
                                 else "⚠ Linux 环境未安装：请先到 设置 → Linux 环境 安装发行版（安装后本服务器会自动连接）",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (sandboxOk) Color(0xFF3FA37A) else Color(0xFFD9913F)
+                                color = if (sandboxOk) haoToneMain(HaoTone.Accent) else haoToneMain(HaoTone.Warn)
                             )
                         } else {
                             LabeledField(
@@ -547,7 +567,7 @@ private fun McpEditView(
                 }
             }
             item {
-                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), pressScale = false) {
+                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(), pressScale = false) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
                             "审批级别",
@@ -571,7 +591,7 @@ private fun McpEditView(
                                 "⚠ 免审批模式下该服务器的所有工具将直接执行、不再弹窗确认——仅建议对确信只读的服务开启。"
                             else "该服务器工具在代理调用前会弹出确认。",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (approvalLevel == "read") Color(0xFFD9913F)
+                            color = if (approvalLevel == "read") haoToneMain(HaoTone.Warn)
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         if (kind == "http") {
@@ -645,13 +665,13 @@ private fun McpEditView(
                     Text(
                         (if (ok) "✓ " else "✗ ") + msg,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (ok) Color(0xFF3FA37A) else Color(0xFFE25555)
+                        color = if (ok) haoToneMain(HaoTone.Accent) else haoToneMain(HaoTone.Danger)
                     )
                 }
             }
             if (initial != null && initial.toolCache.isNotEmpty()) {
                 item {
-                    GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), pressScale = false) {
+                    GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(), pressScale = false) {
                         Column(Modifier.fillMaxWidth().padding(14.dp)) {
                             Text(
                                 "工具清单（${initial.toolCache.size}）",
@@ -683,7 +703,7 @@ private fun McpEditView(
                         onClick = { onDelete() },
                         backdrop = backdrop,
                         shape = RoundedCornerShape(percent = 50),
-                        surfaceColor = Color(0xFFE25555).copy(alpha = 0.85f)
+                        surfaceColor = haoToneMain(HaoTone.Danger).copy(alpha = 0.85f)
                     ) {
                         Text(
                             "删除此服务器",

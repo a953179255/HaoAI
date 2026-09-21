@@ -161,11 +161,18 @@ class MainActivity : ComponentActivity() {
                 amoled = settings.amoledMode,
                 wallpaper = wallpaper
             ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                // 壁纸模式开关：设置/管理页的玻璃卡据此把不透明度抬到 0.82
+                // （白 58% 压在花壁纸上会把图案透出来，卡片/分隔线/徽标全糊在一起）
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.haoai.agent.ui.theme.LocalOnWallpaper
+                        provides (settings.wallpaperGlobal && wallpaper != null)
                 ) {
-                    RootApp(wallpaper)
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        RootApp(wallpaper)
+                    }
                 }
             }
         }

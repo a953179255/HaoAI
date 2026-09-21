@@ -52,6 +52,8 @@ import com.haoai.agent.ui.common.LiquidTabRow
 import com.haoai.agent.ui.common.LiquidToggle
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import kotlinx.coroutines.launch
+import com.haoai.agent.ui.common.appLayer
+import androidx.compose.foundation.layout.Box
 
 private val TRIGGER_TYPES = listOf("manual", "schedule", "boot", "notification")
 
@@ -87,14 +89,21 @@ fun WorkflowScreen(
             // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (wallpaper != null) {
-            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-            Image(
-                bitmap = wpImage,
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
+        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
+        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
+        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                    // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
+                    com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
+            }
         }
         LazyColumn(
             modifier = Modifier
@@ -110,11 +119,23 @@ fun WorkflowScreen(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
                 )
             }
+            if (workflows.isEmpty()) {
+                item {
+                    com.haoai.agent.ui.common.HaoEmptyState(
+                        backdrop = backdrop,
+                        icon = Icons.Filled.Bolt,
+                        title = "暂无工作流",
+                        hint = "工作流 = 多步自动化，可按定时 / 开机 / 通知触发。也可以直接让代理帮你建一条。",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+            }
             items(workflows, key = { it.id }) { w ->
                 GlassCard(
                     onClick = { editTarget = w },
                     backdrop = backdrop,
                     shape = RoundedCornerShape(14.dp),
+                    surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                     modifier = Modifier
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 ) {
@@ -228,7 +249,8 @@ fun WorkflowScreen(
                     GlassCard(
                         onClick = { newDraft = true },
                         backdrop = backdrop,
-                        shape = RoundedCornerShape(14.dp)
+                        shape = RoundedCornerShape(14.dp),
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha()
                     ) {
                         Row(
                             Modifier.padding(horizontal = 18.dp, vertical = 10.dp),

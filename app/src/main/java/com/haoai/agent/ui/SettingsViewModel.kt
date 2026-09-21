@@ -145,6 +145,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         .filter { backupSelected(it) }.sumOf { scopeBytes(it) }
 
     /** 备份体积标签。阈值刻意错开一档：用 MB 表达 300 KB 只会显示成"0.0 MB"。 */
+    // ---- 「关于」页用的只读快照 ----
+
+    /** 本机会话数（会话列表长度）。 */
+    fun sessionCount(): Int = runCatching { c.sessionStore.list().size }.getOrDefault(0)
+
+    /** 应用数据目录绝对路径（关于页可点复制）。 */
+    fun dataDirPath(): String = runCatching { c.appFilesDir.absolutePath }.getOrDefault("")
+
     fun sizeLabel(bytes: Long): String = when {
         bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / 1024.0 / 1024 / 1024)
         bytes >= 10L * 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)

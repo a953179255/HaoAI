@@ -121,7 +121,12 @@ fun TaskFloat(
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, end = 12.dp, start = 12.dp),
+            // bottom = 22dp 是**给库的外阴影留出余量**：本组件外面套着
+            // AnimatedVisibility(expandVertically/shrinkVertically)，它默认 clip = true，
+            // 裁剪边界 = 内容边界。原先玻璃几乎撑满容器（左右仅 12dp、上下 4dp/0dp），
+            // 外阴影被整条吃掉（实测面板下缘外侧亮度 253.9 → 253.9，零投影）；
+            // 上下文面板因为容器横向有富余，阴影才看得见。留 22dp 后阴影能自然溢出。
+            .padding(top = 4.dp, end = 12.dp, start = 12.dp, bottom = 22.dp),
         contentAlignment = Alignment.TopEnd
     ) {
         val fullPx = with(density) { maxWidth.toPx() }
@@ -166,7 +171,11 @@ fun TaskFloat(
             backdrop = backdrop,
             radius = corner,
             lensRadius = 13.dp,
-            surfaceAlpha = 0.50f,
+            // 0.50 → 0.58：与上下文面板统一材质（浅色主题下视觉差极小，价值在一致性）
+            surfaceAlpha = 0.58f,
+            // 浮层强化：分层交给库原生 highlight + shadow + innerShadow
+            // （原先手画描边在玻璃上四边深浅不一：左 186 / 右 188 / 下 225）
+            floating = true,
             modifier = Modifier
                 .width(with(density) { wPx.toDp() })
                 .height(with(density) { hPx.toDp() })

@@ -54,6 +54,11 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.DpOffset
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
+import com.kyant.backdrop.shadow.Shadow
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -61,6 +66,8 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -109,11 +116,38 @@ internal fun glassSurfaceColor(alpha: Float): Color {
     else Color.White.copy(alpha = alpha)
 }
 
-/** 玻璃描边：暗色下白色描边收敛到发丝级，避免刺眼亮框。 */
+/**
+ * 玻璃描边色（**手画描边**）。
+ *
+ * ⚠️ 2026-09-21 结论：**手画描边不适合用在液态玻璃上**。上一次改版把它换成
+ * `onSurface` 深色发丝线后，真机实测四条边深浅不一（左 186 / 右 188 / **下 225**），
+ * 原因是三条结构性冲突：
+ * ① 半透明色压在玻璃上，真实深浅由"身后的内容"决定（左边压聊天内容、下边压白卡片）；
+ * ② `1.5dp × 2.625 = 3.94px` 落在非整数像素上，抗锯齿摊到 4~5 行，四边取整方向不同；
+ * ③ 玻璃自带的 lens 折射亮边（12~20dp 弧）与描边在边缘叠加，一侧被提亮一侧被压暗。
+ *
+ * ⇒ **浮层面板请改用 `GlassPanel(floating = true)`**，分层由库原生三件套
+ * （`highlight` / `shadow` / `innerShadow`）绘制 —— 与折射同源、天然均匀。
+ * 本函数只保留给"平坦卡片"用（白描边，与既有观感一致）。
+ */
 @Composable
 internal fun glassBorderColor(alpha: Float): Color {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     return if (dark) Color.White.copy(alpha = alpha * 0.35f) else Color.White.copy(alpha = alpha)
+}
+
+/** 退化路径（不采样 backdrop、拿不到库阴影）的兜底投影色：环境光。 */
+@Composable
+private fun glassFallbackShadowAmbient(): Color {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return if (dark) Color.Black.copy(alpha = 0.30f) else Color(0xFF262E36).copy(alpha = 0.10f)
+}
+
+/** 退化路径的兜底投影色：主光（决定投影"落点"浓淡）。 */
+@Composable
+private fun glassFallbackShadowSpot(): Color {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return if (dark) Color.Black.copy(alpha = 0.42f) else Color(0xFF262E36).copy(alpha = 0.16f)
 }
 
 @Composable
@@ -167,21 +201,105 @@ fun GlassPanel(
     lensRadius: Dp = radius,
     blurRadius: Dp = radius / 3f,
     chromaticAberration: Boolean = false,
+    /** 折射覆盖**整个表面**（折射高度=短边一半，四边环带在中心汇合）。
+     *  关闭时折射只在边缘一圈（宽度=lensRadius）——通栏大卡上那一条太窄，等于没有。 */
+    lensFull: Boolean = false,
+    /** 折射强度倍数：位移量 = 折射高度 × 此值（演示 App 的比例是 2） */
+    lensAmountMul: Float = 2f,
     refract: Boolean? = null,
     redrawKey: (() -> Any?)? = null,
     border: Boolean = true,
     /** 表面附加绘制（画在磨砂与着色之上、内容之下）：如顶栏状态栏带的渐变补强。仅折射路径生效。 */
     surfaceOverlay: (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)? = null,
+    /**
+     * **浮层强化**（2026-09-21 定案）：用于"悬浮在内容之上"的面板（任务面板 / 上下文面板 / 弹层）。
+     *
+     * 开启后不再手画描边，改用**库原生三件套**表达分层：
+     * ① `highlight` 边缘高光（玻璃边缘受光，浅色底上不可见、深色底上是那圈亮边）；
+     * ② 调强的 `shadow` 外阴影（真实层级——注意会被"展开/收起"动画容器的裁剪吸收，
+     *    在不受裁剪的覆盖层上才完整可见）；
+     * ③ `innerShadow` **四边均匀的内暗边**（offset = 0）= 一块有厚度的玻璃板，
+     *    替代"深色发丝线"，且画在形状之内、不会被任何裁剪吃掉。
+     * 三者由库的着色器绘制、与折射同源 ⇒ **不会出现"四边粗细/深浅不一"**。
+     *
+     * 注意：库的 `drawBackdrop` 默认**已经**在画 `Highlight.Default`（白 0.5dp）与
+     * `Shadow.Default`（24dp / 黑 10%）——浅色背景下白高光看不见、24dp 阴影太柔，
+     * 这才是"面板与聊天内容融为一体"的根因，故浮层需要显式调强。
+     */
+    floating: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
     val surface = glassSurfaceColor(surfaceAlpha)
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val border2 = glassBorderColor(0.45f)
+
+    // ── 分层元素（库原生三件套）──────────────────────────────────────────────
+    // 一律传非空实例（库的形参在不同版本间有 `(() -> X)?` 与 `() -> X` 两种写法，
+    // 传非空可同时兼容）；"不画"用 alpha = 0 表达，而非传 null。
+    // Highlight.Plain = 演示 App 同款的均匀边缘亮环（Default 是渐变式，玻璃上几乎看不见）
+    val highlightLambda: () -> Highlight = remember { { Highlight.Plain } }
+    val shadowLambda: () -> Shadow = if (floating) {
+        remember(darkTheme) {
+            {
+                // 浅色：冷灰实投影，把浮层从近白背景上"抬起来"；深色：纯黑更浓
+                if (darkTheme) Shadow.Default.copy(
+                    radius = 30.dp,
+                    offset = DpOffset(0.dp, 8.dp),
+                    color = Color.Black.copy(alpha = 0.45f)
+                ) else Shadow.Default.copy(
+                    radius = 26.dp,
+                    offset = DpOffset(0.dp, 7.dp),
+                    color = Color(0xFF262E36).copy(alpha = 0.20f)
+                )
+            }
+        }
+    } else remember { { Shadow.Default } }
+    val innerShadowLambda: () -> InnerShadow = if (floating) {
+        remember(darkTheme) {
+            {
+                // **offset = 0 ⇒ 四条边的内暗边完全对称**，这是对"描边不均匀"的正面回答：
+                // 手画描边的不均匀来自三件事——半透明色（深浅被身后内容决定）、
+                // 1.5dp×2.625=3.94px 的非整数线宽（抗锯齿摊到 4~5 行）、
+                // 以及与折射亮边叠边；而内阴影由库着色器绘制，四边天然对称、且**不会被
+                // 展开/收起动画的裁剪吃掉**（内阴影画在形状之内）。
+                // 观感 = 一块有厚度的玻璃板：边缘一圈柔和的暗内边，中间透亮。
+                if (darkTheme) InnerShadow.Default.copy(
+                    radius = 18.dp,
+                    offset = DpOffset.Zero,
+                    color = Color.Black.copy(alpha = 0.38f)
+                ) else InnerShadow.Default.copy(
+                    radius = 15.dp,
+                    offset = DpOffset.Zero,
+                    color = Color(0xFF262E36).copy(alpha = 0.30f)
+                )
+            }
+        }
+    } else remember { { InnerShadow.Default.copy(alpha = 0f) } }
+
+    // 退化路径（不采样 backdrop）拿不到库阴影，用系统 shadow 兜底，避免浮层"贴"在内容上
+    val fallbackShadowMod = if (floating) {
+        Modifier.shadow(
+            elevation = 8.dp,
+            shape = shape ?: RoundedCornerShape(radius),
+            clip = false,
+            ambientColor = glassFallbackShadowAmbient(),
+            spotColor = glassFallbackShadowSpot()
+        )
+    } else Modifier
+    // 浮层由库三件套表达分层，不再手画描边（半透明描边在玻璃上会四边深浅不一）
+    val drawBorder = border && !floating
     val panelModifier = if (r) {
         modifier
             // v7.1 硬裁剪：drawBackdrop 的 blur/lens 与表面填充会溢出圆角外的方形区域
             // （平色背景上呈四角灰块，GlassCard 同款修复——小尺寸圆角面板上最明显）
-            .clip(shape ?: RoundedCornerShape(radius))
+            //
+            // ⚠️ 2026-09-21：**浮层必须跳过这一步**。库的 ShadowNode 把外阴影画在
+            // 「节点四周各 radius*2」之外（radius 26dp ⇒ 单边 136px），而本 .clip() 排在
+            // drawBackdrop 之前 = 在它外层，会把整圈外阴影裁光（实测：旧版 Modifier.shadow
+            // 与本版库阴影在任务面板下缘外侧都是「零投影」）。浮层改用下面的
+            // clipEffects 参数把裁剪交给库自身按 shape 处理。
+            .then(if (floating) Modifier else Modifier.clip(shape ?: RoundedCornerShape(radius)))
             .drawBackdrop(
                 backdrop = backdrop,
                 shape = { shape ?: RoundedCornerShape(radius) },
@@ -196,30 +314,74 @@ fun GlassPanel(
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。
                     if (lensRadius > 0.dp) {
-                        // 环宽 12-20dp：过粗（2×radius=48dp）成白圈、过细（14dp）没折射感
-                        lens(lensRadius.toPx() * 1.1f, (lensRadius * 1.2f).coerceIn(12.dp, 20.dp).toPx(), chromaticAberration = chromaticAberration)
+                        if (lensFull) {
+                            // 折射高度 = 短边一半 ⇒ 四边环带在中心汇合，整面都有折射。
+                            // 演示 App 里"折射高度"滑杆拉高就是这个效果；通栏大卡必须
+                            // 这样才看得见 —— 边缘一圈 24dp 只占卡面极小比例。
+                            val md = size.minDimension
+                            lens(
+                                refractionHeight = md * 0.5f,
+                                refractionAmount = md * 0.5f * lensAmountMul,
+                                depthEffect = true,
+                                chromaticAberration = chromaticAberration
+                            )
+                        } else {
+                            // 窄环带：强度 = 高度 × 倍数（位移大 ⇒ 边缘弯折锐利）
+                            // 对齐 Kyant0 演示 App（GlassPlayground/sheet）的配方：
+                            // 折射强度 = 2 × 折射高度（demo: 16/32 与 25.6/51.2），并开 depthEffect。
+                            lens(
+                                refractionHeight = lensRadius.toPx(),
+                                refractionAmount = (lensRadius * lensAmountMul).toPx(),
+                                depthEffect = true,
+                                chromaticAberration = chromaticAberration
+                            )
+                        }
                     }
                 },
+                // 库原生分层三件套：边缘高光 + 外阴影（层级）+ 内阴影（厚度）
+                highlight = highlightLambda,
+                shadow = shadowLambda,
+                innerShadow = innerShadowLambda,
                 onDrawSurface = {
-                    drawRect(surface)
-                    if (tint != null) {
-                        drawRect(tint, blendMode = BlendMode.Hue)
-                        drawRect(tint.copy(alpha = 0.35f))
+                    if (!floating) {
+                        drawRect(surface)
+                        if (tint != null) {
+                            drawRect(tint, blendMode = BlendMode.Hue)
+                            drawRect(tint.copy(alpha = 0.35f))
+                        }
+                    } else {
+                        // 浮层跳过了外层 Modifier.clip（否则库的外阴影被整圈裁光，见下），
+                        // 因此表面填充改为**按 shape 画路径**，方角不再溢出色块。
+                        val densityScope: androidx.compose.ui.unit.Density = this
+                        val outline = (shape ?: RoundedCornerShape(radius))
+                            .createOutline(size, layoutDirection, densityScope)
+                        val p = Path()
+                        when (outline) {
+                            is Outline.Rounded -> p.addRoundRect(outline.roundRect)
+                            is Outline.Rectangle -> p.addRect(outline.rect)
+                            is Outline.Generic -> p.addPath(outline.path)
+                        }
+                        drawPath(p, surface)
+                        if (tint != null) {
+                            drawPath(p, tint, blendMode = BlendMode.Hue)
+                            drawPath(p, tint.copy(alpha = 0.35f))
+                        }
                     }
                     surfaceOverlay?.invoke(this)
                 }
             )
             // 发丝描边画在玻璃表面之上（后置 modifier 后绘制），与退化分支观感对齐
-            .then(if (border) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
+            .then(if (drawBorder) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
     } else {
         // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂：
         // Modifier.blur 对自身内容做高斯模糊 + 着色底，观感接近真玻璃（非死板白底）。
         // 实现手法：外包一个离屏 Box 画 backdrop 的内容色近似（用 surface 深色版），
         // 内容层加 blur——这里用「背景模糊层+表面」两层组合
         modifier
+            .then(fallbackShadowMod)
             .clip(shape ?: RoundedCornerShape(radius))
             .background(surface)
-            .then(if (border) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
+            .then(if (drawBorder) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
             .then(
                 if (tint != null) Modifier.background(tint) else Modifier
             )
@@ -353,7 +515,7 @@ fun LiquidGlassButton(
     } else {
         Modifier
             .clip(shape)
-            .background(surfaceColor ?: glassSurfaceColor(0.25f))
+            .background(surfaceColor ?: glassSurfaceColor(com.haoai.agent.ui.theme.haoCardSurfaceAlpha()))
             .border(1.5.dp, glassBorderColor(0.45f), shape)
     }
 
@@ -656,15 +818,18 @@ fun GlassPageBar(
     onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     refract: Boolean? = null,
+    /** null = 跟着是否铺壁纸自适应（见 [com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha]） */
+    surfaceAlpha: Float? = null,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}
 ) {
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
         radius = 0.dp,
-        lensRadius = 0.dp,
-        blurRadius = 12.dp,
-        surfaceAlpha = 0.30f,
+        // 顶栏加折射环（之前 0 = 完全没折射，是"只是磨砂"最重的地方）
+        lensRadius = com.haoai.agent.ui.theme.haoPageBarLensRadius(),
+        blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
+        surfaceAlpha = surfaceAlpha ?: com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
         border = false,
         refract = refract
     ) {
@@ -990,8 +1155,14 @@ fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.co
     cursorColor = MaterialTheme.colorScheme.primary,
     focusedBorderColor = MaterialTheme.colorScheme.primary,
     unfocusedBorderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
-    focusedContainerColor = glassSurfaceColor(0.32f),
-    unfocusedContainerColor = glassSurfaceColor(0.20f),
+    // 壁纸上必须加实：输入框里是要读要写的文字，0.20/0.32 的容器
+    // 会让"搜索标题与消息内容"这类占位文字直接糊进壁纸（用户实测指出）
+    focusedContainerColor = glassSurfaceColor(
+        if (com.haoai.agent.ui.theme.LocalOnWallpaper.current) 0.88f else 0.32f
+    ),
+    unfocusedContainerColor = glassSurfaceColor(
+        if (com.haoai.agent.ui.theme.LocalOnWallpaper.current) 0.80f else 0.20f
+    ),
     focusedLabelColor = MaterialTheme.colorScheme.primary,
     unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
 )
@@ -1024,7 +1195,11 @@ fun CompactGlassField(
     // 降明度而非提白度：弹窗面板本身已是 0.92 白（浅色主题），再叠白色容器就是
     // 「白叠白」，边界全靠描边硬撑。改用 onBackground 叠加（浅色下=压暗、
     // 深色下=提亮），容器与面板有真实明度差；聚焦时再加深一档
-    val container = if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
+    // 壁纸上同样加实：0.07/0.04 的容器压在花壁纸上等于没有框
+    val container = if (com.haoai.agent.ui.theme.LocalOnWallpaper.current) {
+        if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f)
+        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.52f)
+    } else if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
     else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f)
 
     androidx.compose.foundation.layout.Row(
@@ -1214,7 +1389,8 @@ fun LiquidTabRow(
             label = "tabIndicator"
         )
         // 容器：玻璃胶囊（细 lens 环）
-        val containerSurface = glassSurfaceColor(0.30f)
+        // 容器：玻璃胶囊 —— 壁纸上 0.30 会让整条切换器糊进壁纸（用户实测指出）
+        val containerSurface = glassSurfaceColor(com.haoai.agent.ui.theme.haoCardSurfaceAlpha())
         Box(
             Modifier
                 .fillMaxSize()
