@@ -36,7 +36,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.shape.RoundedCornerShape
 import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.HaoChip
 import com.haoai.agent.ui.common.HaoGroup
@@ -45,11 +44,8 @@ import com.haoai.agent.ui.theme.GlassTuning
 import com.haoai.agent.ui.theme.HaoTone
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
 import com.haoai.agent.ui.common.appLayer
 
 /**
@@ -75,13 +71,6 @@ private fun GlassLab() {
         }.getOrNull()?.asImageBitmap()
     }
     val backdrop = rememberLayerBackdrop()
-    // 设置页同款采样层：rememberAppBackdrop 画块式（壁纸在层的 draw 块里，
-    // 而非节点记录式）—— 用于定位"实验室好看、设置页不行"的差异
-    val appStyleBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
-        runCatching {
-            com.haoai.agent.platform.WallpaperStore.loadBitmapCover(context, 1080, 2400)
-        }.getOrNull()
-    )
 
     // 与主界面同一环境：壁纸模式开（这样调出来的就是真实观感）
     CompositionLocalProvider(
@@ -97,13 +86,7 @@ private fun GlassLab() {
                 )
             }
             // 采样宿主：壁纸挂进采样层（与演示 BackdropDemoScaffold 同构）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .layerBackdrop(backdrop)
-                    // ②b 的采样源同挂这里：设置页修复路径（appBackdrop + 挂载）的对照
-                    .appLayer(appStyleBackdrop)
-            ) {
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop)) {
                 wallpaper?.let {
                     Image(
                         bitmap = it,
@@ -169,35 +152,6 @@ private fun GlassLab() {
                 ) { }
 
                 // ── 当前配方（= 全项目正在用的，拖动全局变化）──
-                // ── ②b 设置页同款采样层（rememberAppBackdrop 画块式）──
-                Text(
-                    "②b 设置页同款采样层（rememberAppBackdrop）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFF26261F),
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .height(120.dp)
-                        .drawBackdrop(
-                            backdrop = appStyleBackdrop,
-                            shape = { RoundedCornerShape(28f.dp) },
-                            effects = {
-                                vibrancy()
-                                blur(4f.dp.toPx())
-                                lens(
-                                    refractionHeight = 16f.dp.toPx(),
-                                    refractionAmount = 32f.dp.toPx(),
-                                    depthEffect = true,
-                                    chromaticAberration = true
-                                )
-                            },
-                            highlight = { Highlight.Plain },
-                            onDrawSurface = { drawRect(Color.White.copy(alpha = 0.5f)) }
-                        )
-                )
                 Text(
                     "② 当前配方（= 设置页/聊天页正在用的，拖动全局变化）",
                     style = MaterialTheme.typography.labelMedium,

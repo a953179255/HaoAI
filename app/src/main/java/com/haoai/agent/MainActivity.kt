@@ -662,8 +662,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         kotlinx.coroutines.delay(100)   // 转场 spring 收尾
         screenSettled = screen
     }
-    val plainTop = scheme.surface
-    val plainBottom = scheme.surfaceVariant
+    // 遗留3 修复（2026-09-22）：净色底玻璃"透过"的颜色必须与页面实际底色一致
+    // （采样=所见）。此前用 surface/surfaceVariant 渐变，与壳的 .background(background) 不符
+    val plainTop = scheme.background
+    val plainBottom = scheme.background
     val wpBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
         wallpaper, dark = darkBackdrop, baseTop = plainTop, baseBottom = plainBottom
     )

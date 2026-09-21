@@ -47,6 +47,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.haoai.agent.agent.browser.BrowserController
 import com.haoai.agent.ui.common.GlassPanel
 import kotlinx.coroutines.launch
+import com.haoai.agent.ui.common.appLayer
+import androidx.compose.foundation.layout.Box
 
 /**
  * 4.2 内置浏览器界面：WebView 容器（多标签条 + 地址栏 + 后退/刷新）。
@@ -88,12 +90,16 @@ fun BrowserScreen(
         }
     }
 
-    Column(
+    Box(
         Modifier
             .fillMaxSize()
             // 平移转场页面必须有实底：否则转场中本页滑入时透出下层页面
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // ★ 采样宿主（2026-09-22 挂载铁律）：本页底色纯色，宿主录 onDraw 渐变即可，
+        // 玻璃顶栏在宿主外采样（宿主内含玻璃 = RenderNode 成环 = SIGSEGV）
+        Box(Modifier.matchParentSize().appLayer(backdrop))
+        Column(Modifier.fillMaxSize()) {
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
@@ -208,5 +214,6 @@ fun BrowserScreen(
                 .fillMaxWidth()
                 .weight(1f)
         )
+        }
     }
 }
