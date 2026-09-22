@@ -318,17 +318,23 @@ fun SessionsScreen(
                             tx += c.positionChange().x; ty += c.positionChange().y
                             if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
                                 if (abs(tx) > abs(ty)) {
-                                    // 方向语义（2026-09-22 方案 1 定案，两页完全一致）：
-                                    // · 右滑 = 在两个列表间切换（会话→回收站 / 回收站→会话）。
-                                    //   回收站右滑 = "返回"，符合直觉；两页同方向，逻辑一致。
-                                    // · 左滑 = 留给卡片呼出操作（未展开→呼出；已展开→卡片自己收）。
-                                    //   页面只做兜底：有卡片展开时收起它（卡片 visible 区靠 offset{}
-                                    //   位移、命中测试在原位，手指落在可见区外侧时无人接管 → 页面兜底，
-                                    //   否则"滑了没反应"）。
+                                    // 方向语义（2026-09-22 用户定案：每页各自最顺手）：
+                                    // · 全部会话页：**左滑 → 去回收站**；**右滑 → 呼出卡片**（按钮在左，
+                                    //   卡片右移，与滑动方向一致）。
+                                    // · 回收站页：**左滑 → 呼出卡片**（按钮在右，卡片左移）；
+                                    //   **右滑 → 返回全部会话**（"右滑返回"符合直觉）。
+                                    // 页面只做兜底：有卡片展开时，非呼出方向的滑动收起它
+                                    //（卡片 visible 区靠 offset{} 位移、命中测试在原位，
+                                    //  手指落在可见区外侧时无人接管 → 页面兜底，否则"滑了没反应"）。
                                     val cardOpen = openCardIdNow != null
-                                    if (tx > 0f) {
+                                    if (!showTrashNow && tx < 0f) {
+                                        // 会话页左滑 → 回收站
                                         openCardId = null
-                                        showTrash = !showTrashNow
+                                        showTrash = true
+                                    } else if (showTrashNow && tx > 0f) {
+                                        // 回收站右滑 → 返回会话
+                                        openCardId = null
+                                        showTrash = false
                                     } else if (cardOpen) {
                                         openCardId = null
                                     }
@@ -532,6 +538,8 @@ fun SessionsScreen(
                                 onClick = {},
                                 onOpenChange = { open -> openCardId = if (open) s.id else null },
                                 openWidth = 150.dp,
+                                // 回收站：操作区在卡片右侧 → **左滑呼出**（右滑留给"返回会话"）
+                                actionsAtEnd = true,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
                                 actions = {
                                     FilledIconButton(

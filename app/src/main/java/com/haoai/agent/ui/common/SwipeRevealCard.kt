@@ -57,14 +57,15 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
- * 通用「左滑呼出操作按钮」卡片（iOS 邮件 / 微信 / Gmail 范式）：按钮区在卡片右后方，
- * 卡片左移露出。**2026-09-22 由右滑改为左滑**——让"呼出=左滑、切页=右滑"在两页统一，
- * 且符合主流习惯（原先右滑呼出导致切页只能用左滑，回收站"左滑返回"反直觉）。
+ * 通用「滑动呼出操作按钮」卡片。**呼出方向可配置**（2026-09-22 用户定案）：
+ * - `actionsAtEnd = false`（默认）：按钮区在卡片**左**后方，**右滑**呼出 —— 会话页用；
+ * - `actionsAtEnd = true`：按钮区在卡片**右**后方，**左滑**呼出 —— 回收站页用。
+ * 映射关系：**按钮在哪一侧，就从反方向滑出**（各页最顺手），切页手势随之让位。
  *
  * 手势要点：
  * - 方向锁：totalX/totalY 任一轴先越过 touchSlop 即定格方向；纵向先越线则永不接管，
  *   事件全部穿透给外层（列表滚动/翻页），竖滑歪一点不会再误触发呼出。
- * - 未展开仅左滑接管；已展开双向接管（可右滑收回）。
+ * - 未展开时仅"呼出方向"接管；已展开双向接管（反向滑可收回）。
  * - 可选删除带 [deleteWidth]：**两段式**——第一段拖入删除带松手只「上膛」（删除带居中
  *   浮现、卡面贴住其右侧、红色高亮、动作按钮隐藏），并不删除；上膛后再往右拖一次
  *   （或点删除带、点卡面取消）才执行 [onDeleteSwipe]。未提供 [deleteWidth] 则偏移钳制在呼出宽度内。
@@ -82,6 +83,8 @@ fun SwipeRevealCard(
     onClick: () -> Unit,
     onOpenChange: (Boolean) -> Unit,
     openWidth: Dp,
+    /** 操作区在卡片右侧（= 左滑呼出）。会话页 false（右滑呼出），回收站页 true */
+    actionsAtEnd: Boolean = false,
     deleteWidth: Dp? = null,
     onDeleteSwipe: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -90,6 +93,8 @@ fun SwipeRevealCard(
 ) {
     val density = LocalDensity.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    // 呼出方向：+1 = 右滑呼出（按钮在左）；-1 = 左滑呼出（按钮在右）
+    val dir = if (actionsAtEnd) -1f else 1f
     val openPx = with(density) { openWidth.toPx() }
     val deletePx = with(density) { (deleteWidth ?: openWidth).toPx() }
     val armConfirmPx = with(density) { 40.dp.toPx() }
@@ -157,8 +162,9 @@ fun SwipeRevealCard(
                     val over = if (span > 1f) ((offset.value - openPx) / span).coerceIn(0f, 1f) else 0f
                     alpha = if (deleteArmed) 0f else reveal * (1f - over)
                 }
-                .padding(end = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                .padding(start = if (actionsAtEnd) 0.dp else 4.dp, end = if (actionsAtEnd) 4.dp else 0.dp),
+            horizontalArrangement = if (actionsAtEnd) Arrangement.spacedBy(6.dp, Alignment.End)
+            else Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
             content = actions
         )
@@ -178,11 +184,16 @@ fun SwipeRevealCard(
                     Modifier
                         .matchParentSize()
                         .graphicsLayer { alpha = bandAlpha },
-                    contentAlignment = Alignment.CenterEnd
+                    contentAlignment = if (actionsAtEnd) Alignment.CenterEnd else Alignment.CenterStart
                 ) {
                     Box(
                         Modifier
-                            .padding(end = bandStart, top = 5.dp, bottom = 5.dp)
+                            .padding(
+                                start = if (actionsAtEnd) 0.dp else bandStart,
+                                end = if (actionsAtEnd) bandStart else 0.dp,
+                                top = 5.dp,
+                                bottom = 5.dp
+                            )
                             .fillMaxHeight()
                             .width(bandWidth)
                             .background(
@@ -200,8 +211,8 @@ fun SwipeRevealCard(
                                 Icons.Filled.Delete,
                                 contentDescription = when {
                                     confirmReady -> "松手删除会话"
-                                    deleteArmed -> "再左滑或点击删除会话"
-                                    else -> "继续左拖以上膛删除"
+                                    deleteArmed -> if (actionsAtEnd) "再左滑或点击删除会话" else "再右滑或点击删除会话"
+                                    else -> if (actionsAtEnd) "继续左拖以上膛删除" else "继续右拖以上膛删除"
                                 },
                                 tint = if (deleteArmed) Color.White else MaterialTheme.colorScheme.error,
                                 modifier = Modifier
@@ -229,7 +240,7 @@ fun SwipeRevealCard(
                 .fillMaxWidth()
                 // 布局期平移而非 graphicsLayer.translationX：离屏层的方形边界会被玻璃卡片的
                 // backdrop 采样反复回画，在四角积累成「直角阴影」残影（offset 不创建层）
-                .offset { IntOffset(-offset.value.toInt(), 0) }
+                .offset { IntOffset((offset.value * dir).toInt(), 0) }
                 .pointerInput(isOpen, openPx, deletePx) {
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
@@ -237,7 +248,7 @@ fun SwipeRevealCard(
                         var totalX = 0f
                         var totalY = 0f
                         var decided = false
-                        // 已展开的卡片双向接管（可右滑收回）；未展开时仅左滑接管
+                        // 已展开的卡片双向接管（反向滑收回）；未展开时仅呼出方向接管
                         var owned = isOpen
                         var armedTravel = 0f // 上膛后继续右拖的累计量（第二段确认删除）
                         // 手势内累计位移：Animatable.snapTo 是异步协程，高频拖动时 offset.value
@@ -261,15 +272,15 @@ fun SwipeRevealCard(
                                 // 方向锁：先越过 slop 的轴赢；纵向赢则整段手势让给列表滚动/翻页
                                 if (abs(totalX) > slop || abs(totalY) > slop) {
                                     decided = true
-                                    if (!owned) owned = abs(totalX) > abs(totalY) && totalX < 0f
+                                    if (!owned) owned = abs(totalX) > abs(totalY) && (totalX * dir) > 0f
                                 }
                             }
                             if (decided && owned && delta != Offset.Zero) {
                                 change.consume()
                                 if (deleteArmed && armedAtStart) {
-                                    // 统一锚点公式：左右拖同一条连续函数，微抖不跳变；右拖超过
+                                    // 统一锚点公式：左右拖同一条连续函数，微抖不跳变；反向拖超过
                                     // 16dp 才退膛
-                                    armedTravel -= delta.x
+                                    armedTravel += delta.x * dir
                                     val next = (armedAnchor + armedTravel * 0.8f)
                                         .coerceIn(armedPx, deletePx + with(density) { 34.dp.toPx() })
                                     dragX = next
@@ -280,11 +291,11 @@ fun SwipeRevealCard(
                                         confirmReady = false
                                     }
                                 } else {
-                                    dragX = (dragX - delta.x).coerceAtLeast(0f)
+                                    dragX = (dragX + delta.x * dir).coerceAtLeast(0f)
                                     val next = if (dragX <= deletePx) dragX
                                     else deletePx + (dragX - deletePx) * 0.3f // 删除带外阻尼
                                     scope.launch { offset.snapTo(next) }
-                                    // 左拖入删除带深处即时上膛（带触觉提示），不必先松手；
+                                    // 沿呼出方向拖入删除带深处即时上膛（带触觉提示），不必先松手；
                                     // 判定用同步的 dragX，时机不再随机漂移
                                     if (deleteWidth != null && !deleteArmed &&
                                         dragX >= openPx + (deletePx - openPx) * 0.55f
