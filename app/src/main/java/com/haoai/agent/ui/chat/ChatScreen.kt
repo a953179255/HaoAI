@@ -172,6 +172,7 @@ import com.haoai.agent.ui.common.CompactGlassField
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.focus.onFocusChanged
 
 /**
  * 轻量抽屉控制器：0..1 fraction 驱动布局期平移（Modifier.offset，不创建离屏层）。
@@ -440,10 +441,12 @@ fun ChatScreen(
     var showStatusPopup by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showProfileEdit by remember { mutableStateOf(false) }
+    // 聊天输入框聚焦态（由 ComposerBar 上报）：键盘避让的唯一判据
+    var composerFocused by remember { mutableStateOf(false) }
     // 顶栏会话名点击重命名
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
-    // ── 键盘上移（只服务于"聊天输入框"）──
+    // ── 键盘上移（只服务于"聚焦的聊天输入框"）──
     // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
     val imeHeightPx = WindowInsets.ime.getBottom(density)
     val navBarPx = WindowInsets.navigationBars.getBottom(density)
@@ -451,7 +454,11 @@ fun ChatScreen(
     // **不应带动聊天内容一起上移**（用户实锤：在侧边栏编辑档案里打字，聊天页内容仍在抬）
     val overlayDialogOpen = showProfileEdit || showRenameDialog || showModelPicker ||
         showStatusPopup || showSlashHelp
-    val keyboardLiftPx = if (overlayDialogOpen) 0 else (imeHeightPx - navBarPx).coerceAtLeast(0)
+    // 判据是"聊天输入框自己聚焦"而非"键盘是否存在"：关闭弹窗时键盘要收 ~200ms，
+    // 期间若按"无弹窗 + 有键盘"判定，聊天内容会被抬起再落下（用户实锤闪动）。
+    // 以聚焦为准则窗口不存在：聊天输入框没聚焦 → 恒不抬。
+    val keyboardLiftPx = if (overlayDialogOpen || !composerFocused) 0
+        else (imeHeightPx - navBarPx).coerceAtLeast(0)
     // 玻璃 effects 在「绘制期」读取这个 State 注册快照订阅：键盘动画每帧变更 →
     // backdrop 节点失效重绘 → 采样 offset 用最新布局坐标重算。effects 里读普通
     // Int（keyboardLiftPx 参数）不会注册订阅——这正是输入栏透出抬升前旧背景的根因
@@ -474,8 +481,8 @@ fun ChatScreen(
     }
 
     // 系统返回手势：弹层优先关闭，其次侧边栏，避免把应用最小化
-    androidx.activity.compose.BackHandler(enabled = showProfileEdit) { showProfileEdit = false }
-    androidx.activity.compose.BackHandler(enabled = showRenameDialog) { showRenameDialog = false }
+    androidx.activity.compose.BackHandler(enabled = showProfileEdit) { hideIme(); showProfileEdit = false }
+    androidx.activity.compose.BackHandler(enabled = showRenameDialog) { hideIme(); showRenameDialog = false }
     androidx.activity.compose.BackHandler(enabled = showModelPicker) { showModelPicker = false }
     androidx.activity.compose.BackHandler(enabled = showSlashHelp) { showSlashHelp = false }
     androidx.activity.compose.BackHandler(enabled = showStatusPopup) { showStatusPopup = false }
@@ -1109,6 +1116,7 @@ fun ChatScreen(
             ComposerBar(
                 backdrop = backdrop,
                 exportedBackdrop = composerExportBackdrop,
+                onFocusChange = { composerFocused = it },
                 contentExportLayer = composerContentLayer,
                 contentExportCoords = composerContentCoords,
                 text = input,
@@ -1746,7 +1754,7 @@ fun ChatScreen(
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
             title = "重命名会话",
-            onDismiss = { showRenameDialog = false },
+            onDismiss = { hideIme(); showRenameDialog = false },
             confirmLabel = "保存",
             onConfirm = {
                 renameTarget?.let { vm.renameSession(it.id, renameText) }
@@ -1788,10 +1796,11 @@ fun ChatScreen(
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
             title = "编辑档案",
-            onDismiss = { showProfileEdit = false },
+            onDismiss = { hideIme(); showProfileEdit = false },
             confirmLabel = "保存",
             onConfirm = {
                 vm.updateProfile(editName, editEmoji, editGradient, editBio, editImagePath)
+                hideIme()
                 showProfileEdit = false
             },
             dismissLabel = "取消"
@@ -3997,6 +4006,8 @@ private fun ComposerBar(
     contentExportCoords: java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>? = null,
     text: String,
     onTextChange: (String) -> Unit,
+    /** 聊天输入框聚焦变化：键盘避让只服务于"聚焦的输入框"（见 ChatScreen keyboardLiftPx） */
+    onFocusChange: (Boolean) -> Unit = {},
     running: Boolean,
     pendingImage: String?,
     onPickImage: () -> Unit,
@@ -4166,7 +4177,9 @@ private fun ComposerBar(
                 androidx.compose.foundation.text.BasicTextField(
                     value = text,
                     onValueChange = onTextChange,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { onFocusChange(it.isFocused) },
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = MaterialTheme.colorScheme.onBackground,
                         fontSize = 15.sp,
