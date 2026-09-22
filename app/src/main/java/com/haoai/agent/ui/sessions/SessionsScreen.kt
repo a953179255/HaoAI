@@ -318,16 +318,15 @@ fun SessionsScreen(
                             tx += c.positionChange().x; ty += c.positionChange().y
                             if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
                                 if (abs(tx) > abs(ty)) {
-                                    // 方向语义（2026-09-22 定案）：
-                                    // · 左滑 = 在两个列表间切换（会话→回收站 / 回收站→会话）。
-                                    //   两个列表用同一方向，**避免与卡片的右滑呼出冲突**——回收站页
-                                    //   若用右滑切回，会与"右滑呼出卡片"抢同一手势（实测页面抢赢、
-                                    //   卡片呼不出来，用户实锤）。
-                                    // · 右滑 = 留给卡片（未展开→呼出；已展开→卡片自己收）。页面只做兜底：
-                                    //   有卡片展开时收起它（卡片 visible 区靠 offset{} 右移、命中测试在原位，
-                                    //   手指落在可见区右侧时无人接管 → 页面兜底，否则"滑了没反应"）。
+                                    // 方向语义（2026-09-22 方案 1 定案，两页完全一致）：
+                                    // · 右滑 = 在两个列表间切换（会话→回收站 / 回收站→会话）。
+                                    //   回收站右滑 = "返回"，符合直觉；两页同方向，逻辑一致。
+                                    // · 左滑 = 留给卡片呼出操作（未展开→呼出；已展开→卡片自己收）。
+                                    //   页面只做兜底：有卡片展开时收起它（卡片 visible 区靠 offset{}
+                                    //   位移、命中测试在原位，手指落在可见区外侧时无人接管 → 页面兜底，
+                                    //   否则"滑了没反应"）。
                                     val cardOpen = openCardIdNow != null
-                                    if (tx < 0f) {
+                                    if (tx > 0f) {
                                         openCardId = null
                                         showTrash = !showTrashNow
                                     } else if (cardOpen) {
