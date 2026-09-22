@@ -283,6 +283,44 @@ fun ChatScreen(
     // 崩溃，导出层是唯一通路）。作用域在 ChatScreen 级（ComposerBar/TopBar/抽屉三处共用）
     val topBarExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
     val composerExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+    // 顶栏/输入框的**内容导出层**（只含文字/图标，不含玻璃磨砂底）：
+    // 抽屉采样 = 底层画面 + 两张内容层 → 只磨一层（根治"抽屉磨砂与顶栏/输入框
+    // 自身磨砂重叠导致磨砂变重"）；文字仍被抽屉磨砂，不会清晰透出。
+    val topBarContentLayer = rememberGraphicsLayer()
+    val composerContentLayer = rememberGraphicsLayer()
+    val topBarContentCoords = remember {
+        java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>(null)
+    }
+    val composerContentCoords = remember {
+        java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>(null)
+    }
+    // 内容层 → Backdrop 包装（坐标平移对齐，绘制期读，不订阅重组）
+    fun contentLayerBackdrop(
+        layer: androidx.compose.ui.graphics.layer.GraphicsLayer,
+        coords: java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>
+    ): com.kyant.backdrop.Backdrop = object : com.kyant.backdrop.Backdrop {
+        override val isCoordinatesDependent = true
+        override fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBackdrop(
+            density: androidx.compose.ui.unit.Density,
+            coordinates: androidx.compose.ui.layout.LayoutCoordinates?,
+            layerBlock: (androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit)?
+        ) {
+            val root = coords.get() ?: return
+            val self = coordinates ?: return
+            val offset = root.localPositionOf(self)
+            withTransform({
+                translate(-offset.x, -offset.y)
+            }) {
+                drawLayer(layer)
+            }
+        }
+    }
+    val topBarContentBackdrop = remember(topBarContentLayer) {
+        contentLayerBackdrop(topBarContentLayer, topBarContentCoords)
+    }
+    val composerContentBackdrop = remember(composerContentLayer) {
+        contentLayerBackdrop(composerContentLayer, composerContentCoords)
+    }
     val context = LocalContext.current
 
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -655,50 +693,18 @@ fun ChatScreen(
     // 一次（该帧成本与旧常态持平），之后各帧只 drawLayer 静态纹理（纯 GPU 合成）。
     // 视觉输出与旧实现逐帧一致：frozen 首帧录的就是转场起点画面。
     val snapshotLayer = rememberGraphicsLayer()
-    // 快照层宿主坐标（供自定义 Backdrop 平移对齐；抽屉玻璃采样快照用）
-    val snapshotRootCoords = remember {
-        java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>(null)
-    }
-    // 抽屉采样源 = 主界面整页快照：抽屉可见期间主界面被冻结（drawWithContent 分支），
-    // 快照里含顶栏/输入框玻璃的最终效果**与其文字** —— 磨砂"所见即所得"（真透明）。
-    // exportedBackdrop 只导出玻璃表面不含内容，文字会清晰透出（用户实锤）——已被本方案取代。
-    val snapshotBackdrop = remember(snapshotLayer) {
-        object : com.kyant.backdrop.Backdrop {
-            override val isCoordinatesDependent = true
-            override fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBackdrop(
-                density: androidx.compose.ui.unit.Density,
-                coordinates: androidx.compose.ui.layout.LayoutCoordinates?,
-                layerBlock: (androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit)?
-            ) {
-                val root = snapshotRootCoords.get() ?: return
-                val self = coordinates ?: return
-                val offset = root.localPositionOf(self)
-                withTransform({
-                    translate(-offset.x, -offset.y)
-                }) {
-                    drawLayer(snapshotLayer)
-                }
-            }
-        }
-    }
+
     Box(
         Modifier
             .fillMaxSize()
-            .onGloballyPositioned { snapshotRootCoords.set(it) }
+
             .drawWithContent {
+                // 转场冻结（push 设置）：单次录制，转场期滑动的只是一张图
                 if (drawer.frozen) {
-                    // 转场：单次录制（性能关键，转场期滑动的只是一张图）
                     if (!drawer.snapshotFresh) {
                         snapshotLayer.record { this@drawWithContent.drawContent() }
                         drawer.snapshotFresh = true
                     }
-                    drawLayer(snapshotLayer)
-                } else if (drawer.drawerVisible) {
-                    // 抽屉打开：**每帧重录**。单次录制有致命时序坑——从设置返回时
-                    // 聊天页首帧的采样画布还是空的（顶栏/输入框画出来是透明的），
-                    // 这一帧被录进快照后不再更新 → 顶栏/输入框"消失"（用户实锤）。
-                    // 抽屉打开期间主界面静止（用户只拖抽屉），每帧录制成本可接受。
-                    snapshotLayer.record { this@drawWithContent.drawContent() }
                     drawLayer(snapshotLayer)
                 } else {
                     drawer.snapshotFresh = false
@@ -829,6 +835,8 @@ fun ChatScreen(
             Column {
                 TopBar(
     exportedBackdrop = topBarExportBackdrop,
+    contentExportLayer = topBarContentLayer,
+    contentExportCoords = topBarContentCoords,
                     title = vm.agentName(),
                     subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
                     contextUsage = contextUsage,
@@ -1096,6 +1104,8 @@ fun ChatScreen(
             ComposerBar(
                 backdrop = backdrop,
                 exportedBackdrop = composerExportBackdrop,
+                contentExportLayer = composerContentLayer,
+                contentExportCoords = composerContentCoords,
                 text = input,
                 onTextChange = { newVal ->
                     input = newVal
@@ -1355,10 +1365,14 @@ fun ChatScreen(
                     val drawerShape = RoundedCornerShape(
                         topStart = 0.dp, topEnd = 28.dp, bottomEnd = 28.dp, bottomStart = 0.dp
                     )
-                    // 抽屉采样源 = 主界面整页快照（含顶栏/输入框玻璃与其文字，真透明）；
-                    // 抽屉可见期间主界面冻结为快照，同帧即可采样（父子绘制顺序保证无空窗）
+                    // 抽屉采样源 = 底层画面(壁纸+消息列表) + 顶栏/输入框**内容层**：
+                    // 内容层不含它们的玻璃磨砂，抽屉只磨一层 → 磨砂均匀不叠加；
+                    // 文字含在内容层里仍被磨砂（不会清晰透出）
+                    val drawerBackdrop = com.kyant.backdrop.backdrops.rememberCombinedBackdrop(
+                        backdrop, topBarContentBackdrop, composerContentBackdrop
+                    )
                     GlassPanel(
-                        backdrop = snapshotBackdrop,
+                        backdrop = drawerBackdrop,
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(1f)
@@ -1381,11 +1395,13 @@ fun ChatScreen(
                                     style = Stroke(width = 1.5f.dp.toPx())
                                 )
                             },
-                        // 抽屉白雾：显式取比内容卡高一档（0.60 vs 卡片 0.48）——
-                        // 快照方案下顶栏/输入框区域是"双重磨砂"（它们本身已磨砂），
-                        // 会话卡区域是单层；白雾主导后两处观感拉齐，不再"有的重有的透"
-                        surfaceAlpha = 0.60f,
-                        blurRadius = 12.dp,
+                        // 对齐设置页子菜单玻璃配方（用户：抽屉和子菜单效果差很多）：
+                        // blur 16 + 折射环带 16dp（强度 2×=32dp）+ 色差 + 白雾 0.62。
+                        // 磨砂重叠已由"内容层采样"根治（抽屉只磨一层），此处按观感取值
+                        surfaceAlpha = 0.62f,
+                        blurRadius = 16.dp,
+                        lensRadius = 16.dp,
+                        chromaticAberration = true,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
                             topStart = 0.dp,
@@ -1393,8 +1409,6 @@ fun ChatScreen(
                             bottomEnd = 28.dp,
                             bottomStart = 0.dp
                         ),
-                        // 关闭 lens 折射：方角处其采样内边距会产生弧形高光，形成"伪圆角"
-                        lensRadius = 0.dp,
                         // v7.9.1：关掉整圈发丝描边——左缘贴屏幕边，描边成了贴边白线
                         // （用户指出）；右缘分界线在下方单独画
                         border = false
@@ -2057,6 +2071,9 @@ private fun TopBar(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     /** 顶栏玻璃导出层：抽屉合成采样用（ChatScreen 创建传入） */
     exportedBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    /** 顶栏内容导出层（只含文字/图标，不含玻璃磨砂底）：抽屉采样用，避免磨砂叠加 */
+    contentExportLayer: androidx.compose.ui.graphics.layer.GraphicsLayer? = null,
+    contentExportCoords: java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>? = null,
     onDrawer: () -> Unit,
     onNewChat: () -> Unit,
     // 点击标题区（会话名副标题）→ 重命名当前会话
@@ -2104,6 +2121,12 @@ private fun TopBar(
         // GlassPanel 内容是 Box：顶栏行与任务区必须包在同一 Column 里，否则叠放
         Column(
             Modifier
+                // 内容导出：本列（文字/图标，不含玻璃底）录进 contentExportLayer
+                .onGloballyPositioned { contentExportCoords?.set(it) }
+                .drawWithContent {
+                    contentExportLayer?.record { this@drawWithContent.drawContent() }
+                    drawContent()
+                }
                 .fillMaxWidth()
                 // 玻璃面吃掉空白区点按：消息现在会滚入顶栏下方，玻璃后的模糊消息
                 // 不应再响应点按/长按（内部按钮与标题列的点击不受影响）
@@ -3964,6 +3987,9 @@ private fun ComposerBar(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     /** 输入框玻璃的导出层（抽屉合成采样用，见 ChatScreen 抽屉） */
     exportedBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop? = null,
+    /** 输入框内容导出层（只含文字/按钮，不含玻璃磨砂底）：抽屉采样用，避免磨砂叠加 */
+    contentExportLayer: androidx.compose.ui.graphics.layer.GraphicsLayer? = null,
+    contentExportCoords: java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>? = null,
     text: String,
     onTextChange: (String) -> Unit,
     running: Boolean,
@@ -4003,7 +4029,16 @@ private fun ComposerBar(
         redrawKey = redrawKey,
         modifier = modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(top = 4.dp)) {
+        Column(
+            Modifier
+                // 内容导出：本列（输入文字/按钮，不含玻璃底）录进 contentExportLayer
+                .onGloballyPositioned { contentExportCoords?.set(it) }
+                .drawWithContent {
+                    contentExportLayer?.record { this@drawWithContent.drawContent() }
+                    drawContent()
+                }
+                .padding(top = 4.dp)
+        ) {
             androidx.compose.animation.AnimatedVisibility(
                 visible = slashVisible && slashCommands.isNotEmpty(),
                 enter = androidx.compose.animation.expandVertically(
