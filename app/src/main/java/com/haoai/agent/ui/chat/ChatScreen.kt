@@ -169,6 +169,9 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.CompactGlassField
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.drawscope.withTransform
 
 /**
  * 轻量抽屉控制器：0..1 fraction 驱动布局期平移（Modifier.offset，不创建离屏层）。
@@ -197,6 +200,11 @@ class DrawerController {
      * 首帧补录一次（true），期间各帧只 drawLayer；解除 frozen 时复位（false）。
      */
     var snapshotFresh = false
+
+    /** 抽屉可见（绘制期判定，不订阅重组）：fraction>0 即冻结主界面为整页快照，
+     *  抽屉玻璃磨砂"所见即所得"的最终画面（含顶栏/输入框玻璃与其文字）——
+     *  exportedBackdrop 只导出玻璃表面不含内容，文字会清晰透出（用户实锤），快照才是真透明。 */
+    val drawerVisible: Boolean get() = fraction.value > 0f
 
     /**
      * 纵深视差动画标志（v0.18.1 与 frozen 解耦）：仅「侧边栏→设置」保留
@@ -647,11 +655,38 @@ fun ChatScreen(
     // 一次（该帧成本与旧常态持平），之后各帧只 drawLayer 静态纹理（纯 GPU 合成）。
     // 视觉输出与旧实现逐帧一致：frozen 首帧录的就是转场起点画面。
     val snapshotLayer = rememberGraphicsLayer()
+    // 快照层宿主坐标（供自定义 Backdrop 平移对齐；抽屉玻璃采样快照用）
+    val snapshotRootCoords = remember {
+        java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.layout.LayoutCoordinates?>(null)
+    }
+    // 抽屉采样源 = 主界面整页快照：抽屉可见期间主界面被冻结（drawWithContent 分支），
+    // 快照里含顶栏/输入框玻璃的最终效果**与其文字** —— 磨砂"所见即所得"（真透明）。
+    // exportedBackdrop 只导出玻璃表面不含内容，文字会清晰透出（用户实锤）——已被本方案取代。
+    val snapshotBackdrop = remember(snapshotLayer) {
+        object : com.kyant.backdrop.Backdrop {
+            override val isCoordinatesDependent = true
+            override fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBackdrop(
+                density: androidx.compose.ui.unit.Density,
+                coordinates: androidx.compose.ui.layout.LayoutCoordinates?,
+                layerBlock: (androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit)?
+            ) {
+                val root = snapshotRootCoords.get() ?: return
+                val self = coordinates ?: return
+                val offset = root.localPositionOf(self)
+                withTransform({
+                    translate(-offset.x, -offset.y)
+                }) {
+                    drawLayer(snapshotLayer)
+                }
+            }
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
+            .onGloballyPositioned { snapshotRootCoords.set(it) }
             .drawWithContent {
-                if (drawer.frozen) {
+                if (drawer.frozen || drawer.drawerVisible) {
                     if (!drawer.snapshotFresh) {
                         snapshotLayer.record { this@drawWithContent.drawContent() }
                         drawer.snapshotFresh = true
@@ -1312,13 +1347,10 @@ fun ChatScreen(
                     val drawerShape = RoundedCornerShape(
                         topStart = 0.dp, topEnd = 28.dp, bottomEnd = 28.dp, bottomStart = 0.dp
                     )
-                    // 抽屉采样源 = 主采样(壁纸+消息列表) + 顶栏导出 + 输入框导出：
-                    // 玻璃磨砂玻璃（此前顶栏/输入框不在采样层，抽屉下它们的文字清晰透出）
-                    val drawerBackdrop = com.kyant.backdrop.backdrops.rememberCombinedBackdrop(
-                        backdrop, topBarExportBackdrop, composerExportBackdrop
-                    )
+                    // 抽屉采样源 = 主界面整页快照（含顶栏/输入框玻璃与其文字，真透明）；
+                    // 抽屉可见期间主界面冻结为快照，同帧即可采样（父子绘制顺序保证无空窗）
                     GlassPanel(
-                        backdrop = drawerBackdrop,
+                        backdrop = snapshotBackdrop,
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(1f)
