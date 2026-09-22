@@ -97,6 +97,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.tanh
+import androidx.compose.foundation.layout.imePadding
 
 /**
  * 位于玻璃采样层（appLayer/layerBackdrop）内的内容层应设为 false，使内部玻璃组件
@@ -1059,6 +1060,10 @@ fun GlassAlertDialog(
     Box(
         Modifier
             .fillMaxSize()
+            // 键盘避让：键盘弹起时内容区（居中）收缩到键盘上方 —— 弹窗随输入法抬起，
+            // 避免输入框/底部按钮被键盘盖住（用户实锤：编辑档案的签名与保存按钮看不见）。
+            // 内容超长时由内部 verticalScroll + heightIn 承担滚动
+            .imePadding()
             .background(Color.Black.copy(alpha = 0.30f))
             .clickable(interactionSource = null, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.Center

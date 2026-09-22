@@ -425,20 +425,11 @@ fun ChatScreen(
     val density = LocalDensity.current
     // 抽屉面板宽度（与 sheet 的 fillMaxWidth(0.72f) 一致）：跟手拖动时把 px 位移归一化为 fraction
     val drawerPanelWidthDp = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp * 0.72f).dp
-    val imeHeightPx = WindowInsets.ime.getBottom(density)
-    // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
-    val navBarPx = WindowInsets.navigationBars.getBottom(density)
-    val keyboardLiftPx = (imeHeightPx - navBarPx).coerceAtLeast(0)
     // 消息列表顶部留白 = 状态栏 + 顶栏高度：列表物理延伸到玻璃顶栏下方（消息可滚入玻璃
     // 被磨砂遮住，主流聊天观感），仅用 contentPadding 保证初始首条消息停在顶栏下沿
     val topBarHeightDp = with(density) {
         WindowInsets.statusBars.getTop(density).toDp() + 60.dp
     }
-    // 玻璃 effects 在「绘制期」读取这个 State 注册快照订阅：键盘动画每帧变更 →
-    // backdrop 节点失效重绘 → 采样 offset 用最新布局坐标重算。effects 里读普通
-    // Int（keyboardLiftPx 参数）不会注册订阅——这正是输入栏透出抬升前旧背景的根因
-    val keyboardLiftState = remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    keyboardLiftState.intValue = keyboardLiftPx
     // 底部悬浮列（TaskPanel/斜杠弹层/输入框）实测高度，驱动消息列表动态底部留白
     var bottomBarHeightPx by remember { mutableStateOf(0) }
 
@@ -452,6 +443,20 @@ fun ChatScreen(
     // 顶栏会话名点击重命名
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
+    // ── 键盘上移（只服务于"聊天输入框"）──
+    // 底部列自带 navigationBarsPadding，若按完整 ime 高度上移会多抬一个导航栏高度，形成键盘空隙
+    val imeHeightPx = WindowInsets.ime.getBottom(density)
+    val navBarPx = WindowInsets.navigationBars.getBottom(density)
+    // 弹窗（编辑档案/重命名/模型选择等）里的输入框有自己的键盘避让，
+    // **不应带动聊天内容一起上移**（用户实锤：在侧边栏编辑档案里打字，聊天页内容仍在抬）
+    val overlayDialogOpen = showProfileEdit || showRenameDialog || showModelPicker ||
+        showStatusPopup || showSlashHelp
+    val keyboardLiftPx = if (overlayDialogOpen) 0 else (imeHeightPx - navBarPx).coerceAtLeast(0)
+    // 玻璃 effects 在「绘制期」读取这个 State 注册快照订阅：键盘动画每帧变更 →
+    // backdrop 节点失效重绘 → 采样 offset 用最新布局坐标重算。effects 里读普通
+    // Int（keyboardLiftPx 参数）不会注册订阅——这正是输入栏透出抬升前旧背景的根因
+    val keyboardLiftState = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    keyboardLiftState.intValue = keyboardLiftPx
     // /task 强制展开任务面板（即使清单为空或已全部完成）
     // v9 方案B：按会话绑定——切换/新建会话时重置，杜绝他处开过的面板残留到新会话
     var taskPanelExpanded by remember { mutableStateOf(false) }
