@@ -285,12 +285,17 @@ fun SettingsScreen(
             // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
             // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
             var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+        // 预热只做一次：切换/动画期页面每帧重组，若每次都 record 壁纸，会与宿主节点的
+        // record 交替覆盖采样层 → 背景壁纸抽搐（用户实锤）
+        var glassPreheated by remember { mutableStateOf(false) }
             val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
             val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
             androidx.compose.runtime.SideEffect {
-                if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
+                if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                     val img = wallpaper.asImageBitmap()
-                    localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                    glassPreheated = true
+                    glassPreheated = true
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                         drawImage(
                             img,
                             dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -1171,11 +1176,15 @@ private fun SectionPage(
         // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
         // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
         var glassHostSize2 by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+        // 预热只做一次：切换/动画期页面每帧重组，若每次都 record 壁纸，会与宿主节点的
+        // record 交替覆盖采样层 → 背景壁纸抽搐（用户实锤）
+        var glassPreheated2 by remember { mutableStateOf(false) }
         val glassHostSize2Density = androidx.compose.ui.platform.LocalDensity.current
         val glassHostSize2LayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
         androidx.compose.runtime.SideEffect {
-            if (wallpaper != null && glassHostSize2.width > 0 && glassHostSize2.height > 0) {
+            if (!glassPreheated2 && wallpaper != null && glassHostSize2.width > 0 && glassHostSize2.height > 0) {
                 val img = wallpaper.asImageBitmap()
+                glassPreheated2 = true
                 localBackdrop.graphicsLayer.record(glassHostSize2Density, glassHostSize2LayoutDir, glassHostSize2) {
                     drawImage(
                         img,
