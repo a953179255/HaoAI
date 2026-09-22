@@ -49,6 +49,7 @@ import com.haoai.agent.ui.common.GlassPanel
 import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.foundation.layout.Box
+import com.haoai.agent.ui.common.CompactGlassField
 
 /**
  * 4.2 内置浏览器界面：WebView 容器（多标签条 + 地址栏 + 后退/刷新）。
@@ -154,29 +155,23 @@ fun BrowserScreen(
                 }
                 // 地址栏 + 后退/刷新/关闭
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = urlText,
-                        onValueChange = { urlText = it; editing = true },
-                        singleLine = true,
-                        placeholder = {
-                            Text("网址或搜索词", style = MaterialTheme.typography.bodySmall)
-                        },
-                        leadingIcon = { Icon(Icons.Filled.Search, null, modifier = Modifier.size(16.dp)) },
-                        textStyle = MaterialTheme.typography.bodySmall,
-                        shape = RoundedCornerShape(18.dp),
-                        colors = OutlinedTextFieldDefaults.colors(),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(onGo = {
+                    CompactGlassField(
+        value = urlText,
+        onValueChange = { urlText = it; editing = true },
+        label = "",
+        placeholder = "网址或搜索词",
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = {
                             val text = urlText.trim()
                             if (text.isNotEmpty()) {
                                 editing = false
                                 scope.launch { BrowserController.navigateOrSearch(text) }
                             }
                         }),
-                        modifier = Modifier
+        modifier = Modifier
                             .weight(1f)
                             .padding(start = 6.dp)
-                    )
+    )
                     IconButton(onClick = { scope.launch { BrowserController.goBack() } }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "后退", modifier = Modifier.size(20.dp))
                     }

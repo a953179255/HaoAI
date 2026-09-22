@@ -168,6 +168,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+import com.haoai.agent.ui.common.CompactGlassField
 
 /**
  * 轻量抽屉控制器：0..1 fraction 驱动布局期平移（Modifier.offset，不创建离屏层）。
@@ -269,6 +270,11 @@ fun ChatScreen(
     onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {}
 ) {
+    // 顶栏/输入框的导出层：它们 drawBackdrop 时把最终玻璃表面 record 进来，
+    // 抽屉经 CombinedBackdrop 合成采样 —— 解决"玻璃磨砂不到玻璃"（宿主内含玻璃会成环
+    // 崩溃，导出层是唯一通路）。作用域在 ChatScreen 级（ComposerBar/TopBar/抽屉三处共用）
+    val topBarExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+    val composerExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
     val context = LocalContext.current
 
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -779,6 +785,7 @@ fun ChatScreen(
         Box(Modifier.align(Alignment.TopCenter)) {
             Column {
                 TopBar(
+    exportedBackdrop = topBarExportBackdrop,
                     title = vm.agentName(),
                     subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
                     contextUsage = contextUsage,
@@ -1040,8 +1047,12 @@ fun ChatScreen(
                     }
                 }
             }
+            // 顶栏/输入框的导出层：它们自身 drawBackdrop 时把最终表面 record 进来
+            val topBarExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+            val composerExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
             ComposerBar(
                 backdrop = backdrop,
+                exportedBackdrop = composerExportBackdrop,
                 text = input,
                 onTextChange = { newVal ->
                     input = newVal
@@ -1301,8 +1312,13 @@ fun ChatScreen(
                     val drawerShape = RoundedCornerShape(
                         topStart = 0.dp, topEnd = 28.dp, bottomEnd = 28.dp, bottomStart = 0.dp
                     )
+                    // 抽屉采样源 = 主采样(壁纸+消息列表) + 顶栏导出 + 输入框导出：
+                    // 玻璃磨砂玻璃（此前顶栏/输入框不在采样层，抽屉下它们的文字清晰透出）
+                    val drawerBackdrop = com.kyant.backdrop.backdrops.rememberCombinedBackdrop(
+                        backdrop, topBarExportBackdrop, composerExportBackdrop
+                    )
                     GlassPanel(
-                        backdrop = backdrop,
+                        backdrop = drawerBackdrop,
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(1f)
@@ -1481,12 +1497,12 @@ fun ChatScreen(
             },
             confirmEnabled = editText.isNotBlank()
         ) {
-            androidx.compose.material3.OutlinedTextField(
-                value = editText,
-                onValueChange = { editText = it },
-                colors = com.haoai.agent.ui.common.glassFieldColors(),
-                modifier = Modifier.fillMaxWidth()
-            )
+            CompactGlassField(
+        value = editText,
+        onValueChange = { editText = it },
+        label = "",
+        modifier = Modifier.fillMaxWidth()
+    )
             Text(
                 "发送后将替换这条消息并重新生成回复",
                 style = MaterialTheme.typography.labelSmall,
@@ -1675,14 +1691,12 @@ fun ChatScreen(
             },
             dismissLabel = "取消"
         ) {
-            OutlinedTextField(
-                value = renameText,
-                onValueChange = { renameText = it.take(50) },
-                label = { Text("会话名") },
-                singleLine = true,
-                colors = com.haoai.agent.ui.common.glassFieldColors(),
-                modifier = Modifier.fillMaxWidth()
-            )
+            CompactGlassField(
+        value = renameText,
+        onValueChange = { renameText = it.take(50) },
+        label = "会话名",
+        modifier = Modifier.fillMaxWidth()
+    )
         }
     }
 
@@ -1719,14 +1733,12 @@ fun ChatScreen(
             },
             dismissLabel = "取消"
         ) {
-            OutlinedTextField(
-                value = editName,
-                onValueChange = { editName = it.take(20) },
-                label = { Text("名字") },
-                singleLine = true,
-                colors = com.haoai.agent.ui.common.glassFieldColors(),
-                modifier = Modifier.fillMaxWidth()
-            )
+            CompactGlassField(
+        value = editName,
+        onValueChange = { editName = it.take(20) },
+        label = "名字",
+        modifier = Modifier.fillMaxWidth()
+    )
             Text(
                 "头像",
                 style = MaterialTheme.typography.labelSmall,
@@ -1749,12 +1761,16 @@ fun ChatScreen(
                     onClick = { avatarPicker.launch("image/*") },
                     backdrop = backdrop,
                     shape = RoundedCornerShape(percent = 50),
-                    // 弹窗内按钮采样不到弹窗遮罩，透明度低了壁纸直接透过（用户反馈点）
-                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                    // 按钮铁律：实底 + 白字（此前 0.65 主色玻璃，用户反馈配色不对）
+                    surfaceColor = com.haoai.agent.ui.theme.haoButtonColors(
+                        com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+                    ).first
                 ) {
                     Text(
                         "从相册选择",
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = com.haoai.agent.ui.theme.haoButtonColors(
+                            com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+                        ).second,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
@@ -1829,16 +1845,14 @@ fun ChatScreen(
                     )
                 }
             }
-            OutlinedTextField(
-                value = editBio,
-                onValueChange = { editBio = it.take(60) },
-                label = { Text("签名（一句话介绍）") },
-                singleLine = true,
-                colors = com.haoai.agent.ui.common.glassFieldColors(),
-                modifier = Modifier
+            CompactGlassField(
+        value = editBio,
+        onValueChange = { editBio = it.take(60) },
+        label = "签名（一句话介绍）",
+        modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp)
-            )
+    )
         }
     }
 
@@ -1997,6 +2011,8 @@ private fun TopBar(
     subtitle: String,
     contextUsage: ContextUsage,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    /** 顶栏玻璃导出层：抽屉合成采样用（ChatScreen 创建传入） */
+    exportedBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onDrawer: () -> Unit,
     onNewChat: () -> Unit,
     // 点击标题区（会话名副标题）→ 重命名当前会话
@@ -2019,6 +2035,7 @@ private fun TopBar(
     // Row 下方的 Box 画出）；任务面板在同一块玻璃内向下一体生长（animateContentSize）
     GlassPanel(
         backdrop = backdrop,
+        exportedBackdrop = exportedBackdrop,
         modifier = modifier
             .fillMaxWidth()
             .animateContentSize(),
@@ -3901,6 +3918,8 @@ private fun ToolChip(
 @Composable
 private fun ComposerBar(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    /** 输入框玻璃的导出层（抽屉合成采样用，见 ChatScreen 抽屉） */
+    exportedBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop? = null,
     text: String,
     onTextChange: (String) -> Unit,
     running: Boolean,
@@ -3932,6 +3951,7 @@ private fun ComposerBar(
 
     GlassPanel(
         backdrop = backdrop,
+        exportedBackdrop = exportedBackdrop,
         radius = 26.dp,
         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         // 键盘抬升值作重绘键：位置变化后强制重绘折射，采样对齐新布局位置，
@@ -4446,14 +4466,12 @@ private fun SessionsDrawer(
                 renameTarget = null
             }
         ) {
-            OutlinedTextField(
-                value = renameValue,
-                onValueChange = { renameValue = it.take(50) },
-                label = { Text("会话名") },
-                singleLine = true,
-                colors = com.haoai.agent.ui.common.glassFieldColors(),
-                modifier = Modifier.fillMaxWidth()
-            )
+            CompactGlassField(
+        value = renameValue,
+        onValueChange = { renameValue = it.take(50) },
+        label = "会话名",
+        modifier = Modifier.fillMaxWidth()
+    )
         }
     }
 }

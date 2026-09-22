@@ -192,7 +192,8 @@ fun Modifier.appLayer(backdrop: LayerBackdrop): Modifier = this.layerBackdrop(ba
 
 @Composable
 fun GlassPanel(
-    backdrop: LayerBackdrop,
+    // 放宽为 Backdrop 接口：支持 CombinedBackdrop（玻璃导出合成采样，见抽屉）
+    backdrop: com.kyant.backdrop.Backdrop,
     modifier: Modifier = Modifier,
     radius: Dp = 24.dp,
     surfaceAlpha: Float = 0.16f,
@@ -208,6 +209,10 @@ fun GlassPanel(
     lensAmountMul: Float = 2f,
     refract: Boolean? = null,
     redrawKey: (() -> Any?)? = null,
+    /** 把本玻璃的最终表面（磨砂+折射+表面色）导出成一层，供其它玻璃
+     *  （如抽屉）经 CombinedBackdrop 合成采样 —— 解决"玻璃磨砂不到玻璃"：
+     *  玻璃不能进采样宿主（RenderNode 成环），但可以导出自己。 */
+    exportedBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop? = null,
     border: Boolean = true,
     /** 表面附加绘制（画在磨砂与着色之上、内容之下）：如顶栏状态栏带的渐变补强。仅折射路径生效。 */
     surfaceOverlay: (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)? = null,
@@ -342,6 +347,7 @@ fun GlassPanel(
                 highlight = highlightLambda,
                 shadow = shadowLambda,
                 innerShadow = innerShadowLambda,
+                exportedBackdrop = exportedBackdrop,
                 onDrawSurface = {
                     if (!floating) {
                         drawRect(surface)
@@ -1120,9 +1126,9 @@ fun GlassAlertDialog(
                                 modifier = if (fullWidthConfirm) Modifier.fillMaxWidth() else Modifier,
                                 surfaceColor = when {
                                     !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
-                                    danger -> MaterialTheme.colorScheme.error.copy(alpha = 0.92f)
-                                    // 弹窗内按钮采样不到弹窗遮罩/面板（不在采样层里），透明度低了会直接透出壁纸
-                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                    danger -> MaterialTheme.colorScheme.error.copy(alpha = 1f)
+                                    // 按钮铁律：实底 + 白字（此前 0.85 玻璃观感发白发虚）
+                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 1f)
                                 },
                                 refract = refract
                             ) {
@@ -1183,6 +1189,12 @@ fun CompactGlassField(
     singleLine: Boolean = true,
     visualTransformation: androidx.compose.ui.text.input.VisualTransformation =
         androidx.compose.ui.text.input.VisualTransformation.None,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions =
+        androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions =
+        androidx.compose.foundation.text.KeyboardActions.Default,
+    /** 框下方的辅助说明文字（替代 Material supportingText） */
+    supportingText: String? = null,
     trailing: @Composable (() -> Unit)? = null
 ) {
     val interaction = androidx.compose.runtime.remember {
@@ -1213,15 +1225,17 @@ fun CompactGlassField(
             .padding(end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 固定标签：始终在内容左侧，与已填值并排
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
-            maxLines = 1,
-            modifier = Modifier.padding(start = 12.dp)
-        )
-        Spacer(Modifier.width(8.dp))
+        // 固定标签：始终在内容左侧，与已填值并排；label 为空 = 无标签（纯占位框）
+        if (label.isNotBlank()) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
+                maxLines = 1,
+                modifier = Modifier.padding(start = 12.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         Box(Modifier.weight(1f)) {
             if (value.isEmpty() && placeholder != null) {
                 Text(
@@ -1236,6 +1250,8 @@ fun CompactGlassField(
                 onValueChange = onValueChange,
                 singleLine = singleLine,
                 visualTransformation = visualTransformation,
+                keyboardOptions = keyboardOptions,
+                keyboardActions = keyboardActions,
                 interactionSource = interaction,
                 modifier = Modifier.fillMaxWidth(),
                 textStyle = MaterialTheme.typography.bodySmall.copy(
@@ -1244,8 +1260,16 @@ fun CompactGlassField(
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary)
             )
         }
-        trailing?.invoke()
+        }
+    if (supportingText != null) {
+        Text(
+            supportingText,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+            modifier = Modifier.padding(start = 4.dp, top = 3.dp)
+        )
     }
+    trailing?.invoke()
 }
 
 /**

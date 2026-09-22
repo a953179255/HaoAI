@@ -44,6 +44,10 @@ import java.util.Locale
 import com.haoai.agent.ui.theme.HaoDimens
 import androidx.compose.material.icons.filled.Schedule
 import com.haoai.agent.ui.common.appLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 @Composable
 fun ScheduleScreen(
@@ -71,7 +75,24 @@ fun ScheduleScreen(
         // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
         // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
         // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
-        Box(Modifier.matchParentSize().appLayer(backdrop)) {
+        // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
+        // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
+        var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+        val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
+        val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
+        androidx.compose.runtime.SideEffect {
+            if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
+                val img = wallpaper.asImageBitmap()
+                backdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                    drawImage(
+                        img,
+                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
+                    )
+                }
+            }
+        }
+        Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize = it }) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
