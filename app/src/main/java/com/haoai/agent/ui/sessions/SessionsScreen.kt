@@ -177,7 +177,9 @@ fun SessionsScreen(
         Modifier
             .fillMaxSize()
             .navigationBarsPadding()
-            .padding(top = 6.dp)
+            // ⚠️不要加 padding(top)：顶栏玻璃必须从屏幕最顶端铺下来（通栏，
+            // 状态栏文字浮在玻璃上）。加 6dp 会在状态栏与顶栏之间留一条"没磨砂"的缝
+            // （用户截图实锤，与聊天页通栏顶栏不一致）
             .clickable(interactionSource = null, indication = null) {
                 // 点页面空白：呼出中只收起呼出
                 if (openCardId != null) openCardId = null
