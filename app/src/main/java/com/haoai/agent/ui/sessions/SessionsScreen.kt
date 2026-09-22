@@ -348,7 +348,10 @@ fun SessionsScreen(
                     }
                 } else {
                     Box(Modifier.fillMaxSize()) {
-                    // 会话列表：向左滑出 + 淡出
+                    // 会话列表：向左滑出 + 淡出。
+                    // ⚠️仅在动画期组合：稳定态只保留当前页一个列表 —— 两个 LazyColumn 常驻
+                    // 会使 GPU 负担翻倍（模拟器实测 janky 79%/GPU 90th 4950ms 的元凶之一）
+                    if (switchProgress < 0.995f) {
                     Box(
                         Modifier
                             .fillMaxSize()
@@ -496,7 +499,9 @@ fun SessionsScreen(
                     }
                     }
                     }
-                    // 回收站列表：从右滑入 + 淡入
+                    }
+                    // 回收站列表：从右滑入 + 淡入（同样只在动画期组合）
+                    if (switchProgress > 0.005f) {
                     Box(
                         Modifier
                             .fillMaxSize()
@@ -557,6 +562,7 @@ fun SessionsScreen(
                                 }
                             }
                         }
+                    }
                     }
                     }
             }
