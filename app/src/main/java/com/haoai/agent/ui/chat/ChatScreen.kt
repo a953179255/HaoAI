@@ -686,11 +686,19 @@ fun ChatScreen(
             .fillMaxSize()
             .onGloballyPositioned { snapshotRootCoords.set(it) }
             .drawWithContent {
-                if (drawer.frozen || drawer.drawerVisible) {
+                if (drawer.frozen) {
+                    // 转场：单次录制（性能关键，转场期滑动的只是一张图）
                     if (!drawer.snapshotFresh) {
                         snapshotLayer.record { this@drawWithContent.drawContent() }
                         drawer.snapshotFresh = true
                     }
+                    drawLayer(snapshotLayer)
+                } else if (drawer.drawerVisible) {
+                    // 抽屉打开：**每帧重录**。单次录制有致命时序坑——从设置返回时
+                    // 聊天页首帧的采样画布还是空的（顶栏/输入框画出来是透明的），
+                    // 这一帧被录进快照后不再更新 → 顶栏/输入框"消失"（用户实锤）。
+                    // 抽屉打开期间主界面静止（用户只拖抽屉），每帧录制成本可接受。
+                    snapshotLayer.record { this@drawWithContent.drawContent() }
                     drawLayer(snapshotLayer)
                 } else {
                     drawer.snapshotFresh = false
@@ -1373,7 +1381,11 @@ fun ChatScreen(
                                     style = Stroke(width = 1.5f.dp.toPx())
                                 )
                             },
-                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                        // 抽屉白雾：显式取比内容卡高一档（0.60 vs 卡片 0.48）——
+                        // 快照方案下顶栏/输入框区域是"双重磨砂"（它们本身已磨砂），
+                        // 会话卡区域是单层；白雾主导后两处观感拉齐，不再"有的重有的透"
+                        surfaceAlpha = 0.60f,
+                        blurRadius = 12.dp,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
                             topStart = 0.dp,

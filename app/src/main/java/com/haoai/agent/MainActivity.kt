@@ -875,6 +875,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onBack = {
                         enterChat()
                         screen = 0
+                        // 复位快照标志：返回后抽屉开着（drawerVisible），若沿用设置期
+                        // 录的旧快照会缺顶栏/输入框；复位强制重录当前真实画面
+                        drawer.snapshotFresh = false
                         rootScope.launch { drawer.snapOpen() }
                     },
                     onOpenMemories = { screen = 2 },
