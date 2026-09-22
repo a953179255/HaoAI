@@ -537,7 +537,9 @@ fun SessionsScreen(
                                 anyOpen = openCardId != null,
                                 onClick = {},
                                 onOpenChange = { open -> openCardId = if (open) s.id else null },
-                                openWidth = 150.dp,
+                                // 呼出宽度 = 按钮区实际占用：4dp 边距 + 44 + 6 + 44 = 98dp，
+                                // 取 100dp（多给的宽度会让卡片与按钮之间空出一大块——用户实锤）
+                                openWidth = 100.dp,
                                 // 回收站：操作区在卡片右侧 → **左滑呼出**（右滑留给"返回会话"）
                                 actionsAtEnd = true,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
