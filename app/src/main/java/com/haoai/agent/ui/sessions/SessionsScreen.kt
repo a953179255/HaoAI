@@ -73,6 +73,8 @@ import java.util.Locale
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.luminance
+import com.haoai.agent.ui.common.CompactGlassField
+import androidx.compose.ui.graphics.graphicsLayer
 
 /** 独立「全部会话」页：搜索过滤（会话/回收站共用）+ 左右滑动切换 + 置顶/重命名/回收站管理。 */
 @Composable
@@ -89,6 +91,14 @@ fun SessionsScreen(
 
     var query by rememberSaveable { mutableStateOf("") }
     var showTrash by rememberSaveable { mutableStateOf(false) }
+    // 会话↔回收站切换进度（顶层持有）：0=会话，1=回收站。
+    // ⚠️必须放顶层——放在列表分支内部时，分支重组会重建该组合实例，
+    // animateFloatAsState 直接取终值 = 无动画（实测：时长拉到 2000ms 仍 1 帧跳变）。
+    val switchProgress by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (!showTrash) 0f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(340),
+        label = "sessionsSwitch"
+    )
     val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
     // 待彻底删除的会话：误触不可逆操作前先确认
     var pendingPurge by remember { mutableStateOf<StoredSession?>(null) }
@@ -322,7 +332,17 @@ fun SessionsScreen(
                             modifier = Modifier.padding(horizontal = 24.dp)
                         )
                     }
-                } else if (sessionsPage) {
+                } else {
+                    Box(Modifier.fillMaxSize()) {
+                    // 会话列表：向左滑出 + 淡出
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                translationX = -switchProgress * size.width * 0.22f
+                                alpha = 1f - switchProgress
+                            }
+                    ) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)
@@ -343,9 +363,10 @@ fun SessionsScreen(
                                     FilledIconButton(
                                         onClick = { usageTarget = s; openCardId = null },
                                         modifier = Modifier.size(44.dp),
+                                        // 按钮铁律：实底 + 对比字（此前 0.10 淡底几乎看不见——用户实锤）
                                         colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                                            contentColor = MaterialTheme.colorScheme.onBackground
+                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                            contentColor = MaterialTheme.colorScheme.background
                                         )
                                     ) {
                                         Icon(
@@ -361,11 +382,11 @@ fun SessionsScreen(
                                         },
                                         modifier = Modifier.size(44.dp),
                                         colors = IconButtonDefaults.filledIconButtonColors(
-                                            // 未置顶：灰（同重命名）；已置顶：绿（提示当前处于置顶态）
-                                            containerColor = if (s.pinned) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                                            contentColor = if (s.pinned) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onBackground
+                                            // 实底：未置顶=中性实底；已置顶=主色实底（当前处于置顶态）
+                                            containerColor = if (s.pinned) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                            contentColor = if (s.pinned) MaterialTheme.colorScheme.onPrimary
+                                            else MaterialTheme.colorScheme.background
                                         )
                                     ) {
                                         Icon(
@@ -378,8 +399,8 @@ fun SessionsScreen(
                                         onClick = { renameTarget = s; openCardId = null },
                                         modifier = Modifier.size(44.dp),
                                         colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                                            contentColor = MaterialTheme.colorScheme.onBackground
+                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                            contentColor = MaterialTheme.colorScheme.background
                                         )
                                     ) {
                                         Icon(Icons.Filled.Edit, contentDescription = "重命名", modifier = Modifier.size(19.dp))
@@ -391,8 +412,8 @@ fun SessionsScreen(
                                         },
                                         modifier = Modifier.size(44.dp),
                                         colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
-                                            contentColor = MaterialTheme.colorScheme.error
+                                            containerColor = MaterialTheme.colorScheme.error,
+                                            contentColor = MaterialTheme.colorScheme.onError
                                         )
                                     ) {
                                         Icon(Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(20.dp))
@@ -459,8 +480,18 @@ fun SessionsScreen(
                             )
                         }
                     }
-                } else {
-                    LazyColumn(
+                    }
+                    }
+                    // 回收站列表：从右滑入 + 淡入
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                translationX = (1f - switchProgress) * size.width * 0.22f
+                                alpha = switchProgress
+                            }
+                    ) {
+                        LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)
                     ) {
@@ -513,7 +544,8 @@ fun SessionsScreen(
                             }
                         }
                     }
-                }
+                    }
+            }
             }
     }
 
@@ -575,12 +607,10 @@ fun SessionsScreen(
                 renameTarget = null
             }
         ) {
-            OutlinedTextField(
+            CompactGlassField(
                 value = renameValue,
                 onValueChange = { renameValue = it.take(50) },
-                label = { Text("会话名") },
-                singleLine = true,
-                colors = glassFieldColors(),
+                label = "会话名",
                 modifier = Modifier.fillMaxWidth()
             )
         }
