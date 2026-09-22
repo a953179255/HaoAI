@@ -47,6 +47,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.luminance
 
 /**
  * 技能库管理：查看/手动添加/删除 SKILL.md（skill 工具的图形入口）。
@@ -151,6 +152,15 @@ fun SkillsScreen(
         // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
         // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
         // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
+        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
         // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
         // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
         var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -159,7 +169,7 @@ fun SkillsScreen(
         androidx.compose.runtime.SideEffect {
             if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                 val img = wallpaper.asImageBitmap()
-                backdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                     drawImage(
                         img,
                         dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -168,7 +178,7 @@ fun SkillsScreen(
                 }
             }
         }
-        Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize = it }) {
+        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
@@ -188,7 +198,7 @@ fun SkillsScreen(
         ) {
             Spacer(Modifier.height(56.dp))
             com.haoai.agent.ui.common.HaoNote(
-                backdrop = backdrop,
+                backdrop = localBackdrop,
                 text = "代理在完成任务时用 skill 工具沉淀的可复用经验；系统提示词只带索引，正文按需加载。",
                 modifier = Modifier.padding(vertical = 4.dp)
             )
@@ -206,7 +216,7 @@ fun SkillsScreen(
                 )
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = { showAdd = true },
-                    backdrop = backdrop,
+                    backdrop = localBackdrop,
                     shape = RoundedCornerShape(percent = 50),
                     surfaceColor = addBg
                 ) {
@@ -229,7 +239,7 @@ fun SkillsScreen(
                 )
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = { showImportMenu = true },
-                    backdrop = backdrop,
+                    backdrop = localBackdrop,
                     shape = RoundedCornerShape(percent = 50),
                     enabled = !importing,
                     surfaceColor = impBg
@@ -246,7 +256,7 @@ fun SkillsScreen(
                 )
                 com.haoai.agent.ui.common.LiquidGlassButton(
                     onClick = onLearnFromHistory,
-                    backdrop = backdrop,
+                    backdrop = localBackdrop,
                     shape = RoundedCornerShape(percent = 50),
                     surfaceColor = learnBg
                 ) {
@@ -260,7 +270,7 @@ fun SkillsScreen(
             }
             if (skills.isEmpty()) {
                 com.haoai.agent.ui.common.HaoEmptyState(
-                    backdrop = backdrop,
+                    backdrop = localBackdrop,
                     icon = Icons.Filled.Construction,
                     title = "暂无技能",
                     hint = "当代理踩坑并总结出可复用步骤时会自动沉淀到这里，也可以手动添加。",
@@ -275,7 +285,7 @@ fun SkillsScreen(
                 items(skills, key = { it.name }) { s ->
                     GlassCard(
                         onClick = {},
-                        backdrop = backdrop,
+                        backdrop = localBackdrop,
                         shape = RoundedCornerShape(16.dp),
                         surfaceAlpha = if (s.archived) 0.34f else com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                         lensRadius = 16.dp,
@@ -389,7 +399,7 @@ fun SkillsScreen(
                                 if (!s.validated) {
                                     com.haoai.agent.ui.common.GlassTextButton(
                                         text = "验证并启用",
-                                        backdrop = backdrop,
+                                        backdrop = localBackdrop,
                                         onClick = {
                                             store.setValidated(s.name, true)
                                             refresh()
@@ -398,7 +408,7 @@ fun SkillsScreen(
                                 }
                                 com.haoai.agent.ui.common.GlassTextButton(
                                     text = if (s.pinned) "取消置顶" else "置顶",
-                                    backdrop = backdrop,
+                                    backdrop = localBackdrop,
                                     onClick = {
                                         store.setPinned(s.name, !s.pinned)
                                         refresh()
@@ -406,12 +416,12 @@ fun SkillsScreen(
                                 )
                                 com.haoai.agent.ui.common.GlassTextButton(
                                     text = "查看",
-                                    backdrop = backdrop,
+                                    backdrop = localBackdrop,
                                     onClick = { viewBody = s.name to (store.view(s.name) ?: "") }
                                 )
                                 com.haoai.agent.ui.common.GlassTextButton(
                                     text = "导出",
-                                    backdrop = backdrop,
+                                    backdrop = localBackdrop,
                                     onClick = {
                                         val text = runCatching {
                                             java.io.File(
@@ -436,7 +446,7 @@ fun SkillsScreen(
             }
         }
         GlassPageBar(
-            backdrop = backdrop,
+            backdrop = localBackdrop,
             title = "技能库（${skills.size}）",
             onBack = onBack,
             modifier = Modifier

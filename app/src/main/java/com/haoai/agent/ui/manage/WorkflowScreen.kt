@@ -55,6 +55,7 @@ import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.luminance
 
 private val TRIGGER_TYPES = listOf("manual", "schedule", "boot", "notification")
 
@@ -93,6 +94,15 @@ fun WorkflowScreen(
         // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
         // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
         // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
+        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
         // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
         // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
         var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -101,7 +111,7 @@ fun WorkflowScreen(
         androidx.compose.runtime.SideEffect {
             if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                 val img = wallpaper.asImageBitmap()
-                backdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                     drawImage(
                         img,
                         dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -110,7 +120,7 @@ fun WorkflowScreen(
                 }
             }
         }
-        Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize = it }) {
+        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
@@ -140,7 +150,7 @@ fun WorkflowScreen(
             if (workflows.isEmpty()) {
                 item {
                     com.haoai.agent.ui.common.HaoEmptyState(
-                        backdrop = backdrop,
+                        backdrop = localBackdrop,
                         icon = Icons.Filled.Bolt,
                         title = "暂无工作流",
                         hint = "工作流 = 多步自动化，可按定时 / 开机 / 通知触发。也可以直接让代理帮你建一条。",
@@ -151,7 +161,7 @@ fun WorkflowScreen(
             items(workflows, key = { it.id }) { w ->
                 GlassCard(
                     onClick = { editTarget = w },
-                    backdrop = backdrop,
+                    backdrop = localBackdrop,
                     shape = RoundedCornerShape(14.dp),
                     surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                     modifier = Modifier
@@ -266,7 +276,7 @@ fun WorkflowScreen(
                 ) {
                     GlassCard(
                         onClick = { newDraft = true },
-                        backdrop = backdrop,
+                        backdrop = localBackdrop,
                         shape = RoundedCornerShape(14.dp),
                         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha()
                     ) {
@@ -284,7 +294,7 @@ fun WorkflowScreen(
         }
 
         com.haoai.agent.ui.common.GlassPageBar(
-            backdrop = backdrop,
+            backdrop = localBackdrop,
             title = "工作流",
             onBack = onBack,
             modifier = Modifier

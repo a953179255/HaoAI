@@ -61,6 +61,7 @@ import com.haoai.agent.ui.theme.haoToneMain
 import androidx.compose.material.icons.filled.Extension
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.luminance
 
 /**
  * MCP 服务器管理页（2.1）：添加/编辑远程 MCP 服务器、测试连接、查看工具清单、
@@ -157,6 +158,15 @@ fun McpSettingsScreen(
         // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
         // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
         // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
+        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
         // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
         // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
         var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -165,7 +175,7 @@ fun McpSettingsScreen(
         androidx.compose.runtime.SideEffect {
             if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                 val img = wallpaper.asImageBitmap()
-                backdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                     drawImage(
                         img,
                         dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -174,7 +184,7 @@ fun McpSettingsScreen(
                 }
             }
         }
-        Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize = it }) {
+        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
@@ -190,7 +200,7 @@ fun McpSettingsScreen(
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Spacer(Modifier.height(56.dp))
                 com.haoai.agent.ui.common.HaoNote(
-                    backdrop = backdrop,
+                    backdrop = localBackdrop,
                     text = "接入 Model Context Protocol 服务器，为代理扩展外部工具。工具默认执行前询问；" +
                         "添加后冷启动会自动连接。MCP 工具属于「mcp」工具组：新会话默认不注入清单，" +
                         "代理需要时会先调用 tools_enable(\"mcp\") 启用（仅当前会话生效）。",
@@ -199,7 +209,7 @@ fun McpSettingsScreen(
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
                     LiquidGlassButton(
                         onClick = { editing = "new" },
-                        backdrop = backdrop,
+                        backdrop = localBackdrop,
                         shape = RoundedCornerShape(percent = 50),
                         surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
                     ) {
@@ -220,7 +230,7 @@ fun McpSettingsScreen(
                 }
                 if (servers.isEmpty()) {
                     com.haoai.agent.ui.common.HaoEmptyState(
-                        backdrop = backdrop,
+                        backdrop = localBackdrop,
                         icon = Icons.Filled.Extension,
                         title = "暂无 MCP 服务器",
                         hint = "可以添加任何支持 Streamable HTTP 的 MCP 服务器（例如文档查询类只读服务）。",
@@ -236,7 +246,7 @@ fun McpSettingsScreen(
                         val st = states[srv.id] ?: McpConnState.Disconnected
                         GlassCard(
                             onClick = { editing = srv.id },
-                            backdrop = backdrop,
+                            backdrop = localBackdrop,
                             shape = RoundedCornerShape(16.dp),
                             surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                             modifier = Modifier.fillMaxWidth()
@@ -303,7 +313,7 @@ fun McpSettingsScreen(
             }
         // 顶栏悬浮（与其他管理页一致：TopCenter + 12/6 边距）
         GlassPageBar(
-            backdrop = backdrop,
+            backdrop = localBackdrop,
             title = "MCP 服务器",
             onBack = onBack,
             modifier = Modifier

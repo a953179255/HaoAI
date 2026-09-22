@@ -72,6 +72,7 @@ import java.util.Date
 import java.util.Locale
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.luminance
 
 /** 独立「全部会话」页：搜索过滤（会话/回收站共用）+ 左右滑动切换 + 置顶/重命名/回收站管理。 */
 @Composable
@@ -123,6 +124,15 @@ fun SessionsScreen(
     ) {
         // ★ 采样宿主（2026-09-22 挂载铁律）：只录背景层，玻璃元素在宿主外。
         // 宿主子树内含玻璃 = RenderNode 成环 = SIGSEGV（详见 SettingsScreen 同款注释）
+        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
+        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
         // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
         // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
         var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -131,7 +141,7 @@ fun SessionsScreen(
         androidx.compose.runtime.SideEffect {
             if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                 val img = wallpaper.asImageBitmap()
-                backdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                     drawImage(
                         img,
                         dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -140,7 +150,7 @@ fun SessionsScreen(
                 }
             }
         }
-        Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize = it }) {
+        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
@@ -164,7 +174,7 @@ fun SessionsScreen(
             }
     ) {
         GlassPageBar(
-            backdrop = backdrop,
+            backdrop = localBackdrop,
             title = if (showTrash) "回收站" else "全部会话",
             onBack = {
                 // 呼出操作按钮期间点返回：只收起呼出，不离开页面
@@ -239,7 +249,7 @@ fun SessionsScreen(
                     if (openCardId != null) openCardId = null
                     showTrash = i == 1
                 },
-                backdrop = backdrop,
+                backdrop = localBackdrop,
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.weight(1f))
@@ -391,7 +401,7 @@ fun SessionsScreen(
                                 content = { cardClick ->
                                     GlassCard(
                                         onClick = cardClick,
-                                        backdrop = backdrop,
+                                        backdrop = localBackdrop,
                                         shape = RoundedCornerShape(14.dp),
                                         // 与全项目内容卡同刻度（壁纸模式自动 0.82）；
                                         // 当前会话用品牌色 tint 区分，不再用"更透"区分
@@ -458,7 +468,7 @@ fun SessionsScreen(
                             val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
                             GlassCard(
                                 onClick = {},
-                                backdrop = backdrop,
+                                backdrop = localBackdrop,
                                 shape = RoundedCornerShape(14.dp),
                                 surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                                 lensRadius = 14.dp,

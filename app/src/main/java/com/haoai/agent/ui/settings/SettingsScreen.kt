@@ -131,6 +131,7 @@ import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
 import com.haoai.agent.ui.theme.MotionStyle
 import com.haoai.agent.ui.theme.MotionTheme
+import androidx.compose.ui.graphics.luminance
 
 /**
  * 设置主页（分组导航）：
@@ -272,6 +273,15 @@ fun SettingsScreen(
         // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
         // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
         // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+            // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
+            // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+            // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
+            val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+                wallpaper,
+                dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+                baseTop = MaterialTheme.colorScheme.background,
+                baseBottom = MaterialTheme.colorScheme.background
+            )
             // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
             // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
             var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -280,7 +290,7 @@ fun SettingsScreen(
             androidx.compose.runtime.SideEffect {
                 if (wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                     val img = wallpaper.asImageBitmap()
-                    backdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                    localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                         drawImage(
                             img,
                             dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -289,7 +299,7 @@ fun SettingsScreen(
                     }
                 }
             }
-            Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize = it }) {
+            Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
                 if (wallpaper != null) {
                     // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘
                     val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
@@ -329,7 +339,7 @@ fun SettingsScreen(
                 // 状态不再靠卡片底色表达，改用行尾胶囊（待处理 / 未接入 / 已就绪）。
                 item { com.haoai.agent.ui.common.HaoGroupLabel("智能体能力") }
                 item {
-                    HaoGroup(backdrop = backdrop) {
+                    HaoGroup(backdrop = localBackdrop) {
                         HaoRow(
                             icon = Icons.Filled.SmartToy,
                             tintIndex = 0,
@@ -385,7 +395,7 @@ fun SettingsScreen(
 
                 item { com.haoai.agent.ui.common.HaoGroupLabel("扩展与运行环境") }
                 item {
-                    HaoGroup(backdrop = backdrop) {
+                    HaoGroup(backdrop = localBackdrop) {
                         HaoRow(
                             icon = Icons.Filled.Schedule,
                             tintIndex = 1,
@@ -450,7 +460,7 @@ fun SettingsScreen(
                     // （曾试过整组用中性灰做"视觉降级"，用户反馈"图标没有颜色，像坏了"——
                     //  规则是"底色只表达异常"，不是"按分组分层级"，灰色只该出现在
                     //  未接入/未初始化这类中性状态胶囊上。）
-                    HaoGroup(backdrop = backdrop) {
+                    HaoGroup(backdrop = localBackdrop) {
                         HaoRow(
                             icon = Icons.Filled.Folder,
                             tintIndex = 3,
@@ -517,7 +527,7 @@ fun SettingsScreen(
             }
             }
             GlassPageBar(
-                backdrop = backdrop,
+                backdrop = localBackdrop,
                 title = "设置",
                 onBack = onBack,
                 modifier = Modifier
@@ -1149,6 +1159,15 @@ private fun SectionPage(
         // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
         // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
         // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
+        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
+        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
         // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
         // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
         var glassHostSize2 by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
@@ -1157,7 +1176,7 @@ private fun SectionPage(
         androidx.compose.runtime.SideEffect {
             if (wallpaper != null && glassHostSize2.width > 0 && glassHostSize2.height > 0) {
                 val img = wallpaper.asImageBitmap()
-                backdrop.graphicsLayer.record(glassHostSize2Density, glassHostSize2LayoutDir, glassHostSize2) {
+                localBackdrop.graphicsLayer.record(glassHostSize2Density, glassHostSize2LayoutDir, glassHostSize2) {
                     drawImage(
                         img,
                         dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
@@ -1166,7 +1185,7 @@ private fun SectionPage(
                 }
             }
         }
-        Box(Modifier.matchParentSize().appLayer(backdrop).onSizeChanged { glassHostSize2 = it }) {
+        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize2 = it }) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
@@ -1220,7 +1239,7 @@ private fun SectionPage(
             }
         }
         GlassPageBar(
-            backdrop = backdrop,
+            backdrop = localBackdrop,
             title = sectionTitle(section),
             onBack = onBack,
             modifier = Modifier
@@ -1228,7 +1247,7 @@ private fun SectionPage(
         )
         if (pickerSeed != null) {
             ColorPickerDialog(
-                backdrop = backdrop,
+                backdrop = localBackdrop,
                 settings = settings,
                 initialHex = pickerSeed.orEmpty(),
                 initialSlot = pickerSlot,
@@ -1240,7 +1259,7 @@ private fun SectionPage(
             val named = settings.providers.filter { it.apiKeyCipher.isNotBlank() }
                 .map { it.name.ifBlank { it.model } }
             com.haoai.agent.ui.common.GlassAlertDialog(
-                backdrop = backdrop,
+                backdrop = localBackdrop,
                 title = "把 API Key 一起导出？",
                 onDismiss = { keyExportConfirm = false },
                 confirmLabel = "确认包含",
