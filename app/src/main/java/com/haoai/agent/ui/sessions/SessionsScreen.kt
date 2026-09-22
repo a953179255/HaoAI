@@ -290,6 +290,10 @@ fun SessionsScreen(
         }
         val list = if (debouncedQuery.isBlank()) baseList
         else searchResult.titleHits + searchResult.contentHits.map { it.session }
+        // 手势闭包需读最新状态：pointerInput(Unit) 的 block 不随重组重启，
+        // 直接闭包捕获会拿到旧值（Compose 经典坑）
+        val openCardIdNow by androidx.compose.runtime.rememberUpdatedState(openCardId)
+        val showTrashNow by androidx.compose.runtime.rememberUpdatedState(showTrash)
         Box(
             Modifier
                 .fillMaxWidth()
@@ -307,10 +311,18 @@ fun SessionsScreen(
                             tx += c.positionChange().x; ty += c.positionChange().y
                             if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
                                 if (abs(tx) > abs(ty)) {
-                                    if (tx < 0f && !showTrash) showTrash = true
-                                    else if (tx > 0f && showTrash) showTrash = false
-                                    // 切页时收起展开的操作按钮
-                                    openCardId = null
+                                    // 左滑：有卡片展开 → 语义是"收回卡片"，页面代为收起
+                                    //（必须页面来做：卡片 visible 区靠 offset{} 右移，命中测试
+                                    // 仍在原位 → 手指落在卡片可见区右侧时无人接管，会"滑了没反应"）；
+                                    // 无卡片 → 切回收站。右滑：正常切页（含 回收站→会话）
+                                    val cardOpen = openCardIdNow != null
+                                    if (tx > 0f) {
+                                        if (showTrashNow) showTrash = false
+                                        openCardId = null
+                                    } else {
+                                        openCardId = null
+                                        if (!cardOpen && !showTrashNow) showTrash = true
+                                    }
                                 }
                                 break
                             }
