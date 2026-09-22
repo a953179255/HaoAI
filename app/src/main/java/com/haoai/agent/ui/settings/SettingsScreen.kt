@@ -129,6 +129,8 @@ import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
+import com.haoai.agent.ui.theme.MotionStyle
+import com.haoai.agent.ui.theme.MotionTheme
 
 /**
  * 设置主页（分组导航）：
@@ -2055,7 +2057,7 @@ private fun LazyListScope.memoryItems(
         }
     }
     item { SectionTitle("记忆管理模型") }
-    item {
+item {
         GlassGroup(backdrop) {
             Row(
                 Modifier
@@ -2561,6 +2563,44 @@ private fun LazyListScope.generalItems(
             // 通用页少一屏；绝对路径默认折叠——正式包里那目录用户根本打不开。
         }
     }
+
+                    // ── 动画风格：三套全局动画语言（Motion.kt），真机即切即看 ──
+                item {
+                    HaoGroup(backdrop = backdrop) {
+                        HaoRow(
+                            title = "动画风格 · 液态玻璃",
+                            subtitle = MotionStyle.Liquid.label + " · spring 回弹，弹层上浮，底部弹窗越界",
+                            tintIndex = 2,
+                            onClick = { MotionTheme.style = MotionStyle.Liquid },
+                            trailing = {
+                                if (MotionTheme.style == MotionStyle.Liquid) HaoChip("使用中", HaoTone.Accent)
+                            },
+                            showChevron = false
+                        )
+                        HaoRow(
+                            title = "动画风格 · 丝滑响应",
+                            subtitle = MotionStyle.Snappy.label + " · 无回弹，120-170ms，跟手优先",
+                            tintIndex = 4,
+                            onClick = { MotionTheme.style = MotionStyle.Snappy },
+                            trailing = {
+                                if (MotionTheme.style == MotionStyle.Snappy) HaoChip("使用中", HaoTone.Accent)
+                            },
+                            divider = true,
+                            showChevron = false
+                        )
+                        HaoRow(
+                            title = "动画风格 · 柔和渐显",
+                            subtitle = MotionStyle.Gentle.label + " · 强缓动淡入，安静不抢戏",
+                            tintIndex = 5,
+                            onClick = { MotionTheme.style = MotionStyle.Gentle },
+                            trailing = {
+                                if (MotionTheme.style == MotionStyle.Gentle) HaoChip("使用中", HaoTone.Accent)
+                            },
+                            divider = true,
+                            showChevron = false
+                        )
+                    }
+                }
 
     item { SectionTitle("数据与备份") }
     item {

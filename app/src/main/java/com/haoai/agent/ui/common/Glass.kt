@@ -406,7 +406,8 @@ fun GlassPanel(
  */
 class LiquidPressHighlight(private val animationScope: CoroutineScope) {
 
-    private val pressProgressSpec = spring<Float>(0.5f, 300f, 0.001f)
+    private val pressProgressSpec = com.haoai.agent.ui.theme.MotionTheme.pressSpec
+    // 三套动画语言（Liquid 回弹 / Snappy 干脆 / Gentle 柔缓），入口在设置-通用
     private val positionSpec =
         spring(0.5f, 300f, Offset.VisibilityThreshold)
 
@@ -887,7 +888,7 @@ fun GlassPopup(
     var leaving by remember { mutableStateOf(false) }
     val progress by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (leaving) 0f else 1f,
-        animationSpec = androidx.compose.animation.core.tween(durationMillis = 190),
+        animationSpec = com.haoai.agent.ui.theme.MotionTheme.popupSpec,
         label = "glassPopupProgress"
     )
     LaunchedEffect(leaving) {
@@ -896,7 +897,8 @@ fun GlassPopup(
             onDismiss()
         }
     }
-    val slidePx = with(LocalDensity.current) { 10.dp.toPx() }
+    val slidePx = with(LocalDensity.current) { com.haoai.agent.ui.theme.MotionTheme.popupSlideDp.dp.toPx() }
+    val fromScale = com.haoai.agent.ui.theme.MotionTheme.popupFromScale
     androidx.compose.ui.window.Popup(
         alignment = alignment,
         offset = offset,
@@ -907,7 +909,7 @@ fun GlassPopup(
             backdrop = backdrop,
             modifier = modifier.graphicsLayer {
                 alpha = progress
-                val s = 0.92f + 0.08f * progress
+                val s = fromScale + (1f - fromScale) * progress
                 scaleX = s
                 scaleY = s
                 translationY = (1f - progress) * slidePx
@@ -1047,9 +1049,10 @@ fun GlassAlertDialog(
     // 入场过渡：条件组合进入时 AnimatedVisibility 会从初始态播放 enter 动画
     androidx.compose.animation.AnimatedVisibility(
         visible = true,
-        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
+        enter = androidx.compose.animation.fadeIn(
+            androidx.compose.animation.core.tween(com.haoai.agent.ui.theme.MotionTheme.fadeMs)) +
             androidx.compose.animation.scaleIn(
-                initialScale = 0.92f,
+                initialScale = com.haoai.agent.ui.theme.MotionTheme.popupFromScale,
                 animationSpec = androidx.compose.animation.core.tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)
             )
     ) {
@@ -1082,13 +1085,17 @@ fun GlassAlertDialog(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                Column(
-                    Modifier
-                        .padding(top = 12.dp)
-                        .heightIn(max = contentMaxHeight)
-                        .verticalScroll(rememberScrollState()),
-                    content = content
-                )
+                androidx.compose.runtime.CompositionLocalProvider(
+                    LocalCompactFieldOnSolidPanel provides true
+                ) {
+                    Column(
+                        Modifier
+                            .padding(top = 12.dp)
+                            .heightIn(max = contentMaxHeight)
+                            .verticalScroll(rememberScrollState()),
+                        content = content
+                    )
+                }
                 if (onConfirm != null || dismissLabel != null) {
                     Row(
                         Modifier
@@ -1179,6 +1186,10 @@ fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.co
  * 同一屏能多看一两个字段。直接基于 Foundation BasicTextField 自绘边框，
  * 不碰 Material 内部 API（版本间签名不稳）。
  */
+/** 弹窗/底部弹窗内的紧凑输入框走"白面板"配色（压暗容器在白玻璃上是突兀的深灰块）。
+ *  GlassAlertDialog/GlassBottomSheet 的 content 外层会 provide true。 */
+val LocalCompactFieldOnSolidPanel = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 @Composable
 fun CompactGlassField(
     value: String,
@@ -1208,9 +1219,14 @@ fun CompactGlassField(
     // 「白叠白」，边界全靠描边硬撑。改用 onBackground 叠加（浅色下=压暗、
     // 深色下=提亮），容器与面板有真实明度差；聚焦时再加深一档
     // 壁纸上同样加实：0.07/0.04 的容器压在花壁纸上等于没有框
-    val container = if (com.haoai.agent.ui.theme.LocalOnWallpaper.current) {
-        if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f)
-        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.52f)
+    // 三种环境：①弹窗/白面板（Local=true）→ 极浅压暗（面板本身 0.92 白，深灰块突兀）；
+    // ②花壁纸上的页面 → 中度压暗（0.20/0.30，太浅会被花纹吃掉边框）；③净色页 → 极浅
+    val container = if (LocalCompactFieldOnSolidPanel.current) {
+        if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
+        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
+    } else if (com.haoai.agent.ui.theme.LocalOnWallpaper.current) {
+        if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
+        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.20f)
     } else if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
     else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f)
 
