@@ -75,6 +75,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.luminance
 import com.haoai.agent.ui.common.CompactGlassField
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.material.icons.filled.Restore
 
 /** 独立「全部会话」页：搜索过滤（会话/回收站共用）+ 左右滑动切换 + 置顶/重命名/回收站管理。 */
 @Composable
@@ -317,17 +318,20 @@ fun SessionsScreen(
                             tx += c.positionChange().x; ty += c.positionChange().y
                             if (abs(tx) > viewConfiguration.touchSlop || abs(ty) > viewConfiguration.touchSlop) {
                                 if (abs(tx) > abs(ty)) {
-                                    // 左滑：有卡片展开 → 语义是"收回卡片"，页面代为收起
-                                    //（必须页面来做：卡片 visible 区靠 offset{} 右移，命中测试
-                                    // 仍在原位 → 手指落在卡片可见区右侧时无人接管，会"滑了没反应"）；
-                                    // 无卡片 → 切回收站。右滑：正常切页（含 回收站→会话）
+                                    // 方向语义（2026-09-22 定案）：
+                                    // · 左滑 = 在两个列表间切换（会话→回收站 / 回收站→会话）。
+                                    //   两个列表用同一方向，**避免与卡片的右滑呼出冲突**——回收站页
+                                    //   若用右滑切回，会与"右滑呼出卡片"抢同一手势（实测页面抢赢、
+                                    //   卡片呼不出来，用户实锤）。
+                                    // · 右滑 = 留给卡片（未展开→呼出；已展开→卡片自己收）。页面只做兜底：
+                                    //   有卡片展开时收起它（卡片 visible 区靠 offset{} 右移、命中测试在原位，
+                                    //   手指落在可见区右侧时无人接管 → 页面兜底，否则"滑了没反应"）。
                                     val cardOpen = openCardIdNow != null
-                                    if (tx > 0f) {
-                                        if (showTrashNow) showTrash = false
+                                    if (tx < 0f) {
                                         openCardId = null
-                                    } else {
+                                        showTrash = !showTrashNow
+                                    } else if (cardOpen) {
                                         openCardId = null
-                                        if (!cardOpen && !showTrashNow) showTrash = true
                                     }
                                 }
                                 break
@@ -519,52 +523,86 @@ fun SessionsScreen(
                         contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)
                     ) {
                         items(list, key = { it.id }) { s ->
-                            val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L))
-                            GlassCard(
+                            val daysLeft = 7 - ((System.currentTimeMillis() - s.deletedAt) / (24 * 60 * 60 * 1000L)).toInt()
+                            // 与会话页同一套滑动呼出 + 同一套 44dp 圆钮（主次分层：恢复=中性实底、
+                            // 彻底删除=error 实底）。卡上不再放文字按钮——此前 TextButton 的触摸目标
+                            // 把卡片撑高，与会话卡高度不一致（用户实锤）；移除后高度自动对齐
+                            SwipeRevealCard(
+                                isOpen = openCardId == s.id,
+                                anyOpen = openCardId != null,
                                 onClick = {},
-                                backdrop = localBackdrop,
-                                shape = RoundedCornerShape(14.dp),
-                                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
-                                lensRadius = 14.dp,
-                                pressScale = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 2.dp)
-                            ) {
-                                Row(
-                                    Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            highlightedAnnotatedString(s.title, debouncedQuery),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onBackground,
-                                            maxLines = 1
+                                onOpenChange = { open -> openCardId = if (open) s.id else null },
+                                openWidth = 150.dp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                actions = {
+                                    FilledIconButton(
+                                        onClick = {
+                                            vm.restoreSession(s.id)
+                                            openCardId = null
+                                        },
+                                        modifier = Modifier.size(44.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                            contentColor = MaterialTheme.colorScheme.background
                                         )
-                                        Text(
-                                            "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天自动清理 · ${s.messages.size} 条",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                                    ) {
+                                        Icon(Icons.Filled.Restore, contentDescription = "恢复", modifier = Modifier.size(20.dp))
+                                    }
+                                    FilledIconButton(
+                                        onClick = {
+                                            pendingPurge = s
+                                            openCardId = null
+                                        },
+                                        modifier = Modifier.size(44.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.error,
+                                            contentColor = MaterialTheme.colorScheme.onError
                                         )
-                                        contentSnippets[s.id]?.let { snippet ->
-                                            Text(
-                                                highlightedAnnotatedString(snippet, debouncedQuery),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                                                maxLines = 2,
-                                                modifier = Modifier.padding(top = 2.dp)
-                                            )
+                                    ) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "彻底删除", modifier = Modifier.size(20.dp))
+                                    }
+                                },
+                                content = { cardClick ->
+                                    GlassCard(
+                                        onClick = cardClick,
+                                        backdrop = localBackdrop,
+                                        shape = RoundedCornerShape(14.dp),
+                                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                                        lensRadius = 14.dp,
+                                        pressScale = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(
+                                                    highlightedAnnotatedString(s.title, debouncedQuery),
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onBackground,
+                                                    maxLines = 1
+                                                )
+                                                Text(
+                                                    "${fmt.format(Date(s.deletedAt))} 删除 · 剩 $daysLeft 天 · ${s.messages.size} 条",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                                                    maxLines = 1
+                                                )
+                                                contentSnippets[s.id]?.let { snippet ->
+                                                    Text(
+                                                        highlightedAnnotatedString(snippet, debouncedQuery),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                                        maxLines = 2,
+                                                        modifier = Modifier.padding(top = 2.dp)
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
-                                    TextButton(onClick = { vm.restoreSession(s.id) }) {
-                                        Text("恢复", color = MaterialTheme.colorScheme.primary)
-                                    }
-                                    TextButton(onClick = { pendingPurge = s }) {
-                                        Text("彻底删除", color = MaterialTheme.colorScheme.error)
-                                    }
                                 }
-                            }
+                            )
                         }
                     }
                     }
