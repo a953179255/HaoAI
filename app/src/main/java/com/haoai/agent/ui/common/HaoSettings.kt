@@ -337,11 +337,15 @@ fun HaoSwitch(
     enabled: Boolean = true
 ) {
     val dark = com.haoai.agent.ui.theme.haoIsDark()
-    val progress by androidx.compose.animation.core.animateFloatAsState(
+    val rawProgress by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (checked) 1f else 0f,
+        // dampingRatio 0.55 欠阻尼会 undershoot/overshoot 出 [0,1]；
+        // 下游 padding/颜色插值必须收进区间，否则关闭方向 progress<0 时
+        // "Padding must be non-negative" 直接闪退（logcat 已确认 5 次同栈）
         animationSpec = androidx.compose.animation.core.spring(0.55f, 380f),
         label = "haoSwitch"
     )
+    val progress = rawProgress.coerceIn(0f, 1f)
     val trackW = 44.dp
     val trackH = 26.dp
     val knob = 20.dp
