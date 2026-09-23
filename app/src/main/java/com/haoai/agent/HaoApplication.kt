@@ -14,6 +14,6 @@ class HaoApplication : Application() {
         super.onCreate()
         container = AppContainer(this)
         Scheduler.init(this)
-        Scheduler.syncAll(ScheduleStore.load().items)
+        Scheduler.syncAll(ScheduleStore.list())
     }
 }

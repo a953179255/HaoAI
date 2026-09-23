@@ -160,38 +160,31 @@ class AppContainer(app: Application) {
         readMcp = { com.haoai.agent.agent.mcp.McpManager.listServers() },
         readSsh = { com.haoai.agent.agent.tools.shell.SshBackend.loadTargets(appFilesDir) },
         // 分区同步：apply（config_set 与轮询兜底两条路径）成功后落各自存储+重连，备注拼进结果
+        // MCP 部分含 suspend 重连（delay/HTTP），不得在主线程 runBlocking（冷启动迁移会 ANR）——
+        // 统一丢 applicationScope；SSH 仅本地读写，保持同步返回备注。
         onExtChanged = { p ->
             val notes = mutableListOf<String>()
-            kotlinx.coroutines.runBlocking {
-                p.mcpServers?.let { new ->
-                    val cur = com.haoai.agent.agent.mcp.McpManager.listServers()
-                    if (p.mcpRemoved) {
-                        cur.filter { s -> new.none { it.id == s.id } }.forEach {
-                            com.haoai.agent.agent.mcp.McpManager.removeServer(it.id)
+            p.mcpServers?.let { new ->
+                applicationScope.launch {
+                    runCatching {
+                        val cur = com.haoai.agent.agent.mcp.McpManager.listServers()
+                        if (p.mcpRemoved) {
+                            cur.filter { s -> new.none { it.id == s.id } }.forEach {
+                                com.haoai.agent.agent.mcp.McpManager.removeServer(it.id)
+                            }
                         }
-                    }
-                    new.forEach { cfg ->
-                        val old = cur.find { it.id == cfg.id }
-                        // 内容不变跳过（轮询路径每次 apply 都带全量分区，避免无谓重连）
-                        if (old == cfg) return@forEach
-                        when {
-                            old == null -> com.haoai.agent.agent.mcp.McpManager.addServer(cfg)
-                            else -> com.haoai.agent.agent.mcp.McpManager.updateServer(cfg)
-                        }
-                    }
-                    new.forEach { cfg ->
-                        if (!cfg.enabled) return@forEach
-                        when (val st = com.haoai.agent.agent.mcp.McpManager.states.value[cfg.id]) {
-                            is com.haoai.agent.agent.mcp.McpConnState.Ready ->
-                                notes += "MCP「${cfg.name}」已连接（${st.toolCount} 个工具）"
-                            is com.haoai.agent.agent.mcp.McpConnState.Error ->
-                                notes += "MCP「${cfg.name}」连接失败：${st.message.take(80)}"
-                            com.haoai.agent.agent.mcp.McpConnState.PendingReady ->
-                                notes += "MCP「${cfg.name}」等待 Linux 沙箱就绪"
-                            else -> Unit
+                        new.forEach { cfg ->
+                            val old = cur.find { it.id == cfg.id }
+                            // 内容不变跳过（轮询路径每次 apply 都带全量分区，避免无谓重连）
+                            if (old == cfg) return@forEach
+                            when {
+                                old == null -> com.haoai.agent.agent.mcp.McpManager.addServer(cfg)
+                                else -> com.haoai.agent.agent.mcp.McpManager.updateServer(cfg)
+                            }
                         }
                     }
                 }
+                notes += "MCP 配置已提交同步（连接稍后生效）"
             }
             p.sshTargets?.let { new ->
                 val cur = com.haoai.agent.agent.tools.shell.SshBackend.loadTargets(appFilesDir)
@@ -273,10 +266,15 @@ class AppContainer(app: Application) {
         configBridge.startWatching(applicationScope)
     }
 
+    /** 设置读改写互斥：UI 主线程 / flushUsage(IO) / ConfigFileBridge(IO) 并发写会丢更新。 */
+    private val settingsLock = Any()
+
     fun updateSettings(edit: (AppSettings) -> AppSettings) {
-        val next = edit(settingsFlow.value)
-        settingsStore.save(next)
-        settingsFlow.value = next
+        synchronized(settingsLock) {
+            val next = edit(settingsFlow.value)
+            settingsStore.save(next)
+            settingsFlow.value = next
+        }
         // 镜像配置保持与真源一致（apiKey 掩码化回写）
         runCatching { configBridge.onSettingsChanged() }
     }

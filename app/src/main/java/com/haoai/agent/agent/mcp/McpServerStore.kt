@@ -38,7 +38,8 @@ data class McpToolInfoData(
 
 /** 服务器配置持久化（filesDir/mcp/servers.json，HaoJson 原子写 + .bak 兜底）。
  *  headers 值经 Android Keystore 加密落盘（enc:<base64>，密钥名不敏感保留明文）：
- *  旧版明文值加载后原样识别，首次 save 自动升级；Keystore 不可用时回退明文（load 双兼容）。 */
+ *  旧版明文值加载后原样识别，首次 save 自动升级；Keystore 加密失败拒绝写入（fail-closed，
+ *  绝不把 Authorization 明文落盘）。 */
 object McpServerStore {
 
     private lateinit var file: File
@@ -83,7 +84,8 @@ object McpServerStore {
 
     private fun encryptValue(v: String): String =
         if (v.isBlank() || v.startsWith(ENC_PREFIX)) v
-        else cipher.encrypt(v)?.let { ENC_PREFIX + it } ?: v
+        else cipher.encrypt(v)?.let { ENC_PREFIX + it }
+            ?: error("MCP header 加密失败（Keystore 不可用），拒绝明文落盘")
 
     private fun decryptValue(v: String): String =
         if (!v.startsWith(ENC_PREFIX)) v

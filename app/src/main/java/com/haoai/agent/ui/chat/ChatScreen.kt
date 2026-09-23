@@ -386,8 +386,9 @@ fun ChatScreen(
     var pendingAudioName by remember { mutableStateOf<String?>(null) }
     var pendingVideoPath by remember { mutableStateOf<String?>(null) }
     var pendingVideoName by remember { mutableStateOf<String?>(null) }
-    // 相机临时文件：filesDir 下（file_paths.xml 的 internal_files 已覆盖）
-    val cameraShotFile = java.io.File(context.filesDir, "camera_shot.jpg")
+    // 相机临时文件：filesDir/camera/（file_paths 仅暴露该子目录，防 FileProvider 覆盖整个 filesDir）
+    val cameraShotFile = java.io.File(java.io.File(context.filesDir, "camera"), "camera_shot.jpg")
+        .apply { parentFile?.mkdirs() }
     var pendingDocumentName by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
     // 消息长按操作组（1.2）：目标消息 / 编辑重发草稿 / 删除确认

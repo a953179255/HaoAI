@@ -67,14 +67,20 @@ class NotificationCapture : NotificationListenerService() {
             )
         )
         // Phase 6 工作流通知触发：匹配到 enabled 工作流的关键词时入队执行（防抖：每关键词 60s 一次）
-        runCatching { dispatchWorkflowTriggers(title, text) }
+        // 整段挪 IO：onNotificationPosted 是通知服务主线程，WorkflowStore.list 会全量读盘
+        val app = application as? HaoApplication ?: return
+        app.container.applicationScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { dispatchWorkflowTriggers(container = app.container, title = title, text = text) }
+        }
     }
 
     private var lastTriggerAt = mutableMapOf<String, Long>()
 
-    private fun dispatchWorkflowTriggers(title: String, text: String) {
-        val app = application as? HaoApplication ?: return
-        val container = app.container
+    private fun dispatchWorkflowTriggers(
+        container: com.haoai.agent.data.AppContainer,
+        title: String,
+        text: String
+    ) {
         val now = System.currentTimeMillis()
         val content = title + "\n" + text
         com.haoai.agent.agent.workflow.WorkflowStore.list().forEach { def ->

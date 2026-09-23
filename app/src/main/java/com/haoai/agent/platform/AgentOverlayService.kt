@@ -64,9 +64,14 @@ class AgentOverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var observeJob: kotlinx.coroutines.Job? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (wm == null) wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        scope.launch { observe() }
+        // 每次 start 只保留一个观察循环：多轮 send 会叠加协程反复摘挂窗口
+        if (observeJob?.isActive != true) {
+            observeJob = scope.launch { observe() }
+        }
         return START_NOT_STICKY
     }
 

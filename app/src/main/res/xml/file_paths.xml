@@ -3,9 +3,8 @@
     <external-files-path
         name="pictures"
         path="Pictures/" />
-    <!-- getExternalFilesDir 为 null 时相机回退到内部 filesDir：缺这条会抛
-         IllegalArgumentException（Failed to find configured root）直接崩溃 -->
+    <!-- 仅相机临时文件目录：不再暴露整个 filesDir（settings/sessions 等不可经 FileProvider 外发） -->
     <files-path
-        name="internal_files"
-        path="." />
+        name="camera_shot"
+        path="camera/" />
 </paths>

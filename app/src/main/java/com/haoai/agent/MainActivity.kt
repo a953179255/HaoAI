@@ -110,6 +110,21 @@ class MainActivity : ComponentActivity() {
         com.haoai.agent.platform.RunObserver.appForeground = false
     }
 
+    override fun onDestroy() {
+        // 静态桥持有 Activity 闭包：不清理会在主题/配置变更后泄漏整棵 View
+        if (com.haoai.agent.platform.PermissionBridge.requestRuntime != null &&
+            pendingRuntimeCb != null
+        ) {
+            // 回调已挂起的协程交给超时兜底，避免永远等不到系统结果
+            pendingRuntimeCb?.invoke(emptyMap())
+        }
+        pendingRuntimeCb = null
+        pendingResultCb = null
+        com.haoai.agent.platform.PermissionBridge.requestRuntime = null
+        com.haoai.agent.platform.PermissionBridge.startForResult = null
+        super.onDestroy()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -256,6 +271,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     }
     suspend fun consumeDeepLink(uri: android.net.Uri) {
         if (uri.host != "debug") return
+        // 调试路由（bash/ask/vscreen 等）仅 debug 构建生效：release 下任意
+        // app/网页投递的 haoai://debug/* 一律忽略，防跨应用注入与特权命令。
+        val debuggable =
+            (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!debuggable) return
         val target = uri.lastPathSegment ?: ""
         when (target) {
             "chat" -> { enterChat(); screen = 0 }
@@ -273,6 +293,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 rootScope.launch(kotlinx.coroutines.Dispatchers.Default) {
                     val appCtx = container.appContext
                     val pkg = uri.getQueryParameter("pkg") ?: "com.android.settings"
+                    // 包名白名单：禁止把 query 原样拼进 shizuku/root 命令（命令注入）
+                    if (!Regex("^[A-Za-z0-9._]+$").matches(pkg)) {
+                        com.haoai.agent.platform.vdisplay.VirtualScreenController.debugLog(
+                            "route: rejected invalid pkg"
+                        )
+                        return@launch
+                    }
                     // 观察循环：重投递则强退设置重投；无帧自愈后重试；最终长观察帧管线
                     var attempt = 0
                     var launchedOk = false

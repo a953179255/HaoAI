@@ -14,7 +14,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-/** MainActivity 注册系统对话框/相机的启动器后挂进来，供任意线程（含工具执行协程）调用。 */
+/** MainActivity 注册系统对话框/相机的启动器后挂进来，供任意线程（含工具执行协程）调用。
+ *  Activity onDestroy 必须置空，否则静态持有泄漏旧实例。 */
 object PermissionBridge {
 
     /** 发起运行时权限请求；结果按权限名回传。 */

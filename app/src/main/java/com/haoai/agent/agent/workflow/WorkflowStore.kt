@@ -91,7 +91,12 @@ object WorkflowStore {
 
     fun delete(id: String): Boolean {
         val d = dir ?: return false
-        synchronized(lock) { return File(d, "$id.json").delete() }
+        // id 来自模型参数：白名单 + canonical 前缀，防 ../ 路径穿越删 filesDir 任意 json
+        if (!Regex("^[A-Za-z0-9_-]+$").matches(id)) return false
+        val target = runCatching { File(d, "$id.json").canonicalFile }.getOrNull() ?: return false
+        val base = runCatching { d.canonicalFile }.getOrNull() ?: return false
+        if (target.parentFile != base) return false
+        synchronized(lock) { return target.delete() }
     }
 
     fun newId(): String = "wf-${System.currentTimeMillis().toString(36)}-${(0..999).random()}"

@@ -1,9 +1,21 @@
-﻿plugins {
+﻿import java.util.Properties
+
+plugins {
     alias(libs.plugins.android.application)
     // AGP 9.0 起内置 Kotlin 支持，kotlin.android 插件不再需要（kotl.in/gradle/agp-built-in-kotlin）
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
+
+// Release 签名：keystore.properties（已 gitignore）存在则用专用证书，否则回退 debug（本地开发）。
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseKeystore = keystorePropertiesFile.exists() &&
+    keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.haoai.agent"
@@ -13,8 +25,19 @@ android {
         applicationId = "com.haoai.agent"
         minSdk = 26
         targetSdk = 36
-        versionCode = 37
-        versionName = "0.18.4"
+        versionCode = 38
+        versionName = "0.18.5"
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -25,7 +48,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                // 无专用证书时仍可出包（本地验证）；对外发布前务必配置 keystore.properties
+                signingConfigs.getByName("debug")
+            }
         }
     }
     packaging {

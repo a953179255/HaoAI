@@ -40,15 +40,13 @@ class ScheduleTool(private val appFilesDir: java.io.File) : Tool {
                 val prompt = args.optString("prompt").trim()
                 if (name.isEmpty() || prompt.isEmpty()) return ToolResult("create 需要 name 和 prompt", true)
                 val task = ScheduleTask(name = name.take(40), spec = spec, prompt = prompt.take(2000))
-                val state = store.load()
-                state.items.add(task)
-                store.save(state)
+                store.mutate { it.items.add(task) }
                 Scheduler.enqueueNext(task)
                 ToolResult("已创建定时任务「${task.name}」（id=${task.id}，${Scheduler.specLabel(spec)}），到点自动执行。")
             }
 
             "list" -> {
-                val items = store.load().items
+                val items = store.list()
                 if (items.isEmpty()) return ToolResult("暂无定时任务")
                 val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
                 ToolResult(
@@ -64,24 +62,37 @@ class ScheduleTool(private val appFilesDir: java.io.File) : Tool {
 
             "remove" -> {
                 val id = args.optString("id")
-                val state = store.load()
-                val target = state.items.firstOrNull { it.id.equals(id, true) || it.name == id }
-                    ?: return ToolResult("未找到任务：$id", true)
-                state.items.remove(target)
-                store.save(state)
+                var removed: ScheduleTask? = null
+                store.mutate { state ->
+                    val target = state.items.firstOrNull { it.id.equals(id, true) || it.name == id }
+                    if (target != null) {
+                        state.items.remove(target)
+                        removed = target
+                    }
+                }
+                val target = removed ?: return ToolResult("未找到任务：$id", true)
                 Scheduler.cancel(target.id)
                 ToolResult("已删除「${target.name}」")
             }
 
             "toggle" -> {
                 val id = args.optString("id")
-                val state = store.load()
-                val target = state.items.firstOrNull { it.id.equals(id, true) || it.name == id }
-                    ?: return ToolResult("未找到任务：$id", true)
-                target.enabled = !target.enabled
-                store.save(state)
-                if (target.enabled) Scheduler.enqueueNext(target) else Scheduler.cancel(target.id)
-                ToolResult("「${target.name}」已${if (target.enabled) "启用" else "停用"}")
+                var nowEnabled: Boolean? = null
+                var toSchedule: ScheduleTask? = null
+                var cancelId: String? = null
+                var taskName: String? = null
+                store.mutate { state ->
+                    val target = state.items.firstOrNull { it.id.equals(id, true) || it.name == id }
+                    if (target != null) {
+                        target.enabled = !target.enabled
+                        nowEnabled = target.enabled
+                        taskName = target.name
+                        if (target.enabled) toSchedule = target else cancelId = target.id
+                    }
+                }
+                val enabled = nowEnabled ?: return ToolResult("未找到任务：$id", true)
+                if (enabled) Scheduler.enqueueNext(toSchedule!!) else Scheduler.cancel(cancelId!!)
+                ToolResult("「$taskName」已${if (enabled) "启用" else "停用"}")
             }
 
             else -> ToolResult("未知 action", true)

@@ -56,11 +56,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!-- debug deep link：adb shell am start -a android.intent.action.VIEW -d "haoai://debug/<target>"
-                 验证直达（跳过导航点击）。可用 target 见 MainActivity.DEBUG_ROUTES -->
+                 仅保留 DEFAULT（adb 可用）；去掉 BROWSABLE，浏览器/任意网页不可拉起。
+                 consumeDeepLink 另有 FLAG_DEBUGGABLE 门禁，release 构建整段忽略。 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="haoai" android:host="debug" />
             </intent-filter>
             <!-- 系统分享接入（R2.2）：其他 app 分享文本/图片到 HaoAI -->
@@ -71,9 +71,10 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+        <!-- 仅应用内「设置 → 玻璃实验室」进入；adb 可用 run-as/root 启动，无需 exported -->
         <activity
             android:name=".glasslab.GlassLabActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="玻璃实验室" />
 
         <!-- 2.4 notifications_read：通知使用权服务（用户在系统设置中授权） -->

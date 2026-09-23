@@ -76,6 +76,18 @@ object ScheduleStore {
         save(state)
         return true
     }
+
+    /** 锁内整表读改写：create/remove/toggle 等非单任务编辑走这里，避免 load→改→save 窗口竞态。 */
+    @Synchronized
+    fun mutate(edit: (ScheduleState) -> Unit) {
+        val state = load()
+        edit(state)
+        save(state)
+    }
+
+    /** 只读快照：返回拷贝，调用方可安全迭代而不怕并发 mutate。 */
+    @Synchronized
+    fun list(): List<ScheduleTask> = load().items.toList()
 }
 
 object Scheduler {
@@ -101,7 +113,8 @@ object Scheduler {
     fun specLabel(spec: String): String = when {
         spec == "hourly" -> "每小时"
         spec.startsWith("every:") -> {
-            val (n, unit) = Regex("every:(\\d+)([mhd])").find(spec)!!.destructured
+            val found = Regex("every:(\\d+)([mhd])").find(spec)?.destructured ?: return spec
+            val (n, unit) = found
             "每 ${n}${mapOf("m" to "分钟", "h" to "小时", "d" to "天")[unit]}"
         }
         spec.startsWith("daily:") -> "每天 ${spec.removePrefix("daily:")}"

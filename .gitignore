@@ -18,3 +18,5 @@ keystore.properties
 .kotlin/
 
 .git-broken-*/
+*.jks
+*.keystore

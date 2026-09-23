@@ -1284,7 +1284,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _planProposal.value = null
     }
 
+    /** 引擎事件统一切回主线程：子代理 report 在 IO 线程直达 handleEvent 会并发写 liveTools。 */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun handleEvent(ev: TurnEvent) {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            mainHandler.post { handleEvent(ev) }
+            return
+        }
         when (ev) {
             StreamReset -> resetStreamView()
             is MessageAdded -> {
