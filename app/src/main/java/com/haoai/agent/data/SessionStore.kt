@@ -86,7 +86,12 @@ data class StoredSession(
     /** 最近一次压缩**前**的历史 token（真值口径）：诊断"这次压掉多少、是不是压过头"用。 */
     var compactedTokensBefore: Int? = null,
     /** E4b 工具分层：会话内已启用的工具组（core 恒开）。null=全开（升级前旧会话零感知）；新会话默认仅 core。 */
-    var activeGroups: List<String>? = null
+    var activeGroups: List<String>? = null,
+    /**
+     * B6 写盘围栏（对标 OC activeWriterRunId 的轻量版）：每次成功 save 单调 +1。
+     * drain 丢弃 revision 低于已写盘值的陈旧快照，防过期副本覆盖新状态。
+     */
+    var revision: Int = 0
 ) {
     companion object {
         const val RUN_IDLE = "idle"
@@ -269,6 +274,9 @@ class SessionStore(private val dir: File) {
     /** 最新未落盘状态：save 后、写盘完成前，load/list 必须能看到。 */
     private val latest = java.util.concurrent.ConcurrentHashMap<String, StoredSession>()
 
+    /** B6 已成功写盘的 revision（围栏：陈旧副本 revision < 此值则丢弃 save）。 */
+    private val writtenRevision = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     /** 已落盘解析结果缓存（按 mtime 失效），避免 list() 每次全量读盘解析。 */
     private val diskCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StoredSession>>()
 
@@ -332,6 +340,10 @@ class SessionStore(private val dir: File) {
     fun save(session: StoredSession, touch: Boolean = true) {
         // 已彻底删除的会话：静默丢弃迟到的持久化（引擎后台 persist 等）
         if (session.id in tombstones) return
+        // B6 围栏：内存副本 revision 落后于已写盘/已排队值 → 陈旧写丢弃（防覆盖新状态）
+        val queued = pending[session.id]?.revision ?: writtenRevision[session.id] ?: 0
+        if (session.revision in 1 until queued) return
+        session.revision = maxOf(session.revision + 1, queued + 1)
         if (touch) {
             session.updatedAt = System.currentTimeMillis()
             if (session.title == "新会话") {
@@ -371,6 +383,7 @@ class SessionStore(private val dir: File) {
                     fileOf(snapshot.id),
                     HaoJson.json.encodeToString(StoredSession.serializer(), snapshot)
                 )
+                writtenRevision[snapshot.id] = snapshot.revision
             }
         }
     }

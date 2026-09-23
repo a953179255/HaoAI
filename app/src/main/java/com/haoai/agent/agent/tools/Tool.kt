@@ -59,7 +59,9 @@ data class ToolContext(
      * 本轮已经失败过的搜索/抓取引擎 → 失败原因。国内实测：DuckDuckGo 不是"立刻报错"而是
      * 挂十几秒才超时，不记下来就会每次搜索都再等一遍（见 WebSearchTool）。
      */
-    val deadEngines: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap()
+    val deadEngines: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap(),
+    /** B4 会话搜索：由引擎注入 SessionStore.list → 标题/摘要投影；null=工具不注册。 */
+    val sessionSearch: ((String) -> List<Pair<String, String>>)? = null
 ) {
     /** 命中未过期缓存则返回结果；过期条目顺带清除。 */
     fun webCacheGet(key: String, ttlMs: Long = 10 * 60_000L): String? {

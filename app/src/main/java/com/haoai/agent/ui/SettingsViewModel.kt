@@ -816,6 +816,16 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(toolCallCap = v.coerceIn(0, 100_000)) }
     }
 
+    /** B3 智能审批开关（辅助 LLM 评审 shell；失败升级人工）。 */
+    fun setSmartApproval(v: Boolean) {
+        c.updateSettings { it.copy(smartApproval = v) }
+    }
+
+    /** B6 工具组预设：""=按会话；minimal=仅 core；coding=core+extended；full=全开。 */
+    fun setToolProfile(v: String) {
+        c.updateSettings { it.copy(toolProfile = v) }
+    }
+
     /** E5b 软提醒开关（70% 预警）。 */
     fun setSoftBudgetWarn(on: Boolean) {
         c.updateSettings { it.copy(softBudgetWarn = on) }

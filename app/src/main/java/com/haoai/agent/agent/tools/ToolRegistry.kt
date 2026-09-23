@@ -112,6 +112,8 @@ object ToolRegistry {
         add(OcrImageTool())
         add(NotificationsReadTool())
         if (ctx.httpClient != null) add(WebSearchTool())
+        // B4 会话内容检索（core 组 READ：跨会话回忆背景，不改状态）
+        ctx.sessionSearch?.let { add(SessionSearchTool(it)) }
         // MCP 外部工具：enabled 服务器全部展开（未连接时用 toolCache 占位，调用报不可用）
         addAll(com.haoai.agent.agent.mcp.McpManager.toolInstances())
         if (ctx.depth == 0 && subAgentRunner != null) {

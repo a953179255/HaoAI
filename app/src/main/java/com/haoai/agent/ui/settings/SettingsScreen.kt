@@ -1,4 +1,4 @@
-﻿package com.haoai.agent.ui.settings
+package com.haoai.agent.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -2949,6 +2949,44 @@ private fun LazyListScope.generalItems(
                     onChange = { vm.setSoftBudgetWarn(it) },
                     backdrop = backdrop
                 )
+                Spacer(Modifier.height(4.dp))
+                ToggleRow(
+                    title = "Smart approval",
+                    subtitle = "Aux LLM reviews shell before human prompt: safe auto-approve, dangerous deny, uncertain or failure escalate to you.",
+                    checked = settings.smartApproval,
+                    onChange = { vm.setSmartApproval(it) },
+                    backdrop = backdrop
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("Tool profile", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Trim injected tools per task shape (token / noise). Session = follow tools_enable.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        "" to "Session",
+                        "minimal" to "Min",
+                        "coding" to "Code",
+                        "full" to "Full"
+                    ).forEach { (value, label) ->
+                        val selected = settings.toolProfile == value
+                        com.haoai.agent.ui.common.LiquidGlassButton(
+                            onClick = { vm.setToolProfile(value) },
+                            backdrop = backdrop,
+                            enabled = true
+                        ) {
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
                 }
             }
         }

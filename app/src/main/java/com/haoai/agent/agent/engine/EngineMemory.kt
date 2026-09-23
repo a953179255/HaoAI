@@ -77,8 +77,17 @@ internal fun AgentEngine.maybeExtractMemory() {
                             "HaoMemory",
                             "auto 提取跳过（与 ${nearDup.id} 近冲突）：${content.take(40)}"
                         )
+                    } else if (turnTainted) {
+                        // B2：本回合抓过网页/外部内容 → 沉淀一律 untrusted，不进启动注入
+                        bank.remember(
+                            content, tags, importance = 2, source = "auto",
+                            origin = "untrusted"
+                        )
                     } else {
-                        bank.remember(content, tags, importance = 2, source = "auto")
+                        bank.remember(
+                            content, tags, importance = 2, source = "auto",
+                            origin = "agent"
+                        )
                     }
                 }
             }

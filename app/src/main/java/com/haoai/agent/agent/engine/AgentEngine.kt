@@ -114,8 +114,23 @@ class AgentEngine(
     /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒（不中断循环）。 */
     internal val softBudgetWarn: Boolean = true,
     /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
-    internal val toolFailCap: Int = 8
+    internal val toolFailCap: Int = 8,
+    /** B4 会话搜索数据源：UI 与工具共用 SessionStore 投影；null=不注册 session_search。 */
+    internal val sessionSearchFn: ((String) -> List<Pair<String, String>>)? = null,
+    /**
+     * B6 工具 profile 预设（设置 toolProfile）：""=会话 activeGroups；minimal=仅 core；
+     * coding=core+extended；full=全开（null）。会话已有显式分组时 profile 仅作覆盖开关。
+     */
+    internal val toolProfile: String = ""
 ) {
+
+    /** 解析生效工具组：profile 空→会话分组；否则按预设（与 ToolRegistry.ALL_GROUPS 对齐）。 */
+    internal fun activeGroupsForProfile(sessionGroups: Set<String>?): Set<String>? = when (toolProfile) {
+        "minimal" -> setOf(ToolRegistry.GROUP_CORE)
+        "coding" -> setOf(ToolRegistry.GROUP_CORE, ToolRegistry.GROUP_EXTENDED)
+        "full" -> null
+        else -> sessionGroups
+    }
 
     internal val todoStore = TodoStore(appFilesDir)
 
@@ -124,6 +139,12 @@ class AgentEngine(
 
     /** E5 连续工具失败熔断信号（主循环尾检查后复位）。 */
     internal var _loopFailedCap = false
+
+    /** B1 空转守卫 hard stop：置位后主循环尾强制 forceFinish 收尾（与 _loopFailedCap 同路径）。 */
+    internal var _loopStallHalt = false
+
+    /** B2 回合污点：抓到外部网络正文后置位，autoExtract 一律按 untrusted 溯源入库。 */
+    @Volatile internal var turnTainted = false
 
     /** P2 运行中子代理注册表（key=handle id，生命周期=引擎实例即一个回合）。 */
     internal val activeSubagents = java.util.concurrent.ConcurrentHashMap<String, SubagentHandle>()
@@ -199,6 +220,20 @@ class AgentEngine(
 
     /** E3 会话级工具连续失败计数（成功清零）。 */
     internal val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /**
+     * B1 工具空转守卫：按回合复位；无人值守时 hard stop 更积极。
+     * 观测在 finishCall，决策注入引导或置 forceFinish（见 ToolLoopGuard）。
+     */
+    internal val loopGuard = ToolLoopGuard(
+        identicalWarnAfter = 3,
+        identicalBlockAfter = 5,
+        sameToolFailWarnAfter = 3,
+        sameToolFailHaltAfter = 8,
+        maxCyclePeriod = 4,
+        hardStopEnabled = false,
+        loopCap = if (toolCallCap in 1..200) toolCallCap else 0
+    )
 
     /** 5.7 已追加过自改进提示的技能（引擎生命周期=会话，天然满足每会话限一次）。 */
     internal val hintedSkills = mutableSetOf<String>()
@@ -300,6 +335,8 @@ class AgentEngine(
         // P2-5 重放保护按 turn 归零（跨 turn 的合法重复调用不受影响）
         lastExecutedSig = null
         lastExecutedResult = null
+        loopGuard.reset()
+        turnTainted = false
         if (resuming) closeDanglingCalls(onEvent)
         // 本会话已用过的 tool_call id：新来的调用必须避开，否则跨轮撞号会让 UI 行状态与
         // pairSanitized 的配对判定互相顶名（详见 uniquifyCallIds 的注释）
@@ -324,6 +361,8 @@ class AgentEngine(
 
         val shellDir = backend?.shellWorkdir()
             ?: File(appFilesDir, "shell-home").apply { mkdirs() }
+        val sessionSearch: ((String) -> List<Pair<String, String>>)? =
+            if (depth == 0 && sessionSearchFn != null) ({ q -> sessionSearchFn!!.invoke(q) }) else null
         val ctx = ToolContext(
             backend, shellDir, todoStore, appFilesDir,
             sessionId = session.id,
@@ -333,7 +372,8 @@ class AgentEngine(
             configRender = configRender,
             onToolChange = onToolChange,
             vscreenEnabled = vscreenEnabled,
-            vscreenBitrateKbps = vscreenBitrateKbps
+            vscreenBitrateKbps = vscreenBitrateKbps,
+            sessionSearch = sessionSearch
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx, index, total, mode, id ->
@@ -356,8 +396,11 @@ class AgentEngine(
                 add(com.haoai.agent.agent.tools.TranscribeAudioTool { p -> delegateAsrRequest(p) })
             }
         }
-        var tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet(), subagentControl) +
-            handoffTool + toolsEnableTool + delegateTools
+        var tools = ToolRegistry.build(
+            ctx, subAgentRunner,
+            activeGroupsForProfile(session.activeGroups?.toSet()),
+            subagentControl
+        ) + handoffTool + toolsEnableTool + delegateTools
         var apiTools = gateTools(tools.map { it.toApi() })
 
         // E4a 工具定义 token 估算动态化：真实序列化各工具 JSON 求和（兜底下限 3500；门控清空则记 0）
@@ -564,23 +607,41 @@ class AgentEngine(
                     _groupsDirty = false
                     // 与首轮 :319 同构：必须带上 subagentControl（否则 stop/steer/collect_agent 消失）
                     // 与 delegateTools（否则委派视觉/转写工具消失）——曾漏传导致 tools_enable 后能力静默降级
-                    tools = ToolRegistry.build(ctx, subAgentRunner, session.activeGroups?.toSet(), subagentControl) +
-                        handoffTool + toolsEnableTool + delegateTools
+                    tools = ToolRegistry.build(
+                        ctx, subAgentRunner,
+                        activeGroupsForProfile(session.activeGroups?.toSet()),
+                        subagentControl
+                    ) + handoffTool + toolsEnableTool + delegateTools
                     apiTools = gateTools(tools.map { it.toApi() })
                     _toolsTokenCache = if (apiTools.isEmpty()) 0 else estimateToolsTokens(apiTools)
                 }
                 // E5 连续工具失败熔断：达到阈值直接 break 输出失败总结
-                if (_loopFailedCap) {
+                if (_loopFailedCap || _loopStallHalt) {
+                    val stall = _loopStallHalt
                     _loopFailedCap = false
+                    _loopStallHalt = false
                     finishTurn(natural = false)
                     appendAndNotify(
                         ChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
-                            content = "工具连续失败达到阈值，本轮已终止。请拆解任务或检查失败工具的用法。",
+                            content = if (stall) {
+                                "工具空转守卫已终止本轮（检测到无进展的重复调用）。请基于已有信息总结，或换一种方法后重新发起任务。"
+                            } else {
+                                "工具连续失败达到阈值，本轮已终止。请拆解任务或检查失败工具的用法。"
+                            },
                         ),
                         onEvent
                     )
-                    onEvent(ToolChanged(ToolUpdate("fail-cap", ToolRunState.DONE, "失败熔断", "连续工具失败")))
+                    onEvent(
+                        ToolChanged(
+                            ToolUpdate(
+                                if (stall) "stall-cap" else "fail-cap",
+                                ToolRunState.DONE,
+                                if (stall) "空转熔断" else "失败熔断",
+                                if (stall) "重复无进展" else "连续工具失败"
+                            )
+                        )
+                    )
                     break
                 }
 

@@ -277,6 +277,42 @@ internal suspend fun AgentEngine.finishCall(
         if (h.names.isNotEmpty() && call.name !in h.names) continue
         finalResult = h.after(call, args, callCtx, finalResult)
     }
+    // B1 空转守卫：观测收尾结果（与 E5 失败熔断并列；在 hooks 之后，保证 finalResult 已定）
+    val guardDecision = loopGuard.observe(
+        toolName = call.name,
+        argsJson = call.argumentsJson,
+        resultContent = finalResult.content,
+        isError = finalResult.isError,
+        isRead = policy.riskOf(call.name) == com.haoai.agent.agent.policy.RiskLevel.READ
+    )
+    when (guardDecision) {
+        is ToolLoopGuard.Decision.None -> Unit
+        is ToolLoopGuard.Decision.Warn -> {
+            // 引导挂在工具结果尾部：模型下一轮立刻看到，不打断循环
+            finalResult = finalResult.copy(
+                content = finalResult.content + "\n\n" + guardDecision.message,
+                isError = finalResult.isError
+            )
+            onEvent(
+                ToolChanged(
+                    ToolUpdate(call.id, finalState, briefOf(call), "空转守卫：检测到重复调用")
+                )
+            )
+        }
+        is ToolLoopGuard.Decision.Halt -> {
+            finalResult = finalResult.copy(
+                content = finalResult.content + "\n\n" + guardDecision.message,
+                isError = true
+            )
+            _loopStallHalt = true
+            onEvent(
+                ToolChanged(
+                    ToolUpdate(call.id, ToolRunState.ERROR, briefOf(call), "空转守卫：强制收尾")
+                )
+            )
+        }
+    }
+
     // E5 连续工具失败熔断：必须排在 hooks 之后判定——conFailCount 的自增发生在
     // EscalationHook.after（EngineHooks.kt:90），先前置读会让阈值 8 拖到第 9 次失败才触发。
     if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
@@ -291,6 +327,10 @@ internal suspend fun AgentEngine.finishCall(
         error = finalResult.isError
     )
     appendAndNotify(message, onEvent)
+    // B2：外部内容污点标记（web/search/browser 成功且有正文 → 本回合后续 auto 提取按 untrusted）
+    if (!finalResult.isError && call.name in TAINT_TOOLS && finalResult.content.isNotBlank()) {
+        turnTainted = true
+    }
     // 图像注入通路（4.2 browser_screenshot）：工具结果带图时追加一条 user 图像消息，
     // 复用既有 imageData → image_url 转换，OpenAI/Anthropic 两协议均可消费
     finalResult.imageDataUrl?.let { img ->
@@ -309,6 +349,12 @@ internal suspend fun AgentEngine.finishCall(
         )
     )
 }
+
+/** B2：成功返回网络/页面正文的工具名（污染本回合记忆提取的溯源）。 */
+private val TAINT_TOOLS = setOf(
+    "web_fetch", "web_search",
+    "browser_read", "browser_navigate", "browser_find", "browser_screenshot"
+)
 
 /**
  * E6 并行执行：READ 白名单调用在 IO 协程并发跑工具体（信号量限 4），

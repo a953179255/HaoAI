@@ -60,7 +60,9 @@ class ConfigFileBridge(
             "daily_token_budget_k", "keep_alive", "run_overlay", "dream_provider", "dream_idle_minutes",
             // 外观主题组（枚举/范围校验，改错可即时回改，无安全风险）
             "theme_mode", "theme_seed", "amoled_mode", "bubble_opacity",
-            "wallpaper_global", "dynamic_color", "reasoning_effort"
+            "wallpaper_global", "dynamic_color", "reasoning_effort",
+            // B3/B6
+            "smart_approval", "tool_profile"
         )
 
         /** C3 顶层合法键（*_removed 为显式删除开关，见 apply）。 */
@@ -211,6 +213,8 @@ class ConfigFileBridge(
             put("wallpaper_global", settings.wallpaperGlobal)
             put("dynamic_color", settings.dynamicColor)
             put("reasoning_effort", settings.reasoningEffort)
+            put("smart_approval", settings.smartApproval)
+            put("tool_profile", settings.toolProfile)
         }
         val mcp = readMcp().map { s ->
             buildJsonObject {
@@ -434,6 +438,14 @@ class ConfigFileBridge(
         st["memory_enabled"]?.booleanOrNullOr()?.let { next = next.copy(memoryEnabled = it) }
         st["auto_learn"]?.booleanOrNullOr()?.let { next = next.copy(autoLearn = it) }
         st["deep_dream"]?.booleanOrNullOr()?.let { next = next.copy(deepDream = it) }
+        st["smart_approval"]?.booleanOrNullOr()?.let { next = next.copy(smartApproval = it) }
+        st["tool_profile"]?.let { el ->
+            val s = (el as? JsonPrimitive)?.content?.trim().orEmpty()
+            if (s.isNotEmpty() && s !in setOf("minimal", "coding", "full")) {
+                return fail("tool_profile 仅支持 minimal/coding/full 或空串")
+            }
+            next = next.copy(toolProfile = s)
+        }
 
         // ── C4 A 组行为字段（枚举/引用校验失败整体拒绝）──
         st["permission_mode"]?.let { el ->
@@ -690,6 +702,8 @@ class ConfigFileBridge(
         cmp("壁纸全局应用", old.wallpaperGlobal, new.wallpaperGlobal)
         cmp("动态取色", old.dynamicColor, new.dynamicColor)
         cmp("思考等级", old.reasoningEffort.ifBlank { "默认" }, new.reasoningEffort.ifBlank { "默认" })
+        cmp("智能审批", old.smartApproval, new.smartApproval)
+        cmp("工具组预设", old.toolProfile.ifBlank { "按会话" }, new.toolProfile.ifBlank { "按会话" })
         return lines.joinToString("\n").ifBlank { "（无字段变化）" }.take(500)
     }
 

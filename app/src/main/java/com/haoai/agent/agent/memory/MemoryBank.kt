@@ -20,6 +20,15 @@ data class Memory(
     var uniqQueries: Int = 0,
     /** 来源：model(模型主动)/auto(每轮自动提取)/manual(手动)/consolidation(固化晋升)。 */
     val source: String? = null,
+    /**
+     * B2 溯源（对标 OC provenance）：
+     * - owner=用户在可信通道直说；agent=模型从用户内容推导；untrusted=网页/工具等不可信输入；
+     * - system=脚手架（handoff/cron 提示等）。
+     * 未知一律按 agent 处理，绝不默认 owner。
+     */
+    val origin: String = "agent",
+    /** 被召回注入过的条目：autoExtract 禁止再提取（防召回环）。 */
+    var recalled: Boolean = false,
     var updatedAt: Long = 0,
     /** 软失效（Graphiti 式"失效不删除"）：被更新的记忆 id，保留 30 天供溯源后由 tidy 清理。 */
     var supersededBy: String? = null
@@ -142,9 +151,12 @@ class MemoryBank(
         tags: List<String> = emptyList(),
         type: String = "fact",
         importance: Int = 3,
-        source: String? = null
+        source: String? = null,
+        /** B2 溯源：owner/agent/untrusted/system；未知按 agent（见 Memory.origin）。 */
+        origin: String = "agent"
     ): Memory? {
         val text = content.trim()
+        if (text.isEmpty()) return null
         val state = load()
         // 精确 + 归一化双重去重：自动提取的换述版本（标点/空白/大小写差异）不再重复入库；
         // 软失效条目视为已删除，不参与命中（否则被覆盖的记忆会因重复保存而"复活失败"）
@@ -183,11 +195,24 @@ class MemoryBank(
             tags = tags.map { it.trim() }.filter { it.isNotEmpty() }.take(6),
             type = type.take(20),
             importance = importance.coerceIn(1, 5),
-            source = source?.take(20)
+            source = source?.take(20),
+            origin = origin
         )
         state.items.add(m)
         save(state)
         return m
+    }
+
+    /** 标记已被召回注入（防 autoExtract 再次提取同一事实）。 */
+    @Synchronized
+    fun markRecalled(id: String) {
+        val state = load()
+        state.items.firstOrNull { it.id == id }?.let {
+            it.recalled = true
+            it.lastUsedAt = System.currentTimeMillis()
+            it.useCount++
+            save(state)
+        }
     }
 
     fun capacity(): Int = maxItems
@@ -315,6 +340,11 @@ class MemoryBank(
                 if (now - last > 3_600_000L) {
                     m.lastUsedAt = now
                     m.useCount += 1
+                    changed = true
+                }
+                // B2 防召回环：被注入过的条目标记 recalled，autoExtract 不再当新事实提取
+                if (!m.recalled) {
+                    m.recalled = true
                     changed = true
                 }
             }
@@ -463,7 +493,9 @@ class MemoryBank(
     fun promptSnippetIds(query: String? = null, k: Int = 8, capPerItem: Int = 180): Pair<String, List<String>> {
         val now = System.currentTimeMillis()
         val qTokens = query?.let { tokenize(it) } ?: emptySet()
+        // B2：untrusted/system 不进启动/召回注入（provenance 边界）
         val ranked = all()
+            .filter { it.supersededBy == null && it.origin != "untrusted" && it.origin != "system" }
             .sortedByDescending { m ->
                 val ageDays = (now - (if (m.lastUsedAt > 0) m.lastUsedAt else m.createdAt)) / 86_400_000.0
                 val overlap = if (qTokens.isEmpty()) 0
@@ -502,6 +534,7 @@ class MemoryBank(
                 appendLine("- $type${m.content.take(capPerItem)}$tag$age")
             }
         }.trimEnd()
+        // B2 防召回环：注入即标记，autoExtract 不再把这些 id 当新事实提取
         return text to items.map { it.id }
     }
 
@@ -543,6 +576,8 @@ class MemoryBank(
         append(" lastUsed:${m.lastUsedAt} uses:${m.useCount}")
         if (m.uniqQueries > 0) append(" uq:${m.uniqQueries}")
         if (!m.source.isNullOrBlank()) append(" src:${m.source}")
+        if (m.origin != "agent") append(" org:${m.origin}")
+        if (m.recalled) append(" rc:1")
         if (m.updatedAt > 0) append(" upd:${m.updatedAt}")
         if (!m.supersededBy.isNullOrBlank()) append(" sup:${m.supersededBy}")
         if (m.tags.isNotEmpty()) append(" tags:${m.tags.joinToString(",")}")
@@ -649,6 +684,8 @@ class MemoryBank(
             useCount = (meta["uses"]?.toIntOrNull() ?: 0).coerceAtLeast(0),
             uniqQueries = (meta["uq"]?.toIntOrNull() ?: 0).coerceAtLeast(0),
             source = meta["src"]?.take(20),
+            origin = meta["org"] ?: "agent",
+            recalled = meta["rc"] == "1",
             updatedAt = meta["upd"]?.toLongOrNull() ?: 0L,
             supersededBy = supersededBy
         )

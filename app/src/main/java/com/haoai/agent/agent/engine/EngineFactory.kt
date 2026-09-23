@@ -140,7 +140,13 @@ object EngineFactory {
                 if (id.isBlank()) emptyList()
                 else container.resolvePurposeTargets(id, emptyList()).map { it.provider to it.apiKey }
             },
-            planGate = interaction.planGate
+            planGate = interaction.planGate,
+            toolProfile = st.toolProfile,
+            sessionSearchFn = { q ->
+                val res = com.haoai.agent.ui.sessions.searchSessions(container.sessionStore.list(), q)
+                (res.titleHits.map { s -> s.title to "（标题命中）" } +
+                    res.contentHits.map { h -> h.session.title to h.snippet })
+            }
         )
     }
 

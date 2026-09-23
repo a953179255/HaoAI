@@ -247,7 +247,11 @@ data class AppSettings(
     /** 设置结构版本（迁移用）：1 = 熔断分级改造；2 = 模型条目模态字段（vision 物化为 inputModalities）。 */
     val settingsVersion: Int = 0,
     /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */
-    val consecutiveToolFailCap: Int = 8
+    val consecutiveToolFailCap: Int = 8,
+    /** B3 智能审批：命中需审批的操作先用辅助模型评审（APPROVE/DENY/ESCALATE）；失败一律升级人工。 */
+    val smartApproval: Boolean = false,
+    /** B6 会话工具组预设：null=按会话 activeGroups；"minimal"/"coding"/"full"。 */
+    val toolProfile: String = ""
 )
 
 class SettingsStore(context: Context) {
