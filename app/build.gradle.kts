@@ -1,4 +1,4 @@
-﻿import java.util.Properties
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -25,8 +25,8 @@ android {
         applicationId = "com.haoai.agent"
         minSdk = 26
         targetSdk = 36
-        versionCode = 38
-        versionName = "0.18.5"
+        versionCode = 39
+        versionName = "0.18.6"
     }
 
     signingConfigs {
