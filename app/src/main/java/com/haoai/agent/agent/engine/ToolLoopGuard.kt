@@ -189,10 +189,12 @@ class ToolLoopGuard(
             val tail = seq.takeLast(period * 2)
             val firstHalf = tail.subList(0, period)
             val secondHalf = tail.subList(period, period * 2)
-            if (firstHalf == secondHalf) {
+            if (firstHalf == secondHalf && firstHalf.distinct().size > 1) {
                 // 要求至少有一圈是"相对上一次闭合"的新 lap：用窗口内出现次数粗判
                 return 1
             }
+            // firstHalf 全等（AAAA 这种纯重复）不算周期：那是 identicalStreak 的活，
+            // 记在这里会让第 4 次相同调用把 cycleNotices 用掉、报成"短周期循环"
         }
         // period=1 已由 identicalStreak 覆盖
         return 0
