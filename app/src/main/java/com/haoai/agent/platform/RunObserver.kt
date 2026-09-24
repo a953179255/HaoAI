@@ -36,11 +36,21 @@ object RunObserver {
         /** 非空 = 有待审批操作，通知升级为高优先级并挂「查看/批准」动作。 */
         val approvalTitle: String? = null,
         val approvalDetail: String? = null,
+        /** ask_user 待回答提问（P2 通知快捷选项数据源）；与 approvalTitle 同步置位。 */
+        val ask: PendingAskInfo? = null,
         /** 任务开始时间（通知计 Duration 用）。 */
         val startedAt: Long = 0L
     ) {
         val active: Boolean get() = sessionId != null
     }
+
+    /** ask_user 待回答提问的通知载荷：askId 防串卡，options 为选项 label 列表。 */
+    data class PendingAskInfo(
+        val askId: String,
+        val question: String,
+        val options: List<String>,
+        val allowFreeText: Boolean = true
+    )
 
     private val _state = MutableStateFlow(RunState())
     val state = _state.asStateFlow()
@@ -84,6 +94,22 @@ object RunObserver {
         if (!_state.value.active && title != null) return
         _state.value = _state.value.copy(approvalTitle = title, approvalDetail = detail)
     }
+
+    /**
+     * ask_user 提问置位/清除：同时写 approval 状态位（高优通知渠道复用）。
+     * 回答路由见 [askAnswerSink]。
+     */
+    fun setAsk(info: PendingAskInfo?) {
+        if (!_state.value.active && info != null) return
+        _state.value = _state.value.copy(
+            ask = info,
+            approvalTitle = info?.let { "需要你决定" },
+            approvalDetail = info?.question
+        )
+    }
+
+    /** ask_user 回答路由：通知快捷按钮（RunActionReceiver）→ 前台 ChatViewModel 注入的挂起点。 */
+    @Volatile var askAnswerSink: ((askId: String, optionIndex: Int) -> Unit)? = null
 
     fun end() {
         _state.value = RunState()

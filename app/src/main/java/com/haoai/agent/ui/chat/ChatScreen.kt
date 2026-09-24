@@ -88,6 +88,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -334,6 +335,8 @@ fun ChatScreen(
     // 会话门控版流式展示：切到其他会话时为 null，不渲染别的会话正在生成的回答
     val streaming by vm.visibleStreamingText.collectAsState()
     val streamingReasoning by vm.visibleStreamingReasoning.collectAsState()
+    // ask_user 提问卡（会话门控）：模型发起"等你拍板"时渲染在流式区下方
+    val pendingAskNow by vm.visiblePendingAsk.collectAsState()
     val thinkingMs by vm.thinkingMs.collectAsState()
     val running by vm.running.collectAsState()
     val liveToolsSnapshot by vm.liveToolsSnapshotFlow.collectAsState()
@@ -828,6 +831,10 @@ fun ChatScreen(
                 scrollState = scrollState,
                 userScrolledAway = userScrolledAway,
                 sessionId = vm.session.collectAsState().value?.id,
+                planProposal = planProposal
+                    ?.takeIf { it.first == vm.session.collectAsState().value?.id }?.second,
+                onApprovePlan = { vm.approvePlan() },
+                onDismissPlan = { vm.dismissPlan() },
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -1027,6 +1034,16 @@ fun ChatScreen(
                 .onSizeChanged { bottomBarHeightPx = it.height }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
+            // ask_user 提问卡：钉在输入框上方（不随消息滚动、永远贴底）——P1 复审定稿位置
+            pendingAskNow?.let { ask ->
+                androidx.compose.runtime.key("pending-ask-${ask.id}") {
+                    PendingAskCard(
+                        ask = ask,
+                        onAnswer = { id, idx -> vm.answerAsk(id, idx) },
+                        onAnswerFree = { id, text -> vm.answerAskFree(id, text) }
+                    )
+                }
+            }
             // E8 插话排队提示（生成期间用户发送的消息在队列中等待间隙注入）
             val interjectCount by vm.interjectCount.collectAsState()
             if (interjectCount > 0) {
@@ -1084,6 +1101,8 @@ fun ChatScreen(
                             // 否则会说出"正在执行 供应商限流"这种话（真机实测）。
                             val retrying = runningTool?.takeIf { it.callId.startsWith("rate-limit") }
                             val phaseText = when {
+                                // ask_user 挂起等用户：优先级最高——工具在 RUNNING，但真正的事件是"等你回答"
+                                pendingAskNow != null -> "等你回答"
                                 retrying != null ->
                                     (retrying.brief.ifBlank { "网络波动" }) + " · 自动重试中"
                                 runningTool != null -> {
@@ -1929,74 +1948,8 @@ fun ChatScreen(
         }
     }
 
-    // 5.6 计划确认卡：Plan 模式回合结束且拦截过工具时弹出
-    planProposal?.let { plan ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.18f))
-        ) {
-            GlassPanel(
-                backdrop = backdrop,
-                radius = 22.dp,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(24.dp)
-                    .fillMaxWidth()
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        "执行计划",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        "Plan 模式下产出的计划。批准后退出计划模式并开始执行（执行仍走正常审批）。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                    )
-                    Text(
-                        plan.take(4000),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 14,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                            .padding(10.dp)
-                    )
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
-                    ) {
-                        Text(
-                            "继续讨论",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { vm.dismissPlan() }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                        )
-                        Text(
-                            "批准并执行",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { vm.approvePlan() }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
+    // 5.6 计划确认卡：P3 起改为行内卡（与 ask_user 提问卡同族交互），经 MessageList 渲染
+    // planProposal = (所属会话 id, 计划全文)；仅当前会话匹配时显示，防切走会话后批准串台
 
     approval?.let { (req, _) ->
         // 审批弹窗改为液态玻璃卡片，叠在主窗口内（独立 Dialog 窗口无法采样 LayerBackdrop）
@@ -2266,7 +2219,11 @@ private fun MessageList(
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
-    bottomPadding: androidx.compose.ui.unit.Dp
+    bottomPadding: androidx.compose.ui.unit.Dp,
+    /** 5.6 Plan 模式计划确认卡（已按当前会话门控）；非空时渲染在提问卡之后。 */
+    planProposal: String? = null,
+    onApprovePlan: () -> Unit = {},
+    onDismissPlan: () -> Unit = {}
 ) {
     val showStreaming = streamingText != null || running
     val totalItems = rows.size + (if (showStreaming) 1 else 0)
@@ -2625,6 +2582,16 @@ private fun MessageList(
                 )
             }
         }
+        // ask_user 提问卡：P1 复审起固定钉在输入框上方（ChatScreen 底栏），不再放消息流
+        planProposal?.let { plan ->
+            androidx.compose.runtime.key("plan-proposal") {
+                PlanProposalCard(
+                    plan = plan,
+                    onApprove = onApprovePlan,
+                    onDismiss = onDismissPlan
+                )
+            }
+        }
     }
 }
 
@@ -2697,6 +2664,335 @@ private fun RowItem(
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
         else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, growIn, onFooterReveal)
+    }
+}
+
+/**
+ * ask_user 提问卡（等待用户回答；交互=已确认的效果图 v3）：
+ * 单选/多选/自由输入统一「选择 → 底部确认按钮」两步提交防误触，选中可改/取消；
+ * 「其他」行原地变输入框，与选项共用底部确认按钮（回车=确认）。
+ * 挂起语义：运行在此暂停（状态框显示"等你回答"），回答后卡片消失、链卡步骤转已答态。
+ */
+@Composable
+private fun PendingAskCard(
+    ask: com.haoai.agent.ui.ChatViewModel.PendingAsk,
+    onAnswer: (String, Int) -> Unit,
+    onAnswerFree: (String, String) -> Unit
+) {
+    val req = ask.req
+    var selected by remember(ask.id) { mutableStateOf(-1) }
+    var freeOpen by remember(ask.id) { mutableStateOf(false) }
+    var freeText by remember(ask.id) { mutableStateOf("") }
+    val primary = MaterialTheme.colorScheme.primary
+    // 确认按钮的提交目标：选中项 label 或自由输入文本（互斥）
+    val confirmTarget = when {
+        selected in req.options.indices -> req.options[selected].label
+        freeText.isNotBlank() -> freeText.trim()
+        else -> null
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
+        shape = RoundedCornerShape(18.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, primary.copy(alpha = 0.55f)),
+        // 宿主是底部固定栏（自带 horizontal 14dp padding），这里只给竖向间距
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp, bottom = 4.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            // 徽标行：呼吸点 + 「需要你决定」
+            var dotOn by remember(ask.id) { mutableStateOf(true) }
+            LaunchedEffect(ask.id) {
+                while (true) {
+                    dotOn = !dotOn
+                    kotlinx.coroutines.delay(900)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .graphicsLayer { alpha = if (dotOn) 1f else 0.35f }
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(primary)
+                )
+                Text(
+                    "需要你决定",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = primary,
+                    modifier = Modifier.padding(start = 7.dp)
+                )
+            }
+            Text(
+                req.question,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+            req.options.forEachIndexed { i, opt ->
+                val isSel = selected == i
+                Surface(
+                    color = if (isSel) primary.copy(alpha = 0.14f)
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                    shape = RoundedCornerShape(13.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (isSel) primary.copy(alpha = 0.65f)
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .clickable {
+                            selected = if (isSel) -1 else i
+                            if (selected >= 0) freeOpen = false
+                        }
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AskRadioDot(isSel, primary)
+                            Text(
+                                opt.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isSel) primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                            if (i == 0 && req.options.size > 1) {
+                                Text(
+                                    "推荐",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = primary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                        .background(primary.copy(alpha = 0.12f), RoundedCornerShape(999.dp))
+                                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        if (opt.description.isNotBlank()) {
+                            Text(
+                                opt.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.padding(start = 24.dp, top = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            if (req.allowFreeText) {
+                if (!freeOpen) {
+                    Surface(
+                        color = Color.Transparent,
+                        shape = RoundedCornerShape(13.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .clip(RoundedCornerShape(13.dp))
+                            .clickable { freeOpen = true; selected = -1 }
+                    ) {
+                        Text(
+                            "其他…（自由输入）",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                } else {
+                    // 「其他」原地变输入框：提交走底部统一确认按钮（回车=确认）
+                    Surface(
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                        shape = RoundedCornerShape(13.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, primary.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    ) {
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = freeText,
+                            onValueChange = { freeText = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                onDone = { if (freeText.isNotBlank()) onAnswerFree(ask.id, freeText.trim()) }
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(primary),
+                            decorationBox = { inner ->
+                                Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                                    if (freeText.isEmpty()) {
+                                        Text(
+                                            "输入你的回答，底部确认提交",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                    inner()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+            // 底部统一确认按钮：就绪前禁用态提示"先选择一个选项"
+            val ready = confirmTarget != null
+            Surface(
+                color = if (ready) primary.copy(alpha = 0.92f)
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(enabled = ready) {
+                        when {
+                            selected in req.options.indices -> onAnswer(ask.id, selected)
+                            freeText.isNotBlank() -> onAnswerFree(ask.id, freeText.trim())
+                        }
+                    }
+            ) {
+                Text(
+                    if (ready) "确认：" + confirmTarget.orEmpty().take(24) else "先选择一个选项",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (ready) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 11.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 提问卡选项单选圆点：选中填充主色打勾，未选中空心灰圈。 */
+@Composable
+private fun AskRadioDot(selected: Boolean, primary: Color) {
+    Surface(
+        color = if (selected) primary else Color.Transparent,
+        shape = androidx.compose.foundation.shape.CircleShape,
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            if (selected) primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        ),
+        modifier = Modifier.size(16.dp)
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(2.dp)
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Plan 计划确认卡（5.6 → P3 改版）：从居中遮罩弹窗迁到行内卡，与 ask_user 提问卡
+ * 同族的"选择→确认"交互——「继续讨论」次级行 + 「批准并执行」主色确认按钮。
+ * 计划全文在卡内滚动（heightIn 上限 260dp），不再遮挡整屏。
+ */
+@Composable
+private fun PlanProposalCard(
+    plan: String,
+    onApprove: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
+        shape = RoundedCornerShape(18.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, primary.copy(alpha = 0.55f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            Text(
+                "执行计划",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Plan 模式下产出的计划。批准后退出计划模式并开始执行（执行仍走正常审批）。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+            )
+            Text(
+                plan.take(4000),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 260.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    .verticalScroll(rememberScrollState())
+                    .padding(10.dp)
+            )
+            Surface(
+                color = Color.Transparent,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onDismiss() }
+            ) {
+                Text(
+                    "继续讨论",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp)
+                )
+            }
+            Surface(
+                color = primary.copy(alpha = 0.92f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onApprove() }
+            ) {
+                Text(
+                    "批准并执行",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 11.dp)
+                )
+            }
+        }
     }
 }
 

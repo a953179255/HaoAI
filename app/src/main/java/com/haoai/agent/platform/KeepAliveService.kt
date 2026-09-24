@@ -128,18 +128,28 @@ class KeepAliveService : Service() {
             stopPi
         )
         if (st.approvalTitle != null) {
-            // 审批门控：升级到高优渠道（响铃/横幅）单独发一条，点按直达聊天页批准
-            nm.notify(
-                CHANNEL_APPROVAL, APPROVAL_ID,
-                NotificationCompat.Builder(this, CHANNEL_APPROVAL)
-                    .setSmallIcon(R.drawable.ic_notification)
-                    .setContentTitle("等待你的确认")
-                    .setContentText(st.approvalTitle)
-                    .setStyle(NotificationCompat.BigTextStyle().bigText(st.approvalDetail ?: st.approvalTitle))
-                    .setContentIntent(pi)
-                    .setAutoCancel(true)
-                    .build()
-            )
+            // 审批/提问门控：升级到高优渠道（响铃/横幅）单独发一条，点按直达聊天页
+            // ask_user 提问（P2）：通知直接挂选项按钮，点了任务就继续；>3 项或自由输入走应用
+            val askBuilder = NotificationCompat.Builder(this, CHANNEL_APPROVAL)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(if (st.ask != null) "需要你决定" else "等待你的确认")
+                .setContentText(st.approvalTitle)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(st.approvalDetail ?: st.approvalTitle))
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+            st.ask?.let { ask ->
+                if (ask.allowFreeText || ask.options.size > 3) {
+                    val note = buildString {
+                        append(st.approvalDetail ?: st.approvalTitle ?: "")
+                        append("\n\n（打开应用可自由输入或查看全部选项）")
+                    }
+                    askBuilder.setStyle(NotificationCompat.BigTextStyle().bigText(note))
+                }
+                ask.options.take(3).forEachIndexed { i, label ->
+                    askBuilder.addAction(0, label, askAnswerPi(ask.askId, i))
+                }
+            }
+            nm.notify(CHANNEL_APPROVAL, APPROVAL_ID, askBuilder.build())
         } else {
             nm.cancel(CHANNEL_APPROVAL, APPROVAL_ID)
         }
@@ -169,6 +179,17 @@ class KeepAliveService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
+
+    /** ask_user 快捷选项按钮：广播 → RunObserver.askAnswerSink → ChatViewModel 挂起点。 */
+    private fun askAnswerPi(askId: String, index: Int): PendingIntent =
+        PendingIntent.getBroadcast(
+            this, 200 + index,
+            Intent(this, RunActionReceiver::class.java)
+                .setAction(RunActionReceiver.ACTION_ANSWER_ASK)
+                .putExtra(RunActionReceiver.EXTRA_ASK_ID, askId)
+                .putExtra(RunActionReceiver.EXTRA_OPTION_INDEX, index),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification: Notification = idleNotification()

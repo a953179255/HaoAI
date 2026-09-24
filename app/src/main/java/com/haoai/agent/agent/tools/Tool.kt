@@ -28,6 +28,9 @@ data class ToolContext(
     val configMutator: (suspend (kotlinx.serialization.json.JsonObject) -> ToolResult)? = null,
     /** C6 config_get 数据源：渲染当前配置镜像（apiKey 掩码）。 */
     val configRender: (() -> String)? = null,
+    /** ask_user 提问门：模型发起"暂停等用户拍板"，VM 层弹卡挂起直到用户回答。
+     *  null=当前环境无法提问（定时/工作流等无人值守路径），工具按"自行取默认假设"指引收场。 */
+    val askUser: (suspend (AskUserRequest) -> AskUserAnswer)? = null,
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
     val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化总开关（设置页），关闭时 vscreen_* 不注册进工具清单。 */
@@ -89,6 +92,20 @@ data class ToolResult(
     /** 非空时引擎在工具结果后追加一条带图 user 消息（browser_screenshot 图像注入通路）。 */
     val imageDataUrl: String? = null
 )
+
+/** ask_user 单个选项：label 显示用短标签；description 给用户看的一句话补充（可空串）。 */
+data class AskUserOption(val label: String, val description: String = "")
+
+/** ask_user 请求：模型在运行中遇到决策分叉时发起的"暂停等用户拍板"。 */
+data class AskUserRequest(
+    val question: String,
+    val options: List<AskUserOption>,
+    /** false=只允许从选项里挑（不渲染自由输入行）。 */
+    val allowFreeText: Boolean = true
+)
+
+/** ask_user 回答：optionIndex≥0 = 选中选项；否则取 freeText。 */
+data class AskUserAnswer(val optionIndex: Int = -1, val freeText: String = "")
 
 interface Tool {
     val name: String

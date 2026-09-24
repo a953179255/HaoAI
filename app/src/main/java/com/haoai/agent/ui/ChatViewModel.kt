@@ -49,7 +49,21 @@ data class UiTool(
      * 由引擎注入的 user 图像消息在 rebuildRows 里配对回这一步 → 步骤行显示缩略图、
      * 点开在详情弹层看大图；占位文字气泡不再单独成行。
      */
-    val imageData: String? = null
+    val imageData: String? = null,
+    /** ask_user 问答数据：非空时 ChainCard 把该步骤渲染成"问题+所选答案"卡（ask_user 专用）。 */
+    val ask: UiAskData? = null
+)
+
+/** ask_user 步骤的问答数据：问题 + 选项 + 用户回答（历史回看用；运行中 live 步骤为 null）。 */
+data class UiAskData(
+    val question: String,
+    val options: List<String> = emptyList(),
+    val descriptions: List<String> = emptyList(),
+    val allowFreeText: Boolean = true,
+    /** 用户选中的选项下标；null=未从选项里选。 */
+    val pickedIndex: Int? = null,
+    /** 自由输入的回答；与 pickedIndex 互斥。 */
+    val freeText: String? = null
 )
 
 /** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）；id 供任务卡终止按钮定位。 */
@@ -418,6 +432,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         MutableStateFlow<Pair<ApprovalRequest, CompletableDeferred<Boolean>>?>(null)
     val approval = _approval.asStateFlow()
 
+    /** ask_user 提问挂起点：模型调用 ask_user 后在此等待，直到用户点选/输入或运行被取消。 */
+    data class PendingAsk(
+        val id: String,
+        val req: com.haoai.agent.agent.tools.AskUserRequest,
+        val gate: CompletableDeferred<com.haoai.agent.agent.tools.AskUserAnswer>
+    )
+
+    private val _pendingAsk = MutableStateFlow<PendingAsk?>(null)
+
+    /** 会话门控的提问卡：切走后不渲染（与本会话无关的提问不落在当前界面上）。 */
+    val visiblePendingAsk = kotlinx.coroutines.flow.combine(
+        _pendingAsk, _runSessionId, _session
+    ) { p, owner, s -> if (p != null && owner != null && s?.id == owner) p else null }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
+
     private val _sessions = MutableStateFlow<List<StoredSession>>(emptyList())
     val sessions = _sessions.asStateFlow()
 
@@ -451,11 +480,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         refreshSessions()
         refreshDeletedSessions()
         refreshTodos()
+        // P2 通知快捷选项：回答广播 → 本 VM 的提问挂起点（onCleared 摘除，防悬空路由）
+        com.haoai.agent.platform.RunObserver.askAnswerSink = { askId, optionIndex ->
+            answerAsk(askId, optionIndex)
+        }
         if (_sessions.value.isNotEmpty()) {
             selectSession(_sessions.value.first().id)
         } else {
             newSession()
         }
+    }
+
+    override fun onCleared() {
+        com.haoai.agent.platform.RunObserver.askAnswerSink = null
+        super.onCleared()
     }
 
     fun workspaceName(): String =
@@ -832,7 +870,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             val plan = s.messages.lastOrNull {
                 it.role == ChatMessage.ROLE_ASSISTANT && it.content.isNotBlank()
             }?.content.orEmpty()
-            if (plan.isNotBlank()) _planProposal.value = plan
+            if (plan.isNotBlank()) _planProposal.value = s.id to plan
         }
         // v7 排队任务：回合正常结束且队列还有排队消息 → 自动作为新任务执行
         // （运行中可继续派活，队列在任务完成后逐条落地）。
@@ -1266,6 +1304,43 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /**
+     * ask_user 提问门：AskUserTool 调用后在此挂起，弹提问卡等用户点选/输入。
+     * 与审批同一套 CompletableDeferred 挂起骨架；用户按停止 → 协程取消 → finally 清态。
+     */
+    private suspend fun requestAskUser(req: com.haoai.agent.agent.tools.AskUserRequest): com.haoai.agent.agent.tools.AskUserAnswer {
+        val gate = CompletableDeferred<com.haoai.agent.agent.tools.AskUserAnswer>()
+        val askId = java.util.UUID.randomUUID().toString()
+        _pendingAsk.value = PendingAsk(askId, req, gate)
+        // 后台可见性：置 RunObserver.ask（同时写 approval 状态位）→
+        // 任务卡升级高优通知并挂选项快捷按钮，回答经 askAnswerSink 路由回本 VM
+        com.haoai.agent.platform.RunObserver.setAsk(
+            com.haoai.agent.platform.RunObserver.PendingAskInfo(
+                askId, req.question, req.options.map { it.label }, req.allowFreeText
+            )
+        )
+        try {
+            return gate.await()
+        } finally {
+            _pendingAsk.value = null
+            com.haoai.agent.platform.RunObserver.setAsk(null)
+        }
+    }
+
+    /** 提问卡点选项回答（按 id 防串卡：已切走/已回答的请求直接忽略）。 */
+    fun answerAsk(askId: String, optionIndex: Int) {
+        val p = _pendingAsk.value ?: return
+        if (p.id != askId || p.gate.isCompleted) return
+        p.gate.complete(com.haoai.agent.agent.tools.AskUserAnswer(optionIndex = optionIndex))
+    }
+
+    /** 提问卡自由输入回答。 */
+    fun answerAskFree(askId: String, text: String) {
+        val p = _pendingAsk.value ?: return
+        if (p.id != askId || text.isBlank() || p.gate.isCompleted) return
+        p.gate.complete(com.haoai.agent.agent.tools.AskUserAnswer(freeText = text.trim()))
+    }
+
     private enum class SmartVerdict { APPROVE, DENY, ESCALATE }
 
     /**
@@ -1331,8 +1406,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _planMode = kotlinx.coroutines.flow.MutableStateFlow(false)
     val planMode = _planMode
 
-    /** 回合结束时计划待确认（引擎本轮产出过计划文本 → 弹确认卡）。 */
-    private val _planProposal = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** 回合结束时计划待确认（引擎本轮产出过计划文本 → 弹确认卡）。(所属会话 id, 计划全文)；
+     *  带会话归属：批准动作只对产出它的会话生效（用户切走会话后批准不再串台注入）。 */
+    private val _planProposal = kotlinx.coroutines.flow.MutableStateFlow<Pair<String, String>?>(null)
     val planProposal = _planProposal
 
     /** 是否在本回合拦截过 WRITE/EXEC 工具（判定"模型给出的是计划"）。 */
@@ -1340,7 +1416,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 批准计划：退出 Plan 模式并自动触发执行（仍走正常审批）。 */
     fun approvePlan() {
+        val (sid, _) = _planProposal.value ?: return
         _planProposal.value = null
+        if (currentSession?.id != sid) return
         _planMode.value = false
         send("请按上述计划执行。")
     }
@@ -1507,7 +1585,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     val tools = m.toolCalls.map { call ->
                         val live = liveTools[call.id]
                         val stored = resultByCall[call.id]
-                        val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson))
+                        // ask_user 步骤：参数+存储结果解析成问答卡数据；运行中 live 步骤无 ask，
+                        // 回答落库后 stored 分支接管 → 链卡里立即变成"问题+所选答案"
+                        val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
+                        val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson), ask = ask)
                         when {
                             live != null && live.state == ToolRunState.RUNNING -> live
                             stored != null -> base.copy(
@@ -1567,6 +1648,38 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
 
     /**
+     * ask_user 调用参数 + 存储结果 → 问答卡数据。
+     * 结果文本由 AskUserTool 生成（"用户选择了：X" / "用户回答：X"），改前缀两处必须同步。
+     * 解析失败返回 null（该步骤退回普通工具行渲染，不丢数据）。
+     */
+    private fun askDataOf(argsJson: String, result: String?): UiAskData? {
+        val obj = runCatching {
+            com.haoai.agent.data.HaoJson.json.parseToJsonElement(argsJson.ifBlank { "{}" })
+        }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+        fun primitive(key: String) = obj[key] as? kotlinx.serialization.json.JsonPrimitive
+        val question = primitive("question")?.content?.trim()?.ifBlank { null } ?: return null
+        val optArr = obj["options"] as? kotlinx.serialization.json.JsonArray
+        val opts = optArr?.mapNotNull { o ->
+            (o as? kotlinx.serialization.json.JsonObject)?.let {
+                (it["label"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()?.ifBlank { null }
+            }
+        }.orEmpty()
+        if (opts.isEmpty()) return null
+        val descs = optArr?.map { o ->
+            (o as? kotlinx.serialization.json.JsonObject)
+                ?.let { (it["description"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty().trim() }
+                ?: ""
+        } ?: List(opts.size) { "" }
+        val allowFree = primitive("allow_free_text")?.content?.toBooleanStrictOrNull() ?: true
+        val picked = result?.takeIf { it.startsWith("用户选择了：") }
+            ?.removePrefix("用户选择了：")?.trim()
+            ?.let { label -> opts.indexOfFirst { it == label }.takeIf { it >= 0 } }
+        val free = result?.takeIf { it.startsWith("用户回答：") }
+            ?.removePrefix("用户回答：")?.trim()?.ifBlank { null }
+        return UiAskData(question, opts, descs, allowFree, picked, free)
+    }
+
+    /**
      * 引擎注入的截图消息识别：content = "[<工具名>] …（…供图像分析）" 且带 imageData。
      * 返回工具名（配对用），非截图消息返回 null。
      */
@@ -1595,6 +1708,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             interaction = com.haoai.agent.agent.engine.EngineFactory.Interaction(
                 policy = PolicyEngine(st.permissionMode),
                 approve = { req -> requestApproval(req) },
+                askUser = { req -> requestAskUser(req) },
                 onUsage = { pin, pout -> addUsage(pin, pout) },
                 statusProvider = { buildStatusText() },
                 identity = com.haoai.agent.agent.engine.EngineFactory.identityOf(st.agentName, st.soul),

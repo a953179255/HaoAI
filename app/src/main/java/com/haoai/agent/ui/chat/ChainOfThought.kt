@@ -47,6 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowRight
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
@@ -57,6 +58,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -506,6 +508,11 @@ private fun ToolStep(
     val running = tool.state == ToolRunState.RUNNING && live
     val isError = tool.state == ToolRunState.ERROR
     val denied = tool.state == ToolRunState.DENIED
+    // ask_user 已答步骤：渲染成"问题+所选答案"卡（AskUserTool 结果前缀解析，见 ChatViewModel.askDataOf）
+    if (tool.name == "ask_user" && tool.ask != null) {
+        AskStepCard(tool.ask, isError)
+        return
+    }
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
     // CompositionLocal 读取须在组合期（onClick 是普通 lambda，不能现场 .current）
@@ -613,6 +620,115 @@ private fun ToolStep(
     }
 }
 
+/**
+ * ask_user 已答步骤卡：问题 + 选项列表（用户选中的高亮"✓ 你的选择"）或自由输入回答。
+ * 运行中（live，尚无 ask 数据）不走这里——普通步骤行 shimmer 显示"向你提问 · …"。
+ */
+@Composable
+private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            StepIconBox {
+                Icon(
+                    Icons.Filled.Lightbulb,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Text(
+                ask.question,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        val picked = ask.pickedIndex
+        ask.options.forEachIndexed { i, label ->
+            val isPicked = picked == i
+            Surface(
+                color = if (isPicked) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                shape = RoundedCornerShape(10.dp),
+                border = if (isPicked) androidx.compose.foundation.BorderStroke(
+                    1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                ) else null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = if (isPicked) FontWeight.SemiBold else FontWeight.Normal
+                        ),
+                        color = if (isPicked) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isPicked && !isError) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                "你的选择",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        ask.freeText?.let { ft ->
+            Surface(
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    "你的回答：$ft",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                )
+            }
+        }
+        if (picked == null && ask.freeText == null) {
+            Text(
+                "未回答（运行中断或无效应答）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
+    }
+}
+
 /** 工具名 → 步骤图标（按语义关键字归类，未匹配走通用工具图标） */
 private fun toolIcon(name: String): ImageVector = when {
     name.contains("browser") || name.contains("web") || name.contains("search") || name.contains("fetch") ->
@@ -621,6 +737,7 @@ private fun toolIcon(name: String): ImageVector = when {
     name == "write" || name == "edit" -> Icons.Filled.Description
     name == "read" || name.contains("file") || name.contains("grep") -> Icons.Filled.Article
     name.contains("spawn") || name.contains("agent") -> Icons.Filled.AccountTree
+    name == "ask_user" -> Icons.Filled.Lightbulb
     else -> Icons.Filled.Build
 }
 

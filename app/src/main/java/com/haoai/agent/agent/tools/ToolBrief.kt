@@ -82,6 +82,7 @@ object ToolBrief {
             "app_status" -> "读取运行状态"
             "config_get" -> "读取配置"
             "config_set" -> "修改配置"
+            "ask_user" -> "向你提问 · " + args.optString("question").take(30)
             "camera" -> "拍照"
             "location" -> "获取位置"
             "job_output" -> "查看后台任务日志"
@@ -124,6 +125,7 @@ object ToolBrief {
         toolName in setOf("tap", "swipe", "scroll", "find", "wait", "key", "type_text", "launch_app", "open_uri", "list_apps") -> "📱"
         toolName in setOf("todo", "schedule") -> "✅"
         toolName in setOf("memory", "config_get", "config_set", "app_status", "tools_enable") -> "⚙️"
+        toolName == "ask_user" -> "❓"
         toolName.startsWith("spawn") -> "🤖"
         toolName == "location" -> "📍"
         else -> "🔧"

@@ -35,7 +35,9 @@ object EngineFactory {
         val statusProvider: () -> String = { "" },
         val identity: String = "",
         val onToolChange: (() -> Unit)? = null,
-        val planGate: () -> Boolean = { false }
+        val planGate: () -> Boolean = { false },
+        /** ask_user 提问门：仅前台聊天注入（弹卡挂起等用户回答）；无人值守留空。 */
+        val askUser: (suspend (com.haoai.agent.agent.tools.AskUserRequest) -> com.haoai.agent.agent.tools.AskUserAnswer)? = null
     )
 
     /** 交互身份块：Agent 名字与性格，由设置在 VM 侧渲染成提示词片段。 */
@@ -72,6 +74,7 @@ object EngineFactory {
             customPrompt = st.customPrompt,
             policy = interaction.policy,
             approve = interaction.approve,
+            askUser = interaction.askUser,
             session = session,
             persist = { container.sessionStore.save(session) },
             backend = container.workspace.current,

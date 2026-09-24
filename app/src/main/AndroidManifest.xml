@@ -13,6 +13,8 @@
     <!-- 精确闹钟（梦境整理触发更准时）：targetSdk 33+ 默认拒绝，可在系统设置授予；
          未授予时 DreamTriggerMonitor 自动降级 ±5 分钟窗口闹钟 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- alarm_set 走标准 SET_ALARM intent，系统时钟要求调用方持有此普通安装期权限 -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- 签名级权限，普通安装拿不到；仅供用户 adb pm grant 一次性授予后实现无障碍静默自启（A11yGate） -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

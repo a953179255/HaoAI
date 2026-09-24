@@ -82,6 +82,9 @@ class AgentEngine(
     internal val configMutator: (suspend (JsonObject) -> com.haoai.agent.agent.tools.ToolResult)? = null,
     /** C6 config_get 数据源：渲染当前配置镜像（apiKey 掩码）。 */
     internal val configRender: () -> String = { "" },
+    /** ask_user 提问门：模型发起"暂停等用户拍板"，由前台聊天 VM 注入弹卡挂起；
+     *  null（无人值守/子代理）时 AskUserTool 按"取默认假设继续"指引收场。 */
+    internal val askUser: (suspend (com.haoai.agent.agent.tools.AskUserRequest) -> com.haoai.agent.agent.tools.AskUserAnswer)? = null,
     /** C1 config_set 预检：合并补丁→同源解析→语义 diff；err 非空=补丁非法（免审批直接拒绝）。 */
     internal val configPreview: suspend (JsonObject) -> com.haoai.agent.data.ConfigFileBridge.Preview = {
         com.haoai.agent.data.ConfigFileBridge.Preview(err = "配置预检不可用", diff = "")
@@ -375,6 +378,7 @@ class AgentEngine(
             statusProvider = statusProvider,
             configMutator = configMutator,
             configRender = configRender,
+            askUser = askUser,
             onToolChange = onToolChange,
             vscreenEnabled = vscreenEnabled,
             vscreenBitrateKbps = vscreenBitrateKbps,
