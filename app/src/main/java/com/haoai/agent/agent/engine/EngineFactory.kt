@@ -146,7 +146,9 @@ object EngineFactory {
                 val res = com.haoai.agent.ui.sessions.searchSessions(container.sessionStore.list(), q)
                 (res.titleHits.map { s -> s.title to "（标题命中）" } +
                     res.contentHits.map { h -> h.session.title to h.snippet })
-            }
+            },
+            // 搜索主后端：每次搜索现取，改完设置不必重启引擎；key 在这一步才解密
+            searchProviderFn = { container.searchProviderConfig() }
         )
     }
 

@@ -200,6 +200,19 @@ data class AppSettings(
     val backupSnapshots: Boolean = true,
     /** 上次导出到设备外的时间（毫秒）。0 = 从未导出。 */
     val lastDataExportAt: Long = 0,
+    /**
+     * 联网搜索主后端：`builtin`（内置免 key 引擎链）/ `zhipu` / `bocha` / `searxng` / `custom`。
+     * 默认 builtin —— 装上就能联网，配 key 只是把结果质量换上来。
+     */
+    val searchBackend: String = "builtin",
+    /** 搜索结果条数（各家都按这个数截断，进上下文的量由此控制）。 */
+    val searchCount: Int = 5,
+    /** 主后端不可用（配额尽/超时/空结果）时退回内置免 key 链，不让任务直接失败。 */
+    val searchFallback: Boolean = true,
+    /** 各家 API Key：backend id → Keystore 密文。明文不落盘，备份默认剔除该字段。 */
+    val searchApiKeyCiphers: Map<String, String> = emptyMap(),
+    /** 非密钥配置，按 `后端.字段` 存（searxng.url / searxng.engines / custom.template …）。 */
+    val searchOptions: Map<String, String> = emptyMap(),
     /** 上次记忆固化时间与结果（健康度仪表盘展示）。 */
     val lastConsolidationAt: Long = 0,
     val lastConsolidationReport: String = "",

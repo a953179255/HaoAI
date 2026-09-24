@@ -68,11 +68,17 @@ object DataBackupManager {
 
     const val FORMAT_VERSION = 1
     const val MANIFEST_NAME = "manifest.json"
+    /** 明文 Key 映射里搜索后端的保留前缀（providerId 不可能是这个形状，不会撞）。 */
+    internal const val SEARCH_KEY_PREFIX = "search:"
     private const val PAYLOAD = "payload/"
     private const val KEEP_SNAPSHOTS = 8
 
     /** 两份配置真源里出现过的密钥字段名（递归剔除，兼容以后新增的嵌套形状）。 */
-    private val SECRET_KEYS = setOf("apiKeyCipher", "apiKeyPoolCiphers", "apiKey", "apiKeyPool")
+    private val SECRET_KEYS = setOf(
+        "apiKeyCipher", "apiKeyPoolCiphers", "apiKey", "apiKeyPool",
+        // 搜索服务的 key 按后端分键存（Map<backend, 密文>），同一套规则：默认不出包
+        "searchApiKeyCiphers", "searchApiKeys"
+    )
 
     // ── 导出 ────────────────────────────────────────────────────────
 
@@ -328,15 +334,24 @@ object DataBackupManager {
 
     // ── 密钥处理 ────────────────────────────────────────────────────
 
-    /** providerId → 该家全部明文 Key（主 Key + 备用池）。解密失败的条目直接丢掉，不写占位值。 */
-    private fun plaintextKeys(c: AppContainer): Map<String, List<String>> =
-        c.settingsFlow.value.providers.mapNotNull { p ->
+    /** providerId → 该家全部明文 Key（主 Key + 备用池）；搜索后端的 key 以 [SEARCH_KEY_PREFIX] 打头同表存放。 */
+    private fun plaintextKeys(c: AppContainer): Map<String, List<String>> {
+        val s = c.settingsFlow.value
+        val byProvider = s.providers.mapNotNull { p ->
             val all = (listOf(p.apiKeyCipher) + p.apiKeyPoolCiphers)
                 .filter { it.isNotBlank() }
                 .map { c.cipher.decrypt(it) }
                 .filter { it.isNotBlank() }
             if (all.isEmpty()) null else p.id to all
-        }.toMap()
+        }
+        // 勾选"含 Key"时搜索服务的 key 也要跟着出包——否则换机恢复后要重新逐家粘一遍，
+        // 而界面上已经承诺了"包含密钥"
+        val bySearch = s.searchApiKeyCiphers.mapNotNull { (backend, cipher) ->
+            val plain = c.cipher.decrypt(cipher)
+            if (plain.isBlank()) null else SEARCH_KEY_PREFIX + backend to listOf(plain)
+        }
+        return (byProvider + bySearch).toMap()
+    }
 
     /**
      * 重写 JSON 里的密钥：[plain] 为空就把密钥字段全部剔除；非空则在每个 provider 上
@@ -369,6 +384,16 @@ object DataBackupManager {
                             "providers",
                             buildJsonArray { providers.forEach { p -> add(providerWithKey(p, plain)) } }
                         )
+                        // 搜索后端的 key 是 backend → 密文 的映射，形状与 provider 不同，单独改写
+                        k == "searchApiKeyCiphers" && v is JsonObject -> {
+                            val out = v.keys.mapNotNull { backend ->
+                                plain[SEARCH_KEY_PREFIX + backend]?.firstOrNull()?.let { backend to it }
+                            }
+                            if (out.isNotEmpty()) put(
+                                "searchApiKeys",
+                                buildJsonObject { out.forEach { (b, key) -> put(b, key) } }
+                            )
+                        }
                         k in SECRET_KEYS -> Unit
                         else -> put(k, inlineSecrets(v, plain))
                     }

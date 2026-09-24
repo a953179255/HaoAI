@@ -383,6 +383,29 @@ class AppContainer(app: Application) {
     }
 
     /**
+     * 「设置 → 搜索服务」的主后端配置。key 只在这里解密（Keystore 密文存 settings.json，
+     * 明文不落盘），所以每次搜索现取——用户刚填完 key 不必重启引擎就能生效。
+     *
+     * 选「内置免 key」时同样返回配置（backend=builtin，工具侧 `external=false` 就走原引擎链）：
+     * 「结果条数」是用户对检索的统一偏好，内置路径也要能读到，否则设置项只对三家外部后端生效。
+     */
+    fun searchProviderConfig(): com.haoai.agent.agent.tools.SearchProviderConfig {
+        val s = settingsFlow.value
+        val backend = if (com.haoai.agent.agent.tools.SearchProviders.isKnown(s.searchBackend)) {
+            s.searchBackend
+        } else {
+            com.haoai.agent.agent.tools.SearchProviders.BUILTIN
+        }
+        return com.haoai.agent.agent.tools.SearchProviderConfig(
+            backend = backend,
+            apiKey = cipher.decrypt(s.searchApiKeyCiphers[backend]),
+            count = s.searchCount,
+            fallback = s.searchFallback,
+            options = s.searchOptions
+        )
+    }
+
+    /**
      * 聊天会话生效模型：设置里「模型切换 → 聊天会话」配置了就按配置解析
      * （"pid" 或 "pid|modelId"，支持同供应商精确到模型），否则回落当前激活供应商。
      * local 配置不在此处理——聊天入口的 resolveProvider 已有端侧拉起逻辑，

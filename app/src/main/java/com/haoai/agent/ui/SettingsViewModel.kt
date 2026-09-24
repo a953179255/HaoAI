@@ -8,6 +8,10 @@ import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.data.AppContainer
+import com.haoai.agent.agent.tools.SearchProviderConfig
+import com.haoai.agent.agent.tools.SearchHit
+import com.haoai.agent.agent.tools.SearchProviders
+import com.haoai.agent.agent.tools.SearchTestOutcome
 import com.haoai.agent.data.AppSettings
 import com.haoai.agent.data.CapabilityResolver
 import com.haoai.agent.data.ProviderConfig
@@ -182,9 +186,111 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         return "${list.size} 份 · 最近一次（${reason}前）$when0"
     }
 
-    var backupBusy by mutableStateOf(false)
+    // ── 搜索服务 ────────────────────────────────────────────────────
+
+    fun searchBackend(): String = settings.value.searchBackend
+    fun setSearchBackend(id: String) = c.updateSettings { it.copy(searchBackend = id) }
+    fun searchCount(): Int = settings.value.searchCount
+    fun setSearchCount(n: Int) = c.updateSettings { it.copy(searchCount = n.coerceIn(3, 8)) }
+    fun searchFallback(): Boolean = settings.value.searchFallback
+    fun setSearchFallback(v: Boolean) = c.updateSettings { it.copy(searchFallback = v) }
+
+    fun searchOption(key: String): String =
+        settings.value.searchOptions["${searchBackend()}.$key"].orEmpty()
+
+    fun setSearchOption(key: String, value: String) {
+        val full = "${searchBackend()}.$key"
+        c.updateSettings {
+            val next = it.searchOptions.toMutableMap()
+            if (value.isBlank()) next.remove(full) else next[full] = value.trim()
+            it.copy(searchOptions = next)
+        }
+    }
+
+    fun hasSearchKey(backend: String): Boolean =
+        settings.value.searchApiKeyCiphers[backend]?.isNotBlank() == true
+
+    /** 空串 = 清除该后端的 key（密文存 settings.json，明文只在内存里过一遍）。 */
+    fun setSearchKey(backend: String, plain: String) {
+        val ciphered = plain.trim().takeIf { it.isNotEmpty() }?.let { c.cipher.encrypt(it) }
+        c.updateSettings {
+            val next = it.searchApiKeyCiphers.toMutableMap()
+            if (ciphered.isNullOrBlank()) next.remove(backend) else next[backend] = ciphered
+            it.copy(searchApiKeyCiphers = next)
+        }
+    }
+
+    /** 已存 key 的掩码回显：只露尾 4 位，够核对是不是粘错了。 */
+    fun searchKeyMask(backend: String): String {
+        val plain = c.cipher.decrypt(settings.value.searchApiKeyCiphers[backend])
+        if (plain.isBlank()) return ""
+        return "${"•".repeat(8)}${plain.takeLast(4)}"
+    }
+
+    var searchTesting by mutableStateOf(false)
         private set
 
+    /**
+     * 「测试搜索」：真打一次这条路径，返回耗时与命中，不经过模型、不占会话。
+     *
+     * 内置免 key 也在这里测（走 [com.haoai.agent.agent.tools.WebSearchTool.probeChain]，
+     * 与 Agent 实际用的同序/同超时/同质量门）——新用户手上没有 key，如果只能测外部后端，
+     * 这个按钮对默认配置就是死的。
+     */
+    suspend fun searchTest(backend: String, query: String): Result<SearchTestOutcome> {
+        val q = query.trim()
+        if (q.isEmpty()) return Result.failure(IllegalArgumentException("先填一个搜索词"))
+        if (backend != SearchProviders.BUILTIN) {
+            if (SearchProviders.needsKey(backend) && !hasSearchKey(backend)) {
+                return Result.failure(IllegalStateException("未填 API Key"))
+            }
+            if (backend == "searxng" && searchOption("url").isBlank()) {
+                return Result.failure(IllegalStateException("未填实例 URL"))
+            }
+            if (backend == "custom" && !searchOption("template").contains("{query}")) {
+                return Result.failure(IllegalStateException("URL 模板要含 {query} 占位符"))
+            }
+        }
+        val client = c.okHttpClient.newBuilder()
+            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val t0 = System.currentTimeMillis()
+        searchTesting = true
+        val r = try {
+            runCatching {
+                if (backend == SearchProviders.BUILTIN) {
+                    val (engine, hits, errors) = com.haoai.agent.agent.tools.WebSearchTool()
+                        .probeChain(client, q, searchCount())
+                    if (engine == null) {
+                        error(errors.joinToString("；").ifBlank { "三家引擎都没有返回结果" })
+                    }
+                    SearchTestOutcome(engine, hits.map { SearchHit(it.title, it.url, it.snippet) }, errors)
+                } else {
+                    val cfg = SearchProviderConfig(
+                        backend = backend,
+                        apiKey = c.cipher.decrypt(settings.value.searchApiKeyCiphers[backend]),
+                        count = searchCount(),
+                        fallback = false,
+                        options = settings.value.searchOptions
+                    )
+                    val hits = SearchProviders.search(cfg, client, q)
+                        .map { SearchHit(it.title, it.url, it.snippet) }
+                    SearchTestOutcome(SearchProviders.label(backend), hits)
+                }
+            }
+        } finally {
+            searchTesting = false
+        }
+        lastSearchMs = System.currentTimeMillis() - t0
+        return r
+    }
+
+    var lastSearchMs by mutableStateOf(0L)
+        private set
+
+    var backupBusy by mutableStateOf(false)
+        private set
     /** 导出到 SAF 选好的位置。IO 线程跑（打包要读全部会话文件），结果字符串给 UI 弹 Toast。 */
     fun exportData(uri: android.net.Uri, onResult: (Result<String>) -> Unit) {
         if (backupBusy) return

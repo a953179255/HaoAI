@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
@@ -375,6 +376,27 @@ fun SettingsScreen(
                             showChevron = true,
                             divider = true,
                             onClick = { onOpenSection(10) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.Search,
+                            tintIndex = 1,
+                            title = "搜索服务",
+                            subtitle = run {
+                                // 新用户第一眼必须看到"默认就能联网"，否则会以为要先注册什么才能用
+                                val b = settings.searchBackend
+                                if (b == "builtin" || b.isBlank()) "内置免 key 引擎 · 无需配置"
+                                else com.haoai.agent.agent.tools.SearchProviders.label(b)
+                            },
+                            trailing = {
+                                val b = settings.searchBackend
+                                val missing =
+                                    com.haoai.agent.agent.tools.SearchProviders.needsKey(b) &&
+                                        !vm.hasSearchKey(b)
+                                if (missing) HaoChip("待填 Key", HaoTone.Warn)
+                            },
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(17) }
                         )
                         HaoRow(
                             icon = Icons.Filled.AutoFixHigh,
@@ -1107,6 +1129,7 @@ private fun permissionLabel(mode: PermissionMode): String = when (mode) {
 private fun sectionTitle(section: String): String = when (section) {
     "brain" -> "模型大脑"
     "privacy" -> "权限与自动化"
+    "search" -> "搜索服务"
     "memory" -> "记忆与梦境"
     "workspace" -> "工作空间"
     "linux" -> "Linux 环境"
@@ -1231,6 +1254,7 @@ private fun SectionPage(
                         localItems(vm, backdrop, onOpenScan = onShowScan)
                     }
                     "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
+                    "search" -> searchItems(vm, settings, context, backdrop)
                     "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop, onPickDreamModel = onPickDreamModel)
                     "workspace" -> workspaceItems(vm, backdrop) { treePickerLaunch() }
                     "linux" -> linuxItems(vm, backdrop, linuxState)
@@ -1265,8 +1289,13 @@ private fun SectionPage(
             )
         }
         if (keyExportConfirm) {
-            val named = settings.providers.filter { it.apiKeyCipher.isNotBlank() }
-                .map { it.name.ifBlank { it.model } }
+            val named = (settings.providers.filter { it.apiKeyCipher.isNotBlank() }
+                .map { it.name.ifBlank { it.model } } +
+                // 搜索服务的 key 同样会出包，计数漏了它就是"承诺包含 A 家、实际只给 A-1 家"
+                settings.searchApiKeyCiphers.keys
+                    .filter { it.isNotBlank() }
+                    .map { com.haoai.agent.agent.tools.SearchProviders.label(it) })
+                .filter { it.isNotBlank() }
             com.haoai.agent.ui.common.GlassAlertDialog(
                 backdrop = localBackdrop,
                 title = "把 API Key 一起导出？",
@@ -3047,6 +3076,479 @@ private fun LazyListScope.generalItems(
             }
         }
     }
+}
+
+// ---------- 搜索服务 ----------
+
+/**
+ * 「设置 → 搜索服务」后端表。三条规矩都是评审时定下来的：
+ * 1. 副标题一行读完（HaoRow 的 subtitle 是 maxLines=1 硬截断），长说明放进下方配置卡；
+ * 2. 行上先说"点进去要填什么"，不要点进去才发现还得先去注册一家；
+ * 3. 「去哪拿 Key」全站只出现一次，且挂在它自己那个输入框下面——
+ *    评审指出的重复入口（同一家的官网在行尾和表单底部各一个）就是这么来的。
+ */
+private class SearchBackendSpec(
+    val id: String,
+    val title: String,
+    val short: String,
+    val badge: String,
+    val hint: String,
+    val site: String? = null,
+    val siteLabel: String? = null,
+    val siteNote: String? = null
+)
+
+private val SEARCH_BACKENDS = listOf(
+    SearchBackendSpec(
+        id = "builtin", title = "内置免 key 引擎", short = "开箱可用 · 国内结果有限",
+        badge = "无需配置",
+        hint = "依次试 Bing、DuckDuckGo、搜狗：前一家失败或结果不合格才退到下一家；单次搜索用 6s/9s 短超时，本轮失败过的引擎不再重试。什么都不用填。"
+    ),
+    SearchBackendSpec(
+        id = "zhipu", title = "智谱 Web Search", short = "GLM 官方检索 · 按次计费",
+        badge = "需 API Key",
+        hint = "标准档 0.01 元/次、高级档 0.03 元/次。返回已是干净的结果 JSON，不必再跟 Bing 的日历页搏斗。",
+        site = "https://open.bigmodel.cn/usercenter/apikeys",
+        siteLabel = "open.bigmodel.cn · 拿 Key",
+        siteNote = "注册后在控制台「API Keys」页新建"
+    ),
+    SearchBackendSpec(
+        id = "bocha", title = "博查 BoCha", short = "中文检索 · 按次计费",
+        badge = "需 API Key",
+        hint = "国内可直连的第三方检索，中文网页覆盖较好。价格首页不公示，以控制台显示为准。",
+        site = "https://open.bochaai.com/",
+        siteLabel = "open.bochaai.com · 拿 Key",
+        siteNote = "注册后在控制台创建 API Key"
+    ),
+    SearchBackendSpec(
+        id = "searxng", title = "自建 SearXNG", short = "免费 · 要自己有实例",
+        badge = "需实例地址",
+        hint = "元搜索引擎，聚合哪几家由你的实例说了算。实例必须在 settings.yml 的 search.formats 里加上 json，否则接口回的是网页而不是结果。",
+        site = "https://docs.searxng.org/",
+        siteLabel = "docs.searxng.org · 自建文档",
+        siteNote = "重点看 settings.yml 的 search.formats"
+    ),
+    SearchBackendSpec(
+        id = "custom", title = "自定义端点", short = "任何返回 JSON 的接口",
+        badge = "需 URL 模板",
+        hint = "把 {query} 换成检索词、{count} 换成条数后 GET 出去，再按给定路径从响应里取结果数组。不给路径就自动试 results / items / data.webPages.value。"
+    )
+)
+
+private fun LazyListScope.searchItems(
+    vm: SettingsViewModel,
+    settings: AppSettings,
+    context: android.content.Context,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+) {
+    // 显式标成 (String) -> Unit：否则 runCatching 的 Result 会成为 lambda 返回值，
+    // 传给下面的 SearchKeyField/SearchSiteRow 时类型对不上
+    val open: (String) -> Unit = { u ->
+        runCatching {
+            context.startActivity(
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(u)
+                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+    val cur = SEARCH_BACKENDS.firstOrNull { it.id == settings.searchBackend } ?: SEARCH_BACKENDS.first()
+    // 选中了但必填项还空着——行上的"待填写"由它来，避免"用了但根本不通"这种静默态
+    val incomplete = when {
+        com.haoai.agent.agent.tools.SearchProviders.needsKey(cur.id) -> !vm.hasSearchKey(cur.id)
+        cur.id == "searxng" -> vm.searchOption("url").isBlank()
+        cur.id == "custom" -> !vm.searchOption("template").contains("{query}")
+        else -> false
+    }
+
+    item { SectionTitle("主后端") }
+    item {
+        GlassGroup(backdrop) {
+            SEARCH_BACKENDS.forEachIndexed { i, b ->
+                HaoRow(
+                    title = b.title,
+                    subtitle = b.short,
+                    divider = i > 0,
+                    onClick = { vm.setSearchBackend(b.id) },
+                    trailing = {
+                        when {
+                            incomplete && b.id == cur.id -> HaoChip("待填写", HaoTone.Warn)
+                            b.id == cur.id -> HaoChip("使用中", HaoTone.Accent)
+                            else -> HaoChip(b.badge)
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    item { SectionTitle("${cur.title} · 配置") }
+    item {
+        GlassGroup(backdrop) {
+            com.haoai.agent.ui.common.HaoHint(cur.hint)
+            when (cur.id) {
+                "builtin" -> {
+                    // 无字段：这张卡只剩说明，不给空的输入框
+                }
+
+                "zhipu" -> {
+                    SearchKeyField(vm, cur, "粘贴 sk-…", open)
+                    SearchFieldLabel("引擎档位")
+                    com.haoai.agent.ui.common.LiquidTabRow(
+                        tabs = listOf("标准（便宜）", "高级（召回更宽）"),
+                        selectedIndex = if (vm.searchOption("engine") == "search_pro") 1 else 0,
+                        onSelected = {
+                            vm.setSearchOption("engine", if (it == 1) "search_pro" else "search_std")
+                        },
+                        backdrop = backdrop,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                "bocha" -> {
+                    SearchKeyField(vm, cur, "粘贴 API Key", open)
+                    com.haoai.agent.ui.common.HaoDivider()
+                    ToggleRow(
+                        title = "返回摘要段",
+                        subtitle = "每条结果带更长的正文摘要：多花 token，但常常省掉一次 web_fetch",
+                        checked = vm.searchOption("summary") == "1",
+                        onChange = { vm.setSearchOption("summary", if (it) "1" else "") },
+                        backdrop = backdrop
+                    )
+                }
+
+                "searxng" -> {
+                    SearchOptionField(
+                        vm, "url", "实例 URL（必填）", "https://searx.example.com",
+                        help = "记得在实例的 settings.yml 里开启 json 输出，否则这里测不出结果"
+                    )
+                    SearchAdvanced {
+                        SearchOptionField(vm, "engines", "引擎", "google,bing（逗号分隔）")
+                        SearchOptionField(vm, "language", "语言", "zh-CN")
+                        SearchOptionField(vm, "username", "用户名", "实例开了 Basic Auth 才填")
+                        SearchOptionField(vm, "password", "密码", password = true)
+                    }
+                    SearchSiteRow(cur, open)
+                }
+
+                "custom" -> {
+                    SearchOptionField(
+                        vm, "template", "URL 模板（必填）", "https://api.example.com/search?q={query}&count={count}",
+                        help = "{query} 会被 URL 编码后替换进去，缺它这家就用不了"
+                    )
+                    SearchAdvanced {
+                        SearchOptionField(vm, "path", "结果数组路径", "如 data.items（留空自动探测）")
+                        SearchOptionField(vm, "header", "鉴权 Header 名", "Authorization")
+                        SearchKeyField(vm, cur, "随鉴权头发过去，可留空", open, label = "API Key（可选）")
+                    }
+                }
+
+                else -> {
+                    SearchKeyField(vm, cur, "粘贴 API Key", open)
+                }
+            }
+        }
+    }
+
+    item { SectionTitle("检索行为") }
+    item {
+        var n by remember(settings.searchCount) {
+            androidx.compose.runtime.mutableIntStateOf(settings.searchCount)
+        }
+        GlassGroup(backdrop) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("每次返回条数", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "$n 条",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                LiquidSlider(
+                    value = { n.toFloat() },
+                    onValueChange = { v -> n = kotlin.math.round(v).toInt() },
+                    onValueChangeFinished = { vm.setSearchCount(n) },
+                    valueRange = 3f..8f,
+                    visibilityThreshold = 1f,
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                )
+                Text(
+                    "上限 8 是实测结论：一次调研 20 次检索 × 10 条 ≈ 5.6 万字符进上下文，" +
+                        "「成本提醒」就是这么提前触发的。模型自己指定条数时以它为准。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            if (cur.id != "builtin") {
+                com.haoai.agent.ui.common.HaoDivider()
+                ToggleRow(
+                    title = "主后端不可用时退回免 key 链",
+                    subtitle = "配额用尽 / 网络不通 / 返回空结果，都不让任务直接失败",
+                    checked = vm.searchFallback(),
+                    onChange = { vm.setSearchFallback(it) },
+                    backdrop = backdrop
+                )
+            }
+            com.haoai.agent.ui.common.HaoDivider()
+            com.haoai.agent.ui.common.HaoHint(
+                "结果一律标注来源（如「来源：智谱 Web Search」），出问题时能一眼看出是哪家给的——" +
+                    "这是无条件行为，所以没有开关。"
+            )
+        }
+    }
+
+    item { SectionTitle("测试") }
+    item {
+        var query by remember(cur.id) { mutableStateOf("2026年 AI Agent 新变化") }
+        var outcome by remember(cur.id) { mutableStateOf<com.haoai.agent.agent.tools.SearchTestOutcome?>(null) }
+        var failure by remember(cur.id) { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+        GlassGroup(backdrop) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                Text("搜索词", style = MaterialTheme.typography.labelMedium)
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = com.haoai.agent.ui.common.glassFieldColors()
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LiquidPillButton(
+                        backdrop = backdrop,
+                        text = if (cur.id == "builtin") "测试免 key 链" else "测试搜索",
+                        enabled = !vm.searchTesting,
+                        onClick = {
+                            outcome = null
+                            failure = null
+                            scope.launch {
+                                vm.searchTest(cur.id, query)
+                                    .onSuccess { outcome = it }
+                                    .onFailure { failure = it.message ?: "请求失败" }
+                            }
+                        }
+                    )
+                    if (vm.searchTesting) {
+                        Spacer(Modifier.width(12.dp))
+                        CircularProgressIndicator(
+                            Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "正在真发一次请求…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            outcome?.let { o ->
+                com.haoai.agent.ui.common.HaoDivider()
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(
+                        "通过 · ${vm.lastSearchMs} ms · ${o.hits.size} 条 · 来源 ${o.engine}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = haoToneMain(HaoTone.Accent)
+                    )
+                    o.hits.take(3).forEach { h ->
+                        Text(
+                            h.title.ifBlank { h.url },
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        Text(
+                            h.url,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                    if (o.hits.size > 3) {
+                        Text(
+                            "另有 ${o.hits.size - 3} 条未显示",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (o.notes.isNotEmpty()) {
+                        Text(
+                            "沿途失败：" + o.notes.joinToString("；"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                }
+            }
+            failure?.let { msg ->
+                com.haoai.agent.ui.common.HaoDivider()
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(
+                        "失败：$msg",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = haoToneMain(HaoTone.Danger)
+                    )
+                    Text(
+                        if (cur.id == "builtin")
+                            "三家引擎都没出结果：先检查手机的网络/代理。Agent 侧会收到同样的失败说明，" +
+                                "然后用手上的材料收尾而不是空转。"
+                        else
+                            "关掉「主后端不可用时退回免 key 链」时，这条路径失败就会让检索失败；" +
+                                "开着则自动降级，任务不断。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 字段名（玻璃卡内的小标签，与下方输入框同左右内缩）。 */
+@Composable
+private fun SearchFieldLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+    )
+}
+
+/** 官网链接行：紧跟在它所属输入框下面，一家一处。 */
+@Composable
+private fun SearchSiteRow(spec: SearchBackendSpec, open: (String) -> Unit) {
+    val url = spec.site ?: return
+    HaoRow(
+        title = spec.siteLabel ?: url,
+        subtitle = spec.siteNote,
+        divider = true,
+        showChevron = true,
+        onClick = { open(url) }
+    )
+}
+
+/**
+ * API Key 输入：明文只在内存过一遍，落盘是 Keystore 密文。
+ * 已存时不回填正文（回填就等于把解密后的 key 摊在输入框里），只给掩码尾 4 位核对。
+ */
+@Composable
+private fun SearchKeyField(
+    vm: SettingsViewModel,
+    spec: SearchBackendSpec,
+    placeholder: String,
+    open: (String) -> Unit,
+    label: String = "API Key"
+) {
+    val has = vm.hasSearchKey(spec.id)
+    var draft by remember(spec.id) { mutableStateOf("") }
+    // 停笔 600ms 才落盘：逐字符 updateSettings = 每字符一次 Keystore 加密 + 配置全量序列化
+    LaunchedEffect(draft, spec.id) {
+        if (draft.isBlank()) return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        vm.setSearchKey(spec.id, draft)
+    }
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it.trim() },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = {
+                Text(if (has) "已保存，粘贴新值即覆盖" else placeholder)
+            },
+            trailingIcon = {
+                if (has && draft.isBlank()) {
+                    TextButton(onClick = { vm.setSearchKey(spec.id, "") }) {
+                        Text("清除", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            },
+            visualTransformation = PasswordVisualTransformation(),
+            colors = com.haoai.agent.ui.common.glassFieldColors()
+        )
+        Text(
+            if (has) "已保存 ${vm.searchKeyMask(spec.id)}"
+            else "留空即不改动；未填时该后端不可用。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    SearchSiteRow(spec, open)
+}
+
+/** 非密钥配置项（URL/模板/引擎…）：按后端分键存在 searchOptions 里，切后端不串值。 */
+@Composable
+private fun SearchOptionField(
+    vm: SettingsViewModel,
+    key: String,
+    label: String,
+    placeholder: String = "",
+    help: String? = null,
+    password: Boolean = false
+) {
+    val saved = vm.searchOption(key)
+    var draft by remember(key, saved) { mutableStateOf(saved) }
+    LaunchedEffect(draft) {
+        if (draft == saved) return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        vm.setSearchOption(key, draft)
+    }
+    Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text(placeholder) },
+            visualTransformation = if (password) PasswordVisualTransformation()
+            else VisualTransformation.None,
+            colors = com.haoai.agent.ui.common.glassFieldColors()
+        )
+        if (help != null) {
+            Text(
+                help,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** SearXNG/自定义的高级项：默认收起（全留空也能用），平铺会把必填项挤出视线。 */
+@Composable
+private fun SearchAdvanced(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    HaoRow(
+        title = if (expanded) "收起高级选项" else "高级选项（可全部留空）",
+        divider = true,
+        onClick = { expanded = !expanded },
+        trailing = {
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    )
+    if (expanded) Column { content() }
 }
 
 /**

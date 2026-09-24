@@ -121,7 +121,12 @@ class AgentEngine(
      * B6 工具 profile 预设（设置 toolProfile）：""=会话 activeGroups；minimal=仅 core；
      * coding=core+extended；full=全开（null）。会话已有显式分组时 profile 仅作覆盖开关。
      */
-    internal val toolProfile: String = ""
+    internal val toolProfile: String = "",
+    /**
+     * 「设置 → 搜索服务」的主后端（含已解密 key）。每次搜索时现取，改完设置不必重启引擎。
+     * null / backend=builtin 时 web_search 只走内置免 key 链。
+     */
+    internal val searchProviderFn: () -> com.haoai.agent.agent.tools.SearchProviderConfig? = { null }
 ) {
 
     /** 解析生效工具组：profile 空→会话分组；否则按预设（与 ToolRegistry.ALL_GROUPS 对齐）。 */
@@ -373,7 +378,8 @@ class AgentEngine(
             onToolChange = onToolChange,
             vscreenEnabled = vscreenEnabled,
             vscreenBitrateKbps = vscreenBitrateKbps,
-            sessionSearch = sessionSearch
+            sessionSearch = sessionSearch,
+            searchProvider = searchProviderFn()
         )
         val subAgentRunner: SubAgentRunner? =
             if (depth == 0) SubAgentRunner { task, parentCtx, index, total, mode, id ->

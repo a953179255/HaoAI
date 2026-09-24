@@ -36,9 +36,12 @@ class WebSearchTool : Tool {
             ?: return ToolResult("搜索功能不可用", true)
         val query = args.optString("query").trim()
         if (query.isEmpty()) return ToolResult("需要 query 参数", true)
-        // 结果条数：默认 5、上限 8。原为默认 6/上限 10 —— 实测一次调研 20 次检索 × 10 条
-        // ≈ 5.6 万字符塞进上下文，是 prompt token 膨胀的主要来源，收紧一档。
-        val count = (args.optInt("count") ?: 5).coerceIn(1, 8)
+        // 结果条数：模型不指定时用用户在「设置 → 搜索服务」里配的条数（内置链也读得到），
+        // 上限 8 —— 原为默认 6/上限 10，实测一次调研 20 次检索 × 10 条 ≈ 5.6 万字符塞进上下文，
+        // 是 prompt token 膨胀的主要来源，收紧一档（设置页滑杆区间与此对齐）。
+        val count = (args.optInt("count")
+            ?: ctx.searchProvider?.count?.takeIf { it > 0 }
+            ?: 5).coerceIn(1, 8)
         // D 检索卫生：同一任务内同关键词命中 TTL 缓存直接返回（防重复搜索烧轮次）
         val cacheKey = "search:${query.lowercase()}"
         ctx.webCacheGet(cacheKey)?.let { return ToolResult("$it\n\n（缓存）") }
@@ -57,21 +60,41 @@ class WebSearchTool : Tool {
         val errors = mutableListOf<String>()
         val candidates = ArrayList<Pair<String, List<Hit>>>()
         val fast = shortLived(client)
-        for ((engine, fetch) in ENGINE_CHAIN) {
-            ctx.deadEngines[engine]?.let {
-                errors.add("$engine: 本轮已判不可用（$it）")
-                continue
-            }
-            runCatching { fetch(fast, query) }.onSuccess { hits ->
-                if (hits.isEmpty()) errors.add("$engine: 0 结果")
-                else {
-                    candidates += engine to hits
-                    if (qualityIssue(hits, query) == null) break   // 够好就不再试后面的引擎
+
+        // 配了主后端就先问它。它成功且结果合格就不再往下消耗免 key 链的请求。
+        val sp = ctx.searchProvider?.takeIf { it.external }?.copy(count = count)
+        val providerUsable = sp != null && !(SearchProviders.needsKey(sp.backend) && sp.apiKey.isBlank())
+        if (sp != null && !providerUsable) {
+            errors.add("${SearchProviders.label(sp.backend)}: 未配置 API Key")
+        }
+        if (sp != null && providerUsable) {
+            runCatching { SearchProviders.search(sp, fast, query) }.onSuccess { hits ->
+                if (hits.isEmpty()) errors.add("${SearchProviders.label(sp.backend)}: 0 结果")
+                else candidates += SearchProviders.label(sp.backend) to hits
+            }.onFailure { errors.add("${SearchProviders.label(sp.backend)}: ${it.message ?: "失败"}") }
+        }
+
+        // 内置免 key 引擎链什么时候走：没配主后端、配了但没填 key（等于"留空继续用免 key"）、
+        // 或主后端结果不合格且用户允许降级。主后端结果已经够好就不再重复请求。
+        val primaryGood = candidates.any { qualityIssue(it.second, query) == null }
+        val runChain = sp == null || !providerUsable || (!primaryGood && sp.fallback)
+        if (runChain) {
+            for ((engine, fetch) in ENGINE_CHAIN) {
+                ctx.deadEngines[engine]?.let {
+                    errors.add("$engine: 本轮已判不可用（$it）")
+                    continue
                 }
-            }.onFailure {
-                val why = it.message ?: it.javaClass.simpleName
-                ctx.deadEngines[engine] = why
-                errors.add("$engine: $why")
+                runCatching { fetch(fast, query) }.onSuccess { hits ->
+                    if (hits.isEmpty()) errors.add("$engine: 0 结果")
+                    else {
+                        candidates += engine to hits
+                        if (qualityIssue(hits, query) == null) break   // 够好就不再试后面的引擎
+                    }
+                }.onFailure {
+                    val why = it.message ?: it.javaClass.simpleName
+                    ctx.deadEngines[engine] = why
+                    errors.add("$engine: $why")
+                }
             }
         }
         // 没有一家通过质量门时，取"低质条数最少"的那份，并如实告诉模型它不合格
@@ -126,6 +149,38 @@ class WebSearchTool : Tool {
     internal val ENGINE_CHAIN: List<Pair<String, suspend (okhttp3.OkHttpClient, String) -> List<Hit>>> by lazy {
         listOf("bing" to ::tryBing, "duckduckgo" to ::tryDdg, "sogou" to ::trySogou)
     }
+
+    /**
+     * 设置页「测试搜索」跑内置链用：按线上同序、同短超时、同质量门走一遍，
+     * 返回（实际采用的引擎, 结果, 各家失败原因）。
+     *
+     * 与 [run] 的区别只有两点：不带本轮的 deadEngines 拉黑与签名去重（那两套状态属于任务内
+     * 检索，一次诊断不该写进去），以及不过模型。这样"测试通过"才真的等于"Agent 能用"。
+     * [count] 与工具侧同源：测试卡上显示的条数必须等于 Agent 实际会拿到的条数，
+     * 否则设置里写 5 条、测试却报 10 条，用户读到的是两套口径。
+     */
+    internal suspend fun probeChain(
+        client: okhttp3.OkHttpClient,
+        query: String,
+        count: Int = 5
+    ): Triple<String?, List<Hit>, List<String>> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val fast = shortLived(client)
+            val errors = mutableListOf<String>()
+            val candidates = ArrayList<Pair<String, List<Hit>>>()
+            for ((engine, fetch) in ENGINE_CHAIN) {
+                runCatching { fetch(fast, query) }.onSuccess { hits ->
+                    if (hits.isEmpty()) errors.add("$engine: 0 结果")
+                    else {
+                        candidates += engine to hits
+                        if (qualityIssue(hits, query) == null) break
+                    }
+                }.onFailure { errors.add("$engine: ${it.message ?: it.javaClass.simpleName}") }
+            }
+            val pick = candidates.firstOrNull { qualityIssue(it.second, query) == null }
+                ?: candidates.minByOrNull { junkCount(it.second) }
+            Triple(pick?.first, pick?.second?.take(count.coerceIn(1, 8)).orEmpty(), errors)
+        }
 
     /**
      * 搜索专用的短超时客户端。共享的 OkHttp 客户端 readTimeout 是 120s（为模型流式长响应设的），

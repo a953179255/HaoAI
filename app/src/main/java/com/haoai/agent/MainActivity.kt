@@ -211,7 +211,7 @@ private fun screenDepth(s: Int) = when (s) {
     0 -> 0          // 聊天（根）
     1, 4, 7 -> 1    // 设置根 / 会话列表 / 浏览器
     2 -> 3          // 记忆库（记忆与梦境的下级）
-    in 9..16 -> 2   // 设置 section 子页（记忆与梦境/模型大脑/…）
+    in 9..17 -> 2   // 设置 section 子页（记忆与梦境/模型大脑/搜索服务/…）
     else -> 2       // 定时 / 技能 / MCP / 工作流（设置根直接进入）
 }
 
@@ -287,6 +287,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             "mcp" -> { leaveChat(); screen = 6 }
             "browser" -> { leaveChat(); screen = 7 }
             "workflows" -> { leaveChat(); screen = 8 }
+            "search" -> { leaveChat(); screen = 17 }
             "vscreen" -> {
                 enterChat()
                 screen = 0
@@ -966,6 +967,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "usage", onSectionBack = { screen = 1 }
+                )
+                17 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "search", onSectionBack = { screen = 1 }
                 )
                 2 -> com.haoai.agent.ui.manage.MemoryScreen(
                     backdrop = backdrop,

@@ -60,6 +60,8 @@ data class ToolContext(
      * 挂十几秒才超时，不记下来就会每次搜索都再等一遍（见 WebSearchTool）。
      */
     val deadEngines: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap(),
+    /** 「设置 → 搜索服务」选定的主后端（含已解密 key）；null 或 builtin = 只走内置免 key 链。 */
+    val searchProvider: SearchProviderConfig? = null,
     /** B4 会话搜索：由引擎注入 SessionStore.list → 标题/摘要投影；null=工具不注册。 */
     val sessionSearch: ((String) -> List<Pair<String, String>>)? = null
 ) {

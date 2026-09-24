@@ -101,14 +101,18 @@ class DataBackupManagerTest {
           {"id":"p1","name":"商汤","apiKey":"sk-plain-1","apiKeyPool":["sk-a","sk-b"]},
           {"id":"p2","name":"智谱","apiKeyCipher":"BASE64CIPHER","apiKeyPoolCiphers":["C1","C2"],
            "nested":{"apiKey":"deep-should-go"}}
-        ]}
+        ],"searchApiKeyCiphers":{"zhipu":"SEARCHCIPHER","bocha":"BOCHACIPHER"}}
     """.trimIndent()
 
     @Test
     fun keysAreStrippedByDefault() {
         val out = DataBackupManager.transformSecrets(settingsWithKeys, emptyMap())
-        listOf("apiKey", "apiKeyPool", "apiKeyCipher", "apiKeyPoolCiphers", "sk-plain-1", "BASE64CIPHER", "deep-should-go")
-            .forEach { assertFalse("脱敏后仍含 $it", out.contains(it)) }
+        listOf(
+            "apiKey", "apiKeyPool", "apiKeyCipher", "apiKeyPoolCiphers",
+            "sk-plain-1", "BASE64CIPHER", "deep-should-go",
+            // 搜索服务的 key 同一条规矩：默认不出包
+            "searchApiKeyCiphers", "SEARCHCIPHER", "BOCHACIPHER"
+        ).forEach { assertFalse("脱敏后仍含 $it", out.contains(it)) }
         // 非密钥字段一个都不能丢
         assertTrue(out.contains("\"activeProviderId\":\"p1\""))
         assertTrue(out.contains("\"name\":\"智谱\""))
@@ -118,7 +122,11 @@ class DataBackupManagerTest {
     fun explicitIncludeWritesPlaintextAndDropsCipher() {
         val out = DataBackupManager.transformSecrets(
             settingsWithKeys,
-            mapOf("p1" to listOf("sk-plain-1", "sk-a", "sk-b"), "p2" to listOf("decrypted-2"))
+            mapOf(
+                "p1" to listOf("sk-plain-1", "sk-a", "sk-b"),
+                "p2" to listOf("decrypted-2"),
+                "search:zhipu" to listOf("sk-zhipu-plain")
+            )
         )
         assertTrue(out.contains("\"apiKey\":\"sk-plain-1\""))
         assertTrue(out.contains("\"apiKeyPool\":[\"sk-a\",\"sk-b\"]"))
@@ -126,6 +134,11 @@ class DataBackupManagerTest {
         assertFalse(out.contains("apiKeyCipher"))
         assertFalse(out.contains("BASE64CIPHER"))
         assertFalse(out.contains("deep-should-go"))
+        // 勾选"含 Key"时搜索 key 也得真的进包（写成 backend→明文 的独立字段，密文字段照旧移除）
+        assertTrue(out.contains("\"searchApiKeys\":{\"zhipu\":\"sk-zhipu-plain\"}"))
+        assertFalse(out.contains("SEARCHCIPHER"))
+        // 解不出来的后端（key 池里没有）不写占位值
+        assertFalse(out.contains("BOCHACIPHER"))
     }
 
     @Test
@@ -141,6 +154,20 @@ class DataBackupManagerTest {
         assertFalse(d.backupIncludeKeys)
         assertTrue(d.backupSnapshots)
         assertEquals(0L, d.lastDataExportAt)
+        // 搜索服务出厂即"不配也能用"：默认必须是内置免 key，且老配置文件（无这几个字段）
+        // 靠这些默认值就能解析出来
+        assertEquals("builtin", d.searchBackend)
+        assertEquals(5, d.searchCount)
+        assertTrue(d.searchFallback)
+        assertTrue(d.searchApiKeyCiphers.isEmpty())
+        assertTrue(d.searchOptions.isEmpty())
+    }
+
+    @Test
+    fun searchCountCapMatchesTheToolSideCap() {
+        // 设置页滑杆区间 3..8 必须与 WebSearchTool 的 coerceIn(1, 8) 对上：
+        // 上限不一致时用户以为能设 10 条，实际每次还是被裁到 8
+        assertTrue(AppSettings().searchCount in 3..8)
     }
 
     @Test
