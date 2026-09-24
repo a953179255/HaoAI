@@ -59,19 +59,107 @@ data class SearchTestOutcome(
 object SearchProviders {
 
     const val BUILTIN = "builtin"
-    val KEYPED = setOf("zhipu", "bocha")
+    val KEYPED = setOf("zhipu", "bocha", "doubao", "metaso")
+
+    /** 目录页分组：开箱可用 / 国内可直连 / 自建与通用。 */
+    enum class Group { Free, Cn, Self }
+
+    /**
+     * 一家后端的展示元数据。设置页与目录页共用这份表——两处各写一套文案，
+     * 迟早会出现"目录页说免费、配置页说按次计费"这种自相矛盾。
+     *
+     * @param reach 国内直连可达性的**实测状态**。没有 Key 就没法测，不能拿"官方说国内可用"
+     *              当"我测过"，所以默认值是「未实测」，界面上照实显示。
+     */
+    data class Backend(
+        val id: String,
+        val name: String,
+        val short: String,
+        val group: Group,
+        val need: String,
+        val price: String,
+        val one: String,
+        val hint: String,
+        val site: String = "",
+        val siteNote: String = "",
+        val reach: String = "未实测 · 填好 Key 后用下方「测试」确认"
+    )
+
+    /** 已写适配器的后端。加一家 = 这里一行 + `search()` 里一个分支 + 一个纯解析函数。 */
+    val CATALOG: List<Backend> = listOf(
+        Backend(
+            id = BUILTIN, name = "内置免 key 引擎", short = "内置链", group = Group.Free,
+            need = "无需配置", price = "免费",
+            one = "Bing → DuckDuckGo → 搜狗 依次尝试",
+            hint = "依次试 Bing、DuckDuckGo、搜狗：前一家失败或结果不合格才退到下一家；" +
+                "单次搜索用 6s/9s 短超时，本轮失败过的引擎不再重试。什么都不用填，" +
+                "它同时也是其它家的兜底。",
+            reach = "已实测：2026-09-24 模拟器国内直连 4.9s / 5 条 / 来源 duckduckgo"
+        ),
+        Backend(
+            id = "zhipu", name = "智谱 Web Search", short = "智谱", group = Group.Cn,
+            need = "API Key", price = "0.01 元/次",
+            one = "GLM 官方检索接口",
+            hint = "标准档 0.01 元/次、高级档 0.03 元/次。返回已是干净的结果 JSON，" +
+                "不必再跟 Bing 的日历页搏斗。",
+            site = "https://open.bigmodel.cn/usercenter/apikeys",
+            siteNote = "注册后在控制台「API Keys」页新建"
+        ),
+        Backend(
+            id = "bocha", name = "博查 BoCha", short = "博查", group = Group.Cn,
+            need = "API Key", price = "按次计费",
+            one = "中文网页覆盖较好",
+            hint = "国内可直连的第三方检索。价格首页不公示，以控制台显示为准。" +
+                "「返回摘要段」打开后每条结果带更长正文，多花 token 但常省掉一次 web_fetch。",
+            site = "https://open.bochaai.com/",
+            siteNote = "注册后在控制台创建 API Key"
+        ),
+        Backend(
+            id = "doubao", name = "豆包 · 火山搜索", short = "豆包", group = Group.Cn,
+            need = "API Key", price = "有免费额度",
+            one = "方舟系联网检索 API",
+            hint = "走 feedcoop 的检索端点。「网页搜索」返回站内索引结果，" +
+                "「全球搜索」覆盖海外引擎但更慢、更贵。两种模式的响应形状不同，代码里分别解析。",
+            site = "https://console.volcengine.com/search-infinity/api-key",
+            siteNote = "开通「联网内容插件」后创建 API Key"
+        ),
+        Backend(
+            id = "metaso", name = "秘塔 Metaso", short = "秘塔", group = Group.Cn,
+            need = "API Key", price = "按次计费",
+            one = "中文 AI 检索，返回带摘要",
+            hint = "秘塔开放接口，按 q/scope/size 请求，返回 webpages 列表。" +
+                "每次消耗额度（响应里的 credits 字段），所以条数别开太大。",
+            site = "https://metaso.cn/",
+            siteNote = "注册后在开放平台创建 API Key"
+        ),
+        Backend(
+            id = "searxng", name = "自建 SearXNG", short = "SearXNG", group = Group.Self,
+            need = "实例 URL", price = "免费 · 需自建",
+            one = "元搜索引擎，聚合哪家由实例定",
+            hint = "实例必须在 settings.yml 的 search.formats 里加上 json，" +
+                "否则接口回的是网页而不是结果——这时测试会显示 0 条而不是报错。",
+            site = "https://docs.searxng.org/",
+            siteNote = "重点看 settings.yml 的 search.formats",
+            reach = "取决于你的实例在不在国内"
+        ),
+        Backend(
+            id = "custom", name = "自定义端点", short = "自定义", group = Group.Self,
+            need = "URL 模板", price = "看你接谁",
+            one = "任何 GET 返回 JSON 的接口",
+            hint = "把 {query} 换成检索词、{count} 换成条数后 GET 出去，再按给定路径从响应里取结果数组。" +
+                "不给路径就自动试 results / items / data.webPages.value。" +
+                "POST-only 或要 AK/SK 签名的接口接不了，那种得写适配器。",
+            reach = "取决于你接的端点"
+        ),
+    )
+
+    fun backend(id: String): Backend = CATALOG.firstOrNull { it.id == id } ?: CATALOG.first()
 
     /** 后端是否需要我们这边存 key（决定 UI 上要不要显示输入框）。 */
     fun needsKey(backend: String): Boolean = backend in KEYPED
 
     /** 一行说明，直接给设置页与结果标注用。 */
-    fun label(backend: String): String = when (backend) {
-        "zhipu" -> "智谱 Web Search"
-        "bocha" -> "博查 BoCha"
-        "searxng" -> "自建 SearXNG"
-        "custom" -> "自定义端点"
-        else -> "内置免 key 引擎"
-    }
+    fun label(backend: String): String = backend(backend).name
 
     internal suspend fun search(
         cfg: SearchProviderConfig,
@@ -94,6 +182,36 @@ object SearchProviders {
                     put("query", query)
                     put("summary", cfg.opt("summary") == "1")
                     put("count", cfg.count)
+                }, client
+            ))
+
+            // 豆包两种模式端点与请求体都不同（照 RikkaHub DoubaoSearchService.kt:57-91 取形状）
+            "doubao" -> {
+                val global = cfg.opt("mode") == "global"
+                parseDoubao(post(
+                    "https://open.feedcoopapi.com/search_api/" +
+                        if (global) "global_search" else "web_search",
+                    cfg.apiKey,
+                    if (global) buildJsonObject {
+                        put("Query", query)
+                        put("DocCount", cfg.count)
+                        put("MaxSnippetLength", 300)
+                    } else buildJsonObject {
+                        put("Query", query)
+                        put("SearchType", "web")
+                        put("Count", cfg.count)
+                        put("QueryControl", buildJsonObject { put("QueryRewrite", false) })
+                    }, client
+                ))
+            }
+
+            "metaso" -> parseMetaso(post(
+                "https://metaso.cn/api/v1/search", cfg.apiKey,
+                buildJsonObject {
+                    put("q", query)
+                    put("scope", "webpage")
+                    put("size", cfg.count)
+                    put("includeSummary", false)
                 }, client
             ))
 
@@ -177,6 +295,48 @@ object SearchProviders {
             WebSearchTool.Hit(pick(it, "title"), pick(it, "url"), pick(it, "content", "snippet"))
         }
 
+    /**
+     * 豆包：两种模式响应形状不同（web_search 给 `Result.WebResults[]`，global_search 给
+     * `Result.Documents[]`，后者的 Snippet 还是数组），所以一个函数吃两种，别逼调用方选。
+     * 错误也分两层：网关错误在 `ResponseMetadata.Error`，业务错误在 `Result.ErrorCode`。
+     */
+    internal fun parseDoubao(text: String): List<WebSearchTool.Hit> {
+        val root = obj(text) ?: return emptyList()
+        (jsonPath(root, "ResponseMetadata.Error") as? JsonObject)?.let {
+            error("豆包返回 ${pick(it, "Code", "code")}：${pick(it, "Message", "message")}")
+        }
+        val result = jsonPath(root, "Result") as? JsonObject ?: return emptyList()
+        val code = (result["ErrorCode"] as? JsonPrimitive)?.intOrNull
+        if (code != null && code != 0) error("豆包返回 $code：${pick(result, "ErrorMsg")}")
+        (result["WebResults"] as? JsonArray)?.filterIsInstance<JsonObject>()?.let { arr ->
+            return arr.map {
+                // Summary 比 Snippet 长，有就用它（照 RikkaHub CustomResult 的取法）
+                WebSearchTool.Hit(
+                    pick(it, "Title", "title"), pick(it, "Url", "url"),
+                    pick(it, "Summary", "summary").ifBlank { pick(it, "Snippet", "snippet") }
+                )
+            }
+        }
+        return (result["Documents"] as? JsonArray)?.filterIsInstance<JsonObject>()?.map { d ->
+            val snip = (d["Snippet"] as? JsonArray)?.filterIsInstance<JsonObject>()
+                ?.joinToString("\n") { pick(it, "Text", "text") }.orEmpty()
+            WebSearchTool.Hit(pick(d, "Title", "title"), pick(d, "Url", "url"), snip)
+        }.orEmpty()
+    }
+
+    internal fun parseMetaso(text: String): List<WebSearchTool.Hit> {
+        val root = obj(text) ?: return emptyList()
+        // 秘塔失败时也可能回 200 带 message，不查就把"额度不足"当成"没有相关结果"
+        val code = (root["code"] as? JsonPrimitive)?.intOrNull
+        if (code != null && code != 0) error("秘塔返回 $code：${pick(root, "message", "msg")}")
+        return (root["webpages"] as? JsonArray)?.filterIsInstance<JsonObject>()?.map {
+            WebSearchTool.Hit(
+                pick(it, "title"), pick(it, "link", "url"),
+                pick(it, "snippet", "summary")
+            )
+        }.orEmpty()
+    }
+
     /** 自定义端点：先按给定路径找数组，没给就挨个试常见形状。 */
     internal fun parseCustom(text: String, path: String): List<WebSearchTool.Hit> {
         val root = obj(text) ?: return emptyList()
@@ -227,7 +387,35 @@ object SearchProviders {
         return ""
     }
 
-    /** 供设置页判断"这家能不能不填 key 就用"。 */
-    fun isKnown(backend: String): Boolean =
-        backend == BUILTIN || backend in setOf("zhipu", "bocha", "searxng", "custom")
+    /** 供设置页判断"这家能不能不填 key 就用"；也用于把 settings 里写错/已下架的后端名回落内置。 */
+    fun isKnown(backend: String): Boolean = CATALOG.any { it.id == backend }
+
+    /**
+     * 这家**必填项**齐了没。决定三件事：行上挂「已就绪」还是「待填 X」、「测试」让不让跑、
+     * 以及算不算"已添加"。
+     *
+     * 最后一条是 2026-09-24 真机上看出来的：原先"留过任何配置就算添加"，结果用户在档位上
+     * 顺手点了一下（写进 `zhipu.engine=search_std`），一家从没填过 Key 的智谱就冒出来
+     * 挂在列表里。可选值不该把一家家带进主页。
+     */
+    fun isConfigured(backend: String, hasKey: Boolean, options: Map<String, String>): Boolean = when {
+        backend == BUILTIN -> true
+        needsKey(backend) -> hasKey
+        backend == "searxng" -> (options["searxng.url"] ?: "").isNotBlank()
+        backend == "custom" -> (options["custom.template"] ?: "").contains("{query}")
+        else -> true
+    }
+
+    /**
+     * 「已添加」= 内置链 + 当前主后端 + 必填项已配齐的家。
+     *
+     * 做成纯函数、放这一层，是因为设置页与单测都要问同一个问题；留在 ViewModel 里
+     * 就得为了测一条列表推导去造整个 AppContainer（含 Keystore）。
+     * 输出按 [CATALOG] 顺序，不按 Set 迭代顺序：否则列表会随构建/输入顺序抖。
+     * 内置链恒在表里：它是兜底路径，移除它等于把"主后端失败也不让任务断"一起拆了。
+     */
+    fun addedBackends(active: String, configured: Set<String>): List<String> =
+        CATALOG.map { it.id }.filter {
+            it == BUILTIN || it == active || (it in configured && it != active)
+        }
 }

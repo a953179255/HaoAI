@@ -195,8 +195,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun searchFallback(): Boolean = settings.value.searchFallback
     fun setSearchFallback(v: Boolean) = c.updateSettings { it.copy(searchFallback = v) }
 
-    fun searchOption(key: String): String =
-        settings.value.searchOptions["${searchBackend()}.$key"].orEmpty()
+    fun searchOption(key: String): String = searchOptionOf(searchBackend(), key)
+
+    fun searchOptionOf(backend: String, key: String): String =
+        settings.value.searchOptions["$backend.$key"].orEmpty()
 
     fun setSearchOption(key: String, value: String) {
         val full = "${searchBackend()}.$key"
@@ -205,6 +207,60 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             if (value.isBlank()) next.remove(full) else next[full] = value.trim()
             it.copy(searchOptions = next)
         }
+    }
+
+    /**
+     * 「已添加」列表（按目录顺序：内置链、当前主后端、其余配齐的家）。
+     * 判据是纯函数 [SearchProviders.addedBackends]——必填项配齐才算配过，
+     * 顺手点一下可选项不会把一家带进主页。
+     */
+    fun searchAdded(): List<String> {
+        val s = settings.value
+        val configured = SearchProviders.CATALOG
+            .filter { searchReady(it.id) }
+            .map { it.id }.toSet()
+        return SearchProviders.addedBackends(s.searchBackend, configured)
+    }
+
+    /** 这家是否填全了必填项（决定行上挂「已就绪」还是「待填 Key」，也决定算不算已添加）。 */
+    fun searchReady(backend: String): Boolean =
+        SearchProviders.isConfigured(backend, hasSearchKey(backend), settings.value.searchOptions)
+
+    /**
+     * 从已添加里移除：删掉本机的 Key 与可选项（官网那把 Key 不动，随时能再加回来）。
+     * 移除的正好是当前主后端时回落到内置链——不能把 searchBackend 指到一个没配置的家，
+     * 那样下次检索只会得到"未配置 API Key"，而界面上这家已经不存在了。
+     */
+    fun removeSearchBackend(id: String) {
+        if (id == SearchProviders.BUILTIN) return
+        c.updateSettings {
+            val keys = it.searchApiKeyCiphers.toMutableMap().apply { remove(id) }
+            val opts = it.searchOptions.toMutableMap().apply {
+                it.searchOptions.keys.filter { k -> k.startsWith("$id.") }.forEach { k -> remove(k) }
+            }
+            val tests = it.searchTestResults.toMutableMap().apply { remove(id) }
+            it.copy(
+                searchApiKeyCiphers = keys, searchOptions = opts, searchTestResults = tests,
+                searchBackend = if (it.searchBackend == id) SearchProviders.BUILTIN else it.searchBackend
+            )
+        }
+    }
+
+    /** 目录页点「＋ 添加」= 添加并立即切过去（用户裁定的行为）。 */
+    fun addSearchBackend(id: String) = setSearchBackend(id)
+
+    /** 「上次测试 4.9 秒 · 5 条 · 09-24 21:03」；没测过返回空串，界面上就不显示这一项。 */
+    fun searchTestNote(backend: String): String {
+        val raw = settings.value.searchTestResults[backend] ?: return ""
+        val parts = raw.split('|')
+        if (parts.size < 3) return ""
+        val at = parts[0].toLongOrNull() ?: return ""
+        val ms = parts[1].toLongOrNull() ?: 0L
+        val n = parts[2].toIntOrNull() ?: -1
+        // 不用 DateUtils.formatDateTime：它跟着系统 locale 走，英文模拟器上会渲染成
+        // "Sep 24, 3:50 PM" 夹在中文界面里（真机截图实测）
+        val when0 = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA).format(java.util.Date(at))
+        return if (n < 0) "$when0 失败" else "${"%.1f".format(ms / 1000.0)} 秒 · $n 条 · $when0"
     }
 
     fun hasSearchKey(backend: String): Boolean =
@@ -240,16 +296,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     suspend fun searchTest(backend: String, query: String): Result<SearchTestOutcome> {
         val q = query.trim()
         if (q.isEmpty()) return Result.failure(IllegalArgumentException("先填一个搜索词"))
-        if (backend != SearchProviders.BUILTIN) {
-            if (SearchProviders.needsKey(backend) && !hasSearchKey(backend)) {
-                return Result.failure(IllegalStateException("未填 API Key"))
-            }
-            if (backend == "searxng" && searchOption("url").isBlank()) {
-                return Result.failure(IllegalStateException("未填实例 URL"))
-            }
-            if (backend == "custom" && !searchOption("template").contains("{query}")) {
-                return Result.failure(IllegalStateException("URL 模板要含 {query} 占位符"))
-            }
+        // 必填项判据与行上那枚「待填 X」胶囊同一个函数，两处各写一套迟早不一致
+        if (!searchReady(backend)) {
+            return Result.failure(IllegalStateException("未填 ${SearchProviders.backend(backend).need}"))
         }
         val client = c.okHttpClient.newBuilder()
             .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
@@ -283,6 +332,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             searchTesting = false
         }
         lastSearchMs = System.currentTimeMillis() - t0
+        // 留痕给「正在使用」那张卡。失败也记（条数 -1）：只记成功的话，卡片会退化成
+        // "上次测试通过"的自我表扬，而用户真正要看到的是"这家昨天还是通的、今天不通了"
+        val n = r.getOrNull()?.hits?.size ?: -1
+        c.updateSettings {
+            it.copy(searchTestResults = it.searchTestResults +
+                (backend to "${System.currentTimeMillis()}|$lastSearchMs|$n"))
+        }
         return r
     }
 

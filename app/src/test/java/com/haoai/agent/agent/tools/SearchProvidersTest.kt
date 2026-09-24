@@ -103,23 +103,167 @@ class SearchProvidersTest {
 
     // ── 元数据 ──────────────────────────────────────────────────────
 
+    // ── 豆包（两种模式响应形状不同）──────────────────────────────────
+
     @Test
-    fun onlyZhipuAndBochaNeedAKeyFromTheUser() {
-        assertTrue(SearchProviders.needsKey("zhipu"))
-        assertTrue(SearchProviders.needsKey("bocha"))
+    fun doubaoWebModeReadsWebResultsAndPrefersSummary() {
+        val hits = SearchProviders.parseDoubao(
+            """{"ResponseMetadata":{"Error":null},"Result":{"WebResults":[
+               |{"Title":"多智能体编排成为默认","Url":"https://a.com/x","Summary":"长摘要","Snippet":"短"},
+               |{"Title":"只有 Snippet 的一条","Url":"https://a.com/y","Snippet":"就它"}]}}""".trimMargin()
+        )
+        assertEquals(2, hits.size)
+        assertEquals("https://a.com/x", hits[0].url)
+        assertEquals("长摘要", hits[0].snippet)
+        assertEquals("就它", hits[1].snippet)
+    }
+
+    @Test
+    fun doubaoGlobalModeJoinsSnippetArray() {
+        val hits = SearchProviders.parseDoubao(
+            """{"Result":{"ErrorCode":0,"Documents":[
+               |{"Url":"https://g.com/1","Title":"全球结果","Snippet":[{"Text":"第一段"},{"Text":"第二段"}]}]}}""".trimMargin()
+        )
+        assertEquals(1, hits.size)
+        // Snippet 是数组，不 join 就会把正文丢掉
+        assertEquals("第一段\n第二段", hits[0].snippet)
+    }
+
+    /** 豆包的错误分两层：网关在 ResponseMetadata.Error，业务在 Result.ErrorCode。两层都得报出来。 */
+    @Test
+    fun doubaoReportsBothErrorLayers() {
+        val gateway = runCatching {
+            SearchProviders.parseDoubao("""{"ResponseMetadata":{"Error":{"Code":"InvalidParameter","Message":"key invalid"}}}""")
+        }.exceptionOrNull()?.message.orEmpty()
+        assertTrue(gateway.contains("InvalidParameter"))
+        assertTrue(gateway.contains("key invalid"))
+
+        val business = runCatching {
+            SearchProviders.parseDoubao("""{"Result":{"ErrorCode":429,"ErrorMsg":"quota exceeded","Documents":[]}}""")
+        }.exceptionOrNull()?.message.orEmpty()
+        assertTrue(business.contains("429"))
+        assertTrue(business.contains("quota exceeded"))
+    }
+
+    @Test
+    fun doubaoMissingResultIsZeroHitsNotACrash() {
+        assertTrue(SearchProviders.parseDoubao("""{"ResponseMetadata":{}}""").isEmpty())
+        assertTrue(SearchProviders.parseDoubao("<html>网关返回页</html>").isEmpty())
+    }
+
+    // ── 秘塔 ─────────────────────────────────────────────────────────
+
+    @Test
+    fun metasoReadsWebpagesWithLinkAsUrl() {
+        val hits = SearchProviders.parseMetaso(
+            """{"credits":3,"webpages":[
+               |{"title":"秘塔结果","link":"https://m.com/1","snippet":"摘要片段","score":"0.8"}]}""".trimMargin()
+        )
+        assertEquals(1, hits.size)
+        // link 而不是 url：字段取错就是每条结果都没链接
+        assertEquals("https://m.com/1", hits[0].url)
+        assertEquals("摘要片段", hits[0].snippet)
+    }
+
+    @Test
+    fun metasoFallsBackToSummaryWhenSnippetAbsent() {
+        val hits = SearchProviders.parseMetaso(
+            """{"webpages":[{"title":"只有 summary","link":"https://m.com/2","summary":"正文概要"}]}"""
+        )
+        assertEquals("正文概要", hits[0].snippet)
+    }
+
+    @Test
+    fun metasoEmptyWebpagesIsZeroHits() {
+        assertTrue(SearchProviders.parseMetaso("""{"credits":0,"webpages":[]}""").isEmpty())
+    }
+
+    // ── 目录元数据 ──────────────────────────────────────────────────
+
+    /** 目录表自洽：id 唯一、短名/一句话都填了、needsKey 与"要填什么"对得上。 */
+    @Test
+    fun catalogIsSelfConsistent() {
+        val ids = SearchProviders.CATALOG.map { it.id }
+        assertEquals(ids.size, ids.distinct().size)
+        SearchProviders.CATALOG.forEach {
+            assertTrue(it.id, it.name.isNotBlank() && it.short.isNotBlank() && it.one.isNotBlank())
+            assertTrue(it.id, it.hint.isNotBlank())
+            assertTrue(it.id, it.reach.isNotBlank())
+            assertEquals(it.id, SearchProviders.needsKey(it.id), it.need == "API Key")
+            assertTrue(it.id, SearchProviders.isKnown(it.id))
+            // 内置链没有官网可去
+            if (it.id == SearchProviders.BUILTIN) assertTrue(it.id, it.site.isBlank())
+        }
+    }
+
+    /** 回落语义：settings.json 里躺着已下架/写错的后端名时，必须回落内置而不是整条联网能力判死。 */
+    @Test
+    fun unknownBackendFallsBackToBuiltinRow() {
+        assertEquals(SearchProviders.BUILTIN, SearchProviders.backend("tavily").id)
+        assertFalse(SearchProviders.isKnown("tavily"))
+    }
+
+    @Test
+    fun knownBackendsCoverWhatWeShip() {
+        listOf("builtin", "zhipu", "bocha", "doubao", "metaso", "searxng", "custom").forEach {
+            assertTrue(it, SearchProviders.isKnown(it))
+        }
+    }
+
+    // ── 「已添加」推导与必填项判据 ──────────────────────────────────
+
+    /** 必填项配齐才算"配过这家"；可选值不该把一家带进主页。 */
+    @Test
+    fun optionalValuesAloneDoNotMarkABackendConfigured() {
+        // 只点了档位（zhipu.engine），没填 Key —— 真机上就是这么冒出来一家的
+        val onlyEngine = mapOf("zhipu.engine" to "search_std")
+        assertFalse(SearchProviders.isConfigured("zhipu", hasKey = false, options = onlyEngine))
+        assertTrue(SearchProviders.isConfigured("zhipu", hasKey = true, options = onlyEngine))
+        // SearXNG 认 URL，自定义认含 {query} 的模板
+        assertFalse(SearchProviders.isConfigured("searxng", false, mapOf("searxng.engines" to "google")))
+        assertTrue(SearchProviders.isConfigured("searxng", false, mapOf("searxng.url" to "https://s.example")))
+        assertFalse(SearchProviders.isConfigured("custom", false, mapOf("custom.template" to "https://x/y")))
+        assertTrue(SearchProviders.isConfigured("custom", false, mapOf("custom.template" to "https://x/q={query}")))
+        // 内置链恒为已配
+        assertTrue(SearchProviders.isConfigured("builtin", false, emptyMap()))
+    }
+
+    @Test
+    fun addedBackendsAreDerivedFromWhatWasFilled() {
+        val added = SearchProviders.addedBackends(
+            active = "zhipu",
+            configured = setOf("zhipu", "bocha", "searxng")
+        )
+        // 内置链恒在（它是兜底）；其余按 CATALOG 顺序，不按 Set 迭代顺序，否则列表会抖
+        assertEquals(listOf("builtin", "zhipu", "bocha", "searxng"), added)
+        // 当前主后端即使没填完也留在表里（刚从目录页选进来，得看得见它待填）
+        assertEquals(
+            listOf("builtin", "custom"),
+            SearchProviders.addedBackends("custom", emptySet())
+        )
+        // 没配过的家不冒出来
+        assertEquals(listOf("builtin"), SearchProviders.addedBackends("builtin", emptySet()))
+    }
+
+    /** 残留/异常名字不该把家带进表。 */
+    @Test
+    fun staleOrBlankNamesDoNotCountAsAdded() {
+        assertEquals(
+            listOf("builtin"),
+            SearchProviders.addedBackends("builtin", setOf("", "tavily", "exa"))
+        )
+    }
+
+    @Test
+    fun onlyKeyedProvidersNeedAKeyFromTheUser() {
+        listOf("zhipu", "bocha", "doubao", "metaso").forEach {
+            assertTrue(it, SearchProviders.needsKey(it))
+        }
         assertFalse(SearchProviders.needsKey("searxng"))
         assertFalse(SearchProviders.needsKey("custom"))
         assertFalse(SearchProviders.needsKey("builtin"))
     }
 
-    /** 设置页存来的后端名必须认得；不认得时容器会回落内置，不能让一次写错的配置把联网能力判死。 */
-    @Test
-    fun knownBackendsCoverTheFiveOffered() {
-        listOf("builtin", "zhipu", "bocha", "searxng", "custom").forEach {
-            assertTrue(it, SearchProviders.isKnown(it))
-        }
-        assertFalse(SearchProviders.isKnown("tavily"))
-    }
 
     @Test
     fun optionsAreNamespacedByBackend() {

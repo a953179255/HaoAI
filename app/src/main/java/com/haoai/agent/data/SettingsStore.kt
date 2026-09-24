@@ -201,7 +201,7 @@ data class AppSettings(
     /** 上次导出到设备外的时间（毫秒）。0 = 从未导出。 */
     val lastDataExportAt: Long = 0,
     /**
-     * 联网搜索主后端：`builtin`（内置免 key 引擎链）/ `zhipu` / `bocha` / `searxng` / `custom`。
+     * 联网搜索主后端（同一时间只生效一家）：见 `SearchProviders.CATALOG`。
      * 默认 builtin —— 装上就能联网，配 key 只是把结果质量换上来。
      */
     val searchBackend: String = "builtin",
@@ -211,8 +211,14 @@ data class AppSettings(
     val searchFallback: Boolean = true,
     /** 各家 API Key：backend id → Keystore 密文。明文不落盘，备份默认剔除该字段。 */
     val searchApiKeyCiphers: Map<String, String> = emptyMap(),
-    /** 非密钥配置，按 `后端.字段` 存（searxng.url / searxng.engines / custom.template …）。 */
+    /** 非密钥配置，按 `后端.字段` 存（searxng.url / doubao.mode / custom.template …）。 */
     val searchOptions: Map<String, String> = emptyMap(),
+    /**
+     * 各家「测试搜索」的最近一次结果：backend → `时间戳|耗时ms|条数`（失败记 `时间戳|0|-1`）。
+     * 「正在使用」那张卡要说"上次测试 4.9 秒 / 5 条"，就得跨页面留着——
+     * 只放内存里的话返回设置页再进来就空了，那张卡会退化成一句没有证据的自我表扬。
+     */
+    val searchTestResults: Map<String, String> = emptyMap(),
     /** 上次记忆固化时间与结果（健康度仪表盘展示）。 */
     val lastConsolidationAt: Long = 0,
     val lastConsolidationReport: String = "",
