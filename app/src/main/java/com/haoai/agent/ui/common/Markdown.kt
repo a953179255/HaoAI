@@ -268,7 +268,10 @@ private fun MdBlockView(
     textColor: Color
 ) {
     when (block) {
-        is MdBlock.Code -> CodeBlock(block.lang, block.code, block.closed, dark)
+        is MdBlock.Code ->
+            // html/svg 代码块 = 可渲染的视觉效果稿：自动内联渲染（效果/代码可切换）
+            if (block.lang.lowercase() in setOf("html", "htm", "svg")) HtmlArtifactBlock(block, dark)
+            else CodeBlock(block.lang, block.code, block.closed, dark)
         is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
         is MdBlock.Image -> ImageBlockView(block, dark)
         is MdBlock.Math -> FormulaBlock(block.latex, dark)
@@ -1099,6 +1102,94 @@ private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+// ===== HTML/SVG 效果稿内联渲染（lang=html/svg 代码块自动出效果图）=====
+
+/**
+ * html/svg 代码块 → 聊天内直接渲染效果图（Web 池复用，固定高度内部滚动）。
+ * 流式未闭合时先显示源码（避免 WebView 每 40ms 重载闪烁），闭合后自动出效果；
+ * 「查看代码 / 查看效果」随时切换。
+ */
+@Composable
+private fun HtmlArtifactBlock(block: MdBlock.Code, dark: Boolean) {
+    var showCode by remember(block.code) { mutableStateOf(false) }
+    Column {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "效果预览 · ${block.lang}",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (showCode) "查看效果" else "查看代码",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { showCode = !showCode }
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            )
+        }
+        if (showCode) {
+            CodeBlock(block.lang, block.code, block.closed, dark)
+        } else if (!block.closed) {
+            Surface(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "渲染中…",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            Surface(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(420.dp),
+                    factory = { ctx ->
+                        WebViewPool.acquire(ctx).apply {
+                            // 效果稿默认白底：设计稿假定浅色页面，避免深色聊天底透出
+                            setBackgroundColor(android.graphics.Color.WHITE)
+                        }
+                    },
+                    update = { wv ->
+                        if (wv.tag != block.code) {
+                            wv.tag = block.code
+                            wv.loadDataWithBaseURL(null, block.code, "text/html", "utf-8", null)
+                        }
+                    },
+                    onRelease = { wv ->
+                        // 归还前恢复透明底，避免污染池内后续 KaTeX/Mermaid 用途
+                        wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        WebViewPool.release(wv)
+                    }
+                )
+            }
+        }
     }
 }
 
