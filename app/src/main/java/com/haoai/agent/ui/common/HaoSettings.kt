@@ -433,42 +433,6 @@ fun HaoEmptyState(
     }
 }
 
-// ────────────────────────────── 壁纸压暗 ──────────────────────────────
-
-/**
- * 壁纸页面的**内容压暗层**（"方案 4"落到页面上）。
- *
- * 放在壁纸 Image 之后、内容之前。为什么必须有它：光把卡片提到 0.82 只解决了
- * "卡片内部"，而这些是画在**卡片之外**、直接压着壁纸的：
- * 大数字标题（用量页的 2.71M）、段落标题、说明段落、分段控件、页顶计数 …
- * 一张花壁纸会让它们全部失去对比度，分组之间的间隙也整片噪。
- *
- * 压暗后：整页安静下来（间隙不再抢戏）、直接压在壁纸上的文字恢复对比度，
- * 卡片也不必做到近乎不透明（保住玻璃质感）。壁纸仍然看得出是什么。
- *
- * @param enabled 一般传 `wallpaper != null`（本页确实铺着壁纸时）
- */
-@Composable
-fun HaoWallpaperScrim(
-    enabled: Boolean,
-    modifier: Modifier = Modifier
-) {
-    if (!enabled) return
-    val themeDark = com.haoai.agent.ui.theme.haoIsDark()
-    // ⚠️ 只在"壁纸明暗与主题冲突"时才压暗：
-    // 浅色主题 + 浅色壁纸（深色文字压浅底）→ 本来就可读，**不加遮罩**，
-    // 否则整页会被蒙成一片白、壁纸失去意义（用户实测反馈"太白了"）。
-    // 冲突时才需要：浅色主题 + 暗壁纸 → 补白；深色主题 + 亮壁纸 → 压黑。
-    val wpDark = com.haoai.agent.ui.theme.LocalWallpaperDark.current
-    if (wpDark == null || wpDark == themeDark) return
-    Box(
-        modifier.background(
-            if (themeDark) Color.Black.copy(alpha = 0.5f)
-            else Color.White.copy(alpha = 0.5f)
-        )
-    )
-}
-
 // ────────────────────────────── 页面说明条 ──────────────────────────────
 
 /**

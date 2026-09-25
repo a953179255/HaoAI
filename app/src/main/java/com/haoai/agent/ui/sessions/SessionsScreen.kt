@@ -174,8 +174,6 @@ fun SessionsScreen(
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     modifier = Modifier.matchParentSize()
                 )
-                // 壁纸压暗层：卡片之外直接压着壁纸的内容靠它恢复对比度
-                com.haoai.agent.ui.common.HaoWallpaperScrim(wallpaper != null, Modifier.matchParentSize())
             }
         }
     Column(
