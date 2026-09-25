@@ -804,11 +804,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             )
         }
         if (!settings.onboarded) {
-            OnboardingGlass(
-                backdrop = backdrop,
-                settingsVm = settingsVm,
-                onSave = { name, soul, perm -> chatVm.completeOnboarding(name, soul, perm) }
-            )
+            // 首启引导也走横屏内容列（s=-1：不命中浏览器豁免），5 步卡片不会被 873dp 拉开
+            LandscapeWrap(s = -1) {
+                OnboardingGlass(
+                    backdrop = backdrop,
+                    settingsVm = settingsVm,
+                    onSave = { name, soul, perm -> chatVm.completeOnboarding(name, soul, perm) }
+                )
+            }
         } else {
             // 页面切换过渡（slide + scale + fade，有纵深感）：
             // push——新页全屏滑入；旧页缩小(1→0.92)+变暗淡出沉底（不是全 0.7，
