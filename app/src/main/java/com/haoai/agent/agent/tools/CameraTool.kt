@@ -74,7 +74,25 @@ class CameraTool : Tool {
                 }
             }
             if (out.exists() && out.length() > 0) {
-                ToolResult("已拍照：${out.absolutePath}（${out.length() / 1024}KB）")
+                // 采样压缩出 data URL 回显聊天（原图路径仍返回，供 read/shell 处理）
+                val dataUrl = runCatching {
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeFile(out.absolutePath, bounds)
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1280) sample *= 2
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                    val bmp = android.graphics.BitmapFactory.decodeFile(out.absolutePath, opts)
+                        ?: return@runCatching null
+                    val bos = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
+                    bmp.recycle()
+                    "data:image/jpeg;base64," +
+                        android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+                }.getOrNull()
+                ToolResult(
+                    "已拍照：${out.absolutePath}（${out.length() / 1024}KB）",
+                    imageDataUrl = dataUrl
+                )
             } else {
                 ToolResult("拍照已取消或未生成照片", true)
             }

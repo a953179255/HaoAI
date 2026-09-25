@@ -114,6 +114,11 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -3891,6 +3896,59 @@ private fun chatBubbleAlphas(): Pair<Float, Float> {
     return (0.14f + 0.79f * t) to (0.45f + 0.52f * t)
 }
 
+// ── data URL 图片缩略图（composer 附件预览 / 用户已发气泡共用）──
+
+/** 解码缓存：key=dataUrl 哈希。附件数据 ≤1024px 采样，单张位图 ~2-4MB，容量 6 张够用。 */
+private val dataUrlBmpCache = android.util.LruCache<String, ImageBitmap>(6)
+
+@Composable
+private fun DataUrlThumb(
+    dataUrl: String,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(10.dp),
+    contentScale: ContentScale = ContentScale.Crop
+) {
+    val key = remember(dataUrl) { dataUrl.hashCode().toString() }
+    var bmp by remember(dataUrl) { mutableStateOf(dataUrlBmpCache.get(key)) }
+    LaunchedEffect(dataUrl) {
+        if (bmp != null) return@LaunchedEffect
+        val decoded = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = android.util.Base64.decode(
+                    dataUrl.substringAfter("base64,", ""), android.util.Base64.NO_WRAP
+                )
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+        if (decoded != null) {
+            dataUrlBmpCache.put(key, decoded)
+            bmp = decoded
+        }
+    }
+    if (bmp != null) {
+        Image(
+            bmp!!,
+            contentDescription = "图片",
+            modifier = modifier.clip(shape),
+            contentScale = contentScale
+        )
+    } else {
+        Box(
+            modifier
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
 @Composable
 private fun UserBubble(
     row: ChatRow,
@@ -3905,6 +3963,17 @@ private fun UserBubble(
             .padding(horizontal = 14.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.End
     ) {
+        // 用户发的图片附件：气泡上方原比例展示（此前只存不显）
+        row.imageData?.let { dataUrl ->
+            DataUrlThumb(
+                dataUrl,
+                Modifier
+                    .widthIn(max = 260.dp)
+                    .heightIn(max = 280.dp),
+                shape = RoundedCornerShape(14.dp),
+                contentScale = ContentScale.Fit
+            )
+        }
         Surface(
             color = MaterialTheme.colorScheme.primary.copy(alpha = chatBubbleAlphas().first),
             shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
@@ -4370,14 +4439,14 @@ private fun ComposerBar(
             }
             if (pendingImage != null) {
                 Row(
-                    Modifier.padding(horizontal = 18.dp, vertical = 2.dp),
+                    Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Filled.Image,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                    // 附件预览缩略图（此前只显示"已附加图片"文字，用户看不到选了什么）
+                    DataUrlThumb(
+                        pendingImage,
+                        Modifier.size(52.dp),
+                        shape = RoundedCornerShape(12.dp)
                     )
                     Text(
                         "已附加图片",
@@ -4385,7 +4454,7 @@ private fun ComposerBar(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(start = 6.dp),
+                            .padding(start = 10.dp),
                         maxLines = 1
                     )
                     IconButton(onClick = onClearImage, modifier = Modifier.size(30.dp)) {

@@ -14,6 +14,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,6 +54,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -60,6 +64,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -125,6 +130,12 @@ sealed class MdBlock {
 
     /** v2：水平分隔线 ---。 */
     data object Rule : MdBlock()
+
+    /**
+     * 独立成段的图片（![](url)）：网络 http(s) 或本地文件路径，渲染端异步解码。
+     * 混在文字行里的图片仍走行内占位（🖼 alt），不在此列。
+     */
+    data class Image(val alt: String, val url: String) : MdBlock()
 }
 
 /** 对齐方式：0 左 / 1 中 / 2 右。 */
@@ -259,6 +270,7 @@ private fun MdBlockView(
     when (block) {
         is MdBlock.Code -> CodeBlock(block.lang, block.code, block.closed, dark)
         is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
+        is MdBlock.Image -> ImageBlockView(block, dark)
         is MdBlock.Math -> FormulaBlock(block.latex, dark)
         is MdBlock.Table -> TableBlock(block)
         is MdBlock.TableSkeleton -> TableSkeletonBlock(block.header)
@@ -989,6 +1001,105 @@ private fun TableSkeletonBlock(header: List<String>) {
 @Composable
 private fun FormulaBlock(latex: String, dark: Boolean) {
     MathBlockNative(latex, dark)
+}
+
+// ===== Markdown 图片块（![](url)：http(s)/本地文件异步解码，LruCache；失败回落 alt 占位）=====
+
+private val mdImageCache = android.util.LruCache<String, ImageBitmap>(12)
+private val mdImageClient by lazy {
+    okhttp3.OkHttpClient.Builder()
+        .connectTimeout(java.time.Duration.ofSeconds(10))
+        .readTimeout(java.time.Duration.ofSeconds(15))
+        .build()
+}
+
+/** http(s) 下载或本地文件读取 → 采样解码（长边 ≤1080）。任何一步失败返回 null。 */
+private fun decodeMarkdownImage(url: String): ImageBitmap? =
+    runCatching {
+        val bytes = when {
+            url.startsWith("http://") || url.startsWith("https://") ->
+                mdImageClient.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching null
+                    resp.body?.bytes()
+                }
+            url.startsWith("/") -> java.io.File(url).takeIf { it.canRead() }?.readBytes()
+            else -> null
+        } ?: return@runCatching null
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1080) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+    }.onFailure {
+        android.util.Log.w("MdImage", "decode fail url=$url: ${it.javaClass.simpleName}: ${it.message}")
+    }.getOrNull()
+
+@Composable
+private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
+    val key = remember(block.url) { block.url.hashCode().toString() }
+    var bmp by remember(block.url) { mutableStateOf(mdImageCache.get(key)) }
+    var failed by remember(block.url) { mutableStateOf(false) }
+    LaunchedEffect(block.url) {
+        if (bmp != null) return@LaunchedEffect
+        val loaded = withContext(Dispatchers.IO) { decodeMarkdownImage(block.url) }
+        if (loaded != null) {
+            mdImageCache.put(key, loaded)
+            bmp = loaded
+        } else {
+            failed = true
+        }
+    }
+    if (bmp != null) {
+        Surface(
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 80.dp, max = 320.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        bmp!!,
+                        contentDescription = block.alt.ifBlank { "图片" },
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                if (block.alt.isNotBlank()) {
+                    Text(
+                        block.alt,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
+                    )
+                }
+            }
+        }
+    } else if (!failed) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 90.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp
+            )
+        }
+    } else {
+        Text(
+            "🖼 " + block.alt.ifBlank { "图片（加载失败）" },
+            fontStyle = FontStyle.Italic,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 /** Mermaid 图表块：资产就绪走 WebView（渲染失败降级显示源码），未就绪同上。 */

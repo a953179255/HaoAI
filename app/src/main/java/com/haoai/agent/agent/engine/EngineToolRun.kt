@@ -331,13 +331,13 @@ internal suspend fun AgentEngine.finishCall(
     if (!finalResult.isError && call.name in TAINT_TOOLS && finalResult.content.isNotBlank()) {
         turnTainted = true
     }
-    // 图像注入通路（4.2 browser_screenshot）：工具结果带图时追加一条 user 图像消息，
+    // 图像注入通路（browser_screenshot/camera/vscreen 等）：工具结果带图时追加一条 user 图像消息，
     // 复用既有 imageData → image_url 转换，OpenAI/Anthropic 两协议均可消费
     finalResult.imageDataUrl?.let { img ->
         appendAndNotify(
             ChatMessage(
                 role = ChatMessage.ROLE_USER,
-                content = "[${call.name}] 页面截图（当前视觉状态，供图像分析）",
+                content = "[${call.name}] 图片（当前视觉状态，供图像分析）",
                 imageData = img
             ),
             onEvent

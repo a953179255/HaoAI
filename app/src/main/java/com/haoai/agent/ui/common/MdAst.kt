@@ -92,7 +92,15 @@ private fun mapBlock(node: ASTNode, src: String): MdBlock? = when (node.type) {
                 closed = true
             )
         } else {
-            MdBlock.Paragraph(mapInlines(node.children, src))
+            val inlines = mapInlines(node.children, src)
+            // 独立成段的图片（![](url)）提升为图片块真渲染；混在文字里的仍走行内占位
+            val visible = inlines.filterNot { it is MdInline.Run && it.text.isBlank() }
+            if (visible.size == 1 && visible[0] is MdInline.Image) {
+                val img = visible[0] as MdInline.Image
+                MdBlock.Image(img.alt, img.url)
+            } else {
+                MdBlock.Paragraph(inlines)
+            }
         }
     }
     MarkdownElementTypes.ATX_1 -> heading(node, src, 1)
@@ -283,9 +291,17 @@ private fun mapInlinesFiltered(
                 emit(MdInline.Link(listOf(MdInline.Run(url)), url))
             }
             MarkdownElementTypes.IMAGE -> {
-                val url = c.children.firstOrNull { it.type == MarkdownElementTypes.LINK_DESTINATION }
-                    ?.let { src.substring(it.startOffset, it.endOffset) }.orEmpty()
-                val alt = c.children.firstOrNull { it.type == MarkdownElementTypes.LINK_TEXT }
+                // fork 两种结构：![alt](url) 的 LINK_DESTINATION 是 IMAGE 直接子节点；
+                // ![](url)（空 alt）会把 [](url) 整个包成 INLINE_LINK，目的地要下钻一层取
+                fun destOf(n: org.intellij.markdown.ast.ASTNode): String? =
+                    n.children.firstOrNull { it.type == MarkdownElementTypes.LINK_DESTINATION }
+                        ?.let { src.substring(it.startOffset, it.endOffset) }
+                val link = c.children.firstOrNull { it.type == MarkdownElementTypes.INLINE_LINK }
+                val url = destOf(c) ?: link?.let { destOf(it) } ?: ""
+                val alt = listOfNotNull(
+                    c.children.firstOrNull { it.type == MarkdownElementTypes.LINK_TEXT },
+                    link?.children?.firstOrNull { it.type == MarkdownElementTypes.LINK_TEXT }
+                ).firstOrNull()
                     ?.let { it.children.joinToString("") { n -> src.substring(n.startOffset, n.endOffset) } }
                     .orEmpty()
                 emit(MdInline.Image(alt, url))
