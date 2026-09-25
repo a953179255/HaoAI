@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -1223,16 +1224,18 @@ private fun OnboardingGlass(
     Box(
         Modifier
             .fillMaxSize()
+            .statusBarsPadding()
             .imePadding(),
-        contentAlignment = Alignment.Center
+        // v3③：顶对齐 + 固定边距——进度条/「第 N 步」在任何一步都停在同一像素，
+        // 不再随各步内容高度上下浮动（原整体垂直居中是跳动根因）
+        contentAlignment = Alignment.TopCenter
     ) {
         // 首启引导 v2：5 步（欢迎 → 性格 → 权限 → 大脑 → 完成），液态玻璃卡悬浮在壁纸之上
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 22.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(horizontal = 22.dp, vertical = 18.dp),
             radius = 30.dp,
             surfaceAlpha = 0.36f
         ) {
@@ -1286,8 +1289,13 @@ private fun OnboardingGlass(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
 
-                Spacer(Modifier.size(16.dp))
-
+                // 内容滚动列（进度条与底栏固定在外，只有这层滚）
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                Spacer(Modifier.size(12.dp))
                 when (step) {
                     // ═════════ 步 0：见面礼（起名）═════════
                     0 -> {
@@ -1327,7 +1335,7 @@ private fun OnboardingGlass(
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 6.dp)
                         )
-                        // 卡片标题只写风格+性向（如「元气甜系（女声向）」），不出现内部代号——
+                        // 卡片标题只写风格+性向（如「元气甜系（女性向）」），不出现内部代号——
                         // 名字步 0 已定，性格步只呈现性格（2026-09-26 用户定稿）
                         val renderCard: @Composable (String?, String, String, Boolean) -> Unit =
                             { key, title, sub, isCustom ->
@@ -1375,20 +1383,20 @@ private fun OnboardingGlass(
                                     )
                                 }
                             }
-                        val gridP = com.haoai.agent.ui.onboarding.PersonaPresets.gridPresets
+                        // v3①：6 格 2×3——「自定义」并入同一 chunked 网格（第 6 格=极简执行右侧），
+                        // 不再单独占一行
+                        val cells: List<Triple<String?, String, String>> =
+                            com.haoai.agent.ui.onboarding.PersonaPresets.gridPresets
+                                .map { Triple(it.key, it.tag, it.tagline) } +
+                                Triple(null, "自定义", "自己写或🎲随机抽一个")
                         Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            gridP.chunked(2).forEach { rowCards ->
+                            cells.chunked(2).forEach { rowCards ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    rowCards.forEach { p ->
-                                        renderCard(p.key, p.tag, p.tagline, false)
+                                    rowCards.forEach { (key, title, sub) ->
+                                        renderCard(key, title, sub, key == null)
                                     }
                                     if (rowCards.size == 1) Spacer(Modifier.weight(1f))
                                 }
-                            }
-                            // 自定义卡：与预设卡同渲染函数（外观天然一致）
-                            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                renderCard(null, "自定义", "自己写或🎲随机抽一个", true)
-                                Spacer(Modifier.weight(1f))
                             }
                         }
                         // 预览（选了预设才出现）：全文 + 微调入口
@@ -1408,7 +1416,9 @@ private fun OnboardingGlass(
                                         tunedText ?: p.fullText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                                        modifier = Modifier.heightIn(max = 170.dp).verticalScroll(rememberScrollState())
+                                        // v3④：去掉写死的 170dp 上限——随内容自然撑高（短人设
+                                        // 不再截断、空余位置全利用），整页占满由外层滚动接管
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                     if (tuning) {
                                         androidx.compose.foundation.text.BasicTextField(
@@ -1866,12 +1876,14 @@ private fun OnboardingGlass(
                     }
                 }
 
-                // ── 底部操作栏：上一步 / 主按钮 ──
+                } // end content scroll Column
+
+                // ── 底部操作栏：上一步 / 主按钮（固定底栏 · 左右居中——v3⑤，含第 5 步「开始使用」）──
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(top = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (step > 0) {
