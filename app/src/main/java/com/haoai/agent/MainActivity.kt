@@ -10,13 +10,24 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -792,7 +803,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         if (!settings.onboarded) {
             OnboardingGlass(
                 backdrop = backdrop,
-                onSave = { name, soul -> chatVm.completeOnboarding(name, soul) }
+                settingsVm = settingsVm,
+                onSave = { name, soul, perm -> chatVm.completeOnboarding(name, soul, perm) }
             )
         } else {
             // 页面切换过渡（slide + scale + fade，有纵深感）：
@@ -1142,98 +1154,771 @@ private fun TransitionScrim(level: Float, color: Color, modifier: Modifier = Mod
 @Composable
 private fun OnboardingGlass(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    onSave: (String, String) -> Unit
+    settingsVm: SettingsViewModel,
+    onSave: (String, String, com.haoai.agent.agent.policy.PermissionMode) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var soul by remember { mutableStateOf("") }
     var step by remember { mutableIntStateOf(0) }
-    val canConfirm = step == 1 || name.isNotBlank()
+    // ── 步 0：起名 ──
+    var name by remember { mutableStateOf("") }
+    // ── 步 1：性格（预设人设 5+1，可微调）──
+    var personaKey by remember { mutableStateOf<String?>(null) }
+    var personaCustom by remember { mutableStateOf(false) }
+    var customText by remember { mutableStateOf("") }
+    var tunedText by remember { mutableStateOf<String?>(null) }
+    var tuning by remember { mutableStateOf(false) }
+    // ── 步 2：权限模式（推荐全自动）──
+    var perm by remember { mutableStateOf(com.haoai.agent.agent.policy.PermissionMode.YOLO) }
+    // ── 步 3：接大脑（内嵌迷你供应商向导，复用 SettingsViewModel 的 draft 管线）──
+    var brainStage by remember { mutableIntStateOf(0) }
+    var brainPicked by remember { mutableStateOf<com.haoai.agent.ui.ProviderPreset?>(null) }
+    var brainSkipped by remember { mutableStateOf(false) }
+    var brainEcho by remember { mutableStateOf("") }
+    var manualModel by remember { mutableStateOf("") }
+    val draft = settingsVm.draft
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        // 首启引导：液态玻璃卡片悬浮在壁纸之上（"出生仪式"）
+    fun soulText(): String {
+        if (personaCustom) return customText.trim()
+        val p = com.haoai.agent.ui.onboarding.PersonaPresets.all.firstOrNull { it.key == personaKey }
+            ?: return ""
+        return tunedText ?: p.fullText
+    }
+
+    fun soulEcho(): String = when {
+        personaCustom -> "自定义" + if (customText.isNotBlank()) " · " + customText.take(12) + "…" else ""
+        tunedText != null -> (personaKey ?: "") + "（已微调）"
+        personaKey != null -> personaKey + " · " + com.haoai.agent.ui.onboarding.PersonaPresets.all
+            .firstOrNull { it.key == personaKey }?.tag.orEmpty()
+        else -> "跳过了，之后可配"
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .imePadding(),
+        contentAlignment = Alignment.Center
+    ) {
+        // 首启引导 v2：5 步（欢迎 → 性格 → 权限 → 大脑 → 完成），液态玻璃卡悬浮在壁纸之上
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 22.dp),
+                .padding(horizontal = 22.dp)
+                .verticalScroll(rememberScrollState()),
             radius = 30.dp,
             surfaceAlpha = 0.36f
         ) {
-            Column(Modifier.padding(horizontal = 22.dp, vertical = 26.dp)) {
-                Text(
-                    if (step == 0) "见面礼：给我起个名字" else "你想让我是什么性格？",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    if (step == 0)
-                        "我是你的手机智能助理。你想叫我什么？（由你来定，我不给自己起名）"
-                    else
-                        "用一句话形容你希望我的做事风格（可跳过）。之后可在设置里修改。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-                OutlinedTextField(
-                    value = if (step == 0) name else soul,
-                    onValueChange = { if (step == 0) name = it else soul = it },
-                    label = {
-                        Text(if (step == 0) "名字" else "性格 / 风格，如：简洁高效，少废话")
-                    },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = MaterialTheme.colorScheme.onBackground,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
-                        focusedContainerColor = Color.White.copy(alpha = 0.32f),
-                        unfocusedContainerColor = Color.White.copy(alpha = 0.2f),
-                        focusedLabelColor = MaterialTheme.colorScheme.primary,
-                        unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp)
-                )
+            Column(Modifier.padding(horizontal = 22.dp, vertical = 22.dp)) {
+                // ── 时间线 ──
+                val tlLabels = listOf("欢迎", "性格", "权限", "大脑", "完成")
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    tlLabels.forEachIndexed { i, label ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                Modifier
+                                    .size(22.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(
+                                        when {
+                                            i == step -> MaterialTheme.colorScheme.primary
+                                            i < step -> MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                                            else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    if (i < step) "✓" else "${i + 1}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (i <= step) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                                )
+                            }
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (i == step) MaterialTheme.colorScheme.onBackground
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            )
+                        }
+                        if (i < tlLabels.lastIndex) {
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .height(2.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
+                                    )
+                                    .align(Alignment.CenterVertically)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.size(16.dp))
+
+                when (step) {
+                    // ═════════ 步 0：见面礼（起名）═════════
+                    0 -> {
+                        Text(
+                            "见面礼：给我起个名字",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            "我是你的手机智能助理——能帮你设闹钟、查资料、操作手机、写效果稿。" +
+                                "你想叫我什么？（由你来定，我不给自己起名）",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        com.haoai.agent.ui.common.CompactGlassField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = "名字",
+                            placeholder = "如：小七、豆豆、阿澄、团子",
+                            modifier = Modifier.padding(top = 14.dp)
+                        )
+                    }
+
+                    // ═════════ 步 1：性格（预设人设，可微调/自定义）═════════
+                    1 -> {
+                        Text(
+                            "你想让我是什么性格？",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            "挑一个预设人设（点开能看完整人设：性格 / 说话 / 底线），也可以自己写。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        // 5+1 卡片：两列网格
+                        val personas = com.haoai.agent.ui.onboarding.PersonaPresets.all
+                        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            personas.chunked(2).forEach { rowCards ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                    rowCards.forEach { p ->
+                                        val selected = personaKey == p.key && !personaCustom
+                                        Column(
+                                            Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(14.dp))
+                                                .background(
+                                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                                                )
+                                                .border(
+                                                    1.dp,
+                                                    if (selected) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
+                                                    RoundedCornerShape(14.dp)
+                                                )
+                                                .clickable {
+                                                    personaCustom = false
+                                                    tunedText = null
+                                                    tuning = false
+                                                    personaKey = p.key
+                                                }
+                                                .padding(horizontal = 11.dp, vertical = 9.dp)
+                                        ) {
+                                            Text(
+                                                p.key,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onBackground
+                                            )
+                                            Text(
+                                                p.tagline,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                                maxLines = 2,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (rowCards.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            // 自定义卡
+                            val customSel = personaCustom
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        if (customSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (customSel) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
+                                        RoundedCornerShape(14.dp)
+                                    )
+                                    .clickable {
+                                        personaKey = null
+                                        tunedText = null
+                                        tuning = false
+                                        personaCustom = true
+                                    }
+                                    .padding(horizontal = 11.dp, vertical = 9.dp)
+                            ) {
+                                Text(
+                                    "自定义——想什么样写什么样",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
+                        }
+                        // 预览（选了预设才出现）：全文 + 微调入口
+                        if (!personaCustom && personaKey != null) {
+                            val p = com.haoai.agent.ui.onboarding.PersonaPresets.all
+                                .firstOrNull { it.key == personaKey }
+                            if (p != null) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 9.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        tunedText ?: p.fullText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                        modifier = Modifier.heightIn(max = 170.dp).verticalScroll(rememberScrollState())
+                                    )
+                                    if (tuning) {
+                                        androidx.compose.foundation.text.BasicTextField(
+                                            value = tunedText ?: p.fullText,
+                                            onValueChange = { tunedText = it },
+                                            textStyle = MaterialTheme.typography.labelSmall.copy(
+                                                color = MaterialTheme.colorScheme.onBackground
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 100.dp)
+                                                .padding(top = 6.dp)
+                                        )
+                                        Text(
+                                            "✓ 用这一版",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable { tuning = false }
+                                                .padding(top = 6.dp)
+                                        )
+                                    } else {
+                                        Text(
+                                            if (tunedText != null) "✓ 已微调 · ✏️ 再改改" else "✏️ 在此人设基础上微调",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable { tuning = true }
+                                                .padding(top = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        // 自定义输入（只在选了自定义卡时出现）
+                        if (personaCustom) {
+                            com.haoai.agent.ui.common.CompactGlassField(
+                                value = customText,
+                                onValueChange = { customText = it },
+                                label = "描述你想要的人设",
+                                placeholder = "如：上班时间专业一点，晚上聊天随意一点",
+                                modifier = Modifier.padding(top = 9.dp)
+                            )
+                        }
+                    }
+
+                    // ═════════ 步 2：权限模式 ═════════
+                    2 -> {
+                        Text(
+                            "权限怎么管？",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            "决定我调用工具时要不要先问你。多数人用下来全自动最顺手——选一个，随时可改。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        val permOptions = listOf(
+                            Triple(
+                                com.haoai.agent.agent.policy.PermissionMode.ALWAYS_ASK,
+                                "全部询问", "每个工具调用都弹窗确认 · 最稳但最吵"
+                            ),
+                            Triple(
+                                com.haoai.agent.agent.policy.PermissionMode.ASK_WRITES,
+                                "写入时询问", "读不问，写入/执行才问 · 应用默认"
+                            ),
+                            Triple(
+                                com.haoai.agent.agent.policy.PermissionMode.YOLO,
+                                "全自动", "直接执行不弹窗，后台跑任务不中断 · 推荐 · 最顺手"
+                            )
+                        )
+                        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            permOptions.forEach { (mode, label, desc) ->
+                                val selected = perm == mode
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
+                                            RoundedCornerShape(14.dp)
+                                        )
+                                        .clickable { perm = mode }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(17.dp)
+                                            .clip(androidx.compose.foundation.shape.CircleShape)
+                                            .border(
+                                                2.dp,
+                                                if (selected) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+                                                androidx.compose.foundation.shape.CircleShape
+                                            )
+                                    ) {
+                                        if (selected) {
+                                            Box(
+                                                Modifier
+                                                    .fillMaxSize()
+                                                    .padding(3.dp)
+                                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                                    .background(MaterialTheme.colorScheme.primary)
+                                            )
+                                        }
+                                    }
+                                    Column {
+                                        Text(
+                                            label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onBackground
+                                        )
+                                        Text(
+                                            desc,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            "随时可在 设置 → 安全与权限 里改 · 闹钟/相机/定位等系统能力仍按需弹系统授权 · " +
+                                "写入保留快照可回滚",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+
+                    // ═════════ 步 3：接大脑（迷你供应商向导，可跳过）═════════
+                    3 -> {
+                        LaunchedEffect(Unit) {
+                            if (settingsVm.draft == null) settingsVm.startNewDraft()
+                        }
+                        Text(
+                            "接上一个聪明的大脑",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            "选一家你有 API Key 的服务商，贴上 Key 就能开聊。没有也没关系，随时在「设置 → 模型大脑」里补。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        when (brainStage) {
+                            // 选服务商（只用推荐短列表——引导要短）
+                            0 -> {
+                                Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                    com.haoai.agent.ui.ProviderPresets.onboardingShortlist.forEach { p ->
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(14.dp))
+                                                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
+                                                .border(
+                                                    1.dp,
+                                                    if (brainPicked?.name == p.name)
+                                                        MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
+                                                    RoundedCornerShape(14.dp)
+                                                )
+                                                .clickable {
+                                                    brainPicked = p
+                                                    settingsVm.applyPreset(p)
+                                                    brainStage = 1
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            com.haoai.agent.ui.settings.ProviderLogoAvatar(p)
+                                            Column {
+                                                Text(
+                                                    p.name,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onBackground
+                                                )
+                                                Text(
+                                                    p.sub,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 连接：URL（预填）+ Key + 测试
+                            1 -> {
+                                if (draft != null) {
+                                    com.haoai.agent.ui.common.CompactGlassField(
+                                        value = draft.baseUrl,
+                                        onValueChange = { v -> settingsVm.updateDraft(draft.copy(baseUrl = v)) },
+                                        label = "Base URL",
+                                        placeholder = "https://api.deepseek.com/v1",
+                                        modifier = Modifier.padding(top = 10.dp)
+                                    )
+                                    com.haoai.agent.ui.common.CompactGlassField(
+                                        value = draft.apiKeyPlain,
+                                        onValueChange = { v -> settingsVm.updateDraft(draft.copy(apiKeyPlain = v)) },
+                                        label = "API Key",
+                                        placeholder = "sk-…",
+                                        modifier = Modifier.padding(top = 7.dp)
+                                    )
+                                    Row(
+                                        Modifier.padding(top = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        when {
+                                            settingsVm.testing -> Text(
+                                                "测试中…",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                            )
+                                            settingsVm.testResult != null -> {
+                                                val (ok, msg) = settingsVm.testResult!!
+                                                Text(
+                                                    (if (ok) "✓ " else "✕ ") + msg.take(18),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = if (ok) Color(0xFF4CD6A2) else MaterialTheme.colorScheme.error
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            if (settingsVm.testing) "重新测试" else "测试连接",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (settingsVm.testing) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                            else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .clickable(enabled = !settingsVm.testing && draft.model.isNotBlank()) {
+                                                    settingsVm.testDraftConnection()
+                                                }
+                                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // 选模型：自动拉取 → 单选默认；拉不到手填
+                            else -> {
+                                LaunchedEffect(Unit) {
+                                    if (settingsVm.modelChoices == null && !settingsVm.fetchingModels &&
+                                        draft != null && draft.protocol != "anthropic" && draft.baseUrl.isNotBlank()
+                                    ) settingsVm.fetchModelList()
+                                }
+                                if (draft?.protocol == "anthropic") {
+                                    Text(
+                                        "原生协议不支持拉取列表，直接在下面手填模型 ID",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                        modifier = Modifier.padding(top = 10.dp)
+                                    )
+                                } else if (settingsVm.fetchingModels) {
+                                    Text(
+                                        "⇣ 拉取模型列表…",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                        modifier = Modifier.padding(top = 10.dp)
+                                    )
+                                }
+                                val choices = settingsVm.modelChoices
+                                if (choices != null && choices.isNotEmpty()) {
+                                    Column(
+                                        Modifier
+                                            .padding(top = 10.dp)
+                                            .heightIn(max = 220.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        choices.take(12).forEach { id ->
+                                            val selected = draft?.model?.trim() == id
+                                            Row(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .background(
+                                                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
+                                                    )
+                                                    .clickable { settingsVm.pickModel(id) }
+                                                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Box(
+                                                    Modifier
+                                                        .size(16.dp)
+                                                        .clip(androidx.compose.foundation.shape.CircleShape)
+                                                        .border(
+                                                            2.dp,
+                                                            if (selected) MaterialTheme.colorScheme.primary
+                                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                                                            androidx.compose.foundation.shape.CircleShape
+                                                        )
+                                                )
+                                                Spacer(Modifier.size(9.dp))
+                                                Text(
+                                                    id,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onBackground,
+                                                    maxLines = 1,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                com.haoai.agent.ui.common.CompactGlassField(
+                                    value = manualModel,
+                                    onValueChange = { manualModel = it },
+                                    label = "或手动输入模型 ID",
+                                    placeholder = "如 deepseek-chat",
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // ═════════ 步 4：完成清单 ═════════
+                    else -> {
+                        Text(
+                            "一切就绪 🎉",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            "这是你刚配好的东西，以后都在设置里可以改：",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                            onboardingDoneRow("✓", "名字：${name.ifBlank { "小七" }}", "设置 → 通用 里可改")
+                            onboardingDoneRow("✓", "性格：${soulEcho()}", "设置 → 通用 可换人设")
+                            onboardingDoneRow(
+                                "✓", "权限：" + when (perm) {
+                                    com.haoai.agent.agent.policy.PermissionMode.YOLO -> "全自动"
+                                    com.haoai.agent.agent.policy.PermissionMode.ASK_WRITES -> "写入时询问"
+                                    else -> "全部询问"
+                                },
+                                "设置 → 安全与权限 可改 · 写入保留快照可回滚"
+                            )
+                            onboardingDoneRow(
+                                if (brainSkipped) "!" else "✓",
+                                if (brainSkipped) "大脑：未配置" else "大脑：$brainEcho",
+                                if (brainSkipped) "设置 → 模型大脑 随时接入" else "设置 → 模型大脑 可加更多供应商"
+                            )
+                            onboardingDoneRow("·", "通知保活：跑长任务时会请求一次", "后台执行需要常驻通知，建议允许")
+                            onboardingDoneRow("·", "进阶：MCP 工具 / 技能 / 定时任务 / 端侧推理", "不着急，想玩的时候再看")
+                        }
+                    }
+                }
+
+                // ── 底部操作栏：上一步 / 主按钮 ──
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(top = 20.dp),
+                        .padding(top = 18.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (step == 1) {
-                        TextButton(onClick = { onSave(name, "") }) {
-                            Text("跳过", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f))
-                        }
-                    }
-                    LiquidGlassButton(
-                        onClick = {
-                            if (step == 0) {
-                                if (name.isNotBlank()) step = 1
-                            } else {
-                                onSave(name, soul)
-                            }
-                        },
-                        backdrop = backdrop,
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
-                        enabled = canConfirm,
-                        surfaceColor = MaterialTheme.colorScheme.primary.copy(
-                            alpha = if (canConfirm) 0.85f else 0.25f
-                        )
-                    ) {
+                    if (step > 0) {
                         Text(
-                            if (step == 0) "下一步" else "开始使用",
-                            color = if (canConfirm) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                            "‹ 上一步",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .clickable {
+                                    if (step == 3 && brainStage > 0) brainStage--
+                                    else if (step == 3) {
+                                        settingsVm.cancelDraft()
+                                        step = 2
+                                    } else step--
+                                }
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        )
+                    }
+                    when (step) {
+                        0 -> onboardingPrimaryButton(
+                            backdrop = backdrop,
+                            text = "下一步",
+                            enabled = name.isNotBlank(),
+                            onClick = { if (name.isNotBlank()) step = 1 }
+                        )
+                        1 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 2 }
+                        2 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 3 }
+                        3 -> {
+                            if (brainStage == 0) {
+                                Text(
+                                    "稍后再配 →",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .clickable {
+                                            brainSkipped = true
+                                            settingsVm.cancelDraft()
+                                            step = 4
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                                )
+                            }
+                            if (brainStage == 0) {
+                                onboardingPrimaryButton(
+                                    backdrop = backdrop,
+                                    text = "下一步",
+                                    enabled = brainPicked != null,
+                                    onClick = { }
+                                )
+                            } else if (brainStage == 1) {
+                                onboardingPrimaryButton(
+                                    backdrop = backdrop,
+                                    text = "下一步",
+                                    enabled = draft != null && draft.baseUrl.isNotBlank(),
+                                    onClick = {
+                                        brainStage = 2
+                                    }
+                                )
+                            } else {
+                                onboardingPrimaryButton(
+                                    backdrop = backdrop,
+                                    text = "完成",
+                                    enabled = draft != null && draft.model.isNotBlank(),
+                                    onClick = {
+                                        brainEcho = (brainPicked?.name ?: draft?.name ?: "") +
+                                            " · " + (draft?.model ?: "")
+                                        settingsVm.saveDraft()
+                                        step = 4
+                                    }
+                                )
+                            }
+                        }
+                        else -> onboardingPrimaryButton(
+                            backdrop = backdrop,
+                            text = "开始使用",
+                            enabled = true,
+                            onClick = { onSave(name, soulText(), perm) }
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/** 完成清单行。 */
+@Composable
+private fun onboardingDoneRow(mark: String, title: String, sub: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        Text(
+            mark,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = when (mark) {
+                "✓" -> Color(0xFF4CD6A2)
+                "!" -> Color(0xFFFFC46B)
+                else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+            }
+        )
+        Column {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+            )
+        }
+    }
+}
+
+/** 引导主按钮（液态玻璃胶囊）。 */
+@Composable
+private fun onboardingPrimaryButton(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    LiquidGlassButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
+        enabled = enabled,
+        surfaceColor = MaterialTheme.colorScheme.primary.copy(
+            alpha = if (enabled) 0.85f else 0.25f
+        )
+    ) {
+        Text(
+            text,
+            color = if (enabled) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+        )
     }
 }

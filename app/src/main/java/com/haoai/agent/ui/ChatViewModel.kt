@@ -1968,11 +1968,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun needsOnboarding(): Boolean = !c.settingsFlow.value.onboarded
 
-    fun completeOnboarding(name: String, soul: String) {
+    fun completeOnboarding(
+        name: String,
+        soul: String,
+        /** 引导「权限怎么管」步的选择；null=未经过该步（老版本调用），保持现值 */
+        permissionMode: com.haoai.agent.agent.policy.PermissionMode? = null
+    ) {
         c.updateSettings {
             it.copy(
                 agentName = name.trim().take(20),
-                soul = soul.trim().take(120),
+                // v2 引导选预设人设会写整段四段文本（定位/性格/说话/底线），上限 120 → 2000
+                soul = soul.trim().take(2000),
+                permissionMode = permissionMode ?: it.permissionMode,
                 onboarded = true
             )
         }
