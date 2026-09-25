@@ -908,7 +908,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // 的 Modifier.zIndex 不参与 AnimatedContent 的 z 排序，是死代码），
             // 页面直接平铺
             // 横屏：整页限宽居中（一处覆盖 0~18 全部屏；浏览器/抽屉可见时豁免）
-            LandscapeWrap(s = s, drawerOpen = drawer.drawerVisible || drawer.frozen) {
+            LandscapeWrap(s = s, drawerOpen = s == 0 && (drawer.drawerVisible || drawer.frozen)) {
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
@@ -1152,8 +1152,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
  */
 @Composable
 private fun LandscapeWrap(s: Int, drawerOpen: Boolean = false, content: @Composable () -> Unit) {
-    // 浏览器满屏；抽屉可见时不收窄——抽屉是"返回聊天时自动恢复打开"的（snapOpen），
-    // 收窄后内容列会压在抽屉上，只剩左缘一条（真机截图实测）
+    // 浏览器满屏；聊天屏且抽屉可见时不收窄——抽屉是"返回聊天时自动恢复打开"的（snapOpen），
+    // 收窄后内容列会压在抽屉上（真机截图实测）。
+    // 注意 drawerOpen 必须由调用方限定 s==0：leaveChat() 一离开聊天就把 drawer.frozen 置真，
+    // 不限定就会让豁免命中所有屏（实测记忆/会话/MCP 全部退回满宽）
     if (s == 7 || drawerOpen) {
         content()
         return
