@@ -903,6 +903,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // zIndex 已由 transitionSpec 的 targetContentZIndex 声明（内容重组层
             // 的 Modifier.zIndex 不参与 AnimatedContent 的 z 排序，是死代码），
             // 页面直接平铺
+            // 横屏：整页限宽居中（一处覆盖 0~18 全部屏；浏览器豁免）
+            LandscapeWrap(s) {
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
@@ -1123,6 +1125,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     }
                 )
             }
+            }
             } // AnimatedContent content lambda
             // 4.2 预览浮层已移入 ChatScreen（browserPreview 槽位）：保证它画在
             // 侧边栏抽屉之下（抽屉打开时盖住它），且只在聊天页存在。
@@ -1131,6 +1134,45 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         }
     }
 }
+
+
+/**
+ * 横屏内容列：把整页内容限宽居中，行内元素不再横跨整屏。
+ *
+ * 横屏基线（2026-09-26，模拟器 1080×2400 转横屏 ≈ 873×393dp）：设置页等列表卡直接铺满
+ * ~873dp，图标/标题/状态胶囊/箭头被拉开几百 dp，中间全是空白；而可视高度只剩 393dp，
+ * 一屏 5 行，信息密度反而更差。限到 620dp 阅读列宽并居中，两侧用页面同色底铺住——
+ * 不能让开了壁纸的页面在两侧露出两条异色带。
+ *
+ * 豁免浏览器（s=7）：网页该满屏。
+ */
+@Composable
+private fun LandscapeWrap(s: Int, content: @Composable () -> Unit) {
+    if (s == 7) {
+        content()
+        return
+    }
+    // 直接读进来的约束宽高，不读 Configuration.orientation：
+    // 实测 dumpsys 的 orientation 字段与画面矛盾过（报竖屏、窗口却 2400 宽），
+    // 而"宽 > 高"正是布局真正关心的量
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        Modifier.fillMaxSize()
+    ) {
+        if (maxWidth <= maxHeight) {
+            content()
+        } else {
+            // 620dp 阅读列宽：放得下「图标 + 标题 + 两枚状态胶囊 + 箭头」而不显拉胯
+            val pad = ((maxWidth.value - 620f) / 2f).coerceIn(16f, 260f).dp
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(horizontal = pad)
+            ) { content() }
+        }
+    }
+}
+
 
 /**
  * 转场纱幕：盖在壁纸上的主题净色层。level>0 立即升起（tween 0），归零时 450ms
