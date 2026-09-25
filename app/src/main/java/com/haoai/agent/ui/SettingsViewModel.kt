@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.policy.PermissionMode
+import com.haoai.agent.R
 import com.haoai.agent.agent.skills.SkillStore
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.agent.tools.SearchProviderConfig
@@ -63,18 +64,62 @@ data class ProviderPreset(
     val baseUrl: String,
     val model: String,
     /** 卡片副注：写「能拿到什么模型」而非「已预填」 */
-    val sub: String = ""
+    val sub: String = "",
+    /** 分类：推荐 / 中国 / 聚合 / 本机 / 自定义（添加向导顶部的筛选 chips） */
+    val category: String = "推荐",
+    /** 官方 logo 资源（logo_* vector drawable）；null = 用 label 首字字牌头像 */
+    val logoRes: Int? = null,
+    /** 头像底色（ARGB Long）：白标 logo 配深底，彩标配白底，字牌配品牌色 */
+    val avatarBg: Long = 0xFF3F74FF
 )
 
 object ProviderPresets {
+    // 分类筛选顺序（添加向导顶部 chips；一屏放不下时用户可切换/搜索）
+    val categories = listOf("推荐", "中国", "聚合", "本机", "自定义")
+
     val all = listOf(
-        ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "deepseek 官方模型"),
-        ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "kimi-k2-0905-preview", "kimi 系列模型"),
-        ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus", "GLM 系列模型"),
-        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", "", "聚合 400+ 模型"),
-        ProviderPreset("Ollama", "Ollama (本机)", "http://127.0.0.1:11434/v1", "", "本机模型服务"),
-        ProviderPreset("自定义", "", "", "", "任意兼容端点")
+        // ── 推荐 ──
+        ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat",
+            "官方 · deepseek 系列模型", logoRes = R.drawable.logo_deepseek, avatarBg = 0xFFFFFFFF),
+        ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "",
+            "月之暗面 · kimi 系列", logoRes = R.drawable.logo_kimi, avatarBg = 0xFF101010),
+        ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
+            "GLM 系列模型 · 有免费 flash 档", avatarBg = 0xFF3F74FF),
+        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", "",
+            "聚合 400+ 模型", logoRes = R.drawable.logo_openrouter, avatarBg = 0xFF1E293B),
+        ProviderPreset("Anthropic", "Anthropic", "https://api.anthropic.com", "claude-sonnet-4-5",
+            "原生 Messages 协议 · Claude 系列", logoRes = R.drawable.logo_anthropic, avatarBg = 0xFFFFFFFF),
+        ProviderPreset("MiniMax", "MiniMax", "https://api.minimaxi.com/v1", "",
+            "MiniMax 系列", logoRes = R.drawable.logo_minimax, avatarBg = 0xFFFFFFFF),
+        // ── 中国 ──
+        ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
+            "GLM 系列模型 · 有免费 flash 档", category = "中国", avatarBg = 0xFF3F74FF),
+        ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "",
+            "月之暗面 · kimi 系列", category = "中国", logoRes = R.drawable.logo_kimi, avatarBg = 0xFF101010),
+        ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat",
+            "官方 · deepseek 系列模型", category = "中国", logoRes = R.drawable.logo_deepseek, avatarBg = 0xFFFFFFFF),
+        ProviderPreset("MiniMax", "MiniMax", "https://api.minimaxi.com/v1", "",
+            "MiniMax 系列", category = "中国", logoRes = R.drawable.logo_minimax, avatarBg = 0xFFFFFFFF),
+        ProviderPreset("硅基流动", "SiliconFlow", "https://api.siliconflow.cn/v1", "",
+            "聚合 · 国产模型多 · 有免费档", category = "中国", avatarBg = 0xFF6C5CE7),
+        // ── 聚合 ──
+        ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", "",
+            "聚合 400+ 模型", category = "聚合", logoRes = R.drawable.logo_openrouter, avatarBg = 0xFF1E293B),
+        ProviderPreset("硅基流动", "SiliconFlow", "https://api.siliconflow.cn/v1", "",
+            "聚合 · 国产模型多 · 有免费档", category = "聚合", avatarBg = 0xFF6C5CE7),
+        // ── 本机 ──
+        ProviderPreset("Ollama", "Ollama (本机)", "http://127.0.0.1:11434/v1", "",
+            "本机模型服务 · 免 Key", category = "本机", logoRes = R.drawable.logo_ollama, avatarBg = 0xFF101010),
+        ProviderPreset("LM Studio", "LM Studio (本机)", "http://127.0.0.1:1234/v1", "",
+            "本机模型服务 · 免 Key", category = "本机", avatarBg = 0xFF5A5A5A),
+        // ── 自定义 ──
+        ProviderPreset("自定义", "", "", "",
+            "任意 OpenAI 兼容端点", category = "自定义", avatarBg = 0xFF5A5A5A)
     )
+
+    /** 引导页「接大脑」步只用推荐分类的前几行（引导要短）。 */
+    val onboardingShortlist: List<ProviderPreset>
+        get() = all.filter { it.category == "推荐" }.distinctBy { it.name }.take(4)
 }
 
 /** 预设对应的 API 协议：Anthropic 官方端点用原生 Messages，其余走 OpenAI 兼容。 */
@@ -379,6 +424,23 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     var draft by mutableStateOf<ProviderDraft?>(null)
         private set
+
+    /**
+     * 添加供应商向导开关（2026-09-25 交互改版）：true 时 draft 弹层走 3 步向导
+     * （选服务商 → 连接 → 选模型）而非三段面板；编辑已有供应商永远走面板。
+     */
+    var wizardOpen by mutableStateOf(false)
+        private set
+
+    /** 「添加模型供应商」入口：清空草稿并打开向导。 */
+    fun startWizard() {
+        startNewDraft()
+        wizardOpen = true
+    }
+
+    fun closeWizard() {
+        wizardOpen = false
+    }
 
     var draftError by mutableStateOf<String?>(null)
         private set

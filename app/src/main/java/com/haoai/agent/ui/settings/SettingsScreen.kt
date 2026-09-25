@@ -585,25 +585,51 @@ fun SettingsScreen(
     }
 
     draft?.let { d ->
-        ProviderDialog(
-            backdrop = backdrop,
-            draft = d,
-            draftError = vm.draftError,
-            testing = vm.testing,
-            testResult = vm.testResult,
-            fetchingModels = vm.fetchingModels,
-            modelChoices = vm.modelChoices,
-            detectingCaps = vm.detectingCaps,
-            detectResult = vm.detectResult,
-            onChange = { vm.updateDraft(it) },
-            onPreset = { vm.applyPreset(it) },
-            onFetchModels = { vm.fetchModelList() },
-            onPickModel = { vm.pickModel(it) },
-            onDetectCaps = { vm.detectCapabilities() },
-            onSave = { vm.saveDraft() },
-            onTest = { vm.testDraftConnection() },
-            onDismiss = { vm.cancelDraft() }
-        )
+        if (vm.wizardOpen) {
+            // 添加走 3 步向导（选服务商 → 连接 → 选模型）；测试/拉取/保存复用同一 draft 管线
+            ProviderWizardDialog(
+                backdrop = backdrop,
+                draft = d,
+                draftError = vm.draftError,
+                testing = vm.testing,
+                testResult = vm.testResult,
+                fetchingModels = vm.fetchingModels,
+                modelChoices = vm.modelChoices,
+                onChange = { vm.updateDraft(it) },
+                onPreset = { vm.applyPreset(it) },
+                onFetchModels = { vm.fetchModelList() },
+                onPickModel = { vm.pickModel(it) },
+                onTest = { vm.testDraftConnection() },
+                onSave = {
+                    vm.saveDraft()
+                    vm.closeWizard()
+                },
+                onDismiss = {
+                    vm.cancelDraft()
+                    vm.closeWizard()
+                }
+            )
+        } else {
+            ProviderDialog(
+                backdrop = backdrop,
+                draft = d,
+                draftError = vm.draftError,
+                testing = vm.testing,
+                testResult = vm.testResult,
+                fetchingModels = vm.fetchingModels,
+                modelChoices = vm.modelChoices,
+                detectingCaps = vm.detectingCaps,
+                detectResult = vm.detectResult,
+                onChange = { vm.updateDraft(it) },
+                onPreset = { vm.applyPreset(it) },
+                onFetchModels = { vm.fetchModelList() },
+                onPickModel = { vm.pickModel(it) },
+                onDetectCaps = { vm.detectCapabilities() },
+                onSave = { vm.saveDraft() },
+                onTest = { vm.testDraftConnection() },
+                onDismiss = { vm.cancelDraft() }
+            )
+        }
     }
 
     // 模型能力编辑弹层（设计稿 ③）：输入/输出模态勾选 + 能力来源 + 恢复自动检测
@@ -1525,12 +1551,13 @@ private fun LazyListScope.brainItems(
                     }
                     // 添加项作为列表末行：与列表同容器，符合设置页惯例
                     // （原先全宽胶囊浮在玻璃组外面，与列表无归属关系）
+                    // 2026-09-25：点击改为打开 3 步添加向导（原三段面板保留给编辑）
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(min = 44.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { vm.startNewDraft() }
+                            .clickable { vm.startWizard() }
                             .padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1552,7 +1579,7 @@ private fun LazyListScope.brainItems(
             }
             com.haoai.agent.ui.common.HaoNote(
                 backdrop = backdrop,
-                text = "点行展开模型清单并切换默认 · 点「能力」勾选输入/输出模态 · 长按行或展开区「编辑供应商」可测试连接、拉取列表与配置密钥。",
+                text = "点「添加」走 3 步向导（选服务商 → 连接 → 选模型）· 点行展开模型清单并切换默认 · 点「能力」勾选输入/输出模态 · 长按行或展开区「编辑供应商」可测试连接、拉取列表与配置密钥。",
                 modifier = Modifier.padding(vertical = 4.dp)
             )
         }
@@ -5418,6 +5445,640 @@ private fun ProviderDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * 供应商头像：有 logo 资源（ProviderPreset.logoRes，官方矢量标转换的 VectorDrawable）
+ * 画白/深底圆角块 + 单色标；没有的用 label 首字字牌 + 品牌底色。
+ * public：首启引导「接大脑」步（MainActivity）与设置页向导共用。
+ */
+@Composable
+fun ProviderLogoAvatar(preset: com.haoai.agent.ui.ProviderPreset, size: androidx.compose.ui.unit.Dp = 38.dp) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(11.dp))
+            .background(androidx.compose.ui.graphics.Color(preset.avatarBg)),
+        contentAlignment = Alignment.Center
+    ) {
+        val res = preset.logoRes
+        if (res != null) {
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(res),
+                contentDescription = null,
+                modifier = Modifier.size(size * 0.60f)
+            )
+        } else {
+            Text(
+                preset.label.take(1),
+                color = androidx.compose.ui.graphics.Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = (size.value * 0.40f).sp
+            )
+        }
+    }
+}
+
+/**
+ * 添加供应商 3 步向导（2026-09-25 交互改版）：选服务商 → 连接 → 选模型。
+ * 一步一屏替代旧「添加=全页三段 Tab」，测试/拉取/保存复用 SettingsViewModel 的
+ * draft 管线（testDraftConnection/fetchModelList/saveDraft），无新协议层代码。
+ * 编辑已有供应商仍走 ProviderDialog 三段面板。
+ */
+@Composable
+private fun ProviderWizardDialog(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    draft: com.haoai.agent.ui.ProviderDraft,
+    draftError: String?,
+    testing: Boolean,
+    testResult: Pair<Boolean, String>?,
+    fetchingModels: Boolean,
+    modelChoices: List<String>?,
+    onChange: (com.haoai.agent.ui.ProviderDraft) -> Unit,
+    onPreset: (com.haoai.agent.ui.ProviderPreset) -> Unit,
+    onFetchModels: () -> Unit,
+    onPickModel: (String) -> Unit,
+    onTest: () -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var step by remember { mutableIntStateOf(0) }
+    var picked by remember { mutableStateOf<com.haoai.agent.ui.ProviderPreset?>(null) }
+    val stepTitles = listOf("选择服务商", "连接", "选模型")
+
+    // 液态玻璃弹层外壳：同 ProviderDialog（独立 Dialog 窗口采样不到 LayerBackdrop）
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.haoai.agent.ui.common.LocalGlassRefract provides false
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.30f))
+                .imePadding()
+                .clickable(interactionSource = null, indication = null) { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            GlassPanel(
+                backdrop = backdrop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .heightIn(max = 560.dp),
+                radius = 28.dp,
+                surfaceAlpha = 0.92f,
+                blurRadius = 28.dp,
+                chromaticAberration = true
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    // 标题 + 进度点
+                    Column(
+                        Modifier
+                            .clickable(interactionSource = null, indication = null) {}
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 16.dp, bottom = 10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "添加模型供应商",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                "第 ${step + 1} / 3 步",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            repeat(3) { i ->
+                                Box(
+                                    Modifier
+                                        .size(width = if (i == step) 20.dp else 8.dp, height = 8.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(
+                                            if (i <= step) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
+                                        )
+                                )
+                            }
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                stepTitles[step],
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Column(
+                        Modifier
+                            .padding(top = 4.dp)
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        when (step) {
+                            // ═══ 步 0：选择服务商（分类 + 搜索 + 官方 logo）═══
+                            0 -> WizardPickProviderStep(
+                                onPick = { p ->
+                                    picked = p
+                                    onPreset(p)
+                                    step = 1
+                                }
+                            )
+
+                            // ═══ 步 1：连接（名称/协议/URL/Key + 测试连接）═══
+                            1 -> WizardConnectStep(
+                                backdrop = backdrop,
+                                draft = draft,
+                                picked = picked,
+                                testing = testing,
+                                testResult = testResult,
+                                onChange = onChange,
+                                onTest = onTest
+                            )
+
+                            // ═══ 步 2：选模型（自动拉取 + 勾选 + 设默认）═══
+                            2 -> WizardPickModelStep(
+                                draft = draft,
+                                fetchingModels = fetchingModels,
+                                modelChoices = modelChoices,
+                                onChange = onChange,
+                                onFetchModels = onFetchModels,
+                                onPickModel = onPickModel
+                            )
+                        }
+                        draftError?.let { err ->
+                            Text(
+                                err,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                        }
+                    }
+
+                    // 底部操作栏：上一步 / 下一步·完成
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (step > 0) {
+                            com.haoai.agent.ui.common.GlassTextButton(
+                                text = "‹ 上一步",
+                                onClick = { step-- },
+                                backdrop = backdrop
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        when (step) {
+                            0 -> {}
+                            1 -> {
+                                val canNext = draft.baseUrl.isNotBlank()
+                                WizardPrimaryButton(
+                                    text = "下一步",
+                                    enabled = canNext,
+                                    backdrop = backdrop,
+                                    onClick = { if (canNext) step = 2 }
+                                )
+                            }
+                            else -> {
+                                val includedCount = (draft.models.map { it.id } + listOf(draft.model))
+                                    .filter { it.isNotBlank() }.distinct().size
+                                WizardPrimaryButton(
+                                    text = if (includedCount > 0) "完成 · 已选 $includedCount 个模型" else "完成",
+                                    enabled = draft.model.isNotBlank(),
+                                    backdrop = backdrop,
+                                    onClick = { if (draft.model.isNotBlank()) onSave() }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 步 0：服务商目录（分类 chips + 搜索 + logo 行）。 */
+@Composable
+private fun WizardPickProviderStep(onPick: (com.haoai.agent.ui.ProviderPreset) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var catIdx by remember { mutableIntStateOf(0) }
+
+    Text(
+        "有 Key 的直接点；点选即预填地址与协议",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
+    com.haoai.agent.ui.common.CompactGlassField(
+        value = query,
+        onValueChange = { query = it },
+        label = "搜索",
+        placeholder = "如：deepseek / kimi",
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
+    // 分类 chips：搜索时忽略分类
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        com.haoai.agent.ui.ProviderPresets.categories.forEachIndexed { i, c ->
+            GlassCapChip(
+                selected = if (query.isBlank()) catIdx == i else false,
+                label = c,
+                onClick = { catIdx = i }
+            )
+        }
+    }
+    val list = com.haoai.agent.ui.ProviderPresets.all
+        .filter { p ->
+            val q = query.trim().lowercase()
+            q.isBlank() || p.label.lowercase().contains(q) || p.name.lowercase().contains(q) ||
+                p.sub.lowercase().contains(q)
+        }
+        .filter { if (query.isBlank()) it.category == com.haoai.agent.ui.ProviderPresets.categories[catIdx] else true }
+        .distinctBy { it.name }
+    Column(
+        Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        list.forEach { p ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
+                    .clickable { onPick(p) }
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(11.dp)
+            ) {
+                ProviderLogoAvatar(p)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        p.name.ifBlank { p.label },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        p.sub + " · " + p.baseUrl.ifBlank { "手填端点" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+        if (list.isEmpty()) {
+            Text(
+                "没有匹配的服务商——切到「自定义」分类手填任意端点",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        }
+    }
+}
+
+/** 步 1：连接参数（协议已按预设定好、可改）+ 测试连接。 */
+@Composable
+private fun WizardConnectStep(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    draft: com.haoai.agent.ui.ProviderDraft,
+    picked: com.haoai.agent.ui.ProviderPreset?,
+    testing: Boolean,
+    testResult: Pair<Boolean, String>?,
+    onChange: (com.haoai.agent.ui.ProviderDraft) -> Unit,
+    onTest: () -> Unit
+) {
+    var showKey by remember { mutableStateOf(false) }
+    Row(
+        Modifier.padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        picked?.let { ProviderLogoAvatar(it) }
+        Column {
+            Text(
+                picked?.name?.ifBlank { "自定义端点" } ?: "自定义端点",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                "地址与协议已按预设填好，一般不用改",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    com.haoai.agent.ui.common.CompactGlassField(
+        value = draft.name,
+        onValueChange = { v -> onChange(draft.copy(name = v)) },
+        label = "名称",
+        placeholder = "留空自动命名",
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
+    Row(
+        Modifier.padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            "协议",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        GlassCapChip(
+            selected = draft.protocol == "openai_compat",
+            label = "OpenAI 兼容",
+            onClick = { onChange(draft.copy(protocol = "openai_compat")) }
+        )
+        GlassCapChip(
+            selected = draft.protocol == "anthropic",
+            label = "Anthropic 原生",
+            onClick = { onChange(draft.copy(protocol = "anthropic")) }
+        )
+    }
+    com.haoai.agent.ui.common.CompactGlassField(
+        value = draft.baseUrl,
+        onValueChange = { v -> onChange(draft.copy(baseUrl = v)) },
+        label = "Base URL",
+        placeholder = "https://api.deepseek.com/v1",
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
+    com.haoai.agent.ui.common.CompactGlassField(
+        value = draft.apiKeyPlain,
+        onValueChange = { v -> onChange(draft.copy(apiKeyPlain = v)) },
+        label = "API Key",
+        placeholder = "sk-…",
+        visualTransformation =
+            if (showKey) androidx.compose.ui.text.input.VisualTransformation.None
+            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+        trailing = {
+            androidx.compose.material3.TextButton(onClick = { showKey = !showKey }) {
+                Text(
+                    if (showKey) "隐藏" else "显示",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        },
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
+    // 测试连接：结果就地显示。模型 ID 为空时测试无从发起（testDraftConnection 需要模型），
+    // 提示先去下一步拉模型——拉完回来测也一样
+    Row(
+        Modifier.padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        when {
+            testing -> GlassCapChip(selected = true, label = "测试中…", onClick = {})
+            testResult != null -> {
+                val (ok, msg) = testResult
+                GlassCapChip(
+                    selected = true,
+                    label = (if (ok) "✓ " else "✕ ") + msg.take(14),
+                    onClick = {}
+                )
+            }
+        }
+        com.haoai.agent.ui.common.GlassTextButton(
+            text = if (testing) "重新测试" else "测试连接",
+            onClick = onTest,
+            enabled = !testing && draft.model.isNotBlank(),
+            backdrop = backdrop
+        )
+    }
+    if (draft.model.isBlank()) {
+        Text(
+            "还没指定模型 ID：点「下一步」自动拉取模型列表，选完默认后可回来补测",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+    }
+}
+
+/** 步 2：自动拉取模型列表 → 勾选加入 + 点行设默认；拉不到就手动填 ID。 */
+@Composable
+private fun WizardPickModelStep(
+    draft: com.haoai.agent.ui.ProviderDraft,
+    fetchingModels: Boolean,
+    modelChoices: List<String>?,
+    onChange: (com.haoai.agent.ui.ProviderDraft) -> Unit,
+    onFetchModels: () -> Unit,
+    onPickModel: (String) -> Unit
+) {
+    // 进本步自动拉一次（本会话没拉过的话）
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (modelChoices == null && !fetchingModels && draft.baseUrl.isNotBlank() &&
+            draft.protocol != "anthropic"
+        ) onFetchModels()
+    }
+    // 列表到手、还没有默认模型 → 首个自动设默认（省一次手填）
+    androidx.compose.runtime.LaunchedEffect(modelChoices) {
+        if (draft.model.isBlank()) modelChoices?.firstOrNull()?.let { onPickModel(it) }
+    }
+
+    if (draft.protocol == "anthropic") {
+        Text(
+            "Anthropic 原生协议不支持拉取列表，直接在下面手动填模型 ID（如 claude-sonnet-4-5）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+    } else {
+        Row(
+            Modifier.padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                if (fetchingModels) "⇣ 拉取中…" else "已拉取 ${modelChoices?.size ?: 0} 个模型",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "重新拉取",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (fetchingModels) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = !fetchingModels) { onFetchModels() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
+        }
+    }
+
+    // 展示列表 = 拉取的 ∪ 手动加的（都在 draft.models / draft.model 里）
+    val known = (draft.models.map { it.id } + listOf(draft.model)).filter { it.isNotBlank() }.distinct()
+    val shown = (modelChoices ?: emptyList()).distinct() + known.filter { it !in (modelChoices ?: emptyList()) }
+    Column(
+        Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        shown.forEach { id ->
+            val isDefault = id == draft.model.trim()
+            val included = id in known
+            WizardModelRow(
+                id = id,
+                isDefault = isDefault,
+                included = included,
+                onToggleInclude = {
+                    when {
+                        included && isDefault -> {} // 默认模型必须保留在清单里
+                        included -> onChange(draft.copy(models = draft.models.filterNot { it.id == id }))
+                        else -> onChange(
+                            draft.copy(models = draft.models + com.haoai.agent.data.ModelEntry(id))
+                        )
+                    }
+                },
+                onSetDefault = { onPickModel(id) }
+            )
+        }
+    }
+
+    var manual by remember { mutableStateOf("") }
+    Row(
+        Modifier.padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        com.haoai.agent.ui.common.CompactGlassField(
+            value = manual,
+            onValueChange = { manual = it },
+            label = "手动添加",
+            placeholder = "如 deepseek-reasoner",
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            "＋ 加入",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(enabled = manual.isNotBlank()) {
+                    val id = manual.trim()
+                    onChange(draft.copy(models = draft.models + com.haoai.agent.data.ModelEntry(id)))
+                    if (draft.model.isBlank()) onPickModel(id)
+                    manual = ""
+                }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        )
+    }
+    Text(
+        "点行 = 设为默认 · 勾选 = 加入模型清单（设置里随时可换）",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp)
+    )
+}
+
+/** 单个模型行：勾选加入 + 点行设默认。 */
+@Composable
+private fun WizardModelRow(
+    id: String,
+    isDefault: Boolean,
+    included: Boolean,
+    onToggleInclude: () -> Unit,
+    onSetDefault: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
+            .clickable { onSetDefault() }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        // 勾选块（与点行「设默认」是两个独立热区）
+        Box(
+            Modifier
+                .size(18.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(
+                    if (included) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
+                )
+                .border(
+                    1.dp,
+                    if (included) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                    RoundedCornerShape(6.dp)
+                )
+                .clickable { onToggleInclude() },
+            contentAlignment = Alignment.Center
+        ) {
+            if (included) {
+                Text(
+                    "✓",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Text(
+            id,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (isDefault) FontWeight.SemiBold else FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+        if (isDefault) {
+            GlassCapChip(selected = true, label = "默认", onClick = {})
+        }
+    }
+}
+
+/** 向导主操作胶囊（下一步 / 完成）。 */
+@Composable
+private fun WizardPrimaryButton(
+    text: String,
+    enabled: Boolean,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onClick: () -> Unit
+) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(percent = 50))
+            .background(
+                MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 0.85f else 0.25f)
+            )
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 22.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+        )
     }
 }
 
