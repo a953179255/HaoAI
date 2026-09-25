@@ -51,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -906,8 +907,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // zIndex 已由 transitionSpec 的 targetContentZIndex 声明（内容重组层
             // 的 Modifier.zIndex 不参与 AnimatedContent 的 z 排序，是死代码），
             // 页面直接平铺
-            // 横屏：整页限宽居中（一处覆盖 0~18 全部屏；浏览器豁免）
-            LandscapeWrap(s) {
+            // 横屏：整页限宽居中（一处覆盖 0~18 全部屏；浏览器/抽屉可见时豁免）
+            LandscapeWrap(s = s, drawerOpen = drawer.drawerVisible || drawer.frozen) {
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
@@ -1150,8 +1151,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
  * 豁免浏览器（s=7）：网页该满屏。
  */
 @Composable
-private fun LandscapeWrap(s: Int, content: @Composable () -> Unit) {
-    if (s == 7) {
+private fun LandscapeWrap(s: Int, drawerOpen: Boolean = false, content: @Composable () -> Unit) {
+    // 浏览器满屏；抽屉可见时不收窄——抽屉是"返回聊天时自动恢复打开"的（snapOpen），
+    // 收窄后内容列会压在抽屉上，只剩左缘一条（真机截图实测）
+    if (s == 7 || drawerOpen) {
         content()
         return
     }
@@ -1170,8 +1173,17 @@ private fun LandscapeWrap(s: Int, content: @Composable () -> Unit) {
                 Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = pad)
-            ) { content() }
+            ) {
+                // 内层 clipToBounds 是关键：抽屉面板关闭时按**父容器**宽度平移（-panelWidth，
+                // ChatScreen.kt:436 fillMaxWidth(0.72f)），列比屏幕窄时它会溢到列外的留白里
+                // （真机截图：左缘一条被裁的会话列表）。竖屏列=整屏所以从来没暴露过。
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = pad)
+                        .clipToBounds()
+                ) { content() }
+            }
         }
     }
 }
