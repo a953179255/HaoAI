@@ -1160,12 +1160,20 @@ private fun OnboardingGlass(
     var step by remember { mutableIntStateOf(0) }
     // ── 步 0：起名 ──
     var name by remember { mutableStateOf("") }
-    // ── 步 1：性格（预设人设 5+1，可微调）──
-    var personaKey by remember { mutableStateOf<String?>(null) }
+    // ── 步 1：性格（预设风格卡 + 自定义/🎲随机，可微调）──
+    // 默认选中第一张风格卡（与定稿效果图一致：打开即见预览窗、无自定义输入框）
+    var personaKey by remember {
+        mutableStateOf<String?>(
+            com.haoai.agent.ui.onboarding.PersonaPresets.gridPresets.first().key
+        )
+    }
     var personaCustom by remember { mutableStateOf(false) }
     var customText by remember { mutableStateOf("") }
     var tunedText by remember { mutableStateOf<String?>(null) }
     var tuning by remember { mutableStateOf(false) }
+    // 🎲 随机人格（12 款风格池，不重复上一款；chip 只显风格不显代号）
+    var rolledTag by remember { mutableStateOf<String?>(null) }
+    var lastRollIdx by remember { mutableIntStateOf(-1) }
     // ── 步 2：权限模式（推荐全自动）──
     var perm by remember { mutableStateOf(com.haoai.agent.agent.policy.PermissionMode.YOLO) }
     // ── 步 3：接大脑（内嵌迷你供应商向导，复用 SettingsViewModel 的 draft 管线）──
@@ -1183,11 +1191,32 @@ private fun OnboardingGlass(
         return tunedText ?: p.fullText
     }
 
+    /** 🎲 从 12 款风格池随机抽一款填入自定义区（不重复上一款）。 */
+    fun rollPersona() {
+        val pool = com.haoai.agent.ui.onboarding.PersonaPresets.all
+        var i: Int
+        do {
+            i = kotlin.random.Random.nextInt(pool.size)
+        } while (pool.size > 1 && i == lastRollIdx)
+        lastRollIdx = i
+        val p = pool[i]
+        personaKey = null
+        personaCustom = true
+        customText = p.fullText
+        rolledTag = p.tag
+    }
+
+    // 完成清单回显：一律用风格标签，不出现内部代号（名字第一步已定）
     fun soulEcho(): String = when {
-        personaCustom -> "自定义" + if (customText.isNotBlank()) " · " + customText.take(12) + "…" else ""
-        tunedText != null -> (personaKey ?: "") + "（已微调）"
-        personaKey != null -> personaKey + " · " + com.haoai.agent.ui.onboarding.PersonaPresets.all
-            .firstOrNull { it.key == personaKey }?.tag.orEmpty()
+        personaCustom -> "自定义" + when {
+            rolledTag != null -> " · 抽中 $rolledTag"
+            customText.isNotBlank() -> " · " + customText.take(12) + "…"
+            else -> ""
+        }
+        tunedText != null -> com.haoai.agent.ui.onboarding.PersonaPresets.all
+            .firstOrNull { it.key == personaKey }?.tag?.let { "$it（已微调）" } ?: "已微调"
+        personaKey != null -> com.haoai.agent.ui.onboarding.PersonaPresets.all
+            .firstOrNull { it.key == personaKey }?.tag.orEmpty().ifBlank { "跳过了，之后可配" }
         else -> "跳过了，之后可配"
     }
 
@@ -1208,38 +1237,31 @@ private fun OnboardingGlass(
             surfaceAlpha = 0.36f
         ) {
             Column(Modifier.padding(horizontal = 22.dp, vertical = 22.dp)) {
-                // ── 时间线 ──
+                // ── 时间线：纯进度点（无文字标签——起名步的「欢迎」痕迹不再出现，
+                //    名字已在步 0 定过，界面只呈现当前步内容）──
                 val tlLabels = listOf("欢迎", "性格", "权限", "大脑", "完成")
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    tlLabels.forEachIndexed { i, label ->
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Box(
-                                Modifier
-                                    .size(22.dp)
-                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                    .background(
-                                        when {
-                                            i == step -> MaterialTheme.colorScheme.primary
-                                            i < step -> MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
-                                            else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
-                                        }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    if (i < step) "✓" else "${i + 1}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (i <= step) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                                )
-                            }
+                    tlLabels.indices.forEach { i ->
+                        Box(
+                            Modifier
+                                .size(22.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(
+                                    when {
+                                        i == step -> MaterialTheme.colorScheme.primary
+                                        i < step -> MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                                        else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text(
-                                label,
+                                if (i < step) "✓" else "${i + 1}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (i == step) MaterialTheme.colorScheme.onBackground
+                                color = if (i <= step) MaterialTheme.colorScheme.onPrimary
                                 else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                             )
                         }
@@ -1256,6 +1278,13 @@ private fun OnboardingGlass(
                         }
                     }
                 }
+                val stepLabel = tlLabels.getOrElse(step) { tlLabels.last() }
+                Text(
+                    "第 ${step + 1} 步 · $stepLabel",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
 
                 Spacer(Modifier.size(16.dp))
 
@@ -1293,67 +1322,73 @@ private fun OnboardingGlass(
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
-                            "挑一个预设人设（点开能看完整人设：性格 / 说话 / 底线），也可以自己写。",
+                            "挑一个预设（点开能看完整人设并微调），也可以自己写或🎲随机抽一个。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 6.dp)
                         )
-                        // 6 张卡两列网格（5 预设 + 自定义）：共用同一段渲染，自定义卡不再单独排版
-                        // （原单行 Row 比人格卡矮、外观不齐——2026-09-26 用户真机反馈）
-                        val cards: List<Triple<String, String, Boolean>> =
-                            com.haoai.agent.ui.onboarding.PersonaPresets.all
-                                .map { Triple(it.key, it.tagline, false) } +
-                                Triple("自定义", "想什么样写什么样，自己动手", true)
-                        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            cards.chunked(2).forEach { rowCards ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    rowCards.forEach { (title, sub, isCustom) ->
-                                        val selected = if (isCustom) personaCustom
-                                        else personaKey == title && !personaCustom
-                                        Column(
-                                            Modifier
-                                                .weight(1f)
-                                                .clip(RoundedCornerShape(14.dp))
-                                                .background(
-                                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
-                                                )
-                                                .border(
-                                                    1.dp,
-                                                    if (selected) MaterialTheme.colorScheme.primary
-                                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
-                                                    RoundedCornerShape(14.dp)
-                                                )
-                                                .clickable {
-                                                    tunedText = null
-                                                    tuning = false
-                                                    if (isCustom) {
-                                                        personaKey = null
-                                                        personaCustom = true
-                                                    } else {
-                                                        personaCustom = false
-                                                        personaKey = title
-                                                    }
-                                                }
-                                                .padding(horizontal = 11.dp, vertical = 9.dp)
-                                        ) {
-                                            Text(
-                                                title,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onBackground
-                                            )
-                                            Text(
-                                                sub,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                                                maxLines = 2,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                            )
+                        // 卡片标题只写风格+性向（如「元气甜系（女声向）」），不出现内部代号——
+                        // 名字步 0 已定，性格步只呈现性格（2026-09-26 用户定稿）
+                        val renderCard: @Composable (String?, String, String, Boolean) -> Unit =
+                            { key, title, sub, isCustom ->
+                                val selected = if (isCustom) personaCustom
+                                else personaKey == key && !personaCustom
+                                Column(
+                                    Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
+                                            RoundedCornerShape(14.dp)
+                                        )
+                                        .clickable {
+                                            tunedText = null
+                                            tuning = false
+                                            if (isCustom) {
+                                                personaKey = null
+                                                personaCustom = true
+                                            } else {
+                                                personaCustom = false
+                                                personaKey = key
+                                            }
                                         }
+                                        .padding(horizontal = 11.dp, vertical = 9.dp)
+                                ) {
+                                    Text(
+                                        title,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                    Text(
+                                        sub,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                        maxLines = 2,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        val gridP = com.haoai.agent.ui.onboarding.PersonaPresets.gridPresets
+                        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            gridP.chunked(2).forEach { rowCards ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                    rowCards.forEach { p ->
+                                        renderCard(p.key, p.tag, p.tagline, false)
                                     }
                                     if (rowCards.size == 1) Spacer(Modifier.weight(1f))
                                 }
+                            }
+                            // 自定义卡：与预设卡同渲染函数（外观天然一致）
+                            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                renderCard(null, "自定义", "自己写或🎲随机抽一个", true)
+                                Spacer(Modifier.weight(1f))
                             }
                         }
                         // 预览（选了预设才出现）：全文 + 微调入口
@@ -1412,15 +1447,94 @@ private fun OnboardingGlass(
                                 }
                             }
                         }
-                        // 自定义输入（只在选了自定义卡时出现）
+                        // 自定义区（只在选了自定义卡时出现，与预览窗互斥）：
+                        // label 行「自定义」+ 🎲 随机人格；抽中 chip 只显风格（不带代号）；
+                        // 再抽 = 再点🎲（不重复上一款），无「再抽一次」按钮
                         if (personaCustom) {
-                            com.haoai.agent.ui.common.CompactGlassField(
-                                value = customText,
-                                onValueChange = { customText = it },
-                                label = "描述你想要的人设",
-                                placeholder = "如：上班时间专业一点，晚上聊天随意一点",
-                                modifier = Modifier.padding(top = 9.dp)
-                            )
+                            Column(Modifier.padding(top = 9.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "自定义",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(11.dp))
+                                            .background(Color(0xFFFFC46B).copy(alpha = 0.14f))
+                                            .border(
+                                                1.dp,
+                                                Color(0xFFFFC46B).copy(alpha = 0.45f),
+                                                RoundedCornerShape(11.dp)
+                                            )
+                                            .clickable { rollPersona() }
+                                            .padding(horizontal = 13.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "🎲 随机人格",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFFFC46B)
+                                        )
+                                    }
+                                }
+                                rolledTag?.let { tag ->
+                                    Text(
+                                        "抽中：$tag",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFFFFC46B),
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
+                                }
+                                // 多行输入（随机抽出的完整人设要能看全能改）
+                                androidx.compose.foundation.text.BasicTextField(
+                                    value = customText,
+                                    onValueChange = { customText = it },
+                                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    ),
+                                    cursorBrush = androidx.compose.ui.graphics.SolidColor(
+                                        MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .clip(RoundedCornerShape(13.dp))
+                                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
+                                        .border(
+                                            1.dp,
+                                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
+                                            RoundedCornerShape(13.dp)
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 11.dp)
+                                        .heightIn(min = 92.dp),
+                                    decorationBox = { inner ->
+                                        Box(Modifier.fillMaxWidth()) {
+                                            if (customText.isBlank()) {
+                                                Text(
+                                                    "写句你想要的风格；点🎲随机抽一个填进来，可随意改",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                                )
+                                            }
+                                            inner()
+                                        }
+                                    }
+                                )
+                                Text(
+                                    "不满意就再点一次🎲重抽 · 这段内容会直接写进我的人格",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                            }
                         }
                     }
 
