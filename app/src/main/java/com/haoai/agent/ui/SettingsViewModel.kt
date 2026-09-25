@@ -70,7 +70,9 @@ data class ProviderPreset(
     /** 官方 logo 资源（logo_* vector drawable）；null = 用 label 首字字牌头像 */
     val logoRes: Int? = null,
     /** 头像底色（ARGB Long）：白标 logo 配深底，彩标配白底，字牌配品牌色 */
-    val avatarBg: Long = 0xFF3F74FF
+    val avatarBg: Long = 0xFF3F74FF,
+    /** logo 自带圆角底色（如智谱官方黑底白 Z 位图）：true = 铺满头像框，不做内边距 */
+    val logoFull: Boolean = false
 )
 
 object ProviderPresets {
@@ -84,7 +86,8 @@ object ProviderPresets {
         ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "",
             "月之暗面 · kimi 系列", logoRes = R.drawable.logo_kimi, avatarBg = 0xFF101010),
         ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
-            "GLM 系列模型 · 有免费 flash 档", avatarBg = 0xFF3F74FF),
+            "GLM 系列模型 · 有免费 flash 档", logoRes = R.drawable.logo_zhipu,
+            avatarBg = 0xFF2B2B2B, logoFull = true),
         ProviderPreset("OpenRouter", "OpenRouter", "https://openrouter.ai/api/v1", "",
             "聚合 400+ 模型", logoRes = R.drawable.logo_openrouter, avatarBg = 0xFF1E293B),
         ProviderPreset("Anthropic", "Anthropic", "https://api.anthropic.com", "claude-sonnet-4-5",
@@ -93,7 +96,8 @@ object ProviderPresets {
             "MiniMax 系列", logoRes = R.drawable.logo_minimax, avatarBg = 0xFFFFFFFF),
         // ── 中国 ──
         ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
-            "GLM 系列模型 · 有免费 flash 档", category = "中国", avatarBg = 0xFF3F74FF),
+            "GLM 系列模型 · 有免费 flash 档", category = "中国", logoRes = R.drawable.logo_zhipu,
+            avatarBg = 0xFF2B2B2B, logoFull = true),
         ProviderPreset("Kimi", "Moonshot Kimi", "https://api.moonshot.cn/v1", "",
             "月之暗面 · kimi 系列", category = "中国", logoRes = R.drawable.logo_kimi, avatarBg = 0xFF101010),
         ProviderPreset("DeepSeek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat",

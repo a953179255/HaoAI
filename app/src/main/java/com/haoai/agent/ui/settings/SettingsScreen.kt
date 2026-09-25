@@ -5467,7 +5467,10 @@ fun ProviderLogoAvatar(preset: com.haoai.agent.ui.ProviderPreset, size: androidx
             androidx.compose.foundation.Image(
                 painter = androidx.compose.ui.res.painterResource(res),
                 contentDescription = null,
-                modifier = Modifier.size(size * 0.60f)
+                // logoFull = 官方自带圆角底色的位图（智谱黑底白 Z）：铺满头像框；
+                // 其余是单色矢量标：内缩居中，底色由 avatarBg 提供
+                modifier = if (preset.logoFull) Modifier.fillMaxSize()
+                else Modifier.size(size * 0.60f)
             )
         } else {
             Text(
