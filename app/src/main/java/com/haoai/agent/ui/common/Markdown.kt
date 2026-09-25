@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +39,10 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Web
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -85,6 +90,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1105,93 +1111,161 @@ private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
     }
 }
 
-// ===== HTML/SVG 效果稿内联渲染（lang=html/svg 代码块自动出效果图）=====
+// ===== HTML/SVG 效果稿（lang=html/svg 代码块 → 紧凑卡片 + 全屏查看）=====
 
 /**
- * html/svg 代码块 → 聊天内直接渲染效果图（Web 池复用，固定高度内部滚动）。
- * 流式未闭合时先显示源码（避免 WebView 每 40ms 重载闪烁），闭合后自动出效果；
- * 「查看代码 / 查看效果」随时切换。
+ * 效果稿卡片：聊天里不再内联塞高 WebView（裁切 + 双层滚动打架 + 撑爆消息流），
+ * 显示一张紧凑卡片，点开全屏沉浸查看/交互；「查看代码」随时展开源码。
  */
 @Composable
 private fun HtmlArtifactBlock(block: MdBlock.Code, dark: Boolean) {
     var showCode by remember(block.code) { mutableStateOf(false) }
-    Column {
+    var fullscreen by remember(block.code) { mutableStateOf(false) }
+    // 卡片
+    Surface(
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { fullscreen = true }
+    ) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = 2.dp, bottom = 4.dp),
+            Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "效果预览 · ${block.lang}",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                if (showCode) "查看效果" else "查看代码",
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { showCode = !showCode }
-                    .padding(horizontal = 8.dp, vertical = 3.dp)
-            )
-        }
-        if (showCode) {
-            CodeBlock(block.lang, block.code, block.closed, dark)
-        } else if (!block.closed) {
-            Surface(
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF7C5CE0), Color(0xFF4F8FE0)))),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(120.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "渲染中…",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        } else {
-            Surface(
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(420.dp),
-                    factory = { ctx ->
-                        WebViewPool.acquire(ctx).apply {
-                            // 效果稿默认白底：设计稿假定浅色页面，避免深色聊天底透出
-                            setBackgroundColor(android.graphics.Color.WHITE)
-                        }
-                    },
-                    update = { wv ->
-                        if (wv.tag != block.code) {
-                            wv.tag = block.code
-                            wv.loadDataWithBaseURL(null, block.code, "text/html", "utf-8", null)
-                        }
-                    },
-                    onRelease = { wv ->
-                        // 归还前恢复透明底，避免污染池内后续 KaTeX/Mermaid 用途
-                        wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        WebViewPool.release(wv)
-                    }
+                Icon(
+                    Icons.Filled.Web,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(21.dp)
                 )
             }
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(start = 11.dp)
+            ) {
+                Text(
+                    "效果稿 · ${block.lang.uppercase()}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "单文件 · 可交互 · 点按全屏查看",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            Text(
+                "打开",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+            )
+        }
+    }
+    // 次级操作：查看代码（展开后在卡片下方流式显示源码）
+    Text(
+        if (showCode) "收起代码" else "查看代码",
+        fontSize = 11.5.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .padding(top = 5.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { showCode = !showCode }
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    )
+    if (showCode) {
+        CodeBlock(block.lang, block.code, block.closed, dark)
+    }
+    if (fullscreen) {
+        FullscreenHtmlDialog(
+            title = "效果稿 · ${block.lang.uppercase()}",
+            html = block.code,
+            baseUrl = null,
+            onDismiss = { fullscreen = false }
+        )
+    }
+}
+
+/**
+ * 全屏 HTML 查看层：整页完整展示、WebView 原生滚动（无嵌套滚动打架），
+ * 效果稿白底；html 效果稿与 mermaid 大图共用。
+ */
+@Composable
+private fun FullscreenHtmlDialog(
+    title: String,
+    html: String,
+    baseUrl: String?,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(Modifier.fillMaxSize().background(Color(0xFF10151A))) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE8EEEA),
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "关闭",
+                    fontSize = 12.sp,
+                    color = Color(0xFF9AA8A0),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { onDismiss() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    WebViewPool.acquire(ctx).apply {
+                        // 效果稿假定浅色页面，白底防深色底透出
+                        setBackgroundColor(android.graphics.Color.WHITE)
+                    }
+                },
+                update = { wv ->
+                    if (wv.tag != html) {
+                        wv.tag = html
+                        wv.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
+                    }
+                },
+                onRelease = { wv ->
+                    // 归还前恢复透明底，避免污染池内后续 KaTeX/Mermaid 用途
+                    wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    WebViewPool.release(wv)
+                }
+            )
         }
     }
 }
+
 
 /** Mermaid 图表块：资产就绪走 WebView（渲染失败降级显示源码），未就绪同上。 */
 @Composable
@@ -1218,10 +1292,39 @@ private fun MermaidBlock(code: String, dark: Boolean) {
         }
     } else {
         val html = remember(code, dark) { mermaidHtml(code, dark) }
-        WebViewBlock(
-            html = html,
-            baseUrl = "file:///android_asset/mermaid/"
-        )
+        var fullscreen by remember(code) { mutableStateOf(false) }
+        Box(Modifier.fillMaxWidth()) {
+            // 大图内滚限高：此前自动高上限 4000dp，一张大时序图能把消息流撑爆
+            Box(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                WebViewBlock(
+                    html = html,
+                    baseUrl = "file:///android_asset/mermaid/"
+                )
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .clickable { fullscreen = true }
+            ) {
+                Text(
+                    "⤢ 全屏",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+        }
+        if (fullscreen) {
+            FullscreenHtmlDialog(
+                title = "示意图 · mermaid",
+                html = html,
+                baseUrl = "file:///android_asset/mermaid/",
+                onDismiss = { fullscreen = false }
+            )
+        }
     }
 }
 
