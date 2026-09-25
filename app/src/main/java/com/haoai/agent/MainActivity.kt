@@ -18,7 +18,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -1344,6 +1346,9 @@ private fun OnboardingGlass(
                                 Column(
                                     Modifier
                                         .weight(1f)
+                                        // v3⑥：填满行高——行高由 IntrinsicSize.Min 取最高卡，
+                                        // 副注行数不同（自定义1行 vs 其他2行）的同排卡等高
+                                        .fillMaxHeight()
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(
                                             if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
@@ -1391,7 +1396,11 @@ private fun OnboardingGlass(
                                 Triple(null, "自定义", "自己写或🎲随机抽一个")
                         Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                             cells.chunked(2).forEach { rowCards ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                // 行高=同排最高卡（内在高度），配合 fillMaxHeight 同排等高
+                                Row(
+                                    Modifier.height(IntrinsicSize.Min),
+                                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                                ) {
                                     rowCards.forEach { (key, title, sub) ->
                                         renderCard(key, title, sub, key == null)
                                     }
