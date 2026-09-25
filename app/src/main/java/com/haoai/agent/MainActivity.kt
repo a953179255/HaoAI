@@ -1298,13 +1298,18 @@ private fun OnboardingGlass(
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                             modifier = Modifier.padding(top = 6.dp)
                         )
-                        // 5+1 卡片：两列网格
-                        val personas = com.haoai.agent.ui.onboarding.PersonaPresets.all
+                        // 6 张卡两列网格（5 预设 + 自定义）：共用同一段渲染，自定义卡不再单独排版
+                        // （原单行 Row 比人格卡矮、外观不齐——2026-09-26 用户真机反馈）
+                        val cards: List<Triple<String, String, Boolean>> =
+                            com.haoai.agent.ui.onboarding.PersonaPresets.all
+                                .map { Triple(it.key, it.tagline, false) } +
+                                Triple("自定义", "想什么样写什么样，自己动手", true)
                         Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            personas.chunked(2).forEach { rowCards ->
+                            cards.chunked(2).forEach { rowCards ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    rowCards.forEach { p ->
-                                        val selected = personaKey == p.key && !personaCustom
+                                    rowCards.forEach { (title, sub, isCustom) ->
+                                        val selected = if (isCustom) personaCustom
+                                        else personaKey == title && !personaCustom
                                         Column(
                                             Modifier
                                                 .weight(1f)
@@ -1320,21 +1325,26 @@ private fun OnboardingGlass(
                                                     RoundedCornerShape(14.dp)
                                                 )
                                                 .clickable {
-                                                    personaCustom = false
                                                     tunedText = null
                                                     tuning = false
-                                                    personaKey = p.key
+                                                    if (isCustom) {
+                                                        personaKey = null
+                                                        personaCustom = true
+                                                    } else {
+                                                        personaCustom = false
+                                                        personaKey = title
+                                                    }
                                                 }
                                                 .padding(horizontal = 11.dp, vertical = 9.dp)
                                         ) {
                                             Text(
-                                                p.key,
+                                                title,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = MaterialTheme.colorScheme.onBackground
                                             )
                                             Text(
-                                                p.tagline,
+                                                sub,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                                                 maxLines = 2,
@@ -1344,37 +1354,6 @@ private fun OnboardingGlass(
                                     }
                                     if (rowCards.size == 1) Spacer(Modifier.weight(1f))
                                 }
-                            }
-                            // 自定义卡
-                            val customSel = personaCustom
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (customSel) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (customSel) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f),
-                                        RoundedCornerShape(14.dp)
-                                    )
-                                    .clickable {
-                                        personaKey = null
-                                        tunedText = null
-                                        tuning = false
-                                        personaCustom = true
-                                    }
-                                    .padding(horizontal = 11.dp, vertical = 9.dp)
-                            ) {
-                                Text(
-                                    "自定义——想什么样写什么样",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onBackground
-                                )
                             }
                         }
                         // 预览（选了预设才出现）：全文 + 微调入口
