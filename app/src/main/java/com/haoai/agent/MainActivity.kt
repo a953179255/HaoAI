@@ -1699,7 +1699,8 @@ private fun OnboardingGlass(
                                             com.haoai.agent.ui.settings.ProviderLogoAvatar(p)
                                             Column {
                                                 Text(
-                                                    p.name,
+                                                    // 自定义 preset 的 name 为空串，兜底显示 label
+                                                    p.name.ifBlank { p.label },
                                                     style = MaterialTheme.typography.bodySmall,
                                                     fontWeight = FontWeight.SemiBold,
                                                     color = MaterialTheme.colorScheme.onBackground

@@ -94,6 +94,8 @@ object ProviderPresets {
             "原生 Messages 协议 · Claude 系列", logoRes = R.drawable.logo_anthropic, avatarBg = 0xFFFFFFFF),
         ProviderPreset("MiniMax", "MiniMax", "https://api.minimaxi.com/v1", "",
             "MiniMax 系列", logoRes = R.drawable.logo_minimax, avatarBg = 0xFFFFFFFF),
+        ProviderPreset("千问", "阿里千问 (Qwen)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",
+            "通义千问系列 · 有免费档", logoRes = R.drawable.logo_qwen, avatarBg = 0xFFFFFFFF),
         // ── 中国 ──
         ProviderPreset("智谱", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
             "GLM 系列模型 · 有免费 flash 档", category = "中国", logoRes = R.drawable.logo_zhipu,
@@ -104,6 +106,8 @@ object ProviderPresets {
             "官方 · deepseek 系列模型", category = "中国", logoRes = R.drawable.logo_deepseek, avatarBg = 0xFFFFFFFF),
         ProviderPreset("MiniMax", "MiniMax", "https://api.minimaxi.com/v1", "",
             "MiniMax 系列", category = "中国", logoRes = R.drawable.logo_minimax, avatarBg = 0xFFFFFFFF),
+        ProviderPreset("千问", "阿里千问 (Qwen)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",
+            "通义千问系列 · 有免费档", category = "中国", logoRes = R.drawable.logo_qwen, avatarBg = 0xFFFFFFFF),
         ProviderPreset("硅基流动", "SiliconFlow", "https://api.siliconflow.cn/v1", "",
             "聚合 · 国产模型多 · 有免费档", category = "中国", avatarBg = 0xFF6C5CE7),
         // ── 聚合 ──
@@ -121,9 +125,10 @@ object ProviderPresets {
             "任意 OpenAI 兼容端点", category = "自定义", avatarBg = 0xFF5A5A5A)
     )
 
-    /** 引导页「接大脑」步只用推荐分类的前几行（引导要短）。 */
+    /** 引导页「接大脑」步：推荐分类前几行 + 末尾附「自定义」（引导要短，但自定义端点是兜底必给）。 */
     val onboardingShortlist: List<ProviderPreset>
-        get() = all.filter { it.category == "推荐" }.distinctBy { it.name }.take(4)
+        get() = all.filter { it.category == "推荐" }.distinctBy { it.name }.take(4) +
+                all.filter { it.category == "自定义" }
 }
 
 /** 预设对应的 API 协议：Anthropic 官方端点用原生 Messages，其余走 OpenAI 兼容。 */
