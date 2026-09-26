@@ -316,6 +316,21 @@ class EngineFlowTest {
     }
 
     @Test
+    fun `agent artifact dirs get excluded from git locally, not via the user gitignore`() {
+        val ws = tempWorkspace()
+        File(ws, ".git").mkdirs()
+        val exclude = File(ws, ".git/info/exclude")
+        Env.excludeFromGit(ws, Env.TOOL_OUTPUT_DIR, ".haoai-snap")
+        val text = exclude.readText()
+        assertTrue("没写进 info/exclude：$text", text.contains("/${Env.TOOL_OUTPUT_DIR}/"))
+        assertTrue(text.contains("/.haoai-snap/"))
+        assertFalse("不该碰用户的 .gitignore", File(ws, ".gitignore").exists())
+        // 再调一次不能重复追加
+        Env.excludeFromGit(ws, Env.TOOL_OUTPUT_DIR, ".haoai-snap")
+        assertEquals(1, exclude.readText().lines().count { it.trim() == "/${Env.TOOL_OUTPUT_DIR}/" })
+    }
+
+    @Test
     fun `diff summary counts changed lines`() {
         val d = Diff.summary("a\nb\nc", "a\nB\nc")
         assertTrue(d, d.contains("−1 行") && d.contains("+1 行"))
@@ -324,8 +339,8 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        // 14 把：9 把基础 + 5 把常驻进程（open/send/read/close/list）
-        assertEquals(14, schemas.size)
+        // 15 把：9 把基础 + 5 把常驻进程 + 1 把 git
+        assertEquals(15, schemas.size)
         assertTrue(
             "常驻进程工具没注册进来",
             setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")

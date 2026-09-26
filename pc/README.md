@@ -89,10 +89,12 @@ shell_close(id) / shell_list()
 
 ## 已验证到哪一步
 
-- `gradle test` → **37 条全绿**：16 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **44 条全绿**：16 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环），13 条权限规则（语法解析、前缀归约、后写覆盖先写、
   alwaysAsk 压 auto、plan 压 allow、按工作区隔离、落盘重载、走真引擎），
+  7 条 git（引号参数切分、只读不问人、真 add/commit/log、deny 规则拦得住 commit、
+  不在仓库里给下一步、不支持的子命令列可用），
   5 条常驻进程（同一 shell 保留变量状态、关掉不泄漏、被拒不启进程、空闲回收、list 可见），
   3 条真 HTTP 流式（中文按 4 字节切碎不损坏、`tool_calls.arguments` 分片拼回合法 JSON、
   429 标可重试 / 400 不可重试）。

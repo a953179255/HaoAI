@@ -153,9 +153,19 @@ class PolicyStore(private val file: File = Env.rulesFile) {
     }
 
     private fun Rule.matchesSubject(subject: String): Boolean {
-        val s = if (tool == "shell") commandPrefix(subject) else subject
-        val rx = globToRegex(pattern)
-        return rx.matches(s) || (pattern.endsWith("*") && s.startsWith(pattern.dropLast(1)))
+        if (tool != "shell") return globToRegex(pattern).matches(subject)
+        /**
+         * 命令要拿三种形态去比：**归约前缀**（`git checkout`）、**前两个 token**（`git commit`）、
+         * **整条命令**。
+         *
+         * 只用归约前缀会出这种事：arity 词典里没有 `git commit`（它不算危险命令），于是
+         * 用户写的 `shell(git commit*)` 永远匹配不上，规则形同虚设。三种都比一遍，
+         * "宽规则盖住一族、窄规则盖住具体子命令"两种写法都成立。
+         */
+        val reduced = PolicyStore.commandPrefix(subject)
+        val head2 = subject.trim().split(Regex("\\s+")).take(2).joinToString(" ")
+        return listOf(reduced, head2, subject.trim()).any { globToRegex(pattern).matches(it) ||
+            (pattern.endsWith("*") && it.startsWith(pattern.dropLast(1))) }
     }
 
     private fun key(workspace: File): String =

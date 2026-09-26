@@ -114,6 +114,7 @@ class ToolCtx(
         if (!target.isFile) return
         runCatching {
             val dir = File(workspace, ".haoai-snap").apply { mkdirs() }
+            Env.excludeFromGit(workspace, ".haoai-snap")
             target.copyTo(File(dir, "${System.currentTimeMillis()}-${target.name}"), overwrite = true)
         }
     }
@@ -506,6 +507,7 @@ fun capForStore(content: String, cap: Int, workspace: File, callId: String, spil
         val f = File(workspace, rel)
         f.parentFile?.mkdirs()
         f.writeText(content)
+        Env.excludeFromGit(workspace, Env.TOOL_OUTPUT_DIR)
         pruneSpillDir(File(workspace, Env.TOOL_OUTPUT_DIR))
     }.isSuccess
     return spillPreview(content, cap, if (written) rel else null)
@@ -540,5 +542,5 @@ object Diff {
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
-    TodoTool(), AskUserTool(), WebFetchTool()
+    GitTool(), TodoTool(), AskUserTool(), WebFetchTool()
 )

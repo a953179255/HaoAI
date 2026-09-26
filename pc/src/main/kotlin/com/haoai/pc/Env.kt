@@ -86,6 +86,35 @@ object Env {
 
     fun abs(f: File): String = runCatching { f.canonicalFile.absolutePath }.getOrElse { f.absolutePath }
 
+    /**
+     * 把 agent 自己的产物目录写进 `.git/info/exclude`。
+     *
+     * 为什么不用用户的 `.gitignore`：那是用户的文件，agent 往里加东西等于擅自改仓库。
+     * `info/exclude` 是**本地**忽略，不入库、不产生 diff，正好放这种工具垃圾。
+     * 不做这一步，用户跑完一次任务 `git status` 就会看到 `.haoai-snap/`、`.haoai-output/`
+     * 两条永远不该出现的未跟踪项。
+     */
+    fun excludeFromGit(workspace: File, vararg names: String) {
+        var dir: File? = workspace
+        while (dir != null) {
+            val git = File(dir, ".git")
+            if (git.exists()) {
+                val exclude = File(git, "info/exclude")
+                runCatching {
+                    exclude.parentFile?.mkdirs()
+                    val have = if (exclude.isFile) exclude.readText() else ""
+                    val missing = names.filter { !have.contains(it) }
+                    if (missing.isNotEmpty()) {
+                        exclude.appendText("\n# HaoAI PC 的产物目录（本地忽略，不入库）\n" +
+                            missing.joinToString("\n") { "/$it/" } + "\n")
+                    }
+                }
+                return
+            }
+            dir = dir.parentFile
+        }
+    }
+
     @Volatile
     var verbose: Boolean = false
 

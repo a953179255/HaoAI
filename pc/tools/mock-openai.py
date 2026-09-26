@@ -81,6 +81,22 @@ PLAN = {
         ("这条命令输出 4 万字符，会话里只留了头尾摘要，完整内容在 `.haoai-output/` 里，"
          "需要中间部分我可以用 read 分段回读。", None),
     ],
+    "git": [
+        ("先看看仓库现在什么样", [{"id": "g1", "name": "git",
+                                   "arguments": json.dumps({"sub": "status", "args": "--porcelain"})}]),
+        ("读一下要改的文件", [{"id": "g2", "name": "read",
+                               "arguments": json.dumps({"path": "notes.md"})}]),
+        ("改一行", [{"id": "g3", "name": "edit",
+                     "arguments": json.dumps({"path": "notes.md", "old_string": "TODO 待补",
+                                              "new_string": "已完成：PC 端 git 工具链路验证通过"})}]),
+        ("看看 diff", [{"id": "g4", "name": "git",
+                        "arguments": json.dumps({"sub": "diff", "args": "-- notes.md"})}]),
+        ("提交", [{"id": "g5", "name": "git",
+                   "arguments": json.dumps({"sub": "commit", "args": "-am \"docs: 更新 notes\""})}]),
+        ("做完了。改动是 notes.md 里那一行 TODO 被换成验证结论，"
+         "已经 commit（上面 git diff 与 commit 的输出就是证据）。"
+         "没动别的文件，也没 push。", None),
+    ],
     "ask": [
         ("先问一下", [{"id": "call_q", "name": "ask_user",
                        "arguments": json.dumps({"question": "要绿色还是蓝色主题？", "options": ["绿色", "蓝色"]})}]),
