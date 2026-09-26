@@ -266,17 +266,37 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // 转屏也要重算：矩形用 px 且随 decorView 尺寸变，只 key screen 会留下竖屏尺寸
     // 的矩形（横屏后只盖住半屏高，下半截左缘又被系统手势吃掉）。
     // post 到布局之后取真实宽高，避免拿到上一帧的旧尺寸。
+    // 但冷启动第一次组合时 decorView 还没布局（height=0）——旧写法在这里判空后直接放弃、
+    // 且不再重试，于是排除区从来没生效过：真机 dumpsys window 里 HaoAI 窗口压根没有
+    // mSystemGestureExclusion 字段，左缘 x=8 起手的右滑被系统手势吃掉、整页退回桌面
+    //（用户报的"侧边栏呼不出"在真机上就是这个）。改成等一次真实布局再写。
     val gestureCfg = androidx.compose.ui.platform.LocalConfiguration.current
     androidx.compose.runtime.LaunchedEffect(screen, gestureCfg.screenHeightDp, gestureCfg.screenWidthDp) {
         val act = context as? android.app.Activity ?: return@LaunchedEffect
         val view = act.window.decorView
         val density = view.resources.displayMetrics.density
-        view.post {
+        fun applyExclusion() {
             view.systemGestureExclusionRects = if (screen == 0 && view.height > 0) {
                 listOf(android.graphics.Rect(0, 0, (70 * density).toInt(), view.height))
             } else {
                 emptyList()
             }
+        }
+        if (view.height > 0) {
+            view.post { applyExclusion() }
+        } else {
+            val listener = object : android.view.View.OnLayoutChangeListener {
+                override fun onLayoutChange(
+                    v: android.view.View, left: Int, top: Int, right: Int, bottom: Int,
+                    oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int
+                ) {
+                    if (v.height > 0) {
+                        v.removeOnLayoutChangeListener(this)
+                        applyExclusion()
+                    }
+                }
+            }
+            view.addOnLayoutChangeListener(listener)
         }
     }
 

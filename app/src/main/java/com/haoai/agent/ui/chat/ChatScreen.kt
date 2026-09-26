@@ -784,7 +784,12 @@ fun ChatScreen(
                     // 每帧把 fraction 钉到 位移/面板宽度，松手按位置+速度结算开或关
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.position.x < with(this) { 60.dp.toPx() }) {
+                        // 判区取 88dp：魅族 20 Pro 实测 Flyme 的手势导航**不认**
+                        // systemGestureExclusionRects（冷启动后 x=8 起手仍被系统当成返回、
+                        // 整页退回桌面），而起手在 35dp 就能正常呼出抽屉。60dp 只留了一线
+                        // 余量，稍靠外的自然起手就漏；88dp ≈ 屏宽 1/5，配合"必须横向为主"
+                        // 的方向判定，不会和消息列表的纵向滚动抢手势。
+                        if (down.position.x < with(this) { 88.dp.toPx() }) {
                             var tx = 0f; var ty = 0f
                             var tracking = false
                             var startTime = 0L
