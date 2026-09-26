@@ -259,6 +259,27 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val wpVersion by com.haoai.agent.platform.WallpaperStore.changes.collectAsState()
     androidx.compose.runtime.remember(wpVersion) { wallpaper }
     var screen by rememberSaveable { mutableIntStateOf(0) }
+    // 手势导航（navigation_mode=2）下，系统左缘 back 手势区在 App 收到触摸前就吃掉事件——
+    // 实测抽屉的"左缘右滑呼出"判区是 x<60dp，与系统区重叠，从真边缘起手必被吞，
+    // 用户看到的就是"侧边栏呼不出"（汉堡是通的）。声明左缘 70dp 为本页手势排除区
+    //（系统上限 200dp），仅聊天页需要；离开聊天页清掉，不侵占系统 back 手势。
+    // 转屏也要重算：矩形用 px 且随 decorView 尺寸变，只 key screen 会留下竖屏尺寸
+    // 的矩形（横屏后只盖住半屏高，下半截左缘又被系统手势吃掉）。
+    // post 到布局之后取真实宽高，避免拿到上一帧的旧尺寸。
+    val gestureCfg = androidx.compose.ui.platform.LocalConfiguration.current
+    androidx.compose.runtime.LaunchedEffect(screen, gestureCfg.screenHeightDp, gestureCfg.screenWidthDp) {
+        val act = context as? android.app.Activity ?: return@LaunchedEffect
+        val view = act.window.decorView
+        val density = view.resources.displayMetrics.density
+        view.post {
+            view.systemGestureExclusionRects = if (screen == 0 && view.height > 0) {
+                listOf(android.graphics.Rect(0, 0, (70 * density).toInt(), view.height))
+            } else {
+                emptyList()
+            }
+        }
+    }
+
     // 虚拟屏全屏查看页展开态（迷你窗 ⤢ 展开 / 全屏页 ↩ 收起），供两个槽位共享
     var vscreenFullOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -1156,7 +1177,9 @@ private fun LandscapeWrap(s: Int, drawerOpen: Boolean = false, content: @Composa
     // 收窄后内容列会压在抽屉上（真机截图实测）。
     // 注意 drawerOpen 必须由调用方限定 s==0：leaveChat() 一离开聊天就把 drawer.frozen 置真，
     // 不限定就会让豁免命中所有屏（实测记忆/会话/MCP 全部退回满宽）
-    if (s == 7 || drawerOpen) {
+    // 豁免：浏览器（网页满屏）、聊天（横屏改走两栏侧栏 + 全宽消息区，
+    // 抽屉面板在列外的溢出也一并消失）、抽屉可见
+    if (s == 7 || s == 0 || drawerOpen) {
         content()
         return
     }
@@ -1169,8 +1192,9 @@ private fun LandscapeWrap(s: Int, drawerOpen: Boolean = false, content: @Composa
         if (maxWidth <= maxHeight) {
             content()
         } else {
-            // 620dp 阅读列宽：放得下「图标 + 标题 + 两枚状态胶囊 + 箭头」而不显拉胯
-            val pad = ((maxWidth.value - 620f) / 2f).coerceIn(16f, 260f).dp
+            // 留白改为固定窄边（用户裁定：横屏纵向本就紧张，左右 200+dp 纯留白是浪费）。
+            // 两侧只留 12dp 让卡片与屏缘有界，页面自带的 pagePadding 继续提供阅读边距
+            val pad = 12.dp
             Box(
                 Modifier
                     .fillMaxSize()
