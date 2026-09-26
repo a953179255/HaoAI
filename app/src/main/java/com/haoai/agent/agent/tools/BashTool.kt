@@ -23,6 +23,16 @@ class BashTool : Tool {
         const val JOB_LOG_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
 
         /**
+         * 命令原始输出的兜底水位（2026-09-26，从 12_000 提上来）。
+         *
+         * 为什么必须高于引擎的 `STORED_CAP=16000`：工具自己先截到 1.2 万，等于这条结果
+         * 永远到不了落库上限，S4 的"溢出落文件"对 bash 这种最容易出长输出的工具形同虚设。
+         * 为什么不能无限：`exec` 已经把全文读进内存了，再往下传不会多占，但会话与溢出
+         * 文件的写入体量要有个上限，20 万字符够覆盖"一次命令输出几十屏"的现实场景。
+         */
+        const val RAW_OUTPUT_BOUND = 200_000
+
+        /**
          * 包管理命令最短超时保底（2026-09-15）：真机 Ubuntu 上首次 update+install
          * 轻松超过默认 30s；超时击杀 proot 会话会把 dpkg 事务拦腰打断、留
          * interrupted 锁（用户反馈「Ubuntu 用不了」的主要触发路径之一）。
@@ -144,7 +154,14 @@ class BashTool : Tool {
                 "ssh" -> "（ssh）"
                 else -> ""
             }
-            ToolResult("exit=${result.exitCode}$note\n---\n${TextCap.middle(result.output, 12_000)}")
+            /**
+             * 这里只兜"病态大输出"（一条 `cat` 出几十 MB 会把会话文件与后续估算一起拖垮），
+             * 不再代替引擎决定"模型能看到多少"：真正的落库口径是 `EngineToolRun` 的
+             * `capForStore(content, STORED_CAP=16000)`，它上面还有 S4 溢出落文件那条路。
+             * 旧值 12_000 比 STORED_CAP 还小，等于把 bash —— 最容易出长输出的工具 ——
+             * 永久挡在溢出机制之外：开开关也永远不会有文件。故放到远高于 1.6 万的水位。
+             */
+            ToolResult("exit=${result.exitCode}$note\n---\n${TextCap.middle(result.output, RAW_OUTPUT_BOUND)}")
         }
 
     /**

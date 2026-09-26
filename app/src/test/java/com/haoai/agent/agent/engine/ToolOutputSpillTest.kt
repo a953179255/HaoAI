@@ -146,4 +146,24 @@ class ToolOutputSpillTest {
         assertEquals(TextCap.middle(longText(20_000), 16_000), out)
         assertNull(boom.files["whatever"])
     }
+
+    /**
+     * 工具层的水位不能低于引擎落库水位，否则溢出永远触发不了。
+     *
+     * 真机验证时踩出来的：`BashTool` 原本自己先 `TextCap.middle(output, 12_000)`，
+     * 比 `STORED_CAP=16000` 还小 —— 于是"最容易出长输出的工具"恰好是唯一
+     * 到不了 S4 那条通路的工具，开关拨了也没文件。这条测试就是把那个反直觉的
+     * 包含关系钉死：必须 **工具水位 > 落库水位 > 溢出上限之下**。
+     */
+    @Test
+    fun `tool-level output bound stays above the engine stored cap`() {
+        assertTrue(
+            "BashTool 自己截得比落库上限还狠，溢出通路就是死的",
+            com.haoai.agent.agent.tools.BashTool.RAW_OUTPUT_BOUND > STORED_CAP
+        )
+        assertTrue(
+            "超过溢出硬顶就不写文件了，工具水位定在它之上没有意义",
+            com.haoai.agent.agent.tools.BashTool.RAW_OUTPUT_BOUND < SPILL_MAX_CHARS
+        )
+    }
 }
