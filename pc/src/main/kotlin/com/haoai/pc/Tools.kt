@@ -342,41 +342,10 @@ class ShellTool : Tool(
         }
     }
 
-    private fun launcherFor(shell: String): Pair<String, List<String>>? = when {
-        shell == "bash" || shell == "sh" -> {
-            val cands = listOfNotNull(
-                System.getenv("ProgramFiles")?.let { "$it\\Git\\bin\\bash.exe" },
-                System.getenv("ProgramFiles")?.let { "$it\\Git\\usr\\bin\\bash.exe" },
-                "E:\\Git\\bin\\bash.exe",
-                "C:\\Program Files\\Git\\bin\\bash.exe"
-            )
-            val hit = cands.firstOrNull { File(it).isFile }
-            hit?.let { it to listOf("-l") }
-        }
-        shell == "cmd" -> {
-            val sysRoot = System.getenv("SystemRoot")
-            val f = sysRoot?.let { File(it, "System32\\cmd.exe") }
-            if (f != null && f.isFile) f.absolutePath to listOf("/c") else null
-        }
-        else -> {
-            which("pwsh")?.let { it to listOf("-NoProfile", "-NonInteractive", "-File") }
-                ?: run {
-                    val sysRoot = System.getenv("SystemRoot")
-                    val f = sysRoot?.let { File(it, "System32\\WindowsPowerShell\\v1.0\\powershell.exe") }
-                    if (f != null && f.isFile) f.absolutePath to listOf("-NoProfile", "-NonInteractive", "-File") else null
-                }
-        }
-    }
-
-    private fun which(cmd: String): String? {
-        val path = System.getenv("PATH")?.split(File.pathSeparator) ?: return null
-        val exts = if (Env.isWindows) listOf(".exe", ".cmd") else listOf("")
-        for (d in path) for (e in exts) {
-            val f = File(d, cmd + e)
-            if (f.isFile) return f.absolutePath
-        }
-        return null
-    }
+    private fun launcherFor(shell: String): Pair<String, List<String>>? =
+        // 与常驻进程共用同一套"在这台 Windows 上找到 shell"的逻辑（Pty.kt 的 ShellLauncher）：
+        // 两处各写一份 bash 候选路径，将来一定有一份改了另一份没改。
+        ShellLauncher.forName(shell)
 
     companion object {
         /** 不切代码页的话，中文输出在 PowerShell 下必乱码（本机实测）。 */
@@ -570,5 +539,6 @@ object Diff {
 
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
-    ShellTool(), TodoTool(), AskUserTool(), WebFetchTool()
+    ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
+    TodoTool(), AskUserTool(), WebFetchTool()
 )

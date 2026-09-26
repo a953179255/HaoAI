@@ -318,11 +318,22 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        assertEquals(9, schemas.size)
+        // 14 把：9 把基础 + 5 把常驻进程（open/send/read/close/list）
+        assertEquals(14, schemas.size)
+        assertTrue(
+            "常驻进程工具没注册进来",
+            setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")
+                .all { n -> schemas.any { it.name == n } }
+        )
         val read = schemas.first { it.name == "read" }
         val obj = kotlinx.serialization.json.Json.parseToJsonElement(read.params.toString()).jsonObjectOf()
         assertEquals("object", obj["type"]?.let { it.toString().trim('"') })
         assertTrue(obj.containsKey("properties"))
+        // 每条 schema 都得是合法 JSON 且带 properties，否则网关会整批拒
+        schemas.forEach { s ->
+            val o = kotlinx.serialization.json.Json.parseToJsonElement(s.params.toString())
+            assertTrue("${s.name} 的 schema 不是 object", o is kotlinx.serialization.json.JsonObject)
+        }
     }
 
     private fun kotlinx.serialization.json.JsonElement.jsonObjectOf(): Map<String, kotlinx.serialization.json.JsonElement> =

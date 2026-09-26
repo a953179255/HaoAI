@@ -55,6 +55,11 @@ object Prompt {
                 "要看中间部分就用 read 分段回读，**不要凭头尾摘要猜**。"
         )
         appendLine("- 编辑已有文件优先用 edit（精确替换），不要用 write 整篇覆盖，覆盖会丢掉你没看到的行。")
+        appendLine(
+            "- 需要**边看边答**的命令（ssh、mysql>、python -i、构建工具的确认提示），" +
+                "用 shell_open 起常驻进程，再 shell_send / shell_read 来回喂与捞；用完 shell_close。"
+        )
+        appendLine("- 权限规则命中时不会再问你；被规则拒绝时理由会写清楚是哪一条，别原样重试。")
         appendLine("- 需要用户拿主意的地方用 ask_user，一次问清；不要连环追问。")
         appendLine()
 
