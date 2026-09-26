@@ -29,3 +29,36 @@ tasks.withType<JavaExec>().configureEach {
 tasks.named<JavaExec>("run") {
     jvmArgs("-Dfile.encoding=UTF-8")
 }
+
+/**
+ * 打一个**自带 JVM** 的 Windows 应用目录：`build/package/HaoAI-PC/HaoAI-PC.exe`。
+ *
+ * 为什么要这一步：在那之前"PC 端 HaoAI"是"一个要会敲 gradle 的仓库"，
+ * 之后才是"一个能双击、能放进启动菜单的东西"。
+ *
+ * `jpackage` 只在完整 JDK 里有（Android Studio 自带的 jbr 是**运行时**，没有它），
+ * 所以路径从环境来：设 `JPACKAGE` 指向 jpackage，或让它自己在 PATH 里。
+ * 用 `--type app-image` 而不是 installer：不碰注册表、不需要管理员、解压即用、删文件夹即卸载。
+ */
+val packageExe by tasks.registering(Exec::class) {
+    group = "distribution"
+    description = "生成 Windows 应用目录（HaoAI-PC.exe + 自带 runtime）"
+    dependsOn("installDist")
+    val jp = System.getenv("JPACKAGE") ?: "jpackage"
+    val lib = layout.buildDirectory.dir("install/haoai-pc/lib").get().asFile
+    val out = layout.buildDirectory.dir("package").get().asFile
+    doFirst {
+        if (!file(lib).isDirectory) error("先跑 installDist")
+        commandLine(
+            jp, "--type", "app-image", "--name", "HaoAI-PC", "--app-version", "0.1.0",
+            "--vendor", "HaoAI", "--win-console",
+            "--input", lib.absolutePath,
+            "--main-jar", "haoai-pc.jar",
+            "--main-class", "com.haoai.pc.MainKt",
+            "--dest", out.absolutePath,
+            "--java-options", "-Dfile.encoding=UTF-8",
+            "--java-options", "-Dstdout.encoding=UTF-8",
+            "--java-options", "-Dstderr.encoding=UTF-8"
+        )
+    }
+}

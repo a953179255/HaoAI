@@ -6,6 +6,20 @@
 架构决定来自 `HaoAI-Windows端与手机协同方案.md`：**PC 是权威源，手机是节点**；
 内核共享、壳不共享（参考的 7 家 agent 里没有一家用 Compose Desktop 做桌面）。
 
+## 怎么装（Windows）
+
+```
+cd pc
+set JPACKAGE=C:\Program Files\Eclipse Adoptium\jdk-25.0.2.10-hotspot\bin\jpackage.exe
+gradle packageExe
+```
+
+产出 `pc/build/package/HaoAI-PC/`：**自带 JVM 的应用目录**，双击或命令行跑
+`HaoAI-PC.exe doctor` / `HaoAI-PC.exe serve`。用 `--type app-image` 而不是安装包：
+不写注册表、不要管理员、删文件夹即卸载。约 126MB（大头是捆绑的运行时）。
+
+只想跑代码的话 `gradle installDist` 就够了，产物在 `build/install/haoai-pc/bin/`。
+
 ## 现在能做什么
 
 同一个内核，两种壳：
