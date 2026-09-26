@@ -3,6 +3,7 @@ package com.haoai.agent.agent.engine
 import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.model.ToolCallData
 import com.haoai.agent.agent.policy.ApprovalRequest
+import com.haoai.agent.agent.flags.HaoFlag
 import com.haoai.agent.agent.tools.TextCap
 import com.haoai.agent.agent.tools.optBool
 import com.haoai.agent.agent.tools.Tool
@@ -318,7 +319,15 @@ internal suspend fun AgentEngine.finishCall(
     if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
         _loopFailedCap = true
     }
-    var storedContent = TextCap.middle(finalResult.content, STORED_CAP)
+    // S4：落库出口。默认与改造前逐字相同（TextCap.middle 同一套 65%/25% 切分）；
+    // 开了 tool_result_spill 才把全文溢出到工作区、会话里留摘要 + 可 read 的路径。
+    var storedContent = capForStore(
+        content = finalResult.content,
+        cap = STORED_CAP,
+        backend = callCtx.backend,
+        callId = call.id,
+        spillOn = HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, flagOverrides)
+    )
     val message = ChatMessage(
         role = ChatMessage.ROLE_TOOL,
         content = storedContent,

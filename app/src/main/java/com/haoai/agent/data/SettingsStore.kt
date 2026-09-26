@@ -219,6 +219,11 @@ data class AppSettings(
      * 只放内存里的话返回设置页再进来就空了，那张卡会退化成一句没有证据的自我表扬。
      */
     val searchTestResults: Map<String, String> = emptyMap(),
+    /**
+     * S6 特性开关的用户覆盖：flagKey → 是否开启。
+     * 只存"与默认值不同"的项（见 HaoFlag.compactOverrides），未出现的 key 走枚举默认。
+     */
+    val enabledFlags: Map<String, Boolean> = emptyMap(),
     /** 上次记忆固化时间与结果（健康度仪表盘展示）。 */
     val lastConsolidationAt: Long = 0,
     val lastConsolidationReport: String = "",

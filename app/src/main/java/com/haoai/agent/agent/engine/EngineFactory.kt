@@ -91,6 +91,8 @@ object EngineFactory {
             onUsage = interaction.onUsage,
             backgroundScope = backgroundScope,
             statusProvider = interaction.statusProvider,
+            // S6 特性开关覆盖，取自设置快照（默认值在 HaoFlag 枚举里）
+            flagOverrides = st.enabledFlags,
             // C6/C1 统一配置入口：三处调用点共用同一套桥（聊天页曾独享，定时/工作流因此恒失败）
             configRender = { container.configBridge.render(container.settingsFlow.value) },
             configPreview = { patch ->

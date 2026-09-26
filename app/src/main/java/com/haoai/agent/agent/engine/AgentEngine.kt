@@ -97,6 +97,8 @@ class AgentEngine(
     internal val vscreenBitrateKbps: Int = 3000,
     /** 5.1 每日预算提示（≥70% 注入精简提醒、超预算注入警告），由调用方按设置计算。 */
     internal val budgetHint: () -> String = { "" },
+    /** S6 特性开关：用户在「实验特性」里的显式覆盖（key → on）。未覆盖的 key 走 HaoFlag 默认值。 */
+    internal val flagOverrides: Map<String, Boolean> = emptyMap(),
     /** 5.3 模型路由：记忆提取专用链（主+备用）；空=回落主模型。 */
     internal val memoryTarget: (suspend () -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.3 模型路由：上下文压缩摘要专用链。 */
