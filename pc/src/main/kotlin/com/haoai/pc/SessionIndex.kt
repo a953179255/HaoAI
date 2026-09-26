@@ -1,6 +1,8 @@
 package com.haoai.pc
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -57,5 +59,36 @@ object SessionIndex {
         s.mode = meta.mode
         s.title.set(meta.title)
         return s
+    }
+
+    /** 改标题。只动 `title` 一个字段，其余原样写回。 */
+    fun rename(id: String, newTitle: String): Boolean {
+        val f = fileFor(id)
+        if (!f.isFile) return false
+        val clean = newTitle.trim().replace('\n', ' ').take(60)
+        if (clean.isEmpty()) return false
+        return runCatching {
+            val o = Json.parseToJsonElement(f.readText()).jsonObject
+            val patched = JsonObject(o.toMutableMap().apply { put("title", JsonPrimitive(clean)) })
+            f.writeText(patched.toString())
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 删会话 —— 其实是**移进回收目录**，不是就地抹掉。
+     *
+     * 理由：会话文件里是用户与 agent 的全部过程记录，误删一次的成本远高于多留一份垃圾；
+     * 而 `.trash/` 在 `sessions/` 下面，`list()` 的前缀过滤看不到它，界面上就是"删掉了"。
+     * 想彻底清空，删 `%LOCALAPPDATA%\HaoAI\sessions\.trash` 这个目录即可。
+     */
+    fun delete(id: String): Boolean {
+        val f = fileFor(id)
+        if (!f.isFile) return false
+        return runCatching {
+            val trash = File(Env.sessionsDir, ".trash").apply { mkdirs() }
+            val dest = File(trash, "${System.currentTimeMillis()}-${f.name}")
+            f.renameTo(dest) || run { f.copyTo(dest, overwrite = true); f.delete() }
+        }.getOrDefault(false)
     }
 }

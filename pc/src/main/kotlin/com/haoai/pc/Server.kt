@@ -3,8 +3,11 @@ package com.haoai.pc
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.buildJsonObject
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
@@ -66,6 +69,8 @@ class WebServer(settings: PcSettings, port: Int) {
                 }
                 "/api/sessions" -> send(ex, 200, sessionsJson(), "application/json; charset=utf-8")
                 "/api/open" -> openSession(ex)
+                "/api/rename" -> renameSession(ex)
+                "/api/delete" -> deleteSession(ex)
                 "/api/settings" ->
                     if (ex.requestMethod == "POST") saveSettings(ex)
                     else send(ex, 200, settingsJson(), "application/json; charset=utf-8")
@@ -140,12 +145,29 @@ class WebServer(settings: PcSettings, port: Int) {
     private fun bodyOf(ex: HttpExchange): String =
         ex.requestBody.readBytes().toString(StandardCharsets.UTF_8)
 
-    private fun field(ex: HttpExchange, key: String): String = runCatching {
-        Json.parseToJsonElement(bodyOf(ex)).jsonObject[key]?.jsonPrimitive?.content ?: ""
-    }.getOrDefault("")
+    /**
+     * 一次请求的 JSON 体。
+     *
+     * **必须在处理开头一次性读出来**：`HttpExchange.requestBody` 是流，读第二次就是空的。
+     * 之前每个字段各调一次 `field(ex, …)`，于是只有第一个字段拿得到值 ——
+     * `decide` 要读 id/decision/answer 三个，结果 `decision` 永远是空串，
+     * "允许一次"在服务端看来是"没给决定"，直接落进拒绝分支；`rename` 同理。
+     * 这类 bug 单测抓不到（测的是 SessionIndex/引擎，不是 HTTP 层），
+     * 只能靠"两个字段都要用到"的接口在真机上走一遍。
+     */
+    private class Body(ex: HttpExchange) {
+        private val obj: JsonObject = runCatching {
+            Json.parseToJsonElement(
+                // 不借道 bodyOf：Body 是嵌套类（非 inner），拿不到外层方法
+                ex.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+            ).jsonObject
+        }.getOrElse { buildJsonObject { } }
+
+        fun str(key: String): String = obj[key]?.jsonPrimitive?.contentOrNull ?: ""
+    }
 
     private fun task(ex: HttpExchange) {
-        val text = field(ex, "text")
+        val text = Body(ex).str("text")
         send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
         if (text.isBlank()) return
         publish("user", quote(text))
@@ -276,9 +298,10 @@ class WebServer(settings: PcSettings, port: Int) {
     }
 
     private fun decide(ex: HttpExchange) {
-        val id = field(ex, "id")
-        val decision = field(ex, "decision")
-        val answer = field(ex, "answer")
+        val b = Body(ex)
+        val id = b.str("id")
+        val decision = b.str("decision")
+        val answer = b.str("answer")
         val fut = pending[id]
         if (fut != null) fut.complete(if (answer.isNotBlank()) answer else decision)
         if (decision == "allow_session") {
@@ -289,7 +312,7 @@ class WebServer(settings: PcSettings, port: Int) {
     }
 
     private fun mode(ex: HttpExchange) {
-        val m = field(ex, "mode")
+        val m = Body(ex).str("mode")
         if (m in listOf("plan", "ask", "auto")) {
             ensureEngine().session.mode = m
             publish("mode", """{"mode":"$m"}""")
@@ -308,7 +331,7 @@ class WebServer(settings: PcSettings, port: Int) {
     }
 
     private fun openSession(ex: HttpExchange) {
-        val id = field(ex, "id")
+        val id = Body(ex).str("id")
         val meta = SessionIndex.list(200).firstOrNull { it.id == id }
         if (meta == null) {
             send(ex, 404, """{"ok":false,"error":"没有这个会话"}""", "application/json; charset=utf-8")
@@ -322,6 +345,41 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         send(ex, 200, """{"ok":true,"id":${quote(id)}}""", "application/json; charset=utf-8")
         publish("opened", """{"id":${quote(id)},"title":${quote(meta.title)},"mode":${quote(meta.mode)}}""")
+    }
+
+    /**
+     * `POST /api/rename` {id,title} —— 改会话标题。
+     * 内存里那份也要改，否则下一回合结束 `persist()` 会把新标题又写回旧的。
+     */
+    private fun renameSession(ex: HttpExchange) {
+        val b = Body(ex)
+        val id = b.str("id")
+        val title = b.str("title")
+        val ok = SessionIndex.rename(id, title)
+        if (ok && engine?.session?.id == id) engine?.session?.title?.set(title.trim().take(60))
+        send(ex, if (ok) 200 else 404,
+            """{"ok":$ok}""", "application/json; charset=utf-8")
+        if (ok) publish("sessions", "{}")
+    }
+
+    /**
+     * `POST /api/delete` {id} —— 删会话（实为移进 `sessions/.trash`，见 [SessionIndex.delete]）。
+     *
+     * 一条硬约束：**跑着的会话不许删**。否则线程会在一个已经被移走的文件上
+     * 继续 `persist()`，把文件又写回来，表现为"删了又出现"。
+     * 删的正好是当前会话时把 engine 置空，让界面回到新会话。
+     */
+    private fun deleteSession(ex: HttpExchange) {
+        val id = Body(ex).str("id")
+        if (id.isNotBlank() && running && engine?.session?.id == id) {
+            send(ex, 409, """{"ok":false,"error":"这个会话正在跑，先停止再删"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        val ok = SessionIndex.delete(id)
+        if (ok && engine?.session?.id == id) engine = null
+        send(ex, if (ok) 200 else 404, """{"ok":$ok}""", "application/json; charset=utf-8")
+        if (ok) publish("sessions", "{}")
     }
 
     private fun settingsJson(): String {

@@ -33,11 +33,18 @@
   .mini{background:var(--glass);border:1px solid var(--line);color:var(--dim);border-radius:7px;
     font-size:10.5px;padding:1px 6px;cursor:pointer;margin-left:6px}
   .sess{display:flex;flex-direction:column;gap:4px}
-  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 8px;
+  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 46px 6px 8px;
     cursor:pointer;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sess .it:hover{border-color:var(--acc2);color:var(--fg)}
   .sess .it.cur{border-color:var(--acc2);background:rgba(31,111,74,.22);color:var(--fg)}
   .sess .it i{font-style:normal;opacity:.65;font-size:11px}
+  /* 悬停才露出改名/删除：常驻的话侧栏每条都挂两个小方块，比要管的会话还显眼 */
+  .sess .it{position:relative}
+  .sess .it .act{position:absolute;right:5px;top:4px;display:flex;gap:3px;opacity:0;transition:opacity .12s}
+  .sess .it:hover .act{opacity:1}
+  .sess .it .act b{font-weight:400;cursor:pointer;color:var(--dim);border:1px solid var(--line);
+    border-radius:5px;padding:0 5px;font-size:10px;line-height:15px;background:rgba(0,0,0,.45)}
+  .sess .it .act b:hover{color:var(--fg);border-color:var(--acc2)}
   .fld{margin:8px 0}
   .fld label{display:block;font-size:11px;color:var(--dim);margin-bottom:3px}
   .sw{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
@@ -226,6 +233,8 @@ es.addEventListener('notice',e=>notice(JSON.parse(e.data)));
 es.addEventListener('err',e=>notice(JSON.parse(e.data),'err'));
 es.addEventListener('mode',e=>setMode(JSON.parse(e.data).mode));
 es.addEventListener('opened',e=>{const d=JSON.parse(e.data);curId=d.id;$('#title').textContent=d.title;});
+// 服务端改了会话（改名/删除）时推一下，列表自己刷新，不用整页重载
+es.addEventListener('sessions',()=>loadSessions());
 es.addEventListener('run',e=>{running=JSON.parse(e.data).running;if(!running)stopping=false;paintSend();});
 es.addEventListener('approval',e=>ask(JSON.parse(e.data),'approval'));
 es.addEventListener('ask',e=>ask(JSON.parse(e.data),'ask'));
@@ -294,15 +303,38 @@ function loadSessions(){
   fetch('/api/sessions').then(r=>r.json()).then(list=>{
     const box=$('#sessions');
     if(!list.length){box.innerHTML='<div class="it" style="cursor:default">（还没有历史会话）</div>';return}
-    box.innerHTML=list.slice(0,12).map(m=>`<div class="it${m.current?' cur':''}" data-id="${m.id}" title="${esc(m.workspace)}">
+    box.innerHTML=list.slice(0,12).map(m=>`<div class="it${m.current?' cur':''}" data-id="${m.id}" data-t="${esc(m.title)}" title="${esc(m.workspace)}">
+      <span class="act"><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>
       ${esc(m.title)}<br><i>${m.messages} 条 · ${m.mode} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i></div>`).join('');
-    box.querySelectorAll('[data-id]').forEach(e=>e.onclick=()=>{
-      if(e.dataset.id===curId)return;
-      fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:e.dataset.id})})
-        .then(r=>r.json()).then(()=>{curId=e.dataset.id;reload()});
+    box.querySelectorAll('.it').forEach(e=>{
+      const id=e.dataset.id;
+      e.onclick=ev=>{
+        const a=(ev.target.dataset||{}).a;
+        if(a==='ren'){
+          const t=prompt('会话标题',e.dataset.t||'');
+          if(t&&t.trim())post('/api/rename',{id:id,title:t}).then(loadSessions);
+          return;
+        }
+        if(a==='del'){
+          if(!confirm('删除这个会话？文件会移进 sessions/.trash，不是就地抹掉。'))return;
+          // 409 的正文里写着"为什么不让删"（正在跑），所以不能只看 ok
+          fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({id:id})})
+            .then(r=>r.json().then(d=>({ok:r.ok,d:d})))
+            .then(x=>{
+              if(!x.ok){alert((x.d&&x.d.error)||'删除失败');return}
+              if(id===curId){curId=null;stream.innerHTML=''}
+              loadSessions();
+            });
+          return;
+        }
+        if(id===curId)return;
+        post('/api/open',{id:id}).then(()=>{curId=id;reload()});
+      };
     });
   });
 }
+function post(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.ok?r.json():Promise.reject(r.status))}
 function reload(){stream.innerHTML='';return fetch('/api/state').then(r=>r.json()).then(applyState)}
 function applyState(s){
   // 刷新页面也要接上"正在跑"这件事：否则跑着的任务在界面上看不出来，停止按钮也不在。

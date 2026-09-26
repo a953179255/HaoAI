@@ -29,6 +29,11 @@ data class PcSettings(
     /** 工具结果落库上限 / 发请求上限，与手机端 STORED_CAP / REQ_CAP 同源同值。 */
     val storedCap: Int = 16_000,
     val reqCap: Int = 4_000,
+    /** 历史正文超过这么多字符就压一次摘要。默认 6 万字符（≈1.5 万 token）：
+     *  再高，一次压缩要读的头部就太大；再低，短会话也会被压得没上下文。 */
+    val compactTriggerChars: Int = 60_000,
+    /** 压缩时**原样保留**的最近条数。太小会让模型忘记自己刚做了什么。 */
+    val compactKeepTail: Int = 14,
     val flags: Map<String, Boolean> = emptyMap()
 ) {
     fun workspaceFile(): File {
@@ -55,6 +60,8 @@ data class PcSettings(
                     temperature = o.dbl("temperature") ?: 0.3,
                     storedCap = o.int("storedCap") ?: 16_000,
                     reqCap = o.int("reqCap") ?: 4_000,
+                    compactTriggerChars = o.int("compactTriggerChars") ?: 60_000,
+                    compactKeepTail = o.int("compactKeepTail") ?: 14,
                     flags = runCatching {
                         o["flags"]?.jsonObject?.mapValues { (_, v) ->
                             v.jsonPrimitive.content == "true"
@@ -77,6 +84,8 @@ data class PcSettings(
                         put("temperature", s.temperature)
                         put("storedCap", s.storedCap)
                         put("reqCap", s.reqCap)
+                        put("compactTriggerChars", s.compactTriggerChars)
+                        put("compactKeepTail", s.compactKeepTail)
                         put(
                             "flags",
                             buildJsonObject { s.flags.forEach { (k, v) -> put(k, v) } }

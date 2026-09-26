@@ -7,6 +7,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.io.File
 import java.util.UUID
@@ -63,8 +64,32 @@ class Engine(
     var lastError: String? = null
         private set
 
+    /**
+     * 早期历史的摘要（压缩后的"前情"）。null = 还没压过。
+     *
+     * 公开是为了测试与设置页能核对"到底压没压"，也为了落库/回读。
+     * **必须声明在 `init` 之前**：Kotlin 的属性初始化器按声明顺序执行，
+     * 放后面的话 `init` 里刚从磁盘读回来的 summary 会立刻被 `= null` 覆盖掉
+     * —— 表现是"重启后摘要丢了，同一段历史被重新压一遍"。
+     */
+    var summary: String? = null
+        private set
+
+    /** 累计被折进摘要的条数（水位）。恢复会话时要连它一起恢复，否则会重复压。 */
+    var compactedCount = 0
+        private set
+
+    /**
+     * 上次压缩**当时**的正文规模，用来做迟滞（见 [maybeCompact]）。
+     *
+     * 声明位置有讲究：必须在 `init` 之前。Kotlin 的属性初始化器按声明顺序执行，
+     * 放后面的话 `init` 里刚设好的基线会被 `= 0` 抹掉，表现是"重开长会话立刻多压一次"。
+     */
+    private var lastCompactedChars = 0
+
     init {
         history += restore(session.file)
+        restoreSummaryMeta(session.file)
     }
 
     fun messages(): List<Msg> = history.toList()
@@ -84,6 +109,77 @@ class Engine(
 
     fun requestStop() {
         stopRequested = true
+    }
+
+    /**
+     * 超预算就把早期历史折成摘要。返回折掉的条数（0 = 没动）。
+     *
+     * 切点规则只有一条，但它是**不能错**的那条：切点必须落在非 tool 消息上 ——
+     * 一个 `assistant(tool_calls)` 和它后面那些 `tool` 回复是一个整体，
+     * 把它们切开，下一次请求就是"有调用没回复"，网关直接 400，
+     * 而症状看起来像"压缩把会话弄坏了"。（同一个不变量见 [submit] 里的停止分支。）
+     *
+     * 优先让模型自己压，失败/超时/空返回则退回 [Compactor.digest] ——
+     * 省 token 的机制自己不能成为新的故障点。
+     */
+    private fun maybeCompact(): Int {
+        val bodyChars = history.sumOf { it.content?.length ?: 0 }
+        if (bodyChars <= settings.compactTriggerChars) return 0
+        /**
+         * 迟滞：压过一次之后，除非**又长出半个触发线**那么多，否则不再压。
+         *
+         * 为什么需要：保留窗口 `compactKeepTail` 里如果本来就是几条大结果
+         * （实测 8 轮 read，每条 7k 字符 ⇒ 尾巴自己就 2 万字符），
+         * 压完仍然超线。没有这条的话，每一轮都会白花一次模型调用去压一个
+         * 压不动的东西 —— 表现就是"长会话突然开始每轮多一次请求、还不变快"。
+         */
+        if (lastCompactedChars > 0 && bodyChars < lastCompactedChars + settings.compactTriggerChars / 2) return 0
+        val keep = settings.compactKeepTail.coerceAtLeast(4)
+        var cut = (history.size - keep).coerceAtLeast(0)
+        while (cut > 0 && history[cut].role == "tool") cut--
+        if (cut < 4) return 0                       // 头部太短，压了反而更啰嗦
+        val head = history.subList(0, cut).toList()
+        val charsBefore = head.sumOf { it.content?.length ?: 0 }
+
+        val fromModel = runCatching {
+            client.chat(
+                listOf(Msg("user", Compactor.promptFor(head))), emptyList()
+            ) { }.text.trim()
+        }.getOrNull().orEmpty()
+        val piece = if (fromModel.length >= 40) fromModel else Compactor.digest(head)
+
+        summary = mergeSummary(summary, piece)
+        compactedCount += cut
+        history.subList(0, cut).clear()
+        lastCompactedChars = history.sumOf { it.content?.length ?: 0 }
+        emit(
+            Ev.Notice(
+                "上下文压缩：把 $cut 条早期消息折进摘要（约 ${charsBefore} → " +
+                    "${piece.length} 字符，${if (fromModel.length >= 40) "模型生成" else "机器兜底"}）。" +
+                    "累计已折 $compactedCount 条。"
+            )
+        )
+        return cut
+    }
+
+    /** 摘要是**追加式**的：新压的内容接在旧的后面，超限时从最上面裁行，不重写已有部分。 */
+    internal fun mergeSummary(old: String?, piece: String): String {
+        val cap = 8_000
+        val joined = buildString {
+            if (!old.isNullOrBlank()) { append(old.trimEnd()); append('\n') }
+            append(piece.trim())
+        }
+        if (joined.length <= cap) return joined
+        // 超限就保**最新**的那部分：摘要本身也是越新越有用，
+        // 从后往前收集行，装不下就停，并在开头标一句"更早的已省略"。
+        val lines = joined.lines()
+        val kept = kotlin.collections.ArrayDeque<String>()
+        var used = 0
+        for (i in lines.indices.reversed()) {
+            if (used + lines[i].length > cap) break
+            kept.addFirst(lines[i]); used += lines[i].length + 1
+        }
+        return ("…（更早的部分已省略）\n" + kept.joinToString("\n")).trim()
     }
 
     fun todoLines(): List<String> = session.todos.mapIndexed { i, t ->
@@ -119,6 +215,7 @@ class Engine(
                 break
             }
             turnNo++
+            maybeCompact()
             val turn = try {
                 client.chat(requestMessages(), schemas()) { piece -> emit(Ev.TextDelta(piece)) }
             } catch (e: ProviderError) {
@@ -229,7 +326,7 @@ class Engine(
         t.visibleWhen(settings) && if (session.mode == "plan") readOnlyTool(t) else true
     }.map { ToolSchema(it.name, it.desc, it.params) }
 
-    /** 发给模型的窗口：system + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。 */
+    /** 发给模型的窗口：system + 前情摘要 + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。 */
     private fun requestMessages(): List<Msg> {
         val sys = Msg(
             "system", Prompt.system(
@@ -241,20 +338,27 @@ class Engine(
                 )
             )
         )
+        val head = mutableListOf(sys)
+        summary?.takeIf { it.isNotBlank() }?.let {
+            head += Msg("user", "【前情摘要｜更早 $compactedCount 条对话已折叠，以下是压缩后的要点】\n$it")
+        }
         val body = history.map { m ->
             val c = m.content
             if (m.role == "tool" && c != null && c.length > settings.reqCap) {
-                Msg(m.role, TextCap.middle(c, settings.reqCap), callId = m.callId)
+                Msg(m.role, TextCap.middle(c, settings.reqCap), callId = m.callId, name = m.name)
             } else m
         }
         val budget = 120_000
-        var used = sys.content!!.length + body.sumOf { (it.content?.length ?: 0) }
+        var used = head.sumOf { it.content?.length ?: 0 } + body.sumOf { it.content?.length ?: 0 }
         var dropFrom = 0
         while (used > budget && dropFrom < body.size - 6) {
             used -= (body[dropFrom].content?.length ?: 0)
             dropFrom++
         }
-        return listOf(sys) + body.drop(dropFrom)
+        // 兜底裁剪也必须落在"块首"：从中间切断 assistant(tool_calls) 与它的 tool 回复，
+        // 发出去就是一次 400，而症状看起来像"窗口一大就报错"。
+        while (dropFrom > 0 && dropFrom < body.size && body[dropFrom].role == "tool") dropFrom++
+        return head + body.drop(dropFrom)
     }
 
     private fun brief(args: JsonObject): String {
@@ -280,6 +384,10 @@ class Engine(
                     put("updated", System.currentTimeMillis())
                     put("promptTokens", totalPrompt)
                     put("completionTokens", totalCompletion)
+                    // 摘要与水位必须跟着会话走：只存 messages 的话，
+                    // 重开会话时那段被压掉的原文已经没了，而模型又看不到摘要 —— 事实就丢了。
+                    summary?.let { put("summary", it) }
+                    if (compactedCount > 0) put("compactedThrough", compactedCount)
                     put("todos", buildJsonArray {
                         session.todos.forEach { add(buildJsonObject { put("text", it.text); put("status", it.status) }) }
                     })
@@ -314,6 +422,19 @@ class Engine(
                 }.toString()
             )
         }.onFailure { Env.log("engine", "会话落库失败：${it.message}") }
+    }
+
+    /** 回读摘要与水位。老会话文件里没这两个字段，读不到就按"没压过"处理。 */
+    private fun restoreSummaryMeta(f: File) {
+        if (!f.isFile) return
+        runCatching {
+            val o = Json.parseToJsonElement(f.readText()).jsonObject
+            summary = o["summary"]?.jsonPrimitive?.contentOrNull
+            compactedCount = o["compactedThrough"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            // 带着摘要恢复的会话，把迟滞基线设成当前正文规模：
+            // 否则"重开一个本来就很长的会话"会立刻再压一次，白花一次模型调用。
+            if (!summary.isNullOrBlank()) lastCompactedChars = history.sumOf { it.content?.length ?: 0 }
+        }
     }
 
     private fun restore(f: File): List<Msg> {
