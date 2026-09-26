@@ -339,6 +339,8 @@ function reload(){stream.innerHTML='';return fetch('/api/state').then(r=>r.json(
 function applyState(s){
   // 刷新页面也要接上"正在跑"这件事：否则跑着的任务在界面上看不出来，停止按钮也不在。
   running=!!s.running;if(!running)stopping=false;paintSend();
+  // 挂着没答的审批/提问：SSE 只推过一次，刷新就没了，而引擎还在等 —— 必须从 state 里补回来
+  (s.pending||[]).forEach(p=>ask(p.data,p.ev));
   $('#ws').textContent=s.workspace;$('#model').textContent=s.model;setMode2(s.mode);
   $('#title').textContent=s.title||'新会话';
   if(s.todos&&s.todos.length)setTodos(s.todos.map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text));

@@ -35,6 +35,8 @@ class WebServer(settings: PcSettings, port: Int) {
     private val seq = AtomicInteger()
     private val pending = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<String>>()
     private val pendingRule = ConcurrentHashMap<String, Pair<String, String>>()
+    /** 每个待决请求的**原始事件负载**（事件名 → JSON）。见 [stateJson] 里的 pending 字段。 */
+    private val pendingPayload = ConcurrentHashMap<String, Pair<String, String>>()
     private val subscribers: MutableList<OutputStream> = Collections.synchronizedList(mutableListOf())
 
     @Volatile
@@ -131,6 +133,19 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         sb.append("],\"usage\":{\"prompt\":").append(e?.totalPrompt ?: 0L)
         sb.append(",\"completion\":").append(e?.totalCompletion ?: 0L).append("},")
+        /**
+         * 还挂着的审批/提问也要交出去。
+         *
+         * 它们原本只通过 SSE 推一次：页面一刷新（或你开了第二个标签页）对话框就没了，
+         * 而引擎正卡在 `fut.get(300s)` 上等一个不会再出现的按钮 —— 表现是"agent 莫名卡死"，
+         * 最后超时自动拒掉，用户根本不知道发生过什么。
+         * 一次只回一条：弹窗是单实例，堆两个会把前一个盖掉且再也点不到。
+         */
+        sb.append("\"pending\":[")
+        pendingPayload.entries.firstOrNull()?.let { (_, v) ->
+            sb.append("{\"ev\":").append(quote(v.first)).append(",\"data\":").append(v.second).append('}')
+        }
+        sb.append("],")
         sb.append("\"messages\":[")
         e?.messages()?.forEachIndexed { i, m ->
             if (i > 0) sb.append(',')
@@ -255,11 +270,11 @@ class WebServer(settings: PcSettings, port: Int) {
             val fut = java.util.concurrent.CompletableFuture<String>()
             pending[id] = fut
             if (tool.isNotBlank()) pendingRule[id] = tool to pattern
-            publish(
-                "approval",
+            val payload =
                 """{"id":"$id","title":${quote(title)},"detail":${quote(detail)},"kind":"$kind",""" +
                     """"tool":${quote(tool)},"pattern":${quote(pattern)}}"""
-            )
+            pendingPayload[id] = "approval" to payload
+            publish("approval", payload)
             val ans = try {
                 fut.get(300, TimeUnit.SECONDS)
             } catch (e: TimeoutException) {
@@ -270,6 +285,7 @@ class WebServer(settings: PcSettings, port: Int) {
             } finally {
                 pending.remove(id)
                 pendingRule.remove(id)
+                pendingPayload.remove(id)
             }
             // allow_rule：把这条规则永久写进当前工作区的规则表（S2）
             if (ans == "allow_rule" && tool.isNotBlank()) {
@@ -283,16 +299,17 @@ class WebServer(settings: PcSettings, port: Int) {
             val id = "q${seq.incrementAndGet()}"
             val fut = java.util.concurrent.CompletableFuture<String>()
             pending[id] = fut
-            publish(
-                "ask",
+            val askPayload =
                 """{"id":"$id","question":${quote(question)},"options":${options.joinToString(",", "[", "]") { quote(it) }}}"""
-            )
+            pendingPayload[id] = "ask" to askPayload
+            publish("ask", askPayload)
             return try {
                 fut.get(900, TimeUnit.SECONDS)
             } catch (e: Exception) {
                 ""
             } finally {
                 pending.remove(id)
+                pendingPayload.remove(id)
             }
         }
     }

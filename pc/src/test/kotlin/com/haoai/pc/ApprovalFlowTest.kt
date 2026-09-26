@@ -6,6 +6,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.AfterClass
@@ -85,6 +86,11 @@ class ApprovalFlowTest {
             frame("""{"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}"""),
             frame("[DONE]")
         )
+
+        private fun get(path: String): String = http.send(
+            HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
+            HttpResponse.BodyHandlers.ofString()
+        ).body()
 
         private fun post(path: String, obj: Map<String, String>): Pair<Int, String> {
             val body = buildJsonObject { obj.forEach { (k, v) -> put(k, v) } }.toString()
@@ -181,6 +187,17 @@ class ApprovalFlowTest {
         assertEquals("write", d["tool"]?.jsonPrimitive?.content)
         assertTrue("审批卡上没说要写哪个文件：$raw", d["title"]?.jsonPrimitive?.content!!.contains("approved.txt"))
 
+        // 刷新页面（=重读 /api/state）时必须还能看到这条待决审批：
+        // 它只通过 SSE 推过一次，找不到就等于引擎在无人知晓地卡 300 秒。
+        val pend = Json.parseToJsonElement(get("/api/state")).jsonObject["pending"]?.jsonArray
+        assertNotNull("待决审批没进 /api/state（刷新页面就丢了）", pend)
+        assertTrue("state.pending 里不是这条：$pend",
+            pend!!.any {
+                val o = Json.parseToJsonElement(it.toString()).jsonObject
+                o["ev"]?.jsonPrimitive?.content == "approval" &&
+                    o["data"]?.jsonObject?.get("id")?.jsonPrimitive?.content == d["id"]!!.jsonPrimitive.content
+            })
+
         val (code, _) = post("/api/decide", mapOf("id" to d["id"]!!.jsonPrimitive.content,
             "decision" to "allow_once", "answer" to ""))
         assertEquals(200, code)
@@ -193,6 +210,9 @@ class ApprovalFlowTest {
         while (!f.isFile && System.currentTimeMillis() < until) Thread.sleep(100)
         assertTrue("点了「允许一次」，文件却没写出来 —— 这就是修之前那个 bug", f.isFile)
         assertEquals("approved by user", f.readText())
+        // 答完之后必须从 pending 里消失，否则刷新一次就弹一次"已经批过的"框
+        val after = Json.parseToJsonElement(get("/api/state")).jsonObject["pending"]?.jsonArray
+        assertTrue("答完了还挂在 pending 里：$after", after.isNullOrEmpty())
     }
 
     @Test
