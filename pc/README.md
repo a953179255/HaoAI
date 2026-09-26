@@ -207,6 +207,20 @@ haoai screen focus                         # 键盘此刻发给的是谁
 误删一次的成本远高于多留一份垃圾。正在跑的会话不许删（返回 409 并说明原因），
 否则那个线程会把删掉的文件又写回来，表现成"删了又出现"。
 
+## 答案的 markdown 渲染
+
+`md()` 住在 `index.html` 里，Gradle 测试跑不了它，所以配了一个能单跑的脚本：
+
+```
+node pc/tools/md-check.js      # 12 项：排版行为 + 一次注入
+```
+
+它是行级渲染（先按行切，再拼标签），不是那串全局 `replace` 硬怼出来的。改回去会踩两个实测过的坑：
+① 围栏代码块先渲染、行级 `"\n → <br>"` 后跑 ⇒ `<pre>` 里每行代码之间多一个空行（`<pre>` 本来就保留换行）；
+② 代码块是"在整段转义之前搬出去"的，回来时不补转义 ⇒ 模型引用的文件内容能在页面里塞标签。
+支持：一~四级标题、有序/无序列表、引用块、围栏代码块（右上角标语言）、行内码、粗斜体、
+`[文字](链接)` 与裸链接。截图：[渲染后的回答](G:/hbt/pc-demo/md-render.png)。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -313,5 +327,6 @@ pc/src/main/kotlin/com/haoai/pc/
   Main.kt       CLI：doctor / key / init / set / flags / allow / rules / task / chat / serve
 pc/src/main/resources/ui/index.html   网页壳（单文件，无外部依赖）
 pc/tools/haoai.cmd                    启动器（chcp 65001；文件本身必须纯 ASCII）
-pc/tools/mock-openai.py               开发用假网关，没密钥时也能端到端验流程
+pc/tools/mock-openai.py               开发用假网关，没密钥时也能端到端验流程（多一个 loop 模式专测停止）
+pc/tools/md-check.js                  网页壳 markdown 渲染器的离线检查（node 直接跑）
 ```

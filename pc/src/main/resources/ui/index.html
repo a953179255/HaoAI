@@ -86,6 +86,14 @@
   .md h2,.md h3{margin:14px 0 6px;font-size:14px}
   .md ul,.md ol{margin:6px 0;padding-left:22px}
   .md a{color:var(--acc)}
+  .md p{margin:0 0 2px}
+  .md .gap{height:9px}
+  .md blockquote{margin:6px 0;padding:2px 0 2px 12px;border-left:2px solid var(--acc2);color:var(--dim)}
+  /* 代码块右上角标语言：模型经常一个回答里混 kotlin / gradle / shell 三块 */
+  .md pre{position:relative}
+  .md pre[data-lang]::before{content:attr(data-lang);position:absolute;top:6px;right:10px;
+    font-size:10px;color:var(--dim);opacity:.75;font-family:var(--mono)}
+  .md pre[data-lang]{padding-top:24px}
   footer{padding:10px 16px 14px;border-top:1px solid var(--line);background:rgba(10,14,12,.5)}
   .inwrap{max-width:860px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;
     background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:8px}
@@ -175,16 +183,58 @@ const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box');
 let mode='ask', running=false, stopping=false, curId=null;
 
 function esc(t){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function md(t){
-  t=esc(t);
-  t=t.replace(/```(\w*)\n([\s\S]*?)```/g,(m,l,c)=>`<pre><code>${c}</code></pre>`);
-  t=t.replace(/`([^`\n]+)`/g,'<code>$1</code>');
-  t=t.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>');
-  t=t.replace(/^\s*[-*] (.*)$/gm,'<li>$1</li>').replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g,'<ul>$1</ul>');
-  t=t.replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');
-  t=t.replace(/(https?:\/\/[^\s<)]+)/g,'<a href="$1" target="_blank">$1</a>');
-  return t.replace(/\n{2,}/g,'<div style="height:8px"></div>').replace(/\n/g,'<br>');
-}
+function md(t) {
+  if (t == null || String(t).trim() === '') return '';   // 空回答不该产出任何标记（否则多一个空隔块）
+  const esc2 = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const inline = s => s
+    .replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`)
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!;?]|$)/g, '$1<i>$2</i>')
+    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|[^"'>])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  
+  // 1) 先把围栏代码块整块搬出去：行级规则一律不许碰它
+  const blocks = [];
+  let src = String(t == null ? '' : t).replace(/```([^\n`]*)\r?\n([\s\S]*?)```/g,
+    (m, lang, code) => {
+      blocks.push({ lang: lang.trim(), code: code.replace(/\n$/, '') });
+      return '\u0000' + (blocks.length - 1) + '\u0000';
+    });
+  // 2) 整段转义：后面拼进去的标签才是我们自己造的
+  src = esc2(src);
+  
+  const out = [];
+  let list = null;
+  const closeList = () => { if (list) { out.push(list === 'o' ? '</ol>' : '</ul>'); list = null } };
+  const putBlock = i => {
+    const b = blocks[i];
+    if (!b) return '';
+    // 代码内容必须在这里补转义：块是在"整段转义"之前搬出去的，
+    // 不转义就等于模型（或它引用的文件内容）能在页面里塞标签。
+    return `<pre${b.lang ? ` data-lang="${esc2(b.lang)}"` : ''}><code>${esc2(b.code)}</code></pre>`;
+  };
+  
+  src.split(/\r?\n/).forEach(raw => {
+    const line = raw.replace(/\s+$/, '');
+    let m = line.match(/^\u0000(\d+)\u0000$/);
+    if (m) { closeList(); out.push(putBlock(+m[1])); return }
+    m = line.match(/^(#{1,4}) +(.*)$/);
+    if (m) { closeList(); const lv = m[1].length; out.push(`<h${lv}>${inline(m[2])}</h${lv}>`); return }
+    m = line.match(/^&gt; +(.*)$/);
+    if (m) { closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); return }
+    m = line.match(/^[-*+] +(.*)$/);
+    if (m) { if (list !== 'u') { closeList(); out.push('<ul>'); list = 'u' } out.push(`<li>${inline(m[1])}</li>`); return }
+    m = line.match(/^\d+[.)] +(.*)$/);
+    if (m) { if (list !== 'o') { closeList(); out.push('<ol>'); list = 'o' } out.push(`<li>${inline(m[1])}</li>`); return }
+    if (!line.trim()) { closeList(); out.push('<div class="gap"></div>'); return }
+    closeList();
+    // 段落里的代码块占位符（模型把围栏和正文写在同一行时）也一并换回来
+    out.push(`<p>${inline(line).replace(/\u0000(\d+)\u0000/g, (_, i) => putBlock(+i))}</p>`);
+  });
+  closeList();
+  // 兜底：任何没被行级规则吃掉的占位符都要还原，不能把 \x00 数字漏在界面上
+  return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => putBlock(+i));
+  }
 function el(html){const d=document.createElement('div');d.innerHTML=html;return d.firstElementChild}
 function scroll(){stream.scrollTop=stream.scrollHeight}
 function add(node){stream.appendChild(node);scroll();return node}
