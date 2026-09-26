@@ -92,6 +92,21 @@ shell_close(id) / shell_list()
 `echo got-$x-$((6*7))` 拿到 `got-hello-42` 来证明"确实是同一个 shell"。
 空闲 20 分钟自动回收，最多同时 8 个。
 
+## 浏览器控制（默认关）
+
+```
+haoai flags on browser_control     # 关着时这把工具对模型根本不存在（不进 schema）
+haoai browser shot --url=https://example.com --path=shot.png
+```
+
+子命令：`status open navigate read eval click type screenshot shot tabs close`。
+走 CDP 直连本机 Edge/Chrome，**不引 Playwright**。三点实测教训写在代码注释里：
+profile 目录不能共用（Chrome 不让两个实例抢）、target 要挑真的页面（连到 omnibox 会
+表现为"CDP 坏了"）、CLI 每次调用是新进程所以导航+截图要一步做完（`shot`）。
+用**独立临时配置目录**，不碰你自己的 Edge 登录态。
+
+网页版的截图就是用这条链路自己截自己验收的。
+
 ## 与手机端同源的行为
 
 - **工具结果溢出**：超过 `STORED_CAP=16000` 的输出去向工作区 `.haoai-output/`，
@@ -103,13 +118,14 @@ shell_close(id) / shell_list()
 
 ## 已验证到哪一步
 
-- `gradle test` → **44 条全绿**：16 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **46 条全绿**：16 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环），13 条权限规则（语法解析、前缀归约、后写覆盖先写、
   alwaysAsk 压 auto、plan 压 allow、按工作区隔离、落盘重载、走真引擎），
   7 条 git（引号参数切分、只读不问人、真 add/commit/log、deny 规则拦得住 commit、
   不在仓库里给下一步、不支持的子命令列可用），
   5 条常驻进程（同一 shell 保留变量状态、关掉不泄漏、被拒不启进程、空闲回收、list 可见），
+  1 条实验特性可见性（关着的工具不进 schema），
   3 条真 HTTP 流式（中文按 4 字节切碎不损坏、`tool_calls.arguments` 分片拼回合法 JSON、
   429 标可重试 / 400 不可重试）。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
@@ -139,6 +155,7 @@ pc/src/main/kotlin/com/haoai/pc/
   Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）
   Tools.kt      9 把基础工具 + 溢出落文件 + 快照 + diff 摘要
   Policies.kt   S2 权限规则表：tool(pattern) 有序匹配 + 命令前缀归约 + alwaysAsk
+  Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
   Pty.kt        S3 常驻交互进程（open/send/read/close/list）+ 共用的 shell 启动器
   Engine.kt     回合循环、档位闸、两级截断、会话持久化
   Server.kt     127.0.0.1 HTTP + SSE + 审批/提问回环
