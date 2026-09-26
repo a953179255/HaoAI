@@ -20,3 +20,5 @@ keystore.properties
 .git-broken-*/
 *.jks
 *.keystore
+md_jar/
+provider-redesign/
