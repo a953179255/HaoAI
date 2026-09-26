@@ -57,6 +57,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/events" -> sse(ex)
                 "/api/state" -> send(ex, 200, stateJson(), "application/json; charset=utf-8")
                 "/api/task" -> task(ex)
+                "/api/stop" -> stopTask(ex)
                 "/api/decide" -> decide(ex)
                 "/api/mode" -> mode(ex)
                 "/api/new" -> {
@@ -162,6 +163,36 @@ class WebServer(settings: PcSettings, port: Int) {
                 }
             }
         }.apply { isDaemon = true; name = "haoai-run"; start() }
+    }
+
+    /**
+     * `POST /api/stop` —— 停止当前任务。
+     *
+     * 两件必须一起做的事：
+     * 1. 给引擎置位（它只在回合边界与工具边界看这个标志，所以是"收尾式"停止，
+     *    不是掐断 HTTP 流 —— 理由见 [Engine.stopRequested] 的注释）；
+     * 2. **把挂着的审批与提问一次性判掉**。漏了这条，按了停止引擎还卡在
+     *    `fut.get(300s)` 上等一个不会来的点击，"停止"按钮就成了它自己要中止的那件事的受害者。
+     *
+     * 这里刻意**不去抢** `task()` 那把锁：抢了就等于"要停止必须先等本轮跑完"。
+     */
+    private fun stopTask(ex: HttpExchange) {
+        val waiters = pending.entries.toList()
+        var approvals = 0
+        waiters.forEach { (id, fut) ->
+            // 审批的 id 以 a 开头、提问以 q 开头：两者"被中止"的语义不一样，
+            // 审批给 deny（fail-closed），提问给空串（模型会看到"用户没回答"）。
+            if (id.startsWith("q")) fut.complete("") else { fut.complete("deny"); approvals++ }
+        }
+        engine?.requestStop()
+        publish(
+            "notice", quote(
+                if (running || waiters.isNotEmpty())
+                    "已请求停止${if (approvals > 0) "（顺手拒掉 $approvals 个待确认）" else ""}，正在收尾…"
+                else "当前没有正在跑的任务。"
+            )
+        )
+        send(ex, 200, """{"ok":true,"pending":${waiters.size}}""", "application/json; charset=utf-8")
     }
 
     private fun ensureEngine(): Engine = engine ?: synchronized(this) {

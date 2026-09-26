@@ -385,6 +385,54 @@ class EngineFlowTest {
         assertEquals("被开关挡掉的动作不该再弹审批", 0, gate.asked.size)
     }
 
+    /**
+     * 停止要成为数据，不是"悄悄不干了"。三条判据缺一条都算没做完：
+     * ① 排到队里还没执行的工具**不会**被执行；
+     * ② **每个 tool_call_id 仍要有一条 tool 回复** —— OpenAI 兼容协议要求成对，
+     *    少一次下一次请求就 400，"中断"反而把会话写坏（手机端在 id 撞车那次付过学费）；
+     * ③ 历史里要留下"这里被中断过"，否则下一轮模型以为事情做完了，接着往下编。
+     */
+    @Test
+    fun `stopping mid-run skips the rest but keeps the protocol pairs intact`() {
+        val ws = tempWorkspace()
+        val session = Session("stop-" + System.nanoTime(), ws)
+        session.mode = "auto"
+        var ref: Engine? = null
+        val stopper = object : ChatClient {
+            override fun chat(
+                messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit
+            ): AssistantTurn {
+                onText("我先写两个文件")
+                ref?.requestStop()   // 用户在这一刻按了停止
+                return AssistantTurn(
+                    "我先写两个文件",
+                    listOf(
+                        ToolCall("c1", "write", """{"path":"one.txt","content":"1"}"""),
+                        ToolCall("c2", "write", """{"path":"two.txt","content":"2"}""")
+                    ),
+                    Usage(3, 4), "tool_calls"
+                )
+            }
+        }
+        val engine = Engine(
+            session, PcSettings(permissionMode = "auto"), builtinTools(),
+            RecordingGate(true), {}, stopper
+        )
+        ref = engine
+        engine.submit("写两个文件")
+
+        assertFalse("停止之后还是把 one.txt 写了", File(ws, "one.txt").exists())
+        assertFalse("停止之后还是把 two.txt 写了", File(ws, "two.txt").exists())
+        val msgs = engine.messages()
+        val calls = msgs.last { it.role == "assistant" && it.calls.isNotEmpty() }.calls.map { it.id }
+        val answered = msgs.filter { it.role == "tool" }.mapNotNull { it.callId }
+        assertEquals(2, calls.size)
+        assertTrue("有 tool_call 没回复（下一次请求会被网关判 400）：$calls vs $answered",
+            calls.all { it in answered })
+        assertTrue("历史里没留下「这里被中断过」：${msgs.map { (it.content ?: "").take(24) }}",
+            msgs.any { (it.content ?: "").contains("停止") })
+    }
+
     @Test
     fun `diff summary counts changed lines`() {
         val d = Diff.summary("a\nb\nc", "a\nB\nc")

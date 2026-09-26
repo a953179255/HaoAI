@@ -44,7 +44,10 @@
   .sw input{margin-top:3px}
   .sw .t{font-size:12.5px}
   .sw .d{font-size:11px;color:var(--dim);line-height:1.45}
-  .main{display:flex;flex-direction:column;min-width:0}
+  /* min-height:0 是必需的：grid 项默认 min-height:auto，长会话会把 .main 顶到比视口还高，
+     于是 #stream 自己永远不溢出（scrollTop 白设），footer 连同发送/停止按钮被推到屏幕外。
+     实测：跑 20 轮之后截图里根本看不到输入框，用户想停都找不到按钮。 */
+  .main{display:flex;flex-direction:column;min-width:0;min-height:0}
   header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);
     background:rgba(10,14,12,.55);backdrop-filter:blur(10px)}
   header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -54,7 +57,7 @@
     border-radius:999px;cursor:pointer}
   .modes button.on{background:var(--acc2);color:#fff}
   .usage{font-size:11px;color:var(--dim);white-space:nowrap}
-  #stream{flex:1;overflow:auto;padding:18px 20px 8px;scroll-behavior:smooth}
+  #stream{flex:1;min-height:0;overflow:auto;padding:18px 20px 8px;scroll-behavior:smooth}
   .msg{margin:0 auto 14px;max-width:860px}
   .msg.user{background:linear-gradient(180deg,#1d2a24,#182320);border:1px solid #2a3b33;
     border-radius:14px;padding:10px 14px;white-space:pre-wrap}
@@ -84,6 +87,7 @@
   .send{width:34px;height:34px;border-radius:10px;border:0;background:linear-gradient(180deg,var(--acc),#1fa46e);
     color:#062017;font-size:16px;cursor:pointer;font-weight:700}
   .send[disabled]{opacity:.4;cursor:default}
+  .send.stop{background:linear-gradient(180deg,#b4483f,#7c2f28);box-shadow:0 0 0 1px #c9614f inset}
   .todo{list-style:none;padding:0;margin:0;font-size:12.5px}
   .todo li{display:flex;gap:7px;align-items:flex-start;margin-bottom:6px;color:var(--dim)}
   .todo li.done{color:#5d7a6c;text-decoration:line-through}
@@ -161,7 +165,7 @@
 
 <script>
 const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box');
-let mode='ask', running=false, curId=null;
+let mode='ask', running=false, stopping=false, curId=null;
 
 function esc(t){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function md(t){
@@ -222,7 +226,7 @@ es.addEventListener('notice',e=>notice(JSON.parse(e.data)));
 es.addEventListener('err',e=>notice(JSON.parse(e.data),'err'));
 es.addEventListener('mode',e=>setMode(JSON.parse(e.data).mode));
 es.addEventListener('opened',e=>{const d=JSON.parse(e.data);curId=d.id;$('#title').textContent=d.title;});
-es.addEventListener('run',e=>{running=JSON.parse(e.data).running;$('#send').disabled=running&&!approvalOpen;});
+es.addEventListener('run',e=>{running=JSON.parse(e.data).running;if(!running)stopping=false;paintSend();});
 es.addEventListener('approval',e=>ask(JSON.parse(e.data),'approval'));
 es.addEventListener('ask',e=>ask(JSON.parse(e.data),'ask'));
 
@@ -248,7 +252,7 @@ function ask(d,kind){
   }
   m.classList.add('on');
 }
-function close(){$('#mask').classList.remove('on');approvalOpen=false;$('#send').disabled=false}
+function close(){$('#mask').classList.remove('on');approvalOpen=false;paintSend()}
 function decide(id,decision,answer){
   fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,decision,answer})});
@@ -262,10 +266,25 @@ document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>{
 });
 $('#newBtn').onclick=()=>{fetch('/api/new',{method:'POST'});stream.innerHTML='';setTodos([]);$('#title').textContent='新会话';$('#usage').textContent='';box.focus()};
 function send(){
-  const t=box.value.trim();if(!t||running)return;
+  if(running){
+    // 同一个按钮：跑着的时候它就是停止。另起一个"停止"按钮放在旁边，
+    // 用户要在两个长得很像的圆钮之间做选择，得不偿失。
+    if(stopping)return;
+    stopping=true;paintSend();
+    fetch('/api/stop',{method:'POST'});
+    return;
+  }
+  const t=box.value.trim();if(!t)return;
   box.value='';box.style.height='auto';
   fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
-  running=true;$('#send').disabled=true;
+  running=true;stopping=false;paintSend();
+}
+function paintSend(){
+  const b=$('#send');
+  b.classList.toggle('stop',running);
+  b.disabled=running&&stopping;
+  b.textContent=running?'■':'➤';
+  b.title=running?(stopping?'已请求停止，正在收尾…':'停止这一轮（跑完当前动作就收手）'):'发送';
 }
 $('#send').onclick=send;
 box.addEventListener('keydown',e=>{if(e.key=='Enter'&&!e.shiftKey){e.preventDefault();send()}});
@@ -286,6 +305,8 @@ function loadSessions(){
 }
 function reload(){stream.innerHTML='';return fetch('/api/state').then(r=>r.json()).then(applyState)}
 function applyState(s){
+  // 刷新页面也要接上"正在跑"这件事：否则跑着的任务在界面上看不出来，停止按钮也不在。
+  running=!!s.running;if(!running)stopping=false;paintSend();
   $('#ws').textContent=s.workspace;$('#model').textContent=s.model;setMode2(s.mode);
   $('#title').textContent=s.title||'新会话';
   if(s.todos&&s.todos.length)setTodos(s.todos.map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text));
@@ -297,6 +318,7 @@ function applyState(s){
     else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split(String.fromCharCode(10))[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`));
   });
   loadSessions();
+  scroll();   // 打开一个长会话要停在最新一条，而不是最上面
 }
 function setMode2(m){setMode(m)}
 $('#newBtn').addEventListener('click',()=>{setTimeout(loadSessions,400)});

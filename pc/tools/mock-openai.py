@@ -104,6 +104,12 @@ PLAN = {
                          "arguments": json.dumps({"path": "theme.txt", "content": "green\n"})}]),
         ("好，按你说的写好了 theme.txt。", None),
     ],
+    # 永远不收尾的一轮接一轮 —— 存在的唯一理由是让"停止"按钮可被验证：
+    # 其它模式跑完就结束，快到根本来不及点。每轮 sleep 0.6s 让界面看得见。
+    "loop": [
+        ("我再数一轮", [{"id": "call_loop", "name": "shell",
+                         "arguments": json.dumps({"command": "echo round", "shell": "bash", "timeout": 30})}]),
+    ],
 }
 
 
@@ -133,6 +139,12 @@ class Handler(BaseHTTPRequestHandler):
         plan = PLAN.get(MODE, PLAN["tools"])
         idx = min(tool_rounds, len(plan) - 1)
         text, calls = plan[idx]
+        if MODE == "loop":
+            # 每轮慢一点，界面上才看得见"正在跑"，也才来得及按停止。
+            time.sleep(0.6)
+            calls = [dict(calls[0], id="call_loop_%d" % tool_rounds,
+                          arguments=json.dumps({"command": "echo round-%d" % tool_rounds,
+                                                "shell": "bash", "timeout": 30}))]
         stream = req.get("stream", False)
         if not stream:
             body = json.dumps({

@@ -69,6 +69,23 @@ class Engine(
 
     fun messages(): List<Msg> = history.toList()
 
+    /**
+     * 用户中断。`@Volatile` 是因为按停止的是 HTTP 线程，跑回合的是 haoai-run 线程，
+     * 而 `/api/stop` **绝不能**去抢那把跑任务的锁 —— 抢了就变成"点停止要等本轮跑完"，
+     * 停止按钮本身就成了它要中止的那件事的受害者。
+     *
+     * 只在**回合边界与工具边界**检查，不在模型流式中途打断：一次 `chat()` 是有界的，
+     * 打断它要往 Provider 里塞取消令牌，换来的只是少等几秒，代价是半截 tool_call
+     * 落进历史（手机端就是这么把会话写坏的）。
+     */
+    @Volatile
+    var stopRequested = false
+        private set
+
+    fun requestStop() {
+        stopRequested = true
+    }
+
     fun todoLines(): List<String> = session.todos.mapIndexed { i, t ->
         val mark = when (t.status) {
             "done" -> "[x]"; "doing" -> "[>]"; "cancelled" -> "[-]"; else -> "[ ]"
@@ -86,9 +103,21 @@ class Engine(
         var lastText = ""
         var turnNo = 0
         var retry = 0
+        stopRequested = false
         val backoffs = longArrayOf(3_000, 8_000, 20_000)
 
         while (turnNo < settings.maxTurns) {
+            if (stopRequested) {
+                // 中断要**成为数据**，不能只是"停下来"：得留一条模型下一轮看得见的记录，
+                // 否则它以为刚才那件事做完了，接着往下编。
+                history += Msg(
+                    "user",
+                    "（用户在这一轮中途按了停止。之前请求的工具调用没有全部执行完，" +
+                        "继续之前先确认现状，别假设计划已经跑完。）"
+                )
+                emit(Ev.Notice("已按你的要求中断。"))
+                break
+            }
             turnNo++
             val turn = try {
                 client.chat(requestMessages(), schemas()) { piece -> emit(Ev.TextDelta(piece)) }
@@ -123,6 +152,15 @@ class Engine(
             history += Msg("assistant", turn.text, calls = turn.calls)
 
             for (call in turn.calls) {
+                if (stopRequested) {
+                    // 注意是 continue 不是 break：**每个 tool_call_id 都必须有一条 tool 回复**，
+                    // 少一条，下一次请求就被网关判 400（OpenAI 兼容协议的硬要求，
+                    // 手机端在 tool_call id 撞车那次已经付过学费）。
+                    val why = "（用户在执行到这一步之前按了停止，这个调用没有执行。）"
+                    history += Msg("tool", why, callId = call.id, name = call.name)
+                    emit(Ev.ToolEnd(call.id, call.name, false, "已中断，未执行", "generic"))
+                    continue
+                }
                 val tool = byName[call.name]
                 if (tool == null) {
                     val why = "未知工具：${call.name}。可用的是 ${byName.keys.joinToString()}"
