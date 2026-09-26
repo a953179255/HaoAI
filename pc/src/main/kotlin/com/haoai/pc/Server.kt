@@ -27,6 +27,7 @@ class WebServer(private val settings: PcSettings, port: Int) {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
     private val seq = AtomicInteger()
     private val pending = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<String>>()
+    private val pendingRule = ConcurrentHashMap<String, Pair<String, String>>()
     private val subscribers: MutableList<OutputStream> = Collections.synchronizedList(mutableListOf())
 
     @Volatile
@@ -182,13 +183,20 @@ class WebServer(private val settings: PcSettings, port: Int) {
     }
 
     private fun webGate(): Gate = object : Gate {
-        override fun approve(title: String, detail: String, kind: String): Boolean {
+        override fun approve(title: String, detail: String, kind: String): Boolean =
+            approveRule(title, detail, kind, "", "*")
+
+        override fun approveRule(
+            title: String, detail: String, kind: String, tool: String, pattern: String
+        ): Boolean {
             val id = "a${seq.incrementAndGet()}"
             val fut = java.util.concurrent.CompletableFuture<String>()
             pending[id] = fut
+            if (tool.isNotBlank()) pendingRule[id] = tool to pattern
             publish(
                 "approval",
-                """{"id":"$id","title":${quote(title)},"detail":${quote(detail)},"kind":"$kind"}"""
+                """{"id":"$id","title":${quote(title)},"detail":${quote(detail)},"kind":"$kind",""" +
+                    """"tool":${quote(tool)},"pattern":${quote(pattern)}}"""
             )
             val ans = try {
                 fut.get(300, TimeUnit.SECONDS)
@@ -199,8 +207,14 @@ class WebServer(private val settings: PcSettings, port: Int) {
                 "deny"
             } finally {
                 pending.remove(id)
+                pendingRule.remove(id)
             }
-            return ans == "allow_once" || ans == "allow_session"
+            // allow_rule：把这条规则永久写进当前工作区的规则表（S2）
+            if (ans == "allow_rule" && tool.isNotBlank()) {
+                Policies.get().add(settings.workspaceFile(), Rule(tool, pattern, Decision.ALLOW))
+                publish("notice", quote("已记住规则：$tool($pattern)"))
+            }
+            return ans == "allow_once" || ans == "allow_session" || ans == "allow_rule"
         }
 
         override fun ask(question: String, options: List<String>): String {

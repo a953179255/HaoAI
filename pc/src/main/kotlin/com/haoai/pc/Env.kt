@@ -41,6 +41,7 @@ object Env {
     val sessionsDir: File get() = File(home, "sessions").apply { mkdirs() }
     val logsDir: File get() = File(home, "logs").apply { mkdirs() }
     val approvalsFile: File get() = File(home, "approvals.json")
+    val rulesFile: File get() = File(home, "rules.json")
     val memoryFile: File get() = File(home, "MEMORY.md")
 
     /** 工具溢出落文件的目录名 —— 与手机端 `.haoai-output/` 保持同名，便于两套实现对照。 */

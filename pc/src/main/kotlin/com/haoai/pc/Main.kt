@@ -25,6 +25,10 @@ fun main(args: Array<String>) {
         "init" -> init(settings, rest)
         "set" -> set(settings, rest)
         "flags" -> flags(settings, rest)
+        "allow" -> addRule(settings, rest, Decision.ALLOW)
+        "deny" -> addRule(settings, rest, Decision.DENY)
+        "ask" -> addRule(settings, rest, Decision.ASK)
+        "rules" -> listRules(settings, rest)
         "task" -> task(settings, rest)
         "chat" -> chat(settings)
         "serve" -> serve(settings, rest)
@@ -46,6 +50,10 @@ private fun help() {
           haoai init [目录]            设定工作区
           haoai set model=… base=… mode=plan|ask|auto
           haoai flags [on|off <key>]   看/拨实验特性
+          haoai allow <模式>           记住"这类不用再问"，如 haoai allow "git push*"
+          haoai deny  <模式>           记住"这类直接拒绝"
+          haoai ask   <模式>           记住"这类必须问"（auto 也绕不过）
+          haoai rules [clear]          看/清本工作区的规则表
           haoai task "…" [--auto]      跑一条任务就退出
           haoai chat                   终端对话
           haoai serve [--port 8712]    打开本地网页版
@@ -138,6 +146,46 @@ private fun flags(s: PcSettings, rest: List<String>) {
     println("${f.title} -> ${if (HaoFlag.enabled(f, merged)) "开" else "关"}")
 }
 
+/**
+ * 加一条规则。两种写法：
+ *   haoai allow "git push*"          —— 只给模式，工具靠猜（含 / \ 或扩展名算路径→write，否则 shell）
+ *   haoai deny  "write(.env)"        —— 显式 `tool(pattern)`
+ * 规则按工作区分开存，"在这个仓库里允许"不会漏到别的仓库。
+ */
+private fun addRule(s: PcSettings, rest: List<String>, d: Decision) {
+    val raw = rest.joinToString(" ").trim()
+    if (raw.isEmpty()) {
+        println("用法：haoai allow \"git push*\" | haoai deny \"write(.env)\" | haoai ask \"shell(rm *)\"")
+        return
+    }
+    val rule = if (raw.contains('(')) {
+        Rule.parse("$raw ${d.name}")
+    } else {
+        val tool = if (raw.contains('/') || raw.contains('\\') || Regex("""\.\w+$""").containsMatchIn(raw)) "write" else "shell"
+        Rule(tool, if (raw.contains('*')) raw else "$raw*", d)
+    } ?: return println("规则写法不对：$raw")
+    Policies.get().add(s.workspaceFile(), rule)
+    println("已加入规则：${rule.render()}   （工作区 ${s.workspaceFile().absolutePath}）")
+    if (rule.decision == Decision.ALLOW && PolicyStore.commandPrefix(rule.pattern.trimEnd('*')) in PolicyStore.ALWAYS_ASK) {
+        println("  注意：这条在「必须人工确认」清单里，allow 不会生效 —— 那是最后一道闸，绕不过。")
+    }
+}
+
+private fun listRules(s: PcSettings, rest: List<String>) {
+    val ws = s.workspaceFile()
+    if (rest.firstOrNull() == "clear") {
+        Policies.get().clear(ws)
+        println("已清空本工作区规则")
+        return
+    }
+    val rs = Policies.get().rules(ws)
+    println("工作区 ${ws.absolutePath} 的规则（后写的覆盖先写的）：")
+    if (rs.isEmpty()) println("  （空 —— 全部交给档位决定）")
+    rs.forEachIndexed { i, r -> println("  ${i + 1}. ${r.render()}") }
+    println("\n任何档位都绕不过、必须问人的命令前缀：")
+    println("  " + PolicyStore.ALWAYS_ASK.sorted().chunked(4).joinToString("\n  ") { it.joinToString(" · ") })
+}
+
 private fun task(s: PcSettings, rest: List<String>) {
     val text = rest.filter { !it.startsWith("--") }.joinToString(" ").ifBlank {
         println("用法：haoai task \"要做什么\" [--auto] [--plan]"); return
@@ -150,7 +198,7 @@ private fun task(s: PcSettings, rest: List<String>) {
         else -> s
     }
     val printer = printer()
-    val engine = Sessions.create(settings, settings.workspaceFile(), cliGate(auto || plan), printer)
+    val engine = Sessions.create(settings, settings.workspaceFile(), cliGate(auto || plan, settings.workspaceFile()), printer)
     // 正文由 printer 的 TextDelta/TextDone 事件负责，这里不再手动补一遍（会打印两次）
     engine.submit(text)
 }
@@ -160,7 +208,7 @@ private fun chat(s: PcSettings) {
     println("  工作区 ${s.workspaceFile().absolutePath}")
     println("  /mode plan|ask|auto 切档位   /quit 退出   其余文本就是给 agent 的任务")
     val printer = printer()
-    val engine = Sessions.create(s, s.workspaceFile(), cliGate(s.permissionMode == "auto"), printer)
+    val engine = Sessions.create(s, s.workspaceFile(), cliGate(s.permissionMode == "auto", s.workspaceFile()), printer)
     val br = BufferedReader(InputStreamReader(System.`in`, StandardCharsets.UTF_8))
     while (true) {
         print("\n你 > ")
@@ -242,19 +290,37 @@ private fun printer(): (Ev) -> Unit {
     }
 }
 
-private fun cliGate(auto: Boolean): Gate = object : Gate {
+private fun cliGate(auto: Boolean, workspace: File): Gate = object : Gate {
     private val br = BufferedReader(InputStreamReader(System.`in`, StandardCharsets.UTF_8))
 
     @Volatile
     private var allowAll = auto
 
-    override fun approve(title: String, detail: String, kind: String): Boolean {
-        if (allowAll) return true
+    override fun approve(title: String, detail: String, kind: String): Boolean = ask0(title, detail, kind, null, null)
+
+    override fun approveRule(
+        title: String, detail: String, kind: String, tool: String, pattern: String
+    ): Boolean = ask0(title, detail, kind, tool, pattern)
+
+    private fun ask0(
+        title: String, detail: String, kind: String, tool: String?, pattern: String?
+    ): Boolean {
+        if (allowAll && tool == null) return true
         println("\n  ⚠ 需要确认（$kind）：$title")
         detail.lines().take(8).forEach { println("      $it") }
-        print("  [y]允许一次 / [s]本次会话都允许 / [n]拒绝 > ")
+        val line = if (tool != null && pattern != null)
+            "  [y]允许一次 / [r]以后「$tool($pattern)」都允许 / [s]本任务都允许 / [n]拒绝 > "
+        else "  [y]允许一次 / [s]本次会话都允许 / [n]拒绝 > "
+        print(line)
         val a = br.readLine()?.trim()?.lowercase() ?: "n"
         return when (a) {
+            "r", "rule", "always" -> {
+                if (tool != null && pattern != null) {
+                    Policies.get().add(workspace, Rule(tool, pattern, Decision.ALLOW))
+                    println("  已写入规则：$tool($pattern) ALLOW")
+                }
+                true
+            }
             "s", "session" -> {
                 allowAll = true
                 true

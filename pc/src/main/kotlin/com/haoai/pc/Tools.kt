@@ -42,6 +42,18 @@ data class ToolResult(
 interface Gate {
     fun approve(title: String, detail: String, kind: String): Boolean
     fun ask(question: String, options: List<String>): String
+
+    /**
+     * 带"以后这类都允许"的审批。默认实现退化成普通 approve，
+     * 这样测试与脚本化场景不用改；CLI 与网页各自覆盖它来落规则。
+     */
+    fun approveRule(
+        title: String,
+        detail: String,
+        kind: String,
+        tool: String,
+        pattern: String
+    ): Boolean = approve(title, detail, kind)
 }
 
 data class Todo(var text: String, var status: String = "pending")
@@ -68,14 +80,33 @@ class ToolCtx(
 
     fun outside(f: File): Boolean = !f.canonicalPath.startsWith(workspace.canonicalPath + File.separator)
 
-    /** 计划模式与 ask 档位的统一闸口。返回 null 表示放行，否则是给模型看的拒绝理由。 */
-    fun guard(kind: String, title: String, detail: String): String? {
-        if (kind == "read") return null
-        if (mode == "plan") return "计划模式（只读）下拒绝执行「$title」。要动手请先切到 ask/auto 档位。"
-        if (mode == "auto") return null
-        val extra = if (kind == "write" && outside(resolve(title.substringAfterLast(' ')))) "（在工作区之外）" else ""
-        return if (gate.approve(title, detail + extra, kind)) null
-        else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
+    /**
+     * 统一闸口：先查规则表（S2），再落到档位。
+     *
+     * 顺序很要紧 —— **规则先于档位**，否则 `auto` 会把用户专门写下的"这条要问我"给跳过。
+     * 反过来 `plan` 是最高优先级：计划模式就是只读，规则表也放行不了写。
+     *
+     * @param tool 工具名（shell / write / edit …）
+     * @param subject 这次动作的对象：shell 传整条命令，写类传相对路径
+     */
+    fun guard(tool: String, subject: String, title: String, detail: String): String? {
+        val kind = if (tool == "shell") "exec" else "write"
+        val verdict = Policies.get().decide(workspace, tool, subject)
+
+        if (verdict?.decision == Decision.DENY) {
+            return "规则拒绝：${verdict.why}。这条被显式禁掉了，别再重试，换方案或用 ask_user 问用户。"
+        }
+        if (mode == "plan") {
+            return "计划模式（只读）下拒绝执行「$title」。要动手请先切到 ask/auto 档位。"
+        }
+        if (verdict?.decision == Decision.ALLOW) return null
+        if (mode == "auto" && verdict?.decision != Decision.ASK) return null
+
+        val extra = if (kind == "write" && outside(resolve(subject))) "（在工作区之外）" else ""
+        val why = if (verdict != null) "\n为什么还要问：${verdict.why}" else ""
+        val pattern = if (tool == "shell") PolicyStore.commandPrefix(subject) else subject
+        val ok = gate.approveRule(title, detail + extra + why, kind, tool, pattern)
+        return if (ok) null else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
     }
 
     fun snapshotBefore(target: File) {
@@ -136,7 +167,7 @@ class WriteTool : Tool(
         val path = req(args, "path") ?: return fail("write 缺少 path")
         val content = args["content"]?.jsonPrimitive?.content ?: return fail("write 缺少 content")
         val f = ctx.resolve(path)
-        val why = ctx.guard("write", "写入文件 ${ctx.rel(f)}", "新建或覆盖，共 ${content.length} 字符")
+        val why = ctx.guard("write", ctx.rel(f), "写入文件 ${ctx.rel(f)}", "新建或覆盖，共 ${content.length} 字符")
         if (why != null) return fail(why)
         return try {
             ctx.snapshotBefore(f)
@@ -164,7 +195,7 @@ class EditTool : Tool(
         val all = bool(args, "all")
         val f = ctx.resolve(path)
         if (!f.isFile) return fail("文件不存在：${ctx.rel(f)}")
-        val why = ctx.guard("write", "编辑 ${ctx.rel(f)}", "${old.length} → ${new.length} 字符")
+        val why = ctx.guard("write", ctx.rel(f), "编辑 ${ctx.rel(f)}", "${old.length} → ${new.length} 字符")
         if (why != null) return fail(why)
         return try {
             val text = f.readText()
@@ -255,7 +286,7 @@ class ShellTool : Tool(
         val cwd = req(args, "cwd")?.let { ctx.resolve(it) } ?: ctx.workspace
         val launcher = launcherFor(shell) ?: return fail("这台机器上找不到 $shell，换一种 shell 或给绝对路径")
 
-        val why = ctx.guard("exec", "执行命令（$shell）", command)
+        val why = ctx.guard("shell", command, "执行命令（$shell）", command)
         if (why != null) return fail(why)
 
         /**
