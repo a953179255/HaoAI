@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -327,21 +328,9 @@ fun SettingsScreen(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                LazyColumn(
-                    state = rootListState,
-                    modifier = Modifier.fillMaxSize(),
-                    // 内容从顶栏**下方穿过**（top padding 占位，而不是 Spacer 把列表顶下去）：
-                    // 原先列表被 56dp Spacer 顶到栏下方，玻璃顶栏底下永远只有壁纸，
-                    // 看起来像"顶栏下有一层不透明遮罩"（用户实测）——透视要成立，
-                    // 前提是先让内容滚到栏底下去
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        top = 56.dp,
-                        start = HaoDimens.pagePaddingH,
-                        end = HaoDimens.pagePaddingH,
-                        bottom = 24.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)
-                ) {
+                // 横屏两列：内容拆成 A/B 两段本地扩展（竖屏按 A→B 原序渲染，观感不变）
+                fun androidx.compose.foundation.lazy.LazyListScope.homePartA() {
+
                 // ── 目标 A：三组玻璃卡 ───────────────────────────────────────────────
                 // 规则：底色只表达"是不是异常"——常态入口一律强调色徽标，
                 // 只有需要用户处理（无障碍未启用 / rootfs 损坏）才用琥珀；
@@ -484,6 +473,8 @@ fun SettingsScreen(
                     }
                 }
 
+                }
+                fun androidx.compose.foundation.lazy.LazyListScope.homePartB() {
                 item { com.haoai.agent.ui.common.HaoGroupLabel("通用与系统") }
                 item {
                     // 第三组也是常态入口 ⇒ 同样用强调色徽标。
@@ -554,7 +545,60 @@ fun SettingsScreen(
                     }
                 }
 
-            }
+                }
+                val homeTwoCol = androidx.compose.ui.platform.LocalConfiguration.current.let {
+                    it.screenWidthDp > it.screenHeightDp
+                }
+                if (homeTwoCol) {
+                    // 两列：横向高度低，靠并排把"一屏可见条目"翻倍——这才是横屏该有的密度
+                    androidx.compose.foundation.layout.Row(Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = rootListState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                top = 56.dp,
+                                start = HaoDimens.pagePaddingH,
+                                end = HaoDimens.pagePaddingH,
+                                bottom = 24.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)
+                        ) { homePartA() }
+                        LazyColumn(
+                            state = androidx.compose.foundation.lazy.rememberLazyListState(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                top = 56.dp,
+                                start = HaoDimens.pagePaddingH,
+                                end = HaoDimens.pagePaddingH,
+                                bottom = 24.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)
+                        ) { homePartB() }
+                    }
+                } else {
+                    LazyColumn(
+                    state = rootListState,
+                    modifier = Modifier.fillMaxSize(),
+                    // 内容从顶栏**下方穿过**（top padding 占位，而不是 Spacer 把列表顶下去）：
+                    // 原先列表被 56dp Spacer 顶到栏下方，玻璃顶栏底下永远只有壁纸，
+                    // 看起来像"顶栏下有一层不透明遮罩"（用户实测）——透视要成立，
+                    // 前提是先让内容滚到栏底下去
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        top = 56.dp,
+                        start = HaoDimens.pagePaddingH,
+                        end = HaoDimens.pagePaddingH,
+                        bottom = 24.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(HaoDimens.groupGap)
+                ) {
+                    homePartA()
+                    homePartB()
+                }
+                }
             }
             GlassPageBar(
                 backdrop = localBackdrop,

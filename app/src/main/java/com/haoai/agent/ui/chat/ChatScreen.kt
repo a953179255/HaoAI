@@ -432,9 +432,24 @@ fun ChatScreen(
         focusManager.clearFocus()
     }
     fun openDrawer() = scope.launch { hideIme(); drawer.open() }
+    // 汉堡 = 开/关切换。横屏两栏下侧栏常驻，收起它唯一的入口就是这颗钮；
+    // 旧实现只 open 不 close，横屏点汉堡没反应（＝"侧边栏关不掉"）。
+    fun toggleDrawer() {
+        if (drawer.isOpen) scope.launch { hideIme(); drawer.close() } else openDrawer()
+    }
     val density = LocalDensity.current
-    // 抽屉面板宽度（与 sheet 的 fillMaxWidth(0.72f) 一致）：跟手拖动时把 px 位移归一化为 fraction
-    val drawerPanelWidthDp = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp * 0.72f).dp
+    // 横屏 = 两栏模式：侧栏占 28%（≈340dp），常驻可见；竖屏保持 0.72 抽屉盖层
+    val cfgNow = androidx.compose.ui.platform.LocalConfiguration.current
+    val landscapeTwoPane = cfgNow.screenWidthDp > cfgNow.screenHeightDp
+    val drawerPanelRatio = if (landscapeTwoPane) 0.28f else 0.72f
+    // 抽屉面板宽度（与 sheet 的 fillMaxWidth(drawerPanelRatio) 一致）：跟手拖动时把 px 位移归一化为 fraction
+    val drawerPanelWidthDp = (cfgNow.screenWidthDp * drawerPanelRatio).dp
+    // 横屏进屏自动展开侧栏（两栏）：只在"进入横屏"这一刻跑，之后用户可手动收起，不反复强制；
+    // 转回竖屏时收起——竖屏侧栏是盖层，留着会挡住整屏聊天。
+    androidx.compose.runtime.LaunchedEffect(landscapeTwoPane) {
+        if (landscapeTwoPane) { if (!drawer.isOpen) drawer.snapOpen() }
+        else if (drawer.isOpen) drawer.close()
+    }
     // 消息列表顶部留白 = 状态栏 + 顶栏高度：列表物理延伸到玻璃顶栏下方（消息可滚入玻璃
     // 被磨砂遮住，主流聊天观感），仅用 contentPadding 保证初始首条消息停在顶栏下沿
     val topBarHeightDp = with(density) {
@@ -707,6 +722,13 @@ fun ChatScreen(
 
     Box(Modifier.fillMaxSize()) {
     val drawerFraction = drawer.fraction.value
+    // 横屏两栏的「让位」修饰符：侧栏是分区不是盖层，所以凡与聊天内容平级、声明在
+    // appLayer 之外的浮层（玻璃顶栏、上下文详情、底部输入列）都必须按同一 fraction
+    // 让出侧栏宽度。此前只让了消息列：顶栏汉堡被面板压住 → 横屏侧栏关不掉，
+    // 输入框左端也整截藏在面板下（2026-09-26 实锤）。
+    val twoPaneShift =
+        if (landscapeTwoPane) Modifier.padding(start = drawerPanelWidthDp * drawerFraction)
+        else Modifier
     // 转场快照层（v0.18.1 优化：按需录制）：常态只 drawContent()——旧实现每帧
     // 额外把整页再 record 进 GraphicsLayer 一遍，等于全页 DisplayList 每帧录两次，
     // 聊天滚动/抽屉/转场三个场景的每帧成本被凭空放大近一倍（实测聊天滚动 jank 82%）。
@@ -743,6 +765,9 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
+                // 两栏：内容整体让出侧栏宽度（fraction 驱动的布局期 padding，
+                // 与抽屉打开动画同帧；竖屏为 0，保持原盖层行为）
+                .then(twoPaneShift)
                 .pointerInput(Unit) {
                     detectTapGestures {
                         focusManager.clearFocus()
@@ -856,7 +881,7 @@ fun ChatScreen(
 
         // 玻璃顶栏不能进入上面的 appLayer 子树——drawBackdrop 采样自层会递归崩溃
         val activeSession = vm.session.collectAsState().value
-        Box(Modifier.align(Alignment.TopCenter)) {
+        Box(Modifier.align(Alignment.TopCenter).then(twoPaneShift)) {
             Column {
                 TopBar(
     exportedBackdrop = topBarExportBackdrop,
@@ -866,7 +891,7 @@ fun ChatScreen(
                     subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
                     contextUsage = contextUsage,
                     backdrop = backdrop,
-                    onDrawer = { openDrawer() },
+                    onDrawer = { toggleDrawer() },
                     onNewChat = {
                         vm.newSession()
                         scope.launch { drawer.close() }
@@ -982,6 +1007,7 @@ fun ChatScreen(
             exit = androidx.compose.animation.fadeOut(tween(120)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .then(twoPaneShift)
                 .fillMaxSize()
         ) {
             // 透明点击捕获层（无背景色）：外部点击关闭面板
@@ -1033,6 +1059,7 @@ fun ChatScreen(
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
+                .then(twoPaneShift)
                 .navigationBarsPadding()
                 // 同上：offset 布局期平移，保证 TaskPanel/斜杠弹层/输入框玻璃采样随键盘抬升
                 .offset { androidx.compose.ui.unit.IntOffset(0, -keyboardLiftPx) }
@@ -1328,8 +1355,10 @@ fun ChatScreen(
     }
         // 虚拟屏全屏查看页：盖住顶栏（展开态），在 scrim 之前
         vscreenFull()
-        // 抽屉 scrim：透明度随 fraction，点击收起
-        if (drawerFraction > 0.01f) {
+        // 抽屉 scrim：透明度随 fraction，点击收起。
+        // 横屏两栏没有 scrim：侧栏是常驻分区而非盖层，压暗会让右边聊天长期发灰，
+        // 且点聊天区误关侧栏（用户要的是"看着用"，不是"盖着用"）
+        if (drawerFraction > 0.01f && !landscapeTwoPane) {
             Box(
                 Modifier
                     .matchParentSize()
@@ -1347,7 +1376,7 @@ fun ChatScreen(
                 .fillMaxHeight()
                 // 外层宽度=可见面板宽度（0.72）：此前外层 0.85 内层再 0.85，
                 // 吃点击的 clickable 覆盖到 0.85，面板右缘与外层之间 13% 死区点不动
-                .fillMaxWidth(0.72f)
+                .fillMaxWidth(drawerPanelRatio)
                 .onSizeChanged { sheetW = it.width }
                 .offset { IntOffset((-(1f - drawerFraction) * sheetW).toInt(), 0) }
                 // 左滑收起抽屉：跟手拖动，松手按位置+速度结算（与左缘呼出对称）
