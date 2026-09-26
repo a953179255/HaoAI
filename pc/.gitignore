@@ -1,0 +1,8 @@
+.gradle/
+build/
+*.log
+
+# 密钥与本机状态永不入库
+apikey
+*.key
+local.properties

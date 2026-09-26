@@ -1,0 +1,263 @@
+package com.haoai.pc
+
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * 本地 HTTP 服务 + SSE。
+ *
+ * 只绑 127.0.0.1：PC 端"权威源"的角色不等于把 agent 开放到局域网。
+ * 跨端（配对 token / Tailscale / 审批做成持久对象）是方案里 Phase 3 的事，
+ * 这里先把"自己电脑上真能用"做出来。
+ */
+class WebServer(private val settings: PcSettings, port: Int) {
+
+    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
+    private val seq = AtomicInteger()
+    private val pending = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<String>>()
+    private val subscribers: MutableList<OutputStream> = Collections.synchronizedList(mutableListOf())
+
+    @Volatile
+    private var engine: Engine? = null
+
+    @Volatile
+    private var running = false
+
+    fun start(): Int {
+        server.executor = Executors.newCachedThreadPool()
+        server.createContext("/") { ex -> route(ex) }
+        server.start()
+        return server.address.port
+    }
+
+    fun stop() = server.stop(0)
+
+    private fun route(ex: HttpExchange) {
+        val path = ex.requestURI.path
+        try {
+            when (path) {
+                "/", "/index.html" -> sendFile(ex, "ui/index.html", "text/html; charset=utf-8")
+                "/api/events" -> sse(ex)
+                "/api/state" -> send(ex, 200, stateJson(), "application/json; charset=utf-8")
+                "/api/task" -> task(ex)
+                "/api/decide" -> decide(ex)
+                "/api/mode" -> mode(ex)
+                "/api/new" -> {
+                    engine = null
+                    send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+                }
+                else -> send(ex, 404, "not found", "text/plain; charset=utf-8")
+            }
+        } catch (e: Exception) {
+            Env.log("web", "$path 处理失败：${e.message}")
+            runCatching { send(ex, 500, "server error: ${e.message}", "text/plain; charset=utf-8") }
+        } finally {
+            if (path != "/api/events") runCatching { ex.close() }
+        }
+    }
+
+    private fun sse(ex: HttpExchange) {
+        ex.responseHeaders.add("Content-Type", "text/event-stream; charset=utf-8")
+        ex.responseHeaders.add("Cache-Control", "no-cache")
+        ex.sendResponseHeaders(200, 0)
+        val os = ex.responseBody
+        subscribers.add(os)
+        runCatching { write(os, "hello", "{}") }
+        while (true) {
+            Thread.sleep(15_000)
+            try {
+                write(os, "ping", "{}")
+            } catch (e: Exception) {
+                break
+            }
+        }
+        subscribers.remove(os)
+    }
+
+    private fun write(os: OutputStream, event: String, data: String) {
+        os.write("event: $event\ndata: $data\n\n".toByteArray(StandardCharsets.UTF_8))
+        os.flush()
+    }
+
+    private fun publish(event: String, data: String) {
+        val dead = mutableListOf<OutputStream>()
+        synchronized(subscribers) {
+            subscribers.forEach { os -> runCatching { write(os, event, data) }.onFailure { dead += os } }
+        }
+        dead.forEach { subscribers.remove(it) }
+    }
+
+    private fun stateJson(): String {
+        val e = engine
+        val sb = StringBuilder()
+        sb.append('{')
+        sb.append("\"mode\":\"").append(esc(e?.session?.mode ?: settings.permissionMode)).append("\",")
+        sb.append("\"workspace\":\"").append(esc(settings.workspaceFile().absolutePath)).append("\",")
+        sb.append("\"model\":\"").append(esc(settings.model)).append("\",")
+        sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
+        sb.append("\"running\":").append(running).append(",")
+        sb.append("\"todos\":[")
+        e?.session?.todos?.forEachIndexed { i, t ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"text\":").append(quote(t.text)).append(",\"status\":\"").append(t.status).append("\"}")
+        }
+        sb.append("],\"usage\":{\"prompt\":").append(e?.totalPrompt ?: 0L)
+        sb.append(",\"completion\":").append(e?.totalCompletion ?: 0L).append("},")
+        sb.append("\"messages\":[")
+        e?.messages()?.forEachIndexed { i, m ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"role\":\"").append(m.role).append("\",\"content\":").append(quote(m.content ?: ""))
+                .append(",\"name\":").append(quote(m.calls.firstOrNull()?.name ?: ""))
+                .append('}')
+        }
+        sb.append("]}")
+        return sb.toString()
+    }
+
+    private fun bodyOf(ex: HttpExchange): String =
+        ex.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+
+    private fun field(ex: HttpExchange, key: String): String = runCatching {
+        Json.parseToJsonElement(bodyOf(ex)).jsonObject[key]?.jsonPrimitive?.content ?: ""
+    }.getOrDefault("")
+
+    private fun task(ex: HttpExchange) {
+        val text = field(ex, "text")
+        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+        if (text.isBlank()) return
+        publish("user", quote(text))
+        Thread {
+            synchronized(this) {
+                running = true
+                publish("run", """{"running":true}""")
+                try {
+                    ensureEngine().submit(text)
+                } catch (e: Exception) {
+                    publish("err", quote("回合异常：${e.message ?: e.javaClass.simpleName}"))
+                } finally {
+                    running = false
+                    publish("run", """{"running":false}""")
+                }
+            }
+        }.apply { isDaemon = true; name = "haoai-run"; start() }
+    }
+
+    private fun ensureEngine(): Engine = engine ?: synchronized(this) {
+        engine ?: Sessions.create(
+            settings, settings.workspaceFile(), webGate(),
+            emit = { ev -> forward(ev) }
+        ).also { engine = it }
+    }
+
+    private fun forward(ev: Ev) {
+        when (ev) {
+            is Ev.TextDelta -> publish("delta", quote(ev.s))
+            is Ev.TextDone -> publish("answer", quote(ev.s))
+            is Ev.ToolStart -> publish(
+                "tool",
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"brief":${quote(ev.brief)},"state":"run"}"""
+            )
+            is Ev.ToolEnd -> publish(
+                "tool",
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},"out":${quote(ev.out)}}"""
+            )
+            is Ev.Todo -> publish("todo", """{"items":${ev.items.joinToString(",", "[", "]") { quote(it) }}}""")
+            is Ev.Usage -> publish("usage", """{"prompt":${ev.prompt},"completion":${ev.completion},"turns":${ev.turns}}""")
+            is Ev.Notice -> publish("notice", quote(ev.s))
+            is Ev.Err -> publish("err", quote(ev.s))
+            else -> Unit
+        }
+    }
+
+    private fun webGate(): Gate = object : Gate {
+        override fun approve(title: String, detail: String, kind: String): Boolean {
+            val id = "a${seq.incrementAndGet()}"
+            val fut = java.util.concurrent.CompletableFuture<String>()
+            pending[id] = fut
+            publish(
+                "approval",
+                """{"id":"$id","title":${quote(title)},"detail":${quote(detail)},"kind":"$kind"}"""
+            )
+            val ans = try {
+                fut.get(300, TimeUnit.SECONDS)
+            } catch (e: TimeoutException) {
+                publish("notice", quote("300 秒无人应答，按拒绝处理"))
+                "deny"
+            } catch (e: Exception) {
+                "deny"
+            } finally {
+                pending.remove(id)
+            }
+            return ans == "allow_once" || ans == "allow_session"
+        }
+
+        override fun ask(question: String, options: List<String>): String {
+            val id = "q${seq.incrementAndGet()}"
+            val fut = java.util.concurrent.CompletableFuture<String>()
+            pending[id] = fut
+            publish(
+                "ask",
+                """{"id":"$id","question":${quote(question)},"options":${options.joinToString(",", "[", "]") { quote(it) }}}"""
+            )
+            return try {
+                fut.get(900, TimeUnit.SECONDS)
+            } catch (e: Exception) {
+                ""
+            } finally {
+                pending.remove(id)
+            }
+        }
+    }
+
+    private fun decide(ex: HttpExchange) {
+        val id = field(ex, "id")
+        val decision = field(ex, "decision")
+        val answer = field(ex, "answer")
+        val fut = pending[id]
+        if (fut != null) fut.complete(if (answer.isNotBlank()) answer else decision)
+        if (decision == "allow_session") {
+            engine?.session?.mode = "auto"
+            publish("mode", """{"mode":"auto"}""")
+        }
+        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+    }
+
+    private fun mode(ex: HttpExchange) {
+        val m = field(ex, "mode")
+        if (m in listOf("plan", "ask", "auto")) {
+            ensureEngine().session.mode = m
+            publish("mode", """{"mode":"$m"}""")
+        }
+        send(ex, 200, """{"ok":true,"mode":"${engine?.session?.mode ?: m}"}""", "application/json; charset=utf-8")
+    }
+
+    private fun sendFile(ex: HttpExchange, resource: String, type: String) {
+        val bytes = javaClass.classLoader.getResourceAsStream(resource)?.readBytes()
+            ?: "资源缺失：$resource".toByteArray(StandardCharsets.UTF_8)
+        send(ex, 200, String(bytes, StandardCharsets.UTF_8), type)
+    }
+
+    private fun send(ex: HttpExchange, code: Int, body: String, type: String) {
+        val b = body.toByteArray(StandardCharsets.UTF_8)
+        ex.responseHeaders.add("Content-Type", type)
+        ex.sendResponseHeaders(code, b.size.toLong())
+        ex.responseBody.use { it.write(b) }
+    }
+
+    private fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
+        .replace("\n", "\\n").replace("\r", "").replace("\t", "    ")
+
+    private fun quote(s: String): String = "\"" + esc(s) + "\""
+}
