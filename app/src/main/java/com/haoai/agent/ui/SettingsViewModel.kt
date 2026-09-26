@@ -249,6 +249,18 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun searchFallback(): Boolean = settings.value.searchFallback
     fun setSearchFallback(v: Boolean) = c.updateSettings { it.copy(searchFallback = v) }
 
+    /**
+     * S6 特性开关写回。只存"与默认值不同"的覆盖（[com.haoai.agent.agent.flags.HaoFlag.compactOverrides]），
+     * 所以把实验项拨回默认等于从设置文件里删掉它 —— 不留一堆将来会误导人的陈旧 true/false。
+     */
+    fun setFlag(key: String, on: Boolean) = c.updateSettings { st ->
+        st.copy(
+            enabledFlags = com.haoai.agent.agent.flags.HaoFlag.compactOverrides(
+                st.enabledFlags + (key to on)
+            )
+        )
+    }
+
     fun searchOption(key: String): String = searchOptionOf(searchBackend(), key)
 
     fun searchOptionOf(backend: String, key: String): String =

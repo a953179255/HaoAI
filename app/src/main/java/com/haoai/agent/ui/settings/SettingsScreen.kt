@@ -3162,6 +3162,24 @@ private fun LazyListScope.generalItems(
             }
         }
     }
+
+    // ── 实验特性（S6）：新能力"先上再关"的总闸 ──────────────────────────────
+    // 列的是 HaoFlag.visible()，不是散在各页的临时开关 —— 加新能力只在枚举里加一条，
+    // 这里自动出现。已下线（REMOVED）的不显示：显示了也改不动，只会骗人。
+    item { com.haoai.agent.ui.common.HaoGroupLabel("实验特性") }
+    item {
+        HaoGroup(backdrop = backdrop) {
+            com.haoai.agent.agent.flags.HaoFlag.visible().forEach { flag ->
+                ToggleRow(
+                    title = flag.title,
+                    subtitle = flag.what,
+                    checked = com.haoai.agent.agent.flags.HaoFlag.enabled(flag, settings.enabledFlags),
+                    onChange = { vm.setFlag(flag.key, it) },
+                    backdrop = backdrop
+                )
+            }
+        }
+    }
 }
 
 // ---------- 搜索服务（方案 A：正在使用 + 已添加 + 目录页）----------
