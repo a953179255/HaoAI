@@ -726,8 +726,12 @@ fun ChatScreen(
     // appLayer 之外的浮层（玻璃顶栏、上下文详情、底部输入列）都必须按同一 fraction
     // 让出侧栏宽度。此前只让了消息列：顶栏汉堡被面板压住 → 横屏侧栏关不掉，
     // 输入框左端也整截藏在面板下（2026-09-26 实锤）。
+    // fraction 必须先夹回 0..1：抽屉用 spring 收合，阻尼<1 会冲过头到负值，
+    // 而 padding 只接受非负——不夹就是「点汉堡关侧栏 → IllegalArgumentException 崩应用」
+    //（实测崩溃栈 ChatScreen.kt:730 Padding must be non-negative）。
+    // 旧抽屉只把 fraction 用在 alpha/offset 上，负值无害，所以这个坑是新引入的。
     val twoPaneShift =
-        if (landscapeTwoPane) Modifier.padding(start = drawerPanelWidthDp * drawerFraction)
+        if (landscapeTwoPane) Modifier.padding(start = drawerPanelWidthDp * drawerFraction.coerceIn(0f, 1f))
         else Modifier
     // 转场快照层（v0.18.1 优化：按需录制）：常态只 drawContent()——旧实现每帧
     // 额外把整页再 record 进 GraphicsLayer 一遍，等于全页 DisplayList 每帧录两次，
@@ -1495,6 +1499,10 @@ fun ChatScreen(
                             },
                             onSelectSession = { id ->
                                 vm.selectSession(id)
+                                // 竖屏选完收起侧栏：72% 盖层留在屏上，刚点开的对话只剩一条边
+                                // （「+ 新对话」一直是这么做的，选会话却漏了）。
+                                // 横屏两栏侧栏是常驻分区，保持展开不动
+                                if (!landscapeTwoPane) scope.launch { drawer.close() }
                             },
                             onPinSession = { id -> vm.pinSession(id) },
                             onRenameSession = { id, title -> vm.renameSession(id, title) },
