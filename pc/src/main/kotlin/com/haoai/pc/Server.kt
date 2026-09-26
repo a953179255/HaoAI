@@ -22,7 +22,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * 跨端（配对 token / Tailscale / 审批做成持久对象）是方案里 Phase 3 的事，
  * 这里先把"自己电脑上真能用"做出来。
  */
-class WebServer(private val settings: PcSettings, port: Int) {
+class WebServer(settings: PcSettings, port: Int) {
+
+    @Volatile
+    private var settings = settings
+
 
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
     private val seq = AtomicInteger()
@@ -59,6 +63,11 @@ class WebServer(private val settings: PcSettings, port: Int) {
                     engine = null
                     send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
                 }
+                "/api/sessions" -> send(ex, 200, sessionsJson(), "application/json; charset=utf-8")
+                "/api/open" -> openSession(ex)
+                "/api/settings" ->
+                    if (ex.requestMethod == "POST") saveSettings(ex)
+                    else send(ex, 200, settingsJson(), "application/json; charset=utf-8")
                 else -> send(ex, 404, "not found", "text/plain; charset=utf-8")
             }
         } catch (e: Exception) {
@@ -255,6 +264,76 @@ class WebServer(private val settings: PcSettings, port: Int) {
             publish("mode", """{"mode":"$m"}""")
         }
         send(ex, 200, """{"ok":true,"mode":"${engine?.session?.mode ?: m}"}""", "application/json; charset=utf-8")
+    }
+
+    /** 旧会话列表：手机端侧栏有 48 条会话，PC 端少了这个就只能一次性对话。 */
+    private fun sessionsJson(): String {
+        val cur = engine?.session?.id
+        return SessionIndex.list().joinToString(",", "[", "]") { m ->
+            """{"id":${quote(m.id)},"title":${quote(m.title)},"workspace":${quote(m.workspace)},""" +
+                """"mode":"${m.mode}","updated":${m.updated},"messages":${m.messages},""" +
+                """"prompt":${m.prompt},"completion":${m.completion},"current":${m.id == cur}}"""
+        }
+    }
+
+    private fun openSession(ex: HttpExchange) {
+        val id = field(ex, "id")
+        val meta = SessionIndex.list(200).firstOrNull { it.id == id }
+        if (meta == null) {
+            send(ex, 404, """{"ok":false,"error":"没有这个会话"}""", "application/json; charset=utf-8")
+            return
+        }
+        synchronized(this) {
+            // 必须用**原来的 id** 构造 Session：Engine 的 init 按 pc-<id>.json 回读历史，
+            // 走 Sessions.create 会发一个新 id，于是"打开旧会话"变成"开一个空会话"。
+            val s = SessionIndex.restore(meta, settings.workspaceFile())
+            engine = Engine(s, settings, builtinTools(), webGate(), emit = { ev -> forward(ev) })
+        }
+        send(ex, 200, """{"ok":true,"id":${quote(id)}}""", "application/json; charset=utf-8")
+        publish("opened", """{"id":${quote(id)},"title":${quote(meta.title)},"mode":${quote(meta.mode)}}""")
+    }
+
+    private fun settingsJson(): String {
+        val st = settings
+        val flags = HaoFlag.entries.joinToString(",", "[", "]") { f ->
+            """{"key":${quote(f.key)},"title":${quote(f.title)},"what":${quote(f.what)},""" +
+                """"on":${HaoFlag.enabled(f, st.flags)}}"""
+        }
+        val rules = Policies.get().rules(st.workspaceFile()).joinToString(",", "[", "]") { r ->
+            """{"text":${quote(r.render())}}"""
+        }
+        val key = System.getenv("HAOAI_API_KEY")?.takeIf { it.isNotBlank() }
+            ?: runCatching { Env.apiKeyFile.takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
+
+        return """{"provider":${quote(st.providerName)},"baseUrl":${quote(st.baseUrl)},""" +
+            """"model":${quote(st.model)},"mode":${quote(st.permissionMode)},""" +
+            """"workspace":${quote(st.workspaceFile().absolutePath)},""" +
+            """"hasKey":${key != null},"keyHint":${quote(key?.take(6) ?: "")},""" +
+            """"flags":$flags,"rules":$rules}"""
+    }
+
+    private fun saveSettings(ex: HttpExchange) {
+        val body = runCatching { Json.parseToJsonElement(bodyOf(ex)).jsonObject }.getOrNull()
+        if (body == null) {
+            send(ex, 400, """{"ok":false}""", "application/json; charset=utf-8"); return
+        }
+        var n = settings
+        body["model"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(model = it) }
+        body["baseUrl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
+        body["mode"]?.jsonPrimitive?.content?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
+            n = n.copy(permissionMode = it)
+            engine?.session?.mode = it
+        }
+        body["workspace"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(workspace = it) }
+        body["flags"]?.jsonObject?.let { fo ->
+            val merged = n.flags.toMutableMap()
+            fo.forEach { (k, v) -> merged[k] = (v.jsonPrimitive.content == "true") }
+            n = n.copy(flags = HaoFlag.compactOverrides(merged))
+        }
+        PcSettings.save(n)
+        settings = n
+        publish("mode", """{"mode":"${n.permissionMode}"}""")
+        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
     }
 
     private fun sendFile(ex: HttpExchange, resource: String, type: String) {

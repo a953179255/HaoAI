@@ -30,6 +30,20 @@
   .grp{margin:16px 0 6px;color:var(--dim);font-size:11px;letter-spacing:.6px;text-transform:uppercase}
   .kv{font-size:12px;color:var(--dim);word-break:break-all;line-height:1.5}
   .kv b{color:var(--fg);font-weight:600}
+  .mini{background:var(--glass);border:1px solid var(--line);color:var(--dim);border-radius:7px;
+    font-size:10.5px;padding:1px 6px;cursor:pointer;margin-left:6px}
+  .sess{display:flex;flex-direction:column;gap:4px}
+  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 8px;
+    cursor:pointer;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess .it:hover{border-color:var(--acc2);color:var(--fg)}
+  .sess .it.cur{border-color:var(--acc2);background:rgba(31,111,74,.22);color:var(--fg)}
+  .sess .it i{font-style:normal;opacity:.65;font-size:11px}
+  .fld{margin:8px 0}
+  .fld label{display:block;font-size:11px;color:var(--dim);margin-bottom:3px}
+  .sw{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
+  .sw input{margin-top:3px}
+  .sw .t{font-size:12.5px}
+  .sw .d{font-size:11px;color:var(--dim);line-height:1.45}
   .main{display:flex;flex-direction:column;min-width:0}
   header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);
     background:rgba(10,14,12,.55);backdrop-filter:blur(10px)}
@@ -104,6 +118,8 @@
     <div class="kv" id="ws">—</div>
     <div class="grp">大脑</div>
     <div class="kv" id="model">—</div>
+    <div class="grp">历史会话 <button id="cfgBtn" class="mini" title="设置">⚙ 设置</button></div>
+    <div id="sessions" class="sess"></div>
     <div class="grp">说明</div>
     <div class="kv">
       <b>plan</b> 只读调研出方案<br>
@@ -145,7 +161,7 @@
 
 <script>
 const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box');
-let mode='ask', running=false;
+let mode='ask', running=false, curId=null;
 
 function esc(t){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function md(t){
@@ -205,6 +221,7 @@ es.addEventListener('usage',e=>{const d=JSON.parse(e.data);
 es.addEventListener('notice',e=>notice(JSON.parse(e.data)));
 es.addEventListener('err',e=>notice(JSON.parse(e.data),'err'));
 es.addEventListener('mode',e=>setMode(JSON.parse(e.data).mode));
+es.addEventListener('opened',e=>{const d=JSON.parse(e.data);curId=d.id;$('#title').textContent=d.title;});
 es.addEventListener('run',e=>{running=JSON.parse(e.data).running;$('#send').disabled=running&&!approvalOpen;});
 es.addEventListener('approval',e=>ask(JSON.parse(e.data),'approval'));
 es.addEventListener('ask',e=>ask(JSON.parse(e.data),'ask'));
@@ -253,6 +270,66 @@ function send(){
 $('#send').onclick=send;
 box.addEventListener('keydown',e=>{if(e.key=='Enter'&&!e.shiftKey){e.preventDefault();send()}});
 box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(160,box.scrollHeight)+'px'});
+
+function loadSessions(){
+  fetch('/api/sessions').then(r=>r.json()).then(list=>{
+    const box=$('#sessions');
+    if(!list.length){box.innerHTML='<div class="it" style="cursor:default">（还没有历史会话）</div>';return}
+    box.innerHTML=list.slice(0,12).map(m=>`<div class="it${m.current?' cur':''}" data-id="${m.id}" title="${esc(m.workspace)}">
+      ${esc(m.title)}<br><i>${m.messages} 条 · ${m.mode} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i></div>`).join('');
+    box.querySelectorAll('[data-id]').forEach(e=>e.onclick=()=>{
+      if(e.dataset.id===curId)return;
+      fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:e.dataset.id})})
+        .then(r=>r.json()).then(()=>{curId=e.dataset.id;reload()});
+    });
+  });
+}
+function reload(){stream.innerHTML='';return fetch('/api/state').then(r=>r.json()).then(applyState)}
+function applyState(s){
+  $('#ws').textContent=s.workspace;$('#model').textContent=s.model;setMode2(s.mode);
+  $('#title').textContent=s.title||'新会话';
+  if(s.todos&&s.todos.length)setTodos(s.todos.map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text));
+  if(s.usage)$('#usage2').textContent=`输入 ${s.usage.prompt.toLocaleString()} / 输出 ${s.usage.completion.toLocaleString()}`;
+  stream.innerHTML='';
+  (s.messages||[]).forEach(m=>{
+    if(m.role=='user')add(el(`<div class="msg user">${esc(m.content)}</div>`));
+    else if(m.role=='assistant'&&m.content)add(el(`<div class="msg ans md">${md(m.content)}</div>`));
+    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split('
+')[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`));
+  });
+  loadSessions();
+}
+function setMode2(m){setMode(m)}
+$('#newBtn').addEventListener('click',()=>{setTimeout(loadSessions,400)});
+
+// ---- 设置抽屉 ----
+$('#cfgBtn').onclick=()=>{
+  fetch('/api/settings').then(r=>r.json()).then(c=>{
+    approvalOpen=true;
+    const dg=$('#dialog');
+    dg.innerHTML=`<h3>设置</h3>
+      <div class="fld"><label>模型</label><input type="text" id="fModel" value="${esc(c.model)}"></div>
+      <div class="fld"><label>网关 Base URL</label><input type="text" id="fBase" value="${esc(c.baseUrl)}"></div>
+      <div class="fld"><label>工作区</label><input type="text" id="fWs" value="${esc(c.workspace)}"></div>
+      <div class="fld"><label>权限档位</label><input type="text" id="fMode" value="${esc(c.mode)}" placeholder="plan / ask / auto"></div>
+      <div class="fld"><label>密钥</label><div class="kv">${c.hasKey?('已设置 '+esc(c.keyHint)+'…'):'<b style="color:var(--warn)">未设置</b>（跑 haoai key sk-…）'}</div></div>
+      <div class="grp" style="margin-top:12px">实验特性</div>
+      ${c.flags.map(f=>`<label class="sw"><input type="checkbox" data-k="${f.key}" ${f.on?'checked':''}>
+        <span><span class="t">${esc(f.title)}</span><br><span class="d">${esc(f.what)}</span></span></label>`).join('')}
+      <div class="grp" style="margin-top:12px">本工作区权限规则</div>
+      <div class="kv">${c.rules.length?c.rules.map(r=>esc(r.text)).join('<br>'):'（空 —— 全部交给档位决定）'}</div>
+      <div class="acts"><button class="btn" id="cfgClose">关闭</button><button class="btn pri" id="cfgSave">保存</button></div>`;
+    $('#mask').classList.add('on');
+    dg.querySelector('#cfgClose').onclick=close;
+    dg.querySelector('#cfgSave').onclick=()=>{
+      const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
+      fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:dg.querySelector('#fModel').value,baseUrl:dg.querySelector('#fBase').value,
+          workspace:dg.querySelector('#fWs').value,mode:dg.querySelector('#fMode').value,flags})})
+        .then(r=>r.json()).then(()=>{close();notice('设置已保存，下一条消息起生效');reload();});
+    };
+  });
+};
 
 fetch('/api/state').then(r=>r.json()).then(s=>{
   $('#ws').textContent=s.workspace;$('#model').textContent=s.model;setMode(s.mode);

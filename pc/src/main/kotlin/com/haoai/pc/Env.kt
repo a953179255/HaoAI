@@ -16,14 +16,35 @@ import java.util.Date
  */
 object Env {
 
-    val home: File by lazy {
-        // 测试用 -Dhaoai.home=… 把状态根指到临时目录；环境变量 HAOAI_HOME 给用户自己换盘用。
-        val prop = System.getProperty("haoai.home")?.takeIf { it.isNotBlank() }
-        val override = prop ?: System.getenv("HAOAI_HOME")?.takeIf { it.isNotBlank() }
-        val dir = if (override != null) File(override) else File(defaultHome(), "HaoAI")
-        dir.mkdirs()
-        dir
-    }
+    /**
+     * 状态根。
+     *
+     * 刻意**不用 lazy**：测试用 `-Dhaoai.home` / `System.setProperty` 把它指到临时目录，
+     * 而一个 JVM 里多个测试类共享同一个 `Env` —— lazy 会让"第一个碰到它的那个类"定死全局，
+     * 结果就是单测把会话写进用户真实的 `%LOCALAPPDATA%\HaoAI\sessions`（实测泄漏了 21 条）。
+     * 每次按当前属性值重算，代价是一次 File 构造，换来测试永远污染不到用户数据。
+     */
+    @Volatile
+    private var cachedHome: File? = null
+
+    @Volatile
+    private var cachedKey: String? = null
+
+    val home: File
+        get() {
+            val prop = System.getProperty("haoai.home")?.takeIf { it.isNotBlank() }
+            val override = prop ?: System.getenv("HAOAI_HOME")?.takeIf { it.isNotBlank() }
+            val key = override ?: "<default>"
+            cachedHome?.let { if (cachedKey == key) return it }
+            synchronized(this) {
+                cachedHome?.let { if (cachedKey == key) return it }
+                val dir = if (override != null) File(override) else File(defaultHome(), "HaoAI")
+                dir.mkdirs()
+                cachedHome = dir
+                cachedKey = key
+                return dir
+            }
+        }
 
     private fun defaultHome(): File {
         val local = System.getenv("LOCALAPPDATA")

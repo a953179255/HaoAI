@@ -197,6 +197,12 @@ class EngineFlowTest {
 
     @Test
     fun `session persists and a fresh engine sees the history`() {
+        // 先自证测试没有写进用户真实的 %LOCALAPPDATA%：这条挂了就是隔离失效，
+        // 之前 lazy 的 Env.home 让单测在用户目录里堆了 21 条测试会话。
+        assertTrue(
+            "测试状态根没隔离出去：" + Env.sessionsDir.absolutePath,
+            Env.sessionsDir.absolutePath.contains(System.getProperty("java.io.tmpdir").removeSuffix("\\"))
+        )
         val ws = tempWorkspace()
         val session = Session("persist-" + System.nanoTime(), ws)
         session.mode = "auto"
