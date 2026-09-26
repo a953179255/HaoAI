@@ -1,5 +1,6 @@
 package com.haoai.pc
 
+import kotlinx.serialization.json.put
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -29,6 +30,7 @@ fun main(args: Array<String>) {
         "deny" -> addRule(settings, rest, Decision.DENY)
         "ask" -> addRule(settings, rest, Decision.ASK)
         "rules" -> listRules(settings, rest)
+        "browser" -> browserCmd(settings, rest)
         "task" -> task(settings, rest)
         "chat" -> chat(settings)
         "serve" -> serve(settings, rest)
@@ -226,6 +228,35 @@ private fun chat(s: PcSettings) {
         val out = engine.submit(line)
         if (out.isBlank()) println("(本轮没有正文输出)")
     }
+}
+
+/**
+ * `haoai browser <sub> [--url=…] [--selector=…] [--script=…] [--path=…]`
+ *
+ * 直通透传给 browser 工具。存在的理由有两个：① 没密钥时也能验收 CDP 这条路；
+ * ② 出问题时人可以直接敲一条命令复现，不用先跟模型解释一遍。
+ */
+private fun browserCmd(s: PcSettings, rest: List<String>) {
+    val sub = rest.firstOrNull { !it.startsWith("--") } ?: "status"
+    val opts = rest.filter { it.startsWith("--") }.associate {
+        it.removePrefix("--").substringBefore('=') to it.substringAfter('=', "")
+    }
+    if (!HaoFlag.enabled(HaoFlag.BROWSER_CONTROL, s.flags)) {
+        println("浏览器控制现在是关的（这是默认）。先：haoai flags on ${HaoFlag.BROWSER_CONTROL.key}")
+        return
+    }
+    val args = kotlinx.serialization.json.buildJsonObject {
+        put("sub", sub)
+        opts["url"]?.let { put("url", it) }
+        opts["selector"]?.let { put("selector", it) }
+        opts["script"]?.let { put("script", it) }
+        opts["text"]?.let { put("text", it) }
+        opts["path"]?.let { put("path", it) }
+    }
+    val ws = s.workspaceFile()
+    val ctx = ToolCtx(ws, s, "auto", cliGate(true, ws))
+    val r = BrowserTool().run(args, ctx)
+    println((if (r.error) "× " else "") + r.content)
 }
 
 private fun serve(s: PcSettings, rest: List<String>) {

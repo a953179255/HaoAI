@@ -126,7 +126,7 @@ class Engine(
                 val tool = byName[call.name]
                 if (tool == null) {
                     val why = "未知工具：${call.name}。可用的是 ${byName.keys.joinToString()}"
-                    history += Msg("tool", why, callId = call.id)
+                    history += Msg("tool", why, callId = call.id, name = call.name)
                     emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
                     continue
                 }
@@ -142,7 +142,7 @@ class Engine(
                     res.content, settings.storedCap, session.workspace, call.id,
                     HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, settings.flags)
                 )
-                history += Msg("tool", stored, callId = call.id)
+                history += Msg("tool", stored, callId = call.id, name = call.name)
                 emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card))
             }
             session.mode = ctx.mode
@@ -158,9 +158,13 @@ class Engine(
         ?: runCatching { Env.apiKeyFile.takeIf { it.isFile }?.readText()?.trim() }
             .getOrNull()?.takeIf { it.isNotEmpty() }
 
-    /** 工具可见集按档位收窄（S1 的最小可用版：plan 只给读）。 */
+    /** 当前这一轮模型能看见哪些工具（设置页/测试用它核对开关效果）。 */
+    fun visibleToolNames(): Set<String> = schemas().map { it.name }.toSet()
+
+    /** 工具可见集：先过实验特性开关（关着=不存在），再按档位收窄。 */
     private fun schemas(): List<ToolSchema> = tools.filter { t ->
-        if (session.mode == "plan") t.kind == "read" || t.name == "todo" || t.name == "ask_user" else true
+        t.visibleWhen(settings) &&
+            if (session.mode == "plan") t.kind == "read" || t.name == "todo" || t.name == "ask_user" else true
     }.map { ToolSchema(it.name, it.desc, it.params) }
 
     /** 发给模型的窗口：system + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。 */
@@ -224,6 +228,7 @@ class Engine(
                                     put("role", m.role)
                                     put("content", m.content ?: "")
                                     m.callId?.let { put("tool_call_id", it) }
+                                    if (m.name.isNotBlank()) put("name", m.name)
                                     if (m.calls.isNotEmpty()) {
                                         put("tool_calls", buildJsonArray {
                                             m.calls.forEach { c ->

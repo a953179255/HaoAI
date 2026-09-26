@@ -124,8 +124,17 @@ abstract class Tool(
     val name: String,
     val desc: String,
     val params: JsonObject,
-    val kind: String = "read"
+    val kind: String = "read",
+    /**
+     * 挂在这个工具上的实验特性。不为 null 且开关关着时，工具**不进 schema** ——
+     * 模型看不见它，也就不会去调、不会调通了再收到一句"没权限"。
+     * 这就是 S6 开关注册表存在的意义：新能力可以"先上代码，再按需给可见性"。
+     */
+    val flag: HaoFlag? = null
 ) {
+    fun visibleWhen(settings: PcSettings): Boolean =
+        flag == null || HaoFlag.enabled(flag, settings.flags)
+
     abstract fun run(args: JsonObject, ctx: ToolCtx): ToolResult
 
     fun req(args: JsonObject, k: String): String? = args[k]?.jsonPrimitive?.content
@@ -542,5 +551,5 @@ object Diff {
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
-    GitTool(), TodoTool(), AskUserTool(), WebFetchTool()
+    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool()
 )

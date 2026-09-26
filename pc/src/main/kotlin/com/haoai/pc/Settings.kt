@@ -120,6 +120,21 @@ enum class HaoFlag(
         title = "改文件前留快照",
         what = "覆盖/删除已有文件前先存一份到 .haoai-snap/，改坏了能回滚。",
         defaultOn = true
+    ),
+
+    /**
+     * 浏览器控制。**默认关**，而且是"关着就等于工具不存在"（不进 schema），
+     * 不是"存在但报错说没权限"。
+     *
+     * 理由：能控制浏览器 = 能以你的身份点网页上的任何按钮，包括"确认转账"那种。
+     * 这一步必须显式打开，而且打开后每次 navigate/click/type 仍会过权限闸。
+     */
+    BROWSER_CONTROL(
+        key = "browser_control",
+        title = "浏览器控制（CDP）",
+        what = "让 agent 打开本机浏览器看网页、点按钮、截图。用独立的临时配置目录，" +
+            "不碰你自己的 Edge 登录态。默认关：关着时这个工具对模型不存在。",
+        defaultOn = false
     );
 
     companion object {

@@ -294,8 +294,7 @@ function applyState(s){
   (s.messages||[]).forEach(m=>{
     if(m.role=='user')add(el(`<div class="msg user">${esc(m.content)}</div>`));
     else if(m.role=='assistant'&&m.content)add(el(`<div class="msg ans md">${md(m.content)}</div>`));
-    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split('
-')[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`));
+    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split(String.fromCharCode(10))[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`));
   });
   loadSessions();
 }
@@ -331,17 +330,10 @@ $('#cfgBtn').onclick=()=>{
   });
 };
 
-fetch('/api/state').then(r=>r.json()).then(s=>{
-  $('#ws').textContent=s.workspace;$('#model').textContent=s.model;setMode(s.mode);
-  $('#title').textContent=s.title||'新会话';
-  if(s.todos&&s.todos.length)setTodos(s.todos.map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text));
-  if(s.usage)$('#usage2').textContent=`输入 ${s.usage.prompt.toLocaleString()} / 输出 ${s.usage.completion.toLocaleString()}`;
-  (s.messages||[]).forEach(m=>{
-    if(m.role=='user')add(el(`<div class="msg user">${esc(m.content)}</div>`));
-    else if(m.role=='assistant'&&m.content)add(el(`<div class="msg ans md">${md(m.content)}</div>`));
-    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split('\n')[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`));
-  });
-});
+// 初始加载：直接走 reload()，它内部就是 applyState（含会话列表）。
+// 之前这里另写了一份"渲染历史"的代码，结果 applyState 被误放进 forEach 里，
+// 空会话时一次都不执行 —— 左栏的工作区/模型/历史会话全是占位符。
+reload();
 </script>
 </body>
 </html>

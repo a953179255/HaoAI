@@ -21,7 +21,9 @@ data class Msg(
     val role: String,
     val content: String?,
     val calls: List<ToolCall> = emptyList(),
-    val callId: String? = null
+    val callId: String? = null,
+    /** 工具结果属于哪把工具。不存这个，历史回放时工具卡就只剩一个空壳。 */
+    val name: String = ""
 )
 
 data class ToolCall(val id: String, val name: String, val args: String)

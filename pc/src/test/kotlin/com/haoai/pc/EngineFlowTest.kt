@@ -330,6 +330,36 @@ class EngineFlowTest {
         assertEquals(1, exclude.readText().lines().count { it.trim() == "/${Env.TOOL_OUTPUT_DIR}/" })
     }
 
+    /**
+     * 实验特性关着的工具**不该出现在 schema 里**。
+     *
+     * 这是 S6 开关注册表真正值钱的地方：不是"调了再报没权限"，而是"关着就等于不存在"。
+     * 浏览器控制默认关 —— 能以用户身份点网页按钮的能力，不该在用户没打开开关时被模型发现。
+     */
+    @Test
+    fun `a flag-gated tool is invisible to the model while the flag is off`() {
+        val ws = tempWorkspace()
+        val noFlag = mutableListOf(turn("结束"))
+        val (_, scriptedOff, _) = harness(ws, noFlag)
+        // 默认 flags 是空 map → BROWSER_CONTROL 用 defaultOn=false → 关
+        Engine(
+            Session("flag-" + System.nanoTime(), ws), PcSettings(), builtinTools(),
+            RecordingGate(true), {}, Scripted(mutableListOf(turn("完")))
+        ).let { e ->
+            val names = e.visibleToolNames()
+            assertFalse("浏览器控制默认就开着？", names.contains("browser"))
+            assertTrue("基础工具不见了", names.containsAll(listOf("read", "write", "git")))
+        }
+        val on = PcSettings(flags = mapOf("browser_control" to true))
+        Engine(
+            Session("flag2-" + System.nanoTime(), ws), on, builtinTools(),
+            RecordingGate(true), {}, Scripted(mutableListOf(turn("完")))
+        ).let { e ->
+            assertTrue("拨开之后浏览器工具仍不可见", e.visibleToolNames().contains("browser"))
+        }
+        scriptedOff.calls
+    }
+
     @Test
     fun `diff summary counts changed lines`() {
         val d = Diff.summary("a\nb\nc", "a\nB\nc")
@@ -339,8 +369,8 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        // 15 把：9 把基础 + 5 把常驻进程 + 1 把 git
-        assertEquals(15, schemas.size)
+        // 16 把：9 把基础 + 5 把常驻进程 + git + browser
+        assertEquals(16, schemas.size)
         assertTrue(
             "常驻进程工具没注册进来",
             setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")

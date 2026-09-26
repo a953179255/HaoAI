@@ -129,7 +129,7 @@ class WebServer(settings: PcSettings, port: Int) {
         e?.messages()?.forEachIndexed { i, m ->
             if (i > 0) sb.append(',')
             sb.append("{\"role\":\"").append(m.role).append("\",\"content\":").append(quote(m.content ?: ""))
-                .append(",\"name\":").append(quote(m.calls.firstOrNull()?.name ?: ""))
+                .append(",\"name\":").append(quote(m.name.ifBlank { m.calls.firstOrNull()?.name ?: "" }))
                 .append('}')
         }
         sb.append("]}")
