@@ -70,7 +70,8 @@ class BrowserTool : Tool(
 
         val objectOf = req(args, "url") ?: req(args, "selector") ?: req(args, "script") ?: req(args, "path") ?: sub
         if (sub !in READ_ONLY) {
-            val why = ctx.guard("browser", "$sub $objectOf", "浏览器操作：$sub", objectOf.take(300))
+            val why = ctx.guard("browser", "$sub $objectOf", "浏览器操作：$sub", objectOf.take(300),
+                subjectIsPath = false)
             if (why != null) return fail(why)
         }
 

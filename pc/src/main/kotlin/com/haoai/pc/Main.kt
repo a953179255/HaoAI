@@ -31,6 +31,7 @@ fun main(args: Array<String>) {
         "ask" -> addRule(settings, rest, Decision.ASK)
         "rules" -> listRules(settings, rest)
         "browser" -> browserCmd(settings, rest)
+        "screen" -> screenCmd(settings, rest)
         "task" -> task(settings, rest)
         "chat" -> chat(settings)
         "serve" -> serve(settings, rest)
@@ -256,6 +257,30 @@ private fun browserCmd(s: PcSettings, rest: List<String>) {
     val ws = s.workspaceFile()
     val ctx = ToolCtx(ws, s, "auto", cliGate(true, ws))
     val r = BrowserTool().run(args, ctx)
+    println((if (r.error) "× " else "") + r.content)
+}
+
+/**
+ * `haoai screen <sub> [--path=] [--title=] [--name=] [--x=] [--y=] [--button=] [--double=] [--text=] [--keys=]`
+ *
+ * opts 直接透传成 JSON 参数（不再逐个列，免得新加一个 sub 参数就悄悄丢掉）。
+ */
+private fun screenCmd(s: PcSettings, rest: List<String>) {
+    val sub = rest.firstOrNull { !it.startsWith("--") } ?: "windows"
+    val opts = rest.filter { it.startsWith("--") }.associate {
+        it.removePrefix("--").substringBefore('=') to it.substringAfter('=', "")
+    }
+    if (!HaoFlag.enabled(HaoFlag.DESKTOP_CONTROL, s.flags)) {
+        println("屏幕与点击控制现在是关的（这是默认）。先：haoai flags on ${HaoFlag.DESKTOP_CONTROL.key}")
+        return
+    }
+    val args = kotlinx.serialization.json.buildJsonObject {
+        put("sub", sub)
+        for ((k, v) in opts) if (v.isNotBlank()) put(k, v)
+    }
+    val ws = s.workspaceFile()
+    val ctx = ToolCtx(ws, s, "auto", cliGate(true, ws))
+    val r = ScreenTool().run(args, ctx)
     println((if (r.error) "× " else "") + r.content)
 }
 

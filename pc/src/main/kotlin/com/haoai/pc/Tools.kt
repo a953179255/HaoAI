@@ -88,8 +88,40 @@ class ToolCtx(
      *
      * @param tool 工具名（shell / write / edit …）
      * @param subject 这次动作的对象：shell 传整条命令，写类传相对路径
+     * @param subjectIsPath 对象是不是一个文件路径。browser/screen 传的是 URL、坐标、控件名，
+     *   必须给 false —— 否则下面那句"在工作区之外"会把一个 URL 当路径判出来，
+     *   在审批卡上写出一句驴唇不对马嘴的话（实测过，第一次就踩了）。
      */
-    fun guard(tool: String, subject: String, title: String, detail: String): String? {
+    fun guard(
+        tool: String,
+        subject: String,
+        title: String,
+        detail: String,
+        subjectIsPath: Boolean = true
+    ): String? = guardCore(tool, subject, title, { detail }, subjectIsPath)
+
+    /**
+     * 惰性版本：detail 只在**真的要问人**时才算。
+     *
+     * 为什么需要：screen 工具的 detail 要查"此刻哪个窗口在前台"，那是一次 PowerShell 调用
+     * （约 1 秒）。放在规则/档位的判定之前算，就等于每次被拒绝的动作都白付一次钱，
+     * 计划模式下尤其离谱 —— 只读模式根本不会弹框。
+     */
+    fun guard(
+        tool: String,
+        subject: String,
+        title: String,
+        detail: () -> String,
+        subjectIsPath: Boolean = true
+    ): String? = guardCore(tool, subject, title, detail, subjectIsPath)
+
+    private fun guardCore(
+        tool: String,
+        subject: String,
+        title: String,
+        detail: () -> String,
+        subjectIsPath: Boolean
+    ): String? {
         val kind = if (tool == "shell") "exec" else "write"
         val verdict = Policies.get().decide(workspace, tool, subject)
 
@@ -102,10 +134,10 @@ class ToolCtx(
         if (verdict?.decision == Decision.ALLOW) return null
         if (mode == "auto" && verdict?.decision != Decision.ASK) return null
 
-        val extra = if (kind == "write" && outside(resolve(subject))) "（在工作区之外）" else ""
+        val extra = if (subjectIsPath && kind == "write" && outside(resolve(subject))) "（在工作区之外）" else ""
         val why = if (verdict != null) "\n为什么还要问：${verdict.why}" else ""
         val pattern = if (tool == "shell") PolicyStore.commandPrefix(subject) else subject
-        val ok = gate.approveRule(title, detail + extra + why, kind, tool, pattern)
+        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern)
         return if (ok) null else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
     }
 
@@ -318,7 +350,12 @@ class ShellTool : Tool(
             if (kind == "pwsh") ".ps1" else if (kind == "cmd") ".bat" else ".sh",
             File(System.getProperty("java.io.tmpdir"))
         )
-        script.writeText(if (kind == "pwsh") "$PWSH_UTF8_PREFIX $command" else command)
+        val body = if (kind == "pwsh") "$PWSH_UTF8_PREFIX $command" else command
+        // 同 PsRunner：Windows PowerShell 5.1 没有 BOM 就按 GBK 读脚本，
+        // 命令里只要出现中文就会被解坏（表现是"命令跑通了但参数是乱码"）。
+        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+        if (kind == "pwsh") script.writeBytes(bom + body.toByteArray(Charsets.UTF_8))
+        else script.writeText(body)
 
         return try {
             val pb = ProcessBuilder(listOf(launcher.first) + launcher.second + script.absolutePath)
@@ -551,5 +588,5 @@ object Diff {
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
-    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool()
+    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool(), ScreenTool()
 )

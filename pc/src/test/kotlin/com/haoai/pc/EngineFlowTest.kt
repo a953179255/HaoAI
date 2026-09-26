@@ -360,6 +360,31 @@ class EngineFlowTest {
         scriptedOff.calls
     }
 
+    /**
+     * 开关关着的工具，模型硬调也必须跑不动。
+     *
+     * 上面那条只覆盖了 schema 那一侧。`byName` 是全量注册的，模型凭训练记忆报出
+     * `screen`（它在别的 agent 那儿见过）就能绕过"看不见"这道防线 ——
+     * 而 desktop_control 关着的语义是"这台机器的鼠标键盘不归模型管"，
+     * 那必须是执行侧的事实，不只是没写进说明书。
+     */
+    @Test
+    fun `a flag-gated tool still cannot run when the model calls it anyway`() {
+        val ws = tempWorkspace()
+        val (engine, _, gate) = harness(
+            ws,
+            mutableListOf(
+                turn("看看屏幕", toolCall("c1", "screen", """{"sub":"windows"}""")),
+                turn("算了")
+            )
+        )
+        engine.submit("列一下窗口")
+        val toolMsg = engine.messages().last { it.role == "tool" }
+        val why = toolMsg.content ?: ""
+        assertTrue("关着的桌面控制居然执行了：$why", why.contains("没启用") && why.contains("desktop_control"))
+        assertEquals("被开关挡掉的动作不该再弹审批", 0, gate.asked.size)
+    }
+
     @Test
     fun `diff summary counts changed lines`() {
         val d = Diff.summary("a\nb\nc", "a\nB\nc")
@@ -369,8 +394,8 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        // 16 把：9 把基础 + 5 把常驻进程 + git + browser
-        assertEquals(16, schemas.size)
+        // 17 把：9 把基础 + 5 把常驻进程 + git + browser + screen
+        assertEquals(17, schemas.size)
         assertTrue(
             "常驻进程工具没注册进来",
             setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")

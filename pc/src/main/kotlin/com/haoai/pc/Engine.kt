@@ -130,6 +130,27 @@ class Engine(
                     emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
                     continue
                 }
+                /**
+                 * 第二次可见性检查 —— 这次是**执行侧**的。
+                 *
+                 * [schemas] 已经按开关和档位过滤过一轮，但那只管"模型看不看得见"。
+                 * 模型可以凭训练记忆报一个没给它的工具名（`screen` 被别的 agent 用过就记住了），
+                 * 而 `byName` 是全量注册的：少了这道检查，"关着的危险能力"就等于
+                 * 只是没写进说明书，实际上一直可调用。同一个道理见 [ToolCtx.guard] 的 plan 分支。
+                 */
+                if (!tool.visibleWhen(settings)) {
+                    val why = "工具 ${call.name} 没启用（实验特性 ${tool.flag?.key} 是关的）。" +
+                        "要用户执行 haoai flags on ${tool.flag?.key} 才行；现在换个能用的方案。"
+                    history += Msg("tool", why, callId = call.id, name = call.name)
+                    emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
+                    continue
+                }
+                if (ctx.mode == "plan" && !readOnlyTool(tool)) {
+                    val why = "计划模式是只读的，${call.name} 不能用。把要做的事写进计划，或用 ask_user 确认切档。"
+                    history += Msg("tool", why, callId = call.id, name = call.name)
+                    emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
+                    continue
+                }
                 val args = parseArgs(call.args)
                 emit(Ev.ToolStart(call.id, call.name, brief(args)))
                 val res = try {
@@ -161,10 +182,13 @@ class Engine(
     /** 当前这一轮模型能看见哪些工具（设置页/测试用它核对开关效果）。 */
     fun visibleToolNames(): Set<String> = schemas().map { it.name }.toSet()
 
+    /** 计划模式下允许的工具：只读类，加计划本身要用的两件。可见性与执行侧共用这一条判据。 */
+    private fun readOnlyTool(t: Tool) =
+        t.kind == "read" || t.name == "todo" || t.name == "ask_user"
+
     /** 工具可见集：先过实验特性开关（关着=不存在），再按档位收窄。 */
     private fun schemas(): List<ToolSchema> = tools.filter { t ->
-        t.visibleWhen(settings) &&
-            if (session.mode == "plan") t.kind == "read" || t.name == "todo" || t.name == "ask_user" else true
+        t.visibleWhen(settings) && if (session.mode == "plan") readOnlyTool(t) else true
     }.map { ToolSchema(it.name, it.desc, it.params) }
 
     /** 发给模型的窗口：system + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。 */

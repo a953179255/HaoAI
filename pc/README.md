@@ -10,9 +10,13 @@
 
 ```
 cd pc
-set JPACKAGE=C:\Program Files\Eclipse Adoptium\jdk-25.0.2.10-hotspot\bin\jpackage.exe
 gradle packageExe
 ```
+
+`jpackage` 只在完整 JDK 里有（Android Studio 自带的 jbr 没有），任务会自己找：
+`JPACKAGE` 环境变量 → `~\.gradle\jdks\*\bin` → `C:\Program Files\{Eclipse Adoptium,Java,Microsoft}\*\bin`
+→ PATH。都找不到时会给一句能照做的提示，而不是抛一个"启动进程失败"。
+（写死一条绝对路径是踩过坑的：这台机器上昨天还在的 Temurin 25，今天整个目录就没了。）
 
 产出 `pc/build/package/HaoAI-PC/`：**自带 JVM 的应用目录**，双击或命令行跑
 `HaoAI-PC.exe doctor` / `HaoAI-PC.exe serve`。用 `--type app-image` 而不是安装包：
@@ -107,6 +111,59 @@ profile 目录不能共用（Chrome 不让两个实例抢）、target 要挑真�
 
 网页版的截图就是用这条链路自己截自己验收的。
 
+## 屏幕与点击控制（默认关）
+
+```
+haoai flags on desktop_control
+haoai screen windows                       # 谁在屏幕上、在哪、多大
+haoai screen ui --title=记事本              # 某个窗口的控件树（限深限量）
+haoai screen invoke --title=记事本 --name=粘贴   # 按控件名字点，不用猜坐标
+haoai screen click --x=656 --y=90          # 只能点坐标的地方
+haoai screen type --text="100% (x) 中文"    # Unicode 直发，输入法不背锅
+haoai screen focus                         # 键盘此刻发给的是谁
+```
+
+子命令：`capture windows ui focus`（只读）+ `click invoke type key`（会动你的电脑）。
+实现是生成 PowerShell 调系统自带的 .NET（`CopyFromScreen` / `user32!EnumWindows` /
+`System.Windows.Automation` / `SendInput`），**不引 JNA、不引原生库**。
+
+三层闸门，任何一层没开都不会真点：实验特性开关 → 权限闸（每次问，审批卡上写明
+"当前焦点窗口是谁"）→ 环境变量 `HAOAI_ALLOW_CLICK=1`。最后一层的理由：
+一次点击落在哪个窗口上，取决于此刻谁在最前面，而这恰恰是模型看不见、人也容易看错的。
+
+这条路上踩到并修掉的实测坑（都写在 `Desktop.kt` 的注释里，别指望读代码能预见）：
+
+- `Add-Type -TypeDefinition` 编译内联 C# 时**默认不引用 System.Windows.Forms**，
+  写 `Cursor.Position` 直接 SOURCE_CODE_ERROR → 全部改用 user32 P/Invoke。
+- PowerShell 的 `$true` / `$false` / `$null` 是**只读自动变量**，
+  `$true = …` 语法合法、编译不报错，跑起来才炸 → 现在有一条测试按模式扫所有生成的脚本。
+- UIAutomation 的托管 API 在 PowerShell 里**不好用**：`PatternIdentifiers::InvokePattern`
+  静默返回 `$null`，`PropertyCondition` 因为 `NameProperty` 被当成 `DependencyProperty`
+  而构造失败。所以 `invoke` 不做 InvokePattern，改成"UIA 找元素拿矩形 → 真鼠标点中心"。
+- **点击前必须回读光标位置**：`SetCursorPos` 之后 `GetCursorPos` 对不上就不点，
+  并把 DPI 与虚拟桌面一起报出来。报"已点击"而实际没点到，比不点危险得多。
+- **中文输入法会改写 SendKeys**：实测 `HaoAI键入测试` 只剩"键入测试"、
+  `(x)` 被当拼音候选变成"（行）"、`^a` 触发的是输入法的中英切换而不是全选。
+  所以 `type` 改成 `SendInput` + `KEYEVENTF_UNICODE` 直发 UTF-16 码元（16 字符 →
+  系统接收 32 个按键事件，这个数字会印在返回值里，`cbSize` 算错就变 0）；
+  `key` 仍走 SendKeys，输入法开着时组合键可能被截走这件事写进了工具说明。
+- **`SendInput` 返回"全部接收"不等于送达**：第一版把 `KEYEVENTF_UNICODE` 写成 0x20
+  （正确值 0x4），18 个字符 → 系统回报"36 个事件全部接收"，记事本里一个字都没有。
+  翻转结论的是同一时刻、同一窗口用旧的 SendKeys 发 `HaoAI` 立刻进了标题。
+  修完之后实测：`100%(x)键入测试^a+b` **一字不差**进了记事本标题 ——
+  `%` 没被吞、`(x)` 没被输入法当拼音候选、`^a` 就是字面的 `^a`。
+  所以返回值里写的是"入队 N 个按键事件；入队不等于送达"。
+- **没有前台窗口时输入是丢进虚空的**：这台机器出现过 `GetForegroundWindow` 返回 NULL 的
+  整段时间（点了桌面之后尤其容易进这个状态），那时 `SendInput` 照样回报"全部接收"，
+  可没有任何应用收到字。现在 `type`/`key` 先读接收方，没有接收方就明说"已被系统丢弃"，
+  而不是报成功。
+- `.cmd` 启动器**不能有中文注释**：cmd.exe 按控制台代码页（cp936）读批处理文件，
+  UTF-8 的中文注释会被重新分词当成命令执行。解释文字挪到了这份 README。
+- 别的 agent / 插件留下的**全屏置顶覆盖窗**（这台机器上实测有
+  `Cua.AgentCursorOverlay`，3840x1080 铺满虚拟桌面）会吃掉点击。
+  坐标点对了、光标也动了，但事件落在那个覆盖层上 —— 遇到"点了没反应"先 `screen windows`
+  看看有没有这种覆盖窗，别急着怀疑点击实现。
+
 ## 与手机端同源的行为
 
 - **工具结果溢出**：超过 `STORED_CAP=16000` 的输出去向工作区 `.haoai-output/`，
@@ -118,19 +175,27 @@ profile 目录不能共用（Chrome 不让两个实例抢）、target 要挑真�
 
 ## 已验证到哪一步
 
-- `gradle test` → **46 条全绿**：16 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **62 条全绿**：19 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
-  grep/glob、未知工具不崩循环），13 条权限规则（语法解析、前缀归约、后写覆盖先写、
-  alwaysAsk 压 auto、plan 压 allow、按工作区隔离、落盘重载、走真引擎），
+  grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**），
+  13 条权限规则（语法解析、前缀归约、后写覆盖先写、alwaysAsk 压 auto、plan 压 allow、
+  按工作区隔离、落盘重载、走真引擎），
+  15 条桌面控制（生成的脚本不残留占位符、PowerShell 布尔写法、引号注入、
+  点击前回读光标、无前台窗口不报成功、缺参数不弹审批、plan/deny 两条拒绝路径、
+  开关关着时不可见），
   7 条 git（引号参数切分、只读不问人、真 add/commit/log、deny 规则拦得住 commit、
   不在仓库里给下一步、不支持的子命令列可用），
   5 条常驻进程（同一 shell 保留变量状态、关掉不泄漏、被拒不启进程、空闲回收、list 可见），
-  1 条实验特性可见性（关着的工具不进 schema），
   3 条真 HTTP 流式（中文按 4 字节切碎不损坏、`tool_calls.arguments` 分片拼回合法 JSON、
   429 标可重试 / 400 不可重试）。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **网页版跑通**：`/api/task` 触发一轮完整回合，标题、待办、工具卡、用量、历史回放都对。
+- **桌面控制在真机上跑过**：截屏 3840x1080（2.8MB PNG）、窗口列表带 pid/进程名/矩形/标题、
+  UIA 控件树、真点击（光标回读确认到位）、`invoke` 的三条路径（找不到窗口 /
+  找不到控件 / 找到但没开第二道闸）、无前台窗口时的诚实报错，
+  以及**输入真的落进了应用**：`100%(x)键入测试^a+b` 一字不差出现在记事本标题里。
+  最后这条是抓出 `KEYEVENTF_UNICODE` 写错之后才通的 —— 之前它"入队成功、送达为零"。
 
 ## 还没做（按重要性）
 
@@ -140,10 +205,12 @@ profile 目录不能共用（Chrome 不让两个实例抢）、target 要挑真�
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
-3. **网页版没做过像素级验收**：这台机器上无头 Edge 起不来、内置浏览器没有可见表面，
-   只验到 DOM 结构与交互结果。第一次人眼看可能要调排版。
-4. 桌面控制（浏览器 / 屏幕理解 / 点击级自动化）、`write_stdin`+PTY、跨端审批与
-   会话镜像、记忆与备份同步 —— 都在方案的 Phase 2/3 里，这一版没碰。
+3. **网页版只验过它自己的截图**：用 `browser shot` 让受控 Edge 打开本地页面再截回来人眼看，
+   验的过程中发现并修掉了三处（JS 语法错整页白屏、审批第 4 个按钮没接、初始加载不刷新会话列表）。
+   这不等于完整验收：窄屏/长会话/滚动条这类没覆盖，第一次真人长时间用还会再挑出东西。
+4. ~~桌面控制（浏览器 / 屏幕理解 / 点击级自动化）~~ —— 浏览器控制与屏幕/点击控制
+   已经落地（都默认关）。Phase 2 还欠：`write_stdin` 的真 PTY（ConPTY）、
+   MCP 客户端、多会话并发、跨端审批与会话镜像、记忆与备份同步。
 
 ## 代码地图
 
@@ -155,11 +222,14 @@ pc/src/main/kotlin/com/haoai/pc/
   Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）
   Tools.kt      9 把基础工具 + 溢出落文件 + 快照 + diff 摘要
   Policies.kt   S2 权限规则表：tool(pattern) 有序匹配 + 命令前缀归约 + alwaysAsk
-  Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
+  GitTool.kt    一把 git（子命令切分保留引号；只读不问人，改仓库走同一张规则表）
   Pty.kt        S3 常驻交互进程（open/send/read/close/list）+ 共用的 shell 启动器
+  Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
+  Desktop.kt    屏幕理解与点击级自动化：生成的 PowerShell 模板 + PsRunner
   Engine.kt     回合循环、档位闸、两级截断、会话持久化
   Server.kt     127.0.0.1 HTTP + SSE + 审批/提问回环
-  Main.kt       CLI：doctor / key / init / set / flags / task / chat / serve
+  Main.kt       CLI：doctor / key / init / set / flags / allow / rules / task / chat / serve
 pc/src/main/resources/ui/index.html   网页壳（单文件，无外部依赖）
+pc/tools/haoai.cmd                    启动器（chcp 65001；文件本身必须纯 ASCII）
 pc/tools/mock-openai.py               开发用假网关，没密钥时也能端到端验流程
 ```

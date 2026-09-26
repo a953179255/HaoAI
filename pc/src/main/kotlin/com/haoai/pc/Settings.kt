@@ -135,6 +135,18 @@ enum class HaoFlag(
         what = "让 agent 打开本机浏览器看网页、点按钮、截图。用独立的临时配置目录，" +
             "不碰你自己的 Edge 登录态。默认关：关着时这个工具对模型不存在。",
         defaultOn = false
+    ),
+
+    /**
+     * 屏幕理解 + 点击级自动化。比浏览器控制更危险一档：
+     * 它看得见屏幕上的一切（密码管理器、微信窗口都在里面），也替你点得了任何地方。
+     */
+    DESKTOP_CONTROL(
+        key = "desktop_control",
+        title = "屏幕与点击控制",
+        what = "让 agent 截屏、列窗口、读控件树，并模拟点击与键盘输入。" +
+            "它能看见屏幕上所有内容，默认关；打开后每次点击/输入仍逐条问你。",
+        defaultOn = false
     );
 
     companion object {
