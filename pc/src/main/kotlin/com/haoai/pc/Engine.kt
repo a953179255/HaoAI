@@ -195,6 +195,15 @@ class Engine(
             session.title.set(userText.trim().replace('\n', ' ').take(24).ifBlank { "新会话" })
         }
         history += Msg("user", userText)
+        /**
+         * 一开口就先落一次盘。
+         *
+         * 之前只在回合结束时 `persist()`，于是"正在跑的任务"在会话列表里根本不存在
+         * （实测：跑起来了，`/api/sessions` 还是只有旧的那几条）。
+         * 顺带把手机端那条"落库止血"的规矩接上：进程被杀 / 断电时，
+         * 至少用户问了什么还在。
+         */
+        persist()
         val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
         var lastText = ""
         var turnNo = 0

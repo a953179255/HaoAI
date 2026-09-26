@@ -273,7 +273,13 @@ document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>{
   fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:b.dataset.m})});
   setMode(b.dataset.m);
 });
-$('#newBtn').onclick=()=>{fetch('/api/new',{method:'POST'});stream.innerHTML='';setTodos([]);$('#title').textContent='新会话';$('#usage').textContent='';box.focus()};
+$('#newBtn').onclick=()=>{
+  // 跑着的时候服务端会拒绝切换（409）：切走等于造一个停不下来的孤儿任务
+  fetch('/api/new',{method:'POST'}).then(r=>{
+    if(r.status===409){notice('上一个任务还在跑，先按停止（右下角红色 ■）再开新会话');return}
+    stream.innerHTML='';setTodos([]);$('#title').textContent='新会话';$('#usage').textContent='';box.focus()
+  });
+};
 function send(){
   if(running){
     // 同一个按钮：跑着的时候它就是停止。另起一个"停止"按钮放在旁边，
@@ -329,7 +335,11 @@ function loadSessions(){
           return;
         }
         if(id===curId)return;
-        post('/api/open',{id:id}).then(()=>{curId=id;reload()});
+        fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({id:id})})
+          .then(r=>{ if(r.status===409){notice('上一个任务还在跑，先停止再切会话');return}
+                     if(!r.ok){notice('打不开这个会话（'+r.status+'）');return}
+                     curId=id;reload(); });
       };
     });
   });

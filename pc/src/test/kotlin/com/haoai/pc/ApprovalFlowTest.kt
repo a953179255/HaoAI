@@ -169,7 +169,17 @@ class ApprovalFlowTest {
     private fun runTask(prompt: String, turns: List<List<ByteArray>>) {
         script.clear(); script.addAll(turns); which.set(0)
         events.clear()
-        post("/api/new", emptyMap())
+        // 上一条测试可能还有一轮在收尾（跑着的时候切会话会被 409 拒），
+        // 所以这里"停一下再切"，让每条测试都不依赖彼此的执行顺序。
+        if (post("/api/new", emptyMap()).first == 409) {
+            post("/api/stop", emptyMap())
+            val until = System.currentTimeMillis() + 15_000
+            while (System.currentTimeMillis() < until &&
+                Json.parseToJsonElement(get("/api/state")).jsonObject["running"]
+                    ?.jsonPrimitive?.content == "true"
+            ) Thread.sleep(150)
+            post("/api/new", emptyMap())
+        }
         val (code, _) = post("/api/task", mapOf("text" to prompt))
         assertEquals(200, code)
     }
@@ -213,6 +223,44 @@ class ApprovalFlowTest {
         // 答完之后必须从 pending 里消失，否则刷新一次就弹一次"已经批过的"框
         val after = Json.parseToJsonElement(get("/api/state")).jsonObject["pending"]?.jsonArray
         assertTrue("答完了还挂在 pending 里：$after", after.isNullOrEmpty())
+    }
+
+    /**
+     * 跑着的时候切会话 = 造一个停不下来的孤儿任务。
+     *
+     * 这是实测出来的：任务在跑时 POST /api/new，`engine` 被换掉，老引擎还在自己的线程里
+     * 一轮轮调模型，而 /api/stop 只对着新引擎置位 —— 按了停止，`running` 一直挂着 true
+     * 直到 60 轮跑完，界面上却是一条空会话。接上真 key 之后这就是一台关不掉的烧钱机器。
+     * 现在：切会话/再提交一律 409，停止打的是**正在跑的那个**引擎。
+     */
+    @Test
+    fun `switching sessions mid-run is refused and stop reaches the running engine`() {
+        runTask("写一个 orphan.txt", listOf(
+            toolCallTurn("call_o", "write", """{"path":"orphan.txt","content":"x"}"""),
+            textTurn("结束")
+        ))
+        val raw = awaitEvent("approval")
+        assertNotNull("没进入待决审批状态，测不了切换保护", raw)
+
+        assertEquals("跑着的时候还能开新会话（会造出孤儿任务）", 409, post("/api/new", emptyMap()).first)
+        assertEquals("跑着的时候还能再提交任务", 409, post("/api/task", mapOf("text" to "第二个")).first)
+        assertEquals("跑着的时候还能切到别的会话", 409, post("/api/open", mapOf("id" to "whatever")).first)
+
+        // 正在跑的会话此刻就该在列表里（以前只在回合结束时落盘，跑着的项目根本看不见）
+        assertTrue("跑着的会话没进列表", get("/api/sessions").contains("orphan"))
+
+        post("/api/stop", emptyMap())
+        val until = System.currentTimeMillis() + 15_000
+        var stillRunning = true
+        while (System.currentTimeMillis() < until) {
+            stillRunning = Json.parseToJsonElement(get("/api/state")).jsonObject["running"]
+                ?.jsonPrimitive?.content == "true"
+            if (!stillRunning) break
+            Thread.sleep(200)
+        }
+        assertFalse("按了停止还在跑 —— 就是那个孤儿", stillRunning)
+        assertFalse("孤儿任务还是把文件写出去了", File(ws, "orphan.txt").exists())
+        assertEquals("停完之后应该允许切会话", 200, post("/api/new", emptyMap()).first)
     }
 
     @Test

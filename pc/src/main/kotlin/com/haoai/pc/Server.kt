@@ -45,6 +45,18 @@ class WebServer(settings: PcSettings, port: Int) {
     @Volatile
     private var running = false
 
+    /**
+     * 正在跑的那个引擎 —— 和"当前显示的会话"分开记。
+     *
+     * 之前只有 `engine` 一个引用：跑任务时切会话（新会话 / 打开旧会话）会把它整个换掉，
+     * 于是老引擎成了**孤儿** —— 还在循环调模型，但 `/api/stop` 只对着新引擎置位，
+     * 停不下来；界面上 `messages` 是空的，看起来像"空闲"。
+     * 实测：切会话后按停止，`running` 一直是 true 直到 60 轮跑完。
+     * 接上真 key 之后这就是"关不掉的烧钱循环"。
+     */
+    @Volatile
+    private var runningEngine: Engine? = null
+
     fun start(): Int {
         server.executor = Executors.newCachedThreadPool()
         server.createContext("/") { ex -> route(ex) }
@@ -65,10 +77,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/stop" -> stopTask(ex)
                 "/api/decide" -> decide(ex)
                 "/api/mode" -> mode(ex)
-                "/api/new" -> {
-                    engine = null
-                    send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
-                }
+                "/api/new" -> newSession(ex)
                 "/api/sessions" -> send(ex, 200, sessionsJson(), "application/json; charset=utf-8")
                 "/api/open" -> openSession(ex)
                 "/api/rename" -> renameSession(ex)
@@ -183,21 +192,41 @@ class WebServer(settings: PcSettings, port: Int) {
 
     private fun task(ex: HttpExchange) {
         val text = Body(ex).str("text")
+        if (text.isBlank()) {
+            send(ex, 200, """{"ok":false}""", "application/json; charset=utf-8"); return
+        }
+        /**
+         * 一次只跑一个任务。
+         *
+         * 排队的坏处不是并发本身，而是"第二个任务会写进同一个会话、
+         * 而界面只有一份事件流"—— 两条任务的工具卡会串在一起，
+         * 事后看不出哪条输出属于哪条。宁可当场拒绝，让用户先停或等完。
+         */
+        if (runningEngine != null) {
+            send(ex, 409, """{"ok":false,"error":"上一个任务还在跑。按停止键（或 /api/stop）先停掉它。"}""",
+                "application/json; charset=utf-8")
+            return
+        }
         send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
-        if (text.isBlank()) return
         publish("user", quote(text))
+        // 先定好"跑的是哪个引擎"再起线程：否则两次快速提交会双双通过上面的 busy 检查，
+        // 而且 worker 里再 ensureEngine() 会与"跑完之前不许切换"这条规则打架。
+        val e = ensureEngine()
+        runningEngine = e
         Thread {
-            synchronized(this) {
-                running = true
-                publish("run", """{"running":true}""")
-                try {
-                    ensureEngine().submit(text)
-                } catch (e: Exception) {
-                    publish("err", quote("回合异常：${e.message ?: e.javaClass.simpleName}"))
-                } finally {
-                    running = false
-                    publish("run", """{"running":false}""")
-                }
+            // 不再 synchronized(this) 包住整轮：那会让 /api/open 之类的处理
+            // 一直卡到本轮跑完（线程池看着是空闲的，用户看到的是"点了没反应"）。
+            // 切换的保护已经由上面的 busy 拒绝承担了。
+            running = true
+            publish("run", """{"running":true}""")
+            try {
+                e.submit(text)
+            } catch (err: Exception) {
+                publish("err", quote("回合异常：${err.message ?: err.javaClass.simpleName}"))
+            } finally {
+                runningEngine = null
+                running = false
+                publish("run", """{"running":false}""")
             }
         }.apply { isDaemon = true; name = "haoai-run"; start() }
     }
@@ -221,7 +250,9 @@ class WebServer(settings: PcSettings, port: Int) {
             // 审批给 deny（fail-closed），提问给空串（模型会看到"用户没回答"）。
             if (id.startsWith("q")) fut.complete("") else { fut.complete("deny"); approvals++ }
         }
-        engine?.requestStop()
+        // 停的是**正在跑的那个**引擎，不是"当前显示的会话"：
+        // 之前切会话后按停止，置位打到了新引擎上，老引擎一路跑到 60 轮才停。
+        (runningEngine ?: engine)?.requestStop()
         publish(
             "notice", quote(
                 if (running || waiters.isNotEmpty())
@@ -347,7 +378,30 @@ class WebServer(settings: PcSettings, port: Int) {
         }
     }
 
+    /**
+     * 跑着的时候不许切会话。
+     *
+     * 切走的后果不是"任务看不见"，而是**造出一个没人能停的孤儿**：
+     * `engine` 被换掉之后，老引擎还在自己的线程里一轮轮调模型，
+     * 而 `/api/stop` 当时只对着新引擎置位。实测切完再按停止，
+     * `running` 一直挂着 true 直到 60 轮跑完，界面上却是一条空会话。
+     * 接上真 key 之后这就是一台关不掉的烧钱机器，所以宁可拒绝。
+     */
+    private fun busyReply(ex: HttpExchange): Boolean {
+        if (runningEngine == null) return false
+        send(ex, 409, """{"ok":false,"error":"上一个任务还在跑，先按停止再切换会话"}""",
+            "application/json; charset=utf-8")
+        return true
+    }
+
+    private fun newSession(ex: HttpExchange) {
+        if (busyReply(ex)) return
+        engine = null
+        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+    }
+
     private fun openSession(ex: HttpExchange) {
+        if (busyReply(ex)) return
         val id = Body(ex).str("id")
         val meta = SessionIndex.list(200).firstOrNull { it.id == id }
         if (meta == null) {
