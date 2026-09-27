@@ -53,8 +53,14 @@ export HAOAI_HOME="$HOME_DIR"
 
 python tools/mock-openai.py --port "$MOCK_PORT" --mode "$MODE" > "$HOME_DIR/mock.log" 2>&1 &
 MOCK=$!
-cleanup() { kill "$MOCK" 2>/dev/null || true; [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null || true; }
-trap cleanup EXIT
+cleanup() {
+  kill "$MOCK" 2>/dev/null || true
+  [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null || true
+  # 每次跑都换一个状态根（上面那条：不换就会混进上一轮的会话），跑完它就是纯垃圾，
+  # 一天二十来次就是二十个目录。失败时留着看 mock.log / serve.log；KEEP_HOME=1 强制留。
+  if [ "${KEEP_HOME:-0}" != "1" ] && [ "${RC:-1}" = "0" ]; then rm -rf "$HOME_DIR"; fi
+}
+trap 'RC=$?; cleanup' EXIT
 sleep 1
 if [ "$(netstat -ano | grep -cE "127\.0\.0\.1:$MOCK_PORT\s.*LISTENING" || true)" != "1" ]; then
   echo "x 假网关没独占端口 $MOCK_PORT（看 $HOME_DIR/mock.log）"; exit 1
