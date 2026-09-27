@@ -153,6 +153,8 @@ class EngineFlowTest {
         val sys = scripted.lastMessages.first { it.role == "system" }.content ?: ""
         assertTrue("系统提示里没有项目说明：$sys", sys.contains("gradlew.bat"))
         assertTrue("项目说明没标出处，模型分不清是谁写的", sys.contains("AGENTS.md"))
+        assertTrue("占用明细里该有「项目说明」这一行：${engine.contextBreakdown()}",
+            engine.contextBreakdown().any { it.first == "项目说明" && it.second > 0 })
     }
 
     @Test

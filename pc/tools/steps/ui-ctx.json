@@ -1,0 +1,13 @@
+[
+  {"goto": "#box"},
+  {"click": "#tabs button[data-t=\"mem\"]"},
+  {"goto": "#memBox"},
+  {"type": {"sel": "#memBox", "text": "构建只用 gradlew.bat；不要改 build/ 下的任何文件。这条规则要写得足够长，才能在占用明细里看出它自己占了一行。", "enter": false}},
+  {"click": "#memSave"},
+  {"sleep": 900},
+  {"click": "#ctxBtn"},
+  {"sleep": 700},
+  {"eval": "document.getElementById('ctxPanel').innerText.replace(/\\n+/g,' | ').slice(0,160)"},
+  {"shot": "c01-ctx-with-memory"},
+  {"click": "#ctxBtn"}
+]

@@ -619,7 +619,9 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         send(ex, 200, """{"ok":true,"path":${quote(f.absolutePath)},"chars":${text.length}}""",
             "application/json; charset=utf-8")
-        publish("notice", quote("项目说明已写入 ${f.name}：下一条消息起生效"), id)
+        // 发 settings 而不是往流里插一条提示：页面上的"已存 N 字"与 toast 已经说完了，
+        // 而顶栏那圈占用必须重算 —— 项目说明是系统提示的一部分，改了它占用就变了。
+        publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
     }
 
     /**

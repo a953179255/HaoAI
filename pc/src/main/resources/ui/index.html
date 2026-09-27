@@ -992,7 +992,7 @@ function memSave(scope,box,paths,state){
       if(!d||!d.ok){toast((d&&d.error)||'没写进去','err');return}
       // 先重读（路径会从"将创建"变成"已存在"），再写那行状态 ——
       // 反过来写会被重读的异步回来清空，"已存 35 字"闪一下就没了
-      loadMemory().then(()=>{$(state).textContent='已存 '+d.chars+' 字 · 下一条消息起生效'});
+      loadMemory().then(()=>{$(state).textContent='已存 '+d.chars+' 字 · 下一条消息起生效，已计入上下文占用'});
       toast('已保存');
     }).catch(c=>toast('保存失败（'+c+'）','err'));
   };

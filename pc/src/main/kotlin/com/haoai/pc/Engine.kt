@@ -200,8 +200,16 @@ class Engine(
         val sys = req.filter { it.role == "system" }.sumOf { it.content?.length ?: 0 }
         val hist = req.filter { it.role != "system" }.sumOf { (it.content?.length ?: 0) + it.calls.sumOf { c -> c.args.length } }
         val tools = runCatching { schemas().toString().length }.getOrDefault(0)
+        /*
+         * 项目说明单列一行：它是用户自己写进仓库的东西，"上下文快满了"这件事
+         * 到底是纪律太长还是用户的规矩太长，分开看才知道该去删哪个。
+         * 它本来就含在系统提示里，所以从系统提示里减掉，两行加起来还是总数。
+         */
+        val mem = runCatching { Memory.read(session.workspace, gitRoot(session.workspace)).length }
+            .getOrDefault(0).coerceAtMost(sys)
         val out = mutableListOf<Pair<String, Int>>()
-        if (sys > 0) out += "系统提示" to sys
+        if (sys - mem > 0) out += "系统提示" to (sys - mem)
+        if (mem > 0) out += "项目说明" to mem
         if (tools > 0) out += "工具说明" to tools
         if (hist > 0) out += "对话历史" to hist
         summary?.let { if (it.isNotBlank()) out += "前情摘要" to it.length }

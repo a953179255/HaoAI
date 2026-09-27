@@ -428,6 +428,11 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 **顺带修一处回归**：`/clear` 走的是 `/api/cut?index=0`，而 v0.18 把 `cutTo` 的默认语义改成
 "保留这一句"，于是清空历史会留下第一条。现在 `/api/cut` 收 `keep` 参数，`/clear` 传 `keep=0`。
 
+**占用明细多一行**：顶栏那圈"上下文占用"里，项目说明从系统提示中**单列**出来
+（实测 `系统提示 1,422 字 | 项目说明 83 字 | 工具说明 3,264 字`）—— "快满了"的两种成因
+（纪律太长 vs 用户自己的规矩太长）该删的不是一样东西。保存记忆后发 `settings` 事件让占用重算，
+而不是往对话流里插一条"已写入"（页签里那行"已存 N 字"和 toast 已经说完了）。
+
 验收：`bash pc/tools/steps 见下` →
 `bash pc/tools/ui-shot.sh pc/tools/steps/ui-mem.json`（项目/全局两块记忆保存后读回、
 建技能 → `/rev` 面板出现 `/review 技能 …` → 点一下提示词进输入框 → 删除归零）。
