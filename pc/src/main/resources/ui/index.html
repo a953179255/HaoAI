@@ -217,6 +217,12 @@
     color:var(--onacc);font-size:16px;cursor:pointer;font-weight:700}
   .send[disabled]{opacity:.4;cursor:default}
   .send.stop{background:linear-gradient(180deg,#b4483f,#7c2f28);color:#fff;box-shadow:0 0 0 1px #c9614f inset}
+  .clip{flex:none;width:30px;height:30px;align-self:flex-end;border-radius:9px;border:1px solid var(--line);
+    background:var(--glass);color:var(--dim);cursor:pointer;font-size:13px}
+  .clip:hover{color:var(--fg);border-color:var(--acc2)}
+  .card.ask .acts .btn{padding:4px 11px;font-size:12px}
+  .card.ask input{background:var(--glass);border:1px solid var(--line);border-radius:8px;
+    color:var(--fg);font:inherit;font-size:12.5px;padding:5px 8px;outline:0}
   .slash{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% - 6px);width:min(560px,92%);
     background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);box-shadow:var(--shadow);
     display:none;overflow:auto;max-height:320px;z-index:12}
@@ -272,7 +278,53 @@
     box-shadow:var(--shadow);opacity:0;transition:opacity .18s;pointer-events:none;z-index:40}
   .toast.on{opacity:1}
   ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px}
-  @media (max-width:1080px){.app{grid-template-columns:var(--lw,252px) minmax(0,1fr) 0}.rail.r{display:none}}
+  #panelBtn{display:none}
+  /*
+   * 窄屏：右栏/左栏从"占一列"改成"盖一层"。
+   *
+   * 上一版只是把栏 display:none 掉，结果 任务/用量/产出 在窄屏**根本到不了** ——
+   * 页签按钮是 fixed 出来了，可它的面板在 `.rail.r` 里面，父级一隐藏，fixed 的子元素
+   * 跟着不显示（fixed 不会把一个 display:none 的后代救回来）。所以这里必须给一条
+   * "以浮层形式重新出现"的路，而不是只把列收掉。
+   */
+  @media (max-width:1080px){
+    .app{grid-template-columns:var(--lw,252px) minmax(0,1fr) 0}
+    .rail.r{display:none}
+    #panelBtn{display:inline-flex}
+    .app.show-r .rail.r{display:flex;position:fixed;right:0;top:0;bottom:0;width:min(320px,86%);
+      z-index:8;background:var(--panel);box-shadow:var(--shadow);border-left:1px solid var(--line)}
+  }
+  /* 手机宽：正文独占，两栏都改成浮层（☰ 与 ▤ 各开一个） */
+  @media (max-width:780px){
+    .app{grid-template-columns:minmax(0,1fr)}
+    .rail.l{display:none}
+    .app.show-l .rail.l{display:flex;position:fixed;left:0;top:0;bottom:0;width:min(300px,86%);
+      z-index:8;background:var(--panel);box-shadow:var(--shadow)}
+    .ctx,.brand small{display:none}
+    .msg.user,.msg.ans{max-width:94%}
+    .hello .egs{grid-template-columns:1fr}
+    .hello{margin-top:3vh}
+  }
+  /* ---- diff 审阅：写改类工具卡展开后能直接看见改了哪几行 ---- */
+  .card .dif{display:block;margin:0;padding:8px 12px;background:var(--code);border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:12px;line-height:1.55;overflow:auto;max-height:340px;
+    white-space:pre-wrap;word-break:break-all}
+  .dif span{display:block}
+  .dif .dp{color:var(--acc);background:rgba(56,168,114,.13)}
+  .dif .dm{color:var(--bad);background:rgba(214,84,84,.13)}
+  .dif .dc{color:var(--dim)}
+  .dif .dn{color:var(--warn)}
+  .dstat{margin-left:auto;font-size:11px;color:var(--acc2);font-variant-numeric:tabular-nums;padding-left:8px}
+  /* ---- 审批/提问改成消息流里的内联卡（原来是模态弹窗，看不见上下文） ---- */
+  .card.ask{border-color:var(--warn)}
+  .card.ask>summary .tick{background:var(--warn);animation:p 1s infinite}
+  .card.ask .q{padding:8px 12px;border-top:1px solid var(--line);font-size:12.5px}
+  .card.ask pre{margin:0;padding:8px 12px;border-top:1px solid var(--line);font-size:11.5px;
+    font-family:var(--mono);white-space:pre-wrap;word-break:break-all;color:var(--dim);max-height:180px;overflow:auto}
+  .card.ask .acts{display:flex;gap:6px;flex-wrap:wrap;padding:9px 12px;border-top:1px solid var(--line)}
+  .card.ask.done{opacity:.6}
+  .card.ask.done>summary .tick{animation:none;background:var(--dim2)}
+  .card.ask .ans-line{padding:8px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--acc)}
 </style>
 </head>
 <body>
@@ -316,6 +368,7 @@
       </div>
       <button class="iconb" id="themeBtn" title="切换明暗主题">◐</button>
       <button class="iconb" id="expBtn" title="导出这条会话为 markdown">⇩</button>
+      <button class="iconb" id="panelBtn" title="任务 / 用量 / 产出面板">▤</button>
     </header>
     <div class="ctxp" id="ctxPanel"></div>
     <div class="stream" id="stream"></div>
@@ -323,6 +376,8 @@
     <footer>
       <div class="slash" id="slash"></div>
       <div class="inwrap">
+        <button class="clip" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读">📎</button>
+        <input type="file" id="att" multiple hidden>
         <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 / Shift+Enter 换行 / 斜杠唤出命令）"></textarea>
         <button class="send" id="send">➤</button>
       </div>
@@ -487,9 +542,11 @@ function toolEnd(d,v){
   const t=v||cur();
   const c=t.tools[d.id];if(!c)return;
   c.classList.remove('run');c.open=false;
+  const stat=d.card=='diff'?diffStat(d.diff):'';
   c.querySelector('summary').innerHTML='<span class="tick '+(d.ok?'ok':'bad')+'"></span><b>'+esc(d.name)+
-    '</b><span class="sb">'+esc(d.brief||'')+'</span>';
+    '</b><span class="sb">'+esc(d.brief||'')+'</span>'+(stat?'<span class="dstat">'+stat+'</span>':'');
   c.querySelector('.body').textContent=d.out||'(无输出)';
+  if(d.diff)c.querySelector('.body').after(el(diffHtml(d.diff)));
   const sub=c.dataset.subject;
   // 写改类挂"退回上一版"：agent 一次跑十几步，用户想撤的往往就是这一个文件
   if(sub&&d.ok&&(d.name==='write'||d.name==='edit')){
@@ -499,6 +556,21 @@ function toolEnd(d,v){
     t.outputs.push({name:d.name,path:sub});paintOutputs(t);
   }
 }
+/*
+ * diff 的渲染。
+ *
+ * 为什么在服务端算好文本、前端只做着色：diff 的**正确性**不该由界面层决定
+ * （前端自己配对前后文本会漏掉"改在多行"的情况），而着色是纯展示。
+ * 第一行是 "−n 行 / +m 行   路径" 的统计行，不画进正文（它变成 summary 上的绿色小标）。
+ */
+function diffHtml(diff){
+  const lines=String(diff).split('\n').slice(1);
+  return '<pre class="dif">'+lines.map(l=>{
+    const c=l[0]=='-'?'dm':l[0]=='+'?'dp':l.indexOf('…')>0&&l[0]!=' '?'dn':'dc';
+    return '<span class="'+c+'">'+esc(l||' ')+'</span>';
+  }).join('')+'</pre>';
+}
+function diffStat(diff){const m=String(diff||'').split('\n')[0].match(/−\d+ 行 \/ \+\d+ 行/);return m?m[0]:''}
 function notice(t,kind,v){add(el('<div class="'+(kind=='err'?'err':'notice')+'">'+esc(t)+'</div>'),v||cur())}
 function setTodos(items,v){const t=v||cur();t.todos=items;if(t===cur())paintTodos(items)}
 function paintTodos(items){
@@ -678,50 +750,78 @@ es.addEventListener('settings',()=>hydrate(curId));
  * 弹窗是单实例。多会话并行时后到的会把前一个盖掉，而前一个的 id 再也不会出现 ——
  * 那条会话就永久卡在 fut.get(300s) 上，看起来像"agent 无故停了五分钟"。
  */
-const asks=[];
 let cfgOpen=false;
-function ask(d,kind,v){asks.push({d,kind,v});if(asks.length===1)paintAsk()}
-function paintAsk(){
-  const it=asks[0],m=$('#mask');
-  if(!it){m.classList.remove('on');paintSend();return}
-  if(cfgOpen)return;   // 设置抽屉开着时不抢它的弹窗；队列会记住这条，关掉抽屉就补上
-  const dg=$('#dialog'),d=it.d,v=it.v;
-  const from=(v&&v.sid!==curId)?`<button class="lnk" data-x="jump">切到「${esc(v.title||'会话')}」去看</button>`:'';
-  const q=`<span class="q">${asks.length>1?`还有 ${asks.length-1} 个在等`:'&nbsp;'}</span>`;
-  if(it.kind=='approval'){
-    const ruleBtn=d.tool?`<button class="btn" data-x="allow_rule" title="写入本工作区的规则表：${esc(d.tool)}(${esc(d.pattern)})">以后这类都允许</button>`:'';
-    dg.innerHTML=`<div class="kind">需要确认 · ${esc(d.kind)}</div><h3>${esc(d.title)}</h3>
-      <pre>${esc(d.detail)}</pre>
-      <div class="acts"><button class="btn deny" data-x="deny">拒绝</button>
-      ${ruleBtn}<button class="btn" data-x="allow_session">本任务都允许</button>
-      <button class="btn pri" data-x="allow_once">允许一次</button></div>
-      <div class="who">${from}${q}</div>`;
-    dg.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{
-      if(b.dataset.x=='jump'){show(v.sid);paintAsk();return}
-      decide(d.id,b.dataset.x,'');dismiss(d.id)});
+/* ---- 审批与提问：消息流里的内联卡 ----
+ * 原来是模态弹窗。弹窗是单实例，于是需要一套队列，而队列本身就是 bug 的来源：
+ * 多会话并行时后到的会把前一个盖掉，前一个的 id 再也不会出现，那条会话就永久卡在
+ * fut.get(300s) 上（看起来像"agent 无故停了五分钟"）。更要紧的是弹窗把上下文全遮住，
+ * 用户看不见"这一步要动哪个文件"就得凭一句描述决定放不放行。
+ * 内联之后每条会话摆各自的卡，"队列"这个概念整个消失 —— 那类卡死顺带修没了。
+ */
+function ask(d,kind,v){
+  const t=v||cur();
+  t.curAns=null;closeThinking(t);
+  const c=el('<details class="card ask" open><summary><span class="tick"></span><b>'+
+    (kind=='approval'?'需要确认 · '+esc(d.kind||''):'Agent 想问你')+
+    '</b><span class="sb">'+esc(kind=='approval'?d.title:d.question)+'</span></summary>'+
+    (kind=='approval'?'<pre>'+esc(d.detail||'')+'</pre>':'')+'</details>');
+  const acts=el('<div class="acts"></div>');
+  const put=(label,cls,run)=>{const b=el('<button class="btn '+cls+'">'+esc(label)+'</button>');
+    b.onclick=()=>{if(c.classList.contains('done'))return;run(b)};acts.appendChild(b)};
+  const done=label=>{c.classList.add('done');c.open=false;
+    c.appendChild(el('<div class="ans-line">已'+esc(label)+'，这条会话继续跑</div>'))};
+  if(kind=='approval'){
+    // 顺序按"最常用的在右边"排：允许一次是默认动作，拒绝要离它远一点免得误点
+    if(d.tool)put('以后这类都允许','',()=>{decide(d.id,'allow_rule','');done('写入规则并放行')});
+    put('拒绝','deny',()=>{decide(d.id,'deny','');done('拒绝')});
+    put('本任务都允许','',()=>{decide(d.id,'allow_session','');done('本任务都允许')});
+    put('允许一次','pri',()=>{decide(d.id,'allow_once','');done('允许一次')});
   }else{
-    dg.innerHTML=`<h3>Agent 想问你</h3><div style="margin:6px 0 10px">${esc(d.question)}</div>
-      <div class="opts">${(d.options||[]).map((o,i)=>`<button class="btn" data-i="${i}">${esc(o)}</button>`).join('')}</div>
-      <input type="text" id="answ" placeholder="或自己写一句…" style="margin-top:10px">
-      <div class="acts"><button class="btn pri" id="go">发送</button></div>
-      <div class="who">${from}${q}</div>`;
-    dg.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{
-      if(b.dataset.x=='jump'){show(v.sid);paintAsk();return}
-      decide(d.id,'','');dismiss(d.id)});
-    // 选项按钮挂的是 data-i 不是 data-x：漏了这段绑定，点选项就什么都没发生
-    // （上一版重写弹窗时就是这么丢的，只有真去点一个选项才会发现）
-    dg.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{
-      decide(d.id,'',(d.options||[])[+b.dataset.i]);dismiss(d.id)});
-    dg.querySelector('#go').onclick=()=>{decide(d.id,'',dg.querySelector('#answ').value||'按你的建议来');dismiss(d.id)};
+    (d.options||[]).forEach(o=>put(o,'pri',()=>{decide(d.id,'',o);done('回答：'+o)}));
+    const inp=el('<input type="text" placeholder="或自己写一句…">');
+    inp.style.cssText='flex:1;min-width:120px';
+    acts.appendChild(inp);
+    put('发送','',()=>{const x=(inp.value||'').trim()||'按你的建议来';decide(d.id,'',x);done('回答：'+x)});
   }
-  m.classList.add('on');
+  c.appendChild(acts);
+  add(c,t);
 }
-// 撤掉这一条并露出下一条。不能只关最上面那个：必须按 id 摘，
-// 否则点第二条的按钮会把第一条从队列里带走，而第一条还卡在服务端等回答。
-function dismiss(id){const w=asks.findIndex(a=>a.d.id==id);if(w>=0)asks.splice(w,1);paintAsk()}
 function decide(id,decision,answer){
   fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,decision,answer})});
+}
+
+/* ---- 附件 ----
+ * 文本类直接贴进这一句话（模型读得到，不用第二次工具调用）；
+ * 其它类型（图片、压缩包、二进制）落到工作区的 .haoai-attach/ 再给路径 ——
+ * 二进制塞进文本历史只会变乱码，而落成文件之后 read / grep / 视觉输入走同一条路。
+ */
+const TEXT_EXT=/\.(md|txt|json|jsonl|csv|tsv|log|ya?ml|toml|ini|xml|html?|kt|kts|java|py|js|ts|jsx|tsx|go|rs|c|h|cpp|hpp|cs|rb|php|sh|ps1|bat|sql|gradle|css|svg|properties)$/i;
+function attachFiles(list){
+  [...list].forEach(f=>{
+    if(TEXT_EXT.test(f.name)&&f.size<200_000){
+      const r=new FileReader();
+      r.onload=()=>{insertAtCursor('\n\n【附件 '+f.name+'】\n```\n'+String(r.result)+'\n```\n');toast('已把 '+f.name+' 贴进这句话')};
+      r.readAsText(f);
+    }else if(f.size>9_000_000){
+      toast(f.name+' 太大（上限 9 MB）','err');
+    }else{
+      const r=new FileReader();
+      r.onload=()=>{
+        post('/api/attach',{sid:curId,name:f.name,data:String(r.result).split(',')[1]||''}).then(d=>{
+          if(!d||!d.path){toast((d&&d.error)||'附件没存下','err');return}
+          insertAtCursor('\n\n（附件已存到工作区：'+d.path+'，'+Math.round(d.bytes/1024)+' KB。要读它就按这个路径。）\n');
+          toast('已附上 '+f.name);
+        }).catch(c=>toast('附件没存下（'+c+'）','err'));
+      };
+      r.readAsDataURL(f);
+    }
+  });
+}
+function insertAtCursor(t){
+  const s=box.selectionStart==null?box.value.length:box.selectionStart;
+  box.value=box.value.slice(0,s)+t+box.value.slice(s);
+  box.focus();box.dispatchEvent(new Event('input',{bubbles:true}));
 }
 function askText(title,tip,value,ok){
   const dg=$('#dialog');
@@ -747,10 +847,18 @@ function setModeNow(m){
   // 档位是**这条会话**的，不是全局的：带上 sid，否则会把后台正在跑的那条也改掉
   fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m,sid:curId})});
 }
+function narrow(){return innerWidth<=780}
 $('#railBtn').onclick=()=>{
+  // 窄屏下左栏是浮层（占一列会挤没正文），宽屏下才是"收起/展开这一列"
+  if(narrow()){app.classList.toggle('show-l');app.classList.remove('show-r');return}
   app.classList.toggle('no-l');
   localStorage.setItem('haoai-noL',app.classList.contains('no-l')?'1':'');
 };
+$('#panelBtn').onclick=()=>{app.classList.toggle('show-r');app.classList.remove('show-l')};
+// 浮层挡着正文：选中一条会话就把它收起来，不然用户切完还得再找一个关闭的地方
+document.querySelector('.rail.l').addEventListener('click',e=>{
+  if(e.target.closest('.it')&&app.classList.contains('show-l'))app.classList.remove('show-l');
+});
 if(localStorage.getItem('haoai-noL'))app.classList.add('no-l');
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
@@ -848,11 +956,19 @@ box.addEventListener('input',()=>{
   const t=box.value;
   if(t.startsWith('/')&&t.indexOf('\n')<0)showSlash(t.slice(1));else hideSlash();
 });
+$('#clip').onclick=()=>$('#att').click();
+$('#att').onchange=e=>{attachFiles(e.target.files);e.target.value=''};
+// 从资源管理器拖文件进窗口也算附件（这条只有真拖一下才会走到）
+document.addEventListener('dragover',e=>e.preventDefault());
+document.addEventListener('drop',e=>{
+  const f=e.dataTransfer&&e.dataTransfer.files;
+  if(f&&f.length){e.preventDefault();attachFiles(f)}
+});
 document.addEventListener('keydown',e=>{
   const mod=e.ctrlKey||e.metaKey;
   if(e.key=='Escape'){
-    if(asks.length)dismiss(asks[0].d.id);
-    else if(cfgOpen)closeCfg();
+    app.classList.remove('show-l','show-r');
+    if(cfgOpen)closeCfg();
     else $('#mask').classList.remove('on');
     hideSlash();return;
   }
@@ -978,9 +1094,7 @@ function markSessions(){
 function dropView(id){
   const v=views[id];
   if(v){v.el.remove();delete views[id]}
-  for(let i=asks.length-1;i>=0;i--)if(asks[i].v&&asks[i].v.sid===id)asks.splice(i,1);
   if(id===curId){curId='';show(Object.keys(views)[0]||'')}
-  paintAsk();
 }
 function openSession(id){
   if(id===curId)return;
@@ -1026,6 +1140,11 @@ function applyState(s){
         '</span></summary><pre class="body">'+esc(m.content)+'</pre></details>');
       const k=(m.name=='write'||m.name=='edit')?q.findIndex(e=>e[0]==m.name):-1;
       const p=k>=0?q.splice(k,1)[0][1]:'';
+      // diff 跟着历史回来：只随 SSE 流一次的话，看完回答再回头核对改动就什么都没了
+      if(m.diff){
+        node.querySelector('summary').innerHTML+='<span class="dstat">'+esc(diffStat(m.diff))+'</span>';
+        node.querySelector('.body').after(el(diffHtml(m.diff)));
+      }
       if(p){
         node.appendChild(el('<div class="cbar"><button class="ab" data-x="rollback" data-p="'+esc(p)+
           '" title="用 .haoai-snap/ 里最近一份覆盖回这个文件">↩ 退回上一版</button>'+
@@ -1091,7 +1210,7 @@ $('#cfgBtn').onclick=()=>{
     };
   });
 };
-function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');if(asks.length)paintAsk();else paintSend()}
+function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');paintSend()}
 
 /* ---- 轻提示：一句话的事，不往对话流里塞气泡 ---- */
 let toastT=null;

@@ -1,0 +1,21 @@
+[
+  {"goto": "#box"},
+  {"click": "#modes button[data-m=\"ask\"]"},
+  {"sleep": 300},
+  {"type": {"sel": "#box", "text": "验收：写一个需要确认的文件"}},
+  {"goto": ".card.ask", "timeout": 25000},
+  {"eval": "({ask:document.querySelectorAll('.card.ask').length,maskOn:document.getElementById('mask').classList.contains('on'),btns:[...document.querySelector('.card.ask .acts').children].map(b=>b.innerText||b.tagName).join(' | '),title:(document.querySelector('.card.ask .sb')||{}).innerText})"},
+  {"shot": "a01-inline-approval"},
+  {"click": ".card.ask .btn.pri"},
+  {"sleep": 2000},
+  {"eval": "({done:document.querySelectorAll('.card.ask.done').length,askNow:document.querySelectorAll('.card.ask:not(.done)').length,maskOn:document.getElementById('mask').classList.contains('on')})"},
+  {"shot": "a02-approved"},
+  {"goto": ".card.ask:not(.done)", "timeout": 20000},
+  {"sleep": 400},
+  {"shot": "a03-question"},
+  {"eval": "({opts:[...document.querySelector('.card.ask:not(.done) .acts').children].map(b=>b.innerText||b.tagName).join(' | ')})"},
+  {"click": ".card.ask:not(.done) .btn.pri"},
+  {"sleep": 2500},
+  {"eval": "({done:document.querySelectorAll('.card.ask.done').length,askLeft:document.querySelectorAll('.card.ask:not(.done)').length,stopped:!document.getElementById('send').classList.contains('stop')})"},
+  {"shot": "a04-answered"}
+]

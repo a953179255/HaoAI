@@ -35,7 +35,12 @@ data class ToolResult(
     val content: String,
     val error: Boolean = false,
     /** 渲染意图：generic | terminal | diff —— 前端按这个决定摆哪种卡（照 dsh 的插槽注册）。 */
-    val card: String = "generic"
+    val card: String = "generic",
+    /**
+     * 只给界面看的行级 diff，**不进历史**：工具结果会原样发给模型，
+     * 整篇 diff 塞进去等于每改一次文件就多付几百行 token，而模型刚刚已经知道改了什么。
+     */
+    val diff: String = ""
 )
 
 /** 审批与提问的出口。CLI 与 Web 各实现一份，工具层不关心前面是谁。 */
@@ -260,10 +265,14 @@ class WriteTool : Tool(
         val why = ctx.guard("write", ctx.rel(f), "写入文件 ${ctx.rel(f)}", "新建或覆盖，共 ${content.length} 字符")
         if (why != null) return fail(why)
         return try {
+            val before = if (f.isFile) f.readText() else ""
             ctx.snapshotBefore(f)
             f.parentFile?.mkdirs()
             f.writeText(content)
-            ToolResult("已写入 ${ctx.rel(f)}（${content.length} 字符 / ${content.lines().size} 行）", card = "diff")
+            ToolResult(
+                "已写入 ${ctx.rel(f)}（${content.length} 字符 / ${content.lines().size} 行）",
+                card = "diff", diff = Diff.unified(ctx.rel(f), before, content)
+            )
         } catch (e: Exception) {
             fail("写入失败：${e.message}")
         }
@@ -295,7 +304,10 @@ class EditTool : Tool(
             val updated = if (hits == 1) text.replaceFirst(old, new) else text.replace(old, new)
             ctx.snapshotBefore(f)
             f.writeText(updated)
-            ToolResult("已编辑 ${ctx.rel(f)}（替换 ${if (all) hits else 1} 处）\n${Diff.summary(old, new)}", card = "diff")
+            ToolResult(
+                "已编辑 ${ctx.rel(f)}（替换 ${if (all) hits else 1} 处）",
+                card = "diff", diff = Diff.unified(ctx.rel(f), text, updated)
+            )
         } catch (e: Exception) {
             fail("编辑失败：${e.message}")
         }
@@ -615,8 +627,14 @@ private fun pruneSpillDir(dir: File) {
 }
 
 object Diff {
-    /** 公共前后缀之外的部分算替换块，给 diff 卡用。 */
-    fun summary(old: String, new: String): String {
+    /**
+     * 统一风格的行级 diff，给"审阅这次到底改了什么"用。
+     *
+     * 为什么不是 git diff：工作区不一定是仓库（新建的文件 git 根本不认），
+     * 而且这一份要在工具结果里回给模型，必须自带边界（最多 80 行）不能无限长。
+     * 公共前后缀之外的整段算一个替换块 —— 够用、线性时间、不会在长文件上炸。
+     */
+    fun unified(path: String, old: String, new: String, maxLines: Int = 80): String {
         val a = old.lines()
         val b = new.lines()
         var p = 0
@@ -625,11 +643,29 @@ object Diff {
         while (s < a.size - p && s < b.size - p && a[a.size - 1 - s] == b[b.size - 1 - s]) s++
         val removed = a.subList(p, a.size - s)
         val added = b.subList(p, b.size - s)
-        return "−${removed.size} 行 / +${added.size} 行\n" +
-            removed.take(12).joinToString("\n") { "-" + it } +
-            (if (removed.size > 12) "\n-…" else "") + "\n" +
-            added.take(12).joinToString("\n") { "+" + it } +
-            (if (added.size > 12) "\n+…" else "")
+        if (removed.isEmpty() && added.isEmpty()) return "−0 行 / +0 行（内容没变）"
+        val ctxBefore = a.drop(maxOf(0, p - 3)).take(minOf(p, 3))
+        // 尾部上下文就是公共后缀的最后几行（前后两份内容这段是一样的，取哪边都行）
+        val ctxAfter = a.takeLast(minOf(3, s))
+        val body = StringBuilder()
+        ctxBefore.forEach { body.append(" ").append(it).append('\n') }
+        removed.take(maxLines).forEach { body.append("-").append(it).append('\n') }
+        if (removed.size > maxLines) body.append("-…（另有 ").append(removed.size - maxLines).append(" 行未显示）\n")
+        added.take(maxLines).forEach { body.append("+").append(it).append('\n') }
+        if (added.size > maxLines) body.append("+…（另有 ").append(added.size - maxLines).append(" 行未显示）\n")
+        ctxAfter.forEach { body.append(" ").append(it).append('\n') }
+        return "−${removed.size} 行 / +${added.size} 行   $path\n" + body
+    }
+
+    /** 旧接口：只给模型看的那一行摘要（工具结果会进历史，越短越好）。 */
+    fun stat(old: String, new: String): String {
+        val a = old.lines()
+        val b = new.lines()
+        var p = 0
+        while (p < a.size && p < b.size && a[p] == b[p]) p++
+        var s = 0
+        while (s < a.size - p && s < b.size - p && a[a.size - 1 - s] == b[b.size - 1 - s]) s++
+        return "−${a.size - p - s} 行 / +${b.size - p - s} 行"
     }
 }
 

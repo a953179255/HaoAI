@@ -8,9 +8,11 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
+import java.io.File
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -121,6 +123,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/cut" -> cutMessage(ex)
                 "/api/regenerate" -> regenerate(ex)
                 "/api/rollback" -> rollback(ex)
+                "/api/attach" -> attach(ex)
                 "/api/models" -> models(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
@@ -227,15 +230,16 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         sb.append("]},")
         /**
-         * 还挂着的审批/提问也要交出去。
+         * 挂着没答的审批/提问全交出去（不是只交一条）。
          *
-         * 它们原本只通过 SSE 推一次：页面一刷新（或你开了第二个标签页）对话框就没了，
-         * 而引擎正卡在 `fut.get(300s)` 上等一个不会再出现的按钮 —— 表现是"agent 莫名卡死"，
-         * 最后超时自动拒掉，用户根本不知道发生过什么。
-         * 一次只回一条：弹窗是单实例，堆两个会把前一个盖掉且再也点不到。
+         * 它们本来只通过 SSE 推一次：页面一刷新引擎还卡在 `fut.get(300s)` 上等一个
+         * 不会再出现的按钮，表现是"agent 莫名卡死"，最后超时自动拒掉。
+         * 原来这里只回第一条，因为弹窗是单实例、堆两个会互相盖掉。现在审批是消息流里的
+         * 内联卡，一条会话摆一张，"只回一条"就变成了**另一条没人管** —— 所以全交。
          */
         sb.append("\"pending\":[")
-        pendingPayload.values.firstOrNull { it.sid == id }?.let { w ->
+        pendingPayload.values.filter { it.sid == id }.forEachIndexed { i, w ->
+            if (i > 0) sb.append(',')
             sb.append("{\"ev\":").append(quote(w.ev)).append(",\"data\":").append(w.payload).append('}')
         }
         sb.append("],")
@@ -251,6 +255,7 @@ class WebServer(settings: PcSettings, port: Int) {
                  */
                 .append(",\"index\":").append(i)
                 .append(",\"reasoning\":").append(quote(m.reasoning ?: ""))
+                .append(",\"diff\":").append(quote(m.diff))
                 .append(",\"pt\":").append(m.pt).append(",\"ct\":").append(m.ct).append(",\"ms\":").append(m.ms)
                 .append(",\"calls\":").append(m.calls.joinToString(",", "[", "]") { c ->
                     """{"name":${quote(c.name)},"args":${quote(c.args)}}"""
@@ -446,6 +451,48 @@ class WebServer(settings: PcSettings, port: Int) {
         publish("notice", quote("已把 $rel 退回快照（$at）"), sid)
     }
 
+    /**
+     * `POST /api/attach` —— 把浏览器里选的文件落到工作区的 `.haoai-attach/`，回相对路径。
+     *
+     * 为什么不直接把内容塞进消息：模型要的是"一个能读的路径"。文本还好办，
+     * 图片/二进制进文本历史只会变成乱码，而落到盘上之后 read、grep、
+     * 视觉输入走的是同一条路。
+     *
+     * 文件名一律自己拼：清洗掉所有路径分隔符再加时间戳。**不能把用户给的名字交给
+     * 文件系统** —— `..\..\x` 这种名字会把文件写到工作区外面去。
+     */
+    private fun attach(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val ws = sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()
+        val name = b.str("name").replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fa5 ]"), "_").take(80)
+        val data = b.str("data")
+        if (name.isBlank() || data.isBlank()) {
+            send(ex, 200, """{"ok":false,"error":"缺 name 或 data"}""",
+                "application/json; charset=utf-8"); return
+        }
+        if (data.length > 12_000_000) {
+            send(ex, 200, """{"ok":false,"error":"附件太大（上限约 9 MB）"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val bytes = runCatching { Base64.getDecoder().decode(data) }.getOrNull()
+        if (bytes == null) {
+            send(ex, 200, """{"ok":false,"error":"附件没读全（base64 解不开）"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val rel = ".haoai-attach/" + System.currentTimeMillis() + "-" + name
+        val out = File(ws, rel)
+        try {
+            out.parentFile?.mkdirs()
+            out.writeBytes(bytes)
+        } catch (e: Exception) {
+            send(ex, 200, """{"ok":false,"error":${quote("存不下：" + (e.message ?: e.javaClass.simpleName))}}""",
+                "application/json; charset=utf-8"); return
+        }
+        send(ex, 200, """{"ok":true,"path":${quote(rel)},"bytes":${bytes.size}}""",
+            "application/json; charset=utf-8")
+    }
+
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */
     private fun models(ex: HttpExchange) {
         val sid = pick(querySid(ex))
@@ -546,7 +593,7 @@ class WebServer(settings: PcSettings, port: Int) {
             )
             is Ev.ToolEnd -> publish(
                 "tool",
-                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},"out":${quote(ev.out)}}""",
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},"out":${quote(ev.out)},"diff":${quote(ev.diff)}}""",
                 sid
             )
             is Ev.Todo -> publish(

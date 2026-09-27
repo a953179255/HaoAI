@@ -156,6 +156,8 @@ class SessionIndexTest {
         val tool = msgs.filter { it.role == "tool" }
         assertTrue("这份历史里没有工具消息，测不到东西", tool.isNotEmpty())
         assertEquals("重开后工具消息丢了 name", listOf("write"), tool.map { it.name })
+        assertTrue("重开后 diff 丢了（审阅视图变成空）：${tool.first().diff}",
+            tool.first().diff.contains("+hello"))
         val a = msgs.first { it.role == "assistant" }
         assertTrue("重开后每回合的 token 统计丢了：pt=${a.pt} ct=${a.ct} ms=${a.ms}", a.pt > 0 && a.ct > 0)
         assertEquals("重开后 assistant 的 tool_calls 丢了", 1, a.calls.size)

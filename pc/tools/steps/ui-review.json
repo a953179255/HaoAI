@@ -1,0 +1,21 @@
+[
+  {"goto": "#box"},
+  {"type": {"sel": "#box", "text": "验收：建一个 hello.txt 并把第一行改掉"}},
+  {"goto": ".cbar", "timeout": 30000},
+  {"sleep": 2500},
+  {"eval": "({dif:document.querySelectorAll('.dif').length,plus:document.querySelectorAll('.dif .dp').length,minus:document.querySelectorAll('.dif .dm').length,ctx:document.querySelectorAll('.dif .dc').length,dstat:(document.querySelector('.dstat')||{}).innerText||null})"},
+  {"click": ".card:has(.dif) > summary"},
+  {"sleep": 400},
+  {"shot": "r01-diff-dark"},
+  {"eval": "attachFiles([new File(['第一行\\n第二行\\n'],'note.txt',{type:'text/plain'})]),'已调'"},
+  {"sleep": 900},
+  {"eval": "document.getElementById('box').value.slice(0,60)"},
+  {"eval": "attachFiles([new File([new Uint8Array([1,2,3,4,5])],'blob.bin')]),'已调'"},
+  {"sleep": 1200},
+  {"eval": "document.getElementById('box').value.slice(-90)"},
+  {"shot": "r02-attach"},
+  {"click": "#themeBtn"},
+  {"sleep": 500},
+  {"shot": "r03-diff-light"},
+  {"click": "#themeBtn"}
+]

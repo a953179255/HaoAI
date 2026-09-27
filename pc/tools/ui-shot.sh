@@ -55,6 +55,7 @@ for i in $(seq 1 40); do
 done
 echo "服务端 -> $(curl -s "http://127.0.0.1:$PORT/api/state" | head -c 200)"
 
-node tools/shot.js --out "$OUT" --port 9339 --url "http://127.0.0.1:$PORT/" --steps "$STEPS"
+node tools/shot.js --out "$OUT" --port 9339 --width "${SHOT_W:-1500}" --height "${SHOT_H:-930}" \
+  --url "http://127.0.0.1:$PORT/" --steps "$STEPS"
 echo "图在 $OUT"
 ls "$OUT"

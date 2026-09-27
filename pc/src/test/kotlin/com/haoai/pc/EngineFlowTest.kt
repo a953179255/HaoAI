@@ -468,10 +468,15 @@ class EngineFlowTest {
             msgs.any { (it.content ?: "").contains("停止") })
     }
 
+    /** diff 是"审阅这次改了什么"的唯一依据：行数、+/- 前缀、上下文都得在，且不能把没变的报成变了。 */
     @Test
-    fun `diff summary counts changed lines`() {
-        val d = Diff.summary("a\nb\nc", "a\nB\nc")
-        assertTrue(d, d.contains("−1 行") && d.contains("+1 行"))
+    fun `diff marks changed lines and keeps context`() {
+        val d = Diff.unified("a.txt", "一\n二\n三\n四\n五\n六\n七", "一\n二\n改\n四\n五\n六\n七")
+        assertTrue(d, d.contains("−1 行") && d.contains("+1 行") && d.contains("a.txt"))
+        assertTrue("改动行要带 +/-：$d", d.contains("-三") && d.contains("+改"))
+        assertTrue("上下文要带空格前缀：$d", d.contains(" 五"))
+        assertEquals("内容没变就不该报差异",
+            "−0 行 / +0 行（内容没变）", Diff.unified("a", "x\n", "x\n"))
     }
 
     @Test

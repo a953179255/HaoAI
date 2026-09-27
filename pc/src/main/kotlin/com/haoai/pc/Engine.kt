@@ -29,7 +29,11 @@ sealed class Ev {
         /** 这次工具动的对象（写改类是路径，shell 是命令）。界面上的"回滚这次修改"要用它。 */
         val subject: String = ""
     ) : Ev()
-    data class ToolEnd(val id: String, val name: String, val ok: Boolean, val out: String, val card: String) : Ev()
+    data class ToolEnd(
+        val id: String, val name: String, val ok: Boolean, val out: String, val card: String,
+        /** 行级 diff，只给界面（不进历史、不发模型）。 */
+        val diff: String = ""
+    ) : Ev()
     data class ApprovalRequest(val id: String, val title: String, val detail: String, val kind: String) : Ev()
     data class AskRequest(val id: String, val question: String, val options: List<String>) : Ev()
     data class Usage(val prompt: Int, val completion: Int, val turns: Int) : Ev()
@@ -460,8 +464,8 @@ class Engine(
                     res.content, settings.storedCap, session.workspace, call.id,
                     HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, settings.flags)
                 )
-                history += Msg("tool", stored, callId = call.id, name = call.name)
-                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card))
+                history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff)
+                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff))
             }
             session.mode = ctx.mode
         }
@@ -571,6 +575,7 @@ class Engine(
                                     m.callId?.let { put("tool_call_id", it) }
                                     if (m.name.isNotBlank()) put("name", m.name)
                                     m.reasoning?.let { put("reasoning", it) }
+                                    if (m.diff.isNotBlank()) put("diff", m.diff)
                                     if (m.pt > 0) put("pt", m.pt)
                                     if (m.ct > 0) put("ct", m.ct)
                                     if (m.ms > 0) put("ms", m.ms)
@@ -630,6 +635,7 @@ class Engine(
                     name = m["name"]?.jsonPrimitive?.contentOrNull ?: "",
                     callId = m["tool_call_id"]?.jsonPrimitive?.contentOrNull,
                     reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
+                    diff = m["diff"]?.jsonPrimitive?.contentOrNull ?: "",
                     pt = m["pt"]?.jsonPrimitive?.intOrNull ?: 0,
                     ct = m["ct"]?.jsonPrimitive?.intOrNull ?: 0,
                     ms = m["ms"]?.jsonPrimitive?.longOrNull ?: 0L,

@@ -34,6 +34,13 @@ data class Msg(
      * PC 端这次补上。存下来而不是只流一次，是为了刷新页面与重开会话还能展开看。
      */
     val reasoning: String? = null,
+    /**
+     * 工具卡上的行级 diff（只给界面看，[requestMessages] 不会把它发给模型）。
+     *
+     * 存下来是为了"刷新之后还能审阅这次改了什么"——只随 SSE 流一次的话，
+     * 页面一刷新 diff 就没了，而用户往往正是看完回答才回头去核对改动。
+     */
+    val diff: String = "",
     /** 这一回合自己的用量与耗时（不是会话累计），画在回答下面那行小字。 */
     val pt: Int = 0,
     val ct: Int = 0,
