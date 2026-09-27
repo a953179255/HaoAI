@@ -320,6 +320,14 @@
   .dif .dn{color:var(--warn)}
   .ntag{margin-left:auto;font-size:11px;color:var(--dim2);font-variant-numeric:tabular-nums;
     padding-left:8px;white-space:nowrap;flex:none}
+  /* ---- 子任务卡 ---- */
+  .tick.run{background:var(--warn);animation:p 1s infinite}
+  .card.sub .sublog{display:flex;flex-direction:column;gap:2px;padding:6px 12px;border-top:1px solid var(--line);
+    max-height:220px;overflow:auto}
+  .card.sub .sl{font-size:11.5px;color:var(--dim);font-family:var(--mono);
+    white-space:pre-wrap;word-break:break-all}
+  .card.sub .sl.bad{color:var(--bad)}
+  .card.sub .sl.ans{color:var(--fg);font-family:inherit;font-size:12.5px;margin-top:2px}
   /* 设置抽屉里的规则表：能看更要能撤（审批卡上点了"以后都允许"之后得有地方收回） */
   .rules{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto;margin:2px 0 6px}
   .rl{display:flex;gap:8px;align-items:center;font-size:12px;font-family:var(--mono);
@@ -489,7 +497,7 @@ function view(sid){
   let v=views[sid];
   if(!v){
     v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
-       tools:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
+       tools:{},subs:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
        mode:mode,workspace:'',model:'',outputs:[]};
     views[sid]=v;stream.appendChild(v.el);
   }
@@ -638,6 +646,29 @@ function diffHtml(diff){
 function diffStat(diff){const m=String(diff||'').split('\n')[0].match(/−\d+ 行 \/ \+\d+ 行/);return m?m[0]:''}
 // 卡头右侧那枚小标：审批结论 + 改动行数，合成一个元素免得两个 auto 抢位
 function ntag(note,stat){const p=[note,stat].filter(Boolean);return p.length?'<span class="ntag">'+esc(p.join(' · '))+'</span>':''}
+
+/* ---- 子任务卡 ----
+ * 子任务的中间过程**不进正文**：它几十次 read/grep 全摊开，用户就找不到那句结论了。
+ * 所以一张独立的小卡，逐条记"用了哪把工具"，跑完收起并把结论露在第一行。
+ */
+function subLine(d,v){
+  const t=v||cur();
+  let c=t.subs[d.label];
+  if(!c){
+    t.curAns=null;closeThinking(t);
+    c=t.subs[d.label]=add(el('<details class="card sub" open><summary><span class="tick run"></span>'+
+      '<b>子任务</b><span class="sb">'+esc(d.label)+'</span></summary><div class="sublog"></div></details>'),t);
+  }
+  const log=c.querySelector('.sublog');
+  if(d.kind=='tool'||d.kind=='err')log.appendChild(el('<div class="sl'+(d.kind=='err'?' bad':'')+'">'+
+    esc(d.text)+'</div>'));
+  if(d.kind=='done'){
+    c.open=false;c.classList.add('done');
+    c.querySelector('.tick').className='tick ok';
+    log.appendChild(el('<div class="sl ans">结论：'+esc(d.text)+'</div>'));
+    delete t.subs[d.label];
+  }
+}
 function notice(t,kind,v){add(el('<div class="'+(kind=='err'?'err':'notice')+'">'+esc(t)+'</div>'),v||cur())}
 function setTodos(items,v){const t=v||cur();t.todos=items;if(t===cur())paintTodos(items)}
 function paintTodos(items){
@@ -794,6 +825,7 @@ on('stats',(v,d)=>{
 });
 on('user',(v,d)=>{v.curAns=null;closeThinking(v);add(el('<div class="msg user">'+esc(d)+'</div>'),v)});
 on('tool',(v,d)=>{d.state=='run'?toolStart(d,v):toolEnd(d,v)});
+on('sub',(v,d)=>subLine(d,v));
 on('todo',(v,d)=>setTodos(d.items,v));
 on('usage',(v,d)=>paintUsage(d,v));
 on('notice',(v,d)=>notice(d,null,v));
@@ -1302,6 +1334,16 @@ function applyState(s){
     let node=null;
     if(m.role=='user')node=el('<div class="msg user">'+esc(m.content)+'</div>');
     else if(m.role=='assistant'&&m.content)node=el('<div class="msg ans md">'+md(m.content)+'</div>');
+    else if(m.role=='tool'&&m.name=='task'){
+      // 子任务回放成一张子任务卡：过程一行一条，结论单独一行。
+      // 不这么做的话刷新后它就是个普通工具卡，"这是并行出去的子任务"这件事就看不出来了。
+      const mm=(m.content||'').match(/【子任务「([^」]*)」的结论】\n?([\s\S]*)/);
+      const bad=(m.content||'').indexOf('子任务失败')>=0;
+      node=el('<details class="card sub done"><summary><span class="tick '+(bad?'bad':'ok')+'"></span>'+
+        '<b>子任务</b><span class="sb">'+esc(mm?mm[1]:'')+'</span></summary><div class="sublog">'+
+        (m.sub||'').split('\n').filter(Boolean).map(l=>'<div class="sl">'+esc(l)+'</div>').join('')+
+        '<div class="sl ans">结论：'+esc(mm?mm[2]:(m.content||''))+'</div></div></details>');
+    }
     else if(m.role=='tool'){
       node=el('<details class="card"><summary><span class="tick"></span><b>'+
         esc(m.name||'tool')+'</b><span class="sb">'+esc((m.content||'').split('\n')[0].slice(0,60))+

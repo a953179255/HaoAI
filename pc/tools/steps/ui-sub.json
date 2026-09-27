@@ -1,0 +1,13 @@
+[
+  {"goto": "#box"},
+  {"type": {"sel": "#box", "text": "让子任务去调研 hello.txt 里有什么"}},
+  {"goto": ".card.sub", "timeout": 25000},
+  {"sleep": 600},
+  {"eval": "({subs:document.querySelectorAll('.card.sub').length,label:(document.querySelector('.card.sub .sb')||{}).textContent,lines:[...document.querySelectorAll('.card.sub .sl')].map(x=>x.textContent.slice(0,40)),tick:document.querySelector('.card.sub .tick').className})"},
+  {"shot": "s01-sub-running"},
+  {"sleep": 6000},
+  {"eval": "({done:document.querySelectorAll('.card.sub.done').length,ans:([...(document.querySelectorAll('.card.sub .sl.ans'))].map(x=>x.textContent.slice(0,60)).join(' || '))})"},
+  {"shot": "s02-sub-done"},
+  {"eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'磁盘上的会话数='+l.length+' 标题='+l.map(s=>s.title).join(','))"},
+  {"eval": "({bodies:[...document.querySelectorAll('.card > .body')].map(b=>b.innerText.slice(0,36))})"}
+]

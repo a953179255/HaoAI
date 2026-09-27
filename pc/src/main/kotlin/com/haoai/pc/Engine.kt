@@ -34,8 +34,12 @@ sealed class Ev {
         /** 行级 diff，只给界面（不进历史、不发模型）。 */
         val diff: String = "",
         /** 用户对这一步的审批结论，画在卡头。 */
-        val note: String = ""
+        val note: String = "",
+        /** 子任务的中间过程（task 工具专用），只给界面。 */
+        val sub: String = ""
     ) : Ev()
+    /** 子任务的动静：start/tool/err/done。界面上折进那张任务卡，不占正文。 */
+    data class Sub(val label: String, val kind: String, val text: String) : Ev()
     data class ApprovalRequest(val id: String, val title: String, val detail: String, val kind: String) : Ev()
     data class AskRequest(val id: String, val question: String, val options: List<String>) : Ev()
     data class Usage(val prompt: Int, val completion: Int, val turns: Int) : Ev()
@@ -79,7 +83,9 @@ class Engine(
     val tools: List<Tool>,
     private val gate: Gate,
     private val emit: (Ev) -> Unit,
-    client: ChatClient = chatClient(settings)
+    client: ChatClient = chatClient(settings),
+    /** 0=用户直接说话的这条会话；>0 是被派出来的子任务。子任务不许再派子任务。 */
+    val depth: Int = 0
 ) {
 
     /**
@@ -140,6 +146,62 @@ class Engine(
     }
 
     fun messages(): List<Msg> = history.toList()
+
+    /**
+     * 子任务用的客户端工厂。默认按当前设置新建一份；测试里换成脚本。
+     * 没有这个口子，父会话用假网关时子任务会去敲真网关，症状是"派了子任务就卡住"。
+     */
+    @Volatile var childClient: (() -> ChatClient)? = null
+
+    /**
+     * 派一个子任务：独立的历史与工具循环，共用同一个权限闸与设置，
+     * 跑完只把最终回答当成工具结果交回父会话。
+     *
+     * 为什么要独立历史：并行调研时子任务的中间过程（几十次 read/grep）如果都灌进父会话，
+     * 上下文立刻被挤满，而父会话需要的只有那句结论 —— 这正是 subagent 存在的理由。
+     * 深度限一层：否则模型一句"帮我把所有模块都看一遍"能给自己开出一条流水线。
+     */
+    fun spawn(label: String, prompt: String): Pair<String, String> {
+        if (depth >= MAX_DEPTH)
+            return ("子任务不能再派子任务（深度上限 $MAX_DEPTH）。这件事你自己动手做。" to "")
+        if (prompt.isBlank()) return ("子任务没有内容，不知道要它做什么。" to "")
+        val s = Session("sub" + System.nanoTime().toString(16).take(8), session.workspace)
+        s.mode = session.mode
+        val log = StringBuilder()
+        val child = Engine(
+            s, settings, tools, gate,
+            { ev -> forwardSub(label, ev, log) },
+            childClient?.invoke() ?: chatClient(settings),
+            depth = depth + 1
+        )
+        emit(Ev.Sub(label, "start", prompt.take(200)))
+        val out = try {
+            child.submit(prompt)
+        } catch (e: Exception) {
+            "子任务失败：" + (e.message ?: e.javaClass.simpleName)
+        }
+        emit(Ev.Sub(label, "done", out.take(400)))
+        return (out.ifBlank { "子任务没有给出结论" } to log.toString())
+    }
+
+    /** 子任务的动静：一边转成界面上的实时行，一边攒成一份过程记录跟着结论落库。 */
+    private fun forwardSub(label: String, ev: Ev, log: StringBuilder) {
+        when (ev) {
+            is Ev.ToolStart -> {
+                log.appendLine(ev.name + " " + ev.brief)
+                emit(Ev.Sub(label, "tool", ev.name + " " + ev.brief))
+            }
+            is Ev.ToolEnd -> if (!ev.ok) {
+                log.appendLine(ev.name + " 失败")
+                emit(Ev.Sub(label, "err", ev.name + " 失败"))
+            }
+            is Ev.Err -> {
+                log.appendLine("出错：" + ev.s)
+                emit(Ev.Sub(label, "err", ev.s))
+            }
+            else -> Unit
+        }
+    }
 
     /**
      * 用户对上一次审批选了什么，挂在**紧接着落的那条 tool 消息**上。
@@ -352,6 +414,7 @@ class Engine(
         // 等回合结束才刷新的话，一条跑十分钟的任务十分钟都还叫"新会话"。
         if (titled) emit(Ev.Title(session.title.get()))
         val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
+        ctx.spawn = { label, prompt -> spawn(label, prompt) }
         var lastText = ""
         var turnNo = 0
         var retry = 0
@@ -485,8 +548,9 @@ class Engine(
                     HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, settings.flags)
                 )
                 val note = takeNote()
-                history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff, note = note)
-                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note))
+                history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff, note = note,
+                    sub = res.sub)
+                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub))
             }
             session.mode = ctx.mode
         }
@@ -570,6 +634,9 @@ class Engine(
     fun persistNow() = persist()
 
     private fun persist() {
+        // 子任务不落盘：它是一次性的调研，出现在左侧会话列表里只会碍事
+        // （而且它的历史本来就被父会话压缩成了一句结论，重启后也接不回去）。
+        if (depth > 0) return
         runCatching {
             Env.sessionsDir.mkdirs()
             session.file.writeText(
@@ -600,6 +667,7 @@ class Engine(
                                     m.reasoning?.let { put("reasoning", it) }
                                     if (m.diff.isNotBlank()) put("diff", m.diff)
                                     if (m.note.isNotBlank()) put("note", m.note)
+                                    if (m.sub.isNotBlank()) put("sub", m.sub)
                                     if (m.pt > 0) put("pt", m.pt)
                                     if (m.ct > 0) put("ct", m.ct)
                                     if (m.ms > 0) put("ms", m.ms)
@@ -661,6 +729,7 @@ class Engine(
                     reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
                     diff = m["diff"]?.jsonPrimitive?.contentOrNull ?: "",
                     note = m["note"]?.jsonPrimitive?.contentOrNull ?: "",
+                    sub = m["sub"]?.jsonPrimitive?.contentOrNull ?: "",
                     pt = m["pt"]?.jsonPrimitive?.intOrNull ?: 0,
                     ct = m["ct"]?.jsonPrimitive?.intOrNull ?: 0,
                     ms = m["ms"]?.jsonPrimitive?.longOrNull ?: 0L,
@@ -677,6 +746,9 @@ class Engine(
 
     companion object {
         private val emptyObj: JsonObject = buildJsonObject { }
+
+        /** 子任务能派几层：1 = 主会话可以派子任务，子任务不能再派。 */
+        const val MAX_DEPTH = 1
 
         fun gitRoot(dir: File): String? {
             var c: File? = dir

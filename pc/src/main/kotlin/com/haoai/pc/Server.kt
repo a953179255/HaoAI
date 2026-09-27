@@ -272,6 +272,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 .append(",\"reasoning\":").append(quote(m.reasoning ?: ""))
                 .append(",\"diff\":").append(quote(m.diff))
                 .append(",\"note\":").append(quote(m.note))
+                .append(",\"sub\":").append(quote(m.sub))
                 .append(",\"pt\":").append(m.pt).append(",\"ct\":").append(m.ct).append(",\"ms\":").append(m.ms)
                 .append(",\"calls\":").append(m.calls.joinToString(",", "[", "]") { c ->
                     """{"name":${quote(c.name)},"args":${quote(c.args)}}"""
@@ -812,11 +813,16 @@ class WebServer(settings: PcSettings, port: Int) {
             is Ev.ToolEnd -> publish(
                 "tool",
                 """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},""" +
-                    """"out":${quote(ev.out)},"diff":${quote(ev.diff)},"note":${quote(ev.note)}}""",
+                    """"out":${quote(ev.out)},"diff":${quote(ev.diff)},"note":${quote(ev.note)},""" +
+                    """"sub":${quote(ev.sub)}}""",
                 sid
             )
-            is Ev.Todo -> publish(
-                "todo", """{"items":${ev.items.joinToString(",", "[", "]") { quote(it) }}}""", sid
+            is Ev.Sub -> publish(
+                "sub",
+                """{"label":${quote(ev.label)},"kind":${quote(ev.kind)},"text":${quote(ev.text)}}""",
+                sid
+            )
+            is Ev.Todo -> publish(                "todo", """{"items":${ev.items.joinToString(",", "[", "]") { quote(it) }}}""", sid
             )
             is Ev.Usage -> publish(
                 "usage",

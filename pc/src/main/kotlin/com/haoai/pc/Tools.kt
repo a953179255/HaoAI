@@ -40,7 +40,14 @@ data class ToolResult(
      * 只给界面看的行级 diff，**不进历史**：工具结果会原样发给模型，
      * 整篇 diff 塞进去等于每改一次文件就多付几百行 token，而模型刚刚已经知道改了什么。
      */
-    val diff: String = ""
+    val diff: String = "",
+    /**
+     * 子任务的中间过程（一行一条），只给界面。
+     *
+     * 和 diff 同一个道理：这些是"它是怎么查出来的"，用户想核对时才看，
+     * 发给模型纯属浪费 token —— 模型要的是结论。
+     */
+    val sub: String = ""
 )
 
 /** 审批与提问的出口。CLI 与 Web 各实现一份，工具层不关心前面是谁。 */
@@ -70,6 +77,14 @@ class ToolCtx(
     val gate: Gate,
     val todos: MutableList<Todo> = mutableListOf()
 ) {
+    /**
+     * 派子任务的能力，由引擎在建 ctx 时接上。
+     *
+     * 为什么是个可空函数而不是让工具自己去 new 一个引擎：引擎才握着设置、权限闸、
+     * 事件出口和深度。工具层保持"不知道上面是谁"，CLI/网页/测试才能共用同一套工具。
+     */
+    var spawn: ((label: String, prompt: String) -> Pair<String, String>)? = null
+
     fun resolve(p: String): File {
         val clean = p.trim().replace('\\', '/')
         val f = if (File(clean).isAbsolute) File(clean) else File(workspace, clean)
@@ -311,6 +326,23 @@ class EditTool : Tool(
         } catch (e: Exception) {
             fail("编辑失败：${e.message}")
         }
+    }
+}
+
+class TaskTool : Tool(
+    "task",
+    "派一个子任务去做一件独立的事：它有自己的上下文，做完只把最终结论带回来。" +
+        "适合两类活：会刷出一大堆中间结果的调研、能并行做的几块。一次调用只交代一件事，" +
+        "要并行就同一回合里多调几次。",
+    schema("prompt" to "string", "label" to "string", required = arrayOf("prompt")),
+    kind = "read"
+) {
+    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val prompt = req(args, "prompt")?.trim() ?: return fail("task 缺少 prompt")
+        val label = (req(args, "label")?.trim() ?: "").ifBlank { prompt.take(24) }
+        val spawn = ctx.spawn ?: return fail("当前环境没接引擎，派不了子任务")
+        val (out, log) = spawn(label, prompt)
+        return ToolResult("【子任务「$label」的结论】\n$out", sub = log)
     }
 }
 
@@ -672,7 +704,7 @@ object Diff {
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
-    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool(), ScreenTool()
+    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool(), ScreenTool(), TaskTool()
 )
 
 /**

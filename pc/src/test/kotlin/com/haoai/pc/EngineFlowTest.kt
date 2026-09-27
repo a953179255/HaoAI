@@ -191,6 +191,42 @@ class EngineFlowTest {
         assertTrue("坏文件应当读成空列表", Skills.load().isEmpty())
     }
 
+    /**
+     * 子任务（subagent）的三条硬要求：
+     * ① 它真的跑了自己的回合循环（不是把 prompt 原样回显）；
+     * ② 只把**结论**带回父会话 —— 中间过程（read 的全文）不许灌进父历史，
+     *    那正是 subagent 存在的理由：并行调研几十次工具调用会把上下文挤满；
+     * ③ 不落盘、不进会话列表（一次性的活，重启后也没人需要接上它）。
+     */
+    @Test
+    fun `a subagent runs its own loop and only its conclusion comes back`() {
+        val ws = tempWorkspace()
+        File(ws, "note.txt").writeText("第一行内容\n第二行内容")
+        val child = Scripted(mutableListOf(
+            turn("我看一下", toolCall("s1", "read", """{"path":"note.txt"}""")),
+            turn("第一行是「第一行内容」")
+        ))
+        val (engine, _, _) = harness(
+            ws,
+            mutableListOf(
+                turn("派个子任务", toolCall("t1", "task",
+                    """{"prompt":"读 note.txt 并告诉我第一行","label":"看文件"}""")),
+                turn("子任务说第一行是「第一行内容」")
+            )
+        )
+        engine.childClient = { child }
+        engine.submit("让子任务看看 note.txt 的第一行")
+
+        assertTrue("子任务没真跑（它一次都没被问）", child.calls >= 2)
+        val task = engine.messages().last { it.role == "tool" && it.name == "task" }
+        assertTrue("结论没带回父会话：" + task.content, task.content!!.contains("第一行内容"))
+        assertFalse("父历史里混进了子任务的中间过程（read 的全文）：" + task.content,
+            task.content!!.contains("第二行内容"))
+        val files = Env.sessionsDir.listFiles()?.map { it.name }.orEmpty()
+        assertTrue("子任务把会话写进磁盘了：" + files, files.none { "sub" in it })
+        assertTrue("子任务的过程没落库（刷新后回放不出这张卡）：" + task.sub, task.sub.contains("read"))
+    }
+
     @Test
     fun `plan mode refuses writes and hides write tools from the model`() {
         val ws = tempWorkspace()
@@ -537,8 +573,8 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        // 17 把：9 把基础 + 5 把常驻进程 + git + browser + screen
-        assertEquals(17, schemas.size)
+        // 18 把：5 把基础 + 6 把常驻进程 + git + todo + ask_user + web_fetch + browser + screen + task
+        assertEquals(18, schemas.size)
         assertTrue(
             "常驻进程工具没注册进来",
             setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")
