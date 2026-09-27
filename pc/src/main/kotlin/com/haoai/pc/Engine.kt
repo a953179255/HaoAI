@@ -24,6 +24,15 @@ sealed class Ev {
     data class Todo(val items: List<String>) : Ev()
     data class Notice(val s: String) : Ev()
     data class Err(val s: String) : Ev()
+
+    /**
+     * 会话标题变了（第一句话会把它从"新会话"改成那句话的前 24 字）。
+     *
+     * 必须有这个事件：标题只在回合**结束**时随 `sessions` 事件一起刷新，
+     * 于是一条正在跑的长任务在侧栏和顶栏上一直叫"新会话"，
+     * 多会话并行时根本分不清哪条是哪条。
+     */
+    data class Title(val s: String) : Ev()
 }
 
 /** 一个会话：工作区 + 档位 + 待办 + 落库文件。 */
@@ -48,12 +57,32 @@ class Session(val id: String, val workspace: File) {
  */
 class Engine(
     val session: Session,
-    val settings: PcSettings,
+    settings: PcSettings,
     val tools: List<Tool>,
     private val gate: Gate,
     private val emit: (Ev) -> Unit,
-    private val client: ChatClient = chatClient(settings)
+    client: ChatClient = chatClient(settings)
 ) {
+
+    /**
+     * 设置与网关客户端都是**可换的**。
+     *
+     * 之前它们是 `val`：在设置页改了模型或 Base URL，已经建出来的引擎还在用旧的那一份，
+     * 界面上写的"下一条消息起生效"其实是假话 —— 是"下一条新建会话起才生效"。
+     * 多会话并行之后这条更要紧：四条会话共用一个全局设置，改一次就得四条一起跟上。
+     */
+    @Volatile
+    var settings: PcSettings = settings
+        private set
+
+    @Volatile
+    private var client: ChatClient = client
+
+    /** 换用新的全局设置（顺带重建 HTTP 客户端：baseUrl/model 都在里面）。 */
+    fun useSettings(s: PcSettings) {
+        settings = s
+        client = chatClient(s)
+    }
 
     private val history = mutableListOf<Msg>()
     private val byName: Map<String, Tool> = tools.associateBy { it.name }
@@ -109,6 +138,15 @@ class Engine(
 
     fun requestStop() {
         stopRequested = true
+    }
+
+    /**
+     * 开跑前清旗子。**必须在服务端口把 running 置真的同一把锁里调用**，
+     * 不能放在 `submit()` 里：那样"提交后立刻按停止"会被 submit 晚一步的清旗抹掉，
+     * 表现是刚发出去的任务停不下来（多会话并行时更容易撞上，因为切过去切回来都在抢那点时间）。
+     */
+    fun beginRun() {
+        stopRequested = false
     }
 
     /**
@@ -191,8 +229,10 @@ class Engine(
 
     /** 一轮用户输入 → 若干次模型往返 → 最终文本。 */
     fun submit(userText: String): String {
+        var titled = false
         if (session.title.get() == "新会话") {
             session.title.set(userText.trim().replace('\n', ' ').take(24).ifBlank { "新会话" })
+            titled = true
         }
         history += Msg("user", userText)
         /**
@@ -204,11 +244,13 @@ class Engine(
          * 至少用户问了什么还在。
          */
         persist()
+        // 标题一落地就要说出去：侧栏与顶栏靠它区分并行的几条会话，
+        // 等回合结束才刷新的话，一条跑十分钟的任务十分钟都还叫"新会话"。
+        if (titled) emit(Ev.Title(session.title.get()))
         val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
         var lastText = ""
         var turnNo = 0
         var retry = 0
-        stopRequested = false
         val backoffs = longArrayOf(3_000, 8_000, 20_000)
 
         while (turnNo < settings.maxTurns) {
@@ -379,6 +421,15 @@ class Engine(
         val t = raw.trim().ifBlank { "{}" }
         Json.parseToJsonElement(t).jsonObject
     }.getOrElse { emptyObj }
+
+    /**
+     * 立刻落盘（空会话也写）。
+     *
+     * 单会话时代不需要这条：会话第一次 `submit()` 才写文件，反正界面上只有一条。
+     * 多会话并行之后不一样了 —— 新建的那条如果只活在内存里，侧栏（读的是磁盘索引）
+     * 就看不见它，用户切去别的会话就再也点不回来，而它还在后台跑并继续花钱。
+     */
+    fun persistNow() = persist()
 
     private fun persist() {
         runCatching {

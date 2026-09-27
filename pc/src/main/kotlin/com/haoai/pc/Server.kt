@@ -35,29 +35,64 @@ class WebServer(settings: PcSettings, port: Int) {
     private val seq = AtomicInteger()
     private val pending = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<String>>()
     private val pendingRule = ConcurrentHashMap<String, Pair<String, String>>()
-    /** 每个待决请求的**原始事件负载**（事件名 → JSON）。见 [stateJson] 里的 pending 字段。 */
-    private val pendingPayload = ConcurrentHashMap<String, Pair<String, String>>()
+
+    /** 待决请求：事件名、原始负载、属于哪条会话。见 [stateJson] 里的 pending 字段。 */
+    private data class Waiter(val ev: String, val payload: String, val sid: String)
+
+    private val pendingPayload = ConcurrentHashMap<String, Waiter>()
     private val subscribers: MutableList<OutputStream> = Collections.synchronizedList(mutableListOf())
 
-    @Volatile
-    private var engine: Engine? = null
+    /**
+     * 一条被托管的会话：引擎 + 它此刻是否在跑。
+     *
+     * `running` 必须是**每条会话一个**，不能是服务级的一把旗：
+     * 上一版服务级旗子加"切会话就 409"的组合虽然挡住了孤儿任务，代价是一次只能跑一件事，
+     * 而这恰恰是参考实现们（codex 的多 agent、opencode 的多 session）都不接受的限制。
+     */
+    private class Managed(val engine: Engine) {
+        @Volatile
+        var running = false
+    }
 
-    @Volatile
-    private var running = false
+    private val sessions = ConcurrentHashMap<String, Managed>()
+
+    /** 最近使用顺序（新的在前），用来在没指定 sid 时挑"当前会话"。 */
+    private val order = Collections.synchronizedList(mutableListOf<String>())
+
+    /** 同时最多跑几条。没有上限的话，用户可以一路开下去把网关和磁盘都刷爆。 */
+    private val maxRunning = 4
 
     /**
-     * 正在跑的那个引擎 —— 和"当前显示的会话"分开记。
+     * 常驻内存的会话条数上限。
      *
-     * 之前只有 `engine` 一个引用：跑任务时切会话（新会话 / 打开旧会话）会把它整个换掉，
-     * 于是老引擎成了**孤儿** —— 还在循环调模型，但 `/api/stop` 只对着新引擎置位，
-     * 停不下来；界面上 `messages` 是空的，看起来像"空闲"。
-     * 实测：切会话后按停止，`running` 一直是 true 直到 60 轮跑完。
-     * 接上真 key 之后这就是"关不掉的烧钱循环"。
+     * 每条会话在内存里是一个引擎 + 它的全部历史，开二十条不去管就是几百 MB。
+     * 超出时把**最久没碰且没在跑**的请出去：历史本来就落盘在 `sessions/pc-<id>.json`，
+     * 下次 `/api/open` 会按原 id 重建，用户看不出差别。
      */
-    @Volatile
-    private var runningEngine: Engine? = null
+    private val maxResident = 12
+
+    private fun liveCount(): Int = synchronized(order) { order.count { sessions[it]?.running == true } }
+
+    private fun touch(id: String) {
+        synchronized(order) {
+            order.remove(id)
+            order.add(0, id)
+            while (order.size > maxResident) {
+                val victim = order.lastOrNull { sessions[it]?.running != true } ?: break
+                sessions.remove(victim)
+                order.remove(victim)
+            }
+        }
+        // computeIfAbsent 而不是 putIfAbsent(Managed(engineFor(id)))：后者每次都会先构造一个新引擎
+        // 再把结果丢掉，于是同一个会话文件可能同时被两个引擎读写（一个在跑、一个刚被丢弃）。
+        sessions.computeIfAbsent(id) { Managed(engineFor(id)) }
+    }
 
     fun start(): Int {
+        // 重启后要接上"上次用的那条会话"，而不是每次开一个空白新会话、
+        // 把历史留在磁盘上吃灰（手机端与所有参考实现都是"继续上次"）。
+        runCatching { SessionIndex.list(5).firstOrNull()?.let { touch(it.id) } }
+            .onFailure { Env.log("web", "恢复上次会话失败：${it.message}") }
         server.executor = Executors.newCachedThreadPool()
         server.createContext("/") { ex -> route(ex) }
         server.start()
@@ -72,7 +107,7 @@ class WebServer(settings: PcSettings, port: Int) {
             when (path) {
                 "/", "/index.html" -> sendFile(ex, "ui/index.html", "text/html; charset=utf-8")
                 "/api/events" -> sse(ex)
-                "/api/state" -> send(ex, 200, stateJson(), "application/json; charset=utf-8")
+                "/api/state" -> state(ex)
                 "/api/task" -> task(ex)
                 "/api/stop" -> stopTask(ex)
                 "/api/decide" -> decide(ex)
@@ -101,11 +136,11 @@ class WebServer(settings: PcSettings, port: Int) {
         ex.sendResponseHeaders(200, 0)
         val os = ex.responseBody
         subscribers.add(os)
-        runCatching { write(os, "hello", "{}") }
+        runCatching { write(os, "hello", "{}", null) }
         while (true) {
             Thread.sleep(15_000)
             try {
-                write(os, "ping", "{}")
+                write(os, "ping", "{}", null)
             } catch (e: Exception) {
                 break
             }
@@ -113,28 +148,60 @@ class WebServer(settings: PcSettings, port: Int) {
         subscribers.remove(os)
     }
 
-    private fun write(os: OutputStream, event: String, data: String) {
-        os.write("event: $event\ndata: $data\n\n".toByteArray(StandardCharsets.UTF_8))
+    private fun write(os: OutputStream, event: String, data: String, sid: String?) {
+        // sid 走 SSE 的 id: 字段 —— 浏览器把它挂到 MessageEvent.lastEventId 上，
+        // 于是"这条事件属于哪个会话"不用改任何一个已有负载的格式就能带出去。
+        val head = if (sid == null) "" else "id: $sid\n"
+        os.write((head + "event: $event\ndata: $data\n\n").toByteArray(StandardCharsets.UTF_8))
         os.flush()
     }
 
-    private fun publish(event: String, data: String) {
+    private fun publish(event: String, data: String, sid: String? = null) {
         val dead = mutableListOf<OutputStream>()
         synchronized(subscribers) {
-            subscribers.forEach { os -> runCatching { write(os, event, data) }.onFailure { dead += os } }
+            subscribers.forEach { os -> runCatching { write(os, event, data, sid) }.onFailure { dead += os } }
         }
         dead.forEach { subscribers.remove(it) }
     }
 
-    private fun stateJson(): String {
-        val e = engine
+    /** 当前会话 = 最近使用列表的头一个。 */
+    private fun currentId(): String? = synchronized(order) { order.firstOrNull { sessions.containsKey(it) } }
+
+    private fun pick(sid: String): String = sid.ifBlank { currentId() ?: "" }
+
+    /**
+     * 给某条会话造（或复用）引擎。
+     *
+     * 磁盘上有历史就走 [SessionIndex.restore]（**必须用原 id**：Engine 的 init 按
+     * `pc-<id>.json` 回读历史，换 id 就变成打开一条空会话）。
+     */
+    private fun engineFor(id: String): Engine {
+        val meta = SessionIndex.list(400).firstOrNull { it.id == id }
+        val session = if (meta != null) {
+            SessionIndex.restore(meta, settings.workspaceFile())
+        } else {
+            Session(id, settings.workspaceFile())
+        }
+        session.mode = meta?.mode ?: settings.permissionMode
+        return Engine(session, settings, builtinTools(), webGate(id), emit = { ev -> forward(id, ev) })
+    }
+
+    private fun stateJson(sid: String = ""): String {
+        val id = pick(sid)
+        val managed = id.takeIf { it.isNotBlank() }?.let { sessions[it] }
+        val e = managed?.engine
         val sb = StringBuilder()
         sb.append('{')
         sb.append("\"mode\":\"").append(esc(e?.session?.mode ?: settings.permissionMode)).append("\",")
-        sb.append("\"workspace\":\"").append(esc(settings.workspaceFile().absolutePath)).append("\",")
+        // 工作区要报**这条会话自己的**，不是全局设置里的那个：
+        // 每条会话属于它创建时的那个工作区（每个 agent 都是这个语义），
+        // 改了全局工作区之后老会话仍在旧目录里干活，头部却显示新路径就是骗人。
+        sb.append("\"workspace\":\"").append(esc(e?.session?.workspace?.absolutePath
+            ?: settings.workspaceFile().absolutePath)).append("\",")
         sb.append("\"model\":\"").append(esc(settings.model)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
-        sb.append("\"running\":").append(running).append(",")
+        sb.append("\"sessionId\":").append(quote(id)).append(",")
+        sb.append("\"running\":").append(managed?.running == true).append(",")
         sb.append("\"todos\":[")
         e?.session?.todos?.forEachIndexed { i, t ->
             if (i > 0) sb.append(',')
@@ -151,8 +218,8 @@ class WebServer(settings: PcSettings, port: Int) {
          * 一次只回一条：弹窗是单实例，堆两个会把前一个盖掉且再也点不到。
          */
         sb.append("\"pending\":[")
-        pendingPayload.entries.firstOrNull()?.let { (_, v) ->
-            sb.append("{\"ev\":").append(quote(v.first)).append(",\"data\":").append(v.second).append('}')
+        pendingPayload.values.firstOrNull { it.sid == id }?.let { w ->
+            sb.append("{\"ev\":").append(quote(w.ev)).append(",\"data\":").append(w.payload).append('}')
         }
         sb.append("],")
         sb.append("\"messages\":[")
@@ -191,48 +258,64 @@ class WebServer(settings: PcSettings, port: Int) {
     }
 
     private fun task(ex: HttpExchange) {
-        val text = Body(ex).str("text")
+        val b = Body(ex)
+        val text = b.str("text")
+        val wantSid = b.str("sid")
         if (text.isBlank()) {
             send(ex, 200, """{"ok":false}""", "application/json; charset=utf-8"); return
         }
         /**
-         * 一次只跑一个任务。
+         * 一条会话同时只跑一个任务；不同会话之间可以并行（上限 [maxRunning]）。
          *
-         * 排队的坏处不是并发本身，而是"第二个任务会写进同一个会话、
-         * 而界面只有一份事件流"—— 两条任务的工具卡会串在一起，
-         * 事后看不出哪条输出属于哪条。宁可当场拒绝，让用户先停或等完。
+         * 同一条会话里排队是不行的：第二个任务会写进同一段历史，
+         * 两条任务的工具卡串在一起，事后看不出哪条输出属于哪条。
          */
-        if (runningEngine != null) {
-            send(ex, 409, """{"ok":false,"error":"上一个任务还在跑。按停止键（或 /api/stop）先停掉它。"}""",
-                "application/json; charset=utf-8")
+        val sid = wantSid.ifBlank { currentId() ?: newSessionId() }
+        val managed = synchronized(this) {
+            val m = sessions[sid] ?: Managed(engineFor(sid)).also { sessions[sid] = it }
+            touch(sid)
+            when {
+                m.running || liveCount() >= maxRunning -> null
+                // 清停止旗要和置 running 在同一把锁里：见 Engine.beginRun 的注释
+                else -> { m.engine.beginRun(); m.running = true; m }
+            }
+        }
+        if (managed == null) {
+            val why = if (sessions[sid]?.running == true) "这条会话正在跑，先按停止再发新任务"
+            else "已经有 ${maxRunning} 条任务在跑，先停掉一个"
+            send(ex, 409, """{"ok":false,"error":${quote(why)}}""", "application/json; charset=utf-8")
             return
         }
-        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
-        publish("user", quote(text))
-        // 先定好"跑的是哪个引擎"再起线程：否则两次快速提交会双双通过上面的 busy 检查，
-        // 而且 worker 里再 ensureEngine() 会与"跑完之前不许切换"这条规则打架。
-        val e = ensureEngine()
-        runningEngine = e
+        send(ex, 200, """{"ok":true,"sid":${quote(sid)}}""", "application/json; charset=utf-8")
+        publish("user", quote(text), sid)
+        val e = managed.engine
         Thread {
-            // 不再 synchronized(this) 包住整轮：那会让 /api/open 之类的处理
-            // 一直卡到本轮跑完（线程池看着是空闲的，用户看到的是"点了没反应"）。
-            // 切换的保护已经由上面的 busy 拒绝承担了。
-            running = true
-            publish("run", """{"running":true}""")
+            publish("run", """{"running":true}""", sid)
             try {
                 e.submit(text)
             } catch (err: Exception) {
-                publish("err", quote("回合异常：${err.message ?: err.javaClass.simpleName}"))
+                publish("err", quote("回合异常：${err.message ?: err.javaClass.simpleName}"), sid)
             } finally {
-                runningEngine = null
-                running = false
-                publish("run", """{"running":false}""")
+                managed.running = false
+                publish("run", """{"running":false}""", sid)
+                publish("sessions", "{}", sid)
             }
-        }.apply { isDaemon = true; name = "haoai-run"; start() }
+        }.apply { isDaemon = true; name = "haoai-run-$sid"; start() }
     }
 
+    /** 开一条新会话（只登记并立刻落盘，不起线程、不跑任务）。 */
+    private fun newSessionId(): String {
+        val session = Session("pc" + System.nanoTime().toString(16).take(8), settings.workspaceFile())
+        session.mode = settings.permissionMode
+        val e = Engine(session, settings, builtinTools(), webGate(session.id),
+            emit = { ev -> forward(session.id, ev) })
+        e.persistNow()
+        sessions[session.id] = Managed(e)
+        touch(session.id)
+        return session.id
+    }
     /**
-     * `POST /api/stop` —— 停止当前任务。
+     * `POST /api/stop` —— 停止**指定会话**（默认当前那条）的任务。
      *
      * 两件必须一起做的事：
      * 1. 给引擎置位（它只在回合边界与工具边界看这个标志，所以是"收尾式"停止，
@@ -243,54 +326,56 @@ class WebServer(settings: PcSettings, port: Int) {
      * 这里刻意**不去抢** `task()` 那把锁：抢了就等于"要停止必须先等本轮跑完"。
      */
     private fun stopTask(ex: HttpExchange) {
-        val waiters = pending.entries.toList()
+        val sid = pick(Body(ex).str("sid"))
+        val managed = sessions[sid]
+        val waiters = pendingPayload.entries.toList().filter { it.value.sid == sid }
         var approvals = 0
-        waiters.forEach { (id, fut) ->
+        waiters.forEach { (id, w) ->
             // 审批的 id 以 a 开头、提问以 q 开头：两者"被中止"的语义不一样，
             // 审批给 deny（fail-closed），提问给空串（模型会看到"用户没回答"）。
-            if (id.startsWith("q")) fut.complete("") else { fut.complete("deny"); approvals++ }
+            if (w.ev == "ask") pending[id]?.complete("")
+            else { pending[id]?.complete("deny"); approvals++ }
         }
-        // 停的是**正在跑的那个**引擎，不是"当前显示的会话"：
-        // 之前切会话后按停止，置位打到了新引擎上，老引擎一路跑到 60 轮才停。
-        (runningEngine ?: engine)?.requestStop()
+        managed?.engine?.requestStop()
         publish(
             "notice", quote(
-                if (running || waiters.isNotEmpty())
+                if (managed?.running == true || waiters.isNotEmpty())
                     "已请求停止${if (approvals > 0) "（顺手拒掉 $approvals 个待确认）" else ""}，正在收尾…"
-                else "当前没有正在跑的任务。"
-            )
+                else "这条会话现在没有正在跑的任务。"
+            ), sid
         )
         send(ex, 200, """{"ok":true,"pending":${waiters.size}}""", "application/json; charset=utf-8")
     }
 
-    private fun ensureEngine(): Engine = engine ?: synchronized(this) {
-        engine ?: Sessions.create(
-            settings, settings.workspaceFile(), webGate(),
-            emit = { ev -> forward(ev) }
-        ).also { engine = it }
-    }
-
-    private fun forward(ev: Ev) {
+    private fun forward(sid: String, ev: Ev) {
         when (ev) {
-            is Ev.TextDelta -> publish("delta", quote(ev.s))
-            is Ev.TextDone -> publish("answer", quote(ev.s))
+            is Ev.TextDelta -> publish("delta", quote(ev.s), sid)
+            is Ev.TextDone -> publish("answer", quote(ev.s), sid)
             is Ev.ToolStart -> publish(
                 "tool",
-                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"brief":${quote(ev.brief)},"state":"run"}"""
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"brief":${quote(ev.brief)},"state":"run"}""",
+                sid
             )
             is Ev.ToolEnd -> publish(
                 "tool",
-                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},"out":${quote(ev.out)}}"""
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},"out":${quote(ev.out)}}""",
+                sid
             )
-            is Ev.Todo -> publish("todo", """{"items":${ev.items.joinToString(",", "[", "]") { quote(it) }}}""")
-            is Ev.Usage -> publish("usage", """{"prompt":${ev.prompt},"completion":${ev.completion},"turns":${ev.turns}}""")
-            is Ev.Notice -> publish("notice", quote(ev.s))
-            is Ev.Err -> publish("err", quote(ev.s))
+            is Ev.Todo -> publish(
+                "todo", """{"items":${ev.items.joinToString(",", "[", "]") { quote(it) }}}""", sid
+            )
+            is Ev.Usage -> publish(
+                "usage",
+                """{"prompt":${ev.prompt},"completion":${ev.completion},"turns":${ev.turns}}""", sid
+            )
+            is Ev.Notice -> publish("notice", quote(ev.s), sid)
+            is Ev.Err -> publish("err", quote(ev.s), sid)
+            is Ev.Title -> publish("title", """{"title":${quote(ev.s)}}""", sid)
             else -> Unit
         }
     }
 
-    private fun webGate(): Gate = object : Gate {
+    private fun webGate(sid: String): Gate = object : Gate {
         override fun approve(title: String, detail: String, kind: String): Boolean =
             approveRule(title, detail, kind, "", "*")
 
@@ -304,12 +389,12 @@ class WebServer(settings: PcSettings, port: Int) {
             val payload =
                 """{"id":"$id","title":${quote(title)},"detail":${quote(detail)},"kind":"$kind",""" +
                     """"tool":${quote(tool)},"pattern":${quote(pattern)}}"""
-            pendingPayload[id] = "approval" to payload
-            publish("approval", payload)
+            pendingPayload[id] = Waiter("approval", payload, sid)
+            publish("approval", payload, sid)
             val ans = try {
                 fut.get(300, TimeUnit.SECONDS)
             } catch (e: TimeoutException) {
-                publish("notice", quote("300 秒无人应答，按拒绝处理"))
+                publish("notice", quote("300 秒无人应答，按拒绝处理"), sid)
                 "deny"
             } catch (e: Exception) {
                 "deny"
@@ -321,7 +406,7 @@ class WebServer(settings: PcSettings, port: Int) {
             // allow_rule：把这条规则永久写进当前工作区的规则表（S2）
             if (ans == "allow_rule" && tool.isNotBlank()) {
                 Policies.get().add(settings.workspaceFile(), Rule(tool, pattern, Decision.ALLOW))
-                publish("notice", quote("已记住规则：$tool($pattern)"))
+                publish("notice", quote("已记住规则：$tool($pattern)"), sid)
             }
             return ans == "allow_once" || ans == "allow_session" || ans == "allow_rule"
         }
@@ -332,8 +417,8 @@ class WebServer(settings: PcSettings, port: Int) {
             pending[id] = fut
             val askPayload =
                 """{"id":"$id","question":${quote(question)},"options":${options.joinToString(",", "[", "]") { quote(it) }}}"""
-            pendingPayload[id] = "ask" to askPayload
-            publish("ask", askPayload)
+            pendingPayload[id] = Waiter("ask", askPayload, sid)
+            publish("ask", askPayload, sid)
             return try {
                 fut.get(900, TimeUnit.SECONDS)
             } catch (e: Exception) {
@@ -353,69 +438,83 @@ class WebServer(settings: PcSettings, port: Int) {
         val fut = pending[id]
         if (fut != null) fut.complete(if (answer.isNotBlank()) answer else decision)
         if (decision == "allow_session") {
-            engine?.session?.mode = "auto"
-            publish("mode", """{"mode":"auto"}""")
+            // "本任务都允许"只影响发起这条审批的那条会话，不该把别的会话也切成 auto
+            val sid = pendingPayload[id]?.sid ?: currentId() ?: ""
+            sessions[sid]?.engine?.session?.mode = "auto"
+            publish("mode", """{"mode":"auto"}""", sid)
         }
         send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
     }
 
     private fun mode(ex: HttpExchange) {
-        val m = Body(ex).str("mode")
+        val b = Body(ex)
+        val m = b.str("mode")
+        val sid = pick(b.str("sid"))
+        var now = sessions[sid]?.engine?.session?.mode ?: settings.permissionMode
         if (m in listOf("plan", "ask", "auto")) {
-            ensureEngine().session.mode = m
-            publish("mode", """{"mode":"$m"}""")
+            val target = sid.ifBlank { currentId() ?: newSessionId() }
+            touch(target)
+            sessions[target]?.engine?.session?.mode = m
+            now = m
+            publish("mode", """{"mode":"$m"}""", target)
         }
-        send(ex, 200, """{"ok":true,"mode":"${engine?.session?.mode ?: m}"}""", "application/json; charset=utf-8")
+        send(ex, 200, """{"ok":true,"mode":${quote(now)}}""", "application/json; charset=utf-8")
     }
 
     /** 旧会话列表：手机端侧栏有 48 条会话，PC 端少了这个就只能一次性对话。 */
     private fun sessionsJson(): String {
-        val cur = engine?.session?.id
+        val cur = currentId()
         return SessionIndex.list().joinToString(",", "[", "]") { m ->
             """{"id":${quote(m.id)},"title":${quote(m.title)},"workspace":${quote(m.workspace)},""" +
                 """"mode":"${m.mode}","updated":${m.updated},"messages":${m.messages},""" +
-                """"prompt":${m.prompt},"completion":${m.completion},"current":${m.id == cur}}"""
+                """"prompt":${m.prompt},"completion":${m.completion},""" +
+                """"running":${sessions[m.id]?.running == true},"current":${m.id == cur}}"""
         }
     }
 
-    /**
-     * 跑着的时候不许切会话。
-     *
-     * 切走的后果不是"任务看不见"，而是**造出一个没人能停的孤儿**：
-     * `engine` 被换掉之后，老引擎还在自己的线程里一轮轮调模型，
-     * 而 `/api/stop` 当时只对着新引擎置位。实测切完再按停止，
-     * `running` 一直挂着 true 直到 60 轮跑完，界面上却是一条空会话。
-     * 接上真 key 之后这就是一台关不掉的烧钱机器，所以宁可拒绝。
-     */
-    private fun busyReply(ex: HttpExchange): Boolean {
-        if (runningEngine == null) return false
-        send(ex, 409, """{"ok":false,"error":"上一个任务还在跑，先按停止再切换会话"}""",
-            "application/json; charset=utf-8")
-        return true
+    /** `GET /api/state?sid=` —— 不带 sid 就是当前会话。 */
+    private fun state(ex: HttpExchange) {
+        val sid = ex.requestURI.query?.splitToSequence('&')
+            ?.firstOrNull { it.startsWith("sid=") }?.substringAfter('=') ?: ""
+        send(ex, 200, stateJson(sid), "application/json; charset=utf-8")
     }
 
     private fun newSession(ex: HttpExchange) {
-        if (busyReply(ex)) return
-        engine = null
-        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+        // 切会话不再需要"先停止"：每条会话有自己的引擎与 running，
+        // 后台那条继续跑，事件按 sid 分流，停止也按 sid 打。
+        //
+        // 眼前这条如果还一条没说过，就**不要**再造一条：一路点"新任务"会在磁盘上
+        // 留下一堆空的 pc-*.json，侧栏被自己几分钟前的手滑刷屏。
+        val idle = synchronized(this) {
+            currentId()?.let { sessions[it] }?.takeIf { m ->
+                !m.running && m.engine.messages().isEmpty() && m.engine.session.todos.isEmpty()
+            }
+        }
+        val id = idle?.engine?.session?.id ?: newSessionId()
+        val title = idle?.engine?.session?.title?.get() ?: "新会话"
+        val m = sessions[id]?.engine?.session?.mode ?: settings.permissionMode
+        // 档位要一起回：新会话的档位**继承全局默认**，不是"上一条会话的档位"。
+        // 前端只拿到 id 的话会沿用界面上那份旧档位显示出来（实测：全局是 ask，
+        // 新建的会话顶上却亮着"自动"，用户以为自己在问模式下让它自动写了文件）。
+        send(ex, 200, """{"ok":true,"id":${quote(id)},"mode":${quote(m)},"reused":${idle != null}}""",
+            "application/json; charset=utf-8")
+        publish("opened", """{"id":${quote(id)},"title":${quote(title)},"mode":${quote(m)}}""", id)
+        publish("sessions", "{}", id)
     }
 
     private fun openSession(ex: HttpExchange) {
-        if (busyReply(ex)) return
         val id = Body(ex).str("id")
-        val meta = SessionIndex.list(200).firstOrNull { it.id == id }
+        val meta = SessionIndex.list(400).firstOrNull { it.id == id }
         if (meta == null) {
             send(ex, 404, """{"ok":false,"error":"没有这个会话"}""", "application/json; charset=utf-8")
             return
         }
-        synchronized(this) {
-            // 必须用**原来的 id** 构造 Session：Engine 的 init 按 pc-<id>.json 回读历史，
-            // 走 Sessions.create 会发一个新 id，于是"打开旧会话"变成"开一个空会话"。
-            val s = SessionIndex.restore(meta, settings.workspaceFile())
-            engine = Engine(s, settings, builtinTools(), webGate(), emit = { ev -> forward(ev) })
+        // 引擎按 id 复用：正在跑的那条不会因为"打开它"而被重建
+        val m = synchronized(this) {
+            sessions.getOrPut(id) { Managed(engineFor(id)) }.also { touch(id) }
         }
         send(ex, 200, """{"ok":true,"id":${quote(id)}}""", "application/json; charset=utf-8")
-        publish("opened", """{"id":${quote(id)},"title":${quote(meta.title)},"mode":${quote(meta.mode)}}""")
+        publish("opened", """{"id":${quote(id)},"title":${quote(meta.title)},"mode":${quote(m.engine.session.mode)}}""", id)
     }
 
     /**
@@ -427,10 +526,10 @@ class WebServer(settings: PcSettings, port: Int) {
         val id = b.str("id")
         val title = b.str("title")
         val ok = SessionIndex.rename(id, title)
-        if (ok && engine?.session?.id == id) engine?.session?.title?.set(title.trim().take(60))
+        if (ok) sessions[id]?.engine?.session?.title?.set(title.trim().take(60))
         send(ex, if (ok) 200 else 404,
             """{"ok":$ok}""", "application/json; charset=utf-8")
-        if (ok) publish("sessions", "{}")
+        if (ok) publish("sessions", "{}", id)
     }
 
     /**
@@ -438,19 +537,21 @@ class WebServer(settings: PcSettings, port: Int) {
      *
      * 一条硬约束：**跑着的会话不许删**。否则线程会在一个已经被移走的文件上
      * 继续 `persist()`，把文件又写回来，表现为"删了又出现"。
-     * 删的正好是当前会话时把 engine 置空，让界面回到新会话。
      */
     private fun deleteSession(ex: HttpExchange) {
         val id = Body(ex).str("id")
-        if (id.isNotBlank() && running && engine?.session?.id == id) {
+        if (id.isNotBlank() && sessions[id]?.running == true) {
             send(ex, 409, """{"ok":false,"error":"这个会话正在跑，先停止再删"}""",
                 "application/json; charset=utf-8")
             return
         }
         val ok = SessionIndex.delete(id)
-        if (ok && engine?.session?.id == id) engine = null
+        if (ok) {
+            sessions.remove(id)
+            synchronized(order) { order.remove(id) }
+        }
         send(ex, if (ok) 200 else 404, """{"ok":$ok}""", "application/json; charset=utf-8")
-        if (ok) publish("sessions", "{}")
+        if (ok) publish("sessions", "{}", null)
     }
 
     private fun settingsJson(): String {
@@ -482,7 +583,10 @@ class WebServer(settings: PcSettings, port: Int) {
         body["baseUrl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
         body["mode"]?.jsonPrimitive?.content?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
             n = n.copy(permissionMode = it)
-            engine?.session?.mode = it
+            // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话引擎上，
+            // 否则切回后台那个会话时它会继续用旧模式跑。（这里刻意不用 `it`，
+            // 外层 `let` 已经把模式字符串占掉了，嵌套 `forEach { it -> }` 会把外层值遮蔽掉。）
+            sessions.values.forEach { m -> m.engine.session.mode = it }
         }
         body["workspace"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(workspace = it) }
         body["flags"]?.jsonObject?.let { fo ->
@@ -492,7 +596,15 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         PcSettings.save(n)
         settings = n
-        publish("mode", """{"mode":"${n.permissionMode}"}""")
+        // 全局设置变了，**每条活着的会话都要跟上**：引擎各自握着构造时那份设置
+        // （模型、baseUrl、压缩阈值都在里面），不换的话界面上显示新模型、发请求用旧的。
+        sessions.values.forEach { m ->
+            m.engine.useSettings(n)
+            // 跑着的那条不改档位：它可能刚被"本任务都允许"提到 auto，
+            // 中途被一次设置保存打回去，正等确认的工具会当场变成"被拒绝"。
+            if (!m.running) m.engine.session.mode = n.permissionMode
+        }
+        publish("settings", """{"mode":${quote(n.permissionMode)}}""")
         send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
     }
 

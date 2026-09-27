@@ -1,0 +1,197 @@
+// 真像素验收：把页面跑在一个无头 Edge 里，按步骤点/打字，每一步存一张图。
+//
+// 为什么要有这份：应用内的浏览器面板没打开时，截图工具拿不到可见表而拒绝工作，
+// 于是"界面到底长什么样"退化成"我推理它应该长什么样" —— 而界面缺陷恰恰是
+// 结构检查全绿也漏掉的那一类（重叠、纯黑、假玻璃、挂不上样式）。
+// 这份脚本不依赖任何第三方包：Node 24 自带 WebSocket，直连 CDP。
+//
+// 用法：
+//   node pc/tools/shot.js --out <目录> --url <页面> --steps <steps.json>
+// steps.json 是一个数组，元素：
+//   {"url":"..."}                 导航（通常只有第一步有）
+//   {"goto":"#stream .it"}        等某个选择器出现（默认再等 300ms 让动画落定）
+//   {"sleep":1200}                等时间
+//   {"eval":"JS 表达式"}           在页面里跑一段（结果会打印；用于断言 DOM 事实）
+//   {"type":{"sel":"#box","text":"…","enter":true}}  往输入框打字并按发送
+//   {"click":"选择器"}             点一下（用真实的鼠标事件序列，不用 el.click()）
+//   {"shot":"文件名"}              存一张 PNG
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const {spawn} = require('child_process');
+
+function arg(name, dflt) {
+  const i = process.argv.indexOf('--' + name);
+  return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
+}
+
+const OUT = path.resolve(arg('out', '.'));
+const PORT = parseInt(arg('port', '9333'), 10);
+const W = parseInt(arg('width', '1500'), 10);
+const H = parseInt(arg('height', '930'), 10);
+const steps = JSON.parse(fs.readFileSync(path.resolve(arg('steps', '')), 'utf8'));
+const EDGE = arg('edge', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe');
+
+fs.mkdirSync(OUT, {recursive: true});
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'haoai-shot-'));
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function startBrowser() {
+  const proc = spawn(EDGE, [
+    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+    '--window-size=' + W + ',' + H,
+    '--user-data-dir=' + profile,
+    '--remote-debugging-port=' + PORT,
+    'about:blank',
+  ], {stdio: ['ignore', 'ignore', 'pipe']});
+  proc.stderr.on('data', d => { if (process.env.SHOT_VERBOSE) process.stderr.write(d); });
+  for (let i = 0; i < 60; i++) {
+    try {
+      const r = await fetch('http://127.0.0.1:' + PORT + '/json/version');
+      const j = await r.json();
+      // /json/version 的键是大写开头的（"Browser"），写成 j.browser 会一直判不到 —— 
+      // 症状是"Edge 明明起了却报没起来"，而 DevTools listening 那行就在 stderr 上。
+      if (j.browser || j.Browser) return proc;
+    } catch (e) { /* 还没起来 */ }
+    await sleep(250);
+    if (!proc.connected && proc.exitCode) break;
+  }
+  try { proc.kill(); } catch (e) { /* 已经退了 */ }
+  throw new Error('无头 Edge 没起起来（检查端口 ' + PORT + ' 是否被占用）');
+}
+
+let ws, seq = 0;
+const waiting = new Map();
+let sessionId = '';
+
+function send(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = ++seq;
+    // 每条命令都要能超时：量具挂死和界面挂死长得一模一样，
+    // 上一版就是没有任何日志与超时，白等了五分钟才发现是脚本自己卡在握手上了。
+    const timer = setTimeout(() => {
+      if (waiting.has(id)) { waiting.delete(id); reject(new Error('CDP 命令超时：' + method)) }
+    }, 20_000);
+    waiting.set(id, {
+      resolve: v => { clearTimeout(timer); resolve(v) },
+      reject: e => { clearTimeout(timer); reject(e) }
+    });
+    const msg = {id, method, params: params || {}};
+    // 只有走 browser endpoint + Target.attachToTarget(flatten) 时才带 sessionId；
+    // 直连 page endpoint 时多塞一个空 sessionId 会让所有命令静默没反应。
+    if (sessionId) msg.sessionId = sessionId;
+    if (process.env.SHOT_VERBOSE) console.log('  > ' + method);
+    ws.send(JSON.stringify(msg));
+  });
+}
+
+async function attach(url) {
+  const info = await (await fetch('http://127.0.0.1:' + PORT + '/json/version')).json();
+  ws = new WebSocket(info.webSocketDebuggerUrl);
+  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('连不上 CDP')); });
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    const w = waiting.get(m.id);
+    if (w) { waiting.delete(m.id); m.error ? w.reject(new Error(JSON.stringify(m.error))) : w.resolve(m.result); }
+  };
+  /*
+   * 用 browser endpoint 自己开 target，而不是去 /json/list 里捡现成的 page：
+   * 无头 Edge 起来以后 /json/list 里未必有 type:'page' 的项（表现是"没有可用的 page target"，
+   * 而浏览器明明活着），捡谁也不如自己开一个确定。
+   */
+  const {targetId} = await send('Target.createTarget', {url});
+  const attached = await send('Target.attachToTarget', {targetId, flatten: true});
+  sessionId = attached.sessionId || '';
+  console.log('  target=' + targetId + ' session=' + (sessionId || '(空!)'));
+  if (!sessionId) throw new Error('attachToTarget 没给 sessionId：' + JSON.stringify(attached));
+  // 不发 Page.enable / Runtime.enable：这两个域的命令不是必需的
+  // （Runtime.evaluate 与 Page.captureScreenshot 不依赖 enable），
+  // 而在无头 Edge 上 enable 会撞上渲染器还没就绪的窗口期，表现是命令永久不回。
+  await sleep(900);
+}
+
+async function evalJs(expr) {
+  const r = await send('Runtime.evaluate', {expression: expr, returnByValue: true, awaitPromise: true});
+  if (r.exceptionDetails) throw new Error('页面里的 JS 抛错：' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
+  return r.result.value;
+}
+
+async function shot(name) {
+  // 抓屏偶发不回（页面刚被大改之后尤其容易），重试一次再认输：
+  // 不然一次抖动就把整轮验收变成"失败了"，而失败原因和界面缺陷长得一样。
+  let r = null;
+  for (let i = 0; i < 3 && !r; i++) {
+    try { r = await send('Page.captureScreenshot', {format: 'png'}) }
+    catch (e) { if (i === 2) throw e; await sleep(700) }
+  }
+  const f = path.join(OUT, name.endsWith('.png') ? name : name + '.png');
+  fs.writeFileSync(f, Buffer.from(r.data, 'base64'));
+  console.log('  图 -> ' + f);
+}
+
+/** 真实鼠标事件序列：el.click() 会跳过 hover/:active 那一套，样式问题就看不出来了。 */
+async function click(sel) {
+  const box = await evalJs(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});
+    if(!e)return null;const r=e.getBoundingClientRect();
+    return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2})})()`);
+  if (!box) throw new Error('找不到元素：' + sel);
+  const {x, y} = JSON.parse(box);
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
+    await send('Input.dispatchMouseEvent', {type, x, y, button: 'left',
+      clickCount: type === 'mouseMoved' ? 0 : 1, buttons: type === 'mouseReleased' ? 0 : 1});
+}
+
+async function type(step) {
+  await evalJs(`(()=>{const e=document.querySelector(${JSON.stringify(step.sel)});
+    e.focus();e.value=${JSON.stringify(step.text)};
+    e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+  if (step.enter !== false)
+    await send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13})
+        .catch(() => evalJs(`document.querySelector(${JSON.stringify(step.sel)})
+            .dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`));
+}
+
+async function waitFor(sel, timeoutMs) {
+  const until = Date.now() + (timeoutMs || 12_000);
+  while (Date.now() < until) {
+    if (await evalJs(`!!document.querySelector(${JSON.stringify(sel)})`)) return true;
+    await sleep(120);
+  }
+  return false;
+}
+
+(async () => {
+  const proc = await startBrowser();
+  let code = 0;
+  try {
+    await attach(steps[0] && steps[0].url ? steps[0].url : arg('url', 'about:blank'));
+    console.log('  已连上无头 Edge，共 ' + steps.length + ' 步');
+    for (const [i, s] of steps.entries()) {
+      if (s.url && s === steps[0]) continue;
+      const label = s.goto ? '等 ' + s.goto : s.shot ? '图 ' + s.shot : s.eval ? '断言' :
+        s.click ? '点 ' + s.click : s.type ? '打字' : s.sleep ? '睡 ' + s.sleep + 'ms' : '?';
+      console.log('  [' + (i + 1) + '/' + steps.length + '] ' + label);
+      if (s.goto) {
+        const ok = await waitFor(s.goto, s.timeout || 12_000);
+        console.log('  等 ' + s.goto + ' -> ' + (ok ? '出现' : '没出现'));
+        if (!ok) code = 1;
+        await sleep(250);
+      } else if (s.sleep) await sleep(s.sleep);
+      else if (s.eval) console.log('  断言 ' + (JSON.stringify(await evalJs(s.eval)) || ''));
+      else if (s.click) { await click(s.click); await sleep(s.after || 350); }
+      else if (s.type) { await type(s.type); await sleep(s.after || 350); }
+      else if (s.shot) await shot(s.shot);
+    }
+  } catch (e) {
+    console.log('  失败：' + e.message);
+    try { await shot('failure'); } catch (_) {}
+    code = 1;
+  } finally {
+    try { ws && ws.close(); } catch (_) {}
+    proc.kill();
+    await sleep(300);
+  }
+  process.exit(code);
+})();

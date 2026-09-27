@@ -45,6 +45,22 @@
   .sess .it .act b{font-weight:400;cursor:pointer;color:var(--dim);border:1px solid var(--line);
     border-radius:5px;padding:0 5px;font-size:10px;line-height:15px;background:rgba(0,0,0,.45)}
   .sess .it .act b:hover{color:var(--fg);border-color:var(--acc2)}
+  /* 多会话并行：一条会话一个视图容器，只有当前这条可见。
+     后台会话的事件照样写进它自己那个容器 —— 切回去不用重拉、也不丢中间输出。 */
+  .view{display:none}
+  .view.on{display:block}
+  /* 跑着的会话在左侧点一道绿光；只在后台跑、不在眼前时最容易漏 */
+  .sess .it.run{border-color:var(--acc2)}
+  .sess .it.run::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
+    background:var(--acc);border-radius:9px 0 0 9px;animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  /* 后台攒下的新内容 / 等人回答：一个数字角标说清楚"这条需要我"还是"只是有新东西" */
+  .sess .it .nb{position:absolute;right:6px;top:5px;min-width:15px;padding:0 4px;border-radius:8px;
+    background:var(--acc2);color:#eafff5;font-size:10px;font-weight:700;text-align:center;line-height:15px}
+  .sess .it.wait .nb{background:var(--warn);color:#241a08}
+  .sess .it.wait{border-color:var(--warn)}
+  /* 悬停时 ✎/✕ 会出现在同一个右上角，把角标往左挪而不是藏起来 */
+  .sess .it:hover .nb{right:44px}
   .fld{margin:8px 0}
   .fld label{display:block;font-size:11px;color:var(--dim);margin-bottom:3px}
   .sw{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
@@ -119,6 +135,13 @@
     padding:10px 12px;font-family:var(--mono);font-size:12px;max-height:240px;overflow:auto}
   .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
   .acts .btn{width:auto;padding:8px 14px}
+  /* 「这条是谁在问」与「还有几个在等」放在按钮上方一行：
+     多会话并行时按钮已经有四个，再往里塞一个跳转按钮会挤成两排，看着像两组不同的操作。 */
+  .who{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  .who .q{color:var(--dim);font-size:11px}
+  .lnk{background:none;border:0;color:var(--acc);cursor:pointer;font-size:12.5px;padding:0;
+    text-decoration:underline;text-underline-offset:3px}
+  .lnk:hover{color:#7ef0bd}
   .acts .deny{color:var(--err);border-color:#4a2b28}
   .opts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
   .opts .btn{text-align:left}
@@ -180,7 +203,35 @@
 
 <script>
 const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box');
-let mode='ask', running=false, stopping=false, curId=null;
+let mode='ask', stopping=false, curId='';
+
+/* ---- 多会话视图 ----------------------------------------------------------
+ * 每条会话一份自己的 DOM。后台那条跑起来时事件必须写进它自己的容器：
+ * 上一版所有事件都往 #stream 里塞，于是"开着 A 等 B 的结果"会把 B 的输出
+ * 掉进 A 的对话流里，看起来像 A 说了 B 的话。
+ * ------------------------------------------------------------------------ */
+const views={};
+function view(sid){
+  sid=sid||'';
+  let v=views[sid];
+  if(!v){
+    v={sid:sid,el:el('<div class="view"></div>'),curAns:null,acc:'',tools:{},unread:0,running:false,wait:false,
+       title:'新会话',todos:[],usage:null,mode:mode,workspace:'',model:''};
+    views[sid]=v;stream.appendChild(v.el);
+  }
+  return v;
+}
+function cur(){return view(curId)}
+function show(sid){
+  const v=view(sid);curId=v.sid;
+  Object.keys(views).forEach(k=>views[k].el.classList.toggle('on',k===curId));
+  v.unread=0;v.wait=false;
+  $('#title').textContent=v.title||'新会话';
+  // 左栏那两行也是**这条会话的**事实：工作区每条会话各留一份，模型是当前全局的
+  $('#ws').textContent=v.workspace||'—';$('#model').textContent=v.model||'—';
+  setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintSend();scroll();markSessions();
+}
+function scroll(){stream.scrollTop=stream.scrollHeight}
 
 function esc(t){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function md(t) {
@@ -236,82 +287,144 @@ function md(t) {
   return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => putBlock(+i));
   }
 function el(html){const d=document.createElement('div');d.innerHTML=html;return d.firstElementChild}
-function scroll(){stream.scrollTop=stream.scrollHeight}
-function add(node){stream.appendChild(node);scroll();return node}
-
-let curAns=null;
-function answer(text,streaming){
-  if(!streaming){curAns=null}
-  if(!curAns){curAns=add(el(`<div class="msg ans md"></div>`));}
-  curAns.innerHTML=md(text);
+// add 默认写进"当前这一条"，带 v 参数就写进那条会话自己的容器（后台会话的输出不能混进眼前这条）
+function add(node,v){const t=v||cur();t.el.appendChild(node);if(!v||t===cur())scroll();return node}
+function answer(piece,v){
+  const t=v||cur();
+  if(!t.curAns){t.curAns=add(el(`<div class="msg ans md"></div>`),t);t.acc=''}
+  /*
+   * delta 是**增量**，必须累加着画。之前每次都用"当前这一小片"重画整个气泡，
+   * 于是长回答在界面上只剩最后那一片（截图里模型说了"乙这边要动文件了"，
+   * 页面上只有"乙。"），而回合结束时补的那条完整回答又变成第二个气泡。
+   */
+  t.acc+=piece;
+  t.curAns.innerHTML=md(t.acc);
 }
-function finishAnswer(text){
-  const n=add(el(`<div class="msg ans md"></div>`));n.innerHTML=md(text||'');curAns=null;
+function finishAnswer(text,v){
+  const t=v||cur();
+  if(!text){t.curAns=null;return}
+  // 已经在流式的那个气泡就是这条回答 → 换成完整文本，不要再开第二个气泡
+  if(t.curAns){t.curAns.innerHTML=md(text);t.curAns=null;return}
+  add(el(`<div class="msg ans md"></div>`),t).innerHTML=md(text);
 }
-
-const tools={};
-function toolStart(d){
-  const c=add(el(`<details class="card run" open><summary><span class="tick"></span><b>${esc(d.name)}</b><span>${esc(d.brief)}</span></summary><pre class="body"></pre></details>`));
-  tools[d.id]=c;
+function toolStart(d,v){
+  const t=v||cur();
+  // 一动手就把正文气泡收口：下一轮模型说的话要开新气泡，不能接在上一段后面
+  t.curAns=null;
+  const c=add(el(`<details class="card run" open><summary><span class="tick"></span><b>${esc(d.name)}</b><span>${esc(d.brief)}</span></summary><pre class="body"></pre></details>`),t);
+  t.tools[d.id]=c;
 }
-function toolEnd(d){
-  const c=tools[d.id];if(!c)return;
+function toolEnd(d,v){
+  const t=v||cur();
+  const c=t.tools[d.id];if(!c)return;
   c.classList.remove('run');c.open=false;
   c.querySelector('summary').innerHTML=`<span class="tick ${d.ok?'ok':'bad'}"></span><b>${esc(d.name)}</b><span>${esc(d.brief||'')}</span>`;
   c.querySelector('.body').textContent=d.out||'(无输出)';
 }
-function setTodos(items){
-  $('#todos').innerHTML=items.length?items.map(t=>{
+function notice(t,kind,v){add(el(`<div class="${kind=='err'?'err':'notice'}">${esc(t)}</div>`),v||cur())}
+// 任务清单/用量是"当前这条"的视图：后台那两条各自记着自己的那一份
+function setTodos(items,v){const t=v||cur();t.todos=items;if(t===cur())paintTodos(items)}
+function paintTodos(items){
+  $('#todos').innerHTML=(items&&items.length)?items.map(t=>{
     const st=(t.match(/^\[(.)\]/)||[,' '])[1];
     const cls=st=='x'?'done':st=='>'?'doing':'';
     return `<li class="${cls}"><span class="mark">${st=='x'?'✓':st=='>'?'▶':st=='-'?'✕':'○'}</span><span>${esc(t.replace(/^\[\S\]\s*/,''))}</span></li>`;
   }).join(''):'<li><span class="mark">·</span>（还没开始）</li>';
 }
-function notice(t,kind){add(el(`<div class="${kind=='err'?'err':'notice'}">${esc(t)}</div>`))}
+function paintUsage(u,v){
+  const t=v||cur();t.usage=u;
+  if(t!==cur())return;
+  $('#usage').textContent=u&&u.turns?`${u.turns} 轮 · 入 ${(u.prompt/1000).toFixed(1)}k / 出 ${(u.completion/1000).toFixed(1)}k tok`:'';
+  $('#usage2').textContent=u?`输入 ${(u.prompt||0).toLocaleString()} / 输出 ${(u.completion||0).toLocaleString()}`:'输入 0 / 输出 0';
+}
 
-// ---- SSE ----
+// ---- SSE：按会话 id 分流 ----
 const es=new EventSource('/api/events');
-es.addEventListener('delta',e=>answer(JSON.parse(e.data),true));
-es.addEventListener('answer',e=>{const t=JSON.parse(e.data);if(!t){notice('(本轮没有正文)');}finishAnswer(t);});
-es.addEventListener('user',e=>{curAns=null;add(el(`<div class="msg user">${esc(JSON.parse(e.data))}</div>`))});
-es.addEventListener('tool',e=>{const d=JSON.parse(e.data);d.state=='run'?toolStart(d):toolEnd(d)});
-es.addEventListener('todo',e=>setTodos(JSON.parse(e.data).items));
-es.addEventListener('usage',e=>{const d=JSON.parse(e.data);
-  $('#usage').textContent=`${d.turns} 轮 · 入 ${(d.prompt/1000).toFixed(1)}k / 出 ${(d.completion/1000).toFixed(1)}k tok`;
-  $('#usage2').textContent=`输入 ${d.prompt.toLocaleString()} / 输出 ${d.completion.toLocaleString()}`;});
-es.addEventListener('notice',e=>notice(JSON.parse(e.data)));
-es.addEventListener('err',e=>notice(JSON.parse(e.data),'err'));
-es.addEventListener('mode',e=>setMode(JSON.parse(e.data).mode));
-es.addEventListener('opened',e=>{const d=JSON.parse(e.data);curId=d.id;$('#title').textContent=d.title;});
-// 服务端改了会话（改名/删除）时推一下，列表自己刷新，不用整页重载
+/*
+ * 服务端把会话 id 写在 SSE 的 `id:` 字段上，浏览器以 e.lastEventId 暴露，
+ * 于是"这条事件属于哪条会话"不用改任何一个已有事件的负载格式就能带出来。
+ * 一个坑：lastEventId 是会**粘住**的 —— 没写 id: 的全局事件（sessions、settings、
+ * hello、ping）会继承上一条的 id，所以只有服务端确定带 sid 的事件才走这个路由。
+ */
+const BUMP={answer:1,user:1,notice:1,err:1,approval:1,ask:1};
+function on(ev,fn){
+  es.addEventListener(ev,e=>{
+    const sid=e.lastEventId||curId;
+    const v=view(sid);
+    fn(v,JSON.parse(e.data),sid);
+    if(sid!==curId&&BUMP[ev]){v.unread++;if(ev=='approval'||ev=='ask')v.wait=true;markSessions()}
+  });
+}
+on('delta',(v,d)=>answer(d,v));
+on('answer',(v,d)=>{if(!d)notice('(本轮没有正文)',null,v);finishAnswer(d,v)});
+on('user',(v,d)=>{v.curAns=null;add(el(`<div class="msg user">${esc(d)}</div>`),v)});
+on('tool',(v,d)=>{d.state=='run'?toolStart(d,v):toolEnd(d,v)});
+on('todo',(v,d)=>setTodos(d.items,v));
+on('usage',(v,d)=>paintUsage(d,v));
+on('notice',(v,d)=>notice(d,null,v));
+on('err',(v,d)=>notice(d,'err',v));
+on('mode',(v,d)=>{v.mode=d.mode;if(v===cur())setMode(d.mode)});
+on('opened',(v,d)=>{v.title=d.title;if(d.mode)v.mode=d.mode;if(v===cur()){$('#title').textContent=d.title;setMode(d.mode)}});
+// 第一句话一到，标题就要出现在顶栏与侧栏（否则跑十分钟的任务一直叫"新会话"）
+on('title',(v,d)=>{v.title=d.title;if(v===cur())$('#title').textContent=d.title;markSessions()});
+on('run',(v,d)=>{v.running=d.running;if(v===cur()){stopping=false;paintSend()}markSessions()});
+on('approval',(v,d)=>ask(d,'approval',v));
+on('ask',(v,d)=>ask(d,'ask',v));
+// 服务端改了会话（改名/删除/新起一条）时推一下，列表自己刷新，不用整页重载
 es.addEventListener('sessions',()=>loadSessions());
-es.addEventListener('run',e=>{running=JSON.parse(e.data).running;if(!running)stopping=false;paintSend();});
-es.addEventListener('approval',e=>ask(JSON.parse(e.data),'approval'));
-es.addEventListener('ask',e=>ask(JSON.parse(e.data),'ask'));
+// 设置改了：档位与工作区都是按会话显示的，重新拉一次当前会话才不骗人
+es.addEventListener('settings',()=>hydrate(curId));
 
-let approvalOpen=false;
-function ask(d,kind){
+/*
+ * 审批/提问要排队。
+ *
+ * 单会话时弹窗是单实例没关系；多会话并行之后，两条同时请求确认，
+ * 后到的会把前一个覆盖掉，而前一个的 id 再也不会出现 —— 那条会话就永久卡在
+ * fut.get(300s) 上，看起来像"agent 无故停了五分钟"。
+ */
+const asks=[];
+let approvalOpen=false, cfgOpen=false;
+function ask(d,kind,v){asks.push({d,kind,v});if(asks.length===1)paintAsk()}
+function paintAsk(){
+  const it=asks[0];
+  const m=$('#mask');
+  if(!it){approvalOpen=false;m.classList.remove('on');paintSend();return}
+  if(cfgOpen)return;   // 设置抽屉开着时不抢它的弹窗；队列会记住这条，关掉抽屉就补上
   approvalOpen=true;
-  const m=$('#mask'),dg=$('#dialog');
-  if(kind=='approval'){
+  const dg=$('#dialog'),d=it.d,v=it.v;
+  const from=(v&&v.sid!==curId)?`<button class="lnk" data-x="jump" title="切到这条会话再看上下文">切到「${esc(v.title||'会话')}」去看</button>`:'';
+  const q=`<span class="q">${asks.length>1?`还有 ${asks.length-1} 个在等`:'&nbsp;'}</span>`;
+  if(it.kind=='approval'){
     const ruleBtn=d.tool?`<button class="btn" data-x="allow_rule" title="写入本工作区的规则表：${esc(d.tool)}(${esc(d.pattern)})">以后这类都允许</button>`:'';
     dg.innerHTML=`<div class="kind">需要确认 · ${esc(d.kind)}</div><h3>${esc(d.title)}</h3>
       <pre>${esc(d.detail)}</pre>
       <div class="acts"><button class="btn deny" data-x="deny">拒绝</button>
       ${ruleBtn}<button class="btn" data-x="allow_session">本任务都允许</button>
-      <button class="btn pri" data-x="allow_once">允许一次</button></div>`;
-    dg.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{decide(d.id,b.dataset.x,'');close()});
+      <button class="btn pri" data-x="allow_once">允许一次</button></div>
+      <div class="who">${from}${q}</div>`;
+    dg.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{
+      if(b.dataset.x=='jump'){show(v.sid);paintAsk();return}
+      decide(d.id,b.dataset.x,'');dismiss(d.id)});
   }else{
     dg.innerHTML=`<h3>Agent 想问你</h3><div style="margin:6px 0 10px">${esc(d.question)}</div>
       <div class="opts">${(d.options||[]).map((o,i)=>`<button class="btn" data-i="${i}">${esc(o)}</button>`).join('')}</div>
       <input type="text" id="answ" placeholder="或自己写一句…" style="margin-top:10px">
-      <div class="acts"><button class="btn pri" id="go">发送</button></div>`;
-    dg.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{decide(d.id,'',(d.options||[])[+b.dataset.i]);close()});
-    dg.querySelector('#go').onclick=()=>{decide(d.id,'',dg.querySelector('#answ').value||'按你的建议来');close()};
+      <div class="acts"><button class="btn pri" id="go">发送</button></div>
+      <div class="who">${from}${q}</div>`;
+    dg.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{
+      if(b.dataset.x=='jump'){show(v.sid);paintAsk();return}
+      decide(d.id,'','');dismiss(d.id)});
+    // 选项按钮挂的是 data-i 不是 data-x：漏了这段绑定，点选项就什么都没发生
+    // （上一版重写弹窗时就是这么丢的，只有真去点一个选项才会发现）
+    dg.querySelectorAll('[data-i]').forEach(b=>b.onclick=()=>{
+      decide(d.id,'',(d.options||[])[+b.dataset.i]);dismiss(d.id)});
+    dg.querySelector('#go').onclick=()=>{decide(d.id,'',dg.querySelector('#answ').value||'按你的建议来');dismiss(d.id)};
   }
   m.classList.add('on');
 }
-function close(){$('#mask').classList.remove('on');approvalOpen=false;paintSend()}
+// 撤掉这一条并露出下一条。注意不能只 close()：多会话并行时必须按 id 摘，
+// 否则点第二条的按钮会把第一条从队列里带走，而第一条还卡在服务端等回答。
+function dismiss(id){const w=asks.findIndex(a=>a.d.id==id);if(w>=0)asks.splice(w,1);paintAsk()}
 function decide(id,decision,answer){
   fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,decision,answer})});
@@ -320,113 +433,180 @@ function decide(id,decision,answer){
 // ---- 控件 ----
 function setMode(m){mode=m;document.querySelectorAll('#modes button').forEach(b=>b.classList.toggle('on',b.dataset.m==m))}
 document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>{
-  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:b.dataset.m})});
-  setMode(b.dataset.m);
+  const v=cur();v.mode=b.dataset.m;setMode(b.dataset.m);
+  // 档位是**这条会话**的，不是全局的：切档位要带上 sid，否则会把后台那条正在跑的会话也改掉
+  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:b.dataset.m,sid:curId})});
 });
 $('#newBtn').onclick=()=>{
-  // 跑着的时候服务端会拒绝切换（409）：切走等于造一个停不下来的孤儿任务
-  fetch('/api/new',{method:'POST'}).then(r=>{
-    if(r.status===409){notice('上一个任务还在跑，先按停止（右下角红色 ■）再开新会话');return}
-    stream.innerHTML='';setTodos([]);$('#title').textContent='新会话';$('#usage').textContent='';box.focus()
+  // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
+  fetch('/api/new',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(!d.id)return;
+    const v=view(d.id);
+    v.el.innerHTML='';v.curAns=null;v.tools={};v.todos=[];v.usage=null;v.title=d.title||'新会话';
+    if(d.mode)v.mode=d.mode;   // 没有这个字段时宁可留着上一次的显示，也别自己编一个
+    show(d.id);paintUsage(null);box.focus();
+    // 工作区/模型这两行只有 /api/state 会告诉我们。但用户手快得已经把话发出去了就别重画：
+    // 那会儿服务端的历史还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
+    if(!v.running&&!v.el.children.length)hydrate(d.id);
   });
 };
 function send(){
-  if(running){
-    // 同一个按钮：跑着的时候它就是停止。另起一个"停止"按钮放在旁边，
-    // 用户要在两个长得很像的圆钮之间做选择，得不偿失。
-    if(stopping)return;
-    stopping=true;paintSend();
-    fetch('/api/stop',{method:'POST'});
+  const v=cur();
+  const t=box.value.trim();if(!t)return;
+  if(v.running){
+    /*
+     * 跑着的时候按回车**不是**停止。
+     * 上一版把"发送按钮在跑时变成 ■"的规则顺手套到了回车键上，
+     * 于是用户在新会话里打完一句话按回车，被杀掉的是后台那条跑了十分钟的任务。
+     * 停止只留 ■ 一个入口，这句话留在框里不丢。
+     */
+    notice('这条会话正在跑：要另起一件事点「＋新任务」，要停下它按右下角的 ■。这句话还留在框里。');
     return;
   }
-  const t=box.value.trim();if(!t)return;
   box.value='';box.style.height='auto';
-  fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
-  running=true;stopping=false;paintSend();
+  v.running=true;stopping=false;paintSend();markSessions();
+  fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:t,sid:curId})})
+    .then(r=>r.json().then(d=>({code:r.status,d:d})))
+    .then(x=>{
+      if(x.d&&x.d.sid&&x.d.sid!==curId)show(x.d.sid);
+      if(!x.d.ok){v.running=false;stopping=false;paintSend();markSessions();notice(x.d.error||'发送失败','err')}
+    })
+    .catch(()=>{});
+}
+function stopNow(){
+  const v=cur();
+  // 同一个按钮：跑着的时候它就是停止。另起一个"停止"按钮放在旁边，
+  // 用户要在两个长得很像的圆钮之间做选择，得不偿失。
+  if(!v.running||stopping)return;
+  stopping=true;paintSend();
+  fetch('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sid:curId})});
 }
 function paintSend(){
-  const b=$('#send');
-  b.classList.toggle('stop',running);
-  b.disabled=running&&stopping;
-  b.textContent=running?'■':'➤';
-  b.title=running?(stopping?'已请求停止，正在收尾…':'停止这一轮（跑完当前动作就收手）'):'发送';
+  const b=$('#send'),r=!!cur().running;
+  b.classList.toggle('stop',r);
+  b.disabled=r&&stopping;
+  b.textContent=r?'■':'➤';
+  b.title=r?(stopping?'已请求停止，正在收尾…':'停止这一轮（跑完当前动作就收手）'):'发送';
 }
-$('#send').onclick=send;
+$('#send').onclick=()=>{cur().running?stopNow():send()};
 box.addEventListener('keydown',e=>{if(e.key=='Enter'&&!e.shiftKey){e.preventDefault();send()}});
 box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(160,box.scrollHeight)+'px'});
 
+/* ---- 侧栏会话列表 ----
+ * 列表来自服务端（磁盘索引，带 running 与条数），徽标与未读数来自本地 view：
+ * 后者只有浏览器知道（它看见了多少），所以每次重画都用这两份拼。
+ */
+let sessList=[];
+function post(url,body){
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})})
+    .then(r=>r.ok?r.json():Promise.reject(r.status));
+}
 function loadSessions(){
   fetch('/api/sessions').then(r=>r.json()).then(list=>{
-    const box=$('#sessions');
-    if(!list.length){box.innerHTML='<div class="it" style="cursor:default">（还没有历史会话）</div>';return}
-    box.innerHTML=list.slice(0,12).map(m=>`<div class="it${m.current?' cur':''}" data-id="${m.id}" data-t="${esc(m.title)}" title="${esc(m.workspace)}">
-      <span class="act"><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>
-      ${esc(m.title)}<br><i>${m.messages} 条 · ${m.mode} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i></div>`).join('');
-    box.querySelectorAll('.it').forEach(e=>{
-      const id=e.dataset.id;
-      e.onclick=ev=>{
-        const a=(ev.target.dataset||{}).a;
-        if(a==='ren'){
-          const t=prompt('会话标题',e.dataset.t||'');
-          if(t&&t.trim())post('/api/rename',{id:id,title:t}).then(loadSessions);
-          return;
-        }
-        if(a==='del'){
-          if(!confirm('删除这个会话？文件会移进 sessions/.trash，不是就地抹掉。'))return;
-          // 409 的正文里写着"为什么不让删"（正在跑），所以不能只看 ok
-          fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({id:id})})
-            .then(r=>r.json().then(d=>({ok:r.ok,d:d})))
-            .then(x=>{
-              if(!x.ok){alert((x.d&&x.d.error)||'删除失败');return}
-              if(id===curId){curId=null;stream.innerHTML=''}
-              loadSessions();
-            });
-          return;
-        }
-        if(id===curId)return;
-        fetch('/api/open',{method:'POST',headers:{'Content-Type':'application/json'},
+    sessList=list;
+    // 标题由服务端从第一句话生成，所以跑完一轮要把本地视图的标题一起换掉
+    list.forEach(m=>{const v=views[m.id];if(v){v.title=m.title;if(!m.running)v.running=false}});
+    markSessions();
+  });
+}
+function markSessions(){
+  const box=$('#sessions');
+  const live=Object.keys(views).filter(id=>id&&!sessList.some(m=>m.id===id))
+    .map(id=>({id:id,title:views[id].title||'新会话',messages:0,mode:views[id].mode||mode,updated:Date.now()}));
+  const all=live.concat(sessList);
+  if(!all.length){box.innerHTML='<div class="it" style="cursor:default">（还没有历史会话）</div>';return}
+  box.innerHTML=all.slice(0,14).map(m=>{
+    const v=views[m.id]||{};
+    const run=v.running||m.running;
+    const nb=v.wait?'<span class="nb" title="这条会话在等你回答">!</span>'
+      :(v.unread?`<span class="nb" title="切过去看">${v.unread}</span>`:'');
+    return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
+      <span class="act"><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}
+      ${esc(m.title)}<br><i>${run?'正在跑 · ':''}${m.messages} 条 · ${esc(m.mode||'')} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i></div>`;
+  }).join('');
+  box.querySelectorAll('.it').forEach(e=>{
+    const id=e.dataset.id;
+    if(!id)return;
+    e.onclick=ev=>{
+      const a=(ev.target.dataset||{}).a;
+      if(a==='ren'){
+        const t=prompt('会话标题',e.dataset.t||'');
+        if(t&&t.trim())post('/api/rename',{id:id,title:t}).then(loadSessions);
+        return;
+      }
+      if(a==='del'){
+        if(!confirm('删除这个会话？文件会移进 sessions/.trash，不是就地抹掉。'))return;
+        // 409 的正文里写着"为什么不让删"（正在跑），所以不能只看 ok
+        fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({id:id})})
-          .then(r=>{ if(r.status===409){notice('上一个任务还在跑，先停止再切会话');return}
-                     if(!r.ok){notice('打不开这个会话（'+r.status+'）');return}
-                     curId=id;reload(); });
-      };
-    });
+          .then(r=>r.json().then(d=>({ok:r.ok,d:d})))
+          .then(x=>{
+            if(!x.ok){alert((x.d&&x.d.error)||'删除失败');return}
+            dropView(id);loadSessions();
+          });
+        return;
+      }
+      openSession(id);
+    };
   });
 }
-function post(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.ok?r.json():Promise.reject(r.status))}
-function reload(){stream.innerHTML='';return fetch('/api/state').then(r=>r.json()).then(applyState)}
+function dropView(id){
+  const v=views[id];
+  if(v){v.el.remove();delete views[id]}
+  for(let i=asks.length-1;i>=0;i--)if(asks[i].v&&asks[i].v.sid===id)asks.splice(i,1);
+  if(id===curId){curId='';show(Object.keys(views)[0]||'')}
+  paintAsk();
+}
+function openSession(id){
+  if(id===curId)return;
+  // 已经在内存里的那条（尤其是后台正在跑的）直接切过去看：重新拉 state 会把
+  // 正在流式输出的半截回答丢掉，还会把工具卡重画成"已完成"的样子。
+  if(views[id]&&views[id].hydrated){show(id);return}
+  post('/api/open',{id:id})
+    .then(()=>hydrate(id))
+    .catch(code=>notice('打不开这个会话（'+code+'）','err'));
+}
+function hydrate(sid){
+  return fetch('/api/state?sid='+encodeURIComponent(sid||'')).then(r=>r.json()).then(applyState,s=>s);
+}
+// 把服务端给的会话状态画进**它自己那条**视图（不是"当前看见的那条"）
 function applyState(s){
-  // 刷新页面也要接上"正在跑"这件事：否则跑着的任务在界面上看不出来，停止按钮也不在。
-  running=!!s.running;if(!running)stopping=false;paintSend();
-  // 挂着没答的审批/提问：SSE 只推过一次，刷新就没了，而引擎还在等 —— 必须从 state 里补回来
-  (s.pending||[]).forEach(p=>ask(p.data,p.ev));
-  $('#ws').textContent=s.workspace;$('#model').textContent=s.model;setMode2(s.mode);
-  $('#title').textContent=s.title||'新会话';
-  if(s.todos&&s.todos.length)setTodos(s.todos.map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text));
-  if(s.usage)$('#usage2').textContent=`输入 ${s.usage.prompt.toLocaleString()} / 输出 ${s.usage.completion.toLocaleString()}`;
-  stream.innerHTML='';
+  const v=view(s.sessionId||curId);
+  v.hydrated=true;v.running=!!s.running;v.title=s.title||'新会话';v.mode=s.mode;
+  v.workspace=s.workspace;v.model=s.model;
+  v.el.innerHTML='';v.curAns=null;v.tools={};
   (s.messages||[]).forEach(m=>{
-    if(m.role=='user')add(el(`<div class="msg user">${esc(m.content)}</div>`));
-    else if(m.role=='assistant'&&m.content)add(el(`<div class="msg ans md">${md(m.content)}</div>`));
-    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split(String.fromCharCode(10))[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`));
+    if(m.role=='user')add(el(`<div class="msg user">${esc(m.content)}</div>`),v);
+    else if(m.role=='assistant'&&m.content)add(el(`<div class="msg ans md">${md(m.content)}</div>`),v);
+    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split(String.fromCharCode(10))[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`),v);
   });
-  loadSessions();
-  scroll();   // 打开一个长会话要停在最新一条，而不是最上面
+  // 挂着没答的审批/提问：SSE 只推过一次，刷新就没了，而引擎还在等 —— 必须从 state 里补回来
+  (s.pending||[]).forEach(p=>ask(p.data,p.ev,v));
+  v.todos=(s.todos||[]).map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text);
+  paintUsage(s.usage,v);
+  /*
+   * 首屏时 curId 还是空的，"这条是不是眼前这条"只能按 sid 判，不能拿 cur() 比 ——
+   * 那样一比就不相等，标题/工作区/模型/任务清单全都不会画，左栏永远停在占位符上
+   * （截图里抓到的就是这个：会话列表都出来了，工作区还是"—"）。
+   */
+  if(!curId||v.sid===curId)show(v.sid);else markSessions();
+  return s;
 }
-function setMode2(m){setMode(m)}
-$('#newBtn').addEventListener('click',()=>{setTimeout(loadSessions,400)});
 
 // ---- 设置抽屉 ----
 $('#cfgBtn').onclick=()=>{
   fetch('/api/settings').then(r=>r.json()).then(c=>{
-    approvalOpen=true;
+    cfgOpen=true;approvalOpen=true;
     const dg=$('#dialog');
     dg.innerHTML=`<h3>设置</h3>
       <div class="fld"><label>模型</label><input type="text" id="fModel" value="${esc(c.model)}"></div>
       <div class="fld"><label>网关 Base URL</label><input type="text" id="fBase" value="${esc(c.baseUrl)}"></div>
       <div class="fld"><label>工作区</label><input type="text" id="fWs" value="${esc(c.workspace)}"></div>
       <div class="fld"><label>权限档位</label><input type="text" id="fMode" value="${esc(c.mode)}" placeholder="plan / ask / auto"></div>
+      <div class="kv">这里改的是<b>全局默认</b>：模型与网关会立刻发给所有会话（正在跑的那条从下一次请求起生效）；
+        工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。</div>
       <div class="fld"><label>密钥</label><div class="kv">${c.hasKey?('已设置 '+esc(c.keyHint)+'…'):'<b style="color:var(--warn)">未设置</b>（跑 haoai key sk-…）'}</div></div>
       <div class="grp" style="margin-top:12px">实验特性</div>
       ${c.flags.map(f=>`<label class="sw"><input type="checkbox" data-k="${f.key}" ${f.on?'checked':''}>
@@ -435,21 +615,33 @@ $('#cfgBtn').onclick=()=>{
       <div class="kv">${c.rules.length?c.rules.map(r=>esc(r.text)).join('<br>'):'（空 —— 全部交给档位决定）'}</div>
       <div class="acts"><button class="btn" id="cfgClose">关闭</button><button class="btn pri" id="cfgSave">保存</button></div>`;
     $('#mask').classList.add('on');
-    dg.querySelector('#cfgClose').onclick=close;
+    dg.querySelector('#cfgClose').onclick=closeCfg;
     dg.querySelector('#cfgSave').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
       fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model:dg.querySelector('#fModel').value,baseUrl:dg.querySelector('#fBase').value,
           workspace:dg.querySelector('#fWs').value,mode:dg.querySelector('#fMode').value,flags})})
-        .then(r=>r.json()).then(()=>{close();notice('设置已保存，下一条消息起生效');reload();});
+        .then(r=>r.json()).then(()=>{closeCfg();notice('设置已保存：所有会话下一条消息起用新的模型/网关')});
     };
   });
 };
+function closeCfg(){
+  cfgOpen=false;approvalOpen=false;
+  $('#mask').classList.remove('on');
+  if(asks.length)paintAsk();else paintSend();
+}
 
-// 初始加载：直接走 reload()，它内部就是 applyState（含会话列表）。
-// 之前这里另写了一份"渲染历史"的代码，结果 applyState 被误放进 forEach 里，
-// 空会话时一次都不执行 —— 左栏的工作区/模型/历史会话全是占位符。
-reload();
+/*
+ * 启动：先拿服务端认为的"当前会话"（重启时它会接上上次用的那条）。
+ * 一条会话都没有时立刻开一条 —— 之后每个事件都有确定的 sid，
+ * 不需要再处理"这条事件属于哪条会话"的空档期。
+ */
+fetch('/api/state').then(r=>r.json()).then(s=>{
+  if(s.sessionId){applyState(s);loadSessions();return}
+  return post('/api/new',{}).then(d=>{
+    const v=view(d.id);if(d.mode)v.mode=d.mode;show(d.id);loadSessions();box.focus();hydrate(d.id);
+  }).catch(()=>{loadSessions();notice('开不了新会话，检查一下服务是否还在跑','err')});
+});
 </script>
 </body>
 </html>

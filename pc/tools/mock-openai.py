@@ -13,6 +13,7 @@ mode:
   tools   先调 write+edit+read，再收尾（验多回合与真文件）
   spill   跑一条 >16k 字符的 shell（验溢出落文件）
   ask     触发审批 + ask_user（验人机回合）
+  multi   三条会话各一份剧本（验多会话并行时事件不串台）
 """
 import argparse
 import json
@@ -112,12 +113,58 @@ PLAN = {
     ],
 }
 
+# multi：一个网关同时喂好几条会话，各自一份剧本。
+# 三条的话术与文件都不同，所以"事件串台"在界面上是看得见的（丙的回答出现在甲那条=立刻能发现）。
+ROUTED = {
+    "并行甲": PLAN["loop"],
+    "并行乙": [
+        ("乙这边要动文件了", [{"id": "call_b1", "name": "write",
+                               "arguments": json.dumps({"path": "mock-b.txt", "content": "来自乙\n"})}]),
+        ("乙做完了：mock-b.txt 已写入，这条的输出只属于乙。", None),
+    ],
+    "并行丙": [        # 这句话故意写得比一个 SSE 分片（14 字符）长：前端要是拿"当前这一片"重画整个气泡，
+        # 这里就会只剩尾巴，截图上看得出来，断言也能量出来。
+        ("丙先读一个文件；这句话应该整段出现在同一个气泡里，不会被后面的分片顶掉。",
+         [{"id": "call_c1", "name": "read", "arguments": json.dumps({"path": "notes.md"})}]),
+        (PLAN["chat"][0][0], None),
+    ],
+    # 与乙同类（要审批），用来验"两条会话同时等确认"时弹窗会不会互相盖掉
+    "并行丁": [
+        ("丁也要写个文件", [{"id": "call_d1", "name": "write",
+                             "arguments": json.dumps({"path": "mock-d.txt", "content": "D\n"})}]),
+        ("丁做完了：mock-d.txt。", None),
+    ],
+    # ask_user 的选项按钮挂在 data-i 上，重写弹窗时这段绑定丢过一次 —— 只有真点一下才发现
+    "并行戊": [
+        ("戊先问一句", [{"id": "call_e1", "name": "ask_user",
+                         "arguments": json.dumps({"question": "要绿色还是蓝色？", "options": ["绿色", "蓝色"]})}]),
+        ("戊记下了你选的颜色，写进 mock-e.txt。",
+         [{"id": "call_e2", "name": "write",
+           "arguments": json.dumps({"path": "mock-e.txt", "content": "ok\n"})}]),
+        ("戊做完了。", None),
+    ],
+}
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *a):
         pass
+
+    @staticmethod
+    def plan_for(msgs):
+        """multi 模式：按请求里出现的标记挑剧本。
+
+        多会话并行时不能按"第几个请求"发剧本 —— 谁先问到模型不确定，
+        串了台之后前端看到的是 A 的回答带着 B 的工具卡，根本分不清是产品坏了还是测试坏了。
+        标记来自用户第一句话里的词，请求体会把历史原样带回来，所以每条会话稳定命中自己那份。
+        """
+        joined = " ".join(str(m.get("content") or "") for m in msgs)
+        for key in ROUTED:
+            if key in joined:
+                return key, ROUTED[key]
+        return None, PLAN["chat"]
 
     def do_GET(self):
         if self.path.startswith("/v1/models"):
@@ -136,10 +183,12 @@ class Handler(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(n) or b"{}")
         msgs = req.get("messages", [])
         tool_rounds = sum(1 for m in msgs if m.get("role") == "tool")
-        plan = PLAN.get(MODE, PLAN["tools"])
+        key, plan = (None, PLAN.get(MODE, PLAN["tools"]))
+        if MODE == "multi":
+            key, plan = self.plan_for(msgs)
         idx = min(tool_rounds, len(plan) - 1)
         text, calls = plan[idx]
-        if MODE == "loop":
+        if key == "并行甲" or (MODE == "loop" and key is None):
             # 每轮慢一点，界面上才看得见"正在跑"，也才来得及按停止。
             time.sleep(0.6)
             calls = [dict(calls[0], id="call_loop_%d" % tool_rounds,
@@ -173,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8099)
-    ap.add_argument("--mode", default="tools", choices=list(PLAN.keys()))
+    ap.add_argument("--mode", default="tools", choices=list(PLAN.keys()) + ["multi"])
     a = ap.parse_args()
     global MODE
     MODE = a.mode
