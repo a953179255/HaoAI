@@ -1,0 +1,50 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "eval": "(()=>{cur().curAns=null;finishAnswer(\"\\u5148\\u770b\\u8fd9\\u4e2a\\u9875\\u9762\\uff1a\\n\\n```html\\n<!doctype html><style>body{margin:0;font:16px system-ui}\\n#box{padding:22px;background:#f4f1e8;color:#222}\\n#mark{display:inline-block;padding:6px 12px;border-radius:8px;background:#2f7d4f;color:#fff}\\n</style><div id=box><div id=mark>\\u9759\\u6001\\u6837\\u5f0f\\u5df2\\u7ecf\\u751f\\u6548</div>\\n<p id=t>\\u811a\\u672c\\u8fd8\\u6ca1\\u8dd1</p></div>\\n<script>document.getElementById('t').textContent='\\u811a\\u672c\\u8dd1\\u8fc7\\u4e86';try{parent.document.title='HACKED'}catch(e){}</script>\\n```\\n\\n\\u518d\\u770b\\u4e00\\u6bb5\\u957f\\u4ee3\\u7801\\uff1a\\n\\n```python\\nprint(0)\\nprint(1)\\nprint(2)\\nprint(3)\\nprint(4)\\nprint(5)\\nprint(6)\\nprint(7)\\nprint(8)\\nprint(9)\\nprint(10)\\nprint(11)\\nprint(12)\\nprint(13)\\nprint(14)\\nprint(15)\\nprint(16)\\nprint(17)\\nprint(18)\\nprint(19)\\nprint(20)\\nprint(21)\\nprint(22)\\nprint(23)\\nprint(24)\\nprint(25)\\n```\");return 'rendered'})()"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const pr=document.querySelector('.md pre.fold'),cs=getComputedStyle(pr);return({pv:document.querySelectorAll('.cp.pv').length,more:document.querySelectorAll('.cp.more').length,folded:document.querySelectorAll('.md pre.fold').length,scrollH:pr.scrollHeight,shownH:Math.round(pr.getBoundingClientRect().height),maxH:cs.maxHeight})})()"
+ },
+ {
+  "click": ".cp.pv"
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "({on:document.querySelector('#mask').classList.contains('on'),h3:document.querySelector('#dialog h3').textContent,sandbox:document.querySelector('#pvFrame').getAttribute('sandbox'),hasSameOrigin:document.querySelector('#pvFrame').getAttribute('sandbox').includes('same-origin'),w:Math.round(document.querySelector('#dialog').getBoundingClientRect().width),title:document.title,srcdoc:document.querySelector('#pvFrame').getAttribute('srcdoc').includes('静态样式已经生效')})"
+ },
+ {
+  "shot": "p01-preview-sandboxed"
+ },
+ {
+  "click": "#pvRun"
+ },
+ {
+  "sleep": 1600
+ },
+ {
+  "eval": "({sandbox:document.querySelector('#pvFrame').getAttribute('sandbox'),titleAfter:document.title,hacked:document.title=='HACKED'})"
+ },
+ {
+  "shot": "p02-preview-scripts-on"
+ },
+ {
+  "click": "#pvX"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('.cp.more'),pr=t.closest('pre');const before=Math.round(pr.getBoundingClientRect().height);t.click();return({foldedAfter:pr.classList.contains('fold'),before:before,after:Math.round(pr.getBoundingClientRect().height),scrollH:pr.scrollHeight,label:t.textContent})})()"
+ },
+ {
+  "shot": "p03-long-code-expanded"
+ }
+]

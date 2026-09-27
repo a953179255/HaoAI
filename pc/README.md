@@ -378,6 +378,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-jump.json  # 搜索命
 SHOT_MODE=loop bash pc/tools/ui-shot.sh pc/tools/steps/ui-queue.json  # 跑着的时候再发一句：排队胶囊 + 撤回
 SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-msgops.json  # 引用 / 删这一句 / 会话置顶
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-usage.json  # 用量账本：按模型分行 + 近 14 天柱子
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML 沙箱预览 + 长代码块折叠（含隔离断言）
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -1006,6 +1007,44 @@ PC 端以前只有四件。这批补三样，都是"每天会用到、缺了就�
 最后一根标着 `09-27`；`成功率 100% · 平均 93.8 tok/s · 账本 2 行`；
 用量页 `scrollWidth-clientWidth=0`（没撑出横向滚动）。
 
+## 这一批：HTML 产出可以就地预览 + 长代码块先夹住
+
+模型贴一段 HTML 出来，以前只能读源码 —— 而"页面长对不对"恰恰是读源码读不出来的。
+代码块上多了一颗**预览**（语言标 `html`，或者内容开头就是 `<!doctype`/`<html`/`<div` 之类）。
+
+沙箱怎么关是这批唯一要紧的决定：
+
+- `iframe srcdoc=… sandbox=""` —— 默认**什么都不给**，静态 HTML/CSS 直接能看，脚本不跑。
+- 勾上「允许脚本运行」只加 `allow-scripts`，**故意不给 `allow-same-origin`**。
+  给了同源身份，这段 HTML 就带上本页面的 origin，可以反过来对我们的 127.0.0.1 端口发请求 ——
+  而那个服务没有第二道闸（谁都能调 `/api/task`）。模型的回答不是可信输入，
+  **预览不该顺便变成它的执行环境**。
+- 换 `sandbox` 不会重载文档，所以勾选之后重设一次 `srcdoc`，才是"从干净状态再跑一遍"。
+- 不做"在新窗口打开"：`blob:` URL 继承我们的 origin，等于把沙箱白做。
+- 弹窗宽度用 `.dialog:has(.pvframe)` 而不是加一个类 —— 加类要在每个开弹窗的地方记得清掉，
+  漏一处就把下一个弹窗（改名/切模型）也撑成 980px。
+
+另一半是排版：超过 20 行的代码块先夹到 320px，右下角「展开全部 / 收起」。
+agent 一次贴 60 行是常态，不夹住的话回答里真正要看的那句话被顶出视口。
+
+验收（真像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-preview.json`）：
+渲染一段带脚本的 HTML + 一段 26 行的代码 → `pv:1 more:1 folded:1`，
+夹住的那块 `scrollHeight=636` 而实高 320（`max-height:320px` 生效）；
+点预览 → 弹窗宽 980、`sandbox=""`、里面**不含** `same-origin`、`srcdoc` 带着原文；
+勾"允许脚本" → `sandbox="allow-scripts"`，页面里的脚本确实跑了（截图里"脚本跑过了"），
+而它想改宿主标题的那一行没成功：`document.title` 仍是 `HaoAI · PC`（`hacked:false`）；
+点展开全部 → 320 → 638，按钮文字变「收起」。
+这批没有 Kotlin 侧新增：纯界面层，判据都在几何与隔离断言上。
+
+**两个只有看像素才会发现的自伤**（都记进"量具会坏"那一类）：
+
+1. 折叠类我起名叫 `clip` —— 而这个界面里 `.clip` **已经是回形针附件按钮**（`width:30px;height:30px`）。
+   于是代码块被压成 38px 高，`ui-check` 的"class↔CSS"检查照样全绿（类确实存在）。
+   改成 `.fold` 之后 320/638 才对。
+2. 一处补丁把 `.dialog{width:…` 后面多补了一个 `}`，规则被提前关掉，
+   弹窗的底色/内边距/最大高全丢了 —— 现象是"弹窗变成一块没有边框的裸容器"。
+   补丁吃掉"匹配到但没进捕获组"的文本，是同一批里第三次踩转义/括号这类坑。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1134,7 +1173,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    记忆与备份的两端同步（PC 与手机各写各的 `MEMORY.md` 与备份，没有汇合的那一步 —— 与下面第 3 条同源）。
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
-   截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、
+   截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、HTML 产出沙箱预览、
+   长代码块折叠、
    跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、按回合落账的用量看板、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——

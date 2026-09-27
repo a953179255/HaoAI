@@ -338,6 +338,14 @@
   #dropMask .dz{border:2px dashed var(--acc2);border-radius:16px;padding:26px 40px;text-align:center;
     font-size:15px;background:var(--glass2);box-shadow:var(--shadow)}
   #dropMask .dz i{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--dim)}
+  /* 预览时把弹窗撑宽：580px 看一个网页等于没看。用 :has 而不是加类，
+     * 免得下一个弹窗（改名/切模型）继承到这个宽度。 */
+  .dialog:has(.pvframe){width:min(980px,94vw)}
+  .pvframe{width:100%;height:min(56vh,520px);border:1px solid var(--line);border-radius:10px;
+    background:#fff;margin-top:8px}
+  .md pre.fold{max-height:320px;overflow:auto}
+  .cp.more{top:auto;bottom:6px;left:8px;right:auto}
+  .cp.pv{right:52px}
   .dialog{width:min(580px,92vw);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);
     border-radius:var(--r2);padding:18px;box-shadow:var(--shadow)}
   .dialog h3{margin:0 0 4px;font-size:15px}
@@ -934,6 +942,23 @@ function decorate(v){
     const b=document.createElement('button');
     b.className='cp';b.textContent='复制';b.dataset.x='copycode';
     pre.appendChild(b);
+    const src=(code?code.textContent:pre.textContent)||'';
+    // HTML 代码块要能直接看一眼：模型贴出来的页面，光读源码判断不了"对不对"
+    if(lang=='html'||/^\s*<(!doctype|html|body|head|style|div|p |h1|table|svg)/i.test(src)){
+      const pb=document.createElement('button');
+      pb.className='cp pv';pb.textContent='预览';pb.dataset.x='preview';
+      pb.onclick=()=>previewHtml(src);
+      pre.appendChild(pb);
+    }
+    // 长代码块先夹住：agent 一次贴 60 行会把整屏回答顶出视口，而多数时候只想看开头
+    if(src.split('\n').length>20){
+      pre.classList.add('fold');
+      const t=document.createElement('button');
+      t.className='cp more';t.textContent='展开全部';t.dataset.x='more';
+      t.onclick=()=>{pre.classList.toggle('fold');
+        t.textContent=pre.classList.contains('fold')?'展开全部':'收起'};
+      pre.appendChild(t);
+    }
   });
 }
 
@@ -1168,6 +1193,29 @@ function paintQueue(v){
     ((x.imgs&&x.imgs.length)?`<i>${x.imgs.length} 图</i>`:'')+
     `<em data-q="${i}" title="撤回这句，不发出去">✕</em></span>`).join('')):'';
   r.querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>post('/api/unqueue',{sid:curId,at:b.dataset.q}));
+}
+function previewHtml(src){
+  /*
+   * 沙箱怎么关：`sandbox=""` 什么都禁；勾"允许脚本"只加 allow-scripts，
+   * **故意不给 allow-same-origin** —— 给了的话这份 HTML 就带上本页面同源身份，
+   * 能反过来对我们的 127.0.0.1 端口发请求（这个服务谁都能调，没有第二道闸）。
+   * 模型的回答不是可信输入，预览也不该变成它的执行环境。
+   */
+  const dg=$('#dialog');
+  dg.innerHTML=`<h3>HTML 预览</h3><div class="kv" style="margin:2px 0 6px">
+      这段内容来自模型的回答。脚本默认<b>不跑</b>；沙箱没给同源，跑起来也读不到这个页面。</div>
+    <label class="sw"><input type="checkbox" id="pvRun">
+      <span><span class="t">允许脚本运行</span><br><span class="d">iframe sandbox 隔离，无 allow-same-origin</span></span></label>
+    <iframe id="pvFrame" class="pvframe" sandbox="" srcdoc="${esc(src)}" title="HTML 预览"></iframe>
+    <div class="acts"><button class="btn" id="pvX">关闭</button></div>`;
+  $('#mask').classList.add('on');
+  const fr=dg.querySelector('#pvFrame');
+  dg.querySelector('#pvX').onclick=()=>$('#mask').classList.remove('on');
+  dg.querySelector('#pvRun').onchange=e=>{
+    fr.setAttribute('sandbox',e.target.checked?'allow-scripts':'');
+    // 换 sandbox 不会重载文档：重给一次 srcdoc，才是"从干净状态再跑一遍"
+    fr.srcdoc=src;
+  };
 }
 function insertAtCursor(t){
   const s=box.selectionStart==null?box.value.length:box.selectionStart;
