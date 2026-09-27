@@ -212,7 +212,19 @@ async function waitFor(sel, timeoutMs) {
   } finally {
     try { ws && ws.close(); } catch (_) {}
     proc.kill();
-    await sleep(300);
+    /*
+     * 每次跑都要给无头 Edge 一个全新的 user-data-dir，一天二十次就是二十个目录躺在 %TEMP%。
+     * Edge 退出后 Windows 还会占着它一会儿，所以重试几轮；删不掉也不改退出码
+     * （收尾删不动 ≠ 验收失败，上一版就因为这个把全绿的一轮报成非零）。
+     */
+    if (process.env.KEEP_PROFILE) {
+      await sleep(300);
+    } else {
+      for (let i = 0; i < 12; i++) {
+        await sleep(250);
+        try { fs.rmSync(profile, {recursive: true, force: true}); break } catch (_) {}
+      }
+    }
   }
   process.exit(code);
 })();
