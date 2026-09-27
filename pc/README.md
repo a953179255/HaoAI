@@ -366,6 +366,7 @@ SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-ask.json      # 内联�
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-review.json                 # diff 着色 + 两种附件
 SHOT_W=900 bash pc/tools/ui-shot.sh pc/tools/steps/ui-narrow.json      # 窄屏浮层（700 同理）
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件浏览 + 三条越界尝试
+PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-group.json  # 侧栏按目录分组 + 累计用量
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json     # 定时任务：加/跑一次/停用/删 + 思考强度
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
@@ -597,6 +598,28 @@ Kotlin 侧新增 `FileMentionTest`（6 条：相对路径与正斜杠、排序�
 抽屉列出两个目录并标出当前、填一个不存在的目录 → toast 说清是哪个目录打不开且**不**多出一条会话、
 换到 `other` 之后左栏标签与顶栏一起跟着变、点回旧会话又跟着变回来、三条会话各在自己的目录里）。
 Kotlin 侧新增 `WorkspaceTest`（6 条），共 132 条全绿。
+
+## 这一批：侧栏按工作区分组 + 累计用量
+
+上一条批次让人能"换个项目开一条"之后，侧栏立刻暴露了新问题：两个仓库的会话混在一列里，
+标题又都叫"新会话"，看不出谁是谁的。
+
+- **按目录分组**：组头是目录名 + 条数 + 收起/展开，点组头收起（记在 `localStorage`，刷新还在）。
+  **只有一个目录时不分组** —— 那样每人每天多看一眼没用的组头，比现在更糟。
+  当前会话所在的那组不重排（不然正看着的那条会跳走），其余按最后活动时间。
+- 24 条的上限按组分配，某组太长会写"还有 N 条没显示"而不是静默截掉。
+- 搜索命中的高亮（`.hit`）在分组下照常工作。
+
+**累计用量**：用量页签原来只有"这一条会话"的 token。现在加一段**今天 / 近 7 天 / 全部**
+的条数与 ↑↓ token。数据全部从 `/api/sessions` 已有的字段客户端算出来 ——
+服务端本来就报 `prompt/completion/updated`，再加一个 `/api/stats` 只会多一处能写错的地方。
+口径写清楚：只算盘上还留着的会话（列表最长 200 条），删掉的不算；"近 7 天"不叫"本周"，
+因为没人要周一零点那个边界。
+
+验收：`PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-group.json`
+（真像素里：两组各 1 条、组头跟着走、收起变 `+` 且 `localStorage` 里落了值、
+刷新后分组还在、搜索时两组都出命中、累计那行是 `今天 2 条 ↑2,468 ↓174 …`）。
+`ui.json` 全量巡游 83 步无回归（单目录时走的是原来那条平铺路径，所以老判据一条没破）。
 
 ## 与手机端同源的行为
 
