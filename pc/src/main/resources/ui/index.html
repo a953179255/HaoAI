@@ -315,6 +315,18 @@
   .dif .dc{color:var(--dim)}
   .dif .dn{color:var(--warn)}
   .dstat{margin-left:auto;font-size:11px;color:var(--acc2);font-variant-numeric:tabular-nums;padding-left:8px}
+  /* ---- 工作区文件浏览 ---- */
+  .fbar{display:flex;align-items:center;gap:6px;margin:4px 0 6px}
+  .fbar .fp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .files{display:flex;flex-direction:column;gap:1px;overflow:auto;max-height:46vh}
+  .fe{display:flex;gap:6px;align-items:baseline;padding:2px 6px;border-radius:6px;cursor:pointer;
+    font-size:12px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fe:hover{background:var(--glass2)}
+  .fe i{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--dim2);font-variant-numeric:tabular-nums}
+  .fe.dir{color:var(--acc)}
+  .pv{max-height:52vh;overflow:auto;background:var(--code);border:1px solid var(--line);border-radius:9px;
+    padding:9px 11px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-all;margin:8px 0 0}
   /* ---- 审批/提问改成消息流里的内联卡（原来是模态弹窗，看不见上下文） ---- */
   .card.ask{border-color:var(--warn)}
   .card.ask>summary .tick{background:var(--warn);animation:p 1s infinite}
@@ -405,6 +417,10 @@
       <div class="kv">长输出存进工作区 <b>.haoai-output/</b>；写改前自动留快照在 <b>.haoai-snap/</b>，工具卡上可一键退回。</div>
       <div class="grp">本次产出</div>
       <div class="kv" id="outputs">（还没有）</div>
+      <div class="grp">工作区文件</div>
+      <div class="fbar"><button class="ab" data-fx="up" title="回到上一级">↑ 上一级</button>
+        <span class="fp" id="filePath">（根）</span><button class="ab" data-fx="reload">刷新</button></div>
+      <div class="files" id="files">（还没加载）</div>
     </div>
   </aside>
 </div>
@@ -450,6 +466,8 @@ function show(sid){
   $('#model').textContent=v.model?shortModel(v.model):'—';
   setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintOutputs(v);
   paintHello(v);
+  // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
+  fpath='';if(document.querySelector('#tab-files').classList.contains('on'))loadFiles();
   paintSend();paintPill();scroll(true);markSessions();
 }
 // 本地 gguf 的"模型名"是一整条 Windows 路径，直接显示会把顶栏撑爆
@@ -863,7 +881,45 @@ if(localStorage.getItem('haoai-noL'))app.classList.add('no-l');
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
+  if(b.dataset.t=='files')loadFiles();
 });
+
+/* ---- 工作区文件浏览（右栏「产出」页签）----
+ * 放在这一栏的理由很实在：agent 改完一堆文件，用户的下一个动作就是"那我看看那个文件"。
+ * 没有它就得开资源管理器、记住路径 —— 而路径本来就写在界面上。
+ */
+let fpath='';
+function kb(n){return n<1024?n+' B':(n/1024).toFixed(1)+' KB'}
+function loadFiles(){
+  fetch('/api/files?sid='+encodeURIComponent(curId||'')+'&path='+encodeURIComponent(fpath))
+    .then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+      $('#filePath').textContent=d.path===''?'（根）':d.path;
+      const list=d.entries||[];
+      $('#files').innerHTML=list.length?list.map(f=>{
+        const p=(d.path?d.path+'/':'')+f.n;
+        return `<div class="fe${f.d?' dir':''}" data-p="${esc(p)}">${f.d?'▸':'·'} ${esc(f.name||f.n)}`+
+          (f.d?'':'<i>'+kb(f.s)+'</i>')+'</div>';
+      }).join(''):'（空目录）';
+      $('#files').querySelectorAll('.fe').forEach(e=>e.onclick=()=>fEntry(e.dataset.p,e.classList.contains('dir')));
+    }).catch(()=>{$('#files').textContent='读不到工作区（服务换过端口？旧会话的工作区可能已经不在了）'});
+}
+function fEntry(p,isDir){
+  if(isDir){fpath=p;loadFiles();return}
+  fetch('/api/file?sid='+encodeURIComponent(curId||'')+'&path='+encodeURIComponent(p))
+    .then(r=>r.ok?r.json():Promise.reject(r.status)).then(x=>{
+      $('#dialog').innerHTML='<h3>'+esc(p)+'</h3>'+
+        (x.binary?'<div class="kv">（二进制文件，不预览，共 '+kb(x.bytes||0)+'）</div>'
+          :'<pre class="pv">'+esc(x.text||'')+(x.truncated?'\n…（只给前 200 KB）':'')+'</pre>')+
+        '<div class="acts"><button class="btn" id="pvClose">关闭</button></div>';
+      $('#mask').classList.add('on');
+      $('#dialog').querySelector('#pvClose').onclick=()=>$('#mask').classList.remove('on');
+    }).catch(c=>toast('打不开（'+c+'）','err'));
+}
+document.querySelector('.fbar').onclick=e=>{
+  const x=(e.target.dataset||{}).fx;
+  if(x=='up'){fpath=fpath.split('/').slice(0,-1).join('/');loadFiles()}
+  if(x=='reload')loadFiles();
+};
 $('#newBtn').onclick=()=>{
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
   fetch('/api/new',{method:'POST'}).then(r=>r.json()).then(d=>{

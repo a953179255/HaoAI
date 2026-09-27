@@ -1,0 +1,18 @@
+[
+  {"goto": "#box"},
+  {"type": {"sel": "#box", "text": "验收：建一个 hello.txt 并把第一行改掉"}},
+  {"goto": ".cbar", "timeout": 30000},
+  {"sleep": 2000},
+  {"click": "#tabs button[data-t=\"files\"]"},
+  {"sleep": 900},
+  {"eval": "({path:document.getElementById('filePath').innerText,rows:document.querySelectorAll('#files .fe').length,first:(document.querySelector('#files .fe')||{}).innerText})"},
+  {"shot": "f01-files"},
+  {"click": "#files .fe[data-p=\"hello.txt\"]"},
+  {"sleep": 700},
+  {"eval": "({maskOn:document.getElementById('mask').classList.contains('on'),pv:(document.querySelector('#dialog .pv')||{}).innerText||null})"},
+  {"shot": "f02-preview"},
+  {"click": "#pvClose"},
+  {"eval": "fetch('/api/files?sid='+curId+'&path=../../../../Windows').then(r=>r.json()).then(d=>'目录穿越后 path=['+d.path+'] 条目='+d.entries.length)"},
+  {"eval": "fetch('/api/file?sid='+curId+'&path=../../settings.json').then(r=>'读工作区外文件的 HTTP 状态='+r.status)"},
+  {"eval": "fetch('/api/file?sid='+curId+'&path=.haoai-attach/../hello.txt').then(r=>r.json()).then(d=>'规范化后仍在区内 ok='+d.ok)"}
+]

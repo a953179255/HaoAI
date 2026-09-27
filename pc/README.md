@@ -350,12 +350,22 @@ SHOT_MODE=ask bash pc/tools/ui-shot.sh   # 换剧本（chat/tools/spill/ask/git/
 父级一隐藏，fixed 的子元素跟着不显示（fixed 不会把 `display:none` 的后代救回来）。
 现在两栏在窄屏改成**浮层**：顶栏多一个 ▤ 开右栏，☰ 开左栏，选中一条会话或按 Esc 就收起。
 
+**工作区文件浏览**：右栏「产出」页签下面是工作区浏览器（`GET /api/files`、`GET /api/file`），
+点目录进去、点文件弹出预览 —— agent 改完一堆文件，用户的下一个动作就是"那我看看那个文件"，
+没有它就得开资源管理器去记路径，而路径本来就写在界面上。切会话时路径归零（每条会话自己的
+工作区）。**路径不许逃出工作区**：算完 canonical 再判前缀，不在区内的一律退回根 ——
+这个服务只绑 127.0.0.1，但浏览器里任何页面都能对本机端口发请求，所以这条得在服务端守住。
+三条实测：`path=../../../../Windows` 回的是工作区根（2 条，不是 Windows 目录）、
+`path=../../settings.json`（状态根里那份，含 keyHint）回 404、
+`path=.haoai-attach/../hello.txt` 规范化后仍在区内正常打开。
+
 ### 这批的验收
 
 ```
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-ask.json      # 内联审批/提问：mask 不再出现
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-review.json                 # diff 着色 + 两种附件
 SHOT_W=900 bash pc/tools/ui-shot.sh pc/tools/steps/ui-narrow.json      # 窄屏浮层（700 同理）
+bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件浏览 + 三条越界尝试
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
 676px 左栏浮层宽 300px 且带会话列表、点一条会话后收起。

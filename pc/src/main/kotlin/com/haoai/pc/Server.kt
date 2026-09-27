@@ -125,6 +125,8 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/rollback" -> rollback(ex)
                 "/api/attach" -> attach(ex)
                 "/api/models" -> models(ex)
+                "/api/files" -> files(ex)
+                "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
                 "/api/settings" ->
@@ -490,6 +492,56 @@ class WebServer(settings: PcSettings, port: Int) {
                 "application/json; charset=utf-8"); return
         }
         send(ex, 200, """{"ok":true,"path":${quote(rel)},"bytes":${bytes.size}}""",
+            "application/json; charset=utf-8")
+    }
+
+    /**
+     * `GET /api/files?sid=&path=` —— 工作区文件列表，给右栏「产出」页签下的浏览区。
+     *
+     * 只许在工作区里面走：算完 canonical 之后不在工作区内的，一律退回根目录。
+     * 这个服务只绑 127.0.0.1，但浏览器里**任何**页面都能对本机端口发请求，
+     * 所以"路径不能逃出工作区"必须在服务端守住，不能指望前端不传 `..`。
+     */
+    private fun files(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val ws = (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
+        val dir = runCatching { File(ws, queryOf(ex, "path")).canonicalFile }.getOrDefault(ws)
+        val root = if (dir.path.startsWith(ws.path) && dir.isDirectory) dir else ws
+        val list = root.listFiles()
+            ?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
+            ?.filter { it.name != ".git" && !it.name.startsWith("node_modules") }?.take(300)
+            ?: emptyList()
+        val shown = if (root == ws) "" else root.relativeToOrSelf(ws).path.replace('\\', '/')
+        val sb = StringBuilder("""{"path":${quote(shown)},"entries":[""")
+        list.forEachIndexed { i, f ->
+            if (i > 0) sb.append(',')
+            sb.append("""{"n":${quote(f.name)},"d":${f.isDirectory},"s":${if (f.isDirectory) 0 else f.length()}}""")
+        }
+        sb.append("]}")
+        send(ex, 200, sb.toString(), "application/json; charset=utf-8")
+    }
+
+    /** `GET /api/file?sid=&path=` —— 看一个文本文件的前 200 KB（二进制只报大小）。 */
+    private fun fileOne(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val ws = (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
+        val rel = queryOf(ex, "path")
+        val f = runCatching { File(ws, rel).canonicalFile }.getOrNull()
+        if (f == null || !f.path.startsWith(ws.path) || !f.isFile) {
+            send(ex, 404, """{"ok":false,"error":"没有这个文件（或它在工作区外面）"}""",
+                "application/json; charset=utf-8"); return
+        }
+        if (f.length() > 4_000_000) {
+            send(ex, 200, """{"ok":false,"error":"文件太大（${f.length() / 1024} KB），只给前 200 KB 的预览"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val text = runCatching { f.readText() }.getOrNull()
+        if (text == null) {
+            send(ex, 200, """{"ok":true,"binary":true,"bytes":${f.length()}}""",
+                "application/json; charset=utf-8"); return
+        }
+        val cut = text.take(200_000)
+        send(ex, 200, """{"ok":true,"text":${quote(cut)},"truncated":${text.length > cut.length}}""",
             "application/json; charset=utf-8")
     }
 
