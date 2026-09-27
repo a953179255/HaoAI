@@ -586,6 +586,14 @@ class Engine(
                     emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
                     continue
                 }
+                if (call.name in settings.toolsOff) {
+                    // 可见性挡不住"模型硬调"：它可能凭记忆叫一把已经被关掉的工具。
+                    // 执行侧必须再挡一次，并且说清楚去哪儿开 —— 只回一句"未知工具"会把人引偏。
+                    val why = "工具 ${call.name} 在这条会话里被关掉了：右栏「工具」页签可以重新打开。"
+                    history += Msg("tool", why, callId = call.id, name = call.name)
+                    emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
+                    continue
+                }
                 val args = parseArgs(call.args)
                 emit(Ev.ToolStart(call.id, call.name, brief(args), subjectOf(args)))
                 val res = try {
@@ -638,9 +646,18 @@ class Engine(
     private fun readOnlyTool(t: Tool) =
         t.kind == "read" || t.name == "todo" || t.name == "ask_user"
 
-    /** 工具可见集：先过实验特性开关（关着=不存在），再按档位收窄。 */
+    /** 界面上「工具」页签要的清单：连被关掉的也列出来，否则"关掉"这件事看不见。 */
+    data class ToolInfo(val name: String, val kind: String, val desc: String,
+                        val off: Boolean, val gated: Boolean)
+
+    fun toolInfos(): List<ToolInfo> = tools.map {
+        ToolInfo(it.name, it.kind, it.desc, it.name in settings.toolsOff, !it.visibleWhen(settings))
+    }
+
+    /** 工具可见集：实验特性开关（关着=不存在）→ 这条会话的开关 → 档位收窄。 */
     private fun schemas(): List<ToolSchema> = tools.filter { t ->
-        t.visibleWhen(settings) && if (session.mode == "plan") readOnlyTool(t) else true
+        t.visibleWhen(settings) && t.name !in settings.toolsOff &&
+            if (session.mode == "plan") readOnlyTool(t) else true
     }.map { ToolSchema(it.name, it.desc, it.params) }
 
     /** 发给模型的窗口：system + 前情摘要 + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。 */
@@ -712,6 +729,10 @@ class Engine(
                     put("workspace", session.workspace.absolutePath)
                     put("mode", session.mode)
                     put("model", settings.model)
+                    // 会话级开关要落盘：不然刷新/重开之后界面上还写着"已关掉"，
+                    // 而引擎其实拿着全开的工具表在跑
+                    put("toolsOff", kotlinx.serialization.json.JsonArray(
+                        settings.toolsOff.map { kotlinx.serialization.json.JsonPrimitive(it) }))
                     put("updated", System.currentTimeMillis())
                     put("promptTokens", totalPrompt)
                     put("completionTokens", totalCompletion)

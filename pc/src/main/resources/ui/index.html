@@ -315,7 +315,16 @@
   .mark{font-family:var(--mono);font-size:11px;flex:none}
   .prog{height:5px;border-radius:3px;background:var(--glass2);overflow:hidden;margin:2px 0 10px}
   .prog i{display:block;height:100%;background:var(--acc);transition:width .3s}
-  .tabs{display:flex;gap:4px;margin-bottom:10px}
+  .tabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
+  /* 工具清单：一行一把，名字 + 来源标记 + 一句说明，开关在左边 */
+  .trows{display:flex;flex-direction:column;gap:2px;max-height:52vh;overflow:auto}
+  .trow{border-bottom:1px solid var(--line);padding:3px 0}
+  .trow .sw{display:flex;gap:8px;align-items:flex-start}
+  .trow .t{font-size:12px}
+  .trow .tk{font-style:normal;font-size:9.5px;color:var(--dim2);border:1px solid var(--line);
+    border-radius:4px;padding:0 3px;margin-left:5px;vertical-align:1px}
+  .trow.off .t{color:var(--dim2);text-decoration:line-through}
+  .trow.gated{opacity:.5}
   /* 复选框默认是浏览器那套蓝，跟明暗两套主题都不搭 */
   input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
   .tabs button{flex:1;border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:8px;
@@ -547,6 +556,7 @@
       <button data-t="files">产出</button>
       <button data-t="mem">记忆</button>
       <button data-t="cron">定时</button>
+      <button data-t="tools">工具</button>
     </div>
     <div class="tabp on" id="tab-tasks">
       <div class="prog" id="prog"><i style="width:0%"></i></div>
@@ -602,6 +612,13 @@
       <div class="acts2 pinned"><button class="ab" id="skSave">加为技能</button>
         <span class="fp" id="skState"></span></div>
     </div>
+    <div class="tabp" id="tab-tools">
+      <div class="kv" id="toolsSum">—</div>
+      <div class="grp">这条会话能用什么</div>
+      <div id="toolRows" class="trows"></div>
+      <div class="kv">开关只作用于<b>当前这条会话</b>，换一条还是原样。
+        灰掉的是实验特性没开（在设置抽屉里），这里点不动。</div>
+    </div>
     <div class="tabp" id="tab-cron">
       <div class="kv">到点自己起一条<b>新会话</b>去跑这句话（不搅乱你正在聊的那条）。
         机器睡着时<b>不补跑</b>：醒来最多补一次，不会一口气跑八遍。</div>
@@ -646,7 +663,7 @@ function view(sid){
   if(!v){
     v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
        tools:{},subs:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
-       mode:mode,workspace:'',model:'',outputs:[],queue:[]};
+       mode:mode,workspace:'',model:'',outputs:[],queue:[],toolList:[]};
     views[sid]=v;stream.appendChild(v.el);
   }
   return v;
@@ -666,7 +683,7 @@ function show(sid){
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
   fpath='';if(document.querySelector('#tab-files').classList.contains('on'))loadFiles();
-  paintSend();paintPill();paintQueue(v);scroll(true);markSessions();
+  paintSend();paintPill();paintQueue(v);paintTools(v.toolList);scroll(true);markSessions();
 }
 // 本地 gguf 的"模型名"是一整条 Windows 路径，直接显示会把顶栏撑爆
 function shortModel(m){return m?String(m).replace(/^.*[\\/]/,'').replace(/\.gguf$/,''):'—'}
@@ -1041,6 +1058,7 @@ function on(ev,fn){
   });
 }
 on('queue',(v,d)=>{v.queue=d.items||[];paintQueue(v)});
+on('tools',(v)=>hydrate(v.sid));
 on('delta',(v,d)=>answer(d,v));
 on('answer',(v,d)=>{if(!d)notice('(本轮没有正文)',null,v);finishAnswer(d,v)});
 on('reason',(v,d)=>thinking(d,v));
@@ -1265,6 +1283,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='usage')loadUsage();
+  if(b.dataset.t=='tools')hydrate(curId);
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind()}
@@ -1762,6 +1781,26 @@ function loadSessions(){
 }
 /* 累计用量直接从会话列表算：这些字段服务端本来就报（prompt/completion/updated），
    加一个 /api/stats 只会多一处能写错的地方。"近 7 天"不叫"本周"，因为没人要周一零点那个边界。 */
+function paintTools(list){
+  const box=$('#toolRows');if(!box)return;
+  if(!Array.isArray(list))list=[];
+  const arr=list||[];
+  const offN=arr.filter(t=>t.off&&!t.gated).length, gatedN=arr.filter(t=>t.gated).length;
+  // "这条会话关掉的"和"实验特性没开的"是两件事，混成一个数就说不清去哪儿开
+  $('#toolsSum').textContent=arr.length+' 把工具 · 这条会话开着 '+(arr.length-offN-gatedN)+
+    (offN?' · 这条关掉 '+offN+' 把':'')+(gatedN?' · 特性未开 '+gatedN+' 把':'');
+  box.innerHTML=arr.map(t=>`<div class="trow${t.off?' off':''}${t.gated?' gated':''}">
+      <label class="sw"><input type="checkbox" data-tn="${esc(t.name)}" ${t.off||t.gated?'':'checked'} ${t.gated?'disabled':''}>
+      <span><span class="t">${esc(t.name)}<em class="tk">${esc(t.kind)}</em></span><br>
+      <span class="d">${esc(t.desc)}</span></span></label></div>`).join('')||
+    '<div class="kv">还没拿到工具清单（这条会话没打开过）</div>';
+  box.querySelectorAll('[data-tn]').forEach(c=>c.onchange=()=>{
+    post('/api/tool',{sid:curId,name:c.dataset.tn,on:c.checked?'1':'0'}).then(d=>{
+      if(!d||!d.ok){toast('改不动');hydrate(curId);return}
+      toast(c.dataset.tn+(c.checked?' 已打开':' 这条会话关掉了'));hydrate(curId);
+    }).catch(()=>{toast('改不动');hydrate(curId)});
+  });
+}
 function loadUsage(){
   fetch('/api/usage').then(r=>r.json()).then(u=>{
     const f=x=>x.n+' 次 ↑'+(x.prompt||0).toLocaleString()+' ↓'+(x.completion||0).toLocaleString();
@@ -1972,6 +2011,8 @@ function applyState(s){
   // 挂着没答的审批/提问：SSE 只推过一次，刷新就没了，而引擎还在等 —— 必须从 state 里补回来
   (s.pending||[]).forEach(p=>ask(p.data,p.ev,v));
   v.queue=s.queue||[];paintQueue(v);
+  if(s.tools)v.toolList=s.tools;
+  if(v===cur())paintTools(v.toolList);
   v.todos=(s.todos||[]).map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text);
   paintUsage(s.usage,v);
   paintCtx(s.context);

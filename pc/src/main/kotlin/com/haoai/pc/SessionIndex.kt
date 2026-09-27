@@ -30,6 +30,9 @@ object SessionIndex {
         val messages: Int,
         /** 置顶：常用的那条不该被时间序冲下去（手机端 SessionStore 早就有这个字段）。 */
         val pinned: Boolean = false,
+        /** 这条会话自己用的模型（留空 = 跟全局默认）。见 [Engine.persist]。 */
+        val model: String = "",
+        val toolsOff: List<String> = emptyList(),
         val prompt: Long,
         val completion: Long,
         val file: File
@@ -57,6 +60,10 @@ object SessionIndex {
             updated = o["updated"]?.jsonPrimitive?.content?.toLongOrNull() ?: f.lastModified(),
             messages = o["messages"]?.jsonArray?.size ?: 0,
             pinned = o["pinned"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() == true,
+            model = o["model"]?.jsonPrimitive?.contentOrNull ?: "",
+            toolsOff = runCatching {
+                o["toolsOff"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+            }.getOrNull() ?: emptyList(),
             prompt = o["promptTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             completion = o["completionTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             file = f

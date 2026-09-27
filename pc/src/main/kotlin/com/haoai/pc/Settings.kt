@@ -56,6 +56,14 @@ data class PcSettings(
     val compactTriggerChars: Int = 60_000,
     /** 压缩时**原样保留**的最近条数。太小会让模型忘记自己刚做了什么。 */
     val compactKeepTail: Int = 14,
+    /**
+     * 这条会话**关掉**的工具名（按会话生效，与 model 同一层）。
+     *
+     * 为什么按会话而不是全局：让 agent 只做只读调研的那条会话，不该手里还握着 shell；
+     * 而"全局关掉 shell"又太狠，另开一条正经干活的任务就没法用了。
+     * 手机端 ToolRegistry 就是这个语义（会话级 enabledTools）。
+     */
+    val toolsOff: List<String> = emptyList(),
     val flags: Map<String, Boolean> = emptyMap()
 ) {
     fun workspaceFile(): File {
@@ -88,6 +96,9 @@ data class PcSettings(
                     reqCap = o.int("reqCap") ?: 4_000,
                     compactTriggerChars = o.int("compactTriggerChars") ?: 60_000,
                     compactKeepTail = o.int("compactKeepTail") ?: 14,
+                    toolsOff = runCatching {
+                        o["toolsOff"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+                    }.getOrNull() ?: emptyList(),
                     flags = runCatching {
                         o["flags"]?.jsonObject?.mapValues { (_, v) ->
                             v.jsonPrimitive.content == "true"
@@ -116,6 +127,7 @@ data class PcSettings(
                         put("reqCap", s.reqCap)
                         put("compactTriggerChars", s.compactTriggerChars)
                         put("compactKeepTail", s.compactKeepTail)
+                        put("toolsOff", s.toolsOff.joinToString(",", "[", "]") { "\"" + it + "\"" })
                         put(
                             "flags",
                             buildJsonObject { s.flags.forEach { (k, v) -> put(k, v) } }

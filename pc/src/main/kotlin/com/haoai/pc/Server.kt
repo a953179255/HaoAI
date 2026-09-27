@@ -170,6 +170,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/unqueue" -> unqueue(ex)
                 "/api/delmsg" -> deleteMessage(ex)
                 "/api/pin" -> pinSession(ex)
+                "/api/tool" -> toolToggle(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -243,6 +244,14 @@ class WebServer(settings: PcSettings, port: Int,
         var made: Engine? = null
         val e = Engine(session, settings, allTools(), webGate(id) { made }, emit = { ev -> forward(id, ev) })
         made = e
+        // 会话自己的模型与工具开关要在这里接上：引擎构造时拿的是全局设置，
+        // 不补这一步，"这条会话用的是本地 7B、shell 已关掉"重启后就悄悄没了。
+        if (meta != null && (meta.model.isNotBlank() || meta.toolsOff.isNotEmpty())) {
+            e.useSettings(settings.copy(
+                model = meta.model.ifBlank { settings.model },
+                toolsOff = meta.toolsOff
+            ))
+        }
         return e
     }
 
@@ -269,6 +278,13 @@ class WebServer(settings: PcSettings, port: Int,
                         """{"t":${quote(t)},"imgs":${im.joinToString(",", "[", "]") { quote(it) }}}"""
                     }
                 }
+            } ?: ""
+        ).append("],")
+        // 工具清单要连着"这条会话关掉了哪几把"一起报，界面上才看得见开关的状态
+        sb.append("\"tools\":[").append(
+            e?.toolInfos()?.joinToString(",") { t ->
+                """{"name":${quote(t.name)},"kind":${quote(t.kind)},"desc":${quote(t.desc.take(90))},""" +
+                    """"off":${t.off},"gated":${t.gated}}"""
             } ?: ""
         ).append("],")
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
@@ -1534,6 +1550,31 @@ class WebServer(settings: PcSettings, port: Int,
         send(ex, 200, if (ok) """{"ok":true}""" else """{"ok":false,"error":"没有这条会话"}""",
             "application/json; charset=utf-8")
         if (ok) publish("sessions", "{}", id)
+    }
+
+    /**
+     * `POST /api/tool` {sid,name,on} —— 这条会话开/关一把工具。
+     *
+     * 按会话而不是全局：让 agent 只做只读调研的那条，不该手里还握着 shell；
+     * 而"全局关掉 shell"太狠，另开一条正经干活的任务就没法用了。
+     */
+    private fun toolToggle(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val name = b.str("name")
+        val on = b.str("on").let { it == "1" || it == "true" }
+        val e = sessions[sid]?.engine
+        if (e == null || name.isBlank()) {
+            send(ex, 200, """{"ok":false,"error":"没有这条会话或工具名是空的"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val off = e.settings.toolsOff.toMutableList()
+        if (on) off.remove(name) else if (name !in off) off.add(name)
+        e.useSettings(e.settings.copy(toolsOff = off))
+        e.persistNow()
+        send(ex, 200, """{"ok":true,"off":${!on},"toolsOff":${off.joinToString(",", "[", "]") { quote(it) }}}""",
+            "application/json; charset=utf-8")
+        publish("tools", """{"sid":${quote(sid)}}""", sid)
     }
 
     private fun settingsJson(): String {

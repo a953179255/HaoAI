@@ -1,0 +1,81 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "click": "#tabs button[data-t=\"tools\"]"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({rows:document.querySelectorAll('#toolRows .trow').length,sum:document.querySelector('#toolsSum').textContent,shellOff:!!document.querySelector('[data-tn=shell]').closest('.trow').classList.contains('off'),checked:document.querySelector('[data-tn=shell]').checked,gated:document.querySelectorAll('.trow.gated').length})"
+ },
+ {
+  "click": "[data-tn=shell]"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "({checked:document.querySelector('[data-tn=shell]').checked,off:document.querySelector('[data-tn=shell]').closest('.trow').className,sum:document.querySelector('#toolsSum').textContent,toast:document.querySelector('#toast').textContent})"
+ },
+ {
+  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>'toolsOff='+JSON.stringify(s.toolsOff||[]))"
+ },
+ {
+  "shot": "v01-shell-off"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "说一句让这条非空"
+  }
+ },
+ {
+  "goto": ".msg.ans",
+  "timeout": 25000
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "click": "#tabs button[data-t=\"tools\"]"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "(()=>{const c=document.querySelector('[data-tn=shell]');return({before:!!c&&!c.checked})})()"
+ },
+ {
+  "click": "#newBtn"
+ },
+ {
+  "eval": "(()=>{window.__a=curId;return 'sid '+curId.slice(0,7)+' sessions '+document.querySelectorAll('#sessions .it').length})()"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "(()=>{const b=curId!==window.__a;return fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>({switched:b,newSid:curId.slice(0,7),offInState:s.tools.filter(t=>t.off).map(t=>t.name),gated:s.tools.filter(t=>t.gated).length,panelChecked:(document.querySelector('[data-tn=shell]')||{}).checked}))})()"
+ },
+ {
+  "click": "#newBtn"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "({rows:document.querySelectorAll('#toolRows .trow').length,shellChecked:(document.querySelector('[data-tn=shell]')||{checked:null}).checked,sum:document.querySelector('#toolsSum').textContent})"
+ },
+ {
+  "shot": "v02-other-session-on"
+ },
+ {
+  "url": "about:blank"
+ },
+ {
+  "sleep": 300
+ }
+]

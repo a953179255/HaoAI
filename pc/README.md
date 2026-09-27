@@ -379,6 +379,7 @@ SHOT_MODE=loop bash pc/tools/ui-shot.sh pc/tools/steps/ui-queue.json  # 跑着�
 SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-msgops.json  # 引用 / 删这一句 / 会话置顶
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-usage.json  # 用量账本：按模型分行 + 近 14 天柱子
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML 沙箱预览 + 长代码块折叠（含隔离断言）
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -1045,6 +1046,47 @@ agent 一次贴 60 行是常态，不夹住的话回答里真正要看的那句�
    弹窗的底色/内边距/最大高全丢了 —— 现象是"弹窗变成一块没有边框的裸容器"。
    补丁吃掉"匹配到但没进捕获组"的文本，是同一批里第三次踩转义/括号这类坑。
 
+## 这一批：会话级工具开关（右栏多一个「工具」页签）
+
+手机端 `ToolRegistry` 的开关是**按会话**的，PC 端以前只有一张全局表。
+差在哪：让 agent 只做只读调研的那条会话，手里不该还握着 `shell`；
+而"全局关掉 shell"又太狠 —— 另开一条正经干活的任务就没法用了。
+所以开关放在会话这一层，和 v0.32 的"按会话换模型"同一层。
+
+- `PcSettings.toolsOff: List<String>` —— 引擎按它过滤 `schemas()`，界面上看得见"这条会话开着几把"。
+- **可见性挡不住"模型凭记忆硬调"**：`byName` 是全量注册的，模型可以报一个没给它的工具名。
+  所以执行侧再挡一次，并且回一句"在这条会话里被关掉了：右栏「工具」页签可以重新打开" ——
+  只回"未知工具"会把人引偏。（同一族既有守卫是实验特性那一道，写法照它。）
+- 开关**落进会话文件**（`"toolsOff":["shell"]`），`engineFor` 重建引擎时接回来。
+  顺带修掉一个 v0.32 就埋下的洞：**会话自己的 `model` 当时只写不读** ——
+  盘上存了，重启后引擎还是拿全局设置，"这条会话用本地 7B"其实活不过一次重启。
+- 页签里灰掉的是"实验特性没开"，和"这条会话关掉"是两件事，汇总行分开写：
+  `19 把工具 · 这条会话开着 17 · 特性未开 2 把`。混成一个数就说不清去哪儿开。
+
+验收（Kotlin，`ToolToggleTest` 4 条）：清单非空且默认全开；
+关掉 A 的 `shell` 之后 **A 的请求体 tools 里没有它、B 的请求体里还在**（不看界面看线上）；
+模型硬调已关掉的工具 → 第二次请求的历史里出现拒绝语，且那次请求仍不带 shell；
+开关写进了会话文件，删了再放回、重新 open 之后还是关着。
+
+验收（真像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-tools.json`）：
+19 行、取消勾选之后汇总行跟着变、toast 说"这条会话关掉了"；
+**点新任务之后面板要重新变成"全开"** —— 这一步最初是假的（见下），修好之后
+`shellChecked:true`、汇总 `开着 17 · 特性未开 2 把`。
+
+这批自己埋了四个坑，都值得记：
+
+1. **字段名撞车**：我给会话视图加清单字段叫 `v.tools`，而 `v.tools` 早就是
+   "正在跑的那几张工具卡"的映射表（`applyState`/`newTask` 都把它重置成 `{}`）。
+   于是 `paintTools` 拿到一个空对象、`show()` 当场抛异常，表现是"切了会话面板不动"。
+   改名 `v.toolList` 才对。
+2. **共享 DOM 的面板必须跟着会话重画**：右栏那块面板是所有会话共用的一份，
+   切会话不重画就还是上一条的开关状态 —— 和当初"工作区标签停在旧目录"同一类错。
+3. 判"另一条会话不受影响"的像素步骤前两次是**假通过**：`/api/new` 会复用还空着的那条，
+   所以"新任务"拿到的还是同一条会话。先真跑一轮让这条非空，测出来的才是两条。
+4. **测试桩自己错了**：假网关回 `tool_calls` 时我把 `name/arguments` 平铺在 delta 里，
+   而 OpenAI 流式格式要求嵌一层 `"type":"function","function":{...}` ——
+   解析不出来就永远等不到第二轮请求，看着像"产品没挡住"，其实是桩不对。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1111,7 +1153,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **174 条全绿**（整套 28 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **178 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1174,7 +1216,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
    截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、HTML 产出沙箱预览、
-   长代码块折叠、
+   长代码块折叠、会话级工具开关、
    跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、按回合落账的用量看板、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
