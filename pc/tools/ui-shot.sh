@@ -49,6 +49,29 @@ for f in ${PRE_PNG:-}; do
   mkdir -p "$HOME_DIR/ws/$(dirname "$f")"
   printf %s "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==" | base64 -d > "$HOME_DIR/ws/$f"
 done
+# 断点恢复这条链路要"盘上已经有一条没跑完的现场"：服务端一起来就得认得它，
+# 所以会话文件得在服务端启动之前写好。
+# 状态根目录名带时间戳、调用方事先不知道，所以工作区路径用 @WS@ 占位，
+# 在这里替换（JSON 里的反斜杠要翻倍，不然解析出来是个残缺路径）。
+# PRE_RUNSTATE 可以是一条会话，也可以是若干条：多条才验得出"横幅是每条会话自己的"
+# —— 多会话并行时它跟着切会话跑到别条上面，是最容易漏的那类错。
+if [ -n "${PRE_RUNSTATE:-}" ]; then
+  mkdir -p "$HOME_DIR/sessions" "$HOME_DIR/ws"
+  SHOT_WS="$WS_WIN" PRE_RUNSTATE="$PRE_RUNSTATE" python - "$HOME_DIR/sessions" <<'PY'
+import json, os, sys
+# @WS@ 换成这次运行的工作区绝对路径。JSON 里反斜杠要翻倍，所以用 json.dumps 转义
+# 之后再剥掉外层引号，而不是手搓 replace —— 手搓的转义是最容易错的一位。
+ws = json.dumps(os.environ["SHOT_WS"])[1:-1]
+objs = json.loads(os.environ["PRE_RUNSTATE"].replace("@WS@", ws))
+objs = objs if isinstance(objs, list) else [objs]
+out = sys.argv[1]
+for o in objs:
+    # 会话文件的命名规矩是 pc-<id>.json（SessionIndex.fileFor），前缀错了服务端就找不到它
+    with open(os.path.join(out, "pc-" + o["id"] + ".json"), "w", encoding="utf-8") as f:
+        json.dump(o, f, ensure_ascii=False)
+    print("  seeded session", o["id"])
+PY
+fi
 export HAOAI_HOME="$HOME_DIR"
 
 python tools/mock-openai.py --port "$MOCK_PORT" --mode "$MODE" > "$HOME_DIR/mock.log" 2>&1 &

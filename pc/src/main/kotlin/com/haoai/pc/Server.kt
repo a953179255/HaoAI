@@ -171,6 +171,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/delmsg" -> deleteMessage(ex)
                 "/api/pin" -> pinSession(ex)
                 "/api/tool" -> toolToggle(ex)
+                "/api/resume" -> resumeRun(ex)
+                "/api/abandon" -> abandonRun(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -287,6 +289,8 @@ class WebServer(settings: PcSettings, port: Int,
                     """"off":${t.off},"gated":${t.gated}}"""
             } ?: ""
         ).append("],")
+        // 没跑完的现场：重启后还在，就说明这条是被杀/断电打断的，界面上要举出来
+        sb.append("\"runState\":").append(e?.runStateJson() ?: "null").append(',')
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
         sb.append("\"sessionId\":").append(quote(id)).append(",")
@@ -413,7 +417,8 @@ class WebServer(settings: PcSettings, port: Int,
 
     private fun startRun(wantSid: String, text: String, cutTo: Int? = null,
                          named: String = "", fresh: Boolean = false,
-                         images: List<String> = emptyList()): Pair<String, String?> {
+                         images: List<String> = emptyList(),
+                         goal: String? = null): Pair<String, String?> {
         /*
          * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
          * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
@@ -480,7 +485,7 @@ class WebServer(settings: PcSettings, port: Int,
         Thread {
             publish("run", """{"running":true}""", sid)
             try {
-                e.submit(text, images)
+                e.submit(text, images, goal)
             } catch (err: Exception) {
                 publish("err", quote("回合异常：${err.message ?: err.javaClass.simpleName}"), sid)
             } finally {
@@ -1575,6 +1580,40 @@ class WebServer(settings: PcSettings, port: Int,
         send(ex, 200, """{"ok":true,"off":${!on},"toolsOff":${off.joinToString(",", "[", "]") { quote(it) }}}""",
             "application/json; charset=utf-8")
         publish("tools", """{"sid":${quote(sid)}}""", sid)
+    }
+
+    /**
+     * `POST /api/resume` {sid} —— 接着上次没跑完的那件事继续。
+     *
+     * 不重问：历史里已经有前面那几轮，发出去的是一句"接着做，别重做"。
+     * 也不自动跑：只有用户点横幅上那颗按钮才走到这里。
+     */
+    private fun resumeRun(ex: HttpExchange) {
+        val sid = pick(Body(ex).str("sid"))
+        val engine = sessions[sid]?.engine
+        val prompt = engine?.resumePrompt()
+        if (prompt == null) {
+            send(ex, 200, """{"ok":false,"error":"这条会话没有没跑完的现场"}""",
+                "application/json; charset=utf-8"); return
+        }
+        // 横幅上沿用原来那句目标：续跑话术只是给模型的指令，
+        // 拿它当"上次在做的事"显示，再被打断一次就会自指成绕口令。
+        val (got, err) = startRun(sid, prompt, goal = engine?.runGoal)
+        send(ex, 200, if (err == null) """{"ok":true,"sid":${quote(got)}}"""
+        else """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
+    }
+
+    /** `POST /api/abandon` {sid} —— 丢掉那段没跑完的现场（不自动续跑）。 */
+    private fun abandonRun(ex: HttpExchange) {
+        val sid = pick(Body(ex).str("sid"))
+        val e = sessions[sid]?.engine
+        if (e == null) {
+            send(ex, 200, """{"ok":false,"error":"没有这条会话"}""",
+                "application/json; charset=utf-8"); return
+        }
+        e.clearRunState()
+        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+        publish("sessions", "{}", sid)
     }
 
     private fun settingsJson(): String {

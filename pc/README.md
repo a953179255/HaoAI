@@ -380,6 +380,7 @@ SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-msgops.json  # 引用
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-usage.json  # 用量账本：按模型分行 + 近 14 天柱子
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML 沙箱预览 + 长代码块折叠（含隔离断言）
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
+PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -1087,6 +1088,55 @@ agent 一次贴 60 行是常态，不夹住的话回答里真正要看的那句�
    而 OpenAI 流式格式要求嵌一层 `"type":"function","function":{...}` ——
    解析不出来就永远等不到第二轮请求，看着像"产品没挡住"，其实是桩不对。
 
+## 这一批：断点恢复 —— 跑一半被杀，重启之后接着做（v0.41.0）
+
+PC 端一条任务动辄几十轮工具调用。以前进程一没（关掉窗口、断电、改代码重启），
+界面上只剩"这条会话的历史"，**看不出它当时正在跑**，人只能把那句话重问一遍 ——
+前面几轮的 token 白花，而且工具可能已经改过盘上的东西，重问等于从头再来。
+
+- `Engine.persist()` 里多一个 `runState`：`{goal,turn,at,started}`。
+  开跑写一次、每轮 `TurnStats` 再写一次、**正常收尾（含用户按停止）清掉**。
+  所以重启之后还留着的那条，就是被打断的那条 —— 判据是"谁自己收的尾"，不是猜时间。
+  每轮多写一次会话文件（几十 KB）换"崩了也留得下痕迹"，这个代价值得。
+- `/api/state` 带 `runState`，横幅的判据是 `runState!=null && !running`。
+- 界面上是会话顶部一条横幅「上次这条跑到第 N 轮被打断」+ 原目标 + 两个出口：
+  「从中断续跑」与「丢掉这段」。**不自动续跑** —— 用户可能已经不想要那个结果了。
+- 续跑不重问：发出去的是"接着上次没跑完的那件事继续…已经做完的部分别重做一遍"，
+  历史原样带着（`ResumeTest` 判的就是网关收到的请求体里必须有中断前那几轮）。
+  横幅上显示的目标沿用**你当初那句原话**，不是这句续跑话术 ——
+  不然再被打断一次，横幅会自指成一段绕口令。
+- 「丢掉这段」只清现场，不发任何请求（这条断言第一次跑就红了，见下面量具那节）。
+
+顺手修掉两个洞，都是这一批的像素跑出来的：
+
+1. **冷会话点第一下不换画面**：`openSession()` 对"没画过历史的会话"只 `hydrate`、不 `show`
+   （`show` 藏在 `applyState` 那句"curId 空或匹配才切"里，而冷会话两边都不满足）。
+   表现是点第二条会话只把数据取回来、画面还停在上一条，**得点第二下才换**。
+   这是侧栏所有点击的公共路径，跑了三十个版本没人发现 —— 因为以前的剧本要么只有一条会话，
+   要么切会话用的是 `/api/new` 的返回值（那条路径自己会 `show`）。
+2. `.btn` 全局是 `display:block;width:100%`（侧栏那些整行按钮靠它），横幅里照抄就变成
+   **两条通栏大按钮**、把现场挤掉半屏（量出来 156px 高）。加 `.resume .btn{width:auto;flex:none}`
+   之后同一处 62px，目标那行也终于看得见。
+
+验收（Kotlin，`ResumeTest` 4 条）：跑不完的那条在盘上留 `runState`、正常收尾的不留；
+**换一个新的 `WebServer` 实例（等价于重启进程）** 之后 `/api/state` 认得这条，
+`/api/resume` 打到网关的请求体里带着原目标 + 中断前那几轮；`/api/abandon` 清掉且一条请求都不发。
+
+验收（真像素，`PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json`）：
+26 步全绿。剧本里刻意种了**两条**没跑完的会话 —— 在第二条上点「丢掉这段」之后
+`bannersAll:1`（另一条的横幅还在）、`dropRunState:null` 而 `demoRunState.turn:3`，
+这才叫"现场是每条会话自己的"；回到第一条点「从中断续跑」，气泡 4→6、
+最后一条 user 是"接着上次没跑完的那件事继续（上次到第 3 轮被打断了）。原来的目标：把 tools/step…"、
+跑完 `runStateAfter:null`。
+
+这一批被自己的量具绊倒两次，记下来：
+
+- 假网关默认执行器是**一条线程顺序处理**，那句"90 秒不答"的卡住请求把续跑请求堵在后面，
+  于是"网关没收到续跑"看着像产品坏了。换 `newCachedThreadPool` 才对。
+- 测试里 `bodies.clear()` 放在"看见盘上有 runState 之后"—— 但落盘发生在调用模型**之前**，
+  早清一次就会把那条 stuck 请求留在 clear 之后落进列表，
+  "丢掉现场不该顺手发请求"就被自己的记录方式判红了。改成先等请求真到网关再清。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1153,7 +1203,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **178 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **182 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1177,6 +1227,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   4 条专防真网关才会发的东西：`"content": null` 不能变成字符串 "null"（第一次接真模型撞出来的，
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
+  最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
+  工具开关 4、断点恢复 4），这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1228,24 +1280,10 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 下一批的施工图（写给恢复目标后的第一次动手）
 
-两件事都已经设计到"照着就能写"的程度，判据也定好了 —— 别再重新调研一遍。
+剩下这件事已经设计到"照着就能写"的程度，判据也定好了 —— 别再重新调研一遍。
+（第 1 件"断点恢复"已在 v0.41.0 落地；施工图当时是两件一起写的，留个记号。）
 
-**1. 断点恢复（跑一半被杀，重启后从中断续，而不是重问）**
-- 落什么：`Engine.persist()` 里加 `runState`：`{"goal":<这条任务的原话>,"turn":<已用轮数>,
-  "at":<最后一条消息下标>,"started":<epochMs>,"stopped":<是否用户按了停止>}`；
-  回合开始时写一次、每轮 `TurnStats` 时更新一次、正常收尾时清掉（`runState:null`）。
-  只有"没正常收尾"的会话才留得下来 —— 那就是重启后要认的东西。
-- 报什么：`/api/state` 带 `runState`；`stateJson` 里 `running` 一定是 false（进程刚起），
-  所以横幅的判据是 `runState!=null && !running`。
-- 界面：会话顶部一条横幅「上次这条跑到第 N 轮：<goal 摘要>」+ 两个按钮：
-  「从中断续跑」（不重问：直接把 `messages` 截到 `at+1` 后发一个"接着上面继续"的续跑请求）
-  与「丢掉那段重来」（清 runState）。**不要**自动续跑 —— 用户可能已经不想要那个结果了。
-- 判据（Kotlin）：假网关用 `--mode loop` 那套语义（永远不收尾），跑到第 2 轮时
-  `server.stop()` + 换一个新 `WebServer` 实例（同一个 `haoai.home`）→
-  `/api/state` 里 `runState.turn>=2` 且 `running:false`；点续跑之后
-  网关收到的请求体里**带着中断前那几轮的历史**（不是只有一句"继续"）。
-- 判据（像素）：`ui-resume.json` —— 跑一半杀进程、重开页面，横幅在、文案里有轮数，
-  点「从中断续跑」后气泡数只增不减。
+**1. 断点恢复** —— 已落地（v0.41.0，见上面"这一批：断点恢复"那一节）。
 
 **2. 审批与提问支持键盘决定（y / a / n）**
 - 现在内联卡上三个按钮是 `put(label,cls,run)` 造的，`run` 是闭包、**没有 data 属性可寻**，

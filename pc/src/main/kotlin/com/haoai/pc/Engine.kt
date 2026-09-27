@@ -303,6 +303,34 @@ class Engine(
      * 打断它要往 Provider 里塞取消令牌，换来的只是少等几秒，代价是半截 tool_call
      * 落进历史（手机端就是这么把会话写坏的）。
      */
+    /*
+     * "跑到一半的现场"。正常收尾会清掉它 —— 所以重启之后**还留着**的那条，
+     * 就是被杀进程/断电打断的那条。手机端 SessionStore 的 runState 是同一个语义。
+     * 每轮多写一次会话文件（几十 KB）换"崩了也留得下痕迹"，这个代价值得。
+     */
+    @Volatile var runGoal: String? = null
+        private set
+    @Volatile var runTurn: Int = 0
+        private set
+    @Volatile var runStarted: Long = 0L
+        private set
+
+    fun runStateJson(): String? = runGoal?.let { g ->
+        buildJsonObject {
+            put("goal", g); put("turn", runTurn); put("started", runStarted)
+        }.toString()
+    }
+
+    /** 续跑要发的那句话：把原目标带回去，并说清"接着做"，不是重头再来一遍。 */
+    fun resumePrompt(): String? {
+        val g = runGoal ?: return null
+        return "接着上次没跑完的那件事继续（上次到第 $runTurn 轮被打断了）。原来的目标：$g。已经做完的部分别重做一遍。"
+    }
+
+    fun clearRunState() {
+        runGoal = null; runTurn = 0; runStarted = 0L; persistNow()
+    }
+
     @Volatile
     var stopRequested = false
         private set
@@ -440,7 +468,8 @@ class Engine(
     }
 
     /** 一轮用户输入 → 若干次模型往返 → 最终文本。 */
-    fun submit(userText: String, images: List<String> = emptyList()): String {
+    fun submit(userText: String, images: List<String> = emptyList(),
+                 goal: String? = null): String {
         var titled = false
         if (session.title.get() == "新会话") {
             session.title.set(userText.trim().replace('\n', ' ').take(24).ifBlank { "新会话" })
@@ -455,6 +484,9 @@ class Engine(
          * 顺带把手机端那条"落库止血"的规矩接上：进程被杀 / 断电时，
          * 至少用户问了什么还在。
          */
+        runGoal = (goal ?: userText).trim().replace('\n', ' ').take(200)
+        runTurn = 0
+        runStarted = System.currentTimeMillis()
         persist()
         // 标题一落地就要说出去：侧栏与顶栏靠它区分并行的几条会话，
         // 等回合结束才刷新的话，一条跑十分钟的任务十分钟都还叫"新会话"。
@@ -538,6 +570,7 @@ class Engine(
                     pt = pt, ct = ct, ms = ms)
                 emit(Ev.TurnStats(pt, ct, ms, turnNo))
                 UsageLedger.add(settings.model, session.id, pt, ct, ms, true)
+                runTurn = turnNo
                 break
             }
 
@@ -546,6 +579,8 @@ class Engine(
                 reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms)
             emit(Ev.TurnStats(pt, ct, ms, turnNo))
             UsageLedger.add(settings.model, session.id, pt, ct, ms, true)
+            runTurn = turnNo
+            persist()      // 每轮留一次现场：被打断时"跑到第几轮"才是量出来的
 
             val shotPaths = mutableListOf<String>()
             for (call in turn.calls) {
@@ -630,6 +665,9 @@ class Engine(
         }
 
         if (turnNo >= settings.maxTurns) emit(Ev.Notice("已达单轮工具调用上限 ${settings.maxTurns}，先收尾。"))
+        // 走到这里就是"这一条自己收的尾"（含用户按停止）：现场清掉，
+        // 不然重启之后界面上还会举一条"上次跑到一半"的横幅。
+        runGoal = null; runTurn = 0; runStarted = 0L
         persist()
         emit(Ev.TextDone(lastText))
         return lastText
@@ -733,6 +771,14 @@ class Engine(
                     // 而引擎其实拿着全开的工具表在跑
                     put("toolsOff", kotlinx.serialization.json.JsonArray(
                         settings.toolsOff.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+                    runGoal?.let { g ->
+                        put("runState", buildJsonObject {
+                            put("goal", g)
+                            put("turn", runTurn)
+                            put("at", (history.size - 1).coerceAtLeast(0))
+                            put("started", runStarted)
+                        })
+                    }
                     put("updated", System.currentTimeMillis())
                     put("promptTokens", totalPrompt)
                     put("completionTokens", totalCompletion)
@@ -793,6 +839,11 @@ class Engine(
             val o = Json.parseToJsonElement(f.readText()).jsonObject
             summary = o["summary"]?.jsonPrimitive?.contentOrNull
             compactedCount = o["compactedThrough"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            o["runState"]?.jsonObject?.let { rs ->
+                runGoal = rs["goal"]?.jsonPrimitive?.contentOrNull
+                runTurn = rs["turn"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                runStarted = rs["started"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L
+            }
             // 带着摘要恢复的会话，把迟滞基线设成当前正文规模：
             // 否则"重开一个本来就很长的会话"会立刻再压一次，白花一次模型调用。
             if (!summary.isNullOrBlank()) lastCompactedChars = history.sumOf { it.content?.length ?: 0 }

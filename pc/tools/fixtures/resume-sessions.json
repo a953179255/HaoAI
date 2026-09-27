@@ -1,0 +1,48 @@
+[
+  {
+    "id": "resume-demo",
+    "title": "断点恢复·要续跑的这条",
+    "workspace": "@WS@",
+    "mode": "auto",
+    "model": "mock",
+    "updated": 1758970000000,
+    "runState": {
+      "goal": "把 tools/steps 里的验收剧本逐条核对一遍，缺截图的补上",
+      "turn": 3,
+      "at": 6,
+      "started": 1758969400000
+    },
+    "messages": [
+      { "role": "user", "content": "把 tools/steps 里的验收剧本逐条核对一遍，缺截图的补上" },
+      { "role": "assistant", "content": "先看第一个剧本收了哪些图", "tool_calls": [
+        { "id": "c1", "type": "function", "function": { "name": "read", "arguments": "{\"path\":\"tools/steps/ui.json\"}" } }] },
+      { "role": "tool", "tool_call_id": "c1", "name": "read", "content": "ui.json：4 步，收 2 张图 —— 齐全" },
+      { "role": "assistant", "content": "接着看第二个", "tool_calls": [
+        { "id": "c2", "type": "function", "function": { "name": "read", "arguments": "{\"path\":\"tools/steps/ui-trash.json\"}" } }] },
+      { "role": "tool", "tool_call_id": "c2", "name": "read", "content": "ui-trash.json：收了 t01–t04，齐全" },
+      { "role": "assistant", "content": "再核对用量看板那条", "tool_calls": [
+        { "id": "c3", "type": "function", "function": { "name": "read", "arguments": "{\"path\":\"tools/steps/ui-usage.json\"}" } }] },
+      { "role": "tool", "tool_call_id": "c3", "name": "read", "content": "ui-usage.json：只有 t01，看板下面那块明细没有图 —— 这里就是要补的那个" }
+    ]
+  },
+  {
+    "id": "resume-drop",
+    "title": "断点恢复·要丢掉现场的这条",
+    "workspace": "@WS@",
+    "mode": "auto",
+    "model": "mock",
+    "updated": 1758969000000,
+    "runState": {
+      "goal": "整理 tools 目录，把重复的脚本合并成一份",
+      "turn": 1,
+      "at": 2,
+      "started": 1758968800000
+    },
+    "messages": [
+      { "role": "user", "content": "整理 tools 目录，把重复的脚本合并成一份" },
+      { "role": "assistant", "content": "先列出来看看有哪些", "tool_calls": [
+        { "id": "d1", "type": "function", "function": { "name": "shell", "arguments": "{\"command\":\"ls tools\",\"shell\":\"bash\",\"timeout\":30}" } }] },
+      { "role": "tool", "tool_call_id": "d1", "name": "shell", "content": "mock-openai.py\nshot.js\nui-shot.sh\nsteps/" }
+    ]
+  }
+]

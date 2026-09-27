@@ -317,6 +317,17 @@
   .prog i{display:block;height:100%;background:var(--acc);transition:width .3s}
   .tabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
   /* 工具清单：一行一把，名字 + 来源标记 + 一句说明，开关在左边 */
+  /* 断点恢复的横幅： warn 色 + 两个明确的出口，不留"看起来像报错"的悬案 */
+  .resume{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    border:1px solid var(--warn);border-left-width:3px;border-radius:10px;
+    background:var(--glass2);padding:9px 12px;margin:2px 0 12px}
+  .resume span{flex:1;min-width:180px}
+  /* .btn 全局是 display:block;width:100%（侧栏那些整行的按钮靠它），
+     横幅里照抄就会变成两条通栏大按钮，把没跑完的那句话挤到屏幕外 */
+  .resume .btn{width:auto;flex:none;padding:6px 13px;font-size:12.5px}
+  .resume b{font-weight:600;font-size:12.5px;color:var(--warn)}
+  .resume i{font-style:normal;color:var(--dim);font-size:11.5px;
+    display:block;max-width:760px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .trows{display:flex;flex-direction:column;gap:2px;max-height:52vh;overflow:auto}
   .trow{border-bottom:1px solid var(--line);padding:3px 0}
   .trow .sw{display:flex;gap:8px;align-items:flex-start}
@@ -663,7 +674,7 @@ function view(sid){
   if(!v){
     v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
        tools:{},subs:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
-       mode:mode,workspace:'',model:'',outputs:[],queue:[],toolList:[]};
+       mode:mode,workspace:'',model:'',outputs:[],queue:[],toolList:[],runState:null};
     views[sid]=v;stream.appendChild(v.el);
   }
   return v;
@@ -683,7 +694,7 @@ function show(sid){
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
   fpath='';if(document.querySelector('#tab-files').classList.contains('on'))loadFiles();
-  paintSend();paintPill();paintQueue(v);paintTools(v.toolList);scroll(true);markSessions();
+  paintSend();paintPill();paintQueue(v);paintResume(v,v.runState);paintTools(v.toolList);scroll(true);markSessions();
 }
 // 本地 gguf 的"模型名"是一整条 Windows 路径，直接显示会把顶栏撑爆
 function shortModel(m){return m?String(m).replace(/^.*[\\/]/,'').replace(/\.gguf$/,''):'—'}
@@ -1234,6 +1245,24 @@ function previewHtml(src){
     // 换 sandbox 不会重载文档：重给一次 srcdoc，才是"从干净状态再跑一遍"
     fr.srcdoc=src;
   };
+}
+function paintResume(v,st){
+  // 横幅画在**这条会话自己的**视图里：多会话并行时它不该跟着切到别条
+  const old=v.el.querySelector('.resume');if(old)old.remove();
+  if(!st||v.running)return;
+  const b=el('<div class="resume"><span><b>上次这条跑到第 '+(st.turn||0)+' 轮被打断</b>'+
+    '<br><i>'+esc(st.goal||'')+'</i></span>'+
+    '<button class="btn pri" data-rs="go">从中断续跑</button>'+
+    '<button class="btn" data-rs="no">丢掉这段</button></div>');
+  b.querySelector('[data-rs=go]').onclick=()=>post('/api/resume',{sid:v.sid}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'续跑没启动');return}
+    toast('接着上次那几轮继续');hydrate(v.sid);
+  });
+  b.querySelector('[data-rs=no]').onclick=()=>post('/api/abandon',{sid:v.sid}).then(d=>{
+    if(!d||!d.ok){toast('丢不掉');return}
+    v.runState=null;paintResume(v,null);toast('已丢掉没跑完的现场');
+  });
+  v.el.insertBefore(b,v.el.firstChild);
 }
 function insertAtCursor(t){
   const s=box.selectionStart==null?box.value.length:box.selectionStart;
@@ -1924,6 +1953,15 @@ function openSession(id,hit){
   // 正在流式输出的半截回答丢掉，还会把工具卡重画成"已完成"的样子。
   if(views[id]&&views[id].hydrated){show(id);if(hit>=0)jumpToMsg(view(id),hit);return}
   if(hit>=0)view(id).jump=hit;   // 还没画过历史：等 applyState 画完再跳，早了找不到节点
+  /*
+   * 先切画面，再去拉历史。
+   *
+   * 以前这条路径只 hydrate、不 show（show 藏在 applyState 那句"curId 空或匹配才切"里，
+   * 而冷会话两边都不满足），于是**第一次点某条会话只把数据取回来、画面还停在上一条**，
+   * 得点第二下才换 —— 用户的第一反应会是"没点上"。
+   * 实测出来的：页面上同时挂着两条会话时，curId 一直不变（tools/steps/ui-resume.json）。
+   */
+  show(id);
   post('/api/open',{id:id}).then(()=>hydrate(id)).catch(code=>notice('打不开这个会话（'+code+'）','err'));
 }
 function hydrate(sid){
@@ -2012,6 +2050,7 @@ function applyState(s){
   (s.pending||[]).forEach(p=>ask(p.data,p.ev,v));
   v.queue=s.queue||[];paintQueue(v);
   if(s.tools)v.toolList=s.tools;
+  v.runState=s.runState||null;paintResume(v,v.runState);
   if(v===cur())paintTools(v.toolList);
   v.todos=(s.todos||[]).map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text);
   paintUsage(s.usage,v);
