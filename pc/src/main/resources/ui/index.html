@@ -233,7 +233,9 @@ function show(sid){
 }
 function scroll(){stream.scrollTop=stream.scrollHeight}
 
-function esc(t){return (t||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+// 数字也要能进来：esc(4096) 之前会直接 TypeError（number 没有 .replace），
+// 而设置抽屉里一旦有人把数字塞进模板，整个弹窗就画不出来了。
+function esc(t){return String(t==null?'':t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function md(t) {
   if (t == null || String(t).trim() === '') return '';   // 空回答不该产出任何标记（否则多一个空隔块）
   const esc2 = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -605,6 +607,7 @@ $('#cfgBtn').onclick=()=>{
       <div class="fld"><label>网关 Base URL</label><input type="text" id="fBase" value="${esc(c.baseUrl)}"></div>
       <div class="fld"><label>工作区</label><input type="text" id="fWs" value="${esc(c.workspace)}"></div>
       <div class="fld"><label>权限档位</label><input type="text" id="fMode" value="${esc(c.mode)}" placeholder="plan / ask / auto"></div>
+      <div class="fld"><label>单次回答上限（token，0=交给网关）</label><input type="text" id="fMax" value="${esc(c.maxTokens)}"></div>
       <div class="kv">这里改的是<b>全局默认</b>：模型与网关会立刻发给所有会话（正在跑的那条从下一次请求起生效）；
         工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。</div>
       <div class="fld"><label>密钥</label><div class="kv">${c.hasKey?('已设置 '+esc(c.keyHint)+'…'):'<b style="color:var(--warn)">未设置</b>（跑 haoai key sk-…）'}</div></div>
@@ -620,7 +623,8 @@ $('#cfgBtn').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
       fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model:dg.querySelector('#fModel').value,baseUrl:dg.querySelector('#fBase').value,
-          workspace:dg.querySelector('#fWs').value,mode:dg.querySelector('#fMode').value,flags})})
+          workspace:dg.querySelector('#fWs').value,mode:dg.querySelector('#fMode').value,
+          maxTokens:String(dg.querySelector('#fMax').value.replace(/\D/g,"")||"0"),flags})})
         .then(r=>r.json()).then(()=>{closeCfg();notice('设置已保存：所有会话下一条消息起用新的模型/网关')});
     };
   });
