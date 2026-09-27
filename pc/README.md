@@ -383,6 +383,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话�
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
 SHOT_MODE=subloop bash pc/tools/ui-shot.sh pc/tools/steps/ui-substop.json  # 子任务单独停 + 总闸连带停（几何三条 + 中断回话）
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-backup.json  # 备份：区块/导出/两下确认/自动 pre-restore
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -1217,6 +1218,44 @@ Chrome 就只发 `keydown` 不产生"打字"，于是"在输入框里按 y"这�
 （`mock-openai.py` 里同一处判据从一开始就是拼 `content`，所以像素侧没被误导 ——
 两边写法不一致反而救了一次：同一套逻辑的两份实现互相暴露了对方。）
 
+## 这一批：备份导出/恢复（v0.44.0，缺口地图 B1）
+
+状态根里跑着几十条会话、记忆、规则、技能 —— 以前没有任何一个能"整包带走"，
+误删只能靠回收站捞会话文件。这一批把 `pc/**/*.kt` 里 grep `backup` 为零这件事补上。
+
+- **`Backup.kt`**：zip 里 `manifest.json` + `payload/<范围>/<相对路径>`，
+  manifest 记 `format/kind/at/scopes/keysIncluded` 与**每条 payload 的 size + sha256** ——
+  **与手机端 `DataBackupManager` 同一套契约**（两端将来互认对方的包）。
+  五个范围：`settings`（settings/rules/approvals/mcp/browser）、`sessions`、`memory`、`skills`、`tasks`。
+- **恢复是先验后写**：全部 payload 抽到临时目录逐条校验，**任一条对不上（大小或 sha256）、
+  路径想跑出状态根（`../`、绝对路径）、格式版本比现在新、不是本端的包 —— 整包拒绝，
+  此时状态根一个字节都没动过**。全过了才写回，且写回前先自动导出一张 `pre-restore-*.zip` 当后悔药。
+- **`apikey`/`searchkey` 默认不进包**，勾了才写（manifest 的 `keysIncluded` 记在明处）。
+- **正在跑的会话一律拒绝导出/恢复**：引擎每轮 `persist()`，边写边读出来的包"看着完整其实缺半轮"。
+- 恢复成功之后把内存里的引擎与设置丢掉、重读状态根 —— 不丢就等于"恢复了，但界面还在用旧数据"。
+
+界面（设置抽屉最下面「数据与备份」）：勾"包含明文 Key" →「导出一份」→ 行内显示包名/条数/大小；
+恢复与删除都要**点两下**（按钮自己变成"再点一次：恢复会覆盖现在的状态根"）。
+刻意不用原生 `confirm()`：它会挡住无头验收，而且把"这一步会覆盖"放在按钮上更直白。
+
+判据（Kotlin，`BackupTest` 8 条）：导出→改一个字节→恢复被拒且**盘上原样**；越界路径被拒且外部没落文件；
+更新格式/外来包被拒；默认包里没有 key、勾了才有且 manifest 声明；新状态根恢复后逐字节一致 + 自动留了
+`pre-restore` 包；**真有一条会话在跑时导出与恢复都被挡、停掉后能导出**；非 ASCII key 给人话错误。
+（像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-backup.json`，19 步：区块在、默认不勾 Key、
+导出后行出现、第一下点只"上膛"不执行、第二下执行并重载、`/api/backups` 里出现 `pre-restore-*.zip`。）
+
+**这一批最该记的三件事：**
+
+1. **`readManifest` 的 `return@use` 只退出 lambda**，函数最后那句 `null` 才是返回值 ——
+   于是 manifest 永远读不到，症状是"恢复永远拒绝"。测试第一条就红了。
+2. **同一秒导出两次会拿到同一个包名**，后一份覆盖前一份（用户点两下就丢一份）。
+3. **量具自己串台**：`shot.js` 起浏览器**之后**才探 `/json/version`，而上一轮没退干净的无头 Edge
+   正占着 9339 —— 探测"成功"（连的是它），断言在新标签里跑、截图却落进它攒下的旧标签，
+   我截到了**上一轮会话的图**（版本号都对不上）。修法三件套：
+   `pickPort()` 开火前探端口、端口从 9340 起每次挑"真没人听"的、
+   `tools/kill-stale-shot.ps1` 清僵尸（而且必须放在**挑端口之前** —— 放后面会把刚起的服务杀掉，
+   页面整个打不开，这是同一个坑的第二半）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1283,7 +1322,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **186 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **194 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1308,7 +1347,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4），这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8），这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1349,7 +1388,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
    截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、
    跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、按回合落账的用量看板、
-   HTML 产出沙箱预览、长代码块折叠、会话级工具开关、断点恢复、审批键盘决定、子任务单独停、
+   HTML 产出沙箱预览、长代码块折叠、会话级工具开关、断点恢复、审批键盘决定、子任务单独停、备份导出/恢复、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

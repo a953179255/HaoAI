@@ -449,8 +449,11 @@
   .card.sub .sl.ans{color:var(--fg);font-family:inherit;font-size:12.5px;margin-top:2px}
   /* 设置抽屉里的规则表：能看更要能撤（审批卡上点了"以后都允许"之后得有地方收回） */
   .rules{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto;margin:2px 0 6px}
-  .rl{display:flex;gap:8px;align-items:center;font-size:12px;font-family:var(--mono);
+  .rl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;font-family:var(--mono);
     border:1px solid var(--line);border-radius:7px;padding:3px 4px 3px 8px;background:var(--glass)}
+  /* 备份行上的按钮会变成"再点一次：恢复会覆盖现在的状态根"这么长 —— flex 不换行、
+     按钮又能被压扁，那句话就被挤没了（屏幕上等于确认提示没出现）。 */
+  .rl .ab{flex:none;white-space:nowrap;margin-left:auto}
   .rl span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rl em{font-style:normal;color:var(--dim2);font-size:11px}
   /* 抽屉里那行是"名字 + 说明"挤在一行：不留间隙就粘成 "other1 条会话" */
@@ -2171,6 +2174,15 @@ function openCfg(){
         <input type="text" id="mcCmd" placeholder="命令与参数，如 node C:/srv/mcp-server.js"></div>
       <div class="acts2 pinned"><button class="btn" id="mcAdd">加为服务器</button>
         <span class="fp" id="mcState"></span></div>
+      <div class="grp" style="margin-top:12px">数据与备份</div>
+      <div class="kv">状态根里的会话、记忆、设置、规则、技能、定时任务打成一个 zip，每条 payload 都带 sha256；
+        恢复时**任一条对不上就整包拒绝**。密钥默认不进包（勾了才写进去）；恢复前会自动留一张 pre-restore 包当后悔药；
+        有会话正在跑时这两步都会被挡下。</div>
+      <label class="sw"><input type="checkbox" id="bKeys"><span><span class="t">导出时包含明文 Key</span><br>
+        <span class="d">勾了才把 apikey / searchkey 打进包 —— 谁拿到包谁就能用，默认别勾</span></span></label>
+      <div class="addrow"><button class="btn" id="bExport">导出一份到 backups/</button>
+        <span class="fp" id="bState"></span></div>
+      <div class="rules" id="bList">（加载中…）</div>
       <div class="acts"><button class="btn" id="cfgClose">关闭</button><button class="btn pri" id="cfgSave">保存</button></div>`;
     $('#mask').classList.add('on');
     dg.querySelector('#cfgClose').onclick=closeCfg;
@@ -2190,6 +2202,40 @@ function openCfg(){
     dg.querySelector('#mcAdd').onclick=()=>mcpEdit('add',
       dg.querySelector('#mcName').value,dg.querySelector('#mcCmd').value);
     loadMcp();
+    loadBackups(dg);
+    dg.querySelector('#bExport').onclick=()=>{
+      const st=dg.querySelector('#bState');
+      st.textContent='导出中…';
+      post('/api/backup',{action:'export',keys:dg.querySelector('#bKeys').checked?'true':'false',
+          scopes:['settings','sessions','memory','skills','tasks']}).then(x=>{
+        if(!x||!x.ok){st.textContent=(x&&x.error)||'导出失败';return}
+        st.textContent='已导出 '+x.name+'（'+x.entries+' 条 · '+fmtSize(x.bytes)+'）';
+        loadBackups(dg);
+        toast('备份包已写进 HAOAI_HOME/backups');
+      });
+    };
+    /*
+     * 恢复与删除要**点两下**确认：恢复会覆盖现在的状态根，一次误点不该有这种分量。
+     * 刻意不用原生 confirm() —— 它会挡住无头验收（我们的像素剧本没法点它的按钮），
+     * 而且行内确认能顺带把"这一步会覆盖"这句话放在按钮上。
+     */
+    dg.querySelector('#bList').onclick=e=>{
+      const t=e.target;if(!t.dataset)return;
+      const name=t.dataset.bres||t.dataset.bdel;if(!name)return;
+      const lab=t.dataset.lab||(t.dataset.lab=t.textContent);
+      if(t.dataset.arm!=='1'){
+        t.dataset.arm='1';
+        t.textContent=t.dataset.bres?'再点一次：恢复会覆盖现在的状态根':'再点一次确认删除';
+        clearTimeout(t._t);t._t=setTimeout(()=>{t.dataset.arm='';t.textContent=lab},5000);
+        return;
+      }
+      t.dataset.arm='';clearTimeout(t._t);t.textContent=lab;
+      post('/api/backup',{action:t.dataset.bres?'restore':'delete',name:name}).then(x=>{
+        if(!x||!x.ok){toast((x&&x.error)||'没成功','err');loadBackups(dg);return}
+        if(t.dataset.bres){toast('已恢复 —— 状态根换了，页面重读一遍');setTimeout(()=>location.reload(),600)}
+        else{toast('备份包已删除');loadBackups(dg)}
+      });
+    };
     dg.querySelector('#cfgSave').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
       const num=id=>String((dg.querySelector(id).value||'').replace(/\D/g,'')||'0');
@@ -2210,6 +2256,20 @@ function openCfg(){
           closeCfg();toast(k?'设置与密钥已保存':'设置已保存：所有会话下一条消息起生效');hydrate(curId)});
     };
   });
+}
+function loadBackups(dg){
+  const box=(dg||$('#dialog')).querySelector('#bList');if(!box)return;
+  fetch('/api/backups').then(r=>r.json()).then(j=>{
+    const items=(j&&j.items)||[];
+    box.innerHTML=items.length?items.map(b=>{
+      const pre=b.name.indexOf('pre-restore-')===0;
+      return '<div class="rl"><span title="'+esc(b.name)+'">'+esc(b.name)+'</span>'+
+        '<span>'+b.entries+' 条 · '+fmtSize(b.bytes)+(b.keysIncluded?' · 含明文 Key':'')+
+        (pre?' · 恢复前自动留的，不能删':'')+'</span>'+
+        '<button class="ab" data-bres="'+esc(b.name)+'">恢复</button>'+
+        (pre?'':'<button class="ab" data-bdel="'+esc(b.name)+'">删除</button>')+'</div>';
+    }).join(''):'<div class="kv">还没有备份包 —— 上面点「导出一份」就有了。</div>';
+  }).catch(()=>{box.innerHTML='<div class="kv">读不到备份列表</div>'});
 }
 $('#cfgBtn').onclick=openCfg;
 function ruleEdit(op,text){

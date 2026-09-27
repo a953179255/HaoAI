@@ -28,6 +28,8 @@ function arg(name, dflt) {
 
 const OUT = path.resolve(arg('out', '.'));
 const PORT = parseInt(arg('port', '9333'), 10);
+/** 实际用上的调试端口（端口被占时会往旁边挪）；连浏览器、读页签都得用它。 */
+let PORT_ACTUAL = PORT;
 const W = parseInt(arg('width', '1500'), 10);
 const H = parseInt(arg('height', '930'), 10);
 const steps = JSON.parse(fs.readFileSync(path.resolve(arg('steps', '')), 'utf8'));
@@ -38,18 +40,35 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'haoai-shot-'));
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+/**
+ * 端口被上一轮没退干净的 Edge 占着时，探 `/json/version` 会**成功**——
+ * 于是脚本以为自己的浏览器起来了，其实连的是别人的：断言在新标签里跑，
+ * 截图却可能落到它攒下的旧标签上（实测截到过上一轮的会话，版本号都不对）。
+ * 所以开火之前先探，占了就往旁边挪，挪不动才报错。
+ */
+async function pickPort(want) {
+  for (let p = want; p < want + 6; p++) {
+    try {
+      await fetch('http://127.0.0.1:' + p + '/json/version', {signal: AbortSignal.timeout(600)});
+    } catch (e) { return p;   // 没人听 —— 这个端口是我们的
+    }
+  }
+  throw new Error('调试端口 ' + want + '~' + (want + 5) + ' 都被占着（多半是上一轮的无头 Edge 没退）');
+}
+
 async function startBrowser() {
+  PORT_ACTUAL = await pickPort(PORT);
   const proc = spawn(EDGE, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
     '--window-size=' + W + ',' + H,
     '--user-data-dir=' + profile,
-    '--remote-debugging-port=' + PORT,
+    '--remote-debugging-port=' + PORT_ACTUAL,
     'about:blank',
   ], {stdio: ['ignore', 'ignore', 'pipe']});
   proc.stderr.on('data', d => { if (process.env.SHOT_VERBOSE) process.stderr.write(d); });
   for (let i = 0; i < 60; i++) {
     try {
-      const r = await fetch('http://127.0.0.1:' + PORT + '/json/version');
+      const r = await fetch('http://127.0.0.1:' + PORT_ACTUAL + '/json/version');
       const j = await r.json();
       // /json/version 的键是大写开头的（"Browser"），写成 j.browser 会一直判不到 —— 
       // 症状是"Edge 明明起了却报没起来"，而 DevTools listening 那行就在 stderr 上。
@@ -88,7 +107,7 @@ function send(method, params) {
 }
 
 async function attach(url) {
-  const info = await (await fetch('http://127.0.0.1:' + PORT + '/json/version')).json();
+  const info = await (await fetch('http://127.0.0.1:' + PORT_ACTUAL + '/json/version')).json();
   ws = new WebSocket(info.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('连不上 CDP')); });
   ws.onmessage = ev => {

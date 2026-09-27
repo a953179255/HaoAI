@@ -27,6 +27,10 @@ free_port() {
   done
   echo ""; return 1
 }
+# 清上一轮没退干净的僵尸（无头 Edge 攒标签、haoai 服务占着 87xx 端口）。
+# 必须在挑端口之前做 —— 晚一步就会连自己刚起的服务一起杀掉。
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/kill-stale-shot.ps1 2>/dev/null || true
+
 MOCK_PORT="$(free_port 8791 8890)"; PORT="$(free_port 8737 8790)"
 [ -n "$MOCK_PORT" ] && [ -n "$PORT" ] || { echo "x 找不到空端口"; exit 1; }
 echo "端口 mock=$MOCK_PORT web=$PORT"
@@ -106,7 +110,10 @@ for i in $(seq 1 40); do
 done
 echo "服务端 -> $(curl -s "http://127.0.0.1:$PORT/api/state" | head -c 200)"
 
-node tools/shot.js --out "$OUT" --port 9339 --width "${SHOT_W:-1500}" --height "${SHOT_H:-930}" \
+# 调试端口也每次挑"真没人听"的：写死 9339 的话，上一轮的僵尸一占就串台
+SHOT_PORT="$(free_port 9340 9399)"
+[ -n "$SHOT_PORT" ] || { echo "x 找不到空的调试端口"; exit 1; }
+node tools/shot.js --out "$OUT" --port "$SHOT_PORT" --width "${SHOT_W:-1500}" --height "${SHOT_H:-930}" \
   --url "http://127.0.0.1:$PORT/" --steps "$STEPS"
 echo "图在 $OUT"
 ls "$OUT"
