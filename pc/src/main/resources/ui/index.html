@@ -128,6 +128,8 @@
   .atchip em{font-style:normal;cursor:pointer;color:var(--dim2);padding:0 4px;flex:none}
   .atchip em:hover{color:var(--bad)}
   .atchip.no{border-color:var(--warn);color:var(--warn)}
+  /* 胶囊里要看得见那张图：一次截图后连着贴三张，只读文件名分不清哪张是哪张 */
+  .atchip .ath{width:38px;height:26px;object-fit:cover;border-radius:5px;border:1px solid var(--line);flex:none}
   /* 流里的图片：缩略图 + 文件名。图读不出来（工作区外、太大、类型不认）时至少还剩那行字 */
   .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .thumbs .th{display:flex;flex-direction:column;gap:3px}
@@ -300,6 +302,14 @@
   .mask{position:fixed;inset:0;background:rgba(6,10,8,.66);backdrop-filter:blur(4px);
     display:none;align-items:center;justify-content:center;z-index:20}
   .mask.on{display:flex}
+  /* 拖文件进来时的落点提示：盖住整屏但不拦事件（pointer-events:none），
+     否则 dragleave 会被这层自己吃掉，松手那一刻反而什么都收不到。 */
+  #dropMask{position:fixed;inset:0;z-index:19;display:none;align-items:center;justify-content:center;
+    background:rgba(6,10,8,.62);pointer-events:none}
+  #dropMask.on{display:flex}
+  #dropMask .dz{border:2px dashed var(--acc2);border-radius:16px;padding:26px 40px;text-align:center;
+    font-size:15px;background:var(--glass2);box-shadow:var(--shadow)}
+  #dropMask .dz i{display:block;margin-top:7px;font-style:normal;font-size:12px;color:var(--dim)}
   .dialog{width:min(580px,92vw);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);
     border-radius:var(--r2);padding:18px;box-shadow:var(--shadow)}
   .dialog h3{margin:0 0 4px;font-size:15px}
@@ -449,6 +459,7 @@
       <b>询问</b> 写文件/执行命令先问<br>
       <b>自动</b> 全自动，不再打断<br>
       <kbd>Enter</kbd> 发送 · <kbd>/</kbd> 命令 · <kbd>@</kbd> 提文件 · <kbd>Esc</kbd> 关弹窗<br>
+      <kbd>拖进来</kbd> 或 <kbd>Ctrl V</kbd> 加附件与截图 · <kbd>Ctrl N</kbd> 新任务<br>
       <kbd>Ctrl K</kbd> 搜会话 · <kbd>Ctrl B</kbd> 收侧栏 · <kbd>Alt 1/2/3</kbd> 切档
     </div>
   </aside>
@@ -486,7 +497,7 @@
       <div class="inwrap">
         <button class="clip" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读">📎</button>
         <input type="file" id="att" multiple hidden>
-        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 / 换行 Shift+Enter / 命令 / 提文件）"></textarea>
+        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 · Shift+Enter 换行 · / 命令 · @ 文件 · 拖进来或 Ctrl+V 贴截图）"></textarea>
         <button class="send" id="send">➤</button>
       </div>
     </footer>
@@ -565,6 +576,7 @@
 </div>
 
 <div class="mask" id="mask"><div class="dialog" id="dialog"></div></div>
+<div id="dropMask"><div class="dz">松开：作为附件加进这条会话<i>图片走视觉输入，文本文件直接贴进这句话</i></div></div>
 <div class="toast" id="toast"></div>
 <script src="/md.js"></script>
 <script>
@@ -1049,32 +1061,41 @@ function fmtSize(n){
 function paintAtts(){
   const r=$('#attRow');
   r.classList.toggle('on',atts.length>0);
+  const s=encodeURIComponent(curId||'');
   r.innerHTML=atts.map((a,i)=>`<span class="atchip${a.bad?' no':''}" title="${esc(a.p)}">`+
+    (a.img&&a.p?`<img class="ath" src="/api/img?sid=${s}&path=${encodeURIComponent(a.p)}" alt="" onerror="this.style.display='none'">`:'')+
     `<b>${esc(a.name)}</b><i>${a.bad?'递不出':fmtSize(a.bytes)}</i>`+
     `<em data-x="${i}" title="不要这张">✕</em></span>`).join('');
   r.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{atts.splice(+b.dataset.x,1);paintAtts()});
 }
+const IMG_MIME={'image/png':'png','image/jpeg':'jpg','image/gif':'gif','image/webp':'webp'};
 function attachFiles(list){
-  [...list].forEach(f=>{
-    if(TEXT_EXT.test(f.name)&&f.size<200_000){
+  [...list].forEach(src=>{
+    /* 剪贴板里的截图常常不带扩展名（有的浏览器给的名字就是 "image"），
+       只按后缀判会把真图当成"递不出的文件" —— 按 MIME 补一个名字再走。 */
+    const ext=IMG_MIME[(src.type||'').toLowerCase()];
+    const f=(!src.name&&ext)?new File([src],'粘贴图片.'+ext,{type:src.type}):src;
+    const name=f.name||('粘贴文件-'+Date.now());
+    const isImg=IMG_EXT.test(name)||/^image\//.test(f.type||'');
+    if(TEXT_EXT.test(name)&&f.size<200_000){
       const r=new FileReader();
-      r.onload=()=>{insertAtCursor('\n\n【附件 '+f.name+'】\n```\n'+String(r.result)+'\n```\n');toast('已把 '+f.name+' 贴进这句话')};
+      r.onload=()=>{insertAtCursor('\n\n【附件 '+name+'】\n```\n'+String(r.result)+'\n```\n');toast('已把 '+name+' 贴进这句话')};
       r.readAsText(f);
     }else if(f.size>9_000_000){
-      toast(f.name+' 太大（上限 9 MB）','err');
+      toast(name+' 太大（上限 9 MB）','err');
     }else{
       const r=new FileReader();
       r.onload=()=>{
-        post('/api/attach',{sid:curId,name:f.name,data:String(r.result).split(',')[1]||''}).then(d=>{
+        post('/api/attach',{sid:curId,name:name,data:String(r.result).split(',')[1]||''}).then(d=>{
           if(!d||!d.path){toast((d&&d.error)||'附件没存下','err');return}
           insertAtCursor('\n\n（附件已存到工作区：'+d.path+'，'+fmtSize(d.bytes)+'。要读它就按这个路径。）\n');
           // 图片额外挂到待发列表：路径只告诉模型"有这么个文件"，像素要另走 image_url 它才真看得见
-          if(IMG_EXT.test(f.name)){
+          if(isImg){
             if(atts.length>=4)toast('一条消息最多带 4 张图，多余的只留路径','err');
-            else atts.push({p:d.path,name:f.name,bytes:d.bytes});
+            else atts.push({p:d.path,name:name,bytes:d.bytes,img:isImg});
           }
           paintAtts();
-          toast('已附上 '+f.name);
+          toast('已附上 '+name);
         }).catch(c=>toast('附件没存下（'+c+'）','err'));
       };
       r.readAsDataURL(f);
@@ -1083,7 +1104,9 @@ function attachFiles(list){
 }
 function insertAtCursor(t){
   const s=box.selectionStart==null?box.value.length:box.selectionStart;
-  box.value=box.value.slice(0,s)+t+box.value.slice(s);
+  // 空框时不要留那两个换行：附件是这句话的**开头**，前面空两行会把输入框撑出一大条空白
+  const add=s===0?t.replace(/^\n+/,''):t;
+  box.value=box.value.slice(0,s)+add+box.value.slice(s);
   box.focus();box.dispatchEvent(new Event('input',{bubbles:true}));
 }
 function askText(title,tip,value,ok){
@@ -1421,10 +1444,28 @@ box.addEventListener('input',()=>{
 });
 $('#clip').onclick=()=>$('#att').click();
 $('#att').onchange=e=>{attachFiles(e.target.files);e.target.value=''};
-// 从资源管理器拖文件进窗口也算附件（这条只有真拖一下才会走到）
-document.addEventListener('dragover',e=>e.preventDefault());
+/* 拖进来要给可见的落点：以前只有松手那一刻才知道行不行，
+   "拖到一半没反应又缩回去"是这类壳子最常见的困惑。只在真拖着文件时出现 ——
+   选中文字往外拖不该弹这层，所以判 types 里有 Files。 */
+let dragN=0;
+function hasFiles(e){const t=e.dataTransfer&&e.dataTransfer.types;return !!t&&[...t].indexOf('Files')>=0}
+function dropHint(on){
+  dragN=on?dragN+1:0;
+  $('#dropMask').classList.toggle('on',dragN>0);
+}
+document.addEventListener('dragenter',e=>{if(hasFiles(e)){e.preventDefault();dropHint(1)}});
+// 不带 Files 的 dragover 故意不拦：那是选中的文字，要让浏览器原生处理
+document.addEventListener('dragover',e=>{if(hasFiles(e))e.preventDefault()});
+document.addEventListener('dragleave',e=>{if(hasFiles(e))dropHint(0)});
 document.addEventListener('drop',e=>{
   const f=e.dataTransfer&&e.dataTransfer.files;
+  dropHint(0);
+  if(f&&f.length){e.preventDefault();attachFiles(f)}
+});
+/* 剪贴板里的截图：微信/QQ/Snipaste 抓完图直接 Ctrl+V 就进这条会话。
+   只截"带文件"的粘贴，纯文本仍走浏览器原生（否则输入框里贴不进字）。 */
+document.addEventListener('paste',e=>{
+  const f=e.clipboardData&&e.clipboardData.files;
   if(f&&f.length){e.preventDefault();attachFiles(f)}
 });
 document.addEventListener('keydown',e=>{

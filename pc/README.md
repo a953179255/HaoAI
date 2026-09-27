@@ -372,6 +372,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-compact.json   # 手�
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-img.json      # 图片附件胶囊 + 真的走 image_url
 PRE_TOUCH="notes.txt" PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-search.json  # 搜索提供方设置 + 文件浏览器里的图片预览
 PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-model.json  # 只改当前会话的模型 + 回答里的 markdown 图片与 url 转义
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-paste.json  # 拖拽落点层 + Ctrl+V 贴截图进附件
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -800,6 +801,38 @@ md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉�
 顺带一处文档自纠：下面「已验证到哪一步」的条数一直停在 91，早就不对了 ——
 它恰好是"README 只当索引、数字要回代码里数"这条教训的现场版。
 
+## 这一批：截图 Ctrl+V 直接进会话 + 拖文件有落点
+
+上一批把"图片进上下文"打通了，但要送一张图进去还是得：截图 → 先存成文件 →
+点 📎 → 在文件对话框里找到它。微信/QQ/Snipaste 抓完图之后手上只有剪贴板，
+这条路上每一步都是断的；拖文件进来更是**拖到一半没有任何反馈**，只能凭感觉松手。
+
+- `paste`：剪贴板里有文件就接过来走同一条附件路；**只截带文件的粘贴**，
+  纯文本一律不拦（拦了就是"输入框里贴不进字"，这条有专门的判据）。
+- 剪贴板图片经常**没有扩展名**（有的浏览器给的名字就是 `image`），只按后缀认会把真图
+  判成"递不出的文件" —— 按 MIME 补一个名字（`粘贴图片.png`）再走。
+- `dragenter/dragleave` 计数控制一层 `#dropMask`（"松开：作为附件加进这条会话"），
+  `pointer-events:none` 是必须的：不然这层会自己吃掉 dragleave，松手时反而什么都收不到。
+  顺带修好一条旧的：原来 `dragover` 无条件 `preventDefault()`，
+  于是**选中的文字也拖不进输入框** —— 现在只拦真带文件的那次。
+- 附件胶囊里加了 38×26 的小图：连着贴三张截图时，只读 `image.png / image.png / image.png` 分不清。
+- 空框时 `insertAtCursor` 不再留开头那两个换行（附件就是这句话的开头，前面空两行会把输入框撑出一大条空白）。
+- 提示要跟着改：placeholder 与左栏「怎么用」现在写着"拖进来或 Ctrl+V 贴截图"——
+  看不见入口的功能等于没做。
+
+验收（`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-paste.json`，真像素）：
+拖拽时那层提示真的铺满屏且 `pointer-events:none`、松手后消失；
+贴 `image.png` → 胶囊出现且**胶囊里那张 40×40 的图是解出来的**（`prev:["40x40"]`）；
+贴无名图 → 胶囊名字变成 `粘贴图片.png`；贴纯文本 → `defaultPrevented=false`（没被劫持）；
+发出去之后自己那条气泡里两张缩略图都 `naturalWidth>0`、各 172×112。
+
+**这一批两次踩到"量具读错对象"**：第一次断言写的是 `.ans img`（回答气泡），
+而发出去的图缩略图挂在 `.msg.user .thumbs img` 上，于是读出 `thumbs:0` 像是坏了；
+第二次贴的是 72 字节的假 PNG，`onerror` 按设计把坏图藏掉，只剩文件名 ——
+换成页面里用 canvas 现画的**真 PNG** 才量得到 `loaded:2`。
+还有一条边界要写清：合成 `ClipboardEvent` 不会让浏览器真去插入文本，
+所以"文本粘贴没被劫持"的判据只能是 `defaultPrevented`，不是"字出现在框里"。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -928,6 +961,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    记忆与备份的两端同步（PC 与手机各写各的 `MEMORY.md` 与备份，没有汇合的那一步 —— 与下面第 3 条同源）。
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
+   截图 Ctrl+V 与拖拽进附件、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
