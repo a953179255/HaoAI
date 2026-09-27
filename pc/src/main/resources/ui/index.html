@@ -476,6 +476,37 @@
     display:block;border:1px solid var(--line2)}
   .pvmed audio{width:100%;max-width:420px;display:block}
   .pvmed .pm .kv{font-size:11.5px;opacity:.62}
+  /* 运行历史一行：时间 + 触发方式 + 结果，点「再来一次」把那句话填回输入框。
+     刻意不直接重跑：一键就跑掉一次任务（烧的是按量计费的 key）比多点一下回车贵得多。 */
+  .runs{display:flex;flex-direction:column;gap:4px;max-height:34vh;overflow:auto}
+  .rr{display:block;font-size:11.5px;padding:4px 0;border-bottom:1px solid var(--line)}
+  .rr .r1{display:flex;gap:6px;align-items:baseline}
+  /* 问句与那颗 ↻ 同一行：292px 的右栏放不下"时间+触发+结论+按钮+问句"五样 */
+  .rr .r2{display:flex;gap:6px;align-items:baseline}
+  .rr .r2 span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rr .r2 .ab{flex:none;width:auto;padding:1px 7px;font-size:11px;margin:0}
+  .rr .r2{font-size:12px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    color:var(--fg)}
+  .rr i{font-family:var(--mono);opacity:.62;flex:none;font-style:normal}
+  .rr em{font-style:normal;flex:none;padding:0 5px;border:1px solid var(--line);border-radius:6px;font-size:10px;color:var(--acc2)}
+  .rr b{font-weight:400;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rr.bad b{color:var(--bad)}
+  .rr .ab{flex:none;width:auto;padding:2px 7px;font-size:11px}
+  /* 命令面板：一个浮层找得到所有入口（ZCODE 的 quickPick 就是这点最顺手） */
+  .pal{position:fixed;left:50%;top:11vh;transform:translateX(-50%);width:min(620px,92vw);
+    display:none;z-index:60}
+  .pal.on{display:block}
+  .pal .pin{display:flex;gap:8px;align-items:center;background:var(--glass2);border:1px solid var(--line2);
+    border-radius:12px;padding:9px 12px}
+  .pal input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;font-size:13px}
+  .pal .pl{margin-top:6px;background:var(--glass2);border:1px solid var(--line2);border-radius:12px;
+    max-height:56vh;overflow:auto;padding:4px}
+  .pal .pi{display:flex;gap:9px;align-items:baseline;padding:6px 10px;cursor:pointer;font-size:12.5px;border-radius:8px}
+  .pal .pi.sel{background:var(--glass2)}
+  .pal .pi em{font-style:normal;flex:none;min-width:52px;font-size:10.5px;color:var(--dim)}
+  .pal .pi b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .palnum{outline:2px solid var(--acc2);outline-offset:3px;border-radius:6px}
+  .pal .pi span{color:var(--dim);font-size:11px;flex:none;margin-left:auto}
   /* Git 面板一行：勾选框 + porcelain 两列状态 + 路径 + diff 小按钮。
      按钮一律用 .ab —— 全局 .btn 是 display:block;width:100%，放进这一行会把整行撑爆。 */
   .gr{display:flex;gap:7px;align-items:center;font-size:12px;padding:2px 0;min-width:0}
@@ -611,6 +642,8 @@
       <div id="usageModels" class="mrows"></div>
       <div class="grp">近 14 天（柱高 = 当天补全 token）</div>
       <div id="usageDays" class="bars"></div>
+      <div class="grp">运行历史（每跑完一次记一行 · 可再来一次）</div>
+      <div id="runs" class="runs"></div>
       <div class="kv" id="usageMeta">—</div>
       <div class="grp">上下文</div>
       <div class="kv" id="ctxLine">—</div>
@@ -688,6 +721,11 @@
   </aside>
 </div>
 
+<div class="pal" id="pal">
+  <div class="pin"><input type="text" id="palQ" placeholder="命令 / 会话 / 文件 / 设置 —— 打几个字，上下键选，回车执行" autocomplete="off">
+  <kbd>Esc</kbd></div>
+  <div class="pl" id="palList"></div>
+</div>
 <div class="mask" id="mask"><div class="dialog" id="dialog"></div></div>
 <div id="dropMask"><div class="dz">松开：作为附件加进这条会话<i>图片走视觉输入，文本文件直接贴进这句话</i></div></div>
 <div class="toast" id="toast"></div>
@@ -970,6 +1008,124 @@ function paintUsage(u,v){
   $('#usage2').textContent=u?`输入 ${(u.prompt||0).toLocaleString()} / 输出 ${(u.completion||0).toLocaleString()}`:'输入 0 / 输出 0';
   $('#usage3').textContent=u&&u.turns?`${u.turns} 轮 · ↑ ${(u.prompt||0).toLocaleString()} · ↓ ${(u.completion||0).toLocaleString()}`:'—';
 }
+/* ---- 命令面板（Ctrl+Shift+P）----
+ * 一个浮层找得到所有入口：命令、会话、工作区文件、设置项、最近运行。
+ * 刻意**不**在这里做危险操作的第二步 —— 面板只负责"跳到那件事"，
+ * 真正的确认仍留在原处（清空历史、恢复备份这些还是要点两下）。
+ */
+let palOpen=false,palSel=0,palList=[],palTimer=null;
+const PALSET=[
+  ['设置：模型与网关','模型'],['设置：API 密钥','API 密钥'],['设置：工作区','工作区'],
+  ['设置：搜索提供方','搜索（web_search）'],['设置：实验特性','实验特性'],
+  ['设置：本工作区权限规则','本工作区权限规则'],['设置：外部 MCP 服务器','外部 MCP 服务器'],
+  ['设置：数据与备份','数据与备份'],
+  ['右栏：任务','#tabs button[data-t=tasks]'],
+  ['右栏：用量与运行历史','#tabs button[data-t=usage]'],['右栏：产出','#tabs button[data-t=files]'],
+  ['右栏：Git','#tabs button[data-t=git]'],['右栏：记忆','#tabs button[data-t=mem]'],
+  ['右栏：定时','#tabs button[data-t=cron]'],['右栏：工具','#tabs button[data-t=tools]'],
+  ['打开回收站','#trashBtn'],['导出这条会话','#expBtn'],['切换明暗主题','#themeBtn'],
+];
+/** 抽屉是 fetch 回来才渲染的，所以"跳到某一节"要等它出现（最多等 2 秒）。 */
+function palJumpCfg(needle){
+  openCfg();
+  let tries=0;
+  const tick=()=>{
+    const nodes=[...document.querySelectorAll('#dialog .grp, #dialog label')];
+    const hit=nodes.find(n=>n.textContent.indexOf(needle)>=0);
+    if(hit){hit.scrollIntoView({block:'start',behavior:'instant'});
+      hit.classList.add('palnum');setTimeout(()=>hit.classList.remove('palnum'),1600);return}
+    if(++tries<10)setTimeout(tick,200);else toast('设置里没找到「'+needle+'」','err');
+  };
+  setTimeout(tick,200);
+}
+function palToggle(force){
+  palOpen=(typeof force=='boolean')?force:!palOpen;
+  $('#pal').classList.toggle('on',palOpen);
+  if(!palOpen)return;
+  $('#palQ').value='';$('#palQ').focus();palRender('');
+}
+function palItems(q){
+  const s=(q||'').trim().toLowerCase();
+  const hit=t=>!s||String(t).toLowerCase().indexOf(s)>=0;
+  const out=[];
+  CMDS.forEach(c=>{if(hit(c.c+' '+(c.d||'')))out.push({g:'命令',t:c.c+(c.d?'  '+c.d:''),run:()=>runCommand(c.c)})});
+  PALSET.forEach(x=>{if(hit(x[0]))out.push({g:'跳转',t:x[0],run:()=>{
+    if(x[1][0]!='#'){palJumpCfg(x[1]);return}      // 不以 # 开头的那条是"设置里的某一节"
+    const e=document.querySelector(x[1]);if(!e){toast('找不到那个入口','err');return}
+    e.click();}})});
+  (sessList||[]).forEach(m=>{if(hit(m.title))out.push({g:'会话',t:m.title,run:()=>show(m.id)})});
+  runsCache.slice(0,6).forEach((r,i)=>{if(hit(r.goal))out.push({g:'重跑',t:'重跑：'+r.goal.slice(0,40),
+    run:()=>{palToggle(false);rerunGoal(r.goal)}})});
+  return out;
+}
+function palRender(q){
+  palList=palItems(q);palSel=0;
+  const box=$('#palList');
+  box.innerHTML=palList.length?palList.map((x,i)=>'<div class="pi'+(i==0?' sel':'')+'" data-i="'+i+'">'+
+    '<em>'+esc(x.g)+'</em><b>'+esc(x.t)+'</b>'+(x.g=='命令'?'<span>回车执行</span>':'')+'</div>').join('')
+    :'<div class="pi"><em>没有</em><b>没有匹配的东西，换个词试试</b></div>';
+  box.querySelectorAll('.pi[data-i]').forEach(e=>e.onclick=()=>{palSel=+e.dataset.i;palExec()});
+  // 文件是异步搜的：先画命令，回来再补在末尾，免得每敲一个字都卡一下
+  if((q||'').trim().length>=2){
+    const key=q;
+    fetch('/api/files?sid='+encodeURIComponent(curId||'')+'&q='+encodeURIComponent(q.trim()))
+      .then(r=>r.ok?r.json():{entries:[]}).then(d=>{
+        if($('#palQ').value!==key||!palOpen)return;         // 手已经打到下一个字了
+        const add=(d.entries||[]).slice(0,8).map(p=>({g:'文件',t:p.n||p,run:()=>{
+          box.value='';insertAtCursor('@'+(p.n||p));palToggle(false);box.focus();
+          box.dispatchEvent(new Event('input'));}}));
+        if(!add.length)return;
+        palList=palList.concat(add);
+        box.insertAdjacentHTML('beforeend',add.map(x=>'<div class="pi"><em>文件</em><b>'+
+          esc(x.t)+'</b></div>').join(''));
+        box.querySelectorAll('.pi').forEach((e,i)=>{e.dataset.i=i;e.onclick=()=>{palSel=i;palExec()}});
+      }).catch(()=>{});
+  }
+}
+function palMove(d){
+  if(!palList.length)return;
+  palSel=(palSel+d+palList.length)%palList.length;
+  const box=$('#palList');
+  box.querySelectorAll('.pi').forEach((e,i)=>e.classList.toggle('sel',i==palSel));
+  const cur=box.querySelector('.pi.sel');if(cur)cur.scrollIntoView({block:'nearest',behavior:'instant'});
+}
+function palExec(){
+  const x=palList[palSel];palToggle(false);
+  if(x&&x.run)x.run();
+}
+function rerunGoal(g){
+  document.querySelector('#tabs button[data-t=tasks]').click();
+  $('#box').value=g;$('#box').dispatchEvent(new Event('input'));
+  toast('已把那句话填回输入框，回车就跑');$('#box').focus();
+}
+document.addEventListener('mousedown',e=>{
+  if(!palOpen)return;
+  const p=document.querySelector('#pal');
+  if(p&&!p.contains(e.target))palToggle(false);
+});
+$('#palQ').addEventListener('input',()=>palRender($('#palQ').value));
+$('#palQ').addEventListener('keydown',e=>{
+  if(e.key=='ArrowDown'){e.preventDefault();palMove(1)}
+  else if(e.key=='ArrowUp'){e.preventDefault();palMove(-1)}
+  else if(e.key=='Tab'){e.preventDefault();palMove(e.shiftKey?-1:1)}
+  else if(e.key=='Enter'){e.preventDefault();palExec()}
+  else if(e.key=='Escape'){e.preventDefault();palToggle(false)}
+});
+let runsCache=[];
+function loadRuns(){
+  return fetch('/api/runs').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+    runsCache=(d&&d.items)||[];
+    const box=$('#runs');
+    if(!box)return;
+    box.innerHTML=runsCache.length?runsCache.slice(0,40).map((x,i)=>'<div class="rr'+(x.stopped?' bad':'')+'">'+
+      '<div class="r1"><i>'+esc(x.at)+'</i><em>'+esc(x.trigger)+'</em><i>'+esc(x.verdict)+'</i></div>'+
+      '<div class="r2"><span title="'+esc(x.goal)+' · 结论：'+esc(x.out||'')+'">'+esc(x.goal||x.title)+'</span>'+
+      '<button class="ab" data-r="'+i+'" title="再来一次：把这句话填回输入框（不直接跑 —— 一次运行花的是真 token）">↻</button></div></div>').join('')
+      :'<div class="kv">（还没有跑完过的任务。运行历史是**跑完才记**的，正在跑的那条在横幅上。）</div>';
+    box.querySelectorAll('[data-r]').forEach(b=>b.onclick=()=>rerunRun(+b.dataset.r));
+  }).catch(()=>{const b=$('#runs');if(b)b.innerHTML='<div class="kv">读不到运行历史</div>'});
+}
+function rerunRun(i){const x=runsCache[i];if(x&&x.goal)rerunGoal(x.goal)}
 function paintCtx(c){
   const used=(c&&c.chars)||0, win=(c&&c.window)||1, pct=Math.min(100,Math.round(used/win*100));
   const C=2*Math.PI*9, arc=$('#ctxArc');
@@ -1401,7 +1557,7 @@ if(localStorage.getItem('haoai-noL'))app.classList.add('no-l');
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
-  if(b.dataset.t=='usage')loadUsage();
+  if(b.dataset.t=='usage'){loadUsage();loadRuns()}
   if(b.dataset.t=='tools')hydrate(curId);
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='git')loadGit();
@@ -1836,9 +1992,11 @@ document.addEventListener('keydown',e=>{
     app.classList.remove('show-l','show-r');
     if(cfgOpen)closeCfg();
     else $('#mask').classList.remove('on');
+    if(palOpen){palToggle(false);return}
     hideSlash();return;
   }
   if(mod&&e.key.toLowerCase()=='n'){e.preventDefault();$('#newBtn').click();return}
+  if(mod&&e.shiftKey&&e.key.toLowerCase()=='p'){e.preventDefault();palToggle();return}
   if(mod&&e.key.toLowerCase()=='k'){e.preventDefault();$('#sessQ').focus();return}
   if(mod&&e.key.toLowerCase()=='b'){e.preventDefault();$('#railBtn').click();return}
   if(e.altKey&&['1','2','3'].includes(e.key)){e.preventDefault();setModeNow(['plan','ask','auto'][+e.key-1])}

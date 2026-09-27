@@ -194,14 +194,23 @@ async function type(step) {
 const KEYCODE = {Tab: 9, Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39};
 
 /** 真按键：Tab / 方向键这类要走"默认行为"的路径，用 eval 派发合成事件是测不出来的。 */
-async function key(name) {
+const MOD_BIT = {alt: 1, ctrl: 2, meta: 4, shift: 8};
+/** mods 是给快捷键本身用的（Ctrl+Shift+P 这种）：不带修饰位的话 Chrome 收到的就是裸的 P。 */
+function modMask(mods) {
+  let m = 0;
+  for (const x of (mods || [])) m |= (MOD_BIT[String(x).toLowerCase()] || 0);
+  return m;
+}
+async function key(name, mods) {
   const vk = KEYCODE[name] || (name.length === 1 ? name.toUpperCase().charCodeAt(0) : 0);
+  const mask = modMask(mods);
   // 单个字符要带 text：不带的话 Chrome 只发 keydown 不产生"打字"，
   // 于是"在输入框里按 y 该打出 y 还是该决定审批"这种判据根本测不出来。
   const ch = name.length === 1;
   for (const t of ['keyDown', 'keyUp'])
     await send('Input.dispatchKeyEvent', {
       type: t, key: name, code: ch ? 'Key' + name.toUpperCase() : name,
+      modifiers: mask,
       windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk,
       ...(ch && t === 'keyDown' ? {text: name, unmodifiedText: name} : {}),
     });
@@ -235,7 +244,7 @@ async function waitFor(sel, timeoutMs) {
       } else if (s.sleep) await sleep(s.sleep);
       else if (s.eval) console.log('  断言 ' + (JSON.stringify(await evalJs(s.eval)) || ''));
       else if (s.click) { await click(s.click); await sleep(s.after || 350); }
-      else if (s.key) { await key(s.key); await sleep(s.after || 250); }
+      else if (s.key) { await key(s.key, s.mods); await sleep(s.after || 250); }
       else if (s.type) { await type(s.type); await sleep(s.after || 350); }
       else if (s.shot) await shot(s.shot);
     }

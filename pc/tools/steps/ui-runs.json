@@ -1,0 +1,193 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "第一条：把标题写进 notes.md",
+      "enter": true
+    }
+  },
+  {
+    "sleep": 3000
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "第二条：数一下有几个文件",
+      "enter": true
+    }
+  },
+  {
+    "sleep": 3000
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "第三条：读一遍 README",
+      "enter": true
+    }
+  },
+  {
+    "sleep": 3000
+  },
+  {
+    "eval": "fetch('/api/runs').then(r=>r.json()).then(d=>({count:d.count,goals:d.items.map(x=>x.goal.slice(0,12)),triggers:d.items.map(x=>x.trigger),verdicts:d.items.map(x=>x.verdict)}))"
+  },
+  {
+    "click": "#tabs button[data-t=usage]"
+  },
+  {
+    "sleep": 1400
+  },
+  {
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#runs .rr')];const r=rows[0];const rr=r?r.getBoundingClientRect():null;return {rows:rows.length,first:r?r.textContent.replace(/\\s+/g,' ').slice(0,70):'',inViewport:!!(rr&&rr.top>=0&&rr.bottom<=innerHeight),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,btns:rows.map(x=>!!x.querySelector('[data-r]')).filter(Boolean).length}})()"
+  },
+  {
+    "eval": "(()=>{const r=document.querySelector('#runs .rr');if(!r)return 'no row';const rail=document.querySelector('.rail.r').getBoundingClientRect();const sp=r.querySelector('.r2 span').getBoundingClientRect();const btn=r.querySelector('[data-r]').getBoundingClientRect();return {goalW:Math.round(sp.width),goalText:r.querySelector('.r2 span').textContent.slice(0,18),rowH:Math.round(r.getBoundingClientRect().height),btnFits:btn.right<=rail.right+1,btnVisible:btn.width>0&&btn.right<=rail.right+1,railRight:Math.round(rail.right),btnRight:Math.round(btn.right),railScrollX:document.querySelector('.rail.r').scrollWidth>rail.width+1}})()"
+  },
+  {
+    "shot": "h01-runs"
+  },
+  {
+    "click": "#runs .rr [data-r]"
+  },
+  {
+    "sleep": 700
+  },
+  {
+    "eval": "(()=>({boxValue:document.querySelector('#box').value,focused:document.activeElement.id,toast:document.querySelector('.toast')?document.querySelector('.toast').textContent:''}))()"
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 3200
+  },
+  {
+    "eval": "fetch('/api/runs').then(r=>r.json()).then(d=>({count:d.count,newest:d.items[0]&&d.items[0].goal.slice(0,14),trigger:d.items[0]&&d.items[0].trigger}))"
+  },
+  {
+    "key": "P",
+    "mods": [
+      "ctrl",
+      "shift"
+    ]
+  },
+  {
+    "sleep": 700
+  },
+  {
+    "eval": "(()=>{const p=document.querySelector('#pal');const items=[...document.querySelectorAll('#palList .pi')];const r=p.getBoundingClientRect();return {open:p.classList.contains('on'),items:items.length,groups:[...new Set(items.slice(0,12).map(x=>x.querySelector('em').textContent))].join(','),focused:document.activeElement.id,w:Math.round(r.width),top:Math.round(r.top),inViewport:r.top>=0&&r.right<=innerWidth+1}})()"
+  },
+  {
+    "type": {
+      "sel": "#palQ",
+      "text": "git",
+      "enter": false
+    }
+  },
+  {
+    "sleep": 1200
+  },
+  {
+    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];return {items:items.length,texts:items.map(x=>x.textContent.replace(/\\s+/g,' ').slice(0,26)).join(' | '),firstSel:items[0]&&items[0].classList.contains('sel')}})()"
+  },
+  {
+    "shot": "h02-palette"
+  },
+  {
+    "key": "ArrowDown"
+  },
+  {
+    "sleep": 300
+  },
+  {
+    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];const i=items.findIndex(x=>x.classList.contains('sel'));return {selIndex:i,total:items.length,picked:items[i]?items[i].textContent.replace(/\\s+/g,' ').slice(0,24):''}})()"
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 1200
+  },
+  {
+    "eval": "(()=>({palClosed:!document.querySelector('#pal').classList.contains('on'),gitTabOn:document.querySelector('#tabs button[data-t=git]').classList.contains('on'),panelOn:!!document.querySelector('#tab-git.on'),gitRows:document.querySelectorAll('#gitList .gr').length}))()"
+  },
+  {
+    "key": "P",
+    "mods": [
+      "ctrl",
+      "shift"
+    ]
+  },
+  {
+    "sleep": 500
+  },
+  {
+    "type": {
+      "sel": "#palQ",
+      "text": "数据与备份",
+      "enter": false
+    }
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];return {items:items.length,first:items[0]?items[0].textContent.replace(/\\s+/g,' ').slice(0,30):''}})()"
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 800
+  },
+  {
+    "eval": "(()=>{const hl=document.querySelector('.palnum');const dg=document.querySelector('#dialog');return {maskOn:document.querySelector('#mask').classList.contains('on'),drawerOpen:!!(dg&&dg.textContent.indexOf('数据与备份')>=0),highlighted:!!hl,scrolled:hl?Math.round(hl.getBoundingClientRect().top):-1}})()"
+  },
+  {
+    "shot": "h03-settings-jump"
+  },
+  {
+    "key": "Escape"
+  },
+  {
+    "sleep": 600
+  },
+  {
+    "eval": "(()=>({maskClosed:!document.querySelector('#mask').classList.contains('on'),palClosed:!document.querySelector('#pal').classList.contains('on')}))()"
+  },
+  {
+    "eval": "(()=>{document.querySelector('#box').value='正在打字时不该被抢键';document.querySelector('#box').focus();return 'ready'})()"
+  },
+  {
+    "key": "y"
+  },
+  {
+    "eval": "(()=>({boxValue:document.querySelector('#box').value,palStillClosed:!document.querySelector('#pal').classList.contains('on')}))()"
+  },
+  {
+    "key": "P",
+    "mods": [
+      "ctrl",
+      "shift"
+    ]
+  },
+  {
+    "sleep": 500
+  },
+  {
+    "eval": "(()=>({opened:document.querySelector('#pal').classList.contains('on')}))()"
+  },
+  {
+    "click": "#box"
+  },
+  {
+    "sleep": 400
+  },
+  {
+    "eval": "(()=>({closedByOutsideClick:!document.querySelector('#pal').classList.contains('on')}))()"
+  }
+]

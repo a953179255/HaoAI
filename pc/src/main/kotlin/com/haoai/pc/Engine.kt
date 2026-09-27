@@ -354,6 +354,14 @@ class Engine(
         private set
     @Volatile var runStarted: Long = 0L
         private set
+    /**
+     * 这次运行是**谁**发起的：手动 / 排队 / 重跑 / 改问重发 / 定时 / 续跑。
+     *
+     * 由调用方（Server 的 startRun）在 beginRun 之后写一次，运行结束时进 [RunLedger]。
+     * 历史里没有这一列就没法用：定时任务半夜跑的那几次和白天手点的那几次混在一起，
+     * "到底是不是它自己跑挂了"查不出来。
+     */
+    @Volatile var runTrigger: String = "手动"
 
     fun runStateJson(): String? = runGoal?.let { g ->
         buildJsonObject {
@@ -714,6 +722,13 @@ class Engine(
         if (turnNo >= settings.maxTurns) emit(Ev.Notice("已达单轮工具调用上限 ${settings.maxTurns}，先收尾。"))
         // 走到这里就是"这一条自己收的尾"（含用户按停止）：现场清掉，
         // 不然重启之后界面上还会举一条"上次跑到一半"的横幅。
+        // 运行历史：先记账再清现场（清完就拿不到 turns 与 started 了）
+        val began = if (runStarted > 0L) runStarted else System.currentTimeMillis()
+        RunLedger.add(
+            sid = session.id, title = session.title.get(), goal = runGoal ?: "",
+            trigger = runTrigger, turns = turnNo, ms = System.currentTimeMillis() - began,
+            stopped = stopRequested, out = lastText
+        )
         runGoal = null; runTurn = 0; runStarted = 0L
         persist()
         emit(Ev.TextDone(lastText))

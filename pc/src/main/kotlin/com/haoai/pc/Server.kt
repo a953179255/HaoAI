@@ -161,6 +161,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/files" -> files(ex)
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
+                "/api/runs" -> send(ex, 200, RunLedger.json(),
+                    "application/json; charset=utf-8")
                 "/api/usage" -> send(ex, 200, UsageLedger.report(),
                     "application/json; charset=utf-8")
                 "/api/file" -> fileOne(ex)
@@ -431,7 +433,8 @@ class WebServer(settings: PcSettings, port: Int,
     private fun startRun(wantSid: String, text: String, cutTo: Int? = null,
                          named: String = "", fresh: Boolean = false,
                          images: List<String> = emptyList(),
-                         goal: String? = null): Pair<String, String?> {
+                         goal: String? = null,
+                         trigger: String = "手动"): Pair<String, String?> {
         /*
          * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
          * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
@@ -466,6 +469,7 @@ class WebServer(settings: PcSettings, port: Int,
                 touch(target)
                 // 清停止旗要和置 running 在同一把锁里：见 Engine.beginRun 的注释
                 m.engine.beginRun()
+                m.engine.runTrigger = trigger
                 m.running = true
                 if (named.isNotEmpty()) {
                     m.engine.session.title.set(named)
@@ -527,7 +531,7 @@ class WebServer(settings: PcSettings, port: Int,
                 }
                 if (next != null) {
                     publish("queue", queueJson(sid, synchronized(managed.queue) { managed.queue.toList() }), sid)
-                    val (_, qErr) = startRun(sid, next.first, null, "", false, next.second)
+                    val (_, qErr) = startRun(sid, next.first, null, "", false, next.second, trigger = "排队")
                     if (qErr != null) publish("err", quote("排队的那句没发出去：" + qErr), sid)
                 }
             }
@@ -571,7 +575,7 @@ class WebServer(settings: PcSettings, port: Int,
             send(ex, 200, """{"ok":false,"error":"缺 text 或 sid"}""",
                 "application/json; charset=utf-8"); return
         }
-        val (got, err) = startRun(sid, text, cutTo = index)
+        val (got, err) = startRun(sid, text, cutTo = index, trigger = "重跑")
         if (err != null) {
             send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8"); return
         }
@@ -613,7 +617,7 @@ class WebServer(settings: PcSettings, port: Int,
             send(ex, 200, """{"ok":false,"error":"这条会话里还没有可重问的一句话"}""",
                 "application/json; charset=utf-8"); return
         }
-        val (got, err) = startRun(sid, text, cutTo = idx)
+        val (got, err) = startRun(sid, text, cutTo = idx, trigger = "改问重发")
         if (err != null) {
             send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8"); return
         }
@@ -1138,7 +1142,7 @@ class WebServer(settings: PcSettings, port: Int,
         item.lastError = ""
         Schedules.update(item)
         val sid = try {
-            val (newId, err) = startRun("", item.prompt, named = item.name, fresh = true)
+            val (newId, err) = startRun("", item.prompt, named = item.name, fresh = true, trigger = "定时")
             if (err != null) throw IllegalStateException(err)
             publish("title", """{"title":${quote(item.name)}}""", newId)
             // 侧栏要立刻刷出来：定时任务跑那几分钟里用户得看得见它在动，而不是"到点没反应"
@@ -1660,7 +1664,7 @@ class WebServer(settings: PcSettings, port: Int,
         }
         // 横幅上沿用原来那句目标：续跑话术只是给模型的指令，
         // 拿它当"上次在做的事"显示，再被打断一次就会自指成绕口令。
-        val (got, err) = startRun(sid, prompt, goal = engine?.runGoal)
+        val (got, err) = startRun(sid, prompt, goal = engine?.runGoal, trigger = "续跑")
         send(ex, 200, if (err == null) """{"ok":true,"sid":${quote(got)}}"""
         else """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
     }

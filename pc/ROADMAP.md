@@ -66,8 +66,8 @@
 8. **媒体工具（ffmpeg）** —— ✅ v0.45.0 已落地（`Media.kt` + `media` 工具 + `/api/media` Range +「产出」播放器）。｜ OpenClaw image/video-generation + media 播放转码、Hermes 语音 ｜ `pc/**` grep `ffmpeg|transcode` **零命中** ｜ 你直说要"视频制作自动化、帮直播和创作视频" —— 这是最直接的那块 ｜ 无 ffmpeg 时**明确报错并给出安装指引**（不能静默失败）；有则：转码 mp4→mp3、抽 1 帧 png、切 3 秒、抽音轨；产出进 `.haoao-output/` 并在产出面板能 `<video>/<audio>` 播放 ｜ PC
 9. **录屏 + 直播控制** ｜ OpenClaw nodes `screen.record`（它自己 gateway 层 deny 了）｜ 无（grep `obs|record` 零命中）｜ 直播创作的下一步 ｜ 录一段 mp4 到产出面板可播；OBS（obs-websocket）先做"检测到才可用"，没装就说清楚 ｜ PC
 10. **音视频附件 + 代码执行** ｜ ZCODE `code_execution`/`node-repl`、Codex `execute_code` ｜ 附件白名单只有文本+图片（`index.html:1187-1188`），mp4/wav 拖进去没有专门路径；无 `run_code` ｜ 视频工作流要递素材；vibe coding 要跑一段脚本看结果 ｜ 拖 mp4 → 附件胶囊显示类型与大小 → 模型收到落盘路径；`run_code` 跑出的 png 出现在产出面板；超时有界 ｜ PC
-11. **命令面板（Ctrl+Shift+P）** ｜ ZCODE quickPick、OpenClaw command-palette ｜ `grep -c palette = 0`；只有聊天内 `/` 菜单与 Ctrl+K 搜会话 ｜ 认可的 UI 点之一：所有入口一个浮层找得到 ｜ 浮层模糊搜「会话 / 命令 / 设置项 / 文件」→ 上下键 → 回车执行；输入框聚焦时不该抢键（沿用 v0.42 的规矩）｜ PC
-12. **任务运行历史（runs）** ｜ OpenClaw tasks/runs、ZCODE 后台任务列表 ｜ 定时任务有列表，但**每一次跑完不留档**，没有"上次几点跑的、成功没、重跑" ｜ 自动化必须可回看，否则不敢开定时 ｜ 跑 3 次 → 历史 3 条（时间/触发/结果摘要）→ 点重跑出第 4 条 ｜ PC
+11. **命令面板（Ctrl+Shift+P）** —— ✅ v0.47.0 已落地。｜ ZCODE quickPick、OpenClaw command-palette ｜ `grep -c palette = 0`；只有聊天内 `/` 菜单与 Ctrl+K 搜会话 ｜ 认可的 UI 点之一：所有入口一个浮层找得到 ｜ 浮层模糊搜「会话 / 命令 / 设置项 / 文件」→ 上下键 → 回车执行；输入框聚焦时不该抢键（沿用 v0.42 的规矩）｜ PC
+12. **任务运行历史（runs）** —— ✅ v0.47.0 已落地（`RunLedger` + 用量页签底部 + ↻ 填回输入框）。｜ OpenClaw tasks/runs、ZCODE 后台任务列表 ｜ 定时任务有列表，但**每一次跑完不留档**，没有"上次几点跑的、成功没、重跑" ｜ 自动化必须可回看，否则不敢开定时 ｜ 跑 3 次 → 历史 3 条（时间/触发/结果摘要）→ 点重跑出第 4 条 ｜ PC
 
 ### P2 —— 增强项（排后面）
 
@@ -99,7 +99,7 @@
 | **B3** | 终端面板（右栏「终端」页签、多标签、与 agent 共用进程注册表） | B2 | PC |
 | **B4** | 跨端通道（局域网端点 + token 配对）+ 会话只读镜像 + 远程审批 | — | 两端 |
 | **B5** | ✅ v0.46.0 已落地：Git 面板（status/勾选暂存/看 diff/提交） | — | PC |
-| **B6** | 命令面板 + 任务运行历史 | — | PC |
+| **B6** | ✅ v0.47.0 已落地：命令面板（Ctrl+Shift+P）+ 任务运行历史（runs.jsonl + ↻） | — | PC |
 | **B7** | ✅ v0.45.0 已落地：媒体工具 ffmpeg（info/转码/剪切/抽帧/抽音轨/封面）+ 产出直接播 | — | PC |
 | **B8** | 浏览器预览面板（CDP 画面进网页 + 点按回传） | — | PC |
 | **B9** | 音视频附件 + `run_code` | — | PC |

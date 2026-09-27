@@ -106,6 +106,20 @@ const unknown = [...apiPaths].filter(p => !routes.has(p)).sort();
 check(unknown.length === 0, '前端没有调到不存在的接口',
   '陌生接口：' + unknown.join(', ') + '\n         （服务端路由：' + [...routes].filter(r => r.startsWith('api/')).sort().join(', ') + '）');
 
+// ---- 5.5) 整段前端 JS 必须能解析 ----
+/*
+ * 浏览器只在真的加载到那段脚本时才报语法错，而剧本可能压根没跑到那一步 ——
+ * 于是"界面坏了"要等到有人手动打开页面才看得见。这里直接拿 V8 解析一遍整段 script。
+ */
+const jsBlocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+let jsBad = '';
+for (const src of jsBlocks) {
+  if (!src.trim()) continue;
+  try { new Function(src); } catch (e) { jsBad = e.message; break; }
+}
+check(jsBlocks.length > 0, '抓到前端整段脚本', jsBlocks.length + ' 段');
+check(jsBad === '', '整段前端 JS 能解析', jsBad);
+
 // ---- 6) 像素剧本里的每条 eval 必须能解析 ----
 /*
  * 三条真事故换来的：eval 步骤里一个 `a:+(x)` 之类的笔误，要等整轮浏览器起完、
