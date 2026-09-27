@@ -1,0 +1,90 @@
+[
+  {
+    "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=git]');b.click();return {tabOn:b.classList.contains('on'),panelOn:!!document.querySelector('#tab-git.on'),hasList:!!document.querySelector('#gitList')}})()"
+  },
+  {
+    "sleep": 1200
+  },
+  {
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];return 'head='+document.querySelector('#gitHead').textContent+' | last='+document.querySelector('#gitLast').textContent+' | rows='+rows.map(r=>r.querySelector('b').textContent+':'+r.querySelector('i').textContent+(r.classList.contains('st')?'[staged]':'')).join(', ')})()"
+  },
+  {
+    "eval": "(()=>{const r=document.querySelector('#gitList .gr');const cb=r.querySelector('input');const bb=r.querySelector('b').getBoundingClientRect();const ab=r.querySelector('[data-d]').getBoundingClientRect();const cr=r.getBoundingClientRect();return {cbVisible:cb.getBoundingClientRect().width>0,pathEllipsis:bb.width>0&&bb.right<=cr.right+1,diffBtnInside:ab.right<=cr.right+1&&ab.left>bb.left-1,rowH:Math.round(cr.height),pageOverflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,btnWidth:Math.round(ab.width),msgW:Math.round(document.querySelector('#gitMsg').getBoundingClientRect().width),msgOwnLine:(()=>{const i=document.querySelector('#gitMsg').getBoundingClientRect();const b=document.querySelector('#gStage').getBoundingClientRect();return i.bottom<=b.top+2})()}})()"
+  },
+  {
+    "click": "#gitList .gr input"
+  },
+  {
+    "eval": "(()=>{const i=document.querySelector('#gitList .gr input');return {firstRow:i.dataset.p,checked:i.checked}})()"
+  },
+  {
+    "click": "#gStage"
+  },
+  {
+    "sleep": 1400
+  },
+  {
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];return 'state='+document.querySelector('#gitState').textContent+' | head='+document.querySelector('#gitHead').textContent+' | stagedRows='+rows.filter(r=>r.classList.contains('st')).map(r=>r.querySelector('b').textContent).join(',')})()"
+  },
+  {
+    "shot": "g01-staged"
+  },
+  {
+    "click": "#gitList .gr [data-d]"
+  },
+  {
+    "sleep": 1400
+  },
+  {
+    "eval": "(()=>{const d=document.querySelector('#dialog');const pre=d?d.querySelector('pre'):null;const t=pre?pre.textContent:'';return {maskOn:document.querySelector('#mask').classList.contains('on'),title:d?d.querySelector('h3').textContent:'',hasPlus:t.indexOf('+two changed')>=0,hasMinus:t.indexOf('-two')>=0,len:t.length}})()"
+  },
+  {
+    "shot": "g02-diff"
+  },
+  {
+    "click": "#dialog #gClose"
+  },
+  {
+    "type": {
+      "sel": "#gitMsg",
+      "text": "面板提交：把 a.txt 的第二行改掉",
+      "enter": false
+    }
+  },
+  {
+    "click": "#gCommit"
+  },
+  {
+    "sleep": 1800
+  },
+  {
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];return 'state='+document.querySelector('#gitState').textContent+' | head='+document.querySelector('#gitHead').textContent+' | last='+document.querySelector('#gitLast').textContent+' | leftRows='+rows.map(r=>r.querySelector('b').textContent).join(',')})()"
+  },
+  {
+    "eval": "fetch('/api/gitstatus?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(d=>({branch:d.branch,last:d.last,clean:d.clean,count:d.count,staged:d.stagedCount,entries:d.entries.map(e=>e.p+(e.staged?'*':''))}))"
+  },
+  {
+    "shot": "g03-committed"
+  },
+  {
+    "eval": "(()=>{document.querySelector('#gitMsg').value='';document.querySelector('#gCommit').click();return '空说明按下去了'})()"
+  },
+  {
+    "sleep": 1200
+  },
+  {
+    "eval": "(()=>{const s=document.querySelector('#gitState').textContent;return {state:s,refused:s.indexOf('提交说明')>=0||s.indexOf('没有可提交')>=0}})()"
+  },
+  {
+    "eval": "fetch('/api/gitstage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,paths:['../../outside.txt'],unstage:'0'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:d.error}))"
+  },
+  {
+    "eval": "fetch('/api/gitstage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,paths:['--no-verify'],unstage:'0'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:(d.error||'').slice(0,40)}))"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({version:s.version,workspace:s.workspace}))"
+  },
+  {
+    "shot": "g04-refused"
+  }
+]

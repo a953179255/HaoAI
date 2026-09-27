@@ -177,6 +177,10 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/backups" -> send(ex, 200, backupsJson(), "application/json; charset=utf-8")
                 "/api/backup" -> backupOp(ex)
                 "/api/substop" -> stopSubtask(ex)
+                "/api/gitstatus" -> gitStatus(ex)
+                "/api/gitdiff" -> gitDiff(ex)
+                "/api/gitstage" -> gitStage(ex)
+                "/api/gitcommit" -> gitCommit(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -1680,6 +1684,66 @@ class WebServer(settings: PcSettings, port: Int,
      * 和"停止"那颗总闸的区别：总闸会把这一轮整个中止（包括正在写的正文），
      * 而这里只让那条跑偏的调研收尾 —— 父引擎拿到一句"子任务被中断"，接着干别的。
      */
+    /**
+     * `GET /api/gitstatus?sid=` —— Git 面板要的那份状态。
+     *
+     * 不在仓库里也回 200 + `isRepo:false`：面板要能说一句"这里不是仓库"，
+     * 而不是摆一个空列表让人以为"没有改动"（这两件事差很远）。
+     */
+    private fun gitStatus(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val ws = (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile())
+        val repo = GitPanel.repoFor(ws)
+        if (repo == null) {
+            send(ex, 200, """{"ok":true,"isRepo":false,"clean":true,"count":0,"stagedCount":0,""" +
+                """"entries":[],"note":"这里不是 git 仓库（工作区往上也没有 .git）"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        send(ex, 200, GitPanel.statusJson(repo), "application/json; charset=utf-8")
+    }
+
+    /** `GET /api/gitdiff?sid=&path=&staged=` —— 单个文件的差异，只读。 */
+    private fun gitDiff(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val repo = GitPanel.repoFor(
+            (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile())
+        ) ?: return send(ex, 200, """{"ok":false,"error":"这里不是 git 仓库"}""",
+            "application/json; charset=utf-8")
+        send(ex, 200, GitPanel.diffJson(repo, queryOf(ex, "path"), queryOf(ex, "staged") == "1"),
+            "application/json; charset=utf-8")
+    }
+
+    /**
+     * `POST /api/gitstage` {sid, paths[], unstage} —— 勾选暂存 / 取消暂存。
+     *
+     * 这四条面板动作**不过模型的权限闸**：点按钮的人就是用户本人，
+     * 再弹一次"要不要提交你刚按下的提交"是把审批做成噪声。
+     * 边界改由 GitPanel 守住：只认这条会话工作区里的仓库、路径过 safePath、没有 push 这类动词。
+     */
+    private fun gitStage(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val repo = GitPanel.repoFor(
+            (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile())
+        ) ?: return send(ex, 200, """{"ok":false,"error":"这里不是 git 仓库"}""",
+            "application/json; charset=utf-8")
+        send(ex, 200, GitPanel.stageJson(repo, b.list("paths"), b.str("unstage") == "1"),
+            "application/json; charset=utf-8")
+    }
+
+    /** `POST /api/gitcommit` {sid, message, paths[]} —— 提交（勾选非空则先暂存）。 */
+    private fun gitCommit(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val repo = GitPanel.repoFor(
+            (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile())
+        ) ?: return send(ex, 200, """{"ok":false,"error":"这里不是 git 仓库"}""",
+            "application/json; charset=utf-8")
+        send(ex, 200, GitPanel.commitJson(repo, b.str("message"), b.list("paths")),
+            "application/json; charset=utf-8")
+    }
+
     private fun stopSubtask(ex: HttpExchange) {
         val b = Body(ex)
         val sid = pick(b.str("sid"))

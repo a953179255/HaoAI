@@ -476,6 +476,18 @@
     display:block;border:1px solid var(--line2)}
   .pvmed audio{width:100%;max-width:420px;display:block}
   .pvmed .pm .kv{font-size:11.5px;opacity:.62}
+  /* Git 面板一行：勾选框 + porcelain 两列状态 + 路径 + diff 小按钮。
+     按钮一律用 .ab —— 全局 .btn 是 display:block;width:100%，放进这一行会把整行撑爆。 */
+  .gr{display:flex;gap:7px;align-items:center;font-size:12px;padding:2px 0;min-width:0}
+  .gr i{font-family:var(--mono);opacity:.6;flex:none;width:20px;text-align:center}
+  .gr b{font-weight:400;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gr.st b{color:var(--acc2)}
+  .gr .ab{flex:none;width:auto;margin:0;padding:2px 7px;font-size:11px}
+  #gitList{max-height:46vh;overflow:auto;margin-top:6px}
+  /* 提交说明要占满一行：.addrow 默认不换行，输入框挤成 80px 就没法写一句话 */
+  #tab-git .addrow{flex-wrap:wrap}
+  #tab-git .addrow input{flex:1 1 100%;min-width:0}
+  #tab-git .addrow .ab{flex:none}
   .tin{background:var(--glass);border:1px solid var(--line);border-radius:8px;color:var(--fg);
     font:inherit;font-size:12px;padding:5px 8px;outline:0;min-width:0;width:100%}
   .tin:focus{border-color:var(--acc2)}
@@ -580,6 +592,7 @@
       <button data-t="tasks" class="on">任务</button>
       <button data-t="usage">用量</button>
       <button data-t="files">产出</button>
+      <button data-t="git">Git</button>
       <button data-t="mem">记忆</button>
       <button data-t="cron">定时</button>
       <button data-t="tools">工具</button>
@@ -618,6 +631,19 @@
       <div class="fbar"><button class="ab" data-fx="up" title="回到上一级">↑ 上一级</button>
         <span class="fp" id="filePath">（根）</span><button class="ab" data-fx="reload">刷新</button></div>
       <div class="files" id="files">（还没加载）</div>
+    </div>
+    <div class="tabp" id="tab-git">
+      <div class="kv" id="gitHead">—</div>
+      <div class="kv" id="gitLast"></div>
+      <div class="addrow" id="gitBtns">
+        <input type="text" id="gitMsg" placeholder="提交说明（一句人话）">
+        <button class="ab" id="gStage">暂存勾选</button>
+        <button class="ab" id="gUnstage">取消暂存</button>
+        <button class="ab" id="gCommit">提交勾选</button>
+      </div>
+      <label class="kv" id="gFilterRow"><input type="checkbox" id="gOnlyStaged"> 只看已暂存</label>
+      <div id="gitList"></div>
+      <div class="kv" id="gitState"></div>
     </div>
     <div class="tabp" id="tab-mem">
       <div class="kv">这里的规则<b>每回合都喂给模型</b>（现读不缓存，改完下一句就生效）。
@@ -1378,9 +1404,76 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='usage')loadUsage();
   if(b.dataset.t=='tools')hydrate(curId);
   if(b.dataset.t=='files')loadFiles();
+  if(b.dataset.t=='git')loadGit();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind()}
 });
+
+/* ---- Git 面板 ----
+ * 给**人**看 diff、勾文件、写提交说明的地方。模型有 git 工具，但"它改完我扫一眼再提交"
+ * 这件事走模型既慢又要反复审批 —— 而且人点按钮本身就是审批。
+ * 四条动作各对应一个 /api/git* 端点；边界在服务端（只认这条会话的仓库 + 路径白名单）。
+ */
+let gitSel={};
+function gitChecked(){const o=[];document.querySelectorAll('#gitList .gr input').forEach(i=>{if(i.checked)o.push(i.dataset.p)});return o}
+function loadGit(){
+  fetch('/api/gitstatus?sid='+encodeURIComponent(curId||'')).then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+    const list=$('#gitList');
+    if(!d.isRepo){
+      $('#gitHead').textContent='—';$('#gitLast').textContent='';
+      $('#gitBtns').style.display='none';$('#gFilterRow').style.display='none';
+      list.innerHTML='<div class="kv">'+esc(d.note||'这里不是 git 仓库')+'</div>';return;
+    }
+    $('#gitBtns').style.display='';$('#gFilterRow').style.display='';
+    $('#gitHead').textContent=d.branch+'  ·  '+(d.clean?'工作区干净':('工作区不干净 '+d.count+' 项'))+
+      (d.stagedCount?('  ·  已暂存 '+d.stagedCount):'');
+    $('#gitLast').textContent=d.last?('上次提交：'+d.last):'（这个仓库还没有提交）';
+    const only=$('#gOnlyStaged').checked;
+    const rows=(d.entries||[]).filter(e=>!only||e.staged);
+    list.innerHTML=rows.length?rows.map(e=>'<label class="gr'+(e.staged?' st':'')+'">'+
+      '<input type="checkbox" data-p="'+esc(e.p)+'"'+(gitSel[e.p]?' checked':'')+'">'+
+      '<i>'+esc(e.i+e.w)+'</i><b title="'+esc(e.p)+'">'+esc(e.p)+'</b>'+
+      '<button class="ab" data-d="'+esc(e.p)+'" data-s="'+(e.staged?1:0)+'">diff</button></label>').join('')
+      :'<div class="kv">'+(only?'暂存区是空的':'没有改动')+'</div>';
+    list.querySelectorAll('input').forEach(i=>i.onchange=()=>{gitSel[i.dataset.p]=i.checked});
+    list.querySelectorAll('[data-d]').forEach(b=>b.onclick=ev=>{ev.preventDefault();ev.stopPropagation();gitDiff(b.dataset.d,b.dataset.s=='1')});
+  }).catch(()=>{$('#gitList').innerHTML='<div class="kv">读不到仓库状态（服务换过端口？）</div>'});
+}
+function gitPost(url,body,btn){
+  const st=$('#gitState');st.textContent='处理中…';
+  if(btn)btn.disabled=true;
+  post(url,Object.assign({sid:curId},body)).then(d=>{
+    st.textContent=(d&&d.error)?('× '+(d.error||'失败')):('✓ '+((d&&d.message)||'好了'));
+    if(d&&d.error)toast(d.error,'err');
+    loadGit();
+  }).catch(e=>{st.textContent='× 请求没成（'+e+'）'}).finally(()=>{if(btn)btn.disabled=false});
+}
+function gitDiff(p,staged){
+  fetch('/api/gitdiff?sid='+encodeURIComponent(curId||'')+'&path='+encodeURIComponent(p)+'&staged='+(staged?1:0))
+    .then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+      if(d&&!d.ok){toast(d.error||'读不到差异','err');return}
+      const t=(d&&d.text)||'（空）';
+      $('#dialog').innerHTML='<h3>'+esc(p)+(staged?'（已暂存）':'（工作区）')+'</h3>'+
+        '<pre class="pv">'+esc(t.length>40000?t.slice(0,40000)+chr(10)+'…（只给前 4 万字符）':t)+'</pre>'+
+        '<div class="acts"><button class="btn" id="gClose">关闭</button></div>';
+      $('#mask').classList.add('on');
+      $('#dialog').querySelector('#gClose').onclick=()=>$('#mask').classList.remove('on');
+    }).catch(c=>toast('读不到差异（'+c+'）','err'));
+}
+function chr(n){return String.fromCharCode(n)}
+$('#gStage').onclick=e=>gitPost('/api/gitstage',{paths:gitChecked(),unstage:'0'},e.target);
+$('#gUnstage').onclick=e=>gitPost('/api/gitstage',{paths:gitChecked(),unstage:'1'},e.target);
+$('#gCommit').onclick=e=>{
+  const msg=$('#gitMsg').value.trim();
+  if(!msg){
+    // 只弹 toast 不够：那行"✓ 已提交…"会留在原地，看着像这次也提交成功了
+    $('#gitState').textContent='× 提交说明是空的 —— 写一句人话再点';
+    toast('提交说明是空的','err');$('#gitMsg').focus();return
+  }
+  gitPost('/api/gitcommit',{message:msg,paths:gitChecked()},e.target);
+  $('#gitMsg').value='';
+};
+$('#gOnlyStaged').onchange=()=>loadGit();
 
 /* ---- 工作区文件浏览（右栏「产出」页签）----
  * 放在这一栏的理由很实在：agent 改完一堆文件，用户的下一个动作就是"那我看看那个文件"。

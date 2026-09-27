@@ -53,6 +53,21 @@ for f in ${PRE_PNG:-}; do
   mkdir -p "$HOME_DIR/ws/$(dirname "$f")"
   printf %s "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==" | base64 -d > "$HOME_DIR/ws/$f"
 done
+# Git 面板这条链路要"工作区本身是一个真仓库，而且有改动"：
+# 空仓库什么都验不到 —— 暂存、取消暂存、提交、diff 全要有真实的行可点。
+# 故意留一个未跟踪的中文名文件：porcelain 的 -z 就是为了它（默认输出会转义中文）。
+if [ -n "${PRE_GIT:-}" ]; then
+  mkdir -p "$HOME_DIR/ws"
+  ( cd "$HOME_DIR/ws" && \
+    git init -q . && \
+    printf 'one\ntwo\n' > a.txt && printf 'first\n' > b.txt && \
+    git add -A >/dev/null && \
+    git -c user.email=t@t -c user.name=t commit -qm "seed" >/dev/null && \
+    printf 'one\ntwo changed\n' > a.txt && \
+    printf '第一行\n第二行\n' > 中文.txt && \
+    printf 'brand new\n' > new.txt ) || { echo "x 造测试仓库失败（这台机器没有 git？）"; exit 1; }
+  echo "  seeded git repo (a.txt 改动 / 中文.txt 未跟踪 / new.txt 未跟踪)"
+fi
 # 媒体这条链路要一段**真能解码**的素材：假字节流浏览器画不出画面，
 # 于是 faststart、Range、videoWidth 这三样全都验不到 —— 看着绿其实什么都没测。
 # PRE_CLIP=素材.mp4 就用 ffmpeg 现造一段 4 秒的（testsrc + 440Hz 正弦）。
