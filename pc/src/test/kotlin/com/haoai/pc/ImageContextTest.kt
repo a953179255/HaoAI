@@ -211,6 +211,62 @@ class ImageContextTest {
             Session(id, Files.createTempDirectory("haoai-img-sess").toFile().apply { mkdirs() })
     }
 
+    /** 界面画缩略图靠这个口子：工作区里的图给字节，其它一律 404（它不能变成"读任意本地文件"）。 */
+    @Test
+    fun `the img endpoint serves workspace images and nothing else`() {
+        val inside = png(File(ws, "shots/a.png"), "A")
+        val outside = png(File(home, "elsewhere.png"), "E")
+        val r = getRaw("/api/img?path=shots/a.png")
+        assertEquals("工作区里的图要能取到：" + r.first, 200, r.first)
+        assertEquals("image/png", r.second)
+        assertTrue("字节要原样", r.third.contentEquals(inside.readBytes()))
+
+        assertEquals("工作区外面那张不许被读出来", 404, getRaw("/api/img?path=" + enc(outside.name)).first)
+        assertEquals("绝对路径也不许绕过工作区",
+            404, getRaw("/api/img?path=" + enc(outside.absolutePath)).first)
+        assertEquals("往上跳一级同样不行",
+            404, getRaw("/api/img?path=" + enc("../elsewhere.png")).first)
+        File(ws, "notes.txt").writeText("这只是文本")
+        assertEquals("文本冒充图片也不行（只放四种魔数）",
+            404, getRaw("/api/img?path=notes.txt").first)
+    }
+
+    /** 刷新之后还要看得见图：state 必须把路径报回前端。 */
+    @Test
+    fun `state reports the image paths of a message`() {
+        val f = png(File(ws, "notes/state-shot.png"), "T")
+        val sid = post("/api/new", "{}").let {
+            Json.parseToJsonElement(it).jsonObject["id"]!!.jsonPrimitive.content
+        }
+        post("/api/task", """{"text":"带一张图","sid":"$sid","images":["notes/state-shot.png"]}""")
+        val until = System.currentTimeMillis() + 15_000
+        var imgs: List<String> = emptyList()
+        while (System.currentTimeMillis() < until) {
+            val st = Json.parseToJsonElement(get("/api/state?sid=$sid")).jsonObject
+            imgs = st["messages"]!!.jsonArray
+                .firstOrNull { it.jsonObject["role"]?.jsonPrimitive?.content == "user" }
+                ?.jsonObject?.get("images")?.jsonArray
+                ?.map { it.jsonPrimitive.content } ?: emptyList()
+            if (imgs.isNotEmpty()) break
+            Thread.sleep(150)
+        }
+        assertEquals("state 里要带图片路径", listOf(f.absolutePath), imgs.map { File(it).absolutePath })
+    }
+
+    private fun enc(s: String): String = java.net.URLEncoder.encode(s, "UTF-8")
+
+    private fun getRaw(path: String): Triple<Int, String, ByteArray> {
+        val r = http.send(
+            HttpRequest.newBuilder(URI.create(base + path)).GET().build(),
+            HttpResponse.BodyHandlers.ofByteArray()
+        )
+        return Triple(
+            r.statusCode(),
+            r.headers().firstValue("Content-Type").orElse(""),
+            r.body() ?: ByteArray(0)
+        )
+    }
+
     private fun esc(p: String): String = p.replace("\\", "\\\\").replace("\"", "\\\"")
 
     private fun post(path: String, body: String): String = http.send(

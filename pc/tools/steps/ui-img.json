@@ -1,20 +1,109 @@
 [
-  {"goto": "#box"},
-  {"eval": "(()=>{const b=new Uint8Array([137,80,78,71,13,10,26,10].concat(Array(64).fill(66)));attachFiles([new File([b],'shot.png',{type:'image/png'})]);return 'attaching'})()"},
-  {"sleep": 1000},
-  {"eval": "({on:document.querySelector('#attRow').classList.contains('on'),chips:[...document.querySelectorAll('.atchip')].map(x=>x.textContent.replace(/\\s+/g,' ').trim()),box:document.querySelector('#box').value.replace(/\\s+/g,' ').trim().slice(0,70)})"},
-  {"shot": "i01-chip"},
-  {"eval": "(()=>{const b=new Uint8Array([137,80,78,71,13,10,26,10].concat(Array(40).fill(67)));attachFiles([new File([b],'second.png',{type:'image/png'})]);return 'second'})()"},
-  {"sleep": 1000},
-  {"eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),n:document.querySelectorAll('.atchip').length})"},
-  {"click": ".atchip:last-child em"},
-  {"sleep": 400},
-  {"eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),n:document.querySelectorAll('.atchip').length})"},
-  {"shot": "i02-dropped"},
-  {"type": {"sel": "#box", "text": "这张图里有什么？", "enter": false}},
-  {"click": "#send"},
-  {"sleep": 2500},
-  {"eval": "({chips:document.querySelectorAll('.atchip').length,on:document.querySelector('#attRow').classList.contains('on'),user:(document.querySelector('.msg.user')||{}).textContent.replace(/\\s+/g,' ').trim().slice(0,60)})"},
-  {"shot": "i03-sent"},
-  {"eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'会话数='+l.length)"}
+ {
+  "goto": "#box"
+ },
+ {
+  "eval": "(()=>{const b=new Uint8Array([137,80,78,71,13,10,26,10].concat(Array(64).fill(66)));attachFiles([new File([b],'shot.png',{type:'image/png'})]);return 'attaching'})()"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "({on:document.querySelector('#attRow').classList.contains('on'),chips:[...document.querySelectorAll('.atchip')].map(x=>x.textContent.replace(/\\s+/g,' ').trim()),box:document.querySelector('#box').value.replace(/\\s+/g,' ').trim().slice(0,70)})"
+ },
+ {
+  "shot": "i01-chip"
+ },
+ {
+  "eval": "(()=>{const b=new Uint8Array([137,80,78,71,13,10,26,10].concat(Array(40).fill(67)));attachFiles([new File([b],'second.png',{type:'image/png'})]);return 'second'})()"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),n:document.querySelectorAll('.atchip').length})"
+ },
+ {
+  "click": ".atchip:last-child em"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),n:document.querySelectorAll('.atchip').length})"
+ },
+ {
+  "shot": "i02-dropped"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "这张图里有什么？",
+   "enter": false
+  }
+ },
+ {
+  "click": "#send"
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "eval": "({chips:document.querySelectorAll('.atchip').length,on:document.querySelector('#attRow').classList.contains('on'),user:(document.querySelector('.msg.user')||{}).textContent.replace(/\\s+/g,' ').trim().slice(0,60)})"
+ },
+ {
+  "shot": "i03-sent"
+ },
+ {
+  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'会话数='+l.length)"
+ },
+ {
+  "eval": "(()=>{const bin=atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC');const b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);attachFiles([new File([b],'real.png',{type:'image/png'})]);return 'real png '+bin.length+'B'})()"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),running:!!document.querySelector('#send')&&document.querySelector('#box').value.length})"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "这张真图能显示出来吗",
+   "enter": false
+  }
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "click": "#send"
+ },
+ {
+  "sleep": 3500
+ },
+ {
+  "eval": "({users:document.querySelectorAll('.msg.user').length,thumbs:document.querySelectorAll('.thumbs img').length,last:(a=>a?a.naturalWidth+'x'+a.naturalHeight+' '+(a.currentSrc||a.src).slice(-24):'')(document.querySelectorAll('.thumbs img')[document.querySelectorAll('.thumbs img').length-1]),labels:[...document.querySelectorAll('.thumbs i')].map(x=>x.textContent),chips:document.querySelectorAll('.atchip').length})"
+ },
+ {
+  "shot": "i04-thumb-live"
+ },
+ {
+  "eval": "setTimeout(()=>location.reload(),60)"
+ },
+ {
+  "eval": "(async()=>{const im=[...document.querySelectorAll('.thumbs img')];const out=[];for(const i of im){const r=await fetch(i.src);out.push({src:i.src.slice(-30),status:r.status,ct:r.headers.get('content-type'),len:(await r.blob()).size,lazy:i.loading,complete:i.complete,w:i.naturalWidth})}return out})()"
+ },
+ {
+  "goto": "#box"
+ },
+ {
+  "sleep": 1800
+ },
+ {
+  "eval": "(async()=>{const im=[...document.querySelectorAll('.thumbs img')];const out=[];for(const i of im){const r=await fetch(i.src);out.push({st:r.status,ct:(r.headers.get('content-type')||'').slice(0,9),bytes:(await r.blob()).size,w:i.naturalWidth})}return {users:document.querySelectorAll('.msg.user').length,thumbs:im.length,probe:out}})()"
+ },
+ {
+  "shot": "i05-thumb-after-reload"
+ }
 ]

@@ -40,6 +40,11 @@ for f in ${PRE_TOUCH:-}; do
 done
 # 工作区切换器要"另一个真的存在的目录"（不能只测报错那条路）
 for d in ${PRE_DIRS:-}; do mkdir -p "$HOME_DIR/$d"; done
+# 图片这条链路要一张真能渲染的 PNG（假魔数的 72 字节文件浏览器画不出来，只剩文件名）
+for f in ${PRE_PNG:-}; do
+  mkdir -p "$HOME_DIR/ws/$(dirname "$f")"
+  printf %s "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==" | base64 -d > "$HOME_DIR/ws/$f"
+done
 export HAOAI_HOME="$HOME_DIR"
 
 python tools/mock-openai.py --port "$MOCK_PORT" --mode "$MODE" > "$HOME_DIR/mock.log" 2>&1 &

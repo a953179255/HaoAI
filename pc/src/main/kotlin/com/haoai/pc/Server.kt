@@ -152,6 +152,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
                 "/api/file" -> fileOne(ex)
+                "/api/img" -> imageFile(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
                 "/api/settings" -> 
@@ -294,6 +295,7 @@ class WebServer(settings: PcSettings, port: Int,
                 .append(",\"diff\":").append(quote(m.diff))
                 .append(",\"note\":").append(quote(m.note))
                 .append(",\"sub\":").append(quote(m.sub))
+                .append(",\"images\":").append(m.images.joinToString(",", "[", "]") { quote(it) })
                 .append(",\"pt\":").append(m.pt).append(",\"ct\":").append(m.ct).append(",\"ms\":").append(m.ms)
                 .append(",\"calls\":").append(m.calls.joinToString(",", "[", "]") { c ->
                     """{"name":${quote(c.name)},"args":${quote(c.args)}}"""
@@ -411,7 +413,9 @@ class WebServer(settings: PcSettings, port: Int,
             managed.running = false
             return sid to "只能改「你说过的那一句话」，改不了模型的回复"
         }
-        publish("user", quote(text), sid)
+        // 负载从裸字符串变成对象：图片路径要一起出去，前端才画得出刚发出去的那张图。
+        // 前端两种形状都认（见 index.html 的 on(user)），所以这一步不会打断旧页面。
+        publish("user", """{"t":${quote(text)},"imgs":${images.joinToString(",", "[", "]") { quote(it) }}}""", sid)
         val e = managed.engine
         Thread {
             publish("run", """{"running":true}""", sid)
@@ -702,6 +706,38 @@ class WebServer(settings: PcSettings, port: Int,
             """{"p":${quote(p)},"n":${v.first},"t":${v.second},""" +
                 """"cur":${p == curWs},"def":${p == def}}"""
         }, "application/json; charset=utf-8")
+    }
+
+    /**
+     * `GET /api/img?sid=&path=` —— 把会话工作区里的图片原样发给浏览器，好让流里画得出缩略图。
+     *
+     * 历史里存的是路径，界面要显示就得有个取字节的口子。三条边界与 /api/files 同一套理由：
+     * 这个服务只绑 127.0.0.1，但同机任意页面都能对这个端口发请求，所以路径必须 canonical
+     * 之后仍在**这条会话自己的工作区**里，而且只放认得出的那四种图 ——
+     * 否则它就成了一个"读任意本地文件并回显"的接口。
+     */
+    private fun imageFile(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val ws = runCatching {
+            (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
+        }.getOrNull()
+        val given = queryOf(ex, "path")
+        val f = if (ws == null) null else runCatching {
+            // 工具产出的截图存的是绝对路径，用户附件是工作区相对路径：两种都要能取回
+            (if (File(given).isAbsolute) File(given) else File(ws, given)).canonicalFile
+        }.getOrNull()
+        val inside = f != null && ws != null &&
+            (f.path == ws.path || f.path.startsWith(ws.path + File.separator))
+        val mime = if (inside && f != null && f.isFile) Images.mime(f) else null
+        if (mime == null || f == null || f.length() > Images.MAX_BYTES) {
+            send(ex, 404, "没有这张图（或它在工作区外面 / 太大 / 类型不认）",
+                "text/plain; charset=utf-8"); return
+        }
+        val bytes = f.readBytes()
+        ex.responseHeaders.add("Content-Type", mime)
+        ex.responseHeaders.add("Cache-Control", "no-store")
+        ex.sendResponseHeaders(200, bytes.size.toLong())
+        ex.responseBody.use { it.write(bytes) }
     }
 
     private fun fileOne(ex: HttpExchange) {

@@ -128,6 +128,15 @@
   .atchip em{font-style:normal;cursor:pointer;color:var(--dim2);padding:0 4px;flex:none}
   .atchip em:hover{color:var(--bad)}
   .atchip.no{border-color:var(--warn);color:var(--warn)}
+  /* 流里的图片：缩略图 + 文件名。图读不出来（工作区外、太大、类型不认）时至少还剩那行字 */
+  .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .thumbs .th{display:flex;flex-direction:column;gap:3px}
+  .thumbs a{display:block}
+  .thumbs img{width:172px;height:112px;object-fit:cover;border-radius:8px;display:block;cursor:zoom-in;
+    border:1px solid var(--line2);background:var(--code)}
+  .thumbs img:hover{border-color:var(--acc2)}
+  .thumbs i{font-style:normal;font-size:10.5px;color:var(--dim2);max-width:172px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip{border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:999px;
     padding:3px 10px;font-size:11.5px;cursor:pointer;max-width:200px;overflow:hidden;text-overflow:ellipsis;
     white-space:nowrap;font-family:inherit;flex:none}
@@ -616,6 +625,19 @@ function el(html){const d=document.createElement('div');d.innerHTML=html;return 
 /* 引号也要转：这些字符串大量被插进 value="…" / data-ws="…" 这类属性里，
    只转 &<> 的话，一个带引号的模型名或目录名就能把自己关到属性外面去。 */
 function esc(t){return String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+/* 流里的图片：缩略图走 /api/img（服务端限定在这条会话的工作区里），点开是新标签页看原图。
+   图读不出来时至少还剩文件名那一行 —— 不让界面出现"这里本来有张图"的空白。 */
+function thumbs(sid,paths){
+  const list=(paths||[]).filter(p=>p);
+  if(!list.length)return '';
+  const s=encodeURIComponent(sid||curId||'');
+  return '<span class="thumbs">'+list.map(p=>{
+    const u='/api/img?sid='+s+'&path='+encodeURIComponent(p);
+    return `<span class="th"><a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(p)}">`+
+      `<img src="${esc(u)}" alt="${esc(baseName(p))}" loading="lazy"`+
+      ` onerror="this.style.display='none'"></a><i>${esc(baseName(p))}</i></span>`;
+  }).join('')+'</span>';
+}
 function add(node,v){
   const t=v||cur();
   // 起手卡只在"真的开始干活"时让位：一条轻提示（比如"项目说明已保存"）不该把它抹掉
@@ -929,7 +951,12 @@ on('stats',(v,d)=>{
     's</span><span>第 '+d.turns+' 轮</span></div>'));
   paintUsage({prompt:d.pt,completion:d.ct,turns:d.turns},v);
 });
-on('user',(v,d)=>{v.curAns=null;closeThinking(v);add(el('<div class="msg user">'+esc(d)+'</div>'),v)});
+on('user',(v,d)=>{
+  // 负载以前是裸字符串，现在带图片路径；两种形状都认，旧页面刷新前也不会白屏
+  const t=typeof d=='string'?d:((d&&d.t)||'');
+  v.curAns=null;closeThinking(v);
+  add(el('<div class="msg user">'+esc(t)+thumbs(v.sid,d&&d.imgs)+'</div>'),v);
+});
 on('tool',(v,d)=>{d.state=='run'?toolStart(d,v):toolEnd(d,v)});
 on('sub',(v,d)=>subLine(d,v));
 on('todo',(v,d)=>setTodos(d.items,v));
@@ -1646,7 +1673,7 @@ function applyState(s){
       th.querySelector('.tb').textContent=m.reasoning;v.el.appendChild(th);
     }
     let node=null;
-    if(m.role=='user')node=el('<div class="msg user">'+esc(m.content)+'</div>');
+    if(m.role=='user')node=el('<div class="msg user">'+esc(m.content)+thumbs(v.sid,m.images)+'</div>');
     else if(m.role=='assistant'&&m.content)node=el('<div class="msg ans md">'+md(m.content)+'</div>');
     else if(m.role=='tool'&&m.name=='task'){
       // 子任务回放成一张子任务卡：过程一行一条，结论单独一行。
