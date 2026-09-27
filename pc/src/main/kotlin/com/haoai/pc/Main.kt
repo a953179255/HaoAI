@@ -65,7 +65,7 @@ private fun help() {
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.37.0-pc"
+const val PC_VERSION = "0.38.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")

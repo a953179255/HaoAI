@@ -161,6 +161,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/files" -> files(ex)
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
+                "/api/usage" -> send(ex, 200, UsageLedger.report(),
+                    "application/json; charset=utf-8")
                 "/api/file" -> fileOne(ex)
                 "/api/img" -> imageFile(ex)
                 "/api/export" -> exportSession(ex)

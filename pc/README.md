@@ -377,6 +377,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-trash.json  # 回收�
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-jump.json  # 搜索命中跳到那一条并闪一下
 SHOT_MODE=loop bash pc/tools/ui-shot.sh pc/tools/steps/ui-queue.json  # 跑着的时候再发一句：排队胶囊 + 撤回
 SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-msgops.json  # 引用 / 删这一句 / 会话置顶
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-usage.json  # 用量账本：按模型分行 + 近 14 天柱子
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -972,6 +973,39 @@ PC 端以前只有四件。这批补三样，都是"每天会用到、缺了就�
 先把 `window.confirm` 打桩成 `true` 再真点按钮 —— 测的是 `delMsg` 这条代码路径，
 不是浏览器的对话框（对话框本身没什么可测的）。
 
+## 这一批：用量账本 —— 把"今天花了多少"从猜变成量
+
+用量页上那行「今天 / 近 7 天 / 全部」以前是**现算**的：把盘上会话的累计 token
+按 `updated` 落在哪天来加。会话只有一个总数和一个"最后更新时间"，于是
+昨天跑掉三万 token、今天只动了一下标题，那三万就全算成"今天"了 ——
+数字看着挺具体，其实是在猜。
+
+现在按**回合**落账：`HAOAI_HOME/usage.jsonl`，一次模型往返一行
+（时间 / 模型 / 会话 / 输入输出 token / 耗时 / 成没成）。
+
+- 为什么是追加式 jsonl 而不是一个 JSON 数组：读不用整份解析、写不用整份重写，
+  中途断电最坏只坏最后一行 —— 而 `rows()` 会丢掉坏行，**不会让整块看板变成 500**。
+- **失败也要入账**：不然"成功率"这个数根本没地方算，而它恰恰是"这个模型今天靠不靠谱"的判据。
+- 日期分桶用**本地日期**：人说的"今天"是钟表那个数，不是 UTC。
+- 柱子按**补全 token** 算高度：输入 token 会被一次长上下文拉爆，看不出哪天真正在干活。
+- 界面上多了三块：按模型分行（条长按总 token）、近 14 天的柱子（缺的那几天也占位，
+  不然"最近没干活"会被压缩成一根都没有）、成功率与平均 tok/s。
+  图表不引库 —— 整个壳子必须断网能用，柱子就是 div。
+- 旧的 `paintTotals()` 一并删掉：**同一个数不能有两个来源**，
+  留着它就有"哪块面板说的是真话"这个问题。
+
+验收（Kotlin，`UsageLedgerTest` 5 条）：坏行丢掉而整本仍读得出；
+把一行的时间改成 10 天前之后，`today.n=1`、`week.n=1`、`all.n=2`、柱子凑齐 14 根
+（这条就是原来那套现算法的照妖镜）；**模型名是一整条 Windows 路径时 JSON 仍然合法**
+（反斜杠不转义就直接崩，而本地 gguf 的模型名恰恰全是反斜杠）；
+按总 token 排名、成功率 2/3、空账本报零而不是 NaN。
+
+验收（真像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-usage.json`）：
+跑两句之后 `今天 2 次 ↑2,468 ↓174`、按模型那行是 `mock · ↑2,468 ↓174 · 2 次`、
+条宽 100%；14 根柱子里只有今天那根有高度（49px，其余是最小占位 2px）、
+最后一根标着 `09-27`；`成功率 100% · 平均 93.8 tok/s · 账本 2 行`；
+用量页 `scrollWidth-clientWidth=0`（没撑出横向滚动）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1038,7 +1072,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **169 条全绿**（整套 32 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **174 条全绿**（整套 28 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1101,7 +1135,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
    截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、
-   跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、
+   跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、按回合落账的用量看板、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

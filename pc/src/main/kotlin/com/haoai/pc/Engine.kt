@@ -498,10 +498,12 @@ class Engine(
                     continue
                 }
                 lastError = "模型调用失败：${e.message?.take(400)}"
+                UsageLedger.add(settings.model, session.id, 0, 0, 0, false)   // 失败也要入账：成功率不是装饰
                 emit(Ev.Err(lastError!!))
                 break
             } catch (e: Exception) {
                 lastError = "模型调用异常：${e.message ?: e.javaClass.simpleName}"
+                UsageLedger.add(settings.model, session.id, 0, 0, 0, false)
                 emit(Ev.Err(lastError!!))
                 break
             }
@@ -535,6 +537,7 @@ class Engine(
                 history += Msg("assistant", turn.text, reasoning = turn.reasoning.ifBlank { null },
                     pt = pt, ct = ct, ms = ms)
                 emit(Ev.TurnStats(pt, ct, ms, turnNo))
+                UsageLedger.add(settings.model, session.id, pt, ct, ms, true)
                 break
             }
 
@@ -542,6 +545,7 @@ class Engine(
             history += Msg("assistant", turn.text, calls = turn.calls,
                 reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms)
             emit(Ev.TurnStats(pt, ct, ms, turnNo))
+            UsageLedger.add(settings.model, session.id, pt, ct, ms, true)
 
             val shotPaths = mutableListOf<String>()
             for (call in turn.calls) {

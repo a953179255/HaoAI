@@ -131,6 +131,18 @@
   .atchip em:hover{color:var(--bad)}
   .atchip.no{border-color:var(--warn);color:var(--warn)}
   /* 胶囊里要看得见那张图：一次截图后连着贴三张，只读文件名分不清哪张是哪张 */
+  /* 用量看板：不引图表库，柱子就是一行 div —— 整个壳子必须断网能用 */
+  .mrows{display:flex;flex-direction:column;gap:5px}
+  .mrow{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font-size:11.5px;color:var(--dim)}
+  .mrow span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mrow b{font-weight:400;color:var(--dim2);font-size:11px}
+  .mrow i{grid-column:1/3;height:4px;border-radius:2px;background:var(--acc);opacity:.75}
+  .bars{display:flex;align-items:flex-end;gap:3px;height:78px;padding:4px 0 0}
+  .bars .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}
+  .bars .bar span{width:100%;min-height:2px;border-radius:3px 3px 0 0;background:var(--acc2);opacity:.8}
+  .bars .bar em{font-style:normal;font-size:8.5px;color:var(--dim2);margin-top:3px;
+    writing-mode:vertical-rl;transform:rotate(180deg);height:34px;overflow:hidden}
+  .bars .bar:hover span{opacity:1}
   .atchip .ath{width:38px;height:26px;object-fit:cover;border-radius:5px;border:1px solid var(--line);flex:none}
   /* 排队条：跑着的时候发出去的下一句不会立刻进对话，看得见"排在后面"才敢继续打字 */
   .qrow{display:none;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 6px 2px}
@@ -536,16 +548,23 @@
       <div class="kv" id="usage2">输入 0 / 输出 0</div>
       <div class="grp">本回合</div>
       <div class="kv" id="usage3">—</div>
-      <div class="grp">累计（磁盘上的会话）</div>
+      <div class="grp">累计（用量账本 · 按回合记）</div>
       <div class="kv" id="usageAll">—</div>
+      <div class="grp">按模型</div>
+      <div id="usageModels" class="mrows"></div>
+      <div class="grp">近 14 天（柱高 = 当天补全 token）</div>
+      <div id="usageDays" class="bars"></div>
+      <div class="kv" id="usageMeta">—</div>
       <div class="grp">上下文</div>
       <div class="kv" id="ctxLine">—</div>
       <div class="acts2 pinned"><button class="ab" id="cmpBtn"
         title="把早期消息折进摘要：绕开触发线，切点与兜底用的是自动压缩同一个实现">现在压缩一次</button>
         <span class="fp" id="cmpState"></span></div>
       <div class="grp">口径</div>
-      <div class="kv">token 来自网关回包，按<b>计费 token</b> 计，不是字符数；
-        累计只算盘上还留着的会话（列表最长 200 条），删掉的不算。</div>
+      <div class="kv">token 来自网关回包，按<b>计费 token</b> 计，不是字符数。
+        这份账本按<b>回合</b>落账（<code>usage.jsonl</code>），所以"今天花了多少"是真的按今天算的 ——
+        以前那行是拿会话的累计数除以"最后更新时间"，昨天跑的今天动一下标题就全算成今天的了。
+        账本从装上下这版开始记，之前的会话只有累计数。</div>
     </div>
     <div class="tabp" id="tab-files">
       <div class="kv">长输出存进工作区 <b>.haoai-output/</b>；写改前自动留快照在 <b>.haoai-snap/</b>，工具卡上可一键退回。</div>
@@ -1197,6 +1216,7 @@ if(localStorage.getItem('haoai-noL'))app.classList.add('no-l');
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
+  if(b.dataset.t=='usage')loadUsage();
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind()}
@@ -1689,20 +1709,29 @@ function loadSessions(){
     sessList=list;
     // 标题由服务端从第一句话生成，所以跑完一轮要把本地视图的标题一起换掉
     list.forEach(m=>{const v=views[m.id];if(v){v.title=m.title;if(!m.running)v.running=false}});
-    markSessions();paintTotals();
+    markSessions();
   });
 }
 /* 累计用量直接从会话列表算：这些字段服务端本来就报（prompt/completion/updated），
    加一个 /api/stats 只会多一处能写错的地方。"近 7 天"不叫"本周"，因为没人要周一零点那个边界。 */
-function paintTotals(){
-  const el=$('#usageAll');if(!el)return;
-  const d0=new Date();d0.setHours(0,0,0,0);
-  const week=Date.now()-7*86400000;
-  const sum=list=>list.reduce((a,m)=>({p:a.p+(m.prompt||0),c:a.c+(m.completion||0),n:a.n+1}),{p:0,c:0,n:0});
-  const f=x=>`${x.n} 条 ↑${x.p.toLocaleString()} ↓${x.c.toLocaleString()}`;
-  el.textContent='今天 '+f(sum(sessList.filter(m=>(m.updated||0)>=d0.getTime())))+
-    ' · 近 7 天 '+f(sum(sessList.filter(m=>(m.updated||0)>=week)))+
-    ' · 全部 '+f(sum(sessList));
+function loadUsage(){
+  fetch('/api/usage').then(r=>r.json()).then(u=>{
+    const f=x=>x.n+' 次 ↑'+(x.prompt||0).toLocaleString()+' ↓'+(x.completion||0).toLocaleString();
+    $('#usageAll').textContent='今天 '+f(u.today)+' · 近 7 天 '+f(u.week)+' · 全部 '+f(u.all);
+    const ms=u.models||[],mx=Math.max(1,...ms.map(m=>m.prompt+m.completion));
+    $('#usageModels').innerHTML=ms.length?ms.slice(0,6).map(m=>
+      `<div class="mrow" title="${esc(m.model)}"><span>${esc(shortModel(m.model)||'（未知）')}</span>`+
+      `<b>↑${m.prompt.toLocaleString()} ↓${m.completion.toLocaleString()} · ${m.n} 次</b>`+
+      `<i style="width:${Math.round(100*(m.prompt+m.completion)/mx)}%"></i></div>`).join('')
+      :'<div class="kv">还没有账本记录</div>';
+    const ds=u.days||[],md=Math.max(1,...ds.map(d=>d.completion));
+    $('#usageDays').innerHTML=ds.map(d=>
+      `<div class="bar" title="${d.d}：↑${d.prompt} ↓${d.completion}，${d.n} 次">`+
+      `<span style="height:${Math.max(2,Math.round(100*d.completion/md))}%"></span>`+
+      `<em>${esc(d.d.slice(5))}</em></div>`).join('');
+    $('#usageMeta').textContent='成功率 '+Math.round((u.okRate||0)*100)+'% · 平均 '+
+      (u.tps||0)+' tok/s · 账本 '+(u.rows||0)+' 行'+(u.rows?'':'（这一版才开始记）');
+  }).catch(()=>{});
 }
 let qTimer=null;
 $('#sessQ').addEventListener('input',()=>{clearTimeout(qTimer);qTimer=setTimeout(loadSessions,220)});

@@ -1,0 +1,48 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "说一句就好"
+  }
+ },
+ {
+  "goto": ".msg.ans",
+  "timeout": 25000
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "再说一句"
+  }
+ },
+ {
+  "sleep": 3500
+ },
+ {
+  "click": "#tabs button[data-t=\"usage\"]"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({all:document.querySelector('#usageAll').textContent,models:[...document.querySelectorAll('#usageModels .mrow b')].map(x=>x.textContent),row0:(document.querySelector('#usageModels .mrow span')||{}).textContent,barW:(document.querySelector('#usageModels .mrow i')||{}).style?document.querySelector('#usageModels .mrow i').style.width:null})"
+ },
+ {
+  "eval": "({bars:document.querySelectorAll('#usageDays .bar').length,heights:[...document.querySelectorAll('#usageDays .bar span')].map(x=>Math.round(x.getBoundingClientRect().height)).filter(h=>h>0),labels:[...document.querySelectorAll('#usageDays .bar em')].slice(-2).map(x=>x.textContent),meta:document.querySelector('#usageMeta').textConten?t:''})"
+ },
+ {
+  "eval": "({meta:document.querySelector('#usageMeta').textContent,overflow:document.querySelector('#tab-usage').scrollWidth-document.querySelector('#tab-usage').clientWidth})"
+ },
+ {
+  "shot": "u01-usage-board"
+ },
+ {
+  "eval": "fetch('/api/usage').then(r=>r.json()).then(u=>'账本 '+u.rows+' 行 · 今天 '+u.today.n+' 次 ↑'+u.today.prompt+' ↓'+u.today.completion+' · 模型 '+u.models.map(m=>m.model+'='+m.n).join(','))"
+ }
+]
