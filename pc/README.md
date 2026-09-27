@@ -374,6 +374,7 @@ PRE_TOUCH="notes.txt" PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-sho
 PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-model.json  # 只改当前会话的模型 + 回答里的 markdown 图片与 url 转义
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-paste.json  # 拖拽落点层 + Ctrl+V 贴截图进附件
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-trash.json  # 回收站放回 + 侧栏每组点开更多
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-jump.json  # 搜索命中跳到那一条并闪一下
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -874,6 +875,31 @@ md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉�
 截屏列表这一段是**直接把页面里的 `sessList` 换成 12 条假数据**测的：
 `/api/new` 会复用"还空着的那条"，靠真建会话凑不出一个目录里 12 条非空会话
 （要凑得给每条真跑一轮，慢且测的是网关不是渲染）。
+
+## 这一批：搜到一句话，就跳到那一句话
+
+左栏的搜索早就在翻消息正文了（`SessionIndex.match`），但点结果只是"打开那条会话"——
+于是要找的那句话埋在六十句里，用户还得自己滚。**"搜到了"和"带你到那一条"是两件事。**
+
+- `match()` 从"回一段字符串"改成回 `Hit(text, index)`，`/api/sessions` 多带一个 `hitAt`；
+  标题命中的时候 `hitAt=-1`（没有具体某一条可跳）。
+- 界面上点结果 → `openSession(id, hitAt)`：切过去、等历史画完（`applyState` 末尾消费
+  挂着的 `v.jump`）、滚到那一条并闪一下（`.flash` 1.9s 后自己摘掉，重复跳同一条也能再闪）。
+  点的是**眼前这条**就直接跳，不重新拉 state（那会把正在流式输出的半截回答抹掉）。
+- 跳不到就明说：命中的那条可能已经被"就到这里"裁掉，toast 一句"已经不在这条会话里了"，
+  而不是静悄悄停在原地。这里用 toast 不往流里插一行——软提醒不该跟着会话留在页面上。
+
+顺带修掉一处**只有真点一下才会暴露**的自伤：`markSessions` 里我写的是
+`e.currentTarget.dataset`，而 `e` 是 forEach 的**元素**、不是事件对象，
+`currentTarget` 在非派发期是 `null` → 点搜索结果当场抛异常，会话根本切不过去。
+同一轮还修了：搜索时列表里会混进一条**不匹配**的"新会话"（内存里那条没参与过滤）。
+
+验收（真像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-jump.json`）：
+建一条三问的会话、换新会话、搜"换个话题" → `rows:1`（不再混进不匹配的那条）、
+`hit:"2"`、摘要写着"user 第 3 条：…第二问…"；点结果 → `back:true`、
+活动视图里 6 个带下标的节点、目标节点在、`.flash` 在、`inView:true`；
+2.2 秒后 `flashGone:true`（自己收掉）；再跳一个不存在的下标 →
+toast 说清楚、且**没有**把人从当前会话上带走（`stillCur:true`）。
 
 ## 与手机端同源的行为
 

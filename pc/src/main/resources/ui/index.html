@@ -299,6 +299,10 @@
   .tabs button.on{color:var(--fg);border-color:var(--acc2);background:var(--glass2)}
   .tabp{display:none}
   .tabp.on{display:block}
+  /* 搜索跳到的那一条要闪一下：不闪的话"跳过去了"和"打开了会话"看起来是同一件事 */
+  .flash{animation:flash 1.9s ease-out}
+  @keyframes flash{0%,60%{box-shadow:0 0 0 2px var(--acc2);background:var(--glass2)}
+    100%{box-shadow:0 0 0 0 transparent}}
   .mask{position:fixed;inset:0;background:rgba(6,10,8,.66);backdrop-filter:blur(4px);
     display:none;align-items:center;justify-content:center;z-index:20}
   .mask.on{display:flex}
@@ -1661,14 +1665,17 @@ function sessRow(m,run){
   const v=views[m.id]||{};
   const nb=v.wait?'<span class="nb" title="这条会话在等你回答">!</span>'
     :(v.unread?`<span class="nb" title="切过去看">${v.unread}</span>`:'');
-  return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
+  return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-hit="${m.hitAt==null?-1:m.hitAt}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
       <span class="act"><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}
       ${esc(m.title)}<br><i>${run?'正在跑 · ':''}${m.messages} 条 · ${esc(m.mode||'')} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i>
       ${m.hit?`<span class="hit">${esc(m.hit)}</span>`:''}</div>`;
 }
 function markSessions(){
   const box2=$('#sessions');
+  const qq=($('#sessQ').value||'').trim().toLowerCase();
+  // 内存里那条（刚建、还没落库的）也要参与搜索：不筛的话搜东西时会混进一条不匹配的"新会话"
   const live=Object.keys(views).filter(id=>id&&!sessList.some(m=>m.id===id))
+    .filter(id=>!qq||(views[id].title||'').toLowerCase().includes(qq))
     .map(id=>({id:id,title:views[id].title||'新会话',messages:0,mode:views[id].mode||mode,
                updated:Date.now(),workspace:views[id].workspace||''}));
   const all=live.concat(sessList);
@@ -1727,7 +1734,7 @@ function markSessions(){
           });
         return;
       }
-      openSession(id);
+      openSession(id,parseInt(e.dataset.hit||'-1',10));
     };
   });
 }
@@ -1736,15 +1743,28 @@ function dropView(id){
   if(v){v.el.remove();delete views[id]}
   if(id===curId){curId='';show(Object.keys(views)[0]||'')}
 }
-function openSession(id){
-  if(id===curId)return;
+function openSession(id,hit){
+  hit=(hit==null||isNaN(hit))?-1:+hit;
+  if(id===curId){if(hit>=0)jumpToMsg(cur(),hit);return}
   // 已经在内存里的那条（尤其后台正在跑的）直接切过去看：重新拉 state 会把
   // 正在流式输出的半截回答丢掉，还会把工具卡重画成"已完成"的样子。
-  if(views[id]&&views[id].hydrated){show(id);return}
+  if(views[id]&&views[id].hydrated){show(id);if(hit>=0)jumpToMsg(view(id),hit);return}
+  if(hit>=0)view(id).jump=hit;   // 还没画过历史：等 applyState 画完再跳，早了找不到节点
   post('/api/open',{id:id}).then(()=>hydrate(id)).catch(code=>notice('打不开这个会话（'+code+'）','err'));
 }
 function hydrate(sid){
   return fetch('/api/state?sid='+encodeURIComponent(sid||'')).then(r=>r.json()).then(applyState,s=>s);
+}
+/* 搜到一条会话里的某句话之后，得真的把**那一条**带到眼前：
+   只打开会话等于把人扔进一条六十句的会话里说"大概在中间"。 */
+function jumpToMsg(v,i){
+  if(!v)return;
+  const n=v.el.querySelector('[data-index="'+i+'"]');
+  // 跳不到就说跳不到：往历史流里插一行提示会跟着会话留在页面上，这里用 toast
+  if(!n){toast('命中的那一条已经不在这条会话里了','err');return}
+  n.scrollIntoView({block:'center',behavior:'smooth'});
+  n.classList.remove('flash');void n.offsetWidth;n.classList.add('flash');
+  setTimeout(()=>n.classList.remove('flash'),1900);
 }
 // 把服务端给的会话状态画进**它自己那条**视图（不是"当前看见的那条"）
 function applyState(s){
@@ -1824,6 +1844,7 @@ function applyState(s){
    * 那样一比就不相等，标题/模型/任务清单全都不会画，左栏永远停在占位符上。
    */
   if(!curId||v.sid===curId)show(v.sid);else markSessions();
+  if(v.jump!=null){const j=v.jump;v.jump=null;jumpToMsg(v,j)}
   return s;
 }
 

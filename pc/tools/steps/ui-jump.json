@@ -1,0 +1,91 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "第一问：讲讲这种花怎么养"
+  }
+ },
+ {
+  "goto": ".msg.ans",
+  "timeout": 25000
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "第二问：换个话题说点别的"
+  }
+ },
+ {
+  "sleep": 3500
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "第三问：最后再补一句"
+  }
+ },
+ {
+  "sleep": 3500
+ },
+ {
+  "eval": "(()=>{window.__old=curId;return 'old '+curId.slice(0,6)})()"
+ },
+ {
+  "click": "#newBtn"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "type": {
+   "sel": "#sessQ",
+   "text": "换个话题",
+   "enter": false
+  }
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({rows:document.querySelectorAll('#sessions .it').length,hit:document.querySelector('#sessions .it').dataset.hit,snippet:(document.querySelector('#sessions .hit')||{}).textContent})"
+ },
+ {
+  "shot": "j01-search-hit"
+ },
+ {
+  "click": "#sessions .it"
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "(()=>{const v=document.querySelector('.view.on'),n=v&&v.querySelector('[data-index=\"2\"]'),q=document.querySelector('#stream').getBoundingClientRect(),r=n?n.getBoundingClientRect():{top:0,bottom:0};return({back:curId===window.__old,idxOnActive:v?v.querySelectorAll('[data-index]').length:-1,target:!!n,flash:!!document.querySelector('.view.on .flash'),inView:!!n&&r.top>=q.top-3&&r.bottom<=q.bottom+3,scroll:Math.round(document.querySelector('#stream').scrollTop)})})()"
+ },
+ {
+  "shot": "j02-jumped"
+ },
+ {
+  "sleep": 2200
+ },
+ {
+  "eval": "({flashGone:!document.querySelector('.view.on .flash'),stillThere:!!document.querySelector('.view.on [data-index=\"2\"]')})"
+ },
+ {
+  "eval": "(()=>{openSession(window.__old,40);return 'jump-to-missing'})()"
+ },
+ {
+  "eval": "(()=>{openSession(window.__old,40);return 'jump-to-missing'})()"
+ },
+ {
+  "eval": "({toast:document.querySelector('#toast').textContent,on:document.querySelector('#toast').classList.contains('on'),stillCur:curId===window.__old})"
+ },
+ {
+  "shot": "j03-missing-target"
+ }
+]

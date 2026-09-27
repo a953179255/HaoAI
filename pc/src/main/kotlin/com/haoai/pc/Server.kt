@@ -1294,7 +1294,7 @@ class WebServer(settings: PcSettings, port: Int,
                 """"mode":"${m.mode}","updated":${m.updated},"messages":${m.messages},""" +
                 """"prompt":${m.prompt},"completion":${m.completion},""" +
                 """"running":${sessions[m.id]?.running == true},"current":${m.id == cur},""" +
-                """"hit":${quote(hit ?: "")}}"""
+                """"hit":${quote(hit?.text ?: "")},"hitAt":${hit?.index ?: -1}}"""
         }.joinToString(",", "[", "]")
     }
 

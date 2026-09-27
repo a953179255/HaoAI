@@ -18,6 +18,9 @@ import java.io.File
  */
 object SessionIndex {
 
+    /** 命中哪条会话不够：还得知道命中的是第几条消息，界面上才能跳过去并高亮。 */
+    data class Hit(val text: String, val index: Int)
+
     data class Meta(
         val id: String,
         val title: String,
@@ -62,9 +65,9 @@ object SessionIndex {
      * 读整个文件而不是走索引：会话文件都是几十 KB 量级，400 条全扫一遍也就几十毫秒，
      * 为此维护一份倒排索引是不划算的复杂度（而且它会和"改名只动 title 一个字段"打架）。
      */
-    fun match(meta: Meta, needleLower: String): String? {
+    fun match(meta: Meta, needleLower: String): Hit? {
         if (needleLower.isBlank()) return null
-        if (meta.title.lowercase().contains(needleLower)) return "标题命中"
+        if (meta.title.lowercase().contains(needleLower)) return Hit("标题命中", -1)
         val text = runCatching {
             val f = meta.file
             if (!f.isFile || f.length() > 4L * 1024 * 1024) return null
@@ -79,7 +82,7 @@ object SessionIndex {
                 val from = maxOf(0, at - 24)
                 val snippet = body.substring(from, minOf(body.length, at + needleLower.length + 40))
                     .replace('\n', ' ')
-                return "${m["role"]?.jsonPrimitive?.contentOrNull ?: "?"} 第 ${i + 1} 条：…$snippet…"
+                return Hit("${m["role"]?.jsonPrimitive?.contentOrNull ?: "?"} 第 ${i + 1} 条：…$snippet…", i)
             }
         }
         return null
