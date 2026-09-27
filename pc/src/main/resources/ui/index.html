@@ -118,6 +118,16 @@
   .wsrow:hover{border-color:var(--acc2);color:var(--fg)}
   .wsrow span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .wsrow em{font-style:normal;color:var(--acc);font-size:11px;flex:none}
+  /* 待发的图片附件：看得见"这句会带哪几张图"，也能当场撤掉一张 */
+  .atts{display:none;gap:6px;flex-wrap:wrap;max-width:880px;margin:0 auto 4px;padding:0 4px}
+  .atts.on{display:flex}
+  .atchip{display:flex;gap:6px;align-items:center;font-size:11.5px;color:var(--dim);
+    background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:2px 4px 2px 6px;max-width:260px}
+  .atchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .atchip i{font-style:normal;color:var(--dim2);flex:none}
+  .atchip em{font-style:normal;cursor:pointer;color:var(--dim2);padding:0 4px;flex:none}
+  .atchip em:hover{color:var(--bad)}
+  .atchip.no{border-color:var(--warn);color:var(--warn)}
   .chip{border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:999px;
     padding:3px 10px;font-size:11.5px;cursor:pointer;max-width:200px;overflow:hidden;text-overflow:ellipsis;
     white-space:nowrap;font-family:inherit;flex:none}
@@ -456,6 +466,7 @@
     <button class="pill" id="pill">↓ 回到底部</button>
     <footer>
       <div class="slash" id="slash"></div>
+      <div class="atts" id="attRow"></div>
       <div class="inwrap">
         <button class="clip" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读">📎</button>
         <input type="file" id="att" multiple hidden>
@@ -991,6 +1002,22 @@ function decide(id,decision,answer){
  * 二进制塞进文本历史只会变乱码，而落成文件之后 read / grep / 视觉输入走同一条路。
  */
 const TEXT_EXT=/\.(md|txt|json|jsonl|csv|tsv|log|ya?ml|toml|ini|xml|html?|kt|kts|java|py|js|ts|jsx|tsx|go|rs|c|h|cpp|hpp|cs|rb|php|sh|ps1|bat|sql|gradle|css|svg|properties)$/i;
+const IMG_EXT=/\.(png|jpe?g|gif|webp)$/i;
+/* 待发图片：路径由服务端落在工作区 .haoai-attach/ 下，发送时随 messages 一起递过去。
+   认不认得是图片由服务端按魔数判 —— 扩展名会骗人。 */
+let atts=[];
+function fmtSize(n){
+  n=n||0;
+  return n<1024?n+' B':(n<1024*1024?Math.round(n/1024)+' KB':(n/1048576).toFixed(1)+' MB');
+}
+function paintAtts(){
+  const r=$('#attRow');
+  r.classList.toggle('on',atts.length>0);
+  r.innerHTML=atts.map((a,i)=>`<span class="atchip${a.bad?' no':''}" title="${esc(a.p)}">`+
+    `<b>${esc(a.name)}</b><i>${a.bad?'递不出':fmtSize(a.bytes)}</i>`+
+    `<em data-x="${i}" title="不要这张">✕</em></span>`).join('');
+  r.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{atts.splice(+b.dataset.x,1);paintAtts()});
+}
 function attachFiles(list){
   [...list].forEach(f=>{
     if(TEXT_EXT.test(f.name)&&f.size<200_000){
@@ -1004,7 +1031,13 @@ function attachFiles(list){
       r.onload=()=>{
         post('/api/attach',{sid:curId,name:f.name,data:String(r.result).split(',')[1]||''}).then(d=>{
           if(!d||!d.path){toast((d&&d.error)||'附件没存下','err');return}
-          insertAtCursor('\n\n（附件已存到工作区：'+d.path+'，'+Math.round(d.bytes/1024)+' KB。要读它就按这个路径。）\n');
+          insertAtCursor('\n\n（附件已存到工作区：'+d.path+'，'+fmtSize(d.bytes)+'。要读它就按这个路径。）\n');
+          // 图片额外挂到待发列表：路径只告诉模型"有这么个文件"，像素要另走 image_url 它才真看得见
+          if(IMG_EXT.test(f.name)){
+            if(atts.length>=4)toast('一条消息最多带 4 张图，多余的只留路径','err');
+            else atts.push({p:d.path,name:f.name,bytes:d.bytes});
+          }
+          paintAtts();
           toast('已附上 '+f.name);
         }).catch(c=>toast('附件没存下（'+c+'）','err'));
       };
@@ -1292,9 +1325,10 @@ function send(){
   }
   if(t.startsWith('/')&&t.indexOf('\n')<0&&runCommand(t))return;
   box.value='';box.style.height='auto';hideSlash();
+  const imgs=atts.map(a=>a.p);atts=[];paintAtts();
   v.running=true;stopping=false;paintSend();markSessions();
   fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:t,sid:curId})})
+    body:JSON.stringify({text:t,sid:curId,images:imgs})})
     .then(r=>r.json().then(d=>({code:r.status,d:d})))
     .then(x=>{
       if(x.d&&x.d.sid&&x.d.sid!==curId)show(x.d.sid);

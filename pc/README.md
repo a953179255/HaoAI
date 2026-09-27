@@ -369,6 +369,7 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-group.json  # 侧栏按目录分组 + 累计用量
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json     # 定时任务：加/跑一次/停用/删 + 思考强度
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-compact.json   # 手动压缩：折一半/诚实读数/刷新还在
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-img.json      # 图片附件胶囊 + 真的走 image_url
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -649,6 +650,37 @@ Kotlin 侧新增 `WorkspaceTest`（6 条），共 132 条全绿。
 再按一次诚实地拒绝 → 刷新之后「已折进摘要 4 条」还在）。
 Kotlin 侧新增 `ManualCompactTest`（5 条：绕开触发线真的折、太短不许吃历史、落盘与水位、
 未知会话、正在跑的那条被挡下来），共 137 条全绿。
+
+## 这一批：图片真的进上下文（多模态）
+
+一件一直存在、这次才说破的事：**`screen capture` 与浏览器截图只回一个 PNG 路径**。
+模型拿到的是文件名 —— "屏幕理解"其实是模型在猜那个文件里有什么。
+附件那栏的注释也写着"视觉输入走同一条路"，而那条路以前根本不存在。
+
+- `Msg.images` 存的是**路径**，发请求时才编码成 `data:image/...;base64,`。
+  一张 2.8 MB 的截图编码后 3.7 MB，存进会话文件就是每次截图多付 3.7 MB；
+  而图片本来就在工作区里，路径只有几十字节。
+- 只有 `user` 角色用数组 content（`[{type:"text"},{type:"image_url"}]`）：
+  OpenAI 兼容网关大多不接受 `tool` 角色的数组 content。所以工具产出的图，
+  是本轮工具跑完后**补一条 user 消息**递给模型，而不是塞进工具结果里。
+- **认类型只认魔数**（png/jpeg/gif/webp），扩展名会骗人；认不出、读不到、超 6 MB 的一律跳过，
+  并在正文里说明 —— 一张坏图不该把整轮对话弄发不出去。
+- 安全：浏览器提交的图片路径**必须落在会话自己的工作区里**（`insideWorkspace`）。
+  这个服务只绑 127.0.0.1，但同机任意页面都能打这个端口，而图片会被编码后**发到远端网关** ——
+  一条 `C:/Users/.../id_rsa` 只要被当"图片"递出去，就等于把读文件的口子开给了浏览器。
+  一条消息最多 4 张。
+- 上下文那圈按**编码后的真实成本**算图片，不按那 40 个字符的路径 ——
+  否则"贴十张截图"会显示成只用了 400 字。
+- 界面上：图片附件挂在输入框上方的胶囊里（名字 + 大小 + ✕ 撤掉一张），
+  发出去就清空；文本附件仍旧直接贴进这句话（那条路本来就好用）。
+
+测试里最值钱的一条是端到端那条：从 `/api/task` 进去，看**假网关真收到的请求体**里
+有没有 `image_url` 与 data URL，以及工作区外面那条路径有没有被递出去 ——
+判据不在返回值上，在线上的字节上。
+
+验收：`SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-img.json`
+（真像素：贴一张图出胶囊、两张、✕ 撤掉一张、发出去胶囊清空）。
+Kotlin 侧新增 `ImageContextTest`（6 条），共 143 条全绿。
 
 ## 与手机端同源的行为
 

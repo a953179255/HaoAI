@@ -87,10 +87,12 @@ class ScreenTool : Tool(
             if (why != null) return fail(why)
         }
 
+        var shot: String? = null
         val ps = when (sub) {
             "capture" -> {
                 val rel = req(args, "path") ?: "screen-${System.currentTimeMillis()}.png"
                 val f = ctx.resolve(rel)
+                shot = f.absolutePath
                 PsRunner.run(Ps.capture(f.absolutePath)) + "\n图片已存 ${f.absolutePath}" +
                     "（${if (f.isFile) f.length() else 0} 字节）；要看内容用 path=\"$rel\""
             }
@@ -123,7 +125,12 @@ class ScreenTool : Tool(
             }
             else -> "(不该到这里)"
         }
-        return ToolResult(ps.trim().ifBlank { "(无输出)" }, card = if (sub == "ui") "generic" else "terminal")
+        // 截图本身也要递给模型：只回一个路径的话，"屏幕理解"就是模型在猜那个文件里有什么
+        return ToolResult(
+            ps.trim().ifBlank { "(无输出)" },
+            card = if (sub == "ui") "generic" else "terminal",
+            images = listOfNotNull(shot?.takeIf { Images.usable(it) != null })
+        )
     }
 
     private fun isRight(args: JsonObject): Boolean = (req(args, "button") ?: "").lowercase() == "right"

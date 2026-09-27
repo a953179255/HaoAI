@@ -34,6 +34,12 @@ object TextCap {
 data class ToolResult(
     val content: String,
     val error: Boolean = false,
+    /**
+     * 工具产出的图片（**文件路径**）：引擎会在本轮工具跑完后单独补一条 user 消息，
+     * 把像素本身递给模型。以前 `screen capture` 只回一个 png 路径，"屏幕理解"
+     * 其实是模型在猜那个文件里有什么。
+     */
+    val images: List<String> = emptyList(),
     /** 渲染意图：generic | terminal | diff —— 前端按这个决定摆哪种卡（照 dsh 的插槽注册）。 */
     val card: String = "generic",
     /**

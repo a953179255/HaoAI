@@ -50,6 +50,13 @@ data class Msg(
      * 于是"这个文件到底是用户点头写的还是自动写的"在历史里查不出来。
      */
     val note: String = "",
+    /**
+     * 随这条消息一起发给模型的图片（**存的是路径**，发请求时才编码成 data URL）。
+     *
+     * 为什么不把 base64 存进历史：一张截图编码后 3~4 MB，会话文件会被自己撑爆，
+     * 而图片本来就在工作区里躺着。见 [Images]。
+     */
+    val images: List<String> = emptyList(),
     /** 这一回合自己的用量与耗时（不是会话累计），画在回答下面那行小字。 */
     val pt: Int = 0,
     val ct: Int = 0,
@@ -96,6 +103,25 @@ internal fun msgJson(m: Msg): JsonObject = buildJsonObject {
         m.role == "tool" -> {
             put("tool_call_id", m.callId ?: "")
             put("content", m.content ?: "")
+        }
+        m.role == "user" && m.images.isNotEmpty() -> {
+            /*
+             * OpenAI 兼容的多模态写法：user 的 content 换成数组。
+             * 只给 user 角色用数组 —— tool 角色很多网关不接受数组 content，
+             * 一张坏图不该把整轮对话弄发不出去，所以认不出类型/读不到的图直接跳过。
+             */
+            val parts = mutableListOf<JsonElement>()
+            if (!m.content.isNullOrBlank()) parts += buildJsonObject {
+                put("type", "text"); put("text", m.content)
+            }
+            m.images.forEach { p ->
+                val url = Images.dataUrl(p)
+                if (url != null) parts += buildJsonObject {
+                    put("type", "image_url")
+                    put("image_url", buildJsonObject { put("url", url) })
+                }
+            }
+            if (parts.isEmpty()) put("content", m.content ?: "") else put("content", JsonArray(parts))
         }
         else -> put("content", m.content ?: "")
     }

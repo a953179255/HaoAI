@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -325,6 +326,10 @@ class WebServer(settings: PcSettings, port: Int,
         }.getOrElse { buildJsonObject { } }
 
         fun str(key: String): String = obj[key]?.jsonPrimitive?.contentOrNull ?: ""
+
+        /** 字符串数组（图片附件那类）；字段缺失或不是数组都当空表。 */
+        fun list(key: String): List<String> =
+            obj[key]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
     }
 
     /**
@@ -336,8 +341,31 @@ class WebServer(settings: PcSettings, port: Int,
      *
      * 返回 sid to null 表示起来了；sid to "原因" 表示被拒。
      */
+    /**
+     * 浏览器传来的图片路径必须留在**这条会话自己的工作区**里。
+     *
+     * 这个服务只绑 127.0.0.1，但同机任意页面都能对这个端口发请求；而图片会被 base64
+     * 之后原样发给远端网关 —— 一条 `C:/Users/.../id_rsa` 只要被当"图片"递出去，
+     * 就等于把读文件的口子开给了浏览器。认不出类型的（不是那四种魔数）一并丢掉，
+     * 一条消息最多带 4 张：再多不是看图，是刷 token。
+     */
+    private fun insideWorkspace(sid: String, paths: List<String>): List<String> {
+        if (paths.isEmpty()) return emptyList()
+        val ws = runCatching {
+            (sessions[pick(sid)]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
+        }.getOrNull() ?: return emptyList()
+        return paths.mapNotNull { p ->
+            val f = runCatching {
+                if (File(p).isAbsolute) File(p).canonicalFile else File(ws, p).canonicalFile
+            }.getOrNull() ?: return@mapNotNull null
+            val inside = f.path == ws.path || f.path.startsWith(ws.path + File.separator)
+            if (!inside || Images.usable(f.absolutePath) == null) null else f.absolutePath
+        }.take(4)
+    }
+
     private fun startRun(wantSid: String, text: String, cutTo: Int? = null,
-                         named: String = "", fresh: Boolean = false): Pair<String, String?> {
+                         named: String = "", fresh: Boolean = false,
+                         images: List<String> = emptyList()): Pair<String, String?> {
         /*
          * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
          * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
@@ -388,7 +416,7 @@ class WebServer(settings: PcSettings, port: Int,
         Thread {
             publish("run", """{"running":true}""", sid)
             try {
-                e.submit(text)
+                e.submit(text, images)
             } catch (err: Exception) {
                 publish("err", quote("回合异常：${err.message ?: err.javaClass.simpleName}"), sid)
             } finally {
@@ -413,7 +441,7 @@ class WebServer(settings: PcSettings, port: Int,
          * 同一条会话里排队是不行的：第二个任务会写进同一段历史，
          * 两条任务的工具卡串在一起，事后看不出哪条输出属于哪条。
          */
-        val (sid, err) = startRun(wantSid, text)
+        val (sid, err) = startRun(wantSid, text, images = insideWorkspace(wantSid, b.list("images")))
         if (err != null) {
             send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
             return

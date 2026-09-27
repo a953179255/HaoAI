@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -260,7 +261,11 @@ class Engine(
     fun contextBreakdown(): List<Pair<String, Int>> {
         val req = requestMessages()
         val sys = req.filter { it.role == "system" }.sumOf { it.content?.length ?: 0 }
-        val hist = req.filter { it.role != "system" }.sumOf { (it.content?.length ?: 0) + it.calls.sumOf { c -> c.args.length } }
+        val hist = req.filter { it.role != "system" }.sumOf {
+            (it.content?.length ?: 0) + it.calls.sumOf { c -> c.args.length } +
+                // 图片按编码后的真实成本算：只按那 40 个字符的路径算，等于"贴十张截图还说只用了 400 字"
+                it.images.sumOf { Images.wireChars(it) }
+        }
         val tools = runCatching { schemas().toString().length }.getOrDefault(0)
         /*
          * 项目说明单列一行：它是用户自己写进仓库的东西，"上下文快满了"这件事
@@ -410,13 +415,13 @@ class Engine(
     }
 
     /** 一轮用户输入 → 若干次模型往返 → 最终文本。 */
-    fun submit(userText: String): String {
+    fun submit(userText: String, images: List<String> = emptyList()): String {
         var titled = false
         if (session.title.get() == "新会话") {
             session.title.set(userText.trim().replace('\n', ' ').take(24).ifBlank { "新会话" })
             titled = true
         }
-        history += Msg("user", userText)
+        history += Msg("user", userText, images = images.filter { Images.usable(it) != null })
         /**
          * 一开口就先落一次盘。
          *
@@ -513,6 +518,7 @@ class Engine(
                 reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms)
             emit(Ev.TurnStats(pt, ct, ms, turnNo))
 
+            val shotPaths = mutableListOf<String>()
             for (call in turn.calls) {
                 if (stopRequested) {
                     // 注意是 continue 不是 break：**每个 tool_call_id 都必须有一条 tool 回复**，
@@ -566,7 +572,22 @@ class Engine(
                 val note = takeNote()
                 history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff, note = note,
                     sub = res.sub)
+                shotPaths += res.images
                 emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub))
+            }
+            /*
+             * 工具产出的图片（screen capture / 浏览器截图）单独补一条 user 消息递给模型。
+             * 为什么不塞进 tool 消息：OpenAI 兼容网关大多不接受 tool 角色的数组 content，
+             * 而 user 角色带 image_url 是各家都认的写法。工具结果文本里已经有路径与说明，
+             * 这条只是把像素本身给出去 —— 之前"屏幕理解"其实是模型在猜路径后面是什么。
+             */
+            if (shotPaths.isNotEmpty()) {
+                val ok = shotPaths.filter { Images.usable(it) != null }
+                history += if (ok.isNotEmpty())
+                    Msg("user", "（上面这些工具产出了 ${ok.size} 张图片，现在把图本身给你看。）", images = ok)
+                else
+                    Msg("user", "（工具产出的图片没能递出去：类型不认、读不到，或超过 " +
+                        "${Images.MAX_BYTES / 1_000_000} MB 上限。要看就先按路径自己处理。）")
             }
             session.mode = ctx.mode
         }
@@ -682,6 +703,9 @@ class Engine(
                                     if (m.name.isNotBlank()) put("name", m.name)
                                     m.reasoning?.let { put("reasoning", it) }
                                     if (m.diff.isNotBlank()) put("diff", m.diff)
+                                    // 图片只存路径（base64 存进来会把会话文件撑爆）
+                                    if (m.images.isNotEmpty())
+                                        put("images", buildJsonArray { m.images.forEach { add(JsonPrimitive(it)) } })
                                     if (m.note.isNotBlank()) put("note", m.note)
                                     if (m.sub.isNotBlank()) put("sub", m.sub)
                                     if (m.pt > 0) put("pt", m.pt)
@@ -742,6 +766,8 @@ class Engine(
                      */
                     name = m["name"]?.jsonPrimitive?.contentOrNull ?: "",
                     callId = m["tool_call_id"]?.jsonPrimitive?.contentOrNull,
+                    images = m["images"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                        ?: emptyList(),
                     reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
                     diff = m["diff"]?.jsonPrimitive?.contentOrNull ?: "",
                     note = m["note"]?.jsonPrimitive?.contentOrNull ?: "",

@@ -111,11 +111,14 @@ class BrowserTool : Tool(
                     val rel = req(args, "path") ?: "browser-shot-${System.currentTimeMillis()}.png"
                     val nav = browser.navigate(url)
                     val f = ctx.resolve(rel)
-                    ToolResult(nav + "\n" + browser.screenshot(f, rel))
+                    ToolResult(nav + "\n" + browser.screenshot(f, rel),
+                        images = listOf(f.absolutePath).filter { Images.usable(it) != null })
                 }
                 "screenshot" -> {
                     val rel = req(args, "path") ?: "browser-shot-${System.currentTimeMillis()}.png"
-                    ToolResult(browser.screenshot(ctx.resolve(rel), rel))
+                    val f = ctx.resolve(rel)
+                    ToolResult(browser.screenshot(f, rel),
+                        images = listOf(f.absolutePath).filter { Images.usable(it) != null })
                 }
                 "close" -> {
                     browser.shutdown()
