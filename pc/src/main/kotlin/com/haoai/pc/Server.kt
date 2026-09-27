@@ -126,6 +126,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/attach" -> attach(ex)
                 "/api/models" -> models(ex)
                 "/api/rule" -> ruleEdit(ex)
+                "/api/memory" -> memory(ex)
                 "/api/files" -> files(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
@@ -576,6 +577,40 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         send(ex, 200, """{"ok":true,"rule":${quote(r.render())}}""", "application/json; charset=utf-8")
         publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
+    /**
+     * `GET/POST /api/memory` —— 项目说明文件（AGENTS.md 那一类）的读与写。
+     *
+     * 读写都只碰**这条会话自己的工作区**，路径由服务端算（[Memory.target]），
+     * 前端不能指定写哪儿 —— 否则就成了"用一个接口往任意路径写文本"。
+     */
+    private fun memory(ex: HttpExchange) {
+        // 请求体只能读一次：分两次 new Body(ex) 的话第二次拿到的是空对象
+        val b = Body(ex)
+        val sid = if (ex.requestMethod == "GET") querySid(ex) else b.str("sid")
+        val id = pick(sid)
+        val ws = sessions[id]?.engine?.session?.workspace ?: settings.workspaceFile()
+        if (ex.requestMethod == "GET") {
+            val f = Memory.target(ws)
+            val text = runCatching { if (f.isFile) f.readText() else "" }.getOrDefault("")
+            send(ex, 200,
+                """{"ok":true,"path":${quote(f.absolutePath)},"exists":${f.isFile},"text":${quote(text)}}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        val text = b.str("text")
+        val done = runCatching { Memory.write(ws, text) }
+        if (done.isFailure) {
+            send(ex, 200,
+                """{"ok":false,"error":${quote("写不下去：" + (done.exceptionOrNull()?.message ?: ""))}}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        val f = done.getOrThrow()
+        send(ex, 200, """{"ok":true,"path":${quote(f.absolutePath)},"chars":${text.length}}""",
+            "application/json; charset=utf-8")
+        publish("notice", quote("项目说明已写入 ${f.name}：下一条消息起生效"), id)
     }
 
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */

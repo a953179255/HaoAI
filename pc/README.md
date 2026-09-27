@@ -390,6 +390,29 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 （写这条断言时踩到一个坑：`assistant` 那条消息的 `name` 也是 `write`（从它的 calls 补出来的），
 只按名字找会先撞上它 —— 判据要连 `role` 一起挑。）
 
+## 这一批：项目说明（AGENTS.md 那一类）读得到也改得动
+
+之前 PC 端**完全没有**这一环：`PromptCtx.extra` 这个槽位一直空着，模型永远看不到用户在
+仓库里写的规矩 —— 而 codex / opencode / claude-code / ZCode 全都把"这个仓库的规矩"
+收敛到一个随仓库走的文本里（AGENTS.md / CLAUDE.md），手机端也早有记忆分区。
+用户把一个仓库交给 agent，第一件要交代的事就是"构建用什么命令、哪些目录别动"。
+
+- `Memory`：按 `AGENTS.md` → `CLAUDE.md` → `.haoai/memory.md` 找（工作区找不到再看 git 根），
+  找到几份拼几份，每份标出处，总量截到 1.2 万字并说明截断。
+- **每回合现读，不缓存**：用户改完文件，下一句话就生效 —— 这是那几家的共同做法，
+  缓存进"记忆"反而会让人以为规则没生效。
+- 系统提示里给一个小节：`## 项目说明（用户写在仓库里的规则）`，并写明"比默认纪律更具体，
+  冲突时以它们为准"。
+- 右栏多一个「记忆」页签：显示会写到哪个文件、能直接编辑保存（`GET/POST /api/memory`）。
+  保存目标优先顺着已有的 `AGENTS.md` 写（别的 agent 也认这份），没有才写 `.haoai/memory.md`
+  （不污染仓库根）。路径由服务端算，前端不能指定写哪儿。
+
+两条新判据：`AGENTS md reaches the model every turn`（**发给模型的那条 system 消息里必须含规则原文**
+—— 这个功能最容易坏在中间：读到了没塞进 PromptCtx，或塞了但被截断吃掉），
+以及 `memory files are labelled capped and prefer AGENTS md`（出处标注、上限、保存目标）。
+界面侧：`bash pc/tools/ui-shot.sh pc/tools/steps/ui-mem.json`（保存后路径从"将创建"变"已存在"、
+重开页签读回原文、盘上文件确实是那句话）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -514,9 +537,9 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 还没做（按重要性）
 
-1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：记忆/技能/定时任务/MCP 的管理页
-   （PC 端设置抽屉现在能管模型、网关、工作区、档位、maxTokens、contextChars、密钥、
-   实验特性、权限规则，但还没有这四类东西的入口）、子任务（subagent）的派生与展示、
+1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：技能（自定义 `/命令`）、
+   定时任务、MCP 客户端与管理页（PC 端设置抽屉已能管模型、网关、工作区、档位、maxTokens、
+   contextChars、密钥、实验特性、权限规则、项目说明）、子任务（subagent）的派生与展示、
    思考强度可调。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

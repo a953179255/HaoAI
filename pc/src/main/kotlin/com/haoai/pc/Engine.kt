@@ -513,7 +513,9 @@ class Engine(
                     workspace = session.workspace,
                     model = settings.model,
                     mode = session.mode,
-                    gitRoot = gitRoot(session.workspace)
+                    gitRoot = gitRoot(session.workspace),
+                    // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
+                    extra = Memory.read(session.workspace, gitRoot(session.workspace))
                 )
             )
         )

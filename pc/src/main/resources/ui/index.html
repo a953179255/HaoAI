@@ -325,6 +325,10 @@
   .addrow input{flex:1;min-width:0;background:var(--glass);border:1px solid var(--line);border-radius:8px;
     color:var(--fg);font:inherit;font-size:12px;padding:5px 8px;outline:0}
   .addrow .btn{width:auto;flex:none;padding:5px 10px;font-size:12px}
+  .mem{width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--line);
+    border-radius:9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.6;padding:8px;
+    outline:0;resize:vertical;min-height:120px;font-family:var(--mono)}
+  .mem:focus{border-color:var(--acc2)}
   /* ---- 工作区文件浏览 ---- */
   .fbar{display:flex;align-items:center;gap:6px;margin:4px 0 6px}
   .fbar .fp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -411,6 +415,7 @@
       <button data-t="tasks" class="on">任务</button>
       <button data-t="usage">用量</button>
       <button data-t="files">产出</button>
+      <button data-t="mem">记忆</button>
     </div>
     <div class="tabp on" id="tab-tasks">
       <div class="prog" id="prog"><i style="width:0%"></i></div>
@@ -431,6 +436,14 @@
       <div class="fbar"><button class="ab" data-fx="up" title="回到上一级">↑ 上一级</button>
         <span class="fp" id="filePath">（根）</span><button class="ab" data-fx="reload">刷新</button></div>
       <div class="files" id="files">（还没加载）</div>
+    </div>
+    <div class="tabp" id="tab-mem">
+      <div class="kv">这里的规则<b>每回合都喂给模型</b>（现读不缓存，改完下一句就生效）。
+        写进工作区的 <b>AGENTS.md</b>（已有就用它，别的 agent 也认这份），没有则写 <b>.haoai/memory.md</b>。</div>
+      <div class="fp" id="memPath">—</div>
+      <textarea id="memBox" class="mem" rows="10" placeholder="例：构建用 gradlew.bat；不要改 generated/ 下的文件；提交信息用中文一句话"></textarea>
+      <div class="acts2 pinned"><button class="ab" id="memSave">保存</button>
+        <span class="fp" id="memState"></span></div>
     </div>
   </aside>
 </div>
@@ -498,7 +511,15 @@ function el(html){const d=document.createElement('div');d.innerHTML=html;return 
 /* esc 必须能吃数字：(t||'').replace 遇到数字直接 TypeError，
    而设置抽屉里只要有一处把数字塞进模板，整个弹窗就画不出来。 */
 function esc(t){return String(t==null?'':t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function add(node,v){const t=v||cur();const h=t.el.querySelector('.hello');if(h)h.remove();t.el.appendChild(node);bumpPill();return node}
+function add(node,v){
+  const t=v||cur();
+  // 起手卡只在"真的开始干活"时让位：一条轻提示（比如"项目说明已保存"）不该把它抹掉
+  if(node.classList&&(node.classList.contains('msg')||node.classList.contains('card')||
+     node.classList.contains('think')||node.classList.contains('stats'))){
+    const h=t.el.querySelector('.hello');if(h)h.remove();
+  }
+  t.el.appendChild(node);bumpPill();return node
+}
 
 /* ---- 空会话的起手感 ----
  * 空白页不是"简洁"，是"不知道该干什么"。参照 codex/opencode：给四条能直接点开的
@@ -894,6 +915,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='files')loadFiles();
+  if(b.dataset.t=='mem')loadMemory();
 });
 
 /* ---- 工作区文件浏览（右栏「产出」页签）----
@@ -931,6 +953,24 @@ document.querySelector('.fbar').onclick=e=>{
   const x=(e.target.dataset||{}).fx;
   if(x=='up'){fpath=fpath.split('/').slice(0,-1).join('/');loadFiles()}
   if(x=='reload')loadFiles();
+};
+
+/* ---- 项目说明（AGENTS.md 那一类）---- */
+function loadMemory(){
+  return fetch('/api/memory?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(d=>{
+    $('#memPath').textContent=(d.exists?'已存在：':'将创建：')+d.path;
+    $('#memBox').value=d.text||'';
+    $('#memState').textContent='';
+  }).catch(()=>{$('#memPath').textContent='读不到（服务换过端口？）'});
+}
+$('#memSave').onclick=()=>{
+  post('/api/memory',{sid:curId,text:$('#memBox').value}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没写进去','err');return}
+    // 先重读（路径会从"将创建"变成"已存在"），再写那行状态 ——
+    // 反过来写会被重读的异步回来清空，"已存 35 字"闪一下就没了
+    loadMemory().then(()=>{$('#memState').textContent='已存 '+d.chars+' 字 · 下一条消息起生效'});
+    toast('项目说明已保存');
+  }).catch(c=>toast('保存失败（'+c+'）','err'));
 };
 $('#newBtn').onclick=()=>{
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。

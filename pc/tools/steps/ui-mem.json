@@ -1,0 +1,17 @@
+[
+  {"goto": "#box"},
+  {"click": "#tabs button[data-t=\"mem\"]"},
+  {"goto": "#memBox"},
+  {"eval": "({path:document.getElementById('memPath').innerText,box:!!document.getElementById('memBox'),save:!!document.getElementById('memSave')})"},
+  {"shot": "m01-memory-tab"},
+  {"type": {"sel": "#memBox", "text": "构建只用 gradlew.bat；不要改 build/ 下的任何文件。", "enter": false}},
+  {"click": "#memSave"},
+  {"sleep": 800},
+  {"eval": "({state:document.getElementById('memState').innerText,path:document.getElementById('memPath').innerText})"},
+  {"shot": "m02-memory-saved"},
+  {"eval": "fetch('/api/memory?sid='+curId).then(r=>r.json()).then(d=>'读回 ['+d.text+'] exists='+d.exists)"},
+  {"click": "#tabs button[data-t=\"mem\"]"},
+  {"sleep": 500},
+  {"eval": "document.getElementById('memBox').value"},
+  {"eval": "({hello:document.querySelectorAll('.hello').length,path:document.getElementById('memPath').innerText.slice(0,10),state:document.getElementById('memState').innerText})"}
+]

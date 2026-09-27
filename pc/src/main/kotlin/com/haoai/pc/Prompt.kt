@@ -83,7 +83,8 @@ object Prompt {
         appendLine("- 不要往仓库里写密钥。用户给过你的 API Key 只放在 HaoAI 状态目录，不进 git。")
         if (ctx.extra.isNotBlank()) {
             appendLine()
-            appendLine("## 用户自定义指令")
+            appendLine("## 项目说明（用户写在仓库里的规则）")
+            appendLine("这些比上面的默认纪律更具体，冲突时以它们为准；拿不准就先问，不要猜。")
             append(ctx.extra.trim())
             appendLine()
         }
@@ -97,6 +98,68 @@ data class PromptCtx(
     val gitRoot: String?,
     val extra: String = ""
 )
+
+/**
+ * 项目说明文件：`AGENTS.md` / `CLAUDE.md` / `.haoai/memory.md`。
+ *
+ * 为什么必须有这一份：用户把一个仓库交给 agent 时，"这个仓库的规矩"只有他自己知道 ——
+ * 构建命令、禁改目录、提交风格、别动哪个生成文件。codex / opencode / claude-code
+ * 都把它收敛到一个**随仓库走**的文本里，而且**每回合现读**（不是缓存进"记忆"），
+ * 所以用户改完文件，下一句话就生效。之前 PC 端完全没有这一环：`PromptCtx.extra`
+ * 这个槽位一直空着，模型永远看不到用户写的规则。
+ */
+object Memory {
+    val CANDIDATES = listOf("AGENTS.md", "CLAUDE.md", ".haoai/memory.md")
+
+    /** 上限按字符算：说明文件写太长会把上下文吃掉，反而把要干的活挤没。 */
+    const val CAP = 12_000
+
+    private fun dirs(workspace: java.io.File, gitRoot: String?): List<java.io.File> {
+        val out = mutableListOf(workspace)
+        gitRoot?.let { val g = java.io.File(it); if (g.isDirectory && g.path != workspace.path) out += g }
+        return out
+    }
+
+    /** 拼出要塞进系统提示的那一段；一个都没有就返回空串。 */
+    fun read(workspace: java.io.File, gitRoot: String? = null): String {
+        val parts = mutableListOf<Pair<String, String>>()
+        var used = 0
+        for (d in dirs(workspace, gitRoot)) {
+            for (c in CANDIDATES) {
+                val f = java.io.File(d, c)
+                if (!f.isFile) continue
+                val text = runCatching { f.readText() }.getOrDefault("").trim()
+                if (text.isEmpty()) continue
+                val left = CAP - used
+                if (left <= 0) return render(parts) + "\n…（还有更多说明文件未纳入，已截到 $CAP 字）"
+                val label = runCatching { f.relativeToOrSelf(workspace).path }.getOrDefault(f.path).replace('\\', '/')
+                val body = if (text.length > left) text.take(left) + "\n…（本文件过长，已截断）" else text
+                used += body.length
+                parts += label to body
+            }
+        }
+        return render(parts)
+    }
+
+    private fun render(parts: List<Pair<String, String>>): String =
+        parts.joinToString("\n\n") { "【${it.first}】\n${it.second}" }
+
+    /**
+     * 界面/CLI 保存时写哪个文件：已经有 AGENTS.md 就写它（那是三家共用的事实标准，
+     * 别的 agent 也会读），否则写 `.haoai/memory.md`（不污染仓库根）。
+     */
+    fun target(workspace: java.io.File): java.io.File {
+        val agents = java.io.File(workspace, "AGENTS.md")
+        return if (agents.isFile) agents else java.io.File(workspace, ".haoai/memory.md")
+    }
+
+    fun write(workspace: java.io.File, text: String): java.io.File {
+        val f = target(workspace)
+        f.parentFile?.mkdirs()
+        f.writeText(text)
+        return f
+    }
+}
 
 private fun modeText(mode: String) = when (mode) {
     "plan" -> "plan（只读规划）"

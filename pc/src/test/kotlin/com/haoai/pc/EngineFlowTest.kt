@@ -40,9 +40,11 @@ class EngineFlowTest {
     /** 脚本化模型：按队列吐出回合。 */
     private class Scripted(private val turns: MutableList<AssistantTurn>) : ChatClient {
         var lastTools: List<ToolSchema> = emptyList()
+        var lastMessages: List<Msg> = emptyList()
         var calls = 0
         override fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn {
             lastTools = tools
+            lastMessages = messages
             calls++
             val t = if (turns.isNotEmpty()) turns.removeAt(0) else AssistantTurn("收尾", emptyList(), Usage(), "stop")
             onText(t.text)
@@ -134,6 +136,43 @@ class EngineFlowTest {
         )
         e2.submit("写个 c.txt")
         assertFalse("竟然允许从回合中间截断（下一次请求就是有调用没回复）", e2.cutTo(1))
+    }
+
+    /**
+     * 项目说明（AGENTS.md 那一类）要真的到模型眼前。
+     *
+     * 判据不是"Memory.read 返回了字符串"，而是**发给模型的那条 system 消息里有没有它** ——
+     * 这个功能最容易坏在中间：读到了没塞进 PromptCtx，或塞了但被压缩/截断吃掉。
+     */
+    @Test
+    fun `AGENTS md reaches the model every turn`() {
+        val ws = tempWorkspace()
+        File(ws, "AGENTS.md").writeText("构建只用 gradlew.bat，不要直接调 gradle。")
+        val (engine, scripted, _) = harness(ws, mutableListOf(turn("知道了"), turn("还在")))
+        engine.submit("随便做点什么")
+        val sys = scripted.lastMessages.first { it.role == "system" }.content ?: ""
+        assertTrue("系统提示里没有项目说明：$sys", sys.contains("gradlew.bat"))
+        assertTrue("项目说明没标出处，模型分不清是谁写的", sys.contains("AGENTS.md"))
+    }
+
+    @Test
+    fun `memory files are labelled capped and prefer AGENTS md`() {
+        val ws = tempWorkspace()
+        ws.mkdirs()
+        File(ws, ".haoai").mkdirs()
+        File(ws, ".haoai/memory.md").writeText("规则A")
+        val one = Memory.read(ws)
+        assertTrue("没有 AGENTS.md 时该读到 .haoai/memory.md：$one",
+            one.contains("规则A") && one.contains(".haoai/memory.md"))
+        File(ws, "AGENTS.md").writeText("规则B")
+        val both = Memory.read(ws)
+        assertTrue("两份都在就该都带上：$both", both.contains("规则A") && both.contains("规则B"))
+        // 保存的目标：已经有 AGENTS.md 就顺着它写，别的 agent 也认这份
+        assertEquals("AGENTS.md", Memory.target(ws).name)
+        File(ws, "AGENTS.md").writeText("x".repeat(20_000))
+        val big = Memory.read(ws)
+        assertTrue("超长说明要把上下文挤没了：${big.length}", big.length < 14_000)
+        assertTrue("截断了要说一声：$big", big.contains("已截"))
     }
 
     @Test
