@@ -5,8 +5,12 @@
 # 而"界面到底长什么样"这件事只有真截图能定案 —— 记在文档里的结论第二天就不能信了。
 set -euo pipefail
 
+CALLER="$PWD"
 cd "$(dirname "$0")/.."
 STEPS="${1:-tools/steps/ui.json}"
+# 剧本路径按 README 的写法是从仓库根给的（pc/tools/steps/x.json），而这里已经 cd 到 pc/，
+# 于是照抄命令会 ENOENT —— 两处都认：先按 pc/ 相对，找不到再按调用方当时所在目录。
+[ -f "$STEPS" ] || STEPS="$CALLER/$STEPS"
 OUT="${2:-$TEMP/haoai-ui-shot}"
 MODE="${SHOT_MODE:-tools}"
 

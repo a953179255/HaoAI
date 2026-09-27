@@ -48,6 +48,28 @@ check('行内码/粗体/斜体/裸链接/链接语法', () => {
   assert(h.includes('<code>code</code>') && h.includes('<b>粗</b>') && h.includes('<i>斜</i>'), h);
   assert(h.includes('<a href="https://a.cn/x"') && h.includes('>文档</a>'), h);
 });
+check('markdown 图片渲染成 <img>（以前被链接规则吃掉，只剩一个感叹号）', () => {
+  const h = md('看 ![截图一](https://a.cn/x.png) 和 ![本地](/api/img?path=a.png)');
+  assert(h.includes('<img src="https://a.cn/x.png" alt="截图一"'), h);
+  assert(h.includes('<img src="/api/img?path=a.png"'), h);
+  assert(!h.includes(']<(') && !h.includes('!<img'), h);
+});
+check('图片与链接只放行 http/https/站内/data:image，javascript: 留在正文里', () => {
+  const h = md('![坏](javascript:alert(1)) [也坏](javascript:alert(2))');
+  assert(!h.includes('<img src="javascript'), h);
+  assert(!h.includes('<a href="javascript'), h);
+  assert(h.includes('![坏](javascript:alert(1))'), h);
+});
+check('url 里的引号被编掉，属性逃不出去', () => {
+  const h = md('[点](https://a.cn/x"onmouseover="alert(1)) 裸 https://a.cn/y"onmouseover="z');
+  // 真正的判据：注入的内容留在 href 的值里面（引号已编码），标签上没有多出第二个属性
+  assert(h.includes('href="https://a.cn/x%22onmouseover=%22alert(1"'), h);
+  assert(!/<a[^>]*\sonmouseover/i.test(h), h);
+  assert(!/<a[^>]*\s\w+=\s*"[^"]*\s/i.test(h), h);
+  assert(/<a href="https:\/\/a\.cn\/y"[^>]*>/.test(h), h);
+});
+
+
 check('标题一到四级', () => { assert(md('#### 四级').includes('<h4>四级</h4>')); assert(md('## 二级').includes('<h2>二级</h2>')); });
 
 const evil = md('看这个：\n\n```html\n<img src=x onerror=alert(1)>\n<scr' + 'ipt>alert(2)</scr' + 'ipt>\n```\n');

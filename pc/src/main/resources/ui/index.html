@@ -137,6 +137,9 @@
   .thumbs img:hover{border-color:var(--acc2)}
   .thumbs i{font-style:normal;font-size:10.5px;color:var(--dim2);max-width:172px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 回答正文里的 markdown 图片：宽度跟着气泡走，别把整页撑出横向滚动 */
+  .ans img{max-width:100%;max-height:60vh;border-radius:9px;border:1px solid var(--line);
+    background:var(--code);display:inline-block;margin:4px 0}
   .chip{border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:999px;
     padding:3px 10px;font-size:11.5px;cursor:pointer;max-width:200px;overflow:hidden;text-overflow:ellipsis;
     white-space:nowrap;font-family:inherit;flex:none}
@@ -968,6 +971,8 @@ on('usage',(v,d)=>paintUsage(d,v));
 on('notice',(v,d)=>notice(d,null,v));
 on('err',(v,d)=>notice(d,'err',v));
 on('mode',(v,d)=>{v.mode=d.mode;if(v===cur())setMode(d.mode)});
+// 按会话换模型：顶栏那颗标签要跟着这条会话走，不是永远显示全局那份
+on('model',(v,d)=>{v.model=d.model;if(v===cur())$('#model').textContent=shortModel(d.model)});
 on('opened',(v,d)=>{v.title=d.title;if(d.mode)v.mode=d.mode;if(v===cur()){$('#title').textContent=d.title;setMode(d.mode)}});
 // 第一句话一到，标题就要出现在顶栏与侧栏（否则跑十分钟的任务一直叫"新会话"）
 on('title',(v,d)=>{v.title=d.title;if(v===cur())$('#title').textContent=d.title;markSessions()});
@@ -1332,18 +1337,26 @@ function pickModel(){
     dg.innerHTML=`<h3>切换模型</h3><div class="kv" style="margin-bottom:8px">当前：
         <b>${esc(shortModel(cur().model))}</b>。列表来自网关的 /models，没有就手输。</div>${rows}
       <div class="fld"><label>模型名 / id（本地 gguf 填完整路径）</label><input type="text" id="mIn"></div>
+      <label class="sw"><input type="checkbox" id="mScope" checked>
+        <span><span class="t">只改当前这条会话</span><br><span class="d">不勾就是改全局默认：所有会话下一条消息起都换过去。
+          按会话换是"这条拿本地小模型试个简单问题、别影响另外三条"的唯一办法。</span></span></label>
       <div class="acts"><button class="btn" id="mX">关闭</button><button class="btn pri" id="mOk">用这个</button></div>`;
     $('#mask').classList.add('on');
     dg.querySelector('#mX').onclick=()=>$('#mask').classList.remove('on');
     dg.querySelectorAll('[data-mm]').forEach(b=>b.onclick=()=>{dg.querySelector('#mIn').value=b.dataset.mm});
     dg.querySelector('#mOk').onclick=()=>{
       const m=dg.querySelector('#mIn').value.trim();if(!m)return;
-      fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:m})}).then(()=>{
+      const onlyThis=dg.querySelector('#mScope').checked;
+      // 只改这一条走 /api/model（scope 缺省 session）；改全局还是走设置那条，所有引擎一起跟上
+      fetch(onlyThis?'/api/model':'/api/settings',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(onlyThis?{model:m,sid:curId}:{model:m})}).then(r=>r.json()).then(x=>{
+          if(x&&!x.ok){toast(x.error||'没换成','err');return}
           $('#mask').classList.remove('on');
-          Object.keys(views).forEach(k=>{views[k].model=m});
-          toast('已切到 '+shortModel(m));hydrate(curId);
-        });
+          if(!onlyThis)Object.keys(views).forEach(k=>{views[k].model=m});
+          toast(onlyThis?'这条会话切到 '+shortModel(m):'已切到 '+shortModel(m));
+          hydrate(curId);
+        }).catch(()=>toast('模型没换成','err'));
     };
   }).catch(()=>toast('拿不到模型列表'));
 }

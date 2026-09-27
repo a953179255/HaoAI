@@ -371,6 +371,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json     # 定时
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-compact.json   # 手动压缩：折一半/诚实读数/刷新还在
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-img.json      # 图片附件胶囊 + 真的走 image_url
 PRE_TOUCH="notes.txt" PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-search.json  # 搜索提供方设置 + 文件浏览器里的图片预览
+PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-model.json  # 只改当前会话的模型 + 回答里的 markdown 图片与 url 转义
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -744,6 +745,61 @@ PC 端以前只有 `web_fetch`：等于"知道网址才能读"。而 agent 干�
 Kotlin 侧新增 `SearchToolTest`（8 条：fixture 解析、改版返回空、提供方选择、
 本地假搜索服务走完整链路、空结果要说人话、空 query 不浪费请求、博查 JSON 与缺 key），共 152 条全绿。
 
+## 这一批：按会话换模型 + 回答里的图片真的画出来
+
+顶栏那颗模型 chip 以前是**全局开关**：切一下，所有正在跑的会话一起换。
+而"这条长任务换便宜的、那条问答换强的"恰恰是 PC 端多会话并行之后最常见的诉求
+（手机端也是按会话选的）。现在弹窗里多了一格「只改当前这条会话」（默认勾上）：
+
+- 勾着 → `POST /api/model {sid, model, scope:session}`，只 `useSettings(settings.copy(model=…))`
+  换掉那一个引擎；顶栏 chip 显示的是**当前会话自己的**模型（`stateJson.model` 从引擎读，不再读全局设置），
+  所以切会话时 chip 会跟着变，新开的会话回到全局默认。
+- 不勾 → 仍走 `POST /api/settings`，全局改、所有引擎（含以后新建的）一起跟上。
+- 两条路都不能只改界面不改后端，所以 `ModelScopeTest` 的判据是"问服务端要 state，
+  看那一条的 model 变了、别条没变、全局那条也没变"，而不是"chip 文字对不对"。
+
+**测试自己也会假失败**：第一次跑 `ModelScopeTest` 时"只改一条不影响别条"红了，
+根因不在产品 —— `/api/new` 在手边那条还空着的时候会**复用**它（那是前面修的
+"一路点新任务刷出一堆空会话"），于是两次 newSession 拿到同一条 id。
+改成建会话时各带一个临时工作区，才有两条真的会话。量具的假设也要写进注释。
+
+另一半是渲染：模型发的 markdown 里 `![...](url)` 以前原样显示成一行字，
+`/api/img` 都建好了却用不上（工具截图能画，模型自己贴的图不能画）。补了图片规则，
+同时把三类 url 收进一个白名单函数 `safe()`：
+
+- 只放行 `http(s):`、站内 `/…`、`data:image/`；`javascript:`、`file:` 这种留在文本里不变成标签。
+- url 里的双引号编成 `%22`。这条是真问题：`[点](https://a.cn/x"onmouseover="y)`
+  以前会拼出 `<a href="https://a.cn/x"onmouseover="y">`，属性引号被闭合，
+  后面那截就成了浏览器眼里的属性 —— 模型的回答不是可信输入，**它一句 markdown 就能往 DOM 里塞东西**。
+  裸链接那条正则同样以前没过滤，一并过 `safe()`。
+- 图片按 `loading="lazy"` + `.ans img` 限宽，别把气泡撑破。
+
+验收：`PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-model.json` ——
+弹窗里有那格且默认勾上、切完 chip 变成会话模型且 toast 说"这条会话"、
+`GET /api/settings` 里全局模型没动；**先真发一轮**让这条会话非空，再点新任务，
+chip 才回到全局默认（`chipAfterNew:"mock"`、`sessions:2`）—— 不先发一轮的话
+`/api/new` 会把那条空会话复用回去，"新会话回到默认"就永远验不到（同一件事在
+`ModelScopeTest` 里也栽过一次，两边都补了注释）。
+渲染侧：`inThisBubble=1` 且 `naturalWidth=1`（`/api/img` 真拉到字节）、`javascript:` 那条原样留在文本里、
+`<a>` 的 href 里只剩 `%22`，没有凭空多出来的 `onmouseover` 属性；
+再贴一张 2000×120 的宽图，量到的是 `shown:880x55`、`overflow:false`、`#stream` 无横向滚动 —— 
+**图片被气泡限住了而不是把版面撑破**。
+md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉），Kotlin 侧 `ModelScopeTest` 5 条，共 158 条全绿。
+
+这两个数一开始都是假的，值得记：断言写在 `document.querySelector('.ans')` 上，
+真发一轮之后那是**第一条**回答气泡（本地图在最后一条里），于是"坏 url 原样留着"读成了 false；
+宽图第一次量到 `naturalWidth=0`，因为 `loading="lazy"` 的元素不进视口就不解码 ——
+要先 `scrollIntoView()` 再 `await img.decode()`。**量具读错了对象，看起来像产品坏了。**
+
+顺带两处自纠：① `GET /api/models` 的"使用中"标记原本比的是**全局**模型，
+按会话换过之后会出现"chip 显示本地 7B、弹窗里打勾的是另一行"，改成按这条会话的引擎标
+（`ModelScopeTest` 里给假网关加了 `/v1/models`，判据就是"打勾的那一行 id"）；
+② `ui-shot.sh` 里已经 `cd` 到 `pc/`，而 README 的命令是从仓库根抄给的（`pc/tools/steps/x.json`），
+照抄必 ENOENT —— 现在两处都认。
+
+顺带一处文档自纠：下面「已验证到哪一步」的条数一直停在 91，早就不对了 ——
+它恰好是"README 只当索引、数字要回代码里数"这条教训的现场版。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -810,7 +866,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **91 条全绿**（整套 16 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **158 条全绿**（整套 25 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -871,7 +927,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：跨端审批与会话镜像（在手机批桌面那条）、
    记忆与备份的两端同步（PC 与手机各写各的 `MEMORY.md` 与备份，没有汇合的那一步 —— 与下面第 3 条同源）。
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
-   手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、
+   手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

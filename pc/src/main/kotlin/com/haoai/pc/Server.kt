@@ -143,6 +143,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/rollback" -> rollback(ex)
                 "/api/attach" -> attach(ex)
                 "/api/models" -> models(ex)
+                "/api/model" -> modelSet(ex)
                 "/api/rule" -> ruleEdit(ex)
                 "/api/memory" -> memory(ex)
                 "/api/skills" -> skills(ex)
@@ -240,7 +241,9 @@ class WebServer(settings: PcSettings, port: Int,
         // 改了全局工作区之后老会话仍在旧目录里干活，头部却显示新路径就是骗人。
         sb.append("\"workspace\":\"").append(esc(e?.session?.workspace?.absolutePath
             ?: settings.workspaceFile().absolutePath)).append("\",")
-        sb.append("\"model\":\"").append(esc(settings.model)).append("\",")
+        // 模型要报**这条会话自己的**：从 v0.32 起可以只给一条会话换模型，
+        // 还报全局那份的话，顶栏那个标签就在说谎（引擎实际用的和显示的不一样）。
+        sb.append("\"model\":\"").append(esc(e?.settings?.model ?: settings.model)).append("\",")
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
         sb.append("\"sessionId\":").append(quote(id)).append(",")
@@ -1001,12 +1004,51 @@ class WebServer(settings: PcSettings, port: Int,
         Schedules.update(item)
     }
 
+    /**
+     * `POST /api/model` {sid, model, scope} —— 换模型。
+     *
+     * `scope` 缺省是 `session`：只改这一条引擎的设置。以前全局只有一个模型，
+     * 于是"这条会话拿本地小模型试个简单问题、别影响另外三条"做不到，
+     * 而 codex / opencode 这类参考实现都是按会话选的。
+     * `scope=all` 才是原来的全局路径：存盘 + 所有活着的会话一起跟上。
+     */
+    private fun modelSet(ex: HttpExchange) {
+        val b = Body(ex)
+        val m = b.str("model").trim()
+        if (m.isEmpty()) {
+            send(ex, 200, """{"ok":false,"error":"模型名是空的"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val sid = pick(b.str("sid"))
+        val all = b.str("scope") == "all"
+        if (all) {
+            val n = settings.copy(model = m)
+            PcSettings.save(n)
+            settings = n
+            sessions.values.forEach { it.engine.useSettings(n) }
+        } else {
+            val e = sessions[sid]?.engine
+            if (e == null) {
+                send(ex, 200, """{"ok":false,"error":"没有这条会话，改不了模型"}""",
+                    "application/json; charset=utf-8"); return
+            }
+            e.useSettings(e.settings.copy(model = m))
+        }
+        send(ex, 200, """{"ok":true,"model":${quote(m)},"sid":${quote(sid)},"scope":"${if (all) "all" else "session"}"}""",
+            "application/json; charset=utf-8")
+        publish("model", """{"model":${quote(m)},"scope":"${if (all) "all" else "session"}"}""", sid)
+        if (all) publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */
     private fun models(ex: HttpExchange) {
         val sid = pick(querySid(ex))
         val list = runCatching { sessions[sid]?.engine?.models() ?: emptyList() }.getOrDefault(emptyList())
+        // "使用中"要按**这条会话**的模型标：按会话换模型之后，全局那个可能已经不是它在用的了，
+        // 照全局标出来的结果是 chip 显示"本地 7B"、列表里打勾的却是另一行。
+        val cur = sessions[sid]?.engine?.settings?.model ?: settings.model
         send(ex, 200, list.joinToString(",", "[", "]") { m ->
-            """{"id":${quote(m)},"current":${m == settings.model}}"""
+            """{"id":${quote(m)},"current":${m == cur}}"""
         }, "application/json; charset=utf-8")
     }
 

@@ -7,12 +7,22 @@
 function md(t) {
   if (t == null || String(t).trim() === '') return '';   // 空回答不该产出任何标记（否则多一个空隔块）
   const esc2 = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  // 图片必须在链接之前匹配：否则 `![alt](url)` 会被链接规则吃掉，
+  // 屏幕上剩下一个孤零零的感叹号加一条链接（模型很爱在回答里贴图，这条以前就是坏的）。
+  // url 里把引号编掉：整段只转了 &<>，一个带引号的 url 就能把自己关到属性外面去。
+  const safe = u => (/^(https?:\/\/|\/|data:image\/)/i.test(u) ? u.replace(/"/g, '%22') : null);
   const inline = s => s
     .replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`)
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!;?]|$)/g, '$1<i>$2</i>')
-    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|[^"'>])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+    .replace(/!\[([^\]\n]*)\]\((https?:[^)\s]+|\/[^)\s]+|data:image\/[^)\s]+)\)/g,
+      (m, alt, u) => safe(u) ? `<img src="${safe(u)}" alt="${alt}" loading="lazy">` : m)
+    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g,
+      (m, t, u) => safe(u) ? `<a href="${safe(u)}" target="_blank" rel="noopener">${t}</a>` : m)
+    .replace(/(^|[^"'>])(https?:\/\/[^\s<)"']+)/g,
+      // 裸链接也要过 safe：这条以前直接把 url 拼进 href，
+      // 一个带引号的地址就能从属性里爬出去挂上事件处理器
+      (m, pre, u) => safe(u) ? `${pre}<a href="${safe(u)}" target="_blank" rel="noopener">${u}</a>` : m);
   
   // 1) 先把围栏代码块整块搬出去：行级规则一律不许碰它
   const blocks = [];
