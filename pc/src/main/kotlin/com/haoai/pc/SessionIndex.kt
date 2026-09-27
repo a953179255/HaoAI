@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.io.File
 
 /**
@@ -51,6 +52,38 @@ object SessionIndex {
             file = f
         )
     }.getOrNull()
+
+    /**
+     * 搜一条会话：标题命中给标题，否则翻消息正文，返回命中处附近的一小段（给列表当摘要）。
+     *
+     * 为什么要翻正文：用户找旧会话时记得的是"我那天问过的那个报错"，
+     * 而标题往往只是第一句话的前 24 个字，很多会话根本不含那个词。
+     *
+     * 读整个文件而不是走索引：会话文件都是几十 KB 量级，400 条全扫一遍也就几十毫秒，
+     * 为此维护一份倒排索引是不划算的复杂度（而且它会和"改名只动 title 一个字段"打架）。
+     */
+    fun match(meta: Meta, needleLower: String): String? {
+        if (needleLower.isBlank()) return null
+        if (meta.title.lowercase().contains(needleLower)) return "标题命中"
+        val text = runCatching {
+            val f = meta.file
+            if (!f.isFile || f.length() > 4L * 1024 * 1024) return null
+            f.readText()
+        }.getOrNull() ?: return null
+        val o = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+        o["messages"]?.jsonArray?.forEachIndexed { i, el ->
+            val m = runCatching { el.jsonObject }.getOrNull() ?: return@forEachIndexed
+            val body = m["content"]?.jsonPrimitive?.contentOrNull ?: return@forEachIndexed
+            val at = body.lowercase().indexOf(needleLower)
+            if (at >= 0) {
+                val from = maxOf(0, at - 24)
+                val snippet = body.substring(from, minOf(body.length, at + needleLower.length + 40))
+                    .replace('\n', ' ')
+                return "${m["role"]?.jsonPrimitive?.contentOrNull ?: "?"} 第 ${i + 1} 条：…$snippet…"
+            }
+        }
+        return null
+    }
 
     /** 恢复一个会话的壳（历史由 Engine 的 init 自己从同一个文件读回来）。 */
     fun restore(meta: Meta, fallbackWorkspace: File): Session {

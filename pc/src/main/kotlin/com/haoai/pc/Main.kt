@@ -133,6 +133,7 @@ private fun set(s: PcSettings, rest: List<String>) {
              */
             "maxTurns" -> n.copy(maxTurns = int(k, v, n.maxTurns))
             "maxTokens" -> n.copy(maxTokens = int(k, v, n.maxTokens))
+            "contextChars" -> n.copy(contextChars = int(k, v, n.contextChars))
             "storedCap" -> n.copy(storedCap = int(k, v, n.storedCap))
             "reqCap" -> n.copy(reqCap = int(k, v, n.reqCap))
             "compactTriggerChars" -> n.copy(compactTriggerChars = int(k, v, n.compactTriggerChars))

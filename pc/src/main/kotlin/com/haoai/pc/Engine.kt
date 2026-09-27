@@ -8,6 +8,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
 import java.util.UUID
@@ -15,8 +17,18 @@ import java.util.UUID
 /** 引擎往外冒的事件。CLI 打成文本，Web 转成 SSE。 */
 sealed class Ev {
     data class TextDelta(val s: String) : Ev()
+    /** 模型的思考过程（流式）。与正文分开两条流，因为界面上是两种东西。 */
+    data class ReasoningDelta(val s: String) : Ev()
+    /** 一个回合的用量与耗时（不是会话累计），画在回答下面那行小字。 */
+    data class TurnStats(val pt: Int, val ct: Int, val ms: Long, val turns: Int) : Ev()
     data class TextDone(val s: String) : Ev()
-    data class ToolStart(val id: String, val name: String, val brief: String) : Ev()
+    data class ToolStart(
+        val id: String,
+        val name: String,
+        val brief: String,
+        /** 这次工具动的对象（写改类是路径，shell 是命令）。界面上的"回滚这次修改"要用它。 */
+        val subject: String = ""
+    ) : Ev()
     data class ToolEnd(val id: String, val name: String, val ok: Boolean, val out: String, val card: String) : Ev()
     data class ApprovalRequest(val id: String, val title: String, val detail: String, val kind: String) : Ev()
     data class AskRequest(val id: String, val question: String, val options: List<String>) : Ev()
@@ -122,6 +134,74 @@ class Engine(
     }
 
     fun messages(): List<Msg> = history.toList()
+
+    /**
+     * 把历史截到第 index 条为止，供"删到这里 / 编辑重发 / 重新生成"三处用。
+     *
+     * 只允许截在 **user 消息**上：user 消息一定是回合边界。截在
+     * `assistant(tool_calls)` 与它的 tool 回复之间，下一次请求就是"有调用没回复" → 网关 400，
+     * 症状看起来像"编辑一次把会话弄坏了"。（同一条不变量见 maybeCompact 的切点规则。）
+     *
+     * keepAt=true 是"删到这里"：这一句留着，它之后的回答与工具调用全丢。
+     * keepAt=false 是"改这一句重跑"：这一句本身也要拿掉，因为调用方紧接着会把
+     * 新的一句话发进来。两边共用默认值会造出两种完全不同的错，所以调用方必须表态。
+     */
+    fun cutTo(index: Int, keepAt: Boolean = true): Boolean {
+        if (index < 0 || index >= history.size) return false
+        if (history[index].role != "user") return false
+        // 曾经统一写成 `> index`：点"删到这里"连这一句一起删光，整个会话看起来被清空了
+        val keep = if (keepAt) index + 1 else index
+        while (history.size > keep) history.removeAt(history.size - 1)
+        // 压缩水位要跟着退：前面可能被折进摘要的条数不能比剩下的历史还多
+        compactedCount = minOf(compactedCount, history.size)
+        persist()
+        return true
+    }
+
+    /** 最后一条用户消息的位置（"重新生成"从它重跑）。 */
+    fun lastUserIndex(): Int = history.indexOfLast { it.role == "user" }
+
+    /**
+     * 网关上可选的模型（顶栏切换器）。
+     *
+     * 走引擎而不是让前端直接连网关：密钥只在服务端读一次，
+     * 前端拿不到也不该拿到。
+     */
+    fun models(): List<String> = runCatching { client.models() }.getOrDefault(emptyList())
+
+    /**
+     * 上下文构成，给界面上"用了多少"的明细。
+     *
+     * 为什么要拆开：只知道"用了 60%"没法定问题 —— 一条长会话涨到 60% 通常是
+     * 某个工具把 4 万字输出灌进了历史（该看历史那一项），而新开就 40% 通常是
+     * 工具说明太长（该关几个开关）。两件事的解法完全相反，所以必须分行给。
+     *
+     * 单位是**字符**，不是 token：token 只有网关知道（它回 usage 时才准），
+     * 这里标成"字"而不是乘个系数假装精确。
+     */
+    fun contextBreakdown(): List<Pair<String, Int>> {
+        val req = requestMessages()
+        val sys = req.filter { it.role == "system" }.sumOf { it.content?.length ?: 0 }
+        val hist = req.filter { it.role != "system" }.sumOf { (it.content?.length ?: 0) + it.calls.sumOf { c -> c.args.length } }
+        val tools = runCatching { schemas().toString().length }.getOrDefault(0)
+        val out = mutableListOf<Pair<String, Int>>()
+        if (sys > 0) out += "系统提示" to sys
+        if (tools > 0) out += "工具说明" to tools
+        if (hist > 0) out += "对话历史" to hist
+        summary?.let { if (it.isNotBlank()) out += "前情摘要" to it.length }
+        return out
+    }
+
+    /** 当前这一份历史占多少字（界面上的环形指示器的分子）。 */
+    fun contextChars(): Int = contextBreakdown().sumOf { it.second }
+
+    fun textAt(index: Int): String? = history.getOrNull(index)?.content
+
+    /** 这次工具动的对象是什么 —— 界面上的回滚按钮按它找快照。 */
+    private fun subjectOf(args: JsonObject): String =
+        listOf("path", "file", "url", "command").firstNotNullOfOrNull { k ->
+            args[k]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        } ?: ""
 
     /**
      * 用户中断。`@Volatile` 是因为按停止的是 HTTP 线程，跑回合的是 haoai-run 线程，
@@ -267,8 +347,15 @@ class Engine(
             }
             turnNo++
             maybeCompact()
+            val turnStart = System.currentTimeMillis()
+            val ptBefore = totalPrompt
+            val ctBefore = totalCompletion
             val turn = try {
-                client.chat(requestMessages(), schemas()) { piece -> emit(Ev.TextDelta(piece)) }
+                client.chat(
+                    requestMessages(), schemas(),
+                    onText = { piece -> emit(Ev.TextDelta(piece)) },
+                    onReasoning = { piece -> emit(Ev.ReasoningDelta(piece)) }
+                )
             } catch (e: ProviderError) {
                 if (e.transient && retry < backoffs.size) {
                     retry++
@@ -305,14 +392,23 @@ class Engine(
                 )
             }
 
+            // 每回合自己的 token 与耗时：会话累计值看不出"哪一步最贵/最慢"，
+            // 而这正是 PC 上排查一条长任务时最想要的两个数。
+            val pt = (totalPrompt - ptBefore).toInt()
+            val ct = (totalCompletion - ctBefore).toInt()
+            val ms = System.currentTimeMillis() - turnStart
             if (turn.calls.isEmpty()) {
                 lastText = turn.text
-                history += Msg("assistant", turn.text)
+                history += Msg("assistant", turn.text, reasoning = turn.reasoning.ifBlank { null },
+                    pt = pt, ct = ct, ms = ms)
+                emit(Ev.TurnStats(pt, ct, ms, turnNo))
                 break
             }
 
             if (turn.text.isNotBlank()) lastText = turn.text
-            history += Msg("assistant", turn.text, calls = turn.calls)
+            history += Msg("assistant", turn.text, calls = turn.calls,
+                reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms)
+            emit(Ev.TurnStats(pt, ct, ms, turnNo))
 
             for (call in turn.calls) {
                 if (stopRequested) {
@@ -353,7 +449,7 @@ class Engine(
                     continue
                 }
                 val args = parseArgs(call.args)
-                emit(Ev.ToolStart(call.id, call.name, brief(args)))
+                emit(Ev.ToolStart(call.id, call.name, brief(args), subjectOf(args)))
                 val res = try {
                     tool.run(args, ctx)
                 } catch (e: Exception) {
@@ -474,6 +570,10 @@ class Engine(
                                     put("content", m.content ?: "")
                                     m.callId?.let { put("tool_call_id", it) }
                                     if (m.name.isNotBlank()) put("name", m.name)
+                                    m.reasoning?.let { put("reasoning", it) }
+                                    if (m.pt > 0) put("pt", m.pt)
+                                    if (m.ct > 0) put("ct", m.ct)
+                                    if (m.ms > 0) put("ms", m.ms)
                                     if (m.calls.isNotEmpty()) {
                                         put("tool_calls", buildJsonArray {
                                             m.calls.forEach { c ->
@@ -522,7 +622,17 @@ class Engine(
                 Msg(
                     role = role,
                     content = m["content"]?.jsonPrimitive?.contentOrNull,
+                    /*
+                     * name 必须跟着回来：工具卡上那行"edit 已编辑 hello.txt"、以及"↩ 退回上一版"
+                     * 按名字配对路径，都靠它。落盘时写了 name 而读取时漏了，表现是
+                     * "刷新一下所有工具卡都变成匿名的 tool"，而且退回按钮整排消失。
+                     */
+                    name = m["name"]?.jsonPrimitive?.contentOrNull ?: "",
                     callId = m["tool_call_id"]?.jsonPrimitive?.contentOrNull,
+                    reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
+                    pt = m["pt"]?.jsonPrimitive?.intOrNull ?: 0,
+                    ct = m["ct"]?.jsonPrimitive?.intOrNull ?: 0,
+                    ms = m["ms"]?.jsonPrimitive?.longOrNull ?: 0L,
                     calls = m["tool_calls"]?.jsonArray?.mapNotNull { c ->
                         val fn = c.jsonObject["function"]?.jsonObject
                         val id = c.jsonObject["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null

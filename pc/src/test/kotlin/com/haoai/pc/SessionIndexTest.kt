@@ -128,4 +128,36 @@ class SessionIndexTest {
     fun `deleting an unknown session says so instead of pretending`() {
         assertFalse(SessionIndex.delete("never-existed-" + System.nanoTime()))
     }
+
+    /**
+     * 重开会话的字段级回归。
+     *
+     * 落盘写了 name、读取时漏了 name —— 这种不对称在"能跑完"这件事上完全看不出来，
+     * 但界面上是两样东西一起坏：工具卡全变成匿名的 "tool"，而"↩ 退回上一版"要靠
+     * name 才能把路径配对上，于是整排按钮消失。pt/ct/ms 同理（每回合那行小字）。
+     */
+    @Test
+    fun `reopening a session keeps each message's name and per-turn stats`() {
+        val id = "rn4" + System.nanoTime()
+        val (f, _) = makeSession(id)
+        val e = Engine(
+            SessionIndex.restore(SessionIndex.read(f)!!, ws()), PcSettings(), builtinTools(),
+            object : Gate {
+                override fun approve(title: String, detail: String, kind: String) = true
+                override fun ask(question: String, options: List<String>) = ""
+            },
+            {},
+            object : ChatClient {
+                override fun chat(m: List<Msg>, t: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn =
+                    throw AssertionError("构造引擎不该问模型")
+            }
+        )
+        val msgs = e.messages()
+        val tool = msgs.filter { it.role == "tool" }
+        assertTrue("这份历史里没有工具消息，测不到东西", tool.isNotEmpty())
+        assertEquals("重开后工具消息丢了 name", listOf("write"), tool.map { it.name })
+        val a = msgs.first { it.role == "assistant" }
+        assertTrue("重开后每回合的 token 统计丢了：pt=${a.pt} ct=${a.ct} ms=${a.ms}", a.pt > 0 && a.ct > 0)
+        assertEquals("重开后 assistant 的 tool_calls 丢了", 1, a.calls.size)
+    }
 }

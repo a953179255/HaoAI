@@ -7,9 +7,29 @@
 //    模型（或它引用的文件内容）就能在页面里塞标签。
 // 所以这里既测排版行为，也测一次注入。
 const fs = require('fs'), path = require('path'), assert = require('assert');
-const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'resources', 'ui', 'index.html'), 'utf8');
-const m = html.match(/function md\(t\) \{[\s\S]*?\n\}/);
-if (!m) { console.error('x 在 index.html 里找不到 md()'); process.exit(1); }
+// 渲染器现在住在 ui/md.js（以前埋在 index.html 里，改布局时有把它一起改坏的风险）。
+// 找不到 md.js 就退回 index.html 里找 —— 两边任一有就能测。
+const uiDir = path.join(__dirname, '..', 'src', 'main', 'resources', 'ui');
+const html = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
+const standalone = fs.existsSync(path.join(uiDir, 'md.js'))
+  ? fs.readFileSync(path.join(uiDir, 'md.js'), 'utf8') : '';
+const src = standalone || html;
+// 用花括号配对取出整个函数体：以前用"找到行首的 }"这种正则，
+// 缩进一换（或者函数里嵌套了别的块）就悄悄匹配不到，报"找不到 md()"。
+function grabFn(text, head) {
+  const at = text.indexOf(head);
+  if (at < 0) return null;
+  let depth = 0, i = text.indexOf('{', at);
+  if (i < 0) return null;
+  for (; i < text.length; i++) {
+    const c = text[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (!depth) return text.slice(at, i + 1) }
+  }
+  return null;
+}
+const m = { 0: grabFn(src, 'function md(t) {') };
+if (!m[0]) { console.error('x 在 md.js / index.html 里都找不到 md()'); process.exit(1); }
 const md = new Function(m[0] + '; return md;')();
 let bad = 0;
 const check = (n, f) => { try { f(); console.log('  ok   ' + n); } catch (e) { bad++; console.log('  FAIL ' + n + '\n       ' + (e.message || e)); } };
@@ -38,6 +58,26 @@ check('代码块里的标签必须被转义（模型引用的文件内容不可�
 check('正文里的尖括号同样被转义', () => assert(md('if (a < b) x').includes('&lt; b)'), md('if (a < b) x')));
 check('不残留 NUL 占位符', () => { assert(!evil.includes(String.fromCharCode(0)), JSON.stringify(evil)); assert(!code.includes(String.fromCharCode(0))); });
 check('空输入不炸', () => { assert(md('') === ''); assert(md(null) === ''); });
+
+check('表格：表头加分隔行才成表', () => {
+  const h = md('| 方案 | 成本 |\n|---|---|\n| 甲 | 低 |\n| 乙 | 高 |');
+  assert(h.includes('<table><thead><tr><th>方案</th><th>成本</th></tr></thead>'), h);
+  assert(h.includes('<tbody><tr><td>甲</td><td>低</td></tr>'), h);
+  assert(h.includes('<td>乙</td>'), h);
+});
+check('表格：没有分隔行的竖线还是普通文字', () => {
+  const h = md('选 甲 | 乙 都行');
+  assert(!h.includes('<table'), h);
+});
+check('表格：单元格里也要转义', () => {
+  const h = md('| a | b |\n|---|---|\n| <img src=x> | ok |');
+  assert(!/<img/.test(h), h);
+  assert(h.includes('&lt;img'), h);
+});
+check('表格后面的正文不会被吞掉', () => {
+  const h = md('| a |\n|---|\n| 1 |\n\n收尾的话');
+  assert(h.includes('<table') && h.includes('收尾的话'), h);
+});
 
 console.log(bad ? '\n' + bad + ' 项不通过' : '\n全部通过');
 process.exit(bad ? 1 : 0);

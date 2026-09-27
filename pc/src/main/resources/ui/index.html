@@ -1,66 +1,93 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HaoAI · PC</title>
 <style>
-  :root{
-    --bg:#0e1210; --panel:#151b18; --glass:rgba(255,255,255,.045); --line:rgba(255,255,255,.09);
-    --fg:#e8efeb; --dim:#9fb0a8; --acc:#34d399; --acc2:#1f6f4a; --warn:#f0b866; --err:#f27d72;
-    --mono:ui-monospace,"Cascadia Mono",Consolas,"Noto Sans Mono CJK SC",monospace;
+  /* ---- 设计 token：两套主题只差这几个变量，其余规则一律不写死颜色 ---- */
+  :root[data-theme="dark"]{
+    --bg:#0e1210; --bg2:#151b18; --panel:#151b18; --raise:#1a221e;
+    --glass:rgba(255,255,255,.045); --glass2:rgba(255,255,255,.07);
+    --line:rgba(255,255,255,.09); --line2:rgba(255,255,255,.16);
+    --fg:#e8efeb; --fg2:#cfe0d7; --dim:#9fb0a8; --dim2:#6f817a;
+    --acc:#34d399; --acc2:#1f6f4a; --acc3:#17553a; --onacc:#062017;
+    --warn:#f0b866; --err:#f27d72; --code:#0c110f; --num:#8ab4f8;
+    --shadow:0 24px 60px rgba(0,0,0,.5);
   }
+  :root[data-theme="light"]{
+    --bg:#f4f6f4; --bg2:#ffffff; --panel:#ffffff; --raise:#f0f3f0;
+    --glass:rgba(20,40,30,.05); --glass2:rgba(20,40,30,.08);
+    --line:rgba(20,40,30,.13); --line2:rgba(20,40,30,.22);
+    --fg:#14201a; --fg2:#2d3d35; --dim:#5d6f66; --dim2:#87978e;
+    --acc:#0f8b5c; --acc2:#d6ece0; --acc3:#c7e5d5; --onacc:#08281b;
+    --warn:#a05a10; --err:#b3352a; --code:#f7f9f7; --num:#1a6fb5;
+    --shadow:0 18px 44px rgba(20,40,30,.18);
+  }
+  :root{--mono:ui-monospace,"Cascadia Mono",Consolas,"Noto Sans Mono CJK SC",monospace;--r:12px;--r2:16px}
   *{box-sizing:border-box}
   html,body{height:100%}
   body{margin:0;background:
-      radial-gradient(1200px 700px at 12% -8%,#1b2a22 0%,transparent 60%),
-      radial-gradient(900px 600px at 100% 0%,#152230 0%,transparent 55%),var(--bg);
+      radial-gradient(1200px 700px at 12% -8%,var(--bg2) 0%,transparent 60%),
+      radial-gradient(900px 600px at 100% 0%,var(--bg2) 0%,transparent 55%),var(--bg);
     color:var(--fg);font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
-  .app{display:grid;grid-template-columns:230px 1fr 260px;height:100%}
-  .rail{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.012));
-    border-right:1px solid var(--line);padding:14px 12px;overflow:auto}
+  .app{display:grid;grid-template-columns:var(--lw,252px) minmax(0,1fr) var(--rw,292px);height:100%}
+  .app.no-l{--lw:0px}
+  .app.no-r{--rw:0px}
+  .app.no-l .rail.l,.app.no-r .rail.r{display:none}
+  .rail{background:linear-gradient(180deg,var(--glass),transparent);border-right:1px solid var(--line);
+    padding:14px 12px;overflow:auto;display:flex;flex-direction:column;min-height:0}
   .rail.r{border-right:0;border-left:1px solid var(--line)}
   .brand{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:.3px}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--acc);box-shadow:0 0 12px var(--acc)}
-  .sub{color:var(--dim);font-size:12px;margin:2px 0 14px}
-  .btn{display:block;width:100%;padding:9px 10px;border-radius:10px;border:1px solid var(--line);
-    background:var(--glass);color:var(--fg);cursor:pointer;font-size:13px;text-align:center}
-  .btn:hover{border-color:var(--acc2)}
-  .btn.pri{background:linear-gradient(180deg,var(--acc2),#17553a);border-color:#2b8f63;font-weight:600}
-  .grp{margin:16px 0 6px;color:var(--dim);font-size:11px;letter-spacing:.6px;text-transform:uppercase}
-  .kv{font-size:12px;color:var(--dim);word-break:break-all;line-height:1.5}
+  .sub{color:var(--dim);font-size:12px;margin:2px 0 12px}
+  .btn{display:block;width:100%;padding:9px 10px;border-radius:var(--r);border:1px solid var(--line);
+    background:var(--glass);color:var(--fg);cursor:pointer;font-size:13px;text-align:center;font-family:inherit}
+  .btn:hover{border-color:var(--line2)}
+  .btn.pri{background:linear-gradient(180deg,var(--acc2),var(--acc3));border-color:var(--acc2);
+    color:var(--onacc);font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px}
+  .grp{margin:16px 0 6px;color:var(--dim);font-size:11px;letter-spacing:.6px;text-transform:uppercase;
+    display:flex;align-items:center;gap:6px}
+  .kv{font-size:12px;color:var(--dim);word-break:break-all;line-height:1.55}
   .kv b{color:var(--fg);font-weight:600}
   .mini{background:var(--glass);border:1px solid var(--line);color:var(--dim);border-radius:7px;
-    font-size:10.5px;padding:1px 6px;cursor:pointer;margin-left:6px}
-  .sess{display:flex;flex-direction:column;gap:4px}
-  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 46px 6px 8px;
-    cursor:pointer;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .sess .it:hover{border-color:var(--acc2);color:var(--fg)}
-  .sess .it.cur{border-color:var(--acc2);background:rgba(31,111,74,.22);color:var(--fg)}
+    font-size:10.5px;padding:1px 6px;cursor:pointer;margin-left:auto;font-family:inherit}
+  kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--line2);border-bottom-width:2px;
+    border-radius:4px;padding:0 4px;color:var(--dim);background:var(--glass)}
+  .srch{position:relative;margin:2px 0 8px}
+  .srch input{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
+    color:var(--fg);padding:6px 8px 6px 22px;font:inherit;font-size:12px;outline:0}
+  .srch input:focus{border-color:var(--acc2)}
+  .srch::before{content:'⌕';position:absolute;left:7px;top:4px;color:var(--dim);font-size:13px}
+  .sess{display:flex;flex-direction:column;gap:4px;overflow:auto;min-height:60px;flex:1}
+  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 46px 6px 9px;
+    cursor:pointer;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    position:relative}
+  .sess .it:hover{border-color:var(--line2);color:var(--fg)}
+  .sess .it.cur{border-color:var(--acc2);background:var(--glass2);color:var(--fg)}
   .sess .it i{font-style:normal;opacity:.65;font-size:11px}
   /* 悬停才露出改名/删除：常驻的话侧栏每条都挂两个小方块，比要管的会话还显眼 */
-  .sess .it{position:relative}
   .sess .it .act{position:absolute;right:5px;top:4px;display:flex;gap:3px;opacity:0;transition:opacity .12s}
   .sess .it:hover .act{opacity:1}
   .sess .it .act b{font-weight:400;cursor:pointer;color:var(--dim);border:1px solid var(--line);
-    border-radius:5px;padding:0 5px;font-size:10px;line-height:15px;background:rgba(0,0,0,.45)}
+    border-radius:5px;padding:0 5px;font-size:10px;line-height:15px;background:var(--code)}
   .sess .it .act b:hover{color:var(--fg);border-color:var(--acc2)}
   /* 多会话并行：一条会话一个视图容器，只有当前这条可见。
      后台会话的事件照样写进它自己那个容器 —— 切回去不用重拉、也不丢中间输出。 */
   .view{display:none}
   .view.on{display:block}
-  /* 跑着的会话在左侧点一道绿光；只在后台跑、不在眼前时最容易漏 */
   .sess .it.run{border-color:var(--acc2)}
   .sess .it.run::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
     background:var(--acc);border-radius:9px 0 0 9px;animation:pulse 1.4s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
-  /* 后台攒下的新内容 / 等人回答：一个数字角标说清楚"这条需要我"还是"只是有新东西" */
   .sess .it .nb{position:absolute;right:6px;top:5px;min-width:15px;padding:0 4px;border-radius:8px;
-    background:var(--acc2);color:#eafff5;font-size:10px;font-weight:700;text-align:center;line-height:15px}
+    background:var(--acc2);color:var(--fg);font-size:10px;font-weight:700;text-align:center;line-height:15px}
   .sess .it.wait .nb{background:var(--warn);color:#241a08}
   .sess .it.wait{border-color:var(--warn)}
   /* 悬停时 ✎/✕ 会出现在同一个右上角，把角标往左挪而不是藏起来 */
   .sess .it:hover .nb{right:44px}
+  .sess .it .hit{display:block;white-space:normal;color:var(--dim2);font-size:11px;line-height:1.4;
+    border-left:2px solid var(--acc2);padding-left:6px;margin-top:3px}
   .fld{margin:8px 0}
   .fld label{display:block;font-size:11px;color:var(--dim);margin-bottom:3px}
   .sw{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
@@ -68,155 +95,290 @@
   .sw .t{font-size:12.5px}
   .sw .d{font-size:11px;color:var(--dim);line-height:1.45}
   /* min-height:0 是必需的：grid 项默认 min-height:auto，长会话会把 .main 顶到比视口还高，
-     于是 #stream 自己永远不溢出（scrollTop 白设），footer 连同发送/停止按钮被推到屏幕外。
-     实测：跑 20 轮之后截图里根本看不到输入框，用户想停都找不到按钮。 */
-  .main{display:flex;flex-direction:column;min-width:0;min-height:0}
-  header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);
-    background:rgba(10,14,12,.55);backdrop-filter:blur(10px)}
+     于是 #stream 自己永远不溢出（scrollTop 白设），footer 连同发送/停止按钮被推到屏幕外。 */
+  .main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+  header{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);
+    background:var(--bg);min-height:52px}
+  .ht{min-width:0;display:flex;flex-direction:column;gap:1px}
   header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .modes{margin-left:auto;display:flex;gap:4px;background:var(--glass);border:1px solid var(--line);
-    border-radius:999px;padding:3px}
+  .sub2{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
+  .iconb{width:30px;height:30px;flex:none;border-radius:9px;border:1px solid var(--line);background:var(--glass);
+    color:var(--dim);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;font-family:inherit}
+  .iconb:hover{color:var(--fg);border-color:var(--line2)}
+  .chip{border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:999px;
+    padding:3px 10px;font-size:11.5px;cursor:pointer;max-width:200px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;font-family:inherit;flex:none}
+  .chip:hover{color:var(--fg);border-color:var(--acc2)}
+  .modes{margin-left:auto;display:flex;gap:3px;background:var(--glass);border:1px solid var(--line);
+    border-radius:999px;padding:3px;flex:none}
   .modes button{border:0;background:transparent;color:var(--dim);font-size:12px;padding:4px 11px;
-    border-radius:999px;cursor:pointer}
-  .modes button.on{background:var(--acc2);color:#fff}
-  .usage{font-size:11px;color:var(--dim);white-space:nowrap}
-  #stream{flex:1;min-height:0;overflow:auto;padding:18px 20px 8px;scroll-behavior:smooth}
-  .msg{margin:0 auto 14px;max-width:860px}
-  .msg.user{background:linear-gradient(180deg,#1d2a24,#182320);border:1px solid #2a3b33;
-    border-radius:14px;padding:10px 14px;white-space:pre-wrap}
-  .msg.ans{padding:2px 2px 2px 0}
-  .card{border:1px solid var(--line);background:var(--glass);border-radius:12px;margin:8px 0;overflow:hidden}
-  .card>summary{cursor:pointer;padding:8px 12px;font-size:12.5px;color:var(--dim);display:flex;gap:8px;align-items:center}
-  .card>summary b{color:var(--fg);font-weight:600;font-family:var(--mono);font-size:12px}
-  .card .body{margin:0;padding:10px 12px;border-top:1px solid var(--line);background:rgba(0,0,0,.28);
-    font-family:var(--mono);font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:340px;overflow:auto;color:#cfe0d7}
+    border-radius:999px;cursor:pointer;font-family:inherit}
+  .modes button.on{background:var(--acc2);color:var(--fg)}
+  :root[data-theme="dark"] .modes button.on{color:#eafff5}
+  .ctx{display:flex;align-items:center;gap:5px;cursor:pointer;padding:2px 7px 2px 3px;border-radius:999px;
+    border:1px solid transparent;flex:none}
+  .ctx:hover{border-color:var(--line)}
+  .ctx svg{display:block;transform:rotate(-90deg)}
+  .ctx circle{fill:none;stroke-width:3}
+  .ctx .bg{stroke:var(--line)}
+  .ctx .fg{stroke:var(--acc);stroke-linecap:round;transition:stroke-dashoffset .4s}
+  .ctx .hi{stroke:var(--warn)}
+  .ctx span{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .ctxp{border-bottom:1px solid var(--line);background:var(--bg2);padding:10px 16px;display:none;font-size:12px}
+  .ctxp.on{display:block}
+  .ctxp .row{display:flex;align-items:center;gap:8px;margin:5px 0}
+  .ctxp .lb{width:74px;color:var(--dim);flex:none}
+  .ctxp .bar{height:7px;border-radius:4px;background:var(--glass2);flex:1;overflow:hidden}
+  .ctxp .bar i{display:block;height:100%;background:var(--acc2)}
+  .ctxp .vv{width:86px;text-align:right;color:var(--dim);font-variant-numeric:tabular-nums;flex:none}
+  .stream{flex:1;min-height:0;overflow:auto;padding:18px 20px 8px;scroll-behavior:smooth;position:relative}
+  .msg{margin:0 auto 12px;max-width:880px}
+  .msg.user{background:var(--glass2);border:1px solid var(--line);border-radius:var(--r2) var(--r2) 4px var(--r2);
+    padding:9px 13px;white-space:pre-wrap;margin-left:auto;max-width:min(760px,88%)}
+  .msg.ans{padding:2px 0}
+  /* 消息级操作：悬停才出现。常驻的话每条气泡下面都挂一排按钮，比内容还抢眼。 */
+  .acts2{display:flex;gap:2px;opacity:0;transition:opacity .12s;margin:0 auto 14px;max-width:880px}
+  .acts2.pinned{opacity:1}
+  /*
+   * 悬停才显形，但**必须真的写这条规则**：只有 .acts2{opacity:0} 而没有这一行，
+   * 那排按钮就永久不存在于界面上（DOM 在、能点、看不见）—— 静态检查看不见这种错，
+   * 因为它只比"class 有没有对应规则"，而这里的规则本来就在。靠真像素才发现。
+   */
+  .msg:hover+.acts2,.acts2:hover,.acts2:focus-within{opacity:1}
+  .msg.user+.acts2{margin-left:auto;max-width:min(760px,88%);justify-content:flex-end}
+  .ab{border:1px solid transparent;background:transparent;color:var(--dim);cursor:pointer;font-size:11px;
+    border-radius:6px;padding:2px 7px;font-family:inherit}
+  .ab:hover{border-color:var(--line);color:var(--fg);background:var(--glass)}
+  .stats{font-size:11px;color:var(--dim2);display:flex;gap:10px;margin:0 auto 12px;max-width:880px;
+    font-variant-numeric:tabular-nums}
+  .hello{max-width:720px;margin:6vh auto 0;text-align:center}
+  .hello h4{font-size:19px;margin:0 0 6px;font-weight:600}
+  .hello .sub{color:var(--dim);font-size:12.5px;margin:0 auto 20px;max-width:520px;line-height:1.6}
+  .hello .egs{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .hello .eg{display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+    border:1px solid var(--line);background:var(--glass);border-radius:var(--r);padding:10px 12px;
+    color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;transition:border-color .12s,transform .12s}
+  .hello .eg:hover{border-color:var(--acc2);transform:translateY(-1px)}
+  .hello .eg b{font-size:12px;color:var(--acc2)}
+  .hello .eg span{color:var(--dim);line-height:1.5}
+  .think{margin:0 auto 12px;max-width:880px;border:1px dashed var(--line);border-radius:var(--r);
+    background:var(--glass);font-size:12.5px}
+  .think>summary{cursor:pointer;padding:6px 11px;color:var(--dim);display:flex;gap:8px;align-items:center;list-style:none}
+  .think>summary::-webkit-details-marker{display:none}
+  .think .sp{width:7px;height:7px;border-radius:50%;background:var(--warn);animation:p 1s infinite;flex:none}
+  .think .tb{padding:8px 12px 10px;color:var(--dim);white-space:pre-wrap;border-top:1px solid var(--line);
+    max-height:280px;overflow:auto;font-style:italic}
+  .card{border:1px solid var(--line);background:var(--glass);border-radius:var(--r);margin:8px auto;max-width:880px;overflow:hidden}
+  .card>summary{cursor:pointer;padding:8px 12px;font-size:12.5px;color:var(--dim);display:flex;gap:8px;align-items:center;list-style:none}
+  .card>summary::-webkit-details-marker{display:none}
+  .card>summary b{color:var(--fg);font-weight:600;font-family:var(--mono);font-size:12px;flex:none}
+  .card>summary .sb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+  .card .body{margin:0;padding:10px 12px;border-top:1px solid var(--line);background:var(--code);
+    font-family:var(--mono);font-size:12px;line-height:1.55;white-space:pre-wrap;max-height:340px;overflow:auto;color:var(--fg2)}
+  .cbar{display:flex;gap:6px;align-items:center;padding:5px 9px;border-top:1px solid var(--line);background:var(--bg2)}
   .ok{color:var(--acc)} .bad{color:var(--err)}
-  .tick{width:6px;height:6px;border-radius:50%;background:var(--acc);display:inline-block}
+  .tick{width:6px;height:6px;border-radius:50%;background:var(--acc);display:inline-block;flex:none}
   .run .tick{background:var(--warn);animation:p 1s infinite}
   @keyframes p{50%{opacity:.25}}
-  .notice{font-size:12.5px;color:var(--warn);border-left:2px solid var(--warn);padding-left:10px;margin:8px 0}
-  .err{font-size:12.5px;color:var(--err);border-left:2px solid var(--err);padding-left:10px;margin:8px 0}
-  .md code{font-family:var(--mono);background:rgba(255,255,255,.07);padding:1px 5px;border-radius:5px;font-size:12.5px}
-  .md pre{background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow:auto}
+  .notice{font-size:12.5px;color:var(--warn);border-left:2px solid var(--warn);padding-left:10px;margin:8px auto;max-width:880px}
+  .err{font-size:12.5px;color:var(--err);border-left:2px solid var(--err);padding-left:10px;margin:8px auto;max-width:880px}
+  .md code{font-family:var(--mono);background:var(--glass2);padding:1px 5px;border-radius:5px;font-size:12.5px}
+  .md pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow:auto;position:relative}
   .md pre code{background:transparent;padding:0}
   .md h2,.md h3{margin:14px 0 6px;font-size:14px}
+  .md h1,.md h4{margin:12px 0 6px;font-size:13.5px}
   .md ul,.md ol{margin:6px 0;padding-left:22px}
+  .md li{margin:2px 0}
   .md a{color:var(--acc)}
   .md p{margin:0 0 2px}
+  .md table{border-collapse:collapse;margin:8px 0;font-size:12.5px}
+  .md th,.md td{border:1px solid var(--line);padding:4px 9px}
+  .md th{background:var(--glass)}
   .md .gap{height:9px}
   .md blockquote{margin:6px 0;padding:2px 0 2px 12px;border-left:2px solid var(--acc2);color:var(--dim)}
-  /* 代码块右上角标语言：模型经常一个回答里混 kotlin / gradle / shell 三块 */
-  .md pre{position:relative}
-  .md pre[data-lang]::before{content:attr(data-lang);position:absolute;top:6px;right:10px;
-    font-size:10px;color:var(--dim);opacity:.75;font-family:var(--mono)}
-  .md pre[data-lang]{padding-top:24px}
-  footer{padding:10px 16px 14px;border-top:1px solid var(--line);background:rgba(10,14,12,.5)}
-  .inwrap{max-width:860px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;
-    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:8px}
+  /* 代码块右上角标语言 + 复制钮：模型经常一个回答里混 kotlin / gradle / shell 三块 */
+  .md pre[data-lang]::before{content:attr(data-lang);position:absolute;top:7px;right:60px;
+    font-size:10px;color:var(--dim);opacity:.8;font-family:var(--mono)}
+  .md pre[data-lang]{padding-top:26px}
+  .cp{position:absolute;top:5px;right:6px;border:1px solid var(--line);background:var(--bg2);color:var(--dim);
+    border-radius:6px;font-size:10.5px;padding:1px 7px;cursor:pointer;font-family:inherit}
+  .cp:hover{color:var(--fg);border-color:var(--acc2)}
+  .tk-k{color:var(--acc);font-weight:600}
+  .tk-s{color:var(--warn);font-style:normal}
+  .tk-c{color:var(--dim2);font-style:italic}
+  .tk-n{color:var(--num)}
+  footer{padding:8px 14px 12px;border-top:1px solid var(--line);background:var(--bg);position:relative}
+  .inwrap{max-width:880px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);padding:8px}
+  .inwrap:focus-within{border-color:var(--acc2)}
   textarea{flex:1;border:0;outline:0;resize:none;background:transparent;color:var(--fg);
-    font:inherit;max-height:160px;min-height:24px;padding:4px}
-  .send{width:34px;height:34px;border-radius:10px;border:0;background:linear-gradient(180deg,var(--acc),#1fa46e);
-    color:#062017;font-size:16px;cursor:pointer;font-weight:700}
+    font:inherit;max-height:200px;min-height:24px;padding:4px}
+  .send{width:34px;height:34px;flex:none;border-radius:10px;border:0;background:linear-gradient(180deg,var(--acc),var(--acc2));
+    color:var(--onacc);font-size:16px;cursor:pointer;font-weight:700}
   .send[disabled]{opacity:.4;cursor:default}
-  .send.stop{background:linear-gradient(180deg,#b4483f,#7c2f28);box-shadow:0 0 0 1px #c9614f inset}
+  .send.stop{background:linear-gradient(180deg,#b4483f,#7c2f28);color:#fff;box-shadow:0 0 0 1px #c9614f inset}
+  .slash{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% - 6px);width:min(560px,92%);
+    background:var(--panel);border:1px solid var(--line2);border-radius:var(--r);box-shadow:var(--shadow);
+    display:none;overflow:auto;max-height:320px;z-index:12}
+  .slash.on{display:block}
+  .slash .it{display:flex;gap:10px;align-items:baseline;padding:7px 12px;cursor:pointer;font-size:12.5px}
+  .slash .it.sel{background:var(--glass2)}
+  .slash .it code{font-family:var(--mono);color:var(--acc);font-size:12px;flex:none;width:76px}
+  .slash .it em{font-style:normal;color:var(--dim);font-size:11.5px}
+  .pill{position:absolute;left:50%;transform:translateX(-50%);bottom:92px;z-index:9;
+    border:1px solid var(--line2);background:var(--panel);color:var(--fg);border-radius:999px;
+    padding:5px 13px;font-size:12px;cursor:pointer;box-shadow:var(--shadow);display:none;font-family:inherit}
+  .pill.on{display:block}
   .todo{list-style:none;padding:0;margin:0;font-size:12.5px}
   .todo li{display:flex;gap:7px;align-items:flex-start;margin-bottom:6px;color:var(--dim)}
-  .todo li.done{color:#5d7a6c;text-decoration:line-through}
+  .todo li.done{color:var(--dim2);text-decoration:line-through}
   .todo li.doing{color:var(--fg)}
-  .mark{font-family:var(--mono);font-size:11px}
+  .mark{font-family:var(--mono);font-size:11px;flex:none}
+  .prog{height:5px;border-radius:3px;background:var(--glass2);overflow:hidden;margin:2px 0 10px}
+  .prog i{display:block;height:100%;background:var(--acc);transition:width .3s}
+  .tabs{display:flex;gap:4px;margin-bottom:10px}
+  .tabs button{flex:1;border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:8px;
+    padding:5px 4px;font-size:12px;cursor:pointer;font-family:inherit}
+  .tabs button.on{color:var(--fg);border-color:var(--acc2);background:var(--glass2)}
+  .tabp{display:none}
+  .tabp.on{display:block}
   .mask{position:fixed;inset:0;background:rgba(6,10,8,.66);backdrop-filter:blur(4px);
     display:none;align-items:center;justify-content:center;z-index:20}
   .mask.on{display:flex}
-  .dialog{width:min(560px,92vw);background:var(--panel);border:1px solid #2c4038;border-radius:16px;
-    padding:18px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .dialog{width:min(580px,92vw);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);
+    border-radius:var(--r2);padding:18px;box-shadow:var(--shadow)}
   .dialog h3{margin:0 0 4px;font-size:15px}
   .dialog .kind{font-size:11px;color:var(--warn);letter-spacing:.5px}
-  .dialog pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.32);border-radius:10px;
+  .dialog pre{white-space:pre-wrap;word-break:break-all;background:var(--code);border-radius:10px;
     padding:10px 12px;font-family:var(--mono);font-size:12px;max-height:240px;overflow:auto}
   .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
   .acts .btn{width:auto;padding:8px 14px}
   /* 「这条是谁在问」与「还有几个在等」放在按钮上方一行：
-     多会话并行时按钮已经有四个，再往里塞一个跳转按钮会挤成两排，看着像两组不同的操作。 */
+     多会话并行时按钮已经有四个，再往里塞跳转钮会挤成两排，看着像两组不同的操作。 */
   .who{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
   .who .q{color:var(--dim);font-size:11px}
   .lnk{background:none;border:0;color:var(--acc);cursor:pointer;font-size:12.5px;padding:0;
-    text-decoration:underline;text-underline-offset:3px}
-  .lnk:hover{color:#7ef0bd}
-  .acts .deny{color:var(--err);border-color:#4a2b28}
+    text-decoration:underline;text-underline-offset:3px;font-family:inherit}
+  .acts .deny{color:var(--err);border-color:var(--err)}
   .opts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
   .opts .btn{text-align:left}
-  input[type=text]{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:10px;
-    color:var(--fg);padding:8px 10px;font:inherit;outline:0}
-  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#26332d;border-radius:9px}
+  input[type=text]{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
+    color:var(--fg);padding:7px 9px;font:inherit;font-size:12.5px;outline:0}
+  input[type=text]:focus{border-color:var(--acc2)}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel);
+    border:1px solid var(--line2);color:var(--fg);border-radius:999px;padding:7px 16px;font-size:12.5px;
+    box-shadow:var(--shadow);opacity:0;transition:opacity .18s;pointer-events:none;z-index:40}
+  .toast.on{opacity:1}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px}
+  @media (max-width:1080px){.app{grid-template-columns:var(--lw,252px) minmax(0,1fr) 0}.rail.r{display:none}}
 </style>
 </head>
 <body>
-<div class="app">
-  <aside class="rail">
+<div class="app" id="app">
+  <aside class="rail l">
     <div class="brand"><span class="dot"></span> HaoAI <span style="font-weight:400;color:var(--dim);font-size:12px">PC</span></div>
-    <div class="sub">本机 Agent · v0.1.0</div>
-    <button class="btn pri" id="newBtn">＋ 新任务</button>
-    <div class="grp">工作区</div>
-    <div class="kv" id="ws">—</div>
-    <div class="grp">大脑</div>
-    <div class="kv" id="model">—</div>
-    <div class="grp">历史会话 <button id="cfgBtn" class="mini" title="设置">⚙ 设置</button></div>
+    <div class="sub">本机 Agent · v0.2.0</div>
+    <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
+    <div class="grp">历史会话 <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
+    <div class="srch"><input type="text" id="sessQ" placeholder="搜标题与消息正文…"></div>
     <div id="sessions" class="sess"></div>
-    <div class="grp">说明</div>
+    <div class="grp">怎么用</div>
     <div class="kv">
-      <b>plan</b> 只读调研出方案<br>
-      <b>ask</b> 写文件/执行命令先问<br>
-      <b>auto</b> 全自动，不再打断
+      <b>计划</b> 只读调研出方案<br>
+      <b>询问</b> 写文件/执行命令先问<br>
+      <b>自动</b> 全自动，不再打断<br>
+      <kbd>Enter</kbd> 发送 · <kbd>/</kbd> 命令 · <kbd>Esc</kbd> 关弹窗<br>
+      <kbd>Ctrl K</kbd> 搜会话 · <kbd>Ctrl B</kbd> 收侧栏 · <kbd>Alt 1/2/3</kbd> 切档
     </div>
   </aside>
 
   <main class="main">
     <header>
-      <h1 id="title">新会话</h1>
-      <div class="usage" id="usage"></div>
-      <div class="modes" id="modes">
-        <button data-m="plan">计划</button>
-        <button data-m="ask">询问</button>
-        <button data-m="auto">自动</button>
+      <button class="iconb" id="railBtn" title="收起/展开侧栏（Ctrl+B）">☰</button>
+      <div class="ht">
+        <h1 id="title">新会话</h1>
+        <div class="sub2" id="subtitle">—</div>
       </div>
+      <button class="chip" id="modelChip" title="切换模型"><span id="model">—</span></button>
+      <div class="ctx" id="ctxBtn" title="上下文占用，点开看明细">
+        <svg width="22" height="22" viewBox="0 0 22 22">
+          <circle class="bg" cx="11" cy="11" r="9"></circle>
+          <circle class="fg" id="ctxArc" cx="11" cy="11" r="9" stroke-dasharray="56.5" stroke-dashoffset="56.5"></circle>
+        </svg>
+        <span id="ctxPct">0%</span>
+      </div>
+      <div class="modes" id="modes">
+        <button data-m="plan" title="只读调研，给出方案（Alt+1）">计划</button>
+        <button data-m="ask" title="写文件/执行命令先问（Alt+2）">询问</button>
+        <button data-m="auto" title="全自动，不再打断（Alt+3）">自动</button>
+      </div>
+      <button class="iconb" id="themeBtn" title="切换明暗主题">◐</button>
+      <button class="iconb" id="expBtn" title="导出这条会话为 markdown">⇩</button>
     </header>
-    <div id="stream"></div>
+    <div class="ctxp" id="ctxPanel"></div>
+    <div class="stream" id="stream"></div>
+    <button class="pill" id="pill">↓ 回到底部</button>
     <footer>
+      <div class="slash" id="slash"></div>
       <div class="inwrap">
-        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 / Shift+Enter 换行）"></textarea>
+        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 / Shift+Enter 换行 / 斜杠唤出命令）"></textarea>
         <button class="send" id="send">➤</button>
       </div>
     </footer>
   </main>
 
   <aside class="rail r">
-    <div class="grp">任务清单</div>
-    <ul class="todo" id="todos"><li><span class="mark">·</span>（还没开始）</li></ul>
-    <div class="grp">本次用量</div>
-    <div class="kv" id="usage2">输入 0 / 输出 0</div>
-    <div class="grp">提示</div>
-    <div class="kv">长输出会存进工作区 <b>.haoai-output/</b>，卡片里能看到路径。</div>
+    <div class="tabs" id="tabs">
+      <button data-t="tasks" class="on">任务</button>
+      <button data-t="usage">用量</button>
+      <button data-t="files">产出</button>
+    </div>
+    <div class="tabp on" id="tab-tasks">
+      <div class="prog" id="prog"><i style="width:0%"></i></div>
+      <ul class="todo" id="todos"><li><span class="mark">·</span>（还没开始）</li></ul>
+    </div>
+    <div class="tabp" id="tab-usage">
+      <div class="kv" id="usage2">输入 0 / 输出 0</div>
+      <div class="grp">本回合</div>
+      <div class="kv" id="usage3">—</div>
+      <div class="grp">口径</div>
+      <div class="kv">token 来自网关回包，按<b>计费 token</b> 计，不是字符数。</div>
+    </div>
+    <div class="tabp" id="tab-files">
+      <div class="kv">长输出存进工作区 <b>.haoai-output/</b>；写改前自动留快照在 <b>.haoai-snap/</b>，工具卡上可一键退回。</div>
+      <div class="grp">本次产出</div>
+      <div class="kv" id="outputs">（还没有）</div>
+    </div>
   </aside>
 </div>
 
 <div class="mask" id="mask"><div class="dialog" id="dialog"></div></div>
-
+<div class="toast" id="toast"></div>
+<script src="/md.js"></script>
 <script>
-const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box');
+const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box'), app=$('#app');
 let mode='ask', stopping=false, curId='';
 
-/* ---- 多会话视图 ----------------------------------------------------------
- * 每条会话一份自己的 DOM。后台那条跑起来时事件必须写进它自己的容器：
- * 上一版所有事件都往 #stream 里塞，于是"开着 A 等 B 的结果"会把 B 的输出
- * 掉进 A 的对话流里，看起来像 A 说了 B 的话。
- * ------------------------------------------------------------------------ */
+/* ---- 主题：只存一个偏好，其余全交给 CSS 变量 ---- */
+document.documentElement.setAttribute('data-theme',localStorage.getItem('haoai-theme')||'dark');
+$('#themeBtn').onclick=()=>{
+  const n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+  document.documentElement.setAttribute('data-theme',n);
+  localStorage.setItem('haoai-theme',n);
+};
+
+/* ---- 多会话视图：每条会话一份自己的 DOM ----
+ * 后台那条跑起来时事件必须写进它自己的容器：所有事件都往可见那条里塞，
+ * 会变成"开着 A 等 B 的结果"时把 B 的输出画进 A 的对话流。
+ */
 const views={};
 function view(sid){
   sid=sid||'';
   let v=views[sid];
   if(!v){
-    v={sid:sid,el:el('<div class="view"></div>'),curAns:null,acc:'',tools:{},unread:0,running:false,wait:false,
-       title:'新会话',todos:[],usage:null,mode:mode,workspace:'',model:''};
+    v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
+       tools:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
+       mode:mode,workspace:'',model:'',outputs:[]};
     views[sid]=v;stream.appendChild(v.el);
   }
   return v;
@@ -227,128 +389,250 @@ function show(sid){
   Object.keys(views).forEach(k=>views[k].el.classList.toggle('on',k===curId));
   v.unread=0;v.wait=false;
   $('#title').textContent=v.title||'新会话';
-  // 左栏那两行也是**这条会话的**事实：工作区每条会话各留一份，模型是当前全局的
-  $('#ws').textContent=v.workspace||'—';$('#model').textContent=v.model||'—';
-  setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintSend();scroll();markSessions();
+  $('#subtitle').textContent=[v.model?shortModel(v.model):'',v.workspace||''].filter(Boolean).join('  ·  ')||'—';
+  $('#model').textContent=v.model?shortModel(v.model):'—';
+  setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintOutputs(v);
+  paintHello(v);
+  paintSend();paintPill();scroll(true);markSessions();
 }
-function scroll(){stream.scrollTop=stream.scrollHeight}
+// 本地 gguf 的"模型名"是一整条 Windows 路径，直接显示会把顶栏撑爆
+function shortModel(m){return m?String(m).replace(/^.*[\\/]/,'').replace(/\.gguf$/,''):'—'}
+function atBottom(){return stream.scrollHeight-stream.scrollTop-stream.clientHeight<80}
+function scroll(force){if(force||atBottom())stream.scrollTop=stream.scrollHeight;pillN=0;paintPill()}
+let pillN=0;
+function paintPill(){
+  const p=$('#pill');
+  if(!pillN){p.classList.remove('on');p.textContent='↓ 回到底部';return}
+  p.classList.add('on');p.textContent='↓ '+pillN+' 条新内容';
+}
+function bumpPill(){if(!atBottom()){pillN++;paintPill()}}
+stream.addEventListener('scroll',()=>{if(atBottom()){pillN=0;paintPill()}});
+$('#pill').onclick=()=>{stream.scrollTop=stream.scrollHeight;pillN=0;paintPill();box.focus()};
 
-// 数字也要能进来：esc(4096) 之前会直接 TypeError（number 没有 .replace），
-// 而设置抽屉里一旦有人把数字塞进模板，整个弹窗就画不出来了。
-function esc(t){return String(t==null?'':t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function md(t) {
-  if (t == null || String(t).trim() === '') return '';   // 空回答不该产出任何标记（否则多一个空隔块）
-  const esc2 = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  const inline = s => s
-    .replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`)
-    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
-    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!;?]|$)/g, '$1<i>$2</i>')
-    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/(^|[^"'>])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-  
-  // 1) 先把围栏代码块整块搬出去：行级规则一律不许碰它
-  const blocks = [];
-  let src = String(t == null ? '' : t).replace(/```([^\n`]*)\r?\n([\s\S]*?)```/g,
-    (m, lang, code) => {
-      blocks.push({ lang: lang.trim(), code: code.replace(/\n$/, '') });
-      return '\u0000' + (blocks.length - 1) + '\u0000';
-    });
-  // 2) 整段转义：后面拼进去的标签才是我们自己造的
-  src = esc2(src);
-  
-  const out = [];
-  let list = null;
-  const closeList = () => { if (list) { out.push(list === 'o' ? '</ol>' : '</ul>'); list = null } };
-  const putBlock = i => {
-    const b = blocks[i];
-    if (!b) return '';
-    // 代码内容必须在这里补转义：块是在"整段转义"之前搬出去的，
-    // 不转义就等于模型（或它引用的文件内容）能在页面里塞标签。
-    return `<pre${b.lang ? ` data-lang="${esc2(b.lang)}"` : ''}><code>${esc2(b.code)}</code></pre>`;
-  };
-  
-  src.split(/\r?\n/).forEach(raw => {
-    const line = raw.replace(/\s+$/, '');
-    let m = line.match(/^\u0000(\d+)\u0000$/);
-    if (m) { closeList(); out.push(putBlock(+m[1])); return }
-    m = line.match(/^(#{1,4}) +(.*)$/);
-    if (m) { closeList(); const lv = m[1].length; out.push(`<h${lv}>${inline(m[2])}</h${lv}>`); return }
-    m = line.match(/^&gt; +(.*)$/);
-    if (m) { closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); return }
-    m = line.match(/^[-*+] +(.*)$/);
-    if (m) { if (list !== 'u') { closeList(); out.push('<ul>'); list = 'u' } out.push(`<li>${inline(m[1])}</li>`); return }
-    m = line.match(/^\d+[.)] +(.*)$/);
-    if (m) { if (list !== 'o') { closeList(); out.push('<ol>'); list = 'o' } out.push(`<li>${inline(m[1])}</li>`); return }
-    if (!line.trim()) { closeList(); out.push('<div class="gap"></div>'); return }
-    closeList();
-    // 段落里的代码块占位符（模型把围栏和正文写在同一行时）也一并换回来
-    out.push(`<p>${inline(line).replace(/\u0000(\d+)\u0000/g, (_, i) => putBlock(+i))}</p>`);
-  });
-  closeList();
-  // 兜底：任何没被行级规则吃掉的占位符都要还原，不能把 \x00 数字漏在界面上
-  return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => putBlock(+i));
-  }
 function el(html){const d=document.createElement('div');d.innerHTML=html;return d.firstElementChild}
-// add 默认写进"当前这一条"，带 v 参数就写进那条会话自己的容器（后台会话的输出不能混进眼前这条）
-function add(node,v){const t=v||cur();t.el.appendChild(node);if(!v||t===cur())scroll();return node}
+/* esc 必须能吃数字：(t||'').replace 遇到数字直接 TypeError，
+   而设置抽屉里只要有一处把数字塞进模板，整个弹窗就画不出来。 */
+function esc(t){return String(t==null?'':t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function add(node,v){const t=v||cur();const h=t.el.querySelector('.hello');if(h)h.remove();t.el.appendChild(node);bumpPill();return node}
+
+/* ---- 空会话的起手感 ----
+ * 空白页不是"简洁"，是"不知道该干什么"。参照 codex/opencode：给四条能直接点开的
+ * 常见活法，点一下就把话填进输入框（不直接发出去 —— 用户多半还要改两个字）。
+ */
+const HELPS=[
+  ['读代码','读一遍这个工作区，告诉我每个模块负责什么'],
+  ['改文档','把 README 里和代码对不上的部分改过来'],
+  ['跑测试','跑一遍测试，失败就修，修完再跑一次确认'],
+  ['查资料','搜一下这个话题最近三个月的进展，并给出处']];
+function paintHello(v){
+  if(v.el.children.length)return;
+  const h=el('<div class="hello"><h4>给 HaoAI 派个活</h4>'+
+    '<div class="sub">它会读写这个工作区里的文件、跑命令、开浏览器。挑一个起手，或自己写一句。</div><div class="egs">'+
+    HELPS.map(x=>'<button class="eg" data-t="'+esc(x[1])+'"><b>'+esc(x[0])+'</b><span>'+esc(x[1])+'</span></button>').join('')+
+    '</div></div>');
+  h.querySelectorAll('.eg').forEach(b=>b.onclick=()=>{
+    box.value=b.dataset.t;box.focus();box.dispatchEvent(new Event('input',{bubbles:true}));
+  });
+  v.el.appendChild(h);
+}
+
 function answer(piece,v){
   const t=v||cur();
-  if(!t.curAns){t.curAns=add(el(`<div class="msg ans md"></div>`),t);t.acc=''}
-  /*
-   * delta 是**增量**，必须累加着画。之前每次都用"当前这一小片"重画整个气泡，
-   * 于是长回答在界面上只剩最后那一片（截图里模型说了"乙这边要动文件了"，
-   * 页面上只有"乙。"），而回合结束时补的那条完整回答又变成第二个气泡。
-   */
-  t.acc+=piece;
+  if(!t.curAns){t.curAns=add(el('<div class="msg ans md"></div>'),t);t.acc=''}
+  t.acc+=piece;                      // delta 是**增量**，必须累加着画
   t.curAns.innerHTML=md(t.acc);
 }
 function finishAnswer(text,v){
   const t=v||cur();
   if(!text){t.curAns=null;return}
   // 已经在流式的那个气泡就是这条回答 → 换成完整文本，不要再开第二个气泡
-  if(t.curAns){t.curAns.innerHTML=md(text);t.curAns=null;return}
-  add(el(`<div class="msg ans md"></div>`),t).innerHTML=md(text);
+  if(t.curAns){t.curAns.innerHTML=md(text);t.curAns=null}
+  else add(el('<div class="msg ans md"></div>'),t).innerHTML=md(text);
+  decorate(t);
+}
+function thinking(piece,v){
+  const t=v||cur();
+  if(!t.curThink){
+    t.curThink=add(el('<details class="think" open><summary><span class="sp"></span>'+
+      '<span>思考中…</span><span class="stats" style="margin-left:auto"></span></summary>'+
+      '<div class="tb"></div></details>'),t);
+    t.thinkAcc='';t.thinkT0=Date.now();
+  }
+  t.thinkAcc+=piece;
+  t.curThink.querySelector('.tb').textContent=t.thinkAcc;
+  t.curThink.querySelector('.stats').textContent=((Date.now()-t.thinkT0)/1000).toFixed(1)+'s';
+}
+// 思考一结束就把转圈停掉、标题换成耗时，并默认收起（不遮住正文）
+function closeThinking(v){
+  const t=v||cur();
+  if(!t.curThink)return;
+  const s=((Date.now()-(t.thinkT0||Date.now()))/1000).toFixed(1);
+  t.curThink.open=false;
+  t.curThink.querySelector('summary').innerHTML='<span>思考了 '+s+'s</span>'+
+    '<span class="stats" style="margin-left:auto">点开看</span>';
+  t.curThink=null;t.thinkAcc='';
 }
 function toolStart(d,v){
   const t=v||cur();
-  // 一动手就把正文气泡收口：下一轮模型说的话要开新气泡，不能接在上一段后面
-  t.curAns=null;
-  const c=add(el(`<details class="card run" open><summary><span class="tick"></span><b>${esc(d.name)}</b><span>${esc(d.brief)}</span></summary><pre class="body"></pre></details>`),t);
+  closeThinking(t);
+  t.curAns=null;                     // 一动手就收口正文：下一轮的话要开新气泡
+  const c=add(el('<details class="card run" open><summary><span class="tick"></span><b>'+esc(d.name)+
+    '</b><span class="sb">'+esc(d.brief)+'</span></summary><pre class="body"></pre></details>'),t);
+  c.dataset.subject=d.subject||'';
   t.tools[d.id]=c;
 }
 function toolEnd(d,v){
   const t=v||cur();
   const c=t.tools[d.id];if(!c)return;
   c.classList.remove('run');c.open=false;
-  c.querySelector('summary').innerHTML=`<span class="tick ${d.ok?'ok':'bad'}"></span><b>${esc(d.name)}</b><span>${esc(d.brief||'')}</span>`;
+  c.querySelector('summary').innerHTML='<span class="tick '+(d.ok?'ok':'bad')+'"></span><b>'+esc(d.name)+
+    '</b><span class="sb">'+esc(d.brief||'')+'</span>';
   c.querySelector('.body').textContent=d.out||'(无输出)';
+  const sub=c.dataset.subject;
+  // 写改类挂"退回上一版"：agent 一次跑十几步，用户想撤的往往就是这一个文件
+  if(sub&&d.ok&&(d.name==='write'||d.name==='edit')){
+    c.appendChild(el('<div class="cbar"><button class="ab" data-x="rollback" data-p="'+esc(sub)+
+      '" title="用 .haoai-snap/ 里最近一份覆盖回这个文件">↩ 退回上一版</button>'+
+      '<button class="ab" data-x="copyout">复制输出</button></div>'));
+    t.outputs.push({name:d.name,path:sub});paintOutputs(t);
+  }
 }
-function notice(t,kind,v){add(el(`<div class="${kind=='err'?'err':'notice'}">${esc(t)}</div>`),v||cur())}
-// 任务清单/用量是"当前这条"的视图：后台那两条各自记着自己的那一份
+function notice(t,kind,v){add(el('<div class="'+(kind=='err'?'err':'notice')+'">'+esc(t)+'</div>'),v||cur())}
 function setTodos(items,v){const t=v||cur();t.todos=items;if(t===cur())paintTodos(items)}
 function paintTodos(items){
+  const n=(items||[]).length, done=(items||[]).filter(t=>/^\[x\]/.test(t)).length;
+  $('#prog').firstElementChild.style.width=n?Math.round(done/n*100)+'%':'0%';
   $('#todos').innerHTML=(items&&items.length)?items.map(t=>{
     const st=(t.match(/^\[(.)\]/)||[,' '])[1];
     const cls=st=='x'?'done':st=='>'?'doing':'';
     return `<li class="${cls}"><span class="mark">${st=='x'?'✓':st=='>'?'▶':st=='-'?'✕':'○'}</span><span>${esc(t.replace(/^\[\S\]\s*/,''))}</span></li>`;
   }).join(''):'<li><span class="mark">·</span>（还没开始）</li>';
 }
+function paintOutputs(v){
+  const o=((v||cur()).outputs||[]).slice(-14).reverse();
+  // 「产出」这块 DOM 是全局的：后台那条会话跑完时不能把眼前这条的清单盖掉
+  // （todos / usage 早就按"只有当前这条才画"处理了，这里补齐同一套规矩）。
+  if(v&&v!==cur())return;
+  $('#outputs').innerHTML=o.length?o.map(x=>`<div><b>${esc(x.name)}</b> ${esc(x.path)}</div>`).join(''):'（还没有）';
+}
 function paintUsage(u,v){
   const t=v||cur();t.usage=u;
   if(t!==cur())return;
-  $('#usage').textContent=u&&u.turns?`${u.turns} 轮 · 入 ${(u.prompt/1000).toFixed(1)}k / 出 ${(u.completion/1000).toFixed(1)}k tok`:'';
   $('#usage2').textContent=u?`输入 ${(u.prompt||0).toLocaleString()} / 输出 ${(u.completion||0).toLocaleString()}`:'输入 0 / 输出 0';
+  $('#usage3').textContent=u&&u.turns?`${u.turns} 轮 · ↑ ${(u.prompt||0).toLocaleString()} · ↓ ${(u.completion||0).toLocaleString()}`:'—';
+}
+function paintCtx(c){
+  const used=(c&&c.chars)||0, win=(c&&c.window)||1, pct=Math.min(100,Math.round(used/win*100));
+  const C=2*Math.PI*9, arc=$('#ctxArc');
+  arc.setAttribute('stroke-dasharray',C);
+  arc.setAttribute('stroke-dashoffset',C*(1-pct/100));
+  arc.classList.toggle('hi',pct>=80);
+  $('#ctxPct').textContent=pct+'%';
+  const parts=(c&&c.parts)||[], max=parts.reduce((a,p)=>Math.max(a,p[1]),1);
+  $('#ctxPanel').innerHTML=(parts.length?parts.map(p=>
+    `<div class="row"><span class="lb">${esc(p[0])}</span><span class="bar"><i style="width:${Math.round(p[1]/max*100)}%"></i></span><span class="vv">${p[1].toLocaleString()} 字</span></div>`).join('')
+    :'<div class="kv">（还没有上下文）</div>')+
+    `<div class="kv" style="margin-top:8px">合计 ${used.toLocaleString()} 字 / 窗口 ${win.toLocaleString()} 字 = <b>${pct}%</b>。
+     窗口大小在设置里改（contextChars）。快满了先压缩或开新会话。</div>`;
+}
+$('#ctxBtn').onclick=()=>$('#ctxPanel').classList.toggle('on');
+
+/* ---- 代码块：高亮 + 复制（都在渲染之后补，不去动 md.js 那个渲染器） ---- */
+const KW={
+  js:'const let var function return if else for while class new await async import export from try catch throw typeof null true false undefined this extends',
+  ts:'const let var function return if else for while class new await async import export from try catch throw type interface enum implements public private readonly string number boolean',
+  py:'def return if elif else for while class import from as with try except finally raise lambda None True False self in not and or pass yield async await',
+  kt:'fun val var if else when for while return class object interface import package try catch throw null true false is in by data sealed override suspend private public internal lazy',
+  go:'func var const if else for range return package import type struct interface map chan go defer nil true false',
+  rs:'fn let mut const if else for while return struct impl trait enum match pub use crate self super async await move',
+  sh:'if then else fi for do done while case esac function return export local echo cd set source',
+  ps:'if else foreach while function param return Write-Host Get-Set New-Object true false',
+  sql:'select from where group by order join left right inner on insert update delete set values into as distinct limit',
+  json:'true false null',
+  java:'public private class interface extends implements new return if else for while try catch throw static final void int long double boolean String null true false import package',
+  html:'div span a p h1 h2 h3 script style class id href src',
+  css:'color background border margin padding display flex grid width height font',
+  yaml:'true false null'
+};
+const ALIAS={javascript:'js',typescript:'ts',python:'py',kotlin:'kt',shell:'sh',bash:'sh',powershell:'ps',
+  'powershell-script':'ps',yml:'yaml',md:'markdown',jsx:'js',tsx:'ts',gradle:'kt',csharp:'java'};
+function hl(text,lang){
+  const kw=' '+(KW[ALIAS[lang]||lang]||'')+' ';
+  // 一次扫完再输出：分几次 replace 会把上一次插进去的 class 名当成关键字再包一层
+  const re=/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(\d+(?:\.\d+)?)\b|\b([A-Za-z_$][\w$]*)\b/g;
+  return text.replace(re,(m,c,s,n,w)=>{
+    if(c)return `<i class="tk-c">${m}</i>`;
+    if(s)return `<i class="tk-s">${m}</i>`;
+    if(n)return `<u class="tk-n">${m}</u>`;
+    if(w&&kw.includes(' '+w+' '))return `<b class="tk-k">${m}</b>`;
+    return m;
+  });
+}
+function decorate(v){
+  v.el.querySelectorAll('.md pre').forEach(pre=>{
+    if(pre.dataset.done)return;
+    pre.dataset.done='1';
+    const code=pre.querySelector('code');
+    const lang=(pre.dataset.lang||'').trim().split(/\s+/)[0].toLowerCase();
+    // textContent 是**未转义**的原文：必须先 esc 再高亮，否则代码里的 < 会变成真标签
+    if(code&&lang)code.innerHTML=hl(esc(code.textContent),lang);
+    const b=document.createElement('button');
+    b.className='cp';b.textContent='复制';b.dataset.x='copycode';
+    pre.appendChild(b);
+  });
 }
 
-// ---- SSE：按会话 id 分流 ----
-const es=new EventSource('/api/events');
-/*
- * 服务端把会话 id 写在 SSE 的 `id:` 字段上，浏览器以 e.lastEventId 暴露，
+/* ---- 消息级操作：复制 / 编辑重发 / 重新生成 / 删到这里 ---- */
+function ab(label,fn){const b=el('<button class="ab">'+esc(label)+'</button>');b.onclick=fn;return b}
+function actions(v){
+  v.el.querySelectorAll('.msg.user,.msg.ans').forEach(m=>{
+    if(m.dataset.act)return;
+    m.dataset.act='1';
+    const isUser=m.classList.contains('user');
+    const a=el('<div class="acts2"></div>');
+    a.appendChild(ab('复制',()=>{copy(m.innerText);toast('已复制')}));
+    a.appendChild(isUser?ab('编辑重发',()=>editResend(m)):ab('重新生成',regen));
+    a.appendChild(ab('删到这里',()=>cutHere(m)));
+    m.after(a);
+  });
+}
+function idxOf(node){
+  // 气泡在 DOM 里的序号不等于引擎历史的下标（中间还夹着工具卡与提示条），
+  // 所以一律以 applyState 写进 dataset 的 index 为准。
+  return parseInt(node.dataset.index||'-1',10);
+}
+function copy(t){navigator.clipboard?navigator.clipboard.writeText(t):fallbackCopy(t)}
+function fallbackCopy(t){
+  const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);
+  ta.select();try{document.execCommand('copy')}catch(e){}ta.remove();
+}
+function editResend(m){
+  const i=idxOf(m);if(i<0){toast('这条还没落库，稍等一下再改');return}
+  askText('编辑并重发','发送后会替换这条消息，并丢掉它之后的所有内容。',m.innerText,t=>{
+    post('/api/edit',{sid:curId,index:String(i),text:t})
+      .then(()=>toast('已按新的一句话重跑'))
+      .catch(code=>toast(code===409?'这条会话正在跑，先停止再改':'改不动'));
+  });
+}
+function regen(){
+  post('/api/regenerate',{sid:curId}).then(()=>toast('正在重新生成…'))
+    .catch(code=>toast(code===409?'这条会话正在跑，先停止':'没有可重问的一句话'));
+}
+function cutHere(m){
+  const i=idxOf(m);if(i<0){toast('这条还没落库');return}
+  if(!confirm('丢掉这一句之后的所有内容？（它之后的回答与工具调用都会消失）'))return;
+  post('/api/cut',{sid:curId,index:String(i)}).then(()=>{toast('已截断');hydrate(curId)})
+    .catch(code=>toast(code===409?'这条会话正在跑，先停止再改':'截不动'));
+}
+
+/* ---- SSE：按会话 id 分流 ----
+ * 服务端把 sid 写在 SSE 的 id: 字段上，浏览器以 e.lastEventId 暴露，
  * 于是"这条事件属于哪条会话"不用改任何一个已有事件的负载格式就能带出来。
- * 一个坑：lastEventId 是会**粘住**的 —— 没写 id: 的全局事件（sessions、settings、
- * hello、ping）会继承上一条的 id，所以只有服务端确定带 sid 的事件才走这个路由。
+ * 一个坑：lastEventId 会**粘住** —— 没写 id: 的全局事件会继承上一条的 id，
+ * 所以只有服务端确定带 sid 的事件才走这个路由（sessions/settings/hello/ping 不带）。
  */
 const BUMP={answer:1,user:1,notice:1,err:1,approval:1,ask:1};
+const es=new EventSource('/api/events');
 function on(ev,fn){
   es.addEventListener(ev,e=>{
     const sid=e.lastEventId||curId;
@@ -359,7 +643,15 @@ function on(ev,fn){
 }
 on('delta',(v,d)=>answer(d,v));
 on('answer',(v,d)=>{if(!d)notice('(本轮没有正文)',null,v);finishAnswer(d,v)});
-on('user',(v,d)=>{v.curAns=null;add(el(`<div class="msg user">${esc(d)}</div>`),v)});
+on('reason',(v,d)=>thinking(d,v));
+on('stats',(v,d)=>{
+  closeThinking(v);
+  v.el.appendChild(el('<div class="stats"><span>↑ '+(d.pt||0).toLocaleString()+
+    '</span><span>↓ '+(d.ct||0).toLocaleString()+'</span><span>'+((d.ms||0)/1000).toFixed(1)+
+    's</span><span>第 '+d.turns+' 轮</span></div>'));
+  paintUsage({prompt:d.pt,completion:d.ct,turns:d.turns},v);
+});
+on('user',(v,d)=>{v.curAns=null;closeThinking(v);add(el('<div class="msg user">'+esc(d)+'</div>'),v)});
 on('tool',(v,d)=>{d.state=='run'?toolStart(d,v):toolEnd(d,v)});
 on('todo',(v,d)=>setTodos(d.items,v));
 on('usage',(v,d)=>paintUsage(d,v));
@@ -369,32 +661,30 @@ on('mode',(v,d)=>{v.mode=d.mode;if(v===cur())setMode(d.mode)});
 on('opened',(v,d)=>{v.title=d.title;if(d.mode)v.mode=d.mode;if(v===cur()){$('#title').textContent=d.title;setMode(d.mode)}});
 // 第一句话一到，标题就要出现在顶栏与侧栏（否则跑十分钟的任务一直叫"新会话"）
 on('title',(v,d)=>{v.title=d.title;if(v===cur())$('#title').textContent=d.title;markSessions()});
-on('run',(v,d)=>{v.running=d.running;if(v===cur()){stopping=false;paintSend()}markSessions()});
+on('run',(v,d)=>{
+  v.running=d.running;
+  if(v===cur()){stopping=false;paintSend()}
+  if(!d.running)hydrate(v.sid);   // 跑完补一次权威状态：index / 小字 / 产出以服务端为准
+  markSessions();
+});
 on('approval',(v,d)=>ask(d,'approval',v));
 on('ask',(v,d)=>ask(d,'ask',v));
-// 服务端改了会话（改名/删除/新起一条）时推一下，列表自己刷新，不用整页重载
 es.addEventListener('sessions',()=>loadSessions());
-// 设置改了：档位与工作区都是按会话显示的，重新拉一次当前会话才不骗人
 es.addEventListener('settings',()=>hydrate(curId));
 
-/*
- * 审批/提问要排队。
- *
- * 单会话时弹窗是单实例没关系；多会话并行之后，两条同时请求确认，
- * 后到的会把前一个覆盖掉，而前一个的 id 再也不会出现 —— 那条会话就永久卡在
- * fut.get(300s) 上，看起来像"agent 无故停了五分钟"。
+/* ---- 审批/提问队列 ----
+ * 弹窗是单实例。多会话并行时后到的会把前一个盖掉，而前一个的 id 再也不会出现 ——
+ * 那条会话就永久卡在 fut.get(300s) 上，看起来像"agent 无故停了五分钟"。
  */
 const asks=[];
-let approvalOpen=false, cfgOpen=false;
+let cfgOpen=false;
 function ask(d,kind,v){asks.push({d,kind,v});if(asks.length===1)paintAsk()}
 function paintAsk(){
-  const it=asks[0];
-  const m=$('#mask');
-  if(!it){approvalOpen=false;m.classList.remove('on');paintSend();return}
+  const it=asks[0],m=$('#mask');
+  if(!it){m.classList.remove('on');paintSend();return}
   if(cfgOpen)return;   // 设置抽屉开着时不抢它的弹窗；队列会记住这条，关掉抽屉就补上
-  approvalOpen=true;
   const dg=$('#dialog'),d=it.d,v=it.v;
-  const from=(v&&v.sid!==curId)?`<button class="lnk" data-x="jump" title="切到这条会话再看上下文">切到「${esc(v.title||'会话')}」去看</button>`:'';
+  const from=(v&&v.sid!==curId)?`<button class="lnk" data-x="jump">切到「${esc(v.title||'会话')}」去看</button>`:'';
   const q=`<span class="q">${asks.length>1?`还有 ${asks.length-1} 个在等`:'&nbsp;'}</span>`;
   if(it.kind=='approval'){
     const ruleBtn=d.tool?`<button class="btn" data-x="allow_rule" title="写入本工作区的规则表：${esc(d.tool)}(${esc(d.pattern)})">以后这类都允许</button>`:'';
@@ -424,48 +714,99 @@ function paintAsk(){
   }
   m.classList.add('on');
 }
-// 撤掉这一条并露出下一条。注意不能只 close()：多会话并行时必须按 id 摘，
+// 撤掉这一条并露出下一条。不能只关最上面那个：必须按 id 摘，
 // 否则点第二条的按钮会把第一条从队列里带走，而第一条还卡在服务端等回答。
 function dismiss(id){const w=asks.findIndex(a=>a.d.id==id);if(w>=0)asks.splice(w,1);paintAsk()}
 function decide(id,decision,answer){
   fetch('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id,decision,answer})});
 }
+function askText(title,tip,value,ok){
+  const dg=$('#dialog');
+  dg.innerHTML=`<h3>${esc(title)}</h3><div class="kv" style="margin:4px 0 8px">${esc(tip)}</div>
+    <textarea id="et" rows="4" style="width:100%;background:var(--glass);border:1px solid var(--line);
+      border-radius:9px;color:var(--fg);font:inherit;padding:8px">${esc(value)}</textarea>
+    <div class="acts"><button class="btn" id="cx">取消</button><button class="btn pri" id="co">确定</button></div>`;
+  $('#mask').classList.add('on');
+  dg.querySelector('#cx').onclick=()=>$('#mask').classList.remove('on');
+  dg.querySelector('#co').onclick=()=>{
+    const t=dg.querySelector('#et').value.trim();
+    $('#mask').classList.remove('on');
+    if(t)ok(t);
+  };
+  dg.querySelector('#et').focus();
+}
 
-// ---- 控件 ----
+/* ---- 控件 ---- */
 function setMode(m){mode=m;document.querySelectorAll('#modes button').forEach(b=>b.classList.toggle('on',b.dataset.m==m))}
-document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>{
-  const v=cur();v.mode=b.dataset.m;setMode(b.dataset.m);
-  // 档位是**这条会话**的，不是全局的：切档位要带上 sid，否则会把后台那条正在跑的会话也改掉
-  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:b.dataset.m,sid:curId})});
+document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>setModeNow(b.dataset.m));
+function setModeNow(m){
+  const v=cur();v.mode=m;setMode(m);
+  // 档位是**这条会话**的，不是全局的：带上 sid，否则会把后台正在跑的那条也改掉
+  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m,sid:curId})});
+}
+$('#railBtn').onclick=()=>{
+  app.classList.toggle('no-l');
+  localStorage.setItem('haoai-noL',app.classList.contains('no-l')?'1':'');
+};
+if(localStorage.getItem('haoai-noL'))app.classList.add('no-l');
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
 });
 $('#newBtn').onclick=()=>{
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
   fetch('/api/new',{method:'POST'}).then(r=>r.json()).then(d=>{
     if(!d.id)return;
     const v=view(d.id);
-    v.el.innerHTML='';v.curAns=null;v.tools={};v.todos=[];v.usage=null;v.title=d.title||'新会话';
-    if(d.mode)v.mode=d.mode;   // 没有这个字段时宁可留着上一次的显示，也别自己编一个
+    v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.todos=[];v.usage=null;v.outputs=[];
+    v.title='新会话';if(d.mode)v.mode=d.mode;   // 没这个字段就留着旧显示，别自己编一个
     show(d.id);paintUsage(null);box.focus();
-    // 工作区/模型这两行只有 /api/state 会告诉我们。但用户手快得已经把话发出去了就别重画：
-    // 那会儿服务端的历史还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
+    // 工作区/模型这两行只有 /api/state 会给。但用户手快得已经把话发出去了就别重画：
+    // 那会儿服务端还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
     if(!v.running&&!v.el.children.length)hydrate(d.id);
   });
 };
+$('#expBtn').onclick=()=>{if(curId)location.href='/api/export?sid='+encodeURIComponent(curId)};
+$('#modelChip').onclick=pickModel;
+function pickModel(){
+  fetch('/api/models?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(list=>{
+    const dg=$('#dialog');
+    const rows=list.length?list.map(m=>`<div class="acts2 pinned"><button class="ab" data-mm="${esc(m.id)}"
+        style="flex:1;text-align:left">${esc(shortModel(m.id))}${m.current?' · 使用中':''}</button></div>`).join('')
+      :'<div class="kv">这个网关没列出可选模型（/models 是空的），手输：</div>';
+    dg.innerHTML=`<h3>切换模型</h3><div class="kv" style="margin-bottom:8px">当前：
+        <b>${esc(shortModel(cur().model))}</b>。列表来自网关的 /models，没有就手输。</div>${rows}
+      <div class="fld"><label>模型名 / id（本地 gguf 填完整路径）</label><input type="text" id="mIn"></div>
+      <div class="acts"><button class="btn" id="mX">关闭</button><button class="btn pri" id="mOk">用这个</button></div>`;
+    $('#mask').classList.add('on');
+    dg.querySelector('#mX').onclick=()=>$('#mask').classList.remove('on');
+    dg.querySelectorAll('[data-mm]').forEach(b=>b.onclick=()=>{dg.querySelector('#mIn').value=b.dataset.mm});
+    dg.querySelector('#mOk').onclick=()=>{
+      const m=dg.querySelector('#mIn').value.trim();if(!m)return;
+      fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:m})}).then(()=>{
+          $('#mask').classList.remove('on');
+          Object.keys(views).forEach(k=>{views[k].model=m});
+          toast('已切到 '+shortModel(m));hydrate(curId);
+        });
+    };
+  }).catch(()=>toast('拿不到模型列表'));
+}
 function send(){
   const v=cur();
   const t=box.value.trim();if(!t)return;
   if(v.running){
     /*
-     * 跑着的时候按回车**不是**停止。
-     * 上一版把"发送按钮在跑时变成 ■"的规则顺手套到了回车键上，
+     * 跑着的时候按回车**不是**停止。上一版把"发送按钮在跑时变成 ■"顺手套到了回车键上，
      * 于是用户在新会话里打完一句话按回车，被杀掉的是后台那条跑了十分钟的任务。
      * 停止只留 ■ 一个入口，这句话留在框里不丢。
      */
     notice('这条会话正在跑：要另起一件事点「＋新任务」，要停下它按右下角的 ■。这句话还留在框里。');
     return;
   }
-  box.value='';box.style.height='auto';
+  if(t.startsWith('/')&&t.indexOf('\n')<0&&runCommand(t))return;
+  box.value='';box.style.height='auto';hideSlash();
   v.running=true;stopping=false;paintSend();markSessions();
   fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({text:t,sid:curId})})
@@ -493,42 +834,120 @@ function paintSend(){
   b.title=r?(stopping?'已请求停止，正在收尾…':'停止这一轮（跑完当前动作就收手）'):'发送';
 }
 $('#send').onclick=()=>{cur().running?stopNow():send()};
-box.addEventListener('keydown',e=>{if(e.key=='Enter'&&!e.shiftKey){e.preventDefault();send()}});
-box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(160,box.scrollHeight)+'px'});
+box.addEventListener('keydown',e=>{
+  if(slashOpen&&(e.key=='ArrowDown'||e.key=='ArrowUp'||e.key=='Tab')){
+    moveSlash(e.key=='ArrowUp'?-1:1);e.preventDefault();return;
+  }
+  if(slashOpen&&e.key=='Enter'&&!e.shiftKey){pickSlash();e.preventDefault();return}
+  if(e.key=='Enter'&&!e.shiftKey){e.preventDefault();send()}
+});
+box.addEventListener('input',()=>{
+  box.style.height='auto';box.style.height=Math.min(200,box.scrollHeight)+'px';
+  const t=box.value;
+  if(t.startsWith('/')&&t.indexOf('\n')<0)showSlash(t.slice(1));else hideSlash();
+});
+document.addEventListener('keydown',e=>{
+  const mod=e.ctrlKey||e.metaKey;
+  if(e.key=='Escape'){
+    if(asks.length)dismiss(asks[0].d.id);
+    else if(cfgOpen)closeCfg();
+    else $('#mask').classList.remove('on');
+    hideSlash();return;
+  }
+  if(mod&&e.key.toLowerCase()=='n'){e.preventDefault();$('#newBtn').click();return}
+  if(mod&&e.key.toLowerCase()=='k'){e.preventDefault();$('#sessQ').focus();return}
+  if(mod&&e.key.toLowerCase()=='b'){e.preventDefault();$('#railBtn').click();return}
+  if(e.altKey&&['1','2','3'].includes(e.key)){e.preventDefault();setModeNow(['plan','ask','auto'][+e.key-1])}
+});
 
-/* ---- 侧栏会话列表 ----
- * 列表来自服务端（磁盘索引，带 running 与条数），徽标与未读数来自本地 view：
- * 后者只有浏览器知道（它看见了多少），所以每次重画都用这两份拼。
- */
+/* ---- 斜杠命令：与移动端同源的一套（模型照提示词走，人也需要快捷键） ---- */
+const CMDS=[
+  {c:'/plan',a:'plan',d:'只读调研，给出方案，不动任何文件'},
+  {c:'/ask',a:'ask',d:'写文件与执行命令都要人批（默认）'},
+  {c:'/auto',a:'auto',d:'全自动，不再打断'},
+  {c:'/new',a:'new',d:'开一条新会话（后台那条继续跑）'},
+  {c:'/model',a:'model',d:'切换模型'},
+  {c:'/stop',a:'stop',d:'停止这一轮'},
+  {c:'/clear',a:'clear',d:'丢掉当前会话的全部历史'},
+  {c:'/export',a:'export',d:'导出当前会话为 markdown'},
+  {c:'/theme',a:'theme',d:'切换明暗主题'},
+  {c:'/status',a:'status',d:'看上下文占用明细'},
+  {c:'/help',a:'help',d:'列出这些命令'}
+];
+let slashOpen=false,slashSel=0,slashList=[];
+function showSlash(q){
+  slashList=CMDS.filter(x=>x.c.slice(1).toLowerCase().startsWith(q.toLowerCase()));
+  const s=$('#slash');
+  if(!slashList.length){hideSlash();return}
+  slashSel=Math.min(slashSel,slashList.length-1);
+  s.innerHTML=slashList.map((x,i)=>`<div class="it${i==slashSel?' sel':''}" data-i="${i}">
+    <code>${x.c}</code><em>${esc(x.d)}</em></div>`).join('');
+  s.querySelectorAll('.it').forEach(e=>e.onclick=()=>{
+    box.value='';hideSlash();runCommand(slashList[+e.dataset.i].c)});
+  s.classList.add('on');slashOpen=true;
+}
+function hideSlash(){$('#slash').classList.remove('on');slashOpen=false;slashSel=0}
+function moveSlash(d){
+  slashSel=(slashSel+d+slashList.length)%slashList.length;
+  $('#slash').querySelectorAll('.it').forEach((e,i)=>e.classList.toggle('sel',i==slashSel));
+}
+function pickSlash(){const c=slashList[slashSel];box.value='';hideSlash();runCommand(c.c)}
+function runCommand(t){
+  const cmd=(t.trim().split(/\s+/)[0]||'').toLowerCase();
+  const hit=CMDS.find(x=>x.c==cmd);
+  if(!hit)return false;
+  box.value='';box.style.height='auto';hideSlash();
+  switch(hit.a){
+    case 'plan':case 'ask':case 'auto':setModeNow(hit.a);toast('档位已切到 '+hit.c.slice(1));break;
+    case 'new':$('#newBtn').click();break;
+    case 'model':pickModel();break;
+    case 'stop':stopNow();break;
+    case 'clear':
+      if(!confirm('丢掉当前会话的全部历史？（工作区里的文件与快照不会动）'))break;
+      post('/api/cut',{sid:curId,index:'0'}).then(()=>{hydrate(curId);toast('已清空历史')})
+        .catch(()=>toast('清不掉：这条会话可能正在跑'));break;
+    case 'export':$('#expBtn').click();break;
+    case 'theme':$('#themeBtn').click();break;
+    case 'status':$('#ctxPanel').classList.add('on');toast('已展开上下文占用');break;
+    case 'help':notice('命令：'+CMDS.map(x=>x.c).join('  '));break;
+  }
+  return true;
+}
+
+/* ---- 侧栏会话列表：列表来自服务端（磁盘索引 + 搜索），徽标来自本地 view ---- */
 let sessList=[];
 function post(url,body){
   return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})})
     .then(r=>r.ok?r.json():Promise.reject(r.status));
 }
 function loadSessions(){
-  fetch('/api/sessions').then(r=>r.json()).then(list=>{
+  const q=$('#sessQ').value.trim();
+  fetch('/api/sessions'+(q?'?q='+encodeURIComponent(q):'')).then(r=>r.json()).then(list=>{
     sessList=list;
     // 标题由服务端从第一句话生成，所以跑完一轮要把本地视图的标题一起换掉
     list.forEach(m=>{const v=views[m.id];if(v){v.title=m.title;if(!m.running)v.running=false}});
     markSessions();
   });
 }
+let qTimer=null;
+$('#sessQ').addEventListener('input',()=>{clearTimeout(qTimer);qTimer=setTimeout(loadSessions,220)});
 function markSessions(){
-  const box=$('#sessions');
+  const box2=$('#sessions');
   const live=Object.keys(views).filter(id=>id&&!sessList.some(m=>m.id===id))
     .map(id=>({id:id,title:views[id].title||'新会话',messages:0,mode:views[id].mode||mode,updated:Date.now()}));
   const all=live.concat(sessList);
-  if(!all.length){box.innerHTML='<div class="it" style="cursor:default">（还没有历史会话）</div>';return}
-  box.innerHTML=all.slice(0,14).map(m=>{
+  if(!all.length){box2.innerHTML='<div class="it" style="cursor:default">（没有匹配的会话）</div>';return}
+  box2.innerHTML=all.slice(0,24).map(m=>{
     const v=views[m.id]||{};
     const run=v.running||m.running;
     const nb=v.wait?'<span class="nb" title="这条会话在等你回答">!</span>'
       :(v.unread?`<span class="nb" title="切过去看">${v.unread}</span>`:'');
     return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
       <span class="act"><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}
-      ${esc(m.title)}<br><i>${run?'正在跑 · ':''}${m.messages} 条 · ${esc(m.mode||'')} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i></div>`;
+      ${esc(m.title)}<br><i>${run?'正在跑 · ':''}${m.messages} 条 · ${esc(m.mode||'')} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i>
+      ${m.hit?`<span class="hit">${esc(m.hit)}</span>`:''}</div>`;
   }).join('');
-  box.querySelectorAll('.it').forEach(e=>{
+  box2.querySelectorAll('.it').forEach(e=>{
     const id=e.dataset.id;
     if(!id)return;
     e.onclick=ev=>{
@@ -563,12 +982,10 @@ function dropView(id){
 }
 function openSession(id){
   if(id===curId)return;
-  // 已经在内存里的那条（尤其是后台正在跑的）直接切过去看：重新拉 state 会把
+  // 已经在内存里的那条（尤其后台正在跑的）直接切过去看：重新拉 state 会把
   // 正在流式输出的半截回答丢掉，还会把工具卡重画成"已完成"的样子。
   if(views[id]&&views[id].hydrated){show(id);return}
-  post('/api/open',{id:id})
-    .then(()=>hydrate(id))
-    .catch(code=>notice('打不开这个会话（'+code+'）','err'));
+  post('/api/open',{id:id}).then(()=>hydrate(id)).catch(code=>notice('打不开这个会话（'+code+'）','err'));
 }
 function hydrate(sid){
   return fetch('/api/state?sid='+encodeURIComponent(sid||'')).then(r=>r.json()).then(applyState,s=>s);
@@ -578,36 +995,78 @@ function applyState(s){
   const v=view(s.sessionId||curId);
   v.hydrated=true;v.running=!!s.running;v.title=s.title||'新会话';v.mode=s.mode;
   v.workspace=s.workspace;v.model=s.model;
-  v.el.innerHTML='';v.curAns=null;v.tools={};
+  v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.outputs=[];
+  /*
+   * 回放必须把"运行中才有的那两样"也重建出来，否则刷新一次就降级：
+   * ① 写改类工具卡底下的"↩ 退回上一版"（快照还在盘上，按钮却没了）；
+   * ② 右栏「产出」列表。
+   * 工具消息自己不带路径，路径在它上面那条 assistant 的 calls 里 —— 按名字排队取。
+   */
+  let turn=0;
+  const q=[];                       // 待配对的写改路径（按 calls 顺序）
+  const pathArg=a=>{try{return JSON.parse(a||'{}').path||''}catch(e){return ''}};
   (s.messages||[]).forEach(m=>{
-    if(m.role=='user')add(el(`<div class="msg user">${esc(m.content)}</div>`),v);
-    else if(m.role=='assistant'&&m.content)add(el(`<div class="msg ans md">${md(m.content)}</div>`),v);
-    else if(m.role=='tool')add(el(`<details class="card"><summary><span class="tick"></span><b>${esc(m.name||'tool')}</b><span>${esc((m.content||'').split(String.fromCharCode(10))[0].slice(0,60))}</span></summary><pre class="body">${esc(m.content)}</pre></details>`),v);
+    if(m.role=='assistant')turn++;
+    if(m.role=='assistant'&&m.calls)
+      m.calls.forEach(c=>{if(c.name=='write'||c.name=='edit')q.push([c.name,pathArg(c.args)])});
+    // 思考过程要跟着回放：否则"刷新一下，模型刚才怎么想的就没了"
+    if(m.reasoning){
+      const th=el('<details class="think"><summary><span>思考了 '+((m.ms||0)/1000).toFixed(1)+
+        's</span><span class="stats" style="margin-left:auto">点开看</span></summary><div class="tb"></div></details>');
+      th.querySelector('.tb').textContent=m.reasoning;v.el.appendChild(th);
+    }
+    let node=null;
+    if(m.role=='user')node=el('<div class="msg user">'+esc(m.content)+'</div>');
+    else if(m.role=='assistant'&&m.content)node=el('<div class="msg ans md">'+md(m.content)+'</div>');
+    else if(m.role=='tool'){
+      node=el('<details class="card"><summary><span class="tick"></span><b>'+
+        esc(m.name||'tool')+'</b><span class="sb">'+esc((m.content||'').split('\n')[0].slice(0,60))+
+        '</span></summary><pre class="body">'+esc(m.content)+'</pre></details>');
+      const k=(m.name=='write'||m.name=='edit')?q.findIndex(e=>e[0]==m.name):-1;
+      const p=k>=0?q.splice(k,1)[0][1]:'';
+      if(p){
+        node.appendChild(el('<div class="cbar"><button class="ab" data-x="rollback" data-p="'+esc(p)+
+          '" title="用 .haoai-snap/ 里最近一份覆盖回这个文件">↩ 退回上一版</button>'+
+          '<button class="ab" data-x="copyout">复制输出</button></div>'));
+        v.outputs.push({name:m.name,path:p});
+      }
+    }
+    if(node){
+      v.el.appendChild(node);
+      if(m.index!=null)node.dataset.index=m.index;
+    }
+    if(m.role=='assistant'&&(m.pt||m.ct||m.ms))
+      v.el.appendChild(el('<div class="stats"><span>↑ '+(m.pt||0).toLocaleString()+
+        '</span><span>↓ '+(m.ct||0).toLocaleString()+'</span><span>'+((m.ms||0)/1000).toFixed(1)+
+        's</span><span>第 '+turn+' 轮</span></div>'));
   });
+  paintOutputs(v);
+  decorate(v);actions(v);
   // 挂着没答的审批/提问：SSE 只推过一次，刷新就没了，而引擎还在等 —— 必须从 state 里补回来
   (s.pending||[]).forEach(p=>ask(p.data,p.ev,v));
   v.todos=(s.todos||[]).map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text);
   paintUsage(s.usage,v);
+  paintCtx(s.context);
   /*
    * 首屏时 curId 还是空的，"这条是不是眼前这条"只能按 sid 判，不能拿 cur() 比 ——
-   * 那样一比就不相等，标题/工作区/模型/任务清单全都不会画，左栏永远停在占位符上
-   * （截图里抓到的就是这个：会话列表都出来了，工作区还是"—"）。
+   * 那样一比就不相等，标题/模型/任务清单全都不会画，左栏永远停在占位符上。
    */
   if(!curId||v.sid===curId)show(v.sid);else markSessions();
   return s;
 }
 
-// ---- 设置抽屉 ----
+/* ---- 设置抽屉 ---- */
 $('#cfgBtn').onclick=()=>{
   fetch('/api/settings').then(r=>r.json()).then(c=>{
-    cfgOpen=true;approvalOpen=true;
+    cfgOpen=true;
     const dg=$('#dialog');
     dg.innerHTML=`<h3>设置</h3>
       <div class="fld"><label>模型</label><input type="text" id="fModel" value="${esc(c.model)}"></div>
       <div class="fld"><label>网关 Base URL</label><input type="text" id="fBase" value="${esc(c.baseUrl)}"></div>
       <div class="fld"><label>工作区</label><input type="text" id="fWs" value="${esc(c.workspace)}"></div>
-      <div class="fld"><label>权限档位</label><input type="text" id="fMode" value="${esc(c.mode)}" placeholder="plan / ask / auto"></div>
+      <div class="fld"><label>权限档位（新会话的默认）</label><input type="text" id="fMode" value="${esc(c.mode)}" placeholder="plan / ask / auto"></div>
       <div class="fld"><label>单次回答上限（token，0=交给网关）</label><input type="text" id="fMax" value="${esc(c.maxTokens)}"></div>
+      <div class="fld"><label>上下文窗口（字，只用来画那圈占用）</label><input type="text" id="fCtx" value="${esc(c.contextChars)}"></div>
       <div class="kv">这里改的是<b>全局默认</b>：模型与网关会立刻发给所有会话（正在跑的那条从下一次请求起生效）；
         工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。</div>
       <div class="fld"><label>密钥</label><div class="kv">${c.hasKey?('已设置 '+esc(c.keyHint)+'…'):'<b style="color:var(--warn)">未设置</b>（跑 haoai key sk-…）'}</div></div>
@@ -621,19 +1080,43 @@ $('#cfgBtn').onclick=()=>{
     dg.querySelector('#cfgClose').onclick=closeCfg;
     dg.querySelector('#cfgSave').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
+      const num=id=>String((dg.querySelector(id).value||'').replace(/\D/g,'')||'0');
       fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:dg.querySelector('#fModel').value,baseUrl:dg.querySelector('#fBase').value,
-          workspace:dg.querySelector('#fWs').value,mode:dg.querySelector('#fMode').value,
-          maxTokens:String(dg.querySelector('#fMax').value.replace(/\D/g,"")||"0"),flags})})
-        .then(r=>r.json()).then(()=>{closeCfg();notice('设置已保存：所有会话下一条消息起用新的模型/网关')});
+        body:JSON.stringify({model:dg.querySelector('#fModel').value.trim(),baseUrl:dg.querySelector('#fBase').value.trim(),
+          workspace:dg.querySelector('#fWs').value.trim(),mode:dg.querySelector('#fMode').value.trim(),
+          maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags})})
+        .then(r=>r.json()).then(()=>{closeCfg();toast('设置已保存：所有会话下一条消息起生效');hydrate(curId)});
     };
   });
 };
-function closeCfg(){
-  cfgOpen=false;approvalOpen=false;
-  $('#mask').classList.remove('on');
-  if(asks.length)paintAsk();else paintSend();
+function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');if(asks.length)paintAsk();else paintSend()}
+
+/* ---- 轻提示：一句话的事，不往对话流里塞气泡 ---- */
+let toastT=null;
+function toast(t){
+  const x=$('#toast');x.textContent=t;x.classList.add('on');
+  clearTimeout(toastT);toastT=setTimeout(()=>x.classList.remove('on'),2200);
 }
+
+/* ---- 委托点击：代码块复制、输出复制、回滚 ---- */
+document.addEventListener('click',e=>{
+  const x=(e.target.dataset||{}).x;
+  if(!x)return;
+  if(x=='copycode'){
+    const pre=e.target.closest('pre'), code=pre.querySelector('code');
+    copy(code?code.textContent:pre.innerText);toast('代码已复制');return;
+  }
+  if(x=='copyout'){
+    copy(e.target.closest('.card').querySelector('.body').innerText);toast('输出已复制');return;
+  }
+  if(x=='rollback'){
+    const p=e.target.dataset.p;
+    if(!confirm('把 '+p+' 退回最近一份快照？'))return;
+    post('/api/rollback',{sid:curId,path:p})
+      .then(d=>toast('已退回 '+(d.restored||'上一版')))
+      .catch(code=>toast(code===404?'没有这个文件的快照（写之前没留底）':'回滚失败'));
+  }
+});
 
 /*
  * 启动：先拿服务端认为的"当前会话"（重启时它会接上上次用的那条）。

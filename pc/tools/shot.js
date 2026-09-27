@@ -133,10 +133,18 @@ async function shot(name) {
 
 /** 真实鼠标事件序列：el.click() 会跳过 hover/:active 那一套，样式问题就看不出来了。 */
 async function click(sel) {
-  const box = await evalJs(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});
-    if(!e)return null;const r=e.getBoundingClientRect();
+  /*
+   * 先滚到中间再量坐标：消息流是滚动容器，目标在视口外时 getBoundingClientRect
+   * 给的是负数 y，而 CDP 的鼠标事件按**视口**坐标算 —— 于是"点到了"其实点在空中，
+   * 而 hover 才显形的东西（消息操作行）就永远验不到。上一轮就是这么误判成
+   * "hover 不生效"的。
+   */
+  const found = await evalJs(`!!document.querySelector(${JSON.stringify(sel)})`);
+  if (!found) throw new Error('找不到元素：' + sel);
+  await evalJs(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center',behavior:'instant'})`);
+  await sleep(120);
+  const box = await evalJs(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
     return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2})})()`);
-  if (!box) throw new Error('找不到元素：' + sel);
   const {x, y} = JSON.parse(box);
   for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
     await send('Input.dispatchMouseEvent', {type, x, y, button: 'left',

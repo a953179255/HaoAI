@@ -5,6 +5,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -24,7 +25,19 @@ data class Msg(
     val calls: List<ToolCall> = emptyList(),
     val callId: String? = null,
     /** 工具结果属于哪把工具。不存这个，历史回放时工具卡就只剩一个空壳。 */
-    val name: String = ""
+    val name: String = "",
+    /**
+     * 模型的思考过程（DeepSeek/llama.cpp 的 `reasoning_content`）。
+     *
+     * 以前整个字段被直接丢掉：界面上看不到模型在想什么，而**长任务一旦答错，
+     * 用户完全无从判断它是理解错了还是工具用错了**。移动端早就有思考链卡，
+     * PC 端这次补上。存下来而不是只流一次，是为了刷新页面与重开会话还能展开看。
+     */
+    val reasoning: String? = null,
+    /** 这一回合自己的用量与耗时（不是会话累计），画在回答下面那行小字。 */
+    val pt: Int = 0,
+    val ct: Int = 0,
+    val ms: Long = 0L
 )
 
 data class ToolCall(val id: String, val name: String, val args: String)
@@ -40,7 +53,8 @@ data class AssistantTurn(
     val text: String,
     val calls: List<ToolCall>,
     val usage: Usage,
-    val finishReason: String
+    val finishReason: String,
+    val reasoning: String = ""
 )
 
 /** OpenAI wire 格式：assistant 带 tool_calls；tool 消息带 tool_call_id。 */
@@ -80,6 +94,27 @@ internal fun msgJson(m: Msg): JsonObject = buildJsonObject {
  */
 interface ChatClient {
     fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn
+
+    /**
+     * 带**思考流**回调的版本。正文与思考在界面上是两种东西（一个进正文气泡，
+     * 一个进可折叠的"思考过程"），所以必须是两条回调，不能合成一条流。
+     *
+     * 默认转调三参那版并丢掉思考：现有实现与测试里的假客户端因此一行都不用改。
+     */
+    fun chat(
+        messages: List<Msg>,
+        tools: List<ToolSchema>,
+        onText: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ): AssistantTurn = chat(messages, tools, onText)
+
+    /**
+     * 网关上可选的模型 id（顶栏那个切换器要用）。
+     *
+     * 默认空：假客户端与不支持 /models 的网关（实测 sensenova 就返回空数组）
+     * 都不该因此报错——切换器拿到空列表时退化成"手输模型名"。
+     */
+    fun models(): List<String> = emptyList()
 }
 
 /** 按设置造真实网关（含密钥解析）。 */
@@ -114,7 +149,15 @@ class Provider(
 
     private val endpoint: String get() = baseUrl.trimEnd('/') + "/chat/completions"
 
-    override fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn {
+    override fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn =
+        chat(messages, tools, onText) { }
+
+    override fun chat(
+        messages: List<Msg>,
+        tools: List<ToolSchema>,
+        onText: (String) -> Unit,
+        onReasoning: (String) -> Unit
+    ): AssistantTurn {
         val parts: List<JsonElement> = messages.map { msgJson(it) }
         val body = buildJsonObject {
             put("model", model)
@@ -162,7 +205,7 @@ class Provider(
         }
 
         val acc = LinkedHashMap<Int, Array<String>>()
-        val box = arrayOf("", Usage(), "")   // text, usage, finish
+        val box = arrayOf("", Usage(), "", "")   // text, usage, finish, reasoning
 
         /**
          * 按行解析 SSE。
@@ -174,7 +217,7 @@ class Provider(
         java.io.BufferedReader(java.io.InputStreamReader(resp.body(), Charsets.UTF_8)).use { br ->
             while (true) {
                 val line = br.readLine() ?: break
-                if (handleLine(line.trimEnd('\r'), acc, box, onText)) break
+                if (handleLine(line.trimEnd('\r'), acc, box, onText, onReasoning)) break
             }
         }
 
@@ -204,15 +247,19 @@ class Provider(
                 )
             }
         }
-        return AssistantTurn(text, calls, box[1] as Usage, reason)
+        return AssistantTurn(text, calls, box[1] as Usage, reason, box[3] as String)
     }
+
+    /** 只在对方确实给了字符串时才取值：JsonNull 会变成 "null" 字符串，对象会抛。 */
+    private fun strOf(e: JsonElement?): String? = (e as? JsonPrimitive)?.contentOrNull
 
     /** 处理一行 SSE。返回 true 表示流结束（[DONE]）。 */
     private fun handleLine(
         line: String,
         acc: MutableMap<Int, Array<String>>,
         box: Array<Any>,
-        onText: (String) -> Unit
+        onText: (String) -> Unit,
+        onReasoning: (String) -> Unit
     ): Boolean {
         if (line.isEmpty() || line.startsWith(":")) return false
         if (!line.startsWith("data:")) return false
@@ -253,6 +300,18 @@ class Provider(
             }
         }
 
+        /*
+         * 思考过程：DeepSeek 与 llama.cpp 系放在 `reasoning_content`，也有网关用 `reasoning`，
+         * 两个名字都认。以前这两个字段没人读，于是"模型想了半天"在界面上完全隐形 ——
+         * 答错的时候用户分不清它是理解错了还是工具用错了。
+         */
+        (strOf(delta["reasoning_content"]) ?: strOf(delta["reasoning"]))?.let { r ->
+            if (r.isNotEmpty()) {
+                box[3] = (box[3] as String) + r
+                onReasoning(r)
+            }
+        }
+
         delta["tool_calls"]?.jsonArray?.forEach { raw ->
             val tc = raw.jsonObject
             val idx = tc["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
@@ -264,6 +323,28 @@ class Provider(
                 ?.let { slot[2] += it }
         }
         return false
+    }
+
+    /**
+     * `GET /models`。OpenAI 兼容网关的返回形状不止一种
+     * （`{"data":[{"id":…}]}` 与 llama-server 的 `{"models":[{"name":…}]}`），
+     * 两种都认；再不行返回空列表，让界面上退化成手输。
+     */
+    override fun models(): List<String> {
+        val url = baseUrl.trimEnd('/') + "/models"
+        val req = HttpRequest.newBuilder(URI(url))
+            .timeout(Duration.ofSeconds(12))
+            .header("Authorization", "Bearer $apiKey")
+            .GET().build()
+        val body = runCatching {
+            client.send(req, HttpResponse.BodyHandlers.ofString()).body()
+        }.getOrDefault("")
+        val o = runCatching { Json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return emptyList()
+        val arr = o["data"]?.jsonArray ?: o["models"]?.jsonArray ?: return emptyList()
+        return arr.mapNotNull { e ->
+            val m = e.jsonObject
+            m["id"]?.jsonPrimitive?.contentOrNull ?: m["name"]?.jsonPrimitive?.contentOrNull
+        }.distinct()
     }
 
     /** `haoai doctor` 用：一次最小对话，确认 key / model / 网络三件事。 */

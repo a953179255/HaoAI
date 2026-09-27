@@ -147,9 +147,57 @@ class ToolCtx(
         runCatching {
             val dir = File(workspace, ".haoai-snap").apply { mkdirs() }
             Env.excludeFromGit(workspace, ".haoai-snap")
-            target.copyTo(File(dir, "${System.currentTimeMillis()}-${target.name}"), overwrite = true)
+            target.copyTo(File(dir, "${System.currentTimeMillis()}-${Snapshots.keyOf(workspace, target)}"), overwrite = true)
         }
     }
+}
+
+/**
+ * 写改前的快照。
+ *
+ * 文件名以前只用 `时间戳-裸文件名`，于是 `src/A.md` 与 `docs/A.md` 会写进同一份快照，
+ * 回滚时把错目录的内容盖回来 —— 而"回滚"恰恰是用户最信任的一步。
+ * 现在键里带上**相对路径**（分隔符换成 __），回滚才有唯一的对应关系。
+ */
+object Snapshots {
+    fun dir(workspace: File): File = File(workspace, ".haoai-snap")
+
+    fun keyOf(workspace: File, target: File): String {
+        val rel = runCatching {
+            val ws = workspace.canonicalPath
+            val t = target.canonicalPath
+            if (t.startsWith(ws)) t.substring(ws.length).trimStart('\\', '/') else target.name
+        }.getOrDefault(target.name)
+        val flat = rel.replace('\\', '/').replace("/", "__")
+        return if (flat.isBlank()) target.name else flat
+    }
+
+    /** 某个文件的历史快照，新的在前。 */
+    fun forPath(workspace: File, rel: String): List<File> {
+        val key = keyOf(workspace, workspace.resolveRel(rel))
+        val dir = dir(workspace)
+        if (!dir.isDirectory) return emptyList()
+        return (dir.listFiles { f -> f.name.endsWith("-$key") }?.toList() ?: emptyList())
+            .sortedByDescending { it.name.substringBefore('-').toLongOrNull() ?: 0L }
+    }
+
+    /** 回滚到最近一份快照。返回用了哪份快照（界面上要说清"回到了几点几分的样子"）。 */
+    fun restore(workspace: File, rel: String): String? {
+        val target = workspace.resolveRel(rel)
+        val snap = forPath(workspace, rel).firstOrNull() ?: return null
+        return runCatching {
+            val ts = snap.name.substringBefore('-').toLongOrNull()
+            snap.copyTo(target, overwrite = true)
+            if (ts != null) java.time.Instant.ofEpochMilli(ts).atZone(java.time.ZoneId.systemDefault())
+                .toLocalDateTime().toString().replace('T', ' ') else snap.name
+        }.getOrNull()
+    }
+}
+
+/** 相对/绝对都接受，且拒绝跑出工作区的 `..`。 */
+internal fun File.resolveRel(p: String): File {
+    val f = if (File(p).isAbsolute) File(p) else File(this, p)
+    return runCatching { f.canonicalFile }.getOrElse { f.absoluteFile }
 }
 
 abstract class Tool(

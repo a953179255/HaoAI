@@ -28,10 +28,20 @@ def sse(obj):
     return ("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
 
 
-def delta_chunks(text, calls=None):
-    """把一次回合拆成多个 SSE 分片，故意把 arguments 切碎，模拟真实网关。"""
+def delta_chunks(text, calls=None, reasoning=None):
+    """把一次回合拆成多个 SSE 分片，故意把 arguments 切碎，模拟真实网关。
+
+    reasoning 走的是 llama.cpp / 各家网关的 `delta.reasoning_content` 字段。
+    之前这份假网关**从来没发过**这个字段，于是"思考链"那条链路（Provider 解析 →
+    Engine 事件 → 前端的可折叠思考卡）在脱网验收里是零覆盖的 —— 界面看起来"没坏"
+    只是因为卡片永远不出现。所以现在要能发。
+    """
     out = []
     step = 14
+    if reasoning:
+        for i in range(0, len(reasoning), 12):
+            out.append({"choices": [{"delta": {"reasoning_content": reasoning[i:i + 12]},
+                                     "index": 0, "finish_reason": None}]})
     for i in range(0, max(len(text), 1), step):
         piece = text[i:i + step]
         d = {"role": "assistant"} if i == 0 else {}
@@ -59,13 +69,17 @@ def delta_chunks(text, calls=None):
 
 PLAN = {
     "chat": [
-        ("这是 mock 模型的最终回答。\n\n## 小结\n- 工具链路与流式解析都跑通了\n- `inline code` 与代码块应该被前端渲染\n\n```python\nprint('hello from haoai-pc')\n```\n", None),
+        ("这是 mock 模型的最终回答。\n\n## 小结\n- 工具链路与流式解析都跑通了\n- `inline code` 与代码块应该被前端渲染\n\n```python\nprint('hello from haoai-pc')\n```\n",
+         None,
+         "先确认要答什么：这是一次验收，不需要动文件。\n然后想清楚证据从哪来 —— 只看代码不算，得真跑一次。"),
     ],
     "tools": [
         ("我先建文件", [{"id": "call_1", "name": "todo",
                         "arguments": json.dumps({"items": [{"text": "建 hello.txt", "status": "doing"},
                                                             {"text": "改第一行", "status": "pending"},
-                                                            {"text": "读回来核对", "status": "pending"}]})}]),
+                                                            {"text": "读回来核对", "status": "pending"}]})}],
+         "这活分三步：先建文件，再改第一行，最后读回来核对。少了第三步就等于没验——"
+         "工具说成功不代表盘上真是那样。写之前还要留快照，这样用户想反悔时能退回上一版。"),
         ("写入", [{"id": "call_2", "name": "write",
                    "arguments": json.dumps({"path": "hello.txt", "content": "first line\nsecond line\n"})}]),
         ("改一行", [{"id": "call_3", "name": "edit",
@@ -73,7 +87,12 @@ PLAN = {
                                               "new_string": "hello from HaoAI PC"})}]),
         ("读回来核对", [{"id": "call_4", "name": "read", "arguments": json.dumps({"path": "hello.txt"})}]),
         ("做完了：hello.txt 的第一行已改成 `hello from HaoAI PC`，第二行保持 `second line`。"
-         "我是真读过文件才这么说的（上面 read 的结果就是证据）。", None),
+         "我是真读过文件才这么说的（上面 read 的结果就是证据）。\n\n"
+         "## 变更摘要\n- 新建 `hello.txt`\n- 改了 **第一行**\n- 读回核对过\n\n"
+         "| 步骤 | 工具 | 结果 |\n|---|---|---|\n| 建文件 | write | 3 行 |\n| 改一行 | edit | 替换 1 处 |\n\n"
+         "```kotlin\nval s = Snapshots.forPath(\"hello.txt\")\nprintln(s?.keyOf())\n```\n\n"
+         "> 提醒：改动前已经留过快照，可以随时退回上一版。\n", None,
+         "最后要把证据说清楚：读过文件才算做完。顺手给一段代码块和列表，前端才有东西可渲染。"),
     ],
     "spill": [
         ("跑一条长输出", [{"id": "call_s", "name": "shell",
@@ -187,7 +206,11 @@ class Handler(BaseHTTPRequestHandler):
         if MODE == "multi":
             key, plan = self.plan_for(msgs)
         idx = min(tool_rounds, len(plan) - 1)
-        text, calls = plan[idx]
+        row = plan[idx]
+        text = row[0]
+        calls = row[1] if len(row) > 1 else None
+        # 剧本里的第三项就是这一轮的"思考"，没有就不发（真实网关也是有的模型有、有的没有）
+        reasoning = row[2] if len(row) > 2 else None
         if key == "并行甲" or (MODE == "loop" and key is None):
             # 每轮慢一点，界面上才看得见"正在跑"，也才来得及按停止。
             time.sleep(0.6)
@@ -210,10 +233,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        for ch in delta_chunks(text, calls):
+        for ch in delta_chunks(text, calls, reasoning):
             self.wfile.write(sse(ch))
             self.wfile.flush()
-            time.sleep(0.01)
+            # 思考分片发得慢一点：界面上"思考中"那张卡要存在一秒多，
+            # 才看得见它长什么样（真实的推理模型本来就是这个节奏，一秒几个 token）。
+            d = (ch.get("choices") or [{}])[0].get("delta") or {}
+            time.sleep(0.16 if d.get("reasoning_content") else 0.01)
         self.wfile.write(sse({"usage": {"prompt_tokens": 1234 + 200 * idx, "completion_tokens": 87}}))
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()

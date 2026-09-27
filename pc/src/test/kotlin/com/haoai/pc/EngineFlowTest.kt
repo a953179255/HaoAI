@@ -101,6 +101,41 @@ class EngineFlowTest {
         assertTrue("read 结果没落进历史：${lastTool.content}", (lastTool.content ?: "").contains("hi"))
     }
 
+    /**
+     * "删到这里"与"编辑重发"这两种截法的分界。
+     *
+     * 两者本来共用一个 cutTo，于是要么多删一句、要么少删一句：
+     * 前者让整条会话看起来被清空（点"删到这里"结果连自己那句都没了），
+     * 后者会让改后的那句和原句一起留在历史里，模型看到自己问了两遍。
+     */
+    @Test
+    fun `cut keeps the chosen question while edit-resend replaces it`() {
+        val (engine, _, _) = harness(
+            tempWorkspace(),
+            mutableListOf(turn("第一答"), turn("第二答"), turn("第三答"))
+        )
+        engine.submit("第一问")
+        engine.submit("第二问")
+        val second = engine.messages().indexOfLast { it.role == "user" }
+
+        assertTrue(engine.cutTo(second, keepAt = true))
+        assertEquals("删到这里把这一问也删掉了", "第二问", engine.messages()[second].content)
+        assertEquals("该剩 问-答-问 三条", 3, engine.messages().size)
+
+        assertTrue(engine.cutTo(second, keepAt = false))
+        assertEquals("编辑重发没把原句让位给新句", 2, engine.messages().size)
+
+        val (e2, _, _) = harness(
+            tempWorkspace(),
+            mutableListOf(
+                turn("动手", toolCall("x1", "write", """{"path":"c.txt","content":"x"}""")),
+                turn("好了")
+            )
+        )
+        e2.submit("写个 c.txt")
+        assertFalse("竟然允许从回合中间截断（下一次请求就是有调用没回复）", e2.cutTo(1))
+    }
+
     @Test
     fun `plan mode refuses writes and hides write tools from the model`() {
         val ws = tempWorkspace()

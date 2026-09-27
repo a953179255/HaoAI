@@ -106,6 +106,7 @@ class WebServer(settings: PcSettings, port: Int) {
         try {
             when (path) {
                 "/", "/index.html" -> sendFile(ex, "ui/index.html", "text/html; charset=utf-8")
+                "/md.js" -> sendFile(ex, "ui/md.js", "text/javascript; charset=utf-8")
                 "/api/events" -> sse(ex)
                 "/api/state" -> state(ex)
                 "/api/task" -> task(ex)
@@ -113,9 +114,15 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/decide" -> decide(ex)
                 "/api/mode" -> mode(ex)
                 "/api/new" -> newSession(ex)
-                "/api/sessions" -> send(ex, 200, sessionsJson(), "application/json; charset=utf-8")
+                "/api/sessions" -> send(ex, 200, sessionsJson(queryOf(ex, "q")), "application/json; charset=utf-8")
                 "/api/open" -> openSession(ex)
                 "/api/rename" -> renameSession(ex)
+                "/api/edit" -> editMessage(ex)
+                "/api/cut" -> cutMessage(ex)
+                "/api/regenerate" -> regenerate(ex)
+                "/api/rollback" -> rollback(ex)
+                "/api/models" -> models(ex)
+                "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
                 "/api/settings" ->
                     if (ex.requestMethod == "POST") saveSettings(ex)
@@ -209,6 +216,16 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         sb.append("],\"usage\":{\"prompt\":").append(e?.totalPrompt ?: 0L)
         sb.append(",\"completion\":").append(e?.totalCompletion ?: 0L).append("},")
+        // 上下文占用：分子是"这次真的发出去多少字"，分母是设置里可改的窗口。
+        // 拆成几行是因为"快满了"这件事有两种完全相反的成因（历史太长 vs 工具说明太长）。
+        sb.append("\"context\":{\"chars\":").append(e?.contextChars() ?: 0)
+        sb.append(",\"window\":").append(settings.contextChars)
+        sb.append(",\"parts\":[")
+        e?.contextBreakdown()?.forEachIndexed { i, (label, chars) ->
+            if (i > 0) sb.append(',')
+            sb.append('[').append(quote(label)).append(',').append(chars).append(']')
+        }
+        sb.append("]},")
         /**
          * 还挂着的审批/提问也要交出去。
          *
@@ -227,6 +244,17 @@ class WebServer(settings: PcSettings, port: Int) {
             if (i > 0) sb.append(',')
             sb.append("{\"role\":\"").append(m.role).append("\",\"content\":").append(quote(m.content ?: ""))
                 .append(",\"name\":").append(quote(m.name.ifBlank { m.calls.firstOrNull()?.name ?: "" }))
+                /*
+                 * index 是"编辑重发 / 重新生成"的坐标。没有它，前端只能自己数可见消息，
+                 * 而它数出来的下标和引擎历史的下标不是一回事 —— 压缩会把前面若干条
+                 * 折进摘要，于是"改第三句"改到别的句子上。
+                 */
+                .append(",\"index\":").append(i)
+                .append(",\"reasoning\":").append(quote(m.reasoning ?: ""))
+                .append(",\"pt\":").append(m.pt).append(",\"ct\":").append(m.ct).append(",\"ms\":").append(m.ms)
+                .append(",\"calls\":").append(m.calls.joinToString(",", "[", "]") { c ->
+                    """{"name":${quote(c.name)},"args":${quote(c.args)}}"""
+                })
                 .append('}')
         }
         sb.append("]}")
@@ -257,19 +285,16 @@ class WebServer(settings: PcSettings, port: Int) {
         fun str(key: String): String = obj[key]?.jsonPrimitive?.contentOrNull ?: ""
     }
 
-    private fun task(ex: HttpExchange) {
-        val b = Body(ex)
-        val text = b.str("text")
-        val wantSid = b.str("sid")
-        if (text.isBlank()) {
-            send(ex, 200, """{"ok":false}""", "application/json; charset=utf-8"); return
-        }
-        /**
-         * 一条会话同时只跑一个任务；不同会话之间可以并行（上限 [maxRunning]）。
-         *
-         * 同一条会话里排队是不行的：第二个任务会写进同一段历史，
-         * 两条任务的工具卡串在一起，事后看不出哪条输出属于哪条。
-         */
+    /**
+     * 起一轮。发任务、编辑重发、重新生成三条入口共用这一份实现。
+     *
+     * 共用不是为了少写代码，是为了"同一条会话只跑一个""最多并行 4 条"
+     * "清停止旗必须和置 running 在同一把锁里"这三条约束只有一处能写错 ——
+     * 三条入口各写一遍的话，最先漏的永远是后加的那两条。
+     *
+     * 返回 sid to null 表示起来了；sid to "原因" 表示被拒。
+     */
+    private fun startRun(wantSid: String, text: String, cutTo: Int? = null): Pair<String, String?> {
         val sid = wantSid.ifBlank { currentId() ?: newSessionId() }
         val managed = synchronized(this) {
             val m = sessions[sid] ?: Managed(engineFor(sid)).also { sessions[sid] = it }
@@ -282,11 +307,19 @@ class WebServer(settings: PcSettings, port: Int) {
         }
         if (managed == null) {
             val why = if (sessions[sid]?.running == true) "这条会话正在跑，先按停止再发新任务"
-            else "已经有 ${maxRunning} 条任务在跑，先停掉一个"
-            send(ex, 409, """{"ok":false,"error":${quote(why)}}""", "application/json; charset=utf-8")
-            return
+            else "已经有 $maxRunning 条任务在跑，先停掉一个"
+            return sid to why
         }
-        send(ex, 200, """{"ok":true,"sid":${quote(sid)}}""", "application/json; charset=utf-8")
+        /*
+         * 截断放在"置了 running 之后"做：反过来会有一个小窗口 ——
+         * 前一个请求刚读到历史，这条已经开始改它，两条任务同时往一段历史上写。
+         * 截不动（比如前端给的下标不是用户消息）就把 running 还回去，别留一个跑着的空壳。
+         */
+        // startRun 只服务"改这一句重跑"（编辑重发 / 重新生成）：那一句自己也要让位给新的一句
+        if (cutTo != null && !managed.engine.cutTo(cutTo, keepAt = false)) {
+            managed.running = false
+            return sid to "只能改「你说过的那一句话」，改不了模型的回复"
+        }
         publish("user", quote(text), sid)
         val e = managed.engine
         Thread {
@@ -301,7 +334,156 @@ class WebServer(settings: PcSettings, port: Int) {
                 publish("sessions", "{}", sid)
             }
         }.apply { isDaemon = true; name = "haoai-run-$sid"; start() }
+        return sid to null
     }
+
+    private fun task(ex: HttpExchange) {
+        val b = Body(ex)
+        val text = b.str("text")
+        val wantSid = b.str("sid")
+        if (text.isBlank()) {
+            send(ex, 200, """{"ok":false}""", "application/json; charset=utf-8"); return
+        }
+        /**
+         * 一条会话同时只跑一个任务；不同会话之间可以并行（上限 [maxRunning]）。
+         *
+         * 同一条会话里排队是不行的：第二个任务会写进同一段历史，
+         * 两条任务的工具卡串在一起，事后看不出哪条输出属于哪条。
+         */
+        val (sid, err) = startRun(wantSid, text)
+        if (err != null) {
+            send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
+            return
+        }
+        send(ex, 200, """{"ok":true,"sid":${quote(sid)}}""", "application/json; charset=utf-8")
+    }
+
+    /**
+     * `POST /api/edit` {sid,index,text} —— 改一句已经说过的话并重跑。
+     *
+     * 语义与移动端一致：**替换**那条用户消息，并把它之后的一切都丢掉。
+     * 留着后半段不行：那些工具结果与新问题无关，模型会照着旧结论接着往下说。
+     */
+    private fun editMessage(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val index = b.str("index").toIntOrNull() ?: -1
+        val text = b.str("text")
+        if (text.isBlank() || sid.isBlank()) {
+            send(ex, 200, """{"ok":false,"error":"缺 text 或 sid"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val (got, err) = startRun(sid, text, cutTo = index)
+        if (err != null) {
+            send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8"); return
+        }
+        send(ex, 200, """{"ok":true,"sid":${quote(got)},"cut":$index}""", "application/json; charset=utf-8")
+    }
+
+    /** `POST /api/cut` {sid,index} —— 丢掉某句之后的所有内容（"就到这里，别往下接了"）。 */
+    private fun cutMessage(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val index = b.str("index").toIntOrNull() ?: -1
+        val m = sessions[sid]
+        if (m == null) {
+            send(ex, 404, """{"ok":false,"error":"没有这条会话"}""", "application/json; charset=utf-8"); return
+        }
+        if (m.running) {
+            send(ex, 409, """{"ok":false,"error":"这条会话正在跑，先停止再改历史"}""",
+                "application/json; charset=utf-8"); return
+        }
+        if (!m.engine.cutTo(index)) {
+            send(ex, 200, """{"ok":false,"error":"只能删「你说过的那一句话」之后的内容"}""",
+                "application/json; charset=utf-8"); return
+        }
+        send(ex, 200, """{"ok":true,"cut":$index}""", "application/json; charset=utf-8")
+        publish("sessions", "{}", sid)
+    }
+
+    /** `POST /api/regenerate` {sid} —— 把最后一条用户消息重问一遍，换个回答。 */
+    private fun regenerate(ex: HttpExchange) {
+        val sid = pick(Body(ex).str("sid"))
+        val e = sessions[sid]?.engine
+        if (e == null) {
+            send(ex, 404, """{"ok":false,"error":"没有这条会话"}""", "application/json; charset=utf-8"); return
+        }
+        val idx = e.lastUserIndex()
+        val text = e.textAt(idx)
+        if (idx < 0 || text.isNullOrBlank()) {
+            send(ex, 200, """{"ok":false,"error":"这条会话里还没有可重问的一句话"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val (got, err) = startRun(sid, text, cutTo = idx)
+        if (err != null) {
+            send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8"); return
+        }
+        send(ex, 200, """{"ok":true,"sid":${quote(got)},"index":$idx}""", "application/json; charset=utf-8")
+    }
+
+    /**
+     * `POST /api/rollback` {sid,path} —— 把一个文件退回最近一份快照。
+     *
+     * 是"回滚这一个文件"，不是"撤销整个任务"：agent 一次跑十几步，
+     * 用户想撤的往往就是刚才那一个文件，那就给他一个精确、看得见时间的动作。
+     */
+    private fun rollback(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val rel = b.str("path")
+        val ws = sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()
+        if (rel.isBlank()) {
+            send(ex, 200, """{"ok":false,"error":"没说要回滚哪个文件"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val at = Snapshots.restore(ws, rel)
+        if (at == null) {
+            send(ex, 404, """{"ok":false,"error":"没有这个文件的快照（写之前没留底，或快照开关当时关着）"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        send(ex, 200, """{"ok":true,"restored":${quote(at)}}""", "application/json; charset=utf-8")
+        publish("notice", quote("已把 $rel 退回快照（$at）"), sid)
+    }
+
+    /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */
+    private fun models(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val list = runCatching { sessions[sid]?.engine?.models() ?: emptyList() }.getOrDefault(emptyList())
+        send(ex, 200, list.joinToString(",", "[", "]") { m ->
+            """{"id":${quote(m)},"current":${m == settings.model}}"""
+        }, "application/json; charset=utf-8")
+    }
+
+    /** `GET /api/export?sid=` —— 整条会话导成 markdown（贴进文档、发给别人时用）。 */
+    private fun exportSession(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val e = sessions[sid]?.engine
+        if (e == null) {
+            send(ex, 404, "没有这条会话", "text/plain; charset=utf-8"); return
+        }
+        val sb = StringBuilder("# ").append(e.session.title.get()).append("\n\n")
+        e.messages().forEach { m ->
+            when {
+                m.role == "user" -> sb.append("## 你\n\n").append(m.content ?: "").append("\n\n")
+                m.role == "assistant" && !m.content.isNullOrBlank() ->
+                    sb.append("### 助手\n\n").append(m.content).append("\n\n")
+                m.role == "tool" -> sb.append("> `").append(m.name).append("` ")
+                    .append((m.content ?: "").lineSequence().first().take(160)).append("\n\n")
+            }
+        }
+        ex.responseHeaders.add("Content-Disposition", """attachment; filename="haoai-$sid.md"""")
+        send(ex, 200, sb.toString(), "text/markdown; charset=utf-8")
+    }
+
+    private fun queryOf(ex: HttpExchange, key: String): String = ex.requestURI.query
+        ?.splitToSequence('&')
+        ?.firstOrNull { it.startsWith("$key=") }
+        ?.substringAfter('=')
+        ?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+        ?: ""
+
+    private fun querySid(ex: HttpExchange): String = queryOf(ex, "sid")
 
     /** 开一条新会话（只登记并立刻落盘，不起线程、不跑任务）。 */
     private fun newSessionId(): String {
@@ -350,10 +532,16 @@ class WebServer(settings: PcSettings, port: Int) {
     private fun forward(sid: String, ev: Ev) {
         when (ev) {
             is Ev.TextDelta -> publish("delta", quote(ev.s), sid)
+            is Ev.ReasoningDelta -> publish("reason", quote(ev.s), sid)
+            is Ev.TurnStats -> publish(
+                "stats",
+                """{"pt":${ev.pt},"ct":${ev.ct},"ms":${ev.ms},"turns":${ev.turns}}""",
+                sid
+            )
             is Ev.TextDone -> publish("answer", quote(ev.s), sid)
             is Ev.ToolStart -> publish(
                 "tool",
-                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"brief":${quote(ev.brief)},"state":"run"}""",
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"brief":${quote(ev.brief)},"state":"run","subject":${quote(ev.subject)}}""",
                 sid
             )
             is Ev.ToolEnd -> publish(
@@ -461,15 +649,22 @@ class WebServer(settings: PcSettings, port: Int) {
         send(ex, 200, """{"ok":true,"mode":${quote(now)}}""", "application/json; charset=utf-8")
     }
 
-    /** 旧会话列表：手机端侧栏有 48 条会话，PC 端少了这个就只能一次性对话。 */
-    private fun sessionsJson(): String {
+    /**
+     * 旧会话列表。`?q=` 时连**消息正文**一起搜（与移动端同源：
+     * 用户记得的是"我那天问过什么"，不是标题那几个字）。
+     */
+    private fun sessionsJson(q: String = ""): String {
         val cur = currentId()
-        return SessionIndex.list().joinToString(",", "[", "]") { m ->
+        val needle = q.trim().lowercase()
+        return SessionIndex.list(if (needle.isBlank()) 200 else 400).mapNotNull { m ->
+            val hit = if (needle.isBlank()) null else SessionIndex.match(m, needle)
+            if (needle.isNotBlank() && hit == null) return@mapNotNull null
             """{"id":${quote(m.id)},"title":${quote(m.title)},"workspace":${quote(m.workspace)},""" +
                 """"mode":"${m.mode}","updated":${m.updated},"messages":${m.messages},""" +
                 """"prompt":${m.prompt},"completion":${m.completion},""" +
-                """"running":${sessions[m.id]?.running == true},"current":${m.id == cur}}"""
-        }
+                """"running":${sessions[m.id]?.running == true},"current":${m.id == cur},""" +
+                """"hit":${quote(hit ?: "")}}"""
+        }.joinToString(",", "[", "]")
     }
 
     /** `GET /api/state?sid=` —— 不带 sid 就是当前会话。 */

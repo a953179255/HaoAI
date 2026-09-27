@@ -23,22 +23,45 @@ function check(ok, label, extra) {
 }
 
 // ---- 1) 脚本语法：不执行，只让 V8 解析一遍 ----
+// 壳子现在有两段脚本：内联的主逻辑 + 单独一个 md.js（渲染器）。两边都要解析，
+// 也要两边一起扫 class —— 只扫 index.html 的话，渲染器挂的 class 就没人对账了。
+const uiDir = path.resolve(__dirname, '..', 'src', 'main', 'resources', 'ui');
+const mdFile = path.join(uiDir, 'md.js');
+const mdSrc = fs.existsSync(mdFile) ? fs.readFileSync(mdFile, 'utf8') : '';
 const scriptSrc = (html.match(/<script>([\s\S]*?)<\/script>/) || [, ''])[1];
+const allSrc = scriptSrc + '\n' + mdSrc;
 check(scriptSrc.length > 200, '取到了 <script> 里的内容', '长度 ' + scriptSrc.length);
-try { new Function(scriptSrc); check(true, 'JS 语法能过 V8 解析'); }
-catch (e) { check(false, 'JS 语法能过 V8 解析', e.message); }
+check(mdSrc.length > 200, '渲染器 md.js 在（且被 index.html 引用）',
+  '没找到 ui/md.js —— 页面会直接白屏');
+check(/src="\/md\.js"/.test(html), 'index.html 里确实引了 /md.js');
+for (const [label, code] of [['主脚本', scriptSrc], ['md.js', mdSrc]]) {
+  try { new Function(code); check(true, label + ' 语法能过 V8 解析'); }
+  catch (e) { check(false, label + ' 语法能过 V8 解析', e.message); }
+}
 
 // ---- 2) JS 里挂的 class 必须在 CSS 里有规则 ----
 const styleSrc = (html.match(/<style>([\s\S]*?)<\/style>/) || [, ''])[1];
 const cssClasses = new Set();
 for (const m of styleSrc.matchAll(/\.([a-zA-Z][\w-]*)/g)) cssClasses.add(m[1]);
 
+/*
+ * 只认真正的 class 名。模板串里有两种插值写法：
+ *   class="it${cur?' cur':''}"      —— ${ 开始
+ *   class="tick '+(d.ok?'ok':'bad')+' —— '+ 开始（这段是老代码里的字符串拼接）
+ * 上一版正则把后一种的 `'+(d.ok?'ok':'bad')+` 整段当成了 class 名，于是报出两条
+ * "缺规则"的假故障。量具一报假故障，真故障就没人信了，所以静态段只取到第一个
+ * 插值符为止，抠出来的 token 再过一次标识符形状。
+ */
+const IDENT = /^[a-zA-Z][\w-]*$/;
 const used = new Set();
-for (const m of scriptSrc.matchAll(/class="([^"$]*)"/g))
-  m[1].split(/\s+/).filter(Boolean).forEach(c => used.add(c));
-for (const m of scriptSrc.matchAll(/classList\.(?:add|remove|toggle)\(\s*'([\w-]+)'/g)) used.add(m[1]);
-for (const m of scriptSrc.matchAll(/el\('<([\w]+)[^']*class="([\w\- ]+)'/g))
-  m[2].split(/\s+/).filter(Boolean).forEach(c => used.add(c));
+const addStaticClasses = src => {
+  for (const m of src.matchAll(/class="([^"]*)"/g)) {
+    const stat = m[1].split(/\$\{|\+'/)[0];
+    stat.split(/\s+/).forEach(t => { if (IDENT.test(t)) used.add(t) });
+  }
+};
+addStaticClasses(scriptSrc); addStaticClasses(mdSrc);
+for (const m of allSrc.matchAll(/classList\.(?:add|remove|toggle)\(\s*'([\w-]+)'/g)) used.add(m[1]);
 
 // 这些是"行为开关"型 class：CSS 里以别的形式存在（或刻意只给 JS 当标记用）
 const ALLOW = new Set();
@@ -68,15 +91,20 @@ check(dead.length === 0, '前端监听的每个事件名服务端都会发', '�
 const orphan = [...emitted].filter(e => !listened.has(e));
 check(orphan.length === 0, '服务端发的每个事件名前端都有人接', '没人接：' + orphan.join(', '));
 
-// ---- 5) 请求字段名两边要对上（POST 的 key 必须出现在服务端的 Body.str 里）----
+// ---- 5) 前端调用的接口必须在服务端路由表里 ----
+/*
+ * 这份清单**不能**再手抄：手抄的那份只记得起老接口，新加的一律报"陌生接口"，
+ * 而这个检查真正要防的恰恰是"前端打了一个服务端没注册的地址"（那是 404，
+ * 页面上表现为按钮点了没反应）。所以直接去 Server.kt 的路由表里抓。
+ */
 const apiPaths = new Set();
-for (const m of scriptSrc.matchAll(/'\/(api\/[\w]+)'/g)) apiPaths.add(m[1]);
-for (const m of scriptSrc.matchAll(/post\('\/(api\/[\w]+)'/g)) apiPaths.add(m[1]);
+for (const m of allSrc.matchAll(/[/'"`](\/api\/[\w]+)/g)) apiPaths.add(m[1].slice(1));
 check(apiPaths.size >= 6, '抓到前端调用的接口清单', [...apiPaths].join(', '));
-const known = ['api/events', 'api/state', 'api/task', 'api/stop', 'api/decide', 'api/mode',
-  'api/new', 'api/open', 'api/sessions', 'api/rename', 'api/delete', 'api/settings'];
-const unknown = [...apiPaths].filter(p => !known.includes(p));
-check(unknown.length === 0, '前端没有调到不存在的接口', '陌生接口：' + unknown.join(', '));
+const routes = new Set();
+for (const m of server.matchAll(/"(\/[\w./-]+)"\s*->/g)) routes.add(m[1].slice(1));
+const unknown = [...apiPaths].filter(p => !routes.has(p)).sort();
+check(unknown.length === 0, '前端没有调到不存在的接口',
+  '陌生接口：' + unknown.join(', ') + '\n         （服务端路由：' + [...routes].filter(r => r.startsWith('api/')).sort().join(', ') + '）');
 
 console.log(fails ? '\nUI 自检失败 ' + fails + ' 项' : '\nUI 自检全部通过');
 process.exit(fails ? 1 : 0);
