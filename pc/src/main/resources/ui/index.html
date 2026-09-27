@@ -60,7 +60,7 @@
   .srch input:focus{border-color:var(--acc2)}
   .srch::before{content:'⌕';position:absolute;left:7px;top:4px;color:var(--dim);font-size:13px}
   .sess{display:flex;flex-direction:column;gap:4px;overflow:auto;min-height:60px;flex:1}
-  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 46px 6px 9px;
+  .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 66px 6px 9px;
     cursor:pointer;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     position:relative}
   .sess .it:hover{border-color:var(--line2);color:var(--fg)}
@@ -86,6 +86,8 @@
   .sess .it.wait{border-color:var(--warn)}
   /* 悬停时 ✎/✕ 会出现在同一个右上角，把角标往左挪而不是藏起来 */
   .sess .it:hover .nb{right:44px}
+  .sess .it .ptag{font-style:normal;font-size:10px;color:var(--acc2);border:1px solid var(--acc2);
+    border-radius:5px;padding:0 4px;margin-left:5px}
   .sess .it .hit{display:block;white-space:normal;color:var(--dim2);font-size:11px;line-height:1.4;
     border-left:2px solid var(--acc2);padding-left:6px;margin-top:3px}
   .sess .wsg{display:flex;gap:6px;align-items:center;margin:9px 0 2px;padding:0 2px;
@@ -925,7 +927,9 @@ function actions(v){
     const isUser=m.classList.contains('user');
     const a=el('<div class="acts2"></div>');
     a.appendChild(ab('复制',()=>{copy(m.innerText);toast('已复制')}));
+    a.appendChild(ab('引用',()=>quoteTo(m)));
     a.appendChild(isUser?ab('编辑重发',()=>editResend(m)):ab('重新生成',regen));
+    a.appendChild(ab('删这一句',()=>delMsg(m)));
     a.appendChild(ab('删到这里',()=>cutHere(m)));
     m.after(a);
   });
@@ -951,6 +955,23 @@ function editResend(m){
 function regen(){
   post('/api/regenerate',{sid:curId}).then(()=>toast('正在重新生成…'))
     .catch(code=>toast(code===409?'这条会话正在跑，先停止':'没有可重问的一句话'));
+}
+function quoteTo(m){
+  // 引用不是"复制一遍"：原文以 > 引起来放到最前面，用户接着写要问的那句
+  const t=m.innerText.replace(/\s+$/,'');
+  const q=t.split('\n').map(l=>'> '+l).join('\n');
+  box.value=q+'\n\n'+box.value;
+  box.dispatchEvent(new Event('input',{bubbles:true}));
+  box.focus();box.selectionStart=box.selectionEnd=q.length+2;
+  toast('已引用到输入框');
+}
+function delMsg(m){
+  const i=idxOf(m);if(i<0){toast('这条还没落库，删不了');return}
+  if(!confirm('删掉这一句，以及它带出来的回答与工具调用？'))return;
+  post('/api/delmsg',{sid:curId,index:String(i)}).then(d=>{
+    if(d&&d.ok){toast('删掉了 '+d.removed+' 条');hydrate(curId)}
+    else toast((d&&d.error)||'删不掉');
+  }).catch(()=>toast('删不掉'));
 }
 function cutHere(m){
   const i=idxOf(m);if(i<0){toast('这条还没落库');return}
@@ -1700,8 +1721,9 @@ function sessRow(m,run){
   const v=views[m.id]||{};
   const nb=v.wait?'<span class="nb" title="这条会话在等你回答">!</span>'
     :(v.unread?`<span class="nb" title="切过去看">${v.unread}</span>`:'');
-  return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-hit="${m.hitAt==null?-1:m.hitAt}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
-      <span class="act"><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}
+  const ptag=m.pinned?'<em class="ptag" title="已置顶">置顶</em>':'';
+  return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-hit="${m.hitAt==null?-1:m.hitAt}" data-pinned="${m.pinned?1:0}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
+      <span class="act"><b data-a="pin" title="置顶 / 取消置顶">↑</b><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}${ptag}
       ${esc(m.title)}<br><i>${run?'正在跑 · ':''}${m.messages} 条 · ${esc(m.mode||'')} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i>
       ${m.hit?`<span class="hit">${esc(m.hit)}</span>`:''}</div>`;
 }
@@ -1757,6 +1779,7 @@ function markSessions(){
         if(t&&t.trim())post('/api/rename',{id:id,title:t}).then(loadSessions);
         return;
       }
+      if(a==='pin'){post('/api/pin',{id:id,pinned:e.dataset.pinned=='1'?'0':'1'}).then(loadSessions);return}
       if(a==='del'){
         if(!confirm('删除这个会话？文件会移进 sessions/.trash，不是就地抹掉。'))return;
         // 409 的正文里写着"为什么不让删"（正在跑），所以不能只看 ok

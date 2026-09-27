@@ -1,0 +1,84 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "写一个 note.txt 里面放一句话"
+  }
+ },
+ {
+  "goto": ".card",
+  "timeout": 25000
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "eval": "({btns:[...document.querySelectorAll('.view.on .acts2 .ab')].map(x=>x.textContent),cards:document.querySelectorAll('.view.on .card').length})"
+ },
+ {
+  "eval": "(()=>{const m=document.querySelector('.view.on .msg.user');m.querySelector?0:0;[...m.parentElement.querySelectorAll('*')];const bar=m.nextElementSibling;const b=[...bar.querySelectorAll('.ab')].find(x=>x.textContent=='引用');b.click();return 'clicked'})()"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "eval": "({head:document.querySelector('#box').value.slice(0,18),quoted:document.querySelector('#box').value.startsWith('> '),caret:document.querySelector('#box').selectionStart,toast:document.querySelector('#toast').textContent})"
+ },
+ {
+  "shot": "m01-quote"
+ },
+ {
+  "eval": "(()=>{document.querySelector('#box').value='';document.querySelector('#box').dispatchEvent(new Event('input',{bubbles:true}));return 'cleared'})()"
+ },
+ {
+  "eval": "(()=>{const r=document.querySelector('#sessions .it');r.querySelector('[data-a=pin]').click();return 'pinned'})()"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({tag:(document.querySelector('#sessions .ptag')||{}).textContent,first:document.querySelector('#sessions .it').dataset.pinned,rows:document.querySelectorAll('#sessions .it').length})"
+ },
+ {
+  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'服务端第一条 pinned='+l[0].pinned+' 共 '+l.length+' 条')"
+ },
+ {
+  "shot": "m02-pinned"
+ },
+ {
+  "eval": "(()=>{document.querySelector('#sessions .it [data-a=pin]').click();return 'unpin clicked'})()"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'再点一次之后 pinned='+l[0].pinned+' 标签还在不在：'+!!document.querySelector('#sessions .ptag'))"
+ },
+ {
+  "shot": "m04-after-unpin"
+ },
+ {
+  "eval": "(()=>{const t=(window.__state=null,fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>{window.__s=s;const i=s.messages.findIndex(m=>m.role=='tool');return 'tool index '+i}));return 'probing'})()"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "eval": "(()=>{const i=window.__s.messages.findIndex(m=>m.role=='tool');return fetch('/api/delmsg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:curId,index:String(i)})}).then(r=>r.json()).then(d=>'删工具回复：'+JSON.stringify(d))})()"
+ },
+ {
+  "eval": "(()=>{window.confirm=()=>true;const ms=[...document.querySelectorAll('.view.on .msg.user')],m=ms[ms.length-1],b=[...m.nextElementSibling.querySelectorAll('.ab')].find(x=>x.textContent=='删这一句');b.click();return 'deleting'})()"
+ },
+ {
+  "sleep": 2200
+ },
+ {
+  "eval": "({toast:document.querySelector('#toast').textContent,msgs:document.querySelectorAll('.view.on .msg').length,cards:document.querySelectorAll('.view.on .card').length})"
+ },
+ {
+  "shot": "m03-deleted"
+ }
+]

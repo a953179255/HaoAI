@@ -376,6 +376,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-paste.json  # 拖拽�
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-trash.json  # 回收站放回 + 侧栏每组点开更多
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-jump.json  # 搜索命中跳到那一条并闪一下
 SHOT_MODE=loop bash pc/tools/ui-shot.sh pc/tools/steps/ui-queue.json  # 跑着的时候再发一句：排队胶囊 + 撤回
+SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-msgops.json  # 引用 / 删这一句 / 会话置顶
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -937,6 +938,40 @@ toast 说清楚、且**没有**把人从当前会话上带走（`stillCur:true`�
 ② `ui-shot.sh` 收尾删状态根时进程还占着那个目录，`rm` 失败会让**全绿的验收**返回非零 ——
 量具自己把成功报成失败。现在等 0.4 秒再删，删不掉也不改退出码。
 
+## 这一批：引用、删这一句、会话置顶
+
+手机端消息级操作有七件（复制全文/逐块复制/网页预览/重新生成/编辑重发/删除该消息/引用到输入框），
+PC 端以前只有四件。这批补三样，都是"每天会用到、缺了就只能绕路"的：
+
+**引用到输入框** — 把那句话以 `>` 引起来插到输入框最前面，光标停在引用之后。
+不是"复制一遍"：复制走的是剪贴板，回来的是原文，而引用要的是"接着这句话问"。
+
+**删这一句** — 关键在"一句"在 agent 历史里不是孤零零一条：用户那句话带出了整轮回答与工具调用，
+带 `calls` 的 assistant 后面跟着若干条 tool 回复。**只抽走中间一条会留下孤儿 tool 回复，
+下一次请求直接 400** —— 和压缩那条"切点只能落在非 tool 消息上"是同一个道理。所以：
+
+- 删用户那句 = 删它和它带出来的一切（直到下一句用户话）；
+- 删带调用的回答 = 删它和属于它的那几条工具回复（按 `callId` 配对，不多删别人的）；
+- 直接点工具回复 = 拒绝，并说清"删它上面那条调用"；
+- 跑着的时候 = 拒绝（引擎线程正在往同一段历史上写）。
+
+**会话置顶** — 常用的那条不该被时间序冲掉。字段落在会话文件里（`pinned`，和改名一样只动一个字段），
+`list()` 先按 pinned 再按 updated 排；行内那颗 `↑` 切换，置顶的那条在标题后带一个「置顶」小标。
+
+验收（Kotlin，`MsgOpsTest` 3 条）：删一句用户话之后 `removed=2`、剩下的用户话只剩一条；
+下标越界时一条都不动；置顶排在新会话之前、`pc-<id>.json` 里真写着 `"pinned":true`、
+取消之后回到时间序。**判据不看接口返回 200，看盘上和历史里真的少掉了什么。**
+
+验收（真像素，`SHOT_MODE=tools bash pc/tools/ui-shot.sh tools/steps/ui-msgops.json`）：
+动作条上五个按钮都在；点引用 → 输入框以 `> 写一个 note.txt 里面放` 开头、光标在第 23 位；
+点 `↑` → 行内出现「置顶」标签、`data-pinned="1"`、服务端 `pinned=true`，再点一次 → `pinned=false` 且标签消失；
+按 `callId` 找到那条工具回复直接删 → 返回"工具回复不能单独删"；点删这一句 → toast「删掉了 10 条」、
+界面上消息与工具卡一起清空。
+
+一处量具边界要写清：无头浏览器会把 `confirm()` 自动答成"取消"，所以"删这一句"那一步是
+先把 `window.confirm` 打桩成 `true` 再真点按钮 —— 测的是 `delMsg` 这条代码路径，
+不是浏览器的对话框（对话框本身没什么可测的）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1003,7 +1038,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **166 条全绿**（整套 27 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **169 条全绿**（整套 32 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1065,7 +1100,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    记忆与备份的两端同步（PC 与手机各写各的 `MEMORY.md` 与备份，没有汇合的那一步 —— 与下面第 3 条同源）。
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
-   截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、
+   截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、
+   跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

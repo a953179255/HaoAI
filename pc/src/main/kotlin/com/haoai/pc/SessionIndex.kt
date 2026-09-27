@@ -28,6 +28,8 @@ object SessionIndex {
         val mode: String,
         val updated: Long,
         val messages: Int,
+        /** 置顶：常用的那条不该被时间序冲下去（手机端 SessionStore 早就有这个字段）。 */
+        val pinned: Boolean = false,
         val prompt: Long,
         val completion: Long,
         val file: File
@@ -38,7 +40,11 @@ object SessionIndex {
     fun list(limit: Int = 50): List<Meta> {
         val files = Env.sessionsDir.listFiles { f -> f.isFile && f.name.startsWith("pc-") && f.name.endsWith(".json") }
             ?: return emptyList()
-        return files.mapNotNull { f -> read(f) }.sortedByDescending { it.updated }.take(limit)
+        // 置顶的排最前，其余按更新时间：只看 updated 的话，"我天天用那条"会被一次
+        // 无关的旧会话刷新冲掉。
+        return files.mapNotNull { f -> read(f) }
+            .sortedWith(compareByDescending<Meta> { it.pinned }.thenByDescending { it.updated })
+            .take(limit)
     }
 
     fun read(f: File): Meta? = runCatching {
@@ -50,6 +56,7 @@ object SessionIndex {
             mode = o["mode"]?.jsonPrimitive?.content ?: "ask",
             updated = o["updated"]?.jsonPrimitive?.content?.toLongOrNull() ?: f.lastModified(),
             messages = o["messages"]?.jsonArray?.size ?: 0,
+            pinned = o["pinned"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() == true,
             prompt = o["promptTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             completion = o["completionTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             file = f
@@ -118,6 +125,18 @@ object SessionIndex {
      * 而 `.trash/` 在 `sessions/` 下面，`list()` 的前缀过滤看不到它，界面上就是"删掉了"。
      * 想彻底清空，删 `%LOCALAPPDATA%\HaoAI\sessions\.trash` 这个目录即可。
      */
+    /** 置顶 / 取消置顶。和改名一样只动一个字段，其余原样写回。 */
+    fun pin(id: String, on: Boolean): Boolean {
+        val f = fileFor(id)
+        if (!f.isFile) return false
+        return runCatching {
+            val o = Json.parseToJsonElement(f.readText()).jsonObject
+            val patched = JsonObject(o.toMutableMap().apply { put("pinned", JsonPrimitive(on)) })
+            f.writeText(patched.toString())
+            true
+        }.getOrDefault(false)
+    }
+
     fun delete(id: String): Boolean {
         val f = fileFor(id)
         if (!f.isFile) return false

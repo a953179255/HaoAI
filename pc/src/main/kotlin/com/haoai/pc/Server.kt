@@ -166,6 +166,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
                 "/api/unqueue" -> unqueue(ex)
+                "/api/delmsg" -> deleteMessage(ex)
+                "/api/pin" -> pinSession(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -1352,7 +1354,7 @@ class WebServer(settings: PcSettings, port: Int,
             """{"id":${quote(m.id)},"title":${quote(m.title)},"workspace":${quote(m.workspace)},""" +
                 """"mode":"${m.mode}","updated":${m.updated},"messages":${m.messages},""" +
                 """"prompt":${m.prompt},"completion":${m.completion},""" +
-                """"running":${sessions[m.id]?.running == true},"current":${m.id == cur},""" +
+                """"running":${sessions[m.id]?.running == true},"pinned":${m.pinned},"current":${m.id == cur},""" +
                 """"hit":${quote(hit?.text ?: "")},"hitAt":${hit?.index ?: -1}}"""
         }.joinToString(",", "[", "]")
     }
@@ -1499,6 +1501,37 @@ class WebServer(settings: PcSettings, port: Int,
     private fun purgeTrash(ex: HttpExchange) {
         val ok = SessionIndex.purge(Body(ex).str("name"))
         send(ex, 200, """{"ok":$ok}""", "application/json; charset=utf-8")
+    }
+
+    /**
+     * `POST /api/delmsg` {sid,index} —— 删掉某一句和它带出来的一切（见 [Engine.deleteAt]）。
+     *
+     * 跑着的时候不许删：引擎线程正在往同一段历史上写，删完它下一轮读到的就不是刚才那份。
+     */
+    private fun deleteMessage(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val i = b.str("index").toIntOrNull() ?: -1
+        val m = sessions[sid]
+        val (n, err) = when {
+            m == null -> 0 to "没有这条会话"
+            m.running -> 0 to "这条会话正在跑，先停止再删"
+            else -> m.engine.deleteAt(i)
+        }
+        send(ex, 200, if (err.isEmpty()) """{"ok":true,"removed":$n}"""
+        else """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
+        if (err.isEmpty()) publish("sessions", "{}", sid)
+    }
+
+    /** `POST /api/pin` {id,pinned} —— 置顶 / 取消置顶。 */
+    private fun pinSession(ex: HttpExchange) {
+        val b = Body(ex)
+        val id = b.str("id")
+        val on = b.str("pinned").let { it == "true" || it == "1" }
+        val ok = SessionIndex.pin(id, on)
+        send(ex, 200, if (ok) """{"ok":true}""" else """{"ok":false,"error":"没有这条会话"}""",
+            "application/json; charset=utf-8")
+        if (ok) publish("sessions", "{}", id)
     }
 
     private fun settingsJson(): String {

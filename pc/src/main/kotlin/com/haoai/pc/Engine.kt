@@ -341,6 +341,31 @@ class Engine(
         return cut
     }
 
+    /**
+     * 删掉某一句。但 agent 历史里的"一句"从来不是孤零零一条：用户那句话带出了整轮
+     * 回答与工具调用，assistant 那条带 calls 的后面跟着若干条 tool 回复。
+     * 只抽走中间一条会留下孤儿 tool 回复，下一次请求直接 400 —— 和压缩那条"切点只能
+     * 落在非 tool 消息上"是同一个道理。所以这里删的是**这一句和它带出来的一切**。
+     *
+     * 返回 (删掉的条数, 错误说明)；错误说明非空表示一条都没动。
+     */
+    fun deleteAt(i: Int): Pair<Int, String> {
+        if (i < 0 || i >= history.size) return 0 to "没有这一条"
+        val m = history[i]
+        if (m.role == "tool") return 0 to "工具回复不能单独删：删它上面那条调用"
+        var end = i + 1
+        if (m.role == "user") {
+            while (end < history.size && history[end].role != "user") end++
+        } else if (m.calls.isNotEmpty()) {
+            val ids = m.calls.map { it.id }.toSet()
+            while (end < history.size && history[end].role == "tool" && history[end].callId in ids) end++
+        }
+        val n = end - i
+        history.subList(i, end).clear()
+        persistNow()
+        return n to ""
+    }
+
     private fun compactOnce(force: Boolean): Int {
         val bodyChars = history.sumOf { it.content?.length ?: 0 }
         if (!force && bodyChars <= settings.compactTriggerChars) return 0
