@@ -260,6 +260,8 @@ node pc/tools/md-check.js      # 12 项：排版行为 + 一次注入
 node pc/tools/ui-check.js    # 秒级静态检查：JS 语法能过 V8 解析、JS 挂的 class 在 CSS 里都有规则、
                              # $#+id 取的元素都存在、前后端事件名与接口名两两对得上
 node pc/tools/shot.js --out <目录> --steps <steps.json>   # 真像素：无头 Edge + CDP，按步骤点/打字，每步存图
+                                                        # 步里 `must:[...]` 声明哪些字段必须为真 —— 断言打印出来是 false，
+                                                        # 也算整轮失败（以前 eval 步只打印不判，等于假绿）
 ```
 
 `shot.js` 不依赖任何第三方包（Node 24 自带 WebSocket，直连 CDP），steps.json 里写
@@ -1426,6 +1428,65 @@ agent 跑 `gradle` 弹确认时人插不上手，人在终端里敲的东西 age
    "面板刷新把模型饿死"这类 bug 从结构上消失 —— 这类"改数据结构消掉一类 bug"的账，
    比在两边各加一个锁划算。
 
+## 这一批：音视频附件 + `run_code`（v0.49.0，缺口地图 B9）
+
+B7 让 agent 能剪视频、抽帧、抽音轨，但**人没法把素材递给它** —— 附件那一路只认图片，
+拖进来一个 `.mp4` 会被当成"不是图片"静默丢掉。同时 vibe coding 里最高频的一个动作
+"这段代码跑起来到底输出什么"一直只能走 `shell`，而 Windows 上带引号的命令每次都要
+重新拼转义（`ShellTool` 的注释里记过这个坑）。这一批把这两条缝上。
+
+- **附件分两条路**：扩展名命中音视频（mp4/mov/mkv/webm/avi/mp3/m4a/wav/flac/ogg/aac/opus）
+  进 `media`，其余进 `images`。输入框的 chip 上音视频带 `▶` 并显示字节数；发出去之后
+  用户气泡里直接是播放器，重开会话还是播放器（`media` 跟着消息落库）。
+- **`media` 里放的是路径，不是内容**：`/api/run` 收到的 `media` 过 `insideMedia` 四道闸
+  —— 必须在这条会话的工作区内、不超过 512MB、按魔数闻得出确实是音/视频、最多 2 个 ——
+  只把绝对路径写进用户消息。**绝不能混进 `images`**：那一路会把文件编成 data URL 发给模型，
+  一段素材就变成一堆谁也用不上的 base64。"看见画面"由工具做（`media` 抽帧、`run_code` 出图），
+  附件这条路只负责播。
+- **`run_code` 是第 21 把工具**：`lang=python|node`，代码先写成临时文件再执行，
+  所以多行、引号、中文都不需要转义。跑在 `.haoai-output/runs/<时间戳>/`，
+  那个目录里除脚本自身之外新出来的文件一定就是这次产物 —— 图片进 `images`（模型能看），
+  音视频进 `media`（人能播）。这样既不用扫工作区猜产物，也不会把用户自己的文件误认成输出。
+- **解释器按 `PYTHON_EXE`/`NODE_EXE` → PATH → 常见安装目录找**，找不到就回一句人话
+  （告诉该装什么、或把目录写进哪个环境变量），不抛栈。
+- **先过闸再落盘**：顺序是 `ctx.guard` → `mkdirs` → 写脚本 → 执行。被拒的那一次
+  不该在用户工作区里留下目录和脚本。
+
+判据（Kotlin 新增 11 条：`RunCodeTest` 8 + `AvAttachTest` 3，整套 236 条）：
+中文 print 不糊（`你好 from python`、`42` 都在正文里）、stderr 并进同一条结果、
+非零退出 `error=true` 但**输出仍然留着**（同时有 `exit=3` 和"前面还有话"）、
+运行目录里那张 png 被认成 1 张图且正文清单报出 `out.png`、node 同样能跑、
+不认识的 lang 回话里带得出可选列表、**计划模式拒跑且那个 run 目录压根没被创建**、
+`timeout=5` 去跑睡 60 秒的脚本在 25 秒内收住并报"超时"；
+另一侧三条：音视频落在 `user.media` 而 `user.images` 是空的、盘上没有的路径被丢掉
+而不是污染历史、`media` 字段过完会话文件往返之后重开还在。
+（像素，两份剧本共 29 步（附件 20 + 代码 9）：
+`SHOT_MODE=chat PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh tools/steps/ui-attach.json` →
+chip 里同时有 `▶`、文件名和 `音视频 54 KB`、用户气泡里 1 个播放器、
+**真解码** `videoWidth=320 videoHeight=240 duration=4`、发送后 chip 清空、页面不横向溢出、
+刷新重放之后播放器还在且仍是 320×240；
+`SHOT_MODE=code bash pc/tools/ui-shot.sh tools/steps/ui-code.json` →
+工具卡 `exit=0`、stdout 可见、正文报出运行目录、**模型真的拿到了那张图**（缩略图 1 个、
+`naturalWidth=1`）、卡片是开的且图在视口内、重放后 `pixelsHandedToModel=dot.png`。）
+
+**这一批最该记的四件事：**
+
+1. **管道里的 stdout 编码是产品问题，不是环境问题。** `RunCodeTest` 第一条就把中文打成
+   了乱码 —— Windows 上 python 发现 stdout 不是控制台就退回 cp936。修法与 `ShellTool` 同源：
+   起进程时给 `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8`。**凡是往管道里写中文的进程都要
+   显式给编码**，以后每加一把新解释器都要回头看这一条。
+2. **测试共用一个 `haoai.home` 会互相看见对方的会话。** `AvAttachTest` 里固定 id "av1"
+   被三条测试轮流复用，第二条 `Engine()` 起来时把第一条的历史整段恢复进来，于是断言读到的是
+   上一轮那条消息，现象是"莫名其妙多出一个播放器"。现在每条测试自己
+   `System.setProperty("haoai.home", …)` 并用 `nanoTime` 造独立会话 id。
+   凡"落盘再读回"的用例，隔离单位必须是目录，不是对象。
+3. **"附件能显示"与"模型能看见"是两件事。** 第一版把 mp4 一并塞进 `images`，界面很好看，
+   但请求体里多了一段谁也用不上的 base64。现在图片与音视频各走一条字段，判据也分两头写：
+   一条断言 `images.isEmpty()`，一条断言播放器解码成功。
+
+4. **打印出来的 `false` 不是失败 —— 量具自己也会给假绿。** 补「播放器放不出来才解释一句」这条时，探针返回 `{"hintOnErr":false}`，整轮却报 PASS：`shot.js` 过去对 eval 步**只打印不判**。现在加了 `must`：步里声明哪些字段必须为真，任一为假就把退出码置 1（老步不声明就保持原行为，因为有些步的期望值本来就是 false，比如 `running:false`）。顺带两个自己造的坑：① 探针用 `v.onerror=()=>r()` 等错误，等于把内联的 `medFail` 覆盖掉，于是"没提示"是探针的错不是产品的错 —— 等事件要用 `addEventListener`；② `PRE_CLIP` 要的是带扩展名的文件名，我传了 `PRE_CLIP=1`，ffmpeg 报的是"认不出输出格式"，看着像 ffmpeg 坏了 —— 现在 `ui-shot.sh` 一上来就挡掉。
+   （同一批还改掉一处文案噪声：每个正常播放器底下都常驻一句"播不出来通常是编码问题"，看着像整片区域坏了；现在只在 `error` 事件真的来了才补那一句。）
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1492,7 +1553,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **225 条全绿**（整套 60 秒，媒体那 14 条要真跑 ffmpeg 所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **236 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1517,7 +1578,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2），这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3，这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1559,7 +1620,9 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、
    跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、按回合落账的用量看板、
    HTML 产出沙箱预览、长代码块折叠、会话级工具开关、断点恢复、审批键盘决定、子任务单独停、备份导出/恢复、
-   MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
+   MCP 客户端与设置抽屉里的管理段、子任务（`task`）、媒体工具 ffmpeg 与产出直接播、
+Git 面板、命令面板与任务运行历史、终端页签（人和 agent 共用常驻进程）、
+音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
@@ -1584,11 +1647,16 @@ pc/src/main/kotlin/com/haoai/pc/
   Settings.kt   设置落库 + HaoFlag 注册表
   Provider.kt   ChatClient 接口 + OpenAI 兼容流式网关
   Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）+ Memory（项目说明与全局记忆）
-  Tools.kt      18 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
+  Tools.kt      21 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
   Mcp.kt        MCP 客户端：stdio 上的换行 JSON-RPC，把外部 server 的工具包成引擎的 Tool
   Policies.kt   S2 权限规则表：tool(pattern) 有序匹配 + 命令前缀归约 + alwaysAsk
   GitTool.kt    一把 git（子命令切分保留引号；只读不问人，改仓库走同一张规则表）
-  Pty.kt        S3 常驻交互进程（open/send/read/close/list）+ 共用的 shell 启动器
+  Pty.kt        S3 常驻交互进程（open/send/read/close/list）+ 共用的 shell 启动器；
+                输出是带序号的环形缓冲，模型与终端页签各拿一个游标
+  Media.kt      ffmpeg 定位与调用 + 按魔数认音视频（MediaMime）+ Range 解析（边播边拖）
+  RunCode.kt    `run_code`：临时脚本 + python/node，运行目录里新出来的图/音视频交回两侧
+  GitPanel.kt   人用的 Git 面板后端：status/暂存/diff/提交（不吃 porcelain 行首空格）
+  RunLedger.kt  一次运行一行的 HAOAI_HOME/runs.jsonl（最近 500 条，供「用量」页回溯与 ↻）
   Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
   Desktop.kt    屏幕理解与点击级自动化：生成的 PowerShell 模板 + PsRunner
   Engine.kt     回合循环、档位闸、两级截断、上下文压缩、中断、会话持久化

@@ -718,7 +718,7 @@ fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), WebSearchTool(),
-    BrowserTool(), ScreenTool(), TaskTool(), MediaTool()
+    BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool()
 )
 
 /**

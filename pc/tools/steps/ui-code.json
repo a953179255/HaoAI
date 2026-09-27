@@ -1,0 +1,34 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "跑一段 python 算一下并画个点",
+      "enter": true
+    }
+  },
+  {
+    "goto": ".view.on .thumbs img",
+    "timeout": 30000
+  },
+  {
+    "eval": "(()=>{const cards=[...document.querySelectorAll('.view.on .card')];const rc=cards.find(c=>c.querySelector('b')&&c.querySelector('b').textContent==='run_code');const body=rc?rc.querySelector('.body').textContent:'';const img=document.querySelector('.view.on .thumbs img');return {cards:cards.length,hasRunCode:!!rc,exit0:body.indexOf('exit=0')>=0,sawStdout:body.indexOf('结果是 42')>=0,mentionsRunDir:body.indexOf('.haoai-output')>=0,thumbs:document.querySelectorAll('.view.on .thumbs img').length,imgW:img?img.naturalWidth:0,imgH:img?img.naturalHeight:0}})()"
+  },
+  {
+    "eval": "(()=>{const cards=[...document.querySelectorAll('.view.on .card')];const rc=cards.find(c=>c.querySelector('b')&&c.querySelector('b').textContent==='run_code');rc&&(rc.open=true);const img=rc?rc.parentElement.querySelector('.thumbs img'):document.querySelector('.view.on .thumbs img');const r=img?img.getBoundingClientRect():null;return {cardOpen:!!(rc&&rc.open),imgBox:r?{w:Math.round(r.width),h:Math.round(r.height)}:null,inViewport:!!(r&&r.top>=0&&r.bottom<=innerHeight),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>{const t=(s.messages||[]).filter(m=>m.role=='tool'&&m.name==='run_code');const u=(s.messages||[]).filter(m=>m.role=='user'&&m.images&&m.images.length);return {runCodeMsgs:t.length,exit0:t.length>0&&(t[0].content||'').indexOf('exit=0')>=0,pixelsHandedToModel:u.map(m=>m.images.map(x=>x.split(String.fromCharCode(92)).pop()))}})"
+  },
+  {
+    "eval": "fetch('/api/files?sid='+encodeURIComponent(curId)+'&path=.haoai-output/runs').then(r=>r.json()).then(d=>({at:d.path,dirs:(d.entries||[]).map(x=>x.n+(x.d?'/':''))}))"
+  },
+  {
+    "shot": "c01-run-code"
+  },
+  {
+    "eval": "(()=>({lastAns:[...document.querySelectorAll('.view.on .msg.ans')].pop().textContent.replace(/\\s+/g,' ').slice(0,40),running:null}))()"
+  }
+]

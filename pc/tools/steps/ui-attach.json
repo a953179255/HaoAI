@@ -1,0 +1,76 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "eval": "(async()=>{const b=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+encodeURIComponent('素材.mp4')).then(r=>r.blob());const f=new File([b],'我的素材.mp4',{type:'video/mp4'});attachFiles([f]);return 'bytes='+b.size+' type='+b.type})()"
+  },
+  {
+    "sleep": 1800
+  },
+  {
+    "eval": "(()=>{const c=[...document.querySelectorAll('#attRow .atchip')];return {chips:c.length,text:c.map(x=>x.textContent.replace(/\\s+/g,' ')).join(' | '),rowOn:document.querySelector('#attRow').classList.contains('on'),hasPlayIcon:!!document.querySelector('#attRow .avt')}})()"
+  },
+  {
+    "eval": "(()=>({atts:atts.map(a=>({av:!!a.av,img:!!a.img,name:a.name,size:a.bytes}))}))()"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "把这段素材剪 2 秒",
+      "enter": false
+    }
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 3500
+  },
+  {
+    "eval": "(()=>{const v=document.querySelector('.view.on .msg.user video');return {players:document.querySelectorAll('.view.on .msg.user video').length,srcHead:v?v.getAttribute('src').slice(0,34):'',inUserBubble:!!v}})()"
+  },
+  {
+    "eval": "(async()=>{const v=document.querySelector('.view.on .msg.user video');if(!v)return 'no video';return await new Promise(r=>{const to=setTimeout(()=>r({timeout:true,rs:v.readyState,ns:v.networkState}),9000);v.onloadedmetadata=()=>{clearTimeout(to);r({w:v.videoWidth,h:v.videoHeight,d:+v.duration.toFixed(2)})};if(v.readyState>=1){clearTimeout(to);r({w:v.videoWidth,h:v.videoHeight,d:+v.duration.toFixed(2)})}})})()"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({userMedia:(s.messages||[]).filter(m=>m.role=='user'&&m.media&&m.media.length).map(m=>m.media.map(x=>x.split(String.fromCharCode(92)).pop())),running:s.running}))"
+  },
+  {
+    "shot": "a01-attached-player"
+  },
+  {
+    "eval": "location.reload()"
+  },
+  {
+    "sleep": 2500
+  },
+  {
+    "goto": ".view.on .msg.user video",
+    "timeout": 15000
+  },
+  {
+    "eval": "(async()=>{const v=document.querySelector('.view.on .msg.user video');if(!v)return {players:0};if(v.readyState<1)await new Promise(r=>{const to=setTimeout(r,9000);v.onloadedmetadata=()=>{clearTimeout(to);r()}});return {players:document.querySelectorAll('.view.on .msg.user video').length,w:v.videoWidth,h:v.videoHeight,d:+(v.duration||0).toFixed(2),rs:v.readyState}})()"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#attRow');return {chipsClearedAfterSend:atts.length===0&&!t.classList.contains('on'),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()"
+  },
+  {
+    "shot": "a02-after-reload"
+  },
+  {
+    "eval": "(()=>{const kv=document.querySelector('.view.on .msg.user .pm .kv');const t=kv?kv.textContent:'';return JSON.stringify({captionHasName:t.indexOf('素材')>=0,quietWhenPlaying:t.indexOf('编码问题')<0})})()",
+    "must": [
+      "captionHasName",
+      "quietWhenPlaying"
+    ]
+  },
+  {
+    "eval": "(async()=>{const d=document.createElement('div');d.innerHTML=players(curId,['根本不存在的一段.mp4']);document.body.appendChild(d);const v=d.querySelector('video');await new Promise(r=>{if(!v)return r();v.addEventListener('error',()=>r());setTimeout(r,6000)});const t=d.querySelector('.kv').textContent;d.remove();return JSON.stringify({sawErrorEvent:!!v,capHasName:t.indexOf('根本不存在')>=0,hintOnErr:t.indexOf('编码问题')>=0,caption:t})})()",
+    "must": [
+      "sawErrorEvent",
+      "capHasName",
+      "hintOnErr"
+    ]
+  }
+]

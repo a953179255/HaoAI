@@ -225,6 +225,22 @@ async function waitFor(sel, timeoutMs) {
   return false;
 }
 
+/** 判据里哪些声明字段没为真。返回值是给人看的字符串列表。 */
+function mustMiss(val, must) {
+  if (!must || !must.length) return [];
+  let v = val;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (t.startsWith('{') || t.startsWith('[')) { try { v = JSON.parse(t) } catch (_) {} }
+  }
+  const out = [];
+  for (const p of must) {
+    const got = p.split('.').reduce((o, k) => (o == null ? undefined : o[k]), v);
+    if (!got) out.push(p + ' = ' + JSON.stringify(got));
+  }
+  return out;
+}
+
 (async () => {
   const proc = await startBrowser();
   let code = 0;
@@ -242,7 +258,19 @@ async function waitFor(sel, timeoutMs) {
         if (!ok) code = 1;
         await sleep(250);
       } else if (s.sleep) await sleep(s.sleep);
-      else if (s.eval) console.log('  断言 ' + (JSON.stringify(await evalJs(s.eval)) || ''));
+      else if (s.eval) {
+        const got = await evalJs(s.eval);
+        console.log('  断言 ' + (JSON.stringify(got) || ''));
+        /*
+         * "断言打印出来是 false，整轮还是 PASS" —— 打印不是判据。
+         * 所以按用例显式声明哪些字段必须为真（must 支持点号路径），
+         * 没声明的步一律只打印，兼容那些"期望值本来就是 false"的老步。
+         */
+        for (const miss of mustMiss(got, s.must)) {
+          console.log('  !! 第 ' + (i + 1) + ' 步判据没成立：' + miss);
+          code = 1;
+        }
+      }
       else if (s.click) { await click(s.click); await sleep(s.after || 350); }
       else if (s.key) { await key(s.key, s.mods); await sleep(s.after || 250); }
       else if (s.type) { await type(s.type); await sleep(s.after || 350); }

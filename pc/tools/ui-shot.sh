@@ -72,6 +72,10 @@ fi
 # 于是 faststart、Range、videoWidth 这三样全都验不到 —— 看着绿其实什么都没测。
 # PRE_CLIP=素材.mp4 就用 ffmpeg 现造一段 4 秒的（testsrc + 440Hz 正弦）。
 if [ -n "${PRE_CLIP:-}" ]; then
+  case "$PRE_CLIP" in
+    *.*) ;;
+    *) echo "x PRE_CLIP 要的是带扩展名的文件名（如 素材.mp4），现在是「$PRE_CLIP」：ffmpeg 认不出没有扩展名的输出格式，报的错还看着像 ffmpeg 坏了"; exit 1 ;;
+  esac
   FF="${FFMPEG:-$(command -v ffmpeg || true)}"
   [ -n "$FF" ] || { echo "x PRE_CLIP 需要 ffmpeg：装一个或把可执行文件路径写进 FFMPEG"; exit 1; }
   mkdir -p "$HOME_DIR/ws"

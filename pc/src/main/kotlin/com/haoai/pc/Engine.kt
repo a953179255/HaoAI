@@ -523,14 +523,22 @@ class Engine(
     }
 
     /** 一轮用户输入 → 若干次模型往返 → 最终文本。 */
+    /**
+     * [media] 是用户拖进来的**音视频**附件路径。
+     *
+     * 它们与 images 分两份走：图片能把像素直接编进请求（模型真看得见），
+     * 一段 mp4 不行 —— 它只需要知道"素材在这个路径"，然后拿 media 工具去处理；
+     * 而界面上要能播，所以路径跟着消息一起存进历史。
+     */
     fun submit(userText: String, images: List<String> = emptyList(),
-                 goal: String? = null): String {
+                 goal: String? = null, media: List<String> = emptyList()): String {
         var titled = false
         if (session.title.get() == "新会话") {
             session.title.set(userText.trim().replace('\n', ' ').take(24).ifBlank { "新会话" })
             titled = true
         }
-        history += Msg("user", userText, images = images.filter { Images.usable(it) != null })
+        history += Msg("user", userText, images = images.filter { Images.usable(it) != null },
+            media = media.filter { runCatching { File(it).isFile }.getOrDefault(false) })
         /**
          * 一开口就先落一次盘。
          *

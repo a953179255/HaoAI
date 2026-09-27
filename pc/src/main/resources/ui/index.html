@@ -525,6 +525,7 @@
   /* 命令行不换行，但输入框必须能收缩：否则"发送"被挤出右栏（实测过） */
   #tab-term .tcmd{flex-wrap:nowrap}
   #tab-term .tcmd input{flex:1 1 0;min-width:0}
+  .atchip .avt{font-style:normal;color:var(--acc);margin-right:2px}
   .gr{display:flex;gap:7px;align-items:center;font-size:12px;padding:2px 0;min-width:0}
   .gr i{font-family:var(--mono);opacity:.6;flex:none;width:20px;text-align:center}
   .gr b{font-weight:400;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -853,16 +854,22 @@ function isVideo(p){return VEXTS.indexOf(extOf(p))>=0}
 function isMedia(p){return isVideo(p)||AEXTS.indexOf(extOf(p))>=0}
 function player(p,sid){
   const u='/api/media?sid='+encodeURIComponent(sid||curId||'')+'&path='+encodeURIComponent(p);
-  if(isVideo(p))return '<video src="'+esc(u)+'" controls playsinline preload="metadata"></video>';
-  if(AEXTS.indexOf(extOf(p))>=0)return '<audio src="'+esc(u)+'" controls preload="metadata"></audio>';
+  if(isVideo(p))return '<video src="'+esc(u)+'" controls playsinline preload="metadata" onerror="medFail(this)"></video>';
+  if(AEXTS.indexOf(extOf(p))>=0)return '<audio src="'+esc(u)+'" controls preload="metadata" onerror="medFail(this)"></audio>';
   return '';
 }
 function players(sid,paths){
   const list=(paths||[]).filter(isMedia);
   if(!list.length)return '';
   return '<div class="pvmed">'+list.map(p=>'<div class="pm">'+player(p,sid)+
-    '<div class="kv">'+esc(baseName(p))+
-    ' · 播不出来通常是编码问题（H.264+AAC 的 mp4 最稳）</div></div>').join('')+'</div>';
+    '<div class="kv">'+esc(baseName(p))+'</div></div>').join('')+'</div>';
+}
+// 解释只在真放不出来时说：每个正常播放器底下都挂一句"可能是编码问题"，
+// 看着像整片区域坏了，而且没人会在顺利播放时去读它。
+function medFail(el){
+  const kv=el.parentNode&&el.parentNode.querySelector('.kv');
+  if(!kv||kv.dataset.hint==='1')return;
+  kv.dataset.hint='1';kv.textContent+=' · 播不出来通常是编码问题（H.264+AAC 的 mp4 最稳）';
 }
 function add(node,v){
   const t=v||cur();
@@ -1357,7 +1364,7 @@ on('user',(v,d)=>{
   // 负载以前是裸字符串，现在带图片路径；两种形状都认，旧页面刷新前也不会白屏
   const t=typeof d=='string'?d:((d&&d.t)||'');
   v.curAns=null;closeThinking(v);
-  add(el('<div class="msg user">'+esc(t)+thumbs(v.sid,d&&d.imgs)+'</div>'),v);
+  add(el('<div class="msg user">'+esc(t)+thumbs(v.sid,d&&d.imgs)+players(v.sid,d&&d.media)+'</div>'),v);
 });
 on('tool',(v,d)=>{d.state=='run'?toolStart(d,v):toolEnd(d,v)});
 on('sub',(v,d)=>subLine(d,v));
@@ -1441,6 +1448,9 @@ function decide(id,decision,answer){
  */
 const TEXT_EXT=/\.(md|txt|json|jsonl|csv|tsv|log|ya?ml|toml|ini|xml|html?|kt|kts|java|py|js|ts|jsx|tsx|go|rs|c|h|cpp|hpp|cs|rb|php|sh|ps1|bat|sql|gradle|css|svg|properties)$/i;
 const IMG_EXT=/\.(png|jpe?g|gif|webp)$/i;
+// 音视频附件：像素递不进上下文（一段 mp4 不能编成 data URL 塞给模型），
+// 所以只把**路径**给它 + 在界面上摆播放器。后缀表与 /api/media 认的那几类一致。
+const AV_EXT=/\.(mp4|mov|m4v|webm|mp3|m4a|wav|ogg|opus|flac|aac)$/i;
 /* 待发图片：路径由服务端落在工作区 .haoai-attach/ 下，发送时随 messages 一起递过去。
    认不认得是图片由服务端按魔数判 —— 扩展名会骗人。 */
 let atts=[];
@@ -1454,7 +1464,8 @@ function paintAtts(){
   const s=encodeURIComponent(curId||'');
   r.innerHTML=atts.map((a,i)=>`<span class="atchip${a.bad?' no':''}" title="${esc(a.p)}">`+
     (a.img&&a.p?`<img class="ath" src="/api/img?sid=${s}&path=${encodeURIComponent(a.p)}" alt="" onerror="this.style.display='none'">`:'')+
-    `<b>${esc(a.name)}</b><i>${a.bad?'递不出':fmtSize(a.bytes)}</i>`+
+    (a.av?'<i class="avt">▶</i>':'')+
+    `<b>${esc(a.name)}</b><i>${a.bad?'递不出':(a.av?'音视频 '+fmtSize(a.bytes):fmtSize(a.bytes))}</i>`+
     `<em data-x="${i}" title="不要这张">✕</em></span>`).join('');
   r.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{atts.splice(+b.dataset.x,1);paintAtts()});
 }
@@ -1483,6 +1494,9 @@ function attachFiles(list){
           if(isImg){
             if(atts.length>=4)toast('一条消息最多带 4 张图，多余的只留路径','err');
             else atts.push({p:d.path,name:name,bytes:d.bytes,img:isImg});
+          }else if(AV_EXT.test(name)){
+            if(atts.filter(a=>a.av).length>=2)toast('一条消息最多带 2 个音视频，多余的只留路径','err');
+            else atts.push({p:d.path,name:name,bytes:d.bytes,av:true});
           }
           paintAtts();
           toast('已附上 '+name);
@@ -2007,18 +2021,21 @@ function send(){
      */
     if(t.startsWith('/')&&t.indexOf('\n')<0&&runCommand(t))return;
     box.value='';box.style.height='auto';hideSlash();
-    const qi=atts.map(a=>a.p);atts=[];paintAtts();
-    post('/api/task',{text:t,sid:curId,images:qi}).then(d=>{
+    const qi=atts.filter(a=>a.img).map(a=>a.p);
+    const qm=atts.filter(a=>a.av).map(a=>a.p);
+    atts=[];paintAtts();
+    post('/api/task',{text:t,sid:curId,images:qi,media:qm}).then(d=>{
       if(!d||!d.ok)notice((d&&d.error)||'没排进去','err');
     });
     return;
   }
   if(t.startsWith('/')&&t.indexOf('\n')<0&&runCommand(t))return;
   box.value='';box.style.height='auto';hideSlash();
-  const imgs=atts.map(a=>a.p);atts=[];paintAtts();
+  const imgs=atts.filter(a=>a.img).map(a=>a.p);
+  const av=atts.filter(a=>a.av).map(a=>a.p);atts=[];paintAtts();
   v.running=true;stopping=false;paintSend();markSessions();
   fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:t,sid:curId,images:imgs})})
+    body:JSON.stringify({text:t,sid:curId,images:imgs,media:av})})
     .then(r=>r.json().then(d=>({code:r.status,d:d})))
     .then(x=>{
       if(x.d&&x.d.sid&&x.d.sid!==curId)show(x.d.sid);
@@ -2459,7 +2476,8 @@ function applyState(s){
       th.querySelector('.tb').textContent=m.reasoning;v.el.appendChild(th);
     }
     let node=null;
-    if(m.role=='user')node=el('<div class="msg user">'+esc(m.content)+thumbs(v.sid,m.images)+'</div>');
+    if(m.role=='user')node=el('<div class="msg user">'+esc(m.content)+thumbs(v.sid,m.images)+
+      players(v.sid,m.media)+'</div>');
     else if(m.role=='assistant'&&m.content)node=el('<div class="msg ans md">'+md(m.content)+'</div>');
     else if(m.role=='tool'&&m.name=='task'){
       // 子任务回放成一张子任务卡：过程一行一条，结论单独一行。

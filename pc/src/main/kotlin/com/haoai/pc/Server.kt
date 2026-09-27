@@ -435,11 +435,32 @@ class WebServer(settings: PcSettings, port: Int,
         }.take(4)
     }
 
+    /**
+     * 音视频附件：同样只收**这条会话工作区里**的文件，且必须魔数认得出。
+     * 一条消息最多两个，单个上限与 /api/media 一致 —— 一个 4 GB 的原始录像
+     * 不该被拖进会话（模型也不会看它，它只要路径）。
+     */
+    private fun insideMedia(sid: String, paths: List<String>): List<String> {
+        if (paths.isEmpty()) return emptyList()
+        val ws = runCatching {
+            (sessions[pick(sid)]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
+        }.getOrNull() ?: return emptyList()
+        return paths.mapNotNull { p ->
+            val f = runCatching {
+                if (File(p).isAbsolute) File(p).canonicalFile else File(ws, p).canonicalFile
+            }.getOrNull() ?: return@mapNotNull null
+            val inside = f.path == ws.path || f.path.startsWith(ws.path + File.separator)
+            if (!inside || f.length() > MediaMime.MAX) null
+            else if (MediaMime.sniff(f) == null) null else f.absolutePath
+        }.take(2)
+    }
+
     private fun startRun(wantSid: String, text: String, cutTo: Int? = null,
                          named: String = "", fresh: Boolean = false,
                          images: List<String> = emptyList(),
                          goal: String? = null,
-                         trigger: String = "手动"): Pair<String, String?> {
+                         trigger: String = "手动",
+                         media: List<String> = emptyList()): Pair<String, String?> {
         /*
          * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
          * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
@@ -502,12 +523,13 @@ class WebServer(settings: PcSettings, port: Int,
         }
         // 负载从裸字符串变成对象：图片路径要一起出去，前端才画得出刚发出去的那张图。
         // 前端两种形状都认（见 index.html 的 on(user)），所以这一步不会打断旧页面。
-        publish("user", """{"t":${quote(text)},"imgs":${images.joinToString(",", "[", "]") { quote(it) }}}""", sid)
+        publish("user", """{"t":${quote(text)},"imgs":${images.joinToString(",", "[", "]") { quote(it) }},""" +
+            """"media":${media.joinToString(",", "[", "]") { quote(it) }}}}""", sid)
         val e = managed.engine
         Thread {
             publish("run", """{"running":true}""", sid)
             try {
-                e.submit(text, images, goal)
+                e.submit(text, images, goal, media)
             } catch (err: Exception) {
                 publish("err", quote("回合异常：${err.message ?: err.javaClass.simpleName}"), sid)
             } finally {
@@ -557,7 +579,11 @@ class WebServer(settings: PcSettings, port: Int,
          * 同一条会话里排队是不行的：第二个任务会写进同一段历史，
          * 两条任务的工具卡串在一起，事后看不出哪条输出属于哪条。
          */
-        val (sid, err) = startRun(wantSid, text, images = insideWorkspace(wantSid, b.list("images")))
+        val (sid, err) = startRun(
+            wantSid, text,
+            images = insideWorkspace(wantSid, b.list("images")),
+            media = insideMedia(wantSid, b.list("media"))
+        )
         if (err != null) {
             send(ex, 409, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
             return

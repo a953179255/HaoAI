@@ -23,6 +23,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODE = "tools"
 CLIP = os.environ.get("PRE_CLIP", "素材.mp4")
+CODE_PY = "\n".join([
+    'import os',
+    'b = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a252242600000000049454e44ae426082")',
+    'here = os.path.dirname(os.path.abspath(__file__))',
+    'open(os.path.join(here, "dot.png"), "wb").write(b)',
+    'print("写了 dot.png 结果是", 6 * 7)',
+])
 STATE = {"tool_rounds": 0}
 
 
@@ -95,6 +102,14 @@ PLAN = {
          "```kotlin\nval s = Snapshots.forPath(\"hello.txt\")\nprintln(s?.keyOf())\n```\n\n"
          "> 提醒：改动前已经留过快照，可以随时退回上一版。\n", None,
          "最后要把证据说清楚：读过文件才算做完。顺手给一段代码块和列表，前端才有东西可渲染。"),
+    ],
+    # code：模型跑一段 python，脚本往自己的运行目录里写一张 PNG。
+    # 这条要验的是"run_code 产出的图真的回到上下文并显示出来"，
+    # 所以只用标准库（base64/hex + 写文件），不赌 matplotlib 装没装。
+    "code": [
+        ("先算一遍并画张点", [{"id": "call_c1", "name": "run_code",
+                               "arguments": json.dumps({"lang": "python", "code": CODE_PY})}]),
+        ("跑完了：上面那张 PNG 是脚本自己写出来的，图我也看见了。", None),
     ],
     # 媒体工具：探长度 → 转码 → 抽音轨 → 抽一帧。
     # 配合 ui-shot.sh 的 PRE_CLIP（现造一段真素材），跑完界面上那两个播放器是
