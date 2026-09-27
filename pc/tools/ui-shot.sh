@@ -53,6 +53,18 @@ for f in ${PRE_PNG:-}; do
   mkdir -p "$HOME_DIR/ws/$(dirname "$f")"
   printf %s "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==" | base64 -d > "$HOME_DIR/ws/$f"
 done
+# 媒体这条链路要一段**真能解码**的素材：假字节流浏览器画不出画面，
+# 于是 faststart、Range、videoWidth 这三样全都验不到 —— 看着绿其实什么都没测。
+# PRE_CLIP=素材.mp4 就用 ffmpeg 现造一段 4 秒的（testsrc + 440Hz 正弦）。
+if [ -n "${PRE_CLIP:-}" ]; then
+  FF="${FFMPEG:-$(command -v ffmpeg || true)}"
+  [ -n "$FF" ] || { echo "x PRE_CLIP 需要 ffmpeg：装一个或把可执行文件路径写进 FFMPEG"; exit 1; }
+  mkdir -p "$HOME_DIR/ws"
+  "$FF" -y -hide_banner -loglevel error -f lavfi -i "testsrc=duration=4:size=320x240:rate=15" \
+    -f lavfi -i "sine=frequency=440:duration=4" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest \
+    "$HOME_DIR/ws/$PRE_CLIP" || { echo "x 造测试素材失败"; exit 1; }
+  echo "  seeded clip $PRE_CLIP"
+fi
 # 断点恢复这条链路要"盘上已经有一条没跑完的现场"：服务端一起来就得认得它，
 # 所以会话文件得在服务端启动之前写好。
 # 状态根目录名带时间戳、调用方事先不知道，所以工作区路径用 @WS@ 占位，

@@ -60,6 +60,11 @@ async function startBrowser() {
   PORT_ACTUAL = await pickPort(PORT);
   const proc = spawn(EDGE, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+    // 无头页默认 visibilityState=hidden，Chrome 会**推迟**音视频的加载：
+    // 实测同一个 <video> 在首屏（页面还"可见"那会儿）解码得出 160x120，
+    // 刷新之后就不动了 —— 那是量具的条件，不是产品的缺陷。下面这两样把页面钉成"在前台"。
+    '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
     '--window-size=' + W + ',' + H,
     '--user-data-dir=' + profile,
     '--remote-debugging-port=' + PORT_ACTUAL,
@@ -129,6 +134,9 @@ async function attach(url) {
   // （Runtime.evaluate 与 Page.captureScreenshot 不依赖 enable），
   // 而在无头 Edge 上 enable 会撞上渲染器还没就绪的窗口期，表现是命令永久不回。
   await sleep(900);
+  // 把页面钉成"有焦点/可见"，否则音视频元素永远不动（见上面那串启动参数）
+  await send('Emulation.setFocusEmulationEnabled', {enabled: true})
+    .catch(e => console.log('  焦点模拟没开成：' + e.message));
 }
 
 async function evalJs(expr) {

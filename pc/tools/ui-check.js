@@ -106,5 +106,33 @@ const unknown = [...apiPaths].filter(p => !routes.has(p)).sort();
 check(unknown.length === 0, '前端没有调到不存在的接口',
   '陌生接口：' + unknown.join(', ') + '\n         （服务端路由：' + [...routes].filter(r => r.startsWith('api/')).sort().join(', ') + '）');
 
+// ---- 6) 像素剧本里的每条 eval 必须能解析 ----
+/*
+ * 三条真事故换来的：eval 步骤里一个 `a:+(x)` 之类的笔误，要等整轮浏览器起完、
+ * 跑到那一步才报 SyntaxError —— 一次浪费两分钟，而"跑到第 5 步就红"看起来像产品坏了。
+ * 语法检查是纯本地的，放在这里最便宜。顺带验 JSON 本身能解析。
+ */
+const stepDir = path.join(__dirname, 'steps');
+let stepFiles = [];
+try { stepFiles = fs.readdirSync(stepDir).filter(f => f.endsWith('.json')); } catch (e) { stepFiles = []; }
+const badSteps = [];
+for (const f of stepFiles) {
+  let arr;
+  try {
+    arr = JSON.parse(fs.readFileSync(path.join(stepDir, f), 'utf8'));
+  } catch (e) { badSteps.push(f + ' 不是合法 JSON：' + e.message); continue; }
+  (Array.isArray(arr) ? arr : []).forEach((st, i) => {
+    if (!st || typeof st.eval !== 'string') return;
+    // 剧本里两种写法都有：一条表达式，或"点一下再回个话"的语句串。
+    // 只按表达式解析会把后者全判成错（实测四份老剧本被冤枉），所以两种都试。
+    let parsed = true;
+    try { new Function('return (' + st.eval + ')'); }
+    catch (e1) { try { new Function(st.eval); } catch (e2) { parsed = false; } }
+    if (!parsed) badSteps.push(f + ' 第 ' + (i + 1) + ' 步 eval 两种写法都解析不过');
+  });
+}
+check(stepFiles.length > 0, '抓到像素剧本清单', stepFiles.length + ' 份');
+check(badSteps.length === 0, '每份剧本里的 eval 都是合法 JS', badSteps.join('\n         '));
+
 console.log(fails ? '\nUI 自检失败 ' + fails + ' 项' : '\nUI 自检全部通过');
 process.exit(fails ? 1 : 0);

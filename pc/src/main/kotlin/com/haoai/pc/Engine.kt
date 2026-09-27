@@ -37,7 +37,9 @@ sealed class Ev {
         /** 用户对这一步的审批结论，画在卡头。 */
         val note: String = "",
         /** 子任务的中间过程（task 工具专用），只给界面。 */
-        val sub: String = ""
+        val sub: String = "",
+        /** 工具产出的音视频文件路径：界面按它摆播放器（字节走 /api/media）。 */
+        val media: List<String> = emptyList()
     ) : Ev()
     /** 子任务的动静：start/tool/err/done。界面上折进那张任务卡，不占正文。 */
     data class Sub(val label: String, val kind: String, val text: String) : Ev()
@@ -688,9 +690,9 @@ class Engine(
                 )
                 val note = takeNote()
                 history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff, note = note,
-                    sub = res.sub)
+                    sub = res.sub, media = res.media)
                 shotPaths += res.images
-                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub))
+                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub, res.media))
             }
             /*
              * 工具产出的图片（screen capture / 浏览器截图）单独补一条 user 消息递给模型。
@@ -847,6 +849,9 @@ class Engine(
                                     // 图片只存路径（base64 存进来会把会话文件撑爆）
                                     if (m.images.isNotEmpty())
                                         put("images", buildJsonArray { m.images.forEach { add(JsonPrimitive(it)) } })
+                                    // 音视频同样只存路径：字节本来就在盘上，进历史只会撑爆文件
+                                    if (m.media.isNotEmpty())
+                                        put("media", buildJsonArray { m.media.forEach { add(JsonPrimitive(it)) } })
                                     if (m.note.isNotBlank()) put("note", m.note)
                                     if (m.sub.isNotBlank()) put("sub", m.sub)
                                     if (m.pt > 0) put("pt", m.pt)
@@ -913,6 +918,8 @@ class Engine(
                     name = m["name"]?.jsonPrimitive?.contentOrNull ?: "",
                     callId = m["tool_call_id"]?.jsonPrimitive?.contentOrNull,
                     images = m["images"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                        ?: emptyList(),
+                    media = m["media"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
                         ?: emptyList(),
                     reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
                     diff = m["diff"]?.jsonPrimitive?.contentOrNull ?: "",

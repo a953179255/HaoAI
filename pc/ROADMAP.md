@@ -62,7 +62,7 @@
 5. **Git 面板** ｜ ZCODE Git 面板（暂存/提交/差异）｜ 只有 `git` 命令工具与审批用的 review 视图，**人**没有看 diff、勾选暂存、按提交的地方 ｜ vibe coding 的核心交互 ｜ 改动出现在面板 → 勾 1 个文件 → 提交 → `git log` 里有；未提交前有明确的"工作区不干净"提示 ｜ PC
 6. **终端面板（人用的多标签 shell）** ｜ ZCODE 内置终端多标签、OpenClaw terminal 面板 ｜ shell_* 五把工具只有 agent 会用，人没界面；右栏无「终端」页签 ｜ 与 #2 是一对：工具给 agent，面板给人，**共用同一进程注册表**（人在界面开的 shell，agent 也能喂） ｜ 页签出现 → 开一个 shell → 输入回车有输出 → 空闲回收提示存在 → 像素剧本全绿 ｜ PC（排在 #2 之后）
 7. **浏览器预览面板（画面进网页、可点）** ｜ ZCODE 内嵌浏览器 IAB、OpenClaw browser-panel ｜ `Browser.kt` 能控制 Edge，但界面里只能看工具回的截图，人不能"盯着它操作/伸手点一下" ｜ 视频自动化与看页面都要 ｜ 面板出现 CDP 实时画面 → 在面板上点一下 → 浏览器里真的收到点击（用 URL/文本变化断言）；**只操作已开的会话实例，不新开面** ｜ PC
-8. **媒体工具（ffmpeg）** ｜ OpenClaw image/video-generation + media 播放转码、Hermes 语音 ｜ `pc/**` grep `ffmpeg|transcode` **零命中** ｜ 你直说要"视频制作自动化、帮直播和创作视频" —— 这是最直接的那块 ｜ 无 ffmpeg 时**明确报错并给出安装指引**（不能静默失败）；有则：转码 mp4→mp3、抽 1 帧 png、切 3 秒、抽音轨；产出进 `.haoao-output/` 并在产出面板能 `<video>/<audio>` 播放 ｜ PC
+8. **媒体工具（ffmpeg）** —— ✅ v0.45.0 已落地（`Media.kt` + `media` 工具 + `/api/media` Range +「产出」播放器）。｜ OpenClaw image/video-generation + media 播放转码、Hermes 语音 ｜ `pc/**` grep `ffmpeg|transcode` **零命中** ｜ 你直说要"视频制作自动化、帮直播和创作视频" —— 这是最直接的那块 ｜ 无 ffmpeg 时**明确报错并给出安装指引**（不能静默失败）；有则：转码 mp4→mp3、抽 1 帧 png、切 3 秒、抽音轨；产出进 `.haoao-output/` 并在产出面板能 `<video>/<audio>` 播放 ｜ PC
 9. **录屏 + 直播控制** ｜ OpenClaw nodes `screen.record`（它自己 gateway 层 deny 了）｜ 无（grep `obs|record` 零命中）｜ 直播创作的下一步 ｜ 录一段 mp4 到产出面板可播；OBS（obs-websocket）先做"检测到才可用"，没装就说清楚 ｜ PC
 10. **音视频附件 + 代码执行** ｜ ZCODE `code_execution`/`node-repl`、Codex `execute_code` ｜ 附件白名单只有文本+图片（`index.html:1187-1188`），mp4/wav 拖进去没有专门路径；无 `run_code` ｜ 视频工作流要递素材；vibe coding 要跑一段脚本看结果 ｜ 拖 mp4 → 附件胶囊显示类型与大小 → 模型收到落盘路径；`run_code` 跑出的 png 出现在产出面板；超时有界 ｜ PC
 11. **命令面板（Ctrl+Shift+P）** ｜ ZCODE quickPick、OpenClaw command-palette ｜ `grep -c palette = 0`；只有聊天内 `/` 菜单与 Ctrl+K 搜会话 ｜ 认可的 UI 点之一：所有入口一个浮层找得到 ｜ 浮层模糊搜「会话 / 命令 / 设置项 / 文件」→ 上下键 → 回车执行；输入框聚焦时不该抢键（沿用 v0.42 的规矩）｜ PC
@@ -99,7 +99,7 @@
 | **B4** | 跨端通道（局域网端点 + token 配对）+ 会话只读镜像 + 远程审批 | — | 两端 |
 | **B5** | Git 面板（status/勾选暂存/看 diff/提交，走 S2 审批） | — | PC |
 | **B6** | 命令面板 + 任务运行历史 | — | PC |
-| **B7** | 媒体工具 ffmpeg（转码/剪切/抽帧/抽音轨/封面）+ 产出媒体预览 | — | PC |
+| **B7** | ✅ v0.45.0 已落地：媒体工具 ffmpeg（info/转码/剪切/抽帧/抽音轨/封面）+ 产出直接播 | — | PC |
 | **B8** | 浏览器预览面板（CDP 画面进网页 + 点按回传） | — | PC |
 | **B9** | 音视频附件 + `run_code` | — | PC |
 | **B10** | 记忆条目化（CRUD/搜索）+ 两端同步 | B4 | 两端 |

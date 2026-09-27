@@ -15,12 +15,14 @@ mode:
   ask     触发审批 + ask_user（验人机回合）
   multi   三条会话各一份剧本（验多会话并行时事件不串台）
 """
+import os
 import argparse
 import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODE = "tools"
+CLIP = os.environ.get("PRE_CLIP", "素材.mp4")
 STATE = {"tool_rounds": 0}
 
 
@@ -93,6 +95,23 @@ PLAN = {
          "```kotlin\nval s = Snapshots.forPath(\"hello.txt\")\nprintln(s?.keyOf())\n```\n\n"
          "> 提醒：改动前已经留过快照，可以随时退回上一版。\n", None,
          "最后要把证据说清楚：读过文件才算做完。顺手给一段代码块和列表，前端才有东西可渲染。"),
+    ],
+    # 媒体工具：探长度 → 转码 → 抽音轨 → 抽一帧。
+    # 配合 ui-shot.sh 的 PRE_CLIP（现造一段真素材），跑完界面上那两个播放器是
+    # 真解码出画面的，不是摆样子的空壳；抽帧那条还会把 png 递回给模型，
+    # 于是"工具产出的像素"这条路也顺带验了一次。
+    "media": [
+        ("先探一下素材有多长", [{"id": "call_m1", "name": "media",
+                                "arguments": json.dumps({"sub": "info", "input": CLIP})}]),
+        ("压一个 160 宽的小版本", [{"id": "call_m2", "name": "media",
+                                    "arguments": json.dumps({"sub": "transcode", "input": CLIP,
+                                                             "output": "小.mp4", "width": 160})}]),
+        ("抽音轨", [{"id": "call_m3", "name": "media",
+                     "arguments": json.dumps({"sub": "audio", "input": CLIP, "output": "音轨.mp3"})}]),
+        ("抽第 2 秒那一帧", [{"id": "call_m4", "name": "media",
+                              "arguments": json.dumps({"sub": "frame", "input": CLIP, "start": "2"})}]),
+        ("三样都好了：小.mp4 是 160 宽的转码版、音轨.mp3 是抽出来的声音、"
+         "第 2 秒那一帧我已经看见画面了。上面两个播放器都能直接放。", None),
     ],
     # 子任务：父会话派一个 task，子会话再派一个（被深度上限挡住）——
     # 界面上要看得见"子任务在跑什么、结论怎么回来的"，所以得有这份剧本。

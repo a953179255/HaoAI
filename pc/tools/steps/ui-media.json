@@ -1,0 +1,98 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "把素材.mp4处理一下：转个小尺寸、抽音轨、再抽一帧",
+      "enter": true
+    }
+  },
+  {
+    "goto": ".view.on .pvmed video",
+    "timeout": 45000
+  },
+  {
+    "sleep": 14000
+  },
+  {
+    "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const as=[...document.querySelectorAll('.view.on .pvmed audio')];const v=vs[0];const a=as[0];const card=v?v.closest('.card'):null;const vr=v?v.getBoundingClientRect():null;const ar=a?a.getBoundingClientRect():null;const cr=card?card.getBoundingClientRect():null;return {videos:vs.length,audios:as.length,decodeW:v?v.videoWidth:0,decodeH:v?v.videoHeight:0,vidDur:+(v?v.duration:0).toFixed(2),readyState:v?v.readyState:-1,audioDur:+(a?a.duration:0).toFixed(2),geoVW:vr?Math.round(vr.width):0,geoVH:vr?Math.round(vr.height):0,geoAW:ar?Math.round(ar.width):0,geoAH:ar?Math.round(ar.height):0,insideCard:!!(vr&&cr&&vr.left>=cr.left-2&&vr.right<=cr.right+2),noPageOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,frameThumb:(()=>{const i=document.querySelector('.view.on .thumbs img');return i?{nw:i.naturalWidth,nh:i.naturalHeight}:'none'})()}})()"
+  },
+  {
+    "eval": "(()=>{const out=[];document.querySelectorAll('.view.on .pvmed video,.view.on .pvmed audio').forEach(el=>{el.scrollIntoView({block:'center',behavior:'instant'});const r=el.getBoundingClientRect();const card=el.closest('.card');out.push(el.tagName+' w='+Math.round(r.width)+' h='+Math.round(r.height)+' inViewport='+(r.top>=0&&r.bottom<=innerHeight+1)+' cardOpen='+(card?card.open:'none'))});return out.join(' | ')})()"
+  },
+  {
+    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r('no element');if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState});const t=setTimeout(()=>r({timeout:true,rs:el.readyState,ns:el.networkState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState})};el.load()});const v=document.querySelector('.view.on .pvmed video');const a=document.querySelector('.view.on .pvmed audio');return {video:await one(v),audio:await one(a)}})()"
+  },
+  {
+    "eval": "(async()=>{const p=(s)=>encodeURIComponent(s);const out={};const r1=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('小.mp4'),{headers:{Range:'bytes=100-199'}});out.rangeStatus=r1.status;out.contentRange=r1.headers.get('content-range');out.acceptRanges=r1.headers.get('accept-ranges');out.gotBytes=(await r1.arrayBuffer()).byteLength;const r2=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('音轨.mp3'));out.mp3Status=r2.status;out.mp3Type=r2.headers.get('content-type');const r3=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('../../../Windows/win.ini'));out.escapeStatus=r3.status;const r4=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('根本没有这个.mp4'));out.missingStatus=r4.status;return out})()"
+  },
+  {
+    "eval": "(async()=>{const v=document.querySelector('.view.on .pvmed video');const t0=v.currentTime;return await new Promise(res=>{const to=setTimeout(()=>res({seeked:false,before:+t0.toFixed(2),after:+v.currentTime.toFixed(2)}),6000);v.onseeked=()=>{clearTimeout(to);res({seeked:true,before:+t0.toFixed(2),after:+v.currentTime.toFixed(2)})};v.currentTime=2.0})})()"
+  },
+  {
+    "shot": "b07-players"
+  },
+  {
+    "eval": "location.reload()"
+  },
+  {
+    "sleep": 2500
+  },
+  {
+    "goto": ".view.on .pvmed video",
+    "timeout": 20000
+  },
+  {
+    "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const as=[...document.querySelectorAll('.view.on .pvmed audio')];const v=vs[0];return {videosAfterReload:vs.length,audiosAfterReload:as.length,decodeW:v?v.videoWidth:0,inCard:!!(v&&v.closest('.card')),toolHeads:[...document.querySelectorAll('.view.on .card b')].map(b=>b.textContent).join(','),lastAns:[...document.querySelectorAll('.view.on .msg.ans')].pop().textContent.replace(/\\s+/g,' ').slice(0,40)}})()"
+  },
+  {
+    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r('no element');if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState});const t=setTimeout(()=>r({timeout:true,rs:el.readyState,ns:el.networkState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState})};el.load()});const v=document.querySelector('.view.on .pvmed video');const a=document.querySelector('.view.on .pvmed audio');return {afterReloadVideo:await one(v),afterReloadAudio:await one(a)}})()"
+  },
+  {
+    "eval": "(async()=>{const wait=(el,ms)=>new Promise(r=>{const t=setTimeout(()=>r('TIMEOUT rs='+el.readyState+' ns='+el.networkState+' err='+(el.error?el.error.code:'-')),ms);el.onloadedmetadata=()=>{clearTimeout(t);r('OK w='+el.videoWidth+' d='+el.duration)}});const v=document.querySelector('.view.on .pvmed video');const inCard=v.closest('.card');const open=inCard?inCard.open:'no-card';inCard&&(inCard.open=true);v.preload='auto';v.load();const a=await wait(v,7000);const fresh=document.createElement('video');fresh.src=v.getAttribute('src');fresh.preload='auto';document.body.appendChild(fresh);const b=await wait(fresh,7000);fresh.remove();return 'vis='+document.visibilityState+' detailsOpen='+open+' 卡里的='+a+' 新塞body的='+b})()"
+  },
+  {
+    "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=files]');if(!b)return 'no tab btn';b.click();return {tabOn:b.classList.contains('on'),filesBox:!!document.querySelector('#files')}})()"
+  },
+  {
+    "sleep": 1800
+  },
+  {
+    "eval": "(()=>{const e=[...document.querySelectorAll('#files .fe')];return {root:document.querySelector('#filePath').textContent,listed:e.map(x=>x.dataset.p)}})()"
+  },
+  {
+    "eval": "(()=>{const hit=[...document.querySelectorAll('#files .fe')].find(x=>x.dataset.p==='音轨.mp3');if(hit)hit.click();return {clickedAudioFile:!!hit}})()"
+  },
+  {
+    "sleep": 1600
+  },
+  {
+    "eval": "(()=>{const d=document.querySelector('#dialog');const a=d?d.querySelector('audio'):null;const r=a?a.getBoundingClientRect():null;return {maskOn:document.querySelector('#mask').classList.contains('on'),hasAudio:!!a,srcHead:a?a.currentSrc.slice(0,40):'',geoW:r?Math.round(r.width):0,geoH:r?Math.round(r.height):0,decodeDur:+(a?a.duration:0).toFixed(2)}})()"
+  },
+  {
+    "shot": "b07-file-audio"
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('#dialog .acts .btn');if(c)c.click();return {closed:!document.querySelector('#mask').classList.contains('on')}})()"
+  },
+  {
+    "eval": "(()=>{const hit=[...document.querySelectorAll('#files .fe')].find(x=>x.dataset.p==='小.mp4');if(hit)hit.click();return {clickedVideoFile:!!hit}})()"
+  },
+  {
+    "sleep": 1800
+  },
+  {
+    "eval": "(()=>{const d=document.querySelector('#dialog');const v=d?d.querySelector('video'):null;const r=v?v.getBoundingClientRect():null;return {hasVideo:!!v,decodeW:v?v.videoWidth:0,decodeH:v?v.videoHeight:0,geoW:r?Math.round(r.width):0,geoH:r?Math.round(r.height):0,inDialog:!!(v&&v.closest('#dialog'))}})()"
+  },
+  {
+    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r('no element');if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState});const t=setTimeout(()=>r({timeout:true,rs:el.readyState,ns:el.networkState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState})};el.load()});const v=document.querySelector('#dialog .pvmed video');const a=document.querySelector('#dialog .pvmed audio');return {video:await one(v),audio:await one(a)}})()"
+  },
+  {
+    "shot": "b07-file-video"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running,mediaMsgs:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='media').map(m=>({head:(m.content||'').split('\\n')[0].slice(0,30),media:m.media}))}))"
+  }
+]

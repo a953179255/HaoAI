@@ -40,6 +40,13 @@ data class ToolResult(
      * 其实是模型在猜那个文件里有什么。
      */
     val images: List<String> = emptyList(),
+    /**
+     * 工具产出的**音视频**文件路径：界面按它摆播放器，字节走 `/api/media`。
+     *
+     * 与 images 分两份是因为递给模型的方式不同：图片能把像素直接塞进上下文，
+     * 一段 mp4 不能 —— 它只该出现在界面上让人自己看/听，历史里留路径就够。
+     */
+    val media: List<String> = emptyList(),
     /** 渲染意图：generic | terminal | diff —— 前端按这个决定摆哪种卡（照 dsh 的插槽注册）。 */
     val card: String = "generic",
     /**
@@ -711,7 +718,7 @@ fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), WebSearchTool(),
-    BrowserTool(), ScreenTool(), TaskTool()
+    BrowserTool(), ScreenTool(), TaskTool(), MediaTool()
 )
 
 /**

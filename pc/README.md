@@ -1256,6 +1256,62 @@ Chrome 就只发 `keydown` 不产生"打字"，于是"在输入框里按 y"这�
    `tools/kill-stale-shot.ps1` 清僵尸（而且必须放在**挑端口之前** —— 放后面会把刚起的服务杀掉，
    页面整个打不开，这是同一个坑的第二半）。
 
+## 这一批：媒体工具 ffmpeg + 产出能直接播（v0.45.0，缺口地图 B7）
+
+你点名要"视频制作自动化、帮直播和创作视频"，而 `pc/**` 里 grep `ffmpeg|transcode` 是零命中 ——
+模型连素材有多长都问不到，更别提剪切转码。这一批把这条从"没有"做到"跑完就能在界面里看"。
+
+- **`Media.kt` 的 `Ffmpeg`**：定位顺序 = 显式指定 → 环境变量 `HAOAI_FFMPEG_DIR` →
+  状态根里那行 `HAOAI_HOME/ffmpeg` → `PATH` → 四个常见解压落点（winget/手动/choco/scoop）。
+  **找不到时把装法说出来**（winget / choco / ffmpeg.org + 不动 PATH 的两条后门），
+  而不是回一个 exit=1 —— 静默失败会被读成"agent 在偷懒"。
+  调用一律 **argv 直发 ffmpeg.exe，不经 shell**：媒体参数里全是 `scale=1280:-2` 这种带冒号的串，
+  走 shell 必被二次解析吃掉引号（ShellTool 那条老坑）。实测中文文件名 `测试素材.mp4` 也正常。
+- **一把 `media` 工具 + 六个子命令**（info/transcode/cut/frame/audio/cover），不做六把窄工具，
+  理由与 GitTool 同源。参数全部白名单化后由我们自己拼 argv：宽高只收整数、时间只收数字串、
+  编码器名限 `[A-Za-z0-9_.-]` —— 于是模型传什么都拼不出第二条 filter。
+  `info` 只读不问，其余按写文件走权限档（计划模式拒得干脆）。
+- **时间写法在入口归一**：认 `12`、`12.5`、`1:05`、`1:02:03`，不认就说是哪一项错了。
+  直接甩给 ffmpeg 不行 —— `-ss 3sec` 会被它当 0，"抽第 3 秒"静默变成抽第一帧。
+- **mp4/mov/m4a 一律加 `-movflags +faststart`**：moov 不挪到文件头，浏览器要等整份下完才起播。
+- 产出默认进 **`.haoai-output/media/`**（子目录，刻意不放顶层）：溢出目录的清理只扫**直接子文件**，
+  放顶层等于让用户生成的视频被"40 份日志"的回收规则删掉。
+- **`/api/media`**：与 `/api/img` 同一条边界（canonical 后必须仍在这条会话的工作区内、
+  类型由**魔数**认、512MB 上限），并实现 **Range**（206 + `Content-Range`）——
+  不实现的话拖进度条就是坏的我。工作区外的产物不进 `media` 列表，正文里说清"界面不放"。
+- 界面三处：工具卡底下的 `<video>/<audio>` 播放器、右栏「产出」点文件也放、
+  **刷新之后还在**（`media` 与 diff/note 一样进历史与 stateJson）。
+  产出音视频的卡**跑完不收起来** —— 那是用户要看的成品，收起来等于没给。
+
+判据（Kotlin，`MediaTest` 14 条）：没装 ffmpeg 时那句话必须同时含 winget / 环境变量 / ffmpeg.org；
+时间四种写法 + 三种坏写法；坏子命令/缺 input/坏后缀/坏 fps 全在动手前被拒；计划模式拒写且一次都不问；
+文本改名成 `.mp4` 被魔数拒；Range 三种写法 + 越界退回整份；
+**真跑 ffmpeg** 的四条（info 报出双流、抽帧真出 PNG 且像素递给了模型、音轨是 `audio/mpeg`、
+剪切短于原片并说明关键帧代价）、转码后 `width=160` 且 moov 在前 2 KB、
+输入输出同文件被拒且源文件还在、工作区外的产物不进 `media`。
+（像素，`SHOT_MODE=media PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh tools/steps/ui-media.json`，30 步：
+播放器解码出 160×120/4.02s、`Range: bytes=100-199` 回 206 且正好 100 字节、
+`../../../Windows/win.ini` 回 404、seek 到 2s 真的动了、刷新后播放器还在且仍解码、
+「产出」页签点 `音轨.mp3`/`小.mp4` 各摆出能放的播放器。）
+
+**这一批最该记的四件事：**
+
+1. **无头页的 `visibilityState=hidden` 会让 Chrome 推迟音视频加载** ——
+   同一个 `<video>` 在首屏解码得出 160×120，刷新之后 `readyState` 永远是 0、
+   `networkState=2`、`error=null`，而 `fetch(同一个 URL)` 明明白白回 200 `video/mp4`。
+   症状长得像"刷新后播放器坏了"这个产品缺陷，其实是量具条件：
+   `--headless=new` 默认把页面当后台。修在 `shot.js`：`Emulation.setFocusEmulationEnabled`
+   + 三个 `--disable-*-backgrounding/throttling` 启动参数。
+   判据也跟着改硬：不看"元素在不在"，看 `loadedmetadata` 回来后的 `videoWidth`。
+2. **探针返回对象时，值为 `undefined` 的字段会被 `JSON.stringify` 整条丢掉** ——
+   我那条诊断打出 `{}`，看着像"什么都没查到"，其实是被丢掉了。
+   断言探针从此**返回拼好的字符串**，宁可难看也不许沉默。
+3. **`scrollIntoView` 默认是 smooth（异步）**：紧接着读 `getBoundingClientRect` 会读到滚动前的位置，
+   于是"元素不在视口内"是假的。验收脚本里一律写 `behavior:'instant'`。
+4. 两处工具链的转义坑各咬一口：`as` 是 Kotlin 硬关键字（`vararg as:` 直接编译不过）；
+   bash heredoc 会把源码里的 `\\` 收成 `\`（候选目录那批 `"C:\\ffmpeg\\bin"` 全变成非法转义）。
+   后者这次用正斜杠绕开 —— Windows 的 `File` 两种分隔符都认，正斜杠还免转义。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1322,7 +1378,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **194 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **208 条全绿**（整套 58 秒，媒体那 14 条要真跑 ffmpeg 所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1347,7 +1403,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8），这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14），这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本

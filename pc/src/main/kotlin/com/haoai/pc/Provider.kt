@@ -57,6 +57,13 @@ data class Msg(
      * 而图片本来就在工作区里躺着。见 [Images]。
      */
     val images: List<String> = emptyList(),
+    /**
+     * 工具产出的音视频文件路径（与 [images] 同样只存路径）。
+     *
+     * 存下来是为了"刷新之后播放器还在"：只随 SSE 流一次的话，
+     * 页面一刷新生成的视频就只剩一行路径文字了。
+     */
+    val media: List<String> = emptyList(),
     /** 这一回合自己的用量与耗时（不是会话累计），画在回答下面那行小字。 */
     val pt: Int = 0,
     val ct: Int = 0,

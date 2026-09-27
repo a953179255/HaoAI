@@ -165,6 +165,7 @@ class WebServer(settings: PcSettings, port: Int,
                     "application/json; charset=utf-8")
                 "/api/file" -> fileOne(ex)
                 "/api/img" -> imageFile(ex)
+                "/api/media" -> mediaFile(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
                 "/api/unqueue" -> unqueue(ex)
@@ -353,6 +354,7 @@ class WebServer(settings: PcSettings, port: Int,
                 .append(",\"note\":").append(quote(m.note))
                 .append(",\"sub\":").append(quote(m.sub))
                 .append(",\"images\":").append(m.images.joinToString(",", "[", "]") { quote(it) })
+                .append(",\"media\":").append(m.media.joinToString(",", "[", "]") { quote(it) })
                 .append(",\"pt\":").append(m.pt).append(",\"ct\":").append(m.ct).append(",\"ms\":").append(m.ms)
                 .append(",\"calls\":").append(m.calls.joinToString(",", "[", "]") { c ->
                     """{"name":${quote(c.name)},"args":${quote(c.args)}}"""
@@ -837,6 +839,55 @@ class WebServer(settings: PcSettings, port: Int,
         ex.responseBody.use { it.write(bytes) }
     }
 
+    /**
+     * `GET /api/media?sid=&path=` —— 把这条会话工作区里的音视频发给浏览器，支持 Range。
+     *
+     * 三条边界与 /api/img 是同一套理由（这个服务只绑 127.0.0.1，但同机任意页面都能
+     * 对这个端口发请求）：canonical 之后必须仍在这条会话自己的工作区内、类型必须由**魔数**
+     * 认得出（只看后缀就等于让一个改名成 .mp4 的文本文件混出去）、单文件有上限。
+     */
+    private fun mediaFile(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val ws = runCatching {
+            (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
+        }.getOrNull()
+        val given = queryOf(ex, "path")
+        val f = if (ws == null) null else runCatching {
+            (if (File(given).isAbsolute) File(given) else File(ws, given)).canonicalFile
+        }.getOrNull()
+        val inside = f != null && ws != null &&
+            (f.path == ws.path || f.path.startsWith(ws.path + File.separator))
+        val mime = if (inside && f != null && f.isFile && f.length() <= MediaMime.MAX) MediaMime.sniff(f) else null
+        if (mime == null || f == null) {
+            send(ex, 404, "没有这个媒体文件（或它在工作区外面 / 太大 / 类型不认）",
+                "text/plain; charset=utf-8"); return
+        }
+        val len = f.length()
+        val (from, to) = Range.parse(ex.requestHeaders.getFirst("Range"), len)
+        val size = to - from + 1
+        ex.responseHeaders.add("Content-Type", mime)
+        ex.responseHeaders.add("Accept-Ranges", "bytes")
+        ex.responseHeaders.add("Cache-Control", "no-store")
+        val partial = from > 0 || to < len - 1
+        if (partial) ex.responseHeaders.add("Content-Range", "bytes $from-$to/$len")
+        ex.sendResponseHeaders(if (partial) 206 else 200, size)
+        runCatching {
+            java.io.RandomAccessFile(f, "r").use { raf ->
+                val out = ex.responseBody
+                val buf = ByteArray(64 * 1024)
+                var left = size
+                raf.seek(from)
+                while (left > 0) {
+                    val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                    if (n <= 0) break
+                    out.write(buf, 0, n)
+                    left -= n
+                }
+                out.close()
+            }
+        }
+    }
+
     private fun fileOne(ex: HttpExchange) {
         val sid = pick(querySid(ex))
         val ws = (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
@@ -1241,7 +1292,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "tool",
                 """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},""" +
                     """"out":${quote(ev.out)},"diff":${quote(ev.diff)},"note":${quote(ev.note)},""" +
-                    """"sub":${quote(ev.sub)}}""",
+                    """"sub":${quote(ev.sub)},"media":${ev.media.joinToString(",", "[", "]") { quote(it) }}}""",
                 sid
             )
             is Ev.Sub -> publish(
