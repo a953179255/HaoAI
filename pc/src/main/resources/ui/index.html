@@ -383,6 +383,8 @@
   .acts .deny{color:var(--err);border-color:var(--err)}
   .opts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
   .opts .btn{text-align:left}
+  .card.ask .acts kbd{margin-left:7px;padding:0 5px;border:1px solid var(--line2);border-radius:4px;
+    font:600 10.5px/16px ui-monospace,Menlo,Consolas,monospace;color:var(--dim);background:var(--glass2)}
   input[type=text],input[type=password]{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
     color:var(--fg);padding:7px 9px;font:inherit;font-size:12.5px;outline:0}
   input[type=text]:focus,input[type=password]:focus{border-color:var(--acc2)}
@@ -1129,18 +1131,25 @@ function ask(d,kind,v){
     '</b><span class="sb">'+esc(kind=='approval'?d.title:d.question)+'</span></summary>'+
     (kind=='approval'?'<pre>'+esc(d.detail||'')+'</pre>':'')+'</details>');
   const acts=el('<div class="acts"></div>');
-  const put=(label,cls,run)=>{const b=el('<button class="btn '+cls+'">'+esc(label)+'</button>');
+  /*
+   * key/dec 是给键盘路径用的：`dec` 说清"这个按钮决定的是什么"（按语义匹配，
+   * 不按 label 文本匹配 —— 改文案就会悄悄失效），`key` 是显示在按钮上的那个键。
+   */
+  const put=(label,cls,run,key,dec)=>{
+    const b=el('<button class="btn '+cls+'">'+esc(label)+(key?'<kbd>'+key+'</kbd>':'')+'</button>');
+    if(key)b.dataset.key=key;if(dec)b.dataset.dec=dec;
     b.onclick=()=>{if(c.classList.contains('done'))return;run(b)};acts.appendChild(b)};
   const done=label=>{c.classList.add('done');c.open=false;
     c.appendChild(el('<div class="ans-line">已'+esc(label)+'，这条会话继续跑</div>'))};
   if(kind=='approval'){
     // 顺序按"最常用的在右边"排：允许一次是默认动作，拒绝要离它远一点免得误点
-    if(d.tool)put('以后这类都允许','',()=>{decide(d.id,'allow_rule','');done('写入规则并放行')});
-    put('拒绝','deny',()=>{decide(d.id,'deny','');done('拒绝')});
-    put('本任务都允许','',()=>{decide(d.id,'allow_session','');done('本任务都允许')});
-    put('允许一次','pri',()=>{decide(d.id,'allow_once','');done('允许一次')});
+    if(d.tool)put('以后这类都允许','',()=>{decide(d.id,'allow_rule','');done('写入规则并放行')},'r','allow_rule');
+    put('拒绝','deny',()=>{decide(d.id,'deny','');done('拒绝')},'n','deny');
+    put('本任务都允许','',()=>{decide(d.id,'allow_session','');done('本任务都允许')},'a','allow_session');
+    put('允许一次','pri',()=>{decide(d.id,'allow_once','');done('允许一次')},'y','allow_once');
   }else{
-    (d.options||[]).forEach(o=>put(o,'pri',()=>{decide(d.id,'',o);done('回答：'+o)}));
+    // 选项按 1..9 编号：ask_user 的选项常常是"选第几个"，鼠标反而慢
+    (d.options||[]).slice(0,9).forEach((o,i)=>put(o,'pri',()=>{decide(d.id,'',o);done('回答：'+o)},String(i+1)));
     const inp=el('<input type="text" placeholder="或自己写一句…">');
     inp.style.cssText='flex:1;min-width:120px';
     acts.appendChild(inp);
@@ -1684,7 +1693,37 @@ document.addEventListener('keydown',e=>{
   if(mod&&e.key.toLowerCase()=='k'){e.preventDefault();$('#sessQ').focus();return}
   if(mod&&e.key.toLowerCase()=='b'){e.preventDefault();$('#railBtn').click();return}
   if(e.altKey&&['1','2','3'].includes(e.key)){e.preventDefault();setModeNow(['plan','ask','auto'][+e.key-1])}
+  decideByKey(e);
 });
+/*
+ * 审批与提问的键盘决定：y 允许一次 / a 本任务都允许 / n 拒绝 / r 以后这类都允许，
+ * ask_user 的选项按 1..9。
+ *
+ * 三条"不抢"的规矩比快捷键本身重要：① 焦点在输入类元素里不抢（在输入框里打 y
+ * 不该把一次写文件放行掉）；② 弹窗（#mask）开着不抢；③ 带任何修饰键不抢。
+ * 只作用于**当前看得见的那条会话**的第一张待决卡 —— 后台那条在等什么，
+ * 切过去看见卡片之后再决定才对，隔着会话替用户点头是不能做的。
+ */
+function decideByKey(e){
+  if(e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return;
+  const a=document.activeElement;
+  const typing=a&&(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)||a.isContentEditable);
+  /*
+   * 焦点在输入类元素里一律不抢 —— **除了**"输入框是空的"这一种：
+   * 卡片多半正好出现在人刚发完一句话之后，那时焦点就停在 #box 里，
+   * 一律不抢就等于快捷键永远用不上（而空框里没有要打的字，抢了也不丢东西）。
+   * 卡片自带的那个"或自己写一句…"输入框不在豁免之列：在那儿打字就是要写答案。
+   */
+  if(typing&&!(a.id=='box'&&!a.value.trim()))return;
+  if(document.querySelector('#mask.on'))return;
+  const k=(e.key||'').toLowerCase();
+  const card=document.querySelector('.view.on .card.ask:not(.done)');
+  if(!card)return;
+  const b=/^[yanr]$/.test(k)?card.querySelector('[data-dec="'+(k=='y'?'allow_once':k=='a'?'allow_session':k=='n'?'deny':'allow_rule')+'"]')
+    :/^[1-9]$/.test(k)?card.querySelector('[data-key="'+k+'"]'):null;
+  if(!b)return;
+  e.preventDefault();b.click();
+}
 
 /* ---- 斜杠命令：与移动端同源的一套（模型照提示词走，人也需要快捷键） ---- */
 const CMDS=[

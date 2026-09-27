@@ -168,9 +168,16 @@ const KEYCODE = {Tab: 9, Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38, Arro
 
 /** 真按键：Tab / 方向键这类要走"默认行为"的路径，用 eval 派发合成事件是测不出来的。 */
 async function key(name) {
-  const vk = KEYCODE[name] || 0;
+  const vk = KEYCODE[name] || (name.length === 1 ? name.toUpperCase().charCodeAt(0) : 0);
+  // 单个字符要带 text：不带的话 Chrome 只发 keydown 不产生"打字"，
+  // 于是"在输入框里按 y 该打出 y 还是该决定审批"这种判据根本测不出来。
+  const ch = name.length === 1;
   for (const t of ['keyDown', 'keyUp'])
-    await send('Input.dispatchKeyEvent', {type: t, key: name, code: name, windowsVirtualKeyCode: vk});
+    await send('Input.dispatchKeyEvent', {
+      type: t, key: name, code: ch ? 'Key' + name.toUpperCase() : name,
+      windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk,
+      ...(ch && t === 'keyDown' ? {text: name, unmodifiedText: name} : {}),
+    });
 }
 
 async function waitFor(sel, timeoutMs) {

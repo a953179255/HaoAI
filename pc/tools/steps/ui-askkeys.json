@@ -1,0 +1,98 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "click": "#modes button[data-m=\"ask\"]"
+  },
+  {
+    "sleep": 400
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "验收：先问我要什么颜色，再写文件",
+      "enter": true
+    }
+  },
+  {
+    "goto": ".card.ask:not(.done)",
+    "timeout": 25000
+  },
+  {
+    "eval": "({first:'question',keys:[...document.querySelectorAll('.view.on .card.ask:not(.done) [data-key]')].map(b=>b.dataset.key+':'+b.innerText.replace(/\\s+/g,' ')),decs:[...document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]')].map(b=>b.dataset.dec),active:document.activeElement.id})"
+  },
+  {
+    "shot": "k01-question-card"
+  },
+  {
+    "eval": "document.querySelector('#box').value='半句话没发出去';document.querySelector('#box').focus();'typed into box'"
+  },
+  {
+    "key": "2"
+  },
+  {
+    "sleep": 600
+  },
+  {
+    "eval": "({guard:'焦点在输入框里、框中还有字',boxVal:document.querySelector('#box').value,done:document.querySelectorAll('.view.on .card.ask.done').length,left:document.querySelectorAll('.view.on .card.ask:not(.done)').length})"
+  },
+  {
+    "shot": "k02-typing-wins"
+  },
+  {
+    "eval": "document.querySelector('#box').value='';document.activeElement.id"
+  },
+  {
+    "key": "2"
+  },
+  {
+    "sleep": 2500
+  },
+  {
+    "eval": "({digit:'空框时按 2',done:[...document.querySelectorAll('.view.on .card.ask.done .ans-line')].map(e=>e.textContent.trim()),left:document.querySelectorAll('.view.on .card.ask:not(.done)').length})"
+  },
+  {
+    "goto": ".card.ask:not(.done) [data-dec]",
+    "timeout": 25000
+  },
+  {
+    "eval": "({second:'approval',decs:[...document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]')].map(b=>b.dataset.dec),kbds:[...document.querySelectorAll('.view.on .card.ask:not(.done) kbd')].map(k=>k.textContent),title:(document.querySelector('.view.on .card.ask:not(.done) .sb')||{}).innerText})"
+  },
+  {
+    "shot": "k03-approval-card"
+  },
+  {
+    "eval": "document.querySelector('#box').value='我要打';document.querySelector('#box').focus();'box has text'"
+  },
+  {
+    "key": "y"
+  },
+  {
+    "sleep": 700
+  },
+  {
+    "eval": "({guard:'审批卡 + 框里有字，按 y',boxVal:document.querySelector('#box').value,decided:[...document.querySelectorAll('.view.on .card.ask.done .ans-line')].map(e=>e.textContent.trim()),stillWaiting:document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]').length})"
+  },
+  {
+    "eval": "document.querySelector('#box').value='';'cleared'"
+  },
+  {
+    "key": "y"
+  },
+  {
+    "sleep": 3000
+  },
+  {
+    "eval": "({key:'空框按 y 允许一次',cardsLeft:document.querySelectorAll('.view.on .card.ask').length,stopped:!document.getElementById('send').classList.contains('stop')})"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({writeNote:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='write').map(m=>m.note||''),roles:(s.messages||[]).map(m=>m.role).join(','),tail:(s.messages||[]).slice(-1).map(m=>(m.content||'').slice(0,26))}))"
+  },
+  {
+    "eval": "fetch('/api/file?path=theme.txt').then(r=>r.json()).then(f=>({ok:f.ok,onDisk:(f.text||'').trim(),err:f.error||''}))"
+  },
+  {
+    "shot": "k04-approved-by-key"
+  }
+]

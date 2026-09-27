@@ -381,6 +381,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-usage.json  # 用量�
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML 沙箱预览 + 长代码块折叠（含隔离断言）
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
+SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -1137,6 +1138,45 @@ PC 端一条任务动辄几十轮工具调用。以前进程一没（关掉窗�
   早清一次就会把那条 stuck 请求留在 clear 之后落进列表，
   "丢掉现场不该顺手发请求"就被自己的记录方式判红了。改成先等请求真到网关再清。
 
+## 这一批：审批与提问可以按键盘决定（y / a / n / r，选项按 1..9）（v0.42.0）
+
+写文件、跑命令要人批的时候，鼠标在另一块屏幕上、或者一只手端着咖啡 —— 这是 PC 端
+最常见的一个卡手点。手机端早就有"键盘决定"，PC 端以前只有四颗按钮可点。
+
+- 内联审批卡上四把：`y 允许一次`、`a 本任务都允许`、`n 拒绝`、`r 以后这类都允许`；
+  `ask_user` 的选项按 `1..9` 编号。键帽就印在按钮上 —— **看不见的快捷键等于没有**。
+- 匹配按语义不按文案：按钮带 `data-dec=allow_once|allow_session|deny|allow_rule`，
+  键盘路径查这个属性。按 label 文本找的话，改一次文案就悄悄失效。
+- 三条"不抢"的规矩比快捷键本身重要：带任何修饰键不抢；`#mask` 弹窗开着不抢；
+  **焦点在输入类元素里不抢** —— 只放行一种例外：焦点在 `#box` 且**框是空的**。
+  不留这个例外就废了（卡片恰好出现在人刚发完一句话之后，那时焦点就在 `#box` 里），
+  而空框里没有要打的字，抢了不丢东西。卡片自带那个"或自己写一句…"输入框不在例外里。
+- 只作用于**当前看得见的那条会话**的第一张待决卡：后台那条在等什么，
+  切过去看见卡片之后再决定才对，隔着会话替用户点头是不能做的。
+
+判据（真像素，`SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json`，30 步全绿）：
+
+- 卡上看得见：`decs:["allow_rule","deny","allow_session","allow_once"]`、`kbds:["r","n","a","y"]`、
+  提问卡 `keys:["1:绿色 1","2:蓝色 2"]`。
+- **防误伤那条是主角**：框里先打"我要打"再按 `y` → `boxVal:"我要打y"`、
+  待决卡 `stillWaiting:4`（一次都没决定）。这条不是装饰：在输入框里打字把一次写文件放行掉，
+  比没有快捷键糟得多。
+- 空框按 `2` → `已回答：蓝色，这条会话继续跑`；空框按 `y` → 卡消失、
+  历史里那条 write 的 `note:"允许一次"`、`/api/file?path=theme.txt` 读出 `green`。
+  判据落在"盘上真有这个文件"，不看按钮变没变。
+
+两个坑：
+
+1. **判据别读收起的 `<details>` 里的 `innerText`**：卡片决定之后会 `c.open=false` 折起来，
+   而 `innerText` 是**按布局算的** —— 折起来的子树返回空串。于是 `done:[""]` 看着像
+   "那行字没写出来"。换成 `textContent` 才是真值。（同一族坑还有 `naturalWidth=0` 那类"量具自己看不见"。）
+2. `/api/file` 的字段叫 `text` 不叫 `content`，读错字段得到空串，差点把"文件写出来了"
+   判成"审批没生效"。
+
+顺带修了量具自己：`tools/shot.js` 的 `key()` 以前对字母键不带 `text`，
+Chrome 就只发 `keydown` 不产生"打字"，于是"在输入框里按 y"这一族判据根本测不出来
+（会一律通过）。现在单字符键带 `text`/`unmodifiedText` 与 VK 码，是真按键。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1280,22 +1320,12 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 下一批的施工图（写给恢复目标后的第一次动手）
 
-剩下这件事已经设计到"照着就能写"的程度，判据也定好了 —— 别再重新调研一遍。
-（第 1 件"断点恢复"已在 v0.41.0 落地；施工图当时是两件一起写的，留个记号。）
+这张施工图上的两件都已经落地了。下一批要从"还缺的功能"那串里挑，别再从这里找活：
+（第 1 件断点恢复 → v0.41.0；第 2 件键盘决定 → v0.42.0。）
 
 **1. 断点恢复** —— 已落地（v0.41.0，见上面"这一批：断点恢复"那一节）。
 
-**2. 审批与提问支持键盘决定（y / a / n）**
-- 现在内联卡上三个按钮是 `put(label,cls,run)` 造的，`run` 是闭包、**没有 data 属性可寻**，
-  所以键盘路径要么给按钮打 `data-dec=allow_once|allow_session|deny`，
-  要么按 label 文本找 —— 前者更稳，别用文本匹配（改文案就悄悄失效）。
-- 拦截条件要写全：焦点在 `input/textarea/select/contenteditable` 里不抢；
-  `#mask` 开着（弹窗）不抢；带 ctrl/meta/alt 不抢；只作用于**当前这条会话**的第一张待决卡。
-- 卡片上要把快捷键显示出来（"y 允许一次 · a 本任务都允许 · n 拒绝"）——
-  看不见的快捷键等于没有。
-- 判据（像素）：`ask` 档跑一轮 → 卡出现 → 合成 `keydown`（`key:'y'`）→
-  卡收起、历史里那条 `note` 是"允许一次"、盘上那个文件真被写出来；
-  再跑一轮 → 焦点在输入框里按 `y` → **不该**决定任何东西（这条是防误伤的判据，别省）。
+**2. 审批与提问的键盘决定** —— 已落地（v0.42.0，见上面"这一批：审批与提问可以按键盘决定"）。
 
 ## 代码地图
 
