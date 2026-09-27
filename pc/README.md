@@ -370,6 +370,26 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
 676px 左栏浮层宽 300px 且带会话列表、点一条会话后收起。
 
+## 这一批：审批留痕 + 设置抽屉能管规则与密钥
+
+**审批结论进历史**：`Msg.note` 记"允许一次 / 本任务都允许 / 写了规则 / 已拒绝 / 超时未答"，
+跟着会话落库、随 `/api/state` 回来，画在工具卡右上的小标里（`允许一次 · −0 行 / +1 行`）。
+之前它只随 SSE 流一次：内联卡答完就地收起，刷新之后"这个文件到底是谁点头写的"就查不出来了 ——
+权限层最该留痕的恰恰是这一件事。闸口拿引擎引用改成创建方直接给（不再按 sid 查 `sessions`，
+那张表会踢掉超出驻留上限的会话）。
+
+**设置抽屉**：
+- 权限规则从"只能看"变成可增可删（`POST /api/rule`，走 `Rule.parse` 同一套语法：`shell(git push*) deny`）。
+  审批卡上有"以后这类都允许"，就得有收回来的地方。规则按**这条会话的工作区**存。
+- 密钥给了界面入口（`type=password`，留空＝不改；placeholder 回显的是前 6 位，不能顺手当新值写回）。
+  它不进 `PcSettings`（那份会被 `GET /api/settings` 整体发回前端），只落 `HAOAI_HOME/apikey`。
+
+验收：`bash pc/tools/ui-shot.sh pc/tools/steps/ui-settings.json`（加规则→1 条、删→0 条、字段类型）
+与 `SHOT_MODE=ask ... ui-ask.json`（答完之后 `.ntag` 仍是"允许一次 · −0 行 / +1 行"）。
+全栈测试里加了一条：点"允许一次"之后 `/api/state` 的那条 `role=tool` 消息必须带 `note=允许一次`。
+（写这条断言时踩到一个坑：`assistant` 那条消息的 `name` 也是 `write`（从它的 calls 补出来的），
+只按名字找会先撞上它 —— 判据要连 `role` 一起挑。）
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -495,9 +515,9 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 ## 还没做（按重要性）
 
 1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：记忆/技能/定时任务/MCP 的管理页
-   （手机端有设置分区，PC 端只有实验特性那一块）、子任务（subagent）的派生与展示、
-   思考强度可调、以及"审批决定"本身没进历史 —— 刷新之后看得见工具结果，
-   看不见当时是"允许一次"还是"本任务都允许"。
+   （PC 端设置抽屉现在能管模型、网关、工作区、档位、maxTokens、contextChars、密钥、
+   实验特性、权限规则，但还没有这四类东西的入口）、子任务（subagent）的派生与展示、
+   思考强度可调。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。

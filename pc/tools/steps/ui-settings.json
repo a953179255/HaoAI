@@ -1,0 +1,17 @@
+[
+  {"goto": "#box"},
+  {"click": "#cfgBtn"},
+  {"goto": "#fKey"},
+  {"eval": "({keyType:document.getElementById('fKey').type,ph:document.getElementById('fKey').placeholder.slice(0,16),rules:document.querySelectorAll('.rules .rl').length,add:!!document.getElementById('addRule')})"},
+  {"shot": "s01-settings"},
+  {"type": {"sel": "#fRule", "text": "shell(echo*) allow", "enter": false}},
+  {"click": "#addRule"},
+  {"sleep": 900},
+  {"eval": "({rules:document.querySelectorAll('.rules .rl').length,texts:[...document.querySelectorAll('.rules .rl span')].map(s=>s.innerText).join(' | ')})"},
+  {"shot": "s02-rule-added"},
+  {"click": ".rules [data-del]"},
+  {"sleep": 900},
+  {"eval": "({rules:document.querySelectorAll('.rules .rl').length,maskStill:document.getElementById('mask').classList.contains('on')})"},
+  {"shot": "s03-rule-removed"},
+  {"click": "#cfgClose"}
+]

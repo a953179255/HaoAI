@@ -17,5 +17,7 @@
   {"click": ".card.ask:not(.done) .btn.pri"},
   {"sleep": 2500},
   {"eval": "({done:document.querySelectorAll('.card.ask.done').length,askLeft:document.querySelectorAll('.card.ask:not(.done)').length,stopped:!document.getElementById('send').classList.contains('stop')})"},
-  {"shot": "a04-answered"}
+  {"shot": "a04-answered"},
+  {"eval": "({ntag:[...document.querySelectorAll('.ntag')].map(e=>e.innerText).join(' | ')})"},
+  {"shot": "a05-decision-kept"}
 ]

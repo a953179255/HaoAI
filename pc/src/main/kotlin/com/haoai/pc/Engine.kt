@@ -32,7 +32,9 @@ sealed class Ev {
     data class ToolEnd(
         val id: String, val name: String, val ok: Boolean, val out: String, val card: String,
         /** 行级 diff，只给界面（不进历史、不发模型）。 */
-        val diff: String = ""
+        val diff: String = "",
+        /** 用户对这一步的审批结论，画在卡头。 */
+        val note: String = ""
     ) : Ev()
     data class ApprovalRequest(val id: String, val title: String, val detail: String, val kind: String) : Ev()
     data class AskRequest(val id: String, val question: String, val options: List<String>) : Ev()
@@ -138,6 +140,16 @@ class Engine(
     }
 
     fun messages(): List<Msg> = history.toList()
+
+    /**
+     * 用户对上一次审批选了什么，挂在**紧接着落的那条 tool 消息**上。
+     *
+     * 审批发生在 `tool.run()` 里面的 guard，而那条 tool 消息就在 run 返回之后立刻追加，
+     * 所以"下一个"就是它该挂的位置；取一次就清，免得串到下一条没弹过窗的工具上。
+     */
+    @Volatile private var pendingNote: String? = null
+    fun markApproval(text: String) { pendingNote = text }
+    private fun takeNote(): String = pendingNote?.also { pendingNote = null } ?: ""
 
     /**
      * 把历史截到第 index 条为止，供"删到这里 / 编辑重发 / 重新生成"三处用。
@@ -464,8 +476,9 @@ class Engine(
                     res.content, settings.storedCap, session.workspace, call.id,
                     HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, settings.flags)
                 )
-                history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff)
-                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff))
+                val note = takeNote()
+                history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff, note = note)
+                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note))
             }
             session.mode = ctx.mode
         }
@@ -576,6 +589,7 @@ class Engine(
                                     if (m.name.isNotBlank()) put("name", m.name)
                                     m.reasoning?.let { put("reasoning", it) }
                                     if (m.diff.isNotBlank()) put("diff", m.diff)
+                                    if (m.note.isNotBlank()) put("note", m.note)
                                     if (m.pt > 0) put("pt", m.pt)
                                     if (m.ct > 0) put("ct", m.ct)
                                     if (m.ms > 0) put("ms", m.ms)
@@ -636,6 +650,7 @@ class Engine(
                     callId = m["tool_call_id"]?.jsonPrimitive?.contentOrNull,
                     reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
                     diff = m["diff"]?.jsonPrimitive?.contentOrNull ?: "",
+                    note = m["note"]?.jsonPrimitive?.contentOrNull ?: "",
                     pt = m["pt"]?.jsonPrimitive?.intOrNull ?: 0,
                     ct = m["ct"]?.jsonPrimitive?.intOrNull ?: 0,
                     ms = m["ms"]?.jsonPrimitive?.longOrNull ?: 0L,

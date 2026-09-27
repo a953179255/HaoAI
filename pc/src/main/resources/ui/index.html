@@ -314,7 +314,17 @@
   .dif .dm{color:var(--bad);background:rgba(214,84,84,.13)}
   .dif .dc{color:var(--dim)}
   .dif .dn{color:var(--warn)}
-  .dstat{margin-left:auto;font-size:11px;color:var(--acc2);font-variant-numeric:tabular-nums;padding-left:8px}
+  .ntag{margin-left:auto;font-size:11px;color:var(--dim2);font-variant-numeric:tabular-nums;
+    padding-left:8px;white-space:nowrap;flex:none}
+  /* 设置抽屉里的规则表：能看更要能撤（审批卡上点了"以后都允许"之后得有地方收回） */
+  .rules{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto;margin:2px 0 6px}
+  .rl{display:flex;gap:8px;align-items:center;font-size:12px;font-family:var(--mono);
+    border:1px solid var(--line);border-radius:7px;padding:3px 4px 3px 8px;background:var(--glass)}
+  .rl span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .addrow{display:flex;gap:6px;align-items:center}
+  .addrow input{flex:1;min-width:0;background:var(--glass);border:1px solid var(--line);border-radius:8px;
+    color:var(--fg);font:inherit;font-size:12px;padding:5px 8px;outline:0}
+  .addrow .btn{width:auto;flex:none;padding:5px 10px;font-size:12px}
   /* ---- 工作区文件浏览 ---- */
   .fbar{display:flex;align-items:center;gap:6px;margin:4px 0 6px}
   .fbar .fp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -562,7 +572,7 @@ function toolEnd(d,v){
   c.classList.remove('run');c.open=false;
   const stat=d.card=='diff'?diffStat(d.diff):'';
   c.querySelector('summary').innerHTML='<span class="tick '+(d.ok?'ok':'bad')+'"></span><b>'+esc(d.name)+
-    '</b><span class="sb">'+esc(d.brief||'')+'</span>'+(stat?'<span class="dstat">'+stat+'</span>':'');
+    '</b><span class="sb">'+esc(d.brief||'')+'</span>'+ntag(d.note,stat);
   c.querySelector('.body').textContent=d.out||'(无输出)';
   if(d.diff)c.querySelector('.body').after(el(diffHtml(d.diff)));
   const sub=c.dataset.subject;
@@ -589,6 +599,8 @@ function diffHtml(diff){
   }).join('')+'</pre>';
 }
 function diffStat(diff){const m=String(diff||'').split('\n')[0].match(/−\d+ 行 \/ \+\d+ 行/);return m?m[0]:''}
+// 卡头右侧那枚小标：审批结论 + 改动行数，合成一个元素免得两个 auto 抢位
+function ntag(note,stat){const p=[note,stat].filter(Boolean);return p.length?'<span class="ntag">'+esc(p.join(' · '))+'</span>':''}
 function notice(t,kind,v){add(el('<div class="'+(kind=='err'?'err':'notice')+'">'+esc(t)+'</div>'),v||cur())}
 function setTodos(items,v){const t=v||cur();t.todos=items;if(t===cur())paintTodos(items)}
 function paintTodos(items){
@@ -1196,11 +1208,10 @@ function applyState(s){
         '</span></summary><pre class="body">'+esc(m.content)+'</pre></details>');
       const k=(m.name=='write'||m.name=='edit')?q.findIndex(e=>e[0]==m.name):-1;
       const p=k>=0?q.splice(k,1)[0][1]:'';
-      // diff 跟着历史回来：只随 SSE 流一次的话，看完回答再回头核对改动就什么都没了
-      if(m.diff){
-        node.querySelector('summary').innerHTML+='<span class="dstat">'+esc(diffStat(m.diff))+'</span>';
-        node.querySelector('.body').after(el(diffHtml(m.diff)));
-      }
+      // diff 与审批结论跟着历史回来：只随 SSE 流一次的话，看完回答再回头核对就什么都没了
+      if(m.diff||m.note)
+        node.querySelector('summary').innerHTML+=ntag(m.note,diffStat(m.diff));
+      if(m.diff)node.querySelector('.body').after(el(diffHtml(m.diff)));
       if(p){
         node.appendChild(el('<div class="cbar"><button class="ab" data-x="rollback" data-p="'+esc(p)+
           '" title="用 .haoai-snap/ 里最近一份覆盖回这个文件">↩ 退回上一版</button>'+
@@ -1233,7 +1244,7 @@ function applyState(s){
 }
 
 /* ---- 设置抽屉 ---- */
-$('#cfgBtn').onclick=()=>{
+function openCfg(){
   fetch('/api/settings').then(r=>r.json()).then(c=>{
     cfgOpen=true;
     const dg=$('#dialog');
@@ -1246,26 +1257,45 @@ $('#cfgBtn').onclick=()=>{
       <div class="fld"><label>上下文窗口（字，只用来画那圈占用）</label><input type="text" id="fCtx" value="${esc(c.contextChars)}"></div>
       <div class="kv">这里改的是<b>全局默认</b>：模型与网关会立刻发给所有会话（正在跑的那条从下一次请求起生效）；
         工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。</div>
-      <div class="fld"><label>密钥</label><div class="kv">${c.hasKey?('已设置 '+esc(c.keyHint)+'…'):'<b style="color:var(--warn)">未设置</b>（跑 haoai key sk-…）'}</div></div>
+      <div class="fld"><label>API 密钥</label><input type="password" id="fKey" autocomplete="off"
+        placeholder="${c.hasKey?('已设置 '+esc(c.keyHint)+'…（留空则不改）'):'sk-…（只写进 HAOAI_HOME/apikey，不进仓库）'}"></div>
       <div class="grp" style="margin-top:12px">实验特性</div>
       ${c.flags.map(f=>`<label class="sw"><input type="checkbox" data-k="${f.key}" ${f.on?'checked':''}>
         <span><span class="t">${esc(f.title)}</span><br><span class="d">${esc(f.what)}</span></span></label>`).join('')}
       <div class="grp" style="margin-top:12px">本工作区权限规则</div>
-      <div class="kv">${c.rules.length?c.rules.map(r=>esc(r.text)).join('<br>'):'（空 —— 全部交给档位决定）'}</div>
+      <div class="rules">${c.rules.length?c.rules.map(r=>`<div class="rl"><span>${esc(r.text)}</span>
+        <button class="ab" data-del="${esc(r.text)}" title="从规则表里去掉这条">删除</button></div>`).join('')
+        :'<div class="kv">（空 —— 全部交给档位决定。审批卡上点「以后这类都允许」就会写进这里。）</div>'}</div>
+      <div class="addrow"><input type="text" id="fRule" placeholder="shell(git push*) deny"><button class="btn" id="addRule">加规则</button></div>
       <div class="acts"><button class="btn" id="cfgClose">关闭</button><button class="btn pri" id="cfgSave">保存</button></div>`;
     $('#mask').classList.add('on');
     dg.querySelector('#cfgClose').onclick=closeCfg;
+    dg.querySelectorAll('.rules [data-del]').forEach(b=>b.onclick=()=>ruleEdit('del',b.dataset.del));
+    dg.querySelector('#addRule').onclick=()=>ruleEdit('add',dg.querySelector('#fRule').value.trim());
     dg.querySelector('#cfgSave').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
       const num=id=>String((dg.querySelector(id).value||'').replace(/\D/g,'')||'0');
-      fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:dg.querySelector('#fModel').value.trim(),baseUrl:dg.querySelector('#fBase').value.trim(),
+      const body={model:dg.querySelector('#fModel').value.trim(),baseUrl:dg.querySelector('#fBase').value.trim(),
           workspace:dg.querySelector('#fWs').value.trim(),mode:dg.querySelector('#fMode').value.trim(),
-          maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags})})
-        .then(r=>r.json()).then(()=>{closeCfg();toast('设置已保存：所有会话下一条消息起生效');hydrate(curId)});
+          maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags};
+      // 密钥留空就是"不改"：placeholder 里回显的是前 6 位，不能顺手把它当新值写回去
+      const k=(dg.querySelector('#fKey').value||'').trim();
+      if(k)body.key=k;
+      fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+        .then(r=>r.json()).then(x=>{
+          if(x&&!x.ok){toast(x.error||'没保存上','err');return}
+          closeCfg();toast(k?'设置与密钥已保存':'设置已保存：所有会话下一条消息起生效');hydrate(curId)});
     };
   });
-};
+}
+$('#cfgBtn').onclick=openCfg;
+function ruleEdit(op,text){
+  if(!text){toast('规则是空的');return}
+  post('/api/rule',{op:op,text:text,sid:curId}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'规则没改成','err');return}
+    toast(op=='del'?'已删除：'+d.rule:'已加入：'+d.rule);openCfg();   // 重开一次，列表才是服务端那份
+  }).catch(()=>toast('规则改不动','err'));
+}
 function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');paintSend()}
 
 /* ---- 轻提示：一句话的事，不往对话流里塞气泡 ---- */

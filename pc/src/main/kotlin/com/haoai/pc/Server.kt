@@ -125,11 +125,12 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/rollback" -> rollback(ex)
                 "/api/attach" -> attach(ex)
                 "/api/models" -> models(ex)
+                "/api/rule" -> ruleEdit(ex)
                 "/api/files" -> files(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
-                "/api/settings" ->
+                "/api/settings" -> 
                     if (ex.requestMethod == "POST") saveSettings(ex)
                     else send(ex, 200, settingsJson(), "application/json; charset=utf-8")
                 else -> send(ex, 404, "not found", "text/plain; charset=utf-8")
@@ -195,7 +196,11 @@ class WebServer(settings: PcSettings, port: Int) {
             Session(id, settings.workspaceFile())
         }
         session.mode = meta?.mode ?: settings.permissionMode
-        return Engine(session, settings, builtinTools(), webGate(id), emit = { ev -> forward(id, ev) })
+        // 闸口要能拿到"这条会话的引擎"，但引擎构造时还握不住自己的引用 —— 拿个可变槽位接上
+        var made: Engine? = null
+        val e = Engine(session, settings, builtinTools(), webGate(id) { made }, emit = { ev -> forward(id, ev) })
+        made = e
+        return e
     }
 
     private fun stateJson(sid: String = ""): String {
@@ -258,6 +263,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 .append(",\"index\":").append(i)
                 .append(",\"reasoning\":").append(quote(m.reasoning ?: ""))
                 .append(",\"diff\":").append(quote(m.diff))
+                .append(",\"note\":").append(quote(m.note))
                 .append(",\"pt\":").append(m.pt).append(",\"ct\":").append(m.ct).append(",\"ms\":").append(m.ms)
                 .append(",\"calls\":").append(m.calls.joinToString(",", "[", "]") { c ->
                     """{"name":${quote(c.name)},"args":${quote(c.args)}}"""
@@ -545,6 +551,33 @@ class WebServer(settings: PcSettings, port: Int) {
             "application/json; charset=utf-8")
     }
 
+    /**
+     * `POST /api/rule` {op:'add'|'del', text:'shell(git push*) deny', sid} —— 规则表在界面上可增删。
+     *
+     * 之前只能看不能改（加规则要回 CLI 跑 `haoai allow`），而"以后这类都允许"这个按钮
+     * 就在审批卡上 —— 用户既然能一键写规则，就得能看见并收回来的地方。
+     * 规则是**按工作区**存的，所以改的是这条会话自己的工作区，不是全局那个。
+     */
+    private fun ruleEdit(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val ws = sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()
+        val text = b.str("text")
+        val r = Rule.parse(text)
+        if (r == null) {
+            send(ex, 200, """{"ok":false,"error":"看不懂这条规则。写法如：shell(git push*) deny"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val ok = if (b.str("op") == "del") Policies.get().remove(ws, r.tool, r.pattern)
+        else { Policies.get().add(ws, r); true }
+        if (!ok) {
+            send(ex, 200, """{"ok":false,"error":"没找到这条规则（可能已经被删了）"}""",
+                "application/json; charset=utf-8"); return
+        }
+        send(ex, 200, """{"ok":true,"rule":${quote(r.render())}}""", "application/json; charset=utf-8")
+        publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */
     private fun models(ex: HttpExchange) {
         val sid = pick(querySid(ex))
@@ -588,8 +621,10 @@ class WebServer(settings: PcSettings, port: Int) {
     private fun newSessionId(): String {
         val session = Session("pc" + System.nanoTime().toString(16).take(8), settings.workspaceFile())
         session.mode = settings.permissionMode
-        val e = Engine(session, settings, builtinTools(), webGate(session.id),
+        var made: Engine? = null
+        val e = Engine(session, settings, builtinTools(), webGate(session.id) { made },
             emit = { ev -> forward(session.id, ev) })
+        made = e
         e.persistNow()
         sessions[session.id] = Managed(e)
         touch(session.id)
@@ -645,7 +680,8 @@ class WebServer(settings: PcSettings, port: Int) {
             )
             is Ev.ToolEnd -> publish(
                 "tool",
-                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},"out":${quote(ev.out)},"diff":${quote(ev.diff)}}""",
+                """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},""" +
+                    """"out":${quote(ev.out)},"diff":${quote(ev.diff)},"note":${quote(ev.note)}}""",
                 sid
             )
             is Ev.Todo -> publish(
@@ -662,7 +698,14 @@ class WebServer(settings: PcSettings, port: Int) {
         }
     }
 
-    private fun webGate(sid: String): Gate = object : Gate {
+    /**
+     * 网页壳的闸口。
+     *
+     * `engineOf` 由创建方给（引擎构造时还握不住自己的引用）。刻意**不**按 sid 去 `sessions`
+     * 里查：那张表在会话超出驻留上限时会踢掉最久没用的那条，而被踢的引擎可能还在跑 ——
+     * 那时闸口就该拿不到自己该通知的对象了。引用直接给，不绕地图。
+     */
+    private fun webGate(sid: String, engineOf: () -> Engine? = { sessions[sid]?.engine }): Gate = object : Gate {
         override fun approve(title: String, detail: String, kind: String): Boolean =
             approveRule(title, detail, kind, "", "*")
 
@@ -678,9 +721,11 @@ class WebServer(settings: PcSettings, port: Int) {
                     """"tool":${quote(tool)},"pattern":${quote(pattern)}}"""
             pendingPayload[id] = Waiter("approval", payload, sid)
             publish("approval", payload, sid)
+            var timedOut = false
             val ans = try {
                 fut.get(300, TimeUnit.SECONDS)
             } catch (e: TimeoutException) {
+                timedOut = true
                 publish("notice", quote("300 秒无人应答，按拒绝处理"), sid)
                 "deny"
             } catch (e: Exception) {
@@ -690,6 +735,20 @@ class WebServer(settings: PcSettings, port: Int) {
                 pendingRule.remove(id)
                 pendingPayload.remove(id)
             }
+            /*
+             * 结论挂到紧接着落的那条工具消息上。
+             * 之前它只随 SSE 流一次：内联卡答完就收起，刷新之后卡没了，
+             * 于是"这个文件到底是用户点头写的、还是自动写的、还是超时被拒的"查不出来。
+             */
+            engineOf()?.markApproval(
+                when {
+                    timedOut -> "超时未答，按拒绝处理"
+                    ans == "allow_once" -> "允许一次"
+                    ans == "allow_session" -> "本任务都允许"
+                    ans == "allow_rule" -> "写入规则并允许"
+                    else -> "已拒绝"
+                }
+            )
             // allow_rule：把这条规则永久写进当前工作区的规则表（S2）
             if (ans == "allow_rule" && tool.isNotBlank()) {
                 Policies.get().add(settings.workspaceFile(), Rule(tool, pattern, Decision.ALLOW))
@@ -888,6 +947,21 @@ class WebServer(settings: PcSettings, port: Int) {
             val merged = n.flags.toMutableMap()
             fo.forEach { (k, v) -> merged[k] = (v.jsonPrimitive.content == "true") }
             n = n.copy(flags = HaoFlag.compactOverrides(merged))
+        }
+        /*
+         * 密钥单独一条路：它**不进 PcSettings**（那份会被 GET /api/settings 整体发回前端），
+         * 只落 HAOAI_HOME/apikey。界面上给一个改密钥的入口是必要的 —— 之前只能回 CLI，
+         * 而"网页里能改模型、改网关，唯独改不了 key"会让人以为哪儿配错了。
+         */
+        val key = body["key"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        if (key.isNotEmpty()) {
+            val done = runCatching { Env.apiKeyFile.writeText(key) }
+            if (done.isFailure) {
+                send(ex, 200,
+                    """{"ok":false,"error":${quote("密钥存不下：" + (done.exceptionOrNull()?.message ?: ""))}}""",
+                    "application/json; charset=utf-8")
+                return
+            }
         }
         PcSettings.save(n)
         settings = n

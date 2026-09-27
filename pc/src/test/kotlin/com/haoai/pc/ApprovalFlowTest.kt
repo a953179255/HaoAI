@@ -284,6 +284,21 @@ class ApprovalFlowTest {
         // 答完之后必须从 pending 里消失，否则刷新一次就弹一次"已经批过的"框
         val after = jsonOf(get("/api/state?sid=$sid"))["pending"]?.jsonArray
         assertTrue("答完了还挂在 pending 里：$after", after.isNullOrEmpty())
+        /*
+         * 审批结论要留在历史里。内联卡答完就地收起，之后如果历史里查不到，
+         * "这个文件到底是用户点头写的、还是自动写的"就永远说不清 —— 而这是权限层最该留痕的一件事。
+         */
+        val msgs = jsonOf(get("/api/state?sid=$sid"))["messages"]!!.jsonArray.map {
+            Json.parseToJsonElement(it.toString()).jsonObject
+        }
+        // 只挑 role=tool 那条：assistant 那条也带 name="write"（从它的 calls 里补出来的），
+        // 按名字找会先撞上它
+        val wrote = msgs.firstOrNull {
+            it["role"]?.jsonPrimitive?.content == "tool" && it["name"]?.jsonPrimitive?.content == "write"
+        }
+        assertNotNull("历史里没有 write 这条工具消息", wrote)
+        assertEquals("审批结论没落到那条工具消息上",
+            "允许一次", wrote!!["note"]?.jsonPrimitive?.content)
         assertTrue("回合没收尾", awaitIdle(sid))
     }
 
