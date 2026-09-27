@@ -98,7 +98,8 @@ check(orphan.length === 0, '服务端发的每个事件名前端都有人接', '
  * 页面上表现为按钮点了没反应）。所以直接去 Server.kt 的路由表里抓。
  */
 const apiPaths = new Set();
-for (const m of allSrc.matchAll(/[/'"`](\/api\/[\w]+)/g)) apiPaths.add(m[1].slice(1));
+// 允许多段（/api/shell/open 这种）：只吃一段会把嵌套路由报成"陌生接口"
+for (const m of allSrc.matchAll(/[/'"`](\/api\/[\w/]+)/g)) apiPaths.add(m[1].slice(1).replace(/\/+$/, ''));
 check(apiPaths.size >= 6, '抓到前端调用的接口清单', [...apiPaths].join(', '));
 const routes = new Set();
 for (const m of server.matchAll(/"(\/[\w./-]+)"\s*->/g)) routes.add(m[1].slice(1));

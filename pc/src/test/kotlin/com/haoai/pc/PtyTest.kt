@@ -112,4 +112,69 @@ class PtyTest {
             ProcRegistry.close(id)
         }
     }
+    /**
+     * 两个消费者各看各的：面板（人）与 shell_read（模型）读同一个进程。
+     *
+     * 这是把 `lines` 换成"带序号的缓冲 + 各自游标"的全部理由 ——
+     * 共用一条队列时，谁先 poll 走那行对方就永远看不到，
+     * 表现是"界面上明明有输出，模型却说它没看到"。
+     */
+    @Test
+    fun `panel and model each get their own copy of the same output`() {
+        assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
+        val opened = ProcRegistry.open("共享", "bash", Files.createTempDirectory("haoai-pty2").toFile().apply { mkdirs() }, "")
+        assertTrue(opened.exceptionOrNull()?.message ?: "", opened.isSuccess)
+        val l = opened.getOrThrow()
+        try {
+            ProcRegistry.send(l.id, "echo 同一行两边都要看到", true).getOrThrow()
+            // 面板先到先看
+            val (cur, uiLines) = waitUntil { l.since(0L, 400) }
+            assertTrue("面板没看到：" + uiLines, uiLines.any { it.contains("同一行两边都要看到") })
+            // 模型这一路也必须看得到（它有自己的游标）
+            val read = waitUntilText { ProcRegistry.read(l.id, 2500, 4000).getOrDefault("") }
+            assertTrue("模型没看到：" + read, read.contains("同一行两边都要看到"))
+            // 面板再轮询一次不该拿到重复行（游标已经推进到 cur）
+            assertTrue("面板拿到了重复行", l.since(cur, 400).second.isEmpty())
+        } finally {
+            ProcRegistry.close(l.id)
+        }
+    }
+
+    /** 缓冲必须有界：无人值守跑一晚上一条 `yes` 就能把内存吃掉。 */
+    @Test
+    fun `the tail buffer is bounded`() {
+        val dir = Files.createTempDirectory("haoai-pty3").toFile().apply { mkdirs() }
+        val l = ProcRegistry.open("有界", "bash", dir, "").getOrThrow()
+        try {
+            repeat(ProcRegistry.Live.TAIL + 500) { l.push("行" + it) }
+            val (last, lines) = l.since(0L, ProcRegistry.Live.TAIL + 1000)
+            assertTrue("缓冲该有界，实际 " + lines.size, lines.size <= ProcRegistry.Live.TAIL)
+            assertEquals("留下的必须是最近的", "行" + (ProcRegistry.Live.TAIL + 499), lines.last())
+            assertTrue("最老的该被挤掉", lines.none { it == "行0" })
+            // 只取游标之后的：面板轮询靠这个不重复拿同一批
+            assertTrue(l.since(last, 10).second.isEmpty())
+        } finally {
+            ProcRegistry.close(l.id)
+        }
+    }
+
+    private fun waitUntil(poll: () -> Pair<Long, List<String>>): Pair<Long, List<String>> {
+        var last = 0L to emptyList<String>()
+        repeat(40) {
+            last = poll()
+            if (last.second.isNotEmpty()) return last
+            Thread.sleep(150)
+        }
+        return last
+    }
+
+    private fun waitUntilText(poll: () -> String): String {
+        var last = ""
+        repeat(20) {
+            last = poll()
+            if (last.isNotBlank()) return last
+            Thread.sleep(200)
+        }
+        return last
+    }
 }

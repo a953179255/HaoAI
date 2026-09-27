@@ -509,6 +509,22 @@
   .pal .pi span{color:var(--dim);font-size:11px;flex:none;margin-left:auto}
   /* Git 面板一行：勾选框 + porcelain 两列状态 + 路径 + diff 小按钮。
      按钮一律用 .ab —— 全局 .btn 是 display:block;width:100%，放进这一行会把整行撑爆。 */
+  /* 终端：等宽、深色、自己滚。行多时只留最近 600 行（服务端缓冲 2000 行） */
+  .tout{font-family:var(--mono);font-size:11.5px;line-height:1.5;background:var(--code);
+    border:1px solid var(--line2);border-radius:9px;padding:8px 9px;margin:8px 0;
+    max-height:44vh;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .tabs2{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px}
+  .tabs2 button{flex:none;padding:3px 9px;font-size:11.5px;border-radius:7px;
+    border:1px solid var(--line);background:var(--glass);color:var(--dim)}
+  .tabs2 button.on{color:var(--fg);border-color:var(--acc2);background:var(--glass2)}
+  .tabs2 button.dead{text-decoration:line-through;opacity:.55}
+  #tab-term .addrow{flex-wrap:wrap}
+  #tab-term .addrow select{width:32%;flex:none}
+  #tab-term .addrow input{flex:1 1 90px;min-width:0;width:100%}
+  #tab-term .addrow .ab{flex:none;width:auto}
+  /* 命令行不换行，但输入框必须能收缩：否则"发送"被挤出右栏（实测过） */
+  #tab-term .tcmd{flex-wrap:nowrap}
+  #tab-term .tcmd input{flex:1 1 0;min-width:0}
   .gr{display:flex;gap:7px;align-items:center;font-size:12px;padding:2px 0;min-width:0}
   .gr i{font-family:var(--mono);opacity:.6;flex:none;width:20px;text-align:center}
   .gr b{font-weight:400;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -624,6 +640,7 @@
       <button data-t="usage">用量</button>
       <button data-t="files">产出</button>
       <button data-t="git">Git</button>
+      <button data-t="term">终端</button>
       <button data-t="mem">记忆</button>
       <button data-t="cron">定时</button>
       <button data-t="tools">工具</button>
@@ -664,6 +681,22 @@
       <div class="fbar"><button class="ab" data-fx="up" title="回到上一级">↑ 上一级</button>
         <span class="fp" id="filePath">（根）</span><button class="ab" data-fx="reload">刷新</button></div>
       <div class="files" id="files">（还没加载）</div>
+    </div>
+    <div class="tabp" id="tab-term">
+      <div class="tabs2" id="termTabs"></div>
+      <div class="addrow">
+        <select id="tShell"><option value="bash">bash</option><option value="pwsh">pwsh</option>
+          <option value="cmd">cmd</option></select>
+        <input type="text" id="tLabel" placeholder="名字，如 构建">
+        <button class="ab" id="tNew">开一个</button>
+        <button class="ab" id="tClose">关掉这个</button>
+      </div>
+      <pre class="tout" id="termOut">（还没开终端）</pre>
+      <div class="addrow tcmd">
+        <input type="text" id="tIn" placeholder="敲命令，回车送进进程">
+        <button class="ab" id="tSend">发送</button>
+      </div>
+      <div class="kv" id="termState"></div>
     </div>
     <div class="tabp" id="tab-git">
       <div class="kv" id="gitHead">—</div>
@@ -1021,7 +1054,8 @@ const PALSET=[
   ['设置：数据与备份','数据与备份'],
   ['右栏：任务','#tabs button[data-t=tasks]'],
   ['右栏：用量与运行历史','#tabs button[data-t=usage]'],['右栏：产出','#tabs button[data-t=files]'],
-  ['右栏：Git','#tabs button[data-t=git]'],['右栏：记忆','#tabs button[data-t=mem]'],
+  ['右栏：Git','#tabs button[data-t=git]'],
+  ['右栏：终端','#tabs button[data-t=term]'],['右栏：记忆','#tabs button[data-t=mem]'],
   ['右栏：定时','#tabs button[data-t=cron]'],['右栏：工具','#tabs button[data-t=tools]'],
   ['打开回收站','#trashBtn'],['导出这条会话','#expBtn'],['切换明暗主题','#themeBtn'],
 ];
@@ -1561,9 +1595,82 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='tools')hydrate(curId);
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='git')loadGit();
+  if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind()}
 });
+
+/* ---- 终端页签：人与 agent 共用同一份常驻进程 ----
+ * 服务端按行给序号，前端自己记"我看到哪了"，所以这里刷新/切标签都不会
+ * 把模型那一路该读的输出吃掉（两边各一个游标）。
+ */
+let termId='',termCur=0,termTimer=null,termShells=[];
+function loadShells(){
+  return fetch('/api/shells').then(r=>r.json()).then(d=>{
+    termShells=(d&&d.shells)||[];
+    const box=$('#termTabs');
+    box.innerHTML=termShells.length?termShells.map(x=>'<button data-id="'+esc(x.id)+'" class="'+
+      (x.id==termId?'on':'')+(x.alive?'':' dead')+'" title="'+esc(x.display)+' · '+esc(x.cwd)+'">'+
+      esc(x.label||x.id)+'</button>').join('')+'<span class="kv">共 '+termShells.length+' 个</span>'
+      :'<span class="kv">（还没有常驻进程）</span>';
+    box.querySelectorAll('button[data-id]').forEach(b=>b.onclick=()=>termPick(b.dataset.id));
+    if(!termId&&termShells.length)termPick(termShells[0].id);
+    return termShells;
+  });
+}
+function termPick(id){
+  const s=termShells.find(x=>x.id==id);if(!s)return;
+  termId=id;termCur=0;$('#termOut').textContent='';$('#tLabel').value=s.label||'';
+  loadShells().then(()=>termPoll());
+}
+function termPoll(){
+  if(!termId)return Promise.resolve();
+  return fetch('/api/shell/tail?id='+encodeURIComponent(termId)+'&after='+termCur)
+    .then(r=>r.json()).then(d=>{
+      if(!d||!d.ok){$('#termOut').textContent=(d&&d.error)||'读不到了';return}
+      if((d.lines||[]).length){
+        const out=$('#termOut');
+        const stick=out.scrollHeight-out.scrollTop-out.clientHeight<24;   // 用户在往回看就别抢
+        out.textContent+=d.lines.join('\n')+'\n';
+        const keep=out.textContent.split('\n').slice(-600).join('\n');
+        out.textContent=keep;
+        if(stick)out.scrollTop=out.scrollHeight;
+      }
+      termCur=d.next;
+      if(!d.alive)out0('（进程已退出）');
+    }).catch(()=>{});
+}
+function out0(t){const o=$('#termOut');if(o.textContent.indexOf(t)<0)o.textContent+=t+'\n'}
+function termAct(url,body,btn){
+  const st=$('#termState');st.textContent='处理中…';if(btn)btn.disabled=true;
+  post(url,Object.assign({sid:curId},body)).then(d=>{
+    if(d&&d.ok===false){st.textContent='× '+(d.error||'没成');toast(d.error||'没成','err');return d}
+    st.textContent='✓ '+((d&&d.message)||(d&&d.display?('已开 '+(d.id||'')+'（'+d.display+'）'):'好了'));
+    if(d&&d.id)termPick(d.id);
+    return loadShells().then(()=>termPoll());
+  }).catch(e=>{st.textContent='× 请求没成（'+e+'）'})
+    .finally(()=>{if(btn)btn.disabled=false});
+}
+$('#tNew').onclick=e=>termAct('/api/shell/open',
+  {shell:$('#tShell').value,label:$('#tLabel').value.trim()},e.target);
+$('#tClose').onclick=e=>{if(!termId){toast('还没选终端','err');return}
+  termAct('/api/shell/close',{id:termId},e.target).then(()=>{termId='';termCur=0})};
+$('#tSend').onclick=()=>termSendKey(false);
+$('#tIn').addEventListener('keydown',e=>{if(e.key=='Enter'){e.preventDefault();termSendKey(e.shiftKey)}});
+function termSendKey(noEnter){
+  const t=$('#tIn').value;
+  if(!termId){toast('先开一个终端','err');return}
+  if(!t.length){toast('命令是空的','err');return}
+  $('#tIn').value='';
+  post('/api/shell/send',{id:termId,text:t,enter:noEnter?'0':'1'})
+    .then(d=>{if(d&&d.ok===false)toast(d.error||'送不进去','err');return termPoll()});
+}
+function termStartPolling(){
+  stopTermPolling();
+  loadShells();
+  termTimer=setInterval(()=>{if(termId)termPoll()},900);
+}
+function stopTermPolling(){if(termTimer){clearInterval(termTimer);termTimer=null}}
 
 /* ---- Git 面板 ----
  * 给**人**看 diff、勾文件、写提交说明的地方。模型有 git 工具，但"它改完我扫一眼再提交"

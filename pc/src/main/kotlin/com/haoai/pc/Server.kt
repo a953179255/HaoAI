@@ -183,6 +183,11 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/gitdiff" -> gitDiff(ex)
                 "/api/gitstage" -> gitStage(ex)
                 "/api/gitcommit" -> gitCommit(ex)
+                "/api/shells" -> shellsList(ex)
+                "/api/shell/tail" -> shellTail(ex)
+                "/api/shell/open" -> shellOpen(ex)
+                "/api/shell/send" -> shellSend(ex)
+                "/api/shell/close" -> shellClose(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -1688,6 +1693,82 @@ class WebServer(settings: PcSettings, port: Int,
      * 和"停止"那颗总闸的区别：总闸会把这一轮整个中止（包括正在写的正文），
      * 而这里只让那条跑偏的调研收尾 —— 父引擎拿到一句"子任务被中断"，接着干别的。
      */
+    // ---- 终端页签：人与 agent 共用同一份常驻进程表（ProcRegistry）----
+    /*
+     * 为什么给人也开一份：agent 跑 `gradle` 跑到一半弹确认，人看得见却插不上手，
+     * 只能等它超时；而人在终端里敲的东西 agent 也看不见。两边其实是**同一个进程**，
+     * 现在按序号各取各的游标（见 ProcRegistry.Live.since），互不偷输出。
+     *
+     * 边界：起进程只认 shell 名字（bash/pwsh/cmd，由 ShellLauncher 在本机找），
+     * 不接受任意可执行文件；工作目录必须落在**这条会话的工作区里**。
+     * 理由与 /api/img 同源 —— 这个服务只绑 127.0.0.1，但同机任意页面都能打这个端口，
+     * "能起任意进程 + 任意目录"是不能给的。
+     */
+    private fun shellsJson(): String =
+        """{"ok":true,"shells":[""" + ProcRegistry.list().joinToString(",") { l ->
+            """{"id":${quote(l.id)},"label":${quote(l.label)},"display":${quote(l.display)},""" +
+                """"cwd":${quote(Env.abs(l.cwd))},"alive":${l.alive()},""" +
+                """"idle":${System.currentTimeMillis() - l.lastUsed},""" +
+                """"exit":${if (l.alive()) -1 else runCatching { l.proc.exitValue() }.getOrDefault(-1)}}"""
+        } + "]}"
+
+    private fun shellsList(ex: HttpExchange) {
+        send(ex, 200, shellsJson(), "application/json; charset=utf-8")
+    }
+
+    /** 面板轮询：只给序号大于 after 的行。游标在浏览器里，所以刷新/换标签不影响模型那一路。 */
+    private fun shellTail(ex: HttpExchange) {
+        val id = queryOf(ex, "id")
+        val l = ProcRegistry.get(id) ?: return send(
+            ex, 200, """{"ok":false,"error":"没有这个进程（可能已被回收）","lines":[]}""",
+            "application/json; charset=utf-8"
+        )
+        val after = runCatching { queryOf(ex, "after").toLong() }.getOrDefault(0L)
+        val (next, lines) = l.since(after, 400)
+        send(ex, 200, """{"ok":true,"next":$next,"alive":${l.alive()},"lines":[""" +
+            lines.joinToString(",") { quote(it) } + "]}", "application/json; charset=utf-8")
+    }
+
+    private fun shellWorkspaceSid(sid: String): File =
+        (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile())
+
+    private fun shellOpen(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val ws = shellWorkspaceSid(sid).canonicalFile
+        val want = b.str("cwd").ifBlank { ws.path }
+        val cwd = runCatching { File(want).canonicalFile }.getOrDefault(ws)
+        if (!cwd.path.startsWith(ws.path) || !cwd.isDirectory) {
+            val why = "终端只能开在这条会话的工作区里：" + Env.abs(ws) + " 之下的目录（不接受任意目录）"
+            send(ex, 200, """{"ok":false,"error":${quote(why)}}""", "application/json; charset=utf-8")
+            return
+        }
+        ProcRegistry.open(b.str("label"), b.str("shell").ifBlank { "bash" }, cwd, "")
+            .fold(
+                onSuccess = { send(ex, 200, """{"ok":true,"id":${quote(it.id)},"display":${quote(it.display)}}""",
+                    "application/json; charset=utf-8") },
+                onFailure = { e -> send(ex, 200, """{"ok":false,"error":${quote(e.message ?: "起不来")}}""",
+                    "application/json; charset=utf-8") }
+            )
+    }
+
+    private fun shellSend(ex: HttpExchange) {
+        val b = Body(ex)
+        val id = b.str("id")
+        if (id.isBlank()) { send(ex, 200, """{"ok":false,"error":"缺少 id"}""", "application/json; charset=utf-8"); return }
+        val r = ProcRegistry.send(id, b.str("text"), b.str("enter") != "0")
+        send(ex, 200, if (r.isSuccess) """{"ok":true}"""
+        else """{"ok":false,"error":${quote(r.exceptionOrNull()?.message ?: "写不进去")}}""",
+            "application/json; charset=utf-8")
+    }
+
+    private fun shellClose(ex: HttpExchange) {
+        val b = Body(ex)
+        val id = b.str("id")
+        val msg = if (id.isBlank()) "缺少 id" else ProcRegistry.close(id).getOrElse { "关不掉：${it.message}" }
+        send(ex, 200, """{"ok":true,"message":${quote(msg)}}""", "application/json; charset=utf-8")
+    }
+
     /**
      * `GET /api/gitstatus?sid=` —— Git 面板要的那份状态。
      *

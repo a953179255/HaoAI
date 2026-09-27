@@ -1,0 +1,105 @@
+[
+  {
+    "click": "#tabs button[data-t=term]"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>({panelOn:!!document.querySelector('#tab-term.on'),out:document.querySelector('#termOut').textContent.slice(0,20),tabs:document.querySelectorAll('#termTabs button').length}))()"
+  },
+  {
+    "type": {
+      "sel": "#tLabel",
+      "text": "面板开的",
+      "enter": false
+    }
+  },
+  {
+    "click": "#tNew"
+  },
+  {
+    "sleep": 2500
+  },
+  {
+    "eval": "fetch('/api/shells').then(r=>r.json()).then(d=>({n:d.shells.length,labels:d.shells.map(x=>x.label),alive:d.shells.map(x=>x.alive),cwdTail:d.shells.map(x=>x.cwd.split(String.fromCharCode(92)).pop())}))"
+  },
+  {
+    "eval": "(()=>({tabs:[...document.querySelectorAll('#termTabs button')].map(b=>b.textContent),on:[...document.querySelectorAll('#termTabs button.on')].map(b=>b.textContent)}))()"
+  },
+  {
+    "type": {
+      "sel": "#tIn",
+      "text": "echo 面板里跑的一行",
+      "enter": false
+    }
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 2000
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#termOut').textContent;return {sawLine:t.indexOf('面板里跑的一行')>=0,lines:t.split('\\n').filter(Boolean).length}})()"
+  },
+  {
+    "eval": "(()=>{const id=document.querySelector('#termTabs button.on').dataset.id;return fetch('/api/shell/tail?id='+id+'&after=0').then(r=>r.json()).then(d=>({again:d.lines.filter(x=>x.indexOf('面板里跑的一行')>=0).length,alive:d.alive}))})()"
+  },
+  {
+    "type": {
+      "sel": "#tIn",
+      "text": "v=42",
+      "enter": false
+    }
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "type": {
+      "sel": "#tIn",
+      "text": "echo 同一个进程里的值是 ${v}",
+      "enter": false
+    }
+  },
+  {
+    "key": "Enter"
+  },
+  {
+    "sleep": 2000
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#termOut').textContent;return {stateKept:t.indexOf('值是 42')>=0,tail:t.split('\\n').filter(Boolean).slice(-3).join(' / ')}})()"
+  },
+  {
+    "eval": "(()=>{const rail=document.querySelector('.rail.r').getBoundingClientRect();const bad=[];document.querySelectorAll('#tab-term button,#tab-term input,#tab-term select').forEach(e=>{const r=e.getBoundingClientRect();if(r.right>rail.right+1||r.width<=0)bad.push((e.id||e.tagName)+' right='+Math.round(r.right)+' w='+Math.round(r.width))});return {railRight:Math.round(rail.right),overflowing:bad.length?bad.join(' , '):'none',sendW:Math.round(document.querySelector('#tSend').getBoundingClientRect().width),inW:Math.round(document.querySelector('#tIn').getBoundingClientRect().width),pageOverflow:document.documentElement.scrollWidth>document.documentElement.clientWidth}})()"
+  },
+  {
+    "eval": "fetch('/api/shell/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,shell:'bash',cwd:'../../',label:'越界'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:(d.error||'').slice(0,46)}))"
+  },
+  {
+    "eval": "fetch('/api/shell/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,shell:'../calc',cwd:'',label:'任意程序'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:(d.error||'').slice(0,46)}))"
+  },
+  {
+    "shot": "t01-terminal"
+  },
+  {
+    "click": "#tClose"
+  },
+  {
+    "sleep": 1800
+  },
+  {
+    "eval": "fetch('/api/shells').then(r=>r.json()).then(d=>({left:d.shells.length,alive:d.shells.map(x=>x.alive)}))"
+  },
+  {
+    "eval": "(()=>({state:document.querySelector('#termState').textContent,tabs:document.querySelectorAll('#termTabs button').length}))()"
+  },
+  {
+    "shot": "t02-closed"
+  }
+]

@@ -40,7 +40,6 @@ object ProcRegistry {
         val display: String,
         val proc: Process,
         val writer: Writer,
-        val lines: ConcurrentLinkedQueue<String>,
         val cwd: File
     ) {
         @Volatile
@@ -49,9 +48,40 @@ object ProcRegistry {
         @Volatile
         var closed = false
 
+        /**
+         * 输出的环形缓冲：每行带一个递增序号。
+         *
+         * 为什么不再是"一条谁读走就没了"的队列：面板（人看）与 `shell_read`（模型读）
+         * 是**两个消费者**。共用一个队列的话，面板一刷新就把模型该看的行偷走了，
+         * 表现是"模型说它没看到输出"而界面上明明有。改成带序号的缓冲 + 各自一个游标。
+         */
+        private val buf = java.util.ArrayDeque<Pair<Long, String>>()
+        private var n = 0L
+
+        /** 模型那一路读到哪了（面板的游标存在浏览器里，不占这里）。 */
+        @Volatile
+        var toolCur = 0L
+
+        fun push(line: String): Unit = synchronized(buf) {
+            n += 1
+            buf.addLast(n to line)
+            while (buf.size > TAIL) buf.pollFirst()
+        }
+
+        /** 序号大于 [after] 的行，最多 [max] 条；回 (新游标, 行)。 */
+        fun since(after: Long, max: Int = 400): Pair<Long, List<String>> = synchronized(buf) {
+            val take = buf.filter { it.first > after }.take(max)
+            (if (take.isEmpty()) after else take.last().first) to take.map { it.second }
+        }
+
         fun touch() { lastUsed = System.currentTimeMillis() }
 
         fun alive(): Boolean = !closed && proc.isAlive
+
+        companion object {
+            /** 每个进程最多留多少行：面板要能往回滚一点，又不能一晚上吃掉几百 MB。 */
+            const val TAIL = 2000
+        }
     }
 
     private val live = Collections.synchronizedList(mutableListOf<Live>())
@@ -78,12 +108,11 @@ object ProcRegistry {
             display = "$shell @ ${cwd.name}",
             proc = p,
             writer = OutputStreamWriter(p.outputStream, Charsets.UTF_8),
-            lines = ConcurrentLinkedQueue(),
             cwd = cwd
         )
         val t = Thread {
             runCatching {
-                p.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line -> rec.lines += line }
+                p.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line -> rec.push(line) }
             }
             rec.closed = true
         }
@@ -112,16 +141,19 @@ object ProcRegistry {
         val l = get(id) ?: error("没有这个进程：$id")
         val deadline = System.currentTimeMillis() + waitMs.coerceIn(0, 20_000)
         val got = StringBuilder()
+        var cur = l.toolCur
         while (true) {
-            val line = l.lines.poll()
-            if (line != null) {
-                got.append(line).append('\n')
+            val (next, lines) = l.since(cur)
+            if (lines.isNotEmpty()) {
+                cur = next
+                lines.forEach { got.append(it).append('\n') }
                 if (got.length >= maxChars) break
                 continue
             }
             if (System.currentTimeMillis() >= deadline) break
             Thread.sleep(40)
         }
+        l.toolCur = cur
         l.touch()
         val tail = if (!l.alive()) {
             "\n（进程已退出，exit=${runCatching { l.proc.exitValue() }.getOrDefault(-1)}）"
