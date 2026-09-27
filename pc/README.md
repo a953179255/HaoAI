@@ -289,9 +289,40 @@ node pc/tools/shot.js --out <目录> --steps <steps.json>   # 真像素：无头
 - **改文件前留快照**：`.haoai-snap/`，覆盖/编辑前自动存。
 - 实验特性统一注册在 `HaoFlag`，`haoai flags` 看与拨。
 
+## 接真模型跑过（本机 llama-server，不走网络）
+
+云端那把 key 现在只认证不授权（`/chat/completions` 一律 404 `model is not found`，
+`/models` 返回空数组），所以"真模型验收"改成本地模型：**这条路不依赖任何配额，随时能重跑**。
+
+```
+# 本机已有的 llama.cpp 构建与模型（见 G:\AI\AI Model\ 下的 *.bat 配方）
+"G:\AI\llama.cpp\Vulkan\llama-server.exe" -m "G:\AI\AI Model\Agents-A1\Agents-A1-4B-Q4_K_M.gguf" \
+  -c 8192 --host 127.0.0.1 --port 8131 -ngl 99 --flash-attn on --jinja --no-webui
+haoai set base=http://127.0.0.1:8131/v1 model="G:\AI\AI Model\Agents-A1\Agents-A1-4B-Q4_K_M.gguf"
+haoai doctor
+```
+
+`--jinja` 不能省（不套聊天模板就没有 tool_calls，表现是"模型只会说话不会动手"）。
+
+跑了两条真任务，都是"读 notes.md → 按三条待办逐条做完 → 把 [ ] 改成 [x]"这一类多工具多回合活：
+
+- CLI 一条：`read → read → write → write → edit×4 → read×2`，`sum.txt` 里真的是 42（7+13+22），
+  最后一段自述与磁盘上的产物逐条对得上；
+- 网页一条（ask 档）：`read → shell → glob → write → edit`，中途弹了三次审批、逐个放行，
+  截图：[真模型弹的审批](G:/hbt/pc-demo/real-approval.png) ·
+  [真模型跑完的界面](G:/hbt/pc-demo/real-done.png)。
+
+**这一轮抓到的最值钱的缺陷**：`"content": null` 被解析成了四个字符的字符串 `"null"`。
+OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:null，
+而 `JsonNull.jsonPrimitive.content` 返回的是 `"null"` 而不是 null ——
+于是模型每调一次工具，界面上多一行 `HaoAI > null`，历史里也多一句 `null`，
+模型下一轮看到的"自己上一句说的话"就是垃圾。
+全仓 21 处 `?.jsonPrimitive?.content` 一律换成 `contentOrNull`，并补了一条流式回归测试。
+假网关从来不发 null，所以 85 条测试全绿也照不出来：**这是"必须用真模型跑一遍"的实证理由**。
+
 ## 已验证到哪一步
 
-- `gradle test` → **85 条全绿**（整套 14 秒）：20 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **86 条全绿**（整套 14 秒）：20 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -311,7 +342,8 @@ node pc/tools/shot.js --out <目录> --steps <steps.json>   # 真像素：无头
   不在仓库里给下一步、不支持的子命令列可用），
   5 条常驻进程（同一 shell 保留变量状态、关掉不泄漏、被拒不启进程、空闲回收、list 可见），
   3 条真 HTTP 流式（中文按 4 字节切碎不损坏、`tool_calls.arguments` 分片拼回合法 JSON、
-  429 标可重试 / 400 不可重试）。
+  429 标可重试 / 400 不可重试），
+  1 条专防 `"content": null` 被解析成字符串 "null"（真模型第一次跑就撞出来的，见上面那节）。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本

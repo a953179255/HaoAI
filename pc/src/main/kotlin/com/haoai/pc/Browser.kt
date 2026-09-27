@@ -1,6 +1,7 @@
 package com.haoai.pc
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
@@ -180,7 +181,7 @@ class BrowserSession private constructor(
         var err = ""
         repeat(2) { attempt ->
             val r = call("Page.navigate", buildJsonObject { put("url", fixed) })
-            err = r["result"]?.jsonObject?.get("errorText")?.jsonPrimitive?.content ?: ""
+            err = r["result"]?.jsonObject?.get("errorText")?.jsonPrimitive?.contentOrNull ?: ""
             // 首屏还在加载时导航会被 ERR_ABORTED 顶掉，等一下再试一次就过去了
             if (err != "net::ERR_ABORTED") return@repeat
             Thread.sleep(600)
@@ -224,7 +225,7 @@ class BrowserSession private constructor(
     fun screenshot(target: File, rel: String): String {
         ensureConnected()
         val r = call("Page.captureScreenshot", buildJsonObject { put("format", "png") })
-        val b64 = r["result"]?.jsonObject?.get("data")?.jsonPrimitive?.content
+        val b64 = r["result"]?.jsonObject?.get("data")?.jsonPrimitive?.contentOrNull
             ?: return "截图失败：CDP 没返回 data"
         target.parentFile?.mkdirs()
         target.writeBytes(Base64.getDecoder().decode(b64))
@@ -314,9 +315,9 @@ class BrowserSession private constructor(
         )
         r["exceptionDetails"]?.let { return "JS 抛错：${it.toString().take(300)}" }
         val res = r["result"]?.jsonObject?.get("result")?.jsonObject ?: return "(无结果)"
-        return res["value"]?.jsonPrimitive?.content
-            ?: res["description"]?.jsonPrimitive?.content
-            ?: res["type"]?.jsonPrimitive?.content
+        return res["value"]?.jsonPrimitive?.contentOrNull
+            ?: res["description"]?.jsonPrimitive?.contentOrNull
+            ?: res["type"]?.jsonPrimitive?.contentOrNull
             ?: "(无结果)"
     }
 
@@ -357,9 +358,9 @@ class BrowserSession private constructor(
             // 不落盘就会每敲一条命令开一台新 Edge。agent 的 serve 进程重启后也能接上同一台。
             runCatching {
                 val saved = Json.parseToJsonElement(portFile.readText()).jsonObject
-                val p = saved["port"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-                val exePath = saved["exe"]?.jsonPrimitive?.content ?: ""
-                val prof = saved["profile"]?.jsonPrimitive?.content ?: ""
+                val p = saved["port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                val exePath = saved["exe"]?.jsonPrimitive?.contentOrNull ?: ""
+                val prof = saved["profile"]?.jsonPrimitive?.contentOrNull ?: ""
                 if (p > 0 && attachable(p)) {
                     return BrowserSession(null, p, prof.ifBlank { null }?.let { File(it) }, exePath)
                         .also { current = it }

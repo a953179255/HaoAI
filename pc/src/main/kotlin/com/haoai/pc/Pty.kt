@@ -1,6 +1,7 @@
 package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -266,7 +267,7 @@ class ShellSendTool : Tool(
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val id = req(args, "id") ?: return fail("shell_send 缺少 id")
         val text = req(args, "text") ?: ""
-        val enter = args["enter"]?.jsonPrimitive?.content != "false"
+        val enter = args["enter"]?.jsonPrimitive?.contentOrNull != "false"
         val why = ctx.guard("shell", text, "向常驻进程 $id 输入", text)
         if (why != null) return fail(why)
         return ProcRegistry.send(id, text, enter).fold(

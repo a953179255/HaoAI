@@ -159,4 +159,39 @@ class ProviderStreamTest {
 
     private fun emptyObj(): kotlinx.serialization.json.JsonObject =
         kotlinx.serialization.json.buildJsonObject { }
+
+    /**
+     * `"content": null` 不能变成四个字符的 "null"。
+     *
+     * OpenAI 兼容网关在"这一帧只有 tool_calls、没有正文"时，标准写法就是 content:null
+     * （本地 llama-server 与很多真网关都这么发）。而 `JsonNull.jsonPrimitive.content`
+     * 返回的是字符串 "null" —— 于是模型每调一次工具，界面上打一行 "HaoAI > null"，
+     * 历史里也多一句 "null"，模型下一轮看到的助手发言就是垃圾。
+     *
+     * 这一条是**第一次接真模型**才撞出来的：假网关从来不发 null，
+     * 所以 85 条测试全绿也照不出来（同一类盲区见本文件开头那句"流式解析完全没覆盖"）。
+     */
+    @Test
+    fun `null content does not become the literal string null`() {
+        val frames = listOf(
+            data("""{"choices":[{"index":0,"finish_reason":null,"delta":{"role":"assistant","content":null}}]}"""),
+            data("""{"choices":[{"index":0,"finish_reason":null,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]}}]}"""),
+            data("""{"choices":[{"index":0,"finish_reason":null,"delta":{"content":null}}]}"""),
+            data("""{"choices":[{"index":0,"finish_reason":"tool_calls","delta":{}}]}"""),
+            data("[DONE]")
+        )
+        val f = serve(frames)
+        try {
+            val streamed = StringBuilder()
+            val r = Provider("http://127.0.0.1:${f.port}/v1", "k", "m")
+                .chat(listOf(Msg("user", "读一下")), emptyList()) { streamed.append(it) }
+            assertEquals("正文里混进了字符串 null：" + r.text, "", r.text)
+            assertEquals("每一帧都被当成正文流出去了：$streamed", "", streamed.toString())
+            assertEquals(1, r.calls.size)
+            assertEquals("read", r.calls.first().name)
+            assertEquals("""{"path":"a.txt"}""", r.calls.first().args)
+        } finally {
+            f.server.stop(0)
+        }
+    }
 }

@@ -414,7 +414,7 @@ class Engine(
 
     private fun brief(args: JsonObject): String {
         val v = args["command"] ?: args["path"] ?: args["url"] ?: args["pattern"] ?: args["question"]
-        return v?.jsonPrimitive?.content?.take(180) ?: args.toString().take(140)
+        return v?.jsonPrimitive?.contentOrNull?.take(180) ?: args.toString().take(140)
     }
 
     private fun parseArgs(raw: String): JsonObject = runCatching {
@@ -490,7 +490,7 @@ class Engine(
         runCatching {
             val o = Json.parseToJsonElement(f.readText()).jsonObject
             summary = o["summary"]?.jsonPrimitive?.contentOrNull
-            compactedCount = o["compactedThrough"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            compactedCount = o["compactedThrough"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             // 带着摘要恢复的会话，把迟滞基线设成当前正文规模：
             // 否则"重开一个本来就很长的会话"会立刻再压一次，白花一次模型调用。
             if (!summary.isNullOrBlank()) lastCompactedChars = history.sumOf { it.content?.length ?: 0 }
@@ -503,16 +503,16 @@ class Engine(
             val o = Json.parseToJsonElement(f.readText()).jsonObject
             o["messages"]?.jsonArray?.mapNotNull { el ->
                 val m = el.jsonObject
-                val role = m["role"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                val role = m["role"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                 Msg(
                     role = role,
-                    content = m["content"]?.jsonPrimitive?.content,
-                    callId = m["tool_call_id"]?.jsonPrimitive?.content,
+                    content = m["content"]?.jsonPrimitive?.contentOrNull,
+                    callId = m["tool_call_id"]?.jsonPrimitive?.contentOrNull,
                     calls = m["tool_calls"]?.jsonArray?.mapNotNull { c ->
                         val fn = c.jsonObject["function"]?.jsonObject
-                        val id = c.jsonObject["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                        val n = fn?.get("name")?.jsonPrimitive?.content ?: return@mapNotNull null
-                        ToolCall(id, n, fn["arguments"]?.jsonPrimitive?.content ?: "{}")
+                        val id = c.jsonObject["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        val n = fn?.get("name")?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        ToolCall(id, n, fn["arguments"]?.jsonPrimitive?.contentOrNull ?: "{}")
                     } ?: emptyList()
                 )
             } ?: emptyList()

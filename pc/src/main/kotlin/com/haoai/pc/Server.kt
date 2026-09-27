@@ -579,16 +579,16 @@ class WebServer(settings: PcSettings, port: Int) {
             send(ex, 400, """{"ok":false}""", "application/json; charset=utf-8"); return
         }
         var n = settings
-        body["model"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(model = it) }
-        body["baseUrl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
-        body["mode"]?.jsonPrimitive?.content?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
+        body["model"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(model = it) }
+        body["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
+        body["mode"]?.jsonPrimitive?.contentOrNull?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
             n = n.copy(permissionMode = it)
             // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话引擎上，
             // 否则切回后台那个会话时它会继续用旧模式跑。（这里刻意不用 `it`，
             // 外层 `let` 已经把模式字符串占掉了，嵌套 `forEach { it -> }` 会把外层值遮蔽掉。）
             sessions.values.forEach { m -> m.engine.session.mode = it }
         }
-        body["workspace"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { n = n.copy(workspace = it) }
+        body["workspace"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(workspace = it) }
         body["flags"]?.jsonObject?.let { fo ->
             val merged = n.flags.toMutableMap()
             fo.forEach { (k, v) -> merged[k] = (v.jsonPrimitive.content == "true") }

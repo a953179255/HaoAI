@@ -1,6 +1,7 @@
 package com.haoai.pc
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -213,10 +214,22 @@ class Provider(
         }
 
         val choice = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: return false
-        choice["finish_reason"]?.jsonPrimitive?.content?.let { if (it.isNotBlank() && it != "null") box[2] = it }
+        /*
+         * 这些字段全部要走 `contentOrNull`，不能用 `.jsonPrimitive?.content`。
+         *
+         * `JsonNull.jsonPrimitive.content` 返回的是**四个字符的字符串 "null"**，不是 null。
+         * 而 OpenAI 兼容网关在"这一帧只有 tool_calls、没有正文"时，标准写法就是
+         * `"content": null` —— 于是模型每调一次工具，历史里就多一句 "null"，
+         * 界面上每轮都打印 "HaoAI > null"。
+         * 第一次接真模型（本地 llama-server 的 Agents-A1-4B）才撞上：
+         * 假网关从来不发 null，所以 85 条测试全绿也照不出来。
+         */
+        choice["finish_reason"]?.jsonPrimitive?.contentOrNull?.let {
+            if (it.isNotBlank()) box[2] = it
+        }
         val delta = choice["delta"]?.jsonObject ?: return false
 
-        delta["content"]?.jsonPrimitive?.content?.let { piece ->
+        delta["content"]?.jsonPrimitive?.contentOrNull?.let { piece ->
             if (piece.isNotEmpty()) {
                 box[0] = (box[0] as String) + piece
                 onText(piece)
@@ -225,12 +238,12 @@ class Provider(
 
         delta["tool_calls"]?.jsonArray?.forEach { raw ->
             val tc = raw.jsonObject
-            val idx = tc["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            val idx = tc["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
             val slot = acc.getOrPut(idx) { arrayOf("", "", "") }
-            tc["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let { slot[0] = it }
-            tc["function"]?.jsonObject?.get("name")?.jsonPrimitive?.content
+            tc["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { slot[0] = it }
+            tc["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
                 ?.takeIf { it.isNotBlank() }?.let { slot[1] += it }
-            tc["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.content
+            tc["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
                 ?.let { slot[2] += it }
         }
         return false
