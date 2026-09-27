@@ -326,9 +326,19 @@ class Engine(
      * 优先让模型自己压，失败/超时/空返回则退回 [Compactor.digest] ——
      * 省 token 的机制自己不能成为新的故障点。
      */
-    private fun maybeCompact(): Int {
+    private fun maybeCompact(): Int = compactOnce(force = false)
+
+    /** 界面上"现在压缩一次"走的这条：绕开触发线与迟滞，切点规则与兜底完全同一个实现。 */
+    fun compactNow(): Int {
+        val cut = compactOnce(force = true)
+        // 手动压缩不在回合里，没人替它落盘：不写一次，刷新就回到压缩前的样子
+        if (cut > 0) persistNow()
+        return cut
+    }
+
+    private fun compactOnce(force: Boolean): Int {
         val bodyChars = history.sumOf { it.content?.length ?: 0 }
-        if (bodyChars <= settings.compactTriggerChars) return 0
+        if (!force && bodyChars <= settings.compactTriggerChars) return 0
         /**
          * 迟滞：压过一次之后，除非**又长出半个触发线**那么多，否则不再压。
          *
@@ -337,8 +347,14 @@ class Engine(
          * 压完仍然超线。没有这条的话，每一轮都会白花一次模型调用去压一个
          * 压不动的东西 —— 表现就是"长会话突然开始每轮多一次请求、还不变快"。
          */
-        if (lastCompactedChars > 0 && bodyChars < lastCompactedChars + settings.compactTriggerChars / 2) return 0
-        val keep = settings.compactKeepTail.coerceAtLeast(4)
+        if (!force && lastCompactedChars > 0 &&
+            bodyChars < lastCompactedChars + settings.compactTriggerChars / 2) return 0
+        val want = settings.compactKeepTail.coerceAtLeast(4)
+        /*
+         * 手动压缩时保留窗口不许比历史还长：默认 keep=14，一条 12 句的会话按下去会
+         * "没得压"，而那恰恰是人最想压的时刻（刚跑完一段调研）。折一半，至少留 4 条。
+         */
+        val keep = if (force) minOf(want, (history.size / 2).coerceAtLeast(4)) else want
         var cut = (history.size - keep).coerceAtLeast(0)
         while (cut > 0 && history[cut].role == "tool") cut--
         if (cut < 4) return 0                       // 头部太短，压了反而更啰嗦

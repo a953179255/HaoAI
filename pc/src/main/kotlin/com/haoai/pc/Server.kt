@@ -149,6 +149,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/schedules" -> schedules(ex)
                 "/api/files" -> files(ex)
                 "/api/workspaces" -> workspaces(ex)
+                "/api/compact" -> compactNow(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
@@ -253,6 +254,10 @@ class WebServer(settings: PcSettings, port: Int,
         // 拆成几行是因为"快满了"这件事有两种完全相反的成因（历史太长 vs 工具说明太长）。
         sb.append("\"context\":{\"chars\":").append(e?.contextChars() ?: 0)
         sb.append(",\"window\":").append(settings.contextChars)
+        // 触发线与"已经折掉多少条"要报给界面：不报的话"现在压缩一次"这个按钮点下去
+        // 到底是压了还是没到量，用户只能猜
+        sb.append(",\"trigger\":").append(settings.compactTriggerChars)
+        sb.append(",\"compactedThrough\":").append(e?.compactedCount ?: 0)
         sb.append(",\"parts\":[")
         e?.contextBreakdown()?.forEachIndexed { i, (label, chars) ->
             if (i > 0) sb.append(',')
@@ -620,6 +625,34 @@ class WebServer(settings: PcSettings, port: Int,
      * 不另存一份"最近列表"：会话索引里本来就写着每条会话的工作区，再存一份就是两个真源，
      * 迟早对不上（手机端踩过这个）。这里按目录归组，条数与最后活动时间都从会话算出来。
      */
+    /**
+     * `POST /api/compact` {sid} —— 手动把早期消息折进摘要（不等触发线）。
+     *
+     * 跑着的那条不许压：历史正在被回合改，这时候算出来的切点等于两条任务往一段历史上写。
+     */
+    private fun compactNow(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val m = sessions[sid]
+        if (m == null) {
+            send(ex, 200, """{"ok":false,"error":"没有这条会话"}""", "application/json; charset=utf-8"); return
+        }
+        if (m.running) {
+            send(ex, 200, """{"ok":false,"error":${quote("这条正在跑，等它收尾再压（不然切点会算错）")}}""",
+                "application/json; charset=utf-8"); return
+        }
+        val before = m.engine.contextChars()
+        val cut = runCatching { m.engine.compactNow() }.getOrElse { e ->
+            send(ex, 200,
+                """{"ok":false,"error":${quote("压缩失败：" + (e.message ?: e.javaClass.simpleName))}}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        send(ex, 200, """{"ok":true,"cut":$cut,"before":$before,"after":${m.engine.contextChars()}}""",
+            "application/json; charset=utf-8")
+        publish("sessions", "{}", sid)
+    }
+
     private fun workspaces(ex: HttpExchange) {
         val cur = pick(querySid(ex))
         val curWs = runCatching {

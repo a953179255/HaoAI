@@ -483,6 +483,11 @@
       <div class="kv" id="usage3">—</div>
       <div class="grp">累计（磁盘上的会话）</div>
       <div class="kv" id="usageAll">—</div>
+      <div class="grp">上下文</div>
+      <div class="kv" id="ctxLine">—</div>
+      <div class="acts2 pinned"><button class="ab" id="cmpBtn"
+        title="把早期消息折进摘要：绕开触发线，切点与兜底用的是自动压缩同一个实现">现在压缩一次</button>
+        <span class="fp" id="cmpState"></span></div>
       <div class="grp">口径</div>
       <div class="kv">token 来自网关回包，按<b>计费 token</b> 计，不是字符数；
         累计只算盘上还留着的会话（列表最长 200 条），删掉的不算。</div>
@@ -771,7 +776,32 @@ function paintCtx(c){
     :'<div class="kv">（还没有上下文）</div>')+
     `<div class="kv" style="margin-top:8px">合计 ${used.toLocaleString()} 字 / 窗口 ${win.toLocaleString()} 字 = <b>${pct}%</b>。
      窗口大小在设置里改（contextChars）。快满了先压缩或开新会话。</div>`;
+  const tg=(c&&c.trigger)||0,done=(c&&c.compactedThrough)||0;
+  $('#ctxLine').textContent=`当前 ${used.toLocaleString()} 字 · 窗口 ${win.toLocaleString()}（${pct}%）`+
+    ` · 自动触发线 ${tg.toLocaleString()} 字 · 已折进摘要 ${done} 条`;
 }
+
+/* ---- 手动压缩：到没到触发线都能压一次（长会话里"我先收个尾"的入口） ---- */
+function compactNow(){
+  if(!curId){toast('还没有会话');return}
+  const st=$('#cmpState');st.textContent='压缩中…';
+  post('/api/compact',{sid:curId}).then(d=>{
+    if(!d||!d.ok){st.textContent='';toast((d&&d.error)||'没压成','err');return}
+    st.textContent='';
+    if(!d.cut){toast('头部消息还不够多（少于 4 条可折），这次没动');hydrate(curId);return}
+    const n=v=>(v||0).toLocaleString(), saved=(d.before||0)-(d.after||0);
+    const line='上下文压缩：把 '+n(d.cut)+' 条早期消息折进摘要（'+n(d.before)+' → '+n(d.after)+' 字'+
+      (saved>0?'，省 '+n(saved)+' 字':'；这次没省到字，会话再长些压才有净收益')+'）。';
+    toast(line);
+    /*
+     * notice 要排在 hydrate 之后：引擎也发了一条 notice，但紧接着的 state 重画会把
+     * 整个流重放一遍、把它抹掉 —— 于是"压过了"这件事在流里一句都不剩。
+     * 长期证据是「已折进摘要 N 条」那一行（它来自盘上的水位，刷新也在）。
+     */
+    hydrate(curId).then(()=>notice(line));
+  }).catch(()=>{st.textContent='';toast('压缩请求没走通','err')});
+}
+$('#cmpBtn').onclick=compactNow;
 $('#ctxBtn').onclick=()=>$('#ctxPanel').classList.toggle('on');
 
 /* ---- 代码块：高亮 + 复制（都在渲染之后补，不去动 md.js 那个渲染器） ---- */
@@ -1337,6 +1367,7 @@ const CMDS=[
   {c:'/model',a:'model',d:'切换模型'},
   {c:'/stop',a:'stop',d:'停止这一轮'},
   {c:'/clear',a:'clear',d:'丢掉当前会话的全部历史'},
+  {c:'/compact',a:'compact',d:'把早期消息折进摘要（不等触发线）'},
   {c:'/export',a:'export',d:'导出当前会话为 markdown'},
   {c:'/theme',a:'theme',d:'切换明暗主题'},
   {c:'/status',a:'status',d:'看上下文占用明细'},
@@ -1425,6 +1456,7 @@ function runCommand(t){
       if(!confirm('丢掉当前会话的全部历史？（工作区里的文件与快照不会动）'))break;
       post('/api/cut',{sid:curId,index:'0',keep:'0'}).then(()=>{hydrate(curId);toast('已清空历史')})
         .catch(()=>toast('清不掉：这条会话可能正在跑'));break;
+    case 'compact':compactNow();break;
     case 'export':$('#expBtn').click();break;
     case 'theme':$('#themeBtn').click();break;
     case 'status':$('#ctxPanel').classList.add('on');toast('已展开上下文占用');break;

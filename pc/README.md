@@ -368,6 +368,7 @@ SHOT_W=900 bash pc/tools/ui-shot.sh pc/tools/steps/ui-narrow.json      # 窄屏�
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件浏览 + 三条越界尝试
 PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-group.json  # 侧栏按目录分组 + 累计用量
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json     # 定时任务：加/跑一次/停用/删 + 思考强度
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-compact.json   # 手动压缩：折一半/诚实读数/刷新还在
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -620,6 +621,34 @@ Kotlin 侧新增 `WorkspaceTest`（6 条），共 132 条全绿。
 （真像素里：两组各 1 条、组头跟着走、收起变 `+` 且 `localStorage` 里落了值、
 刷新后分组还在、搜索时两组都出命中、累计那行是 `今天 2 条 ↑2,468 ↓174 …`）。
 `ui.json` 全量巡游 83 步无回归（单目录时走的是原来那条平铺路径，所以老判据一条没破）。
+
+## 这一批：手动压缩一次（`/compact` 与用量页那颗按钮）
+
+自动压缩早就有，但它只在**下一轮请求前**、且过了触发线才动手。长会话里人常有另一个判断：
+"这段调研没用了，先收一收再往下走" —— 不该逼他等到 6 万字，也不该为此重开一条会话。
+所以补一条手动入口：用量页签「上下文」那行旁边的按钮，或输入 `/compact`。
+
+- 绕开的只有**触发线与迟滞**两道闸；切点规则、模型摘要 + 机器兜底、摘要追加与裁剪，
+  全部走自动那条同一个实现（`compactOnce(force)`），两条路不会各自腐化。
+- **跑着的那条不许压**：历史正在被回合改，这时候算切点等于两条任务往一段历史上写；
+  接口把理由说清（"这条正在跑，等它收尾再压"）。
+- 手动压缩不在回合里，没人替它落盘 —— `compactNow()` 自己 `persistNow()` 一次，
+  否则刷新就回到压缩前的样子。
+- 修掉一个真实障碍：`compactKeepTail` 默认 14，于是 12 句的会话按下去"没得压"
+  （那恰恰是人最想压的时刻）。force 模式把保留窗口压到"至多折一半、至少留 4 条"。
+- 读数诚实：短句会话上压缩可能**一个字都不省**（摘要和原文差不多长），
+  提示就照实说"这次没省到字，会话再长些压才有净收益"，不假装成功。
+- 顶栏那圈占用旁边加了「已折进摘要 N 条 / 自动触发线 X 字」，
+  数据来自 `state.context.{trigger,compactedThrough}`（水位本来就在盘上，只是以前没报给界面）。
+
+一处已知取舍：压完那条流内提示是**重画之后补发的**（引擎也发了一条，但紧接着的 state 重放会把它抹掉），
+所以它只在当前这一次可见；长期证据是用量页那行「已折进摘要 N 条」，它来自盘上的水位，刷新也在。
+
+验收：`SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-compact.json`
+（真像素：按之前 8 条消息 / 已折 0 条 → 按下去 4 条 + 流里出现那条提示 + 顶栏数字不变就照实说 →
+再按一次诚实地拒绝 → 刷新之后「已折进摘要 4 条」还在）。
+Kotlin 侧新增 `ManualCompactTest`（5 条：绕开触发线真的折、太短不许吃历史、落盘与水位、
+未知会话、正在跑的那条被挡下来），共 137 条全绿。
 
 ## 与手机端同源的行为
 
