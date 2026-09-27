@@ -9,6 +9,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -418,7 +419,7 @@ class ApprovalFlowTest {
 
     /** 同一条会话里排队不行：第二个任务会写进同一段历史，事后看不出哪条输出属于哪条。 */
     @Test
-    fun `a second task on the same running session is refused`() {
+    fun `a second task on the same running session waits its turn`() {
         val sid = runTask("占位：写 busy.txt", listOf(
             toolCallTurn("call_busy", "write", """{"path":"busy.txt","content":"x"}"""),
             textTurn("结束")
@@ -426,8 +427,12 @@ class ApprovalFlowTest {
         assertNotNull("没进入待决审批状态，测不了并发保护", awaitEventFrom("approval", sid))
 
         val (code, body) = post("/api/task", mapOf("text" to "同一条会话上的第二个", "sid" to sid))
-        assertEquals("同一条会话跑着的时候还能再提交：$body", 409, code)
-        assertTrue("409 得说清楚为什么：$body", body.contains("正在跑"))
+        assertEquals("跑着的时候第二句该被收下排队，而不是被拒：$body", 200, code)
+        // 收了，但**不能同时跑**：这条会话还停在第一句的待决审批上
+        assertTrue("第二句没进队列", stateQueue(sid).contains("同一条会话上的第二个"))
+        // 排队不等于并发：第一句还停在待决审批上，第二句必须还在队列里等着
+        assertTrue("第一句该还在跑（第二句不该抢同一段历史）", isRunning(sid))
+        assertTrue("第二句该还在队列里等着", stateQueue(sid).contains("同一条会话上的第二个"))
 
         // 但**切换会话**不再被拒：后台继续跑，事件按 sid 分流
         val opened = post("/api/open", mapOf("id" to sid))
@@ -436,7 +441,15 @@ class ApprovalFlowTest {
 
         post("/api/stop", mapOf("sid" to sid))
         assertTrue(awaitIdle(sid))
+        // 停止之后排队的句子不该自己接着往下说
+        assertEquals("按了停止，队列该清空（文字由前端退回输入框）",
+            emptyList<String>(), stateQueue(sid))
     }
+
+    /** 队列现在是什么：/api/state 里的 queue[].t */
+    private fun stateQueue(sid: String): List<String> =
+        Json.parseToJsonElement(get("/api/state?sid=$sid")).jsonObject["queue"]?.jsonArray
+            ?.map { it.jsonObject["t"]?.jsonPrimitive?.contentOrNull ?: "" } ?: emptyList()
 
     @Test
     fun `deny leaves the file unwritten`() {

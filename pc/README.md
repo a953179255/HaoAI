@@ -375,6 +375,7 @@ PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-paste.json  # 拖拽落点层 + Ctrl+V 贴截图进附件
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-trash.json  # 回收站放回 + 侧栏每组点开更多
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-jump.json  # 搜索命中跳到那一条并闪一下
+SHOT_MODE=loop bash pc/tools/ui-shot.sh pc/tools/steps/ui-queue.json  # 跑着的时候再发一句：排队胶囊 + 撤回
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -901,6 +902,41 @@ md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉�
 2.2 秒后 `flashGone:true`（自己收掉）；再跳一个不存在的下标 →
 toast 说清楚、且**没有**把人从当前会话上带走（`stillCur:true`）。
 
+## 这一批：跑着的时候再发一句 —— 排队，不是 409
+
+手机端有"排队 + 插话 + 撤回"（`ChatViewModel`），PC 端以前是直接拒：
+"这条会话正在跑，先按停止再发新任务"。可用户手打的下一句十有八九就是要紧接着说的，
+而按停止会杀掉跑了十分钟的活 —— 两个选项都不对，正确答案是**让它等着**。
+
+- `Managed` 加一条 `queue`（每会话一条，上限 8 句）。`startRun` 在最前面分诊：
+  这条会话正在跑、且不是"编辑重发/重新生成"（那两类要截断历史，排队过去位置就错了）
+  ⇒ 入队 + 发 `queue` 事件，**不碰并发判定**，也不新建会话。
+- 接下一句的地方只有一个：那条 run 线程的 `finally`（本轮真的结束了）。
+  一次只取一句 —— 取完发出去，`running` 又成 true，剩下的由下一条 run 线程接力。
+  两条任务往同一段历史上写是最坏的情况，所以宁可慢，不可交错。
+- **按停止 = 别再自己往下说了**：这时不但不接下一句，还要把队列清空。
+  前端在 `stopNow()` 里把排队的文字原样退回输入框并 toast 一句"撤掉 N 句排队的"，
+  所以"清空"不是把用户打的话弄丢。
+- 界面上是一条"排队中 · 本轮说完接着说"的胶囊（可撤回），队列同时进 `/api/state`，
+  刷新页面之后那几句还在。
+
+验收（Kotlin，`QueueTest` 3 条 + 改掉一条过期的 `ApprovalFlowTest`）：
+假网关对带"慢"的那句拖 1.8 秒，第二句才真撞得上"正在跑"。判据不看接口说了什么，
+看**网关按什么顺序收到什么**：排队没接上则第二句永远不到、撤回没生效则第二句会到，
+两种失败模式都能被同一条测试区分出来。原来那条"第二个任务该被 409"的用例
+按新语义改成"该被收下并排队，且第一句仍在待决审批上、第二句不许抢同一段历史"。
+
+验收（真像素，`SHOT_MODE=loop bash pc/tools/ui-shot.sh tools/steps/ui-queue.json`）：
+跑着的时候按回车 → 胶囊出现、`state.queue=["这句要排在后面说"]`、那句话**没有**混进对话流；
+点 ✕ → 胶囊消失、`state.queue=0` 而会话还在跑。
+
+顺带修掉两处自己造的坑：① Python 补丁里写 `'
+'` 会被 Python 先吃掉一层，
+落到 JS 里就成了真的换行 —— 字符串字面量断掉、整个脚本不解析，
+表现是"点什么都没反应 + `cur is not defined`"，看着像产品坏了其实是补丁坏了（同一批踩两次）；
+② `ui-shot.sh` 收尾删状态根时进程还占着那个目录，`rm` 失败会让**全绿的验收**返回非零 ——
+量具自己把成功报成失败。现在等 0.4 秒再删，删不掉也不改退出码。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -967,7 +1003,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **163 条全绿**（整套 22 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **166 条全绿**（整套 27 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），

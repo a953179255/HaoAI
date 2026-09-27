@@ -130,6 +130,16 @@
   .atchip.no{border-color:var(--warn);color:var(--warn)}
   /* 胶囊里要看得见那张图：一次截图后连着贴三张，只读文件名分不清哪张是哪张 */
   .atchip .ath{width:38px;height:26px;object-fit:cover;border-radius:5px;border:1px solid var(--line);flex:none}
+  /* 排队条：跑着的时候发出去的下一句不会立刻进对话，看得见"排在后面"才敢继续打字 */
+  .qrow{display:none;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 6px 2px}
+  .qrow.on{display:flex}
+  .qrow .ql{font-size:11px;color:var(--dim2)}
+  .qchip{display:flex;gap:5px;align-items:center;max-width:100%;font-size:11.5px;color:var(--dim);
+    border:1px solid var(--line);border-radius:8px;padding:2px 4px 2px 8px;background:var(--glass)}
+  .qchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qchip i{font-style:normal;color:var(--dim2);flex:none}
+  .qchip em{font-style:normal;cursor:pointer;color:var(--dim2);padding:0 4px;flex:none}
+  .qchip em:hover{color:var(--bad)}
   /* 流里的图片：缩略图 + 文件名。图读不出来（工作区外、太大、类型不认）时至少还剩那行字 */
   .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .thumbs .th{display:flex;flex-direction:column;gap:3px}
@@ -497,6 +507,7 @@
     <button class="pill" id="pill">↓ 回到底部</button>
     <footer>
       <div class="slash" id="slash"></div>
+      <div class="qrow" id="queueRow"></div>
       <div class="atts" id="attRow"></div>
       <div class="inwrap">
         <button class="clip" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读">📎</button>
@@ -606,7 +617,7 @@ function view(sid){
   if(!v){
     v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
        tools:{},subs:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
-       mode:mode,workspace:'',model:'',outputs:[]};
+       mode:mode,workspace:'',model:'',outputs:[],queue:[]};
     views[sid]=v;stream.appendChild(v.el);
   }
   return v;
@@ -626,7 +637,7 @@ function show(sid){
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
   fpath='';if(document.querySelector('#tab-files').classList.contains('on'))loadFiles();
-  paintSend();paintPill();scroll(true);markSessions();
+  paintSend();paintPill();paintQueue(v);scroll(true);markSessions();
 }
 // 本地 gguf 的"模型名"是一整条 Windows 路径，直接显示会把顶栏撑爆
 function shortModel(m){return m?String(m).replace(/^.*[\\/]/,'').replace(/\.gguf$/,''):'—'}
@@ -964,6 +975,7 @@ function on(ev,fn){
     if(sid!==curId&&BUMP[ev]){v.unread++;if(ev=='approval'||ev=='ask')v.wait=true;markSessions()}
   });
 }
+on('queue',(v,d)=>{v.queue=d.items||[];paintQueue(v)});
 on('delta',(v,d)=>answer(d,v));
 on('answer',(v,d)=>{if(!d)notice('(本轮没有正文)',null,v);finishAnswer(d,v)});
 on('reason',(v,d)=>thinking(d,v));
@@ -1105,6 +1117,17 @@ function attachFiles(list){
       r.readAsDataURL(f);
     }
   });
+}
+function paintQueue(v){
+  const r=$('#queueRow');
+  if(v!==cur()){r.classList.remove('on');r.innerHTML='';return}
+  const q=(v&&v.queue)||[];
+  r.classList.toggle('on',q.length>0);
+  r.innerHTML=q.length?('<span class="ql">排队中 · 本轮说完接着说</span>'+q.map((x,i)=>
+    `<span class="qchip" title="${esc(x.t)}"><b>${esc(x.t.length>30?x.t.slice(0,30)+'…':x.t)}</b>`+
+    ((x.imgs&&x.imgs.length)?`<i>${x.imgs.length} 图</i>`:'')+
+    `<em data-q="${i}" title="撤回这句，不发出去">✕</em></span>`).join('')):'';
+  r.querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>post('/api/unqueue',{sid:curId,at:b.dataset.q}));
 }
 function insertAtCursor(t){
   const s=box.selectionStart==null?box.value.length:box.selectionStart;
@@ -1420,11 +1443,16 @@ function send(){
   const t=box.value.trim();if(!t)return;
   if(v.running){
     /*
-     * 跑着的时候按回车**不是**停止。上一版把"发送按钮在跑时变成 ■"顺手套到了回车键上，
-     * 于是用户在新会话里打完一句话按回车，被杀掉的是后台那条跑了十分钟的任务。
-     * 停止只留 ■ 一个入口，这句话留在框里不丢。
+     * 跑着的时候按回车**不是**停止（上一版把"发送按钮在跑时变成 ■"顺套到回车键上，
+     * 于是新会话里按一次回车，被杀掉的是后台那条跑了十分钟的任务）。
+     * 也不是拒绝：下一句多半就是要紧接着说的 —— 排到本轮后面，界面上给一条"排队中"。
      */
-    notice('这条会话正在跑：要另起一件事点「＋新任务」，要停下它按右下角的 ■。这句话还留在框里。');
+    if(t.startsWith('/')&&t.indexOf('\n')<0&&runCommand(t))return;
+    box.value='';box.style.height='auto';hideSlash();
+    const qi=atts.map(a=>a.p);atts=[];paintAtts();
+    post('/api/task',{text:t,sid:curId,images:qi}).then(d=>{
+      if(!d||!d.ok)notice((d&&d.error)||'没排进去','err');
+    });
     return;
   }
   if(t.startsWith('/')&&t.indexOf('\n')<0&&runCommand(t))return;
@@ -1442,6 +1470,13 @@ function send(){
 }
 function stopNow(){
   const v=cur();
+  // 停止会把排队的句子撤掉（服务端不再自动接下去），文字原样退回输入框，不弄丢
+  if(v.queue&&v.queue.length){
+    const back=v.queue.map(x=>x.t).join('\n');
+    box.value=back+(box.value.trim()?'\n'+box.value:'');
+    box.dispatchEvent(new Event('input',{bubbles:true}));
+    toast('撤掉 '+v.queue.length+' 句排队的，已放回输入框');
+  }
   // 同一个按钮：跑着的时候它就是停止。另起一个"停止"按钮放在旁边，
   // 用户要在两个长得很像的圆钮之间做选择，得不偿失。
   if(!v.running||stopping)return;
@@ -1836,6 +1871,7 @@ function applyState(s){
   decorate(v);actions(v);
   // 挂着没答的审批/提问：SSE 只推过一次，刷新就没了，而引擎还在等 —— 必须从 state 里补回来
   (s.pending||[]).forEach(p=>ask(p.data,p.ev,v));
+  v.queue=s.queue||[];paintQueue(v);
   v.todos=(s.todos||[]).map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text);
   paintUsage(s.usage,v);
   paintCtx(s.context);

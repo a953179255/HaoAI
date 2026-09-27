@@ -58,7 +58,12 @@ cleanup() {
   [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null || true
   # 每次跑都换一个状态根（上面那条：不换就会混进上一轮的会话），跑完它就是纯垃圾，
   # 一天二十来次就是二十个目录。失败时留着看 mock.log / serve.log；KEEP_HOME=1 强制留。
-  if [ "${KEEP_HOME:-0}" != "1" ] && [ "${RC:-1}" = "0" ]; then rm -rf "$HOME_DIR"; fi
+  if [ "${KEEP_HOME:-0}" != "1" ] && [ "${RC:-1}" = "0" ]; then
+    # 服务端进程刚 kill，Windows 上它的当前目录还会被占一会儿：删不动就算了，
+    # 不能让一次"验收其实全绿"的运行因为收尾删目录失败而报非零退出码。
+    sleep 0.4
+    rm -rf "$HOME_DIR" 2>/dev/null || true
+  fi
 }
 trap 'RC=$?; cleanup' EXIT
 sleep 1

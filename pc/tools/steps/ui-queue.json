@@ -1,0 +1,50 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "做一个不停的活"
+  }
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "eval": "({running:cur().running,btn:document.querySelector('#send').textContent.trim(),msgs:document.querySelectorAll('.view.on .msg').length})"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "这句要排在后面说"
+  }
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({row:document.querySelector('#queueRow').classList.contains('on'),chips:[...document.querySelectorAll('.qchip b')].map(x=>x.textContent),label:(document.querySelector('.qrow .ql')||{}).textContent,msgs:document.querySelectorAll('.view.on .msg').length,box:document.querySelector('#box').value})"
+ },
+ {
+  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>'state.queue='+JSON.stringify((s.queue||[]).map(x=>x.t)))"
+ },
+ {
+  "shot": "q01-queued"
+ },
+ {
+  "click": ".qchip em"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({row:document.querySelector('#queueRow').classList.contains('on'),chips:document.querySelectorAll('.qchip').length,msgs:document.querySelectorAll('.view.on .msg').length})"
+ },
+ {
+  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>'撤回后 state.queue='+(s.queue||[]).length+' 还在跑='+s.running)"
+ },
+ {
+  "shot": "q02-withdrawn"
+ }
+]

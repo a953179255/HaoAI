@@ -58,6 +58,15 @@ class WebServer(settings: PcSettings, port: Int,
     private class Managed(val engine: Engine) {
         @Volatile
         var running = false
+
+        /**
+         * 跑着的时候用户又发了一句 —— 先排队，本轮结束自动接上（见 `startRun` 的入队分支）。
+         *
+         * 以前这里直接 409："这条会话正在跑，先按停止再发新任务"。可是用户手打的下一句
+         * 往往就是要紧接着说的，让他先停止等于打断正在跑的活；手机端与 codex 都是排队 + 可撤回。
+         * 上限 8 句：再多说明用户在试错，不如下令停下来看一眼。
+         */
+        val queue = mutableListOf<Pair<String, List<String>>>()
     }
 
     private val sessions = ConcurrentHashMap<String, Managed>()
@@ -156,6 +165,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/img" -> imageFile(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
+                "/api/unqueue" -> unqueue(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -247,6 +257,16 @@ class WebServer(settings: PcSettings, port: Int,
         // 模型要报**这条会话自己的**：从 v0.32 起可以只给一条会话换模型，
         // 还报全局那份的话，顶栏那个标签就在说谎（引擎实际用的和显示的不一样）。
         sb.append("\"model\":\"").append(esc(e?.settings?.model ?: settings.model)).append("\",")
+        // 排队的句子要跟着 state 报出去：刷新页面之后"还有两句等着说"不能看不见
+        sb.append("\"queue\":[").append(
+            managed?.let { m ->
+                synchronized(m.queue) {
+                    m.queue.joinToString(",") { (t, im) ->
+                        """{"t":${quote(t)},"imgs":${im.joinToString(",", "[", "]") { quote(it) }}}"""
+                    }
+                }
+            } ?: ""
+        ).append("],")
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
         sb.append("\"sessionId\":").append(quote(id)).append(",")
@@ -382,6 +402,20 @@ class WebServer(settings: PcSettings, port: Int,
          * `named` 必须在这里定：Engine.submit 只在标题还是「新会话」时才自动取名，
          * 晚一步就被任务句子的前 24 字占了（定时任务的句子本来就是半截话）。
          */
+        // 正在跑的那条又收到一句：不进并发判定，直接排队，本轮结束后由 run 线程接上。
+        // 编辑重发 / 重新生成（带 cutTo）不排队 —— 它们要截断历史，排队过去位置就错了。
+        if (cutTo == null && !fresh && wantSid.isNotBlank()) {
+            sessions[wantSid]?.let { m ->
+                if (m.running) {
+                    val q = synchronized(m.queue) {
+                        if (m.queue.size >= 8) null else { m.queue.add(text to images); m.queue.toList() }
+                    }
+                    if (q == null) return wantSid to "这条会话已经排了 8 句，先撤回几句"
+                    publish("queue", queueJson(wantSid, q), wantSid)
+                    return wantSid to null
+                }
+            }
+        }
         val (sid, managed) = synchronized(this) {
             val use = if (fresh) "" else wantSid.ifBlank { currentId() ?: "" }
             if (liveCount() >= maxRunning) {
@@ -433,6 +467,31 @@ class WebServer(settings: PcSettings, port: Int,
                 managed.running = false
                 publish("run", """{"running":false}""", sid)
                 publish("sessions", "{}", sid)
+                /*
+                 * 本轮真的结束了才换下一句 —— 两条任务往同一段历史上写是最坏的情况。
+                 * 一次只取一句：发出去之后 running 又是 true，再往后的句子由那条 run 线程接力。
+                 */
+                val stopped = e.stopRequested
+                val next = if (stopped) null else synchronized(managed.queue) {
+                    if (managed.queue.isEmpty()) null else managed.queue.removeAt(0)
+                }
+                if (stopped) {
+                    /*
+                     * 按停止 = "这条别再自己往下跑了"。这时候把排队的句子接着发出去，
+                     * 用户看到的就是"我按了停止它又自己说起话来"。
+                     * 队列在这里清空，文字由前端放回输入框（见 index.html 的 stopNow），
+                     * 所以不是把用户打的话弄丢。
+                     */
+                    val dropped = synchronized(managed.queue) {
+                        val n = managed.queue.size; managed.queue.clear(); n
+                    }
+                    if (dropped > 0) publish("queue", queueJson(sid, emptyList()), sid)
+                }
+                if (next != null) {
+                    publish("queue", queueJson(sid, synchronized(managed.queue) { managed.queue.toList() }), sid)
+                    val (_, qErr) = startRun(sid, next.first, null, "", false, next.second)
+                    if (qErr != null) publish("err", quote("排队的那句没发出去：" + qErr), sid)
+                }
             }
         }.apply { isDaemon = true; name = "haoai-run-$sid"; start() }
         return sid to null
@@ -1396,6 +1455,25 @@ class WebServer(settings: PcSettings, port: Int,
         }
         send(ex, if (ok) 200 else 404, """{"ok":$ok}""", "application/json; charset=utf-8")
         if (ok) publish("sessions", "{}", null)
+    }
+
+    private fun queueJson(sid: String, q: List<Pair<String, List<String>>>): String =
+        """{"sid":${quote(sid)},"items":[""" + q.joinToString(",") { (t, im) ->
+            """{"t":${quote(t)},"imgs":${im.joinToString(",", "[", "]") { quote(it) }}}"""
+        } + "]}"
+
+    /** `POST /api/unqueue` {sid,at} —— 撤回排在第 at 位那一句（还没发出去才算撤回）。 */
+    private fun unqueue(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val at = b.str("at").toIntOrNull() ?: -1
+        val m = sessions[sid]
+        if (m == null) {
+            send(ex, 200, """{"ok":false,"error":"没有这条会话"}""", "application/json; charset=utf-8"); return
+        }
+        val q = synchronized(m.queue) { if (at in m.queue.indices) m.queue.removeAt(at); m.queue.toList() }
+        send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
+        publish("queue", queueJson(sid, q), sid)
     }
 
     /** `GET /api/trash` —— 回收站列表（删除其实是移进来的，见 [SessionIndex.delete]）。 */
