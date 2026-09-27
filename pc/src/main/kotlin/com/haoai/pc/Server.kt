@@ -27,7 +27,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * 跨端（配对 token / Tailscale / 审批做成持久对象）是方案里 Phase 3 的事，
  * 这里先把"自己电脑上真能用"做出来。
  */
-class WebServer(settings: PcSettings, port: Int) {
+class WebServer(settings: PcSettings, port: Int,
+               /** 同时最多跑几条。没有上限的话用户可以一路开下去把网关和磁盘都刷爆。
+                *  做成构造参数只为一件事能被测：满了时的一次失败发送不许留下空会话。 */
+               private val maxRunning: Int = 4) {
 
     @Volatile
     private var settings = settings
@@ -66,9 +69,7 @@ class WebServer(settings: PcSettings, port: Int) {
     /** 最近使用顺序（新的在前），用来在没指定 sid 时挑"当前会话"。 */
     private val order = Collections.synchronizedList(mutableListOf<String>())
 
-    /** 同时最多跑几条。没有上限的话，用户可以一路开下去把网关和磁盘都刷爆。 */
-    private val maxRunning = 4
-
+    
     /**
      * 常驻内存的会话条数上限。
      *
@@ -103,10 +104,21 @@ class WebServer(settings: PcSettings, port: Int) {
         server.executor = Executors.newCachedThreadPool()
         server.createContext("/") { ex -> route(ex) }
         server.start()
+        // 定时任务的线程跟着服务起落：daemon 线程，JVM 退了它自己就没了
+        sched = Scheduler { s -> runSchedule(s) }.also { it.start() }
         return server.address.port
     }
 
-    fun stop() = server.stop(0)
+    /** 调度线程。测试里也直接拿它 `tick(now)`，不用真等 5 秒。 */
+    private var sched: Scheduler? = null
+
+    fun schedules(): Scheduler? = sched
+
+    fun stop() {
+        sched?.stopped = true
+        sched = null
+        server.stop(0)
+    }
 
     private fun route(ex: HttpExchange) {
         val path = ex.requestURI.path
@@ -134,6 +146,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/memory" -> memory(ex)
                 "/api/skills" -> skills(ex)
                 "/api/mcp" -> mcp(ex)
+                "/api/schedules" -> schedules(ex)
                 "/api/files" -> files(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
@@ -224,6 +237,7 @@ class WebServer(settings: PcSettings, port: Int) {
         sb.append("\"workspace\":\"").append(esc(e?.session?.workspace?.absolutePath
             ?: settings.workspaceFile().absolutePath)).append("\",")
         sb.append("\"model\":\"").append(esc(settings.model)).append("\",")
+        sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
         sb.append("\"sessionId\":").append(quote(id)).append(",")
         sb.append("\"running\":").append(managed?.running == true).append(",")
@@ -316,15 +330,36 @@ class WebServer(settings: PcSettings, port: Int) {
      *
      * 返回 sid to null 表示起来了；sid to "原因" 表示被拒。
      */
-    private fun startRun(wantSid: String, text: String, cutTo: Int? = null): Pair<String, String?> {
-        val sid = wantSid.ifBlank { currentId() ?: newSessionId() }
-        val managed = synchronized(this) {
-            val m = sessions[sid] ?: Managed(engineFor(sid)).also { sessions[sid] = it }
-            touch(sid)
-            when {
-                m.running || liveCount() >= maxRunning -> null
+    private fun startRun(wantSid: String, text: String, cutTo: Int? = null,
+                         named: String = "", fresh: Boolean = false): Pair<String, String?> {
+        /*
+         * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
+         * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
+         * 一次失败的发送不该留下任何痕迹。
+         * `fresh` 是给定时任务用的：它必须另起一条，不能塞进用户正在聊的那条。
+         * `named` 必须在这里定：Engine.submit 只在标题还是「新会话」时才自动取名，
+         * 晚一步就被任务句子的前 24 字占了（定时任务的句子本来就是半截话）。
+         */
+        val (sid, managed) = synchronized(this) {
+            val use = if (fresh) "" else wantSid.ifBlank { currentId() ?: "" }
+            if (liveCount() >= maxRunning) {
+                use to null
+            } else if (use.isNotEmpty() && sessions[use]?.running == true) {
+                use to null
+            } else {
+                val target = use.ifBlank { newSessionId() }
+                val m = sessions[target] ?: Managed(engineFor(target)).also { sessions[target] = it }
+                touch(target)
                 // 清停止旗要和置 running 在同一把锁里：见 Engine.beginRun 的注释
-                else -> { m.engine.beginRun(); m.running = true; m }
+                m.engine.beginRun()
+                m.running = true
+                if (named.isNotEmpty()) {
+                    m.engine.session.title.set(named)
+                    // newSessionId 已经把这条落过一次盘（标题还是「新会话」），不补写一次，
+                    // 侧栏立刻刷新出来看到的还是「新会话」，定时任务就像没起名。
+                    m.engine.persistNow()
+                }
+                target to m
             }
         }
         if (managed == null) {
@@ -710,6 +745,79 @@ class WebServer(settings: PcSettings, port: Int) {
         publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
     }
 
+    /**
+     * `GET/POST /api/schedules` —— 定时任务的读与增删改。
+     * `POST {op:'add'|'del'|'toggle'|'run', id?, name?, prompt?, kind?, every?, at?}`
+     */
+    private fun schedules(ex: HttpExchange) {
+        val b = Body(ex)
+        if (ex.requestMethod != "GET") {
+            val list = Schedules.load()
+            val id = b.str("id").ifBlank { "sc" + System.nanoTime().toString(16).take(8) }
+            when (b.str("op")) {
+                "del" -> Schedules.remove(id)
+                "toggle" -> list.firstOrNull { it.id == id }?.let {
+                    it.enabled = !it.enabled; Schedules.update(it)
+                }
+                "run" -> list.firstOrNull { it.id == id }?.let { runSchedule(it) }
+                else -> {
+                    val prompt = b.str("prompt").trim()
+                    if (prompt.isEmpty()) {
+                        send(ex, 200, """{"ok":false,"error":"要跑的那句话是空的"}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    Schedules.update(
+                        Schedule(
+                            id = id,
+                            name = b.str("name").trim().ifBlank { prompt.take(18) },
+                            prompt = prompt,
+                            kind = if (b.str("kind") == "daily") "daily" else "interval",
+                            every = b.str("every").toIntOrNull()?.coerceIn(1, 7 * 24 * 60) ?: 60,
+                            at = b.str("at").ifBlank { "09:00" }
+                        )
+                    )
+                }
+            }
+        }
+        send(ex, 200, """{"ok":true,"items":${schedulesJson()}}""", "application/json; charset=utf-8")
+        publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
+    private fun schedulesJson(): String = Schedules.load().joinToString(",", "[", "]") { s ->
+        """{"id":${quote(s.id)},"name":${quote(s.name)},"prompt":${quote(s.prompt)},""" +
+            """"kind":${quote(s.kind)},"every":${s.every},"at":${quote(s.at)},""" +
+            """"enabled":${s.enabled},"lastRun":${s.lastRun},"lastSid":${quote(s.lastSid)},""" +
+            """"lastError":${quote(s.lastError)},"nextDue":${Schedule.nextDue(s, System.currentTimeMillis())}}"""
+    }
+
+    /**
+     * 到点（或用户点了"立刻跑一次"）：起一条**新会话**去跑这句话。
+     *
+     * 用新会话而不是塞进当前会话：定时任务是"另一件事"，混进用户正在聊的那条，
+     * 除了把上下文搅乱之外没有别的好处；而参考实现（openclaw 那类双机部署）也是
+     * 一次触发一条独立会话。标题定成任务名，否则列表里全是"每天早上…"这种半截句子。
+     */
+    private fun runSchedule(s: Schedule) {
+        val item = s.copy()
+        item.lastRun = System.currentTimeMillis()
+        item.lastError = ""
+        Schedules.update(item)
+        val sid = try {
+            val (newId, err) = startRun("", item.prompt, named = item.name, fresh = true)
+            if (err != null) throw IllegalStateException(err)
+            publish("title", """{"title":${quote(item.name)}}""", newId)
+            // 侧栏要立刻刷出来：定时任务跑那几分钟里用户得看得见它在动，而不是"到点没反应"
+            publish("sessions", "{}")
+            newId
+        } catch (e: Exception) {
+            item.lastError = e.message ?: e.javaClass.simpleName
+            Schedules.update(item)
+            return
+        }
+        item.lastSid = sid
+        Schedules.update(item)
+    }
+
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */
     private fun models(ex: HttpExchange) {
         val sid = pick(querySid(ex))
@@ -1058,6 +1166,10 @@ class WebServer(settings: PcSettings, port: Int) {
 
         return """{"provider":${quote(st.providerName)},"baseUrl":${quote(st.baseUrl)},""" +
             """"model":${quote(st.model)},"mode":${quote(st.permissionMode)},"maxTokens":${st.maxTokens},""" +
+            """"reasoningEffort":${quote(st.reasoningEffort)},""" +
+            // 上下文窗口必须回得去：抽屉里那一格原来永远是空的，用户以为没配，
+            // 而保存时 num() 把空串读成 0 —— 于是"打开设置再保存"就把窗口清零了。
+            """"contextChars":${st.contextChars},""" +
             """"workspace":${quote(st.workspaceFile().absolutePath)},""" +
             """"hasKey":${key != null},"keyHint":${quote(key?.take(6) ?: "")},""" +
             """"flags":$flags,"rules":$rules}"""
@@ -1072,6 +1184,14 @@ class WebServer(settings: PcSettings, port: Int) {
         body["model"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(model = it) }
         body["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
         body["maxTokens"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.let { n = n.copy(maxTokens = maxOf(0, it)) }
+        // 窗口只认正数：读成 0 会让"那圈占用"永远显示 0%，比留空更骗人
+        body["contextChars"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.let {
+            if (it > 0) n = n.copy(contextChars = it)
+        }
+        // 允许清空（"" = 不发 reasoning_effort），所以这里不判空
+        body["reasoningEffort"]?.jsonPrimitive?.contentOrNull?.let {
+            n = n.copy(reasoningEffort = it.trim().lowercase())
+        }
         body["mode"]?.jsonPrimitive?.contentOrNull?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
             n = n.copy(permissionMode = it)
             // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话引擎上，

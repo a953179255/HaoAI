@@ -149,6 +149,11 @@
   .ab{border:1px solid transparent;background:transparent;color:var(--dim);cursor:pointer;font-size:11px;
     border-radius:6px;padding:2px 7px;font-family:inherit}
   .ab:hover{border-color:var(--line);color:var(--fg);background:var(--glass)}
+  /* 钉在面板底部的那一排是"提交"，不是悬停才出现的行内小动作：
+     沿用 .ab 那套透明样式，它看起来就是一行灰字（像素里没人知道能点）。 */
+  .acts2.pinned .ab{border-color:var(--line);background:var(--glass);color:var(--fg);
+    padding:4px 11px;border-radius:8px;font-size:12px}
+  .acts2.pinned .ab:hover{border-color:var(--acc2)}
   .stats{font-size:11px;color:var(--dim2);display:flex;gap:10px;margin:0 auto 12px;max-width:880px;
     font-variant-numeric:tabular-nums}
   .hello{max-width:720px;margin:6vh auto 0;text-align:center}
@@ -274,9 +279,13 @@
   .acts .deny{color:var(--err);border-color:var(--err)}
   .opts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
   .opts .btn{text-align:left}
-  input[type=text]{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
+  input[type=text],input[type=password]{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
     color:var(--fg);padding:7px 9px;font:inherit;font-size:12.5px;outline:0}
-  input[type=text]:focus{border-color:var(--acc2)}
+  input[type=text]:focus,input[type=password]:focus{border-color:var(--acc2)}
+  /* 设置抽屉里的下拉框：不 styled 的话浏览器会给它一块白底，深色主题下像个洞 */
+  .fld select{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
+    color:var(--fg);padding:6px 8px;font:inherit;font-size:12.5px;outline:0}
+  .fld select:focus{border-color:var(--acc2)}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel);
     border:1px solid var(--line2);color:var(--fg);border-radius:999px;padding:7px 16px;font-size:12.5px;
     box-shadow:var(--shadow);opacity:0;transition:opacity .18s;pointer-events:none;z-index:40}
@@ -342,6 +351,20 @@
     border-radius:9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.6;padding:8px;
     outline:0;resize:vertical;min-height:120px;font-family:var(--mono)}
   .mem:focus{border-color:var(--acc2)}
+  .tin{background:var(--glass);border:1px solid var(--line);border-radius:8px;color:var(--fg);
+    font:inherit;font-size:12px;padding:5px 8px;outline:0;min-width:0;width:100%}
+  .tin:focus{border-color:var(--acc2)}
+  #tab-cron .addrow select{width:44%;flex:none}
+  #tab-cron .addrow input{width:28%}
+  /* 任务列表不能沿用设置抽屉那个 150px 高的内滚：这一栏本身就能滚，
+     套两层的结果是第二张卡被齐腰切断（像素里看得见），而用户不知道下面还有。 */
+  #tab-cron .rules{max-height:none;overflow:visible}
+  #tab-cron input.tin,#tab-cron select.tin{margin:0}
+  .rl.cron{flex-wrap:wrap;align-items:flex-start;padding:5px 6px 5px 8px;gap:4px}
+  .rl.cron>span{flex:1 1 100%;display:flex;flex-direction:column;gap:1px;white-space:normal}
+  .rl.cron b{color:var(--fg);font-size:12px}
+  .rl.cron em{font-style:normal;font-size:11px;color:var(--dim2);white-space:normal}
+  .rl.cron.off{opacity:.55}
   /* ---- 工作区文件浏览 ---- */
   .fbar{display:flex;align-items:center;gap:6px;margin:4px 0 6px}
   .fbar .fp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -370,7 +393,7 @@
 <div class="app" id="app">
   <aside class="rail l">
     <div class="brand"><span class="dot"></span> HaoAI <span style="font-weight:400;color:var(--dim);font-size:12px">PC</span></div>
-    <div class="sub">本机 Agent · v0.2.0</div>
+    <div class="sub">本机 Agent · <span id="ver">连接中…</span></div>
     <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
     <div class="grp">历史会话 <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
     <div class="srch"><input type="text" id="sessQ" placeholder="搜标题与消息正文…"></div>
@@ -429,6 +452,7 @@
       <button data-t="usage">用量</button>
       <button data-t="files">产出</button>
       <button data-t="mem">记忆</button>
+      <button data-t="cron">定时</button>
     </div>
     <div class="tabp on" id="tab-tasks">
       <div class="prog" id="prog"><i style="width:0%"></i></div>
@@ -468,6 +492,20 @@
       <textarea id="skText" class="mem" rows="4" placeholder="这个命令要让模型做什么；选中后这段会填进输入框，你还能接着补两句"></textarea>
       <div class="acts2 pinned"><button class="ab" id="skSave">加为技能</button>
         <span class="fp" id="skState"></span></div>
+    </div>
+    <div class="tabp" id="tab-cron">
+      <div class="kv">到点自己起一条<b>新会话</b>去跑这句话（不搅乱你正在聊的那条）。
+        机器睡着时<b>不补跑</b>：醒来最多补一次，不会一口气跑八遍。</div>
+      <div class="rules" id="cronList">（还没配）</div>
+      <input type="text" id="crName" class="tin" placeholder="名字，如 早间巡检">
+      <textarea id="crPrompt" class="mem" rows="3" placeholder="到点要跑的那句话，如：看一下今天的构建日志，有报错就写清是哪一条"></textarea>
+      <div class="addrow">
+        <select id="crKind" class="tin"><option value="interval">每隔几分钟</option><option value="daily">每天一次</option></select>
+        <input type="text" id="crEvery" class="tin" value="60" placeholder="分钟">
+        <input type="text" id="crAt" class="tin" value="09:00" placeholder="HH:MM">
+      </div>
+      <div class="acts2 pinned"><button class="ab" id="crAdd">加为定时任务</button>
+        <span class="fp" id="crState"></span></div>
     </div>
   </aside>
 </div>
@@ -964,6 +1002,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='mem')loadMemory();
+  if(b.dataset.t=='cron'){loadCron();syncCronKind()}
 });
 
 /* ---- 工作区文件浏览（右栏「产出」页签）----
@@ -1056,6 +1095,50 @@ $('#skSave').onclick=()=>{
   }).catch(c=>toast('技能没保存（'+c+'）','err'));
 };
 loadSkills();
+
+/* ---- 定时任务 ---- */
+function whenText(s){return s.kind=='daily'?'每天 '+s.at:'每 '+s.every+' 分钟'}
+function whenTime(t){if(!t)return '不会跑';
+  return new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function paintCron(list){
+  $('#cronList').innerHTML=(list||[]).length?list.map(s=>
+    `<div class="rl cron${s.enabled?'':' off'}"><span><b>${esc(s.name)}</b>`+
+    `<em>${whenText(s)} · 下次 ${whenTime(s.nextDue)}</em>`+
+    `<em>${s.lastRun?('上次 '+whenTime(s.lastRun)+(s.lastError?' · '+esc(s.lastError):'')):'还没跑过'}</em></span>`+
+    `<button class="ab" data-cr="run" data-id="${esc(s.id)}" title="立刻起一条会话跑一次">跑一次</button>`+
+    `<button class="ab" data-cr="toggle" data-id="${esc(s.id)}">${s.enabled?'停用':'启用'}</button>`+
+    `<button class="ab" data-cr="del" data-id="${esc(s.id)}">删</button></div>`).join('')
+    :'（还没配）';
+}
+/* 选「每天一次」就别再显示"几分钟"，反过来也是：两个都摆着，用户会以为是一起生效的 */
+function syncCronKind(){
+  const d=$('#crKind').value=='daily';
+  $('#crEvery').style.display=d?'none':'';
+  $('#crAt').style.display=d?'':'none';
+}
+$('#crKind').onchange=syncCronKind;
+function loadCron(){
+  return fetch('/api/schedules').then(r=>r.ok?r.json():Promise.reject(r.status))
+    .then(d=>paintCron(d.items)).catch(()=>{$('#cronList').textContent='读不到'});
+}
+$('#cronList').onclick=e=>{
+  const b=e.target.closest?e.target.closest('[data-cr]'):null;
+  if(!b)return;
+  post('/api/schedules',{op:b.dataset.cr,id:b.dataset.id}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
+    paintCron(d.items);toast('已更新');
+    if(b.dataset.cr=='run')loadSessions();   // 跑一次会冒出一条新会话
+  }).catch(()=>toast('定时任务改不动','err'));
+};
+$('#crAdd').onclick=()=>{
+  const p=$('#crPrompt').value.trim();
+  if(!p){toast('那句话是空的');return}
+  post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,kind:$('#crKind').value,
+    every:$('#crEvery').value,at:$('#crAt').value}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+    $('#crName').value='';$('#crPrompt').value='';paintCron(d.items);toast('定时任务已加');
+  }).catch(()=>toast('定时任务没加上','err'));
+};
 $('#newBtn').onclick=()=>{
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
   fetch('/api/new',{method:'POST'}).then(r=>r.json()).then(d=>{
@@ -1311,6 +1394,8 @@ function applyState(s){
   const v=view(s.sessionId||curId);
   v.hydrated=true;v.running=!!s.running;v.title=s.title||'新会话';v.mode=s.mode;
   v.workspace=s.workspace;v.model=s.model;
+  // 版本号由服务端报：这里以前自己写死 v0.2.0，而仓库已经走到 0.23 —— 界面上那行是骗人的
+  if(s.version)$('#ver').textContent=s.version;
   v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.outputs=[];
   /*
    * 回放必须把"运行中才有的那两样"也重建出来，否则刷新一次就降级：
@@ -1397,8 +1482,16 @@ function openCfg(){
       <div class="fld"><label>权限档位（新会话的默认）</label><input type="text" id="fMode" value="${esc(c.mode)}" placeholder="plan / ask / auto"></div>
       <div class="fld"><label>单次回答上限（token，0=交给网关）</label><input type="text" id="fMax" value="${esc(c.maxTokens)}"></div>
       <div class="fld"><label>上下文窗口（字，只用来画那圈占用）</label><input type="text" id="fCtx" value="${esc(c.contextChars)}"></div>
+      <div class="fld"><label>思考强度（reasoning effort）</label>
+        <select id="fEff">
+          <option value="">不发，交给网关默认</option>
+          <option value="low">low —— 少想，出得快</option>
+          <option value="medium">medium —— 均衡</option>
+          <option value="high">high —— 多想，慢且贵</option>
+        </select></div>
       <div class="kv">这里改的是<b>全局默认</b>：模型与网关会立刻发给所有会话（正在跑的那条从下一次请求起生效）；
-        工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。</div>
+        工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。
+        思考强度只有支持它的推理模型有效，不吃的网关保持「不发」。</div>
       <div class="fld"><label>API 密钥</label><input type="password" id="fKey" autocomplete="off"
         placeholder="${c.hasKey?('已设置 '+esc(c.keyHint)+'…（留空则不改）'):'sk-…（只写进 HAOAI_HOME/apikey，不进仓库）'}"></div>
       <div class="grp" style="margin-top:12px">实验特性</div>
@@ -1420,6 +1513,10 @@ function openCfg(){
       <div class="acts"><button class="btn" id="cfgClose">关闭</button><button class="btn pri" id="cfgSave">保存</button></div>`;
     $('#mask').classList.add('on');
     dg.querySelector('#cfgClose').onclick=closeCfg;
+    // 思考强度可能是 CLI 写进去的别的值，认不出就补一项，别在保存时静默改成"不发"
+    const eff=dg.querySelector('#fEff'),effv=c.reasoningEffort||'';
+    if(effv&&!Array.from(eff.options).some(o=>o.value===effv))eff.add(new Option(effv+' —— 网关自定义',effv));
+    eff.value=effv;
     dg.querySelectorAll('.rules [data-del]').forEach(b=>b.onclick=()=>ruleEdit('del',b.dataset.del));
     dg.querySelector('#addRule').onclick=()=>ruleEdit('add',dg.querySelector('#fRule').value.trim());
     // 列表是异步填的，所以删除按钮走事件委托，不能在填之前就 query 一遍
@@ -1434,7 +1531,8 @@ function openCfg(){
       const num=id=>String((dg.querySelector(id).value||'').replace(/\D/g,'')||'0');
       const body={model:dg.querySelector('#fModel').value.trim(),baseUrl:dg.querySelector('#fBase').value.trim(),
           workspace:dg.querySelector('#fWs').value.trim(),mode:dg.querySelector('#fMode').value.trim(),
-          maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags};
+          maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags,
+          reasoningEffort:dg.querySelector('#fEff').value};
       // 密钥留空就是"不改"：placeholder 里回显的是前 6 位，不能顺手把它当新值写回去
       const k=(dg.querySelector('#fKey').value||'').trim();
       if(k)body.key=k;

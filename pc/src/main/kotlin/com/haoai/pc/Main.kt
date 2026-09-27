@@ -64,7 +64,8 @@ private fun help() {
     )
 }
 
-private const val PC_VERSION = "0.1.0-pc"
+/** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
+const val PC_VERSION = "0.24.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -134,6 +135,7 @@ private fun set(s: PcSettings, rest: List<String>) {
             "maxTurns" -> n.copy(maxTurns = int(k, v, n.maxTurns))
             "maxTokens" -> n.copy(maxTokens = int(k, v, n.maxTokens))
             "contextChars" -> n.copy(contextChars = int(k, v, n.contextChars))
+            "reasoningEffort", "effort" -> n.copy(reasoningEffort = v.trim())
             "storedCap" -> n.copy(storedCap = int(k, v, n.storedCap))
             "reqCap" -> n.copy(reqCap = int(k, v, n.reqCap))
             "compactTriggerChars" -> n.copy(compactTriggerChars = int(k, v, n.compactTriggerChars))
@@ -144,7 +146,7 @@ private fun set(s: PcSettings, rest: List<String>) {
             )
             else -> {
                 println("不认识的设置项：$k（可用：model base mode workspace maxTurns maxTokens " +
-                    "storedCap reqCap compactTriggerChars compactKeepTail temperature provider）")
+                    "reasoningEffort storedCap reqCap compactTriggerChars compactKeepTail temperature provider）")
                 n
             }
         }

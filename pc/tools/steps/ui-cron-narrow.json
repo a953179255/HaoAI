@@ -1,0 +1,17 @@
+[
+  {"goto": "#box"},
+  {"click": "#panelBtn"},
+  {"sleep": 400},
+  {"click": "#tabs button[data-t=\"cron\"]"},
+  {"sleep": 500},
+  {"type": {"sel": "#crName", "text": "夜间归档"}},
+  {"type": {"sel": "#crPrompt", "text": "把今天的会话归档一下，有失败的说清哪一条"}},
+  {"click": "#crAdd"},
+  {"sleep": 700},
+  {"eval": "(()=>{const r=document.querySelector('.rail.r').getBoundingClientRect();const b=document.querySelector('#crAdd'),s=getComputedStyle(b);return {w:innerWidth,inView:r.right<=innerWidth+1&&r.width>100,rows:document.querySelectorAll('#cronList .rl.cron').length,name:(document.querySelector('#cronList b')||{}).textContent,addBtn:s.borderTopWidth+'/'+s.color+'/w'+Math.round(b.getBoundingClientRect().width),cutBelow:[...document.querySelectorAll('#cronList .rl.cron')].map(c=>Math.round(c.getBoundingClientRect().bottom)).filter(x=>x>Math.round(r.bottom)+1).length}})()"},
+  {"shot": "n01-cron-narrow"},
+  {"click": "#cronList [data-cr=\"run\"]"},
+  {"sleep": 2500},
+  {"eval": "({sessions:[...document.querySelectorAll('.sess .it')].map(i=>i.textContent.trim().slice(0,24)),unread:document.querySelectorAll('.sess .it .nb').length})"},
+  {"shot": "n02-cron-narrow-ran"}
+]

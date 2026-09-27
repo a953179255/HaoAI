@@ -111,6 +111,7 @@ internal fun msgJson(m: Msg): JsonObject = buildJsonObject {
 interface ChatClient {
     fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn
 
+
     /**
      * 带**思考流**回调的版本。正文与思考在界面上是两种东西（一个进正文气泡，
      * 一个进可折叠的"思考过程"），所以必须是两条回调，不能合成一条流。
@@ -137,7 +138,7 @@ interface ChatClient {
 fun chatClient(s: PcSettings): ChatClient {
     val key = System.getenv("HAOAI_API_KEY")?.takeIf { it.isNotBlank() }
         ?: runCatching { Env.apiKeyFile.takeIf { it.isFile }?.readText()?.trim() }.getOrNull().orEmpty()
-    return Provider(s.baseUrl, key, s.model, s.temperature, s.maxTokens)
+    return Provider(s.baseUrl, key, s.model, s.temperature, s.maxTokens, s.reasoningEffort)
 }
 
 /**
@@ -155,8 +156,16 @@ class Provider(
     private val model: String,
     private val temperature: Double = 0.3,
     /** 0 = 不发 max_tokens（有些网关不接受这个字段）。 */
-    private val maxTokens: Int = 0
+    private val maxTokens: Int = 0,
+    /**
+     * 思考强度（OpenAI 的 `reasoning_effort`）。空 = 不发这个字段。
+     *
+     * 刻意可空：本地 llama-server 与不少兼容网关收到不认识的字段会直接 400，
+     * "默认不发、用户显式选了才发"才不会把现有部署弄坏。
+     */
+    private var reasoningEffort: String = ""
 ) : ChatClient {
+
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(20))
@@ -179,6 +188,7 @@ class Provider(
             put("model", model)
             put("temperature", temperature)
             if (maxTokens > 0) put("max_tokens", maxTokens)
+            if (reasoningEffort.isNotBlank()) put("reasoning_effort", reasoningEffort)
             put("stream", true)
             put("stream_options", buildJsonObject { put("include_usage", true) })
             put("messages", JsonArray(parts))

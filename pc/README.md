@@ -366,6 +366,8 @@ SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-ask.json      # 内联�
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-review.json                 # diff 着色 + 两种附件
 SHOT_W=900 bash pc/tools/ui-shot.sh pc/tools/steps/ui-narrow.json      # 窄屏浮层（700 同理）
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件浏览 + 三条越界尝试
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json     # 定时任务：加/跑一次/停用/删 + 思考强度
+SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
 676px 左栏浮层宽 300px 且带会话列表、点一条会话后收起。
@@ -493,6 +495,50 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 —— 子任务卡、标签、过程行、结论、以及**磁盘上只有 1 条会话**（子任务没漏进列表）。
 Kotlin 侧 `a subagent runs its own loop and only its conclusion comes back` 断言
 父历史里**不含**子任务读到的第二行原文（真跑过 = 过程被压掉了），并检查 `Msg.sub` 落了库。
+
+## 这一批：定时任务 + 思考强度
+
+**定时任务**（`Schedules.kt`，存在 `HAOAI_HOME/schedules.json`）：到点自己起一条**新会话**去跑那句话。
+手机端早就有定时任务，而桌面这台机器才是真正常开着的 —— "每天早上把构建日志看一遍写份摘要"
+这种活只有常驻机器能替人干。三条刻意的取舍：
+
+- **不补跑**。笔记本睡了八小时，醒来一口气触发八次既刷爆网关也不是用户要的。
+  interval 从上一次（或创建时刻）往后推，daily 今天过了点就补一次、跑过就等明天。
+  这条由 `Schedule.nextDue` 一处实现，并被 `a slept machine fires once, not eight times` 钉住。
+- **每 5 秒轮询而不是精确定时器**：`Timer` 在睡眠期间不触发、醒来也不补，轮询天然把
+  "睡醒发现过期"变成一次普通判断。调度与执行分开（`Scheduler` 只管时机，`fire` 由服务端注入），
+  两边才能各自单测。
+- **起新会话而不是塞进当前会话**：定时任务是另一件事，混进用户正在聊的那条只会搅乱上下文。
+  标题在 `startRun` 的锁里就定成任务名并补写一次盘，否则侧栏刷出来还是"新会话"。
+
+界面是第 5 个页签「定时」：列表卡显示 名字 / 每多久或每天几点 / 下次什么时候 / 上次结果，
+每条三个动作（跑一次、停用、启用、删）。选「每天一次」就把"几分钟"那格藏起来，反过来也是。
+
+**思考强度**（`PcSettings.reasoningEffort` → `Provider`）：默认**不发** `reasoning_effort` 这个字段。
+本机 llama-server 与不少兼容网关收到不认识的字段直接 400，"界面有下拉框"不等于可以永远发。
+设置抽屉里一格下拉（不发 / low / medium / high），CLI `set effort=high` 同效；
+CLI 写进去的下拉框没有的值会补成一项，不会在保存时被静默改成"不发"。
+
+### 这一批被像素与测试抓出来的四个缺陷
+
+1. **`GET /api/settings` 里没有 `contextChars`**，而保存时 `num()` 把空读成 0 ——
+   于是"打开设置点保存"就把上下文窗口清零，那圈占用永远显示 0%。现在读写两头都补上了，
+   并且 `every drawer field round-trips through the endpoint` 把抽屉里每一格都按字段名过一遍。
+2. **API 密钥那格是 `type=password`，而 CSS 只写了 `input[type=text]`** —— 深色主题下它是一块白底。
+3. **定时任务列表沿用了设置抽屉那个 `max-height:150px` 内滚**：这一栏本身就能滚，
+   套两层的结果是第二张卡被齐腰切断，而用户不知道下面还有东西。
+4. **假网关把 SSE 的帧分隔写在了三引号原始串里**（`\n` 是两个字符），Provider 一帧都解不出来 ——
+   于是"跑一次"其实每条都在报错，而 Kotlin 测试全绿。判据从"会话出现了"改成
+   "会话里真的说过话、有回复、且不再 running"。同一个坑也暴露了 `startRun` 的旧顺序：
+   先建会话再判并行上限，满了时的一次失败发送会在列表里留下一条空白"新会话"
+   （定时任务撞上就更糟，每五分钟一条），现在改成先判定后新建，
+   并用 `WebServer(maxRunning = 0)` 让这条能被测。
+
+验收：`SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json`（宽屏：加两条任务、
+跑一次冒出一条以任务名命名的会话、停用显示"不会跑"、删、抽屉里的思考强度往返），
+`SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json`（窄屏浮层）。
+Kotlin 侧新增 `ScheduleTest`（17 条：时间算法 / 存储 / HTTP CRUD / 跑一次真起会话 / 满了不留壳）与
+`ReasoningEffortTest`（5 条：发与不发 / 走到线上 / 设置端点往返 / 抽屉字段整体往返），共 120 条全绿。
 
 ## 与手机端同源的行为
 
@@ -645,6 +691,7 @@ pc/src/main/kotlin/com/haoai/pc/
   Engine.kt     回合循环、档位闸、两级截断、上下文压缩、中断、会话持久化
   Compress.kt   压缩的两份产出：给模型的提示 + 确定性机器摘要（兜底）
   SessionIndex.kt 磁盘会话索引：列表 / 恢复 / 改名 / 删除（移进 .trash）
+  Schedules.kt    定时任务：时间算法（刻意不补跑）+ HAOAI_HOME/schedules.json + 5 秒轮询线程
   Server.kt     127.0.0.1 HTTP + SSE + 审批/提问回环（请求体每个 handler 只读一次）；
                 每条会话一个引擎，事件按 sid 分流（sid 走 SSE 的 id: 字段），
                 同条会话一次一个任务、不同会话最多并行 4 条、常驻超过 12 条请出最久没碰的

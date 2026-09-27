@@ -36,6 +36,8 @@ data class PcSettings(
      * 太小（比如 1024）会把带思考过程的模型截成半句，所以给的是"够写完一个工具调用"的量。
      */
     val maxTokens: Int = 4096,
+    /** 思考强度："" = 不发这个字段；low / medium / high 按网关的写法发。 */
+    val reasoningEffort: String = "",
     /**
      * 这个模型的上下文窗口（字/符口径，用来画界面上那圈"用了多少"）。
      *
@@ -77,6 +79,7 @@ data class PcSettings(
                     maxTurns = o.int("maxTurns") ?: 60,
                     temperature = o.dbl("temperature") ?: 0.3,
                     maxTokens = o.int("maxTokens") ?: 4096,
+                    reasoningEffort = o.str("reasoningEffort") ?: "",
                     contextChars = o.int("contextChars") ?: 128_000,
                     storedCap = o.int("storedCap") ?: 16_000,
                     reqCap = o.int("reqCap") ?: 4_000,
@@ -103,6 +106,7 @@ data class PcSettings(
                         put("maxTurns", s.maxTurns)
                         put("temperature", s.temperature)
                         put("maxTokens", s.maxTokens)
+                        put("reasoningEffort", s.reasoningEffort)
                         put("contextChars", s.contextChars)
                         put("storedCap", s.storedCap)
                         put("reqCap", s.reqCap)
