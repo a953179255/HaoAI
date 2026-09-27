@@ -450,7 +450,7 @@
     <div class="sub">本机 Agent · <span id="ver">连接中…</span></div>
     <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
     <button class="wsrow" id="wsBtn" title="换个工作区开一条新任务"><span id="wsName">工作区</span><em>换 ▾</em></button>
-    <div class="grp">历史会话 <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
+    <div class="grp">历史会话 <button class="mini" id="trashBtn" title="删掉的会话先进回收站，这里可以放回">回收站</button> <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
     <div class="srch"><input type="text" id="sessQ" placeholder="搜标题与消息正文…"></div>
     <div id="sessions" class="sess"></div>
     <div class="grp">怎么用</div>
@@ -1350,6 +1350,34 @@ function openWs(){
 }
 $('#wsBtn').onclick=openWs;
 $('#expBtn').onclick=()=>{if(curId)location.href='/api/export?sid='+encodeURIComponent(curId)};
+$('#trashBtn').onclick=openTrash;
+/* 回收站：删除是移进 sessions/.trash，但"可恢复"没有入口就等于没有 ——
+   之前只有 tooltip 上那半句话，删错一条只能去开文件管理器。 */
+function openTrash(){
+  fetch('/api/trash').then(r=>r.json()).then(list=>{
+    const dg=$('#dialog');
+    const rows=list.length?list.map(t=>`<div class="acts2 pinned" style="align-items:center">
+        <div class="kv" style="flex:1;min-width:0"><b>${esc(t.title)}</b><br><i>${t.messages} 条 · ${fmtSize(t.bytes)} · ${new Date(t.updated).toLocaleString('zh-CN')}</i></div>
+        <button class="ab" data-back="${esc(t.name)}">放回</button>
+        <button class="ab" data-purge="${esc(t.name)}" title="彻底删掉，这一步不可恢复">删干净</button></div>`).join('')
+      :'<div class="kv">回收站是空的。删掉的会话会先进这里，不放回来就一直留着。</div>';
+    dg.innerHTML=`<h3>回收站</h3><div class="kv" style="margin-bottom:8px">
+        删会话是移进 <code>sessions/.trash</code>，不是抹掉。放回后它会重新出现在左栏，历史原样。</div>${rows}
+      <div class="acts"><button class="btn" id="tX">关闭</button></div>`;
+    $('#mask').classList.add('on');
+    dg.querySelector('#tX').onclick=()=>$('#mask').classList.remove('on');
+    dg.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>{
+      post('/api/untrash',{name:b.dataset.back}).then(x=>{
+        if(!x||!x.ok){toast((x&&x.error)||'放不回去','err');return}
+        toast('已放回会话');loadSessions();openTrash();
+      }).catch(()=>toast('放不回去','err'));
+    });
+    dg.querySelectorAll('[data-purge]').forEach(b=>b.onclick=()=>{
+      if(!confirm('彻底删掉这一条？这一步不可恢复。'))return;
+      post('/api/purge',{name:b.dataset.purge}).then(()=>openTrash()).catch(()=>toast('没删掉','err'));
+    });
+  }).catch(()=>toast('读不到回收站','err'));
+}
 $('#modelChip').onclick=pickModel;
 function pickModel(){
   fetch('/api/models?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(list=>{
@@ -1621,6 +1649,7 @@ $('#sessQ').addEventListener('input',()=>{clearTimeout(qTimer);qTimer=setTimeout
 /* 侧栏分组：有了多工作区之后，不同项目的会话混在一起看不出谁是谁的。
    只有一个目录时**不分组** —— 那样每人每天多看一眼没用的组头。 */
 let folded=[];
+let wsMore={};   // 哪个目录被点开过多显示几条（不存 localStorage：刷新后回到 8 条是合理的）
 try{folded=JSON.parse(localStorage.getItem('haoai-ws-fold')||'[]')}catch(e){folded=[]}
 function foldWs(p,on){
   const i=folded.indexOf(p);
@@ -1648,22 +1677,31 @@ function markSessions(){
   all.forEach(m=>{const k=m.workspace||'';if(!byWs.has(k))byWs.set(k,[]);byWs.get(k).push(m)});
   const groups=[...byWs.entries()].sort((a,b)=>
     Math.max(...b[1].map(m=>m.updated||0))-Math.max(...a[1].map(m=>m.updated||0)));
+  // 每个目录一组、每组先给 8 条，剩下的**点得开**：以前静默截到 24 条，
+  // 会话一多旧的就等于消失了（只剩搜索一条路）。
+  const cap=ws=>8+(wsMore[ws]||0);
+  const moreLine=(ws,n)=>`<div class="wsf"><b data-more="${esc(ws)}">还有 ${n} 条没显示 · 点开</b></div>`;
+  const moreHook=()=>box2.querySelectorAll('[data-more]').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.more;wsMore[k]=(wsMore[k]||0)+12;markSessions();
+  });
   if(groups.length===1){
-    box2.innerHTML=all.slice(0,24).map(m=>sessRow(m,views[m.id]&&views[m.id].running||m.running)).join('');
+    const gws=groups[0][0],gl=groups[0][1],n=cap(gws);
+    box2.innerHTML=gl.slice(0,n).map(m=>sessRow(m,views[m.id]&&views[m.id].running||m.running)).join('')+
+      (gl.length>n?moreLine(gws,gl.length-n):'');
+    moreHook();
   }else{
-    let left=24;
     box2.innerHTML=groups.map(([ws,list])=>{
       const name=baseName(ws)||'（未定目录）';
       const off=folded.indexOf(ws)>=0;
       const head=`<div class="wsg" data-wsg="${esc(ws)}" title="${esc(ws)}（点一下${off?'展开':'收起'}）">`+
         `<span>${esc(name)}</span><i>${list.length} 条</i><em>${off?'+':'−'}</em></div>`;
       if(!list.some(m=>m.id===curId))list.sort((a,b)=>(b.updated||0)-(a.updated||0));
-      const take=off?0:list.slice(0,Math.max(0,left));
-      left-=take.length;
+      const n=cap(ws),take=off?0:list.slice(0,n);
       return head+(off?`<div class="wsf">${list.length} 条已收起</div>`
         :take.map(m=>sessRow(m,views[m.id]&&views[m.id].running||m.running)).join('')+
-          (list.length>take.length?`<div class="wsf">还有 ${list.length-take.length} 条没显示</div>`:''));
+          (list.length>n?moreLine(ws,list.length-n):''));
     }).join('');
+    moreHook();
     box2.querySelectorAll('.wsg').forEach(h=>h.onclick=()=>
       foldWs(h.dataset.wsg,folded.indexOf(h.dataset.wsg)<0));
   }
@@ -1685,7 +1723,7 @@ function markSessions(){
           .then(r=>r.json().then(d=>({ok:r.ok,d:d})))
           .then(x=>{
             if(!x.ok){alert((x.d&&x.d.error)||'删除失败');return}
-            dropView(id);loadSessions();
+            dropView(id);loadSessions();toast('已移进回收站，左栏「回收站」里可以放回');
           });
         return;
       }

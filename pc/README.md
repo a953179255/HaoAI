@@ -373,6 +373,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-img.json      # 图片
 PRE_TOUCH="notes.txt" PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-search.json  # 搜索提供方设置 + 文件浏览器里的图片预览
 PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-model.json  # 只改当前会话的模型 + 回答里的 markdown 图片与 url 转义
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-paste.json  # 拖拽落点层 + Ctrl+V 贴截图进附件
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-trash.json  # 回收站放回 + 侧栏每组点开更多
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -785,7 +786,7 @@ chip 才回到全局默认（`chipAfterNew:"mock"`、`sessions:2`）—— 不�
 `<a>` 的 href 里只剩 `%22`，没有凭空多出来的 `onmouseover` 属性；
 再贴一张 2000×120 的宽图，量到的是 `shown:880x55`、`overflow:false`、`#stream` 无横向滚动 —— 
 **图片被气泡限住了而不是把版面撑破**。
-md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉），Kotlin 侧 `ModelScopeTest` 5 条，共 158 条全绿。
+md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉），Kotlin 侧 `ModelScopeTest` 5 条，共 158 条全绿（这批之后是 163）。
 
 这两个数一开始都是假的，值得记：断言写在 `document.querySelector('.ans')` 上，
 真发一轮之后那是**第一条**回答气泡（本地图在最后一条里），于是"坏 url 原样留着"读成了 false；
@@ -839,6 +840,40 @@ md-check 新增 3 例（图片渲染、危险协议不转标签、引号编掉�
 两条都实测过：成功那次目录数 21→21，故意喂一个等不到的选择器那次 21→22。
 同一批还清掉了 1400 多个历史遗留的 `haoai-rules-*.json`（测试临时目录改道之前漏的，
 `-mmin +20` 只挑没人动的，移进回收站不硬删）。
+
+## 这一批：回收站有入口 + 侧栏不再静默截断
+
+两件"功能其实早就在、但界面上用不到"的事凑一批：
+
+**删掉的会话放不回来。** `delete` 从第一天就是移进 `sessions/.trash` 而不是抹掉，
+可"可恢复"只写在 tooltip 那半句话里 —— 没有入口的恢复等于没有，删错一条只能去开文件管理器。
+现在左栏「历史会话」标题旁多了一颗**回收站**按钮：
+
+- `GET /api/trash` 列条目（标题 / 几条消息 / 多大 / 什么时候删的），
+  `POST /api/untrash {name}` 放回，`POST /api/purge {name}` 才是真删（走 `confirm` 二次确认）。
+- **`name` 是客户端给的，所以只认回收站里真实存在的那个文件名**：先算 canonical 再判是否还在
+  `.trash` 目录内。`../../settings.json` 这种名字如果不拦，就等于把状态根里任意文件搬进 `sessions/`。
+- 放回前先看外面有没有同 id 的会话，有就**拒绝**而不是覆盖 ——
+  "删了又建了一条同名新的"之后放回旧的，不该把新的那份历史吃掉。
+
+**侧栏每组只给 8 条，但剩下的点得开。** 以前是全局静默截到 24 条：会话一多，
+旧的就等于消失了（只剩搜索一条路），而"还有 N 条没显示"那行字是死的。
+现在每组 8 条起，末尾一行「还有 N 条没显示 · 点开」，点一次多给 12 条。
+
+验收（Kotlin）：`SessionTrashTest` 5 条 —— 删除后文件真在 `.trash` 且列表读得到；
+放回后**字节级一致**且重新出现在 `/api/sessions`；越界的 `name` 被拒且 `settings.json` 没被动过；
+同 id 已在外面时拒绝放回、外面那份一个字没变、回收站里那份还在；`purge` 之后真没了。
+**第一条跑出来就是红的**：`/api/trash` 的 JSON 是我手拼的，多了一个 `}`，
+`{"...,"title":"x"}` + `,"messages":0}` 拼成非法数组 —— 又是"接口返回 200 但内容没人读过"这一类。
+
+验收（真像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-trash.json`）：
+12 条一组时 `rows:9`（8 条 + 当前那条另一组）且那行「还有 4 条没显示 · 点开」在，
+点一下 `rowsAfter:13`、那行消失；删一条之后弹窗里 `回收站 / 1 个放回 / 1 个删干净`，
+条目带着标题与"0 条 · 233 B · 时间"；点放回 → toast「已放回会话」、弹窗里少一条、
+`/api/sessions` 里能查到那个 id。
+截屏列表这一段是**直接把页面里的 `sessList` 换成 12 条假数据**测的：
+`/api/new` 会复用"还空着的那条"，靠真建会话凑不出一个目录里 12 条非空会话
+（要凑得给每条真跑一轮，慢且测的是网关不是渲染）。
 
 ## 与手机端同源的行为
 
@@ -906,7 +941,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **158 条全绿**（整套 25 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **163 条全绿**（整套 22 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -968,7 +1003,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    记忆与备份的两端同步（PC 与手机各写各的 `MEMORY.md` 与备份，没有汇合的那一步 —— 与下面第 3 条同源）。
    已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
-   截图 Ctrl+V 与拖拽进附件、
+   截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

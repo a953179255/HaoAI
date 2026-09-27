@@ -156,6 +156,9 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/img" -> imageFile(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
+                "/api/trash" -> trashList(ex)
+                "/api/untrash" -> untrashSession(ex)
+                "/api/purge" -> purgeTrash(ex)
                 "/api/settings" -> 
                     if (ex.requestMethod == "POST") saveSettings(ex)
                     else send(ex, 200, settingsJson(), "application/json; charset=utf-8")
@@ -1393,6 +1396,31 @@ class WebServer(settings: PcSettings, port: Int,
         }
         send(ex, if (ok) 200 else 404, """{"ok":$ok}""", "application/json; charset=utf-8")
         if (ok) publish("sessions", "{}", null)
+    }
+
+    /** `GET /api/trash` —— 回收站列表（删除其实是移进来的，见 [SessionIndex.delete]）。 */
+    private fun trashList(ex: HttpExchange) {
+        send(ex, 200, SessionIndex.listTrash().joinToString(",", "[", "]") { m ->
+            """{"name":${quote(m.file.name)},"id":${quote(m.id)},"title":${quote(m.title)},"""+
+                """"messages":${m.messages},"updated":${m.updated},"bytes":${m.file.length()}}"""
+        }, "application/json; charset=utf-8")
+    }
+
+    /** `POST /api/untrash` {name} —— 把一条会话放回历史列表。 */
+    private fun untrashSession(ex: HttpExchange) {
+        val name = Body(ex).str("name")
+        val r = SessionIndex.untrash(name)
+        val id = r.getOrNull()
+        send(ex, 200, if (id != null) """{"ok":true,"id":${quote(id)}}"""
+        else """{"ok":false,"error":${quote(r.exceptionOrNull()?.message ?: "放不回去")}}""",
+            "application/json; charset=utf-8")
+        if (id != null) publish("sessions", "{}", null)
+    }
+
+    /** `POST /api/purge` {name} —— 彻底删掉回收站里的某一条（界面上要二次确认）。 */
+    private fun purgeTrash(ex: HttpExchange) {
+        val ok = SessionIndex.purge(Body(ex).str("name"))
+        send(ex, 200, """{"ok":$ok}""", "application/json; charset=utf-8")
     }
 
     private fun settingsJson(): String {

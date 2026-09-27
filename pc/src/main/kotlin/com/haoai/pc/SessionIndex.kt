@@ -124,4 +124,47 @@ object SessionIndex {
             f.renameTo(dest) || run { f.copyTo(dest, overwrite = true); f.delete() }
         }.getOrDefault(false)
     }
+
+    fun trashDir(): File = File(Env.sessionsDir, ".trash")
+
+    /**
+     * 回收站里有什么。文件名是 `<删除时间>-pc-<id>.json`，标题/条数从文件内容里读。
+     *
+     * 为什么界面上要看得见：删除是移进 `.trash` 而不是抹掉，但**没有入口的"可恢复"
+     * 等于没有** —— 之前只有 tooltip 上那半句"（移进 sessions/.trash，可恢复）"，
+     * 用户删错一条就只能去开文件管理器。
+     */
+    fun listTrash(limit: Int = 60): List<Meta> {
+        val files = trashDir().listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: return emptyList()
+        return files.mapNotNull { read(it) }.sortedByDescending { it.updated }.take(limit)
+    }
+
+    /**
+     * 把一条会话从回收站放回原位，返回它的 id；放不回来说明原因。
+     *
+     * `name` 是**客户端给的**，所以只认回收站里真实存在的那个文件名：
+     * 先按 canonical 判还在不在 `.trash` 目录内，否则 `../../settings.json` 这种
+     * 名字能把任意文件搬进 sessions/ 目录。
+     */
+    fun untrash(name: String): Result<String> {
+        val dir = trashDir().canonicalFile
+        val src = File(dir, name)
+        if (!src.isFile || !src.canonicalFile.startsWith(dir)) return Result.failure(Exception("回收站里没有这个文件"))
+        val meta = read(src) ?: return Result.failure(Exception("这个文件读不出会话内容"))
+        val dest = fileFor(meta.id)
+        if (dest.exists()) return Result.failure(Exception("已经有一条同 id 的会话在外面，放回会覆盖它"))
+        return runCatching {
+            if (!(src.renameTo(dest) || run { src.copyTo(dest, overwrite = false); src.delete() })) {
+                throw Exception("搬不动")
+            }
+            meta.id
+        }
+    }
+
+    /** 彻底删掉回收站里的某一条（用户点了"清空"才走到这）。 */
+    fun purge(name: String): Boolean {
+        val dir = trashDir().canonicalFile
+        val f = File(dir, name)
+        return f.isFile && f.canonicalFile.startsWith(dir) && f.delete()
+    }
 }
