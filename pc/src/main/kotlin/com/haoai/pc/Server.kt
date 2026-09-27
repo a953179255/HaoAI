@@ -548,6 +548,7 @@ class WebServer(settings: PcSettings, port: Int,
 
     /**
      * `GET /api/files?sid=&path=` —— 工作区文件列表，给右栏「产出」页签下的浏览区。
+     * `GET /api/files?sid=&q=` —— 递归按片段搜，给输入框的 @ 提及用（返回相对路径）。
      *
      * 只许在工作区里面走：算完 canonical 之后不在工作区内的，一律退回根目录。
      * 这个服务只绑 127.0.0.1，但浏览器里**任何**页面都能对本机端口发请求，
@@ -558,6 +559,45 @@ class WebServer(settings: PcSettings, port: Int,
         val ws = (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
         val dir = runCatching { File(ws, queryOf(ex, "path")).canonicalFile }.getOrDefault(ws)
         val root = if (dir.path.startsWith(ws.path) && dir.isDirectory) dir else ws
+        val q = queryOf(ex, "q").trim()
+        if (q.isNotEmpty()) {
+            /*
+             * `?q=` 是输入框里 @ 提及文件的递归搜索。三条边界都是必须的：
+             * 只在 canonical 之后的工作区内走（这个服务绑 127.0.0.1，但浏览器里任何页面
+             * 都能对本机端口发请求）；扫满 4000 个条目就收，免得在一份内核 checkout 里
+             * 按一个字母就把盘扫穿；跳过 .git / node_modules / build 这类没人要的目录。
+             */
+            val skip = setOf(".git", ".gradle", ".idea", "build", "dist", "target", ".haoai-output", ".trash")
+            val hits = mutableListOf<Pair<String, Boolean>>()
+            val queue = ArrayDeque<Pair<File, Int>>()
+            queue.add(ws to 0)
+            var seen = 0
+            val low = q.lowercase()
+            while (queue.isNotEmpty() && hits.size < 40 && seen < 4000) {
+                val (dir, depth) = queue.removeFirst()
+                for (f in dir.listFiles()?.toList() ?: emptyList()) {
+                    if (++seen > 4000) break
+                    if (f.name in skip || f.name.startsWith("node_modules")) continue
+                    val rel = f.relativeToOrSelf(ws).path.replace('\\', '/')
+                    if (rel.lowercase().contains(low)) hits += rel to f.isDirectory
+                    if (hits.size >= 40) break
+                    if (f.isDirectory && depth < 6) queue.add(f to depth + 1)
+                }
+            }
+            // 文件名开头就命中的排在前面，再按名字短的在前：打 "serv" 想看的第一个是 Server.kt，
+            // 不是 xxx-service.txt，也不是某个深层同名文件
+            val ranked = hits.sortedWith(
+                compareByDescending<Pair<String, Boolean>> {
+                    it.first.substringAfterLast('/').lowercase().startsWith(low)
+                }.thenBy { it.first.substringAfterLast('/').length }.thenBy {
+                    it.first.count { c -> c == '/' }
+                }.thenBy { it.first.length }
+            )
+            send(ex, 200, ranked.joinToString(",", """{"path":"","entries":[""", "]}") { (rel, dir) ->
+                """{"n":${quote(rel)},"d":$dir,"s":0}"""
+            }, "application/json; charset=utf-8")
+            return
+        }
         val list = root.listFiles()
             ?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
             ?.filter { it.name != ".git" && !it.name.startsWith("node_modules") }?.take(300)

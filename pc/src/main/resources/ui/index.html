@@ -234,7 +234,10 @@
   .slash.on{display:block}
   .slash .it{display:flex;gap:10px;align-items:baseline;padding:7px 12px;cursor:pointer;font-size:12.5px}
   .slash .it.sel{background:var(--glass2)}
-  .slash .it code{font-family:var(--mono);color:var(--acc);font-size:12px;flex:none;width:76px}
+  /* 命令名短（/plan），给固定宽能让说明对齐；@ 提及的文件名长得多，
+     写死 76px 会让名字压到后面的「文件」标签上（像素里看得见），所以改成"至少 76、能长"。 */
+  .slash .it code{font-family:var(--mono);color:var(--acc);font-size:12px;flex:none;min-width:76px;
+    width:auto;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .slash .it em{font-style:normal;color:var(--dim);font-size:11.5px}
   .slash .tg{font-style:normal;font-size:10px;color:var(--acc2);border:1px solid var(--line);
     border-radius:5px;padding:0 4px;flex:none}
@@ -403,7 +406,7 @@
       <b>计划</b> 只读调研出方案<br>
       <b>询问</b> 写文件/执行命令先问<br>
       <b>自动</b> 全自动，不再打断<br>
-      <kbd>Enter</kbd> 发送 · <kbd>/</kbd> 命令 · <kbd>Esc</kbd> 关弹窗<br>
+      <kbd>Enter</kbd> 发送 · <kbd>/</kbd> 命令 · <kbd>@</kbd> 提文件 · <kbd>Esc</kbd> 关弹窗<br>
       <kbd>Ctrl K</kbd> 搜会话 · <kbd>Ctrl B</kbd> 收侧栏 · <kbd>Alt 1/2/3</kbd> 切档
     </div>
   </aside>
@@ -440,7 +443,7 @@
       <div class="inwrap">
         <button class="clip" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读">📎</button>
         <input type="file" id="att" multiple hidden>
-        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 / Shift+Enter 换行 / 斜杠唤出命令）"></textarea>
+        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 / 换行 Shift+Enter / 命令 / 提文件）"></textarea>
         <button class="send" id="send">➤</button>
       </div>
     </footer>
@@ -1220,16 +1223,21 @@ function paintSend(){
 }
 $('#send').onclick=()=>{cur().running?stopNow():send()};
 box.addEventListener('keydown',e=>{
-  if(slashOpen&&(e.key=='ArrowDown'||e.key=='ArrowUp'||e.key=='Tab')){
+  if((slashOpen||atOpen)&&(e.key=='ArrowDown'||e.key=='ArrowUp'||e.key=='Tab')){
     moveSlash(e.key=='ArrowUp'?-1:1);e.preventDefault();return;
   }
+  if(atOpen&&e.key=='Enter'&&!e.shiftKey){e.preventDefault();pickAt(atSel);return}
   if(slashOpen&&e.key=='Enter'&&!e.shiftKey){pickSlash();e.preventDefault();return}
   if(e.key=='Enter'&&!e.shiftKey){e.preventDefault();send()}
 });
 box.addEventListener('input',()=>{
   box.style.height='auto';box.style.height=Math.min(200,box.scrollHeight)+'px';
   const t=box.value;
-  if(t.startsWith('/')&&t.indexOf('\n')<0)showSlash(t.slice(1));else hideSlash();
+  if(t.startsWith('/')&&t.indexOf('\n')<0){showSlash(t.slice(1));return}
+  hideSlash();
+  // @ 只看光标前面那段：光标在句子中间时不该被尾巴上的 @ 触发
+  const m=ATRE.exec(t.slice(0,box.selectionStart==null?t.length:box.selectionStart));
+  if(m)showAt(m[2]);
 });
 $('#clip').onclick=()=>$('#att').click();
 $('#att').onchange=e=>{attachFiles(e.target.files);e.target.value=''};
@@ -1271,6 +1279,7 @@ let slashOpen=false,slashSel=0,slashList=[];
 /* 自定义技能与内置命令共用这一个面板：内置在前，技能在后（重名时内置赢，服务端也会拒重名） */
 function slashItems(){return CMDS.concat(SKILLS.map(s=>({c:'/'+s.name,d:s.desc||'自定义技能',skill:s.text})))}
 function showSlash(q){
+  atOpen=false;clearTimeout(atTimer);
   slashList=slashItems().filter(x=>x.c.slice(1).toLowerCase().startsWith(q.toLowerCase()));
   const s=$('#slash');
   if(!slashList.length){hideSlash();return}
@@ -1281,12 +1290,54 @@ function showSlash(q){
     box.value='';hideSlash();runCommand(slashList[+e.dataset.i].c)});
   s.classList.add('on');slashOpen=true;
 }
-function hideSlash(){$('#slash').classList.remove('on');slashOpen=false;slashSel=0}
+function hideSlash(){
+  $('#slash').classList.remove('on');slashOpen=false;slashSel=0;
+  atOpen=false;atSel=0;clearTimeout(atTimer);
+}
 function moveSlash(d){
-  slashSel=(slashSel+d+slashList.length)%slashList.length;
-  $('#slash').querySelectorAll('.it').forEach((e,i)=>e.classList.toggle('sel',i==slashSel));
+  const n=atOpen?atList.length:slashList.length;
+  if(!n)return;
+  const i=(atOpen?atSel:slashSel)+d;
+  const nx=(i%n+n)%n;
+  if(atOpen)atSel=nx;else slashSel=nx;
+  $('#slash').querySelectorAll('.it').forEach((e,k)=>e.classList.toggle('sel',k==nx));
 }
 function pickSlash(){const c=slashList[slashSel];box.value='';hideSlash();runCommand(c.c)}
+
+/* ---- @ 提及工作区里的文件 ----
+ * 手敲 src/main/kotlin/com/haoai/pc/Server.kt 这种路径是纯粹的摩擦，而这套界面每天要打几十次。
+ * 只把路径插进输入框，**不**顺手把文件内容塞进上下文：一个大文件能把窗口顶满，
+ * 而模型本来就有 read/glob，看到 @路径 自己决定读哪段更准。
+ */
+const ATRE=/(^|[\s(（【])@([^\s@]*)$/;
+let atOpen=false,atSel=0,atList=[],atFrag='',atTimer=null;
+function showAt(frag){
+  clearTimeout(atTimer);atFrag=frag;
+  atTimer=setTimeout(()=>{
+    fetch('/api/files?sid='+encodeURIComponent(curId)+'&q='+encodeURIComponent(frag))
+      .then(r=>r.ok?r.json():{entries:[]}).then(d=>{
+        if(frag!==atFrag)return;              // 手已经打到下一个字了，这张晚到的列表要丢掉
+        atList=(d.entries||[]).map(x=>x.n);
+        if(!atList.length){hideSlash();return}
+        atSel=0;
+        const s=$('#slash');
+        s.innerHTML=atList.map((p,i)=>`<div class="it${i==0?' sel':''}" data-i="${i}">
+          <code>@${esc(p.split('/').pop())}</code><i class="tg">文件</i><em>${esc(p)}</em></div>`).join('');
+        s.querySelectorAll('.it').forEach(e=>e.onclick=()=>pickAt(+e.dataset.i));
+        s.classList.add('on');atOpen=true;slashOpen=false;
+      }).catch(()=>{});
+  },120);
+}
+function pickAt(i){
+  const p=atList[Math.min(i,atList.length-1)];if(!p)return;
+  const cur=box.value,caret=box.selectionStart==null?cur.length:box.selectionStart;
+  const m=ATRE.exec(cur.slice(0,caret));if(!m){hideSlash();return}
+  const start=caret-m[2].length-1;            // 连那个 @ 一起换掉
+  box.value=cur.slice(0,start)+'@'+p+' '+cur.slice(caret);
+  const at=start+1+p.length+1;
+  hideSlash();box.focus();box.setSelectionRange(at,at);
+  box.style.height='auto';box.style.height=Math.min(200,box.scrollHeight)+'px';
+}
 function runCommand(t){
   const cmd=(t.trim().split(/\s+/)[0]||'').toLowerCase();
   const hit=CMDS.find(x=>x.c==cmd);

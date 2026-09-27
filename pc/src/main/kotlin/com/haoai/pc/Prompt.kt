@@ -50,6 +50,8 @@ object Prompt {
 
         appendLine("## 工具使用")
         appendLine("- 读文件用 read（带 offset/limit），找东西用 grep/glob，别 cat 整个大目录。")
+        appendLine("- 用户消息里的 `@相对路径` 是工作区里的文件引用（界面按 @ 补全出来的），" +
+            "需要内容就用 read 去读它 —— 它只是被指出来，不代表你已经读过。")
         appendLine(
             "- 命令输出过长时会被截断，末尾若出现\"已存进工作区文件\"的提示，" +
                 "要看中间部分就用 read 分段回读，**不要凭头尾摘要猜**。"

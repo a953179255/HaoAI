@@ -154,11 +154,23 @@ async function click(sel) {
 async function type(step) {
   await evalJs(`(()=>{const e=document.querySelector(${JSON.stringify(step.sel)});
     e.focus();e.value=${JSON.stringify(step.text)};
+    // 程序化改 value 之后光标位置各家浏览器不一致，而 @ 补全这类要看"光标前那段"，
+    // 所以显式把光标放到末尾，模拟真的打完字的状态
+    const L=e.value.length;try{e.setSelectionRange(L,L)}catch(_){}
     e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
   if (step.enter !== false)
     await send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13})
         .catch(() => evalJs(`document.querySelector(${JSON.stringify(step.sel)})
             .dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`));
+}
+
+const KEYCODE = {Tab: 9, Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39};
+
+/** 真按键：Tab / 方向键这类要走"默认行为"的路径，用 eval 派发合成事件是测不出来的。 */
+async function key(name) {
+  const vk = KEYCODE[name] || 0;
+  for (const t of ['keyDown', 'keyUp'])
+    await send('Input.dispatchKeyEvent', {type: t, key: name, code: name, windowsVirtualKeyCode: vk});
 }
 
 async function waitFor(sel, timeoutMs) {
@@ -179,7 +191,7 @@ async function waitFor(sel, timeoutMs) {
     for (const [i, s] of steps.entries()) {
       if (s.url && s === steps[0]) continue;
       const label = s.goto ? '等 ' + s.goto : s.shot ? '图 ' + s.shot : s.eval ? '断言' :
-        s.click ? '点 ' + s.click : s.type ? '打字' : s.sleep ? '睡 ' + s.sleep + 'ms' : '?';
+        s.click ? '点 ' + s.click : s.key ? '按键 ' + s.key : s.type ? '打字' : s.sleep ? '睡 ' + s.sleep + 'ms' : '?';
       console.log('  [' + (i + 1) + '/' + steps.length + '] ' + label);
       if (s.goto) {
         const ok = await waitFor(s.goto, s.timeout || 12_000);
@@ -189,6 +201,7 @@ async function waitFor(sel, timeoutMs) {
       } else if (s.sleep) await sleep(s.sleep);
       else if (s.eval) console.log('  断言 ' + (JSON.stringify(await evalJs(s.eval)) || ''));
       else if (s.click) { await click(s.click); await sleep(s.after || 350); }
+      else if (s.key) { await key(s.key); await sleep(s.after || 250); }
       else if (s.type) { await type(s.type); await sleep(s.after || 350); }
       else if (s.shot) await shot(s.shot);
     }

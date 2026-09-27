@@ -25,6 +25,23 @@ tasks.withType<JavaExec>().configureEach {
     standardInput = System.`in`
 }
 
+/*
+ * 测试的临时目录关进一个专用子目录，跑完就删。
+ *
+ * 起因：%TEMP% 里堆了五千多个 `haoai-*` 目录 —— 每条测试都用 `Files.createTempDirectory`
+ * 造一个工作区/状态根，用完没人收。改调用点要动 11 个文件，而 `java.io.tmpdir` 只有一处。
+ *
+ * 但不能指到 `build/` 底下：那还在 HaoAI 这个 git 仓库里面，`GitToolTest` 靠"临时目录不在
+ * 任何仓库里"这条前提跑，指进 build 之后它当场假失败（"不在仓库里却成功了"）。
+ * 所以放在系统 TEMP 下的专用目录里，跑完整个删掉。
+ */
+val testTmp = File(System.getProperty("java.io.tmpdir"), "haoai-pc-test-tmp")
+tasks.test {
+    doFirst { testTmp.mkdirs() }
+    systemProperty("java.io.tmpdir", testTmp.absolutePath)
+    doLast { runCatching { testTmp.deleteRecursively() } }
+}
+
 // `gradle run --args="task '统计 pc 下有多少行 kt'"`
 tasks.named<JavaExec>("run") {
     jvmArgs("-Dfile.encoding=UTF-8")

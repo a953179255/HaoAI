@@ -32,6 +32,12 @@ HOME_DIR="${TMPDIR:-$TEMP}/haoai-uishot-$(date +%H%M%S)"
 
 WS_WIN="$HOME_DIR\\ws"
 mkdir -p "$HOME_DIR" "$HOME_DIR/ws" "$OUT"
+# 有些验收要工作区里先有东西（@ 提及没文件可提就什么都验不到）。
+# PRE_TOUCH="a/b.txt c.txt" —— 空格分隔的相对路径，各塞一行 seed。
+for f in ${PRE_TOUCH:-}; do
+  mkdir -p "$HOME_DIR/ws/$(dirname "$f")"
+  printf 'seed\n' > "$HOME_DIR/ws/$f"
+done
 export HAOAI_HOME="$HOME_DIR"
 
 python tools/mock-openai.py --port "$MOCK_PORT" --mode "$MODE" > "$HOME_DIR/mock.log" 2>&1 &
