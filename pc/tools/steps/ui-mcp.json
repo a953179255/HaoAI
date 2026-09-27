@@ -1,0 +1,19 @@
+[
+  {"goto": "#box"},
+  {"click": "#cfgBtn"},
+  {"goto": "#mcAdd"},
+  {"sleep": 900},
+  {"eval": "({list:document.getElementById('mcpList').innerText.slice(0,20),flag:[...document.querySelectorAll('.sw .t')].map(x=>x.innerText).filter(t=>t.indexOf('MCP')>=0).join(',')})"},
+  {"type": {"sel": "#mcName", "text": "mock", "enter": false}},
+  {"type": {"sel": "#mcCmd", "text": "node G:/HaoAI/pc/tools/mock-mcp.js --mark C:/Users/95317/AppData/Local/Temp/mcp-ui-mark.txt", "enter": false}},
+  {"click": "#mcAdd"},
+  {"sleep": 4000},
+  {"eval": "document.getElementById('mcpList').innerText.replace(/\\n+/g,' | ')"},
+  {"shot": "x01-mcp-added"},
+  {"click": "#mcpList [data-mdel]"},
+  {"sleep": 1500},
+  {"eval": "document.getElementById('mcpList').innerText.slice(0,20)"},
+  {"click": "#cfgClose"},
+  {"sleep": 400},
+  {"eval": "({maskOn:document.getElementById('mask').classList.contains('on')})"}
+]

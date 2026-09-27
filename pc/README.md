@@ -437,6 +437,39 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 `bash pc/tools/ui-shot.sh pc/tools/steps/ui-mem.json`（项目/全局两块记忆保存后读回、
 建技能 → `/rev` 面板出现 `/review 技能 …` → 点一下提示词进输入框 → 删除归零）。
 
+## 这一批：MCP 客户端 —— 外部工具接进引擎
+
+参照列表里那几家（codex / claude-code / opencode / dsh）都靠 MCP 把"我实现不了的能力"
+变成生态：数据库、issue 系统、公司内部工具，不用每个 agent 各写一遍。之前 PC 端没有这一层，
+用户就只能用内置那十八把工具。
+
+- `Mcp.kt`：stdio 上跑**换行分隔的 JSON-RPC 2.0**（不是 LSP 那套 `Content-Length` 头）。
+  `initialize` → `notifications/initialized` → `tools/list` → `tools/call`。
+  读回包**按 id 匹配并跳过通知**：server 会主动推 `notifications/xxx`，不按 id 挑就会把
+  日志当结果解析，症状是"工具结果是一团看不懂的东西"。
+- 外部工具包成引擎的 `Tool`，名字 `mcp_<server>_<tool>`（网关要求 `[A-Za-z0-9_-]`，
+  加前缀也让界面上"这是外部工具"一眼看得出来，还不会和内置撞名）。
+- **三条安全边界，都不许放宽**：① 整条链路挂在 `mcp_client` 开关上，**默认关**，
+  关着时这些工具对模型不存在（和浏览器控制同一套理由：别人写的进程能干什么我们不知道）；
+  ② 跑哪个命令由**用户自己写进 `HAOAI_HOME/mcp.json`**，界面只能改这份配置，
+  模型没有这条路 —— 它能调用已注册的工具，但拉不起新进程；③ 工具 `kind="write"`：
+  计划模式一律挡住，其余档位每次调用都过权限闸。
+- 一个坏 server 只让"外部工具"变空，不许把引擎带崩（`allTools()` 整体包 runCatching）。
+  握手/列工具 6 秒超时（设置抽屉打开时要同步问一遍每个 server 的状态，装死的外部进程
+  不该把界面吊住），真调用才给 60 秒。
+- 管理入口在设置抽屉：列出每个 server 的连接状态与工具数、可加可删；加完发 `settings`
+  事件让顶栏占用重算（工具说明那一行会变长）。
+
+### 验收：对着真协议跑，不是对着自己的解析函数跑
+
+`tools/mock-mcp.js` 是一个最小的**真** MCP 服务器（stdio + 换行 JSON-RPC），
+`tools/call` 会把入参写进磁盘标记文件 —— 于是能证明"这次调用真的到了外部进程"，
+而不是客户端自己编了个返回值。三条判据各对一个失败面（`McpTest`）：
+① 握手 + 列工具 + 真调用（并且磁盘标记里有那句话）；② 命令不存在的 server 只让外部工具变空，
+引擎照常拿到内置那套；③ 开关关着时 `visibleToolNames()` 里没有任何 `mcp_` 开头的工具。
+界面侧：`bash pc/tools/ui-shot.sh pc/tools/steps/ui-mcp.json`
+（加 `node …/mock-mcp.js` → 列表出现"已连上，1 把工具" → 删除回到"（还没配）"）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -561,10 +594,9 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 还没做（按重要性）
 
-1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：技能（自定义 `/命令`）、
-   定时任务、MCP 客户端与管理页（PC 端设置抽屉已能管模型、网关、工作区、档位、maxTokens、
-   contextChars、密钥、实验特性、权限规则、项目说明）、子任务（subagent）的派生与展示、
-   思考强度可调。
+1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：定时任务（到点自己起一条会话干活）、
+   子任务（subagent）的派生与展示、思考强度可调。
+   MCP 客户端与设置抽屉里的管理段已经落地（默认关，见上一节）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
@@ -579,8 +611,9 @@ pc/src/main/kotlin/com/haoai/pc/
   Env.kt        状态根、环境事实、日志
   Settings.kt   设置落库 + HaoFlag 注册表
   Provider.kt   ChatClient 接口 + OpenAI 兼容流式网关
-  Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）
-  Tools.kt      9 把基础工具 + 溢出落文件 + 快照 + diff 摘要
+  Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）+ Memory（项目说明与全局记忆）
+  Tools.kt      18 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
+  Mcp.kt        MCP 客户端：stdio 上的换行 JSON-RPC，把外部 server 的工具包成引擎的 Tool
   Policies.kt   S2 权限规则表：tool(pattern) 有序匹配 + 命令前缀归约 + alwaysAsk
   GitTool.kt    一把 git（子命令切分保留引号；只读不问人，改仓库走同一张规则表）
   Pty.kt        S3 常驻交互进程（open/send/read/close/list）+ 共用的 shell 启动器

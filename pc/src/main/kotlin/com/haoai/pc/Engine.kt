@@ -704,8 +704,8 @@ object Sessions {
     ): Engine {
         val s = Session(UUID.randomUUID().toString().take(8), workspace)
         s.mode = settings.permissionMode
-        val e = if (client == null) Engine(s, settings, builtinTools(), gate, emit)
-        else Engine(s, settings, builtinTools(), gate, emit, client)
+        val e = if (client == null) Engine(s, settings, allTools(), gate, emit)
+        else Engine(s, settings, allTools(), gate, emit, client)
         map[s.id] = e
         return e
     }

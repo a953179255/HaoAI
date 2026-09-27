@@ -133,6 +133,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/rule" -> ruleEdit(ex)
                 "/api/memory" -> memory(ex)
                 "/api/skills" -> skills(ex)
+                "/api/mcp" -> mcp(ex)
                 "/api/files" -> files(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
@@ -205,7 +206,7 @@ class WebServer(settings: PcSettings, port: Int) {
         session.mode = meta?.mode ?: settings.permissionMode
         // 闸口要能拿到"这条会话的引擎"，但引擎构造时还握不住自己的引用 —— 拿个可变槽位接上
         var made: Engine? = null
-        val e = Engine(session, settings, builtinTools(), webGate(id) { made }, emit = { ev -> forward(id, ev) })
+        val e = Engine(session, settings, allTools(), webGate(id) { made }, emit = { ev -> forward(id, ev) })
         made = e
         return e
     }
@@ -662,6 +663,52 @@ class WebServer(settings: PcSettings, port: Int) {
         send(ex, 200, """{"ok":true,"count":${list.size}}""", "application/json; charset=utf-8")
     }
 
+    /**
+     * `GET/POST /api/mcp` —— 外部 MCP 服务器配置的读、改与重连。
+     * `POST {op:'add'|'del', name, command, args}`（args 是空格分隔的一行）。
+     *
+     * 界面只能**改这份配置文件**：要跑哪个命令得由用户自己写下来。
+     * 模型没有这条路 —— 它能调用已注册的外部工具，但拉不起一个新进程。
+     */
+    private fun mcp(ex: HttpExchange) {
+        fun render(status: List<Map<String, String>>): String = status.joinToString(",", "[", "]") { row ->
+            "{" + row.entries.joinToString(",") { (k, v) -> "\"$k\":${quote(v)}" } + "}"
+        }
+        if (ex.requestMethod == "GET") {
+            send(ex, 200, """{"ok":true,"servers":${render(Mcp.status())}}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        val b = Body(ex)
+        val list = McpConfig.load().toMutableList()
+        val name = b.str("name").trim()
+        if (name.isEmpty()) {
+            send(ex, 200, """{"ok":false,"error":"名字是空的"}""",
+                "application/json; charset=utf-8"); return
+        }
+        if (b.str("op") == "del") list.removeAll { it.name == name }
+        else {
+            val cmd = b.str("command").trim()
+            if (cmd.isEmpty()) {
+                send(ex, 200, """{"ok":false,"error":"命令是空的"}""",
+                    "application/json; charset=utf-8"); return
+            }
+            if (!name.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
+                send(ex, 200, """{"ok":false,"error":"名字只能用字母、数字、_ 与 -"}""",
+                    "application/json; charset=utf-8"); return
+            }
+            list.removeAll { it.name == name }
+            list += McpServer(name, cmd.substringBefore(' '), cmd.substringAfter(' ', "")
+                .split(' ').filter { it.isNotBlank() })
+        }
+        McpConfig.save(list)
+        Mcp.reload()
+        send(ex, 200, """{"ok":true,"servers":${render(Mcp.status())}}""",
+            "application/json; charset=utf-8")
+        // 工具表变了 → 顶栏那圈占用（工具说明那一行）必须重算
+        publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */
     private fun models(ex: HttpExchange) {
         val sid = pick(querySid(ex))
@@ -706,7 +753,7 @@ class WebServer(settings: PcSettings, port: Int) {
         val session = Session("pc" + System.nanoTime().toString(16).take(8), settings.workspaceFile())
         session.mode = settings.permissionMode
         var made: Engine? = null
-        val e = Engine(session, settings, builtinTools(), webGate(session.id) { made },
+        val e = Engine(session, settings, allTools(), webGate(session.id) { made },
             emit = { ev -> forward(session.id, ev) })
         made = e
         e.persistNow()

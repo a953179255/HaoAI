@@ -674,3 +674,12 @@ fun builtinTools(): List<Tool> = listOf(
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool(), ScreenTool()
 )
+
+/**
+ * 引擎实际拿到的工具表 = 内置 + 外部 MCP。
+ *
+ * MCP 那半边整体包在 runCatching 里：一个配错的 server（命令不存在、握手超时）
+ * 不该让整条会话起不来，最多是"这次没有外部工具"。
+ */
+fun allTools(): List<Tool> =
+    builtinTools() + runCatching { Mcp.tools() }.getOrDefault(emptyList())

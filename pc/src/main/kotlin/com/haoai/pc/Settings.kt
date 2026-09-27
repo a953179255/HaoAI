@@ -178,6 +178,18 @@ enum class HaoFlag(
         what = "让 agent 截屏、列窗口、读控件树，并模拟点击与键盘输入。" +
             "它能看见屏幕上所有内容，默认关；打开后每次点击/输入仍逐条问你。",
         defaultOn = false
+    ),
+
+    /**
+     * 外部 MCP 工具。默认关，理由和浏览器控制同级：**别人写的进程能干什么我们不知道**。
+     * 关着时这些工具对模型完全不存在（不进 schema），打开后每次调用仍逐条过权限闸。
+     */
+    MCP_CLIENT(
+        key = "mcp_client",
+        title = "外部 MCP 工具",
+        what = "连接你在 HAOAI_HOME/mcp.json 里配置的 MCP 服务器，把它们报的工具交给模型用。" +
+            "默认关：外部进程的行为不可预知，打开后每次调用仍逐条问你。",
+        defaultOn = false
     );
 
     companion object {

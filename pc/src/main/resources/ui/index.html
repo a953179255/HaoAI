@@ -325,6 +325,7 @@
   .rl{display:flex;gap:8px;align-items:center;font-size:12px;font-family:var(--mono);
     border:1px solid var(--line);border-radius:7px;padding:3px 4px 3px 8px;background:var(--glass)}
   .rl span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rl em{font-style:normal;color:var(--dim2);font-size:11px}
   .addrow{display:flex;gap:6px;align-items:center}
   .addrow input{flex:1;min-width:0;background:var(--glass);border:1px solid var(--line);border-radius:8px;
     color:var(--fg);font:inherit;font-size:12px;padding:5px 8px;outline:0}
@@ -1366,11 +1367,26 @@ function openCfg(){
         <button class="ab" data-del="${esc(r.text)}" title="从规则表里去掉这条">删除</button></div>`).join('')
         :'<div class="kv">（空 —— 全部交给档位决定。审批卡上点「以后这类都允许」就会写进这里。）</div>'}</div>
       <div class="addrow"><input type="text" id="fRule" placeholder="shell(git push*) deny"><button class="btn" id="addRule">加规则</button></div>
+      <div class="grp" style="margin-top:12px">外部 MCP 服务器</div>
+      <div class="kv">要跑哪个命令由你写进 <b>HAOAI_HOME/mcp.json</b>：模型只能调用已注册的外部工具，
+        拉不起新进程。上面「外部 MCP 工具」开关关着时，这些工具对模型完全不存在。</div>
+      <div class="rules" id="mcpList">（加载中…）</div>
+      <div class="addrow"><input type="text" id="mcName" placeholder="名字，如 db">
+        <input type="text" id="mcCmd" placeholder="命令与参数，如 node C:/srv/mcp-server.js"></div>
+      <div class="acts2 pinned"><button class="btn" id="mcAdd">加为服务器</button>
+        <span class="fp" id="mcState"></span></div>
       <div class="acts"><button class="btn" id="cfgClose">关闭</button><button class="btn pri" id="cfgSave">保存</button></div>`;
     $('#mask').classList.add('on');
     dg.querySelector('#cfgClose').onclick=closeCfg;
     dg.querySelectorAll('.rules [data-del]').forEach(b=>b.onclick=()=>ruleEdit('del',b.dataset.del));
     dg.querySelector('#addRule').onclick=()=>ruleEdit('add',dg.querySelector('#fRule').value.trim());
+    // 列表是异步填的，所以删除按钮走事件委托，不能在填之前就 query 一遍
+    dg.querySelector('#mcpList').onclick=e=>{
+      const n=(e.target.dataset||{}).mdel;if(n)mcpEdit('del',n,'');
+    };
+    dg.querySelector('#mcAdd').onclick=()=>mcpEdit('add',
+      dg.querySelector('#mcName').value,dg.querySelector('#mcCmd').value);
+    loadMcp();
     dg.querySelector('#cfgSave').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
       const num=id=>String((dg.querySelector(id).value||'').replace(/\D/g,'')||'0');
@@ -1394,6 +1410,28 @@ function ruleEdit(op,text){
     if(!d||!d.ok){toast((d&&d.error)||'规则没改成','err');return}
     toast(op=='del'?'已删除：'+d.rule:'已加入：'+d.rule);openCfg();   // 重开一次，列表才是服务端那份
   }).catch(()=>toast('规则改不动','err'));
+}
+
+/* ---- 外部 MCP 服务器（设置抽屉里的一段）---- */
+function paintMcp(list){
+  $('#mcpList').innerHTML=(list||[]).length?(list||[]).map(s=>
+    `<div class="rl"><span><b>${esc(s.name)}</b> ${esc(s.command)}`+
+    `<em>${s.running=='true'?' · 已连上，'+s.tools+' 把工具':' · '+esc(s.error||'没连上')}</em></span>`+
+    `<button class="ab" data-mdel="${esc(s.name)}">删除</button></div>`).join('')
+    :'<div class="kv">（还没配）</div>';
+}
+function loadMcp(){
+  fetch('/api/mcp').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>paintMcp(d.servers))
+    .catch(()=>{$('#mcpList').textContent='读不到（服务换过端口？）'});
+}
+function mcpEdit(op,name,command){
+  if(!name.trim()){toast('名字是空的');return}
+  $('#mcState').textContent='正在连接…';
+  post('/api/mcp',{op:op,name:name,command:command}).then(d=>{
+    if(!d||!d.ok){$('#mcState').textContent='';toast((d&&d.error)||'没改成','err');return}
+    $('#mcName').value='';$('#mcCmd').value='';$('#mcState').textContent='';
+    paintMcp(d.servers);toast(op=='del'?'已删除服务器':'服务器已保存并尝试连接');
+  }).catch(()=>{$('#mcState').textContent='';toast('服务器改不动','err')});
 }
 function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');paintSend()}
 
