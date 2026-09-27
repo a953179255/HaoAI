@@ -13,3 +13,9 @@ Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
     $_.CommandLine -match '--port 8[78][0-9][0-9]'
   } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+# The preview panel drives a browser under haoai-browser-profile-<port>.
+# Edge detaches from the launcher, so a killed run can leave that window behind for good.
+Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" |
+  Where-Object { $_.CommandLine -like '*haoai-browser-profile*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }

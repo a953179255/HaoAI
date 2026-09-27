@@ -509,6 +509,14 @@
   .pal .pi span{color:var(--dim);font-size:11px;flex:none;margin-left:auto}
   /* Git 面板一行：勾选框 + porcelain 两列状态 + 路径 + diff 小按钮。
      按钮一律用 .ab —— 全局 .btn 是 display:block;width:100%，放进这一行会把整行撑爆。 */
+  /* 预览：一帧 JPEG 铺满窄栏，点它就是把坐标送进页面 */
+  .pvs{margin:2px 0 7px}
+  .pvs img{display:none;width:100%;border:1px solid var(--line);border-radius:9px;
+    background:#111;cursor:crosshair}
+  .pvrow{display:flex;gap:5px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+  .pvrow input{flex:1 1 120px;min-width:0;font-size:12px}
+  .pvlive{display:flex;gap:5px;align-items:center;font-size:11.5px;opacity:.75;margin-top:2px}
+
   /* 终端：等宽、深色、自己滚。行多时只留最近 600 行（服务端缓冲 2000 行） */
   .tout{font-family:var(--mono);font-size:11.5px;line-height:1.5;background:var(--code);
     border:1px solid var(--line2);border-radius:9px;padding:8px 9px;margin:8px 0;
@@ -642,6 +650,7 @@
       <button data-t="files">产出</button>
       <button data-t="git">Git</button>
       <button data-t="term">终端</button>
+      <button data-t="pv">预览</button>
       <button data-t="mem">记忆</button>
       <button data-t="cron">定时</button>
       <button data-t="tools">工具</button>
@@ -698,6 +707,22 @@
         <button class="ab" id="tSend">发送</button>
       </div>
       <div class="kv" id="termState"></div>
+    </div>
+    <div class="tabp" id="tab-pv">
+      <div class="kv" id="pvNote">这个页签一打开才会连上那台独立配置目录的浏览器；
+        画面每不到一秒取一帧，你在画面上点的地方会送回页面。</div>
+      <div class="pvs"><img id="pvImg" alt="浏览器画面"></div>
+      <div class="pvrow"><input id="pvUrl" placeholder="http://127.0.0.1:8000/"><button class="ab" id="pvGo">打开</button></div>
+      <div class="pvrow"><input id="pvText" placeholder="送进页面的字（先在画面上点一下输入框）"><button class="ab" id="pvSend">送入</button>
+        <select id="pvKey"><option value="">按键…</option><option value="Enter">Enter</option>
+          <option value="Tab">Tab</option><option value="Backspace">Backspace</option>
+          <option value="Escape">Escape</option><option value="PageDown">PageDown</option>
+          <option value="PageUp">PageUp</option></select></div>
+      <div class="tabs2" id="pvPages"></div>
+      <div class="pvrow"><button class="ab" id="pvReload" title="只重取一帧">重取一帧</button>
+        <button class="ab" id="pvClose">关掉这台浏览器</button></div>
+      <div class="kv" id="pvMeta">—</div>
+      <label class="pvlive"><input type="checkbox" id="pvLive" checked>连续刷新（取消勾选就定格在这一帧）</label>
     </div>
     <div class="tabp" id="tab-git">
       <div class="kv" id="gitHead">—</div>
@@ -1062,7 +1087,7 @@ const PALSET=[
   ['右栏：任务','#tabs button[data-t=tasks]'],
   ['右栏：用量与运行历史','#tabs button[data-t=usage]'],['右栏：产出','#tabs button[data-t=files]'],
   ['右栏：Git','#tabs button[data-t=git]'],
-  ['右栏：终端','#tabs button[data-t=term]'],['右栏：记忆','#tabs button[data-t=mem]'],
+  ['右栏：终端','#tabs button[data-t=term]'],['右栏：预览','#tabs button[data-t=pv]'],['右栏：记忆','#tabs button[data-t=mem]'],
   ['右栏：定时','#tabs button[data-t=cron]'],['右栏：工具','#tabs button[data-t=tools]'],
   ['打开回收站','#trashBtn'],['导出这条会话','#expBtn'],['切换明暗主题','#themeBtn'],
 ];
@@ -1610,6 +1635,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='git')loadGit();
   if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
+  if(b.dataset.t=='pv')pvStart(); else pvStop();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind()}
 });
@@ -1685,6 +1711,95 @@ function termStartPolling(){
   termTimer=setInterval(()=>{if(termId)termPoll()},900);
 }
 function stopTermPolling(){if(termTimer){clearInterval(termTimer);termTimer=null}}
+
+/* ---- 预览页签：CDP 的一帧画面进网页，人点的位置送回页面 ----
+ * 为什么值得做：模型有浏览器工具，但人只能看它转述 —— "它说页面长这样"和"我自己看一眼再点两下"
+ * 是两种信任度。这条通道同时是视频/直播工作流里"盯一眼产出页"的地方。
+ * 边界在服务端：开关没开一律不动浏览器，网址只收 http/https。
+ */
+let pvTimer=null,pvVw=0,pvVh=0,pvOn=false,pvBusy=false,pvBlob='',pvHalted=false;
+function pvPost(body){return fetch('/api/preview/input',{method:'POST',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({sid:curId},body))})
+  .then(r=>r.json()).then(o=>{if(o.error)toast(o.error,'err')})}
+function pvStart(){pvState();if(!pvTimer)pvTimer=setInterval(pvTick,900)}
+function pvStop(){if(pvTimer){clearInterval(pvTimer);pvTimer=null}}
+function pvState(){
+  return fetch('/api/preview/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(d=>{
+    pvOn=!!d.on;pvVw=d.vw||0;pvVh=d.vh||0;
+    const note=$('#pvNote');
+    note.textContent=d.note||'';note.style.display=d.note?'block':'none';
+    $('#pvMeta').textContent=pvOn?((d.title||'（无标题）')+' · 视口 '+pvVw+'×'+pvVh+' · '+(d.url||'')):'';
+    pvPages(d.pages||[]);
+    $('#pvImg').style.display=(pvOn&&pvVw>0)?'block':'none';
+  }).catch(()=>{});
+}
+function pvPages(ps){
+  const box=$('#pvPages');
+  box.innerHTML=ps.length?ps.map(x=>'<button data-pid="'+esc(x.id)+'">'+esc((x.title||x.url||'页面').slice(0,16))+'</button>').join('')
+    :'<span class="kv">（还没有标签页）</span>';
+  box.querySelectorAll('button[data-pid]').forEach(b=>b.onclick=()=>{
+    fetch('/api/preview/pick',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({sid:curId,id:b.dataset.pid})}).then(r=>r.json()).then(o=>{
+      if(o.error)toast(o.error,'err');pvState();pvTick();})});
+}
+function pvTick(){
+  if(pvHalted||pvBusy||!$('#pvLive').checked)return;
+  pvBusy=true;
+  fetch('/api/preview/frame?sid='+encodeURIComponent(curId)+'&ts='+Date.now()).then(r=>{
+    if(!r.ok)return r.json().catch(()=>({})).then(j=>{
+      if(j&&j.error){$('#pvNote').textContent=j.error;$('#pvNote').style.display='block';
+        $('#pvImg').style.display='none';pvOn=false}
+    });
+    return r.blob().then(b=>{
+      const img=$('#pvImg');
+      if(pvBlob)URL.revokeObjectURL(pvBlob);
+      pvBlob=URL.createObjectURL(b);img.src=pvBlob;img.style.display='block';
+    });
+  }).catch(()=>{}).then(()=>{pvBusy=false});
+}
+$('#pvImg').onclick=e=>{
+  if(!pvOn)return;
+  const r=e.currentTarget.getBoundingClientRect();
+  if(r.width<10||r.height<10)return;
+  pvPost({kind:'click',x:e.clientX-r.left,y:e.clientY-r.top,iw:Math.round(r.width),ih:Math.round(r.height)});
+  pvState();setTimeout(pvTick,300);
+};
+// 滚轮也送过去：只看一屏的画面没法验长页面，而"再截一张"要人手动翻页很别扭
+$('#pvImg').onwheel=e=>{
+  if(!pvOn)return;
+  e.preventDefault();
+  const r=e.currentTarget.getBoundingClientRect();
+  pvPost({kind:'wheel',x:Math.round(r.width/2),y:Math.round(r.height/2),dy:e.deltaY});
+  pvState();setTimeout(pvTick,300);
+};
+$('#pvGo').onclick=()=>{
+  const u=$('#pvUrl').value.trim();
+  if(!u){toast('先输个网址','err');return}
+  pvHalted=false;toast('正在打开…');
+  fetch('/api/preview/open',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sid:curId,url:u})}).then(r=>r.json()).then(o=>{
+    if(o.error){toast(o.error,'err');return}
+    toast(o.note||'已打开');pvState();setTimeout(pvTick,700);});
+};
+$('#pvUrl').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('#pvGo').click()}};
+$('#pvSend').onclick=()=>{
+  const t=$('#pvText').value;
+  if(!t){toast('要先有字','err');return}
+  pvPost({kind:'text',text:t}).then(()=>{$('#pvText').value='';pvState();setTimeout(pvTick,300)});
+};
+$('#pvReload').onclick=()=>{pvHalted=false;pvState();pvTick()};
+// 关掉就停手：不再轮询、也不再报状态，否则"关掉"会被下一次取帧顶掉
+$('#pvClose').onclick=()=>{
+  pvHalted=true;pvStop();
+  fetch('/api/preview/close',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sid:curId})}).then(r=>r.json()).then(o=>{
+    toast(o.error||o.note||'已关掉');
+    $('#pvImg').style.display='none';$('#pvMeta').textContent='—';$('#pvPages').innerHTML='';});
+};
+$('#pvKey').onchange=e=>{
+  const k=e.target.value;if(!k)return;
+  pvPost({kind:'key',key:k});e.target.value='';pvState();setTimeout(pvTick,300);
+};
 
 /* ---- Git 面板 ----
  * 给**人**看 diff、勾文件、写提交说明的地方。模型有 git 工具，但"它改完我扫一眼再提交"

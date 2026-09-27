@@ -381,6 +381,13 @@ SHOT_MODE=loop bash pc/tools/ui-shot.sh pc/tools/steps/ui-queue.json  # 跑着�
 SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-msgops.json  # 引用 / 删这一句 / 会话置顶
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-usage.json  # 用量账本：按模型分行 + 近 14 天柱子
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML 沙箱预览 + 长代码块折叠（含隔离断言）
+SHOT_MODE=media PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-media.json  # ffmpeg 六个子命令 + 产出直接播（真解码）
+SHOT_MODE=git PRE_GIT=1 bash pc/tools/ui-shot.sh pc/tools/steps/ui-git.json  # Git 面板：看 diff / 勾文件 / 提交（含中文文件名）
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-runs.json  # 命令面板 Ctrl+Shift+P + 任务运行历史与 ↻
+SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-term.json  # 终端页签：人与 agent 共用同一常驻进程（各一个游标）
+SHOT_MODE=chat PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-attach.json  # 音视频附件：胶囊 + 播放器 + 刷新重放
+SHOT_MODE=code bash pc/tools/ui-shot.sh pc/tools/steps/ui-code.json  # run_code：跑 python 出图，图真的交回模型
+SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/steps/ui-iab.json  # 「预览」页签：CDP 画面进网页、人点的位置送回页面
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
@@ -1487,6 +1494,60 @@ chip 里同时有 `▶`、文件名和 `音视频 54 KB`、用户气泡里 1 个
 4. **打印出来的 `false` 不是失败 —— 量具自己也会给假绿。** 补「播放器放不出来才解释一句」这条时，探针返回 `{"hintOnErr":false}`，整轮却报 PASS：`shot.js` 过去对 eval 步**只打印不判**。现在加了 `must`：步里声明哪些字段必须为真，任一为假就把退出码置 1（老步不声明就保持原行为，因为有些步的期望值本来就是 false，比如 `running:false`）。顺带两个自己造的坑：① 探针用 `v.onerror=()=>r()` 等错误，等于把内联的 `medFail` 覆盖掉，于是"没提示"是探针的错不是产品的错 —— 等事件要用 `addEventListener`；② `PRE_CLIP` 要的是带扩展名的文件名，我传了 `PRE_CLIP=1`，ffmpeg 报的是"认不出输出格式"，看着像 ffmpeg 坏了 —— 现在 `ui-shot.sh` 一上来就挡掉。
    （同一批还改掉一处文案噪声：每个正常播放器底下都常驻一句"播不出来通常是编码问题"，看着像整片区域坏了；现在只在 `error` 事件真的来了才补那一句。）
 
+## 这一批：浏览器预览面板（右栏「预览」）—— 人自己看一眼、自己点两下（v0.50.0，缺口地图 B8）
+
+浏览器控制（CDP）早就有了，但那是**模型的眼睛**：它说"页面加载完了、按钮点到了"，
+人只能信。视频/直播工作流里我要盯的是"这页到底长什么样、这个按钮我按得着吗"，
+所以右栏多一个「预览」页签（现在一共 9 个）：把 CDP 的一帧画面搬进网页，人点的位置再送回页面。
+
+- **画面**：`Page.captureScreenshot` 出 JPEG（quality 55，一帧 30–80KB），面板每 900ms 取一帧，
+  走 `URL.createObjectURL` 而不是把 URL 塞进 `<img src>` —— 后者会被浏览器按同一 URL 缓存住，
+  画面就定格了。**取消勾选「连续刷新」= 定格**，看长文的时候不再刷。
+- **点回去**：图是等比缩在 292px 窄栏里的，所以"图上的点"要按视口比例换算成"页面上的点"
+  （`PreviewPanel.mapClick`），再走 `Input.dispatchMouseEvent`。**这里刻意不用模型那条 `n.click()`** ——
+  那跳过了命中测试，hover 才出来的菜单、只认 mousedown 的控件全都点不动；人看着画面点，
+  就必须让页面自己去判断点到了谁。滚轮同理（`mouseWheel`）。
+- **送字**走 `Input.insertText`（IME 那条路），中文不会散成一串 keydown；特殊键只放常用的那几个
+  （Enter/Tab/Backspace/Escape/PageUp/PageDown），不做全键盘映射。
+- **网址只收 http/https**，而且**在补协议之前**先把危险协议逐个点名拒掉：
+  `javascript:alert(1)` 不带 `//`，只看"有没有 ://"会把它放过来变成 `https://javascript:alert(1)` ——
+  看着挡住了，其实只是把脏东西挪了个位置。`file://` 也拒：这条通道能把任何 URL 渲染成图给人看，
+  开了就是本地文件读取口。没写协议时 `localhost:5173` 这类补 `http://`（补 https 会连不上本地 dev server）。
+- **光是打开页签、看画面、看状态都不会起进程**（`previewPeek` 只认已经在跑的那台）；
+  只有人按「打开 / 送入 / 点一下 / 切标签」才允许 `getOrCreate()`。
+- 面板上有「关掉这台浏览器」，且关闭会**停掉自己的轮询**。
+
+判据（Kotlin 新增 13 条 `PreviewTest`，整套 249 条）：白名单收/拒各一条（含 `file:`/`javascript:`/`data:`/`about:`/`chrome:`、
+控制字符、超长、带 `@` 的 host）、坐标换算 270×200→1080×800 正中得 (540,400)、越界夹进视口、
+尺寸没量出来时一律 (0,0)、状态 JSON 带开关没开那句"去哪开"、标签页列表过 JSON 往返不丢字段，
+外加 5 条真 HTTP：开关关着时 `/api/preview/state` 回 `on:false` 且**不动浏览器**、
+坏网址在白名单就被拒（早于"要不要起进程"）、好网址 + 开关关着 ⇒ 回人话、
+取帧回 404（面板靠这个把"没拿到帧"说成人话）、不认的动作不算成功。
+（像素，`SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/ui-shot.sh tools/steps/ui-iab.json`，20 步：
+起的是**真 Edge**（独立配置目录），靶页挂在假网关的 `/hello` 上 ——
+视口量出 921×920、帧的 `naturalWidth=921`（真解码，不是"元素在 DOM 里"）、
+靶页标题从 `预览靶页 0` → 送入"你好呀"后 `预览靶页 0｜你好呀` → **点画面正中**之后 `预览靶页 1｜你好呀`
+（按钮在页面正中，所以"点图的正中＝点屏幕的正中"这条换算被真实验证了，不是自证）→
+图在窄栏里 267×267 完整放得下、页面无横向溢出 → 切走页签后 `pvTimer===null`（轮询真的停了）→
+按「关掉这台浏览器」后 5.5 秒内第二次关闭回"没有正在跑的浏览器实例"。）
+
+**这一批最该记的三件事：**
+
+1. **"关掉"会被自己的轮询顶掉。** 第一版 `previewState/previewFrame` 也走 `getOrCreate()`，
+   于是按下关闭之后，下一次取帧又把 Edge 拉起来 —— 面板上那句"已关掉"当场变假话。
+   修法是**把"看一眼"和"做一件事"拆成两个入口**（`previewPeek` 只读、`previewSession` 才允许起），
+   顺带把"光是打开页签就 spawn 进程"这个副作用一起去掉。这类"读路径不该有写副作用"的分裂，
+   比在关闭处加锁干净得多。
+2. **`shutdown()` 只 destroy 手里那个 PID 是不够的。** msedge.exe 的启动进程会把真正的浏览器
+   甩成另一棵进程树，进程没死、调试端口还在应答。现在先 `Browser.close`（CDP 自己退，带走整棵树，
+   它通常不回包所以走 dispatch 直发不等响应），等端口真没人应答最多 4 秒，不退才 `taskkill /T /F` 兜底，
+   并且**把真实结果回给人看**（"已关掉"/"已强制结束"/"端口还在应答，去任务管理器看一眼"）。
+   收尾的 `kill-stale-shot.ps1` 也补了一条：按 `haoai-browser-profile-` 认这台机器上遗留的预览浏览器。
+3. **量具的 `must` 门当场抓住我自己的假绿。** 剧本第 20 步第一次跑出 `{"gone":false}` 却整轮 PASS ——
+   因为 eval 步以前只打印不判。加了 `must` 之后这一轮直接失败，才逼出上面第 1、2 两条真缺陷。
+   （另一条同类：关闭最多花 4 秒，而第二次 close 会撞进第一次还没清空的 `current`，
+   所以判据要**轮询到"没有正在跑的实例"为止**，不能"等 1.5 秒再看一眼"。）
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1553,7 +1614,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **236 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **249 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1578,7 +1639,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3，这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13，这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1622,7 +1683,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    HTML 产出沙箱预览、长代码块折叠、会话级工具开关、断点恢复、审批键盘决定、子任务单独停、备份导出/恢复、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）、媒体工具 ffmpeg 与产出直接播、
 Git 面板、命令面板与任务运行历史、终端页签（人和 agent 共用常驻进程）、
-音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）。
+音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）、浏览器预览面板（人自己看画面、自己点）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
@@ -1656,6 +1717,7 @@ pc/src/main/kotlin/com/haoai/pc/
   Media.kt      ffmpeg 定位与调用 + 按魔数认音视频（MediaMime）+ Range 解析（边播边拖）
   RunCode.kt    `run_code`：临时脚本 + python/node，运行目录里新出来的图/音视频交回两侧
   GitPanel.kt   人用的 Git 面板后端：status/暂存/diff/提交（不吃 porcelain 行首空格）
+  PreviewPanel.kt 预览面板的纯逻辑：网址白名单 + 图上坐标→页面坐标 + 状态 JSON
   RunLedger.kt  一次运行一行的 HAOAI_HOME/runs.jsonl（最近 500 条，供「用量」页回溯与 ↻）
   Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
   Desktop.kt    屏幕理解与点击级自动化：生成的 PowerShell 模板 + PsRunner

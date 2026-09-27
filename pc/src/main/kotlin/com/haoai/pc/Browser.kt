@@ -235,15 +235,144 @@ class BrowserSession private constructor(
         return "截图已存 ${target.absolutePath}（${target.length()} 字节；再看内容用 path=\"$rel\"）"
     }
 
-    fun shutdown() {
+    // ---- 预览面板要的四件事：取帧、量视口、送输入、切标签 ----
+    //
+    // 与上面那批给模型用的方法分开写，是因为语义不同：`click(selector)` 是"模型判断该点哪"，
+    // 直接 n.click()；面板上是**人看着画面点**，必须走 CDP 的输入通道，
+    // 让页面自己做命中测试 —— 否则 hover 才出来的菜单、只认 mousedown 的控件全都点不动。
+
+    /** 一帧 JPEG。给面板轮询用，够看清又不把 CDP 压满（quality 55 大约 30–80KB）。 */
+    fun jpegFrame(quality: Int = 55): ByteArray {
+        ensureConnected()
+        val r = call("Page.captureScreenshot", buildJsonObject {
+            put("format", "jpeg")
+            put("quality", quality)
+            put("fromSurface", true)
+        })
+        val b64 = r["result"]?.jsonObject?.get("data")?.jsonPrimitive?.contentOrNull
+            ?: return ByteArray(0)
+        return runCatching { Base64.getDecoder().decode(b64) }.getOrDefault(ByteArray(0))
+    }
+
+    /** 视口宽高（CSS 像素）。面板把"图上的点"换算成"页面上的点"要用它。 */
+    fun viewport(): Pair<Int, Int> {
+        val s = runCatching { eval("window.innerWidth + 'x' + window.innerHeight") }.getOrDefault("")
+        val parts = s.split('x')
+        return Pair(
+            parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 0,
+            parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+        )
+    }
+
+    fun pageTitle(): String = runCatching { eval("document.title") }.getOrDefault("")
+
+    fun pageUrlNow(): String = runCatching { eval("location.href") }.getOrDefault("")
+
+    /** 人点一下：按下 + 抬起，坐标是页面 CSS 像素。 */
+    fun clickAt(x: Int, y: Int): String {
+        ensureConnected()
+        call("Input.dispatchMouseEvent", mouseEvent("mousePressed", x, y, 1))
+        call("Input.dispatchMouseEvent", mouseEvent("mouseReleased", x, y, 0))
+        return "已把点击送到 ($x, $y)"
+    }
+
+    fun scrollAt(x: Int, y: Int, deltaY: Int): String {
+        ensureConnected()
+        call("Input.dispatchMouseEvent", buildJsonObject {
+            put("type", "mouseWheel"); put("x", x); put("y", y)
+            put("deltaX", 0); put("deltaY", deltaY)
+        })
+        return "已滚 $deltaY"
+    }
+
+    /** 往当前焦点元素送字。走 insertText（IME 那条路），中文不会散成一串 keydown。 */
+    fun insertText(text: String): String {
+        ensureConnected()
+        call("Input.insertText", buildJsonObject { put("text", text) })
+        return "已送入 ${text.length} 字"
+    }
+
+    /** 特殊键：Enter / Tab / Backspace / Escape / 方向键。 */
+    fun pressKey(key: String): String {
+        ensureConnected()
+        val vk = SPECIAL_KEYS[key.lowercase()] ?: return "不认的键：$key（能用的：" +
+            SPECIAL_KEYS.keys.joinToString("/") + "）"
+        val code = KEY_CODES[key.lowercase()] ?: key
+        call("Input.dispatchKeyEvent", buildJsonObject {
+            put("type", "keyDown"); put("windowsVirtualKeyCode", vk); put("nativeVirtualKeyCode", vk)
+            put("code", code); put("key", key)
+        })
+        call("Input.dispatchKeyEvent", buildJsonObject {
+            put("type", "keyUp"); put("windowsVirtualKeyCode", vk); put("nativeVirtualKeyCode", vk)
+            put("code", code); put("key", key)
+        })
+        return "已按下 $key"
+    }
+
+    /** 可切过去的页面标签（id / 标题 / url）。 */
+    fun pageList(): List<Triple<String, String, String>> {
+        val v = runCatching { get("/json") }.getOrDefault("")
+        return Regex("""\{[^{}]*\}""").findAll(v).map { it.value }
+            .filter { field(it, "type") == "page" && field(it, "webSocketDebuggerUrl") != null }
+            .map { Triple(field(it, "id") ?: "", field(it, "title") ?: "", field(it, "url") ?: "") }
+            .toList()
+    }
+
+    /** 面板切到另一个标签：换掉 WS 端点重连（模型那边下次调用也会跟着过去）。 */
+    fun focusPage(id: String): String? {
+        val target = runCatching { get("/json") }.getOrDefault("")
+        val rows = Regex("""\{[^{}]*\}""").findAll(target).map { it.value }.toList()
+        val row = rows.firstOrNull { field(it, "id") == id && field(it, "type") == "page" }
+            ?: return null
+        val url = WS_URL.find(row)?.groupValues?.get(1) ?: return null
+        runCatching { sock?.close() }
+        sock = null
+        wsUrl = url
+        connect()
+        return "已切到 ${field(row, "title") ?: id}"
+    }
+
+    private fun mouseEvent(type: String, x: Int, y: Int, buttons: Int) = buildJsonObject {
+        put("type", type); put("x", x); put("y", y)
+        put("button", "left"); put("clickCount", 1); put("buttons", buttons)
+    }
+
+    /**
+     * 关掉这台浏览器。
+     *
+     * 只 destroy 手里那个 PID 是不够的：msedge.exe 的启动进程会把真正的浏览器甩成另一棵树，
+     * 于是"已关掉"之后窗口还在（面板上这句话就成了假话）。所以先让浏览器自己退（CDP 的
+     * `Browser.close`，它带走整棵树），等它死透；实在不退才兜底 taskkill 进程树。
+     * `Browser.close` 通常不会回包（人都走了），所以走 dispatch 直发、不等响应。
+     */
+    fun shutdown(): String {
+        runCatching { dispatch("""{"id":999999,"method":"Browser.close","params":{}}""") }
+        val until = System.currentTimeMillis() + 4_000
+        while (System.currentTimeMillis() < until && probe()) Thread.sleep(250)
+        var forced = false
+        if (probe()) {
+            val pid = proc?.pid()
+            if (pid != null) runCatching {
+                ProcessBuilder("taskkill", "/PID", pid.toString(), "/T", "/F")
+                    .redirectErrorStream(true).start().waitFor(5, TimeUnit.SECONDS)
+            }
+            forced = true
+            val hard = System.currentTimeMillis() + 3_000
+            while (System.currentTimeMillis() < hard && probe()) Thread.sleep(200)
+        }
         runCatching { sock?.close() }
         sock = null
         wsUrl = null
         BrowserSession.forgetPort()
+        // 单例也要清：留着它，existing() 会指着这台已死的实例，"关掉"就说不准了
+        if (current === this) current = null
         proc?.let {
             it.destroy()
-            if (!it.waitFor(3, TimeUnit.SECONDS)) it.destroyForcibly()
+            if (!it.waitFor(2, TimeUnit.SECONDS)) it.destroyForcibly()
         }
+        return if (probe()) "已经让它退了，但调试端口还在应答（窗口可能没关干净，去任务管理器看一眼）"
+        else if (forced) "已强制结束那台浏览器"
+        else "已关掉那台浏览器"
     }
 
     /** 这个实例还活着吗（HTTP 端点能通就算）。 */
@@ -350,6 +479,20 @@ class BrowserSession private constructor(
     companion object {
         private val WS_URL = Regex(""""webSocketDebuggerUrl"\s*:\s*"([^"]+)"""")
 
+        /** 面板上那颗"按键"框只认这几个：够翻页、确认、删字，不做全键盘映射。 */
+        private val SPECIAL_KEYS = mapOf(
+            "enter" to 13, "return" to 13, "tab" to 9, "backspace" to 8, "delete" to 46,
+            "escape" to 27, "esc" to 27, "up" to 38, "down" to 40, "left" to 37, "right" to 39,
+            "home" to 36, "end" to 35, "pageup" to 33, "pagedown" to 34, "space" to 32
+        )
+        private val KEY_CODES = mapOf(
+            "enter" to "Enter", "return" to "Enter", "tab" to "Tab", "backspace" to "Backspace",
+            "delete" to "Delete", "escape" to "Escape", "esc" to "Escape", "up" to "ArrowUp",
+            "down" to "ArrowDown", "left" to "ArrowLeft", "right" to "ArrowRight",
+            "home" to "Home", "end" to "End", "pageup" to "PageUp", "pagedown" to "PageDown",
+            "space" to "Space"
+        )
+
         @Volatile
         private var current: BrowserSession? = null
 
@@ -425,6 +568,9 @@ class BrowserSession private constructor(
                 HttpResponse.BodyHandlers.ofString()
             ).statusCode() == 200
         }.getOrDefault(false)
+
+        /** 只拿"已经在跑的那台"，绝不新起一个进程（面板上那颗「关掉这台」要用）。 */
+        fun existing(): BrowserSession? = current?.takeIf { it.probe() }
 
         /** 关掉时把端口记录一起清掉，免得下次去连一个已经不存在的浏览器。 */
         fun forgetPort() {

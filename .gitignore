@@ -22,3 +22,6 @@ keystore.properties
 *.keystore
 md_jar/
 provider-redesign/
+
+# 开发脚本（tools/*.py）跑出来的字节码缓存，不是源码
+__pycache__/

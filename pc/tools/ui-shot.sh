@@ -133,6 +133,19 @@ fi
   > "$HOME_DIR/set.log" 2>&1
 tail -2 "$HOME_DIR/set.log"
 
+# 有的链路要"实验特性是开的"才验得到（预览面板：browser_control 关着时端点压根不动浏览器）。
+# 走 CLI 而不是手改 settings.json —— 开关的落盘口径（只存与默认值不同的那些）由代码自己保证。
+for k in ${PRE_FLAGS:-}; do
+  "$BIN" flags on "$k" >> "$HOME_DIR/set.log" 2>&1 || { echo "x 开不了开关 $k（看 $HOME_DIR/set.log）"; exit 1; }
+  echo "  flag on: $k"
+done
+# 剧本里写 @MOCK@ 的地方换成这次的假网关端口（预览靶页就挂在它上面，端口每轮现挑，写死必串台）。
+if grep -q '@MOCK@' "$STEPS" 2>/dev/null; then
+  sed "s|@MOCK@|$MOCK_PORT|g" "$STEPS" > "$HOME_DIR/steps.json"
+  STEPS="$HOME_DIR/steps.json"
+  echo "  steps @MOCK@ -> $MOCK_PORT"
+fi
+
 "$BIN" serve --port "$PORT" > "$HOME_DIR/serve.log" 2>&1 &
 SRV=$!
 for i in $(seq 1 40); do

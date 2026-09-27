@@ -188,6 +188,12 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/shell/open" -> shellOpen(ex)
                 "/api/shell/send" -> shellSend(ex)
                 "/api/shell/close" -> shellClose(ex)
+                "/api/preview/state" -> previewState(ex)
+                "/api/preview/frame" -> previewFrame(ex)
+                "/api/preview/open" -> previewOpen(ex)
+                "/api/preview/input" -> previewInput(ex)
+                "/api/preview/pick" -> previewPick(ex)
+                "/api/preview/close" -> previewClose(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -1786,6 +1792,136 @@ class WebServer(settings: PcSettings, port: Int,
         send(ex, 200, if (r.isSuccess) """{"ok":true}"""
         else """{"ok":false,"error":${quote(r.exceptionOrNull()?.message ?: "写不进去")}}""",
             "application/json; charset=utf-8")
+    }
+
+    // ---- 浏览器预览面板：把 CDP 画面搬进网页，人点的地方送回页面 ----
+    //
+    // 与 Git 面板同一个立场：**人亲手点这一下就是审批**，所以这里不再过模型的权限闸
+    // （模型那条路照旧逐条问）。但两件事不放：开关没开时这套端点一律不动浏览器；
+    // 网址只收 http/https —— 这条通道能把任何 URL 渲染成图，`file://` 就等于开了个读盘口。
+
+    private fun previewOn(): Boolean = HaoFlag.enabled(HaoFlag.BROWSER_CONTROL, settings.flags)
+
+    /**
+     * 只读的那一半：**光是打开页签、看画面、看状态，绝不起新进程**。
+     *
+     * 上一版这里统一走 getOrCreate()，于是"关掉这台浏览器"被自己的轮询顶掉了 ——
+     * 关闭之后下一次取帧又把 Edge 拉起来，面板上那句"已关掉"当场变成假话。
+     */
+    private fun previewPeek(): BrowserSession? =
+        if (!previewOn()) null else BrowserSession.existing()
+
+    /** 会做事的那一半：只有人明确按了"打开 / 送入 / 点一下 / 切标签"才允许起。 */
+    private fun previewSession(): BrowserSession? =
+        if (!previewOn()) null else runCatching { BrowserSession.getOrCreate() }.getOrNull()
+
+    private fun previewOff(ex: HttpExchange) {
+        send(ex, 200, PreviewPanel.errJson(PreviewPanel.OFF_NOTE), "application/json; charset=utf-8")
+    }
+
+    private fun previewState(ex: HttpExchange) {
+        if (!previewOn()) {
+            send(ex, 200, PreviewPanel.stateJson(false, PreviewPanel.OFF_NOTE, "", "", 0, 0, emptyList()),
+                "application/json; charset=utf-8")
+            return
+        }
+        val ses = previewPeek()
+        if (ses == null) {
+            send(ex, 200, PreviewPanel.stateJson(true,
+                "还没有在跑的浏览器。输个网址按「打开」就会起一台（独立配置目录，不碰你自己的 Edge）。" +
+                    "起不来时看 `haoai doctor`。",
+                "", "", 0, 0, emptyList()), "application/json; charset=utf-8")
+            return
+        }
+        val (vw, vh) = ses.viewport()
+        send(ex, 200, PreviewPanel.stateJson(true, "", ses.pageUrlNow(), ses.pageTitle(),
+            vw, vh, ses.pageList()), "application/json; charset=utf-8")
+    }
+
+    /** 一帧 JPEG。回 404/503 是故意的：面板靠 <img> 的 error 事件知道"这帧没拿到"。 */
+    private fun previewFrame(ex: HttpExchange) {
+        val ses = previewPeek()
+        if (ses == null) {
+            send(ex, 404, if (previewOn()) """{"ok":false,"error":"浏览器没起来"}"""
+            else PreviewPanel.errJson(PreviewPanel.OFF_NOTE), "application/json; charset=utf-8")
+            return
+        }
+        val bytes = runCatching { ses.jpegFrame() }.getOrDefault(ByteArray(0))
+        if (bytes.isEmpty()) {
+            send(ex, 503, """{"ok":false,"error":"这一帧没截到（页面可能正在导航）"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        ex.responseHeaders.add("Cache-Control", "no-store")
+        ex.responseHeaders.add("Content-Type", "image/jpeg")
+        ex.sendResponseHeaders(200, bytes.size.toLong())
+        ex.responseBody.use { it.write(bytes) }
+    }
+
+    private fun previewOpen(ex: HttpExchange) {
+        val b = Body(ex)
+        val url = PreviewPanel.safeUrl(b.str("url"))
+        if (url == null) {
+            send(ex, 200, PreviewPanel.errJson("只收 http/https 网址；本地文件请用「产出」页签打开"),
+                "application/json; charset=utf-8")
+            return
+        }
+        val ses = previewSession()
+        if (ses == null) { previewOff(ex); return }
+        val note = runCatching { ses.navigate(url) }.getOrElse { e -> "打不开：${e.message ?: "未知原因"}" }
+        send(ex, 200, PreviewPanel.okJson(note), "application/json; charset=utf-8")
+    }
+
+    private fun previewInput(ex: HttpExchange) {
+        val b = Body(ex)
+        val ses = previewSession()
+        if (ses == null) { previewOff(ex); return }
+        val num = fun(k: String): Double {
+            val v = b.str(k).toDoubleOrNull() ?: 0.0
+            return if (v.isNaN() || v.isInfinite()) 0.0 else v
+        }
+        val out = when (b.str("kind")) {
+            "click" -> {
+                val (vw, vh) = ses.viewport()
+                val pt = PreviewPanel.mapClick(num("x"), num("y"), num("iw").toInt(), num("ih").toInt(), vw, vh)
+                if (vw <= 0 || vh <= 0) "页面还没量出尺寸，稍等一下再点" else ses.clickAt(pt.first, pt.second)
+            }
+            "wheel" -> {
+                val (vw, vh) = ses.viewport()
+                ses.scrollAt(num("x").toInt().coerceIn(0, maxOf(vw - 1, 0)),
+                    num("y").toInt().coerceIn(0, maxOf(vh - 1, 0)), num("dy").toInt())
+            }
+            "text" -> {
+                val t = b.str("text")
+                if (t.isEmpty()) "没东西可送" else ses.insertText(t.take(2000))
+            }
+            "key" -> ses.pressKey(b.str("key"))
+            else -> "不认的动作：「${b.str("kind")}」（能用的：click / wheel / text / key）"
+        }
+        send(ex, 200, PreviewPanel.okJson(out), "application/json; charset=utf-8")
+    }
+
+    /**
+     * 用完就关。面板会自己起一台带独立配置目录的浏览器 ——
+     * 不留这颗按钮的话，一晚十几轮验收就是一堆没人要的 Edge 窗口（这台机器还是几个 agent 共用的）。
+     */
+    private fun previewClose(ex: HttpExchange) {
+        val ses = BrowserSession.existing()
+        if (ses == null) {
+            send(ex, 200, PreviewPanel.okJson("没有正在跑的浏览器实例"), "application/json; charset=utf-8")
+            return
+        }
+        val note = runCatching { ses.shutdown() }.getOrElse { e -> "关的时候出错了：${e.message}" }
+        send(ex, 200, PreviewPanel.okJson(note + "（独立配置目录，不碰你自己的 Edge）"),
+            "application/json; charset=utf-8")
+    }
+
+    private fun previewPick(ex: HttpExchange) {
+        val b = Body(ex)
+        val ses = previewSession()
+        if (ses == null) { previewOff(ex); return }
+        val note = ses.focusPage(b.str("id")) ?: "找不到那个标签页（可能已经被关掉了）"
+        send(ex, 200, PreviewPanel.okJson(note), "application/json; charset=utf-8")
     }
 
     private fun shellClose(ex: HttpExchange) {

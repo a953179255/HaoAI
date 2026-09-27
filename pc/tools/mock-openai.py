@@ -227,6 +227,25 @@ ROUTED = {
 }
 
 
+# 预览面板这条链路要一个"点得动、也看得到结果"的靶页：
+# 光把画面搬过来不算通 —— 判据是"人在这边点一下，那边的计数器真的 +1，
+# 而且这件事能从 CDP 读回来"。所以按钮居中（画面是等比缩的，点图的正中就是点屏幕正中），
+# 并把计数与收到的字写进 title —— 面板的状态行读的就是 document.title。
+HELLO = (
+    "<!doctype html><meta charset=utf-8><title>\u9884\u89c8\u9776\u9875 0</title>"
+    "<style>body{margin:0;height:100vh;display:flex;flex-direction:column;"
+    "align-items:center;justify-content:center;gap:18px;font:16px system-ui;background:#fafafa}"
+    "#b{font-size:22px;padding:16px 26px}#i{font-size:18px;width:240px;padding:8px}</style>"
+    "<div id=c>\u8ba1\u6570 0</div>"
+    "<button id=b>\u70b9\u6211 +1</button>"
+    "<input id=i autofocus placeholder=\"\u8fd9\u91cc\u6536\u5b57\">"
+    "<script>var n=0;function sync(){document.title='\u9884\u89c8\u9776\u9875 '+n"
+    "+'\uff5c'+document.getElementById('i').value}"
+    "document.getElementById('b').onclick=function(){n++;"
+    "document.getElementById('c').textContent='\u8ba1\u6570 '+n;sync()};"
+    "document.getElementById('i').oninput=sync;</script>"
+)
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -248,7 +267,14 @@ class Handler(BaseHTTPRequestHandler):
         return None, PLAN["chat"]
 
     def do_GET(self):
-        if self.path.startswith("/v1/models"):
+        if self.path.startswith("/hello"):
+            body = HELLO.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path.startswith("/v1/models"):
             body = json.dumps({"data": [{"id": "mock"}]}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

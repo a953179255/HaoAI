@@ -1,0 +1,104 @@
+[
+  {
+    "goto": "#tabs button[data-t=pv]"
+  },
+  {
+    "click": "#tabs button[data-t=pv]"
+  },
+  {
+    "eval": "(()=>{const p=document.querySelector('#tab-pv');const n=document.querySelector('#pvNote');return JSON.stringify({shown:p.classList.contains('on'),hasImg:!!document.querySelector('#pvImg'),hasUrl:!!document.querySelector('#pvUrl'),hasClose:!!document.querySelector('#pvClose'),noteLong:(n.textContent||'').length>20})})()",
+    "must": [
+      "shown",
+      "hasImg",
+      "hasUrl",
+      "hasClose",
+      "noteLong"
+    ]
+  },
+  {
+    "type": {
+      "sel": "#pvUrl",
+      "text": "http://127.0.0.1:@MOCK@/hello",
+      "enter": false
+    }
+  },
+  {
+    "click": "#pvGo"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const r=await fetch('/api/preview/state?sid='+encodeURIComponent(curId)).then(x=>x.json()).catch(()=>({}));if(r.vw>0)return JSON.stringify({ok:true,ms:Date.now()-t0,vw:r.vw,vh:r.vh,pages:(r.pages||[]).length});if(Date.now()-t0>60000)return JSON.stringify({ok:false,ms:Date.now()-t0,note:String(r.note||'').slice(0,80)});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "ok"
+    ]
+  },
+  {
+    "eval": "(async()=>{const i=document.querySelector('#pvImg');const t0=Date.now();while(i.naturalWidth===0&&Date.now()-t0<20000)await new Promise(z=>setTimeout(z,500));return JSON.stringify({frame:i.naturalWidth>0,w:i.naturalWidth,h:i.naturalHeight,shown:i.style.display})})()",
+    "must": [
+      "frame"
+    ]
+  },
+  {
+    "eval": "(async()=>{const r=await fetch('/api/preview/state?sid='+encodeURIComponent(curId)).then(x=>x.json());return JSON.stringify({t0ok:r.title.indexOf('预览靶页')===0,title:r.title,meta:document.querySelector('#pvMeta').textContent.length>10})})()",
+    "must": [
+      "t0ok",
+      "meta"
+    ]
+  },
+  {
+    "type": {
+      "sel": "#pvText",
+      "text": "你好呀",
+      "enter": false
+    }
+  },
+  {
+    "click": "#pvSend"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const r=await fetch('/api/preview/state?sid='+encodeURIComponent(curId)).then(x=>x.json()).catch(()=>({}));if(String(r.title||'').indexOf('你好呀')>=0)return JSON.stringify({typed:true,title:r.title,ms:Date.now()-t0});if(Date.now()-t0>15000)return JSON.stringify({typed:false,title:r.title});await new Promise(z=>setTimeout(z,1200))}})()",
+    "must": [
+      "typed"
+    ]
+  },
+  {
+    "click": "#pvImg"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const r=await fetch('/api/preview/state?sid='+encodeURIComponent(curId)).then(x=>x.json()).catch(()=>({}));const ti=String(r.title||'');if(ti.indexOf('预览靶页 1')===0)return JSON.stringify({clicked:true,title:ti,ms:Date.now()-t0});if(Date.now()-t0>15000)return JSON.stringify({clicked:false,title:ti});await new Promise(z=>setTimeout(z,1200))}})()",
+    "must": [
+      "clicked"
+    ]
+  },
+  {
+    "eval": "(()=>{const i=document.querySelector('#pvImg');const r=i.getBoundingClientRect();const rail=document.querySelector('.rail.r').getBoundingClientRect();return JSON.stringify({fits:r.right<=rail.right+2&&r.left>=rail.left-2&&r.width>60,w:Math.round(r.width),h:Math.round(r.height),noHorizScroll:document.documentElement.scrollWidth<=document.documentElement.clientWidth})})()",
+    "must": [
+      "fits",
+      "noHorizScroll"
+    ]
+  },
+  {
+    "shot": "iab01-preview"
+  },
+  {
+    "click": "#tabs button[data-t=tasks]"
+  },
+  {
+    "eval": "(()=>JSON.stringify({stopped:pvTimer===null,leftTab:document.querySelector('#tab-pv').classList.contains('on')===false}))()",
+    "must": [
+      "stopped",
+      "leftTab"
+    ]
+  },
+  {
+    "click": "#tabs button[data-t=pv]"
+  },
+  {
+    "click": "#pvClose"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const o=await fetch('/api/preview/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:curId})}).then(r=>r.json()).catch(()=>({}));if(String(o.note||'').indexOf('没有正在跑')>=0)return JSON.stringify({gone:true,ms:Date.now()-t0});if(Date.now()-t0>25000)return JSON.stringify({gone:false,ms:Date.now()-t0,note:String(o.note||o.error||'')});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "gone"
+    ]
+  }
+]
