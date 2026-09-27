@@ -237,6 +237,8 @@
   .prog{height:5px;border-radius:3px;background:var(--glass2);overflow:hidden;margin:2px 0 10px}
   .prog i{display:block;height:100%;background:var(--acc);transition:width .3s}
   .tabs{display:flex;gap:4px;margin-bottom:10px}
+  /* 复选框默认是浏览器那套蓝，跟明暗两套主题都不搭 */
+  input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
   .tabs button{flex:1;border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:8px;
     padding:5px 4px;font-size:12px;cursor:pointer;font-family:inherit}
   .tabs button.on{color:var(--fg);border-color:var(--acc2);background:var(--glass2)}
