@@ -38,6 +38,8 @@ for f in ${PRE_TOUCH:-}; do
   mkdir -p "$HOME_DIR/ws/$(dirname "$f")"
   printf 'seed\n' > "$HOME_DIR/ws/$f"
 done
+# 工作区切换器要"另一个真的存在的目录"（不能只测报错那条路）
+for d in ${PRE_DIRS:-}; do mkdir -p "$HOME_DIR/$d"; done
 export HAOAI_HOME="$HOME_DIR"
 
 python tools/mock-openai.py --port "$MOCK_PORT" --mode "$MODE" > "$HOME_DIR/mock.log" 2>&1 &

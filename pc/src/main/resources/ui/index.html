@@ -105,6 +105,12 @@
   .iconb{width:30px;height:30px;flex:none;border-radius:9px;border:1px solid var(--line);background:var(--glass);
     color:var(--dim);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;font-family:inherit}
   .iconb:hover{color:var(--fg);border-color:var(--line2)}
+  .wsrow{display:flex;gap:8px;align-items:center;width:100%;text-align:left;margin:6px 0 2px;
+    background:var(--glass);border:1px solid var(--line);border-radius:9px;padding:5px 9px;
+    color:var(--dim);font:inherit;font-size:11.5px;cursor:pointer;font-family:inherit}
+  .wsrow:hover{border-color:var(--acc2);color:var(--fg)}
+  .wsrow span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wsrow em{font-style:normal;color:var(--acc);font-size:11px;flex:none}
   .chip{border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:999px;
     padding:3px 10px;font-size:11.5px;cursor:pointer;max-width:200px;overflow:hidden;text-overflow:ellipsis;
     white-space:nowrap;font-family:inherit;flex:none}
@@ -346,6 +352,8 @@
     border:1px solid var(--line);border-radius:7px;padding:3px 4px 3px 8px;background:var(--glass)}
   .rl span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rl em{font-style:normal;color:var(--dim2);font-size:11px}
+  /* 抽屉里那行是"名字 + 说明"挤在一行：不留间隙就粘成 "other1 条会话" */
+  #dialog .rl em{margin-left:6px}
   .addrow{display:flex;gap:6px;align-items:center}
   .addrow input{flex:1;min-width:0;background:var(--glass);border:1px solid var(--line);border-radius:8px;
     color:var(--fg);font:inherit;font-size:12px;padding:5px 8px;outline:0}
@@ -398,6 +406,7 @@
     <div class="brand"><span class="dot"></span> HaoAI <span style="font-weight:400;color:var(--dim);font-size:12px">PC</span></div>
     <div class="sub">本机 Agent · <span id="ver">连接中…</span></div>
     <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
+    <button class="wsrow" id="wsBtn" title="换个工作区开一条新任务"><span id="wsName">工作区</span><em>换 ▾</em></button>
     <div class="grp">历史会话 <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
     <div class="srch"><input type="text" id="sessQ" placeholder="搜标题与消息正文…"></div>
     <div id="sessions" class="sess"></div>
@@ -551,6 +560,9 @@ function show(sid){
   v.unread=0;v.wait=false;
   $('#title').textContent=v.title||'新会话';
   $('#subtitle').textContent=[v.model?shortModel(v.model):'',v.workspace||''].filter(Boolean).join('  ·  ')||'—';
+  // 左栏那颗工作区标签跟着会话走：点回旧会话却亮着刚才那个目录，比不显示更坏
+  $('#wsName').textContent=v.workspace?baseName(v.workspace):'工作区';
+  $('#wsBtn').title=v.workspace||'换个工作区开一条新任务';
   $('#model').textContent=v.model?shortModel(v.model):'—';
   setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintOutputs(v);
   paintHello(v);
@@ -575,7 +587,9 @@ $('#pill').onclick=()=>{stream.scrollTop=stream.scrollHeight;pillN=0;paintPill()
 function el(html){const d=document.createElement('div');d.innerHTML=html;return d.firstElementChild}
 /* esc 必须能吃数字：(t||'').replace 遇到数字直接 TypeError，
    而设置抽屉里只要有一处把数字塞进模板，整个弹窗就画不出来。 */
-function esc(t){return String(t==null?'':t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+/* 引号也要转：这些字符串大量被插进 value="…" / data-ws="…" 这类属性里，
+   只转 &<> 的话，一个带引号的模型名或目录名就能把自己关到属性外面去。 */
+function esc(t){return String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function add(node,v){
   const t=v||cur();
   // 起手卡只在"真的开始干活"时让位：一条轻提示（比如"项目说明已保存"）不该把它抹掉
@@ -1142,19 +1156,62 @@ $('#crAdd').onclick=()=>{
     $('#crName').value='';$('#crPrompt').value='';paintCron(d.items);toast('定时任务已加');
   }).catch(()=>toast('定时任务没加上','err'));
 };
-$('#newBtn').onclick=()=>{
+function newTask(ws){
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
-  fetch('/api/new',{method:'POST'}).then(r=>r.json()).then(d=>{
+  fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(ws?{ws:ws}:{})}).then(r=>r.json()).then(d=>{
+    if(d&&!d.ok&&d.error){toast(d.error,'err');return}
     if(!d.id)return;
+    $('#mask').classList.remove('on');
     const v=view(d.id);
     v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.todos=[];v.usage=null;v.outputs=[];
     v.title='新会话';if(d.mode)v.mode=d.mode;   // 没这个字段就留着旧显示，别自己编一个
     show(d.id);paintUsage(null);box.focus();
     // 工作区/模型这两行只有 /api/state 会给。但用户手快得已经把话发出去了就别重画：
     // 那会儿服务端还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
-    if(!v.running&&!v.el.children.length)hydrate(d.id);
-  });
-};
+    // 判据是"有没有真的气泡"，不能用 children.length —— 起手卡自己就是一个子元素，
+    // 那样一条刚建好的空会话永远刷不到 state，顶栏停在"—"、左栏工作区还是上一条的。
+    if(!v.running&&!v.el.querySelector('.msg'))hydrate(d.id);
+  }).catch(()=>toast('开不了新会话，检查一下服务是否还在跑','err'));
+}
+$('#newBtn').onclick=()=>newTask('');
+
+/* ---- 工作区切换器 ----
+ * 每条会话本来就属于自己那个目录（服务端一直存着），缺的只是"换个项目开一条"的入口。
+ * 列表不另存一份"最近"：会话索引里就有每条的工作区，再存一份就是两个真源。
+ */
+function baseName(p){
+  const s=String(p||'').replace(/[\\/]+$/,'');
+  const i=Math.max(s.lastIndexOf('/'),s.lastIndexOf('\\'));
+  return i<0?s:s.slice(i+1);
+}
+function openWs(){
+  fetch('/api/workspaces?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(d=>{
+    const dg=$('#dialog');
+    const rows=(d.items||[]).map(w=>`<div class="rl"><span title="${esc(w.p)}">${esc(baseName(w.p)||w.p)}`+
+      `<em>${w.n} 条会话${w.def?' · 默认':''}${w.t?(' · 上次 '+new Date(w.t).toLocaleDateString('zh-CN')):''}`+
+      ` · ${esc(w.p)}</em></span>`+
+      (w.cur?'<em class="ntag">当前</em>':`<button class="ab" data-ws="${esc(w.p)}">在这开一条</button>`)+
+      `</div>`).join('')||'<div class="kv">（还没有会话）</div>';
+    dg.innerHTML=`<h3>工作区</h3>
+      <div class="kv">一条会话属于它创建时的那个目录。换工作区是<b>开一条新的</b>，
+        不是把当前这条挪走 —— 已经写下的文件不该跟着换地方。
+        当前：<b>${esc(baseName(d.current)||'（还没定）')}</b></div>
+      <div class="rules">${rows}</div>
+      <div class="addrow"><input type="text" id="wIn" placeholder="另一个目录的完整路径，如 D:/code/foo">
+        <button class="btn" id="wGo">在这开一条</button></div>
+      <div class="acts"><button class="btn" id="wX">关闭</button></div>`;
+    $('#mask').classList.add('on');
+    dg.querySelector('#wX').onclick=()=>$('#mask').classList.remove('on');
+    dg.querySelector('#wGo').onclick=()=>{
+      const p=dg.querySelector('#wIn').value.trim();
+      if(!p){toast('目录是空的');return}
+      newTask(p);
+    };
+    dg.querySelectorAll('[data-ws]').forEach(b=>b.onclick=()=>newTask(b.dataset.ws));
+  }).catch(()=>toast('读不到工作区列表','err'));
+}
+$('#wsBtn').onclick=openWs;
 $('#expBtn').onclick=()=>{if(curId)location.href='/api/export?sid='+encodeURIComponent(curId)};
 $('#modelChip').onclick=pickModel;
 function pickModel(){

@@ -148,6 +148,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/mcp" -> mcp(ex)
                 "/api/schedules" -> schedules(ex)
                 "/api/files" -> files(ex)
+                "/api/workspaces" -> workspaces(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
                 "/api/delete" -> deleteSession(ex)
@@ -613,6 +614,35 @@ class WebServer(settings: PcSettings, port: Int,
     }
 
     /** `GET /api/file?sid=&path=` —— 看一个文本文件的前 200 KB（二进制只报大小）。 */
+    /**
+     * `GET /api/workspaces` —— 最近用过的工作区，给左栏那个切换器。
+     *
+     * 不另存一份"最近列表"：会话索引里本来就写着每条会话的工作区，再存一份就是两个真源，
+     * 迟早对不上（手机端踩过这个）。这里按目录归组，条数与最后活动时间都从会话算出来。
+     */
+    private fun workspaces(ex: HttpExchange) {
+        val cur = pick(querySid(ex))
+        val curWs = runCatching {
+            (sessions[cur]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile.absolutePath
+        }.getOrDefault("")
+        val metas = SessionIndex.list(400)
+        val grouped = LinkedHashMap<String, Pair<Int, Long>>()
+        metas.forEach { m ->
+            val key = runCatching { File(m.workspace).canonicalFile.absolutePath }.getOrDefault(m.workspace)
+            if (key.isBlank()) return@forEach
+            val (n, t) = grouped[key] ?: (0 to 0L)
+            grouped[key] = (n + 1) to maxOf(t, m.updated)
+        }
+        // 全局默认那个即使一条会话都没有也要在列表里（第一次用的人只有它）
+        val def = runCatching { settings.workspaceFile().canonicalFile.absolutePath }.getOrDefault("")
+        if (def.isNotEmpty()) grouped.getOrPut(def) { 0 to 0L }
+        val items = grouped.entries.sortedByDescending { it.value.second }
+        send(ex, 200, items.joinToString(",", """{"current":${quote(curWs)},"items":[""", "]}") { (p, v) ->
+            """{"p":${quote(p)},"n":${v.first},"t":${v.second},""" +
+                """"cur":${p == curWs},"def":${p == def}}"""
+        }, "application/json; charset=utf-8")
+    }
+
     private fun fileOne(ex: HttpExchange) {
         val sid = pick(querySid(ex))
         val ws = (sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()).canonicalFile
@@ -898,8 +928,8 @@ class WebServer(settings: PcSettings, port: Int,
     private fun querySid(ex: HttpExchange): String = queryOf(ex, "sid")
 
     /** 开一条新会话（只登记并立刻落盘，不起线程、不跑任务）。 */
-    private fun newSessionId(): String {
-        val session = Session("pc" + System.nanoTime().toString(16).take(8), settings.workspaceFile())
+    private fun newSessionId(at: File? = null): String {
+        val session = Session("pc" + System.nanoTime().toString(16).take(8), at ?: settings.workspaceFile())
         session.mode = settings.permissionMode
         var made: Engine? = null
         val e = Engine(session, settings, allTools(), webGate(session.id) { made },
@@ -1123,8 +1153,26 @@ class WebServer(settings: PcSettings, port: Int,
         //
         // 眼前这条如果还一条没说过，就**不要**再造一条：一路点"新任务"会在磁盘上
         // 留下一堆空的 pc-*.json，侧栏被自己几分钟前的手滑刷屏。
+        // 指定了工作区就**一定新建一条**：复用手边那条空的会把它悄悄挪到别的目录，
+        // 用户下一条消息就落到了他没选的地方。目录打不开要明确报错，
+        // 不能"退回默认工作区"—— 那等于把人送进一个他没选的仓库里写文件。
+        val want = Body(ex).str("ws")
+        if (want.isNotBlank()) {
+            val ok = runCatching { File(want).canonicalFile }.getOrNull()?.takeIf { it.isDirectory }
+            if (ok == null) {
+                send(ex, 200, """{"ok":false,"error":${quote("这个目录打不开：" + want)}}""",
+                    "application/json; charset=utf-8"); return
+            }
+            val newId = newSessionId(ok)
+            val md = sessions[newId]?.engine?.session?.mode ?: settings.permissionMode
+            send(ex, 200, """{"ok":true,"id":${quote(newId)},"mode":${quote(md)},"reused":false}""",
+                "application/json; charset=utf-8")
+            publish("opened", """{"id":${quote(newId)},"title":"新会话","mode":${quote(md)}}""", newId)
+            publish("sessions", "{}", newId)
+            return
+        }
         val idle = synchronized(this) {
-            currentId()?.let { sessions[it] }?.takeIf { m ->
+            currentId()?.let { s -> sessions[s] }?.takeIf { m ->
                 !m.running && m.engine.messages().isEmpty() && m.engine.session.todos.isEmpty()
             }
         }
