@@ -290,6 +290,21 @@ class Engine(
             totalCompletion += turn.usage.completionTokens
             emit(Ev.Usage(totalPrompt.toInt(), totalCompletion.toInt(), turnNo))
 
+            /*
+             * 被 max_tokens 截断要**说出来**。
+             * 不说，界面看起来就是"模型答完了"，而它其实说到一半被掐了 ——
+             * 更糟的是这一轮没有 tool_calls，循环会当成最终回答直接收尾，
+             * 用户拿到半句话还以为是结论。（真模型第一次跑就遇到：一轮生成 5792 token。）
+             */
+            if (turn.finishReason.equals("length", ignoreCase = true)) {
+                emit(
+                    Ev.Notice(
+                        "这一轮说到一半被 max_tokens=${settings.maxTokens} 截断了，下面这段可能不完整。" +
+                            "要放宽就在设置里改 maxTokens（0 = 交给网关），或把这一步拆小一点。"
+                    )
+                )
+            }
+
             if (turn.calls.isEmpty()) {
                 lastText = turn.text
                 history += Msg("assistant", turn.text)

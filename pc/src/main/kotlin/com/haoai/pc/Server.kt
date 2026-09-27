@@ -567,7 +567,7 @@ class WebServer(settings: PcSettings, port: Int) {
             ?: runCatching { Env.apiKeyFile.takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
 
         return """{"provider":${quote(st.providerName)},"baseUrl":${quote(st.baseUrl)},""" +
-            """"model":${quote(st.model)},"mode":${quote(st.permissionMode)},""" +
+            """"model":${quote(st.model)},"mode":${quote(st.permissionMode)},"maxTokens":${st.maxTokens},""" +
             """"workspace":${quote(st.workspaceFile().absolutePath)},""" +
             """"hasKey":${key != null},"keyHint":${quote(key?.take(6) ?: "")},""" +
             """"flags":$flags,"rules":$rules}"""
@@ -581,6 +581,7 @@ class WebServer(settings: PcSettings, port: Int) {
         var n = settings
         body["model"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(model = it) }
         body["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
+        body["maxTokens"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.let { n = n.copy(maxTokens = maxOf(0, it)) }
         body["mode"]?.jsonPrimitive?.contentOrNull?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
             n = n.copy(permissionMode = it)
             // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话引擎上，

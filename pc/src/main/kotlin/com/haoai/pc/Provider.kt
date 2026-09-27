@@ -86,7 +86,7 @@ interface ChatClient {
 fun chatClient(s: PcSettings): ChatClient {
     val key = System.getenv("HAOAI_API_KEY")?.takeIf { it.isNotBlank() }
         ?: runCatching { Env.apiKeyFile.takeIf { it.isFile }?.readText()?.trim() }.getOrNull().orEmpty()
-    return Provider(s.baseUrl, key, s.model, s.temperature)
+    return Provider(s.baseUrl, key, s.model, s.temperature, s.maxTokens)
 }
 
 /**
@@ -102,7 +102,9 @@ class Provider(
     private val baseUrl: String,
     private val apiKey: String,
     private val model: String,
-    private val temperature: Double = 0.3
+    private val temperature: Double = 0.3,
+    /** 0 = 不发 max_tokens（有些网关不接受这个字段）。 */
+    private val maxTokens: Int = 0
 ) : ChatClient {
 
     private val client: HttpClient = HttpClient.newBuilder()
@@ -117,6 +119,7 @@ class Provider(
         val body = buildJsonObject {
             put("model", model)
             put("temperature", temperature)
+            if (maxTokens > 0) put("max_tokens", maxTokens)
             put("stream", true)
             put("stream_options", buildJsonObject { put("include_usage", true) })
             put("messages", JsonArray(parts))
@@ -184,10 +187,24 @@ class Provider(
         }.filter { it.name.isNotBlank() }
 
         val text = box[0] as String
+        val reason = box[2] as String
         if (text.isBlank() && calls.isEmpty()) {
-            throw ProviderError("模型没有返回内容", transient = true)
+            /*
+             * "被 max_tokens 截断"与"内容被安全策略挡掉"是**确定性结果**：
+             * 重跑一百次也是这个结果。把它们当"网关抖动"去重试，等于白等 31 秒
+             * （3+8+20 三档退避）再告诉用户一句没用的话 —— 这条是拿真模型把
+             * maxTokens 调到 150 之后实测出来的（一轮全花在思考上，正文是空的）。
+             * 交给引擎：它会带着 finish_reason 说一句"这轮被截断了，去改 maxTokens"。
+             */
+            val deterministic = reason.equals("length", true) || reason.equals("content_filter", true)
+            if (!deterministic) {
+                throw ProviderError(
+                    "模型没有返回内容（finish_reason=${reason.ifBlank { "没有给" }}）",
+                    transient = true
+                )
+            }
         }
-        return AssistantTurn(text, calls, box[1] as Usage, box[2] as String)
+        return AssistantTurn(text, calls, box[1] as Usage, reason)
     }
 
     /** 处理一行 SSE。返回 true 表示流结束（[DONE]）。 */

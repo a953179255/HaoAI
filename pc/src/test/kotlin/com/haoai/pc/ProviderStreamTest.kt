@@ -21,15 +21,21 @@ import java.net.InetSocketAddress
  */
 class ProviderStreamTest {
 
-    private data class Fixture(val port: Int, val requests: MutableList<String>, val server: HttpServer)
+    private data class Fixture(
+        val port: Int,
+        val requests: MutableList<String>,
+        val bodies: MutableList<String>,
+        val server: HttpServer
+    )
 
     /** 起一个假网关，按 chunks 原样吐出去（每片一次 write + flush，制造真实的分片边界）。 */
     private fun serve(chunks: List<ByteArray>, status: Int = 200, body: String = ""): Fixture {
         val reqs = mutableListOf<String>()
+        val bodies = mutableListOf<String>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/v1/chat/completions") { ex ->
             reqs.add(ex.requestHeaders.getFirst("Authorization") ?: "")
-            ex.requestBody.readBytes()
+            bodies.add(String(ex.requestBody.readBytes(), Charsets.UTF_8))
             if (status != 200) {
                 val b = body.toByteArray()
                 ex.sendResponseHeaders(status, b.size.toLong())
@@ -48,7 +54,7 @@ class ProviderStreamTest {
             ex.close()
         }
         server.start()
-        return Fixture(server.address.port, reqs, server)
+        return Fixture(server.address.port, reqs, bodies, server)
     }
 
     private fun data(s: String) = ("data: " + s + "\n\n").toByteArray(Charsets.UTF_8)
@@ -192,6 +198,84 @@ class ProviderStreamTest {
             assertEquals("""{"path":"a.txt"}""", r.calls.first().args)
         } finally {
             f.server.stop(0)
+        }
+    }
+
+    /** 请求体里要带上 max_tokens；设成 0 时**不发**这个字段（有的网关不认）。 */
+    @Test
+    fun `max_tokens is sent and can be turned off`() {
+        val frames = listOf(
+            data("""{"choices":[{"index":0,"finish_reason":"stop","delta":{"content":"好"}}]}"""),
+            data("[DONE]")
+        )
+        val on = serve(frames)
+        val off = serve(frames)
+        try {
+            Provider("http://127.0.0.1:${on.port}/v1", "k", "m", 0.3, 4096)
+                .chat(listOf(Msg("user", "hi")), emptyList()) { }
+            assertTrue("请求体里没有 max_tokens：${on.bodies.first()}",
+                on.bodies.first().contains("\"max_tokens\":4096"))
+            Provider("http://127.0.0.1:${off.port}/v1", "k", "m", 0.3, 0)
+                .chat(listOf(Msg("user", "hi")), emptyList()) { }
+            assertTrue("maxTokens=0 还硬发 max_tokens：${off.bodies.first()}",
+                !off.bodies.first().contains("max_tokens"))
+        } finally {
+            on.server.stop(0); off.server.stop(0)
+        }
+    }
+
+    /** `finish_reason: length` 要原样带出去 —— 引擎靠它告诉用户"这句被掐断了"。 */
+    @Test
+    fun `finish reason length survives parsing`() {
+        val f = serve(listOf(
+            data("""{"choices":[{"index":0,"finish_reason":null,"delta":{"content":"说了一半"}}]}"""),
+            data("""{"choices":[{"index":0,"finish_reason":"length","delta":{}}]}"""),
+            data("[DONE]")
+        ))
+        try {
+            val r = Provider("http://127.0.0.1:${f.port}/v1", "k", "m")
+                .chat(listOf(Msg("user", "hi")), emptyList()) { }
+            assertEquals("length", r.finishReason)
+            assertEquals("说了一半", r.text)
+        } finally {
+            f.server.stop(0)
+        }
+    }
+
+    /**
+     * 空正文 + `finish_reason: length` 不能当"网关抖动"去重试。
+     *
+     * 真模型上实测：把 maxTokens 压到 150，一轮全花在思考上、正文为空，
+     * 旧代码抛 transient 异常 → 引擎按 3/8/20 秒退避重跑三遍（白等 31 秒），
+     * 最后还是一句空话。截断是确定性结果，要直接交给引擎说"这轮被截断了"。
+     */
+    @Test
+    fun `truncated empty turn is not retried as a transient gateway error`() {
+        val cut = serve(listOf(
+            data("""{"choices":[{"index":0,"finish_reason":"length","delta":{}}]}"""),
+            data("[DONE]")
+        ))
+        val quiet = serve(listOf(
+            data("""{"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}"""),
+            data("[DONE]")
+        ))
+        try {
+            val r = Provider("http://127.0.0.1:${cut.port}/v1", "k", "m")
+                .chat(listOf(Msg("user", "hi")), emptyList()) { }
+            assertEquals("截断要原样交出去，不能抛异常", "length", r.finishReason)
+            assertEquals("", r.text)
+            // 而"什么都没返回、也没说为什么"仍然算抖动，该重试
+            try {
+                Provider("http://127.0.0.1:${quiet.port}/v1", "k", "m")
+                    .chat(listOf(Msg("user", "hi")), emptyList()) { }
+                fail("空正文 + finish_reason=stop 仍然要抛（这是真的网关没吐东西）")
+            } catch (e: ProviderError) {
+                assertTrue("要标成可重试", e.transient)
+                assertTrue("报错要带上 finish_reason，不然排查全靠猜：" + e.message,
+                    e.message!!.contains("stop"))
+            }
+        } finally {
+            cut.server.stop(0); quiet.server.stop(0)
         }
     }
 }

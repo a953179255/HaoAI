@@ -26,6 +26,15 @@ data class PcSettings(
     val permissionMode: String = "ask",
     val maxTurns: Int = 60,
     val temperature: Double = 0.3,
+    /**
+     * 单次回合格子数上限（发 `max_tokens`）。0 = 不发，由网关自己定。
+     *
+     * 默认 4096，是第一次接本地真模型量出来的：Agents-A1-4B 在"从 1 数到 300"这种任务上
+     * 一轮生成了 **5792 个 token / 94 秒**，而停止只能等这一轮跑完才生效
+     * （见 [Engine.stopRequested] 的取舍）。不设上限等于把一次回合的等待与花费交给模型心情。
+     * 太小（比如 1024）会把带思考过程的模型截成半句，所以给的是"够写完一个工具调用"的量。
+     */
+    val maxTokens: Int = 4096,
     /** 工具结果落库上限 / 发请求上限，与手机端 STORED_CAP / REQ_CAP 同源同值。 */
     val storedCap: Int = 16_000,
     val reqCap: Int = 4_000,
@@ -58,6 +67,7 @@ data class PcSettings(
                     permissionMode = o.str("permissionMode") ?: "ask",
                     maxTurns = o.int("maxTurns") ?: 60,
                     temperature = o.dbl("temperature") ?: 0.3,
+                    maxTokens = o.int("maxTokens") ?: 4096,
                     storedCap = o.int("storedCap") ?: 16_000,
                     reqCap = o.int("reqCap") ?: 4_000,
                     compactTriggerChars = o.int("compactTriggerChars") ?: 60_000,
@@ -82,6 +92,7 @@ data class PcSettings(
                         put("permissionMode", s.permissionMode)
                         put("maxTurns", s.maxTurns)
                         put("temperature", s.temperature)
+                        put("maxTokens", s.maxTokens)
                         put("storedCap", s.storedCap)
                         put("reqCap", s.reqCap)
                         put("compactTriggerChars", s.compactTriggerChars)
