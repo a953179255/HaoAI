@@ -173,6 +173,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/tool" -> toolToggle(ex)
                 "/api/resume" -> resumeRun(ex)
                 "/api/abandon" -> abandonRun(ex)
+                "/api/backups" -> send(ex, 200, backupsJson(), "application/json; charset=utf-8")
+                "/api/backup" -> backupOp(ex)
                 "/api/substop" -> stopSubtask(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
@@ -1636,6 +1638,76 @@ class WebServer(settings: PcSettings, port: Int,
         val subs = (e?.subNames() ?: emptyList()).joinToString(",", "[", "]") { quote(it) }
         send(ex, 200, """{"ok":$ok,"error":${quote(if (ok) "" else "这条子任务已经不在跑了")},"subs":$subs}""",
             "application/json; charset=utf-8")
+    }
+
+    /** `GET /api/backups` —— 已有的备份包（含恢复之前自动留的那张"后悔药"）。 */
+    private fun backupsJson(): String {
+        val items = Backup.list()
+        return "{\"ok\":true,\"items\":[" + items.joinToString(",") { b ->
+            "{\"name\":" + quote(b.name) + ",\"at\":" + quote(b.at) + ",\"bytes\":" + b.bytes +
+                ",\"entries\":" + b.entries + ",\"keysIncluded\":" + b.keysIncluded +
+                ",\"reason\":" + quote(b.reason) + ",\"scopes\":[" +
+                b.scopes.joinToString(",") { s -> quote(s) } + "]}"
+        } + "]}"
+    }
+
+    /**
+     * `POST /api/backup` {action:export|restore|delete, scopes, keys, name}
+     *
+     * 导出与恢复都动状态根：引擎每轮 `persist()`、恢复还会覆盖文件，
+     * 所以**正在跑的会话一律挡掉**（让用户先停止）。这不是保守 ——
+     * 边写边读出来的包"看着完整其实缺半轮"，而半轮恢复比失败更难查。
+     *
+     * 恢复成功之后要把内存里的引擎与设置丢掉：它们握着的是恢复前的文件，
+     * 不丢就等于"恢复成功了，但界面还在用旧数据"。
+     */
+    private fun backupOp(ex: HttpExchange) {
+        val b = Body(ex)
+        val action = b.str("action")
+        val busy = liveCount()
+        if (action == "export" || action == "restore") {
+            if (busy > 0) {
+                val what = if (action == "export") "备份" else "恢复"
+                send(ex, 200, "{\"ok\":false,\"error\":\"有 " + busy + " 条会话正在跑，先停止它们再" + what + "\"}",
+                    "application/json; charset=utf-8")
+                return
+            }
+        }
+        when (action) {
+            "export" -> {
+                val r = runCatching { Backup.export(b.list("scopes"), b.str("keys") == "true") }
+                if (r.isSuccess) {
+                    val s = r.getOrThrow()
+                    send(ex, 200, "{\"ok\":true,\"name\":" + quote(s.name) +
+                        ",\"entries\":" + s.entries + ",\"bytes\":" + s.bytes + "}",
+                        "application/json; charset=utf-8")
+                } else {
+                    send(ex, 200, "{\"ok\":false,\"error\":" + quote(r.exceptionOrNull()?.message ?: "导出失败") + "}",
+                        "application/json; charset=utf-8")
+                }
+            }
+            "restore" -> {
+                val msg = Backup.restore(b.str("name"))
+                if (msg.startsWith("ok")) {
+                    synchronized(order) { order.clear() }
+                    sessions.clear()
+                    settings = PcSettings.load()
+                    publish("sessions", "{}")
+                    send(ex, 200, "{\"ok\":true,\"msg\":" + quote(msg) + "}",
+                        "application/json; charset=utf-8")
+                } else {
+                    send(ex, 200, "{\"ok\":false,\"error\":" + quote(msg) + "}",
+                        "application/json; charset=utf-8")
+                }
+            }
+            "delete" -> {
+                val msg = Backup.delete(b.str("name"))
+                send(ex, 200, if (msg == "ok") "{\"ok\":true}"
+                else "{\"ok\":false,\"error\":" + quote(msg) + "}", "application/json; charset=utf-8")
+            }
+            else -> send(ex, 200, "{\"ok\":false,\"error\":\"不认识的动作\"}",
+                "application/json; charset=utf-8")
+        }
     }
 
     private fun settingsJson(): String {

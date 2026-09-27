@@ -200,6 +200,20 @@ class Provider(
 
     private val endpoint: String get() = baseUrl.trimEnd('/') + "/chat/completions"
 
+    /**
+     * 请求头里能用的 key：先剥掉换行与首尾空白，再拦非 ASCII。
+     *
+     * 为什么必须自己拦：`HttpRequest` 遇到非法头值只抛
+     * `invalid header value: "Bearer sk-…"` —— 从这句看不出是**复制粘贴把中文带进 key 里了**，
+     * 用户会以为网关坏了。实测就是这么撞出来的（备份测试里拿中文当假 key 种数据）。
+     */
+    private fun headerKey(): String {
+        val k = apiKey.lines().joinToString("") { it.trim() }   // 去换行与空白，刻意不写反斜杠转义
+        if (k.isNotEmpty() && !k.all { it.code in 0x20..0x7e }) throw IllegalArgumentException(
+            "API key 里有非 ASCII 或控制字符（多半是复制时带进了中文或换行），请重新粘贴一段纯 ASCII 的 key")
+        return k
+    }
+
     override fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn =
         chat(messages, tools, onText) { }
 
@@ -239,7 +253,7 @@ class Provider(
             .timeout(Duration.ofMinutes(8))
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
-            .header("Authorization", "Bearer $apiKey")
+            .header("Authorization", "Bearer " + headerKey())
             .POST(HttpRequest.BodyPublishers.ofString(body, Charsets.UTF_8))
             .build()
 
@@ -386,7 +400,7 @@ class Provider(
         val url = baseUrl.trimEnd('/') + "/models"
         val req = HttpRequest.newBuilder(URI(url))
             .timeout(Duration.ofSeconds(12))
-            .header("Authorization", "Bearer $apiKey")
+            .header("Authorization", "Bearer " + headerKey())
             .GET().build()
         val body = runCatching {
             client.send(req, HttpResponse.BodyHandlers.ofString()).body()
