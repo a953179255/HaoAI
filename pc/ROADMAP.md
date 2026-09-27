@@ -27,7 +27,33 @@
 ### P0 —— 用户点名 + 主用途
 
 1. **备份导出/恢复（PC 端）** ｜ OpenClaw `backups/`、手机端 `DataBackupManager`（导出侧已落 `1c0c208`，恢复侧待做）｜ `pc/**/*.kt` grep `backup` **零命中**，PC 端一条会话误删只能靠 `.trash` ｜ 你明说"这两条都要做"；几十条会话 + 记忆 + 规则是真会丢的资产 ｜ 导出 → `manifest.jsonl` 每行一条 + sha256 → 恢复到空状态根，会话/记忆/设置/规则全在；被改动的条目按行号拒绝恢复 ｜ **PC**（manifest schema 与手机对齐，给后面跨端同步打底）
-2. **真 PTY（ConPTY）+ `write_stdin` 语义** ｜ codex `unified_exec`/`write_stdin`、dsh `terminal_open/send/read/signal/close/list` ｜ `Pty.kt:25`「管道而不是伪终端」⇒ `python -i`、gradle 问答、`npm init`、全屏 TUI 都不可用（无 TTY、无行编辑、无窗口尺寸）｜ 你明说要做；vibe coding 天天撞 ｜ `python -i` 里 `1+1` 有回显、交互问答能答、全屏程序能读到内容；空闲回收与断连不回归 ｜ **PC**
+2. **真 PTY（ConPTY）+ `write_stdin` 语义** ｜ 对标 codex / dsh ｜ **2026-09-28 做过一轮，卡在半路，下面的实测结论别再重新推** ｜
+   - **前提被推翻了一半**：管道下 `python -i` 其实能问能答（拿到 `>>> 42`）、`read` 式行提示也能过
+     （`hi-wang`）。所以 ConPTY 的价值**不在**"边看边答"，而在这四件管道做不到的事：
+     `isatty()` 为真（否则程序自己关颜色/关进度/拒绝运行）、输入**回显**、**Ctrl+C**、全屏 TUI。
+     `Pty.kt:20-23` 那段"完全没法用"的说法要照这个改。
+   - **伪终端本身建得起来**：`CreatePipe` × 2 + `CreatePseudoConsole(100x30)` 返回 hr=0、句柄有效。
+     探可用性要**真开一个再关掉**，别读版本号：JVM 在 Windows 11 上把 `os.version` 报成 `10.0`，
+     拿它比 ">= 1809" 会把支持的机器判成不支持（第一版就是这么红的）。
+   - **卡点**：`CreateProcessW` 带 `EXTENDED_STARTUPINFO_PRESENT` 一律 `ERROR_INVALID_PARAMETER(87)`，而
+     ① 同一个 STARTUPINFOEX（`cb=120`，偏移 104 处读回来确实是属性表指针）**不带这个 flag → 成功**；
+     ② 用 jna-platform 自带的 `Kernel32.CreateProcess` + 普通 STARTUPINFO → **成功**（真起来了 cmd.exe，有 pid）；
+     ③ `InitializeProcThreadAttributeList` 两趟（先问出 48 字节再初始化）返回 true，
+       `UpdateProcThreadAttribute(PSEUDOCONSOLE, hpc, 8)` 也返回 true；
+     ④ `lpValue` 传 HPCON 本身 / 传"指向 HPCON 的指针"，两种都 87；
+     ⑤ `si`、`pi` 改成裸 `Pointer` 传（绕开 Structure marshalling）也 87。
+     → 不是结构体布局、也不是字符串宽度（但**确实**踩过一条：`Native.load` 不传
+     `W32APIOptions.UNICODE_OPTIONS` 时 `String` 按 ANSI 走，必须传）。
+     剩下最可疑的是 `attribute` 这个 `DWORD_PTR` 参数在 JNA 里怎么过去（值 vs 指针）。
+   - **下次从这里接着查**：(a) 用 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 做对照，分清"属性表整体不行"
+     还是"只有 PSEUDOCONSOLE 这项不行"；(b) 照抄一个能跑的开源调用序列（rust `portable-pty`、
+     Java 的 conpty 绑定）逐参数对齐；(c) 小坑备忘：`WinBase.STARTUPINFO.cb` 是 `WinDef.DWORD` 不是 `Int`。
+   - **别把量具算进结论**：`GetLastError()` 要在失败那一步**立刻**读（`DeleteProcThreadAttributeList`
+     会覆盖它），而 `runCatching { ... }` 会把 JNA 的异常吞成 `false` —— 两个都做过之后，
+     我拿到过一条"失败 err=0"的假线索，绕了三四轮。
+   - **退路**（如果 ConPTY 一时拿不下）：`shell_open` 加 `tty` 选项，能建就建、建不了就在工具结果里
+     写明"这台没有 TTY：Ctrl+C 与回显不可用"，而不是静默用管道假装成功。
+
 3. **跨端：会话镜像 + 远程审批** ｜ OpenClaw gateway 多通道 + DM 配对审批、Hermes 单 gateway 跨平台会话连续 ｜ 两端完全隔离：PC 的审批卡只有本机能点，手机看不到 PC 在跑什么 ｜ 你对 PC 端的首要定位就是"和手机端联动" ｜ 手机配对后能看到 PC 待审卡并允许/拒绝，PC 真执行；会话只读回放；断开重连不重复决策 ｜ **两端**（需局域网端点 + token 配对，安全边界要写死）
 4. **记忆条目化 + 两端同步** ｜ Hermes FTS5 跨会话检索、OpenClaw memory-wiki/dreaming、ZCODE `MEMORY.md` 索引 ｜ PC 的 `/api/memory` 是整段文本框：没有条目 CRUD、没有搜索、没有与手机共用 ｜ 助手与 vibe coding 的长期记忆都靠它，现在各写各的 ｜ 条目增删改查 + 搜索；手机端读到同一份 ｜ **两端**（依赖 #3 的通道）
 
