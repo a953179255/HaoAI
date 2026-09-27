@@ -231,6 +231,10 @@
   .slash .it.sel{background:var(--glass2)}
   .slash .it code{font-family:var(--mono);color:var(--acc);font-size:12px;flex:none;width:76px}
   .slash .it em{font-style:normal;color:var(--dim);font-size:11.5px}
+  .slash .tg{font-style:normal;font-size:10px;color:var(--acc2);border:1px solid var(--line);
+    border-radius:5px;padding:0 4px;flex:none}
+  .skills{display:flex;flex-direction:column;gap:3px;margin:2px 0 6px}
+  .skills em{font-style:normal;color:var(--dim)}
   .pill{position:absolute;left:50%;transform:translateX(-50%);bottom:92px;z-index:9;
     border:1px solid var(--line2);background:var(--panel);color:var(--fg);border-radius:999px;
     padding:5px 13px;font-size:12px;cursor:pointer;box-shadow:var(--shadow);display:none;font-family:inherit}
@@ -444,6 +448,17 @@
       <textarea id="memBox" class="mem" rows="10" placeholder="例：构建用 gradlew.bat；不要改 generated/ 下的文件；提交信息用中文一句话"></textarea>
       <div class="acts2 pinned"><button class="ab" id="memSave">保存</button>
         <span class="fp" id="memState"></span></div>
+      <div class="grp" style="margin-top:12px">全局记忆（跨项目）</div>
+      <div class="fp" id="gPath">—</div>
+      <textarea id="gBox" class="mem" rows="6" placeholder="例：回答一律用中文；改代码前先给方案等我确认"></textarea>
+      <div class="acts2 pinned"><button class="ab" id="gSave">保存全局</button>
+        <span class="fp" id="gState"></span></div>
+      <div class="grp" style="margin-top:12px">自定义命令（技能）</div>
+      <div class="skills" id="skillList">（还没有）</div>
+      <div class="addrow"><input type="text" id="skName" placeholder="名字，如 review"><input type="text" id="skDesc" placeholder="一句话说明"></div>
+      <textarea id="skText" class="mem" rows="4" placeholder="这个命令要让模型做什么；选中后这段会填进输入框，你还能接着补两句"></textarea>
+      <div class="acts2 pinned"><button class="ab" id="skSave">加为技能</button>
+        <span class="fp" id="skState"></span></div>
     </div>
   </aside>
 </div>
@@ -955,23 +970,59 @@ document.querySelector('.fbar').onclick=e=>{
   if(x=='reload')loadFiles();
 };
 
-/* ---- 项目说明（AGENTS.md 那一类）---- */
-function loadMemory(){
-  return fetch('/api/memory?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(d=>{
-    $('#memPath').textContent=(d.exists?'已存在：':'将创建：')+d.path;
-    $('#memBox').value=d.text||'';
-    $('#memState').textContent='';
-  }).catch(()=>{$('#memPath').textContent='读不到（服务换过端口？）'});
+/* ---- 项目说明（AGENTS.md 那一类）与全局记忆 ---- */
+function memLoad(scope){
+  return fetch('/api/memory?sid='+encodeURIComponent(curId||'')+'&scope='+scope)
+    .then(r=>r.ok?r.json():Promise.reject(r.status));
 }
-$('#memSave').onclick=()=>{
-  post('/api/memory',{sid:curId,text:$('#memBox').value}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没写进去','err');return}
-    // 先重读（路径会从"将创建"变成"已存在"），再写那行状态 ——
-    // 反过来写会被重读的异步回来清空，"已存 35 字"闪一下就没了
-    loadMemory().then(()=>{$('#memState').textContent='已存 '+d.chars+' 字 · 下一条消息起生效'});
-    toast('项目说明已保存');
-  }).catch(c=>toast('保存失败（'+c+'）','err'));
+function memFill(paths,box,state,d){
+  $(paths).textContent=(d.exists?'已存在：':'将创建：')+d.path;
+  $(box).value=d.text||'';$(state).textContent='';
+}
+function loadMemory(){
+  return Promise.all([memLoad('project').catch(()=>({})),memLoad('global').catch(()=>({}))])
+    .then(([p,g])=>{
+      memFill('#memPath','#memBox','#memState',p);
+      memFill('#gPath','#gBox','#gState',g);
+    });
+}
+function memSave(scope,box,paths,state){
+  return ()=>{
+    post('/api/memory',{sid:curId,scope:scope,text:$(box).value}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没写进去','err');return}
+      // 先重读（路径会从"将创建"变成"已存在"），再写那行状态 ——
+      // 反过来写会被重读的异步回来清空，"已存 35 字"闪一下就没了
+      loadMemory().then(()=>{$(state).textContent='已存 '+d.chars+' 字 · 下一条消息起生效'});
+      toast('已保存');
+    }).catch(c=>toast('保存失败（'+c+'）','err'));
+  };
+}
+$('#memSave').onclick=memSave('project','#memBox','#memPath','#memState');
+$('#gSave').onclick=memSave('global','#gBox','#gPath','#gState');
+
+/* ---- 自定义命令（技能）：名字 + 一段提示词，存在 HAOAI_HOME/skills.json ---- */
+let SKILLS=[];
+function loadSkills(){
+  return fetch('/api/skills').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+    SKILLS=d.items||[];paintSkills();
+  }).catch(()=>{SKILLS=[];paintSkills()});
+}
+function paintSkills(){
+  const el2=$('#skillList');
+  el2.innerHTML=SKILLS.length?SKILLS.map(s=>`<div class="rl"><span>/${esc(s.name)} <em>${esc(s.desc||'')}</em></span>
+    <button class="ab" data-sk="${esc(s.name)}">删除</button></div>`).join(''):'（还没有自定义命令）';
+  el2.querySelectorAll('[data-sk]').forEach(b=>b.onclick=()=>
+    post('/api/skills',{op:'del',name:b.dataset.sk}).then(loadSkills));
+}
+$('#skSave').onclick=()=>{
+  post('/api/skills',{op:'add',name:$('#skName').value,desc:$('#skDesc').value,text:$('#skText').value}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+    $('#skName').value='';$('#skDesc').value='';$('#skText').value='';
+    loadSkills().then(()=>{$('#skState').textContent='现有 '+SKILLS.length+' 个技能 · 打 / 就能用'});
+    toast('技能已保存');
+  }).catch(c=>toast('技能没保存（'+c+'）','err'));
 };
+loadSkills();
 $('#newBtn').onclick=()=>{
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
   fetch('/api/new',{method:'POST'}).then(r=>r.json()).then(d=>{
@@ -1101,13 +1152,15 @@ const CMDS=[
   {c:'/help',a:'help',d:'列出这些命令'}
 ];
 let slashOpen=false,slashSel=0,slashList=[];
+/* 自定义技能与内置命令共用这一个面板：内置在前，技能在后（重名时内置赢，服务端也会拒重名） */
+function slashItems(){return CMDS.concat(SKILLS.map(s=>({c:'/'+s.name,d:s.desc||'自定义技能',skill:s.text})))}
 function showSlash(q){
-  slashList=CMDS.filter(x=>x.c.slice(1).toLowerCase().startsWith(q.toLowerCase()));
+  slashList=slashItems().filter(x=>x.c.slice(1).toLowerCase().startsWith(q.toLowerCase()));
   const s=$('#slash');
   if(!slashList.length){hideSlash();return}
   slashSel=Math.min(slashSel,slashList.length-1);
   s.innerHTML=slashList.map((x,i)=>`<div class="it${i==slashSel?' sel':''}" data-i="${i}">
-    <code>${x.c}</code><em>${esc(x.d)}</em></div>`).join('');
+    <code>${x.c}</code>${x.skill?'<i class="tg">技能</i>':''}<em>${esc(x.d)}</em></div>`).join('');
   s.querySelectorAll('.it').forEach(e=>e.onclick=()=>{
     box.value='';hideSlash();runCommand(slashList[+e.dataset.i].c)});
   s.classList.add('on');slashOpen=true;
@@ -1121,7 +1174,13 @@ function pickSlash(){const c=slashList[slashSel];box.value='';hideSlash();runCom
 function runCommand(t){
   const cmd=(t.trim().split(/\s+/)[0]||'').toLowerCase();
   const hit=CMDS.find(x=>x.c==cmd);
-  if(!hit)return false;
+  if(!hit){
+    // 自定义技能：把提示词填进输入框而不是直接发出去 —— 用户多半还要补两句（要改哪个文件）
+    const sk=SKILLS.find(x=>('/'+x.name).toLowerCase()==cmd);
+    if(!sk)return false;
+    box.value='';box.style.height='auto';hideSlash();
+    insertAtCursor(sk.text||'');toast('已插入 /'+sk.name);return true;
+  }
   box.value='';box.style.height='auto';hideSlash();
   switch(hit.a){
     case 'plan':case 'ask':case 'auto':setModeNow(hit.a);toast('档位已切到 '+hit.c.slice(1));break;
@@ -1130,7 +1189,7 @@ function runCommand(t){
     case 'stop':stopNow();break;
     case 'clear':
       if(!confirm('丢掉当前会话的全部历史？（工作区里的文件与快照不会动）'))break;
-      post('/api/cut',{sid:curId,index:'0'}).then(()=>{hydrate(curId);toast('已清空历史')})
+      post('/api/cut',{sid:curId,index:'0',keep:'0'}).then(()=>{hydrate(curId);toast('已清空历史')})
         .catch(()=>toast('清不掉：这条会话可能正在跑'));break;
     case 'export':$('#expBtn').click();break;
     case 'theme':$('#themeBtn').click();break;

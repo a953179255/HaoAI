@@ -175,6 +175,20 @@ class EngineFlowTest {
         assertTrue("截断了要说一声：$big", big.contains("已截"))
     }
 
+    /** 技能存的是 JSON，而提示词里必然有换行与引号：转义错了就是把 skills.json 写坏。 */
+    @Test
+    fun `skills survive a save-load round trip with quotes and newlines`() {
+        val text = "先看 diff，再改。\n注意：\"引号\"与 \\ 反斜杠 都要活着回来。\n第三行"
+        Skills.save(listOf(Skill("review", "看改动", text), Skill("tidy", "整理", "  ")))
+        val back = Skills.load()
+        assertEquals("存两条就该读回两条", 2, back.size)
+        assertEquals("换行/引号/反斜杠被转义弄坏了：<" + back[0].text + ">", text, back[0].text)
+        assertEquals("看改动", back[0].desc)
+        // 坏文件不能把界面搞死：读不出来就当没有
+        Env.skillsFile.writeText("{这不是 JSON")
+        assertTrue("坏文件应当读成空列表", Skills.load().isEmpty())
+    }
+
     @Test
     fun `plan mode refuses writes and hides write tools from the model`() {
         val ws = tempWorkspace()

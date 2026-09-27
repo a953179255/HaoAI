@@ -58,6 +58,11 @@ class WebServer(settings: PcSettings, port: Int) {
 
     private val sessions = ConcurrentHashMap<String, Managed>()
 
+    /** 前端 `/` 命令面板里的内置项：自定义技能不许占用这些名字（两份实现靠这份对齐）。 */
+    private val BUILTIN_CMDS = setOf(
+        "plan", "ask", "auto", "new", "model", "stop", "clear", "export", "theme", "status", "help"
+    )
+
     /** 最近使用顺序（新的在前），用来在没指定 sid 时挑"当前会话"。 */
     private val order = Collections.synchronizedList(mutableListOf<String>())
 
@@ -127,6 +132,7 @@ class WebServer(settings: PcSettings, port: Int) {
                 "/api/models" -> models(ex)
                 "/api/rule" -> ruleEdit(ex)
                 "/api/memory" -> memory(ex)
+                "/api/skills" -> skills(ex)
                 "/api/files" -> files(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/export" -> exportSession(ex)
@@ -407,7 +413,8 @@ class WebServer(settings: PcSettings, port: Int) {
             send(ex, 409, """{"ok":false,"error":"这条会话正在跑，先停止再改历史"}""",
                 "application/json; charset=utf-8"); return
         }
-        if (!m.engine.cutTo(index)) {
+        // keep=0 是 /clear 用法（连第一条一起丢）；默认留着这一句，那是"删到这里"的语义
+        if (!m.engine.cutTo(index, keepAt = b.str("keep") != "0")) {
             send(ex, 200, """{"ok":false,"error":"只能删「你说过的那一句话」之后的内容"}""",
                 "application/json; charset=utf-8"); return
         }
@@ -588,11 +595,14 @@ class WebServer(settings: PcSettings, port: Int) {
     private fun memory(ex: HttpExchange) {
         // 请求体只能读一次：分两次 new Body(ex) 的话第二次拿到的是空对象
         val b = Body(ex)
-        val sid = if (ex.requestMethod == "GET") querySid(ex) else b.str("sid")
+        val get = ex.requestMethod == "GET"
+        val sid = if (get) querySid(ex) else b.str("sid")
+        val scope = if (get) queryOf(ex, "scope") else b.str("scope")
         val id = pick(sid)
         val ws = sessions[id]?.engine?.session?.workspace ?: settings.workspaceFile()
-        if (ex.requestMethod == "GET") {
-            val f = Memory.target(ws)
+        // scope=global 是跨项目的个人偏好（HAOAI_HOME/MEMORY.md），默认是这条会话工作区里的说明
+        val f = if (scope == "global") Env.memoryFile else Memory.target(ws)
+        if (get) {
             val text = runCatching { if (f.isFile) f.readText() else "" }.getOrDefault("")
             send(ex, 200,
                 """{"ok":true,"path":${quote(f.absolutePath)},"exists":${f.isFile},"text":${quote(text)}}""",
@@ -600,17 +610,54 @@ class WebServer(settings: PcSettings, port: Int) {
             return
         }
         val text = b.str("text")
-        val done = runCatching { Memory.write(ws, text) }
+        val done = runCatching { f.parentFile?.mkdirs(); f.writeText(text); f }
         if (done.isFailure) {
             send(ex, 200,
                 """{"ok":false,"error":${quote("写不下去：" + (done.exceptionOrNull()?.message ?: ""))}}""",
                 "application/json; charset=utf-8")
             return
         }
-        val f = done.getOrThrow()
         send(ex, 200, """{"ok":true,"path":${quote(f.absolutePath)},"chars":${text.length}}""",
             "application/json; charset=utf-8")
         publish("notice", quote("项目说明已写入 ${f.name}：下一条消息起生效"), id)
+    }
+
+    /**
+     * `GET/POST /api/skills` —— 自定义 `/命令`（技能）的读与增删。
+     * `POST {op:'add'|'del', name, desc, text}`；同名算覆盖。
+     */
+    private fun skills(ex: HttpExchange) {
+        val b = Body(ex)
+        if (ex.requestMethod == "GET") {
+            val items = Skills.load().joinToString(",", "[", "]") {
+                """{"name":${quote(it.name)},"desc":${quote(it.desc)},"text":${quote(it.text)}}"""
+            }
+            send(ex, 200, """{"ok":true,"items":$items,"taken":${quote(BUILTIN_CMDS.joinToString(","))}}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        val name = b.str("name").trim().trimStart('/')
+        if (name.isEmpty()) {
+            send(ex, 200, """{"ok":false,"error":"命令名是空的"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val list = Skills.load().toMutableList()
+        if (b.str("op") == "del") {
+            list.removeAll { it.name == name }
+        } else {
+            if (name.any { it.isWhitespace() }) {
+                send(ex, 200, """{"ok":false,"error":"命令名不能含空格"}""",
+                    "application/json; charset=utf-8"); return
+            }
+            if (name.lowercase() in BUILTIN_CMDS) {
+                send(ex, 200, """{"ok":false,"error":"/$name 是内置命令，换一个名字"}""",
+                    "application/json; charset=utf-8"); return
+            }
+            list.removeAll { it.name == name }
+            list += Skill(name, b.str("desc").trim(), b.str("text"))
+        }
+        Skills.save(list)
+        send(ex, 200, """{"ok":true,"count":${list.size}}""", "application/json; charset=utf-8")
     }
 
     /** `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。 */

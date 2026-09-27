@@ -413,6 +413,25 @@ bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件�
 界面侧：`bash pc/tools/ui-shot.sh pc/tools/steps/ui-mem.json`（保存后路径从"将创建"变"已存在"、
 重开页签读回原文、盘上文件确实是那句话）。
 
+## 这一批：全局记忆 + 自定义命令（技能）
+
+**全局记忆**：`HAOAI_HOME/MEMORY.md` 这个槽位早就声明了却没人读（和 `PromptCtx.extra` 一样是空挂的）。
+现在它排在项目说明最前面，跨项目生效（"回答用中文"这类人的习惯），工作区里的 `AGENTS.md`
+则是仓库的规矩 —— 两者分开存，别把个人偏好写进仓库去。
+
+**自定义命令（技能）**：`HAOAI_HOME/skills.json`，一条 = 名字 + 一句说明 + 一段提示词。
+`/` 面板里排在内置命令后面并带「技能」标；选中它**是把提示词填进输入框**而不是直接发出去 ——
+用户多半还要补一句"这次是哪个文件"。重名拒绝（内置赢），名字里不许有空格。
+存的是 JSON 而提示词必然带换行与引号，所以转义单独测了一条（坏文件按"没有技能"处理，
+手改错一个逗号不该让整页起不来）。
+
+**顺带修一处回归**：`/clear` 走的是 `/api/cut?index=0`，而 v0.18 把 `cutTo` 的默认语义改成
+"保留这一句"，于是清空历史会留下第一条。现在 `/api/cut` 收 `keep` 参数，`/clear` 传 `keep=0`。
+
+验收：`bash pc/tools/steps 见下` →
+`bash pc/tools/ui-shot.sh pc/tools/steps/ui-mem.json`（项目/全局两块记忆保存后读回、
+建技能 → `/rev` 面板出现 `/review 技能 …` → 点一下提示词进输入框 → 删除归零）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，

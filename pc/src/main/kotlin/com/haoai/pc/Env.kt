@@ -65,6 +65,9 @@ object Env {
     val rulesFile: File get() = File(home, "rules.json")
     val memoryFile: File get() = File(home, "MEMORY.md")
 
+    /** 自定义 `/命令`（技能）：名字 + 一段提示词。见 [Skills]。 */
+    val skillsFile: File get() = File(home, "skills.json")
+
     /** 工具溢出落文件的目录名 —— 与手机端 `.haoai-output/` 保持同名，便于两套实现对照。 */
     const val TOOL_OUTPUT_DIR = ".haoai-output"
 

@@ -120,23 +120,35 @@ object Memory {
         return out
     }
 
+    /** 全局记忆（跨项目的个人偏好）+ 工作区里的说明文件，按这个顺序拼。 */
+    private fun sources(workspace: java.io.File, gitRoot: String?): List<Pair<String, java.io.File>> {
+        val out = mutableListOf<Pair<String, java.io.File>>()
+        if (Env.memoryFile.isFile) out += "（全局）MEMORY.md" to Env.memoryFile
+        for (d in dirs(workspace, gitRoot)) {
+            for (c in CANDIDATES) {
+                val f = java.io.File(d, c)
+                if (f.isFile && out.none { it.second.absolutePath == f.canonicalFile.absolutePath })
+                    out += runCatching { f.relativeToOrSelf(workspace).path }.getOrDefault(f.path).replace('\\', '/') to f
+            }
+        }
+        return out
+    }
+
     /** 拼出要塞进系统提示的那一段；一个都没有就返回空串。 */
     fun read(workspace: java.io.File, gitRoot: String? = null): String {
         val parts = mutableListOf<Pair<String, String>>()
         var used = 0
-        for (d in dirs(workspace, gitRoot)) {
-            for (c in CANDIDATES) {
-                val f = java.io.File(d, c)
-                if (!f.isFile) continue
-                val text = runCatching { f.readText() }.getOrDefault("").trim()
-                if (text.isEmpty()) continue
-                val left = CAP - used
-                if (left <= 0) return render(parts) + "\n…（还有更多说明文件未纳入，已截到 $CAP 字）"
-                val label = runCatching { f.relativeToOrSelf(workspace).path }.getOrDefault(f.path).replace('\\', '/')
-                val body = if (text.length > left) text.take(left) + "\n…（本文件过长，已截断）" else text
-                used += body.length
-                parts += label to body
+        for ((label, f) in sources(workspace, gitRoot)) {
+            val text = runCatching { f.readText() }.getOrDefault("").trim()
+            if (text.isEmpty()) continue
+            val left = CAP - used
+            if (left <= 0) {
+                parts += label to "…（还有更多说明未纳入）"
+                break
             }
+            val body = if (text.length > left) text.take(left) + "\n…（本文件过长，已截断）" else text
+            used += body.length
+            parts += label to body
         }
         return render(parts)
     }
@@ -151,13 +163,6 @@ object Memory {
     fun target(workspace: java.io.File): java.io.File {
         val agents = java.io.File(workspace, "AGENTS.md")
         return if (agents.isFile) agents else java.io.File(workspace, ".haoai/memory.md")
-    }
-
-    fun write(workspace: java.io.File, text: String): java.io.File {
-        val f = target(workspace)
-        f.parentFile?.mkdirs()
-        f.writeText(text)
-        return f
     }
 }
 

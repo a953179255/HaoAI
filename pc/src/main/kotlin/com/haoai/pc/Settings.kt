@@ -3,6 +3,7 @@ package com.haoai.pc
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -205,3 +206,42 @@ internal fun JsonObject.dbl(k: String): Double? = this[k]?.jsonPrimitive?.let {
 }
 
 internal fun JsonObject.long(k: String): Long? = this[k]?.jsonPrimitive?.longOrNull
+
+data class Skill(val name: String, val desc: String, val text: String)
+
+/**
+ * 自定义 `/命令`（技能）：一个名字 + 一句说明 + 一段提示词。
+ *
+ * 存 HAOAI_HOME/skills.json 而**不是随仓库走**：「我常用的活法」是人的习惯，
+ * 仓库里的规矩归 AGENTS.md（见 [Memory]）。坏文件按"没有技能"处理 ——
+ * 手改 JSON 改错一个逗号，不该让整个界面起不来。
+ */
+object Skills {
+    fun load(): List<Skill> = runCatching {
+        Json.parseToJsonElement(Env.skillsFile.readText()).jsonArray.mapNotNull { e ->
+            val o = e.jsonObject
+            val n = o["name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            if (n.isEmpty()) return@mapNotNull null
+            Skill(
+                n,
+                o["desc"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                o["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    fun save(list: List<Skill>) {
+        val body = list.joinToString(",", "[", "]") { s ->
+            """{"name":${json(s.name)},"desc":${json(s.desc)},"text":${json(s.text)}}"""
+        }
+        runCatching {
+            Env.skillsFile.parentFile?.mkdirs()
+            Env.skillsFile.writeText(body)
+        }
+    }
+
+    /** JSON 字符串字面量：换行和引号必须转义，否则一段多行提示词就能把文件写坏。 */
+    private fun json(s: String): String = "\"" +
+        s.replace("\\", "\\\\").replace("\"", "\\\"")
+            .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t") + "\""
+}
