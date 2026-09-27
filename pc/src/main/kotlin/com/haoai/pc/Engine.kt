@@ -162,10 +162,39 @@ class Engine(
      * 上下文立刻被挤满，而父会话需要的只有那句结论 —— 这正是 subagent 存在的理由。
      * 深度限一层：否则模型一句"帮我把所有模块都看一遍"能给自己开出一条流水线。
      */
-    fun spawn(label: String, prompt: String): Pair<String, String> {
+    /**
+     * 正在跑的子任务：`label -> 子引擎`。
+     *
+     * 存在的唯一理由：**停掉一条跑偏的调研不该以中止整轮为代价**。
+     * 以前只有"停止"这一个总闸，按下去连正在写的正文一起断掉；
+     * 而子任务恰恰是最容易跑偏的那部分（模型让它"把所有模块看一遍"，一看就是四十轮）。
+     * 停止仍然只在回合/工具边界生效 —— 和主循环同一套规矩，不给子任务开特例。
+     */
+    private val liveSubs = java.util.concurrent.ConcurrentHashMap<String, Engine>()
+
+    /** 界面上"哪几条子任务在跑"。 */
+    fun subNames(): List<String> = liveSubs.keys.toList()
+
+    /** 请求停掉某一条子任务：true 表示这条确实在跑（跑完的、名字错的都返回 false）。 */
+    fun stopSub(label: String): Boolean {
+        val c = liveSubs[label] ?: return false
+        c.requestStop()
+        return true
+    }
+
+    /** 同名子任务要各自可停：模型很爱给两条调研起同一个标签，撞名时"停掉它"会停错那条。 */
+    private fun uniqueSubName(base: String): String {
+        var k = base
+        var n = 2
+        while (liveSubs.containsKey(k)) { k = "$base $n"; n++ }
+        return k
+    }
+
+    fun spawn(rawLabel: String, prompt: String): Pair<String, String> {
         if (depth >= MAX_DEPTH)
             return ("子任务不能再派子任务（深度上限 $MAX_DEPTH）。这件事你自己动手做。" to "")
         if (prompt.isBlank()) return ("子任务没有内容，不知道要它做什么。" to "")
+        val label = uniqueSubName(rawLabel.ifBlank { "子任务" })
         val s = Session("sub" + System.nanoTime().toString(16).take(8), session.workspace)
         s.mode = session.mode
         val log = StringBuilder()
@@ -175,14 +204,23 @@ class Engine(
             childClient?.invoke() ?: chatClient(settings),
             depth = depth + 1
         )
+        liveSubs[label] = child
         emit(Ev.Sub(label, "start", prompt.take(200)))
         val out = try {
             child.submit(prompt)
         } catch (e: Exception) {
             "子任务失败：" + (e.message ?: e.javaClass.simpleName)
+        } finally {
+            liveSubs.remove(label, child)
         }
-        emit(Ev.Sub(label, "done", out.take(400)))
-        return (out.ifBlank { "子任务没有给出结论" } to log.toString())
+        // 被停掉的那条**要说清是被停掉的**：只回一句"没有给出结论"，
+        // 模型会以为子任务白跑，通常原地再派一条一模一样的。
+        val stopped = child.stopRequested
+        val text = if (stopped) "子任务被中断（用户停掉了它）。中断前它说到：" +
+            out.take(200).ifBlank { "（还没开口）" } + " 换个更小的问法，或者自己动手做这一步。"
+        else out.ifBlank { "子任务没有给出结论" }
+        emit(Ev.Sub(label, "done", text.take(400)))
+        return (text to log.toString())
     }
 
     /** 子任务的动静：一边转成界面上的实时行，一边攒成一份过程记录跟着结论落库。 */
@@ -337,6 +375,13 @@ class Engine(
 
     fun requestStop() {
         stopRequested = true
+        /*
+         * 中止整轮时正在跑的子任务要一起停。
+         *
+         * 不这么做的话：`task` 这把工具是**阻塞**的，父循环要等 spawn 返回才看得见
+         * stopRequested —— 按下停止，那条调研还在自己转圈，界面几十秒不动。
+         */
+        liveSubs.values.forEach { it.requestStop() }
     }
 
     /**

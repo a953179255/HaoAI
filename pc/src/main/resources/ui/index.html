@@ -383,6 +383,10 @@
   .acts .deny{color:var(--err);border-color:var(--err)}
   .opts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
   .opts .btn{text-align:left}
+  /* .btn 全局是 width:100%，这颗挂在 summary 上要自己收回来（横幅那颗撞过同一个坑） */
+  .card.sub summary{display:flex;gap:8px;align-items:center}
+  .card.sub .substop{width:auto;flex:none;margin-left:auto;padding:2px 9px;font-size:11.5px}
+  .card.sub .substop:disabled{opacity:.55;cursor:default}
   .card.ask .acts kbd{margin-left:7px;padding:0 5px;border:1px solid var(--line2);border-radius:4px;
     font:600 10.5px/16px ui-monospace,Menlo,Consolas,monospace;color:var(--dim);background:var(--glass2)}
   input[type=text],input[type=password]{width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;
@@ -853,7 +857,18 @@ function subLine(d,v){
   if(!c){
     t.curAns=null;closeThinking(t);
     c=t.subs[d.label]=add(el('<details class="card sub" open><summary><span class="tick run"></span>'+
-      '<b>子任务</b><span class="sb">'+esc(d.label)+'</span></summary><div class="sublog"></div></details>'),t);
+      '<b>子任务</b><span class="sb">'+esc(d.label)+'</span>'+
+      '<button class="btn substop" data-stop="'+esc(d.label)+'">停掉它</button></summary>'+
+      '<div class="sublog"></div></details>'),t);
+    // 单独停一条：总闸会把这一轮整个中止（连正在写的正文一起），而跑偏的往往只是这条调研
+    c.querySelector('.substop').onclick=ev=>{
+      ev.preventDefault();ev.stopPropagation();   // summary 上点一下会折叠卡片，这里只想要按钮
+      const btn=ev.currentTarget;
+      post('/api/substop',{sid:t.sid,label:btn.dataset.stop}).then(x=>{
+        if(!x||!x.ok){toast((x&&x.error)||'这条子任务已经不在跑了','err');btn.disabled=true;return}
+        btn.disabled=true;btn.textContent='正在收尾';toast('已请求停掉这条子任务');
+      });
+    };
   }
   const log=c.querySelector('.sublog');
   if(d.kind=='tool'||d.kind=='err')log.appendChild(el('<div class="sl'+(d.kind=='err'?' bad':'')+'">'+
@@ -861,6 +876,7 @@ function subLine(d,v){
   if(d.kind=='done'){
     c.open=false;c.classList.add('done');
     c.querySelector('.tick').className='tick ok';
+    const sp=c.querySelector('.substop');if(sp)sp.remove();   // 跑完了就没有可停的东西
     log.appendChild(el('<div class="sl ans">结论：'+esc(d.text)+'</div>'));
     delete t.subs[d.label];
   }
@@ -2090,6 +2106,9 @@ function applyState(s){
   v.queue=s.queue||[];paintQueue(v);
   if(s.tools)v.toolList=s.tools;
   v.runState=s.runState||null;paintResume(v,v.runState);
+  /* 刷新之前就在跑的子任务：它还没进历史，重放造不出卡片，
+     不补一张的话"单独停掉一条调研"这件事在刷新之后就丢了 */
+  (s.subs||[]).forEach(lb=>{if(!v.subs[lb])subLine({label:lb,kind:'start',text:'（刷新之前就在跑）'},v)});
   if(v===cur())paintTools(v.toolList);
   v.todos=(s.todos||[]).map(t=>(t.status=='done'?'[x]':t.status=='doing'?'[>]':'[ ]')+' '+t.text);
   paintUsage(s.usage,v);

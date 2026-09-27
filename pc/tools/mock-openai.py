@@ -141,6 +141,25 @@ PLAN = {
     ],
 }
 
+# 子任务单独停止：父任务派一条"一直数"的调研，界面上要能只停这一条。
+# 父子共用"按 tool_rounds 取第几行"这一套会串台（两边的第 0 轮长得一样），
+# 所以按请求里有没有子任务自己的标记分道 —— 和 multi 模式同一个办法。
+SUBLOOP_MARK = "子任务现场"
+SUBLOOP_PARENT = [
+    ("我派个子任务去数数", [{"id": "t1", "name": "task",
+        "arguments": json.dumps({"prompt": SUBLOOP_MARK + "：一轮一轮数，数到八再说", "label": "数数"})}],
+     "这件事要反复看好几轮，交给子任务，我只要它的结论。"),
+    ("子任务回来了，我照它的结论收尾。", None),
+]
+SUBLOOP_CHILD = [
+    ("我先看一眼", [{"id": "s0", "name": "shell",
+        "arguments": json.dumps({"command": "echo one", "shell": "bash", "timeout": 30})}]),
+] + [("我再数一轮", [{"id": "s%d" % i, "name": "shell",
+        "arguments": json.dumps({"command": "echo round-%d" % i, "shell": "bash", "timeout": 30})}])
+     for i in range(1, 9)] + [
+    ("数完了：一共数了 9 轮，每轮 echo 一个数。", None),
+]
+
 # multi：一个网关同时喂好几条会话，各自一份剧本。
 # 三条的话术与文件都不同，所以"事件串台"在界面上是看得见的（丙的回答出现在甲那条=立刻能发现）。
 ROUTED = {
@@ -214,6 +233,11 @@ class Handler(BaseHTTPRequestHandler):
         key, plan = (None, PLAN.get(MODE, PLAN["tools"]))
         if MODE == "multi":
             key, plan = self.plan_for(msgs)
+        if MODE == "subloop":
+            joined = " ".join(str(m.get("content") or "") for m in msgs)
+            plan = SUBLOOP_CHILD if SUBLOOP_MARK in joined else SUBLOOP_PARENT
+            if tool_rounds:
+                time.sleep(0.5)   # 每轮慢一点，界面上才来得及点"停掉它" 
         idx = min(tool_rounds, len(plan) - 1)
         row = plan[idx]
         text = row[0]
@@ -257,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8099)
-    ap.add_argument("--mode", default="tools", choices=list(PLAN.keys()) + ["multi"])
+    ap.add_argument("--mode", default="tools", choices=list(PLAN.keys()) + ["multi", "subloop"])
     a = ap.parse_args()
     global MODE
     MODE = a.mode

@@ -382,6 +382,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML �
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
+SHOT_MODE=subloop bash pc/tools/ui-shot.sh pc/tools/steps/ui-substop.json  # 子任务单独停 + 总闸连带停（几何三条 + 中断回话）
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -1177,6 +1178,45 @@ PC 端一条任务动辄几十轮工具调用。以前进程一没（关掉窗�
 Chrome 就只发 `keydown` 不产生"打字"，于是"在输入框里按 y"这一族判据根本测不出来
 （会一律通过）。现在单字符键带 `text`/`unmodifiedText` 与 VK 码，是真按键。
 
+## 这一批：子任务可以单独停（总闸也会带上它们）（v0.43.0）
+
+`task` 派出去的调研是**阻塞**的：父循环卡在 `spawn` 里，要等子任务返回才看得见停止旗子。
+所以以前只有两个选择 —— 等它跑完，或者按总闸把这一轮整个中止（连正在写的正文一起丢）。
+而"子任务跑偏了"恰恰是最常见的那种尴尬：模型让它"把所有模块看一遍"，一看就是四十轮。
+
+- `Engine.liveSubs`：`label -> 子引擎`。`POST /api/substop {sid,label}` 只给那一条置停止旗，
+  父任务继续。停止仍然只在**回合/工具边界**生效 —— 和主循环同一套规矩，不给子任务开特例。
+- 同名子任务各自可停：模型很爱给两条调研起同一个标签，撞名时"停掉它"会停错那条，
+  而且看不出来 —— 所以标签自动排号（`数数`、`数数 2`）。
+- 被停掉的那条**要带上下文回话**：`子任务被中断（用户停掉了它）。中断前它说到：…`。
+  只回"没有结论"，模型通常原地再派一条一模一样的。
+- 总闸 `requestStop()` 现在会连带 `liveSubs.values.forEach { it.requestStop() }`：
+  按下停止之后那条调研不再自己转圈。这是这条改动里最值钱的一半 ——
+  没有它，"停止"在有子任务的回合上等于"等子任务自己跑完"。
+- `/api/state` 报 `subs:["数数"]`，界面上每张在跑的子任务卡右上角一颗"停掉它"。
+  刷新之后历史里还没有它（它没进历史），所以卡片要按 `subs` 补一张，
+  否则"刷新一次就再也停不掉那条调研"。
+
+判据（Kotlin，`SubStopTest` 4 条）：**数"停下来之后还问了模型几次"**，不数秒 ——
+第一次用 `awaitIdle(4.5s)` 就自己红了（shell 每次都要起一个 bash，慢机器上时间这条不稳），
+而轮数才是语义：停对了不会跑满 6 轮。四条分别是：`subs` 在跑时看得见、跑完清空；
+停一条之后父任务收到「被中断」那句且**自己接着收尾**；按总闸之后子任务跟着停；
+停一条已经不存在的要回 `ok:false` 并说清原因。
+
+判据（真像素，`SHOT_MODE=subloop bash pc/tools/ui-shot.sh pc/tools/steps/ui-substop.json`，15 步全绿）：
+卡上 `停掉它` 55×21、`notFullWidth/rightOfLabel/insideSummary` 三条几何都对（`.btn` 全局
+`width:100%` 那个坑这里又撞了一次，靠 `width:auto;flex:none;margin-left:auto` 收回）；
+点下去 900ms 内 `subs:[]`、`running:false`，历史里那条 task 回复是
+「子任务被中断（用户停掉了它）。中断前它说到：我再数一轮…」，父任务最后那句"照它的结论收尾"也在。
+
+**这一批最该记的一条**：假网关自己认错了人。
+分类"这是子任务在问还是父任务在问"最初写成 `body.contains(MARK)` ——
+父任务历史里那条 assistant 的 `tool_call` 参数**就带着这个标记**（它就是照那句话派的活），
+于是子任务明明已经停住，父任务却被当成子任务一路收到 shell 调用跑到第 6 轮，
+症状和"停不掉子任务"一模一样。改成只看 `role=="user"` 的消息正文才对。
+（`mock-openai.py` 里同一处判据从一开始就是拼 `content`，所以像素侧没被误导 ——
+两边写法不一致反而救了一次：同一套逻辑的两份实现互相暴露了对方。）
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1243,7 +1283,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **182 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **186 条全绿**（整套 29 秒）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1268,7 +1308,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4），这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4），这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1309,7 +1349,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、按会话换模型、
    截图 Ctrl+V 与拖拽进附件、回收站放回、侧栏每组点开更多、搜索命中跳到那一条、
    跑着的时候排队与撤回、引用某句到输入框、删某一句、会话置顶、按回合落账的用量看板、
-   HTML 产出沙箱预览、长代码块折叠、会话级工具开关、
+   HTML 产出沙箱预览、长代码块折叠、会话级工具开关、断点恢复、审批键盘决定、子任务单独停、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

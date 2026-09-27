@@ -173,6 +173,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/tool" -> toolToggle(ex)
                 "/api/resume" -> resumeRun(ex)
                 "/api/abandon" -> abandonRun(ex)
+                "/api/substop" -> stopSubtask(ex)
                 "/api/trash" -> trashList(ex)
                 "/api/untrash" -> untrashSession(ex)
                 "/api/purge" -> purgeTrash(ex)
@@ -291,6 +292,10 @@ class WebServer(settings: PcSettings, port: Int,
         ).append("],")
         // 没跑完的现场：重启后还在，就说明这条是被杀/断电打断的，界面上要举出来
         sb.append("\"runState\":").append(e?.runStateJson() ?: "null").append(',')
+        // 正在跑的子任务：卡片是事件流里造的，刷新之后重放历史造不出它，
+        // 不报出去就等于"刷新一次就再也停不掉那条调研"
+        sb.append("\"subs\":[").append((e?.subNames() ?: emptyList())
+            .joinToString(",") { quote(it) }).append("],")
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
         sb.append("\"sessionId\":").append(quote(id)).append(",")
@@ -1614,6 +1619,23 @@ class WebServer(settings: PcSettings, port: Int,
         e.clearRunState()
         send(ex, 200, """{"ok":true}""", "application/json; charset=utf-8")
         publish("sessions", "{}", sid)
+    }
+
+    /**
+     * `POST /api/substop` {sid,label} —— 只停某一条子任务，父任务继续。
+     *
+     * 和"停止"那颗总闸的区别：总闸会把这一轮整个中止（包括正在写的正文），
+     * 而这里只让那条跑偏的调研收尾 —— 父引擎拿到一句"子任务被中断"，接着干别的。
+     */
+    private fun stopSubtask(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val label = b.str("label")
+        val e = sessions[sid]?.engine
+        val ok = e != null && label.isNotBlank() && e.stopSub(label)
+        val subs = (e?.subNames() ?: emptyList()).joinToString(",", "[", "]") { quote(it) }
+        send(ex, 200, """{"ok":$ok,"error":${quote(if (ok) "" else "这条子任务已经不在跑了")},"subs":$subs}""",
+            "application/json; charset=utf-8")
     }
 
     private fun settingsJson(): String {

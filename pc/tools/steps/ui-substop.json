@@ -1,0 +1,52 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "派个子任务去数数",
+      "enter": true
+    }
+  },
+  {
+    "goto": ".view.on .card.sub",
+    "timeout": 25000
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.sub');const b=c.querySelector('.substop');const s=c.querySelector('.sb');const r=b.getBoundingClientRect();const sr=c.querySelector('summary').getBoundingClientRect();const lr=s.getBoundingClientRect();return {cards:document.querySelectorAll('.view.on .card.sub').length,label:s.textContent,btnText:b.textContent,w:Math.round(r.width),h:Math.round(r.height),notFullWidth:r.width<sr.width/3,rightOfLabel:r.left>=lr.right,insideSummary:r.top>=sr.top-1&&r.bottom<=sr.bottom+1,noOverlapWithTick:r.left>lr.left}})()"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running,subs:s.subs}))"
+  },
+  {
+    "shot": "s01-sub-running"
+  },
+  {
+    "click": ".view.on .card.sub .substop"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>{const b=document.querySelector('.view.on .card.sub .substop');return {btn:b?b.textContent:'(gone)',disabled:b?b.disabled:null}})()"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({subsAfterClick:s.subs,running:s.running}))"
+  },
+  {
+    "shot": "s02-sub-stopping"
+  },
+  {
+    "sleep": 6000
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.sub');return {cards:document.querySelectorAll('.view.on .card.sub').length,done:!!(c&&c.classList.contains('done')),logLines:c?c.querySelectorAll('.sublog .sl').length:0,stopBtnGone:!(c&&c.querySelector('.substop')),lastAns:[...document.querySelectorAll('.view.on .msg.ans')].pop().textContent.replace(/\\s+/g,' ').slice(0,30)}})()"
+  },
+  {
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running,subs:s.subs,taskNote:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='task').map(m=>(m.content||'').replace(/\\s+/g,' ').slice(0,46)),roles:(s.messages||[]).map(m=>m.role).join(',')}))"
+  },
+  {
+    "shot": "s03-after-stop"
+  }
+]
