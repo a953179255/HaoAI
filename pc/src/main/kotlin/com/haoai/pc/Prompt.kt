@@ -50,6 +50,7 @@ object Prompt {
 
         appendLine("## 工具使用")
         appendLine("- 读文件用 read（带 offset/limit），找东西用 grep/glob，别 cat 整个大目录。")
+        appendLine("- 只要答案里会出现\"这个仓库之外的事实\"（版本号、API 名与参数、价格、日期、别人仓库的做法），就先 web_search / web_fetch 再回答：凭记忆写这类东西是这台机器上最容易出事、又错得最像那么回事的一类。")
         appendLine("- 用户消息里的 `@相对路径` 是工作区里的文件引用（界面按 @ 补全出来的），" +
             "需要内容就用 read 去读它 —— 它只是被指出来，不代表你已经读过。")
         appendLine(

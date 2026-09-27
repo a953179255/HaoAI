@@ -1,0 +1,116 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "click": "#cfgBtn"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "({prov:(document.querySelector('#fSProv')||{}).value,opts:[...document.querySelectorAll('#fSProv option')].map(o=>o.value),keyType:(document.querySelector('#fSKey')||{}).type,ph:(document.querySelector('#fSKey')||{}).placeholder,grps:[...document.querySelectorAll('#dialog .grp')].map(x=>x.textContent)})"
+ },
+ {
+  "shot": "s01-cfg-search"
+ },
+ {
+  "eval": "(()=>{const s=document.querySelector('#fSProv');s.value='bocha';return s.value})()"
+ },
+ {
+  "click": "#cfgSave"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "fetch('/api/settings').then(r=>r.json()).then(c=>'服务端 provider='+c.searchProvider+' 有 key='+c.hasSearchKey)"
+ },
+ {
+  "click": "#cfgBtn"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "({back:(document.querySelector('#fSProv')||{}).value,ph:(document.querySelector('#fSKey')||{}).placeholder})"
+ },
+ {
+  "eval": "document.querySelector('#fSProv').value='auto'"
+ },
+ {
+  "click": "#cfgSave"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "eval": "fetch('/api/settings').then(r=>r.json()).then(c=>'改回 '+c.searchProvider)"
+ },
+ {
+  "click": "#tabs button[data-t=\"files\"]"
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "({files:[...document.querySelectorAll('#files .fe')].map(e=>e.dataset.p)})"
+ },
+ {
+  "click": "#files .fe[data-p=\"seed\"]"
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "({inDir:document.querySelector('#filePath').textContent,files:[...document.querySelectorAll('#files .fe')].map(e=>e.dataset.p)})"
+ },
+ {
+  "eval": "(()=>{const e=document.querySelector('#files .fe[data-p=\"seed/one.png\"]');if(!e)return 'no element';e.click();return 'clicked '+e.className})()"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "({on:document.querySelector('#mask').classList.contains('on'),h3:document.querySelector('#dialog h3').textContent,img:!!document.querySelector('.pvimg img'),natural:(a=>a?a.naturalWidth+'x'+a.naturalHeight:'')(document.querySelector('.pvimg img')),kv:(document.querySelector('.pvimg .kv')||{}).textContent,w:Math.round((document.querySelector('.pvimg img')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width),hasPre:!!document.querySelector('#dialog pre.pv')})"
+ },
+ {
+  "shot": "s02-img-preview"
+ },
+ {
+  "click": "#pvClose"
+ },
+ {
+  "click": "#pvClose"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "click": ".fbar [data-fx=\"up\"]"
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "({path:document.querySelector('#filePath').textContent,files:[...document.querySelectorAll('#files .fe')].map(e=>e.dataset.p),hit:(e=>e?JSON.stringify((()=>{const r=e.getBoundingClientRect();const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {y:Math.round(r.y),over:top?top.className+'|'+top.tagName:''}})()):'')(document.querySelector('#files .fe[data-p=\"notes.txt\"]'))})"
+ },
+ {
+  "click": "#files .fe[data-p=\"notes.txt\"]"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "({mouseClickOpened:document.querySelector('#mask').classList.contains('on'),h3:document.querySelector('#dialog h3').textContent,pre:!!document.querySelector('#dialog pre.pv'),txt:(document.querySelector('#dialog pre.pv')||{}).textContent})"
+ },
+ {
+  "shot": "s03-text-preview"
+ },
+ {
+  "click": "#pvClose"
+ }
+]

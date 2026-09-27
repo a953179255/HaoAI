@@ -38,6 +38,8 @@ data class PcSettings(
     val maxTokens: Int = 4096,
     /** 思考强度："" = 不发这个字段；low / medium / high 按网关的写法发。 */
     val reasoningEffort: String = "",
+    /** 搜索提供方：auto = 有 key 走博查、没 key 走 DuckDuckGo。 */
+    val searchProvider: String = "auto",
     /**
      * 这个模型的上下文窗口（字/符口径，用来画界面上那圈"用了多少"）。
      *
@@ -80,6 +82,7 @@ data class PcSettings(
                     temperature = o.dbl("temperature") ?: 0.3,
                     maxTokens = o.int("maxTokens") ?: 4096,
                     reasoningEffort = o.str("reasoningEffort") ?: "",
+                    searchProvider = o.str("searchProvider") ?: "auto",
                     contextChars = o.int("contextChars") ?: 128_000,
                     storedCap = o.int("storedCap") ?: 16_000,
                     reqCap = o.int("reqCap") ?: 4_000,
@@ -107,6 +110,7 @@ data class PcSettings(
                         put("temperature", s.temperature)
                         put("maxTokens", s.maxTokens)
                         put("reasoningEffort", s.reasoningEffort)
+                        put("searchProvider", s.searchProvider)
                         put("contextChars", s.contextChars)
                         put("storedCap", s.storedCap)
                         put("reqCap", s.reqCap)

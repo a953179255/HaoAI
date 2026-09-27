@@ -370,6 +370,7 @@ PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-group
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron.json     # 定时任务：加/跑一次/停用/删 + 思考强度
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-compact.json   # 手动压缩：折一半/诚实读数/刷新还在
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-img.json      # 图片附件胶囊 + 真的走 image_url
+PRE_TOUCH="notes.txt" PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-search.json  # 搜索提供方设置 + 文件浏览器里的图片预览
 SHOT_W=760 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-cron-narrow.json  # 窄屏浮层里的同一套
 ```
 876px 与 676px 各跑一遍：右栏默认 `none`、点 ▤ 之后 `flex` 且 `right<=innerWidth`（真的在屏幕内）、
@@ -708,6 +709,41 @@ Kotlin 侧新增 `ImageContextTest`（6 条），共 143 条全绿。
 Kotlin 侧 `ImageContextTest` 加到 8 条（新增：`/api/img` 给工作区内的图回字节、
 工作区外/绝对路径/`../`/文本冒充一律 404，以及 `state` 把图片路径报回前端），共 145 条全绿。
 
+## 这一批：`web_search` —— PC 端补齐两端最大的一块功能差
+
+PC 端以前只有 `web_fetch`：等于"知道网址才能读"。而 agent 干活时最常见的一步是
+"这个库现在的 API 到底叫什么"、"这个错误码是谁定义的" —— 没有搜索，模型只能凭训练时的记忆答，
+答错了界面上一个字都看不出来。手机端为这件事做了 12 家搜索服务，PC 端一条都没有。
+
+- 默认走 **DuckDuckGo 的 `html` 端点**：纯服务端渲染，不要 key、不要浏览器，装完就能用。
+  有 key 的人可以切 **博查**（与手机端同源的一家）。`settings.searchProvider` = `auto` 时
+  有 key 走博查、没 key 走 DDG；显式选了博查却没 key 就直接说清去哪儿填，不去发一个注定空手的请求。
+- key 只落 `HAOAI_HOME/searchkey`（或 `HAOAI_SEARCH_KEY`），**不进设置对象** ——
+  那份会被 `GET /api/settings` 整体发回前端，与 API 密钥同一条理由。
+- DDG 改版就会一条都解析不出来，而那时最坏的不是报错是"空结果 + 模型开始编"。
+  所以：解析抽成纯函数 `parseDuckDuckGo(html)` 用离线 fixture 测（改版时这条先红）；
+  一条都没有时明确说"可能关键词太偏，也可能是页面改版解析不出来"，并给出下一步
+  （换个说法 / 直接 web_fetch 已知地址）。
+- 跳转壳要解：DDG 的链接是 `//duckduckgo.com/l/?uddg=<编码后的真地址>`，
+  不解出来模型拿到的就是一条打不开的跳转地址。
+- 提示词里补了路由判据（手机端那条"不调研就写作"的教训）：**答案里只要出现"这个仓库之外的事实"
+  （版本号、API 名与参数、价格、日期、别人仓库的做法），就必须先搜再答**。
+  按产出物的事实性分道，而不是按"这是不是检索类任务"的枚举 —— 前者才是那条缺陷的根。
+- 设置抽屉里加了「搜索」一段（提供方下拉 + key 输入，留空=不改；placeholder 说清当前走哪家）。
+
+顺带修一个**一直在骗人的判断**：`/api/file` 用"`readText()` 抛不抛异常"来定是不是二进制，
+而 Kotlin 的 `readText()` 遇到坏字节是替换成 U+FFFD 而不是抛 —— 于是一张 PNG 会以一屏乱码
+被当成文本发回界面（"二进制不预览"那条从来没生效过）。改成自己判：图片魔数直接算二进制
+并且让界面走 `/api/img` 画出来，其余看前 8 KB 有没有 NUL 字节。文件浏览器里现在
+点图片是真缩略图（像素里 `naturalWidth=1`），点文本还是 `<pre>`。
+
+验收：`PRE_TOUCH="notes.txt" PRE_PNG="seed/one.png" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-search.json`
+—— 抽屉里那段渲染与提供方往返（选博查→服务端记下→重开还是博查→改回 auto）、
+图片预览渲染出 1×1、真鼠标点文本文件仍走 `<pre>`（上一轮"真点击没开"经查是量具时机，
+不是产品：`elementFromPoint` 显示那一行上面没有任何遮挡）。
+Kotlin 侧新增 `SearchToolTest`（8 条：fixture 解析、改版返回空、提供方选择、
+本地假搜索服务走完整链路、空结果要说人话、空 query 不浪费请求、博查 JSON 与缺 key），共 152 条全绿。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -834,7 +870,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 1. **界面还差的几样（对着桌面 agent 与手机端比出来的）**：跨端审批与会话镜像（在手机批桌面那条）、
    记忆与备份的两端同步（PC 与手机各写各的 `MEMORY.md` 与备份，没有汇合的那一步 —— 与下面第 3 条同源）。
-   已经落地的：定时任务、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、
+   已经落地的：web_search（免 key 的 DuckDuckGo + 可选博查）、图片进上下文与流里缩略图、定时任务、
+   手动压缩、思考强度、@ 提及文件、工作区切换与侧栏按目录分组、累计用量、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条

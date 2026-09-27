@@ -620,7 +620,7 @@ internal fun globToRegex(glob: String): Regex {
     return Regex(sb.append('$').toString(), RegexOption.IGNORE_CASE)
 }
 
-private fun schema(vararg props: Pair<String, String>, required: Array<String> = emptyArray()): JsonObject =
+internal fun schema(vararg props: Pair<String, String>, required: Array<String> = emptyArray()): JsonObject =
     buildJsonObject {
         put("type", "object")
         put("properties", buildJsonObject {
@@ -710,7 +710,8 @@ object Diff {
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
-    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), BrowserTool(), ScreenTool(), TaskTool()
+    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), WebSearchTool(),
+    BrowserTool(), ScreenTool(), TaskTool()
 )
 
 /**

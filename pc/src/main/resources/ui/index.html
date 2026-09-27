@@ -388,6 +388,10 @@
     border-radius:9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.6;padding:8px;
     outline:0;resize:vertical;min-height:120px;font-family:var(--mono)}
   .mem:focus{border-color:var(--acc2)}
+  /* 文件浏览器里预览图片：宽度跟着抽屉走，别把窗口撑破 */
+  .pvimg{display:flex;flex-direction:column;gap:8px;margin:6px 0}
+  .pvimg img{max-width:100%;max-height:56vh;object-fit:contain;border-radius:9px;
+    border:1px solid var(--line2);background:var(--code)}
   .tin{background:var(--glass);border:1px solid var(--line);border-radius:8px;color:var(--fg);
     font:inherit;font-size:12px;padding:5px 8px;outline:0;min-width:0;width:100%}
   .tin:focus{border-color:var(--acc2)}
@@ -1146,7 +1150,12 @@ function fEntry(p,isDir){
   fetch('/api/file?sid='+encodeURIComponent(curId||'')+'&path='+encodeURIComponent(p))
     .then(r=>r.ok?r.json():Promise.reject(r.status)).then(x=>{
       $('#dialog').innerHTML='<h3>'+esc(p)+'</h3>'+
-        (x.binary?'<div class="kv">（二进制文件，不预览，共 '+kb(x.bytes||0)+'）</div>'
+        (/\.(png|jpe?g|gif|webp)$/i.test(p)
+          // 图片走 /api/img：上一批刚把"看图"这条路修通，文件浏览器里再报"二进制不预览"就说不过去了
+          ?'<div class="pvimg"><img src="/api/img?sid='+encodeURIComponent(curId||'')+
+            '&path='+encodeURIComponent(p)+'" alt="'+esc(p)+'">'+
+            '<div class="kv">'+kb(x.bytes||0)+' · 显示不出来就是它在工作区外或类型不认</div></div>'
+          :x.binary?'<div class="kv">（二进制文件，不预览，共 '+kb(x.bytes||0)+'）</div>'
           :'<pre class="pv">'+esc(x.text||'')+(x.truncated?'\n…（只给前 200 KB）':'')+'</pre>')+
         '<div class="acts"><button class="btn" id="pvClose">关闭</button></div>';
       $('#mask').classList.add('on');
@@ -1750,6 +1759,15 @@ function openCfg(){
         思考强度只有支持它的推理模型有效，不吃的网关保持「不发」。</div>
       <div class="fld"><label>API 密钥</label><input type="password" id="fKey" autocomplete="off"
         placeholder="${c.hasKey?('已设置 '+esc(c.keyHint)+'…（留空则不改）'):'sk-…（只写进 HAOAI_HOME/apikey，不进仓库）'}"></div>
+      <div class="grp" style="margin-top:12px">搜索（web_search）</div>
+      <div class="fld"><label>用哪家</label>
+        <select id="fSProv">
+          <option value="auto">auto —— 有 key 走博查，没 key 走 DuckDuckGo</option>
+          <option value="duckduckgo">duckduckgo —— 免 key，装完就能用</option>
+          <option value="bocha">bocha —— 要 key，与手机端同源</option>
+        </select></div>
+      <div class="fld"><label>搜索 key（留空则不改）</label><input type="password" id="fSKey" autocomplete="off"
+        placeholder="${c.hasSearchKey?('已设置（provider '+esc(c.searchProvider)+'）—— 留空则不改'):'没填就走 DuckDuckGo；填了才可能用博查'}"></div>
       <div class="grp" style="margin-top:12px">实验特性</div>
       ${c.flags.map(f=>`<label class="sw"><input type="checkbox" data-k="${f.key}" ${f.on?'checked':''}>
         <span><span class="t">${esc(f.title)}</span><br><span class="d">${esc(f.what)}</span></span></label>`).join('')}
@@ -1773,6 +1791,9 @@ function openCfg(){
     const eff=dg.querySelector('#fEff'),effv=c.reasoningEffort||'';
     if(effv&&!Array.from(eff.options).some(o=>o.value===effv))eff.add(new Option(effv+' —— 网关自定义',effv));
     eff.value=effv;
+    // 搜索提供方只认这三个值；设置里被写成别的（CLI 手滑）就留着 auto，不跟着犯糊
+    const prov=dg.querySelector('#fSProv');
+    if(['auto','duckduckgo','bocha'].indexOf(c.searchProvider)>=0)prov.value=c.searchProvider;
     dg.querySelectorAll('.rules [data-del]').forEach(b=>b.onclick=()=>ruleEdit('del',b.dataset.del));
     dg.querySelector('#addRule').onclick=()=>ruleEdit('add',dg.querySelector('#fRule').value.trim());
     // 列表是异步填的，所以删除按钮走事件委托，不能在填之前就 query 一遍
@@ -1788,10 +1809,14 @@ function openCfg(){
       const body={model:dg.querySelector('#fModel').value.trim(),baseUrl:dg.querySelector('#fBase').value.trim(),
           workspace:dg.querySelector('#fWs').value.trim(),mode:dg.querySelector('#fMode').value.trim(),
           maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags,
-          reasoningEffort:dg.querySelector('#fEff').value};
+          reasoningEffort:dg.querySelector('#fEff').value,
+          searchProvider:dg.querySelector('#fSProv').value};
       // 密钥留空就是"不改"：placeholder 里回显的是前 6 位，不能顺手把它当新值写回去
       const k=(dg.querySelector('#fKey').value||'').trim();
       if(k)body.key=k;
+      // 搜索 key 同理：留空 = 不改，填了才写（它只落 HAOAI_HOME/searchkey）
+      const sk=(dg.querySelector('#fSKey').value||'').trim();
+      if(sk)body.searchKey=sk;
       fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(r=>r.json()).then(x=>{
           if(x&&!x.ok){toast(x.error||'没保存上','err');return}

@@ -67,6 +67,8 @@ object Env {
 
     /** 自定义 `/命令`（技能）：名字 + 一段提示词。见 [Skills]。 */
     val skillsFile: File get() = File(home, "skills.json")
+    /** 搜索服务的 key：与 API 密钥同理，**不进设置对象**（那份会整体发给前端）。 */
+    val searchKeyFile: File get() = File(home, "searchkey")
 
     /** 工具溢出落文件的目录名 —— 与手机端 `.haoai-output/` 保持同名，便于两套实现对照。 */
     const val TOOL_OUTPUT_DIR = ".haoai-output"

@@ -753,9 +753,25 @@ class WebServer(settings: PcSettings, port: Int,
             send(ex, 200, """{"ok":false,"error":"文件太大（${f.length() / 1024} KB），只给前 200 KB 的预览"}""",
                 "application/json; charset=utf-8"); return
         }
+        /*
+         * "是不是文本"不能靠 readText() 抛不抛异常 —— 它遇到坏字节是替换成 U+FFFD 而不是抛，
+         * 于是一张 PNG 会以一屏乱码的形式被当成文本发回界面（实测就是这么露出来的）。
+         * 改成自己判：图片魔数直接算二进制（界面走 /api/img 画出来），
+         * 其余看前 8 KB 里有没有 NUL 字节（真正的文本文件不会有）。
+         */
+        val head = runCatching {
+            val b = ByteArray(minOf(8192, f.length().toInt()))
+            f.inputStream().use { it.read(b) }; b
+        }.getOrDefault(ByteArray(0))
+        val isImage = Images.mime(f) != null
+        val isBinary = isImage || head.contains(0.toByte())
+        if (isBinary) {
+            send(ex, 200, """{"ok":true,"binary":true,"img":$isImage,"bytes":${f.length()}}""",
+                "application/json; charset=utf-8"); return
+        }
         val text = runCatching { f.readText() }.getOrNull()
         if (text == null) {
-            send(ex, 200, """{"ok":true,"binary":true,"bytes":${f.length()}}""",
+            send(ex, 200, """{"ok":true,"binary":true,"img":false,"bytes":${f.length()}}""",
                 "application/json; charset=utf-8"); return
         }
         val cut = text.take(200_000)
@@ -1352,6 +1368,9 @@ class WebServer(settings: PcSettings, port: Int,
         return """{"provider":${quote(st.providerName)},"baseUrl":${quote(st.baseUrl)},""" +
             """"model":${quote(st.model)},"mode":${quote(st.permissionMode)},"maxTokens":${st.maxTokens},""" +
             """"reasoningEffort":${quote(st.reasoningEffort)},""" +
+            """"searchProvider":${quote(st.searchProvider)},""" +
+            // 只报"有没有 key"，不报 key 本身：这份对象会整体发给浏览器
+            """"hasSearchKey":${Search.key().isNotBlank()},""" +
             // 上下文窗口必须回得去：抽屉里那一格原来永远是空的，用户以为没配，
             // 而保存时 num() 把空串读成 0 —— 于是"打开设置再保存"就把窗口清零了。
             """"contextChars":${st.contextChars},""" +
@@ -1370,6 +1389,12 @@ class WebServer(settings: PcSettings, port: Int,
         body["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(baseUrl = it) }
         body["maxTokens"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.let { n = n.copy(maxTokens = maxOf(0, it)) }
         // 窗口只认正数：读成 0 会让"那圈占用"永远显示 0%，比留空更骗人
+        body["searchProvider"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let {
+            n = n.copy(searchProvider = it.trim().lowercase())
+        }
+        // 搜索 key 与 API 密钥同理：只落 HAOAI_HOME/searchkey，不进设置对象
+        val skey = body["searchKey"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        if (skey.isNotEmpty()) runCatching { Env.searchKeyFile.writeText(skey) }
         body["contextChars"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.let {
             if (it > 0) n = n.copy(contextChars = it)
         }
