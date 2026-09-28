@@ -45,6 +45,18 @@ class DigestTest {
     }
 
     @Test
+    fun `a chain shows its last step, not its first`() {
+        // 任务链：第一步记 任务链，后面几步是队列接力的 排队 —— 汇总要给最后那一步
+        RunLedger.add(sid = "pc-chain", title = "剪片链", goal = "g", trigger = "任务链",
+            turns = 2, ms = 900L, stopped = false, out = "第一步：剪好了")
+        RunLedger.add(sid = "pc-chain", title = "剪片链", goal = "g", trigger = "排队",
+            turns = 1, ms = 800L, stopped = false, out = "第二步：封面抽出来了")
+        val es = Digest.entries().filter { it.title == "剪片链" }
+        assertEquals("一条链在汇总里只占一行：" + es.map { it.text }, 1, es.size)
+        assertTrue("该行该是最后一步的结果：" + es[0].text, es[0].text.contains("封面"))
+    }
+
+    @Test
     fun `a stopped run says so instead of looking like a result`() {
         add("定时", "剪片子", 1, "跑到一半被停了", stopped = true)
         val e = Digest.entries().first()

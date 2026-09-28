@@ -179,6 +179,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/files" -> files(ex)
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
+                "/api/workflows" -> workflows(ex)
                 "/api/digest" -> send(ex, 200, Digest.json(),
                     "application/json; charset=utf-8")
                 "/api/digest/export" -> digestExport(ex)
@@ -1191,6 +1192,7 @@ class WebServer(settings: PcSettings, port: Int,
                             at = (at?.at ?: b.str("at")).ifBlank { "09:00" },
                             days = at?.days ?: b.str("days"),
                             runAt = at?.runAt ?: 0L,
+                            flow = b.str("flow"),
                             created = old?.created ?: System.currentTimeMillis(),
                             enabled = old?.enabled ?: true,
                             lastRun = old?.lastRun ?: 0L,
@@ -1208,7 +1210,7 @@ class WebServer(settings: PcSettings, port: Int,
     private fun schedulesJson(): String = Schedules.load().joinToString(",", "[", "]") { s ->
         """{"id":${quote(s.id)},"name":${quote(s.name)},"prompt":${quote(s.prompt)},""" +
             """"kind":${quote(s.kind)},"every":${s.every},"at":${quote(s.at)},""" +
-            """"days":${quote(s.days)},"runAt":${s.runAt},""" +
+            """"days":${quote(s.days)},"runAt":${s.runAt},"flow":${quote(s.flow)},""" +
             """"when":${quote(SchedulePlan.describe(s.kind, s.every, s.at, s.days, s.runAt))},""" +
             """"enabled":${s.enabled},"lastRun":${s.lastRun},"lastSid":${quote(s.lastSid)},""" +
             """"lastError":${quote(s.lastError)},"nextDue":${Schedule.nextDue(s, System.currentTimeMillis())}}"""
@@ -1246,6 +1248,57 @@ class WebServer(settings: PcSettings, port: Int,
         )
     }
 
+    private fun workflows(ex: HttpExchange) {
+        val b = Body(ex)
+        if (ex.requestMethod != "GET") {
+            when (b.str("op")) {
+                "del" -> Workflows.remove(b.str("id"))
+                "run" -> {
+                    val (ok, note) = runWorkflow(b.str("id"))
+                    if (!ok) {
+                        send(ex, 200, """{"ok":false,"error":${quote(note)}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                }
+                else -> {
+                    val steps = Workflows.parseSteps(b.str("steps"))
+                    if (steps.isEmpty()) {
+                        send(ex, 200, """{"ok":false,"error":"一行一步，至少写一行"}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    val id = b.str("id").ifBlank { "wf" + System.nanoTime().toString(16).take(8) }
+                    val old = Workflows.find(id)
+                    Workflows.update(
+                        Workflow(id, b.str("name").trim().ifBlank { steps.first().take(18) }, steps,
+                            created = old?.created ?: System.currentTimeMillis())
+                    )
+                }
+            }
+        }
+        send(ex, 200, Workflows.json(), "application/json; charset=utf-8")
+    }
+
+    /**
+     * 跑一条任务链：第一步正常起一轮，剩下的**塞进那条会话已有的排队队列**。
+     *
+     * 不另造一套执行机制是这里的关键决定：队列由每轮结束时的接力自动往下发，
+     * 于是每一步都看得见上一步的结果（同一段历史），按停止也会像平时一样清掉队列，
+     * 而"任务链跑到一半会话被删了"这类边角情况不用重新想一遍。
+     */
+    private fun runWorkflow(id: String): Pair<Boolean, String> {
+        val wf = Workflows.find(id) ?: return false to "没有这条任务链（可能刚被删掉）"
+        if (wf.steps.isEmpty()) return false to "这条任务链是空的"
+        val (sid, err) = startRun("", wf.steps.first(), named = wf.name, fresh = true, trigger = "任务链")
+        if (err != null) return false to err
+        val rest = wf.steps.drop(1)
+        if (rest.isNotEmpty()) sessions[sid]?.let { m ->
+            synchronized(m.queue) { rest.forEach { m.queue.add(it to emptyList()) } }
+            publish("queue", queueJson(sid, synchronized(m.queue) { m.queue.toList() }), sid)
+        }
+        publish("sessions", "{}")
+        return true to "已开跑：${wf.name}（共 ${wf.steps.size} 步）"
+    }
+
     /**
      * 到点（或用户点了"立刻跑一次"）：起一条**新会话**去跑这句话。
      *
@@ -1254,6 +1307,20 @@ class WebServer(settings: PcSettings, port: Int,
      * 一次触发一条独立会话。标题定成任务名，否则列表里全是"每天早上…"这种半截句子。
      */
     private fun runSchedule(s: Schedule) {
+        // 配了任务链就跑链：链里每一步都看得见上一步的结果，比"排一句话"顶用
+        if (s.flow.isNotBlank()) {
+            // 先记账再跑：不写 lastRun 的话调度每 5 秒就会再触发一次，链会被反复起头
+            s.lastRun = System.currentTimeMillis()
+            s.lastError = ""
+            Schedules.update(s)
+            val (ok, note) = runWorkflow(s.flow)
+            if (!ok) {
+                s.lastError = note
+                Schedules.update(s)
+                Env.log("sched", "跑链失败：$note")
+            }
+            return
+        }
         val item = s.copy()
         item.lastRun = System.currentTimeMillis()
         item.lastError = ""

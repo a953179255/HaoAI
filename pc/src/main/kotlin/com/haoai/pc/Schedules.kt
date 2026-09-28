@@ -34,6 +34,8 @@ data class Schedule(
     val days: String = "",
     /** 一次性任务的时刻（epoch ms；once 才用）。 */
     val runAt: Long = 0L,
+    /** 非空 = 到点跑这条任务链（几句按顺序跑在同一会话里），`prompt` 就不再看。 */
+    val flow: String = "",
     val created: Long = System.currentTimeMillis(),
     var enabled: Boolean = true,
     var lastRun: Long = 0L,
@@ -159,6 +161,7 @@ object Schedules {
                 at = o["at"]?.jsonPrimitive?.contentOrNull ?: "09:00",
                 days = o["days"]?.jsonPrimitive?.contentOrNull ?: "",
                 runAt = o["runAt"]?.jsonPrimitive?.longOrNull ?: 0L,
+                flow = o["flow"]?.jsonPrimitive?.contentOrNull ?: "",
                 created = o["created"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
                 enabled = o["enabled"]?.jsonPrimitive?.contentOrNull != "false",
                 lastRun = o["lastRun"]?.jsonPrimitive?.longOrNull ?: 0L,
@@ -171,7 +174,8 @@ object Schedules {
     fun save(list: List<Schedule>) {
         val body = list.joinToString(",", "[", "]") { s ->
             """{"id":${js(s.id)},"name":${js(s.name)},"prompt":${js(s.prompt)},"kind":${js(s.kind)},""" +
-                """"every":${s.every},"at":${js(s.at)},"days":${js(s.days)},"runAt":${s.runAt},"created":${s.created},""" +
+                """"every":${s.every},"at":${js(s.at)},"days":${js(s.days)},"runAt":${s.runAt},""" +
+                """"flow":${js(s.flow)},"created":${s.created},""" +
                 """"enabled":${s.enabled},"lastRun":${s.lastRun},"lastSid":${js(s.lastSid)},""" +
                 """"lastError":${js(s.lastError)}}"""
         }

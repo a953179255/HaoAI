@@ -1,0 +1,68 @@
+[
+  {
+    "goto": "#tabs button[data-t=cron]"
+  },
+  {
+    "click": "#tabs button[data-t=cron]"
+  },
+  {
+    "type": {
+      "sel": "#wfName",
+      "text": "链流三步",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#wfSteps",
+      "text": "链流甲：把 a.txt 写出来\n链流乙：把 b.txt 写出来\n链流丙：把 c.txt 写出来并说一共几步",
+      "enter": false
+    }
+  },
+  {
+    "click": "#wfAdd",
+    "after": 800
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#wfList').innerText||'';return JSON.stringify({name:t.indexOf('链流三步')>=0,steps3:t.indexOf('3 步')>=0})})()",
+    "must": [
+      "name",
+      "steps3"
+    ]
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#crFlow').innerText||'';return JSON.stringify({inSelect:t.indexOf('跑任务链：链流三步')>=0})})()",
+    "must": [
+      "inSelect"
+    ]
+  },
+  {
+    "click": "#wfList [data-wf=run]",
+    "after": 1500
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await fetch('/api/sessions').then(r=>r.json()).catch(()=>[]);const hit=(d||[]).filter(s=>(s.title||'').indexOf('链流三步')>=0);if(hit.length){const el=document.querySelector('#sessions .it[data-id=\"'+hit[0].id+'\"]');if(el)el.click();return JSON.stringify({found:true,sid:hit[0].id.slice(0,8)});}if(Date.now()-t0>30000)return JSON.stringify({found:false,n:(d||[]).length});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": [
+      "found"
+    ]
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const t=document.querySelector('#stream').innerText||'';const all=t.indexOf('链流甲')>=0&&t.indexOf('链流乙')>=0&&t.indexOf('链流丙')>=0;if(all)return JSON.stringify({all3:true,ms:Date.now()-t0});if(Date.now()-t0>60000)return JSON.stringify({all3:false,tail:t.slice(-160)});await new Promise(z=>setTimeout(z,1000))}})()",
+    "must": [
+      "all3"
+    ]
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await fetch('/api/digest').then(r=>r.json()).catch(()=>({items:[]}));const hit=(d.items||[]).filter(e=>(e.title||'').indexOf('链流三步')>=0);if(hit.length)return JSON.stringify({inDigest:true,last:hit[0].text.slice(0,40),onePerChain:hit.length===1});if(Date.now()-t0>40000)return JSON.stringify({inDigest:false,n:(d.items||[]).length});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "inDigest",
+      "onePerChain"
+    ]
+  },
+  {
+    "click": "#tabs button[data-t=cron]"
+  },
+  {
+    "shot": "fl01-chain"
+  }
+]

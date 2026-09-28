@@ -31,11 +31,22 @@ object Digest {
     /** 汇总里最多列几条：手机上屏就那么大，再多也翻不完。 */
     const val LIMIT = 40
 
-    /** 定时触发的那些运行，最近的在前。手动/排队/续跑的不算（那些人在电脑前，看得见）。 */
-    fun entries(limit: Int = LIMIT): List<Entry> =
-        RunLedger.rows(400).filter { it.trigger == "定时" }.take(limit).map { r ->
+    /**
+     * 定时跑出来的那些运行，最近的在前；**每个会话只留最近一轮**。
+     *
+     * 为什么不是"只要 trigger=定时"：任务链跑起来只有第一步记成 `任务链`，
+     * 后面几步都是队列接力的 `排队` —— 只挑定时的话，一条三步链的汇总里
+     * 就只剩下第一步，人最想要的"最后说的是什么"反而看不到。
+     * 所以先认出哪些会话是定时/任务链起的，再把那条会话里最近一轮留下。
+     * 手动发的不算（那些人在电脑前，看得见）。
+     */
+    fun entries(limit: Int = LIMIT): List<Entry> {
+        val rows = RunLedger.rows(400)
+        val owned = rows.filter { it.trigger == "定时" || it.trigger == "任务链" }.map { it.sid }.toSet()
+        return rows.filter { it.sid in owned }.distinctBy { it.sid }.take(limit).map { r ->
             Entry(r.t, r.title.ifBlank { "(没名字)" }, r.sid, r.verdict, r.out)
         }
+    }
 
     fun json(limit: Int = LIMIT): String {
         val items = entries(limit).joinToString(",") { e ->

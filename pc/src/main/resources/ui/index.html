@@ -787,6 +787,13 @@
       <div class="kv" id="dgSum">—</div>
       <div class="rules" id="dgList"></div>
       <div class="acts2"><button class="ab" id="dgExport">导出成 md</button></div>
+      <div class="grp">任务链（工作流）</div>
+      <div class="kv">一行一步，按顺序跑在<b>同一条会话</b>里：每一步都看得见上一步的结果。最多 8 步。</div>
+      <div class="rules" id="wfList">（还没配）</div>
+      <input type="text" id="wfName" class="tin" placeholder="名字，如 直播后剪片">
+      <textarea id="wfSteps" class="mem" rows="3" placeholder="把 rec.mp4 剪成 30 秒&#10;从片子里抽一张封面&#10;照这条片子写一句标题"></textarea>
+      <div class="acts2 pinned"><button class="ab" id="wfAdd">加为任务链</button>
+        <span class="fp" id="wfState"></span></div>
       <input type="text" id="crName" class="tin" placeholder="名字，如 早间巡检">
       <textarea id="crPrompt" class="mem" rows="3" placeholder="到点要跑的那句话，如：看一下今天的构建日志，有报错就写清是哪一条"></textarea>
       <input type="text" id="crWhen" class="tin" placeholder="一句话排期：每周一三五 8 点 / 每天 7:30 和 21:30 / 半小时后">
@@ -795,6 +802,7 @@
         <select id="crKind" class="tin"><option value="interval">每隔几分钟</option><option value="daily">每天一次</option></select>
         <input type="text" id="crEvery" class="tin" value="60" placeholder="分钟">
         <input type="text" id="crAt" class="tin" value="09:00" placeholder="HH:MM">
+        <select id="crFlow" class="tin"><option value="">跑上面那句话</option></select>
       </div>
       <div class="acts2 pinned"><button class="ab" id="crAdd">加为定时任务</button>
         <span class="fp" id="crState"></span></div>
@@ -1659,7 +1667,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
   if(b.dataset.t=='pv')pvStart(); else pvStop();
   if(b.dataset.t=='mem')loadMemory();
-  if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest()}
+  if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest();loadWorkflows()}
 });
 
 /* ---- 终端页签：人与 agent 共用同一份常驻进程 ----
@@ -2069,6 +2077,40 @@ loadSkills();
 function whenText(s){return s.when||(s.kind=='daily'?'每天 '+s.at:'每 '+s.every+' 分钟')}
 function whenTime(t){if(!t)return '不会跑';
   return new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function paintWorkflows(list){
+  $('#wfList').innerHTML=(list||[]).length?list.map(w=>
+    `<div class="rl"><span><b>${esc(w.name)}</b><em>${w.count} 步 · ${esc((w.steps[0]||'').slice(0,26))}${
+      (w.steps[0]||'').length>26?'…':''}</em></span>`+
+    `<button class="ab" data-wf="run" data-id="${esc(w.id)}">跑一次</button>`+
+    `<button class="ab" data-wf="del" data-id="${esc(w.id)}">删</button></div>`).join('')
+    :'（还没配）';
+  // 定时任务的下拉里同步一份：选了就跑链，没选就跑"那句话"
+  const keep=$('#crFlow').value;
+  $('#crFlow').innerHTML='<option value="">跑上面那句话</option>'+(list||[]).map(w=>
+    `<option value="${esc(w.id)}">跑任务链：${esc(w.name)}（${w.count} 步）</option>`).join('');
+  if(keep)$('#crFlow').value=keep;
+}
+function loadWorkflows(){
+  return fetch('/api/workflows').then(r=>r.json())
+    .then(d=>paintWorkflows(d.items)).catch(()=>{$('#wfList').textContent='读不到'});
+}
+$('#wfAdd').onclick=()=>{
+  const steps=$('#wfSteps').value.trim();
+  if(!steps){toast('一行一步，先写几步');return}
+  post('/api/workflows',{op:'save',id:'',name:$('#wfName').value,steps:steps}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+    $('#wfName').value='';$('#wfSteps').value='';paintWorkflows(d.items);toast('任务链已加');
+  }).catch(()=>toast('任务链没加上','err'));
+};
+$('#wfList').onclick=e=>{
+  const b=e.target.closest?e.target.closest('[data-wf]'):null;
+  if(!b)return;
+  post('/api/workflows',{op:b.dataset.wf,id:b.dataset.id}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没做成','err');return}
+    paintWorkflows(d.items);toast(b.dataset.wf=='run'?'已开跑第一步':'已更新');
+    loadSessions();
+  }).catch(()=>toast('任务链动不了','err'));
+};
 function paintCron(list){
   $('#cronList').innerHTML=(list||[]).length?list.map(s=>
     `<div class="rl cron${s.enabled?'':' off'}"><span><b>${esc(s.name)}</b>`+
@@ -2119,7 +2161,7 @@ $('#crAdd').onclick=()=>{
   if(!p){toast('那句话是空的');return}
   const w=$('#crWhen').value.trim();
   post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,when:w,kind:$('#crKind').value,
-    every:$('#crEvery').value,at:$('#crAt').value}).then(d=>{
+    every:$('#crEvery').value,at:$('#crAt').value,flow:$('#crFlow').value}).then(d=>{
     if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
     $('#crName').value='';$('#crPrompt').value='';$('#crWhen').value='';$('#crWhenEcho').textContent='';
     $('#crManual').style.display='';
