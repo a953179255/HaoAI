@@ -38,6 +38,13 @@ const W = parseInt(arg('width', '1500'), 10);
 const H = parseInt(arg('height', '930'), 10);
 /** --mobile：按手机视口量（手机网页端用得上，桌面窗口宽度会被最小值顶回去）。 */
 const MOBILE = process.argv.includes('--mobile');
+/*
+ * SHOT_DPR=2 把截图按 2 倍采样。为什么要有这个开关：12px 的加粗中文在 dpr=1 的 PNG 里
+ * 会被 ClearType 子像素边缘 + 缩放采样糊成"重影"，我在验收记忆里看到过两次，
+ * 每次都怀疑是排版坏了 —— 而 `getClientRects()` 量出来加粗那段与后面那句之间 gap=0，
+ * 布局根本没重叠。判"看不清"之前先按高倍率重拍一张，别把量具的锯齿算成产品的缺陷。
+ */
+const DPR = Math.max(1, Number(process.env.SHOT_DPR || (MOBILE ? 2 : 1)) || 1);
 const steps = JSON.parse(fs.readFileSync(path.resolve(arg('steps', '')), 'utf8'));
 const EDGE = arg('edge', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe');
 
@@ -152,10 +159,10 @@ async function attach(url) {
    * 于是"按手机宽度排版"这条判据量的其实还是桌面宽度 —— 一个安静的假阴性。
    * 手机网页端要用 Emulation.setDeviceMetricsOverride 才量得准（顺带把 deviceScaleFactor/mobile 摆对）。
    */
-  if (MOBILE) {
-    await send('Emulation.setDeviceMetricsOverride', {width: W, height: H, deviceScaleFactor: 2, mobile: true})
-      .then(() => console.log('  手机视口 ' + W + 'x' + H + '（device metrics override）'))
-      .catch(e => console.log('  手机视口没开成（判据会失真）：' + e.message));
+  if (MOBILE || DPR > 1) {
+    await send('Emulation.setDeviceMetricsOverride', {width: W, height: H, deviceScaleFactor: DPR, mobile: MOBILE})
+      .then(() => console.log('  ' + (MOBILE ? '手机' : '桌面') + '视口 ' + W + 'x' + H + ' @dpr' + DPR))
+      .catch(e => console.log('  视口覆盖没开成（判据会失真）：' + e.message));
   }
 }
 
@@ -291,6 +298,7 @@ function mustMiss(val, must) {
 (async () => {
   const proc = await startBrowser();
   let code = 0;
+  const misses = [];
   try {
     await attach(steps[0] && steps[0].url ? steps[0].url : arg('url', 'about:blank'));
     console.log('  已连上无头 Edge，共 ' + steps.length + ' 步');
@@ -303,7 +311,7 @@ function mustMiss(val, must) {
       if (s.goto) {
         const ok = await waitFor(s.goto, s.timeout || 12_000, s.visible === true);
         console.log('  等 ' + s.goto + (s.visible ? '（要看得见）' : '') + ' -> ' + (ok ? '出现' : '没出现'));
-        if (!ok) code = 1;
+        if (!ok) { code = 1; misses.push('第 ' + (i + 1) + ' 步没等到 ' + s.goto); }
         await sleep(250);
       } else if (s.sleep) await sleep(s.sleep);
       else if (s.eval) {
@@ -316,6 +324,7 @@ function mustMiss(val, must) {
          */
         for (const miss of mustMiss(got, s.must)) {
           console.log('  !! 第 ' + (i + 1) + ' 步判据没成立：' + miss);
+          misses.push('第 ' + (i + 1) + ' 步 ' + miss);
           code = 1;
         }
       }
@@ -329,7 +338,7 @@ function mustMiss(val, must) {
           : s.viewport === 'desktop' ? {width: 1500, height: 930, mobile: false}
           : {width: s.viewport.width || W, height: s.viewport.height || H, mobile: !!s.viewport.mobile};
         await send('Emulation.setDeviceMetricsOverride',
-          {width: v.width, height: v.height, deviceScaleFactor: v.mobile ? 2 : 1, mobile: v.mobile});
+          {width: v.width, height: v.height, deviceScaleFactor: v.mobile ? Math.max(2, DPR) : DPR, mobile: v.mobile});
         console.log('  视口 -> ' + v.width + 'x' + v.height + (v.mobile ? '（手机）' : ''));
         await sleep(300);
       }
@@ -338,6 +347,14 @@ function mustMiss(val, must) {
       else if (s.type) { await type(s.type); await sleep(s.after || 350); }
       else if (s.shot) await shot(s.shot);
     }
+    /*
+     * 收尾再喊一次。中间那行 `!!` 太容易被忽略：v0.67.0 有一份剧本第 14 步的判据
+     * 写成在 Rect 上取 `scrollWidth`（永远是 undefined → 永远 false），整轮其实是红的，
+     * 而我把它 `| tail` 之后只看了打印出来的数值就当通过了。
+     * 退出码是对的，**管道会把退出码换成 tail 的** —— 所以最后一行必须自己把结论说出来。
+     */
+    if (misses.length) console.log('x 判据没过 ' + misses.length + ' 处：' + misses.join(' | '));
+    else console.log('全部判据通过（' + steps.length + ' 步）');
   } catch (e) {
     console.log('  失败：' + e.message);
     try { await shot('failure'); } catch (_) {}

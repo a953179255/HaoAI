@@ -39,7 +39,7 @@
   "sleep": 1200
  },
  {
-  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];const spans=rows.map(r=>r.querySelector('span').innerText.replace(/\\s+/g,' '));return {items:rows.length,texts:spans.join(' | '),state:document.querySelector('#memAddState').textContent,noClip:rows.every(r=>{const s=r.querySelector('span');return s.scrollWidth<=s.clientWidth+1}),overflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()",
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];const spans=rows.map(r=>r.querySelector('span').innerText.replace(/\\s+/g,' '));const bad=rows.map(r=>{const s=r.querySelector('span');return {sw:s.scrollWidth,cw:s.clientWidth,h:Math.round(s.getBoundingClientRect().height),txt:s.innerText.replace(/\\s+/g,' ').slice(0,24)}}).filter(x=>x.sw>x.cw+1);return {items:rows.length,texts:spans.join(' | '),clipped:JSON.stringify(bad),state:document.querySelector('#memAddState').textContent,noClip:rows.every(r=>{const s=r.querySelector('span');return s.scrollWidth<=s.clientWidth+1}),overflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()",
   "must": [
    "items",
    "noClip",
@@ -50,7 +50,7 @@
   "shot": "m01-memitems"
  },
  {
-  "eval": "(()=>{const a=document.querySelector('#memType').getBoundingClientRect(),b=document.querySelector('#memImp').getBoundingClientRect(),c=document.querySelector('#memTags').getBoundingClientRect(),panel=document.querySelector('#tab-mem').getBoundingClientRect();return{selects:Math.round(a.width)+'x'+Math.round(b.width),sameRow:Math.abs(a.top-b.top)<2,tagsFull:Math.round(c.width),tagsBelow:a.bottom<=c.top+2,inPanel:[a,b,c].every(r=>r.right<=panel.right+1&&r.left>=panel.left-1),noClip:c.scrollWidth<=c.clientWidth+1}})()",
+  "eval": "(()=>{const a=document.querySelector('#memType').getBoundingClientRect(),b=document.querySelector('#memImp').getBoundingClientRect(),c=document.querySelector('#memTags').getBoundingClientRect(),t=document.querySelector('#memTags'),panel=document.querySelector('#tab-mem').getBoundingClientRect();return{selects:Math.round(a.width)+'x'+Math.round(b.width),sameRow:Math.abs(a.top-b.top)<2,tagsFull:Math.round(c.width),tagsBelow:a.bottom<=c.top+2,inPanel:[a,b,c].every(r=>r.right<=panel.right+1&&r.left>=panel.left-1),sw:t.scrollWidth,cw:t.clientWidth,noClip:t.scrollWidth<=t.clientWidth+1}})()",
   "must": [
    "sameRow",
    "tagsFull",

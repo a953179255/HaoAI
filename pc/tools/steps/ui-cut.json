@@ -28,7 +28,7 @@
   ]
  },
  {
-  "eval": "(async()=>{const cap=await fetch('/api/file?path='+encodeURIComponent('字幕.srt')).then(r=>r.text());const img=[...document.querySelectorAll('.view.on .thumbs img')].find(i=>/封面/.test(decodeURIComponent(i.src)));return {srtOk:/00:00:00,300 --> 00:00:01,800/.test(cap)&&cap.indexOf('第一段：开场')>=0,srtHead:cap.slice(0,46),capW:img?img.naturalWidth:0,capH:img?img.naturalHeight:0}})()",
+  "eval": "(async()=>{const cap=await fetch('/api/file?path='+encodeURIComponent('字幕.srt')).then(r=>r.text());let img=null;{const t0=Date.now();for(;;){img=[...document.querySelectorAll('.view.on .thumbs img')].find(i=>/封面/.test(decodeURIComponent(i.src))&&i.naturalWidth>0);if(img||Date.now()-t0>9000)break;await new Promise(z=>setTimeout(z,400))}}return {srtOk:/00:00:00,300 --> 00:00:01,800/.test(cap)&&cap.indexOf('第一段：开场')>=0,srtHead:cap.slice(0,46),capW:img?img.naturalWidth:0,capH:img?img.naturalHeight:0}})()",
   "must": [
    "srtOk",
    "capW"
