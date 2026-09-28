@@ -164,7 +164,8 @@ class Engine(
      * 子任务用的客户端工厂。默认按当前设置新建一份；测试里换成脚本。
      * 没有这个口子，父会话用假网关时子任务会去敲真网关，症状是"派了子任务就卡住"。
      */
-    @Volatile var childClient: (() -> ChatClient)? = null
+    /** 子任务的网关客户端按**它自己要用的那份设置**造（换模型时模型名要跟着变）。 */
+    @Volatile var childClient: ((PcSettings) -> ChatClient)? = null
 
     /**
      * 派一个子任务：独立的历史与工具循环，共用同一个权限闸与设置，
@@ -202,22 +203,46 @@ class Engine(
         return k
     }
 
-    fun spawn(rawLabel: String, prompt: String): Pair<String, String> {
+    /**
+     * 派一条子任务。可以按子任务换模型与工具，但**权限不能从这条路绕过去**：
+     * 档位只能比父会话更严（plan 的父会话不能派一条 auto 出去替它写文件），
+     * 工具只能是父会话现在有的那个子集（不能凭训练记忆要一把没给的工具）。
+     */
+    fun spawn(rawLabel: String, prompt: String, opts: SubOpts = SubOpts()): Pair<String, String> {
         if (depth >= MAX_DEPTH)
             return ("子任务不能再派子任务（深度上限 $MAX_DEPTH）。这件事你自己动手做。" to "")
         if (prompt.isBlank()) return ("子任务没有内容，不知道要它做什么。" to "")
+        val mode = opts.mode.ifBlank { session.mode }
+        if (session.mode == "plan" && mode != "plan")
+            return ("这条会话在 plan 档：子任务也只能只读。要动手先切到 ask/auto，或者直接把这件事说出来。" to "")
+        val want = opts.tools.split(',', '，').map { it.trim() }.filter { it.isNotEmpty() }
+        val have = tools.map { it.name }
+        val unknown = want.filter { it !in have }
+        if (unknown.isNotEmpty())
+            return ("子任务要的工具这条会话没有：${unknown.joinToString("/")}。" +
+                "能用的是：${have.joinToString("/")}" to "")
+        val subTools = if (want.isEmpty()) tools else tools.filter { it.name in want }
+        val subSettings = if (opts.model.isBlank()) settings else settings.copy(model = opts.model)
         val label = uniqueSubName(rawLabel.ifBlank { "子任务" })
         val s = Session("sub" + System.nanoTime().toString(16).take(8), session.workspace)
-        s.mode = session.mode
+        s.mode = mode
         val log = StringBuilder()
         val child = Engine(
-            s, settings, tools, gate,
+            s, subSettings, subTools, gate,
             { ev -> forwardSub(label, ev, log) },
-            childClient?.invoke() ?: chatClient(settings),
+            childClient?.invoke(subSettings) ?: chatClient(subSettings),
             depth = depth + 1
         )
         liveSubs[label] = child
-        emit(Ev.Sub(label, "start", prompt.take(200)))
+        val cfg = listOfNotNull(
+            if (opts.model.isBlank()) null else "模型 ${opts.model}",
+            if (want.isEmpty()) null else "只给 ${want.joinToString("/")}",
+            if (mode == session.mode) null else "$mode 档"
+        ).joinToString(" · ")
+        // 配置也要进那份**落库的过程记录**：不然刷新之后这张卡上就只剩结论，
+        // 而"当时用的是哪个模型"恰恰是事后最想回看的一行
+        if (cfg.isNotEmpty()) log.appendLine("配置：$cfg")
+        emit(Ev.Sub(label, "start", (if (cfg.isEmpty()) "" else "[$cfg] ") + prompt.take(200)))
         val out = try {
             child.submit(prompt)
         } catch (e: Exception) {
@@ -565,7 +590,7 @@ class Engine(
         // 等回合结束才刷新的话，一条跑十分钟的任务十分钟都还叫"新会话"。
         if (titled) emit(Ev.Title(session.title.get()))
         val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
-        ctx.spawn = { label, prompt -> spawn(label, prompt) }
+        ctx.spawn = { label, prompt, opts -> spawn(label, prompt, opts) }
         // 检查点按"一轮"记：这一轮动过哪些文件、改之前长什么样，
         // 之后人点「回到这次之前」才有东西可退（见 [Checkpoints]）。
         ctx.runId = "r" + runStarted

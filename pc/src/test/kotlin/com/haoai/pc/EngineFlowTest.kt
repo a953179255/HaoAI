@@ -214,7 +214,7 @@ class EngineFlowTest {
                 turn("子任务说第一行是「第一行内容」")
             )
         )
-        engine.childClient = { child }
+        engine.childClient = { _ -> child }
         engine.submit("让子任务看看 note.txt 的第一行")
 
         assertTrue("子任务没真跑（它一次都没被问）", child.calls >= 2)
@@ -612,5 +612,67 @@ class EngineFlowTest {
         assertTrue("系统提示里没有长期记忆那一段：" + sys.take(300), sys.contains("长期记忆"))
         assertTrue("那条 gradle 记忆没被喂进去", sys.contains("gradle 9.6"))
         assertTrue("不可信来源不该进提示", !sys.contains("手机端同步"))
+    }
+    /**
+     * 子任务可以按任务换模型与工具，但**权限不能从这条路绕过去**。
+     * 三条判据各钉一件事：指定的模型真的用上了、"只给 read"就真的只有 read、
+     * plan 档的父会话派不出一条能写文件的子任务（否则"只读调研"成了摆设，
+     * 模型只要把写操作塞进 task 就能绕过档位 —— 与第四批那个"关着的工具凭名字还能调"同源）。
+     */
+    @Test
+    fun `a subagent can be given its own model and a narrower tool set`() {
+        val ws = tempWorkspace()
+        File(ws, "note.txt").writeText("第一行内容\n第二行内容\n")
+        val child = Scripted(mutableListOf(turn("子任务答完了")))
+        var seenModel = ""
+        val (engine, _, _) = harness(
+            ws,
+            mutableListOf(
+                turn("派一条", toolCall("t1", "task",
+                    """{"prompt":"只看 note.txt","label":"小活","model":"local-7b","tools":"read"}""")),
+                turn("收尾")
+            )
+        )
+        engine.childClient = { st -> seenModel = st.model; child }
+        engine.submit("派个子任务")
+        assertEquals("子任务没换上指定的模型", "local-7b", seenModel)
+        assertEquals("说了只给 read，模型却拿到一整排：" + child.lastTools.map { it.name },
+            listOf("read"), child.lastTools.map { it.name })
+    }
+
+    @Test
+    fun `a plan session cannot delegate its way into writing`() {
+        val ws = tempWorkspace()
+        val (engine, _, gate) = harness(
+            ws,
+            mutableListOf(
+                turn("让子任务去写", toolCall("t1", "task",
+                    """{"prompt":"写一个 b.txt","label":"代写","mode":"auto"}""")),
+                turn("那我不做了")
+            ),
+            mode = "plan"
+        )
+        engine.submit("想办法写个文件")
+        val task = engine.messages().last { it.role == "tool" && it.name == "task" }
+        assertTrue("plan 档居然派出了能写的子任务：" + task.content,
+            task.content!!.contains("plan"))
+        assertFalse("文件真的被写出来了", File(ws, "b.txt").exists())
+        assertTrue("plan 档连审批都不该弹：" + gate.asked, gate.asked.isEmpty())
+    }
+
+    @Test
+    fun `asking a subagent for a tool the session does not have is refused, not ignored`() {
+        val (engine, _, _) = harness(
+            tempWorkspace(),
+            mutableListOf(
+                turn("给它一把不存在的", toolCall("t1", "task",
+                    """{"prompt":"跑一下","label":"要 shell","tools":"read,nope"}""")),
+                turn("算了")
+            )
+        )
+        engine.submit("派个子任务")
+        val task = engine.messages().last { it.role == "tool" && it.name == "task" }
+        assertTrue("该说这条会话没有这工具：" + task.content, task.content!!.contains("nope"))
+        assertTrue("该把能用的列出来：" + task.content, task.content!!.contains("read"))
     }
 }

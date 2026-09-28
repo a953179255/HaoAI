@@ -1260,6 +1260,14 @@ function subLine(d,v){
     };
   }
   const log=c.querySelector('.sublog');
+  /* 开头那一行必须画出来：里面写着这条子任务用了哪个模型、只给了哪几把工具。
+     配置还要**抬到标题上** —— 跑完的卡是收起的，藏在展开体里的配置等于看不见，
+     而"看不见的配置"就是在用户不知情的情况下换了套权限在跑。 */
+  if(d.kind=='start'&&d.text){
+    const m=/^\[([^\]]+)\]\s*/.exec(d.text);
+    if(m)c.querySelector('.sb').textContent=d.label+' · '+m[1];
+    log.appendChild(el('<div class="sl">交代：'+esc(m?d.text.slice(m[0].length):d.text)+'</div>'));
+  }
   if(d.kind=='tool'||d.kind=='err')log.appendChild(el('<div class="sl'+(d.kind=='err'?' bad':'')+'">'+
     esc(d.text)+'</div>'));
   if(d.kind=='done'){
@@ -3194,9 +3202,13 @@ function applyState(s){
       // 不这么做的话刷新后它就是个普通工具卡，"这是并行出去的子任务"这件事就看不出来了。
       const mm=(m.content||'').match(/【子任务「([^」]*)」的结论】\n?([\s\S]*)/);
       const bad=(m.content||'').indexOf('子任务失败')>=0;
+      // 配置那行抬到标题上（与实时渲染同一口径：收起的卡里看不见的配置等于没告知）
+      const subLines=(m.sub||'').split('\n').filter(Boolean);
+      const cfgI=subLines.findIndex(l=>l.indexOf('配置：')===0);
+      const cfg=cfgI>=0?subLines.splice(cfgI,1)[0].slice(3):'';
       node=el('<details class="card sub done"><summary><span class="tick '+(bad?'bad':'ok')+'"></span>'+
-        '<b>子任务</b><span class="sb">'+esc(mm?mm[1]:'')+'</span></summary><div class="sublog">'+
-        (m.sub||'').split('\n').filter(Boolean).map(l=>'<div class="sl">'+esc(l)+'</div>').join('')+
+        '<b>子任务</b><span class="sb">'+esc((mm?mm[1]:'')+(cfg?' · '+cfg:''))+'</span></summary><div class="sublog">'+
+        subLines.map(l=>'<div class="sl">'+esc(l)+'</div>').join('')+
         '<div class="sl ans">结论：'+esc(mm?mm[2]:(m.content||''))+'</div></div></details>');
     }
     else if(m.role=='tool'){

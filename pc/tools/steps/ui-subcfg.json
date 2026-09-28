@@ -1,0 +1,57 @@
+[
+ {
+  "click": "#modes [data-m=\"auto\"]",
+  "note": "自动档：这条要真跑出子任务，弹审批会把节奏拖住"
+ },
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "派一条只读的子任务出去，用本地小模型"
+  }
+ },
+ {
+  "eval": "(async()=>{const t=Date.now();while(Date.now()-t<60000){if(/第一行内容/.test(document.querySelector('.view.on').textContent))break;await new Promise(r=>setTimeout(r,500))}const cards=[...document.querySelectorAll('.view.on .card.sub')];const one=cards.find(c=>c.textContent.indexOf('小模型读文件')>=0)||null;const sb=one?one.querySelector('.sb').textContent:'';return {subCards:cards.length,found:!!one,summary:sb,titleShowsModel:sb.indexOf('模型 本地小模型')>=0,titleShowsTools:sb.indexOf('只给 read/grep')>=0,bodyHasConclusion:one?one.textContent.indexOf('结论：')>=0:false,conclusion:/第一行内容/.test(document.querySelector('.view.on').textContent)}})()",
+  "must": [
+   "found",
+   "titleShowsModel",
+   "titleShowsTools",
+   "conclusion",
+   "bodyHasConclusion"
+  ]
+ },
+ {
+  "shot": "s01-subagent-config"
+ },
+ {
+  "eval": "(()=>{const one=[...document.querySelectorAll('.view.on .card.sub')].find(c=>/小模型读文件/.test(c.textContent));const t=one?one.textContent.replace(/\\s+/g,' '):'';return {nestedTaskRefused:/task/.test(t),depthNote:/不能再派子任务|task 失败/.test(t)||/不能再派子任务/.test(document.querySelector('.view.on').textContent)}})()",
+  "must": [
+   "nestedTaskRefused"
+  ]
+ },
+ {
+  "eval": "location.reload()"
+ },
+ {
+  "sleep": 4000
+ },
+ {
+  "goto": "#box"
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "eval": "(async()=>{const t=Date.now();let one=null;while(Date.now()-t<20000){one=[...document.querySelectorAll('.view.on .card.sub')].find(c=>c.textContent.indexOf('小模型读文件')>=0);if(one)break;await new Promise(r=>setTimeout(r,500))}const sb=one?one.querySelector('.sb').textContent:'';return {replayed:!!one,replayTitle:sb.indexOf('模型 本地小模型')>=0&&sb.indexOf('只给 read/grep')>=0,noDupLog:one?one.textContent.indexOf('配置：')<0:false,title:sb}})()",
+  "must": [
+   "replayed",
+   "replayTitle",
+   "noDupLog"
+  ]
+ },
+ {
+  "shot": "s02-subagent-replay"
+ }
+]

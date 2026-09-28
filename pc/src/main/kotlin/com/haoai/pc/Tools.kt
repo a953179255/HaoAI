@@ -115,7 +115,7 @@ class ToolCtx(
      * 为什么是个可空函数而不是让工具自己去 new 一个引擎：引擎才握着设置、权限闸、
      * 事件出口和深度。工具层保持"不知道上面是谁"，CLI/网页/测试才能共用同一套工具。
      */
-    var spawn: ((label: String, prompt: String) -> Pair<String, String>)? = null
+    var spawn: ((label: String, prompt: String, opts: SubOpts) -> Pair<String, String>)? = null
 
     fun resolve(p: String): File {
         val clean = p.trim().replace('\\', '/')
@@ -394,21 +394,51 @@ class EditTool : Tool(
     }
 }
 
+/**
+ * 派子任务时能交代的两件事：用哪个模型、只给哪几把工具（还有档位）。
+ *
+ * 为什么允许"按子任务"换：一条大任务里既有"把这三份日志读一遍 summarize"（脏活，
+ * 本地小模型就够）又有"据此定方案"（要强的），全用同一个模型就是拿贵的干便宜的活。
+ * 但**权限不能靠换子任务绕过**：档位只能更严、工具只能是父会话已有的子集，
+ * 见 [Engine.spawn]。
+ */
+data class SubOpts(
+    val model: String = "",
+    val tools: String = "",
+    val mode: String = ""
+)
+
 class TaskTool : Tool(
     "task",
     "派一个子任务去做一件独立的事：它有自己的上下文，做完只把最终结论带回来。" +
         "适合两类活：会刷出一大堆中间结果的调研、能并行做的几块。一次调用只交代一件事，" +
-        "要并行就同一回合里多调几次。",
-    schema("prompt" to "string", "label" to "string", required = arrayOf("prompt")),
+        "要并行就同一回合里多调几次。" +
+        "可选 model（这条子任务用哪个模型，例如脏活交给本地小模型）、" +
+        "tools（只给它哪几把工具，逗号分隔；不写就是父会话现在能用的那些）、" +
+        "mode（plan/ask/auto；**只能比父会话更严，不能更松**）。",
+    schema(
+        "prompt" to "string", "label" to "string",
+        "model" to "string", "tools" to "string", "mode" to "string",
+        required = arrayOf("prompt")
+    ),
     kind = "read"
 ) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val prompt = req(args, "prompt")?.trim() ?: return fail("task 缺少 prompt")
         val label = (req(args, "label")?.trim() ?: "").ifBlank { prompt.take(24) }
         val spawn = ctx.spawn ?: return fail("当前环境没接引擎，派不了子任务")
-        val (out, log) = spawn(label, prompt)
+        val opts = SubOpts(
+            model = (req(args, "model") ?: "").trim(),
+            tools = (req(args, "tools") ?: "").trim(),
+            mode = (req(args, "mode") ?: "").trim().lowercase()
+        )
+        if (opts.mode.isNotEmpty() && opts.mode !in MODES)
+            return fail("mode 只认 ${MODES.joinToString("/")}，现在是「${opts.mode}」")
+        val (out, log) = spawn(label, prompt, opts)
         return ToolResult("【子任务「$label」的结论】\n$out", sub = log)
     }
+
+    companion object { val MODES = setOf("plan", "ask", "auto") }
 }
 
 class GlobTool : Tool(
