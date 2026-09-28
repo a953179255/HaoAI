@@ -1101,6 +1101,7 @@ class WebServer(settings: PcSettings, port: Int,
             return
         }
         val op = b.str("op")
+        if (op == "tidy") { memoriesTidy(ex, b, f, doc); return }
         val content = b.str("content").trim()
         val imp = b.str("imp").toIntOrNull() ?: 3
         val type = b.str("type").trim().ifBlank { Memories.TYPE_FACT }
@@ -1134,6 +1135,32 @@ class WebServer(settings: PcSettings, port: Int,
                 """"items":${Memories.json(doc)}}""", json)
         // 记忆也是系统提示的一部分：改了它，顶栏那圈上下文占用要重算
         publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
+    /**
+     * `POST /api/memories {op:"tidy", apply:"true"}` —— 整理一次。
+     *
+     * 先给"将要动谁"再动手（`apply` 不带就是预览）：这是自动判断在改用户的长期记忆，
+     * 一次点错能把十几条一起合掉。预览不写文件，所以返回的三份计数才是可信的。
+     * 手机端是每轮自动 tidy，这边刻意不自动 —— 两端共用一份文件时，两边都自动整理＝互相整理。
+     */
+    private fun memoriesTidy(ex: HttpExchange, b: Body, f: File, doc: Memories.Doc) {
+        val json = "application/json; charset=utf-8"
+        val apply = b.str("apply") == "true"
+        val t = Memories.tidy(doc)
+        if (apply && !Memories.save(f, doc)) {
+            send(ex, 200, """{"ok":false,"error":${quote("写不下去：" + f.absolutePath)}}""", json)
+            return
+        }
+        val rows = (t.degraded.map { it to "重要度低且 30 天没用" } +
+            t.merged.map { it to "和另一条重复" }).take(8)
+        val detail = rows.joinToString(",", "[", "]") { (it, why) ->
+            """{"content":${quote(it.content.take(60))},"why":${quote(why)}}"""
+        }
+        send(ex, 200,
+            """{"ok":true,"applied":$apply,"degraded":${t.degraded.size},"merged":${t.merged.size},""" +
+                """"purged":${t.purged.size},"count":${doc.items.count { it.live }},"detail":$detail}""", json)
+        if (apply && t.changed > 0) publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
     }
 
     /**

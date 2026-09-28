@@ -34,6 +34,12 @@ object Memories {
     const val INJECT_CAP = 1200
     const val PER_ITEM_CAP = 180
     const val ARCHIVED = "archived"
+    /** 与手机端同名（`MemoryBank.DORMANT`）：自动降级的标记，两边都不注入、但文件里还看得到。 */
+    const val DORMANT = "dormant"
+    const val STALE_DAYS = 30L
+    const val DUP_SIMILARITY = 0.85
+    /** 一条记忆每小时最多记一次"用过"，与手机端同一口径：常驻注入不该自我强化转正。 */
+    const val USE_HOURS_MS = 3_600_000L
 
     private val TYPES = listOf(TYPE_PREF, TYPE_DECISION, TYPE_EVENT, TYPE_FACT)
     private val HEAD = linkedMapOf(
@@ -42,6 +48,9 @@ object Memories {
     private val LINE = Regex("""^-\s*\[([0-9a-fA-F]{1,8})\s*·\s*重要度(\d)]\s*(.*)$""")
     private val META = Regex("""([A-Za-z]+):(\S+)""")
     private val VIS_TAGS = Regex("""\s*\[([^\]]{1,60})]\s*$""")
+    /** [parse] 会落成字段的元数据键；其余的进 [Item.rawMeta] 原样带回去。 */
+    private val KNOWN_KEYS = setOf("id", "imp", "type", "created", "lastused", "uses",
+        "uq", "src", "org", "upd", "sup", "tags")
 
     data class Item(
         val id: String,
@@ -56,7 +65,15 @@ object Memories {
         var origin: String = "agent",
         var updatedAt: Long = 0,
         var supersededBy: String? = null,
-        var tags: List<String> = emptyList()
+        var tags: List<String> = emptyList(),
+        /**
+         * 这边**不认识**的元数据键，按原样带着走。
+         *
+         * 两端共用一个文件，谁都没有"我读不懂的字段可以扔"这个权力：手机端会写 `rc:1`
+         * （被注入过，防 autoExtract 把老事实当新记忆再提取一遍），PC 早期版本不认识它，
+         * 一保存就把手机端的防召回环标记擦掉了。所以未知键原样保留、原样写回。
+         */
+        var rawMeta: List<Pair<String, String>> = emptyList()
     ) {
         /** 与手机端同一口径：被取代的、以及非 agent/用户来源的，都不进提示。 */
         val live: Boolean get() = supersededBy == null && origin != "untrusted" && origin != "system"
@@ -64,7 +81,9 @@ object Memories {
 
     class Doc(
         val items: MutableList<Item> = mutableListOf(),
-        val extras: MutableList<String> = mutableListOf()
+        val extras: MutableList<String> = mutableListOf(),
+        /** 这份文件是哪一个工作区的（绝对路径），只当作查询指纹的命名空间用。 */
+        val key: String = ""
     ) {
         val active: List<Item> get() = items.filter { it.live }
     }
@@ -72,11 +91,12 @@ object Memories {
     fun fileFor(workspace: File): File = File(workspace, "MEMORY.md")
 
     fun load(f: File): Doc =
-        if (!f.isFile) Doc() else parse(runCatching { f.readText(Charsets.UTF_8) }.getOrDefault(""))
+        if (!f.isFile) Doc(key = f.absolutePath)
+        else parse(runCatching { f.readText(Charsets.UTF_8) }.getOrDefault(""), f.absolutePath)
 
     /** 读：分节标题决定默认 type，注释里的元数据是权威（可见文字只是给人看的）。 */
-    fun parse(text: String): Doc {
-        val doc = Doc()
+    fun parse(text: String, key: String = ""): Doc {
+        val doc = Doc(key = key)
         var type = TYPE_FACT
         var archived = false
         var other = false
@@ -120,7 +140,9 @@ object Memories {
                 origin = mm["org"]?.takeIf { it.isNotBlank() } ?: "agent",
                 updatedAt = mm["upd"]?.toLongOrNull() ?: 0L,
                 supersededBy = (if (archived) mm["sup"] ?: ARCHIVED else mm["sup"]?.takeIf { it.isNotBlank() }),
-                tags = tags.take(6)
+                tags = tags.take(6),
+                rawMeta = meta.map { p -> p.groupValues[1].lowercase() to p.groupValues[2] }
+                    .filter { !KNOWN_KEYS.contains(it.first) }.distinct()
             )
         }
         return doc
@@ -160,6 +182,7 @@ object Memories {
         if (it.updatedAt > 0) meta += "upd:${it.updatedAt}"
         it.supersededBy?.let { s -> meta += "sup:$s" }
         if (it.tags.isNotEmpty()) meta += "tags:" + it.tags.joinToString(",")
+        it.rawMeta.forEach { (k, v) -> meta += "$k:$v" }
         return "- [${it.id} · 重要度${it.importance}] ${flat(it.content)} <!-- ${meta.joinToString(" ")} -->"
     }
 
@@ -234,9 +257,18 @@ object Memories {
      * 并且**整条丢掉而不是截半条**（总字数超了就停）—— 半句话比没有这句话更容易被模型当成事实。
      * 与手机端同一组常数（k=8 / 单条 180 / 总 1200），这样两端看到的记忆量是同一个量级。
      */
-    fun inject(doc: Doc, query: String?, k: Int = INJECT_K): String {
+    fun inject(doc: Doc, query: String?, k: Int = INJECT_K): String = injectIds(doc, query, k).first
+
+    /**
+     * 注入的那一段，外加**这次命中了哪几条**。
+     *
+     * 为什么要把 id 返回出来：使用反馈只能在"真的发给模型了"之后记（手机端同一口径：
+     * 只估算上下文占用的调用不回写）。没有这个回环，打分里的 `min(uses,5)*0.2` 永远是 0，
+     * 常用的一条永远升不上去、久不用的一条也永远降不下来 —— 记忆库会退化成"按写入顺序取前 8 条"。
+     */
+    fun injectIds(doc: Doc, query: String?, k: Int = INJECT_K): Pair<String, List<String>> {
         val pool = doc.active
-        if (pool.isEmpty()) return ""
+        if (pool.isEmpty()) return "" to emptyList()
         val q = tokens(query ?: "")
         val now = System.currentTimeMillis()
         val picked = mutableListOf<Item>()
@@ -250,13 +282,127 @@ object Memories {
             picked += it
             used += body.length
         }
-        if (picked.isEmpty()) return ""
+        if (picked.isEmpty()) return "" to emptyList()
         return picked.joinToString("\n") {
             val age = (now - (if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt)) / 86_400_000.0
             val stale = if (age > 60) "（${(age / 30).toInt()} 个月前记录，可能已过时）" else ""
             "- [重要度${it.importance}] ${it.content.take(PER_ITEM_CAP)}$stale"
-        }
+        } to picked.map { it.id }
     }
+
+    /**
+     * 记一次"这几条被用过了"。返回 `true` = 有计数变化（才值得写文件）。
+     *
+     * 三条与手机端对齐的口径，少一条都会让计数变成噪音：
+     * ① **每小时最多 +1**：注入是每轮都做的事，不限流就等于"谁常驻谁转正"；
+     * ② `uq` 只数**没见过的查询指纹**（同一句话反复问 100 次算 1 次），指纹集合每条目限 32 个；
+     * ③ 打上 `rc:1`（手机端靠它防"把召回来的老事实再提取一遍成新记忆"）。
+     */
+    fun markUsed(doc: Doc, ids: Collection<String>, query: String?,
+                 now: Long = System.currentTimeMillis()): Boolean {
+        if (ids.isEmpty()) return false
+        val fp = fingerprint(query)
+        var changed = false
+        for (id in ids) {
+            val it = doc.items.firstOrNull { x -> x.id == id && x.live } ?: continue
+            if (fp != null) {
+                val seen = seenQueries.getOrPut(doc.key + "#" + id) { LinkedHashSet() }
+                if (seen.add(fp)) {
+                    if (seen.size > 32) seen.remove(seen.first())
+                    it.uniqQueries += 1
+                    changed = true
+                }
+            }
+            if (now - it.lastUsedAt > USE_HOURS_MS) {
+                it.lastUsedAt = now
+                it.useCount += 1
+                changed = true
+            }
+            if (it.rawMeta.none { p -> p.first == "rc" }) {
+                it.rawMeta = it.rawMeta + ("rc" to "1")
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /**
+     * 真发出去一次之后的回写：**重新读一遍文件**，只在最新那份上记使用计数。
+     *
+     * 不拿调用方内存里那份盖回去 —— 两端共用一个文件，手机上刚刚新增或改掉的一条
+     * 会被这一写抹掉，而"记忆自己会丢"是比"少记一次使用"严重得多的故障。
+     * 重读之后按 id 找，找不到就跳过（那一条可能已被手机端合并或忘掉）。
+     */
+    fun bumpUsage(f: File, ids: Collection<String>, query: String?,
+                  now: Long = System.currentTimeMillis()): Boolean {
+        val doc = load(f)
+        return markUsed(doc, ids, query, now) && save(f, doc)
+    }
+
+    /** 整理一次的报告：三堆**都是将要动谁**，不是已经动了谁（预览用同一份）。 */
+    class Tidy(
+        val degraded: List<Item> = emptyList(),
+        val merged: List<Item> = emptyList(),
+        val purged: List<Item> = emptyList()
+    ) {
+        val changed: Int get() = degraded.size + merged.size + purged.size
+    }
+
+    /**
+     * 整理：降级 / 合重 / 清掉过期失效。与手机端 `MemoryBank.tidy()` 同一组判据
+     * （重要度<=2 且 30 天没用 → `dormant`；归一化相同或词面 Jaccard>0.85 → 合到一条；
+     * 失效满 30 天物理删除），**一处刻意不同**：
+     *
+     * 手机端合并是直接从文件里删掉，这边改成"指到保留那条的 id 上"（`sup:<keeper>`）。
+     * 手机读这种行完全没问题（本来就是这个语义），而误合的那条还能回看、能改回来 ——
+     * 自动整理跑在共享文件上，可逆性本身是判据。
+     *
+     * 因此这里是**手动一次**而不是每轮自动：两端都开自动整理，会把对方的整理当成新内容再整理一遍。
+     */
+    fun tidy(doc: Doc, now: Long = System.currentTimeMillis()): Tidy {
+        val day = 86_400_000.0
+        val degraded = mutableListOf<Item>()
+        for (it in doc.items) {
+            if (it.supersededBy != null || it.importance > 2) continue
+            val ref = if (it.lastUsedAt > 0) it.lastUsedAt else it.createdAt
+            if ((now - ref) / day > STALE_DAYS) {
+                it.supersededBy = DORMANT
+                it.updatedAt = now
+                degraded += it
+            }
+        }
+        val merged = mutableListOf<Item>()
+        val kept = mutableListOf<Item>()
+        for (it in doc.items.filter { x -> x.supersededBy == null }
+            .sortedWith(compareByDescending<Item> { it.importance }.thenByDescending { it.createdAt })) {
+            val norm = normalize(it.content)
+            val toks = tokens(it.content)
+            val hit = kept.firstOrNull { k ->
+                normalize(k.content) == norm ||
+                    (norm.isNotEmpty() && jaccard(toks, tokens(k.content)) > DUP_SIMILARITY)
+            }
+            if (hit == null) kept += it else {
+                it.supersededBy = hit.id
+                it.updatedAt = now
+                merged += it
+            }
+        }
+        val purged = doc.items.filter {
+            val sup = it.supersededBy ?: return@filter false
+            sup != it.id && (now - (if (it.updatedAt > 0) it.updatedAt else it.createdAt)) / day > STALE_DAYS
+        }
+        doc.items.removeAll(purged)
+        return Tidy(degraded, merged, purged)
+    }
+
+    /** 查询指纹：与手机端 `MemoryBank.fingerprint` 同一个算法，否则两边的 `uq` 不可比。 */
+    private fun fingerprint(q: String?): String? {
+        val s = q?.trim()?.lowercase() ?: return null
+        if (s.isEmpty()) return null
+        return Integer.toHexString(s.take(160).hashCode())
+    }
+
+    private val seenQueries = java.util.concurrent.ConcurrentHashMap<String, LinkedHashSet<String>>()
 
     fun json(doc: Doc, query: String = ""): String {
         val list = if (query.isBlank()) doc.items.sortedByDescending { it.createdAt }

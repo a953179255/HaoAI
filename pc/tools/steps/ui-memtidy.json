@@ -1,0 +1,34 @@
+[
+ {"goto": "#box"},
+ {"click": "#tabs button[data-t=\"mem\"]"},
+ {"goto": "#memItems"},
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];const texts=rows.map(r=>r.querySelector('span').innerText.replace(/\\s+/g,' ')).join(' | ');return {items:rows.length,six:rows.length===6,uses:/用过 1 次/.test(texts),stale:/老机器的盘符/.test(texts),state:document.querySelector('#memAddState').textContent}})()",
+  "must": ["six", "uses", "stale"]
+ },
+ {
+  "eval": "(()=>{const a=document.querySelector('#memAdd').getBoundingClientRect(),b=document.querySelector('#memTidy').getBoundingClientRect(),p=document.querySelector('#tab-mem').getBoundingClientRect(),s=document.querySelector('#memAddState');return {sameRow:Math.abs(a.top-b.top)<2,oneLine:a.height<30&&b.height<30,inPanel:[a,b].every(r=>r.right<=p.right+1&&r.left>=p.left-1),stateVisible:(s.textContent||'').length>0,stateNoClip:s.scrollWidth<=s.clientWidth+1}})()",
+  "must": ["sameRow", "oneLine", "inPanel", "stateVisible", "stateNoClip"]
+ },
+ {"click": "#memTidy"},
+ {"sleep": 900},
+ {
+  "eval": "(()=>{const b=document.querySelector('#memTidy'),s=document.querySelector('#memTidyState');const txt=s.textContent||'';const r=b.getBoundingClientRect(),a=document.querySelector('#memAdd').getBoundingClientRect();return {label:b.textContent,hint:txt.replace(/\\s+/g,' '),armed:/确认整理（动 4 条）/.test(b.textContent),saysDeg:txt.indexOf('降级 2 条')>=0,saysMerge:txt.indexOf('合并 1 条')>=0,saysPurge:txt.indexOf('清掉 1 条')>=0,why:txt.indexOf('30 天没用')>=0,shown:!s.hidden,unchanged:document.querySelectorAll('#memItems .rl').length===6,armedOneLine:r.height<30&&Math.abs(r.top-a.top)<2}})()",
+  "must": ["armed", "saysDeg", "saysMerge", "saysPurge", "why", "shown", "unchanged", "armedOneLine"]
+ },
+ {"shot": "t01-memtidy-preview"},
+ {"click": "#memTidy"},
+ {"sleep": 1400},
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];const b=document.querySelector('#memTidy'),s=document.querySelector('#memTidyState');const txt=rows.map(r=>r.querySelector('span').innerText).join(' ');return {live:rows.length,three:rows.length===3,disarmed:b.textContent==='整理一次',hidden:s.hidden,gone:txt.indexOf('老机器的盘符')<0&&txt.indexOf('导出目录')<0&&txt.indexOf('jdk now')<0,kept:txt.indexOf('gradle 9.6')>=0,state:document.querySelector('#memAddState').textContent,overflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()",
+  "must": ["three", "disarmed", "hidden", "gone", "kept", "overflow"]
+ },
+ {"shot": "t02-memtidy-after"},
+ {"click": "#memTidy"},
+ {"sleep": 900},
+ {
+  "eval": "(()=>{const s=document.querySelector('#memTidyState'),b=document.querySelector('#memTidy');const txt=(s.textContent||'').replace(/\\s+/g,' ');return {hint:txt,none:/不用整理/.test(txt),notArmed:b.textContent==='整理一次',stillThree:document.querySelectorAll('#memItems .rl').length===3}})()",
+  "must": ["none", "notArmed", "stillThree"]
+ },
+ {"shot": "t03-memtidy-clean"}
+]

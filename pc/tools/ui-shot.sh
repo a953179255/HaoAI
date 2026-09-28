@@ -84,6 +84,35 @@ if [ -n "${PRE_CLIP:-}" ]; then
     "$HOME_DIR/ws/$PRE_CLIP" || { echo "x 造测试素材失败"; exit 1; }
   echo "  seeded clip $PRE_CLIP"
 fi
+# 记忆整理这条链路要"盘上已经存着一份旧记忆"。时间戳必须按**运行时的现在**算：
+# 判据是"30 天没用"，夹具里写死时间戳的话过几天就永远命中不了 ——
+# 那种剧本会一直绿，而它其实什么都没验（这是"量具自己会坏"的又一种坏法）。
+if [ -n "${PRE_MEMORY:-}" ]; then
+  mkdir -p "$HOME_DIR/ws"
+  python - "$HOME_DIR/ws/MEMORY.md" <<'PY'
+import sys, time
+now = int(time.time() * 1000); day = 86_400_000
+def line(i, imp, text, t, typ="fact"):
+    return ("- [%s · 重要度%d] %s <!-- id:%s imp:%d type:%s created:%d lastUsed:%d uses:1 uq:1 -->"
+            % (i, imp, text, i, imp, typ, t, t))
+open(sys.argv[1], "w", encoding="utf-8").write("\n".join([
+    "# 长期记忆", "",
+    "## 偏好（1）",
+    line("1111aaaa", 4, "回答先给结论再给依据", now - 2 * day, "preference"),
+    "", "## 事实（5）",
+    line("2222bbbb", 5, "这个仓库用 gradle 9.6 构建，JDK 是 Temurin 25", now - day),
+    line("3333cccc", 2, "很久以前顺手记下的一条：老机器的盘符是 D", now - 40 * day),
+    line("4444dddd", 1, "上一次试过的导出目录叫 out", now - 90 * day),
+    line("5555eeee", 3, "run the gradle build task with jdk", now - 3 * day),
+    line("6666ffff", 1, "run the gradle build task with jdk now", now - 4 * day),
+    "", "## 已归档（1）",
+    "- [7777aaaa · 重要度2] 三个月前忘掉的一条 <!-- id:7777aaaa imp:2 type:fact created:%d "
+    "lastUsed:0 uses:0 sup:archived upd:%d -->" % (now - 60 * day, now - 40 * day),
+    "",
+]) + "\n")
+print("  seeded MEMORY.md（该降级 2 / 该合并 1 / 该清掉 1 / 正常 3）")
+PY
+fi
 # 断点恢复这条链路要"盘上已经有一条没跑完的现场"：服务端一起来就得认得它，
 # 所以会话文件得在服务端启动之前写好。
 # 状态根目录名带时间戳、调用方事先不知道，所以工作区路径用 @WS@ 占位，

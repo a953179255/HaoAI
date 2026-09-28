@@ -613,6 +613,31 @@ class EngineFlowTest {
         assertTrue("那条 gradle 记忆没被喂进去", sys.contains("gradle 9.6"))
         assertTrue("不可信来源不该进提示", !sys.contains("手机端同步"))
     }
+
+    /**
+     * 记忆"用过几次"要**真的回到文件里**，而只看上下文占用的那类调用不能记账。
+     *
+     * 没有这条回写，打分里的 `min(uses,5)*0.2` 永远是 0：常用的一条升不上去、
+     * 久不用的一条降不下来，记忆库退化成"按写入顺序取前 8 条"。
+     * 判据取文件内容 —— 那是下一个回合唯一读得到的东西，内存里改得再对也没用。
+     */
+    @Test
+    fun `a real request counts as one use but the context estimate does not`() {
+        val ws = tempWorkspace()
+        val doc = Memories.Doc()
+        val (mem, _) = Memories.add(doc, "构建用 gradle 9.6", Memories.TYPE_FACT, importance = 5)
+        val mf = Memories.fileFor(ws)
+        assertTrue(Memories.save(mf, doc))
+        val (engine, _, _) = harness(ws, mutableListOf(turn("知道了")))
+        engine.submit("构建命令是什么")
+        assertEquals("真的带着它发过一次请求，就该记一次",
+            1, Memories.load(mf).items.first { it.id == mem.id }.useCount)
+        repeat(3) { engine.contextBreakdown() }
+        val after = Memories.load(mf).items.first { it.id == mem.id }
+        assertEquals("看占用不是把记忆用一遍，不该记账", 1, after.useCount)
+        assertTrue("被注入过要留 rc 标记（手机端靠它防重复提取）",
+            after.rawMeta.any { it.first == "rc" })
+    }
     /**
      * 子任务可以按任务换模型与工具，但**权限不能从这条路绕过去**。
      * 三条判据各钉一件事：指定的模型真的用上了、"只给 read"就真的只有 read、

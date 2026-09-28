@@ -165,4 +165,133 @@ class MemoriesTest {
         // 上限的判定在接口层（要给用户回话），这里只保证数得对
         assertEquals(Memories.MAX_ITEMS, 200)
     }
+
+    /* ---- 使用反馈与整理（v0.69.0）---- */
+
+    private val DAY = 86_400_000L
+
+    /** 指纹表按"文件路径 + 条目 id"分桶，所以每份测试自己造一个不重复的 key。 */
+    private fun freshDoc(name: String) = Memories.Doc(key = "/tmp/haoai-$name")
+
+    @Test
+    fun `metadata we do not understand survives our rewrite`() {
+        // 手机端会写 rc:1（被注入过，防它把召回来的老事实再提取一遍）。
+        // 这边不认识这个键 —— 但共用一个文件的人没有"读不懂就可以扔"的权力。
+        val text = PHONE_SAMPLE.replace(
+            "uses:7 uq:3 src:model", "uses:7 uq:3 rc:1 src:model zz:future"
+        )
+        val out = Memories.render(Memories.parse(text))
+        assertTrue("未知的元数据键要原样带回去：$out", out.contains("rc:1") && out.contains("zz:future"))
+        assertEquals("带着未知键也要幂等", out, Memories.render(Memories.parse(out)))
+    }
+
+    @Test
+    fun `use feedback records each item at most once an hour`() {
+        val d = freshDoc("hour")
+        val (it, _) = Memories.add(d, "构建用 gradle 9.6", importance = 4)
+        val t0 = System.currentTimeMillis()
+        assertTrue(Memories.markUsed(d, listOf(it.id), "gradle 怎么构建", t0))
+        assertEquals(1, it.useCount)
+        assertTrue("同一条的 rc 标记要打上（手机端读它）", it.rawMeta.any { p -> p.first == "rc" })
+        assertFalse("一小时内再注入一次不该再计数",
+            Memories.markUsed(d, listOf(it.id), "gradle 怎么构建", t0 + 60_000))
+        assertEquals(1, it.useCount)
+        assertTrue(Memories.markUsed(d, listOf(it.id), "gradle 怎么构建", t0 + 2 * 3_600_000L))
+        assertEquals(2, it.useCount)
+        assertEquals("一小时限流管的是次数，不是最后使用时间", t0 + 2 * 3_600_000L, it.lastUsedAt)
+    }
+
+    @Test
+    fun `the same question asked again does not inflate the unique query count`() {
+        val d = freshDoc("uq")
+        val (it, _) = Memories.add(d, "回答先给结论", importance = 4)
+        val t0 = System.currentTimeMillis()
+        Memories.markUsed(d, listOf(it.id), "结论呢", t0)
+        Memories.markUsed(d, listOf(it.id), "结论呢", t0 + 2 * 3_600_000L)
+        assertEquals("同一句话问两遍算 1 个查询", 1, it.uniqQueries)
+        Memories.markUsed(d, listOf(it.id), "先把结论说出来好吗", t0 + 3 * 3_600_000L)
+        assertEquals("换个说法才算新的", 2, it.uniqQueries)
+        val before = it.uniqQueries
+        Memories.markUsed(d, listOf(it.id), "   ", t0 + 9 * 3_600_000L)
+        assertEquals("空查询没有指纹可言，不该加次数", before, it.uniqQueries)
+    }
+
+    @Test
+    fun `writing usage back reads the file again instead of overwriting the other end`() {
+        val f = tmp()
+        val d = Memories.Doc(key = f.absolutePath)
+        val (mine, _) = Memories.add(d, "这个项目用 Temurin 25", importance = 4)
+        assertTrue(Memories.save(f, d))
+        // 与此同时手机端往同一份文件里加了一条（PC 内存里那份是旧的）
+        val phoneLine = "- [abcd1234 · 重要度5] 手机端新记的一条 <!-- id:abcd1234 imp:5 type:fact " +
+            "created:1758000000000 lastUsed:0 uses:0 -->"
+        f.writeText(f.readText().trimEnd() + "\n" + phoneLine + "\n")
+        assertTrue(Memories.bumpUsage(f, listOf(mine.id), "JDK 用哪个"))
+        val after = Memories.load(f)
+        assertEquals("回写不能把手机端那条抹掉", 2, after.items.size)
+        assertNotNull(after.items.firstOrNull { it.id == "abcd1234" })
+        assertEquals(1, after.items.first { it.id == mine.id }.useCount)
+    }
+
+    @Test
+    fun `tidy degrades stale low-importance items but keeps them readable`() {
+        val d = freshDoc("degrade")
+        val now = System.currentTimeMillis()
+        val (old, _) = Memories.add(d, "很久以前顺手记下的一条", importance = 2)
+        old.createdAt = now - 40 * DAY
+        val (hot, _) = Memories.add(d, "常用的一条", importance = 4)
+        hot.createdAt = now - 40 * DAY
+        val t = Memories.tidy(d, now)
+        assertEquals(listOf(old.id), t.degraded.map { it.id })
+        assertEquals(Memories.DORMANT, old.supersededBy)
+        assertTrue("降级不是删除：条目还在文件里", d.items.any { it.id == old.id })
+        assertTrue("重要度高的不动", hot.live)
+        assertFalse("降级的不再进提示", Memories.inject(d, "一条", k = 8).contains("很久以前"))
+    }
+
+    @Test
+    fun `tidy merges near duplicates by pointing at the keeper`() {
+        val now = System.currentTimeMillis()
+        fun line(id: String, imp: Int, text: String, created: Long) =
+            "- [$id · 重要度$imp] $text <!-- id:$id imp:$imp type:fact created:$created lastUsed:0 uses:0 -->"
+        // 从文件里读，而不是用 add() 造：add() 自己就会把归一化相同的两条合成一条，
+        // 而真实场景是"手机端早先记下过一条措辞略不同的"，那才是 tidy 要收拾的现场。
+        val d = Memories.parse(listOf(
+            "# 长期记忆", "", "## 事实（4）",
+            line("aaaa1111", 5, "这个仓库用 gradle 9.6 构建", now),
+            line("bbbb2222", 2, "这个仓库，用 gradle 9.6 构建。", now - DAY),
+            line("cccc3333", 4, "run the gradle build task with jdk", now - 2 * DAY),
+            line("dddd4444", 1, "run the gradle build task with jdk now", now - 3 * DAY)
+        ).joinToString("\n"), "/tmp/haoai-merge")
+        val t = Memories.tidy(d, now)
+        assertEquals("留重要度高的那条", setOf("bbbb2222", "dddd4444"), t.merged.map { it.id }.toSet())
+        assertEquals("aaaa1111", d.items.first { it.id == "bbbb2222" }.supersededBy)
+        assertEquals("cccc3333", d.items.first { it.id == "dddd4444" }.supersededBy)
+        assertTrue("四条都还在文件里：误合了能改回来", d.items.size == 4)
+        assertEquals(2, d.active.size)
+    }
+
+    @Test
+    fun `tidy purges only what has been dead for a month`() {
+        val d = freshDoc("purge")
+        val now = System.currentTimeMillis()
+        val (gone, _) = Memories.add(d, "早就忘掉的一条", importance = 3)
+        Memories.forget(d, gone.id)
+        d.items.first { it.id == gone.id }.updatedAt = now - 31 * DAY
+        val (recent, _) = Memories.add(d, "上礼拜刚忘掉的一条", importance = 3)
+        Memories.forget(d, recent.id)
+        d.items.first { it.id == recent.id }.updatedAt = now - 10 * DAY
+        val t = Memories.tidy(d, now)
+        assertEquals(listOf(gone.id), t.purged.map { it.id })
+        assertTrue("不满 30 天的还留着供回看", d.items.any { it.id == recent.id })
+    }
+
+    @Test
+    fun `tidy on a healthy library promises to do nothing`() {
+        // 界面第一次点击只是预览，"0 条"是它要能显示出来的一句话，不是空响应
+        val d = freshDoc("clean")
+        val now = System.currentTimeMillis()
+        Memories.add(d, "一条正常在用的记忆", importance = 4).first.createdAt = now
+        assertEquals(0, Memories.tidy(d, now).changed)
+    }
 }

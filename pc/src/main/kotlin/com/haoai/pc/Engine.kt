@@ -620,7 +620,7 @@ class Engine(
             val ctBefore = totalCompletion
             val turn = try {
                 client.chat(
-                    requestMessages(), schemas(),
+                    requestMessages(countUse = true), schemas(),
                     onText = { piece -> emit(Ev.TextDelta(piece)) },
                     onReasoning = { piece -> emit(Ev.ReasoningDelta(piece)) }
                 )
@@ -822,8 +822,21 @@ class Engine(
             if (session.mode == "plan") readOnlyTool(t) else true
     }.map { ToolSchema(it.name, it.desc, it.params) }
 
-    /** 发给模型的窗口：system + 前情摘要 + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。 */
-    private fun requestMessages(): List<Msg> {
+    /**
+     * 发给模型的窗口：system + 前情摘要 + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。
+     *
+     * [countUse] 只有真的发请求那一处传 `true`：记忆的使用反馈要记在"确实带着这几条发出去了"之后，
+     * 而 [contextBreakdown] 那种只看占用的估算调用不能记账（否则每开一次界面就刷一轮计数）。
+     */
+    private fun requestMessages(countUse: Boolean = false): List<Msg> {
+        val memQuery = history.lastOrNull { m -> m.role == "user" }?.content?.take(300)
+        // 条目记忆按"这一轮在问什么"挑几条注入（挑剩的整条丢，不截半句）
+        val mem = runCatching {
+            val (text, ids) = Memories.injectIds(Memories.load(Memories.fileFor(session.workspace)), memQuery)
+            if (countUse && ids.isNotEmpty())
+                Memories.bumpUsage(Memories.fileFor(session.workspace), ids, memQuery)
+            text
+        }.getOrDefault("")
         val sys = Msg(
             "system", Prompt.system(
                 PromptCtx(
@@ -833,11 +846,7 @@ class Engine(
                     gitRoot = gitRoot(session.workspace),
                     // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
                     extra = Memory.read(session.workspace, gitRoot(session.workspace)),
-                    // 条目记忆按"这一轮在问什么"挑几条注入（挑剩的整条丢，不截半句）
-                    memories = runCatching {
-                        val q = history.lastOrNull { m -> m.role == "user" }?.content?.take(300)
-                        Memories.inject(Memories.load(Memories.fileFor(session.workspace)), q)
-                    }.getOrDefault(""),
+                    memories = mem,
                     persona = session.persona
                 )
             )

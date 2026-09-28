@@ -483,6 +483,9 @@
   /* 窄栏里一行放三样一定会挤爆（技能那行的两个输入框是刻意各占一行的）：
      类型与重要度各占一半，标签另起一行 —— 别去动 .addrow 的通用规则，技能那两行会跟着变样。 */
   #tab-mem .memrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  /* 按钮里的中文一旦换行就成了"整理一 次"，比挤一点更难看：这两个钮不许折行，
+     计数那句挪到下面一行去说（同一行放三个控件是这栏反复踩过的坑）。 */
+  #tab-mem .acts2 .ab{white-space:nowrap}
   #tab-mem .memrow select{min-width:0;background:var(--glass);border:1px solid var(--line);
     border-radius:8px;color:var(--fg);font:inherit;font-size:11.5px;padding:5px 6px;font-family:inherit}
   #tab-mem .memrow input{grid-column:1/-1;min-width:0}
@@ -802,7 +805,9 @@
         <input type="text" id="memTags" placeholder="标签，逗号分隔">
       </div>
       <div class="acts2 pinned"><button class="ab" id="memAdd">记住这条</button>
-        <span class="fp" id="memAddState"></span></div>
+        <button class="ab" id="memTidy" title="降级久没用的、合掉重复的（先给预览，点头才写）">整理一次</button></div>
+      <div class="fp" id="memAddState"></div>
+      <div class="kv" id="memTidyState" hidden style="white-space:pre-line"></div>
       <div class="grp" style="margin-top:12px">项目说明（整篇）</div>
       <div class="kv">这里的规则<b>每回合都喂给模型</b>（现读不缓存，改完下一句就生效）。
         写进工作区的 <b>AGENTS.md</b>（已有就用它，别的 agent 也认这份），没有则写 <b>.haoai/memory.md</b>。</div>
@@ -2231,6 +2236,7 @@ document.querySelector('.fbar').onclick=e=>{
 /* ---- 条目记忆（工作区 MEMORY.md，与手机端同一格式）---- */
 let MEMS=[],memT=0;
 function loadMems(q){
+  if(TIDY)disarmTidy();   // 列表一刷新，刚才那份预览就不作数了
   return fetch('/api/memories?sid='+encodeURIComponent(curId||'')+'&q='+encodeURIComponent(q||''))
     .then(r=>r.ok?r.json():Promise.reject(r.status))
     .then(d=>{MEMS=d.items||[];paintMems(d)})
@@ -2240,7 +2246,7 @@ function paintMems(d){
   const box=$('#memItems');
   const live=MEMS.filter(m=>m.active);
   box.innerHTML=live.length?live.map(m=>`<div class="rl"><span><i class="imp">${m.imp}</i> ${esc(m.content)}`+
-    `${m.tags?' <em>'+esc(m.tags)+'</em>':''}</span>`+
+    `${m.tags?' <em>'+esc(m.tags)+'</em>':''}${m.uses>0?' <em>用过 '+m.uses+' 次</em>':''}</span>`+
     `<button class="ab" data-forget="${esc(m.id)}" title="忘掉这条（文件里留痕，不静默删）">忘</button></div>`).join('')
     :(($('#memQ').value||'')?'（没有匹配的条目）':'（还没有记过东西）');
   box.querySelectorAll('[data-forget]').forEach(b=>b.onclick=()=>
@@ -2263,6 +2269,28 @@ $('#memAdd').onclick=()=>{
     });
 };
 $('#memQ').oninput=()=>{clearTimeout(memT);memT=setTimeout(()=>loadMems($('#memQ').value),260)};
+
+/* 整理一次：第一次点击只要预览（服务端不写文件），按钮上写出"将要动几条"，
+   第二次点击才带 apply=true。自动判断改的是用户的长期记忆，点错一次能合掉十几条。 */
+let TIDY=null;
+function disarmTidy(){TIDY=null;const b=$('#memTidy');if(b)b.textContent='整理一次';const s=$('#memTidyState');if(s)s.hidden=true}
+$('#memTidy').onclick=()=>{
+  if(TIDY){post('/api/memories',{sid:curId,op:'tidy',apply:'true'}).then(d=>{
+      if(!d||!d.ok){disarmTidy();toast((d&&d.error)||'没整理成','err');return}
+      disarmTidy();loadMems($('#memQ').value);
+      toast('整理好了：降级 '+(d.degraded||0)+' 条 · 合并 '+(d.merged||0)+' 条 · 清掉 '+(d.purged||0)+' 条');
+    });return}
+  post('/api/memories',{sid:curId,op:'tidy'}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'预览没拿到','err');return}
+    const n=(d.degraded||0)+(d.merged||0)+(d.purged||0);
+    const s=$('#memTidyState');s.hidden=false;
+    if(!n){s.textContent='看过了：没有久没用的、也没有重复的，不用整理。';return}
+    TIDY=d;$('#memTidy').textContent='确认整理（动 '+n+' 条）';
+    s.textContent='将要：降级 '+(d.degraded||0)+' 条（30 天没用且重要度≤2）、合并 '+(d.merged||0)+' 条（内容重复）、'+
+      '清掉 '+(d.purged||0)+' 条（早已失效、满 30 天）。合并是留痕的（那条指到保留的那条上），不是删掉。'+
+      ((d.detail||[]).length?'\n'+d.detail.map(x=>'· '+esc(x.why)+'：'+esc(x.content)).join('\n'):'');
+  });
+};
 
 /* ---- 项目说明（AGENTS.md 那一类）与全局记忆 ---- */
 function memLoad(scope){
