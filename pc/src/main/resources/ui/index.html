@@ -2982,7 +2982,9 @@ function openCfg(){
         工作区与档位只影响<b>之后新建</b>的会话，已有会话留在自己的工作区里。
         思考强度只有支持它的推理模型有效，不吃的网关保持「不发」。</div>
       <div class="fld"><label>API 密钥</label><input type="password" id="fKey" autocomplete="off"
-        placeholder="${c.hasKey?('已设置 '+esc(c.keyHint)+'…（留空则不改）'):'sk-…（只写进 HAOAI_HOME/apikey，不进仓库）'}"></div>
+        placeholder="sk-…（留空则不改；只写进 HAOAI_HOME/apikey，不进仓库）">
+        <div class="acts2"><span class="kv" id="st-apikey">读不到</span>
+        <button class="ab" data-sec="apikey">撤掉这把</button></div></div>
       <div class="grp" style="margin-top:12px">搜索（web_search）</div>
       <div class="fld"><label>用哪家</label>
         <select id="fSProv">
@@ -2991,7 +2993,9 @@ function openCfg(){
           <option value="bocha">bocha —— 要 key，与手机端同源</option>
         </select></div>
       <div class="fld"><label>搜索 key（留空则不改）</label><input type="password" id="fSKey" autocomplete="off"
-        placeholder="${c.hasSearchKey?('已设置（provider '+esc(c.searchProvider)+'）—— 留空则不改'):'没填就走 DuckDuckGo；填了才可能用博查'}"></div>
+        placeholder="没填就走 DuckDuckGo；填了才可能用博查">
+        <div class="acts2"><span class="kv" id="st-searchkey">读不到</span>
+        <button class="ab" data-sec="searchkey">撤掉这把</button></div></div>
       <div class="grp" style="margin-top:12px">实验特性</div>
       ${c.flags.map(f=>`<label class="sw"><input type="checkbox" data-k="${f.key}" ${f.on?'checked':''}>
         <span><span class="t">${esc(f.title)}</span><br><span class="d">${esc(f.what)}</span></span></label>`).join('')}
@@ -3070,6 +3074,34 @@ function openCfg(){
         else{toast('备份包已删除');loadBackups(dg)}
       });
     };
+    /* 凭据条目：状态从 /api/secrets 读（那边只给掩码），撤掉是两次点击确认。
+       撤掉一把 key 会让所有请求当场失败，所以第一次点击只改文案、不动盘。 */
+    function loadSec(){
+      fetch('/api/secrets').then(r=>r.json()).then(d=>{
+        (d.items||[]).forEach(s=>{
+          const el=dg.querySelector('#st-'+s.id);if(!el)return;
+          el.textContent=s.set?('已设置 '+s.mask+' · 改于 '+new Date(s.updated).toLocaleString())
+            :'未设置 —— 放在 '+s.path;
+          const b=dg.querySelector('[data-sec="'+s.id+'"]');
+          if(b){b.disabled=!s.set;b.textContent='撤掉这把'}
+        });
+      }).catch(()=>{});
+    }
+    loadSec();
+    dg.querySelectorAll('[data-sec]').forEach(t=>{
+      t.onclick=()=>{
+        if(t.dataset.arm!=='1'){
+          t.dataset.arm='1';t.textContent='再点一次：真的撤掉';
+          clearTimeout(t._t);t._t=setTimeout(()=>{t.dataset.arm='';t.textContent='撤掉这把'},5000);
+          return;
+        }
+        t.dataset.arm='';clearTimeout(t._t);t.textContent='撤掉这把';
+        post('/api/secrets',{id:t.dataset.sec,value:''}).then(x=>{
+          if(!x||!x.ok){toast((x&&x.error)||'没撤掉','err');return}
+          toast('已撤掉，下一条消息起不再带这把 key');loadSec();
+        }).catch(()=>toast('没撤掉','err'));
+      };
+    });
     dg.querySelector('#cfgSave').onclick=()=>{
       const flags={};dg.querySelectorAll('[data-k]').forEach(i=>flags[i.dataset.k]=i.checked);
       const num=id=>String((dg.querySelector(id).value||'').replace(/\D/g,'')||'0');
@@ -3078,16 +3110,16 @@ function openCfg(){
           maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags,
           reasoningEffort:dg.querySelector('#fEff').value,
           searchProvider:dg.querySelector('#fSProv').value};
-      // 密钥留空就是"不改"：placeholder 里回显的是前 6 位，不能顺手把它当新值写回去
-      const k=(dg.querySelector('#fKey').value||'').trim();
-      if(k)body.key=k;
-      // 搜索 key 同理：留空 = 不改，填了才写（它只落 HAOAI_HOME/searchkey）
-      const sk=(dg.querySelector('#fSKey').value||'').trim();
-      if(sk)body.searchKey=sk;
+      // 密钥留空就是"不改"：placeholder 里回显的是掩码，不能顺手把它当新值写回去
+      const keys=[['#fKey','apikey'],['#fSKey','searchkey']]
+        .map(x=>({id:x[1],v:(dg.querySelector(x[0]).value||'').trim()})).filter(x=>x.v);
       fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(r=>r.json()).then(x=>{
           if(x&&!x.ok){toast(x.error||'没保存上','err');return}
-          closeCfg();toast(k?'设置与密钥已保存':'设置已保存：所有会话下一条消息起生效');hydrate(curId)});
+          // 两把 key 各走 /api/secrets：那里才是"能看状态、能撤"的那一面
+          return Promise.all(keys.map(k=>post('/api/secrets',{id:k.id,value:k.v}))).then(()=>{
+            closeCfg();toast(keys.length?'设置与密钥已保存':'设置已保存：所有会话下一条消息起生效');hydrate(curId)});
+        });
     };
   });
 }

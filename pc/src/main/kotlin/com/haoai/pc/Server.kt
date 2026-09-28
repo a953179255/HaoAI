@@ -181,6 +181,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/compact" -> compactNow(ex)
                 "/api/workflows" -> workflows(ex)
                 "/api/presets" -> presets(ex)
+                "/api/secrets" -> secrets(ex)
                 "/api/digest" -> send(ex, 200, Digest.json(),
                     "application/json; charset=utf-8")
                 "/api/digest/export" -> digestExport(ex)
@@ -1563,6 +1564,31 @@ class WebServer(settings: PcSettings, port: Int,
     }
 
     /**
+     * 凭据条目：列出（只给掩码）、改、撤。见 [Secrets]。
+     *
+     * `value` 留空 = 撤掉（删文件）。这里的响应**永远不含明文**，
+     * 连测试都是从响应文本里搜不到那串 key 来判的 —— 泄密这件事一旦回退是静默的。
+     */
+    private fun secrets(ex: HttpExchange) {
+        val b = Body(ex)
+        if (ex.requestMethod != "GET") {
+            val slot = Secrets.find(b.str("id"))
+            if (slot == null) {
+                send(ex, 200, """{"ok":false,"error":"没有这个凭据条目"}""",
+                    "application/json; charset=utf-8"); return
+            }
+            val done = Secrets.set(slot, b.str("value"))
+            if (done.isFailure) {
+                send(ex, 200,
+                    """{"ok":false,"error":${quote("密钥存不下：" + (done.exceptionOrNull()?.message ?: ""))}}""",
+                    "application/json; charset=utf-8")
+                return
+            }
+        }
+        send(ex, 200, Secrets.json(), "application/json; charset=utf-8")
+    }
+
+    /**
      *
      * `engineOf` 由创建方给（引擎构造时还握不住自己的引用）。刻意**不**按 sid 去 `sessions`
      * 里查：那张表在会话超出驻留上限时会踢掉最久没用的那条，而被踢的引擎可能还在跑 ——
@@ -2502,7 +2528,7 @@ class WebServer(settings: PcSettings, port: Int,
             // 而保存时 num() 把空串读成 0 —— 于是"打开设置再保存"就把窗口清零了。
             """"contextChars":${st.contextChars},""" +
             """"workspace":${quote(st.workspaceFile().absolutePath)},""" +
-            """"hasKey":${key != null},"keyHint":${quote(key?.take(6) ?: "")},""" +
+            """"hasKey":${key != null},""" +
             """"flags":$flags,"rules":$rules}"""
     }
 
@@ -2519,9 +2545,8 @@ class WebServer(settings: PcSettings, port: Int,
         body["searchProvider"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let {
             n = n.copy(searchProvider = it.trim().lowercase())
         }
-        // 搜索 key 与 API 密钥同理：只落 HAOAI_HOME/searchkey，不进设置对象
-        val skey = body["searchKey"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (skey.isNotEmpty()) runCatching { Env.searchKeyFile.writeText(skey) }
+        // 密钥不在这里写：一把 key 只留 `/api/secrets` 一个入口（见 [Secrets]）。
+        // 两处能写同一把 key，"改了没生效"就要查两条路才知道哪条没走。
         body["contextChars"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.let {
             if (it > 0) n = n.copy(contextChars = it)
         }
@@ -2543,20 +2568,10 @@ class WebServer(settings: PcSettings, port: Int,
             n = n.copy(flags = HaoFlag.compactOverrides(merged))
         }
         /*
-         * 密钥单独一条路：它**不进 PcSettings**（那份会被 GET /api/settings 整体发回前端），
-         * 只落 HAOAI_HOME/apikey。界面上给一个改密钥的入口是必要的 —— 之前只能回 CLI，
-         * 而"网页里能改模型、改网关，唯独改不了 key"会让人以为哪儿配错了。
+         * 密钥单独一条路（`/api/secrets`）：它**不进 PcSettings**（那份会被 GET /api/settings
+         * 整体发回前端），只落 HAOAI_HOME/apikey。界面上给一个改与撤的入口是必要的 ——
+         * 之前只能回 CLI，而"网页里能改模型、改网关，唯独改不了 key"会让人以为哪儿配错了。
          */
-        val key = body["key"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        if (key.isNotEmpty()) {
-            val done = runCatching { Env.apiKeyFile.writeText(key) }
-            if (done.isFailure) {
-                send(ex, 200,
-                    """{"ok":false,"error":${quote("密钥存不下：" + (done.exceptionOrNull()?.message ?: ""))}}""",
-                    "application/json; charset=utf-8")
-                return
-            }
-        }
         PcSettings.save(n)
         settings = n
         // 全局设置变了，**每条活着的会话都要跟上**：引擎各自握着构造时那份设置
