@@ -82,6 +82,14 @@ object Memories {
     class Doc(
         val items: MutableList<Item> = mutableListOf(),
         val extras: MutableList<String> = mutableListOf(),
+        /**
+         * 第一个分节标题**之前**的那些行（标题 + 给人看的说明），原样带着走。
+         *
+         * 手机端在文件顶上写了两行 `>` 的解释（"行尾 <!-- --> 是元数据，修改内容时请整行保留"…），
+         * 而这边过去只认 `- 条目`，散文一律丢掉 —— 于是 PC 存一次盘，手机端那份说明就没了。
+         * 与 [Item.rawMeta] 同一条规矩：共用文件的一方没有"读不懂就可以扔"的权力。
+         */
+        val prelude: MutableList<String> = mutableListOf(),
         /** 这份文件是哪一个工作区的（绝对路径），只当作查询指纹的命名空间用。 */
         val key: String = ""
     ) {
@@ -100,17 +108,22 @@ object Memories {
         var type = TYPE_FACT
         var archived = false
         var other = false
+        var seenSection = false
         val bodies = mutableListOf<String>()
         for (raw in text.lines()) {
             val line = raw.trim()
             if (line.startsWith("## ")) {
+                seenSection = true
                 val h = line.substring(3).substringBefore('（').substringBefore('(').trim()
                 archived = h == "已归档"
                 other = h == "其他"
                 HEAD.entries.firstOrNull { it.value == h }?.let { type = it.key }
                 continue
             }
-            if (line.isEmpty() || (line.startsWith("#") && !line.startsWith("- "))) continue
+            if (line.isEmpty()) continue
+            // 第一个分节之前的散文（标题、给人看的说明）整份带着走，见 [Doc.prelude]
+            if (!seenSection && !line.startsWith("- ")) { doc.prelude += line; continue }
+            if (line.startsWith("#") && !line.startsWith("- ")) continue
             if (!line.startsWith("- ")) { if (other) doc.extras += line; continue }
             val m = LINE.find(line)
             if (m == null) { doc.extras += line; continue }
@@ -150,9 +163,15 @@ object Memories {
 
     /** 写：手机端能原样读回来的形状。 */
     fun render(doc: Doc): String = buildString {
-        appendLine("# 长期记忆")
-        appendLine()
-        appendLine("<!-- 一行一条。手机端 HaoAI 与电脑端 HaoAI 读写同一份，格式两边共用。 -->")
+        if (doc.prelude.isNotEmpty()) {
+            // 别人（手机端）写好的开头原样放回去，不换成我们自己的那份；
+            // 标题后面补一个空行 —— 解析时空行不进 prelude，这样两边各自的形状都能逐字节复原（幂等）。
+            doc.prelude.forEach { appendLine(it); if (it.startsWith("# ")) appendLine() }
+        } else {
+            appendLine("# 长期记忆")
+            appendLine()
+            appendLine("<!-- 一行一条。手机端 HaoAI 与电脑端 HaoAI 读写同一份，格式两边共用。 -->")
+        }
         for ((t, head) in HEAD) {
             val list = doc.items.filter { it.type == t && it.supersededBy == null }
             if (list.isEmpty()) continue

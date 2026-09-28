@@ -76,6 +76,28 @@ class MemoriesTest {
         assertEquals(Memories.render(d), Memories.render(again))
     }
 
+    /** 手机端 `renderMarkdown` 真实写出的开头（规格就是那份文件；`MemoryBankFormatTest` 钉着它）。 */
+    private val PHONE_PRELUDE = """
+        # 长期记忆（MEMORY.md）
+
+        > 长期记忆真源：模型与用户都可直接查看编辑。行尾 <!-- --> 是元数据，修改内容时请整行保留；
+        > 去重/上限/冲突检测等结构性修改建议仍用 memory 工具。每次写盘前旧版保留为同目录 .bak。
+    """.trimIndent()
+
+    @Test
+    fun `the preamble the phone wrote survives our save`() {
+        // 这两行 `>` 是写给**人**看的，不是条目。以前 PC 只认 `- 条目`，
+        // 存一次盘就把手机端的说明整段擦掉 —— 与"读不懂的元数据键要原样带回"是同一条规矩。
+        val text = PHONE_PRELUDE + "\n\n" + PHONE_SAMPLE.lineSequence()
+            .dropWhile { !it.startsWith("## ") }.joinToString("\n")
+        val out = Memories.render(Memories.parse(text))
+        assertTrue("手机端那两行说明没了：\n" + out.lines().take(6).joinToString("\n"),
+            out.contains("> 长期记忆真源") && out.contains("旧版保留为同目录 .bak"))
+        assertTrue("标题也被换成了我们自己的那份", out.startsWith("# 长期记忆（MEMORY.md）"))
+        assertEquals("条目一条都不能少", 4, Memories.parse(out).items.size)
+        assertEquals("再存一次必须逐字节相同（幂等）", out, Memories.render(Memories.parse(out)))
+    }
+
     @Test
     fun `lines we cannot parse are kept, not dropped`() {
         val d = Memories.parse(PHONE_SAMPLE)
