@@ -1772,7 +1772,9 @@ function loadLan(){
       :'关着（默认）。要联动就点下面「打开端点」。';
     $('#lanOn').textContent=live?'关掉端点':'打开端点';
     const left=d.expires?Math.max(0,Math.round((d.expires-Date.now())/1000)):0;
-    $('#lanCodeLine').textContent=d.code?('配对码 '+d.code+' · '+left+' 秒内有效，只能用一次'):'';
+    $('#lanCodeLine').textContent=d.code
+      ?('手机浏览器打开 http://'+d.addr+':'+d.port+' 输配对码 '+d.code+'（'+left+' 秒内有效，只能用一次）')
+      :'';
     // 一行放不下三样东西（窄栏 292px）：名字与「移除」一行，指纹与时间单独一行
     $('#lanDevs').innerHTML=(d.devices||[]).map(x=>'<div class="mrow"><span>'+esc(x.name)+'</span>'+
       '<button class="ab" data-rm="'+esc(x.hash)+'">移除</button></div>'+

@@ -129,7 +129,7 @@ if [ "$(netstat -ano | grep -cE "127\.0\.0\.1:$MOCK_PORT\s.*LISTENING" || true)"
   echo "x 假网关没独占端口 $MOCK_PORT（看 $HOME_DIR/mock.log）"; exit 1
 fi
 
-"$BIN" set base="http://127.0.0.1:$MOCK_PORT/v1" model=mock "workspace=$WS_WIN" mode=auto maxTokens=2048 \
+"$BIN" set base="http://127.0.0.1:$MOCK_PORT/v1" model=mock "workspace=$WS_WIN" mode="${SHOT_PERM:-auto}" maxTokens=2048 \
   > "$HOME_DIR/set.log" 2>&1
 tail -2 "$HOME_DIR/set.log"
 
@@ -165,9 +165,22 @@ done
 echo "服务端 -> $(curl -s "http://127.0.0.1:$PORT/api/state" | head -c 200)"
 
 # 调试端口也每次挑"真没人听"的：写死 9339 的话，上一轮的僵尸一占就串台
+# 手机网页端要**真的配对一次**：配对码只能由跑着的服务发，所以在这里现取现用，
+# 再塞进剧本里的 @CODE@。写死码等于测了个假流程。
+if [ -n "${PRE_LAN:-}" ]; then
+  LAN_RAW="$(curl -s -X POST "http://127.0.0.1:$PORT/api/lan/code")"
+  # 接口回的 JSON 没有结尾换行，直接管道进 sed 一行都匹配不上（表现是"码没拿到"）。
+  LAN_CODE="$(printf "%s\n" "$LAN_RAW" | grep -o "\"code\":\"[0-9]\{6\}\"" | head -1 | cut -d\" -f4)"
+  [ -n "$LAN_CODE" ] || { echo "x 拿不到配对码（局域网端点没开起来？）"; exit 1; }
+  echo "  pairing code $LAN_CODE"
+  sed "s|@CODE@|$LAN_CODE|g" "$STEPS" > "$HOME_DIR/steps2.json"
+  STEPS="$HOME_DIR/steps2.json"
+fi
+
 SHOT_PORT="$(free_port 9340 9399)"
 [ -n "$SHOT_PORT" ] || { echo "x 找不到空的调试端口"; exit 1; }
 node tools/shot.js --out "$OUT" --port "$SHOT_PORT" --width "${SHOT_W:-1500}" --height "${SHOT_H:-930}" \
+  ${SHOT_MOBILE:+--mobile} \
   --url "http://127.0.0.1:$PORT/" --steps "$STEPS"
 echo "图在 $OUT"
 ls "$OUT"

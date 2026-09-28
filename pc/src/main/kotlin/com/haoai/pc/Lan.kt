@@ -229,6 +229,9 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
         val path = ex.requestURI.path
         try {
             when {
+                // 手机网页端先于鉴权：不让人先把页面打开，他连配对码往哪填都不知道。
+                // 这份 HTML 里没有任何凭据，数据全走下面那些要 token 的 /lan/* 口。
+                path == "/" || path == "/index.html" || path == "/phone" -> page(ex)
                 path == "/lan/health" -> send(ex, 200, """{"ok":true,"service":"haoai-pc"}""")
                 path == "/lan/pair" && ex.requestMethod == "POST" -> pair(ex)
                 else -> {
@@ -256,6 +259,15 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
         } finally {
             runCatching { ex.close() }
         }
+    }
+
+    private fun page(ex: HttpExchange) {
+        val html = javaClass.classLoader.getResourceAsStream("ui/phone.html")?.readBytes()
+            ?: "手机网页端资源缺失（打包时没带上 ui/phone.html）".toByteArray(Charsets.UTF_8)
+        ex.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
+        ex.responseHeaders.add("Cache-Control", "no-store")
+        ex.sendResponseHeaders(200, html.size.toLong())
+        ex.responseBody.use { it.write(html) }
     }
 
     private fun pair(ex: HttpExchange) {

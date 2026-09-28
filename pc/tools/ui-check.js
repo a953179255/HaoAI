@@ -121,6 +121,29 @@ for (const src of jsBlocks) {
 check(jsBlocks.length > 0, '抓到前端整段脚本', jsBlocks.length + ' 段');
 check(jsBad === '', '整段前端 JS 能解析', jsBad);
 
+/*
+ * 手机网页端（phone.html）也是前端：它的脚本坏了，手机上只是"白屏 + 按钮点不动"，
+ * 桌面这边一切正常。上一版就是被一次写入截断（localStorage 变成 localS…tem）坑掉的，
+ * 现象是"配对按钮点了没反应"，查了两轮才想到去看 rect=0x0。
+ */
+let phoneBad = '', phonePages = 0, lanMissing = [];
+const lanSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc', 'Lan.kt'), 'utf8');
+const lanRoutes = new Set([...lanSrc.matchAll(/"(\/lan\/[a-z]+)"/g)].map(m => m[1].slice(1)));
+for (const f of fs.readdirSync(uiDir).filter(x => x.endsWith('.html') && x !== 'index.html')) {
+  phonePages++;
+  const pageSrc = fs.readFileSync(path.join(uiDir, f), 'utf8');
+  for (const m of pageSrc.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+    if (!m[1].trim()) continue;
+    try { new Function(m[1]); } catch (e) { phoneBad = f + '：' + e.message; break; }
+  }
+  for (const q of new Set([...pageSrc.matchAll(/'(\/lan\/[a-z]+)'/g)].map(m => m[1]))) {
+    if (!lanRoutes.has(q.slice(1))) lanMissing.push(f + ' 调了 ' + q);
+  }
+}
+check(phonePages > 0, '抓到手机网页端', phonePages + ' 个非主页面');
+check(phoneBad === '', '手机网页端 JS 能解析', phoneBad);
+check(lanMissing.length === 0, '手机网页端没有调到不存在的 /lan 接口', lanMissing.join(', '));
+
 // ---- 6) 像素剧本里的每条 eval 必须能解析 ----
 /*
  * 三条真事故换来的：eval 步骤里一个 `a:+(x)` 之类的笔误，要等整轮浏览器起完、

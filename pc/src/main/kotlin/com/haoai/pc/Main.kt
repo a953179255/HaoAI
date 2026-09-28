@@ -61,13 +61,13 @@ private fun help() {
           haoai task "…" [--auto]      跑一条任务就退出
           haoai chat                   终端对话
           haoai serve [--port 8712]    打开本地网页版
-          haoai lan [status|on|off|code]  手机联动（局域网端点与配对码）
+          haoai lan [status|on|off|code|devices|pair <名>|unpair <前缀>]  手机联动
         """.trimIndent()
     )
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.53.0-pc"
+const val PC_VERSION = "0.54.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -327,10 +327,11 @@ private fun lanCmd(settings: PcSettings, rest: List<String>) {
 /** 通知活着的 `haoai serve`；连不上就回 null（不抛，CLI 还要能只改开关）。 */
 private fun notifyLan(body: String): String? {
     val path = if (body == "code") "/api/lan/code" else "/api/lan/toggle"
+    val port = runCatching { File(Env.home, "webport").readText().trim().toIntOrNull() }.getOrNull() ?: 8712
     return runCatching {
         val c = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(1)).build()
         val r = c.send(
-            java.net.http.HttpRequest.newBuilder(java.net.URI("http://127.0.0.1:8712" + path))
+            java.net.http.HttpRequest.newBuilder(java.net.URI("http://127.0.0.1:$port" + path))
                 .header("Content-Type", "application/json")
                 .timeout(java.time.Duration.ofSeconds(3))
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(

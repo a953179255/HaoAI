@@ -10,10 +10,12 @@
 // steps.json 是一个数组，元素：
 //   {"url":"..."}                 导航（通常只有第一步有）
 //   {"goto":"#stream .it"}        等某个选择器出现（默认再等 300ms 让动画落定）
+//                                 加 "visible":true 才要求它真的有尺寸（hidden 区块里的元素 querySelector 也命中）
 //   {"sleep":1200}                等时间
 //   {"eval":"JS 表达式"}           在页面里跑一段（结果会打印；用于断言 DOM 事实）
+//                                 加 "must":["a","b.c"]：这些字段不为真就把整轮判成失败
 //   {"type":{"sel":"#box","text":"…","enter":true}}  往输入框打字并按发送
-//   {"click":"选择器"}             点一下（用真实的鼠标事件序列，不用 el.click()）
+//   {"click":"选择器"}             点一下（用真实的鼠标事件序列，不用 el.click()；0 尺寸直接报错）
 //   {"shot":"文件名"}              存一张 PNG
 
 const fs = require('fs');
@@ -32,6 +34,8 @@ const PORT = parseInt(arg('port', '9333'), 10);
 let PORT_ACTUAL = PORT;
 const W = parseInt(arg('width', '1500'), 10);
 const H = parseInt(arg('height', '930'), 10);
+/** --mobile：按手机视口量（手机网页端用得上，桌面窗口宽度会被最小值顶回去）。 */
+const MOBILE = process.argv.includes('--mobile');
 const steps = JSON.parse(fs.readFileSync(path.resolve(arg('steps', '')), 'utf8'));
 const EDGE = arg('edge', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe');
 
@@ -90,14 +94,18 @@ let ws, seq = 0;
 const waiting = new Map();
 let sessionId = '';
 
-function send(method, params) {
+function send(method, params, ms) {
   return new Promise((resolve, reject) => {
     const id = ++seq;
     // 每条命令都要能超时：量具挂死和界面挂死长得一模一样，
     // 上一版就是没有任何日志与超时，白等了五分钟才发现是脚本自己卡在握手上了。
+    //
+    // 但断言步的预算必须**大于**这一步自己声明的等待时间：ui-iab 那条"等预览起来"
+    // 循环 60 秒，而命令 20 秒就被砍，于是永远只能看到"CDP 命令超时"，
+    // 拿不到步里准备的那句失败原因（`ok:false, note:…`）—— 一个把诊断吃掉的量具。
     const timer = setTimeout(() => {
       if (waiting.has(id)) { waiting.delete(id); reject(new Error('CDP 命令超时：' + method)) }
-    }, 20_000);
+    }, ms || 20_000);
     waiting.set(id, {
       resolve: v => { clearTimeout(timer); resolve(v) },
       reject: e => { clearTimeout(timer); reject(e) }
@@ -137,12 +145,34 @@ async function attach(url) {
   // 把页面钉成"有焦点/可见"，否则音视频元素永远不动（见上面那串启动参数）
   await send('Emulation.setFocusEmulationEnabled', {enabled: true})
     .catch(e => console.log('  焦点模拟没开成：' + e.message));
+  /*
+   * --window-size=390 在桌面 Chrome/Edge 上会被最小窗口宽度顶回去（实测 innerWidth 500+），
+   * 于是"按手机宽度排版"这条判据量的其实还是桌面宽度 —— 一个安静的假阴性。
+   * 手机网页端要用 Emulation.setDeviceMetricsOverride 才量得准（顺带把 deviceScaleFactor/mobile 摆对）。
+   */
+  if (MOBILE) {
+    await send('Emulation.setDeviceMetricsOverride', {width: W, height: H, deviceScaleFactor: 2, mobile: true})
+      .then(() => console.log('  手机视口 ' + W + 'x' + H + '（device metrics override）'))
+      .catch(e => console.log('  手机视口没开成（判据会失真）：' + e.message));
+  }
 }
 
-async function evalJs(expr) {
-  const r = await send('Runtime.evaluate', {expression: expr, returnByValue: true, awaitPromise: true});
+async function evalJs(expr, ms) {
+  const r = await send('Runtime.evaluate', {expression: expr, returnByValue: true, awaitPromise: true}, ms);
   if (r.exceptionDetails) throw new Error('页面里的 JS 抛错：' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
   return r.result.value;
+}
+
+/**
+ * 断言步的命令超时：按这一步自己声明的等待预算推算（脚本里写 `Date.now()-t0>60000`
+ * 就是打算等 60 秒），再加 15 秒余量。不这样算的话，凡是"没等到"的场合
+ * 都只会得到一句 CDP 超时，而那一步本来准备好的失败原因永远打不出来。
+ */
+function evalMs(expr) {
+  let max = 0;
+  for (const m of String(expr).matchAll(/Date\.now\(\)\s*-\s*\w+\s*[<>]\s*(\d{4,})/g))
+    max = Math.max(max, parseInt(m[1], 10));
+  return max ? max + 15_000 : 20_000;
 }
 
 async function shot(name) {
@@ -171,8 +201,13 @@ async function click(sel) {
   await evalJs(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center',behavior:'instant'})`);
   await sleep(120);
   const box = await evalJs(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
-    return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2})})()`);
-  const {x, y} = JSON.parse(box);
+    return JSON.stringify({x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height})})()`);
+  const {x, y, w, h} = JSON.parse(box);
+  /*
+   * 零尺寸的元素点不到：鼠标按在它"中心"其实是按在别的东西上，而前面的步骤一切正常，
+   * 于是最后一屏截图和真实行为对不上。宁可在这里报错，也不要往下走一个假的成功。
+   */
+  if (!(w > 0 && h > 0)) throw new Error('要点但看不见（0 尺寸）：' + sel);
   for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
     await send('Input.dispatchMouseEvent', {type, x, y, button: 'left',
       clickCount: type === 'mouseMoved' ? 0 : 1, buttons: type === 'mouseReleased' ? 0 : 1});
@@ -216,10 +251,20 @@ async function key(name, mods) {
     });
 }
 
-async function waitFor(sel, timeoutMs) {
+/**
+ * 等到元素出现。visible=true 时要的是"看得见的出现"：
+ * hidden 的 section 里的按钮用 querySelector 一样找得到，于是 waitFor 报"出现"、
+ * click 把鼠标点在空中（getBoundingClientRect 全 0），现象和"界面坏了"一模一样。
+ * 上一轮手机网页端就是这么把两轮排查送掉的。
+ */
+async function waitFor(sel, timeoutMs, visible) {
+  const test = visible
+    ? `(()=>{const e=document.querySelector(${JSON.stringify(sel)});if(!e)return false;
+        const r=e.getBoundingClientRect();return r.width>0&&r.height>0})()`
+    : `!!document.querySelector(${JSON.stringify(sel)})`;
   const until = Date.now() + (timeoutMs || 12_000);
   while (Date.now() < until) {
-    if (await evalJs(`!!document.querySelector(${JSON.stringify(sel)})`)) return true;
+    if (await evalJs(test)) return true;
     await sleep(120);
   }
   return false;
@@ -253,13 +298,13 @@ function mustMiss(val, must) {
         s.click ? '点 ' + s.click : s.key ? '按键 ' + s.key : s.type ? '打字' : s.sleep ? '睡 ' + s.sleep + 'ms' : '?';
       console.log('  [' + (i + 1) + '/' + steps.length + '] ' + label);
       if (s.goto) {
-        const ok = await waitFor(s.goto, s.timeout || 12_000);
-        console.log('  等 ' + s.goto + ' -> ' + (ok ? '出现' : '没出现'));
+        const ok = await waitFor(s.goto, s.timeout || 12_000, s.visible === true);
+        console.log('  等 ' + s.goto + (s.visible ? '（要看得见）' : '') + ' -> ' + (ok ? '出现' : '没出现'));
         if (!ok) code = 1;
         await sleep(250);
       } else if (s.sleep) await sleep(s.sleep);
       else if (s.eval) {
-        const got = await evalJs(s.eval);
+        const got = await evalJs(s.eval, evalMs(s.eval));
         console.log('  断言 ' + (JSON.stringify(got) || ''));
         /*
          * "断言打印出来是 false，整轮还是 PASS" —— 打印不是判据。

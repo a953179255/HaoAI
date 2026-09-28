@@ -176,6 +176,14 @@ PLAN = {
                          "arguments": json.dumps({"path": "theme.txt", "content": "green\n"})}]),
         ("好，按你说的写好了 theme.txt。", None),
     ],
+    # 手机审批这条链路要"审批卡一直挂着"：ask 档下 write 会问人，
+    # 人在手机上点"允许一次"之后文件才出现 —— 这条剧本就是那一次。
+    "approve": [
+        ("我先写一个文件", [{"id": "call_ap", "name": "write",
+                             "arguments": json.dumps({"path": "approved.txt",
+                                                      "content": "从手机上批准的\n"})}]),
+        ("批准了，approved.txt 已经写下去。", None),
+    ],
     # 永远不收尾的一轮接一轮 —— 存在的唯一理由是让"停止"按钮可被验证：
     # 其它模式跑完就结束，快到根本来不及点。每轮 sleep 0.6s 让界面看得见。
     "loop": [

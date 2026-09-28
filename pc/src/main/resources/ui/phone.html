@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1512">
+<title>HaoAI · 这台电脑</title>
+<style>
+  /* 手机上的网页端：不引任何外部依赖，深色、大按钮、单手能点。
+     刻意不复用桌面那份 index.html 的样式 —— 292px 窄栏的排版规则在手机上全是反的。 */
+  :root{--bg:#0d1512;--fg:#e8f0ea;--mut:#8fa39a;--line:#1f3029;--acc:#3ddc84;
+    --card:#141f1a;--bad:#ff6b6b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
+    padding-bottom:56px}
+  header{position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:12px 14px;
+    background:rgba(13,21,18,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);z-index:5}
+  header b{font-size:15px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--mut);flex:none}
+  .dot.on{background:var(--acc)}
+  #host{color:var(--mut);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sp{flex:1}
+  .badge{background:var(--acc);color:#06180f;font-size:12px;font-weight:700;border-radius:10px;
+    padding:1px 8px;min-width:20px;text-align:center}
+  .page{padding:14px}
+  .lead{color:var(--mut);font-size:13.5px;margin:0 0 14px}
+  input{width:100%;padding:13px 12px;margin:0 0 10px;border-radius:11px;border:1px solid var(--line);
+    background:#0f1a15;color:var(--fg);font-size:16px}
+  #code{letter-spacing:.4em;text-align:center;font-size:22px;font-family:ui-monospace,Consolas,monospace}
+  button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);
+    border-radius:11px;padding:11px 14px}
+  .big{width:100%;background:var(--acc);color:#06180f;font-weight:700;border:0;padding:14px}
+  .ghost{background:none;border-color:transparent;color:var(--mut);padding:6px 0}
+  .tabs{display:flex;gap:8px;margin-bottom:12px}
+  .tabs button{flex:1;padding:9px;border-radius:10px}
+  .tabs button.on{border-color:var(--acc);color:var(--acc)}
+  .row{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);
+    border-radius:13px;background:var(--card);margin-bottom:9px}
+  .row .t{flex:1;min-width:0}
+  .row .t b{display:block;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .t span{color:var(--mut);font-size:12px}
+  .mut{color:var(--mut);font-size:12px}
+  .err{color:var(--bad);font-size:13px;min-height:18px;margin:6px 0 0}
+  .card{border:1px solid var(--line);border-radius:13px;background:var(--card);padding:12px;margin-bottom:10px}
+  .card h3{margin:0 0 6px;font-size:14.5px}
+  .card p{margin:0 0 10px;color:var(--mut);font-size:12.5px;white-space:pre-wrap;
+    max-height:8.5em;overflow:auto}
+  .acts{display:flex;gap:8px;flex-wrap:wrap}
+  .acts button{flex:1 1 96px;font-size:13.5px;padding:12px 8px}
+  .ok{border-color:var(--acc);color:var(--acc)}
+  .no{border-color:#5a2b2b;color:var(--bad)}
+  .msgs{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+  .m{border-radius:12px;padding:9px 11px;font-size:13.5px;white-space:pre-wrap;word-break:break-word}
+  .m.user{background:#16302a;border:1px solid #214d42}
+  .m.assistant{background:var(--card);border:1px solid var(--line)}
+  .m.tool{background:#12191d;border:1px dashed #26333a;color:var(--mut);font-size:12.5px}
+  .m .who{display:block;color:var(--mut);font-size:11px;margin-bottom:3px}
+  footer{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;gap:10px;
+    padding:8px 14px calc(8px + env(safe-area-inset-bottom));background:rgba(13,21,18,.94);
+    border-top:1px solid var(--line)}
+  [hidden]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span><b>HaoAI</b><span id="host"></span>
+  <i class="sp"></i><span class="badge" id="badge" hidden>0</span>
+</header>
+
+<main>
+  <section class="page" id="sPair" hidden>
+    <p class="lead">在电脑上：网页界面 →「工具」页签 → 手机联动 → 生成配对码（六位，120 秒内有效、只能用一次）。
+      配对之后这台设备能<b>只读</b>看到电脑上的会话，并替人点审批。</p>
+    <input id="code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="配对码">
+    <input id="name" maxlength="30" autocomplete="off" placeholder="这台设备的名字（例：魅族 20 Pro）">
+    <button class="big" id="btnPair">配对</button>
+    <p class="err" id="err"></p>
+  </section>
+
+  <section class="page" id="sList" hidden>
+    <nav class="tabs">
+      <button id="tSess" class="on">会话</button>
+      <button id="tAppr">待批</button>
+    </nav>
+    <div id="sess"></div>
+    <div id="appr" hidden></div>
+  </section>
+
+  <section class="page" id="sView" hidden>
+    <button class="ghost" id="back">‹ 返回列表</button>
+    <h3 id="vTitle" style="margin:8px 0 2px;font-size:16px"></h3>
+    <p class="mut" id="vMeta"></p>
+    <div class="msgs" id="vBody"></div>
+    <p class="mut" style="margin-top:12px">只读镜像：每条正文截 600 字、最多最近 60 条；工具原始输出与文件内容不在这个通道里。</p>
+  </section>
+</main>
+
+<footer>
+  <span class="mut sp" id="stamp">还没连上</span>
+  <button class="ghost" id="btnUnpair" hidden>解除配对</button>
+</footer>
+
+<script>
+var SKEY='haoai-lan-device';
+var token=localStorage.getItem(SKEY)||'';
+var devName=localStorage.getItem(SKEY+'-dev')||'';
+var view='sess',openSid='',busy=false;
+function $(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function api(path,body){
+  var opt={headers:{'X-HaoAI-Token':token}};
+  if(body){opt.method='POST';opt.headers['Content-Type']='application/json';
+    opt.body=JSON.stringify(body)}
+  return fetch(path,opt).then(function(r){
+    if(r.status===401){forget();throw new Error('这台设备还没配对，或者配对已被电脑上移除')}
+    return r.json()})
+}
+function forget(){token='';devName='';try{localStorage.removeItem(SKEY);localStorage.removeItem(SKEY+'-dev')}catch(e){};stopTimers()}
+/*
+ * 只留一条 4 秒的循环，并且"配对成功/刚刷新页面"也要继续转。
+ * 之前 refresh() 走的是"立刻刷一次但不排下一次"，于是配对之后徽章数字就冻住了 ——
+ * 电脑上冒出新审批，手机上要切一次页签才看得见。
+ */
+var timer=0,vtimer=0;
+function stopTimers(){clearTimeout(timer);timer=0;clearTimeout(vtimer);vtimer=0}
+function schedule(){clearTimeout(timer);if(token)timer=setTimeout(refresh,4000)}
+function show(which){
+  $('sPair').hidden=which!=='pair';$('sList').hidden=which!=='list';$('sView').hidden=which!=='view';
+  $('btnUnpair').hidden=which==='pair';
+}
+function fail(e){$('err').textContent=(e&&e.message)||'连不上';$('stamp').textContent='出错了'}
+
+/* ---- 配对 ---- */
+$('btnPair').onclick=function(){
+  var c=$('code').value.trim(),n=$('name').value.trim()||'手机';
+  if(!/^\d{6}$/.test(c)){$('err').textContent='配对码是 6 位数字';return}
+  $('btnPair').disabled=true;$('err').textContent='';
+  fetch('/lan/pair',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:c,name:n})}).then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})})
+  .then(function(x){
+    if(!x.ok||!x.j.token){$('err').textContent=x.j.error||'配对失败';return}
+    token=x.j.token;devName=x.j.device||n;try{localStorage.setItem(SKEY,token);localStorage.setItem(SKEY+'-dev',devName)}catch(e){
+      $('err').textContent='这台浏览器不允许存东西，刷新页面要重新配对'}
+    $('host').textContent=devName;show('list');refresh()})
+  .catch(fail).then(function(){$('btnPair').disabled=false});
+};
+$('btnUnpair').onclick=function(){
+  api('/lan/unpair',{}).then(function(){forget();$('host').textContent='';boot()}).catch(fail)};
+
+/* ---- 列表 / 待批 ---- */
+function tabs(v){
+  view=v;$('tSess').classList.toggle('on',v==='sess');$('tAppr').classList.toggle('on',v==='appr');
+  $('sess').hidden=v!=='sess';$('appr').hidden=v!=='appr';refresh()}
+$('tSess').onclick=function(){tabs('sess')};
+$('tAppr').onclick=function(){tabs('appr')};
+
+function refresh(){
+  if(busy)return;busy=true;
+  var jobs=[api('/lan/pending').then(function(d){
+      var ps=(d&&d.items)||[];$('badge').hidden=!ps.length;$('badge').textContent=ps.length;
+      $('appr').innerHTML=ps.length?ps.map(function(p){
+        var pl=p.payload||{};
+        return '<div class="card"><h3>'+esc(pl.title||'(没标题)')+'</h3>'+
+          '<p>'+esc(pl.detail||'')+'</p><div class="acts">'+
+          '<button class="ok" data-d="allow_once" data-i="'+esc(p.id)+'">允许一次</button>'+
+          '<button data-d="allow_session" data-i="'+esc(p.id)+'">本任务都允许</button>'+
+          '<button class="no" data-d="deny" data-i="'+esc(p.id)+'">拒绝</button></div></div>'}).join('')
+        :'<p class="mut">没有在等批准的。电脑上要人点东西的时候会自动出现在这里。</p>';
+      [].forEach.call(document.querySelectorAll('#appr [data-d]'),function(b){
+        b.onclick=function(){decide(b.dataset.i,b.dataset.d,b)}});
+    }),
+    api('/lan/sessions').then(function(d){
+      var ss=(d&&d.items)||[];
+      $('sess').innerHTML=ss.length?ss.map(function(s){
+        return '<div class="row" data-s="'+esc(s.id)+'"><span class="dot'+(s.running?' on':'')+'"></span>'+
+          '<span class="t"><b>'+esc(s.title)+'</b><span>'+esc(s.mode)+' · '+(s.msgs||0)+' 条 · '+esc(s.ws||'')+
+          (s.running?' · 正在跑':'')+'</span></span></div>'}).join('')
+        :'<p class="mut">电脑上还没有会话。</p>';
+      [].forEach.call(document.querySelectorAll('#sess [data-s]'),function(r){
+        r.onclick=function(){open(r.dataset.s)}});
+    })];
+  Promise.all(jobs).catch(fail).then(function(){busy=false;
+    $('stamp').textContent='最近刷新 '+new Date().toLocaleTimeString();schedule()});
+}
+function decide(id,d,btn){
+  [].forEach.call(document.querySelectorAll('#appr button'),function(b){b.disabled=true});
+  api('/lan/decide',{id:id,decision:d}).then(function(o){
+    $('stamp').textContent=o.ok?(o.note||'已送出'):(o.error||'没送到');refresh()})
+  .catch(function(e){$('stamp').textContent=(e&&e.message)||'失败';refresh()})}
+
+/* ---- 单条会话（只读） ---- */
+function open(sid){openSid=sid;show('view');pull()}
+$('back').onclick=function(){openSid='';show('list');refresh()};
+function pull(){
+  if(!openSid)return;
+  api('/lan/session?sid='+encodeURIComponent(openSid)).then(function(d){
+    if(!d.ok){$('vBody').innerHTML='<p class="mut">'+esc(d.error||'读不到')+'</p>';return}
+    $('vTitle').textContent=d.title||'会话';
+    $('vMeta').textContent=(d.running?'正在跑':'空闲')+' · '+(d.items||[]).length+' 条';
+    $('vBody').innerHTML=(d.items||[]).map(function(m){
+      var cls=m.role==='user'?'user':(m.role==='assistant'?'assistant':'tool');
+      var who=m.role==='user'?'你':(m.role==='tool'?(m.name||'工具结果'):(m.role==='assistant'?'HaoAI':m.role));
+      return '<div class="m '+cls+'"><span class="who">'+esc(who)+'</span>'+esc(m.text)+'</div>'}).join('')
+      ||'<p class="mut">（这条会话还没有正文）</p>';
+    vtimer=setTimeout(function(){if(openSid)pull()},5000)}).catch(fail)}
+
+/* ---- 起来先看有没有 token ---- */
+function boot(){
+  $('host').textContent=devName;
+  if(token){show('list');refresh()}
+  else{show('pair');$('stamp').textContent='还没配对'}
+}
+boot();
+</script>
+</body>
+</html>

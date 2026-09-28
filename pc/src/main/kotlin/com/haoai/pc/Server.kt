@@ -118,6 +118,10 @@ class WebServer(settings: PcSettings, port: Int,
         server.executor = Executors.newCachedThreadPool()
         server.createContext("/") { ex -> route(ex) }
         server.start()
+        // 把真端口留在盘上：`haoai lan code` 这类 CLI 子命令要找到活着的实例。
+        // 写死 8712 是错的 —— --port 换一个端口、或者 8712 被占自动挪位之后，
+        // CLI 会说"没有正在跑的服务"，而服务其实跑得好好的。
+        runCatching { File(Env.home, "webport").writeText(server.address.port.toString()) }
         // 定时任务的线程跟着服务起落：daemon 线程，JVM 退了它自己就没了
         sched = Scheduler { s -> runSchedule(s) }.also { it.start() }
         // 上次开过就接着开：手机配对的 token 还在人手里，服务重启不该把人踢下线
@@ -133,6 +137,7 @@ class WebServer(settings: PcSettings, port: Int,
     fun schedules(): Scheduler? = sched
 
     fun stop() {
+        runCatching { File(Env.home, "webport").delete() }
         // 别把录屏的 ffmpeg 留成孤儿进程：那台机器会继续往盘上写
         runCatching { Recordings.stopAll() }
         runCatching { lan?.stop() }

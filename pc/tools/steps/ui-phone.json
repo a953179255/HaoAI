@@ -1,0 +1,129 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "写一个需要批准的",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if((s.pending||[]).length)return JSON.stringify({pending:true,n:s.pending.length});if(Date.now()-t0>40000)return JSON.stringify({pending:false});await new Promise(z=>setTimeout(z,800))}})()",
+    "must": [
+      "pending"
+    ]
+  },
+  {
+    "eval": "(()=>{location.href='http://127.0.0.1:@LAN@/';return 'go'})()"
+  },
+  {
+    "goto": "#code",
+    "visible": true,
+    "timeout": 25000
+  },
+  {
+    "shot": "ph00-phone-pair"
+  },
+  {
+    "type": {
+      "sel": "#code",
+      "text": "@CODE@",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#name",
+      "text": "像素测试机",
+      "enter": false
+    }
+  },
+  {
+    "click": "#btnPair",
+    "after": 1200
+  },
+  {
+    "eval": "(()=>{const k=window.SKEY;let n=0;const e=[];for(let i=0;i<localStorage.length;i++){e.push(localStorage.key(i));n++}return JSON.stringify({storedLen:(localStorage.getItem(k)||'').length,keys:n,listShown:!document.querySelector('#sList').hidden,pairShown:!document.querySelector('#sPair').hidden,host:document.querySelector('#host').textContent,err:document.querySelector('#err').textContent,hostWide:(document.querySelector('#host').getBoundingClientRect().width>24)})})()",
+    "must": [
+      "storedLen",
+      "keys",
+      "listShown",
+      "hostWide"
+    ]
+  },
+  {
+    "eval": "(()=>{location.reload();return 'reload'})()"
+  },
+  {
+    "goto": "#sList",
+    "visible": true,
+    "timeout": 20000
+  },
+  {
+    "eval": "(()=>{window.rtStamp=document.querySelector('#stamp').textContent||'';return JSON.stringify({reloaded_listShown:!document.querySelector('#sList').hidden,reloaded_pairShown:!document.querySelector('#sPair').hidden,badgeOne:document.querySelector('#badge').textContent==='1',mark:window.rtStamp.length,hostRestored:(document.querySelector('#host').textContent||'').length>1})})()",
+    "must": [
+      "reloaded_listShown",
+      "badgeOne",
+      "mark",
+      "hostRestored"
+    ]
+  },
+  {
+    "eval": "(async()=>{const b=window.rtStamp;const t0=Date.now();for(;;){const now=document.querySelector('#stamp').textContent||'';if(now&&now!==b)return JSON.stringify({loopAlive:true,deltaMs:Date.now()-t0});if(Date.now()-t0>12000)return JSON.stringify({loopAlive:false,deltaMs:Date.now()-t0,seen:b});await new Promise(z=>setTimeout(z,400))}})()",
+    "must": [
+      "loopAlive"
+    ]
+  },
+  {
+    "click": "#tAppr"
+  },
+  {
+    "goto": "#appr [data-d=allow_once]",
+    "visible": true,
+    "timeout": 20000
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('#appr .card');const txt=c?c.innerText:'';return JSON.stringify({showsTask:txt.indexOf('approved.txt')>=0||txt.indexOf('写入文件')>=0,buttons:c?c.querySelectorAll('button').length:0})})()",
+    "must": [
+      "showsTask"
+    ]
+  },
+  {
+    "shot": "ph01-phone-approval"
+  },
+  {
+    "click": "#appr [data-d=allow_once]",
+    "after": 800
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await api('/lan/sessions').catch(()=>({items:[]}));for(const s of (d.items||[])){const one=await api('/lan/session?sid='+encodeURIComponent(s.id)).catch(()=>({}));const txt=(one.items||[]).map(m=>m.text).join('\\n');if(txt.indexOf('approved.txt')>=0)return JSON.stringify({approved:true,rundown:true,ms:Date.now()-t0,seen:txt.slice(-40)})}if(Date.now()-t0>45000)return JSON.stringify({approved:false,rundown:false,ms:Date.now()-t0});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "approved",
+      "rundown"
+    ]
+  },
+  {
+    "eval": "(async()=>{const d=await api('/lan/pending').catch(()=>({}));return JSON.stringify({cleared:(d.items||[]).length===0,badgeHidden:document.querySelector('#badge').hidden})})()",
+    "must": [
+      "cleared",
+      "badgeHidden"
+    ]
+  },
+  {
+    "click": "#tSess"
+  },
+  {
+    "eval": "(()=>{const w=window.innerWidth;const over=document.documentElement.scrollWidth>w+1;const r=document.querySelector('#sess .row');const b=r?r.getBoundingClientRect():null;return JSON.stringify({phoneWidth:w<=420,noHorizScroll:!over,rows:(document.querySelectorAll('#sess .row')||[]).length,tapTarget:!!b&&b.height>=28})})()",
+    "must": [
+      "phoneWidth",
+      "noHorizScroll",
+      "rows",
+      "tapTarget"
+    ]
+  },
+  {
+    "shot": "ph02-phone-list"
+  }
+]

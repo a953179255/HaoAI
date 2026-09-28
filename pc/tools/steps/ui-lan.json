@@ -28,10 +28,11 @@
     "click": "#lanCode"
   },
   {
-    "eval": "(()=>{const t=document.querySelector('#lanCodeLine').textContent;return JSON.stringify({hasCode:/配对码 \\d{6}/.test(t),counting:/秒内有效，只能用一次/.test(t)})})()",
+    "eval": "(()=>{const t=document.querySelector('#lanCodeLine').textContent;return JSON.stringify({hasCode:/配对码 \\d{6}/.test(t),counting:/秒内有效，只能用一次/.test(t),tellsWhereToType:/打开 http:\\/\\/\\d+\\.\\d+\\.\\d+\\.\\d+:\\d+/.test(t)})})()",
     "must": [
       "hasCode",
-      "counting"
+      "counting",
+      "tellsWhereToType"
     ]
   },
   {

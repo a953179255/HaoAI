@@ -131,6 +131,25 @@ class LanTest {
     }
 
     @Test
+    fun `the phone page is served without a token and carries no secrets`() {
+        val (st, html) = get("/")
+        assertEquals(200, st)
+        assertTrue("该是给人看的配对页：" + html.take(80), html.contains("配对码"))
+        assertTrue(html.contains("/lan/pair"))
+        assertFalse("页面里不许出现任何凭据或密钥" + html.length, html.contains("sk-"))
+    }
+
+    @Test
+    fun `every lan path the phone page calls really exists`() {
+        val (_, html) = get("/")
+        val called = Regex("/lan/[a-z]+").findAll(html).map { it.value }.toSet()
+        val served = setOf("/lan/pair", "/lan/sessions", "/lan/session", "/lan/pending",
+            "/lan/decide", "/lan/unpair", "/lan/health")
+        // 页面上写的路径若拼错，手机上只会表现为"一直转圈"—— 静态就能挡掉
+        assertTrue("页面调了不存在的路径：" + (called - served - "/lan/"), called.all { it in served })
+    }
+
+    @Test
     fun `every lan endpoint refuses an unauthenticated request`() {
         for (path in listOf("/lan/sessions", "/lan/pending", "/lan/session?sid=s1")) {
             val (st, body) = get(path)
@@ -220,5 +239,24 @@ class LanTest {
         } finally {
             runCatching { web.stop() }
         }
+    }
+
+    @Test
+    fun `the live port is left on disk so the CLI can find the running instance`() {
+        runCatching { server?.stop() }
+        server = null
+        PcSettings.save(PcSettings(baseUrl = "http://127.0.0.1:1/v1"))
+        val marker = File(Env.home, "webport")
+        val web = WebServer(PcSettings.load(), port = 0)
+        val actual = web.start()
+        try {
+            assertTrue("该拿到真端口：$actual", actual > 0)
+            // 写死 8712 的 CLI 在 --port 换端口 / 端口被占自动挪位之后会找不到服务，
+            // 现象是"没有正在跑的服务"—— 而服务其实好好的。所以盘上必须记**真**端口。
+            assertEquals("盘上记的必须是实际绑定成功的端口", actual.toString(), marker.readText().trim())
+        } finally {
+            runCatching { web.stop() }
+        }
+        assertFalse("停了就该擦掉，否则 CLI 会去敲一个没人听的端口", marker.exists())
     }
 }
