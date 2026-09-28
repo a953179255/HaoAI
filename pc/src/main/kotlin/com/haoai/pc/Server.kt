@@ -175,6 +175,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/skills" -> skills(ex)
                 "/api/mcp" -> mcp(ex)
                 "/api/schedules" -> schedules(ex)
+                "/api/sched/parse" -> schedParse(ex)
                 "/api/files" -> files(ex)
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
@@ -1166,14 +1167,32 @@ class WebServer(settings: PcSettings, port: Int,
                         send(ex, 200, """{"ok":false,"error":"要跑的那句话是空的"}""",
                             "application/json; charset=utf-8"); return
                     }
+                    // 一句话排期优先：解析不出来就明确拒绝，**不退回默认时间** ——
+                    // 猜错的时间会在人睡着的时候起一条真任务并花 token。
+                    val whenText = b.str("when").trim()
+                    val parsed = if (whenText.isEmpty()) null else SchedulePlan.parse(whenText, System.currentTimeMillis())
+                    // 只有"写了却没看懂"才拒绝；没写就走下面那套手填字段（老客户端与 CLI 都不带 when）
+                    if (whenText.isNotEmpty() && parsed?.first == null) {
+                        send(ex, 200, """{"ok":false,"error":${quote(parsed?.second ?: "没看懂那句排期")}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    val at = parsed?.first
+                    val old = list.firstOrNull { it.id == id }
                     Schedules.update(
                         Schedule(
                             id = id,
                             name = b.str("name").trim().ifBlank { prompt.take(18) },
                             prompt = prompt,
-                            kind = if (b.str("kind") == "daily") "daily" else "interval",
-                            every = b.str("every").toIntOrNull()?.coerceIn(1, 7 * 24 * 60) ?: 60,
-                            at = b.str("at").ifBlank { "09:00" }
+                            kind = at?.kind ?: if (b.str("kind") == "daily") "daily" else "interval",
+                            every = at?.every ?: (b.str("every").toIntOrNull()?.coerceIn(1, 7 * 24 * 60) ?: 60),
+                            at = (at?.at ?: b.str("at")).ifBlank { "09:00" },
+                            days = at?.days ?: b.str("days"),
+                            runAt = at?.runAt ?: 0L,
+                            created = old?.created ?: System.currentTimeMillis(),
+                            enabled = old?.enabled ?: true,
+                            lastRun = old?.lastRun ?: 0L,
+                            lastSid = old?.lastSid ?: "",
+                            lastError = old?.lastError ?: ""
                         )
                     )
                 }
@@ -1186,8 +1205,42 @@ class WebServer(settings: PcSettings, port: Int,
     private fun schedulesJson(): String = Schedules.load().joinToString(",", "[", "]") { s ->
         """{"id":${quote(s.id)},"name":${quote(s.name)},"prompt":${quote(s.prompt)},""" +
             """"kind":${quote(s.kind)},"every":${s.every},"at":${quote(s.at)},""" +
+            """"days":${quote(s.days)},"runAt":${s.runAt},""" +
+            """"when":${quote(SchedulePlan.describe(s.kind, s.every, s.at, s.days, s.runAt))},""" +
             """"enabled":${s.enabled},"lastRun":${s.lastRun},"lastSid":${quote(s.lastSid)},""" +
             """"lastError":${quote(s.lastError)},"nextDue":${Schedule.nextDue(s, System.currentTimeMillis())}}"""
+    }
+
+    /** 界面边打边预览："每周一三五 8 点" → 复述 + 下一次时间。 */
+    private fun schedParse(ex: HttpExchange) {
+        // 界面走 GET 的查询串，CLI/测试可能把 when 放在 JSON 里：两边都认，
+        // 但只读一次请求体（这条链路上每个 handler 只能读一次 body，读两遍会拿空）
+        val raw = Regex("""(?:^|&)when=([^&]*)""").find(ex.requestURI.rawQuery ?: "")?.groupValues?.get(1)
+        val text = raw?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault("") }
+            ?: Body(ex).str("when")
+        val (at, err) = SchedulePlan.parse(text, System.currentTimeMillis())
+        if (at == null) {
+            send(ex, 200, """{"ok":false,"error":${quote(err)}}""", "application/json; charset=utf-8")
+            return
+        }
+        val next = Schedule.nextDue(
+            Schedule("p", "p", "p", kind = at.kind, every = at.every, at = at.at,
+                days = at.days, runAt = at.runAt),
+            System.currentTimeMillis()
+        )
+        send(ex, 200, """{"ok":true,"echo":${quote(at.echo)},"kind":${quote(at.kind)},""" +
+            """"every":${at.every},"at":${quote(at.at)},"days":${quote(at.days)},"runAt":${at.runAt},""" +
+            """"next":$next,"nextText":${quote(if (next > 0L) schedStamp(next) else "不会跑（检查写法）")}}""",
+            "application/json; charset=utf-8")
+    }
+
+    private fun schedStamp(ms: Long): String {
+        val c = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+        val w = listOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")[c.get(java.util.Calendar.DAY_OF_WEEK) - 1]
+        return "%02d-%02d %02d:%02d %s".format(
+            c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH),
+            c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE), w
+        )
     }
 
     /**

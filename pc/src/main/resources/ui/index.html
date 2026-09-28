@@ -785,7 +785,9 @@
       <div class="rules" id="cronList">（还没配）</div>
       <input type="text" id="crName" class="tin" placeholder="名字，如 早间巡检">
       <textarea id="crPrompt" class="mem" rows="3" placeholder="到点要跑的那句话，如：看一下今天的构建日志，有报错就写清是哪一条"></textarea>
-      <div class="addrow">
+      <input type="text" id="crWhen" class="tin" placeholder="一句话排期：每周一三五 8 点 / 每天 7:30 和 21:30 / 半小时后">
+      <div class="kv" id="crWhenEcho"></div>
+      <div class="addrow" id="crManual">
         <select id="crKind" class="tin"><option value="interval">每隔几分钟</option><option value="daily">每天一次</option></select>
         <input type="text" id="crEvery" class="tin" value="60" placeholder="分钟">
         <input type="text" id="crAt" class="tin" value="09:00" placeholder="HH:MM">
@@ -2060,7 +2062,7 @@ $('#skSave').onclick=()=>{
 loadSkills();
 
 /* ---- 定时任务 ---- */
-function whenText(s){return s.kind=='daily'?'每天 '+s.at:'每 '+s.every+' 分钟'}
+function whenText(s){return s.when||(s.kind=='daily'?'每天 '+s.at:'每 '+s.every+' 分钟')}
 function whenTime(t){if(!t)return '不会跑';
   return new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function paintCron(list){
@@ -2093,13 +2095,31 @@ $('#cronList').onclick=e=>{
     if(b.dataset.cr=='run')loadSessions();   // 跑一次会冒出一条新会话
   }).catch(()=>toast('定时任务改不动','err'));
 };
+/* 一句话排期：边打边解析，把"理解成什么"和"下一次什么时候跑"摆在眼前让人确认。
+   解析不出来就明说 —— 服务端这时不会退回默认时间，猜错的时间会在人睡着时起真任务。 */
+let crWhenTimer=null;
+$('#crWhen').oninput=()=>{
+  const v=$('#crWhen').value.trim();
+  $('#crManual').style.display=v?'none':'';
+  const e=$('#crWhenEcho');
+  clearTimeout(crWhenTimer);
+  if(!v){e.textContent='';e.style.color='';return}
+  crWhenTimer=setTimeout(()=>fetch('/api/sched/parse?when='+encodeURIComponent(v))
+    .then(r=>r.json()).then(d=>{
+      e.style.color=d.ok?'var(--acc)':'var(--err)';
+      e.textContent=d.ok?('理解为：'+d.echo+' 下次 '+d.nextText):d.error;
+    }).catch(()=>{e.style.color='var(--err)';e.textContent='解析口没回应'}),350);
+};
 $('#crAdd').onclick=()=>{
   const p=$('#crPrompt').value.trim();
   if(!p){toast('那句话是空的');return}
-  post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,kind:$('#crKind').value,
+  const w=$('#crWhen').value.trim();
+  post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,when:w,kind:$('#crKind').value,
     every:$('#crEvery').value,at:$('#crAt').value}).then(d=>{
     if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
-    $('#crName').value='';$('#crPrompt').value='';paintCron(d.items);toast('定时任务已加');
+    $('#crName').value='';$('#crPrompt').value='';$('#crWhen').value='';$('#crWhenEcho').textContent='';
+    $('#crManual').style.display='';
+    paintCron(d.items);toast('定时任务已加');
   }).catch(()=>toast('定时任务没加上','err'));
 };
 function newTask(ws){

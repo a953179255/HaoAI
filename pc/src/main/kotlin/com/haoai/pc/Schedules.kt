@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.io.File
+import java.util.Calendar
 
 /**
  * 定时任务：到点自己起一条会话去跑一句话。
@@ -22,10 +23,17 @@ data class Schedule(
     val id: String,
     val name: String,
     val prompt: String,
-    /** interval = 每 `every` 分钟；daily = 每天 `at` 的 HH:MM。 */
+    /**
+     * interval = 每 `every` 分钟；daily = 每天 `at`（可以 "07:30,21:30" 多个时刻）；
+     * weekly = 每周 `days` 的 `at`；once = 到 `runAt` 这个时刻跑一次。
+     */
     val kind: String = "interval",
     val every: Int = 60,
     val at: String = "09:00",
+    /** 周一 = 0 …… 周日 = 6，逗号分隔（weekly 才用）。 */
+    val days: String = "",
+    /** 一次性任务的时刻（epoch ms；once 才用）。 */
+    val runAt: Long = 0L,
     val created: Long = System.currentTimeMillis(),
     var enabled: Boolean = true,
     var lastRun: Long = 0L,
@@ -56,29 +64,78 @@ data class Schedule(
          * 关键取舍：**不补跑**。笔记本睡了八小时，醒来时一口气触发八次任务既刷爆网关，
          * 也不是用户要的（他要的是"现在这一次的结果"）。所以：
          * - interval：从上一次（或创建时刻）往后推，睡醒最多补一次；
-         * - daily：今天这个点已过且今天还没跑过 → 立刻跑一次；否则等明天。
+         * - daily / weekly：取"上一次跑过之后"的第一个槽位 —— 睡过头就只补那一次；
+         *   新建的那条从**创建时刻之后**第一个槽位算起，所以下午两点建"每天 09:00"
+         *   不会当场跑一遍（旧版会：那是把"补跑"和"刚建好"混成了一件事）。
+         * - once：过点太久（>6 小时）就当错过了，不再半夜补跑一条人已经忘了的任务。
          */
         fun nextDue(s: Schedule, now: Long): Long {
             if (!s.enabled) return 0L
-            return if (s.kind == "daily") {
-                val today = timeTodayAt(s.at, now)
-                if (today == 0L) return 0L
-                val day = 24 * 60 * MINUTE
-                // 今天这个点：没过点它就是将来值（dueNow 判 false），过了点它就是过去值（判 true），
-                // 所以"补一次"不需要额外分支；只有今天已经跑过才要推到明天。
-                if (s.lastRun > 0 && s.lastRun >= today) today + day else today
-            } else {
-                val every = if (s.every <= 0) 60 else s.every
-                val base = if (s.lastRun > 0) s.lastRun else s.created
-                base + every * MINUTE
+            return when (s.kind) {
+                "once" -> if (s.runAt > 0L && s.lastRun < s.runAt) s.runAt else 0L
+                "interval" -> {
+                    val every = if (s.every <= 0) 60 else s.every
+                    val base = if (s.lastRun > 0) s.lastRun else s.created
+                    base + every * MINUTE
+                }
+                else -> nextSlot(s, if (s.lastRun > 0) s.lastRun else s.created)
             }
+        }
+
+        /** 从 `from` 之后（不含）第一个该跑的时刻；找不到回 0。 */
+        fun nextSlot(s: Schedule, from: Long): Long {
+            val times = s.at.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            if (times.isEmpty()) return 0L
+            val wantDays = when (s.kind) {
+                "weekly" -> s.days.split(",").mapNotNull { it.trim().toIntOrNull() }.filter { it in 0..6 }.toSet()
+                else -> (0..6).toSet()
+            }
+            if (wantDays.isEmpty()) return 0L
+            val day0 = startOfDay(from)
+            var best = 0L
+            // 往后找 8 天足够覆盖"每周某天 + 跨周"，再多就是配置错了
+            for (off in 0..8) {
+                val day = day0 + off * DAY
+                if (((Calendar.getInstance().apply { timeInMillis = day }
+                        .get(Calendar.DAY_OF_WEEK) + 5) % 7) !in wantDays) continue
+                for (t in times) {
+                    val ms = atOn(day, t)
+                    if (ms > from && (best == 0L || ms < best)) best = ms
+                }
+                if (best != 0L) return best
+            }
+            return 0L
+        }
+
+        private const val DAY = 24 * 60 * MINUTE
+
+        private fun startOfDay(ms: Long): Long {
+            val c = Calendar.getInstance().apply { timeInMillis = ms }
+            c.set(Calendar.HOUR_OF_DAY, 0)
+            c.set(Calendar.MINUTE, 0)
+            c.set(Calendar.SECOND, 0)
+            c.set(Calendar.MILLISECOND, 0)
+            return c.timeInMillis
+        }
+
+        /** 某天 HH:MM 的时间戳；写法不对回 0（表示这条不跑，而不是偷偷用默认值）。 */
+        fun atOn(dayStart: Long, hhmm: String): Long {
+            val parts = hhmm.split(":")
+            val h = parts.getOrNull(0)?.toIntOrNull() ?: return 0L
+            val m = parts.getOrNull(1)?.toIntOrNull() ?: return 0L
+            if (h !in 0..23 || m !in 0..59) return 0L
+            return dayStart + (h * 60 + m) * MINUTE
         }
 
         /** 该不该现在触发。 */
         fun dueNow(s: Schedule, now: Long): Boolean {
             val due = nextDue(s, now)
-            return due in 1..now
+            if (due !in 1..now) return false
+            // 一次性任务过点太久就别补了：人早忘了，半夜跑一条只会白花 token
+            if (s.kind == "once" && now - due > 6 * 60 * MINUTE) return false
+            return true
         }
+
     }
 }
 
@@ -100,6 +157,8 @@ object Schedules {
                 kind = o["kind"]?.jsonPrimitive?.contentOrNull ?: "interval",
                 every = o["every"]?.jsonPrimitive?.intOrNull ?: 60,
                 at = o["at"]?.jsonPrimitive?.contentOrNull ?: "09:00",
+                days = o["days"]?.jsonPrimitive?.contentOrNull ?: "",
+                runAt = o["runAt"]?.jsonPrimitive?.longOrNull ?: 0L,
                 created = o["created"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
                 enabled = o["enabled"]?.jsonPrimitive?.contentOrNull != "false",
                 lastRun = o["lastRun"]?.jsonPrimitive?.longOrNull ?: 0L,
@@ -112,7 +171,7 @@ object Schedules {
     fun save(list: List<Schedule>) {
         val body = list.joinToString(",", "[", "]") { s ->
             """{"id":${js(s.id)},"name":${js(s.name)},"prompt":${js(s.prompt)},"kind":${js(s.kind)},""" +
-                """"every":${s.every},"at":${js(s.at)},"created":${s.created},""" +
+                """"every":${s.every},"at":${js(s.at)},"days":${js(s.days)},"runAt":${s.runAt},"created":${s.created},""" +
                 """"enabled":${s.enabled},"lastRun":${s.lastRun},"lastSid":${js(s.lastSid)},""" +
                 """"lastError":${js(s.lastError)}}"""
         }

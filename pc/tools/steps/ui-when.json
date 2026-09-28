@@ -1,0 +1,121 @@
+[
+  {
+    "goto": "#tabs button[data-t=cron]"
+  },
+  {
+    "click": "#tabs button[data-t=cron]"
+  },
+  {
+    "type": {
+      "sel": "#crName",
+      "text": "剪一条 30 秒",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#crPrompt",
+      "text": "把今天的录屏剪成 30 秒并导出封面",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#crWhen",
+      "text": "每周一三五 8 点",
+      "enter": false
+    },
+    "after": 900
+  },
+  {
+    "eval": "(()=>{const e=document.querySelector('#crWhenEcho');const t=e.textContent||'';return JSON.stringify({echo:t,weekly:t.indexOf('每周一、周三、周五')>=0,next:t.indexOf('下次')>=0,manualHidden:document.querySelector('#crManual').style.display==='none',green:getComputedStyle(e).color})})()",
+    "must": [
+      "echo",
+      "weekly",
+      "next",
+      "manualHidden"
+    ]
+  },
+  {
+    "click": "#crAdd"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#cronList').innerText;return JSON.stringify({saved:t.indexOf('每周一、周三、周五 08:00')>=0,rows:document.querySelectorAll('#cronList .rl').length})})()",
+    "must": [
+      "saved",
+      "rows"
+    ]
+  },
+  {
+    "type": {
+      "sel": "#crWhen",
+      "text": "每天",
+      "enter": false
+    },
+    "after": 900
+  },
+  {
+    "eval": "(()=>{const e=document.querySelector('#crWhenEcho');return JSON.stringify({asks:(e.textContent||'').indexOf('几点')>=0})})()",
+    "must": [
+      "asks"
+    ]
+  },
+  {
+    "type": {
+      "sel": "#crWhen",
+      "text": "半小时后",
+      "enter": false
+    },
+    "after": 900
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#crWhenEcho').textContent||'';return JSON.stringify({onceEcho:t.indexOf('30 分钟后')>=0})})()",
+    "must": [
+      "onceEcho"
+    ]
+  },
+  {
+    "type": {
+      "sel": "#crName",
+      "text": "睡前收工",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#crPrompt",
+      "text": "把今天的直播素材列个清单",
+      "enter": false
+    }
+  },
+  {
+    "click": "#crAdd"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#cronList').innerText;return JSON.stringify({two:document.querySelectorAll('#cronList .rl').length===2,onceRow:t.indexOf('一次性')>=0 && /\\d{2}:\\d{2}/.test(t)})})()",
+    "must": [
+      "two",
+      "onceRow"
+    ]
+  },
+  {
+    "shot": "cr01-one-line-schedule"
+  },
+  {
+    "click": "#cronList .rl:nth-child(2) [data-cr=run]",
+    "after": 1500
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await fetch('/api/sessions').then(r=>r.json()).catch(()=>[]);const hit=(d||[]).filter(s=>(s.title||'').indexOf('睡前收工')>=0);if(hit.length)return JSON.stringify({ran:true,sid:hit[0].id.slice(0,8),ms:Date.now()-t0});if(Date.now()-t0>25000)return JSON.stringify({ran:false,n:(d||[]).length});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": [
+      "ran"
+    ]
+  },
+  {
+    "eval": "(async()=>{const d=await fetch('/api/schedules').then(r=>r.json());const one=(d.items||[]).filter(s=>s.kind==='once')[0]||{};return JSON.stringify({lastRun:(one.lastRun||0)>0,when:one.when||'',next:one.nextDue||0})})()",
+    "must": [
+      "lastRun",
+      "when"
+    ]
+  }
+]

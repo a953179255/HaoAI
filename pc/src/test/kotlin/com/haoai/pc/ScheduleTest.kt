@@ -78,14 +78,19 @@ class ScheduleTest {
     }
 
     @Test
-    fun `daily catches up today but waits for tomorrow once run`() {
-        val nine = sched(kind = "daily", at = "09:00")
-        val twoPm = clock(14, 0)
-        assertTrue("点已过且今天没跑过，就该补这一次", Schedule.dueNow(nine, twoPm))
-        val ran = nine.copy()
-        ran.lastRun = twoPm
-        assertFalse("今天跑过了，要等到明天九点", Schedule.dueNow(ran, twoPm))
-        assertEquals(clock(9, 0, 1), Schedule.nextDue(ran, twoPm))
+    fun `daily catches up after a sleep but a freshly made task waits for its slot`() {
+        // 早上建、机器睡过 09:00、下午醒来 → 补那一次（这是"不补跑"里唯一的例外）
+        val born = sched(kind = "daily", at = "09:00").copy(created = clock(7, 0))
+        assertTrue("点已过且今天没跑过，就该补这一次", Schedule.dueNow(born, clock(14, 0)))
+        // 下午才建"每天 09:00" → 不该当场跑一遍：要立刻看效果有点「跑一次」，
+        // 保存一个排期就等于烧一次 token，是旧版把"补跑"和"刚建好"混成了一件事。
+        val late = sched(kind = "daily", at = "09:00").copy(created = clock(14, 0))
+        assertFalse(Schedule.dueNow(late, clock(14, 30)))
+        assertEquals(clock(9, 0, 1), Schedule.nextDue(late, clock(14, 30)))
+        val ran = born.copy()
+        ran.lastRun = clock(14, 0)
+        assertFalse("今天跑过了，要等到明天九点", Schedule.dueNow(ran, clock(14, 5)))
+        assertEquals(clock(9, 0, 1), Schedule.nextDue(ran, clock(14, 0)))
     }
 
     @Test
@@ -359,5 +364,31 @@ class ScheduleTest {
             runCatching { server.stop() }
             runCatching { gateway.stop(0) }
         }
+    }
+
+    @Test
+    fun `the api takes a one-line schedule and refuses to guess`() {
+        Schedules.save(emptyList())
+        val resp = items(post("/api/schedules",
+            """{"name":"剪片子","prompt":"把今天的录屏剪成 30 秒","when":"每周一三五 8 点"}""").second)
+        assertEquals(1, resp.size)
+        val o = resp[0].jsonObject
+        assertEquals("weekly", o["kind"]!!.jsonPrimitive.content)
+        assertEquals("0,2,4", o["days"]!!.jsonPrimitive.content)
+        assertEquals("08:00", o["at"]!!.jsonPrimitive.content)
+        assertTrue("列表要回一句人话复述：" + o["when"]!!.jsonPrimitive.content,
+            o["when"]!!.jsonPrimitive.content.contains("每周一、周三、周五"))
+        // 看不懂就明确拒绝，并且**不许留下一条半成品任务**：
+        // 猜错的时间会在人睡着的时候起真任务、花真 token
+        val (st, body) = post("/api/schedules", """{"prompt":"x","when":"每天"}""")
+        assertEquals(200, st)
+        assertTrue("该说清缺什么：" + body, body.contains("几点"))
+        assertEquals("被拒的那条不该落盘", 1, items(get("/api/schedules")).size)
+        // 预览口：界面边打边显示"理解成什么、下一次什么时候跑"
+        val p = get("/api/sched/parse?when=" + java.net.URLEncoder.encode("半小时后", "UTF-8"))
+        assertTrue("预览该给出一次性的复述：" + p, p.contains(""""kind":"once"""") && p.contains("30 分钟后"))
+        assertTrue("预览要给出下一次时间：" + p, p.contains("nextText"))
+        val pb = post("/api/sched/parse", """{"when":"每周一三五 8 点"}""").second
+        assertTrue("正文里带 when 也要能解析：" + pb, pb.contains("每周一、周三、周五"))
     }
 }
