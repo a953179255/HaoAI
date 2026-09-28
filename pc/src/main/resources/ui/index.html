@@ -525,14 +525,19 @@
   .rr b{font-weight:400;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rr.bad b{color:var(--bad)}
   .rr .ab{flex:none;width:auto;padding:2px 7px;font-size:11px}
-  /* 命令面板：一个浮层找得到所有入口（ZCODE 的 quickPick 就是这点最顺手） */
+  /* 命令面板：一个浮层找得到所有入口（ZCODE 的 quickPick 就是这点最顺手）。
+     整个浮层是一块实心板：原来输入框和列表各用 --glass2（7% 白）铺底，于是下面那条
+     会话的气泡文字直接透上来跟条目叠成一片，读不出来 —— 盖在内容上的浮层用透明底＝假玻璃。
+     两截各自铺底还会在中间留一条 6px 的缝透出正文，所以实心板放在 .pal 上。
+     条目选中态仍用 --glass2，那是在实心板上加一层高光，不是靠它撑背景。 */
   .pal{position:fixed;left:50%;top:11vh;transform:translateX(-50%);width:min(620px,92vw);
-    display:none;z-index:60}
+    display:none;z-index:60;background:var(--panel);border:1px solid var(--line2);
+    border-radius:14px;padding:6px;box-shadow:var(--shadow)}
   .pal.on{display:block}
   .pal .pin{display:flex;gap:8px;align-items:center;background:var(--glass2);border:1px solid var(--line2);
     border-radius:12px;padding:9px 12px}
   .pal input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;font-size:13px}
-  .pal .pl{margin-top:6px;background:var(--glass2);border:1px solid var(--line2);border-radius:12px;
+  .pal .pl{margin-top:6px;background:transparent;border:0;border-radius:12px;
     max-height:56vh;overflow:auto;padding:4px}
   .pal .pi{display:flex;gap:9px;align-items:baseline;padding:6px 10px;cursor:pointer;font-size:12.5px;border-radius:8px}
   .pal .pi.sel{background:var(--glass2)}
@@ -668,7 +673,7 @@
         <button data-m="ask" title="写文件/执行命令先问（Alt+2）">询问</button>
         <button data-m="auto" title="全自动，不再打断（Alt+3）">自动</button>
       </div>
-      <button class="iconb" id="duoBtn" title="把刚才看的那条并排到右边（对照代码与对照聊天用）">▥</button>
+      <button class="iconb" id="duoBtn" title="把刚才看的那条并排到左边（对照代码与对照聊天用）">▥</button>
       <button class="iconb" id="themeBtn" title="切换明暗主题">◐</button>
       <button class="iconb" id="expBtn" title="导出这条会话为 markdown">⇩</button>
       <button class="iconb" id="shareBtn" title="导出只读 HTML 快照（发给别人看，页面里没有脚本）">↗</button>
@@ -984,7 +989,7 @@ function capText(v){
 /* keep=true：只换"这句话发到哪一条"，不动任何滚动条（点右栏那一格时用它）。 */
 function show(sid,keep){
   const v=view(sid),prev=curId;
-  // 点右边那一格时两条互换位置，谁也不许凭空消失
+  // 点并排那一格（在左边）时两条互换位置，谁也不许凭空消失
   if(duoOn()&&sid===duoId&&curId){curId=sid;duoId=prev;lastId=prev}
   else{curId=v.sid;if(prev&&sid&&prev!==sid)lastId=prev}
   layout();
@@ -1029,7 +1034,7 @@ function follow(v){
 stream.addEventListener('scroll',()=>{if(atBottom(cur())){pillN=0;paintPill()}});
 $('#pill').onclick=()=>{
   pin(cur());
-  // 分屏时"回到底部"= 两格都到最新：只把输入那一格拽下来、右边还留着半屏，等于没回
+  // 分屏时"回到底部"= 两格都到最新：只把输入那一格拽下来、另一格还留着半屏，等于没回
   if(duoOn()&&views[duoId])pin(views[duoId]);
   pillN=0;paintPill();box.focus();
 };
@@ -1050,10 +1055,11 @@ function setDuo(sid){
   const v=view(sid);
   // 已经有内容就别重拉：applyState 是"清空重画"，对一条正在流式输出的会话等于把半截回答抹掉
   // （openSession 里那条老注释说的就是这件事，而 hydrated 标记对开机就在那儿跑的会话并不可靠）。
-  if(v.hydrated||v.el.children.length){pin(v);toast('已并排：右边是「'+(v.title||'新会话')+'」');return}
+  // 那一条排在**左边**（layout 里 duo 在前），提示语必须说左：说右会让人去盯自己那条。
+  if(v.hydrated||v.el.children.length){pin(v);toast('已并排：左边是「'+(v.title||'新会话')+'」');return}
   post('/api/open',{id:sid}).then(()=>hydrate(sid))
-    .then(()=>{if(views[sid])pin(views[sid]);toast('已并排：右边是「'+(views[sid].title||'新会话')+'」')})
-    .catch(()=>{duoId='';layout();pin(cur());markSessions();notice('右边那条会话打不开，分屏已退出','err')});
+    .then(()=>{if(views[sid])pin(views[sid]);toast('已并排：左边是「'+(views[sid].title||'新会话')+'」')})
+    .catch(()=>{duoId='';layout();pin(cur());markSessions();notice('左边那条会话打不开，分屏已退出','err')});
 }
 /* 分屏时点任意一格就把输入对象换过去：正在选文字、点按钮的时候不抢。 */
 stream.addEventListener('mouseup',e=>{
@@ -1324,7 +1330,30 @@ const PALSET=[
   ['右栏：终端','#tabs button[data-t=term]'],['右栏：预览','#tabs button[data-t=pv]'],['右栏：记忆','#tabs button[data-t=mem]'],
   ['右栏：定时','#tabs button[data-t=cron]'],['右栏：工具','#tabs button[data-t=tools]'],
   ['打开回收站','#trashBtn'],['导出这条会话','#expBtn'],['导出只读快照','#shareBtn'],['切换明暗主题','#themeBtn'],
+  /* 后面几批加的能力当时没进面板 —— 命令面板的价值就在"不用记入口在哪"，漏一项就等于少了半个功能。
+   * 目标写成函数的是"动作"：不跳到哪里，而是替你把两步一次做完（先开页签、再点页签里那颗）。
+   * 第三格可以显式盖掉左边那枚徽标（默认：函数=动作、其余=跳转）。 */
+  ['右栏：自动化（角色卡与钩子）','#tabs button[data-t=role]'],
+  ['动作：把刚才看的那条并排到左边（分屏）','#duoBtn','动作'],
+  ['动作：整理条目记忆（先给预览再点头）',()=>palTabBtn('mem','#memTidy')],
+  ['动作：手动压缩一次上下文（把早期消息折进摘要）',()=>palTabBtn('usage','#cmpBtn')],
+  ['动作：开工一条新会话','#newBtn','动作'],
 ];
+/** 页签里的东西常常是 fetch 回来才渲染的，所以"点开页签再点里面某颗"要等它出现（最多等 2 秒）。 */
+function palTabBtn(tab,sel){
+  const t=document.querySelector('#tabs button[data-t='+tab+']');
+  if(!t){toast('右栏没这个页签','err');return}
+  t.click();
+  let tries=0;
+  const tick=()=>{
+    const b=document.querySelector(sel);
+    /* 先滚到看得见再点：面板的意义是"把那件事送到眼前"，而页签常常比屏高，
+       于是按钮在视口里、它下面的结果行掉在折痕外 —— 实测整理预览就是这么看不见的。 */
+    if(b){b.scrollIntoView({block:'center',behavior:'instant'});b.click();return}
+    if(++tries<10)setTimeout(tick,200);else toast('那颗按钮这次没等出来，去右栏「'+tab+'」页签手动点一下','err');
+  };
+  setTimeout(tick,220);
+}
 /** 抽屉是 fetch 回来才渲染的，所以"跳到某一节"要等它出现（最多等 2 秒）。 */
 function palJumpCfg(needle){
   openCfg();
@@ -1349,10 +1378,12 @@ function palItems(q){
   const hit=t=>!s||String(t).toLowerCase().indexOf(s)>=0;
   const out=[];
   CMDS.forEach(c=>{if(hit(c.c+' '+(c.d||'')))out.push({g:'命令',t:c.c+(c.d?'  '+c.d:''),run:()=>runCommand(c.c)})});
-  PALSET.forEach(x=>{if(hit(x[0]))out.push({g:'跳转',t:x[0],run:()=>{
-    if(x[1][0]!='#'){palJumpCfg(x[1]);return}      // 不以 # 开头的那条是"设置里的某一节"
-    const e=document.querySelector(x[1]);if(!e){toast('找不到那个入口','err');return}
-    e.click();}})});
+  PALSET.forEach(x=>{if(!hit(x[0]))return;
+    const g=x[2]||(typeof x[1]=='function'?'动作':'跳转');
+    out.push({g:g,t:x[0],run:typeof x[1]=='function'?x[1]:()=>{
+      if(x[1][0]!='#'){palJumpCfg(x[1]);return}      // 不以 # 开头的那条是"设置里的某一节"
+      const e=document.querySelector(x[1]);if(!e){toast('找不到那个入口','err');return}
+      e.click();}})});
   (sessList||[]).forEach(m=>{if(hit(m.title))out.push({g:'会话',t:m.title,run:()=>show(m.id)})});
   runsCache.slice(0,6).forEach((r,i)=>{if(hit(r.goal))out.push({g:'重跑',t:'重跑：'+r.goal.slice(0,40),
     run:()=>{palToggle(false);rerunGoal(r.goal)}})});
@@ -1360,11 +1391,11 @@ function palItems(q){
 }
 function palRender(q){
   palList=palItems(q);palSel=0;
-  const box=$('#palList');
-  box.innerHTML=palList.length?palList.map((x,i)=>'<div class="pi'+(i==0?' sel':'')+'" data-i="'+i+'">'+
-    '<em>'+esc(x.g)+'</em><b>'+esc(x.t)+'</b>'+(x.g=='命令'?'<span>回车执行</span>':'')+'</div>').join('')
+  const lst=$('#palList');            // 别叫 box：box 是输入框的全局名，一撞车"插完 @ 把光标还给输入框"就写成插到列表上
+  lst.innerHTML=palList.length?palList.map((x,i)=>'<div class="pi'+(i==0?' sel':'')+'" data-i="'+i+'">'+
+    '<em>'+esc(x.g)+'</em><b>'+esc(x.t)+'</b>'+(x.g=='命令'||x.g=='动作'?'<span>回车执行</span>':'')+'</div>').join('')
     :'<div class="pi"><em>没有</em><b>没有匹配的东西，换个词试试</b></div>';
-  box.querySelectorAll('.pi[data-i]').forEach(e=>e.onclick=()=>{palSel=+e.dataset.i;palExec()});
+  lst.querySelectorAll('.pi[data-i]').forEach(e=>e.onclick=()=>{palSel=+e.dataset.i;palExec()});
   // 文件是异步搜的：先画命令，回来再补在末尾，免得每敲一个字都卡一下
   if((q||'').trim().length>=2){
     const key=q;
@@ -1372,22 +1403,21 @@ function palRender(q){
       .then(r=>r.ok?r.json():{entries:[]}).then(d=>{
         if($('#palQ').value!==key||!palOpen)return;         // 手已经打到下一个字了
         const add=(d.entries||[]).slice(0,8).map(p=>({g:'文件',t:p.n||p,run:()=>{
-          box.value='';insertAtCursor('@'+(p.n||p));palToggle(false);box.focus();
-          box.dispatchEvent(new Event('input'));}}));
+          insertAtCursor('@'+(p.n||p));palToggle(false);}}));
         if(!add.length)return;
         palList=palList.concat(add);
-        box.insertAdjacentHTML('beforeend',add.map(x=>'<div class="pi"><em>文件</em><b>'+
+        lst.insertAdjacentHTML('beforeend',add.map(x=>'<div class="pi"><em>文件</em><b>'+
           esc(x.t)+'</b></div>').join(''));
-        box.querySelectorAll('.pi').forEach((e,i)=>{e.dataset.i=i;e.onclick=()=>{palSel=i;palExec()}});
+        lst.querySelectorAll('.pi').forEach((e,i)=>{e.dataset.i=i;e.onclick=()=>{palSel=i;palExec()}});
       }).catch(()=>{});
   }
 }
 function palMove(d){
   if(!palList.length)return;
   palSel=(palSel+d+palList.length)%palList.length;
-  const box=$('#palList');
-  box.querySelectorAll('.pi').forEach((e,i)=>e.classList.toggle('sel',i==palSel));
-  const cur=box.querySelector('.pi.sel');if(cur)cur.scrollIntoView({block:'nearest',behavior:'instant'});
+  const lst=$('#palList');
+  lst.querySelectorAll('.pi').forEach((e,i)=>e.classList.toggle('sel',i==palSel));
+  const cur=lst.querySelector('.pi.sel');if(cur)cur.scrollIntoView({block:'nearest',behavior:'instant'});
 }
 function palExec(){
   const x=palList[palSel];palToggle(false);

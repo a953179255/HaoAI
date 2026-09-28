@@ -330,7 +330,7 @@ toast、快捷键（`Ctrl+N/K/B`、`Alt+1/2/3`、`Esc`）。markdown 渲染器�
 全量重跑所有像素剧本（按**退出码**判，不看打印）：
 
 ```
-bash pc/tools/audit-steps.sh                 # 39 份，跑法一律从本 README 原样抄
+bash pc/tools/audit-steps.sh                 # 41 份（这份数字以脚本自己打印的为准），跑法一律从本 README 原样抄
 bash pc/tools/audit-steps.sh ui-files        # 只跑名字里含该子串的
 ```
 
@@ -406,6 +406,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-preview.json  # HTML �
 SHOT_MODE=media PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-media.json  # ffmpeg 六个子命令 + 产出直接播（真解码）
 SHOT_MODE=git PRE_GIT=1 bash pc/tools/ui-shot.sh pc/tools/steps/ui-git.json  # Git 面板：看 diff / 勾文件 / 提交（含中文文件名）
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-runs.json  # 命令面板 Ctrl+Shift+P + 任务运行历史与 ↻
+SHOT_MODE=chat PRE_MEMORY=1 bash pc/tools/ui-shot.sh pc/tools/steps/ui-pal.json  # 面板里那四个"动作"真的按得到（分屏/整理记忆/压缩/新会话）
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-term.json  # 终端页签：人与 agent 共用同一常驻进程（各一个游标）
 SHOT_MODE=chat PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-attach.json  # 音视频附件：胶囊 + 播放器 + 刷新重放
 SHOT_MODE=code bash pc/tools/ui-shot.sh pc/tools/steps/ui-code.json  # run_code：跑 python 出图，图真的交回模型
@@ -2527,6 +2528,58 @@ PC 保存时被整段擦掉 —— 解析器只认自己建模的那 12 个键�
 像素剧本 `tools/steps/ui-edit3.json`（跑法 `SHOT_MODE=edit3 PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-edit3.json`）
 量到：三个播放器都在、第一个时长是原素材的一半、链式产物接得上（每一步吃的都是上一步的输出）。
 
+## 这一批：命令面板补齐后面几批的入口（v0.73.0，B21）
+
+分屏、整理条目记忆、手动压缩、自动化页签这四样是 v0.60~v0.72 陆续加的，
+**当时都没进 Ctrl+Shift+P**。命令面板的价值就是"不用记入口在哪"，
+漏一项等于那半个功能在面板里不存在 —— 而它坏得很安静：条目列表看着挺满，谁也不会去数。
+
+- `PALSET` 的目标现在可以是**函数**：函数那几条归到新的「动作」组，
+  和「跳转」的区别是它不把你送到某页签就完事，而是替你把两步做完。
+  第三格可以显式写组名（`#duoBtn` 这种点一下就行的也标成动作，别让人在"跳转"里找"切换主题"）。
+- 新增 `palTabBtn(页签, 选择器)`：先开页签，再等里面的按钮出现（最多 2 秒）才点。
+  页签内容很多是 fetch 回来才渲染的，直接 `querySelector` 会拿到 null。
+  点之前先 `scrollIntoView`：页签常常比屏高，按钮在视口里而**它下面那行结果**掉在折痕外 ——
+  整理预览就是这么"送到了但看不见"。
+
+**看像素看出来的三处**（结构判据全绿也照样错）：
+
+1. **面板是透明的**。`.pal .pin` / `.pal .pl` 铺的是 `--glass2`（7% 白），
+   于是底下那条会话的气泡文字直接透上来和条目叠成一片，`/compact` 那行读不出来。
+   盖在内容上的浮层用透明底就是假玻璃：改成整块实心 `--panel` + `var(--shadow)`，
+   输入框那层保留 `--glass2` 当高光。剧本里加了 `palSolid` 这条判据（按 `backgroundColor` 里有没有 alpha 判）。
+2. **分屏的提示说反了**。`setDuo` 的 toast 写「已并排：右边是…」，而并排那条**渲染在左边**
+   （`layout` 里 duo 在前，`ui-duo.json` 早就量过 `duoIsLeft`）。改成说左边，
+   并把「话」和「画」钉在同一条判据里：`duoLeft && toastLeft` 两个都要过。
+3. **`palRender` 里的局部 `box` 撞了输入框的全局名**。文件那条结果选中之后的
+   `box.value='';box.focus();box.dispatchEvent(...)` 打在结果列表 `<div>` 上，
+   三句全是空操作（`insertAtCursor` 用的是全局那个 `box`，所以 @ 还是插进去了，
+   看起来"没事"）。改名 `lst` 并把那三句删掉。
+
+**测试**：`ScheduleTest` +1（daily 的第一格只看出生点、不看你在什么时候问），
+顺带修掉一条**只在夜里红**的测试：`daily in the future does not fire` 用了默认的
+`created = System.currentTimeMillis()`，而 daily 的 `nextDue` 算的是"出生之后的第一格"，
+于是 23:00 以后跑全量它就红（23:33 实测）。现在把出生点钉成 `clock(7,0)`。
+PC 整套 **404 条全绿**。
+
+**验收**：像素剧本 `tools/steps/ui-pal.json` 65 步 / 70 条判据
+（跑法 `SHOT_MODE=chat PRE_MEMORY=1 bash pc/tools/ui-shot.sh pc/tools/steps/ui-pal.json`），
+八张图逐张看过。量到的事实：
+
+- 面板打开时焦点在 `#palQ`（不是"看得见但打不了字"），空查询里命令 12 条 / 跳转 22 条 / 动作 4 条；
+- 「分屏」这条走键盘：回车之后浮层关闭、`#stream.split` 亮、两格各占半宽、并过去那条确实是刚才看过的；
+- 「整理条目记忆」两步之后 `#memTidyState` 的**头一行在页签可视区内**（`headSeen`），
+  按钮变成「确认整理（动 2 条）」；同一条截图还顺带证明 v0.69 的用量回写在跑 ——
+  起手那一轮把 6 条记忆全注入过，`lastUsed` 被刷成现在，所以"该降级的"从 2 条变成 0 条；
+- 搜「摘要」同时列出 `/compact` 命令与那条动作（面板不替人挑路），用 `palMove` 走到动作那行再回车，
+  用量页签被自己翻开、toast 说出结果；
+- 十个页签排一行没被压成两行（`tabsFit`），跑完页面没有横向溢出。
+
+`ui-check.js` 新增两条静态检查：**面板每条入口都真的存在**（数组里的字符串选择器，
+上面那条 `$#+id` 扫不到），以及**动作要的页签与按钮能静态对上**。
+翻转验过：把 `#duoBtn` 改成 `#duoBtnXX`、把 `palTabBtn('mem',…)` 改成不存在的页签，
+三条漂移动全被抓出来；改回来就绿。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -2593,7 +2646,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **403 条全绿**（整套约 75 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **404 条全绿**（整套约 75 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），

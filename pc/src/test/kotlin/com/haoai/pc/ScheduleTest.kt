@@ -96,9 +96,30 @@ class ScheduleTest {
 
     @Test
     fun `daily in the future does not fire`() {
-        val late = sched(kind = "daily", at = "23:00")
+        /*
+         * created 必须钉死，不能留默认值。默认是 System.currentTimeMillis()，而 daily 的
+         * nextDue 走的是 `nextSlot(s, created)` —— 它算的是"这条排期出生后第一个该跑的点"，
+         * 跟传进来的 now 无关。于是晚上 23:00 之后跑测试，出生点已经越过今天那一格，
+         * 答案就成了"明天 23:00"，这条断言就红了（实测 23:33 跑全量时炸在这里，
+         * 而白天跑一直是绿的 —— 一个只在夜里红的测试等于没有测试）。
+         */
+        val late = sched(kind = "daily", at = "23:00", created = clock(7, 0))
         assertFalse(Schedule.dueNow(late, clock(14, 0)))
         assertEquals(clock(23, 0), Schedule.nextDue(late, clock(14, 0)))
+    }
+
+    /** 上面那条为什么必须钉 created：daily 的答案根本不看传进来的 now，只看出生点。 */
+    @Test
+    fun `daily's next slot keys off the birth moment, not off the moment you ask`() {
+        val s = sched(kind = "daily", at = "23:00", created = clock(7, 0))
+        val morning = Schedule.nextDue(s, clock(8, 0))
+        val night = Schedule.nextDue(s, clock(22, 0))
+        assertEquals("同一个出生点，早晚问两次要给同一个答案", morning, night)
+        assertEquals(clock(23, 0), morning)
+        // 出生点已经在今晚那一格之后 → 第一格是明天的，而不是"现在补一次"
+        val bornLate = sched(kind = "daily", at = "23:00", created = clock(23, 30))
+        assertEquals(clock(23, 0, 1), Schedule.nextDue(bornLate, clock(23, 45)))
+        assertFalse(Schedule.dueNow(bornLate, clock(23, 45)))
     }
 
     /** 写法不对的时间不是"崩"也不是"零点跑"，是这条根本不跑。 */

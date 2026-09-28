@@ -1,0 +1,164 @@
+[
+ {"goto": "#box"},
+ {"type": {"sel": "#box", "text": "记一句：这条会话要有话，后面才分得出两条", "enter": true}},
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&Date.now()-t0>2500)return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>70000)return JSON.stringify({done:false});await new Promise(z=>setTimeout(z,1200))}})()",
+  "must": ["done"],
+  "note": "先让起手那条说过话：/api/new 对「一条没说过」的会话是复用不新建的（故意的，别拿它当缺陷）"
+ },
+ {
+  "eval": "(window.__a=curId,{startupCur:curId,startupLast:lastId,splitOff:!stream.classList.contains('split'),hasMsg:document.querySelectorAll('.view.on .msg.user').length>=1})",
+  "must": ["hasMsg"]
+ },
+ {"click": "#newBtn"},
+ {"sleep": 1600},
+ {
+  "eval": "(window.__b=curId,{twoSessions:!!window.__a&&!!window.__b&&window.__a!=window.__b,lastIsA:lastId==window.__a,emptyNew:document.querySelectorAll('.view.on .msg.user').length==0})",
+  "must": ["twoSessions", "lastIsA", "emptyNew"],
+  "note": "第二条会话建好后 lastId 指向第一条 —— 分屏那颗只认这个"
+ },
+
+ {"key": "P", "mods": ["ctrl", "shift"]},
+ {"sleep": 700},
+ {
+  "eval": "(()=>{const p=document.querySelector('#pal');const it=[...document.querySelectorAll('#palList .pi')];const g=[...new Set(it.map(x=>x.querySelector('em').textContent))];const r=p.getBoundingClientRect();const solid=s=>/^rgb\\([^)]*\\)$/.test(getComputedStyle(document.querySelector(s)).backgroundColor);return {open:p.classList.contains('on'),focused:document.activeElement.id=='palQ',groups:g.join(','),nCmd:it.filter(x=>x.querySelector('em').textContent=='命令').length,nJump:it.filter(x=>x.querySelector('em').textContent=='跳转').length,nAct:it.filter(x=>x.querySelector('em').textContent=='动作').length,w:Math.round(r.width),inV:r.top>=0&&r.right<=innerWidth+1&&r.width>320,palSolid:solid('.pal')}})()",
+  "must": ["open", "focused", "nCmd", "nJump", "nAct", "inV", "palSolid"],
+  "note": "空查询里三组都在：命令 / 跳转 / 动作。动作这组是本批新加的，读出 0 就说明分派没接上，而不是「面板坏了」。palSolid 这条判据是被像素逼出来的：浮层原来铺的是 7% 白的 --glass2，下面会话的气泡文字直接透上来和条目叠成一片"
+ },
+ {
+  "eval": "(()=>{const a=[...document.querySelectorAll('#palList .pi')].filter(x=>x.querySelector('em').textContent=='动作');return {four:a.length>=4,labels:a.map(x=>x.querySelector('b').textContent.replace(/\\s+/g,' ')).join(' / '),duo:a.some(x=>/分屏/.test(x.textContent)),tidy:a.some(x=>/整理条目记忆/.test(x.textContent)),compact:a.some(x=>/压缩/.test(x.textContent)),fresh:a.some(x=>/开工一条/.test(x.textContent))}})()",
+  "must": ["four", "duo", "tidy", "compact", "fresh"],
+  "note": "分屏 / 整理记忆 / 手动压缩 / 新会话四条一次点齐——漏一项就等于那半个功能在面板里不存在"
+ },
+ {"shot": "p00-palette-open"},
+
+ {"type": {"sel": "#palQ", "text": "分屏", "enter": false}},
+ {"sleep": 900},
+ {
+  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];const a=it.filter(x=>x.querySelector('em').textContent=='动作');return {only:a.length==1&&it.length==1,isFirst:it[0]==a[0]&&it[0].classList.contains('sel'),label:a[0]?a[0].querySelector('b').textContent.slice(0,26):'',hint:!!(a[0]&&a[0].querySelector('span'))}})()",
+  "must": ["only", "isFirst", "hint"],
+  "note": "搜「分屏」只剩这一条动作，行尾还写着「回车执行」"
+ },
+ {
+  "eval": "(()=>({splitBefore:!stream.classList.contains('split'),memOnBefore:document.querySelector('#tabs button[data-t=mem]').classList.contains('on')}))()",
+  "must": ["splitBefore"],
+  "note": "点之前的状态要留在档上：不然「分屏开了」这条判据分不清是本批的功劳还是上一份剧本的残留"
+ },
+ {"shot": "p01-search-duo"},
+
+ {"key": "Enter"},
+ {"sleep": 1800},
+ {
+  "eval": "(()=>{const ps=[...document.querySelectorAll('#stream .view')].filter(e=>e.offsetParent);const du=document.querySelector('#stream .view.duo');const on=document.querySelector('#stream .view.on');const left=du&&on?du.getBoundingClientRect().left<on.getBoundingClientRect().left:false;return {palClosed:!document.querySelector('#pal').classList.contains('on'),split:stream.classList.contains('split'),panes:ps.length==2,duoIsA:!!du&&du.dataset.sid==window.__a,chip:!document.querySelector('#duoChip').hidden,cols:(()=>{const r=ps.map(e=>e.getBoundingClientRect());return r.length==2&&r[0].left<r[1].left&&r[0].width>300})(),duoLeft:left,toastLeft:/左边是/.test(document.querySelector('#toast').textContent),toast:(document.querySelector('#toast').textContent||'').slice(0,40)}})()",
+  "must": ["palClosed", "split", "panes", "duoIsA", "chip", "cols", "duoLeft", "toastLeft"],
+  "note": "面板一发回车：关浮层、点到 #duoBtn、两栏真的并起来。toast 说「左边是…」而并排那条确实在左边 —— 这两条判据要一起过，光过一条就是话和画面对不上（原来那句写的是右边）"
+ },
+ {"shot": "p02-split-from-palette"},
+
+ {"click": "#duoChip"},
+ {"sleep": 1300},
+ {
+  "eval": "(()=>({splitOff:!stream.classList.contains('split'),chipHidden:document.querySelector('#duoChip').hidden,one:[...document.querySelectorAll('#stream .view')].filter(e=>e.offsetParent).length==1}))()",
+  "must": ["splitOff", "chipHidden", "one"],
+  "note": "退出分屏再验下一条：两栏还开着时右栏是窄的，几何判据说不清是谁坏的"
+ },
+
+ {"key": "P", "mods": ["ctrl", "shift"]},
+ {"sleep": 700},
+ {"type": {"sel": "#palQ", "text": "整理条目记忆", "enter": false}},
+ {"sleep": 900},
+ {
+  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];const a=it.filter(x=>x.querySelector('em').textContent=='动作');return {open:document.querySelector('#pal').classList.contains('on'),focused:document.activeElement.id=='palQ',only:a.length==1,isFirst:it[0]==a[0],memStillOff:!document.querySelector('#tabs button[data-t=mem]').classList.contains('on')}})()",
+  "must": ["open", "focused", "only", "isFirst", "memStillOff"],
+  "note": "每次都要先把浮层打开再打字：focus() 打在 display:none 的 #palQ 上是静默失败的，于是回车落到页面上别处，测出来的是「动作没反应」而不是「我没打开面板」"
+ },
+ {"key": "Enter"},
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const on=document.querySelector('#tabs button[data-t=mem]').classList.contains('on');const s=document.querySelector('#memTidyState');if(on&&!s.hidden&&s.textContent.length>4)return JSON.stringify({landed:true,ms:Date.now()-t0});if(Date.now()-t0>14000)return JSON.stringify({landed:false,memOn:on,hidden:s.hidden,text:s.textContent.slice(0,70)});await new Promise(z=>setTimeout(z,400))}})()",
+  "must": ["landed"],
+  "note": "这条动作是两步：先开记忆页签、再等里面的「整理一次」出来点上。轮询到状态文案落地才算通"
+ },
+ {
+  "eval": "(()=>{const s=document.querySelector('#memTidyState');const b=document.querySelector('#memTidy');const br=b.getBoundingClientRect();const sr=s.getBoundingClientRect();const p=document.querySelector('#tab-mem').getBoundingClientRect();return {memOn:document.querySelector('#tabs button[data-t=mem]').classList.contains('on'),paneShown:!!document.querySelector('#tab-mem.on'),preview:/降级|合并|清掉|不用整理/.test(s.textContent),armed:b.textContent!='整理一次',btnVisible:br.width>0&&br.height>0,btnInPanel:br.right<=p.right+1,headSeen:sr.top>=p.top-1&&sr.top<p.bottom-24,degraded0:/降级 0 条/.test(s.textContent),rows:document.querySelectorAll('#memItems .rl').length}})()",
+  "must": ["memOn", "paneShown", "preview", "armed", "btnVisible", "btnInPanel", "headSeen", "rows"],
+  "note": "预览落地、按钮变成「确认整理（动 N 条）」。headSeen 是看像素补的：页签比屏高，按钮在视口里而它下面那行预览掉在折痕外，等于送到一半。degraded0 顺带说明 v0.69 的用量回写真的在跑（起手那一轮把 6 条都注入过，lastUsed 全被刷成现在，就没有该降级的了）"
+ },
+ {"shot": "p03-tidy-preview"},
+
+ {"key": "P", "mods": ["ctrl", "shift"]},
+ {"sleep": 700},
+ {"type": {"sel": "#palQ", "text": "摘要", "enter": false}},
+ {"sleep": 900},
+ {
+  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];const cmd=it.filter(x=>x.querySelector('em').textContent=='命令');const act=it.filter(x=>x.querySelector('em').textContent=='动作');return {open:document.querySelector('#pal').classList.contains('on'),both:cmd.length>=1&&act.length>=1,cmdLabel:cmd.map(x=>x.querySelector('b').textContent.replace(/\\s+/g,' ').slice(0,22)).join('|'),actLabel:act.map(x=>x.querySelector('b').textContent.replace(/\\s+/g,' ').slice(0,34)).join('|'),usageOff:!document.querySelector('#tabs button[data-t=usage]').classList.contains('on')}})()",
+  "must": ["open", "both", "cmdLabel", "usageOff"],
+  "note": "同一个词命中两条路（/compact 命令与「手动压缩一次上下文」动作）：面板不替人挑，两条都列出来"
+ },
+ {"shot": "p04-search-compact"},
+ {
+  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];window.__need=it.findIndex(x=>/手动压缩/.test(x.textContent));palMove(window.__need-palSel);const s=document.querySelector('#palList .pi.sel');return {naved:window.__need>=1,selIsAction:s.querySelector('em').textContent=='动作',selLabel:s.querySelector('b').textContent.replace(/\\s+/g,' ').slice(0,30)}})()",
+  "must": ["naved", "selIsAction"],
+  "note": "用键盘走到动作那一行（palMove 就是上下键调的那个函数）：这里刻意不选第一行，因为第一行是 /compact 命令，选它就测不到动作那条分派"
+ },
+ {"key": "Enter"},
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const on=document.querySelector('#tabs button[data-t=usage]').classList.contains('on');const t=document.querySelector('#toast').textContent;if(on&&/压缩|不够多/.test(t))return JSON.stringify({said:true,ms:Date.now()-t0,toast:t.slice(0,80)});if(Date.now()-t0>26000)return JSON.stringify({said:false,usageOn:on,toast:t.slice(0,80)});await new Promise(z=>setTimeout(z,700))}})()",
+  "must": ["said"],
+  "note": "压缩真跑了一次并且说了结果：这条会话只有两句所以是「不够多」那句，有历史时会是折了几条省几字那句，两种都算说话"
+ },
+ {
+  "eval": "(()=>{const s=document.querySelector('#cmpState');return {usageOn:document.querySelector('#tabs button[data-t=usage]').classList.contains('on'),stateClean:s.textContent==='',palClosed:!document.querySelector('#pal').classList.contains('on')}})()",
+  "must": ["usageOn", "stateClean", "palClosed"],
+  "note": "用完把「压缩中…」那个状态收回空串，别留一个永远转圈的读数"
+ },
+ {"shot": "p05-compact-from-palette"},
+
+ {"key": "P", "mods": ["ctrl", "shift"]},
+ {"sleep": 700},
+ {"type": {"sel": "#palQ", "text": "自动化", "enter": false}},
+ {"sleep": 900},
+ {
+  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];return {open:document.querySelector('#pal').classList.contains('on'),jump:it.filter(x=>x.querySelector('em').textContent=='跳转').length,label:it.filter(x=>x.querySelector('em').textContent=='跳转').map(x=>x.querySelector('b').textContent.slice(0,24)).join('|'),roleOff:!document.querySelector('#tabs button[data-t=role]').classList.contains('on')}})()",
+  "must": ["open", "jump", "label", "roleOff"],
+  "note": "「自动化（角色卡与钩子）」是跳转类：它只负责把页签翻开，不替你点里面的按钮"
+ },
+ {"key": "Enter"},
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){if(document.querySelector('#tabs button[data-t=role]').classList.contains('on'))return JSON.stringify({roleOn:true,ms:Date.now()-t0});if(Date.now()-t0>9000)return JSON.stringify({roleOn:false});await new Promise(z=>setTimeout(z,300))}})()",
+  "must": ["roleOn"]
+ },
+ {
+  "eval": "(()=>{const p=document.querySelector('#tab-role');return {tabOn:document.querySelector('#tabs button[data-t=role]').classList.contains('on'),paneShown:p.classList.contains('on')&&p.offsetParent!=null,hasForm:!!(document.querySelector('#roleName')&&document.querySelector('#rolePersona')&&document.querySelector('#roleAdd')),tabsFit:[...document.querySelectorAll('#tabs button')].every(b=>b.getBoundingClientRect().height<32)}})()",
+  "must": ["tabOn", "paneShown", "hasForm", "tabsFit"],
+  "note": "十个页签排一行不许压成两行（之前第 10 个把最后一个挤出右缘过）"
+ },
+ {"shot": "p06-role-from-palette"},
+
+ {
+  "eval": "(()=>{const e=document.querySelector('#sessions .it[data-id=\"'+window.__a+'\"]');if(e)e.click();return {switched:!!e&&curId==window.__a,aHasHistory:document.querySelectorAll('.view[data-sid=\"'+window.__a+'\"] .msg.user').length>=1}})()",
+  "must": ["switched", "aHasHistory"],
+  "note": "先切回有历史那条：不然「开工一条新会话」复用的正是当前这条空的（故意的），判据就测不出它换了会话"
+ },
+ {"sleep": 1400},
+ {"key": "P", "mods": ["ctrl", "shift"]},
+ {"sleep": 700},
+ {"type": {"sel": "#palQ", "text": "开工一条", "enter": false}},
+ {"sleep": 900},
+ {
+  "eval": "(window.__before=curId,{only:[...document.querySelectorAll('#palList .pi')].filter(x=>x.querySelector('em').textContent=='动作').length==1,label:(document.querySelector('#palList .pi')||{}).textContent})"
+ },
+ {"key": "Enter"},
+ {"sleep": 2000},
+ {
+  "eval": "(()=>({fresh:curId!=window.__before,empty:document.querySelectorAll('.view.on .msg.user').length==0,aKept:document.querySelectorAll('.view[data-sid=\"'+window.__a+'\"] .msg.user').length>=1,palClosed:!document.querySelector('#pal').classList.contains('on')}))()",
+  "must": ["fresh", "empty", "aKept", "palClosed"],
+  "note": "「开工一条新会话」真的换了一条空的：这条判据同时挡住「面板点了没反应」与「把旧会话的历史清了」"
+ },
+ {"shot": "p07-fresh-session"},
+
+ {
+  "eval": "(()=>{const de=document.documentElement;return {noOverflow:de.scrollWidth<=de.clientWidth+1,palClosed:!document.querySelector('#pal').classList.contains('on'),actLeft:[...document.querySelectorAll('#palList .pi')].filter(x=>x.querySelector('em').textContent=='动作').length}})()",
+  "must": ["noOverflow", "palClosed"],
+  "note": "整场跑完不许把页面撑出横滚动条——浮层用 fixed 时也常犯这个"
+ }
+]

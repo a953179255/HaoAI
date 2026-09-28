@@ -94,6 +94,37 @@ const dup = [...idHits].filter(([, n]) => n > 1).map(([i, n]) => i + '×' + n).s
 check(dup.length === 0, '整份文档里每个 id 只出现一次',
   '重名：' + dup.join(', ') + '（getElementById 只认第一个，另一个永远点不到）');
 
+// ---- 3c) 命令面板的每条入口都要真的存在 ----
+/*
+ * 上面那条 $#+id 只认 `$('#x')` 这种写法，而面板的目标是**数组里的字符串**
+ * （'#duoBtn'、'#tabs button[data-t=role]'），扫不到。而"入口漂了"是面板独有的坏法：
+ * 条目还在、搜得到、回车也按了，只是 toast 一句"找不到那个入口"——
+ * 面板的价值就是"不用记入口在哪"，这一条坏等于那半个功能没了。
+ * 后面几批（分屏 / 整理记忆 / 手动压缩 / 自动化页签）就是这么漏进面板的。
+ */
+const palSrc = (scriptSrc.match(/const PALSET=\[([\s\S]*?)\n\];/) || [, ''])[1];
+const tabNames = new Set();
+const tabBlock = (html.match(/<div class="tabs" id="tabs">([\s\S]*?)<\/div>/) || [, ''])[1];
+for (const m of tabBlock.matchAll(/data-t="([\w-]+)"/g)) tabNames.add(m[1]);
+const palBad = [];
+let palRows = 0, palActs = 0;
+for (const m of palSrc.matchAll(/\[\s*'([^']+)'(?:\s*,\s*'([^']*)')?/g)) {
+  palRows++;
+  const target = m[2] || '';
+  if (!target || target[0] !== '#') continue;   // 函数=动作类；不以 # 开头=设置抽屉里的某一节（要 fetch 回来才知道）
+  const id = (target.match(/^#([\w-]+)/) || [, ''])[1];
+  if (!id || !presentIds.has(id)) palBad.push(m[1] + ' → ' + target);
+}
+for (const m of palSrc.matchAll(/palTabBtn\('(\w+)'\s*,\s*'#([\w-]+)'\)/g)) {
+  palActs++;
+  if (!tabNames.has(m[1])) palBad.push('动作要的页签 data-t=' + m[1] + ' 不存在');
+  if (!presentIds.has(m[2])) palBad.push('动作要的 #' + m[2] + ' 不存在');
+}
+check(palRows >= 20, '命令面板抓到条目',
+  '只抓到 ' + palRows + ' 条 —— 数组写法改了的话这条检查就形同虚设了');
+check(palActs >= 2, '面板里"两步动作"的页签与按钮都能静态对上', '只对上 ' + palActs + ' 条');
+check(palBad.length === 0, '命令面板每条入口都真的存在', '漂了：' + palBad.join('、'));
+
 // ---- 4) 服务端事件名与前端监听名要对得上 ----
 const server = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc', 'Server.kt'), 'utf8');
 const emitted = new Set();
