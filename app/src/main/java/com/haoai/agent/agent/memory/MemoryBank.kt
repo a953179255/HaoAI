@@ -428,8 +428,12 @@ class MemoryBank(
      *    移入「已归档」节，不再参与注入/检索但保留可见可捞回
      * 2) 软失效（sup/dormant/archived）超 30 天才物理清理
      * 3) 归一化去重（忽略空白/大小写/标点差异）
-     * 4) 高相似合并（同 token 重叠率 > 0.85 保留重要性高/更新的）
-     * @return 删除+降级的条数
+     * 4) 高相似合并（同 token 重叠率 > 0.85 保留重要性高/更新的）——
+     *    **合并不是把那条删掉**，而是给它打上 `sup:<保留那条的 id>` 一起留在文件里。
+     *    形状与本文件的 [supersede]、[mergeIds] 一致，也与电脑端 `pc/.../Memories.kt` 的
+     *    `tidy()` 一致：这份 MEMORY.md 是两端共用的，"谁被谁合掉了"必须看得见、也能改回来；
+     *    30 天后由第 2 条统一清理。
+     * @return 动了的条数（降级 + 合并 + 物理清理）
      */
     @Synchronized
     fun tidy(): Int {
@@ -458,9 +462,12 @@ class MemoryBank(
         }
         removed += beforePurge - state.items.size
         for (m in state.items.sortedWith(compareByDescending<Memory> { it.importance }.thenByDescending { it.createdAt })) {
+            // 已经失效的（含刚被降级的）既不参与合重，也不能当"保留那条"：
+            // 否则活的那条会被指到一条 dormant 上，两条一起消失，等于静默丢数据
+            if (m.supersededBy != null) continue
             val norm = normalize(m.content)
             val toks = tokenize(m.content)
-            val dup = kept.any { k ->
+            val dup = kept.firstOrNull { k ->
                 normalize(k.content) == norm || run {
                     val kt = tokenize(k.content)
                     val inter = kt.intersect(toks).size
@@ -468,9 +475,16 @@ class MemoryBank(
                     union > 0 && inter.toDouble() / union > 0.85
                 }
             }
-            if (dup) removed++ else kept.add(m)
+            if (dup == null) kept.add(m) else {
+                m.supersededBy = dup.id
+                m.updatedAt = now
+                removed++
+            }
         }
-        if (removed > 0 || degraded > 0) save(MemoryState(kept.toMutableList(), state.extras))
+        // 存的是 state.items 而不是 kept：被合掉那条只多了个 sup 标记，仍留在库里，
+        // 由写盘时归进「已归档」节。这里若存 kept，留痕就白做了 —— 文件里那条直接消失，
+        // 两端共写一份 MEMORY.md 时谁也看不出少了什么、也改不回来。
+        if (removed > 0 || degraded > 0) save(MemoryState(state.items, state.extras))
         return removed + degraded
     }
 

@@ -38,6 +38,27 @@ class MemoriesTest {
         - 这条是用户手写的、没有 id 的说明
     """.trimIndent()
 
+    /**
+     * **手机端真实整理（tidy）之后写出来的那份文件**，字节是从一次真的 `MemoryBank.tidy()`
+     * 之后直接抄过来的（不是手写样本）：一条被合掉的、留痕指向保留那条。
+     * 为什么值得单独钉：两端共写一份 MEMORY.md 时，"手机整理过"这个现场只有这边能验。
+     */
+    private val PHONE_TIDIED = """
+        # 长期记忆（MEMORY.md）
+
+        > 长期记忆真源：模型与用户都可直接查看编辑。行尾 <!-- --> 是元数据，修改内容时请整行保留；
+        > 去重/上限/冲突检测等结构性修改建议仍用 memory 工具。每次写盘前旧版保留为同目录 .bak。
+
+        ## 偏好（1）
+        - [1cf1bf17 · 重要度4] 回答先给结论再给依据 <!-- id:1cf1bf17 imp:4 type:preference created:1790614373290 lastUsed:0 uses:0 -->
+
+        ## 事实（1）
+        - [a93285fd · 重要度5] run the gradle build task with jdk now <!-- id:a93285fd imp:5 type:fact created:1790614373280 lastUsed:0 uses:0 -->
+
+        ## 已归档（1）
+        - [a0465934 · 重要度3] run the gradle build task with jdk <!-- id:a0465934 imp:3 type:fact created:1790614373267 lastUsed:0 uses:0 upd:1790614373298 sup:a93285fd -->
+    """.trimIndent()
+
     @Test
     fun `reads the shape the phone writes`() {
         val d = Memories.parse(PHONE_SAMPLE)
@@ -315,5 +336,23 @@ class MemoriesTest {
         val now = System.currentTimeMillis()
         Memories.add(d, "一条正常在用的记忆", importance = 4).first.createdAt = now
         assertEquals(0, Memories.tidy(d, now).changed)
+    }
+
+    /** 手机整理过的那份，电脑端读回来必须认得这条留痕：只剩两条活的、注入不带被合那条、再整理也不动它。 */
+    @Test
+    fun `a file the phone tidied reads back as merged and converges`() {
+        val d = Memories.parse(PHONE_TIDIED)
+        assertEquals("三条都读得回来（留痕不是删除）", 3, d.items.size)
+        assertEquals("活着的只有两条", 2, d.active.size)
+        val gone = d.items.first { it.id == "a0465934" }
+        assertEquals("手机留的 sup 要读成『指向保留那条』", "a93285fd", gone.supersededBy)
+        assertEquals("保留那条自己必须是活的", null, d.items.first { it.id == "a93285fd" }.supersededBy)
+        val (_, ids) = Memories.injectIds(d, "run the gradle build task with jdk")
+        assertTrue("被合掉那条不该再进注入：$ids", !ids.contains("a0465934"))
+        assertTrue("保留那条该进注入：$ids", ids.contains("a93285fd"))
+        // 收敛：两端各自整理同一份文件，不该出现"你合我一次、我再合你一次"
+        assertEquals("电脑端再整理一次不该动它", 0, Memories.tidy(d, System.currentTimeMillis()).changed)
+        assertTrue("整理过一次之后文件形状不该变（两端幂等）",
+            Memories.render(d).trimEnd() == PHONE_TIDIED.trimEnd())
     }
 }

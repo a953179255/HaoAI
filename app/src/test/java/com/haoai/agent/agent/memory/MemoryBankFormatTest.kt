@@ -14,7 +14,9 @@ import java.nio.file.Files
  * 同一套行格式），而它一直是"只有口头约定、没有测试钉住"的状态。
  * 电脑端那边早就有"照手机端真实写出的样子读"的测试，但那份夹具是**手写**的样本 ——
  * 也就是说"手机真的写出来的是不是这个形状"这件事，此前两边都没测。
- * 这里就干这一件事：**用真实的 [MemoryBank] 写盘，再按电脑端解析器用的同一批正则去量**。
+ * 这里干两件事：**用真实的 [MemoryBank] 写盘，再按电脑端解析器用的同一批正则去量**；
+ * 以及钉住 `tidy()` 的形状 —— 两端可能指同一份文件，"整理"过谁、把谁合到了谁身上，
+ * 必须两边都读得懂、都改得回来（详见 `MemoryBank.tidy()` 的注释）。
  *
  * 判据一律写成"期望的形状"而不是"非空"：这类共享契约上，"有个东西在"等于没测。
  */
@@ -121,5 +123,105 @@ class MemoryBankFormatTest {
         for (line in before)
             assertTrue("已有那条被改写了（元数据漂移会互相覆盖对方的计数）：\n$line\n$after",
                 after.contains(line))
+    }
+
+    // ---- tidy()：两端共写一份文件时，"整理"该留痕而不是删掉 ----
+
+    private fun newDir(): File = Files.createTempDirectory("haoai-memtidy").toFile()
+
+    /** 把某一条的 created/lastUsed 改成 n 天前（模拟"很久没用"），返回改后的行文本。 */
+    private fun ageOut(file: File, id: String, days: Int): String {
+        val old = System.currentTimeMillis() - days * 86_400_000L
+        val lines = file.lines().map {
+            if (it.contains("id:$id "))
+                it.replace(Regex("created:\\d+"), "created:$old")
+                    .replace(Regex("lastUsed:\\d+"), "lastUsed:$old")
+            else it
+        }
+        file.writeText(lines.joinToString("\n") + "\n")
+        return lines.first { it.contains("id:$id ") }
+    }
+
+    private fun sectionOf(file: File, id: String): String {
+        var head = "（文件开头）"
+        for (l in file.lines()) {
+            if (l.startsWith("## ")) head = l
+            else if (l.contains("id:$id ")) return head
+        }
+        return "（找不到 $id 那一行）"
+    }
+
+    @Test
+    fun `tidy merges by leaving a trace instead of dropping the line`() {
+        val dir = newDir()
+        val b = MemoryBank(dir)
+        val older = b.remember("run the gradle build task with jdk", type = "fact", importance = 3)!!
+        val keeper = b.remember("run the gradle build task with jdk now", type = "fact", importance = 5)!!
+        assertEquals("整理该动一条", 1, b.tidy())
+        val f = b.storageFile()
+        val raw = f.lines()
+        val goneLine = raw.firstOrNull { it.contains("id:${older.id} ") }
+        assertTrue("被合掉的那条整行没了（留痕才是可回滚的整理）：\n${raw.joinToString("\n")}",
+            goneLine != null)
+        assertEquals("库里活着的应该只剩一条", 1, b.activeCount())
+        assertEquals("留痕要指向保留那条的 id", keeper.id, metaOf(goneLine!!)["sup"])
+        assertTrue("被合掉那条该归进已归档节：${sectionOf(f, older.id)}",
+            sectionOf(f, older.id).startsWith("## 已归档"))
+        assertTrue("保留那条不该被动到：${metaOf(raw.first { it.contains("id:${keeper.id} ") })}",
+            metaOf(raw.first { it.contains("id:${keeper.id} ") })["sup"] == null)
+    }
+
+    /**
+     * 改这条的真实理由：旧实现没有"已失效的不参与合重"这一步，于是
+     * **重要度更高的那条 dormant 会当上保留者，把还活着的那条物理删掉** ——
+     * 一次整理吃掉一条活跃记忆，而它自己早就在归档里了。
+     */
+    @Test
+    fun `a degraded item never eats a live one`() {
+        val dir = newDir()
+        var b = MemoryBank(dir)
+        val stale = b.remember("run the gradle build task with jdk", type = "fact", importance = 2)!!
+        b.remember("run the gradle build task with jdk now", type = "fact", importance = 1)
+        ageOut(b.storageFile(), stale.id, 40)
+        b = MemoryBank(dir)                       // 重新读盘，按改过的时间戳算
+        b.tidy()
+        val f = b.storageFile()
+        val staleLine = f.lines().first { it.contains("id:${stale.id} ") }
+        val freshLine = f.lines().first { it.contains("jdk now") }
+        assertEquals("久没用的那条应该降级成 dormant", "dormant", metaOf(staleLine)["sup"])
+        assertTrue("活着的这条被整理吃掉了（旧实现就是这么丢数据）：\n$freshLine",
+            metaOf(freshLine)["sup"] == null)
+        assertEquals("只剩活的那条", 1, b.activeCount())
+    }
+
+    @Test
+    fun `tidy converges - the second pass leaves the file alone`() {
+        val dir = newDir()
+        val b = MemoryBank(dir)
+        b.remember("run the gradle build task with jdk", type = "fact", importance = 3)
+        b.remember("run the gradle build task with jdk now", type = "fact", importance = 5)
+        b.tidy()
+        val once = b.storageFile().readText()
+        assertEquals("第二次整理不该再动东西（合并没有收敛就会天天改盘）", 0, b.tidy())
+        assertEquals("第二次写盘改了字节（幂等性破了）", once, b.storageFile().readText())
+    }
+
+    @Test
+    fun `the trace the phone writes is readable by the PC end`() {
+        val dir = newDir()
+        val b = MemoryBank(dir)
+        val gone = b.remember("run the gradle build task with jdk", type = "fact", importance = 3)!!
+        val keeper = b.remember("run the gradle build task with jdk now", type = "fact", importance = 5)!!
+        b.tidy()
+        val line = b.storageFile().lines().first { it.contains("id:${gone.id} ") }
+        assertTrue("电脑端的行正则匹配不上：[$line]", lineRe.matches(line))
+        val meta = metaOf(line)
+        assertEquals("sup 要指向保留那条", keeper.id, meta["sup"])
+        assertTrue("id 形状两边要一致（电脑端按 1~8 位十六进制解析）：${meta["id"]}",
+            Regex("^[0-9a-fA-F]{1,8}$").matches(meta["id"] ?: ""))
+        assertNotNull("没写 upd 的话，电脑端清理时会拿 created 当基准，刚合掉的那条会被当场删掉",
+            meta["upd"])
+        assertTrue("upd 必须是合并时刻（不是出生时刻）",
+            (meta["upd"]!!.toLong()) >= (meta["created"]!!.toLong()))
     }
 }
