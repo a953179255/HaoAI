@@ -64,7 +64,7 @@
 6. **终端面板（人用的多标签 shell）** ｜ ZCODE 内置终端多标签、OpenClaw terminal 面板 ｜ shell_* 五把工具只有 agent 会用，人没界面；右栏无「终端」页签 ｜ 与 #2 是一对：工具给 agent，面板给人，**共用同一进程注册表**（人在界面开的 shell，agent 也能喂） ｜ 页签出现 → 开一个 shell → 输入回车有输出 → 空闲回收提示存在 → 像素剧本全绿 ｜ PC（排在 #2 之后）
 7. **浏览器预览面板（画面进网页、可点）** —— ✅ v0.50.0 已落地（右栏「预览」页签 + `PreviewPanel` + 六个 `/api/preview*`）。｜ ZCODE 内嵌浏览器 IAB、OpenClaw browser-panel ｜ `Browser.kt` 能控制 Edge，但界面里只能看工具回的截图，人不能"盯着它操作/伸手点一下" ｜ 视频自动化与看页面都要 ｜ **实测**：真 Edge 起一台（独立配置目录），靶页标题从 `预览靶页 0` → 送入中文后带上 `你好呀` → 点画面正中让靶页计数器 +1（换算按视口比例，不是 element.click()）；帧 `naturalWidth=921`；切走页签轮询真停；「关掉这台浏览器」后端口不再应答。｜ **与原案的一处偏差**：原写"只操作已开的实例"，实现是**读路径（看状态/取帧）绝不 spawn，只有人按打开/送入/点/切标签才允许起一台** —— 光开页签就有副作用不行，但完全不给人开口的面板没用 ｜ PC
 8. **媒体工具（ffmpeg）** —— ✅ v0.45.0 已落地（`Media.kt` + `media` 工具 + `/api/media` Range +「产出」播放器）。｜ OpenClaw image/video-generation + media 播放转码、Hermes 语音 ｜ `pc/**` grep `ffmpeg|transcode` **零命中** ｜ 你直说要"视频制作自动化、帮直播和创作视频" —— 这是最直接的那块 ｜ 无 ffmpeg 时**明确报错并给出安装指引**（不能静默失败）；有则：转码 mp4→mp3、抽 1 帧 png、切 3 秒、抽音轨；产出进 `.haoao-output/` 并在产出面板能 `<video>/<audio>` 播放 ｜ PC
-9. **录屏 + 直播控制** ｜ OpenClaw nodes `screen.record`（它自己 gateway 层 deny 了）｜ 无（grep `obs|record` 零命中）｜ 直播创作的下一步 ｜ 录一段 mp4 到产出面板可播；OBS（obs-websocket）先做"检测到才可用"，没装就说清楚 ｜ PC
+9. **录屏 + 直播控制** —— ✅ v0.53.0 落了录屏（`Record.kt` + 第 22 把工具 `record`；录 → 停 → 界面里立刻能播 → 交给 `media` 剪；停止走 stdin 的 `q` 而不是 kill，否则 mp4 少 moov box 变成"存在但放不出来"）。OBS 那条（obs-websocket，检测到才可用）待做 ｜ OpenClaw nodes `screen.record`（它自己 gateway 层 deny 了）｜ 原缺陷：grep `obs|record` 零命中 ｜ 直播创作的下一步 ｜ **实测**：真录到这台机器 3840×1080 的桌面，浏览器解码出 videoWidth=3840、约 1s / 410248 字节 ｜ PC
 10. **音视频附件 + 代码执行** —— ✅ v0.49.0 已落地（附件按扩展名分 `images`/`media` 两条路，`run_code` 跑 python/node 并把运行目录里新出的图交回模型）。｜ ZCODE `code_execution`/`node-repl`、Codex `execute_code` ｜ 原缺陷：附件白名单只有文本+图片，mp4/wav 拖进去没有专门路径；无 `run_code` ｜ 视频工作流要递素材；vibe coding 要跑一段脚本看结果 ｜ 实测：chip 带 `▶` 与字节数、气泡里播放器真解码 320×240/4s、刷新重放还在、`run_code` 的 dot.png 到模型手里（naturalWidth=1）、计划模式拒跑且不留目录 ｜ PC
 11. **命令面板（Ctrl+Shift+P）** —— ✅ v0.47.0 已落地。｜ ZCODE quickPick、OpenClaw command-palette ｜ `grep -c palette = 0`；只有聊天内 `/` 菜单与 Ctrl+K 搜会话 ｜ 认可的 UI 点之一：所有入口一个浮层找得到 ｜ 浮层模糊搜「会话 / 命令 / 设置项 / 文件」→ 上下键 → 回车执行；输入框聚焦时不该抢键（沿用 v0.42 的规矩）｜ PC
 12. **任务运行历史（runs）** —— ✅ v0.47.0 已落地（`RunLedger` + 用量页签底部 + ↻ 填回输入框）。｜ OpenClaw tasks/runs、ZCODE 后台任务列表 ｜ 定时任务有列表，但**每一次跑完不留档**，没有"上次几点跑的、成功没、重跑" ｜ 自动化必须可回看，否则不敢开定时 ｜ 跑 3 次 → 历史 3 条（时间/触发/结果摘要）→ 点重跑出第 4 条 ｜ PC
@@ -107,7 +107,7 @@
 | **B11** | 技能 zip/URL 导入 + 技能目录页 + hooks + 凭据条目 + 审批风险分级 | — | PC |
 | **B12** | 🟡 v0.52.0 落了**检查点 / 回到某次之前**（整轮撤销）；多标签分屏与只读分享快照待做 | — | PC |
 | **B13** | 定时任务自然语言与投递 + 语音 + 预设 agent + 工作流链 | — | PC |
-| **B14** | 录屏（OBS 后置） | B7 | PC |
+| **B14** | ✅ v0.53.0 已落地：`record` 工具（gdigrab 录桌面，停止走 `q` 收尾）；OBS（obs-websocket）仍按"检测到才可用"留着 | B7 | PC |
 | **B15** | `:core` 合并 | B4 | 两端 |
 
 **执行顺序**：B1 → B2 → B3 → B5 → B6 → B7 → B8 → B9 → B4 → B10 → B11 → B12 → B13 → B14 → B15

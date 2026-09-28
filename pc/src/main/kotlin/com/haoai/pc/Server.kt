@@ -133,6 +133,8 @@ class WebServer(settings: PcSettings, port: Int,
     fun schedules(): Scheduler? = sched
 
     fun stop() {
+        // 别把录屏的 ffmpeg 留成孤儿进程：那台机器会继续往盘上写
+        runCatching { Recordings.stopAll() }
         runCatching { lan?.stop() }
         lan = null
         sched?.stopped = true

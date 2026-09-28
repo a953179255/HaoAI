@@ -1,0 +1,41 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "录三秒屏幕然后给我看",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&Date.now()-t0>3000)return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>120000)return JSON.stringify({done:false,ms:Date.now()-t0});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "done"
+    ]
+  },
+  {
+    "eval": "(()=>{const v=document.querySelector('.view.on');const t=v?v.textContent:'';return JSON.stringify({started:t.indexOf('开始录了')>=0,stopped:t.indexOf('已停止')>=0,cards:v?v.querySelectorAll('.card').length:0})})()",
+    "must": [
+      "started",
+      "stopped"
+    ]
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const v=document.querySelector('.view.on .pvmed video');if(v&&v.videoWidth>0)return JSON.stringify({played:true,w:v.videoWidth,h:v.videoHeight,d:Math.round(v.duration||0)});if(Date.now()-t0>20000)return JSON.stringify({played:false,has:!!v,nw:v?v.videoWidth:-1});await new Promise(z=>setTimeout(z,800))}})()",
+    "must": [
+      "played"
+    ]
+  },
+  {
+    "eval": "(()=>{const v=document.querySelector('.view.on .pvmed video');const r=v.getBoundingClientRect();const main=document.querySelector('.main').getBoundingClientRect();return JSON.stringify({fits:r.right<=main.right+2&&r.width>60,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth})})()",
+    "must": [
+      "fits",
+      "noOverflow"
+    ]
+  },
+  {
+    "shot": "r01-record"
+  }
+]

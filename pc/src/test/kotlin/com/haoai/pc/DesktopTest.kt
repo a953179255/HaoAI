@@ -261,6 +261,6 @@ class DesktopTest {
         assertFalse(t.visibleWhen(PcSettings()))
         assertTrue(t.visibleWhen(PcSettings(flags = mapOf("desktop_control" to true))))
         // 21 把：工具总数变了要同步改 EngineFlowTest 里那条断言
-        assertEquals(21, builtinTools().size)
+        assertEquals(22, builtinTools().size)
     }
 }

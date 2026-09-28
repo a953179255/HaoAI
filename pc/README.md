@@ -390,6 +390,7 @@ SHOT_MODE=code bash pc/tools/ui-shot.sh pc/tools/steps/ui-code.json  # run_code�
 SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/steps/ui-iab.json  # 「预览」页签：CDP 画面进网页、人点的位置送回页面
 SHOT_MODE=chat PRE_LAN=1 bash pc/tools/steps/ui-lan.json  # 手机联动：开/关端点、配对码倒数、设备移除（端口每轮现挑）
 SHOT_MODE=tools bash pc/tools/steps/ui-rewind.json  # 检查点：两步确认整轮撤销一次任务的改动
+SHOT_MODE=rec bash pc/tools/steps/ui-record.json  # 录屏：真录桌面 → 停 → 界面里真能播
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
@@ -1641,6 +1642,47 @@ chip 里同时有 `▶`、文件名和 `音视频 54 KB`、用户气泡里 1 个
    表现是"这段永远是空的"，看着像功能没生效。现在 catch 里会写"读不到检查点账本"，
    而这类手搓 JSON 的坑以后应该改走序列化器。
 
+## 这一批：录屏（`record`）—— 把"刚才那段屏幕"变成能播的文件（v0.53.0，缺口地图 B14）
+
+B7 的 `media` 只能处理**已经在盘上的**文件，而"视频制作自动化 / 直播辅助"缺的正是第一步：
+把刚才那段屏幕变成文件。OBS 依然更好（场景、混音、推流），但那是后置项 ——
+先让 agent 能自己走完 `录 → 停 → 立刻在界面里放 → 交给 media 剪`。
+
+- **`Record.kt`**：`Recordings`（进程注册表）+ 第 22 把工具 `record`，三个动作 `start / stop / status`。
+  命令是 `gdigrab -i desktop` + `libx264 -preset veryfast` + `-movflags +faststart`，
+  argv 直接拼、不经 shell（Windows 上带引号的命令走 shell 必被二次解析吃掉）。
+- **停止走 stdin 的 `q`，不是 kill。** 硬杀会让 mp4 少掉尾部 moov box ——
+  文件存在、大小正常，但播放器与 `media info` 都读不出时长，表现是"录到了却打不开"，
+  而且看着像 B7 那个播放器有 bug。所以 `stop` 送 `q` → 等它自己收尾（最多 6 秒）→
+  实在不退才强杀，并且**在回执里明说"强杀收尾，文件可能不完整"**。
+- **护栏**：`maxSeconds` 默认 300、上限 1800，并真的发给 ffmpeg（`-t`），另有一条 watchdog 线程到点自停；
+  同时最多两场；`area` 只认 `x,y,宽x高` 这种纯数字格式，`audio` 设备名不许带引号与换行；
+  产出落 `.haoai-output/media/rec-<ts>.mp4`（撞名加序号）。
+- **只有一场在录时 `stop` 不用带 id** —— 录屏的常态就是"开一场、干点事、停掉它"，
+  逼人回去抄 id 是把工具当 API 用。
+- **服务退出会 `stopAll()`**：孤儿 ffmpeg 会继续往盘上写，而且一直在录你的屏幕。
+
+判据（Kotlin 新增 9 条 `RecordTest`，整套 279 条）：argv 三条路（全屏 / 区域 / 带音频）各验一遍
+—— 包括"不录声音要显式 `-an`，否则 ffmpeg 会去抓默认设备"这种只有真用过才知道的；
+`area` 写错、`audio` 带换行、没装 ffmpeg 三种失败都要回人话；
+**ask 档审批被拒不许把进程起起来**（auto 档直接放行是设计，测试用 ask 才验得到闸）；
+停止那条用一个**假的 ffmpeg**（读 stdin 的 `.cmd`，只有真读到那一行才写文件并 exit 0）——
+于是"文件在 + 退出码 0 + 能被认成音视频"三样一起成立，才证明走的是收尾而不是 kill。
+（像素，`SHOT_MODE=rec bash pc/tools/ui-shot.sh tools/steps/ui-record.json`，7 步：
+mock 真的调 `record start` → `record stop` → **录到的是这台机器的真桌面 3840×1080**、
+浏览器真解码出 `videoWidth=3840`、约 1s / 410248 字节、卡片是开的、画面铺在正文里不溢出。）
+
+**这一批最该记的三件事：**
+
+1. **"存在但放不出来"比"报错"糟得多。** 所以停止路径的判据不能只看"文件在不在"，
+   要看**退出码 0**（自己退的）与魔数可识别 —— 这两样一起才等于"用户双击能放"。
+   也因此录屏测试不能用真 ffmpeg 当唯一判据：锁屏时 gdigrab 会失败，测试就变成随机红；
+   真录那一段交给像素剧本（跑的时候屏幕是醒的，且失败会直接印在断言里）。
+2. **审批闸只在 ask 档生效。** 第一版测试用 `mode="auto"` 造 ctx，于是"被拒不该起进程"
+   这条永远测不到（auto 直接放行）。凡是验"权限被拦"的用例，档位必须是 ask/deny。
+3. **折叠的工具卡不进 `innerText`。** 判据里搜"开始录了"搜不到，因为卡片收起时正文是 `display:none`；
+   改成 `textContent` 才对。这类"量具读不到 ≠ 产品没有"的坑，是文本断言里最容易中招的一种。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1707,7 +1749,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **270 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **279 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1732,7 +1774,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13、手机联动（局域网）12、检查点回滚 9，这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13、手机联动（局域网）12、检查点回滚 9、录屏 9，这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1778,7 +1820,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 Git 面板、命令面板与任务运行历史、终端页签（人和 agent 共用常驻进程）、
 音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）、浏览器预览面板（人自己看画面、自己点）、
    手机联动 PC 侧（局域网端点 + 配对码 + 只读会话镜像 + 远程审批；手机端那一半还欠）、
-   检查点回滚（「产出」页签底部「回到某次之前」，整轮撤销一次任务的改动）。
+   检查点回滚（「产出」页签底部「回到某次之前」，整轮撤销一次任务的改动）、
+   录屏（`record` 工具：录桌面 → 停 → 立刻在界面里放 → 交给 `media` 剪）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
@@ -1803,7 +1846,7 @@ pc/src/main/kotlin/com/haoai/pc/
   Settings.kt   设置落库 + HaoFlag 注册表
   Provider.kt   ChatClient 接口 + OpenAI 兼容流式网关
   Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）+ Memory（项目说明与全局记忆）
-  Tools.kt      21 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
+  Tools.kt      22 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
   Mcp.kt        MCP 客户端：stdio 上的换行 JSON-RPC，把外部 server 的工具包成引擎的 Tool
   Policies.kt   S2 权限规则表：tool(pattern) 有序匹配 + 命令前缀归约 + alwaysAsk
   GitTool.kt    一把 git（子命令切分保留引号；只读不问人，改仓库走同一张规则表）
@@ -1816,6 +1859,7 @@ pc/src/main/kotlin/com/haoai/pc/
   RunLedger.kt  一次运行一行的 HAOAI_HOME/runs.jsonl（最近 500 条，供「用量」页回溯与 ↻）
   Lan.kt        手机联动：配对码与设备 token（盘上只存哈希）+ 局域网 HTTP 面（默认不监听）
   Checkpoints.kt 一轮动过哪些文件的账本（HAOAI_HOME/checkpoints.jsonl）+ 整轮回滚
+  Record.kt     录屏：ffmpeg gdigrab 的进程注册表，停止走 stdin 的 q（不是 kill，否则 mp4 放不出来）
   Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
   Desktop.kt    屏幕理解与点击级自动化：生成的 PowerShell 模板 + PsRunner
   Engine.kt     回合循环、档位闸、两级截断、上下文压缩、中断、会话持久化
