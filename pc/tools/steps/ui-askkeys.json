@@ -20,7 +20,9 @@
     "timeout": 25000
   },
   {
-    "eval": "({first:'question',keys:[...document.querySelectorAll('.view.on .card.ask:not(.done) [data-key]')].map(b=>b.dataset.key+':'+b.innerText.replace(/\\s+/g,' ')),decs:[...document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]')].map(b=>b.dataset.dec),active:document.activeElement.id})"
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');const keys=[...c.querySelectorAll('[data-key]')].map(b=>b.dataset.key+':'+b.innerText.replace(/\\s+/g,' '));const decs=[...c.querySelectorAll('[data-dec]')].map(b=>b.dataset.dec);return JSON.stringify({first:'question',keys,decs,twoKeys:keys.length==2,noDecBtns:decs.length==0,active:document.activeElement.id,activeIsBox:document.activeElement.id=='box'})})()",
+    "must": ["twoKeys", "noDecBtns", "activeIsBox"],
+    "note": "提问卡上只有选项的键号（1/2），**不该有那三个决定按钮** —— 有就等于把提问当审批渲染了。activeIsBox 钉的是开局焦点在输入框：y/2 这些键要先归输入框管"
   },
   {
     "shot": "k01-question-card"
@@ -35,7 +37,9 @@
     "sleep": 600
   },
   {
-    "eval": "({guard:'焦点在输入框里、框中还有字',boxVal:document.querySelector('#box').value,done:document.querySelectorAll('.view.on .card.ask.done').length,left:document.querySelectorAll('.view.on .card.ask:not(.done)').length})"
+    "eval": "(()=>{const box=document.querySelector('#box').value;const done=document.querySelectorAll('.view.on .card.ask.done').length;const left=document.querySelectorAll('.view.on .card.ask:not(.done)').length;return JSON.stringify({guard:'焦点在输入框里、框中还有字',boxVal:box,done,left,untouched:done==0,stillWaiting:left==1})})()",
+    "must": ["boxVal", "untouched", "stillWaiting"],
+    "note": "这一条是**闸门**：人在打字、光标在输入框里，按 2 就该是个字符，不该替他答话。done 期望是 0，所以判据要自己算成布尔（`untouched`）—— 直接 must 一个 0 会把「什么都没发生」判成失败"
   },
   {
     "shot": "k02-typing-wins"
@@ -50,14 +54,18 @@
     "sleep": 2500
   },
   {
-    "eval": "({digit:'空框时按 2',done:[...document.querySelectorAll('.view.on .card.ask.done .ans-line')].map(e=>e.textContent.trim()),left:document.querySelectorAll('.view.on .card.ask:not(.done)').length})"
+    "eval": "(()=>{const done=[...document.querySelectorAll('.view.on .card.ask.done .ans-line')].map(e=>e.textContent.trim());const left=document.querySelectorAll('.view.on .card.ask:not(.done)').length;return JSON.stringify({digit:'空框时按 2',done,left,answeredBlue:done.join('|').indexOf('蓝色')>=0,approvalUp:left==1})})()",
+    "must": ["answeredBlue", "approvalUp"],
+    "note": "空框时按 2 才真的算回答。判据不是「有 done 这一行」而是「done 那行写着蓝色」—— 按错键号（把 1 当 2）也会留下一行字，但留的是另一个答案"
   },
   {
     "goto": ".card.ask:not(.done) [data-dec]",
     "timeout": 25000
   },
   {
-    "eval": "({second:'approval',decs:[...document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]')].map(b=>b.dataset.dec),kbds:[...document.querySelectorAll('.view.on .card.ask:not(.done) kbd')].map(k=>k.textContent),title:(document.querySelector('.view.on .card.ask:not(.done) .sb')||{}).innerText})"
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');const decs=[...c.querySelectorAll('[data-dec]')].map(b=>b.dataset.dec);const kbds=[...c.querySelectorAll('kbd')].map(k=>k.textContent);return JSON.stringify({second:'approval',decs,kbds,title:(c.querySelector('.sb')||{}).innerText,fourDecs:decs.length==4,hasAllowOnce:decs.indexOf('allow_once')>=0,hasDeny:decs.indexOf('deny')>=0,hasSession:decs.indexOf('allow_session')>=0,hasRule:decs.indexOf('allow_rule')>=0,kbdY:kbds.join('').indexOf('y')>=0,titleIsWrite:(c.querySelector('.sb')||{}).innerText && (c.querySelector('.sb')||{}).innerText.indexOf('theme.txt')>=0})})()",
+    "must": ["fourDecs", "hasAllowOnce", "hasDeny", "hasSession", "hasRule", "kbdY", "titleIsWrite"],
+    "note": "审批卡四个决定一个都不能少（少一个就是「只能全允许或全拒绝」），而且 y 这个键号要印在卡上 —— 光测「按 y 有效」测不到人看得见该按哪个"
   },
   {
     "shot": "k03-approval-card"
@@ -72,7 +80,9 @@
     "sleep": 700
   },
   {
-    "eval": "({guard:'审批卡 + 框里有字，按 y',boxVal:document.querySelector('#box').value,decided:[...document.querySelectorAll('.view.on .card.ask.done .ans-line')].map(e=>e.textContent.trim()),stillWaiting:document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]').length})"
+    "eval": "(()=>{const box=document.querySelector('#box').value;const stillWaiting=document.querySelectorAll('.view.on .card.ask:not(.done) [data-dec]').length;return JSON.stringify({guard:'审批卡 + 框里有字，按 y',boxVal:box,decided:[...document.querySelectorAll('.view.on .card.ask.done .ans-line')].map(e=>e.textContent.trim()),stillWaiting,notYet:stillWaiting==4,boxKept:box.indexOf('我要打')>=0})})()",
+    "must": ["notYet", "boxKept"],
+    "note": "同一个闸门在审批卡上再验一次（那边的 y 是「允许一次」，更容易被误按）。notYet 钉的是四颗按钮还挂着没被决定"
   },
   {
     "eval": "document.querySelector('#box').value='';'cleared'"
@@ -84,13 +94,19 @@
     "sleep": 3000
   },
   {
-    "eval": "({key:'空框按 y 允许一次',cardsLeft:document.querySelectorAll('.view.on .card.ask').length,stopped:!document.getElementById('send').classList.contains('stop')})"
+    "eval": "(()=>{const cardsLeft=document.querySelectorAll('.view.on .card.ask').length;return JSON.stringify({key:'空框按 y 允许一次',cardsLeft,allCleared:cardsLeft==0,stopped:!document.getElementById('send').classList.contains('stop')})})()",
+    "must": ["allCleared", "stopped"],
+    "note": "空框按 y 才真的放行：卡全清、发送键从「停止」变回去"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({writeNote:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='write').map(m=>m.note||''),roles:(s.messages||[]).map(m=>m.role).join(','),tail:(s.messages||[]).slice(-1).map(m=>(m.content||'').slice(0,26))}))"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>{const writeNote=(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='write').map(m=>m.note||'');const tail=(s.messages||[]).slice(-1).map(m=>(m.content||'').slice(0,26));return {writeNote,roles:(s.messages||[]).map(m=>m.role).join(','),tail,noteKept:writeNote.join('|')=='允许一次',tailMentions:tail.join('').indexOf('theme.txt')>=0}})",
+    "must": ["noteKept", "tailMentions"],
+    "note": "决定要**落库**，不是只在界面上闪一下：那条 write 的工具回执里写着「允许一次」。这条防的是「刷新之后卡回到未决定状态」那类回归（配置类信息必须落库，见 README 同名条目）"
   },
   {
-    "eval": "fetch('/api/file?path=theme.txt').then(r=>r.json()).then(f=>({ok:f.ok,onDisk:(f.text||'').trim(),err:f.error||''}))"
+    "eval": "fetch('/api/file?path=theme.txt').then(r=>r.json()).then(f=>({ok:f.ok,onDisk:(f.text||'').trim(),err:f.error||''}))",
+    "must": ["ok", "onDisk"],
+    "note": "最后是真事实：文件在盘上、内容是 green"
   },
   {
     "shot": "k04-approved-by-key"

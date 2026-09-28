@@ -204,7 +204,13 @@ for (const f of stepFiles) {
   let arr;
   try {
     arr = JSON.parse(fs.readFileSync(path.join(stepDir, f), 'utf8'));
-  } catch (e) { badSteps.push(f + ' 不是合法 JSON：' + e.message); continue; }
+  } catch (e) {
+    // 剧本里最常见的两种"JSON 自己坏了"：note 里用了 ASCII 双引号（整行被截断）、
+    // 正则写了 \s \d（JSON 里必须 \\s \\d）。两种都是本轮自己踩的，指个方向省一轮排查。
+    badSteps.push(f + ' 不是合法 JSON：' + e.message +
+      '（note 里的引号请用「」，正则里的 \\s \\d 要写成 \\\\s \\\\d）');
+    continue;
+  }
   (Array.isArray(arr) ? arr : []).forEach((st, i) => {
     if (!st || typeof st.eval !== 'string') return;
     // 剧本里两种写法都有：一条表达式，或"点一下再回个话"的语句串。
@@ -213,10 +219,38 @@ for (const f of stepFiles) {
     try { new Function('return (' + st.eval + ')'); }
     catch (e1) { try { new Function(st.eval); } catch (e2) { parsed = false; } }
     if (!parsed) badSteps.push(f + ' 第 ' + (i + 1) + ' 步 eval 两种写法都解析不过');
+    // 正则里的 `\s` `\d` 在 JSON 字符串里是非法转义（要写成 `\\s`），
+    // 而 note 里用 ASCII 双引号会把整行 JSON 截断 —— 这两处都是本轮自己踩的，
+    // 症状是"剧本跑到那一步突然什么都读不出来"。JSON.parse 在上面已经拦住了，
+    // 这里只是让**报错落在写剧本的那一刻**。
+    if (typeof st.note === 'string' && /(^|[^\\])"/.test(st.note)) {
+      try { JSON.stringify({ n: st.note }); } catch (e) { badSteps.push(f + ' 第 ' + (i + 1) + ' 步 note 里有裸引号'); }
+    }
   });
 }
 check(stepFiles.length > 0, '抓到像素剧本清单', stepFiles.length + ' 份');
 check(badSteps.length === 0, '每份剧本里的 eval 都是合法 JS', badSteps.join('\n         '));
+
+/*
+ * ---- 6.4) 只打印不断言的剧本 = 没有判据（只数得清"退出了 0"）----
+ * 2026-09-29 给 audit-steps.sh 加上"判据数为 0 单独标红"之后全量跑了一遍：
+ * 43 份里有 31 份一条 `must` 都没有 —— 它们把 JSON 打印给人读，
+ * 于是界面坏了、按钮没了、卡不重画了，它都照样"绿"。这是整个验收体系最大的一笔债。
+ * 一次补完不现实，所以做成**棘轮**：只许变好。每补完一份就把下面的上限改小，
+ * 补不完不许加新的零判据剧本。
+ */
+const ZERO_GATE_CEILING = 33;   // 本轮补掉 ui-ask(18 条) 与 ui-askkeys(23 条)
+const zeroGate = [];
+for (const f of stepFiles) {
+  let arr;
+  try { arr = JSON.parse(fs.readFileSync(path.join(stepDir, f), 'utf8')); } catch (e) { continue; }
+  const gates = (Array.isArray(arr) ? arr : []).reduce((s, st) => s + ((st && st.must) || []).length, 0);
+  if (gates === 0) zeroGate.push(f.replace(/\.json$/, ''));
+}
+check(zeroGate.length <= ZERO_GATE_CEILING,
+  '一条判据都没有的剧本数（棘轮，只许降）',
+  '现在 ' + zeroGate.length + ' 份，上限 ' + ZERO_GATE_CEILING +
+  '。补判据的顺序建议按最近改过的面：' + zeroGate.slice(0, 8).join(' ') + ' …');
 
 /*
  * ---- 6.5) 分屏之后"看得见的会话"有两种：左格（.on）与右格（.duo）----

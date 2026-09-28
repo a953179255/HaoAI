@@ -4,20 +4,40 @@
   {"sleep": 300},
   {"type": {"sel": "#box", "text": "验收：写一个需要确认的文件"}},
   {"goto": ".card.ask", "timeout": 25000},
-  {"eval": "({ask:document.querySelectorAll('.card.ask').length,maskOn:document.getElementById('mask').classList.contains('on'),btns:[...document.querySelector('.card.ask .acts').children].map(b=>b.innerText||b.tagName).join(' | '),title:(document.querySelector('.card.ask .sb')||{}).innerText})"},
+  {
+    "eval": "(()=>{const c=document.querySelectorAll('.card.ask');const a=c[0];const acts=a?a.querySelector('.acts'):null;return JSON.stringify({askOne:c.length==1,question:/要绿色还是蓝色/.test(a?a.innerText:''),noMask:!document.getElementById('mask').classList.contains('on'),keyHinted:/1/.test(acts?acts.innerText:'')&&/2/.test(acts.innerText),hasInput:!!(a&&a.querySelector('input'))})})()",
+    "must": ["askOne", "question", "noMask", "keyHinted", "hasInput"],
+    "note": "审批与提问都是**消息流里的内联卡**，不是遮罩弹窗：`noMask` 钉的就是这件事（改回弹窗这条会红）。提问卡上还该有选项的快捷键号 1/2 和一个自己写的输入框"
+  },
   {"shot": "a01-inline-approval"},
   {"click": ".card.ask .btn.pri"},
   {"sleep": 2000},
-  {"eval": "({done:document.querySelectorAll('.card.ask.done').length,askNow:document.querySelectorAll('.card.ask:not(.done)').length,maskOn:document.getElementById('mask').classList.contains('on')})"},
+  {
+    "eval": "(()=>{const done=document.querySelectorAll('.card.ask.done').length;const left=[...document.querySelectorAll('.card.ask:not(.done)')];return JSON.stringify({answered:done>=1,approvalUp:left.length==1&&/允许一次/.test(left[0].innerText),noMask:!document.getElementById('mask').classList.contains('on')})})()",
+    "must": ["answered", "approvalUp", "noMask"],
+    "note": "答完「绿色」，那张卡要留下（done），并且引擎接着跑到的下一步**审批**要自己冒出来 —— 这一步是这条链路的因果点：答错了就不会有审批卡"
+  },
   {"shot": "a02-approved"},
   {"goto": ".card.ask:not(.done)", "timeout": 20000},
   {"sleep": 400},
   {"shot": "a03-question"},
-  {"eval": "({opts:[...document.querySelector('.card.ask:not(.done) .acts').children].map(b=>b.innerText||b.tagName).join(' | ')})"},
+  {
+    "eval": "(()=>{const a=document.querySelector('.card.ask:not(.done)');const btns=a?[...a.querySelector('.acts').children].map(b=>b.innerText):[];const all=btns.join(' | ');return JSON.stringify({four:btns.length==4,hasAllowOnce:/允许一次/.test(all),hasSession:/本任务都允许/.test(all),hasRule:/以后这类都允许/.test(all),hasDeny:/拒绝/.test(all),keyHints:btns.filter(t=>/[ynar]$/i.test(t.trim())).length==4})})()",
+    "must": ["four", "hasAllowOnce", "hasSession", "hasRule", "hasDeny", "keyHints"],
+    "note": "四个决定一个都不能少，而且每颗上面都写着快捷键号（y/a/r/n）—— 快捷键上卡那批做的就是把提示印在按钮里，只测「按 y 有效」测不到「人看得见该按哪个」"
+  },
   {"click": ".card.ask:not(.done) .btn.pri"},
   {"sleep": 2500},
-  {"eval": "({done:document.querySelectorAll('.card.ask.done').length,askLeft:document.querySelectorAll('.card.ask:not(.done)').length,stopped:!document.getElementById('send').classList.contains('stop')})"},
+  {
+    "eval": "(()=>{const left=document.querySelectorAll('.card.ask:not(.done)').length;return JSON.stringify({nothingLeft:left==0,stopped:!document.getElementById('send').classList.contains('stop')})})()",
+    "must": ["nothingLeft", "stopped"],
+    "note": "批完不许留一张还挂着的卡（`left==0`），发送键也要从「停止」变回去 —— 期望值是 0 的东西必须自己算成布尔，`must` 里写 `left` 会把「真的清干净了」判成失败"
+  },
   {"shot": "a04-answered"},
-  {"eval": "({ntag:[...document.querySelectorAll('.ntag')].map(e=>e.innerText).join(' | ')})"},
+  {
+    "eval": "(()=>{const n=[...document.querySelectorAll('.ntag')].map(e=>e.innerText).join(' | ');return JSON.stringify({kept:/允许一次/.test(n),diffShown:/行/.test(n)})})()",
+    "must": ["kept", "diffShown"],
+    "note": "决定要留在卡上（回合跑完、卡片重画之后还在），并且带上当时的改动量 —— 事后回看才知道那句改动是谁批的"
+  },
   {"shot": "a05-decision-kept"}
 ]
