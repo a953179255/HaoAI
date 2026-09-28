@@ -206,6 +206,9 @@ interface LanHost {
     /** 人从手机上做的决定。回一句话说明成没成。 */
     fun decide(id: String, decision: String): String
 
+    /** 这条挂起是 "approval" 还是 "ask"（也可能是空串 = 已经不在了）。 */
+    fun pendingKind(id: String): String
+
     /** 从手机发来的活：sid 空 = 另起一条新会话。回一句话说明成没成（成则带 sid）。 */
     fun lanSend(sid: String, text: String): String
 
@@ -309,11 +312,22 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
         val body = readBody(ex)
         val id = field(body, "id")
         val decision = field(body, "decision")
-        if (id.isBlank() || decision !in DECISIONS) {
-            send(ex, 200, """{"ok":false,"error":"要 id 和 decision（${DECISIONS.joinToString("/")}）"}""")
+        val answer = field(body, "answer")
+        /*
+         * 两种挂起填的东西不一样：**审批**只能填那三个值（填错了就等于替人放行），
+         * **提问**填的是回答文字本身（选项原文或自由输入）—— 引擎那边 `fut.complete(字符串)`
+         * 拿到的就是这句话。所以这里按 `pendingKind` 分岔，而不是一刀切校验 DECISIONS：
+         * 一刀切的话手机上永远答不了提问，而把校验放开又会让人拿 answer 蒙混过审批。
+         */
+        val kind = if (id.isBlank()) "" else host.pendingKind(id)
+        val value = if (kind == "ask") answer.ifBlank { decision } else decision
+        if (id.isBlank() || value.isBlank() || (kind != "ask" && decision !in DECISIONS)) {
+            send(ex, 200, """{"ok":false,"error":${q(
+                if (kind == "ask") "这条是提问：把要选的那个答案放进 answer"
+                else "要 id 和 decision（${DECISIONS.joinToString("/")}）")}""")
             return
         }
-        val note = host.decide(id, decision)
+        val note = host.decide(id, value)
         send(ex, 200, """{"ok":${note.startsWith("已")},"note":${q(note)}}""")
     }
 

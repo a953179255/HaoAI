@@ -4,11 +4,14 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.File
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -2472,15 +2475,22 @@ class WebServer(settings: PcSettings, port: Int,
             """"items":[$rows]}"""
     }
 
+    /**
+     * 手机上"在等人点"的那一份。**审批与提问都要给**：
+     * 以前只挑 approval，于是 `ask_user` 那种"要绿色还是蓝色"在手机上根本不存在 ——
+     * 而它和审批一样是把回合卡住的那一步，甚至更需要"人在外面随手答一句"。
+     * 提问归一成 `{title, options:[..]}`，让两份手机客户端读同一组字段。
+     */
     override fun pendingJson(): String {
-        val rows = pending.keys.filter { pendingPayload[it]?.ev == "approval" }.joinToString(",") { id ->
-            val w = pendingPayload[id]
-            val payload = w?.payload?.takeIf { it.isNotBlank() } ?: "{}"
-            """{"id":${quote(id)},"kind":"approval",""" +
-                """"sid":${quote(w?.sid ?: "")},"payload":$payload}"""
-        }
+        val rows = pending.keys.mapNotNull { id ->
+            val w = pendingPayload[id] ?: return@mapNotNull null
+            lanPendingRow(id, w.ev, w.sid, w.payload)
+        }.joinToString(",")
         return """{"ok":true,"items":[$rows]}"""
     }
+
+    /** 跨端那一面要知道这条是审批还是提问（决定只能填那三个值，回答填的是文字本身）。 */
+    override fun pendingKind(id: String): String = pendingPayload[id]?.ev ?: ""
 
     /**
      * 手机上发来的活。`sid` 空 = 另起一条新会话（不去挤用户正在聊的那条）。
@@ -2512,8 +2522,11 @@ class WebServer(settings: PcSettings, port: Int,
 
     override fun decide(id: String, decision: String): String {
         val fut = pending[id] ?: return "这条已经不在等待了（可能刚在电脑上被处理）"
+        // 先取事件名再 complete：complete 之后引擎可能立刻把这条销号（pendingPayload.remove），
+        // 那时 ev 就读不到了，回话就会退化成审批那句。
+        val isAsk = pendingPayload[id]?.ev == "ask"
         if (!fut.complete(decision)) return "这条已经答过了"
-        return "已按你的决定放行：$decision"
+        return decideNote(isAsk, decision)
     }
 
     private fun previewState(ex: HttpExchange) {
@@ -2867,3 +2880,52 @@ class WebServer(settings: PcSettings, port: Int,
 
     private fun quote(s: String): String = "\"" + esc(s) + "\""
 }
+
+/**
+ * 一条待决 → 跨端那一面的一行 JSON。**这一段的写法本身是结论**：
+ *
+ * 它原来是手搓字符串拼出来的，ask 分支多写了一个 `}`。手机页 `r.json()` 当场抛，
+ * 那句提示只在角落闪 9 秒，待批页看上去就是"电脑那边没在等人" —— 一个谁都不会怀疑到
+ * 协议头上的症状。而 `LanTest` 那几条全绿，因为它断的是**假 host 手写的那份字符串**：
+ * 桩和产品各错各的，两边一起把缺陷盖住。
+ *
+ * 所以两件事一起做：① 改用手感啰嗦但**结构上不可能括号不配对**的 JsonObject 构造；
+ * ② 把它挪成顶层函数，让测试能对着产品真身（而不是桩）做 `Json.parseToJsonElement`。
+ * 第三道保险在像素剧本 `ui-phoneask.json` 里：它把待批页"读不到"和"真的没有"分开判。
+ */
+internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String): String? {
+    val p = payload.takeIf { it.isNotBlank() } ?: "{}"
+    val body: JsonObject = when (ev) {
+        "approval" -> buildJsonObject {
+            put("id", id); put("kind", "approval"); put("sid", sid)
+            put("payload", runCatching { Json.parseToJsonElement(p) }.getOrNull() ?: JsonObject(emptyMap()))
+        }
+        // 提问归一成 {title, options:[..]}：两份手机客户端读同一组字段，不用各认一种载荷
+        "ask" -> buildJsonObject {
+            val a = runCatching { Json.parseToJsonElement(p).jsonObject }.getOrNull()
+            put("id", id); put("kind", "ask"); put("sid", sid)
+            put("payload", buildJsonObject {
+                put("title", a?.get("question")?.jsonPrimitive?.contentOrNull ?: "")
+                put("detail", "")
+                put("options", buildJsonArray {
+                    // 一个元素不是字符串也不能把整份列表带崩：这一句抛了就是 /lan/pending 500，
+                    // 手机上表现成"待批页什么都看不见"，和本批要修的那个症状一模一样。
+                    a?.get("options")?.jsonArray?.forEach { o ->
+                        runCatching { o.jsonPrimitive.contentOrNull }.getOrNull()?.let { add(JsonPrimitive(it)) }
+                    }
+                })
+            })
+        }
+        else -> return null
+    }
+    return body.toString()
+}
+
+/**
+ * 答完一句之后回给手机的那句话。审批与提问走的是同一个 `/lan/decide`，
+ * 但话不能说反：像素验收里答完「绿色」之后，手机底下浮出来的曾是
+ * 「已按你的决定放行：绿色」—— 那是"有人替某个操作开了绿灯"的意思，
+ * 而这次只是回了一句选择题的答案。
+ */
+internal fun decideNote(isAsk: Boolean, value: String): String =
+    if (isAsk) "已把回答送回电脑：$value" else "已按你的决定放行：$value"

@@ -188,24 +188,55 @@ object PcWatchdog {
         pollOnce()
     }
 
+    /** 在通知上直接答了电脑上那句提问（`ask_user`）。送的是回答文字，不是那三个决定值。 */
+    suspend fun answer(id: String, text: String) {
+        val f = file() ?: return
+        val ep = store?.load(f) ?: return
+        _state.value = _state.value.copy(
+            lastNote = when (val out = PcLink(ep.base, ep.token).answer(id, text)) {
+                is PcOut.Ok -> out.value
+                is PcOut.Fail -> out.message
+            }
+        )
+        pollOnce()
+    }
+
     private fun showNotification(items: List<PcApproval>, total: Int) {
         val a = app ?: return
         val first = items.firstOrNull() ?: return
+        val ask = first.kind == "ask"
         val body = buildString {
-            append(first.payload.title.ifBlank { "（没标题）" })
+            append(first.payload.title.ifBlank { if (ask) "（没问出口）" else "（没标题）" })
             if (first.payload.detail.isNotBlank()) append('\n').append(first.payload.detail)
+            if (ask && first.payload.options.isNotEmpty())
+                append('\n').append("可选：").append(first.payload.options.take(4).joinToString(" / "))
             if (first.payload.riskWhy.isNotBlank()) append('\n').append("为什么算高危：${first.payload.riskWhy}")
         }
         val b = NotificationCompat.Builder(a, CHANNEL_PC)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(if (total > 1) "电脑上有 $total 条在等你批" else "电脑上有 1 条在等你批")
+            .setContentTitle(
+                if (ask) (if (total > 1) "电脑上有话要问你（还有 ${total - 1} 条要批）" else "电脑上有话要问你")
+                else if (total > 1) "电脑上有 $total 条在等你批" else "电脑上有 1 条在等你批"
+            )
             .setContentText(body.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(openAppIntent(a))
             .setAutoCancel(false)
-        // 三个动作直接挂在通知上：人在外面不用解锁找应用就能放行或拒绝
-        listOf("允许一次" to "allow_once", "本任务都允许" to "allow_session", "拒绝" to "deny")
-            .forEach { (label, d) -> b.addAction(0, label, decidePi(a, first.id, d, label.hashCode())) }
+        // 动作直接挂在通知上：人在外面不用解锁找应用就能放行、拒绝，或者答那一句
+        if (ask) {
+            first.payload.options.take(3).forEach { opt ->
+                b.addAction(0, opt.take(12), decidePi(a, first.id, opt, opt.hashCode(), isAnswer = true))
+            }
+            // 选项超过三个、或一个都没给：通知上摆不下，得给一个**真能写句子**的地方。
+            // 这里指向电脑上那个手机网页端（它的回答输入框正是这一批像素验过的东西），
+            // 不指向应用内 —— `PcLinkScreen` 现在只有配对与状态，没有写回答的框，
+            // 按钮写着「打开写回答」而打开的页面写不了，那就是个假出口。
+            if (first.payload.options.size > 3 || first.payload.options.isEmpty())
+                b.addAction(0, "在网页上答", openWebIntent(a, _state.value.base))
+        } else {
+            listOf("允许一次" to "allow_once", "本任务都允许" to "allow_session", "拒绝" to "deny")
+                .forEach { (label, d) -> b.addAction(0, label, decidePi(a, first.id, d, label.hashCode())) }
+        }
         (a.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, b.build())
     }
@@ -215,11 +246,14 @@ object PcWatchdog {
         (a.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID)
     }
 
-    private fun decidePi(a: Context, id: String, decision: String, code: Int): PendingIntent {
+    private fun decidePi(
+        a: Context, id: String, decision: String, code: Int, isAnswer: Boolean = false
+    ): PendingIntent {
         val i = Intent(a, PcActionReceiver::class.java)
             .setAction(PcActionReceiver.ACTION_PC_DECIDE)
             .putExtra(PcActionReceiver.EXTRA_ID, id)
             .putExtra(PcActionReceiver.EXTRA_DECISION, decision)
+            .putExtra(PcActionReceiver.EXTRA_IS_ANSWER, isAnswer)
         return PendingIntent.getBroadcast(
             a, code, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -233,6 +267,20 @@ object PcWatchdog {
         }
         return PendingIntent.getActivity(
             a, 900, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    /**
+     * 打开电脑上那个手机网页端（`base` 本身就是它）。
+     * 通知上摆不下的回答（没给选项、或选项超过三个）目前只有那里写得进去 ——
+     * 应用内的 `PcLinkScreen` 还没有回答输入框，按钮指过去就是个假出口。
+     */
+    private fun openWebIntent(a: Context, base: String): PendingIntent {
+        if (base.isBlank()) return openAppIntent(a)   // 连地址都没有时别发一个打不开的 intent
+        val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(base))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(
+            a, 901, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
 }
@@ -250,8 +298,10 @@ class PcActionReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_PC_DECIDE) return
         val id = intent.getStringExtra(EXTRA_ID) ?: return
         val decision = intent.getStringExtra(EXTRA_DECISION) ?: return
+        // 同一个按钮口，两种语义：审批送的是那三个决定值，提问送的是回答文字
+        val isAnswer = intent.getBooleanExtra(EXTRA_IS_ANSWER, false)
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { PcWatchdog.decide(id, decision) }
+            runCatching { if (isAnswer) PcWatchdog.answer(id, decision) else PcWatchdog.decide(id, decision) }
                 .onFailure { android.util.Log.w("HaoPcLink", "点决定没送到：${it.message}") }
         }
     }
@@ -260,5 +310,6 @@ class PcActionReceiver : BroadcastReceiver() {
         const val ACTION_PC_DECIDE = "com.haoai.agent.action.PC_DECIDE"
         const val EXTRA_ID = "pc_ask_id"
         const val EXTRA_DECISION = "pc_decision"
+        const val EXTRA_IS_ANSWER = "pc_is_answer"
     }
 }

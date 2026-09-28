@@ -156,7 +156,11 @@ var ntimer=0;
 function say(t,bad){const n=$('note');n.textContent=t||'';n.hidden=!t;
   n.classList.toggle('bad',!!bad);clearTimeout(ntimer);
   if(t)ntimer=setTimeout(function(){n.hidden=true;n.textContent=''},9000)}
-function fail(e){const m=(e&&e.message)||'连不上';$('err').textContent=m;say(m,true)}
+function fail(e){const m=(e&&e.message)||'连不上';$('err').textContent=m;say(m,true);
+  /* 读不到就要写在待批页上。原来只有角落一句 9 秒后自动消失的提示，
+     于是"电脑回了一份手机读不懂的东西"和"电脑上确实没在等人"长得一模一样 —— 
+     本批那条坏 JSON 就是这么混过去一整轮的。 */
+  if(!$('appr').innerHTML.trim())$('appr').innerHTML='<p class="mut">没能读到电脑的待决：'+esc(m)+'</p>'}
 
 /* ---- 配对 ---- */
 $('btnPair').onclick=function(){
@@ -194,15 +198,35 @@ function refresh(){
         var pl=p.payload||{};
         var rk=pl.risk?('<span class="rk '+
           (pl.risk=='high'?'hi':(pl.risk=='mid'?'mid':'lo'))+'">'+esc(pl.riskLabel||pl.risk)+'</span>'):'';
+        if(p.kind=='ask'){
+          /* 提问走的是"回答文字"，不是那三个决定值：按选项给按钮，
+             没有选项（或超过三个）就给一个输入框 —— 电脑上问自由问题时手机也答得了。 */
+          var os=pl.options||[];
+          return '<div class="card ask"><h3>❓ '+esc(pl.title||'(没问出口)')+'</h3>'+
+            '<p class="mut">这是电脑上的一句提问，答了它才继续跑。</p><div class="acts">'+
+            os.slice(0,3).map(function(o){return '<button class="ok" data-a="'+esc(o)+'" data-i="'+
+              esc(p.id)+'">'+esc(o)+'</button>'}).join('')+
+            /* 输入框一直在：选项不够贴切（或根本没给选项）时，人得能自己写一句。
+               以前"自己写…"在没有输入框时点下去只会提示"先写一句回答" —— 那是个假出口。 */
+            '<input id="answ" placeholder="或自己写一句回答" maxlength="200">'+
+            '<button data-a="__own__" data-i="'+esc(p.id)+'">发送回答</button>'+
+            '</div></div>'
+        }
         return '<div class="card'+(pl.risk=='high'?' hi':'')+'" data-risk="'+esc(pl.risk||'')+'"><h3>'+esc(pl.title||'(没标题)')+rk+'</h3>'+
           '<p>'+esc(pl.detail||'')+'</p>'+
           (pl.riskWhy?'<p class="why">'+esc(pl.riskWhy)+'</p>':'')+'<div class="acts">'+
           '<button class="ok" data-d="allow_once" data-i="'+esc(p.id)+'">允许一次</button>'+
           '<button data-d="allow_session" data-i="'+esc(p.id)+'">本任务都允许</button>'+
           '<button class="no" data-d="deny" data-i="'+esc(p.id)+'">拒绝</button></div></div>'}).join('')
-        :'<p class="mut">没有在等批准的。电脑上要人点东西的时候会自动出现在这里。</p>';
+        :'<p class="mut">没有在等你的。电脑上要人批准或要人回答的时候，会自动出现在这里。</p>';
       [].forEach.call(document.querySelectorAll('#appr [data-d]'),function(b){
         b.onclick=function(){decide(b.dataset.i,b.dataset.d,b)}});
+      [].forEach.call(document.querySelectorAll('#appr [data-a]'),function(b){
+        b.onclick=function(){
+          var v=b.dataset.a;
+          if(v=='__own__'){var el=document.querySelector('#answ');v=(el&&el.value||'').trim();
+            if(!v){say('先写一句回答',true);return}}
+          answer(b.dataset.i,v,b)}});
     }),
     api('/lan/digest').then(function(d){
       var es=(d&&d.items)||[];
@@ -224,9 +248,13 @@ function refresh(){
   Promise.all(jobs).catch(fail).then(function(){busy=false;
     $('stamp').textContent='最近刷新 '+new Date().toLocaleTimeString();schedule()});
 }
-function decide(id,d,btn){
+function decide(id,d,btn){sendDecide(id,{decision:d})}
+/* 提问的回答走同一个口，只是字段叫 answer：电脑上 fut.complete(字符串) 拿到的就是这句。 */
+function answer(id,text,btn){sendDecide(id,{answer:text})}
+function sendDecide(id,body){
   [].forEach.call(document.querySelectorAll('#appr button'),function(b){b.disabled=true});
-  api('/lan/decide',{id:id,decision:d}).then(function(o){
+  body.id=id;
+  api('/lan/decide',body).then(function(o){
     say(o.ok?(o.note||'已送出'):(o.error||'没送到'),!o.ok);refresh()})
   .catch(function(e){say((e&&e.message)||'失败',true);refresh()})}
 

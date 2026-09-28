@@ -38,7 +38,19 @@ class LanTest {
         var decided: Pair<String, String>? = null
         override fun sessionsJson() = """{"ok":true,"items":[{"id":"s1","title":"跑一条任务"}]}"""
         override fun sessionJson(sid: String) = """{"ok":true,"sid":${quote(sid)},"items":[]}"""
-        override fun pendingJson() = """{"ok":true,"items":[{"id":"a1","kind":"approval","sid":"s1"}]}"""
+        /**
+         * 行交给产品真身 [lanPendingRow] 去拼。桩原来是自己手写一份字符串的 ——
+         * 那正是本批翻车的地方：产品那边多写了一个 `}`，而这份桩一直是对的，
+         * 于是路由测试全绿、手机页全空。**桩不许替产品重写一遍它要产的东西。**
+         */
+        override fun pendingJson(): String = """{"ok":true,"items":[""" + listOf(
+            lanPendingRow("a1", "approval", "s1", """{"title":"写 theme.txt","detail":"green\n"}"""),
+            lanPendingRow("q1", "ask", "s1",
+                """{"question":"要绿色还是蓝色主题？","options":["绿色","蓝色"]}"""),
+        ).filterNotNull().joinToString(",") + "]}"
+        /** 挂起的是审批还是提问，由这一份决定 `/lan/decide` 收哪个字段（真机上由 pendingPayload 的 ev 给）。 */
+        var kinds = mutableMapOf("a1" to "approval", "q1" to "ask")
+        override fun pendingKind(id: String): String = kinds[id] ?: ""
         var sent: Pair<String, String>? = null
         override fun digestJson() = """{"ok":true,"items":[],"count":0}"""
         override fun lanSend(sid: String, text: String): String {
@@ -48,7 +60,9 @@ class LanTest {
 
         override fun decide(id: String, decision: String): String {
             decided = id to decision
-            return "已按你的决定放行：$decision"
+            // 连这句回话都用产品那个函数生成：桩自己手写一份措辞，
+            // 就等于把"界面说什么"这件事排除在测试之外（本批那句"放行"就是这么溜过去的）。
+            return decideNote(kinds[id] == "ask", decision)
         }
 
         private fun quote(s: String) = "\"" + s + "\""
@@ -209,6 +223,80 @@ class LanTest {
             assertTrue("$bad 该被拒：" + body, body.contains("\"ok\":false"))
         }
         assertEquals(null, host.decided)
+    }
+
+    @Test
+    fun `a question reaches the phone with its options`() {
+        val token = paired()
+        val (code, body) = get("/lan/pending", token)
+        assertEquals(200, code)
+        assertTrue("提问该被镜像过来（以前只挑 approval，手机上根本看不到提问）：$body",
+            body.contains("\"kind\":\"ask\""))
+        assertTrue("问题原文要带过来：" + body, body.contains("要绿色还是蓝色主题？"))
+        assertTrue("候选项要带过来：" + body, body.contains("\"options\":[\"绿色\",\"蓝色\"]"))
+    }
+
+    /**
+     * 上面那条断的是**假 host 手写的那串字符**，产品里真正拼它的是另一段代码 ——
+     * 于是 ask 分支多写一个 `}` 的时候，这一族测试全绿，手机页却一片空白
+     * （`r.json()` 抛了，只在角落闪一句提示）。桩和产品各错各的，两边一起把缺陷盖住。
+     * 这条直接对着产品真身做 JSON.parse：括号不配对、引号没转义，这里就红。
+     */
+    @Test
+    fun `the product's own pending rows parse as JSON`() {
+        val ask = lanPendingRow("q1", "ask", "s1",
+            """{"question":"要绿色还是蓝色主题？","options":["绿色","蓝色"]}""")
+        val o = Json.parseToJsonElement(ask ?: "null").jsonObject
+        assertEquals("ask", o["kind"]?.jsonPrimitive?.content)
+        val pl = o["payload"]?.jsonObject
+        assertEquals("提问行没带 payload：" + ask, "要绿色还是蓝色主题？",
+            pl?.get("title")?.jsonPrimitive?.content)
+        assertEquals(listOf("绿色", "蓝色"), pl?.get("options")?.jsonArray?.map { it.jsonPrimitive.content })
+
+        // 审批那行的 payload 是整段透传的，最容易被引号与换行弄坏
+        val appr = lanPendingRow("a1", "approval", "s1",
+            """{"title":"写 theme.txt","detail":"第一行\n带\"引号\"","risk":"low"}""")
+        val a = Json.parseToJsonElement(appr ?: "null").jsonObject
+        assertEquals("第一行\n带\"引号\"",
+            a["payload"]?.jsonObject?.get("detail")?.jsonPrimitive?.content)
+
+        // 载荷本身是坏的：宁可整条不给，也不许吐出一段"看着像 JSON"的东西
+        val junk = lanPendingRow("a2", "approval", "s1", "{不是 JSON")
+        assertTrue("坏载荷不许拼出半截 JSON：" + junk,
+            junk == null || runCatching { Json.parseToJsonElement(junk) }.isSuccess)
+        assertNull("不认识的事件别硬凑一行", lanPendingRow("x", "notice", "s1", "{}"))
+    }
+
+    /**
+     * 回答走的是 `answer`，而审批走的是 `decision`。这条判据守的是两件事：
+     * ① 手机上答得了提问；② **不能拿 answer 蒙混过审批**（那样"随便写句什么"就等于替人放行）。
+     */
+    @Test
+    fun `an answer resolves a question but never an approval`() {
+        val token = paired()
+        val (code, body) = post("/lan/decide", """{"id":"q1","answer":"绿色"}""", token)
+        assertEquals(200, code)
+        assertTrue("该把回答原句交给引擎：" + host.decided, host.decided == ("q1" to "绿色"))
+        assertTrue("回话要说明是答了哪句：" + body, body.contains("绿色"))
+
+        host.decided = null
+        val (c2, b2) = post("/lan/decide", """{"id":"a1","answer":"允许吧"}""", token)
+        assertEquals(200, c2)
+        assertNull("审批不吃 answer（只认那三个决定值）：$b2", host.decided)
+        assertTrue("要说清该怎么填：" + b2, b2.contains("decision"))
+    }
+
+    /**
+     * 答完提问回的那句话不许借用审批的词。像素验收抓到过手机底下浮出
+     * 「已按你的决定放行：绿色」—— 答一句选择题不等于替谁开了绿灯。
+     */
+    @Test
+    fun `the note tells an answer apart from a decision`() {
+        val answer = decideNote(true, "绿色")
+        assertTrue("要说清送回去的是回答：" + answer, answer.contains("回答"))
+        assertFalse("不许说成放行：" + answer, answer.contains("放行"))
+        assertTrue("审批那句照旧：" + decideNote(false, "allow_once"),
+            decideNote(false, "allow_once").contains("放行"))
     }
 
     @Test

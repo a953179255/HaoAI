@@ -67,7 +67,7 @@ private fun help() {
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.73.0-pc"
+const val PC_VERSION = "0.74.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -272,10 +272,29 @@ private fun chat(s: PcSettings) {
  * 上一版类似的坑是"CLI 写了设置、界面还是旧的"，这里宁可多打一行也不让人猜。
  */
 private fun lanCmd(settings: PcSettings, rest: List<String>) {
-    val sub = rest.firstOrNull { !it.startsWith("--") } ?: "status"
-    val opts = rest.filter { it.startsWith("--") }.associate {
-        it.removePrefix("--").substringBefore('=').trim() to it.substringAfter('=', "").trim()
+    /*
+     * 参数解析要认两种写法：`--port=8899` 和 `--port 8899`。原来只认前者，
+     * 而脚本里用的是后者（`haoai lan on --port "$LAN_PORT"`）：值没被当成值，
+     * 端口静默落回默认 8720。这一轮如果 8720 被别的 haoai 占着（这台机器不止一个 agent
+     * 在跑），手机页连的就是**别人那台**——配对码、待批列表全都对错，还一路绿灯。
+     * 所以：值吃回去，位置参数只数没被吃掉的。
+     */
+    val opts = LinkedHashMap<String, String>()
+    val pos = mutableListOf<String>()
+    var i = 0
+    while (i < rest.size) {
+        val a = rest[i]
+        if (!a.startsWith("--")) { pos.add(a); i++; continue }
+        val k = a.removePrefix("--").substringBefore('=').trim()
+        if (a.contains('=')) {
+            opts[k] = a.substringAfter('=').trim(); i++
+        } else if (i + 1 < rest.size && !rest[i + 1].startsWith("--")) {
+            opts[k] = rest[i + 1].trim(); i += 2          // 值是被吃掉的，不该再被当成子命令
+        } else {
+            opts[k] = ""; i++
+        }
     }
+    val sub = pos.firstOrNull() ?: "status"
     val port = opts["port"]?.toIntOrNull() ?: LanStore.port()
     when (sub) {
         "status" -> {
@@ -310,20 +329,20 @@ private fun lanCmd(settings: PcSettings, rest: List<String>) {
             println("${it.hash.take(12)}  ${it.name}  加于 ${it.added}  上次 ${it.lastSeen}")
         }
         "pair" -> {
-            val name = rest.getOrNull(rest.indexOf(sub) + 1)?.takeIf { !it.startsWith("--") } ?: "命令行配对"
+            val name = pos.getOrNull(1) ?: "命令行配对"
             val (dev, token) = LanStore.pair(name)
             println("设备：${dev.name}    指纹：${dev.hash.take(12)}")
             println("token（只出现这一次，盘上只存哈希）：")
             println(token)
         }
         "allow-send" -> {
-            val on = rest.getOrNull(rest.indexOf(sub) + 1)?.let { it == "on" || it == "1" } ?: true
+            val on = pos.getOrNull(1)?.let { it == "on" || it == "1" } ?: true
             LanStore.saveAllowSend(on)
             println(if (on) "已允许从手机派活（手机上发的话会让这台电脑真的动手；ask 档仍会逐条要审批）"
             else "已收回：手机只能看会话与批审批，不能派活")
         }
         "unpair" -> {
-            val prefix = rest.getOrNull(rest.indexOf(sub) + 1) ?: ""
+            val prefix = pos.getOrNull(1) ?: ""
             println(if (LanStore.remove(prefix)) "已解除：$prefix" else "没找到以「$prefix」开头的设备")
         }
         else -> println("用法：haoai lan status|on|off|code|devices|pair <名>|unpair <前缀>")

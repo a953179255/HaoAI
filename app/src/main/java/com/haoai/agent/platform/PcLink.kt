@@ -81,7 +81,9 @@ data class PcMessage(val role: String = "", val name: String = "", val text: Str
 @Serializable
 data class PcPayload(
     val title: String = "", val detail: String = "",
-    val risk: String = "", val riskLabel: String = "", val riskWhy: String = ""
+    val risk: String = "", val riskLabel: String = "", val riskWhy: String = "",
+    /** `kind=="ask"` 时才有：电脑上那句提问给的候选项（可能为空 = 自由回答）。 */
+    val options: List<String> = emptyList()
 )
 
 @Serializable
@@ -213,6 +215,22 @@ class PcLink(
         val (st, tx) = call("lan/send", """{"sid":"${esc(sid)}","text":"${esc(text)}"}""")
         return when (val out = decode<PcNote>(st, tx)) {
             is PcOut.Ok -> PcOut.Ok(out.value.sid.ifBlank { out.value.note })
+            is PcOut.Fail -> PcOut.Fail(out.message, out.unauthorized)
+        }
+    }
+
+    /**
+     * 回答电脑上的一句提问（`ask_user`）。
+     *
+     * 与 [decide] 分开写：那边只能填那三个决定值，这边填的是**回答文字本身** ——
+     * 引擎那边 `fut.complete(字符串)` 拿到的就是这句。合成一个方法的话，
+     * 要么放开校验让"answer 蒙混过审批"成为可能，要么手机上永远答不了提问。
+     */
+    suspend fun answer(id: String, text: String): PcOut<String> {
+        if (text.isBlank()) return PcOut.Fail("回答是空的，没发出去")
+        val (st, tx) = call("lan/decide", """{"id":"${esc(id)}","answer":"${esc(text)}"}""")
+        return when (val out = decode<PcNote>(st, tx)) {
+            is PcOut.Ok -> PcOut.Ok(out.value.note.ifBlank { "已把这句回答送到电脑上" })
             is PcOut.Fail -> PcOut.Fail(out.message, out.unauthorized)
         }
     }

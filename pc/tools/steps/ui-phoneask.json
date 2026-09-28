@@ -1,0 +1,144 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "先问我要哪个主题再动手",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const a=(s.pending||[]).find(p=>p.ev=='ask');if(a)return JSON.stringify({askParked:true,question:a.data.question||'',opts:(a.data.options||[]).join('|'),n:(s.pending||[]).length});if(Date.now()-t0>40000)return JSON.stringify({askParked:false,evs:(s.pending||[]).map(p=>p.ev).join('|')});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": [
+      "askParked",
+      "question",
+      "opts"
+    ],
+    "note": "在**桌面这一头**等提问挂上（/api/state 的 pending 同源可读；/lan/* 只有局域网那个口有，桌面页去 fetch 它是跨源、必然假红）。提问在服务器上就是一个 Waiter(\"ask\")，手机页稍后再来取也一样"
+  },
+  {
+    "eval": "(()=>{location.href='http://127.0.0.1:@LAN@/';return 'go'})()"
+  },
+  {
+    "goto": "#code",
+    "visible": true,
+    "timeout": 25000
+  },
+  {
+    "type": {
+      "sel": "#code",
+      "text": "@CODE@",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#name",
+      "text": "提问验收机",
+      "enter": false
+    }
+  },
+  {
+    "click": "#btnPair",
+    "after": 1500
+  },
+  {
+    "eval": "(async()=>{const r=await fetch('/lan/pending',{headers:{'X-HaoAI-Token':token}});const t=await r.text();let ok=false;try{ok=JSON.parse(t).ok===true}catch(e){}return JSON.stringify({rawParses:ok,http:r.status,tail:t.slice(-46)})})()",
+    "must": [
+      "rawParses"
+    ],
+    "note": "协议本身的判据：跨端这份 JSON 要能被 JSON.parse。手搓字符串拼 JSON 多写过一个 `}`，手机页 r.json() 抛了之后只在角落闪一句提示，待批页看着就是\"空的\" —— 症状指向界面，病根在协议。这一条把它当场钉住，不用等到后面一堆假故障再回头猜"
+  },
+  {
+    "click": "#tAppr"
+  },
+  {
+    "goto": "#appr .card",
+    "visible": true,
+    "timeout": 25000
+  },
+  {
+    "eval": "(()=>{const cards=[...document.querySelectorAll('#appr .card')];const ask=cards.filter(c=>/❓/.test(c.innerText));const a=ask[0];const btns=a?[...a.querySelectorAll('[data-a]')]:[];const r=a?a.getBoundingClientRect():{left:0,right:0,width:0,height:0};return JSON.stringify({apprShown:!document.querySelector('#appr').hidden,noReadError:!/没能读到/.test(document.querySelector('#appr').innerText),kindAsk:ask.length==1,question:/要绿色还是蓝色/.test(a?a.innerText:''),optNames:btns.map(b=>b.dataset.a).join('|'),hasInput:!!(a&&a.querySelector('#answ')),badgeOne:(document.querySelector('#badge').textContent||'')=='1',noDecideBtns:!!(a&&a.querySelectorAll('[data-d]').length==0),inWide:r.width>200&&r.right<=innerWidth+1,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+1})})()",
+    "must": [
+      "apprShown",
+      "noReadError",
+      "kindAsk",
+      "question",
+      "optNames",
+      "hasInput",
+      "badgeOne",
+      "noDecideBtns",
+      "inWide",
+      "noOverflow"
+    ],
+    "note": "提问以前根本到不了手机（pendingJson 只挑 approval）。现在它是一张带 ❓ 的卡：问题原文 + 两个选项按钮 + 一个自己写的输入框。optNames 钉的是 data-a 的**值**（点下去发出去的就是它），不是按钮文字；noDecideBtns 钉的是这张卡上不许有「允许/拒绝」——那不是提问的答法"
+  },
+  {
+    "shot": "pa01-ask-card"
+  },
+  {
+    "eval": "(()=>{const b=[...document.querySelectorAll('#appr [data-a]')].find(x=>x.dataset.a=='绿色');if(!b)return JSON.stringify({clicked:false,have:[...document.querySelectorAll('#appr [data-a]')].map(x=>x.dataset.a).join('|')});b.click();return JSON.stringify({clicked:true})})()",
+    "must": [
+      "clicked"
+    ],
+    "note": "点的是「绿色」这个**回答**。先别急着信它送到了：空回答在服务端会被换成一句「用户没回答」，回合照样往下跑，所以\"推进到审批\"根本不能当送达的凭据 —— 最后一步回桌面查 tool 结果原文"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const n=document.querySelector('#note').textContent||'';if(/送回电脑/.test(n)&&!/放行/.test(n))return JSON.stringify({noteSaysAnswer:true,note:n});if(/放行/.test(n))return JSON.stringify({noteSaysAnswer:false,note:n});if(Date.now()-t0>9000)return JSON.stringify({noteSaysAnswer:false,note:n||'(一句提示都没浮出来)'});await new Promise(z=>setTimeout(z,400))}})()",
+    "must": [
+      "noteSaysAnswer"
+    ],
+    "note": "答完提问，手机上浮的那句话不能是审批的词。这一条就是本批在截图里抓到的：答了「绿色」之后底下写的是「已按你的决定放行：绿色」—— 答一句选择题和替某个操作开绿灯是两回事"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await api('/lan/pending').catch(()=>({}));const it=(d&&d.items)||[];const appr=it.filter(x=>x.kind=='approval');if(appr.length)return JSON.stringify({advanced:true,kind:appr[0].kind,askGone:!it.some(x=>x.kind=='ask'),ms:Date.now()-t0});if(Date.now()-t0>45000)return JSON.stringify({advanced:false,n:it.length,seen:JSON.stringify(it).slice(0,120)});await new Promise(z=>setTimeout(z,900))}})()",
+    "must": [
+      "advanced",
+      "askGone"
+    ],
+    "note": "答完之后引擎接着跑，下一步是写 theme.txt 的**审批**；askGone 钉的是这条提问真的从待决里销了号（不是又被塞回队列）"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){await refresh();const c=document.querySelector('#appr .card');if(c&&!/❓/.test(c.innerText)&&c.querySelector('[data-d]'))return JSON.stringify({nowApproval:true,three:c.querySelectorAll('[data-d]').length,ms:Date.now()-t0});if(Date.now()-t0>20000)return JSON.stringify({nowApproval:false,txt:c?c.innerText.slice(0,60):'(一张卡都没有)'});await new Promise(z=>setTimeout(z,1200))}})()",
+    "must": [
+      "nowApproval",
+      "three"
+    ],
+    "note": "手机页面自己刷出审批卡（那三个 data-d 按钮），不用重开页面"
+  },
+  {
+    "shot": "pa02-then-approval"
+  },
+  {
+    "eval": "(()=>{const b=document.querySelector('#appr [data-d=\"allow_once\"]');if(!b)return JSON.stringify({ok:false});b.click();return JSON.stringify({ok:true})})()",
+    "must": [
+      "ok"
+    ],
+    "note": "把这回合收尾（不留在待批状态里挂到超时），顺带验一次审批那条路没被这批改动弄坏"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await api('/lan/pending').catch(()=>({}));if(!((d&&d.items)||[]).length)return JSON.stringify({cleared:true,ms:Date.now()-t0});if(Date.now()-t0>40000)return JSON.stringify({cleared:false,n:(d.items||[]).length});await new Promise(z=>setTimeout(z,900))}})()",
+    "must": [
+      "cleared"
+    ],
+    "note": "批完之后列表要空"
+  },
+  {
+    "eval": "(()=>{location.href='http://127.0.0.1:@WEB@/';return 'go'})()"
+  },
+  {
+    "goto": "#box",
+    "visible": true,
+    "timeout": 25000
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const ms=s.messages||[];const hit=ms.find(m=>(m.content||'')=='绿色');if(hit&&ms.some(m=>/theme\\.txt/.test(m.content||'')))return JSON.stringify({answerLanded:true,role:hit.role,name:hit.name||'',turnDone:true,n:ms.length,ms:Date.now()-t0});if(Date.now()-t0>30000)return JSON.stringify({answerLanded:false,turnDone:false,n:ms.length,tail:JSON.stringify(ms.slice(-3)).slice(0,160)});await new Promise(z=>setTimeout(z,900))}})()",
+    "must": [
+      "answerLanded",
+      "turnDone"
+    ],
+    "note": "这一条才是「回答真的送到了引擎」的凭据：落库的消息里有一条内容**正好是**「绿色」的 tool 结果（AskUserTool 把 fut 拿到的原文当结果返回）。空字符串会被换成「(用户没回答…)」，那样这条就红 —— 中间任何一环（手机按钮 → /lan/decide 的 answer 字段 → fut.complete → 引擎）断了都会被抓出来。turnDone 顺带证明这一回合跑到了最后一句"
+  }
+]
