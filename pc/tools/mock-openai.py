@@ -184,6 +184,19 @@ PLAN = {
                                                       "content": "从手机上批准的\n"})}]),
         ("批准了，approved.txt 已经写下去。", None),
     ],
+    # 审批风险分级：高/中/低三张卡一次摆齐。
+    # 高危那条选的是 `git push --force`，跑在没有 git 的临时工作区里 —— 就算剧本手滑点了
+    # "允许"，它也只会回一句 fatal，不会真把什么推上去。验收工具自己不能是不可逆的。
+    "risk": [
+        ("第一条不可逆", [{"id": "call_r1", "name": "shell",
+                            "arguments": json.dumps({"command": "git push --force origin main",
+                                                     "shell": "bash", "timeout": 30})}]),
+        ("第二条改已存在的文件", [{"id": "call_r2", "name": "write",
+                                    "arguments": json.dumps({"path": "risk.txt", "content": "覆盖一遍\n"})}]),
+        ("第三条新建文件", [{"id": "call_r3", "name": "write",
+                              "arguments": json.dumps({"path": "risk-new.md", "content": "新文件\n"})}]),
+        ("三张卡该分别标高危/中危/低危，红框只该出现在第一张上。", None),
+    ],
     # 永远不收尾的一轮接一轮 —— 存在的唯一理由是让"停止"按钮可被验证：
     # 其它模式跑完就结束，快到根本来不及点。每轮 sleep 0.6s 让界面看得见。
     "loop": [

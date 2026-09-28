@@ -49,6 +49,12 @@
   .acts button{flex:1 1 96px;font-size:13.5px;padding:12px 8px}
   .ok{border-color:var(--acc);color:var(--acc)}
   .no{border-color:#5a2b2b;color:var(--bad)}
+  .card.hi{border-color:var(--bad)}
+  .rk{font-size:11px;padding:1px 7px;border-radius:999px;margin-left:6px;border:1px solid var(--line);
+    color:var(--mut);vertical-align:2px}
+  .rk.mid{color:#e7b473;border-color:#7a5320}
+  .rk.hi{background:var(--bad);border-color:var(--bad);color:#1d0808;font-weight:700}
+  .why{color:var(--mut);font-size:12px}
   .msgs{display:flex;flex-direction:column;gap:8px;margin-top:10px}
   .m{border-radius:12px;padding:9px 11px;font-size:13.5px;white-space:pre-wrap;word-break:break-word}
   .m.user{background:#16302a;border:1px solid #214d42}
@@ -186,8 +192,11 @@ function refresh(){
       var ps=(d&&d.items)||[];$('badge').hidden=!ps.length;$('badge').textContent=ps.length;
       $('appr').innerHTML=ps.length?ps.map(function(p){
         var pl=p.payload||{};
-        return '<div class="card"><h3>'+esc(pl.title||'(没标题)')+'</h3>'+
-          '<p>'+esc(pl.detail||'')+'</p><div class="acts">'+
+        var rk=pl.risk?('<span class="rk '+
+          (pl.risk=='high'?'hi':(pl.risk=='mid'?'mid':'lo'))+'">'+esc(pl.riskLabel||pl.risk)+'</span>'):'';
+        return '<div class="card'+(pl.risk=='high'?' hi':'')+'" data-risk="'+esc(pl.risk||'')+'"><h3>'+esc(pl.title||'(没标题)')+rk+'</h3>'+
+          '<p>'+esc(pl.detail||'')+'</p>'+
+          (pl.riskWhy?'<p class="why">'+esc(pl.riskWhy)+'</p>':'')+'<div class="acts">'+
           '<button class="ok" data-d="allow_once" data-i="'+esc(p.id)+'">允许一次</button>'+
           '<button data-d="allow_session" data-i="'+esc(p.id)+'">本任务都允许</button>'+
           '<button class="no" data-d="deny" data-i="'+esc(p.id)+'">拒绝</button></div></div>'}).join('')

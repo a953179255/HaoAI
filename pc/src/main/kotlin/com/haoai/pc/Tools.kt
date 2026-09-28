@@ -79,6 +79,22 @@ interface Gate {
         tool: String,
         pattern: String
     ): Boolean = approve(title, detail, kind)
+
+    /**
+     * 带风险分级的版本。默认退化回 5 参那条，
+     * 这样 CLI 与所有测试假闸口不用一起改；只有网页壳覆盖它把分级显示到卡上。
+     *
+     * 传的是 [RiskOf.Verdict] 而不是拼好的字符串：分级有三要素（等级、文案、为什么），
+     * 拆成三个参数就会有人按文案匹配 —— 界面改一次措辞，高危红框就静默失效了。
+     */
+    fun approveRule(
+        title: String,
+        detail: String,
+        kind: String,
+        tool: String,
+        pattern: String,
+        risk: RiskOf.Verdict?
+    ): Boolean = approveRule(title, detail, kind, tool, pattern)
 }
 
 data class Todo(var text: String, var status: String = "pending")
@@ -168,12 +184,23 @@ class ToolCtx(
             return "计划模式（只读）下拒绝执行「$title」。要动手请先切到 ask/auto 档位。"
         }
         if (verdict?.decision == Decision.ALLOW) return null
-        if (mode == "auto" && verdict?.decision != Decision.ASK) return null
+        val out = subjectIsPath && kind == "write" && outside(resolve(subject))
+        val risk = RiskOf.of(tool, subject, detail(), out,
+            subjectIsPath && kind == "write" && runCatching { resolve(subject).isFile }.getOrDefault(false))
+        /*
+         * auto 档跳过审批，但**高危不跳**。
+         *
+         * 理由很具体：定时任务与任务链都以 auto 档跑，而链里完全可能出现
+         * `git push --force` 或"删工作区外的文件"。以前 auto 就是"全放行"，
+         * 等于把不可逆的那一下也交给了模型自己决定。现在低/中危照旧自动过，
+         * 高危仍然弹卡 —— 而卡可以在手机上点（v0.55 那条路），不会真把人堵在工位外。
+         */
+        if (mode == "auto" && risk.level != Risk.HIGH && verdict?.decision != Decision.ASK) return null
 
-        val extra = if (subjectIsPath && kind == "write" && outside(resolve(subject))) "（在工作区之外）" else ""
+        val extra = if (out) "（在工作区之外）" else ""
         val why = if (verdict != null) "\n为什么还要问：${verdict.why}" else ""
         val pattern = if (tool == "shell") PolicyStore.commandPrefix(subject) else subject
-        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern)
+        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern, risk)
         return if (ok) null else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
     }
 

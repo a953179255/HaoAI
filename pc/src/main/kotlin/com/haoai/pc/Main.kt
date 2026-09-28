@@ -67,7 +67,7 @@ private fun help() {
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.58.0-pc"
+const val PC_VERSION = "0.59.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -463,17 +463,28 @@ private fun cliGate(auto: Boolean, workspace: File): Gate = object : Gate {
     @Volatile
     private var allowAll = auto
 
-    override fun approve(title: String, detail: String, kind: String): Boolean = ask0(title, detail, kind, null, null)
+    override fun approve(title: String, detail: String, kind: String): Boolean = ask0(title, detail, kind, null, null, null)
 
     override fun approveRule(
         title: String, detail: String, kind: String, tool: String, pattern: String
-    ): Boolean = ask0(title, detail, kind, tool, pattern)
+    ): Boolean = ask0(title, detail, kind, tool, pattern, null)
+
+    /**
+     * CLI 也报等级：auto 档现在会为高危弹一次确认（定时任务/任务链里那条 `git push --force`），
+     * 终端上只写"需要确认"的话，人和网页端看到的不是同一条信息。
+     */
+    override fun approveRule(
+        title: String, detail: String, kind: String, tool: String, pattern: String,
+        risk: RiskOf.Verdict?
+    ): Boolean = ask0(title, detail, kind, tool, pattern, risk)
 
     private fun ask0(
-        title: String, detail: String, kind: String, tool: String?, pattern: String?
+        title: String, detail: String, kind: String, tool: String?, pattern: String?,
+        risk: RiskOf.Verdict?
     ): Boolean {
         if (allowAll && tool == null) return true
-        println("\n  ⚠ 需要确认（$kind）：$title")
+        val rk = if (risk == null) "" else " · ${RiskOf.label(risk.level)}：${risk.why}"
+        println("\n  ⚠ 需要确认（$kind）$rk：$title")
         detail.lines().take(8).forEach { println("      $it") }
         val line = if (tool != null && pattern != null)
             "  [y]允许一次 / [r]以后「$tool($pattern)」都允许 / [s]本任务都允许 / [n]拒绝 > "

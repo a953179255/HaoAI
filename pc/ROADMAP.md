@@ -76,7 +76,7 @@
 15. **会话分享快照（只读 HTML）** ｜ OpenCode `/share` ｜ 只有导出 markdown ｜ 给人看的成品形态 ｜ 导出的 HTML 无头浏览器打开，消息全在 ｜ PC
 16. **技能 zip/URL 导入 + 技能目录页** ｜ ZCODE 插件市场 40 款、OpenClaw ClawHub ｜ `/api/skills` 只有读/增/删 ｜ 能力扩展要能"装进来" ｜ 上传含 `SKILL.md` 的 zip → 列表出现 → `/命令` 可用；zip 里带 `../` 越界路径 → 拒绝并说明 ｜ PC
 17. **hooks（事件挂脚本）** ｜ ZCODE 7 个 hooks、OpenClaw session-memory/compaction-notifier ｜ 无 ｜ 想在回合结束时自动记一笔/推一个通知 ｜ 挂 `on-run-end` 脚本 → 跑完文件被写；脚本失败只记日志不打断会话 ｜ PC
-18. **审批风险分级** ｜ OpenClaw exec-approvals（security=full）、Claude Code 权限模式 ｜ 规则表有（Policies.kt），但待审卡上没有"这条有多危险" ｜ 点允许之前要看得见风险 ｜ `rm -rf /` 标红高危、`echo` 标低危；**先做确定性规则打分，不烧模型** ｜ PC
+18. **审批风险分级** ｜ OpenClaw exec-approvals（security=full）、Claude Code 权限模式 ｜ 规则表有（Policies.kt），但待审卡上没有"这条有多危险" ｜ 点允许之前要看得见风险 ｜ `rm -rf /` 标红高危、`echo` 标低危；**先做确定性规则打分，不烧模型** ｜ PC —— ✅ v0.59.0 已落地（`Risk.kt` 三档 + 卡上徽标与"为什么"；**auto 档从此不为高危自动放行**）
 19. **凭据条目管理** ｜ OpenClaw secrets ｜ 只有 `HAOAI_HOME/apikey`、`searchkey` 两个裸文件（有意不进 PcSettings，这条约束保留）｜ key 越来越多，要看得见、改得动、撤销掉 ｜ 设置页列出（值打码）、可改可删；`GET /api/settings` 永远不回传值 ｜ PC
 20. **定时任务增强：自然语言建任务 + 结果投递** ｜ Hermes 自然语言 cron 与"结果投递任意平台"、OpenClaw isolated session ｜ cron 表单要人自己填字段；跑完的摘要**没有去处**（只在会话里） ｜ 自动化要"跑到哪儿了我看得见" ｜ 一句话 → 解析成 cron 并预览（确认才落库）→ 跑完摘要写进指定会话/文件 ｜ PC
 21. **语音输入 / 回答朗读** ｜ Hermes 语音备忘与转写、Codex 语音 ｜ `grep speech = 0` ｜ 直播时口述、看结果不用读屏 ｜ 按钮在、无权限时给明确文案（headless 验不了权限，判据只能是"降级不炸"）｜ PC

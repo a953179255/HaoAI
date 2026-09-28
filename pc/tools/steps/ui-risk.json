@@ -1,0 +1,48 @@
+[
+  {"goto": "#box"},
+  {"click": "#modes button[data-m=\"ask\"]"},
+  {"sleep": 400},
+  {"type": {"sel": "#box", "text": "验收：连着做三件风险不同的事"}},
+
+  {"goto": ".view.on .card.ask[data-risk=\"high\"]", "timeout": 25000},
+  {"eval": "(()=>{const q=s=>document.querySelector('.view.on '+s);const why=(q('.card.ask[data-risk=high] .rkw')||{}).innerText||'';return {lvl:(q('.card.ask:not(.done)')||{dataset:{}}).dataset.risk, badge:(q('.card.ask[data-risk=high] .rk')||{}).innerText, badgeW:Math.round((q('.card.ask[data-risk=high] .rk')||{getBoundingClientRect:()=>({width:0})}).getBoundingClientRect().width), why, saysIrreversible:why.indexOf('不可逆')>=0}})()",
+   "must": ["lvl", "badge", "badgeW", "why", "saysIrreversible"]},
+  {"shot": "rk01-high-card"},
+  {"click": ".view.on .card.ask[data-risk=high] .btn.pri"},
+  {"sleep": 1800},
+
+  {"goto": ".view.on .card.ask[data-risk=\"mid\"]:not(.done)", "timeout": 25000},
+  {"eval": "(()=>{const g=s=>getComputedStyle(document.querySelector('.view.on '+s));return {badge:(document.querySelector('.view.on .card.ask[data-risk=mid] .rk')||{}).innerText, midBorder:g('.card.ask[data-risk=mid]').borderTopColor, hiBorder:g('.card.ask[data-risk=high]').borderTopColor, midNotRed:document.querySelectorAll('.view.on .card.ask[data-risk=mid].hi').length===0, differs:g('.card.ask[data-risk=mid]').borderTopColor!==g('.card.ask[data-risk=high]').borderTopColor}})()",
+   "must": ["badge", "midNotRed", "differs"]},
+  {"shot": "rk02-mid-card"},
+  {"click": ".view.on .card.ask[data-risk=mid] .btn.pri"},
+  {"sleep": 1800},
+
+  {"goto": ".view.on .card.ask[data-risk=\"low\"]:not(.done)", "timeout": 25000},
+  {"eval": "(()=>{const q=s=>document.querySelector('.view.on '+s);const lo=getComputedStyle(q('.card.ask[data-risk=low] .rk'));const hi=getComputedStyle(q('.card.ask[data-risk=high] .rk'));const m=getComputedStyle(q('.card.ask[data-risk=mid] .rk'));return {badge:q('.card.ask[data-risk=low] .rk').innerText, loText:lo.color, hiText:hi.color, hiSolid:hi.backgroundColor, threeTones:(lo.color!==hi.color&&m.color!==hi.color&&m.color!==lo.color), hiIsFilled:hi.backgroundColor!=='rgba(0, 0, 0, 0)', notRed:document.querySelectorAll('.view.on .card.ask[data-risk=low].hi').length===0, hi:document.querySelectorAll('.view.on .card.ask[data-risk=high]').length, mid:document.querySelectorAll('.view.on .card.ask[data-risk=mid]').length, lo2:document.querySelectorAll('.view.on .card.ask[data-risk=low]').length, redOnlyOne:document.querySelectorAll('.view.on .card.ask.hi').length===1, doneNow:document.querySelectorAll('.view.on .card.ask.done').length, lowBorder:getComputedStyle(q('.card.ask[data-risk=low]')).borderTopColor, midBorder:getComputedStyle(q('.card.ask[data-risk=mid]')).borderTopColor, hiBorder:getComputedStyle(q('.card.ask[data-risk=high]')).borderTopColor, threeWeights:(new Set([getComputedStyle(q('.card.ask[data-risk=low]')).borderTopColor,getComputedStyle(q('.card.ask[data-risk=mid]')).borderTopColor,getComputedStyle(q('.card.ask[data-risk=high]')).borderTopColor]).size===3)}})()",
+   "must": ["badge", "threeTones", "hiIsFilled", "notRed", "hi", "mid", "lo2", "redOnlyOne", "doneNow", "threeWeights"]},
+  {"shot": "rk03-three-levels"},
+  {"click": ".view.on .card.ask[data-risk=low] .btn.pri"},
+  {"sleep": 3000},
+  {"eval": "({stopped:!document.getElementById('send').classList.contains('stop')})", "must": ["stopped"]},
+
+  {"click": "#newBtn"},
+  {"sleep": 600},
+  {"click": "#modes button[data-m=\"auto\"]"},
+  {"sleep": 400},
+  {"type": {"sel": "#box", "text": "自动档：只该为不可逆那一下停下来"}},
+  {"goto": ".view.on .card.ask[data-risk=\"high\"]", "timeout": 25000},
+  {"eval": "({autoStillAsks:document.querySelectorAll('.view.on .card.ask[data-risk=high]').length, onlyOne:document.querySelectorAll('.view.on .card.ask').length})",
+   "must": ["autoStillAsks", "onlyOne"]},
+  {"shot": "rk04-auto-high-card"},
+  {"click": ".view.on .card.ask[data-risk=high] .btn.deny"},
+  {"sleep": 3000},
+
+  {"eval": "fetch('/api/state').then(r=>r.json()).then(s=>{const t=(s.messages||[]).filter(m=>m.role=='tool');return {writes:t.filter(m=>m.name=='write').length, shells:t.filter(m=>m.name=='shell').length, denied:t.filter(m=>m.name=='shell').map(m=>(m.content||'').slice(0,12)).join(','), cards:document.querySelectorAll('.view.on .card.ask').length, stopped:!document.getElementById('send').classList.contains('stop')}})",
+   "must": ["writes", "shells", "stopped"],
+   "note": "跑完之后审批卡本来就不在 DOM 里（历史从 /api/state 重画），所以'没弹卡'的正证是这两次写真的执行了"},
+  {"eval": "fetch('/api/file?path=risk-new.md').then(r=>r.json()).then(f=>({ok:f.ok,onDisk:(f.text||'').trim(),err:f.error||''}))",
+   "must": ["ok", "onDisk"],
+   "note": "低危新建文件真的落盘：分级不是把任务堵死，只是把不可逆那一下拦下来"},
+  {"shot": "rk05-auto-low-mid-passed"}
+]

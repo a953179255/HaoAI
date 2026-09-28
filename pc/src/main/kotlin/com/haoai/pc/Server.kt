@@ -1514,18 +1514,34 @@ class WebServer(settings: PcSettings, port: Int,
      */
     private fun webGate(sid: String, engineOf: () -> Engine? = { sessions[sid]?.engine }): Gate = object : Gate {
         override fun approve(title: String, detail: String, kind: String): Boolean =
-            approveRule(title, detail, kind, "", "*")
+            approveRule(title, detail, kind, "", "*", null)
 
         override fun approveRule(
-            title: String, detail: String, kind: String, tool: String, pattern: String
+            title: String, detail: String, kind: String, tool: String, pattern: String,
+            risk: RiskOf.Verdict?
         ): Boolean {
             val id = "a${seq.incrementAndGet()}"
             val fut = java.util.concurrent.CompletableFuture<String>()
             pending[id] = fut
             if (tool.isNotBlank()) pendingRule[id] = tool to pattern
-            val payload =
-                """{"id":"$id","title":${quote(title)},"detail":${quote(detail)},"kind":"$kind",""" +
-                    """"tool":${quote(tool)},"pattern":${quote(pattern)}}"""
+            /*
+             * 分级在 payload 里是**两样东西**：`risk` 是给 CSS 挑颜色用的稳定码，
+             * `riskLabel` 是给人看的那句中文。合成一个字段就会有界面按中文匹配，
+             * 于是"高危"改成"高风险"的同一分钟，红框静默消失。
+             */
+            val payload = buildString {
+                val fields = mutableListOf(
+                    "\"id\":${quote(id)}", "\"title\":${quote(title)}",
+                    "\"detail\":${quote(detail)}", "\"kind\":${quote(kind)}",
+                    "\"tool\":${quote(tool)}", "\"pattern\":${quote(pattern)}"
+                )
+                if (risk != null) {
+                    fields.add("\"risk\":${quote(risk.code())}")
+                    fields.add("\"riskLabel\":${quote(RiskOf.label(risk.level))}")
+                    fields.add("\"riskWhy\":${quote(risk.why)}")
+                }
+                append('{').append(fields.joinToString(",")).append('}')
+            }
             pendingPayload[id] = Waiter("approval", payload, sid)
             publish("approval", payload, sid)
             var timedOut = false
