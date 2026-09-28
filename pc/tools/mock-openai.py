@@ -128,6 +128,30 @@ PLAN = {
         ("三样都好了：小.mp4 是 160 宽的转码版、音轨.mp3 是抽出来的声音、"
          "第 2 秒那一帧我已经看见画面了。上面两个播放器都能直接放。", None),
     ],
+    # 剪辑那条链单独一个模式：老剧本 ui-media.json 的判据（几个播放器、收尾那句话）不能被这批改动连带改掉，
+    # 所以新链子中在 cut 里，两边各自可跑。caption 那一步是**像素判据** ——
+    # 中文标题（含一个冒号）要真画出来而不是方块，截图里看得见。
+    "cut": [
+        ("先写两条字幕", [{"id": "call_c5", "name": "media",
+                        "arguments": json.dumps({"sub": "srt", "output": "字幕.srt", "force": True,
+                                                 "items": json.dumps(
+                                                     [{"start": "0.3", "end": "1.8", "text": "第一段：开场"},
+                                                      {"start": "2.0", "end": "3.6", "text": "第二段：中文也要对"}],
+                                                     ensure_ascii=False)})}]),
+        ("把字幕烧进画面", [{"id": "call_c6", "name": "media",
+                          "arguments": json.dumps({"sub": "subtitle", "input": CLIP,
+                                                   "output": "字幕版.mp4", "subs": "字幕.srt"})}]),
+        ("做一张带中文标题的封面", [{"id": "call_c7", "name": "media",
+                                 "arguments": json.dumps({"sub": "caption", "input": CLIP, "start": "1",
+                                                          "output": "封面.png",
+                                                          "text": "第三期 : 冒号也要画得出来",
+                                                          "size": 40})}]),
+        ("把素材拼两遍当长片", [{"id": "call_c8", "name": "media",
+                               "arguments": json.dumps({"sub": "join", "input": CLIP,
+                                                        "input2": CLIP, "output": "拼接.mp4"})}]),
+        ("四样都好了：字幕.srt 写出来了、字幕版.mp4 是把字幕烧进画面的版本、"
+         "封面.png 上那行中文标题（含一个冒号）画出来了、拼接.mp4 是素材放两遍。上面这些播放器都能直接放。", None),
+    ],
     # 录屏这条链路要**真的**录一段桌面：开录 → 停 → 界面上出现一个真能解码的播放器。
     # stop 不带 id —— 只有一场在录时那是让人回去抄 id，多此一举。
     "rec": [

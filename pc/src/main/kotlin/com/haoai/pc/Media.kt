@@ -1,6 +1,11 @@
 package com.haoai.pc
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -135,7 +140,18 @@ object Ffmpeg {
 }
 
 /** media 工具的内部结果：要么带着 argv，要么带着那句要说给模型听的话。 */
-private class Plan(val argv: List<String> = emptyList(), val hint: String = "", val err: String = "")
+/**
+ * 一条要跑的 ffmpeg 命令，外加"跑之前要先落到盘上的那几个文件"。
+ *
+ * writes 为什么要单独列：drawtext 的文字与 subtitles 的字幕都走**文件**而不是内联进过滤串 ——
+ * 过滤串里 `:` `\` `'` `%` 每一样都要再转一层，中文标题里一个冒号就能把整条 filter 打断。
+ * 而"先写文件"这件事必须发生在审批通过之后，否则人点了拒绝，盘上却多出两个临时文件。
+ */
+private class Plan(
+    val argv: List<String> = emptyList(), val hint: String = "", val err: String = "",
+    val writes: List<Pair<File, String>> = emptyList(),
+    val copies: List<Pair<File, File>> = emptyList()
+)
 
 /**
  * HTTP Range 解析，给 `/api/media` 用。
@@ -214,15 +230,21 @@ object MediaMime {
 class MediaTool : Tool(
     "media",
     "用 ffmpeg/ffprobe 处理音视频素材。sub ∈ info（探测时长与流，只读）| transcode（转码/改分辨率）| " +
-        "cut（按时间剪切）| frame（抽一帧成图，图本身会递给你看）| audio（抽音轨）| cover（封面图）。" +
+        "cut（按时间剪切）| frame（抽一帧成图，图本身会递给你看）| audio（抽音轨）| cover（封面图）| " +
+        "caption（给封面/某一帧叠一行大标题，做视频封面与直播缩略图）| " +
+        "srt（把「几点到几点说什么」写成字幕文件，不需要源文件也不碰 ffmpeg）| " +
+        "subtitle（把 .srt 烧进画面，出的是新视频）| join（两段按顺序拼成一段，会重编码）。" +
         "input 是源文件（工作区相对路径或绝对路径）；output 可省，默认写进 .haoai-output/media/。" +
-        "start/dur 认 12、12.5、1:05、1:02:03 四种写法。除 info 外都会写文件，按权限档走。",
+        "start/dur 认 12、12.5、1:05、1:02:03 四种写法。caption 要 text，subtitle 要 subs，join 要 input2，" +
+        "srt 要 items（JSON 数组：[{\"start\":\"0\",\"end\":\"2.5\",\"text\":\"第一句\"}]）。除 info 外都会写文件，按权限档走。",
     schema(
         "sub" to "string", "input" to "string", "output" to "string",
         "start" to "string", "dur" to "string", "width" to "integer", "height" to "integer",
         "fps" to "string", "crf" to "integer", "preset" to "string", "codec" to "string",
         "reencode" to "boolean", "timeout" to "integer",
-        required = arrayOf("sub", "input")
+        "text" to "string", "items" to "string", "subs" to "string", "input2" to "string",
+        "size" to "integer", "pos" to "string", "font" to "string", "force" to "boolean",
+        required = arrayOf("sub")
     ),
     kind = "exec"
 ) {
@@ -230,6 +252,9 @@ class MediaTool : Tool(
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val sub = (req(args, "sub") ?: "").trim().lowercase()
         if (sub !in SUBS) return fail("media 不认的子命令：「$sub」。可用：$SUB_LIST")
+        // 字幕文件是"我们自己写文本"，既不需要源文件也不碰 ffmpeg：
+        // 放在 input 存在性检查之前，否则"先写字幕、后录屏"这条正常顺序会被挡掉。
+        if (sub == "srt") return srt(args, ctx)
         val src = req(args, "input")?.takeIf { it.isNotBlank() }
             ?: return fail("media 缺少 input（源文件路径，工作区相对或绝对都认）")
         val inp = ctx.resolve(src)
@@ -251,7 +276,7 @@ class MediaTool : Tool(
         if (ext !in allowed) return fail("sub=$sub 只能输出 ${allowed.joinToString("/")}，现在要写 .$ext")
         if (out.isFile && out.canonicalPath == inp.canonicalPath) return fail("输入与输出是同一个文件，会把自己覆盖掉")
 
-        val plan = plan(sub, args, inp, out, start, dur)
+        val plan = plan(sub, args, inp, out, start, dur, ctx)
         if (plan.err.isNotEmpty()) return fail(plan.err)
         val label = ctx.rel(out)
         val why = ctx.guard(
@@ -259,6 +284,16 @@ class MediaTool : Tool(
             { "ffmpeg $sub → $label\n源文件：${ctx.rel(inp)}" + if (out.isFile) "\n注意：会覆盖已有文件" else "" }
         )
         if (why != null) return fail(why)
+        // 审批过了才落这些"喂给过滤串的小文件"：点拒绝不该在盘上留东西
+        plan.writes.forEach { (f, body) ->
+            f.parentFile?.mkdirs()
+            f.writeText(body, Charsets.UTF_8)
+        }
+        // 字体一份工作区只拷一次（十几 MB，每次画标题都重拷一遍太浪费）
+        plan.copies.forEach { (from, to) ->
+            to.parentFile?.mkdirs()
+            if (!to.isFile || to.length() != from.length()) from.copyTo(to, overwrite = true)
+        }
 
         val began = System.currentTimeMillis()
         val r = Ffmpeg.run(exe, plan.argv, ctx.workspace, timeout)
@@ -305,7 +340,8 @@ class MediaTool : Tool(
         return ToolResult("ffprobe ${ctx.rel(inp)}\n${TextCap.head(r.log.trim(), 3000)}")
     }
 
-    private fun plan(sub: String, args: JsonObject, inp: File, out: File, start: String, dur: String?): Plan {
+    private fun plan(sub: String, args: JsonObject, inp: File, out: File, start: String, dur: String?,
+                     ctx: ToolCtx): Plan {
         badParams(args)?.let { return Plan(err = it) }
         val base = listOf("-y", "-hide_banner", "-loglevel", "error", "-nostats")
         val seek = if (start == "0") emptyList() else listOf("-ss", start)
@@ -353,8 +389,186 @@ class MediaTool : Tool(
                 Plan(base + seek + src + listOf("-vn") + span + listOf("-c:a", c) +
                     (if (c == "libmp3lame") listOf("-b:a", "192k") else emptyList()) + out.absolutePath, hint = "")
             }
+            /*
+             * caption：在封面/某一帧上叠一行大标题（视频封面、直播缩略图就靠它）。
+             * 文字走 textfile 而不是内联 text= —— 过滤串里 : \ ' % 每一样都要再转一层，
+             * 中文标题里一个冒号就能把整条 filter 打断；textfile 让"文字内容"与"filter 语法"分家。
+             */
+            "caption" -> {
+                val text = req(args, "text")?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: return Plan(err = "sub=caption 要 text（要叠在画面上的那行字）")
+                if (text.length > 120) return Plan(err = "标题超过 120 字（${text.length}）：那是正文不是标题")
+                val font = fontFile(req(args, "font")) ?: return Plan(
+                    err = "这台机器上找不到能画中文的字体（试过 msyh.ttc / simhei.ttf / msyhbd.ttc）。" +
+                        "用 font= 指一个 .ttf/.ttc 的绝对路径。没有合适字体时 drawtext 会画出一堆方块，" +
+                        "比不画更糟 —— 所以这里宁可不跑"
+                )
+                val size = int(args, "size", 64).coerceIn(12, 400)
+                val cap = File(out.parentFile, out.name.substringBeforeLast('.') + ".txt")
+                // 字体不能直接把 C:/Windows/Fonts/... 写进过滤串：那个冒号怎么转义都还会和
+                // "选项之间也用冒号"撞车（实测报 No option name near '/Windows/...'）。
+                // 所以先把它拷进工作区，用不带盘符的相对路径引用 —— 转义这一层整个绕开。
+                val fontHere = File(File(ctx.workspace, "${Env.TOOL_OUTPUT_DIR}/fonts"), font.name)
+                val wh = if (int(args, "width", 0) > 0 || int(args, "height", 0) > 0) vf
+                    else listOf("-vf", "scale=1280:-2")
+                val draw = "drawtext=fontfile=${escFilter(rel(fontHere, ctx))}:textfile=${escFilter(rel(cap, ctx))}" +
+                    ":fontsize=$size:fontcolor=white:borderw=3:bordercolor=black@0.65:" +
+                    (if (req(args, "pos")?.trim()?.lowercase() == "top")
+                        "x=(w-text_w)/2:y=text_h+60" else "x=(w-text_w)/2:y=h-text_h-60")
+                val chain = if (wh.size == 2) listOf(wh[0], wh[1] + "," + draw) else listOf("-vf", draw)
+                Plan(
+                    base + seek + src + listOf("-frames:v", "1") + chain +
+                        (if (ext == "jpg" || ext == "jpeg") listOf("-q:v", "3") else emptyList()) +
+                        out.absolutePath,
+                    hint = "标题默认压在画面下方、居中；pos=top 换到上方。图上的字是**烧进去的**，改字要重跑",
+                    writes = listOf(cap to text.replace("\r\n", "\n").lines().take(3).joinToString("\n")),
+                    copies = listOf(font to fontHere)
+                )
+            }
+            // subtitle：把字幕烧进画面。字幕文件先复制成一个"安全名字"再交给过滤串 ——
+            // 用户给的路径可能带空格、中文、盘符冒号，这些在 filter 里都要再转一层。
+            "subtitle" -> {
+                val raw = req(args, "subs")?.trim()
+                if (raw.isNullOrEmpty()) return Plan(err = "sub=subtitle 要 subs：一个 .srt/.ass 的路径（没有就先跑 sub=srt）")
+                val sf = ctx.resolve(raw)
+                if (!sf.isFile) return Plan(err = "没有这个字幕文件：${ctx.rel(sf)}（subs 要指向盘上真存在的文件）")
+                val se = ext(sf)
+                if (se !in SUBEXT) return Plan(err = "subs 只认 ${SUBEXT.joinToString("/")}，现在是 .$se")
+                val safe = File(out.parentFile, out.name.substringBeforeLast('.') + ".$se")
+                val preset = req(args, "preset")?.trim()?.lowercase()?.takeIf { it in PRESETS } ?: "veryfast"
+                Plan(
+                    base + seek + src + span +
+                        listOf("-vf", "subtitles=${escFilter(rel(safe, ctx))}") +
+                        listOf("-map", "0:v:0", "-map", "0:a?") +
+                        listOf("-c:v", "libx264", "-preset", preset, "-crf", int(args, "crf", 23).coerceIn(0, 51).toString()) +
+                        listOf("-c:a", "copy") + faststart(ext) + out.absolutePath,
+                    hint = "字幕是烧进画面的，播放器关不掉；要可关的字幕轨就得走容器内嵌（这条工具不做）",
+                    writes = listOf(safe to sf.readText(Charsets.UTF_8))
+                )
+            }
+            /*
+             * join：两段按顺序拼成一段。用 concat **滤镜**而不是 concat 列表文件 ——
+             * 列表文件里的路径解析规则（相对谁、怎么转义、非 ASCII）在中文工作区上最容易出事，
+             * 代价是必然重编码（两段时间戳/编码参数对不上时 -c copy 会花屏，那比慢更糟）。
+             */
+            "join" -> {
+                val raw2 = req(args, "input2")?.trim()
+                if (raw2.isNullOrEmpty()) return Plan(err = "sub=join 要 input2：第二段文件（顺序是 input → input2）")
+                val b = ctx.resolve(raw2)
+                if (!b.isFile) return Plan(err = "没有这第二个文件：${ctx.rel(b)}")
+                // 同一段拼两遍是合法用法（把一条 5 秒素材铺成 10 秒），所以不挡"input==input2"；
+                // 真正会毁掉文件的是"输出等于输入"，那条在 run() 入口已经挡了。
+                val aA = hasAudio(inp, ctx)
+                val aB = hasAudio(b, ctx)
+                if (aA == null || aB == null) return Plan(
+                    err = "没探出这两段有没有声音流（ffprobe 没成功），不敢替你决定要不要保留声音 —— " +
+                        "先各跑一次 sub=info 看看"
+                )
+                if (aA != aB) return Plan(
+                    err = "两段的声音不一致（一段有音轨、一段没有），concat 拼不了。" +
+                        "给缺音轨的那段补一条静音轨（media transcode + 自己带一路 aac），或两段都用同一种流结构"
+                )
+                val preset = req(args, "preset")?.trim()?.lowercase()?.takeIf { it in PRESETS } ?: "veryfast"
+                val fc = if (aA) "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]"
+                else "[0:v][1:v]concat=n=2:v=1:a=1[v]"
+                val maps = if (aA) listOf("-map", "[v]", "-map", "[a]") else listOf("-map", "[v]")
+                val enc = listOf("-c:v", "libx264", "-preset", preset, "-crf", int(args, "crf", 23).coerceIn(0, 51).toString()) +
+                    (if (aA) listOf("-c:a", "aac", "-b:a", "192k") else emptyList())
+                Plan(
+                    base + listOf("-i", inp.absolutePath, "-i", b.absolutePath) +
+                        listOf("-filter_complex", fc) + maps + enc + faststart(ext) + out.absolutePath,
+                    hint = if (aA) "两段都要同分辨率同帧率才好看；不一样就先各自 transcode 再拼"
+                    else "两段都没有音轨，拼出来也是无声的"
+                )
+            }
             else -> Plan(err = "不认的子命令：$sub")
         }
+    }
+
+    /**
+     * 把「几点到几点说什么」写成 SRT。不碰 ffmpeg —— 这一步只是文本，
+     * 而 SRT 的格式（序号从 1 开始、时间用 `00:00:02,500 --> ` 这种逗号毫秒、块之间空一行）
+     * 一旦手抖，整条字幕就对口型对不上，所以格式在这里一次算对并有 round-trip 测试。
+     */
+    private fun srt(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val raw = req(args, "items")?.trim()
+        if (raw.isNullOrEmpty()) return fail(
+            "sub=srt 要 items：一个 JSON 数组，形如 [{\"start\":\"0\",\"end\":\"2.5\",\"text\":\"第一句\"}]"
+        )
+        val rows = runCatching { Json.parseToJsonElement(raw).jsonArray }.getOrNull()
+            ?: return fail("items 不是一个 JSON 数组，看不懂：${raw.take(80)}")
+        if (rows.isEmpty()) return fail("items 是空数组：一句字幕都没有")
+        if (rows.size > 400) return fail("一次最多 400 条字幕（现在 ${rows.size} 条），拆成几段再合")
+        val cues = mutableListOf<Triple<Double, Double, String>>()
+        rows.forEachIndexed { i, el ->
+            val o = runCatching { el.jsonObject }.getOrNull()
+                ?: return fail("第 ${i + 1} 条不是对象：每条都要 {start,end,text}")
+            val a = parseTime(o["start"]?.jsonPrimitive?.contentOrNull)
+                ?.toDoubleOrNull() ?: return fail("第 ${i + 1} 条的 start 看不懂（要秒或 时:分:秒）")
+            val b = parseTime(o["end"]?.jsonPrimitive?.contentOrNull)
+                ?.toDoubleOrNull() ?: return fail("第 ${i + 1} 条的 end 看不懂（写法同 start）")
+            if (b <= a) return fail("第 ${i + 1} 条的 end（$b）不晚于 start（$a）：这条字幕一秒都不到")
+            val t = (o["text"]?.jsonPrimitive?.contentOrNull ?: "").trim()
+            if (t.isEmpty()) return fail("第 ${i + 1} 条 text 是空的：空字幕占着时间轴，不如不写")
+            cues += Triple(a, b, t)
+        }
+        cues.sortBy { it.first }
+        val given = req(args, "output")?.trim()
+        val out = if (!given.isNullOrEmpty()) ctx.resolve(given) else {
+            val dir = File(ctx.workspace, "${Env.TOOL_OUTPUT_DIR}/media").apply { mkdirs() }
+            File(dir, (req(args, "input")?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { File(it).name.substringBeforeLast('.') } ?: "字幕") + ".srt")
+        }
+        if (ext(out) != "srt") return fail("sub=srt 只能写 .srt，现在要写 ${out.name}")
+        out.parentFile?.mkdirs()
+        if (out.isFile && out.length() > 0 && !bool(args, "force")) return fail(
+            "${ctx.rel(out)} 已经存在（${kb(out.length())}）。要盖掉就带 force=true —— " +
+                "字幕是人工对过时间的东西，静默覆盖代价太高"
+        )
+        val why = ctx.guard("media", ctx.rel(out), "生成字幕文件",
+            { "写 ${cues.size} 条字幕 → ${ctx.rel(out)}" + if (out.isFile) "\n注意：会覆盖已有文件" else "" })
+        if (why != null) return fail(why)
+        val text = cues.mapIndexed { i, c ->
+            "${i + 1}\n${srtTime(c.first)} --> ${srtTime(c.second)}\n${c.third.replace("\r\n", "\n")}\n"
+        }.joinToString("\n")
+        out.writeText(text, Charsets.UTF_8)
+        if (ctx.rel(out).startsWith(Env.TOOL_OUTPUT_DIR)) Env.excludeFromGit(ctx.workspace, Env.TOOL_OUTPUT_DIR)
+        return ToolResult(
+            "media srt · ${cues.size} 条 · 末尾到 ${"%.1f".format(cues.last().second)}s\n" +
+                "输出：${ctx.rel(out)}（${kb(out.length())}）\n" +
+                "下一步：sub=subtitle 把它烧进画面，或 sub=transcode 时自己带字幕轨。"
+        )
+    }
+
+    /** SRT 的时间：`00:01:02,500`。逗号不是笔误，是格式规定（写句号整条不认）。 */
+    private fun srtTime(sec: Double): String {
+        val ms = (sec * 1000).toLong().coerceAtLeast(0)
+        return "%02d:%02d:%02d,%03d".format(ms / 3600000, ms / 60000 % 60, ms / 1000 % 60, ms % 1000)
+    }
+
+    /** 这台机器上能不能画中文。找不到就回 null，让上层明说而不是画出一堆方块。 */
+    private fun fontFile(given: String?): File? {
+        val g = given?.trim()?.takeIf { it.isNotEmpty() }
+        if (g != null) return File(g).takeIf { it.isFile }
+        return CJK_FONTS.map { File(it) }.firstOrNull { it.isFile }
+    }
+
+    /** 相对工作区的路径，统一用 `/`：过滤串里的反斜杠是转义符，留着它必出事。 */
+    private fun rel(f: File, ctx: ToolCtx): String = ctx.rel(f).replace('\\', '/')
+
+    /** 过滤串里的值：`\` 先换成正斜杠，再把 `:` 与 `'` 各挡一层。 */
+    private fun escFilter(p: String): String = p.replace('\\', '/').replace(":", "\\:").replace("'", "\\'")
+
+    /** 有没有音轨：true/false，探测失败回 null（上层据此拒绝，而不是替你猜）。 */
+    private fun hasAudio(f: File, ctx: ToolCtx): Boolean? {
+        val probe = Ffmpeg.ffprobe() ?: return null
+        val r = Ffmpeg.run(
+            probe, listOf("-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=index", "-of", "csv=p=0", f.absolutePath),
+            ctx.workspace, 30
+        )
+        if (!r.ok) return null
+        return r.log.trim().isNotEmpty()
     }
 
     /** 输出落在哪：给了就用给的，没给就进 `.haoai-output/media/` 并自动避重名。 */
@@ -411,6 +625,9 @@ class MediaTool : Tool(
         req(args, "preset")?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let {
             if (it !in PRESETS) return "preset 只认 ${PRESETS.joinToString("/")}，现在是「$it」"
         }
+        req(args, "pos")?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let {
+            if (it != "top" && it != "bottom") return "pos 只认 top/bottom（标题压在画面哪一边），现在是「$it」"
+        }
         listOf("width" to int(args, "width", 0), "height" to int(args, "height", 0)).forEach { (k, v) ->
             if (v != 0 && (v < 16 || v > 8192)) return "$k=$v 太离谱（16~8192 之间，或不给让它自动）"
         }
@@ -418,9 +635,16 @@ class MediaTool : Tool(
     }
 
     companion object {
-        private val SUBS = setOf("info", "transcode", "cut", "frame", "audio", "cover")
-        private const val SUB_LIST = "info/transcode/cut/frame/audio/cover"
+        private val SUBS = setOf(
+            "info", "transcode", "cut", "frame", "audio", "cover", "caption", "subtitle", "srt", "join"
+        )
+        private const val SUB_LIST = "info/transcode/cut/frame/audio/cover/caption/subtitle/srt/join"
         private val PICS = setOf("png", "jpg", "jpeg", "webp")
+        private val SUBEXT = setOf("srt", "ass", "ssa", "vtt")
+        private val CJK_FONTS = listOf(
+            "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/msyhbd.ttc"
+        )
+        private val VIDEO_OK = setOf("mp4", "mov", "mkv", "webm")
         private val AUDIO_ONLY = setOf("mp3", "wav", "m4a", "aac", "ogg", "opus", "flac")
         private val PRESETS = setOf(
             "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"
@@ -435,10 +659,15 @@ class MediaTool : Tool(
             "cut" to (setOf("mp4", "mov", "mkv", "webm") + AUDIO_ONLY),
             "frame" to setOf("png", "jpg", "jpeg", "webp"),
             "cover" to setOf("jpg", "jpeg", "png", "webp"),
+            "caption" to setOf("jpg", "jpeg", "png", "webp"),
+            "subtitle" to VIDEO_OK,
+            "join" to VIDEO_OK,
+            "srt" to setOf("srt"),
             "audio" to AUDIO_ONLY
         )
         private val DEFAULT_EXT = mapOf(
-            "transcode" to "mp4", "cut" to "mp4", "frame" to "png", "cover" to "jpg", "audio" to "mp3"
+            "transcode" to "mp4", "cut" to "mp4", "frame" to "png", "cover" to "jpg", "audio" to "mp3",
+            "caption" to "jpg", "subtitle" to "mp4", "join" to "mp4"
         )
 
         private fun ext(f: File): String = f.extension.lowercase().trimStart('.')

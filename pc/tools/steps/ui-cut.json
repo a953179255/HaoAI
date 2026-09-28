@@ -1,0 +1,58 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "剪一条片子：写字幕、烧进画面、做中文标题封面、两段拼一起"
+  }
+ },
+ {
+  "eval": "(async()=>{const t=Date.now();while(Date.now()-t<90000){if(/四样都好了/.test(document.querySelector('.view.on').textContent))break;await new Promise(r=>setTimeout(r,600))}const v=document.querySelector('.view.on');return {done:/四样都好了/.test(v.textContent),badCards:v.querySelectorAll('.card .tick.bad').length,cards:v.querySelectorAll('.card').length}})()",
+  "must": [
+   "done",
+   "cards"
+  ]
+ },
+ {
+  "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];return {players:vs.length,srcs:vs.map(x=>decodeURIComponent((x.currentSrc||x.src||'').split('path=')[1]||'')).join(','),audios:document.querySelectorAll('.view.on .pvmed audio').length,thumbs:[...document.querySelectorAll('.view.on .thumbs img')].map(i=>i.naturalWidth+'x'+i.naturalHeight).join(',')}})()",
+  "must": [
+   "players"
+  ]
+ },
+ {
+  "eval": "(async()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const one=el=>new Promise(r=>{const to=setTimeout(()=>r({t:'超时'}),12000);const go=()=>{clearTimeout(to);r({w:el.videoWidth,h:el.videoHeight,d:+(el.duration||0).toFixed(1)})};el.readyState>=1?go():el.onloadedmetadata=go});const out=[];for(const el of vs)out.push(await one(el));return {meta:JSON.stringify(out),durations:out.map(x=>x.d).join('+'),bothAbout8:out.filter(x=>x.d>6.5).length}})()",
+  "must": [
+   "meta"
+  ]
+ },
+ {
+  "eval": "(async()=>{const cap=await fetch('/api/file?path='+encodeURIComponent('字幕.srt')).then(r=>r.text());const img=[...document.querySelectorAll('.view.on .thumbs img')].find(i=>/封面/.test(decodeURIComponent(i.src)));return {srtOk:/00:00:00,300 --> 00:00:01,800/.test(cap)&&cap.indexOf('第一段：开场')>=0,srtHead:cap.slice(0,46),capW:img?img.naturalWidth:0,capH:img?img.naturalHeight:0}})()",
+  "must": [
+   "srtOk",
+   "capW"
+  ]
+ },
+ {
+  "shot": "c01-cut-chain"
+ },
+ {
+  "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=files]');if(b)b.click();return 'open files'})()"
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "eval": "(()=>{const names=[...document.querySelectorAll('#files .fe')].map(x=>x.textContent.trim().split('\\n')[0]);return {hasSrt:names.some(n=>n.indexOf('字幕.srt')>=0),hasCover:names.some(n=>n.indexOf('封面.png')>=0),hasJoin:names.some(n=>n.indexOf('拼接.mp4')>=0),hasBurned:names.some(n=>n.indexOf('字幕版.mp4')>=0),fontCached:[...document.querySelectorAll('#files .fe')].length}})()",
+  "must": [
+   "hasSrt",
+   "hasCover",
+   "hasJoin",
+   "hasBurned"
+  ]
+ },
+ {
+  "shot": "c02-outputs"
+ }
+]

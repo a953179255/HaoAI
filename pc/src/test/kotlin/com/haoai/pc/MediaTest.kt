@@ -286,4 +286,120 @@ class MediaTest {
         assertTrue(r.content, r.content.contains("同一个文件"))
         assertTrue("源文件必须还在", src.isFile)
     }
+
+    // ---- 字幕 / 标题 / 拼接（视频创作那条链）----
+
+    @Test
+    fun `srt writes the exact shape players accept`() {
+        val dir = ws()
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val items = """[{"start":"0","end":"2.5","text":"第一句：中文，带冒号 : 也无妨"},""" +
+            """{"start":"1:05","end":"1:07.25","text":"第二句"}]"""
+        val r = MediaTool().run(args("""{"sub":"srt","items":${json(items)}}"""), ctx)
+        assertFalse(r.content, r.error)
+        val f = File(dir, ".haoai-output/media/字幕.srt")
+        assertTrue("字幕没落到默认位置：${r.content}", f.isFile)
+        val text = f.readText(Charsets.UTF_8)
+        // 序号从 1、毫秒前是**逗号**、块之间空一行 —— 任一处写错，播放器整条字幕不显示
+        assertTrue(text, text.contains("1\n00:00:00,000 --> 00:00:02,500\n第一句"))
+        assertTrue(text, text.contains("2\n00:01:05,000 --> 00:01:07,250\n第二句"))
+        assertTrue("块之间必须空一行", text.contains("\n\n2\n"))
+    }
+
+    /** 把一段 JSON 塞进另一段 JSON 的字符串字段里：引号要转义，测试自己也得合法。 */
+    private fun json(raw: String): String = "\"" + raw.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+    @Test
+    fun `srt refuses bad cues and needs force to overwrite`() {
+        val dir = ws()
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val badEnd = MediaTool().run(args("""{"sub":"srt","items":${json("""[{"start":"3","end":"2","text":"倒着走"}]""")}}"""), ctx)
+        assertTrue(badEnd.content, badEnd.error)
+        assertTrue(badEnd.content, badEnd.content.contains("不晚于"))
+        val notArray = MediaTool().run(args("""{"sub":"srt","items":"第一句"}"""), ctx)
+        assertTrue(notArray.content, notArray.error)
+        val empty = MediaTool().run(args("""{"sub":"srt","items":"[]"}"""), ctx)
+        assertTrue(empty.content, empty.error)
+
+        val ok = MediaTool().run(args("""{"sub":"srt","output":"cap.srt","items":${json("""[{"start":"0","end":"1","text":"一句"}]""")}}"""), ctx)
+        assertFalse(ok.content, ok.error)
+        val again = MediaTool().run(args("""{"sub":"srt","output":"cap.srt","items":${json("""[{"start":"0","end":"1","text":"改了"}]""")}}"""), ctx)
+        assertTrue("已存在的字幕默认不许盖", again.error)
+        assertTrue(again.content, again.content.contains("force"))
+        val forced = MediaTool().run(args("""{"sub":"srt","output":"cap.srt","force":true,"items":${json("""[{"start":"0","end":"1","text":"改了"}]""")}}"""), ctx)
+        assertFalse(forced.content, forced.error)
+        assertTrue(File(dir, "cap.srt").readText(Charsets.UTF_8).contains("改了"))
+    }
+
+    @Test
+    fun `the new subcommands say what they still need`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws()
+        val src = clip(dir)
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        listOf(
+            """{"sub":"caption","input":"${src.name}"}""" to "text",
+            """{"sub":"subtitle","input":"${src.name}"}""" to "subs",
+            """{"sub":"subtitle","input":"${src.name}","subs":"没有这个.srt"}""" to "没有这个字幕文件",
+            """{"sub":"join","input":"${src.name}"}""" to "input2",
+            """{"sub":"join","input":"${src.name}","input2":"没这第二段.mp4"}""" to "没有这第二个文件",
+            """{"sub":"caption","input":"${src.name}","text":"标题","pos":"中间"}""" to "pos"
+        ).forEach { (body, want) ->
+            val r = MediaTool().run(args(body), ctx)
+            assertTrue("$body ⇒ ${r.content}", r.error)
+            assertTrue("$body 该说到「$want」：${r.content}", r.content.contains(want))
+        }
+    }
+
+    @Test
+    fun `caption really paints a title over the frame`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws()
+        val src = clip(dir)
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val plain = MediaTool().run(args("""{"sub":"cover","input":"${src.name}","output":"a.png","start":"1"}"""), ctx)
+        assertFalse(plain.content, plain.error)
+        val cap = MediaTool().run(
+            args("""{"sub":"caption","input":"${src.name}","output":"b.png","start":"1","text":"第三期 : 冒号也要能画"}"""), ctx)
+        assertFalse("caption 没跑成：${cap.content}", cap.error)
+        val a = File(dir, "a.png"); val b = File(dir, "b.png")
+        assertTrue("两张图都在", a.isFile && b.isFile)
+        assertTrue("标题没改变任何一个像素 = 文字其实没画上去",
+            !a.readBytes().contentEquals(b.readBytes()))
+        assertTrue("图要递回给模型看", cap.images.isNotEmpty())
+        assertTrue("给过滤串的 textfile 要在审批之后才落盘", File(dir, "b.txt").isFile)
+    }
+
+    @Test
+    fun `srt then subtitle burns in and keeps the length`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws()
+        val src = clip(dir)
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val s = MediaTool().run(args(
+            """{"sub":"srt","output":"字幕.srt","input":"${src.name}","items":${json("""[{"start":"0.5","end":"2","text":"烧进去的字幕"}]""")}}"""), ctx)
+        assertFalse(s.content, s.error)
+        val b = MediaTool().run(args("""{"sub":"subtitle","input":"${src.name}","output":"out.mp4","subs":"字幕.srt"}"""), ctx)
+        assertFalse("烧字幕没成功：${b.content}", b.error)
+        val out = File(dir, "out.mp4")
+        assertTrue(out.isFile)
+        val p = probe(out)
+        assertTrue("时长该还是 5 秒左右：$p", Regex("duration=([0-9.]+)").find(p)?.groupValues?.get(1)?.toDoubleOrNull()?.let { it in 4.0..6.5 } == true)
+        assertTrue("画面流要在：$p", p.contains("codec_type=video"))
+        assertTrue("声音不该丢：$p", p.contains("codec_type=audio"))
+    }
+
+    @Test
+    fun `join doubles the duration and keeps audio`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws()
+        val src = clip(dir)
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val r = MediaTool().run(args("""{"sub":"join","input":"${src.name}","input2":"${src.name}","output":"j.mp4"}"""), ctx)
+        assertFalse("拼接没成功：${r.content}", r.error)
+        val p = probe(File(dir, "j.mp4"))
+        val d = Regex("duration=([0-9.]+)").find(p)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+        assertTrue("两段五秒该拼成十秒左右，实际 $d", d in 8.5..12.5)
+        assertTrue("音轨要留着：$p", p.contains("codec_type=audio"))
+    }
 }
