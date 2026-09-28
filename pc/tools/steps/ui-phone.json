@@ -219,5 +219,19 @@
   },
   {
     "shot": "ph02-phone-list"
+  },
+  {
+    "click": "#tDgst"
+  },
+  {
+    "eval": "(()=>{const d=document.querySelector('#dgst');const t=d?(d.innerText||''):'';return JSON.stringify({tabOn:document.querySelector('#tDgst').classList.contains('on'),shown:!d.hidden,empty:t.indexOf('还没有跑完过')>=0||t.length>20})})()",
+    "must": [
+      "tabOn",
+      "shown",
+      "empty"
+    ]
+  },
+  {
+    "shot": "ph04-phone-digest"
   }
 ]

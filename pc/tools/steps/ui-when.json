@@ -117,5 +117,31 @@
       "lastRun",
       "when"
     ]
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await fetch('/api/digest').then(r=>r.json()).catch(()=>({items:[]}));const hit=(d.items||[]).filter(e=>(e.title||'').indexOf('睡前收工')>=0);if(hit.length)return JSON.stringify({dig:true,n:(d.items||[]).length,verdict:hit[0].verdict});if(Date.now()-t0>45000)return JSON.stringify({dig:false,seen:(d.items||[]).map(e=>e.title)});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "dig"
+    ]
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const t=document.querySelector('#dgList').innerText||'';if(t.indexOf('睡前收工')>=0)return JSON.stringify({shown:true,sum:(document.querySelector('#dgSum').textContent||'').indexOf('1 条')>=0,ms:Date.now()-t0});if(Date.now()-t0>20000)return JSON.stringify({shown:false,sum:false,seen:t.slice(0,60)});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": [
+      "shown",
+      "sum"
+    ]
+  },
+  {
+    "click": "#dgExport",
+    "after": 900
+  },
+  {
+    "eval": "(async()=>{const u='/api/file?sid='+encodeURIComponent(curId)+'&path='+encodeURIComponent('.haoai-output/schedule-log.md');const r=await fetch(u).then(x=>x.json()).catch(()=>({}));const t=JSON.stringify(r);return JSON.stringify({exported:t.indexOf('schedule-log')>=0||t.indexOf('定时任务结果汇总')>=0||t.indexOf('早间巡检')>=0,note:t.slice(0,70)})})()",
+    "must": [
+      "exported"
+    ]
+  },
+  {
+    "shot": "cr02-digest"
   }
 ]

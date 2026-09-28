@@ -783,6 +783,10 @@
       <div class="kv">到点自己起一条<b>新会话</b>去跑这句话（不搅乱你正在聊的那条）。
         机器睡着时<b>不补跑</b>：醒来最多补一次，不会一口气跑八遍。</div>
       <div class="rules" id="cronList">（还没配）</div>
+      <div class="grp">跑完的结果</div>
+      <div class="kv" id="dgSum">—</div>
+      <div class="rules" id="dgList"></div>
+      <div class="acts2"><button class="ab" id="dgExport">导出成 md</button></div>
       <input type="text" id="crName" class="tin" placeholder="名字，如 早间巡检">
       <textarea id="crPrompt" class="mem" rows="3" placeholder="到点要跑的那句话，如：看一下今天的构建日志，有报错就写清是哪一条"></textarea>
       <input type="text" id="crWhen" class="tin" placeholder="一句话排期：每周一三五 8 点 / 每天 7:30 和 21:30 / 半小时后">
@@ -1655,7 +1659,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
   if(b.dataset.t=='pv')pvStart(); else pvStop();
   if(b.dataset.t=='mem')loadMemory();
-  if(b.dataset.t=='cron'){loadCron();syncCronKind()}
+  if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest()}
 });
 
 /* ---- 终端页签：人与 agent 共用同一份常驻进程 ----
@@ -2121,6 +2125,35 @@ $('#crAdd').onclick=()=>{
     $('#crManual').style.display='';
     paintCron(d.items);toast('定时任务已加');
   }).catch(()=>toast('定时任务没加上','err'));
+};
+/* 跑完的结果：只收 trigger=定时 的那些运行（手动的那类人在电脑前，看得见）。
+   数据直接取自运行账本，不另存一份 —— 两份真相迟早对不上。 */
+function paintDigest(it){
+  $('#dgSum').textContent=it.length?('最近 '+it.length+' 条定时结果，最新的在上方')
+    :'还没有跑完过的定时任务。到点后这里会出现它说的那句话。';
+  $('#dgList').innerHTML=it.map(e=>
+    '<div class="rl"><span><b>'+esc(e.at)+' · '+esc(e.title)+'</b>'+
+    '<em>'+esc(e.verdict)+(e.text?(' · '+esc(e.text.slice(0,60))):'')+'</em></span></div>').join('')||'';
+}
+function loadDigest(){
+  return fetch('/api/digest').then(r=>r.json())
+    .then(d=>paintDigest(d.items||[])).catch(()=>{$('#dgSum').textContent='读不到结果汇总'});
+}
+/* 定时任务是在后台跑完的：只看一次的话，"跑完的结果"这块会永远停在打开页签那一刻的样子。
+   所以页签开着时每 4 秒拉一次，切走就不拉（本地接口，但没必要在背后一直打）。 */
+let dgTimer=null;
+function watchDigest(){
+  if(dgTimer)return;
+  dgTimer=setInterval(()=>{
+    const on=document.querySelector('#tab-cron');
+    if(!on||!on.classList.contains('on'))return;
+    fetch('/api/digest').then(r=>r.json()).then(d=>paintDigest(d.items||[])).catch(()=>{});
+  },4000);
+}
+$('#dgExport').onclick=()=>{
+  post('/api/digest/export',{}).then(d=>{
+    toast(d&&d.ok?(d.note||'已导出'):'没导出：'+((d&&d.note)||d&&d.error||''),d&&d.ok?'':'err');
+  }).catch(()=>toast('没导出','err'));
 };
 function newTask(ws){
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。

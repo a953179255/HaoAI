@@ -208,6 +208,9 @@ interface LanHost {
 
     /** 从手机发来的活：sid 空 = 另起一条新会话。回一句话说明成没成（成则带 sid）。 */
     fun lanSend(sid: String, text: String): String
+
+    /** 定时任务跑完的结果汇总（只读）。人不在电脑前时，这一份就是"它说了什么"。 */
+    fun digestJson(): String
 }
 
 /**
@@ -261,6 +264,7 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
                         path == "/lan/pending" -> send(ex, 200, host.pendingJson())
                         path == "/lan/decide" && ex.requestMethod == "POST" -> decide(ex)
                         path == "/lan/send" && ex.requestMethod == "POST" -> lanSendRoute(ex)
+                        path == "/lan/digest" -> send(ex, 200, host.digestJson())
                         path == "/lan/unpair" && ex.requestMethod == "POST" -> {
                             val ok = LanStore.remove(dev.hash)
                             val msg = if (ok) "已解除这台设备的配对" else "没找到这台设备"

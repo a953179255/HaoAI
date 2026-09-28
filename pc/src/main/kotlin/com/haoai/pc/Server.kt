@@ -179,6 +179,9 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/files" -> files(ex)
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
+                "/api/digest" -> send(ex, 200, Digest.json(),
+                    "application/json; charset=utf-8")
+                "/api/digest/export" -> digestExport(ex)
                 "/api/runs" -> send(ex, 200, RunLedger.json(),
                     "application/json; charset=utf-8")
                 "/api/usage" -> send(ex, 200, UsageLedger.report(),
@@ -2050,6 +2053,15 @@ class WebServer(settings: PcSettings, port: Int,
         }
         val (got, err) = startRun(want, text, fresh = want.isEmpty(), trigger = "手机")
         return err ?: "已交给电脑：会话 $got"
+    }
+
+    override fun digestJson(): String = Digest.json(20)
+
+    private fun digestExport(ex: HttpExchange) {
+        val (rel, note) = Digest.export(settings.workspaceFile())
+        val ok = rel.isNotEmpty()
+        send(ex, 200, """{"ok":$ok,"note":${quote(note)},"path":${quote(rel)}}""",
+            "application/json; charset=utf-8")
     }
 
     override fun decide(id: String, decision: String): String {

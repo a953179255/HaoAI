@@ -90,9 +90,11 @@ footer{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;align-
     <nav class="tabs">
       <button id="tSess" class="on">会话</button>
       <button id="tAppr">待批</button>
+      <button id="tDgst">结果</button>
     </nav>
     <div id="sess"></div>
     <div id="appr" hidden></div>
+    <div id="dgst" hidden></div>
   </section>
 
   <section class="page" id="sView" hidden>
@@ -169,10 +171,14 @@ $('btnUnpair').onclick=function(){
 
 /* ---- 列表 / 待批 ---- */
 function tabs(v){
-  view=v;$('tSess').classList.toggle('on',v==='sess');$('tAppr').classList.toggle('on',v==='appr');
-  $('sess').hidden=v!=='sess';$('appr').hidden=v!=='appr';refresh()}
+  view=v;
+  ['sess','appr','dgst'].forEach(function(k){
+    $('t'+k.charAt(0).toUpperCase()+k.slice(1,4)).classList.toggle('on',v===k);
+    $(k).hidden=v!==k});
+  refresh()}
 $('tSess').onclick=function(){tabs('sess')};
 $('tAppr').onclick=function(){tabs('appr')};
+$('tDgst').onclick=function(){tabs('dgst')};
 
 function refresh(){
   if(busy)return;busy=true;
@@ -188,6 +194,13 @@ function refresh(){
         :'<p class="mut">没有在等批准的。电脑上要人点东西的时候会自动出现在这里。</p>';
       [].forEach.call(document.querySelectorAll('#appr [data-d]'),function(b){
         b.onclick=function(){decide(b.dataset.i,b.dataset.d,b)}});
+    }),
+    api('/lan/digest').then(function(d){
+      var es=(d&&d.items)||[];
+      $('dgst').innerHTML=es.length?es.map(function(e){
+        return '<div class="card"><h3>'+esc(e.at)+' · '+esc(e.title)+'</h3>'+
+          '<p>'+esc(e.verdict)+'\n'+esc(e.text||'（没留下正文）')+'</p></div>'}).join('')
+        :'<p class="mut">还没有跑完过的定时任务。到点跑完之后，它说的那句话会出现在这里。</p>';
     }),
     api('/lan/sessions').then(function(d){
       var ss=(d&&d.items)||[];

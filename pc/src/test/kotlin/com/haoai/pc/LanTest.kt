@@ -40,6 +40,7 @@ class LanTest {
         override fun sessionJson(sid: String) = """{"ok":true,"sid":${quote(sid)},"items":[]}"""
         override fun pendingJson() = """{"ok":true,"items":[{"id":"a1","kind":"approval","sid":"s1"}]}"""
         var sent: Pair<String, String>? = null
+        override fun digestJson() = """{"ok":true,"items":[],"count":0}"""
         override fun lanSend(sid: String, text: String): String {
             sent = sid to text
             return "已交给电脑：会话 " + (sid.ifBlank { "s9" })
@@ -150,8 +151,13 @@ class LanTest {
     fun `every lan path the phone page calls really exists`() {
         val (_, html) = get("/")
         val called = Regex("/lan/[a-z]+").findAll(html).map { it.value }.toSet()
-        val served = setOf("/lan/pair", "/lan/sessions", "/lan/session", "/lan/pending",
-            "/lan/decide", "/lan/unpair", "/lan/send", "/lan/health")
+        // 路由清单从源码里取，不再手抄一份：手抄那份每次加接口都要记得改，
+        // 而"忘了改"的表现是这条测试红掉 —— 红两次之后人就会把测试删了。
+        val src = File("src/main/kotlin/com/haoai/pc/Lan.kt")
+        assertTrue("找不到 Lan.kt（挪了源码位置就该同步改这里）：" + src.absolutePath, src.isFile)
+        val served = Regex("\"/lan/[a-z]+\"").findAll(src.readText())
+            .map { it.value.trim('"') }.toSet()
+        assertTrue("源码里一个路由都没抓到，这条测试就白跑了：" + served, served.size >= 6)
         // 页面上写的路径若拼错，手机上只会表现为"一直转圈"—— 静态就能挡掉
         assertTrue("页面调了不存在的路径：" + (called - served - "/lan/"), called.all { it in served })
     }
@@ -248,6 +254,15 @@ class LanTest {
         } finally {
             runCatching { web.stop() }
         }
+    }
+
+    @Test
+    fun `the digest is read-only and needs a token`() {
+        val (st, _) = get("/lan/digest")
+        assertEquals("没配对读不到结果汇总", 401, st)
+        val (st2, body) = get("/lan/digest", paired())
+        assertEquals(200, st2)
+        assertTrue("该回一份 items：" + body, body.contains(""","items":"""))
     }
 
     // ---- 从手机派活（默认关，且它是"让这台电脑动手"的那条口）----
