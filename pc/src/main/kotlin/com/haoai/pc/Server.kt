@@ -180,6 +180,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/workspaces" -> workspaces(ex)
                 "/api/compact" -> compactNow(ex)
                 "/api/workflows" -> workflows(ex)
+                "/api/presets" -> presets(ex)
                 "/api/digest" -> send(ex, 200, Digest.json(),
                     "application/json; charset=utf-8")
                 "/api/digest/export" -> digestExport(ex)
@@ -347,6 +348,9 @@ class WebServer(settings: PcSettings, port: Int,
             .joinToString(",") { quote(it) }).append("],")
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
+        // 角色名要报**这条会话自己的**：顶栏那个标签如果显示的是"上一次选过的角色"，
+        // 就等于在说一条没在跑的会话正在跑。
+        sb.append("\"role\":").append(quote(e?.session?.role ?: "")).append(",")
         sb.append("\"sessionId\":").append(quote(id)).append(",")
         sb.append("\"running\":").append(managed?.running == true).append(",")
         sb.append("\"todos\":[")
@@ -1419,14 +1423,23 @@ class WebServer(settings: PcSettings, port: Int,
 
     private fun querySid(ex: HttpExchange): String = queryOf(ex, "sid")
 
-    /** 开一条新会话（只登记并立刻落盘，不起线程、不跑任务）。 */
-    private fun newSessionId(at: File? = null): String {
+    /**
+     * 开一条新会话（只登记并立刻落盘，不起线程、不跑任务）。
+     *
+     * `preset` 是角色卡：模型、工作区、档位、人设一次带上。
+     * 档位这里必须**当场定下来**并回给调用方 —— 界面上那个"新会话继承全局默认"的语义
+     * 已经在 v0.44 修过一次（新会话顶上亮着上一条的档位＝骗人），带角色卡时同理。
+     */
+    private fun newSessionId(at: File? = null, preset: Preset? = null): String {
         val session = Session("pc" + System.nanoTime().toString(16).take(8), at ?: settings.workspaceFile())
-        session.mode = settings.permissionMode
+        session.mode = preset?.let { Presets.modeOf(it, settings.permissionMode) } ?: settings.permissionMode
+        session.persona = preset?.persona.orEmpty()
+        session.role = preset?.name.orEmpty()
         var made: Engine? = null
         val e = Engine(session, settings, allTools(), webGate(session.id) { made },
             emit = { ev -> forward(session.id, ev) })
         made = e
+        if (preset != null && preset.model.isNotBlank()) e.useSettings(settings.copy(model = preset.model))
         e.persistNow()
         sessions[session.id] = Managed(e)
         touch(session.id)
@@ -1505,8 +1518,51 @@ class WebServer(settings: PcSettings, port: Int,
         }
     }
 
+    /** 角色卡：存"人设 + 模型 + 工作区 + 档位"，新会话一键带上。见 [Presets]。 */
+    private fun presets(ex: HttpExchange) {
+        val b = Body(ex)
+        if (ex.requestMethod != "GET") {
+            when (b.str("op")) {
+                "del" -> Presets.remove(b.str("id"))
+                else -> {
+                    val name = b.str("name").trim()
+                    val persona = b.str("persona").trim()
+                    if (name.isBlank() && persona.isBlank()) {
+                        send(ex, 200, """{"ok":false,"error":"至少给个名字或一段人设"}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    val ws = b.str("workspace").trim()
+                    // 现在就打不开的目录不许存进来：存进去之后每次用都要失败一次，
+                    // 而失败发生在"我已经选好角色了"之后，最容易被当成角色卡坏了。
+                    if (ws.isNotBlank() &&
+                        runCatching { File(ws).canonicalFile }.getOrNull()?.isDirectory != true) {
+                        send(ex, 200, """{"ok":false,"error":${quote("这个目录现在打不开：" + ws)}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    val id = b.str("id").ifBlank { "pr" + System.nanoTime().toString(16).take(8) }
+                    val old = Presets.find(id)
+                    if (old == null && Presets.load().size >= Presets.MAX) {
+                        send(ex, 200, """{"ok":false,"error":${quote("角色卡最多 " + Presets.MAX + " 张，先删一张")}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    Presets.update(
+                        Preset(
+                            id = id,
+                            name = name.ifBlank { persona.take(12) },
+                            persona = persona,
+                            model = b.str("model").trim(),
+                            workspace = ws,
+                            mode = b.str("mode").trim().takeIf { it in Presets.MODES } ?: "",
+                            created = old?.created ?: System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+        }
+        send(ex, 200, Presets.json(), "application/json; charset=utf-8")
+    }
+
     /**
-     * 网页壳的闸口。
      *
      * `engineOf` 由创建方给（引擎构造时还握不住自己的引用）。刻意**不**按 sid 去 `sessions`
      * 里查：那张表在会话超出驻留上限时会踢掉最久没用的那条，而被踢的引擎可能还在跑 ——
@@ -1664,18 +1720,36 @@ class WebServer(settings: PcSettings, port: Int,
         // 指定了工作区就**一定新建一条**：复用手边那条空的会把它悄悄挪到别的目录，
         // 用户下一条消息就落到了他没选的地方。目录打不开要明确报错，
         // 不能"退回默认工作区"—— 那等于把人送进一个他没选的仓库里写文件。
-        val want = Body(ex).str("ws")
-        if (want.isNotBlank()) {
-            val ok = runCatching { File(want).canonicalFile }.getOrNull()?.takeIf { it.isDirectory }
-            if (ok == null) {
+        val b = Body(ex)
+        val want = b.str("ws")
+        val presetId = b.str("preset")
+        val preset = if (presetId.isBlank()) null else Presets.find(presetId)
+        if (presetId.isNotBlank() && preset == null) {
+            send(ex, 200, """{"ok":false,"error":"没有这个角色卡，可能已经被删掉了"}""",
+                "application/json; charset=utf-8"); return
+        }
+        // 角色卡带了目录就必须用它的：打不开就明确报错，**不退回全局**。
+        // 退回等于把用户送进一个他没选的仓库里写文件 —— 那比失败更糟。
+        val presetWs = preset?.let { Presets.workspaceOf(it) }
+        if (preset != null && preset.workspace.isNotBlank() && presetWs == null) {
+            send(ex, 200, """{"ok":false,"error":${quote("这个角色卡的目录打不开：" + preset.workspace)}}""",
+                "application/json; charset=utf-8"); return
+        }
+        if (want.isNotBlank() || preset != null) {
+            val ok = if (want.isBlank()) presetWs else runCatching { File(want).canonicalFile }
+                .getOrNull()?.takeIf { it.isDirectory }
+            if (want.isNotBlank() && ok == null) {
                 send(ex, 200, """{"ok":false,"error":${quote("这个目录打不开：" + want)}}""",
                     "application/json; charset=utf-8"); return
             }
-            val newId = newSessionId(ok)
-            val md = sessions[newId]?.engine?.session?.mode ?: settings.permissionMode
-            send(ex, 200, """{"ok":true,"id":${quote(newId)},"mode":${quote(md)},"reused":false}""",
-                "application/json; charset=utf-8")
-            publish("opened", """{"id":${quote(newId)},"title":"新会话","mode":${quote(md)}}""", newId)
+            val newId = newSessionId(ok, preset)
+            val eng = sessions[newId]?.engine
+            val md = eng?.session?.mode ?: settings.permissionMode
+            val role = quote(eng?.session?.role ?: "")
+            send(ex, 200, """{"ok":true,"id":${quote(newId)},"mode":${quote(md)},""" +
+                """"role":$role,"reused":false}""", "application/json; charset=utf-8")
+            publish("opened", """{"id":${quote(newId)},"title":"新会话","mode":${quote(md)},"role":$role}""",
+                newId)
             publish("sessions", "{}", newId)
             return
         }

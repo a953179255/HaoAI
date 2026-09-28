@@ -64,6 +64,16 @@ sealed class Ev {
 class Session(val id: String, val workspace: File) {
     @Volatile
     var mode: String = "ask"
+    /**
+     * 角色卡（[Preset]）带来的人设，进系统提示的「本次角色」一节。
+     * 空 = 没有角色。刻意不复用 `PromptCtx.extra`：那一份是**工作区**的说明文件，
+     * 换一个会话还在，而角色是跟着这条会话走的。
+     */
+    @Volatile
+    var persona: String = ""
+    /** 这条会话是哪个角色卡起的（只为在顶栏显示名字，判据不看它）。 */
+    @Volatile
+    var role: String = ""
     val todos = mutableListOf<Todo>()
     val file: File get() = File(Env.sessionsDir, "pc-$id.json")
     val title = java.util.concurrent.atomic.AtomicReference("新会话")
@@ -783,7 +793,8 @@ class Engine(
                     mode = session.mode,
                     gitRoot = gitRoot(session.workspace),
                     // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
-                    extra = Memory.read(session.workspace, gitRoot(session.workspace))
+                    extra = Memory.read(session.workspace, gitRoot(session.workspace)),
+                    persona = session.persona
                 )
             )
         )
@@ -841,6 +852,10 @@ class Engine(
                     put("title", session.title.get())
                     put("workspace", session.workspace.absolutePath)
                     put("mode", session.mode)
+                    // 角色是这条会话的身份的一部分：不落盘的话，重启之后人设没了、
+                    // 而顶栏还写着角色名 —— 显示与事实分家。
+                    put("persona", session.persona)
+                    put("role", session.role)
                     put("model", settings.model)
                     // 会话级开关要落盘：不然刷新/重开之后界面上还写着"已关掉"，
                     // 而引擎其实拿着全开的工具表在跑

@@ -1,0 +1,42 @@
+[
+  {"goto": "#box"},
+  {"click": "#tabs button[data-t=\"role\"]"},
+  {"sleep": 600},
+  {"eval": "({tabOn:!!document.querySelector('#tab-role.on'), list:(document.querySelector('#roleList')||{}).innerText, hasForm:!!(document.querySelector('#roleName')&&document.querySelector('#rolePersona')&&document.querySelector('#roleAdd'))})",
+   "must": ["tabOn", "hasForm"], "note": "页签打得开、表单在"},
+
+  {"eval": "(()=>{const bs=[...document.querySelectorAll('#tabs button')];const rail=document.querySelector('.rail.r').getBoundingClientRect();const over=bs.filter(b=>b.getBoundingClientRect().right>rail.right+1).map(b=>b.textContent).join(',');const tall=bs.filter(b=>b.getBoundingClientRect().height>30).map(b=>b.textContent).join(',');return {n:bs.length, over, tall, oneLine:tall==='', inside:over===''}})()",
+   "must": ["oneLine", "inside"], "note": "第 10 个页签把每个压成两行、最后一个挤出右缘 —— 几何判据钉住它"},
+  {"type": {"sel": "#roleName", "text": "直播助手", "enter": false}},
+  {"eval": "(()=>{document.querySelector('#rolePersona').value='口述要快，三句话内给结论';document.querySelector('#roleMode').value='plan';return 'filled'})()"},
+  {"click": "#roleAdd"},
+  {"sleep": 700},
+  {"eval": "(()=>{const row=document.querySelector('#roleList .rl');const sp=row?row.querySelector('span'):null;const t=sp?sp.innerText:'';return {named:t.indexOf('直播助手')>=0, showsMode:t.indexOf('计划')>=0, showsFallbacks:t.indexOf('跟全局')>=0, notClipped:sp?(sp.scrollWidth-sp.clientWidth<=1):false, personaInTitle:((row&&row.getAttribute('title'))||'').indexOf('口述要快')>=0, useBtn:document.querySelectorAll('#roleList [data-role=use]').length}})()",
+   "must": ["named", "showsMode", "showsFallbacks", "notClipped", "personaInTitle", "useBtn"],
+   "note": "名字与档位必须真的看得见（不是被省略号切掉），长人设收在 title 里、点「改」能回填"},
+  {"shot": "rl01-role-list"},
+
+  {"click": "#roleList [data-role=use]"},
+  {"sleep": 1500},
+  {"eval": "({chip:document.querySelector('#roleChip').hidden===false, chipText:document.querySelector('#roleChip').innerText, planOn:document.querySelector('#modes button[data-m=plan]').classList.contains('on'), askOn:document.querySelector('#modes button[data-m=ask]').classList.contains('on')})",
+   "must": ["chip", "planOn"], "note": "用它开一条：顶栏出现角色徽标，档位真的切到计划"},
+  {"shot": "rl02-role-session"},
+
+  {"type": {"sel": "#box", "text": "验收：这个角色卡该是只读的"}},
+  {"sleep": 4000},
+  {"eval": "(()=>{const v=document.querySelector('.view.on');const t=(v?v.innerText:'');return {planBlocked:t.indexOf('计划模式')>=0, noCard:v?v.querySelectorAll('.card.ask').length:-1}})()",
+   "must": ["planBlocked"], "note": "档位是真带上了：写文件被计划模式挡下，且不该弹审批卡"},
+  {"shot": "rl03-plan-blocked"},
+
+  {"click": "#tabs button[data-t=\"role\"]"},
+  {"sleep": 500},
+  {"click": "#roleList [data-role=edit]"},
+  {"sleep": 400},
+  {"eval": "({refilled:document.querySelector('#roleName').value, modeBack:document.querySelector('#roleMode').value, personaBack:document.querySelector('#rolePersona').value})",
+   "must": ["refilled", "modeBack", "personaBack"], "note": "改：表单要回填，不然「改」就是重做一张"},
+  {"click": "#roleList [data-role=del]"},
+  {"sleep": 700},
+  {"eval": "({empty:(document.querySelector('#roleList')||{}).innerText, gone:document.querySelectorAll('#roleList [data-role]').length})",
+   "must": ["empty"], "note": "删完回到没配"},
+  {"shot": "rl04-role-deleted"}
+]

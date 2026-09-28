@@ -315,7 +315,9 @@
   .mark{font-family:var(--mono);font-size:11px;flex:none}
   .prog{height:5px;border-radius:3px;background:var(--glass2);overflow:hidden;margin:2px 0 10px}
   .prog i{display:block;height:100%;background:var(--acc);transition:width .3s}
-  .tabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
+  /* 页签是网格而不是 flex：加到第 10 个之后，flex:1 会把每个压到 26px，
+     两个汉字竖着排成两行，最后一个还被挤出右边缘 —— 网格按列平分，永远一行一个字宽。 */
+  .tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:10px}
   /* 工具清单：一行一把，名字 + 来源标记 + 一句说明，开关在左边 */
   /* 断点恢复的横幅： warn 色 + 两个明确的出口，不留"看起来像报错"的悬案 */
   .resume{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
@@ -339,7 +341,7 @@
   /* 复选框默认是浏览器那套蓝，跟明暗两套主题都不搭 */
   input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
   .tabs button{flex:1;border:1px solid var(--line);background:var(--glass);color:var(--dim);border-radius:8px;
-    padding:5px 4px;font-size:12px;cursor:pointer;font-family:inherit}
+    padding:5px 2px;font-size:12px;cursor:pointer;font-family:inherit;white-space:nowrap;text-align:center}
   .tabs button.on{color:var(--fg);border-color:var(--acc2);background:var(--glass2)}
   .tabp{display:none}
   .tabp.on{display:block}
@@ -456,6 +458,9 @@
   .rl .ab{flex:none;white-space:nowrap;margin-left:auto}
   .rl span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rl em{font-style:normal;color:var(--dim2);font-size:11px}
+  /* 角色卡这一行宁可长高也别用省略号：被切掉的恰好是"这张卡把档位/模型设成了什么"，
+     而那正是列表存在的理由（cron 那两行同理，但它的按钮少，暂时没被挤到） */
+  #roleList .rl span{white-space:normal;line-height:1.4}
   /* 抽屉里那行是"名字 + 说明"挤在一行：不留间隙就粘成 "other1 条会话" */
   #dialog .rl em{margin-left:6px}
   .addrow{display:flex;gap:6px;align-items:center}
@@ -621,6 +626,7 @@
         <div class="sub2" id="subtitle">—</div>
       </div>
       <button class="chip" id="modelChip" title="切换模型"><span id="model">—</span></button>
+      <span class="chip" id="roleChip" hidden title="这条会话是哪个角色卡起的（人设已进系统提示）"></span>
       <div class="ctx" id="ctxBtn" title="上下文占用，点开看明细">
         <svg width="22" height="22" viewBox="0 0 22 22">
           <circle class="bg" cx="11" cy="11" r="9"></circle>
@@ -663,6 +669,7 @@
       <button data-t="pv">预览</button>
       <button data-t="mem">记忆</button>
       <button data-t="cron">定时</button>
+      <button data-t="role">角色</button>
       <button data-t="tools">工具</button>
     </div>
     <div class="tabp on" id="tab-tasks">
@@ -769,6 +776,21 @@
       <div class="acts2 pinned"><button class="ab" id="skSave">加为技能</button>
         <span class="fp" id="skState"></span></div>
     </div>
+    <div class="tabp" id="tab-role">
+      <div class="kv">角色卡 = <b>一段人设 + 模型 + 工作区 + 档位</b>存下来。点「用它开一条」，这四样一次带上 ——
+        一件一件重挑总会漏一件，而漏的那件通常要等跑错了才看得见。</div>
+      <div class="rules" id="roleList">（还没配）</div>
+      <input type="text" id="roleName" class="tin" placeholder="名字，如 直播助手 / 安卓开发 / 剪片">
+      <textarea id="rolePersona" class="mem" rows="4"
+        placeholder="这个角色是谁、要产出什么、有什么规矩。会原样进系统提示的「本次角色」一节。"></textarea>
+      <select id="roleModel" class="tin"><option value="">模型：跟全局默认</option></select>
+      <input type="text" id="roleWs" class="tin" placeholder="工作区绝对路径，留空 = 跟全局">
+      <select id="roleMode" class="tin"><option value="">档位：跟全局默认</option>
+        <option value="plan">计划（只读）</option><option value="ask">询问</option>
+        <option value="auto">自动（高危仍会问）</option></select>
+      <div class="acts2 pinned"><button class="ab" id="roleAdd">存为角色卡</button>
+        <span class="fp" id="roleState"></span></div>
+    </div>
     <div class="tabp" id="tab-tools">
       <div class="kv" id="toolsSum">—</div>
       <div class="grp">这条会话能用什么</div>
@@ -852,7 +874,7 @@ function view(sid){
   if(!v){
     v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
        tools:{},subs:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
-       mode:mode,workspace:'',model:'',outputs:[],queue:[],toolList:[],runState:null};
+       mode:mode,workspace:'',model:'',role:'',outputs:[],queue:[],toolList:[],runState:null};
     views[sid]=v;stream.appendChild(v.el);
   }
   return v;
@@ -868,6 +890,9 @@ function show(sid){
   $('#wsName').textContent=v.workspace?baseName(v.workspace):'工作区';
   $('#wsBtn').title=v.workspace||'换个工作区开一条新任务';
   $('#model').textContent=v.model?shortModel(v.model):'—';
+  // 角色名跟着会话走：没有角色就整颗藏掉，摆一个空的"（无）"是在占人的注意力
+  $('#roleChip').hidden=!v.role;
+  $('#roleChip').textContent=v.role?('角色 · '+v.role):'';
   setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintOutputs(v);
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
@@ -1687,6 +1712,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='pv')pvStart(); else pvStop();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest();loadWorkflows()}
+  if(b.dataset.t=='role')loadPresets();
 });
 
 /* ---- 终端页签：人与 agent 共用同一份常驻进程 ----
@@ -2130,7 +2156,71 @@ $('#wfList').onclick=e=>{
     loadSessions();
   }).catch(()=>toast('任务链动不了','err'));
 };
+/* ---- 角色卡（预设 agent）：人设 + 模型 + 工作区 + 档位，一次带上 ----
+ * 这里刻意只做"存 / 用 / 改 / 删"，不在列表上摆开关：
+ * 一张卡生效与否的判据是"那条会话是不是这样"，而那条会话的顶栏已经报出来了。
+ */
+const ROLE_MODES={plan:'计划',ask:'询问',auto:'自动'};
+let roleEditing='';
+function paintPresets(list){
+  // 一行摆得下的只有"名字 + 三样设置"：人设长句放 title（悬停能看），
+  // 挤进这一行的话被省略号切掉的是**判据要看的那部分**（档位），列表就成了摆设。
+  $('#roleList').innerHTML=(list||[]).length?(list||[]).map(p=>
+    `<div class="rl" title="${esc(String(p.persona||''))}"><span><b>${esc(p.name)}</b>`+
+    `<em>${ROLE_MODES[p.mode]||'档位跟全局'} · `+
+      `${p.model?('模型 '+esc(shortModel(p.model))):'模型跟全局'} · `+
+      `${p.workspace?('目录 '+esc(baseName(p.workspace))):'目录跟全局'}</em></span>`+
+    `<button class="ab pri" data-role="use" data-id="${esc(p.id)}" title="按这套开一条新会话">用它开一条</button>`+
+    `<button class="ab" data-role="edit" data-id="${esc(p.id)}">改</button>`+
+    `<button class="ab" data-role="del" data-id="${esc(p.id)}">删</button></div>`).join('')
+    :'（还没配）';
+}
+function loadPresets(){
+  return fetch('/api/presets').then(r=>r.json()).then(d=>{
+    paintPresets(d.items);
+    presets=d.items||[];
+    if(!$('#roleModel').options.length||$('#roleModel').options.length==1)
+      fetch('/api/models?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(list=>{
+        const keep=$('#roleModel').value;
+        $('#roleModel').innerHTML='<option value="">模型：跟全局默认</option>'+
+          (list||[]).map(m=>`<option value="${esc(m.id)}">${esc(shortModel(m.id))}</option>`).join('');
+        $('#roleModel').value=keep||'';
+      }).catch(()=>{});
+  }).catch(()=>{$('#roleList').textContent='读不到'});
+}
+let presets=[];
+$('#roleAdd').onclick=()=>{
+  const name=$('#roleName').value.trim(),persona=$('#rolePersona').value.trim();
+  if(!name&&!persona){toast('至少给个名字或一段人设');return}
+  post('/api/presets',{op:'save',id:roleEditing,name:name,persona:persona,
+    model:$('#roleModel').value,workspace:$('#roleWs').value.trim(),mode:$('#roleMode').value})
+    .then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
+      paintPresets(d.items);presets=d.items||[];roleEditing='';
+      $('#roleName').value='';$('#rolePersona').value='';$('#roleWs').value='';
+      $('#roleState').textContent='已存';toast('角色卡已存');
+    }).catch(()=>toast('角色卡没存上','err'));
+};
+$('#roleList').onclick=e=>{
+  const b=e.target.closest?e.target.closest('[data-role]'):null;
+  if(!b)return;
+  const p=presets.find(x=>x.id==b.dataset.id);
+  if(b.dataset.role=='use'){newTask('',b.dataset.id);return}
+  if(b.dataset.role=='edit'){
+    if(!p)return;
+    roleEditing=p.id;$('#roleName').value=p.name;$('#rolePersona').value=p.persona||'';
+    $('#roleWs').value=p.workspace||'';$('#roleMode').value=p.mode||'';$('#roleModel').value=p.model||'';
+    $('#roleState').textContent='改的是「'+p.name+'」';return;
+  }
+  post('/api/presets',{op:'del',id:b.dataset.id}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没删掉','err');return}
+    paintPresets(d.items);presets=d.items||[];
+    if(roleEditing==b.dataset.id)roleEditing='';
+    $('#roleState').textContent='';toast('角色卡已删');
+  }).catch(()=>toast('角色卡删不掉','err'));
+};
 function paintCron(list){
+
   $('#cronList').innerHTML=(list||[]).length?list.map(s=>
     `<div class="rl cron${s.enabled?'':' off'}"><span><b>${esc(s.name)}</b>`+
     `<em>${whenText(s)} · 下次 ${whenTime(s.nextDue)}</em>`+
@@ -2216,16 +2306,17 @@ $('#dgExport').onclick=()=>{
     toast(d&&d.ok?(d.note||'已导出'):'没导出：'+((d&&d.note)||d&&d.error||''),d&&d.ok?'':'err');
   }).catch(()=>toast('没导出','err'));
 };
-function newTask(ws){
+function newTask(ws,preset){
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
   fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(ws?{ws:ws}:{})}).then(r=>r.json()).then(d=>{
+    body:JSON.stringify(Object.assign({},ws?{ws:ws}:{},preset?{preset:preset}:{}))}).then(r=>r.json()).then(d=>{
     if(d&&!d.ok&&d.error){toast(d.error,'err');return}
     if(!d.id)return;
     $('#mask').classList.remove('on');
     const v=view(d.id);
     v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.todos=[];v.usage=null;v.outputs=[];
     v.title='新会话';if(d.mode)v.mode=d.mode;   // 没这个字段就留着旧显示，别自己编一个
+    v.role=d.role||'';                          // 角色卡带的名字，顶栏那颗徽标读它
     show(d.id);paintUsage(null);box.focus();
     // 工作区/模型这两行只有 /api/state 会给。但用户手快得已经把话发出去了就别重画：
     // 那会儿服务端还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
@@ -2776,7 +2867,7 @@ function jumpToMsg(v,i){
 function applyState(s){
   const v=view(s.sessionId||curId);
   v.hydrated=true;v.running=!!s.running;v.title=s.title||'新会话';v.mode=s.mode;
-  v.workspace=s.workspace;v.model=s.model;
+  v.workspace=s.workspace;v.model=s.model;v.role=s.role||'';
   // 版本号由服务端报：这里以前自己写死 v0.2.0，而仓库已经走到 0.23 —— 界面上那行是骗人的
   if(s.version)$('#ver').textContent=s.version;
   v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.outputs=[];

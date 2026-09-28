@@ -33,6 +33,9 @@ object SessionIndex {
         /** 这条会话自己用的模型（留空 = 跟全局默认）。见 [Engine.persist]。 */
         val model: String = "",
         val toolsOff: List<String> = emptyList(),
+        /** 角色卡起头的会话：人设与角色名。见 [Preset]。 */
+        val persona: String = "",
+        val role: String = "",
         val prompt: Long,
         val completion: Long,
         val file: File
@@ -64,6 +67,8 @@ object SessionIndex {
             toolsOff = runCatching {
                 o["toolsOff"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
             }.getOrNull() ?: emptyList(),
+            persona = o["persona"]?.jsonPrimitive?.contentOrNull ?: "",
+            role = o["role"]?.jsonPrimitive?.contentOrNull ?: "",
             prompt = o["promptTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             completion = o["completionTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             file = f
@@ -107,6 +112,8 @@ object SessionIndex {
         val ws = runCatching { File(meta.workspace) }.getOrNull()?.takeIf { it.isDirectory } ?: fallbackWorkspace
         val s = Session(meta.id, ws)
         s.mode = meta.mode
+        s.persona = meta.persona
+        s.role = meta.role
         s.title.set(meta.title)
         return s
     }
