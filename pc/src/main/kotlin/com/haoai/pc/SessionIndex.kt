@@ -53,7 +53,24 @@ object SessionIndex {
             .take(limit)
     }
 
-    fun read(f: File): Meta? = runCatching {
+    /**
+     * 读一条会话的头。**读不出就退避着重试五次**：
+     * 会话文件每回合都在重写，而 Windows 上"替换一个正被读的文件"未必成功
+     * （move 要对目标开 DELETE 访问，失败时只能退到 copy，那一瞬就读到半截 JSON）。
+     * 一次就放弃的代价是"那条会话从列表里凭空消失"——刚建的那条最容易中。
+     */
+    fun read(f: File): Meta? {
+        var attempt = 0
+        while (attempt < 5) {
+            val m = runCatching { metaOf(f) }.getOrNull()
+            if (m != null) return m
+            attempt++
+            runCatching { Thread.sleep(20L * attempt) }
+        }
+        return null
+    }
+
+    private fun metaOf(f: File): Meta = runCatching {
         val o = Json.parseToJsonElement(f.readText()).jsonObject
         Meta(
             id = o["id"]?.jsonPrimitive?.content ?: f.name.removePrefix("pc-").removeSuffix(".json"),
@@ -73,7 +90,7 @@ object SessionIndex {
             completion = o["completionTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             file = f
         )
-    }.getOrNull()
+    }.getOrThrow()
 
     /**
      * 搜一条会话：标题命中给标题，否则翻消息正文，返回命中处附近的一小段（给列表当摘要）。

@@ -2,6 +2,7 @@ package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -241,7 +242,13 @@ class ScheduleTest {
         assertTrue("要留下新会话的 id", sid.isNotBlank())
         lastSid = sid
         val listed = get("/api/sessions")
-        assertTrue("侧栏里要看得见这条任务会话", listed.contains(sid))
+        assertTrue(
+            "侧栏里要看得见这条任务会话（要找 $sid，列表里是 " +
+                items(listed).mapNotNull {
+                    it.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                }.joinToString(",") + "）",
+            listed.contains(sid)
+        )
         assertTrue("标题要用任务名，不能是一串 id 或「新会话」", listed.contains("晨会材料"))
         assertEquals("只多出一条，不是把当前会话也用掉了", before + 1, items(listed).size)
         /*

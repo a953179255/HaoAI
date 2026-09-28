@@ -60,6 +60,48 @@ object Env {
     val settingsFile: File get() = File(home, "settings.json")
     val apiKeyFile: File get() = File(home, "apikey")
     val sessionsDir: File get() = File(home, "sessions").apply { mkdirs() }
+
+    /**
+     * 先写同目录的 `.tmp` 再换过去，让读的一方永远看不到半截文件。
+     *
+     * 会话文件是"每回合都在写、侧栏一直在读"的那一个。直接 `writeText` 会让读的一方
+     * 有机会看到一个写了一半的文件，而读侧全都包在 `runCatching` 里 ——
+     * 解析失败被咽掉，症状是"刚建的那条会话在列表里凭空不见了"（负载高的时候真能撞上）。
+     *
+     * **Windows 上必须留 copy 这条退路**：目标文件被另一个读句柄握着时，
+     * `Files.move`（要对目标开 DELETE 访问）直接 ACCESS_DENIED ——
+     * 第一版只兜了 AtomicMoveNotSupportedException，于是整部落库失败，
+     * 三次 ResumeTest 全红，比原来的半截文件严重得多。Java 的读句柄带 FILE_SHARE_WRITE，
+     * 所以 copy（只要 WRITE 权限）是通的。
+     */
+    fun atomicWrite(target: File, text: String) {
+        val tmp = File(target.parentFile, target.name + ".tmp")
+        tmp.writeText(text)
+        val from = tmp.toPath()
+        val to = target.toPath()
+        var moved = false
+        // 先试原子替换，失败就隔几毫秒再试：读的一方是"打开-读完-关闭"的短句柄，
+        // 重试几次基本都能挤进它关着的那段窗口。
+        repeat(4) { i ->
+            if (moved) return@repeat
+            moved = runCatching {
+                java.nio.file.Files.move(
+                    from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE
+                )
+            }.isSuccess
+            if (!moved && i < 3) Thread.sleep(4L * (i + 1))
+        }
+        if (!moved) {
+            moved = runCatching {
+                java.nio.file.Files.move(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }.isSuccess || runCatching {
+                java.nio.file.Files.copy(from, to, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }.isSuccess
+        }
+        if (!moved) target.writeText(text)   // 三条路都不通才原地覆盖；宁可慢也不悄悄丢
+        runCatching { tmp.delete() }
+    }
     val logsDir: File get() = File(home, "logs").apply { mkdirs() }
     val approvalsFile: File get() = File(home, "approvals.json")
     val rulesFile: File get() = File(home, "rules.json")

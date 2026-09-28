@@ -860,7 +860,8 @@ class Engine(
         if (depth > 0) return
         runCatching {
             Env.sessionsDir.mkdirs()
-            session.file.writeText(
+            Env.atomicWrite(
+                session.file,
                 buildJsonObject {
                     put("id", session.id)
                     put("title", session.title.get())
