@@ -74,7 +74,7 @@
 13. **工作区检查点 `/rewind`** ｜ ZCODE `/rewind`、OpenClaw applied-history ｜ 只有工具级快照（每会话 200 个/50MB）与 `/api/rollback`，没有"把整个工作区按一下存一个点、再回到它" ｜ 改坏了要整体回退 ｜ 建检查点 → 再改 → 回滚 → 多个文件内容回来 ｜ PC —— 🟡 v0.52.0 落了检查点与整轮回滚（`Checkpoints.kt` + 「产出」页签那颗钮，两步确认）；分屏与分享快照待做
 14. **多标签/分屏会话** ｜ ZCODE 多标签 ｜ 单视图切会话（SSE 已按 sid 分流，地基在）｜ 对照代码与对照聊天时想并排看 ｜ 两条同时跑左右各自流式、不串台 ｜ PC
 15. **会话分享快照（只读 HTML）** ｜ OpenCode `/share` ｜ 只有导出 markdown ｜ 给人看的成品形态 ｜ 导出的 HTML 无头浏览器打开，消息全在 ｜ PC
-16. **技能 zip/URL 导入 + 技能目录页** ｜ ZCODE 插件市场 40 款、OpenClaw ClawHub ｜ `/api/skills` 只有读/增/删 ｜ 能力扩展要能"装进来" ｜ 上传含 `SKILL.md` 的 zip → 列表出现 → `/命令` 可用；zip 里带 `../` 越界路径 → 拒绝并说明 ｜ PC
+16. **技能 zip/URL 导入 + 技能目录页** ｜ ZCODE 插件市场 40 款、OpenClaw ClawHub ｜ `/api/skills` 只有读/增/删 ｜ 能力扩展要能"装进来" ｜ 上传含 `SKILL.md` 的 zip → 列表出现 → `/命令` 可用；zip 里带 `../` 越界路径 → 拒绝并说明 ｜ PC —— ✅ v0.63.0 已落地（`SkillDocs.kt`：`skills/<slug>/SKILL.md` + YAML 头，与手机端同一形状；三个入口=粘贴/网址/本地 zip；越界条目被拒且**报出来**；这版是"用户用 `/` 唤起"，模型自选要连着 `promptIndex` + `skill` 工具一起做）
 17. **hooks（事件挂脚本）** ｜ ZCODE 7 个 hooks、OpenClaw session-memory/compaction-notifier ｜ 无 ｜ 想在回合结束时自动记一笔/推一个通知 ｜ 挂 `on-run-end` 脚本 → 跑完文件被写；脚本失败只记日志不打断会话 ｜ PC —— ✅ v0.62.0 已落地（`Hooks.kt` + `/api/hooks`，事件 `run-end`，上下文走 `HAOAI_*` 环境变量、结论全文走 `$HAOAI_OUTFILE` 文件；只有用户能写命令，所以不过审批闸口）
 18. **审批风险分级** ｜ OpenClaw exec-approvals（security=full）、Claude Code 权限模式 ｜ 规则表有（Policies.kt），但待审卡上没有"这条有多危险" ｜ 点允许之前要看得见风险 ｜ `rm -rf /` 标红高危、`echo` 标低危；**先做确定性规则打分，不烧模型** ｜ PC —— ✅ v0.59.0 已落地（`Risk.kt` 三档 + 卡上徽标与"为什么"；**auto 档从此不为高危自动放行**）
 19. **凭据条目管理** ｜ OpenClaw secrets ｜ 只有 `HAOAI_HOME/apikey`、`searchkey` 两个裸文件（有意不进 PcSettings，这条约束保留）｜ key 越来越多，要看得见、改得动、撤销掉 ｜ 设置页列出（值打码）、可改可删；`GET /api/settings` 永远不回传值 ｜ PC —— ✅ v0.61.0 已落地（`Secrets.kt` + `/api/secrets` 读/改/撤，掩码只给前 2 后 2；`/api/settings` 连以前那 6 位 `keyHint` 也收掉了）
@@ -104,7 +104,7 @@
 | **B8** | ✅ v0.50.0 已落地：「预览」页签（CDP 帧进网页 + 点/滚/送字回传 + 用完关掉） | — | PC |
 | **B9** | ✅ v0.49.0 已落地：音视频附件（`media` 一条独立字段）+ `run_code`（python/node） | — | PC |
 | **B10** | 记忆条目化（CRUD/搜索）+ 两端同步 | B4 | 两端 |
-| **B11** | 技能 zip/URL 导入 + 技能目录页 + hooks + 凭据条目 + 审批风险分级 | — | PC |
+| **B11** | ✅ 全部落地：审批风险分级（v0.59.0）、凭据条目（v0.61.0）、hooks（v0.62.0）、技能 SKILL.md 导入（v0.63.0） | — | PC |
 | **B12** | 🟡 v0.52.0 落了**检查点 / 回到某次之前**（整轮撤销）；多标签分屏与只读分享快照待做 | — | PC |
 | **B13** | 🟡 v0.56.0 落了**一句话排期**（规则解析 + weekly/once/一天多时刻 + 边打边预览"下次什么时候跑"，看不懂就拒绝），v0.57.0 落了**跑完的结果去哪**（`Digest`：桌面定时页一块实时汇总 + 导出 md + 手机「结果」页签，数据仍取自运行账本），v0.58.0 又落了**任务链**（`Workflows`：一行一步、跑在同一条会话里，定时任务可以直接跑一条链）；还欠：语音输入、把结果推到手机通知（要 B4 的安卓那一半）。v0.60.0 落了**预设 agent（角色卡）**（`Presets.kt` + 「角色」页签，人设进系统提示，「用它开一条」一次带上模型/工作区/档位） | B4 | PC |
 | **B14** | ✅ v0.53.0 已落地：`record` 工具（gdigrab 录桌面，停止走 `q` 收尾）；OBS（obs-websocket）仍按"检测到才可用"留着 | B7 | PC |

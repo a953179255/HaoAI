@@ -775,6 +775,17 @@
       <textarea id="skText" class="mem" rows="4" placeholder="这个命令要让模型做什么；选中后这段会填进输入框，你还能接着补两句"></textarea>
       <div class="acts2 pinned"><button class="ab" id="skSave">加为技能</button>
         <span class="fp" id="skState"></span></div>
+      <div class="grp" style="margin-top:12px">导入 SKILL.md（与手机端同一形状）</div>
+      <div class="kv">一个目录一份 <code>SKILL.md</code>，YAML 头里写 <code>name</code> / <code>description</code>。
+        装进 <span id="skDir">HAOAI_HOME/skills</span>，和手写的 /命令 一起出现在输入框的 <code>/</code> 菜单里。
+        <b>这一版是"你唤起"</b>：不注入系统提示，模型也不会自己去翻。</div>
+      <div class="addrow"><input type="text" id="skUrl" placeholder="网址：一份 SKILL.md 或一个 zip 包" style="flex:1">
+        <button class="ab" id="skUrlGo">按网址导入</button></div>
+      <div class="addrow"><input type="file" id="skFile" accept=".zip,.md,.markdown,.txt">
+        <button class="ab" id="skFileGo">导入本地文件</button>
+        <span class="fp" id="skImpState"></span></div>
+      <textarea id="skPaste" class="mem" rows="3" placeholder="或者把一份 SKILL.md 直接粘在这里"></textarea>
+      <div class="acts2 pinned"><button class="ab" id="skPasteGo">导入这段</button></div>
     </div>
     <div class="tabp" id="tab-role">
       <div class="kv">角色卡 = <b>一段人设 + 模型 + 工作区 + 档位</b>存下来。点「用它开一条」，这四样一次带上 ——
@@ -2115,15 +2126,63 @@ let SKILLS=[];
 function loadSkills(){
   return fetch('/api/skills').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
     SKILLS=d.items||[];paintSkills();
+    if(d.dir&&$('#skDir'))$('#skDir').textContent=d.dir;
   }).catch(()=>{SKILLS=[];paintSkills()});
 }
 function paintSkills(){
   const el2=$('#skillList');
-  el2.innerHTML=SKILLS.length?SKILLS.map(s=>`<div class="rl"><span>/${esc(s.name)} <em>${esc(s.desc||'')}</em></span>
-    <button class="ab" data-sk="${esc(s.name)}">删除</button></div>`).join(''):'（还没有自定义命令）';
+  el2.innerHTML=SKILLS.length?SKILLS.map(s=>`<div class="rl"><span>/${esc(s.name)} <em>${esc(s.desc||'')}${
+      s.doc?' · SKILL.md':''}</em></span>
+    <button class="ab" data-sk="${esc(s.name)}" data-doc="${s.doc?esc(s.slug||''):''}">删除</button></div>`).join('')
+    :'（还没有技能）';
+  // 导入的那份删的是目录，手写的那份删的是列表里的一条 —— 两件事别混成一个 op
   el2.querySelectorAll('[data-sk]').forEach(b=>b.onclick=()=>
-    post('/api/skills',{op:'del',name:b.dataset.sk}).then(loadSkills));
+    post('/api/skills',b.dataset.doc?{op:'deldoc',slug:b.dataset.doc}:{op:'del',name:b.dataset.sk})
+      .then(d=>{if(d&&d.items){SKILLS=d.items;paintSkills();impNote(d)}else loadSkills()}));
 }
+function impNote(d){
+  const el3=$('#skImpState');if(!el3)return;
+  const a=(d.added||[]).length,sk=(d.skipped||[]).length;
+  el3.textContent=d.error?d.error:('进了 '+a+' 份'+(sk?('，跳过 '+sk+' 份'):''));
+}
+/** 大文件别用 `String.fromCharCode.apply(null,u)` 一次灌进去 —— 参数上限会炸。 */
+function b64(buf){
+  const u=new Uint8Array(buf);let s='';const CH=0x8000;
+  for(let i=0;i<u.length;i+=CH)s+=String.fromCharCode.apply(null,u.subarray(i,i+CH));
+  return btoa(s);
+}
+function afterImport(d){
+  if(!d){$('#skImpState').textContent='';toast('服务端没回应','err');return}
+  if(d.items){SKILLS=d.items;paintSkills()}
+  impNote(d);
+  if(d.ok){toast('技能已导入 · 打 / 就能用');loadSkills()}
+  else toast(d.error||'什么都没进','err');
+}
+$('#skUrlGo').onclick=()=>{
+  const u=$('#skUrl').value.trim();
+  if(!u){toast('先填一个网址');return}
+  $('#skImpState').textContent='在拉…';
+  post('/api/skills',{op:'import-url',url:u}).then(afterImport)
+    .catch(()=>{$('#skImpState').textContent='';toast('导入失败','err')});
+};
+$('#skFileGo').onclick=()=>{
+  const f=($('#skFile').files||[])[0];
+  if(!f){toast('先选一个 .zip 或 .md 文件');return}
+  $('#skImpState').textContent='在读…';
+  const isZip=/\.zip$/i.test(f.name);
+  const fr=new FileReader();
+  fr.onload=()=>post('/api/skills',
+      isZip?{op:'import-zip',data:b64(fr.result)}:{op:'import-text',text:String(fr.result)})
+    .then(afterImport).catch(()=>{$('#skImpState').textContent='';toast('导入失败','err')});
+  fr.onerror=()=>{$('#skImpState').textContent='';toast('文件没读出来','err')};
+  if(isZip)fr.readAsArrayBuffer(f);else fr.readAsText(f,'utf-8');
+};
+$('#skPasteGo').onclick=()=>{
+  const t=$('#skPaste').value;
+  if(!t.trim()){toast('先把一份 SKILL.md 粘进来');return}
+  post('/api/skills',{op:'import-text',text:t}).then(d=>{if(d&&d.ok)$('#skPaste').value='';afterImport(d)})
+    .catch(()=>toast('导入失败','err'));
+};
 $('#skSave').onclick=()=>{
   post('/api/skills',{op:'add',name:$('#skName').value,desc:$('#skDesc').value,text:$('#skText').value}).then(d=>{
     if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}

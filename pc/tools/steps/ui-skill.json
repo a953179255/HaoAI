@@ -1,0 +1,28 @@
+[
+  {"goto": "#box"},
+  {"click": "#tabs button[data-t=\"mem\"]"},
+  {"sleep": 700},
+  {"eval": "({url:!!document.querySelector('#skUrl'), paste:!!document.querySelector('#skPaste'), file:!!document.querySelector('#skFile'), dir:(document.querySelector('#skDir')||{}).textContent, list:(document.querySelector('#skillList')||{}).innerText})",
+   "must": ["url", "paste", "file", "dir"], "note": "导入的三个入口都在，且报出装到哪"},
+  {"shot": "sk00-skills-panel"},
+
+  {"eval": "(()=>{document.querySelector('#skPaste').value='---\\nname: 剪片流程\\ndescription: 把录屏剪成 30 秒竖版\\n---\\n第一步：找到今天的 rec.mp4\\n第二步：剪到 30 秒\\n';return 'pasted'})()"},
+  {"click": "#skPasteGo"},
+  {"sleep": 1200},
+  {"eval": "(()=>{const t=(document.querySelector('#skillList')||{}).innerText||'';return {named:t.indexOf('剪片流程')>=0, desc:t.indexOf('30 秒竖版')>=0, tagged:t.indexOf('SKILL.md')>=0, imp:(document.querySelector('#skImpState')||{}).innerText, rows:document.querySelectorAll('#skillList .rl').length, docBtn:document.querySelectorAll('#skillList [data-doc]').length}})()",
+   "must": ["named", "desc", "tagged", "docBtn"], "note": "粘进来的一份 SKILL.md 成了列表里的一条，还标着来源"},
+  {"shot": "sk01-skill-imported"},
+
+  {"eval": "(()=>{const b=document.querySelector('#box');b.value='/';b.focus();b.dispatchEvent(new Event('input',{bubbles:true}));return 'typed slash'})()"},
+  {"sleep": 600},
+  {"eval": "(()=>{const s=document.querySelector('#slash');const t=s?(s.innerText||''):'';return {open:!!s&&s.classList.contains('on'), inMenu:t.indexOf('剪片流程')>=0}})()",
+   "must": ["open", "inMenu"], "note": "导入的技能与内置命令一起出现在 / 菜单里"},
+  {"shot": "sk02-slash-menu"},
+  {"eval": "document.querySelector('#box').value='';'cleared'"},
+
+  {"click": "#skillList [data-doc]"},
+  {"sleep": 1000},
+  {"eval": "({list:(document.querySelector('#skillList')||{}).innerText, rows:document.querySelectorAll('#skillList .rl').length})",
+   "must": ["list"], "note": "删掉的是那个目录，不是整张列表"},
+  {"shot": "sk03-skill-deleted"}
+]

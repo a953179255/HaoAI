@@ -1076,13 +1076,51 @@ class WebServer(settings: PcSettings, port: Int,
      * `GET/POST /api/skills` —— 自定义 `/命令`（技能）的读与增删。
      * `POST {op:'add'|'del', name, desc, text}`；同名算覆盖。
      */
+    /** 手写的 `/命令` 与导入的 SKILL.md 拼成一份清单：界面上是同一个列表，不必分两处渲染。 */
+    private fun skillItems(): String = "[" +
+        (Skills.load().map {
+            """{"name":${quote(it.name)},"desc":${quote(it.desc)},"text":${quote(it.text)},"doc":false}"""
+        } + SkillDocs.jsonItems().let { if (it.isEmpty()) emptyList() else listOf(it) })
+            .joinToString(",") + "]"
+
+    private fun skillsJson(): String =
+        """{"ok":true,"items":${skillItems()},""" +
+            """"taken":${quote(BUILTIN_CMDS.joinToString(","))},""" +
+            """"dir":${quote(SkillDocs.dir().absolutePath)},"maxDocs":${SkillDocs.MAX_DOCS}}"""
+
+    private fun arrOf(list: List<String>): String = list.joinToString(",", "[", "]") { quote(it) }
+
     private fun skills(ex: HttpExchange) {
         val b = Body(ex)
         if (ex.requestMethod == "GET") {
-            val items = Skills.load().joinToString(",", "[", "]") {
-                """{"name":${quote(it.name)},"desc":${quote(it.desc)},"text":${quote(it.text)}}"""
+            send(ex, 200, skillsJson(), "application/json; charset=utf-8")
+            return
+        }
+        val op = b.str("op")
+        /*
+         * 导入这条路只管"装进 HAOAI_HOME/skills/<slug>/"，
+         * 越界与超限的判定都在 [SkillDocs] 里（zip 条目名是外部输入，防线只有一处）。
+         */
+        if (op in listOf("import-text", "import-url", "import-zip", "deldoc")) {
+            val r = when (op) {
+                "import-text" -> SkillDocs.importText(b.str("text"))
+                "import-url" -> SkillDocs.importUrl(b.str("url"))
+                "import-zip" -> {
+                    val bytes = runCatching {
+                        java.util.Base64.getDecoder().decode(b.str("data").trim())
+                    }.getOrNull()
+                    if (bytes == null) ImportReport(error = "没读懂这个包（base64 解不开）")
+                    else SkillDocs.importZip(bytes)
+                }
+                else -> {
+                    val gone = SkillDocs.remove(SkillDocs.sanitize(b.str("slug")))
+                    if (gone) ImportReport(added = listOf("已删掉"))
+                    else ImportReport(error = "没有这个技能，或者它是手写的 /命令（那种请在原处删）")
+                }
             }
-            send(ex, 200, """{"ok":true,"items":$items,"taken":${quote(BUILTIN_CMDS.joinToString(","))}}""",
+            send(ex, 200,
+                """{"ok":${r.ok},"added":${arrOf(r.added)},"skipped":${arrOf(r.skipped)},""" +
+                    """"error":${quote(r.error)},"items":${skillItems()}}""",
                 "application/json; charset=utf-8")
             return
         }
@@ -1092,7 +1130,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "application/json; charset=utf-8"); return
         }
         val list = Skills.load().toMutableList()
-        if (b.str("op") == "del") {
+        if (op == "del") {
             list.removeAll { it.name == name }
         } else {
             if (name.any { it.isWhitespace() }) {
