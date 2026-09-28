@@ -2637,11 +2637,29 @@ PC 整套 **404 条全绿**。
    **量具放水的时候，缺陷看起来就不存在**（与下面「量具自己会坏」同源）。
 
 翻转验过：把客户端那句 `b.header("X-HaoAI-Token", token)` 删掉 → 5 条红；改回来 → 全绿。
-**手机端整套 `gradle :app:testDebugUnitTest` 176 条全绿**（这一片 +9 条 `PcLinkTest`；上一片 B10 第一步 +4 条 `MemoryBankFormatTest`）。
+**手机端整套 `gradle :app:testDebugUnitTest` 184 条全绿**（`PcLinkTest` 9 + `PcPairingTest` 8；
+再往上一片是 B10 第一步的 `MemoryBankFormatTest` +4）。
 
-**还欠的（要设备的那一段，单独排）**：token 与地址的落盘（要过 `KeystoreCipher`，明文不进日志）、
-设置页的配对界面、`KeepAliveService` 加一条"电脑上有人在等"的通知、以及真机上验一次
-"到底能不能常驻"（那条不验就写"未验证"，不写"通过"）。
+### 第二片：配对落盘与"有人在等"的判定（同样不碰设备）
+
+`app/.../platform/PcPairing.kt`：`PcStore`（`filesDir/pc-link.json`）+ `PcWatch`（待批差集）。
+
+- **token 绝不明文落盘**：加密失败就**拒绝保存**并说清原因（同一策略见
+  `agent/mcp/McpServerStore.kt` 的 `encryptValue`，那儿的注释写着"绝不能返回空串冒充成功"）。
+  地址在存之前先过 `pcNormalizeBase` —— 打错的地址不配被存下来变成常驻的困惑。
+- **解不开就当没配对**：换机恢复 / 清除 Keystore 之后文件还在、token 解不开。这时候留着一条
+  点什么都 401 的"假配对"，比老实说"重新配一次"更坏。
+- `PcWatch` 钉的是后台轮询特有的两个坑：**同一批待批反复弹**（人关不掉）与
+  **批完了通知还挂着**（人以为电脑仍在等他）。手机网页端撞不到这两个，因为它是"页面开着才刷新"。
+- 测试 +8（`PcPairingTest`）。翻转验过：`enc()` 改成原样返回 → "明文不许落盘"与"Keystore 坏了该拒绝"
+  两条红；`PcWatch` 改成每次都响 → 两条差集判据红。
+- 一处假货差点骗过自己：`FakePcCipher` 第一版用 `android.util.Base64`，而单测里
+  `isReturnDefaultValues = true` 会让它**静默返回 null** ⇒ "加密失败该拒绝落盘"那条测试
+  一直在测一个假故障。换成 `java.util.Base64` 才是真的可逆假货。
+
+**还欠的（要设备的那一段，单独排）**：设置页的配对界面（要真截图才算验过）、
+`KeepAliveService` 接上 `PcWatch` 真的弹出那条通知（弹得出来、批完也收得回去）、
+以及真机上验一次"到底能不能常驻"（那条不验就写"未验证"，不写"通过"）。
 
 ## 与手机端同源的行为
 
