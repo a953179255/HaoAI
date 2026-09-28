@@ -1,21 +1,47 @@
 [
   {
-    "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=git]');b.click();return {tabOn:b.classList.contains('on'),panelOn:!!document.querySelector('#tab-git.on'),hasList:!!document.querySelector('#gitList')}})()"
+    "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=git]');b.click();return JSON.stringify({tabOn:b.classList.contains('on'),panelOn:!!document.querySelector('#tab-git.on'),hasList:!!document.querySelector('#gitList')})})()",
+    "must": [
+      "tabOn",
+      "panelOn",
+      "hasList"
+    ],
+    "note": "Git 页签一点就开：按钮亮、面板在、列表容器在"
   },
   {
     "sleep": 1200
   },
   {
-    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];return 'head='+document.querySelector('#gitHead').textContent+' | last='+document.querySelector('#gitLast').textContent+' | rows='+rows.map(r=>r.querySelector('b').textContent+':'+r.querySelector('i').textContent+(r.classList.contains('st')?'[staged]':'')).join(', ')})()"
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')].map(r=>r.querySelector('b').textContent+':'+r.querySelector('i').textContent);const head=document.querySelector('#gitHead').textContent,last=document.querySelector('#gitLast').textContent;return JSON.stringify({head,last,rows,three:rows.length==3,seesCjk:rows.join(',').indexOf('中文.txt')>=0,dirty:/不干净/.test(head),hasLastCommit:last.indexOf('上次提交')>=0})})()",
+    "must": [
+      "three",
+      "seesCjk",
+      "dirty",
+      "hasLastCommit"
+    ],
+    "note": "三条改动都要列出来，**其中那条中文文件名尤其**：porcelain 的 -z 就是为了它（默认输出会把中文转义成八进制，界面上就是一片乱码或者干脆少一行）。head 那句要说清在哪个分支、干不干净"
   },
   {
-    "eval": "(()=>{const r=document.querySelector('#gitList .gr');const cb=r.querySelector('input');const bb=r.querySelector('b').getBoundingClientRect();const ab=r.querySelector('[data-d]').getBoundingClientRect();const cr=r.getBoundingClientRect();return {cbVisible:cb.getBoundingClientRect().width>0,pathEllipsis:bb.width>0&&bb.right<=cr.right+1,diffBtnInside:ab.right<=cr.right+1&&ab.left>bb.left-1,rowH:Math.round(cr.height),pageOverflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,btnWidth:Math.round(ab.width),msgW:Math.round(document.querySelector('#gitMsg').getBoundingClientRect().width),msgOwnLine:(()=>{const i=document.querySelector('#gitMsg').getBoundingClientRect();const b=document.querySelector('#gStage').getBoundingClientRect();return i.bottom<=b.top+2})()}})()"
+    "eval": "(()=>{const r=document.querySelector('#gitList .gr');const cb=r.querySelector('input');const bb=r.querySelector('b').getBoundingClientRect();const ab=r.querySelector('[data-d]').getBoundingClientRect();const cr=r.getBoundingClientRect();const i=document.querySelector('#gitMsg').getBoundingClientRect();const b=document.querySelector('#gStage').getBoundingClientRect();return JSON.stringify({cbVisible:cb.getBoundingClientRect().width>0,pathEllipsis:bb.width>0&&bb.right<=cr.right+1,diffBtnInside:ab.right<=cr.right+1&&ab.left>bb.left-1,rowH:Math.round(cr.height),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+1,btnWidth:Math.round(ab.width),msgW:Math.round(document.querySelector('#gitMsg').getBoundingClientRect().width),msgOwnLine:i.bottom<=b.top+2})})()",
+    "must": [
+      "cbVisible",
+      "pathEllipsis",
+      "diffBtnInside",
+      "noOverflow",
+      "msgOwnLine"
+    ],
+    "note": "勾选框要看得见、路径不许溢出到行外、diff 按钮要在行内、整页不许横向滚、提交说明框要独占一行而不是把按钮挤下去。**期望值是 false 的那条（没有溢出）必须自己算成布尔**，must 里直接写 pageOverflow 会把「没溢出」判成失败"
   },
   {
     "click": "#gitList .gr input"
   },
   {
-    "eval": "(()=>{const i=document.querySelector('#gitList .gr input');return {firstRow:i.dataset.p,checked:i.checked}})()"
+    "eval": "(()=>{const i=document.querySelector('#gitList .gr input');return {firstRow:i.dataset.p,checked:i.checked}})()",
+    "must": [
+      "firstRow",
+      "checked"
+    ],
+    "note": "点第一行的勾选框：勾上的必须是 a.txt 本人（多元素共用 id/顺序错位那类 bug 就在这）"
   },
   {
     "click": "#gStage"
@@ -24,7 +50,12 @@
     "sleep": 1400
   },
   {
-    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];return 'state='+document.querySelector('#gitState').textContent+' | head='+document.querySelector('#gitHead').textContent+' | stagedRows='+rows.filter(r=>r.classList.contains('st')).map(r=>r.querySelector('b').textContent).join(',')})()"
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];const staged=rows.filter(r=>r.classList.contains('st')).map(r=>r.querySelector('b').textContent);const state=document.querySelector('#gitState').textContent;return JSON.stringify({state,head:document.querySelector('#gitHead').textContent,staged,onlyA:staged.join(',')=='a.txt',saidOne:state.indexOf('已暂存 1')>=0})})()",
+    "must": [
+      "onlyA",
+      "saidOne"
+    ],
+    "note": "暂存之后**只有那一条**带 [staged] 标（全表被标成已暂存 = 提交时才发现带上了别人不想提交的东西），状态那句要报出数字"
   },
   {
     "shot": "g01-staged"
@@ -36,7 +67,14 @@
     "sleep": 1400
   },
   {
-    "eval": "(()=>{const d=document.querySelector('#dialog');const pre=d?d.querySelector('pre'):null;const t=pre?pre.textContent:'';return {maskOn:document.querySelector('#mask').classList.contains('on'),title:d?d.querySelector('h3').textContent:'',hasPlus:t.indexOf('+two changed')>=0,hasMinus:t.indexOf('-two')>=0,len:t.length}})()"
+    "eval": "(()=>{const d=document.querySelector('#dialog');const pre=d?d.querySelector('pre'):null;const t=pre?pre.textContent:'';return JSON.stringify({maskOn:document.querySelector('#mask').classList.contains('on'),title:d?d.querySelector('h3').textContent:'',hasPlus:t.indexOf('+two changed')>=0,hasMinus:t.indexOf('-two')>=0,len:t.length,titleHasFile:(d?d.querySelector('h3').textContent:'').indexOf('a.txt')>=0})})()",
+    "must": [
+      "maskOn",
+      "hasPlus",
+      "hasMinus",
+      "titleHasFile"
+    ],
+    "note": "diff 弹窗要有真实的加减行（空 diff 等于没读文件）、标题要写明是哪个文件"
   },
   {
     "shot": "g02-diff"
@@ -58,10 +96,23 @@
     "sleep": 1800
   },
   {
-    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')];return 'state='+document.querySelector('#gitState').textContent+' | head='+document.querySelector('#gitHead').textContent+' | last='+document.querySelector('#gitLast').textContent+' | leftRows='+rows.map(r=>r.querySelector('b').textContent).join(',')})()"
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#gitList .gr')].map(r=>r.querySelector('b').textContent);const state=document.querySelector('#gitState').textContent;return JSON.stringify({state,head:document.querySelector('#gitHead').textContent,last:document.querySelector('#gitLast').textContent,rows,leftTwo:rows.length==2,committed:/已提交/.test(state),cjkLeft:rows.join(',').indexOf('中文.txt')>=0})})()",
+    "must": [
+      "leftTwo",
+      "committed",
+      "cjkLeft"
+    ],
+    "note": "提交完只剩两条未跟踪的（把 a.txt 提交掉不等于把别人也提交掉），状态那句要带上新的 commit 号"
   },
   {
-    "eval": "fetch('/api/gitstatus?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(d=>({branch:d.branch,last:d.last,clean:d.clean,count:d.count,staged:d.stagedCount,entries:d.entries.map(e=>e.p+(e.staged?'*':''))}))"
+    "eval": "fetch('/api/gitstatus?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(d=>JSON.stringify({branch:d.branch,last:d.last,clean:d.clean,count:d.count,staged:d.stagedCount,entries:d.entries.map(e=>e.p+(e.staged?'*':'')),stillDirty:d.clean===false,countTwo:d.count==2,noStaged:d.stagedCount==0}))",
+    "must": [
+      "branch",
+      "stillDirty",
+      "countTwo",
+      "noStaged"
+    ],
+    "note": "界面说的数要和 `git status` 自己说的一致（提交后干净项该归 0、剩余该是 2）——只看界面会把\"面板自己算错\"当成\"git 就是这样\""
   },
   {
     "shot": "g03-committed"
@@ -73,16 +124,33 @@
     "sleep": 1200
   },
   {
-    "eval": "(()=>{const s=document.querySelector('#gitState').textContent;return {state:s,refused:s.indexOf('提交说明')>=0||s.indexOf('没有可提交')>=0}})()"
+    "eval": "(()=>{const s=document.querySelector('#gitState').textContent;return {state:s,refused:s.indexOf('提交说明')>=0||s.indexOf('没有可提交')>=0}})()",
+    "must": [
+      "refused"
+    ],
+    "note": "空说明点提交要**被挡住并说清缺什么**，不能悄悄提交一个空 message"
   },
   {
-    "eval": "fetch('/api/gitstage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,paths:['../../outside.txt'],unstage:'0'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:d.error}))"
+    "eval": "fetch('/api/gitstage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,paths:['../../outside.txt'],unstage:'0'})}).then(r=>r.json()).then(d=>JSON.stringify({ok:d.ok,error:d.error,blocked:d.ok!==true}))",
+    "must": [
+      "blocked"
+    ],
+    "note": "网络来的字符串不能直接当路径：`../../` 必须挡掉（这条口会把 paths 拼进 git 命令，挡不住就等于让手机上的一条请求去改工作区外的仓库）"
   },
   {
-    "eval": "fetch('/api/gitstage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,paths:['--no-verify'],unstage:'0'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:(d.error||'').slice(0,40)}))"
+    "eval": "fetch('/api/gitstage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,paths:['--no-verify'],unstage:'0'})}).then(r=>r.json()).then(d=>JSON.stringify({ok:d.ok,error:(d.error||'').slice(0,40),blocked:d.ok!==true}))",
+    "must": [
+      "blocked"
+    ],
+    "note": "以 `--` 开头的文件名要当参数注入处理（`--no-verify` 会跳过仓库自己的钩子）"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({version:s.version,workspace:s.workspace}))"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>JSON.stringify({version:s.version,workspace:s.workspace,versionOk:(s.version||'').indexOf('-pc')>=0,wsIsRepo:(s.workspace||'').length>0}))",
+    "must": [
+      "versionOk",
+      "wsIsRepo"
+    ],
+    "note": "收尾确认这一轮打的确实是**这次起的那个服务**（端口串台时界面数据看着全对，其实来自另一台 haoai）"
   },
   {
     "shot": "g04-refused"
