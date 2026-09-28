@@ -69,17 +69,30 @@ class AtomicWriteTest {
         writer.start()
         var lost = 0
         var reads = 0
+        // 没读到的那一次，现场到底长什么样。不加这一层，"红了"只等于"某次没读到"，
+        // 而三种坏法差得很远：文件不见了 / 内容是半截（原子性真破了）/ 内容其实是好的
+        // （只是共享冲突挤兑掉了那 300ms 重试窗口）。前两种要改产品，最后一种是机器忙。
+        val why = mutableListOf<String>()
         // 读的一侧就用产品里那个函数（它自带三次重试），别自己造一套读法
         val until = System.currentTimeMillis() + 4000L
         while (System.currentTimeMillis() < until) {
-            if (SessionIndex.read(f) == null) lost++ else reads++
+            if (SessionIndex.read(f) == null) {
+                lost++
+                if (why.size < 4) {
+                    why += runCatching {
+                        val t = f.readText()
+                        "现读 ${t.length} 字节·可解析=" +
+                            runCatching { Json.parseToJsonElement(t).jsonObject }.isSuccess
+                    }.getOrElse { "现读就抛了·${it.javaClass.simpleName}" }
+                }
+            } else reads++
             Thread.sleep(1)
         }
         stop.set(true)
         writer.join(5000)
         assertTrue("写了几轮：" + n, n > 20)
         assertTrue("一次都没读成功过，量具有问题：reads=$reads", reads > 20)
-        assertEquals("边写边读时读侧不该丢会话：lost", 0, lost)
+        assertEquals("边写边读时读侧不该丢会话：lost（现场=$why）", 0, lost)
     }
 
     @Test

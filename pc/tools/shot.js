@@ -299,6 +299,7 @@ function mustMiss(val, must) {
   const proc = await startBrowser();
   let code = 0;
   const misses = [];
+  let asserts = 0;   // 声明了几条判据（must 里的项数总和）——0 就意味着这份剧本只打印不断言
   try {
     await attach(steps[0] && steps[0].url ? steps[0].url : arg('url', 'about:blank'));
     console.log('  已连上无头 Edge，共 ' + steps.length + ' 步');
@@ -322,6 +323,7 @@ function mustMiss(val, must) {
          * 所以按用例显式声明哪些字段必须为真（must 支持点号路径），
          * 没声明的步一律只打印，兼容那些"期望值本来就是 false"的老步。
          */
+        asserts += (s.must || []).length;
         for (const miss of mustMiss(got, s.must)) {
           console.log('  !! 第 ' + (i + 1) + ' 步判据没成立：' + miss);
           misses.push('第 ' + (i + 1) + ' 步 ' + miss);
@@ -353,8 +355,15 @@ function mustMiss(val, must) {
      * 而我把它 `| tail` 之后只看了打印出来的数值就当通过了。
      * 退出码是对的，**管道会把退出码换成 tail 的** —— 所以最后一行必须自己把结论说出来。
      */
-    if (misses.length) console.log('x 判据没过 ' + misses.length + ' 处：' + misses.join(' | '));
-    else console.log('全部判据通过（' + steps.length + ' 步）');
+    /*
+     * 判据条数要打印出来：以前只报"多少步"，于是一份 `must` 全被删光的剧本
+     * 也能报"31 步全绿"—— 那是**零断言的绿**，正是 v0.67.0 那份恒 false 的 noClip
+     * 判据混过去的同一个洞。步数与判据数分开报，0 条判据一眼就能看见。
+     */
+    if (misses.length) console.log('x 判据没过 ' + misses.length + ' 处（共 ' + asserts + ' 条判据 / ' +
+      steps.length + ' 步）：' + misses.join(' | '));
+    else console.log('全部判据通过（' + steps.length + ' 步 / ' + asserts + ' 条判据）' +
+      (asserts === 0 ? '  ⚠ 这份剧本一条判据都没有，绿了等于没测' : ''));
   } catch (e) {
     console.log('  失败：' + e.message);
     try { await shot('failure'); } catch (_) {}

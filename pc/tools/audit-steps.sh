@@ -61,12 +61,20 @@ while IFS= read -r cmd; do
   out="$TEMP/pc-audit-$name.log"
   ( cd "$ROOT" && eval "$cmd" ) > "$out" 2>&1
   rc=$?
-  gates=$(grep -ac '!!' "$out" || true)
+  # 三个数分开看：跑了几步、**声明了几条判据**、几条没过。
+  # 只看退出码会把"零判据的绿"当成通过（v0.67.0 那条恒 false 的判据就是这么混过去的），
+  # 所以判据数为 0 单独标红，别让它躲在 ok 里。
+  miss=$(grep -ac '^  !!' "$out" || true)
+  asserts=$(grep -ao '步 / [0-9]* 条判据' "$out" | tail -1 | grep -o '[0-9]*' | head -1)
+  [ -n "$asserts" ] || asserts='?'
   if [ "$rc" != "0" ]; then
     bad=$((bad+1))
-    printf 'RED  %-16s rc=%s gates=%s  %s\n' "$name" "$rc" "$gates" "$out" | tee -a "$LOG"
+    printf 'RED  %-16s rc=%s 判据=%s 没过=%s  %s\n' "$name" "$rc" "$asserts" "$miss" "$out" | tee -a "$LOG"
+  elif [ "$asserts" = "0" ]; then
+    bad=$((bad+1))
+    printf 'RED  %-16s 一条判据都没声明 —— 绿了等于没测（去 steps/%s.json 补 must）\n' "$name" "$name" | tee -a "$LOG"
   else
-    printf 'ok   %-16s gates=%s\n' "$name" "$gates" | tee -a "$LOG"
+    printf 'ok   %-16s 判据=%s\n' "$name" "$asserts" | tee -a "$LOG"
   fi
 done < "$TEMP/pc-steps-commands.txt"
 
