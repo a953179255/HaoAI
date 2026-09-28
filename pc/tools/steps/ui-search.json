@@ -81,10 +81,13 @@
   "shot": "s02-img-preview"
  },
  {
-  "click": "#pvClose"
+  "click": "#dlgClose"
  },
  {
-  "click": "#pvClose"
+  "eval": "({closed:!document.querySelector('#mask').classList.contains('on')})",
+  "must": [
+   "closed"
+  ]
  },
  {
   "sleep": 400
@@ -111,6 +114,6 @@
   "shot": "s03-text-preview"
  },
  {
-  "click": "#pvClose"
+  "click": "#dlgClose"
  }
 ]

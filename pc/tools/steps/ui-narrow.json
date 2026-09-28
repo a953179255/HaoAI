@@ -1,19 +1,72 @@
 [
-  {"goto": "#box"},
-  {"type": {"sel": "#box", "text": "验收：建一个 hello.txt 并把第一行改掉"}},
-  {"goto": ".cbar", "timeout": 30000},
-  {"sleep": 2000},
-  {"eval": "({w:innerWidth,railL:getComputedStyle(document.querySelector('.rail.l')).display,railR:getComputedStyle(document.querySelector('.rail.r')).display,panelBtn:getComputedStyle(document.getElementById('panelBtn')).display})"},
-  {"click": "#panelBtn"},
-  {"sleep": 400},
-  {"eval": "(()=>{const r=document.querySelector('.rail.r').getBoundingClientRect();return {w:innerWidth,shown:getComputedStyle(document.querySelector('.rail.r')).display,inView:r.right<=innerWidth+1&&r.width>100,todos:document.querySelector('#tab-tasks').innerText.slice(0,24)}})()"},
-  {"shot": "w-narrow-panel"},
-  {"click": "#panelBtn"},
-  {"click": "#railBtn"},
-  {"sleep": 400},
-  {"eval": "(()=>{const r=document.querySelector('.rail.l').getBoundingClientRect();return {shown:getComputedStyle(document.querySelector('.rail.l')).display,left:r.left>=-1,width:r.width,sessions:document.querySelectorAll('#sessions .it').length}})()"},
-  {"shot": "w-narrow-sessions"},
-  {"click": "#sessions .it"},
-  {"sleep": 400},
-  {"eval": "getComputedStyle(document.querySelector('.rail.l')).display"}
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "验收：建一个 hello.txt 并把第一行改掉"
+  }
+ },
+ {
+  "goto": ".cbar",
+  "timeout": 30000
+ },
+ {
+  "sleep": 2000
+ },
+ {
+  "eval": "({w:innerWidth,railL:getComputedStyle(document.querySelector('.rail.l')).display,railR:getComputedStyle(document.querySelector('.rail.r')).display,panelBtn:getComputedStyle(document.getElementById('panelBtn')).display})"
+ },
+ {
+  "click": "#panelBtn"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "eval": "(()=>{const r=document.querySelector('.rail.r').getBoundingClientRect();return {w:innerWidth,shown:getComputedStyle(document.querySelector('.rail.r')).display,inView:r.right<=innerWidth+1&&r.width>100,todos:document.querySelector('#tab-tasks').innerText.slice(0,24)}})()"
+ },
+ {
+  "shot": "w-narrow-panel"
+ },
+ {
+  "click": "#panelBtn"
+ },
+ {
+  "click": "#railBtn"
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "eval": "({hidden:getComputedStyle(document.querySelector('.rail.l')).display==='none'})",
+  "must": [
+   "hidden"
+  ]
+ },
+ {
+  "click": "#railBtn"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "eval": "(()=>{const r=document.querySelector('.rail.l').getBoundingClientRect();return {shown:getComputedStyle(document.querySelector('.rail.l')).display,left:r.left>=-1,width:r.width,sessions:document.querySelectorAll('#sessions .it').length}})()"
+ },
+ {
+  "shot": "w-narrow-sessions"
+ },
+ {
+  "click": "#sessions .it"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "eval": "getComputedStyle(document.querySelector('.rail.l')).display"
+ }
 ]

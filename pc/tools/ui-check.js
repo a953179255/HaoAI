@@ -79,6 +79,21 @@ for (const m of html.matchAll(/id='([\w-]+)'/g)) presentIds.add(m[1]);
 const noId = [...wanted].filter(i => !presentIds.has(i)).sort();
 check(noId.length === 0, 'JS 里 $#+id 取的元素都存在', '找不到：' + noId.join(', '));
 
+// ---- 3b) 同一个 id 不许出现两次（HTML 里写死的 + JS 模板里注入的算同一份文档）----
+/*
+ * 为什么值得静态挡：`#pvClose` 曾在"浏览器预览页签"和"文件预览弹窗"里各有一个。
+ * 页面自己的代码侥幸没事（弹窗那个用 `$('#dialog').querySelector(...)` 限了范围），
+ * 但 `getElementById` / 任何通用 `querySelector('#pvClose')` 只会命中**文档里第一个** ——
+ * 于是像素剧本点"关闭"实际点在另一个页签里那个 0 尺寸的按钮上，报"点不到"，
+ * 而这类错在页面上看起来像"剧本写错了"，不像"产品有两个同名 id"。
+ */
+const idHits = new Map();
+for (const m of html.matchAll(/id="([\w-]+)"/g)) idHits.set(m[1], (idHits.get(m[1]) || 0) + 1);
+for (const m of html.matchAll(/id='([\w-]+)'/g)) idHits.set(m[1], (idHits.get(m[1]) || 0) + 1);
+const dup = [...idHits].filter(([, n]) => n > 1).map(([i, n]) => i + '×' + n).sort();
+check(dup.length === 0, '整份文档里每个 id 只出现一次',
+  '重名：' + dup.join(', ') + '（getElementById 只认第一个，另一个永远点不到）');
+
 // ---- 4) 服务端事件名与前端监听名要对得上 ----
 const server = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc', 'Server.kt'), 'utf8');
 const emitted = new Set();

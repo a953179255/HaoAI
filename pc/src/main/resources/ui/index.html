@@ -2239,9 +2239,9 @@ function fEntry(p,isDir){
           :isMedia(p)?players(curId,[p])
           :x.binary?'<div class="kv">（二进制文件，不预览，共 '+kb(x.bytes||0)+'）</div>'
           :'<pre class="pv">'+esc(x.text||'')+(x.truncated?'\n…（只给前 200 KB）':'')+'</pre>')+
-        '<div class="acts"><button class="btn" id="pvClose">关闭</button></div>';
+        '<div class="acts"><button class="btn" id="dlgClose">关闭</button></div>';
       $('#mask').classList.add('on');
-      $('#dialog').querySelector('#pvClose').onclick=()=>$('#mask').classList.remove('on');
+      $('#dialog').querySelector('#dlgClose').onclick=()=>$('#mask').classList.remove('on');
     }).catch(c=>toast('打不开（'+c+'）','err'));
 }
 document.querySelector('.fbar').onclick=e=>{

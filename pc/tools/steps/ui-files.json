@@ -11,7 +11,7 @@
   {"sleep": 700},
   {"eval": "({maskOn:document.getElementById('mask').classList.contains('on'),pv:(document.querySelector('#dialog .pv')||{}).innerText||null})"},
   {"shot": "f02-preview"},
-  {"click": "#pvClose"},
+  {"click": "#dlgClose"},
   {"eval": "fetch('/api/files?sid='+curId+'&path=../../../../Windows').then(r=>r.json()).then(d=>'目录穿越后 path=['+d.path+'] 条目='+d.entries.length)"},
   {"eval": "fetch('/api/file?sid='+curId+'&path=../../settings.json').then(r=>'读工作区外文件的 HTTP 状态='+r.status)"},
   {"eval": "fetch('/api/file?sid='+curId+'&path=.haoai-attach/../hello.txt').then(r=>r.json()).then(d=>'规范化后仍在区内 ok='+d.ok)"}

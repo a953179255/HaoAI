@@ -29,7 +29,7 @@ import io, re, sys
 t = io.open(sys.argv[1], encoding='utf-8').read()
 best = {}
 for full, name in re.findall(
-        r'((?:[A-Z_]+=\S+\s+)*bash pc/tools/ui-shot\.sh pc/tools/steps/([a-z0-9\-]+)\.json[^\n`#]*?)\s*(?:#|`|\r|$)', t, re.M):
+        r'((?:[A-Z_]+=(?:"[^"]*"|\'[^\']*\'|\S+)\s+)*bash pc/tools/ui-shot\.sh pc/tools/steps/([a-z0-9\-]+)\.json[^\n`#]*?)\s*(?:#|`|\r|$)', t, re.M):
     full = re.split(r'\s{2,}#', full.strip())[0].strip()
     if 'SHOT_DPR' in full:      # 高倍率重拍不是验收跑法
         continue
