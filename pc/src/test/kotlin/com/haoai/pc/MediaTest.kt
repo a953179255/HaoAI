@@ -402,4 +402,99 @@ class MediaTest {
         assertTrue("两段五秒该拼成十秒左右，实际 $d", d in 8.5..12.5)
         assertTrue("音轨要留着：$p", p.contains("codec_type=audio"))
     }
+    /* ---- 剪辑链第三段：变速 / 淡入淡出 / 压 BGM（v0.72.0）---- */
+
+    private fun durOf(f: File): Double =
+        Regex("duration=([0-9.]+)").find(probe(f))?.groupValues?.get(1)?.toDoubleOrNull() ?: -1.0
+
+    /** 另一条时长的素材：混音要验"以主音为准截断"，两段一样长就验不出来。 */
+    private fun clipSecs(dir: File, name: String, secs: Int, audio: Boolean = true): File {
+        val f = File(dir, name)
+        val exe = Ffmpeg.ffmpeg() ?: return f
+        val ins = mutableListOf("-f", "lavfi", "-i", "testsrc=duration=$secs:size=320x240:rate=15")
+        if (audio) ins += listOf("-f", "lavfi", "-i", "sine=frequency=320:duration=$secs")
+        val tail = if (audio) listOf("-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest")
+        else listOf("-c:v", "libx264", "-pix_fmt", "yuv420p")
+        Ffmpeg.run(exe, listOf("-y", "-hide_banner", "-loglevel", "error") + ins + tail + f.absolutePath, dir, 120)
+        return f
+    }
+
+    @Test
+    fun `speed 2x halves the duration and keeps the audio track`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws(); val src = clip(dir)
+        val r = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"2","output":"快.mp4"}"""),
+            ToolCtx(dir, PcSettings(), "auto", SpyGate()))
+        assertFalse("两倍速没成：${r.content}", r.error)
+        val out = File(dir, "快.mp4")
+        assertTrue("两倍速后该在 2~3 秒，实际 ${durOf(out)}", durOf(out) in 2.0..3.2)
+        assertTrue("音轨要留着（只变画面就是废片）", probe(out).contains("codec_type=audio"))
+    }
+
+    @Test
+    fun `speed 4x chains two atempo stages instead of feeding ffmpeg an illegal number`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws(); val src = clip(dir)
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val r = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"4","output":"x4.mp4"}"""), ctx)
+        assertFalse("四倍速没成（atempo 只吃 0.5~2，得自己拆级）：${r.content}", r.error)
+        assertTrue("四倍速后该 1~2 秒，实际 ${durOf(File(dir, "x4.mp4"))}",
+            durOf(File(dir, "x4.mp4")) in 0.8..2.0)
+        val bad = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"40","output":"n.mp4"}"""), ctx)
+        assertTrue("倍速离谱要挡下来：${bad.content}", bad.error && bad.content.contains("0.25"))
+        val junk = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"2;rm","output":"n2.mp4"}"""), ctx)
+        assertTrue("非数字的 rate 一个字都不该进过滤串：${junk.content}", junk.error)
+    }
+
+    @Test
+    fun `fade computes the fade-out from the real duration and leaves the length alone`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws(); val src = clip(dir)          // 5 秒
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val r = MediaTool().run(args("""{"sub":"fade","input":"${src.name}","output":"f.mp4"}"""), ctx)
+        assertFalse("淡入淡出没成：${r.content}", r.error)
+        val out = File(dir, "f.mp4")
+        assertTrue("加淡入淡出不该改时长，实际 ${durOf(out)}", durOf(out) in 4.5..5.6)
+        assertTrue("结尾也要淡出（画面流要在）", probe(out).contains("codec_type=video"))
+        val tooLong = MediaTool().run(
+            args("""{"sub":"fade","input":"${src.name}","fadeIn":"3","fadeOut":"3","output":"g.mp4"}"""), ctx)
+        assertTrue("淡入+淡出比整段还长必须拒绝（那样整段是黑的）：${tooLong.content}", tooLong.error)
+        val zero = MediaTool().run(
+            args("""{"sub":"fade","input":"${src.name}","fadeIn":"0","fadeOut":"0","output":"h.mp4"}"""), ctx)
+        assertTrue("两个都是 0 等于什么都不做，要说出来：${zero.content}", zero.error)
+    }
+
+    @Test
+    fun `mix ducks the music under the voice and cuts it where the voice ends`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws(); val voice = clip(dir)                       // 5 秒
+        val music = clipSecs(dir, "背景音乐.mp4", 8)                 // 8 秒，故意更长
+        val r = MediaTool().run(args(
+            """{"sub":"mix","input":"${voice.name}","input2":"${music.name}","output":"混好.mp4"}"""),
+            ToolCtx(dir, PcSettings(), "auto", SpyGate()))
+        assertFalse("混音没成：${r.content}", r.error)
+        val out = File(dir, "混好.mp4")
+        val p = probe(out)
+        assertTrue("音乐比口播长，必须在口播结束处截断（5 秒左右，实际 ${durOf(out)}）", durOf(out) in 4.4..6.0)
+        assertTrue("画面要留着（这一步只动声音）：$p", p.contains("codec_type=video"))
+        assertTrue("要有音轨：$p", p.contains("codec_type=audio"))
+    }
+
+    @Test
+    fun `mix refuses instead of producing silent video`() {
+        assumeTrue("这台机器上没有 ffmpeg", have())
+        val dir = ws()
+        val mute = clipSecs(dir, "无声素材.mp4", 4, audio = false)
+        val music = clipSecs(dir, "背景音乐.mp4", 6)
+        val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
+        val r = MediaTool().run(args(
+            """{"sub":"mix","input":"${mute.name}","input2":"${music.name}","output":"x.mp4"}"""), ctx)
+        assertTrue("主素材没音轨要直说，不能悄悄出一条无声视频：${r.content}", r.error)
+        val noSecond = MediaTool().run(args("""{"sub":"mix","input":"${music.name}","output":"y.mp4"}"""), ctx)
+        assertTrue("不给 input2 要报错：${noSecond.content}", noSecond.error)
+        val badGain = MediaTool().run(args(
+            """{"sub":"mix","input":"${music.name}","input2":"${music.name}","gain":"12","output":"z.mp4"}"""), ctx)
+        assertTrue("gain 超范围要挡：${badGain.content}", badGain.error)
+    }
+
 }

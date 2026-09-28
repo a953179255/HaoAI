@@ -1,0 +1,37 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "把素材做成两倍速、首尾淡入淡出、再压一层背景音乐",
+   "enter": true
+  }
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&Date.now()-t0>3000)return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>150000)return JSON.stringify({done:false,ms:Date.now()-t0});await new Promise(z=>setTimeout(z,1500))}})()",
+  "must": [
+   "done"
+  ]
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();let vs=[];for(;;){vs=[...document.querySelectorAll('.view.on .pvmed video')];if(vs.length>=3&&vs.every(v=>v.readyState>=1&&v.duration>0))return JSON.stringify({players:vs.length,durs:vs.map(v=>+(v.duration||0).toFixed(2)),allThree:vs.length>=3,firstHalf:vs[0].duration>1.5&&vs[0].duration<3.0,chainKept:Math.abs(vs[0].duration-vs[2].duration)<1.2});if(Date.now()-t0>11000)return JSON.stringify({players:vs.length,durs:vs.map(v=>v.duration),ready:vs.map(v=>v.readyState),allThree:vs.length>=3,firstHalf:false,chainKept:false});await new Promise(z=>setTimeout(z,600))}})()",
+  "must": [
+   "allThree",
+   "firstHalf",
+   "chainKept"
+  ]
+ },
+ {
+  "shot": "e01-edit3"
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/files?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({entries:[]}));const names=(d.entries||[]).map(x=>x.n).join(',');return JSON.stringify({names:names.slice(0,120),hasSpeed:names.indexOf('两倍速.mp4')>=0,hasFade:names.indexOf('淡入淡出.mp4')>=0,hasMix:names.indexOf('成品.mp4')>=0})})()",
+  "must": [
+   "hasSpeed",
+   "hasFade",
+   "hasMix"
+  ]
+ }
+]

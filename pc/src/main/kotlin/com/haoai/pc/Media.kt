@@ -233,9 +233,13 @@ class MediaTool : Tool(
         "cut（按时间剪切）| frame（抽一帧成图，图本身会递给你看）| audio（抽音轨）| cover（封面图）| " +
         "caption（给封面/某一帧叠一行大标题，做视频封面与直播缩略图）| " +
         "srt（把「几点到几点说什么」写成字幕文件，不需要源文件也不碰 ffmpeg）| " +
-        "subtitle（把 .srt 烧进画面，出的是新视频）| join（两段按顺序拼成一段，会重编码）。" +
+        "subtitle（把 .srt 烧进画面，出的是新视频）| join（两段按顺序拼成一段，会重编码）| " +
+        "speed（整段变速，rate=2 是两倍速，口播讲快了用它把时间压回去）| " +
+        "fade（开头淡入、结尾淡出，切片首尾不生硬）| " +
+        "mix（把一段 BGM 压在口播下面：input2 是音乐，gain 是音乐的音量倍数，默认 0.18）。" +
         "input 是源文件（工作区相对路径或绝对路径）；output 可省，默认写进 .haoai-output/media/。" +
         "start/dur 认 12、12.5、1:05、1:02:03 四种写法。caption 要 text，subtitle 要 subs，join 要 input2，" +
+        "mix 也要 input2，speed 要 rate，fade 用 fadeIn/fadeOut（秒，默认各 1 秒），" +
         "srt 要 items（JSON 数组：[{\"start\":\"0\",\"end\":\"2.5\",\"text\":\"第一句\"}]）。除 info 外都会写文件，按权限档走。",
     schema(
         "sub" to "string", "input" to "string", "output" to "string",
@@ -244,6 +248,7 @@ class MediaTool : Tool(
         "reencode" to "boolean", "timeout" to "integer",
         "text" to "string", "items" to "string", "subs" to "string", "input2" to "string",
         "size" to "integer", "pos" to "string", "font" to "string", "force" to "boolean",
+        "rate" to "string", "fadeIn" to "string", "fadeOut" to "string", "gain" to "string",
         required = arrayOf("sub")
     ),
     kind = "exec"
@@ -481,8 +486,121 @@ class MediaTool : Tool(
                     else "两段都没有音轨，拼出来也是无声的"
                 )
             }
+            /*
+             * speed：整段变速。视频 setpts、音频 atempo，**两边必须一起动** ——
+             * 只改画面不改声音，出来的是"默片配原速解说"那种废片。
+             * atempo 只认 0.5~2.0，所以 4 倍速要串两级（2×2）：这是 ffmpeg 自己的限制，
+             * 传超范围的数它直接报错退出，所以我们先在本地拆好。
+             */
+            "speed" -> {
+                val rate = num(args, "rate")
+                    ?: return Plan(err = "sub=speed 要 rate（倍速，如 1.25 / 2 / 0.5，只能是数字）")
+                if (rate < 0.25 || rate > 8.0) return Plan(err = "rate=$rate 不在 0.25~8 之间")
+                val a = hasAudio(inp, ctx)
+                val v = "[0:v]setpts=PTS/${fmtNum(rate)}[v]"
+                val fc = if (a == true) "$v;[0:a]${atempoChain(rate)}[a]" else v
+                val maps = if (a == true) listOf("-map", "[v]", "-map", "[a]") else listOf("-map", "[v]")
+                val enc = listOf("-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", int(args, "crf", 23).coerceIn(0, 51).toString()) +
+                    (if (a == true) listOf("-c:a", "aac", "-b:a", "160k") else emptyList())
+                Plan(base + src + listOf("-filter_complex", fc) + maps + enc + faststart(ext) + out.absolutePath,
+                    hint = if (a == true) "时长会变成原来的 1/$rate（变速必然重编码）"
+                    else "这段没有音轨，只变了画面")
+            }
+            /*
+             * fade：首尾淡入淡出。结尾那一刀要知道总时长，所以先 ffprobe 一次 ——
+             * 拿 `dur` 参数覆盖也行，但默认按文件真实长度算，省得模型记错长度把淡出算到片尾之外
+             * （那样淡出永远不出现，而文件"看着是成功了"）。
+             */
+            "fade" -> {
+                val fi = num(args, "fadeIn") ?: 1.0
+                val fo = num(args, "fadeOut") ?: 1.0
+                if (fi < 0 || fo < 0) return Plan(err = "fadeIn/fadeOut 不能是负数")
+                if (fi == 0.0 && fo == 0.0) return Plan(err = "fadeIn 与 fadeOut 都是 0：那等于什么都不做")
+                // dur 给了就以它为准（比如只处理片段）；不给才去探测整段长度。
+                // 注意不能让空串走 parseTime —— 它会当成 0，于是"淡入淡出比整段长"这条判据第一次就红。
+                val total = dur?.takeIf { it.isNotBlank() }?.let { parseTime(it) }?.toDoubleOrNull()
+                    ?: durationOf(inp, ctx)
+                    ?: return Plan(err = "没探出这段的时长（淡出要算结尾在哪）—— 先跑一次 sub=info，或直接给 dur")
+                if (fi + fo >= total) return Plan(
+                    err = "淡入 ${fi}s + 淡出 ${fo}s 已经不比整段 ${fmtNum(total)}s 短了：那样整段都是黑的")
+                val v = mutableListOf<String>()
+                val a = mutableListOf<String>()
+                if (fi > 0) { v += "fade=t=in:st=0:d=${fmtNum(fi)}"; a += "afade=t=in:st=0:d=${fmtNum(fi)}" }
+                if (fo > 0) {
+                    val st = fmtNum(total - fo)
+                    v += "fade=t=out:st=$st:d=${fmtNum(fo)}"; a += "afade=t=out:st=$st:d=${fmtNum(fo)}"
+                }
+                val has = hasAudio(inp, ctx)
+                val fc = if (has == true) "[0:v]${v.joinToString(",")}[v];[0:a]${a.joinToString(",")}[a]"
+                else "[0:v]${v.joinToString(",")}[v]"
+                val maps = if (has == true) listOf("-map", "[v]", "-map", "[a]") else listOf("-map", "[v]")
+                val enc = listOf("-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", int(args, "crf", 23).coerceIn(0, 51).toString()) +
+                    (if (has == true) listOf("-c:a", "aac", "-b:a", "160k") else emptyList())
+                Plan(base + src + listOf("-filter_complex", fc) + maps + enc + faststart(ext) + out.absolutePath,
+                    hint = "整段按 ${fmtNum(total)}s 算的淡出起点；不对就给 dur 覆盖")
+            }
+            /*
+             * mix：把一段 BGM 压在口播下面（直播切片、视频背景音都这一步）。
+             * 两条口径：① 音乐先 `volume=gain` 再混，`normalize=0` 关掉 amix 默认的"按路数平分"，
+                 否则口播会被一起拖小声（听感是"人声发虚"，而参数上看不出来）；
+             * ② `duration=first` —— 音乐比口播长时**在口播结束处截断**，不能反过来把视频拉长。
+             * 画面 `-c:v copy`：这一步只动声音，重编码画面是白花一分钟。
+             */
+            "mix" -> {
+                val raw2 = req(args, "input2")?.trim()
+                if (raw2.isNullOrEmpty())
+                    return Plan(err = "sub=mix 要 input2：背景音乐那条（input 是口播/主音）")
+                val b = ctx.resolve(raw2)
+                if (!b.isFile) return Plan(err = "没有这条音乐：${ctx.rel(b)}")
+                if (hasAudio(inp, ctx) != true) return Plan(err = "主素材自己没有音轨，压什么都还是没声音")
+                if (hasAudio(b, ctx) != true) return Plan(err = "当音乐的那个文件没有音轨：${ctx.rel(b)}")
+                val g = num(args, "gain") ?: 0.18
+                if (g <= 0 || g > 4) return Plan(err = "gain=$g 不在 0~4 之间（音乐相对口播的倍数，默认 0.18）")
+                val audioOnly = ext in AUDIO_ONLY
+                val fc = "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[v];" +
+                    "[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=${fmtNum(g)}[m];" +
+                    "[v][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]"
+                val maps = if (audioOnly) listOf("-map", "[a]") else listOf("-map", "0:v", "-map", "[a]")
+                val vcopy = if (audioOnly) emptyList() else listOf("-c:v", "copy")
+                Plan(base + listOf("-i", inp.absolutePath, "-i", b.absolutePath) +
+                    listOf("-filter_complex", fc) + maps + vcopy +
+                    listOf("-c:a", if (ext == "mp3") "libmp3lame" else "aac", "-b:a", "192k") +
+                    faststart(ext) + out.absolutePath,
+                    hint = "音乐压到 ${fmtNum(g)}x，并在主音结束处截断")
+            }
             else -> Plan(err = "不认的子命令：$sub")
         }
+    }
+
+    /** 只认"数字（可带小数）"的参数。宁可拒绝也不能把任意字符串拼进过滤串。 */
+    private fun num(args: JsonObject, key: String): Double? {
+        val s = req(args, key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (!s.matches(Regex("^\\d{1,4}(\\.\\d{1,3})?$"))) return null
+        return s.toDoubleOrNull()
+    }
+
+    /** 不带区域设置的数字格式化：`String.format` 在某些 locale 下会把小数点写成逗号，那会打断过滤串。 */
+    private fun fmtNum(d: Double): String =
+        java.math.BigDecimal(d.toString()).stripTrailingZeros().toPlainString()
+
+    /** atempo 只吃 0.5~2.0，超出就串多级。 */
+    private fun atempoChain(rate: Double): String {
+        var left = rate
+        val parts = mutableListOf<String>()
+        while (left > 2.0) { parts += "atempo=2.0"; left /= 2.0 }
+        while (left < 0.5) { parts += "atempo=0.5"; left /= 0.5 }
+        parts += "atempo=${fmtNum(left)}"
+        return parts.joinToString(",")
+    }
+
+    private fun durationOf(f: File, ctx: ToolCtx): Double? {
+        val probe = Ffmpeg.ffprobe() ?: return null
+        val r = Ffmpeg.run(probe, listOf("-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", f.absolutePath), ctx.workspace, 30)
+        if (!r.ok) return null
+        return r.log.trim().toDoubleOrNull()
     }
 
     /**
@@ -636,9 +754,11 @@ class MediaTool : Tool(
 
     companion object {
         private val SUBS = setOf(
-            "info", "transcode", "cut", "frame", "audio", "cover", "caption", "subtitle", "srt", "join"
+            "info", "transcode", "cut", "frame", "audio", "cover", "caption", "subtitle", "srt", "join",
+            "speed", "fade", "mix"
         )
-        private const val SUB_LIST = "info/transcode/cut/frame/audio/cover/caption/subtitle/srt/join"
+        private const val SUB_LIST =
+            "info/transcode/cut/frame/audio/cover/caption/subtitle/srt/join/speed/fade/mix"
         private val PICS = setOf("png", "jpg", "jpeg", "webp")
         private val SUBEXT = setOf("srt", "ass", "ssa", "vtt")
         private val CJK_FONTS = listOf(
@@ -662,12 +782,14 @@ class MediaTool : Tool(
             "caption" to setOf("jpg", "jpeg", "png", "webp"),
             "subtitle" to VIDEO_OK,
             "join" to VIDEO_OK,
+            "speed" to VIDEO_OK, "fade" to VIDEO_OK, "mix" to (VIDEO_OK + AUDIO_ONLY),
             "srt" to setOf("srt"),
             "audio" to AUDIO_ONLY
         )
         private val DEFAULT_EXT = mapOf(
             "transcode" to "mp4", "cut" to "mp4", "frame" to "png", "cover" to "jpg", "audio" to "mp3",
-            "caption" to "jpg", "subtitle" to "mp4", "join" to "mp4"
+            "caption" to "jpg", "subtitle" to "mp4", "join" to "mp4",
+            "speed" to "mp4", "fade" to "mp4", "mix" to "mp4"
         )
 
         private fun ext(f: File): String = f.extension.lowercase().trimStart('.')
