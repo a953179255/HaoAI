@@ -515,4 +515,58 @@ class ApprovalFlowTest {
             ))
         }
     }
+
+    /**
+     * 浏览器要 parse 的每一帧 SSE，data 都必须是合法 JSON。
+     *
+     * 这条测试存在的全部理由：`user` 事件的负载多打了两个右括号，`JSON.parse` 当场抛，
+     * 于是**用户自己那句话根本不出现在对话流里** —— 要等这一轮跑完（或刷新）重画才回来。
+     * 一轮跑十几分钟的长任务里，表现就是"我说的话不见了"。
+     * 而所有接口测试全绿：它们读的是 `/api/state` 的 JSON，没有一条去看 SSE 帧里的内容。
+     *
+     * 自己开一条 events 连接读，不去动共享的 `events` 队列 ——
+     * 从共享队列里 poll 会把别的测试在等的事件吃掉，变成"单跑通过、合跑失败"。
+     */
+    @Test
+    fun `every sse frame the browser parses is valid json`() {
+        val sid = jsonOf(post("/api/new", emptyMap()).second)["id"]!!.jsonPrimitive.content
+        val frames = Collections.synchronizedList(mutableListOf<Evt>())
+        Thread {
+            runCatching {
+                val conn = http.send(
+                    HttpRequest.newBuilder(URI.create("$base/api/events")).GET().build(),
+                    HttpResponse.BodyHandlers.ofLines()
+                )
+                var ev = ""
+                var id = ""
+                conn.body().forEach { line ->
+                    when {
+                        line.startsWith("id:") -> id = line.substring(3).trim()
+                        line.startsWith("event:") -> ev = line.substring(6).trim()
+                        line.startsWith("data:") && ev.isNotEmpty() -> {
+                            frames.add(Evt(ev, line.substring(5).trim(), id)); ev = ""
+                        }
+                    }
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        Thread.sleep(400)
+        post("/api/task", mapOf("sid" to sid, "text" to "帧格式探针：我说的话要看得见"))
+        val until = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < until &&
+            frames.none { it.sid == sid && it.ev == "run" && it.data.contains("false") }) Thread.sleep(80)
+
+        val mine = frames.filter { it.sid == sid || it.sid.isEmpty() }
+        assertTrue("一帧都没收到（sid=$sid）：SSE 没连上或事件没带 sid", mine.size >= 3)
+        mine.forEach { f ->
+            assertTrue("${f.ev} 的负载不是合法 JSON：" + f.data,
+                runCatching { Json.parseToJsonElement(f.data) }.isSuccess)
+        }
+        val user = mine.firstOrNull { it.ev == "user" }
+        assertNotNull("没收到 user 帧：前端画不出用户刚说的那句话", user)
+        val u = jsonOf(user!!.data)
+        assertEquals("帧格式探针：我说的话要看得见", u["t"]?.jsonPrimitive?.content)
+        assertTrue("user 帧要带 imgs/media 两个数组（前端按对象形状画附件）",
+            u.containsKey("imgs") && u.containsKey("media"))
+    }
 }

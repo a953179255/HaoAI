@@ -565,8 +565,10 @@ class WebServer(settings: PcSettings, port: Int,
         }
         // 负载从裸字符串变成对象：图片路径要一起出去，前端才画得出刚发出去的那张图。
         // 前端两种形状都认（见 index.html 的 on(user)），所以这一步不会打断旧页面。
+        // 括号数是有测试的（ApprovalFlowTest 的"每一帧都得是合法 JSON"）：这里多打一个 }
+        // 时浏览器 JSON.parse 抛异常，表现成"用户自己那句话不出现在对话流里"，而接口测试全绿。
         publish("user", """{"t":${quote(text)},"imgs":${images.joinToString(",", "[", "]") { quote(it) }},""" +
-            """"media":${media.joinToString(",", "[", "]") { quote(it) }}}}""", sid)
+            """"media":${media.joinToString(",", "[", "]") { quote(it) }}}""", sid)
         val e = managed.engine
         Thread {
             publish("run", """{"running":true}""", sid)
