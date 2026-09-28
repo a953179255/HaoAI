@@ -65,6 +65,7 @@
     position:relative}
   .sess .it:hover{border-color:var(--line2);color:var(--fg)}
   .sess .it.cur{border-color:var(--acc2);background:var(--glass2);color:var(--fg)}
+  .sess .it.duo{border-color:var(--acc2);border-style:dashed}
   .sess .it i{font-style:normal;opacity:.65;font-size:11px}
   /* 悬停才露出改名/删除：常驻的话侧栏每条都挂两个小方块，比要管的会话还显眼 */
   .sess .it .act{position:absolute;right:5px;top:4px;display:flex;gap:3px;opacity:0;transition:opacity .12s}
@@ -76,6 +77,21 @@
      后台会话的事件照样写进它自己那个容器 —— 切回去不用重拉、也不丢中间输出。 */
   .view{display:none}
   .view.on{display:block}
+  /* 分屏（两条会话并排看）：每格自己是一条滚动条。
+     共用 #stream 那一条时，左边跟流会把右边拽着走 —— 并排看的意义正好是"各看各的"。
+     标题走 ::before + attr(data-cap)：会话重画历史时整段 innerHTML 会被清空，
+     真插进去的节点会跟着没了，伪元素不会。 */
+  #stream.split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:0;overflow:hidden}
+  #stream.split .view.on,#stream.split .view.duo{display:block;overflow:auto;height:100%;
+    min-height:0;padding:0 14px 8px}
+  /* 分隔线画在容器正中间，不画在某一格上：哪条会话在左取决于它是什么时候建的，
+     挂在 .duo 上就会出现"左栏贴着容器左缘有一条没人懂的竖线"。 */
+  #stream.split::after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;
+    background:var(--line);pointer-events:none}
+  #stream.split .view::before{content:attr(data-cap);position:sticky;top:0;z-index:3;display:block;
+    margin:0 -14px 8px;padding:5px 12px;background:var(--bg);border-bottom:1px solid var(--line);
+    color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #stream.split .view.on::before{color:var(--acc2)}
   .sess .it.run{border-color:var(--acc2)}
   .sess .it.run::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;
     background:var(--acc);border-radius:9px 0 0 9px;animation:pulse 1.4s ease-in-out infinite}
@@ -627,6 +643,7 @@
       </div>
       <button class="chip" id="modelChip" title="切换模型"><span id="model">—</span></button>
       <span class="chip" id="roleChip" hidden title="这条会话是哪个角色卡起的（人设已进系统提示）"></span>
+      <span class="chip" id="duoChip" hidden title="两条会话并排中，点我退出">▥ 分屏中 · 退出</span>
       <div class="ctx" id="ctxBtn" title="上下文占用，点开看明细">
         <svg width="22" height="22" viewBox="0 0 22 22">
           <circle class="bg" cx="11" cy="11" r="9"></circle>
@@ -639,6 +656,7 @@
         <button data-m="ask" title="写文件/执行命令先问（Alt+2）">询问</button>
         <button data-m="auto" title="全自动，不再打断（Alt+3）">自动</button>
       </div>
+      <button class="iconb" id="duoBtn" title="把刚才看的那条并排到右边（对照代码与对照聊天用）">▥</button>
       <button class="iconb" id="themeBtn" title="切换明暗主题">◐</button>
       <button class="iconb" id="expBtn" title="导出这条会话为 markdown">⇩</button>
       <button class="iconb" id="shareBtn" title="导出只读 HTML 快照（发给别人看，页面里没有脚本）">↗</button>
@@ -881,7 +899,7 @@
 <script src="/md.js"></script>
 <script>
 const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box'), app=$('#app');
-let mode='ask', stopping=false, curId='';
+let mode='ask', stopping=false, curId='', duoId='', lastId='';
 
 /* ---- 主题：只存一个偏好，其余全交给 CSS 变量 ---- */
 document.documentElement.setAttribute('data-theme',localStorage.getItem('haoai-theme')||'dark');
@@ -903,14 +921,41 @@ function view(sid){
     v={sid:sid,el:el('<div class="view"></div>'),curAns:null,curThink:null,acc:'',thinkAcc:'',thinkT0:0,
        tools:{},subs:{},unread:0,running:false,wait:false,title:'新会话',todos:[],usage:null,
        mode:mode,workspace:'',model:'',role:'',outputs:[],queue:[],toolList:[],runState:null};
+    v.el.dataset.sid=sid;
+    // 分屏时每一格自己是滚动容器，"人回到这一格的底部了"得听它自己的滚动事件
+    v.el.addEventListener('scroll',()=>{
+      if(stream.classList.contains('split')&&v.el.classList.contains('on')&&atBottom(v)){pillN=0;paintPill()}
+    });
     views[sid]=v;stream.appendChild(v.el);
   }
   return v;
 }
 function cur(){return view(curId)}
-function show(sid){
-  const v=view(sid);curId=v.sid;
-  Object.keys(views).forEach(k=>views[k].el.classList.toggle('on',k===curId));
+function duoOn(){return !!duoId&&duoId!==curId&&!!views[duoId]}
+/* 可见性只由这一句决定：两格的 on/duo、#stream 上的 split、每格顶上那条标题。
+   show() 与 setDuo() 都走它 —— 别处再各自 toggle 迟早漏一处。 */
+function layout(){
+  Object.keys(views).forEach(k=>{
+    const e=views[k].el;
+    e.classList.toggle('on',k===curId);
+    e.classList.toggle('duo',duoOn()&&k===duoId);
+    e.dataset.cap=capText(views[k]);
+  });
+  stream.classList.toggle('split',duoOn());
+  $('#duoChip').hidden=!duoOn();
+}
+function capText(v){
+  if(!duoOn())return '';
+  const t=v.title||'新会话';
+  return v.sid===curId?('▸ '+t+' · 输入到这里'):('· '+t+' · 点这一格换到这里输入');
+}
+/* keep=true：只换"这句话发到哪一条"，不动任何滚动条（点右栏那一格时用它）。 */
+function show(sid,keep){
+  const v=view(sid),prev=curId;
+  // 点右边那一格时两条互换位置，谁也不许凭空消失
+  if(duoOn()&&sid===duoId&&curId){curId=sid;duoId=prev;lastId=prev}
+  else{curId=v.sid;if(prev&&sid&&prev!==sid)lastId=prev}
+  layout();
   v.unread=0;v.wait=false;
   $('#title').textContent=v.title||'新会话';
   $('#subtitle').textContent=[v.model?shortModel(v.model):'',v.workspace||''].filter(Boolean).join('  ·  ')||'—';
@@ -925,21 +970,69 @@ function show(sid){
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
   fpath='';if(document.querySelector('#tab-files').classList.contains('on'))loadFiles();
-  paintSend();paintPill();paintQueue(v);paintResume(v,v.runState);paintTools(v.toolList);scroll(true);markSessions();
+  paintSend();paintPill();paintQueue(v);paintResume(v,v.runState);paintTools(v.toolList);
+  if(!keep)scroll(true,v);
+  markSessions();
 }
 // 本地 gguf 的"模型名"是一整条 Windows 路径，直接显示会把顶栏撑爆
 function shortModel(m){return m?String(m).replace(/^.*[\\/]/,'').replace(/\.gguf$/,''):'—'}
-function atBottom(){return stream.scrollHeight-stream.scrollTop-stream.clientHeight<80}
-function scroll(force){if(force||atBottom())stream.scrollTop=stream.scrollHeight;pillN=0;paintPill()}
+/* 分屏时每一格自己是一条滚动条，单屏时整页一条 —— 下面几句都按"这条会话此刻在哪个容器里"取。 */
+function paneOf(v){return stream.classList.contains('split')&&v&&v.el?v.el:stream}
+function atBottom(v){const p=paneOf(v||cur());return p.scrollHeight-p.scrollTop-p.clientHeight<80}
+function pin(v){const p=paneOf(v||cur());p.scrollTop=p.scrollHeight}
+function scroll(force,v){if(force||atBottom(v))pin(v);pillN=0;paintPill()}
 let pillN=0;
 function paintPill(){
   const p=$('#pill');
   if(!pillN){p.classList.remove('on');p.textContent='↓ 回到底部';return}
   p.classList.add('on');p.textContent='↓ '+pillN+' 条新内容';
 }
-function bumpPill(){if(!atBottom()){pillN++;paintPill()}}
-stream.addEventListener('scroll',()=>{if(atBottom()){pillN=0;paintPill()}});
-$('#pill').onclick=()=>{stream.scrollTop=stream.scrollHeight;pillN=0;paintPill();box.focus()};
+function bump(){pillN++;paintPill()}
+/* 新内容出来时：正在看的这一格贴着底就跟着走（流式回答不再跑出屏幕），不贴底才计数；
+   没在屏幕上的那条只计数 —— 碰滚动条会把人正在看的那条拽走。 */
+function follow(v){
+  if(!v.el.classList.contains('on')&&!v.el.classList.contains('duo')){bump();return}
+  if(atBottom(v))pin(v);else bump();
+}
+stream.addEventListener('scroll',()=>{if(atBottom(cur())){pillN=0;paintPill()}});
+$('#pill').onclick=()=>{
+  pin(cur());
+  // 分屏时"回到底部"= 两格都到最新：只把输入那一格拽下来、右边还留着半屏，等于没回
+  if(duoOn()&&views[duoId])pin(views[duoId]);
+  pillN=0;paintPill();box.focus();
+};
+$('#duoChip').onclick=()=>setDuo('');
+$('#duoBtn').onclick=()=>{
+  if(duoOn()){setDuo('');return}
+  if(!lastId||lastId===curId){toast('并排得先打开过另一条：左栏点一条，再回来点 ▥','err');return}
+  setDuo(lastId);
+};
+/* 分屏的开与关只走这一句：右栏那条若还没取过历史就替它取，取不到就当场退出并说为什么。
+   进出都要把两格各自拽到底 —— 刚切成两格时每一格的 scrollTop 都是 0，
+   人本来看着的是最新那句，一切换就跳回第一条，等于把功能变成了故障。 */
+function setDuo(sid){
+  if(!sid||sid===curId||sid===duoId){
+    duoId='';layout();pin(cur());markSessions();toast('已退出分屏');return
+  }
+  duoId=sid;layout();pin(cur());markSessions();
+  const v=view(sid);
+  // 已经有内容就别重拉：applyState 是"清空重画"，对一条正在流式输出的会话等于把半截回答抹掉
+  // （openSession 里那条老注释说的就是这件事，而 hydrated 标记对开机就在那儿跑的会话并不可靠）。
+  if(v.hydrated||v.el.children.length){pin(v);toast('已并排：右边是「'+(v.title||'新会话')+'」');return}
+  post('/api/open',{id:sid}).then(()=>hydrate(sid))
+    .then(()=>{if(views[sid])pin(views[sid]);toast('已并排：右边是「'+(views[sid].title||'新会话')+'」')})
+    .catch(()=>{duoId='';layout();pin(cur());markSessions();notice('右边那条会话打不开，分屏已退出','err')});
+}
+/* 分屏时点任意一格就把输入对象换过去：正在选文字、点按钮的时候不抢。 */
+stream.addEventListener('mouseup',e=>{
+  if(!duoOn()||!e.target.closest)return;
+  const host=e.target.closest('.view');
+  if(!host||host.dataset.sid===curId)return;
+  if(e.target.closest('button,a,input,textarea,select,[contenteditable]'))return;
+  const sel=window.getSelection();
+  if(sel&&String(sel).length)return;
+  show(host.dataset.sid,true);
+});
 
 function el(html){const d=document.createElement('div');d.innerHTML=html;return d.firstElementChild}
 /* esc 必须能吃数字：(t||'').replace 遇到数字直接 TypeError，
@@ -996,7 +1089,7 @@ function add(node,v){
      node.classList.contains('think')||node.classList.contains('stats'))){
     const h=t.el.querySelector('.hello');if(h)h.remove();
   }
-  t.el.appendChild(node);bumpPill();return node
+  t.el.appendChild(node);follow(t);return node
 }
 
 /* ---- 空会话的起手感 ----
@@ -1020,11 +1113,17 @@ function paintHello(v){
   v.el.appendChild(h);
 }
 
+/* 流式增量的重画要在改内容**之前**问"贴不贴底"，之后问已经被自己撑高了。
+   onScreen：这条会话此刻在不在屏幕上（分屏时两条都在）。 */
+function onScreen(v){return v.el.classList.contains('on')||v.el.classList.contains('duo')}
+function grow(t,paint){const stick=onScreen(t)&&atBottom(t);paint();if(stick)pin(t)}
 function answer(piece,v){
   const t=v||cur();
-  if(!t.curAns){t.curAns=add(el('<div class="msg ans md"></div>'),t);t.acc=''}
-  t.acc+=piece;                      // delta 是**增量**，必须累加着画
-  t.curAns.innerHTML=md(t.acc);
+  grow(t,()=>{
+    if(!t.curAns){t.curAns=add(el('<div class="msg ans md"></div>'),t);t.acc=''}
+    t.acc+=piece;                     // delta 是**增量**，必须累加着画
+    t.curAns.innerHTML=md(t.acc);
+  });
 }
 function finishAnswer(text,v){
   const t=v||cur();
@@ -1043,8 +1142,10 @@ function thinking(piece,v){
     t.thinkAcc='';t.thinkT0=Date.now();
   }
   t.thinkAcc+=piece;
-  t.curThink.querySelector('.tb').textContent=t.thinkAcc;
-  t.curThink.querySelector('.stats').textContent=((Date.now()-t.thinkT0)/1000).toFixed(1)+'s';
+  grow(t,()=>{
+    t.curThink.querySelector('.tb').textContent=t.thinkAcc;
+    t.curThink.querySelector('.stats').textContent=((Date.now()-t.thinkT0)/1000).toFixed(1)+'s';
+  });
 }
 // 思考一结束就把转圈停掉、标题换成耗时，并默认收起（不遮住正文）
 function closeThinking(v){
@@ -2878,8 +2979,9 @@ function sessRow(m,run){
   const nb=v.wait?'<span class="nb" title="这条会话在等你回答">!</span>'
     :(v.unread?`<span class="nb" title="切过去看">${v.unread}</span>`:'');
   const ptag=m.pinned?'<em class="ptag" title="已置顶">置顶</em>':'';
-  return `<div class="it${m.id===curId?' cur':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-hit="${m.hitAt==null?-1:m.hitAt}" data-pinned="${m.pinned?1:0}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
-      <span class="act"><b data-a="pin" title="置顶 / 取消置顶">↑</b><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}${ptag}
+  const dtag=m.id===duoId?'<em class="ptag" title="已在右栏并排">并排</em>':'';
+  return `<div class="it${m.id===curId?' cur':''}${m.id===duoId?' duo':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-hit="${m.hitAt==null?-1:m.hitAt}" data-pinned="${m.pinned?1:0}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
+      <span class="act"><b data-a="pin" title="置顶 / 取消置顶">↑</b><b data-a="ren" title="重命名">✎</b><b data-a="del" title="删除（移进 sessions/.trash，可恢复）">✕</b></span>${nb}${ptag}${dtag}
       ${esc(m.title)}<br><i>${run?'正在跑 · ':''}${m.messages} 条 · ${esc(m.mode||'')} · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i>
       ${m.hit?`<span class="hit">${esc(m.hit)}</span>`:''}</div>`;
 }
@@ -2951,11 +3053,15 @@ function markSessions(){
       openSession(id,parseInt(e.dataset.hit||'-1',10));
     };
   });
+  layout();   // 每格顶上那条标题是从 v.title 现取的，改名之后要跟着重画
 }
 function dropView(id){
   const v=views[id];
   if(v){v.el.remove();delete views[id]}
-  if(id===curId){curId='';show(Object.keys(views)[0]||'')}
+  // 被删的那条要是正钉在右栏，分屏必须跟着退：留一个空栏比退回单栏更糟
+  if(id===duoId)duoId='';
+  if(id===lastId)lastId='';
+  if(id===curId){curId='';show(Object.keys(views)[0]||'')}else layout();
 }
 function openSession(id,hit){
   hit=(hit==null||isNaN(hit))?-1:+hit;

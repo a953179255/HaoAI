@@ -172,5 +172,24 @@ for (const f of stepFiles) {
 check(stepFiles.length > 0, '抓到像素剧本清单', stepFiles.length + ' 份');
 check(badSteps.length === 0, '每份剧本里的 eval 都是合法 JS', badSteps.join('\n         '));
 
+/*
+ * ---- 6.5) 分屏之后"看得见的会话"有两种：左格（.on）与右格（.duo）----
+ * 凡是写死 `.view.on` 的选择器，分屏时就把右边那一格整个漏掉 —— 这类漏法在单屏下
+ * 测不出来（那时 on 就是唯一可见的），只有并排看的时候才显形。所以逐条对账：
+ * 要么同一条选择器也管 .duo，要么进这份"刻意只作用于输入对象"的白名单。
+ */
+const DUO_TARGET_ONLY = [
+  '.view.on .card.ask'   // 键盘决定审批卡：只该打在"这句话发到哪一条"上
+];
+const duoBlind = [];
+for (const m of scriptSrc.matchAll(/['"`][^'"`\n]*\.view\.on[^'"`\n]*['"`]/g)) {
+  const sel = m[0].slice(1, -1);
+  if (sel.includes('.duo')) continue;
+  if (DUO_TARGET_ONLY.some(t => sel.includes(t))) continue;
+  duoBlind.push(sel);
+}
+check(duoBlind.length === 0, '按 .view.on 取元素的地方要么也管 .duo，要么在白名单里',
+  '分屏时会漏掉右栏：' + duoBlind.join(', '));
+
 console.log(fails ? '\nUI 自检失败 ' + fails + ' 项' : '\nUI 自检全部通过');
 process.exit(fails ? 1 : 0);

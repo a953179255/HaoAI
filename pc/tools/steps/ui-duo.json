@@ -1,0 +1,113 @@
+[
+ {
+  "click": "#modes [data-m=\"auto\"]",
+  "note": "自动档：左栏那条要一轮一轮跑 shell，弹审批就没法并行看流式了"
+ },
+ {
+  "goto": "#box"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "并行甲：这条一直数下去，等一下当左栏"
+  }
+ },
+ {
+  "sleep": 7000
+ },
+ {
+  "eval": "(window.__a=curId,{aRuns:cur().running,aCards:document.querySelectorAll('.view.on .card').length,diag:Object.keys(views).map(k=>(k||'空sid')+':u'+views[k].el.querySelectorAll('.msg.user').length+':h'+(views[k].hydrated?1:0)+':k'+views[k].el.children.length).join(' ')})"
+ },
+ {
+  "click": "#newBtn"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "并行己：这条一次答六十行"
+  }
+ },
+ {
+  "sleep": 9000
+ },
+ {
+  "eval": "(window.__b=curId,{bRuns:cur().running,bChars:(document.querySelector('.view.on').innerText||'').length,splitBefore:stream.classList.contains('split'),twoSids:window.__a!==window.__b})"
+ },
+ {
+  "click": "#duoBtn"
+ },
+ {
+  "goto": "#stream.split"
+ },
+ {
+  "eval": "(()=>{const ps=[...document.querySelectorAll('#stream .view')].filter(e=>e.offsetParent);const r=ps.map(e=>e.getBoundingClientRect());const gap=ps.map(e=>e.scrollHeight-e.scrollTop-e.clientHeight);return({split:stream.classList.contains('split'),panes:ps.length,twoCols:r.length==2&&r[0].left<r[1].left&&Math.abs(r[0].top-r[1].top)<2&&r[0].right<=r[1].left+2,halfW:r.length==2&&r[0].width>300&&Math.abs(r[0].width-r[1].width)<30,widths:r.map(e=>Math.round(e.width)).join(\"x\"),heights:r.map(e=>Math.round(e.height)).join(\"x\"),ownScroll:ps.every(e=>getComputedStyle(e).overflowY=='auto'),tall:ps.every(e=>e.scrollHeight>e.clientHeight+40),bothPinned:Math.max.apply(null,gap)<120,caps:ps.map(e=>e.dataset.cap).join('|'),chip:!document.querySelector('#duoChip').hidden,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth})})()",
+  "must": ["split", "panes", "twoCols", "halfW", "ownScroll", "tall", "bothPinned", "caps", "chip", "noOverflow"]
+ },
+ {
+  "shot": "d01-split"
+ },
+ {
+  "eval": "(()=>{const d=document.querySelector('#stream .view.duo');d.scrollTop=0;return{putTop:Math.round(d.scrollTop),duoIsLeft:d.getBoundingClientRect().left<document.querySelector('#stream .view.on').getBoundingClientRect().left}})()"
+ },
+ {
+  "sleep": 5000
+ },
+ {
+  "eval": "(()=>{const d=document.querySelector('#stream .view.duo'),o=document.querySelector('#stream .view.on');return({duoSid:d.dataset.sid,onSid:o.dataset.sid,leftStaysUp:d.scrollTop<400,rightStaysPinned:o.scrollHeight-o.scrollTop-o.clientHeight<120,pill:document.querySelector('#pill').classList.contains('on'),pillText:document.querySelector('#pill').textContent.trim(),leftHasJia:/并行甲|我再数一轮/.test(d.textContent)&&!/己第 1 行/.test(d.textContent),rightHasJi:/己第 1 行/.test(o.textContent)&&!/我再数一轮/.test(o.textContent)})})()",
+  "must": ["leftStaysUp", "rightStaysPinned", "pill", "leftHasJia", "rightHasJi"]
+ },
+ {
+  "shot": "d02-nocrawl"
+ },
+ {
+  "eval": "(()=>{const ps=[...document.querySelectorAll('#stream .view')].filter(e=>e.offsetParent);return{users:ps.map(e=>e.querySelectorAll('.msg.user').length).join(','),target:curId===window.__b?'右栏(己)':'左栏(甲)',diag:Object.keys(views).map(k=>(k||'空sid')+':u'+views[k].el.querySelectorAll('.msg.user').length+':h'+(views[k].hydrated?1:0)+':k'+views[k].el.children.length).join(' ')}})()"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "并行己：再说一遍六十行"
+  }
+ },
+ {
+  "sleep": 9000
+ },
+ {
+  "eval": "(()=>{const a=document.querySelector('#stream .view[data-sid=\"'+window.__a+'\"]'),b=document.querySelector('#stream .view[data-sid=\"'+window.__b+'\"]');return({aUser:a.querySelectorAll('.msg.user').length,bUser:b.querySelectorAll('.msg.user').length,onlyTargetGrew:a.querySelectorAll('.msg.user').length==1&&b.querySelectorAll('.msg.user').length==2,bPinned:b.scrollHeight-b.scrollTop-b.clientHeight<120,aStillUp:a.scrollTop<400})})()",
+  "must": ["onlyTargetGrew", "bPinned", "aStillUp"]
+ },
+ {
+  "shot": "d03-only-target"
+ },
+ {
+  "click": "#stream .view.duo .stats"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "(()=>{const ps=[...document.querySelectorAll('#stream .view')].filter(e=>e.offsetParent),on=document.querySelector('#stream .view.on'),du=document.querySelector('#stream .view.duo'),r=ps.map(e=>e.getBoundingClientRect());return({swapped:curId===window.__a&&duoId===window.__b,onIsLeft:on===ps[0]&&r.length==2&&r[0].left<r[1].left,aStillUp:on.scrollTop<400,capNow:(on.dataset.cap||'').indexOf('输入到这里')>=0,capOther:(du.dataset.cap||'').indexOf('点这一格')>=0})})()",
+  "must": ["swapped", "onIsLeft", "aStillUp", "capNow", "capOther"]
+ },
+ {
+  "shot": "d04-retarget"
+ },
+ {
+  "click": "#duoChip"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "(()=>{const ps=[...document.querySelectorAll('#stream .view')].filter(e=>e.offsetParent);return({splitOff:!stream.classList.contains('split'),one:ps.length===1&&ps[0].dataset.sid===curId,noDuo:!document.querySelector('.view.duo'),chipHidden:document.querySelector('#duoChip').hidden,stillThere:/己第 1 行/.test(document.querySelector('#stream .view[data-sid=\"'+window.__b+'\"]').textContent),paneStopsScrolling:ps.length===1&&getComputedStyle(ps[0]).overflowY!=='auto'})})()",
+  "must": ["splitOff", "one", "noDuo", "chipHidden", "stillThere", "paneStopsScrolling"]
+ },
+ {
+  "shot": "d05-back-single"
+ },
+ {
+  "eval": "fetch('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:window.__a})}).then(r=>'停掉左栏：'+r.status)"
+ }
+]

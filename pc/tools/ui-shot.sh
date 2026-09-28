@@ -109,6 +109,10 @@ PY
 fi
 export HAOAI_HOME="$HOME_DIR"
 
+# 假网关自己语法错的时候，症状是"没独占端口"（进程起来又立刻死了，端口上零个监听），
+# 看着像端口被别的 agent 抢了 —— 先花 0.2 秒把语法问题在这里说清楚。
+python -m py_compile tools/mock-openai.py || { echo "x tools/mock-openai.py 语法不过（上面就是报错行）"; exit 1; }
+
 python tools/mock-openai.py --port "$MOCK_PORT" --mode "$MODE" > "$HOME_DIR/mock.log" 2>&1 &
 MOCK=$!
 cleanup() {
