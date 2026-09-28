@@ -151,4 +151,47 @@ class CheckpointTest {
         assertTrue("账本该有上限，实际 $lines", lines <= 4000)
         assertTrue("留下的是最近的记录", Checkpoints.entries(1).first().path.endsWith("f4199.txt"))
     }
+
+    /* ---- "回到这一句之前"（v0.70.0）---- */
+
+    @Test
+    fun `a message index finds the run that produced it`() {
+        Checkpoints.begin("s1", "run-a", "第一轮", at = 0)
+        Checkpoints.begin("s1", "run-b", "第二轮", at = 4)
+        Checkpoints.begin("s1", "run-c", "第三轮", at = 8)
+        assertEquals("点在这轮中间也算这一轮", "run-b" to 4, Checkpoints.runCovering("s1", 6))
+        assertEquals("点在这轮第一句上", "run-b" to 4, Checkpoints.runCovering("s1", 4))
+        assertEquals("最早那轮从 0 开始", "run-a" to 0, Checkpoints.runCovering("s1", 0))
+        assertEquals("别的会话的消息不该混进来", null, Checkpoints.runCovering("s2", 6))
+        assertEquals("退要连着后面的轮次一起退", listOf("run-b", "run-c"), Checkpoints.runsFrom("s1", 4))
+        assertEquals(listOf("run-c"), Checkpoints.runsFrom("s1", 8))
+    }
+
+    @Test
+    fun `a run recorded before the index existed is never guessed at`() {
+        // 老账本没有 at 字段。宁可回退不了，也不能猜一个轮次去退 —— 退错版本比不能退危险得多。
+        Checkpoints.begin("s1", "old-run", "早于这个功能的轮次")
+        assertEquals(-1, Checkpoints.entries().first { it.path.isEmpty() }.at)
+        assertEquals(null, Checkpoints.runCovering("s1", 3))
+        assertEquals(emptyList<String>(), Checkpoints.runsFrom("s1", 0))
+    }
+
+    @Test
+    fun `rewinding several runs goes back to before the first of them`() {
+        write(ctx(""), "a.txt", "v0")
+        Checkpoints.begin("s1", "r-a", "改一次", at = 0)
+        write(ctx("r-a"), "a.txt", "v1")
+        write(ctx("r-a"), "made.txt", "第一轮建的")
+        Checkpoints.begin("s1", "r-b", "再改一次", at = 3)
+        write(ctx("r-b"), "a.txt", "v2")
+        write(ctx("r-b"), "late.txt", "第二轮建的")
+        val rep = Checkpoints.rewindAll(ws, listOf("r-a", "r-b"))
+        assertTrue(rep.note, rep.ok)
+        assertEquals("同一路径取这批里最早那份：那才是这一轮开始前的样子",
+            "v0", File(ws, "a.txt").readText())
+        assertFalse("两轮各自新建的文件都要消失", File(ws, "made.txt").exists())
+        assertFalse(File(ws, "late.txt").exists())
+        assertEquals(listOf("late.txt", "made.txt"), rep.deleted.sorted())
+        assertTrue("话说了几轮：" + rep.note, rep.note.contains("2 轮"))
+    }
 }

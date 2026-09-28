@@ -165,6 +165,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/rename" -> renameSession(ex)
                 "/api/edit" -> editMessage(ex)
                 "/api/cut" -> cutMessage(ex)
+                "/api/rewindturn" -> rewindTurn(ex)
                 "/api/regenerate" -> regenerate(ex)
                 "/api/rollback" -> rollback(ex)
                 "/api/attach" -> attach(ex)
@@ -677,6 +678,49 @@ class WebServer(settings: PcSettings, port: Int,
                 "application/json; charset=utf-8"); return
         }
         send(ex, 200, """{"ok":true,"cut":$index}""", "application/json; charset=utf-8")
+        publish("sessions", "{}", sid)
+    }
+
+    /**
+     * `POST /api/rewindturn` {sid,index} —— 回到这一句之前：**话和文件一起回去**。
+     *
+     * 为什么光有 `/api/cut` 不够：那句"删到这里"只截对话，工作区里那几轮改的文件留在原地，
+     * 于是"退回到问它之前"是假的 —— 人以为改动没了，下一轮模型读到的还是改过的内容。
+     * 这里退的是"这一轮以及它之后的所有轮"（同一路径取这批记录里最早那份快照）。
+     *
+     * 顺序刻意：能校验的先校验完（会话在、没在跑、这一句确实属于某一轮），再截历史，
+     * 最后才动文件 —— 动文件是这里唯一收不回的那一步，要让它出问题时
+     * 用户至少看得见"话已经退到哪了"，而不是反过来。
+     */
+    private fun rewindTurn(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val index = b.str("index").toIntOrNull() ?: -1
+        val json = "application/json; charset=utf-8"
+        val m = sessions[sid]
+        if (m == null) {
+            send(ex, 404, """{"ok":false,"error":"没有这条会话"}""", json); return
+        }
+        if (m.running) {
+            send(ex, 409, """{"ok":false,"error":"这条会话正在跑，先停止再回退"}""", json); return
+        }
+        val hit = Checkpoints.runCovering(sid, index)
+        if (hit == null) {
+            send(ex, 200, """{"ok":false,"error":"这一句对不上任何一轮（那次运行早于这个功能，或记录被清掉了）"}""", json)
+            return
+        }
+        val at = hit.second
+        if (!m.engine.cutTo(at, keepAt = false)) {
+            send(ex, 200, """{"ok":false,"error":"截不动这一段历史，文件也没动"}""", json); return
+        }
+        val runs = Checkpoints.runsFrom(sid, at)
+        val dropped = m.engine.dropTodosForRewind()
+        val r = Checkpoints.rewindAll(m.engine.session.workspace, runs)
+        fun arr(xs: List<String>) = xs.joinToString(",", "[", "]") { quote(it) }
+        send(ex, 200,
+            """{"ok":true,"cut":$at,"runs":${runs.size},"todos":$dropped,"note":${quote(r.note)},""" +
+                """"restored":${arr(r.restored)},"deleted":${arr(r.deleted)},""" +
+                """"missing":${arr(r.missing)}}""", json)
         publish("sessions", "{}", sid)
     }
 

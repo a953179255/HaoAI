@@ -1,0 +1,38 @@
+[
+  {"goto": "#box"},
+  {
+   "type": {"sel": "#box", "text": "建一个 hello.txt 再把第一行改掉", "enter": true}
+  },
+  {
+   "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&Date.now()-t0>2500)return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>60000)return JSON.stringify({done:false});await new Promise(z=>setTimeout(z,1200))}})()",
+   "must": ["done"]
+  },
+  {
+   "type": {"sel": "#box", "text": "再跑一遍同样的改动", "enter": true}
+  },
+  {
+   "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&Date.now()-t0>2500)return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>60000)return JSON.stringify({done:false});await new Promise(z=>setTimeout(z,1200))}})()",
+   "must": ["done"]
+  },
+  {
+   "eval": "(async()=>{const d=await fetch('/api/files?sid='+encodeURIComponent(curId)).then(r=>r.json());const names=(d.entries||[]).map(x=>x.n).join(',');const acts=[...document.querySelectorAll('.view.on .msg.user')][0].nextElementSibling;const bs=[...acts.querySelectorAll('.ab')];const r=acts.getBoundingClientRect();const box=document.querySelector('#stream').getBoundingClientRect();const td=[...document.querySelectorAll('#todos li')].map(x=>x.innerText).join('/');return JSON.stringify({users:document.querySelectorAll('.view.on .msg.user').length,hasHello:names.indexOf('hello.txt')>=0,todos:td,hasTodos:td.length>4&&!/还没开始/.test(td),labels:bs.map(b=>b.textContent).join('/'),hasRewind:bs.some(b=>b.textContent==='回到这里（含文件）'),noWrap:bs.every(b=>b.getBoundingClientRect().height<30),rowFits:acts.scrollWidth<=acts.clientWidth+1,inStream:r.right<=box.right+2,oneRow:new Set(bs.map(b=>Math.round(b.getBoundingClientRect().top))).size===1})})()",
+   "must": ["hasHello", "hasRewind", "hasTodos", "noWrap", "rowFits", "inStream", "oneRow", "users"]
+  },
+  {"shot": "x01-before-rewindturn"},
+  {
+   "eval": "(()=>{window.confirm=()=>true;const m=[...document.querySelectorAll('.view.on .msg.user')][0];const b=[...m.nextElementSibling.querySelectorAll('.ab')].find(x=>x.textContent==='回到这里（含文件）');b.click();return 'clicked'})()"
+  },
+  {
+   "eval": "(async()=>{const t0=Date.now();for(;;){const d=await fetch('/api/files?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({entries:[]}));const names=(d.entries||[]).map(x=>x.n).join(',');const users=document.querySelectorAll('.view.on .msg.user').length;if(names.indexOf('hello.txt')<0&&users===0){const t=(document.querySelector('#toast')||{}).textContent||'';return JSON.stringify({gone:true,users:users,toast:t.slice(0,90),said:/(还原|删掉)/.test(t),ms:Date.now()-t0})}if(Date.now()-t0>20000)return JSON.stringify({gone:false,head:names.slice(0,60),users:users});await new Promise(z=>setTimeout(z,900))}})()",
+   "must": ["gone", "said"]
+  },
+  {
+   "eval": "(async()=>{const d=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));return JSON.stringify({empty:document.querySelectorAll('.view.on .msg.user').length===0,msgs:document.querySelectorAll('.view.on .msg').length,notRunning:d.running===false,todos:(document.querySelector('#todos')||{}).innerText||'',todosCleared:/还没开始/.test((document.querySelector('#todos')||{}).innerText||'')})})()",
+   "must": ["empty", "notRunning", "todosCleared"]
+  },
+  {"shot": "x02-after-rewindturn"},
+  {
+   "eval": "(async()=>{const d=await fetch('/api/checkpoints?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({items:[]}));return JSON.stringify({rows:(d.items||[]).length,overflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth})})()",
+   "must": ["overflow"]
+  }
+]

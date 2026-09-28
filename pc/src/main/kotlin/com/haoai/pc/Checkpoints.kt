@@ -2,6 +2,7 @@ package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -24,15 +25,22 @@ object Checkpoints {
     /** 一条记录：这一轮动了这个路径，改之前的快照在 snap（空 = 这轮之前它不存在）。 */
     data class Entry(
         val run: String, val sid: String, val ts: Long, val goal: String,
-        val path: String, val snap: String
+        val path: String, val snap: String,
+        /**
+         * 这一轮**开头那句话**在历史里的下标（头行才有；-1 = 这批记录早于该字段，不知道）。
+         *
+         * 有了它，"回到这一句之前"才知道该退哪几轮 —— 只按时间猜会退错，
+         * 因为定时任务、手机派活、子任务都往同一条会话里追加消息。
+         */
+        val at: Int = -1
     )
 
     val file: File get() = File(Env.home, "checkpoints.jsonl")
     private const val KEEP = 4000
 
     /** 一轮开始登记一条头行（带任务名）。没有它，列表里就不知道这一轮是干什么的。 */
-    fun begin(sid: String, run: String, goal: String) =
-        write(Entry(run, sid, System.currentTimeMillis(), goal.take(200), "", ""))
+    fun begin(sid: String, run: String, goal: String, at: Int = -1) =
+        write(Entry(run, sid, System.currentTimeMillis(), goal.take(200), "", "", at))
 
     fun note(ctx: ToolCtx, target: File, snap: File?) {
         val run = ctx.runId
@@ -47,7 +55,7 @@ object Checkpoints {
             file.appendText(
                 buildJsonObject {
                     put("run", e.run); put("sid", e.sid); put("ts", e.ts); put("goal", e.goal)
-                    put("path", e.path); put("snap", e.snap)
+                    put("path", e.path); put("snap", e.snap); put("at", e.at)
                 }.toString() + "\n"
             )
             prune()
@@ -72,7 +80,8 @@ object Checkpoints {
                     o["ts"]?.jsonPrimitive?.longOrNull ?: 0L,
                     o["goal"]?.jsonPrimitive?.content ?: "",
                     o["path"]?.jsonPrimitive?.content ?: "",
-                    o["snap"]?.jsonPrimitive?.content ?: ""
+                    o["snap"]?.jsonPrimitive?.content ?: "",
+                    o["at"]?.jsonPrimitive?.intOrNull ?: -1
                 )
             }.getOrNull()
         }
@@ -94,11 +103,33 @@ object Checkpoints {
      * ② 同一路径取**最早**那份快照 —— 取最后一份等于只撤销最后一步；
      * ③ 快照不在/写不回去就**逐条报出来**，回滚这件事上"没说"比"报错"危险得多。
      */
-    fun rewind(workspace: File, run: String): RewindReport {
+    /** 这一条消息是哪一轮带出来的：返回 (那轮的 run, 那轮开头那句话的下标)。 */
+    fun runCovering(sid: String, index: Int): Pair<String, Int>? = entries()
+        .filter { it.sid == sid && it.path.isEmpty() && it.at >= 0 && it.at <= index }
+        .maxByOrNull { it.at }
+        ?.let { it.run to it.at }
+
+    /** 从某一轮开始（含）往后一共有哪些轮 —— "回到这一句之前"要一起退掉的那些。 */
+    fun runsFrom(sid: String, at: Int): List<String> = entries()
+        .filter { it.sid == sid && it.path.isEmpty() && it.at >= at }
+        .sortedBy { it.at }
+        .map { it.run }.distinct()
+
+    fun rewind(workspace: File, run: String): RewindReport = rewindAll(workspace, listOf(run))
+
+    /**
+     * 回到**若干轮**开始之前。一次退多轮是"回到这一句之前"的必然：那句话之后可能又跑了三轮，
+     * 只退第一轮的话后面三轮改的文件还留在原地，"退回了"这件事就是假的。
+     *
+     * 同一路径取这批记录里**最早**那份快照（= 这批轮次开始前的样子），与单轮那条同一口径。
+     */
+    fun rewindAll(workspace: File, runs: List<String>): RewindReport {
         val ws = runCatching { workspace.canonicalFile }.getOrElse { workspace }
-        val rows = entries().filter { it.run == run && it.path.isNotEmpty() }
+        val want = runs.toSet()
+        val rows = entries().filter { it.run in want && it.path.isNotEmpty() }
         if (rows.isEmpty()) return RewindReport(false,
-            "这一轮没有登记过文件改动（它可能没动过文件，或者记录太早被清掉了）",
+            if (want.isEmpty()) "没找到要退的那一轮（记录太早被清掉了？）"
+            else "这几轮没有登记过文件改动（它们可能没动过文件，或者记录太早被清掉了）",
             emptyList(), emptyList(), emptyList())
         val firstByPath = LinkedHashMap<String, Entry>()
         for (e in rows.sortedBy { it.ts }) firstByPath.putIfAbsent(e.path, e)
@@ -123,7 +154,8 @@ object Checkpoints {
             if (done) restored += rel else missing += "$rel（写不回去）"
         }
         val note = buildString {
-            append("回到这轮之前：还原 ${restored.size} 个")
+            append(if (runs.size > 1) "回到这 ${runs.size} 轮之前：" else "回到这轮之前：")
+            append("还原 ${restored.size} 个")
             if (deleted.isNotEmpty()) append("、删掉它新建的 ${deleted.size} 个")
             if (missing.isNotEmpty()) append("；${missing.size} 个没能处理")
         }

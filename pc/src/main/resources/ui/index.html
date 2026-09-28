@@ -1542,6 +1542,7 @@ function actions(v){
     a.appendChild(isUser?ab('编辑重发',()=>editResend(m)):ab('重新生成',regen));
     a.appendChild(ab('删这一句',()=>delMsg(m)));
     a.appendChild(ab('删到这里',()=>cutHere(m)));
+    a.appendChild(ab('回到这里（含文件）',()=>rewindTurn(m)));
     m.after(a);
   });
 }
@@ -1589,6 +1590,22 @@ function cutHere(m){
   if(!confirm('丢掉这一句之后的所有内容？（它之后的回答与工具调用都会消失）'))return;
   post('/api/cut',{sid:curId,index:String(i)}).then(()=>{toast('已截断');hydrate(curId)})
     .catch(code=>toast(code===409?'这条会话正在跑，先停止再改':'截不动'));
+}
+/* 回到这一轮之前：话和文件一起回去。与上面那颗"删到这里"的区别就是要不要动工作区 ——
+   只截对话时那几轮改的文件还留在原地，下一轮模型读到的是改过的内容，"退回了"是假的。 */
+function rewindTurn(m){
+  const i=idxOf(m);if(i<0){toast('这条还没落库，回退不了');return}
+  if(!confirm('回到这一轮之前？\n\n'+
+    '· 这一轮和它之后的对话会消失\n'+
+    '· 这几轮 HaoAI 改过的文件退回被改之前的样子，它新建的文件会被删掉\n'+
+    '· 你自己改的、它没动过的文件它不碰'))return;
+  post('/api/rewindturn',{sid:curId,index:String(i)}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'回退失败','err');return}
+    hydrate(curId);
+    const bad=(d.missing||[]).length;
+    toast((d.note||'已回到这一轮之前')+(bad?('；'+bad+' 个没能处理，已列出'):''),bad?'err':'');
+    if(bad)toast('没能处理的：'+d.missing.slice(0,2).join('、'),'err');
+  }).catch(code=>toast(code===409?'这条会话正在跑，先停止再回退':'回退失败','err'));
 }
 
 /* ---- SSE：按会话 id 分流 ----

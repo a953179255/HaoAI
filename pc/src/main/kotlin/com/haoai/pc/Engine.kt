@@ -316,6 +316,21 @@ class Engine(
     fun lastUserIndex(): Int = history.indexOfLast { it.role == "user" }
 
     /**
+     * 回退一轮时把这一轮的计划一起作废，返回清掉了几条。
+     *
+     * 右栏那块清单描述的是"这次任务要做哪几步"，而这次任务已经被退掉了；
+     * 留着它，界面就在说一件已经不存在的工作 —— 比"话和文件没一起退"更隐蔽的那种不一致。
+     */
+    fun dropTodosForRewind(): Int {
+        val n = session.todos.size
+        if (n > 0) {
+            session.todos.clear()
+            persistNow()
+        }
+        return n
+    }
+
+    /**
      * 网关上可选的模型（顶栏切换器）。
      *
      * 走引擎而不是让前端直接连网关：密钥只在服务端读一次，
@@ -595,7 +610,9 @@ class Engine(
         // 之后人点「回到这次之前」才有东西可退（见 [Checkpoints]）。
         ctx.runId = "r" + runStarted
         ctx.sid = session.id
-        Checkpoints.begin(session.id, ctx.runId, runGoal ?: "")
+        // at = 这一轮开头那句话在历史里的下标。"回到这一句之前"要靠它把消息对上轮次 ——
+        // 按时间猜会退错：定时任务、手机派活都往同一条会话里追加消息。
+        Checkpoints.begin(session.id, ctx.runId, runGoal ?: "", history.indexOfLast { m -> m.role == "user" })
         var lastText = ""
         var turnNo = 0
         var retry = 0
