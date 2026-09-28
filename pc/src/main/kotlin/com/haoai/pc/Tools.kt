@@ -88,7 +88,10 @@ class ToolCtx(
     val settings: PcSettings,
     var mode: String,
     val gate: Gate,
-    val todos: MutableList<Todo> = mutableListOf()
+    val todos: MutableList<Todo> = mutableListOf(),
+    /** 这一轮的名字，由引擎在建 ctx 时填。空 = 不在任何一轮里（CLI 单发、测试）。 */
+    var runId: String = "",
+    var sid: String = ""
 ) {
     /**
      * 派子任务的能力，由引擎在建 ctx 时接上。
@@ -174,14 +177,36 @@ class ToolCtx(
         return if (ok) null else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
     }
 
-    fun snapshotBefore(target: File) {
-        if (!HaoFlag.enabled(HaoFlag.SNAPSHOT_BEFORE_WRITE, settings.flags)) return
-        if (!target.isFile) return
-        runCatching {
+    /**
+     * 改之前留一份，并**回给检查点账本**。
+     *
+     * 返回快照文件（没快照就返回 null）不是为了好看：`/rewind` 要区分
+     * "这轮改坏了它"（有快照 ⇒ 还原）与"这轮新建了它"（没快照 ⇒ 删掉）。
+     * 开关关着时不留快照，也就没法回滚 —— 这时候如实返回 null，
+     * 界面上那句"这一轮没登记改动"才是真话。
+     */
+    fun snapshotBefore(target: File): File? {
+        if (!target.isFile) {
+            Checkpoints.note(this, target, null)
+            return null
+        }
+        if (!HaoFlag.enabled(HaoFlag.SNAPSHOT_BEFORE_WRITE, settings.flags)) {
+            Checkpoints.note(this, target, null)
+            return null
+        }
+        return runCatching {
             val dir = File(workspace, ".haoai-snap").apply { mkdirs() }
             Env.excludeFromGit(workspace, ".haoai-snap")
-            target.copyTo(File(dir, "${System.currentTimeMillis()}-${Snapshots.keyOf(workspace, target)}"), overwrite = true)
-        }
+            // 同一毫秒里改同一个文件两次是真会发生的（一轮里连续两个 edit）。
+            // 名字撞车会把**最早**那份盖掉，而回滚要的恰好就是最早那份。
+            val key = "${System.currentTimeMillis()}-${Snapshots.keyOf(workspace, target)}"
+            var snap = File(dir, key)
+            var n = 1
+            while (snap.exists()) { snap = File(dir, "$key-${n++}") }
+            target.copyTo(snap, overwrite = false)
+            Checkpoints.note(this, target, snap)
+            snap
+        }.getOrNull()
     }
 }
 

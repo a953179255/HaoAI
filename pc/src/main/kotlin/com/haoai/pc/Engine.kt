@@ -556,6 +556,11 @@ class Engine(
         if (titled) emit(Ev.Title(session.title.get()))
         val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
         ctx.spawn = { label, prompt -> spawn(label, prompt) }
+        // 检查点按"一轮"记：这一轮动过哪些文件、改之前长什么样，
+        // 之后人点「回到这次之前」才有东西可退（见 [Checkpoints]）。
+        ctx.runId = "r" + runStarted
+        ctx.sid = session.id
+        Checkpoints.begin(session.id, ctx.runId, runGoal ?: "")
         var lastText = ""
         var turnNo = 0
         var retry = 0

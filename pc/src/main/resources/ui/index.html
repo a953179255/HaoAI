@@ -691,6 +691,9 @@
       <div class="fbar"><button class="ab" data-fx="up" title="回到上一级">↑ 上一级</button>
         <span class="fp" id="filePath">（根）</span><button class="ab" data-fx="reload">刷新</button></div>
       <div class="files" id="files">（还没加载）</div>
+      <div class="grp">回到某次之前（检查点）</div>
+      <div class="kv" id="ckSum">—</div>
+      <div id="ckRows" class="runs"></div>
     </div>
     <div class="tabp" id="tab-term">
       <div class="tabs2" id="termTabs"></div>
@@ -1641,7 +1644,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='usage'){loadUsage();loadRuns()}
   if(b.dataset.t=='tools'){hydrate(curId);loadLan()}
-  if(b.dataset.t=='files')loadFiles();
+  if(b.dataset.t=='files'){loadFiles();loadCk()}
   if(b.dataset.t=='git')loadGit();
   if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
   if(b.dataset.t=='pv')pvStart(); else pvStop();
@@ -1720,6 +1723,39 @@ function termStartPolling(){
   termTimer=setInterval(()=>{if(termId)termPoll()},900);
 }
 function stopTermPolling(){if(termTimer){clearInterval(termTimer);termTimer=null}}
+
+/* ---- 检查点：把"这次任务做的改动"整轮撤掉 ----
+ * 单文件回滚早就有了（工具卡上那颗），但跑歪的往往不止一个文件，还可能新建了三个。
+ * 这颗钮要的是"回到我按发送之前"。它会覆盖与删除工作区里的文件，所以**必须两步确认**：
+ * 第一下只把按钮变成"再点一次确认"，第二下才动手。
+ */
+let ckCache=[];
+function loadCk(){
+  return fetch('/api/checkpoints?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(d=>{
+    ckCache=(d&&d.items)||[];
+    $('#ckSum').textContent=ckCache.length
+      ?('最近 ' + ckCache.length + ' 轮改动可以整轮退回（快照在 .haoai-snap/，只记这一轮动过的文件）。')
+      :'（还没有可回退的轮次。要能回退，这一轮得真的动过文件，且「改文件前留快照」是开着的。）';
+    $('#ckRows').innerHTML=ckCache.length?ckCache.map((x,i)=>'<div class="rr">'+
+      '<div class="r1"><i>'+esc(new Date(x.ts).toLocaleString())+'</i><em>'+x.files+' 个文件</em></div>'+
+      '<div class="r2"><span title="'+esc(x.goal)+'">'+esc(x.goal||'（没名字的一轮）')+'</span>'+
+      '<button class="ab" data-ck="'+esc(x.run)+'" title="把这一轮动过的文件全部改回原样、并删掉它新建的文件">⟲ 回到这次之前</button></div></div>').join('')
+      :'';
+    document.querySelectorAll('#ckRows [data-ck]').forEach(b=>b.onclick=()=>{window.__ck=(window.__ck||0)+1;
+      if(b.dataset.armed==='1'){rewind(b.dataset.ck);return}
+      b.dataset.armed='1';b.textContent='再点一次确认';
+      setTimeout(()=>{if(b.dataset.armed==='1'){b.dataset.armed='';b.textContent='⟲ 回到这次之前'}},12_000);
+    });
+  }).catch(()=>{const b=$('#ckRows');if(b)b.innerHTML='<div class="kv">读不到检查点账本（接口回了不是 JSON 的东西）</div>'});
+}
+function rewind(run){
+  fetch('/api/rewind',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sid:curId,run:run})}).then(r=>r.json()).then(o=>{
+    if(o.error){toast(o.error,'err');return}
+    toast((o.ok?'':'（有没处理完的）')+ (o.note||''),o.ok?'':'err');
+    loadCk();loadFiles();
+  });
+}
 
 /* ---- 手机联动（局域网端点）----
  * 界面只负责"开/关 + 发码 + 看有哪些设备"，真正的对外面在 LanServer（另一个端口）。

@@ -389,6 +389,7 @@ SHOT_MODE=chat PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-at
 SHOT_MODE=code bash pc/tools/ui-shot.sh pc/tools/steps/ui-code.json  # run_code：跑 python 出图，图真的交回模型
 SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/steps/ui-iab.json  # 「预览」页签：CDP 画面进网页、人点的位置送回页面
 SHOT_MODE=chat PRE_LAN=1 bash pc/tools/steps/ui-lan.json  # 手机联动：开/关端点、配对码倒数、设备移除（端口每轮现挑）
+SHOT_MODE=tools bash pc/tools/steps/ui-rewind.json  # 检查点：两步确认整轮撤销一次任务的改动
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
@@ -1596,6 +1597,50 @@ chip 里同时有 `▶`、文件名和 `音视频 54 KB`、用户气泡里 1 个
    在 292px 里把「移除」拆成了两行。改成"名字与按钮一行（`.mrow` 的两列网格）、指纹与时间单独一行"，
    并把时间缩成 `toLocaleTimeString()`。**这类问题只有真像素看得见**，DOM 结构检查全绿。
 
+## 这一批：回到某次之前（检查点 / rewind）（v0.52.0，缺口地图 B12 的第一件）
+
+已有的快照只解决"这个文件改坏了，退回上一版"（工具卡上那颗）。但 vibe coding 里跑歪的一次任务
+往往不止动一个文件，还会新建两三个 —— 那时想按的钮是**"回到我按发送之前"**。
+这一批把它做成「产出」页签底部一段"回到某次之前（检查点）"。
+
+- **`Checkpoints.kt`**：`HAOAI_HOME/checkpoints.jsonl`，一行一条
+  `{run, sid, ts, goal, path, snap}`。一轮开始时写一条头行（带任务名），
+  每次 write/edit 动一个文件就追一条。**不复制第二份快照** —— 复用 `Snapshots` 已经写下的那个文件，
+  这里只记指针，所以这轮没动文件时磁盘上是零额外开销。
+- **回滚语义**（`rewind`）：同一路径在这一轮里被改三次，取**最早**那份快照（= 这轮开始前的样子）；
+  这轮**新建**的文件（没有快照）就删掉；越出工作区的路径一律不碰并逐条说清楚；
+  快照文件不见了就报"没能处理 N 个"，**不静默跳过** —— 回滚这件事上"没说"比"报错"危险。
+- **两步确认**：第一下只把按钮变成"再点一次确认"（12 秒内有效），第二下才动手。
+  6 秒试过一轮，实测太紧：脚本里两步之间要读一次文件列表就超了，人犹豫一下也会超时。
+- **顺手修掉一个真缺陷**：快照文件名以前是 `时间戳-相对路径`，**同一毫秒里改同一个文件两次**
+  （一轮里连续两个 edit 是常态）会撞名，`copyTo(overwrite=true)` 把**最早**那份盖掉 ——
+  于是"回到这轮之前"退到的是中间态。现在撞名就加序号，且用 `overwrite=false`。
+
+判据（Kotlin 新增 9 条 `CheckpointTest`，整套 270 条）：跑真 write/edit 之后 rewind 把两个文件都退回原样、
+一轮里改三次退到**最早**那份、这轮新建的文件被删掉、
+工作区外的路径不动且报出来、快照被删时如实报 missing 而不是说成功、
+没登记过的 run 回一句人话、`runId` 为空（CLI 单发）不留任何账、
+列表只列真动过文件的轮次并带上任务名与文件数、账本有界（灌 4200 条后 ≤4000 且留下的是最近的）。
+（像素，`SHOT_MODE=tools bash pc/tools/ui-shot.sh tools/steps/ui-rewind.json`，16 步：
+让 mock 真的建 `hello.txt` 并改第一行 → 「产出」页签里文件在 → 检查点段出现"最近 1 轮改动可以整轮退回"
+与一行带任务名 + "2 个文件"的按钮 → **只点一下**：按钮变"再点一次确认"、`dataset.armed=1`、
+**文件还在**（证明一步都不会误删）→ 再点第二下：`/api/files` 里 `hello.txt` 5ms 内消失、
+`window.__ck===2`（两次都真点到了同一个节点）→ 行在 292px 窄栏里放得下、页面无横向溢出。）
+
+**这一批最该记的三件事：**
+
+1. **"两步确认"的计时窗是给人用的，不是给脚本用的。** 第一版 6 秒，像素剧本里点完第一下、
+   中间读一次文件列表，回来就发现按钮已经自己变回去了 —— 看着像"第二下没点到"。
+   加了 `window.__ck` 计数与节点记号 `__seen` 才分清：**不是没点到，是超时复位了**。
+   ⇒ 判据失败时先分清"没送达"与"状态被重置"，这两种的修法完全相反。
+2. **异步渲染出来的按钮要先 `goto` 再点。** 「产出」页签的检查点行是 fetch 回来才有的，
+   量具在渲染前就取到了坐标，点下去打在空气上。现在剧本里固定插一步
+   `{"goto":"#ckRows [data-ck]"}` —— 结构检查全绿也可能点空。
+3. **接口回了坏 JSON，界面不能只是"什么都不显示"。** 第一版 `listJson` 拼出一个
+   `{"ok":true,"ws":"ws",""count":1}`（多一个引号），前端 `r.json()` 抛错被 `.catch{}` 咽掉，
+   表现是"这段永远是空的"，看着像功能没生效。现在 catch 里会写"读不到检查点账本"，
+   而这类手搓 JSON 的坑以后应该改走序列化器。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1662,7 +1707,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **261 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **270 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1687,7 +1732,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13、手机联动（局域网）12，这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13、手机联动（局域网）12、检查点回滚 9，这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1732,7 +1777,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）、媒体工具 ffmpeg 与产出直接播、
 Git 面板、命令面板与任务运行历史、终端页签（人和 agent 共用常驻进程）、
 音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）、浏览器预览面板（人自己看画面、自己点）、
-   手机联动 PC 侧（局域网端点 + 配对码 + 只读会话镜像 + 远程审批；手机端那一半还欠）。
+   手机联动 PC 侧（局域网端点 + 配对码 + 只读会话镜像 + 远程审批；手机端那一半还欠）、
+   检查点回滚（「产出」页签底部「回到某次之前」，整轮撤销一次任务的改动）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
@@ -1769,6 +1815,7 @@ pc/src/main/kotlin/com/haoai/pc/
   PreviewPanel.kt 预览面板的纯逻辑：网址白名单 + 图上坐标→页面坐标 + 状态 JSON
   RunLedger.kt  一次运行一行的 HAOAI_HOME/runs.jsonl（最近 500 条，供「用量」页回溯与 ↻）
   Lan.kt        手机联动：配对码与设备 token（盘上只存哈希）+ 局域网 HTTP 面（默认不监听）
+  Checkpoints.kt 一轮动过哪些文件的账本（HAOAI_HOME/checkpoints.jsonl）+ 整轮回滚
   Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
   Desktop.kt    屏幕理解与点击级自动化：生成的 PowerShell 模板 + PsRunner
   Engine.kt     回合循环、档位闸、两级截断、上下文压缩、中断、会话持久化

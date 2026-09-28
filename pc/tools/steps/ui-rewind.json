@@ -1,0 +1,88 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "建一个 hello.txt 再把第一行改掉",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&Date.now()-t0>2500)return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>60000)return JSON.stringify({done:false,ms:Date.now()-t0});await new Promise(z=>setTimeout(z,1200))}})()",
+    "must": [
+      "done"
+    ]
+  },
+  {
+    "click": "#tabs button[data-t=files]"
+  },
+  {
+    "eval": "(async()=>{const d=await fetch('/api/files?sid='+encodeURIComponent(curId)).then(r=>r.json());const j=(d.entries||[]).map(x=>x.n).join(',');return JSON.stringify({hasHello:j.indexOf('hello.txt')>=0,head:j.slice(0,60)})})()",
+    "must": [
+      "hasHello"
+    ]
+  },
+  {
+    "eval": "(()=>{const rows=document.querySelectorAll('#ckRows [data-ck]');return JSON.stringify({rows:rows.length,sum:document.querySelector('#ckSum').textContent.indexOf('最近')>=0,label:rows.length?(rows[0].textContent||'').indexOf('回到这次之前')>=0:false})})()",
+    "must": [
+      "rows",
+      "sum",
+      "label"
+    ]
+  },
+  {
+    "goto": "#ckRows [data-ck]",
+    "timeout": 15000
+  },
+  {
+    "shot": "w01-checkpoints"
+  },
+  {
+    "eval": "(()=>{const b=document.querySelector('#ckRows [data-ck]');b.__seen=1;return JSON.stringify({stamped:b.__seen===1})})()",
+    "must": [
+      "stamped"
+    ]
+  },
+  {
+    "click": "#ckRows [data-ck]",
+    "after": 500
+  },
+  {
+    "eval": "(async()=>{const b=document.querySelector('#ckRows [data-ck]');const d=await fetch('/api/files?sid='+encodeURIComponent(curId)).then(r=>r.json());const j=(d.entries||[]).map(x=>x.n).join(',');return JSON.stringify({armed:(b.textContent||'').indexOf('再点一次确认')>=0,dataset:b.dataset.armed||'',sameNode:b.__seen===1,stillThere:j.indexOf('hello.txt')>=0})})()",
+    "must": [
+      "armed",
+      "dataset",
+      "stillThere",
+      "sameNode"
+    ]
+  },
+  {
+    "click": "#ckRows [data-ck]",
+    "after": 900
+  },
+  {
+    "eval": "(async()=>{const b=document.querySelector('#ckRows [data-ck]');const t0=Date.now();for(;;){const d=await fetch('/api/files?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({entries:[]}));const j=(d.entries||[]).map(x=>x.n).join(',');if(j.indexOf('hello.txt')<0)return JSON.stringify({gone:true,ms:Date.now()-t0,clicks:window.__ck||0});if(Date.now()-t0>15000)return JSON.stringify({gone:false,head:j.slice(0,60),clicks:window.__ck||0,sameNode:b.__seen===1,label:(b.textContent||'').slice(0,14)});await new Promise(z=>setTimeout(z,900))}})()",
+    "must": [
+      "gone"
+    ]
+  },
+  {
+    "eval": "(()=>{const box=document.querySelector('#ckRows');const r=box.getBoundingClientRect();const rail=document.querySelector('.rail.r').getBoundingClientRect();return JSON.stringify({fits:r.right<=rail.right+2&&r.left>=rail.left-2,rows:box.querySelectorAll('[data-ck]').length,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth})})()",
+    "must": [
+      "fits",
+      "noOverflow"
+    ]
+  },
+  {
+    "eval": "(async()=>{const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json());return JSON.stringify({notRunning:s.running===false,hint:document.querySelector('#ckSum').textContent.length>8})})()",
+    "must": [
+      "notRunning",
+      "hint"
+    ]
+  },
+  {
+    "shot": "w02-after-rewind"
+  }
+]

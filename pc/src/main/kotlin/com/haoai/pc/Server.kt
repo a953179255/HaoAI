@@ -193,6 +193,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/gitdiff" -> gitDiff(ex)
                 "/api/gitstage" -> gitStage(ex)
                 "/api/gitcommit" -> gitCommit(ex)
+                "/api/checkpoints" -> checkpointsList(ex)
+                "/api/rewind" -> rewindRun(ex)
                 "/api/lan" -> lanStatus(ex)
                 "/api/lan/toggle" -> lanToggle(ex)
                 "/api/lan/code" -> lanCode(ex)
@@ -1833,6 +1835,36 @@ class WebServer(settings: PcSettings, port: Int,
         send(ex, 200, PreviewPanel.errJson(PreviewPanel.OFF_NOTE), "application/json; charset=utf-8")
     }
 
+
+    /**
+     * `GET /api/checkpoints?sid=` —— 这条会话最近几轮各动了几个文件。
+     * `POST /api/rewind` {sid, run} —— 回到那一轮开始之前。
+     *
+     * 与 Git 面板同一立场：**人点的这颗钮就是审批**，所以不再过模型的权限闸。
+     * 但它会覆盖与删除工作区里的文件，所以界面上必须两步确认（见 index.html 那颗按钮）。
+     */
+    private fun checkpointsList(ex: HttpExchange) {
+        val sid = pick(querySid(ex))
+        val ws = sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()
+        send(ex, 200, Checkpoints.listJson(sid, ws.name), "application/json; charset=utf-8")
+    }
+
+    private fun rewindRun(ex: HttpExchange) {
+        val b = Body(ex)
+        val sid = pick(b.str("sid"))
+        val run = b.str("run")
+        if (run.isBlank()) {
+            send(ex, 200, PreviewPanel.errJson("要指定回到哪一轮（run）"), "application/json; charset=utf-8")
+            return
+        }
+        val ws = sessions[sid]?.engine?.session?.workspace ?: settings.workspaceFile()
+        val r = Checkpoints.rewind(ws, run)
+        val miss = r.missing.joinToString(", ") { quote(it) }
+        send(ex, 200, """{"ok":${r.ok},"note":${quote(r.note)},"restored":[${
+            r.restored.joinToString(", ") { quote(it) }
+        }],"deleted":[${r.deleted.joinToString(", ") { quote(it) }}],""" +
+            """"missing":[$miss]}""", "application/json; charset=utf-8")
+    }
 
     // ---- 手机联动（局域网）：这一组是**只回本机网页**的控制口，真正的对外面在 LanServer ----
 
