@@ -17,6 +17,8 @@
 //   {"type":{"sel":"#box","text":"…","enter":true}}  往输入框打字并按发送
 //   {"click":"选择器"}             点一下（用真实的鼠标事件序列，不用 el.click()；0 尺寸直接报错）
 //   {"shot":"文件名"}              存一张 PNG
+//   {"viewport":"phone"|"desktop"|[{"width":..,"height":..,"mobile":true}]}
+//                                 中途换设备度量（手机剧本要回电脑页勾开关时必须撤掉覆盖）
 
 const fs = require('fs');
 const os = require('os');
@@ -295,7 +297,8 @@ function mustMiss(val, must) {
     for (const [i, s] of steps.entries()) {
       if (s.url && s === steps[0]) continue;
       const label = s.goto ? '等 ' + s.goto : s.shot ? '图 ' + s.shot : s.eval ? '断言' :
-        s.click ? '点 ' + s.click : s.key ? '按键 ' + s.key : s.type ? '打字' : s.sleep ? '睡 ' + s.sleep + 'ms' : '?';
+        s.click ? '点 ' + s.click : s.key ? '按键 ' + s.key : s.type ? '打字' : s.viewport ? '视口 ' + s.viewport
+          : s.sleep ? '睡 ' + s.sleep + 'ms' : '?';
       console.log('  [' + (i + 1) + '/' + steps.length + '] ' + label);
       if (s.goto) {
         const ok = await waitFor(s.goto, s.timeout || 12_000, s.visible === true);
@@ -315,6 +318,20 @@ function mustMiss(val, must) {
           console.log('  !! 第 ' + (i + 1) + ' 步判据没成立：' + miss);
           code = 1;
         }
+      }
+      else if (s.viewport) {
+        /*
+         * 剧本中途换尺寸：手机那条链路要"先在手机上、再回电脑上勾个开关、再回手机"，
+         * 而设备度量覆盖是跟着标签走的 —— 不撤掉的话，回到桌面页量的还是 390px，
+         * 窄栏布局把右侧页签整个藏起来，于是"点不到「工具」页签"看着像产品坏了。
+         */
+        const v = s.viewport === 'phone' ? {width: W, height: H, mobile: true}
+          : s.viewport === 'desktop' ? {width: 1500, height: 930, mobile: false}
+          : {width: s.viewport.width || W, height: s.viewport.height || H, mobile: !!s.viewport.mobile};
+        await send('Emulation.setDeviceMetricsOverride',
+          {width: v.width, height: v.height, deviceScaleFactor: v.mobile ? 2 : 1, mobile: v.mobile});
+        console.log('  视口 -> ' + v.width + 'x' + v.height + (v.mobile ? '（手机）' : ''));
+        await sleep(300);
       }
       else if (s.click) { await click(s.click); await sleep(s.after || 350); }
       else if (s.key) { await key(s.key, s.mods); await sleep(s.after || 250); }

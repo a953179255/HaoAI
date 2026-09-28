@@ -12,7 +12,7 @@
     --card:#141f1a;--bad:#ff6b6b}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
-    padding-bottom:56px}
+    padding-bottom:124px}
   header{position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:12px 14px;
     background:rgba(13,21,18,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);z-index:5}
   header b{font-size:15px}
@@ -55,9 +55,18 @@
   .m.assistant{background:var(--card);border:1px solid var(--line)}
   .m.tool{background:#12191d;border:1px dashed #26333a;color:var(--mut);font-size:12.5px}
   .m .who{display:block;color:var(--mut);font-size:11px;margin-bottom:3px}
-  footer{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;gap:10px;
+footer{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;
     padding:8px 14px calc(8px + env(safe-area-inset-bottom));background:rgba(13,21,18,.94);
     border-top:1px solid var(--line)}
+  #cbar{display:flex;gap:8px;width:100%;align-items:flex-end}
+  #msg{flex:1;resize:none;min-height:44px;max-height:9em;padding:11px 12px;border-radius:11px;
+    border:1px solid var(--line);background:#0f1a15;color:var(--fg);font:inherit;font-size:16px}
+  .cbtn{flex:none;width:78px;background:var(--acc);color:#06180f;font-weight:700;border:0;padding:12px}
+  .cbtn:disabled{background:#20402f;color:var(--mut)}
+  /* 一次性回执（"已交给电脑"、"没送到"）单独一行：盖章时间是每 4 秒刷的，
+     共用一行的话回执会被立刻盖掉，人根本来不及看。 */
+  .say{width:100%;color:var(--acc);font-size:13px;min-height:0}
+  .say.bad{color:var(--bad)}
   [hidden]{display:none}
 </style>
 </head>
@@ -96,6 +105,11 @@
 </main>
 
 <footer>
+  <div id="cbar" hidden>
+    <textarea id="msg" rows="2" maxlength="2000" placeholder="让这台电脑做点什么…（空着发出去的是新会话）"></textarea>
+    <button class="cbtn" id="btnSend">发送</button>
+  </div>
+  <div class="say" id="note" hidden></div>
   <span class="mut sp" id="stamp">还没连上</span>
   <button class="ghost" id="btnUnpair" hidden>解除配对</button>
 </footer>
@@ -128,8 +142,13 @@ function schedule(){clearTimeout(timer);if(token)timer=setTimeout(refresh,4000)}
 function show(which){
   $('sPair').hidden=which!=='pair';$('sList').hidden=which!=='list';$('sView').hidden=which!=='view';
   $('btnUnpair').hidden=which==='pair';
+  $('cbar').hidden=!(token&&which!=='pair');
 }
-function fail(e){$('err').textContent=(e&&e.message)||'连不上';$('stamp').textContent='出错了'}
+var ntimer=0;
+function say(t,bad){const n=$('note');n.textContent=t||'';n.hidden=!t;
+  n.classList.toggle('bad',!!bad);clearTimeout(ntimer);
+  if(t)ntimer=setTimeout(function(){n.hidden=true;n.textContent=''},9000)}
+function fail(e){const m=(e&&e.message)||'连不上';$('err').textContent=m;say(m,true)}
 
 /* ---- 配对 ---- */
 $('btnPair').onclick=function(){
@@ -186,8 +205,22 @@ function refresh(){
 function decide(id,d,btn){
   [].forEach.call(document.querySelectorAll('#appr button'),function(b){b.disabled=true});
   api('/lan/decide',{id:id,decision:d}).then(function(o){
-    $('stamp').textContent=o.ok?(o.note||'已送出'):(o.error||'没送到');refresh()})
-  .catch(function(e){$('stamp').textContent=(e&&e.message)||'失败';refresh()})}
+    say(o.ok?(o.note||'已送出'):(o.error||'没送到'),!o.ok);refresh()})
+  .catch(function(e){say((e&&e.message)||'失败',true);refresh()})}
+
+/* ---- 从手机派活 ----
+   这条口要电脑上显式勾「允许从手机派活」才通（不勾就回一句为什么）。
+   在会话详情页发 = 接着这条聊；在列表页发 = 另起一条新会话。 */
+$('btnSend').onclick=function(){
+  var t=$('msg').value.trim();
+  if(!t){say('先写一句要做什么',true);return}
+  $('btnSend').disabled=true;
+  api('/lan/send',{sid:openSid,text:t}).then(function(o){
+    say(o.ok?(o.note||'已经发到电脑上'):(o.error||'没送到'),!o.ok);
+    if(o.ok){$('msg').value='';refresh();if(openSid)pull()}})
+  .catch(function(e){say((e&&e.message)||'连不上',true)})
+  .then(function(){$('btnSend').disabled=false});
+};
 
 /* ---- 单条会话（只读） ---- */
 function open(sid){openSid=sid;show('view');pull()}
@@ -209,7 +242,7 @@ function pull(){
 function boot(){
   $('host').textContent=devName;
   if(token){show('list');refresh()}
-  else{show('pair');$('stamp').textContent='还没配对'}
+  else{show('pair');$('stamp').textContent='还没配对';say('')}
 }
 boot();
 </script>

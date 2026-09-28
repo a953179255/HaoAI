@@ -112,6 +112,100 @@
     ]
   },
   {
+    "eval": "(()=>{return JSON.stringify({composerShown:!document.querySelector('#cbar').hidden,onList:!document.querySelector('#sList').hidden})})()",
+    "must": [
+      "composerShown",
+      "onList"
+    ]
+  },
+  {
+    "type": {
+      "sel": "#msg",
+      "text": "把今天那段录屏剪成 30 秒",
+      "enter": false
+    }
+  },
+  {
+    "click": "#btnSend",
+    "after": 1000
+  },
+  {
+    "eval": "(()=>{const t=(document.querySelector('#note').textContent||'')+(document.querySelector('#stamp').textContent||'');return JSON.stringify({refused:t.indexOf('允许从手机派活')>=0,stillThere:document.querySelector('#msg').value.length>0})})()",
+    "must": [
+      "refused",
+      "stillThere"
+    ]
+  },
+  {
+    "viewport": "desktop"
+  },
+  {
+    "eval": "(()=>{location.href='http://127.0.0.1:@WEB@/';return 'go'})()"
+  },
+  {
+    "goto": "#tabs button[data-t=tools]",
+    "visible": true,
+    "timeout": 20000
+  },
+  {
+    "click": "#tabs button[data-t=tools]"
+  },
+  {
+    "goto": "#lanSend",
+    "visible": true,
+    "timeout": 20000
+  },
+  {
+    "click": "#lanSend",
+    "after": 900
+  },
+  {
+    "eval": "(async()=>{const c=document.querySelector('#lanSend');const d=await fetch('/api/lan').then(r=>r.json());return JSON.stringify({checked:c.checked,persisted:!!d.allowSend})})()",
+    "must": [
+      "checked",
+      "persisted"
+    ]
+  },
+  {
+    "eval": "(()=>{location.href='http://127.0.0.1:@LAN@/';return 'go'})()"
+  },
+  {
+    "viewport": "phone"
+  },
+  {
+    "goto": "#sList",
+    "visible": true,
+    "timeout": 20000
+  },
+  {
+    "type": {
+      "sel": "#msg",
+      "text": "把今天那段录屏剪成 30 秒",
+      "enter": false
+    }
+  },
+  {
+    "click": "#btnSend",
+    "after": 1500
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const d=await api('/lan/sessions').catch(()=>({items:[]}));const hit=(d.items||[]).filter(s=>(s.title||'').indexOf('剪成 30 秒')>=0);if(hit.length)return JSON.stringify({sent:true,n:(d.items||[]).length,running:!!hit[0].running,mode:hit[0].mode});if(Date.now()-t0>40000)return JSON.stringify({sent:false,n:(d.items||[]).length});await new Promise(z=>setTimeout(z,1500))}})()",
+    "must": [
+      "sent"
+    ]
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const n=document.querySelector('#note');const t=n.hidden?'':(n.textContent||'');if(t.indexOf('已交给电脑')>=0)return JSON.stringify({ack:true,shown:!n.hidden,cleared:document.querySelector('#msg').value===''});if(Date.now()-t0>12000)return JSON.stringify({ack:false,seen:t.slice(0,40),cleared:document.querySelector('#msg').value===''});await new Promise(z=>setTimeout(z,300))}})()",
+    "must": [
+      "ack",
+      "shown",
+      "cleared"
+    ]
+  },
+  {
+    "shot": "ph03-phone-sent"
+  },
+  {
     "click": "#tSess"
   },
   {

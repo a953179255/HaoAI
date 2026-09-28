@@ -150,8 +150,10 @@ if [ -n "${PRE_LAN:-}" ]; then
   echo "  lan on :$LAN_PORT + 一台已配对设备"
 fi
 # 剧本里写 @MOCK@ 的地方换成这次的假网关端口（预览靶页就挂在它上面，端口每轮现挑，写死必串台）。
-if grep -qE '@MOCK@|@LAN@' "$STEPS" 2>/dev/null; then
-  sed -e "s|@MOCK@|$MOCK_PORT|g" -e "s|@LAN@|${LAN_PORT:-0}|g" "$STEPS" > "$HOME_DIR/steps.json"
+if grep -qE '@MOCK@|@LAN@|@WEB@' "$STEPS" 2>/dev/null; then
+  # @WEB@ = 桌面那头的端口：手机剧本要跳回桌面页去勾「允许从手机派活」，
+  # 写死 8712 的话换成别的端口就测的是别人的服务。
+  sed -e "s|@MOCK@|$MOCK_PORT|g" -e "s|@LAN@|${LAN_PORT:-0}|g" -e "s|@WEB@|$PORT|g" "$STEPS" > "$HOME_DIR/steps.json"
   STEPS="$HOME_DIR/steps.json"
   echo "  steps @MOCK@ -> $MOCK_PORT"
 fi

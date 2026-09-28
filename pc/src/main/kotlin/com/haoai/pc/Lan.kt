@@ -56,16 +56,28 @@ object LanStore {
     fun enabled(): Boolean = load()["enabled"]?.jsonPrimitive?.booleanOrNull ?: false
     fun port(): Int = load()["port"]?.jsonPrimitive?.intOrNull ?: DEFAULT_PORT
 
+    /**
+     * 「允许从手机派活」—— 默认关。
+     * 只读镜像与远程审批是"看一眼、替人点一下"，而从手机发一句话等于
+     * **让这台电脑替手机动手**（配错的设备、被偷走的 token、家里别人的手机都能发）。
+     * 所以这条要人在电脑上显式勾上；开关跟着 lan.json 走，不进 settings.json
+     * （`GET /api/settings` 是整份回给前端的）。
+     */
+    fun allowSend(): Boolean = load()["allowSend"]?.jsonPrimitive?.booleanOrNull ?: false
+
+    fun saveAllowSend(on: Boolean) = write(enabled(), port(), devices(), on)
+
     fun save(on: Boolean, port: Int) {
         val keep = devices()
         write(on, port, keep)
     }
 
-    private fun write(on: Boolean, port: Int, devs: List<Device>) {
+    private fun write(on: Boolean, port: Int, devs: List<Device>, send: Boolean = allowSend()) {
         file.parentFile?.mkdirs()
         val text = buildJsonObject {
             put("enabled", on)
             put("port", port)
+            put("allowSend", send)
             put("devices", buildJsonArray {
                 devs.forEach { d ->
                     add(buildJsonObject {
@@ -193,6 +205,9 @@ interface LanHost {
 
     /** 人从手机上做的决定。回一句话说明成没成。 */
     fun decide(id: String, decision: String): String
+
+    /** 从手机发来的活：sid 空 = 另起一条新会话。回一句话说明成没成（成则带 sid）。 */
+    fun lanSend(sid: String, text: String): String
 }
 
 /**
@@ -245,6 +260,7 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
                         path == "/lan/session" -> send(ex, 200, host.sessionJson(query(ex, "sid")))
                         path == "/lan/pending" -> send(ex, 200, host.pendingJson())
                         path == "/lan/decide" && ex.requestMethod == "POST" -> decide(ex)
+                        path == "/lan/send" && ex.requestMethod == "POST" -> lanSendRoute(ex)
                         path == "/lan/unpair" && ex.requestMethod == "POST" -> {
                             val ok = LanStore.remove(dev.hash)
                             val msg = if (ok) "已解除这台设备的配对" else "没找到这台设备"
@@ -273,7 +289,7 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
     private fun pair(ex: HttpExchange) {
         val body = readBody(ex)
         val code = field(body, "code")
-        val name = field(body, "name").ifBlank { "未命名设备" }
+        val name = field(body, "name").ifBlank { "未命名设备" }.take(40)
         if (!LanStore.redeemCode(code)) {
             send(ex, 403, """{"ok":false,"error":"配对码不对或已经过期（120 秒内有效、只能用一次）"}""")
             return
@@ -297,6 +313,26 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
         send(ex, 200, """{"ok":${note.startsWith("已")},"note":${q(note)}}""")
     }
 
+    private fun lanSendRoute(ex: HttpExchange) {
+        if (!LanStore.allowSend()) {
+            send(ex, 200, """{"ok":false,"error":"电脑上没开「允许从手机派活」：这台电脑只肯看和批，不替手机动手"}""")
+            return
+        }
+        val body = readBody(ex)
+        val text = textField(body, "text").trim()
+        if (text.isEmpty()) {
+            send(ex, 200, """{"ok":false,"error":"要 text（要说的那句话）"}""")
+            return
+        }
+        if (text.length > MAX_TEXT) {
+            send(ex, 200, """{"ok":false,"error":"这句 ${text.length} 字太长了（上限 $MAX_TEXT 字），拆短再发"}""")
+            return
+        }
+        val note = host.lanSend(textField(body, "sid").trim(), text)
+        Env.log("lan", "手机派活：${note.take(80)}")
+        send(ex, 200, """{"ok":${note.startsWith("已")},"note":${q(note)}}""")
+    }
+
     /** 只暴露"这台机器在局域网里是哪个地址"，别的什么都不给。 */
     private fun readBody(ex: HttpExchange): String = runCatching {
         ex.requestBody.readBytes().toString(Charsets.UTF_8).take(8192)
@@ -305,10 +341,66 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
     companion object {
         val DECISIONS = setOf("allow_once", "allow_session", "deny")
 
+        /** 一句话的上限：手机打字本来就短，留 2000 是给"把这段贴过去"这种用法。 */
+        const val MAX_TEXT = 2000
+
         private fun q(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
         private fun field(body: String, key: String): String =
             Regex(""""$key"\s*:\s*"([^"]*)"""").find(body)?.groupValues?.get(1) ?: ""
+
+        /**
+         * 取 JSON 里的一段字符串并反转义。
+         *
+         * 刻意不用正则：`((?:[^"\\]|\\.)*)` 这种"分组上再套量词"在 JDK 里是**递归**的，
+         * 实测正文到 2000 字就 StackOverflowError（见 .test-work/RegexProbe 那次复现）。
+         * 那是个 Error，路由里的 `catch (e: Exception)` 接不住，表现是连接被直接掐断、
+         * 一个字节都不回 —— 而这台机器是在局域网里听别人发消息的。
+         * 也不用两次 replace 反转义：`\\n`（转义过的反斜杠 + n）会被折成换行，
+         * 手机发来的原文里贴 Windows 路径是常态。
+         */
+        private fun textField(body: String, key: String): String {
+            val needle = "\"" + key + "\""
+            var at = body.indexOf(needle)
+            while (at >= 0) {
+                var i = at + needle.length
+                while (i < body.length && body[i].isWhitespace()) i++
+                if (i < body.length && body[i] == ':') {
+                    i++
+                    while (i < body.length && body[i] == ' ') i++
+                    if (i < body.length && body[i] == '"') return unescapeJsonString(body, i + 1)
+                }
+                at = body.indexOf(needle, at + needle.length)
+            }
+            return ""
+        }
+
+        /** 从开引号的下一位扫到未转义的闭引号。单遍、不递归。 */
+        private fun unescapeJsonString(body: String, from: Int): String {
+            val sb = StringBuilder()
+            var i = from
+            while (i < body.length) {
+                val c = body[i]
+                if (c == '"') return sb.toString()
+                if (c == '\\' && i + 1 < body.length) {
+                    when (val n = body[i + 1]) {
+                        'n' -> sb.append('\n')
+                        'r' -> sb.append('\r')
+                        't' -> sb.append('\t')
+                        'b' -> sb.append('\b')
+                        '"' -> sb.append('"')
+                        '\\' -> sb.append('\\')
+                        '/' -> sb.append('/')
+                        else -> sb.append('\\').append(n)
+                    }
+                    i += 2
+                } else {
+                    sb.append(c)
+                    i++
+                }
+            }
+            return sb.toString()
+        }
 
         private fun query(ex: HttpExchange, key: String): String =
             URI("http://x" + ex.requestURI.rawQuery?.let { "?$it" } ?: "").let { u ->

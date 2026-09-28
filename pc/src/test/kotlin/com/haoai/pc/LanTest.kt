@@ -8,6 +8,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -38,6 +39,12 @@ class LanTest {
         override fun sessionsJson() = """{"ok":true,"items":[{"id":"s1","title":"跑一条任务"}]}"""
         override fun sessionJson(sid: String) = """{"ok":true,"sid":${quote(sid)},"items":[]}"""
         override fun pendingJson() = """{"ok":true,"items":[{"id":"a1","kind":"approval","sid":"s1"}]}"""
+        var sent: Pair<String, String>? = null
+        override fun lanSend(sid: String, text: String): String {
+            sent = sid to text
+            return "已交给电脑：会话 " + (sid.ifBlank { "s9" })
+        }
+
         override fun decide(id: String, decision: String): String {
             decided = id to decision
             return "已按你的决定放行：$decision"
@@ -144,7 +151,7 @@ class LanTest {
         val (_, html) = get("/")
         val called = Regex("/lan/[a-z]+").findAll(html).map { it.value }.toSet()
         val served = setOf("/lan/pair", "/lan/sessions", "/lan/session", "/lan/pending",
-            "/lan/decide", "/lan/unpair", "/lan/health")
+            "/lan/decide", "/lan/unpair", "/lan/send", "/lan/health")
         // 页面上写的路径若拼错，手机上只会表现为"一直转圈"—— 静态就能挡掉
         assertTrue("页面调了不存在的路径：" + (called - served - "/lan/"), called.all { it in served })
     }
@@ -158,6 +165,8 @@ class LanTest {
         }
         val (st, _) = post("/lan/decide", """{"id":"a1","decision":"allow_once"}""")
         assertEquals("决定这条更要挡", 401, st)
+        val (st2, _) = post("/lan/send", """{"sid":"","text":"派个活"}""")
+        assertEquals("派活这条是「让电脑动手」，没 token 一律 401", 401, st2)
     }
 
     @Test
@@ -239,6 +248,63 @@ class LanTest {
         } finally {
             runCatching { web.stop() }
         }
+    }
+
+    // ---- 从手机派活（默认关，且它是"让这台电脑动手"的那条口）----
+
+    @Test
+    fun `sending from the phone is off until the PC ticks it`() {
+        val tk = paired()
+        val (st, body) = post("/lan/send", """{"sid":"","text":"把录屏剪成 30 秒"}""", tk)
+        assertEquals(200, st)
+        assertTrue("没勾开关就该挡住：" + body, body.contains("允许从手机派活"))
+        assertNull("挡住了就不该走到执行侧", host.sent)
+    }
+
+    @Test
+    fun `an unpaired device cannot send even after the switch is on`() {
+        LanStore.saveAllowSend(true)
+        val (st, _) = post("/lan/send", """{"sid":"","text":"随便一句"}""", "")
+        assertEquals("没 token 一律 401", 401, st)
+    }
+
+    @Test
+    fun `the phone sentence arrives intact with quotes and newlines`() {
+        val tk = paired()
+        LanStore.saveAllowSend(true)
+        val body = """{"sid":"","text":"先读 \"README\"\n再列一下文件"}"""
+        val (st, txt) = post("/lan/send", body, tk)
+        assertEquals(200, st)
+        assertTrue("该回一句人话：" + txt, txt.contains("已交给电脑"))
+        assertEquals("正文里的引号与换行不许被吃掉", "先读 \"README\"\n再列一下文件", host.sent?.second)
+        assertEquals("空 sid = 另起一条", "", host.sent?.first)
+
+        // `\\n` 是"转义过的反斜杠 + n"，不是换行：手机发来的原文里贴 Windows 路径是常态，
+        // 用两次 replace 反转义会把它折成换行，路径当场断成两截。
+        post("/lan/send", """{"sid":"","text":"C:\\nx"}""", tk)
+        assertEquals("反斜杠后面那个 n 不许变成换行", "C:\\nx", host.sent?.second)
+    }
+
+    @Test
+    fun `an empty or absurdly long sentence is refused in plain words`() {
+        val tk = paired()
+        LanStore.saveAllowSend(true)
+        val (_, e1) = post("/lan/send", """{"sid":"","text":"   "}""", tk)
+        assertTrue("空正文：" + e1, e1.contains("要 text"))
+        val (_, e2) = post("/lan/send", "{\"sid\":\"\",\"text\":\"" + "字".repeat(2100) + "\"}", tk)
+        assertTrue("超长该说上限：" + e2, e2.contains("上限") && e2.contains("2000"))
+        assertNull("两条都不该走到执行侧", host.sent)
+    }
+
+    @Test
+    fun `the allow-send switch survives the endpoint being toggled`() {
+        LanStore.saveAllowSend(true)
+        LanStore.save(true, 8720)
+        assertTrue("开关跟着 lan.json 走，不该被开/关端点冲掉", LanStore.allowSend())
+        LanStore.save(false, 8720)
+        assertTrue(LanStore.allowSend())
+        LanStore.saveAllowSend(false)
+        assertFalse(LanStore.allowSend())
     }
 
     @Test

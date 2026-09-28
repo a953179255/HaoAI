@@ -61,13 +61,13 @@ private fun help() {
           haoai task "…" [--auto]      跑一条任务就退出
           haoai chat                   终端对话
           haoai serve [--port 8712]    打开本地网页版
-          haoai lan [status|on|off|code|devices|pair <名>|unpair <前缀>]  手机联动
+          haoai lan [status|on|off|code|devices|pair <名>|unpair <前缀>|allow-send on|off]  手机联动
         """.trimIndent()
     )
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.54.0-pc"
+const val PC_VERSION = "0.55.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -315,6 +315,12 @@ private fun lanCmd(settings: PcSettings, rest: List<String>) {
             println("设备：${dev.name}    指纹：${dev.hash.take(12)}")
             println("token（只出现这一次，盘上只存哈希）：")
             println(token)
+        }
+        "allow-send" -> {
+            val on = rest.getOrNull(rest.indexOf(sub) + 1)?.let { it == "on" || it == "1" } ?: true
+            LanStore.saveAllowSend(on)
+            println(if (on) "已允许从手机派活（手机上发的话会让这台电脑真的动手；ask 档仍会逐条要审批）"
+            else "已收回：手机只能看会话与批审批，不能派活")
         }
         "unpair" -> {
             val prefix = rest.getOrNull(rest.indexOf(sub) + 1) ?: ""

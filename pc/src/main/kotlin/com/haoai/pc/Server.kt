@@ -206,6 +206,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/lan/toggle" -> lanToggle(ex)
                 "/api/lan/code" -> lanCode(ex)
                 "/api/lan/unpair" -> lanUnpair(ex)
+                "/api/lan/allow" -> lanAllow(ex)
                 "/api/shells" -> shellsList(ex)
                 "/api/shell/tail" -> shellTail(ex)
                 "/api/shell/open" -> shellOpen(ex)
@@ -1883,11 +1884,18 @@ class WebServer(settings: PcSettings, port: Int,
         val live = lan?.running == true
         return """{"ok":true,"enabled":${LanStore.enabled()},"running":$live,""" +
             """"port":${lan?.boundPort ?: LanStore.port()},"addr":${quote(LanServer.lanAddress())},""" +
+            """"allowSend":${LanStore.allowSend()},""" +
             """"code":${quote(code)},"expires":$until,"devices":[$devs]}"""
     }
 
     private fun lanStatus(ex: HttpExchange) =
         send(ex, 200, lanStatusJson(), "application/json; charset=utf-8")
+
+    private fun lanAllow(ex: HttpExchange) {
+        val on = Body(ex).str("on") == "1"
+        LanStore.saveAllowSend(on)
+        send(ex, 200, lanStatusJson(), "application/json; charset=utf-8")
+    }
 
     private fun lanToggle(ex: HttpExchange) {
         val want = Body(ex).str("on") == "1"
@@ -1970,6 +1978,25 @@ class WebServer(settings: PcSettings, port: Int,
                 """"sid":${quote(w?.sid ?: "")},"payload":$payload}"""
         }
         return """{"ok":true,"items":[$rows]}"""
+    }
+
+    /**
+     * 手机上发来的活。`sid` 空 = 另起一条新会话（不去挤用户正在聊的那条）。
+     * 这条口是"让这台电脑替手机动手"，所以三道闸：
+     * ① LanStore.allowSend() 必须在电脑上显式勾过；② sid 先验格式再验存在
+     * —— 它会变成 sessions 目录下的文件名，`../` 这种必须挡掉；
+     * ③ 权限档位照旧生效：ask 档下这一样会冒出审批卡，手机批不了就卡在那儿等人。
+     */
+    override fun lanSend(sid: String, text: String): String {
+        val want = sid.trim()
+        if (want.isNotEmpty()) {
+            if (!want.matches(Regex("^[A-Za-z0-9_-]{1,40}$")))
+                return "会话 id 不对：在手机上重新点一条会话"
+            if (sessions[want] == null && !SessionIndex.fileFor(want).isFile)
+                return "没有这条会话了（电脑上大概已删掉），重新拉一次列表"
+        }
+        val (got, err) = startRun(want, text, fresh = want.isEmpty(), trigger = "手机")
+        return err ?: "已交给电脑：会话 $got"
     }
 
     override fun decide(id: String, decision: String): String {

@@ -770,6 +770,10 @@
       <div class="acts2"><button class="ab" id="lanOn">打开端点</button>
         <button class="ab" id="lanCode">生成配对码</button></div>
       <div class="kv" id="lanCodeLine"></div>
+      <label class="mrow"><input type="checkbox" id="lanSend">
+        <span>允许从手机派活</span></label>
+      <div class="kv">这一条改变的是<b>这台电脑会不会替手机动手</b>：勾上之后，手机上发一句话
+        就等于在电脑上按了发送。默认不勾；ask 档照样会逐条弹审批，所以"批"和"派"是分开的两个权限。</div>
       <div id="lanDevs" class="mrows"></div>
       <div class="kv">开着的时候这台 PC 会在局域网监听一个端口：手机配对后能<b>只读</b>看这几条会话，
         并替你在手机上点"允许一次 / 拒绝"。密钥、工作区绝对路径、工具原始输出都不在这个通道里。
@@ -1775,6 +1779,9 @@ function loadLan(){
     $('#lanCodeLine').textContent=d.code
       ?('手机浏览器打开 http://'+d.addr+':'+d.port+' 输配对码 '+d.code+'（'+left+' 秒内有效，只能用一次）')
       :'';
+    // 正在点这个开关的时候别被 1 秒轮询盖回去（勾了又跳回 unchecked 最误导人）
+    const sw=$('#lanSend');
+    if(document.activeElement!==sw) sw.checked=!!d.allowSend;
     // 一行放不下三样东西（窄栏 292px）：名字与「移除」一行，指纹与时间单独一行
     $('#lanDevs').innerHTML=(d.devices||[]).map(x=>'<div class="mrow"><span>'+esc(x.name)+'</span>'+
       '<button class="ab" data-rm="'+esc(x.hash)+'">移除</button></div>'+
@@ -1787,6 +1794,12 @@ function loadLan(){
     if(d.code)lanTimer=setInterval(loadLan,1000);
   }).catch(()=>{});
 }
+$('#lanSend').onchange=()=>{
+  const on=$('#lanSend').checked;
+  lanPost('/api/lan/allow',{on:on?'1':'0'})
+    .then(()=>{toast(on?'已允许从手机派活':'已收回：手机只能看和批');loadLan()})
+    .catch(()=>{$('#lanSend').checked=!on;toast('没送到，开关没改')});
+};
 $('#lanOn').onclick=()=>{
   const want=/打开/.test($('#lanOn').textContent)?'1':'0';
   lanPost('/api/lan/toggle',{on:want}).then(o=>{toast(o.error||o.note||'');loadLan()});

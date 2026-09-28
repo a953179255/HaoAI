@@ -81,7 +81,7 @@ val packageExe by tasks.registering(Exec::class) {
             error("删不掉旧的 ${prev.absolutePath}（可能 HaoAI-PC.exe 正在运行），先关掉它")
         }
         commandLine(
-            jp, "--type", "app-image", "--name", "HaoAI-PC", "--app-version", "0.54.0",
+            jp, "--type", "app-image", "--name", "HaoAI-PC", "--app-version", "0.55.0",
             "--vendor", "HaoAI", "--win-console",
             "--input", lib.absolutePath,
             "--main-jar", "haoai-pc.jar",
