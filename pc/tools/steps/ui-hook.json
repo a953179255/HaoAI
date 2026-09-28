@@ -1,0 +1,29 @@
+[
+  {"goto": "#box"},
+  {"click": "#tabs button[data-t=\"role\"]"},
+  {"sleep": 700},
+  {"eval": "({tabOn:!!document.querySelector('#tab-role.on'), list:(document.querySelector('#hookList')||{}).innerText, hasCmd:!!document.querySelector('#hookCmd'), hasAdd:!!document.querySelector('#hookAdd'), roleFormAlive:!!document.querySelector('#roleName')})",
+   "must": ["tabOn", "list", "hasCmd", "hasAdd", "roleFormAlive"], "note": "「自动化」页签里角色卡与钩子共存"},
+  {"type": {"sel": "#hookName", "text": "记一笔", "enter": false}},
+  {"eval": "(()=>{document.querySelector('#hookCmd').value='Set-Content -Path hook-ui.txt -Value (\"ui=\" + $env:HAOAI_SID)';return 'cmd set'})()"},
+  {"click": "#hookAdd"},
+  {"sleep": 800},
+  {"eval": "(()=>{const t=(document.querySelector('#hookList')||{}).innerText||'';return {named:t.indexOf('记一笔')>=0, event:t.indexOf('一轮跑完')>=0, neverRun:t.indexOf('还没跑过')>=0, rows:document.querySelectorAll('#hookList .rl').length}})()",
+   "must": ["named", "event", "neverRun"], "note": "刚加的钩子：事件说人话、状态是还没跑过"},
+  {"shot": "hk01-hook-list"},
+
+  {"type": {"sel": "#box", "text": "验收：跑完该有钩子替我记一笔"}},
+  {"eval": "(()=>{const t0=Date.now();const loop=()=>fetch('/api/hooks').then(r=>r.json()).then(d=>{const h=(d.items||[])[0]||{};if(h.last||Date.now()-t0>20000)return {ran:!!h.last,ok:h.ok===true,last:h.last||'',waited:Date.now()-t0};return new Promise(res=>setTimeout(res,400)).then(loop)});return loop()})()",
+   "must": ["ran", "ok"], "note": "一轮跑完，钩子真的被执行了（last 是子进程的 exit）"},
+  {"shot": "hk02-hook-ran"},
+
+  {"click": "#hookList [data-hk=toggle]"},
+  {"sleep": 800},
+  {"eval": "(()=>{const row=document.querySelector('#hookList .rl');const t=row?row.innerText:'';return {off:row?row.classList.contains('off'):false, label:(row.querySelector('[data-hk=toggle]')||{}).textContent, state:t.indexOf('停用')<0||t.indexOf('启用')>=0}})()",
+   "must": ["off", "label"], "note": "停用之后按钮该翻成「启用」，行也该看着是灰的"},
+  {"click": "#hookList [data-hk=del]"},
+  {"sleep": 800},
+  {"eval": "({empty:(document.querySelector('#hookList')||{}).innerText, rows:document.querySelectorAll('#hookList .rl').length})",
+   "must": ["empty"]},
+  {"shot": "hk03-hook-off-deleted"}
+]

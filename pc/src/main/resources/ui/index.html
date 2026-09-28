@@ -669,7 +669,7 @@
       <button data-t="pv">预览</button>
       <button data-t="mem">记忆</button>
       <button data-t="cron">定时</button>
-      <button data-t="role">角色</button>
+      <button data-t="role">自动化</button>
       <button data-t="tools">工具</button>
     </div>
     <div class="tabp on" id="tab-tasks">
@@ -790,6 +790,22 @@
         <option value="auto">自动（高危仍会问）</option></select>
       <div class="acts2 pinned"><button class="ab" id="roleAdd">存为角色卡</button>
         <span class="fp" id="roleState"></span></div>
+      <div class="grp" style="margin-top:12px">跑完自动执行（钩子）</div>
+      <div class="kv">一轮跑完后替你在<b>这条会话的工作区</b>里执行一段命令：记一笔日志、推个通知、把产物挪进目录。
+        结论全文在 <code>$env:HAOAI_OUTFILE</code> 指的那个文件里，会话 id 在 <code>$env:HAOAI_SID</code>。
+        命令只有你在这里能写（模型加不了自己的钩子）；<b>跑失败只记在这条上，不会打断会话</b>。</div>
+      <div class="rules" id="hookList">（还没配）</div>
+      <input type="text" id="hookName" class="tin" placeholder="名字，如 记一笔 / 挪素材">
+      <textarea id="hookCmd" class="mem" rows="3"
+        placeholder="PowerShell，如：Add-Content -Path hook.log -Value &quot;$env:HAOAI_TITLE 跑完 $((Get-Date) -Format HH:mm)&quot;"></textarea>
+      <div class="acts2"><select id="hookEvent" class="tin" style="flex:1"></select>
+        <select id="hookShell" class="tin" style="flex:1">
+          <option value="pwsh">pwsh</option><option value="bash">bash</option><option value="cmd">cmd</option>
+        </select>
+        <input type="text" id="hookTimeout" class="tin" style="width:64px" value="30"
+          title="超时秒数，到点直接终止"></div>
+      <div class="acts2 pinned"><button class="ab" id="hookAdd">加为钩子</button>
+        <span class="fp" id="hookState"></span></div>
     </div>
     <div class="tabp" id="tab-tools">
       <div class="kv" id="toolsSum">—</div>
@@ -1712,7 +1728,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='pv')pvStart(); else pvStop();
   if(b.dataset.t=='mem')loadMemory();
   if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest();loadWorkflows()}
-  if(b.dataset.t=='role')loadPresets();
+  if(b.dataset.t=='role'){loadPresets();loadHooks()}
 });
 
 /* ---- 终端页签：人与 agent 共用同一份常驻进程 ----
@@ -2218,6 +2234,44 @@ $('#roleList').onclick=e=>{
     if(roleEditing==b.dataset.id)roleEditing='';
     $('#roleState').textContent='';toast('角色卡已删');
   }).catch(()=>toast('角色卡删不掉','err'));
+};
+/* ---- 钩子：一轮跑完自动执行的一段命令 ---- */
+function paintHooks(list){
+  $('#hookList').innerHTML=(list||[]).length?(list||[]).map(h=>
+    `<div class="rl${h.enabled?'':' off'}" title="${esc(h.command)}"><span><b>${esc(h.name)}</b>`+
+    `<em>${esc(h.eventLabel||h.event)} · ${esc(h.shell)} · ${h.timeoutSec}s · `+
+      `${h.lastAt?('上次 '+(h.ok?'成':'败')+'：'+esc(h.last.slice(0,40))):'还没跑过'}</em></span>`+
+    `<button class="ab" data-hk="toggle" data-id="${esc(h.id)}">${h.enabled?'停用':'启用'}</button>`+
+    `<button class="ab" data-hk="del" data-id="${esc(h.id)}">删</button></div>`).join('')
+    :'（还没配）';
+}
+function loadHooks(){
+  return fetch('/api/hooks').then(r=>r.json()).then(d=>{
+    hooks=d.items||[];paintHooks(hooks);
+    const sel=$('#hookEvent');
+    if(sel.options.length!=(d.events||[]).length)
+      sel.innerHTML=(d.events||['run-end']).map(e=>`<option value="${esc(e)}">${esc(e)}</option>`).join('');
+  }).catch(()=>{$('#hookList').textContent='读不到'});
+}
+let hooks=[];
+$('#hookAdd').onclick=()=>{
+  const cmd=$('#hookCmd').value.trim();
+  if(!cmd){toast('要跑什么？命令是空的');return}
+  post('/api/hooks',{op:'save',id:'',name:$('#hookName').value,command:cmd,
+    event:$('#hookEvent').value||'run-end',shell:$('#hookShell').value,
+    timeoutSec:$('#hookTimeout').value||'30'}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+      $('#hookName').value='';$('#hookCmd').value='';paintHooks(d.items);hooks=d.items||[];
+      toast('钩子已加，下一轮跑完就执行');
+    }).catch(()=>toast('钩子没加上','err'));
+};
+$('#hookList').onclick=e=>{
+  const b=e.target.closest?e.target.closest('[data-hk]'):null;
+  if(!b)return;
+  post('/api/hooks',{op:b.dataset.hk,id:b.dataset.id}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没做成','err');return}
+    paintHooks(d.items);hooks=d.items||[];
+  }).catch(()=>toast('钩子动不了','err'));
 };
 function paintCron(list){
 

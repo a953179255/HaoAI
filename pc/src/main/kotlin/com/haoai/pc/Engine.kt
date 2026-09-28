@@ -753,6 +753,20 @@ class Engine(
             stopped = stopRequested, out = lastText
         )
         runGoal = null; runTurn = 0; runStarted = 0L
+        /*
+         * 用户配的钩子（`run-end`）：先记账再放钩子，且**只有父会话放** ——
+         * 子任务（depth>0）也会走到这一行，一次调研放一遍通知是重复劳动。
+         * fire 内部整段 runCatching 并丢到别的线程：钩子坏在这里，
+         * 症状就会是"回完话会话挂了"，那是最难查的一类错。
+         */
+        if (depth == 0) Hooks.fire(
+            Hooks.RUN_END,
+            Hooks.Ctx(
+                sid = session.id, runId = "r" + began, title = session.title.get(),
+                model = settings.model, workspace = session.workspace, mode = session.mode,
+                trigger = runTrigger, stopped = stopRequested, finalText = lastText
+            )
+        )
         persist()
         emit(Ev.TextDone(lastText))
         return lastText

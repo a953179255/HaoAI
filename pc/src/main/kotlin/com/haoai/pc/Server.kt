@@ -182,6 +182,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/workflows" -> workflows(ex)
                 "/api/presets" -> presets(ex)
                 "/api/secrets" -> secrets(ex)
+                "/api/hooks" -> hooks(ex)
                 "/api/digest" -> send(ex, 200, Digest.json(),
                     "application/json; charset=utf-8")
                 "/api/digest/export" -> digestExport(ex)
@@ -1586,6 +1587,54 @@ class WebServer(settings: PcSettings, port: Int,
             }
         }
         send(ex, 200, Secrets.json(), "application/json; charset=utf-8")
+    }
+
+    /**
+     * 钩子条目：事件挂脚本。见 [Hooks]。
+     *
+     * 只给界面用 —— 引擎的工具表里**没有**这把工具，模型加不了自己的钩子。
+     * 正因为命令只有用户能写，它跑的时候才不需要过审批闸口。
+     */
+    private fun hooks(ex: HttpExchange) {
+        val b = Body(ex)
+        if (ex.requestMethod != "GET") {
+            when (b.str("op")) {
+                "del" -> Hooks.remove(b.str("id"))
+                "toggle" -> Hooks.find(b.str("id"))?.let { Hooks.update(it.copy(enabled = !it.enabled)) }
+                else -> {
+                    val command = b.str("command").trim()
+                    if (command.isBlank()) {
+                        send(ex, 200, """{"ok":false,"error":"要跑什么？命令是空的"}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    val event = b.str("event").ifBlank { Hooks.RUN_END }
+                    if (event !in Hooks.EVENTS) {
+                        send(ex, 200, """{"ok":false,"error":${quote("还不认识事件「$event」，现在只有 " +
+                            Hooks.EVENTS.joinToString("/"))}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    val id = b.str("id").ifBlank { "hk" + System.nanoTime().toString(16).take(8) }
+                    val old = Hooks.find(id)
+                    if (old == null && Hooks.load().size >= Hooks.MAX) {
+                        send(ex, 200, """{"ok":false,"error":${quote("钩子最多 " + Hooks.MAX + " 条，先删一条")}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    Hooks.update(
+                        Hook(
+                            id = id,
+                            name = b.str("name").trim().ifBlank { command.take(18) },
+                            event = event, command = command,
+                            shell = b.str("shell").ifBlank { "pwsh" },
+                            timeoutSec = (b.str("timeoutSec").toIntOrNull()
+                                ?: old?.timeoutSec ?: 30).coerceIn(1, 600),
+                            enabled = old?.enabled ?: true,
+                            last = old?.last ?: "", lastAt = old?.lastAt ?: 0L
+                        )
+                    )
+                }
+            }
+        }
+        send(ex, 200, Hooks.json(), "application/json; charset=utf-8")
     }
 
     /**
