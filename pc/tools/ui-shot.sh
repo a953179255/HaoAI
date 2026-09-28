@@ -139,9 +139,19 @@ for k in ${PRE_FLAGS:-}; do
   "$BIN" flags on "$k" >> "$HOME_DIR/set.log" 2>&1 || { echo "x 开不了开关 $k（看 $HOME_DIR/set.log）"; exit 1; }
   echo "  flag on: $k"
 done
+# 手机联动这条链路要"端点已经开着、而且有一台已配对设备"：
+# 端口每轮现挑（写死就会和别的进程抢），配对走 CLI —— 它写的就是服务读的那份 lan.json。
+LAN_PORT=""
+if [ -n "${PRE_LAN:-}" ]; then
+  LAN_PORT="$(free_port 8720 8759)"
+  [ -n "$LAN_PORT" ] || { echo "x 找不到空的局域网端口（8720-8759 全被占）"; exit 1; }
+  "$BIN" lan on --port "$LAN_PORT" >> "$HOME_DIR/set.log" 2>&1 || { echo "x haoai lan on 失败（看 set.log）"; exit 1; }
+  "$BIN" lan pair 测试手机 >> "$HOME_DIR/set.log" 2>&1 || { echo "x haoai lan pair 失败"; exit 1; }
+  echo "  lan on :$LAN_PORT + 一台已配对设备"
+fi
 # 剧本里写 @MOCK@ 的地方换成这次的假网关端口（预览靶页就挂在它上面，端口每轮现挑，写死必串台）。
-if grep -q '@MOCK@' "$STEPS" 2>/dev/null; then
-  sed "s|@MOCK@|$MOCK_PORT|g" "$STEPS" > "$HOME_DIR/steps.json"
+if grep -qE '@MOCK@|@LAN@' "$STEPS" 2>/dev/null; then
+  sed -e "s|@MOCK@|$MOCK_PORT|g" -e "s|@LAN@|${LAN_PORT:-0}|g" "$STEPS" > "$HOME_DIR/steps.json"
   STEPS="$HOME_DIR/steps.json"
   echo "  steps @MOCK@ -> $MOCK_PORT"
 fi

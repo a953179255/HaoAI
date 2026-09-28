@@ -1,0 +1,87 @@
+[
+  {
+    "goto": "#tabs button[data-t=tools]"
+  },
+  {
+    "click": "#tabs button[data-t=tools]"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#lanSum').textContent;return JSON.stringify({showsOpen:t.indexOf('开着')>=0,showsPort:t.indexOf('@LAN@')>=0,oneDevice:t.indexOf('1 台')>=0,btnOff:document.querySelector('#lanOn').textContent.indexOf('关掉')>=0})})()",
+    "must": [
+      "showsOpen",
+      "showsPort",
+      "oneDevice",
+      "btnOff"
+    ]
+  },
+  {
+    "eval": "(async()=>{const d=await fetch('/api/lan').then(r=>r.json());return JSON.stringify({running:!!d.running,port:String(d.port)==='@LAN@',devs:(d.devices||[]).length,noToken:JSON.stringify(d).indexOf('token')<0,hasHash:JSON.stringify(d).indexOf('hash')>=0})})()",
+    "must": [
+      "running",
+      "port",
+      "devs",
+      "noToken",
+      "hasHash"
+    ]
+  },
+  {
+    "click": "#lanCode"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#lanCodeLine').textContent;return JSON.stringify({hasCode:/配对码 \\d{6}/.test(t),counting:/秒内有效，只能用一次/.test(t)})})()",
+    "must": [
+      "hasCode",
+      "counting"
+    ]
+  },
+  {
+    "eval": "(()=>{const box=document.querySelector('#lanDevs');const r=box.getBoundingClientRect();const rail=document.querySelector('.rail.r').getBoundingClientRect();return JSON.stringify({rows:box.querySelectorAll('[data-rm]').length,fits:r.right<=rail.right+2&&r.left>=rail.left-2,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth})})()",
+    "must": [
+      "rows",
+      "fits",
+      "noOverflow"
+    ]
+  },
+  {
+    "shot": "l01-lan"
+  },
+  {
+    "click": "#lanDevs [data-rm]"
+  },
+  {
+    "eval": "(async()=>{await new Promise(z=>setTimeout(z,900));const d=await fetch('/api/lan').then(r=>r.json());return JSON.stringify({removed:(d.devices||[]).length===0,uiEmpty:document.querySelector('#lanDevs').textContent.indexOf('还没有配对设备')>=0})})()",
+    "must": [
+      "removed",
+      "uiEmpty"
+    ]
+  },
+  {
+    "click": "#lanOn"
+  },
+  {
+    "eval": "(async()=>{await new Promise(z=>setTimeout(z,900));const d=await fetch('/api/lan').then(r=>r.json());return JSON.stringify({stopped:d.running===false,btnBackOn:document.querySelector('#lanOn').textContent.indexOf('打开')>=0||(document.querySelector('#lanSum').textContent.indexOf('关着')>=0)})})()",
+    "must": [
+      "stopped"
+    ]
+  },
+  {
+    "click": "#lanOn"
+  },
+  {
+    "eval": "(async()=>{await new Promise(z=>setTimeout(z,1200));const d=await fetch('/api/lan').then(r=>r.json());return JSON.stringify({restarted:!!d.running,portAgain:String(d.port)==='@LAN@'})})()",
+    "must": [
+      "restarted",
+      "portAgain"
+    ]
+  },
+  {
+    "eval": "(async()=>{const h=await fetch('http://127.0.0.1:@LAN@/lan/health',{mode:'no-cors'}).then(r=>'sent').catch(()=>'fail');const d=await fetch('/api/lan').then(r=>r.json());return JSON.stringify({probe:h==='sent',running:!!d.running})})()",
+    "must": [
+      "probe",
+      "running"
+    ]
+  },
+  {
+    "shot": "l02-lan-after"
+  }
+]

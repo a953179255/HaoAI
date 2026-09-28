@@ -388,6 +388,7 @@ SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-term.json  # 终端页
 SHOT_MODE=chat PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-attach.json  # 音视频附件：胶囊 + 播放器 + 刷新重放
 SHOT_MODE=code bash pc/tools/ui-shot.sh pc/tools/steps/ui-code.json  # run_code：跑 python 出图，图真的交回模型
 SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/steps/ui-iab.json  # 「预览」页签：CDP 画面进网页、人点的位置送回页面
+SHOT_MODE=chat PRE_LAN=1 bash pc/tools/steps/ui-lan.json  # 手机联动：开/关端点、配对码倒数、设备移除（端口每轮现挑）
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
@@ -1548,6 +1549,53 @@ chip 里同时有 `▶`、文件名和 `音视频 54 KB`、用户气泡里 1 个
    （另一条同类：关闭最多花 4 秒，而第二次 close 会撞进第一次还没清空的 `current`，
    所以判据要**轮询到"没有正在跑的实例"为止**，不能"等 1.5 秒再看一眼"。）
 
+## 这一批：手机联动（局域网端点 + 配对码 + 会话镜像 + 远程审批）（v0.51.0，缺口地图 B4 的 PC 侧）
+
+这台 PC 上的 agent 会跑长任务，而人常常在沙发上。"跑到一半要人点允许"如果只能回工位点，
+自动化就等于每晚停一次 —— 这正是用户把 PC 端定位成"和手机端 HaoAI 联动"时要解决的那件事。
+这一批把 PC 侧做完：手机能**只读**看到桌面上这几条会话，并能替人点"允许一次 / 本任务允许 / 拒绝"。
+
+- **`Lan.kt`**：`LanStore`（`HAOAI_HOME/lan.json`）+ `LanServer`（另一个端口的 HTTP 面）。
+  端点**默认不存在** —— 要 `haoai lan on` 或界面里点「打开端点」才会去监听，
+  而不是"开着但每个请求都拒绝"。少一个能被打的端口，就少一类能被量的面。
+- **凭据口径**：配对码 6 位数字、120 秒、一次一用、**猜错 8 次连正确的码也不放行**；
+  换到的设备 token 是 32 字节随机值，**盘上只存 SHA-256 哈希**，验证走 `MessageDigest.isEqual`
+  （常量时间）而不是 `String==`。凭据单独一个文件，不进 `settings.json` —— 那份是整份回给前端的。
+- **镜像只给该给的**：会话 id / 标题 / 档位 / 是否在跑 / 消息数 / **工作区目录名**（不是绝对路径）；
+  正文每条截 600 字、最多 60 条。密钥本来就不在会话里，这里再多挡一层：
+  测试直接断言镜像 JSON 里既没有绝对路径也没有 `sk-`。
+- **手机上现在只有审批，没有问答**：`/lan/pending` 只列 `kind=="approval"`。
+  开放问题要打字回答，而手机端还没有输入框 —— 与其显示一个答不了的卡片，不如不出现。
+- **CLI 会先通知活着的服务**：`haoai lan on|off|code` 先打一次 `127.0.0.1:8712` 的 loopback 口，
+  通知不上才只改盘上开关并**明说**"下一次 serve 才生效"。CLI 与 serve 是两个进程，
+  这里不吭声就会重演"改了设置界面还是旧的"。
+
+判据（Kotlin 新增 12 条 `LanTest`，整套 261 条）：配对码是 6 位且一次性、错 8 次作废、
+错码配对回 403 且不发 token、**盘上没有明文 token**（只 64 位哈希）、反手 token 与空 token 都不被认、
+`/lan/sessions|pending|session|decide` 四个口未配对一律 401（`/lan/health` 是唯一免凭据的）、
+配对之后镜像读得到、手机点的决定真的落到 `LanHost.decide`、
+只接受 `allow_once/allow_session/deny` 三种、解除配对后旧 token 立刻失效、
+真 `WebServer` 的镜像不含绝对路径与密钥。
+（像素，`SHOT_MODE=chat PRE_LAN=1 bash pc/tools/ui-shot.sh tools/steps/ui-lan.json`，16 步：
+`PRE_LAN` 用 CLI 现开一个端点（端口每轮现挑）并预配一台"测试手机"→
+「工具」页签底部那段显示 `开着：192.168.1.37:8720 · 已配对 1 台` →
+点「生成配对码」出 6 位码并开始倒数 → 设备行"名字 + 移除"一行、指纹 + 时间一行（窄栏 292px 放得下、
+页面不横向溢出）→ 点移除后服务端与界面同时归零 → 关掉端点 `running:false` → 再开还是同一个端口 →
+`/lan/health` 真的在监听。**判据全部走 `must`**，任何一条为假整轮非零退出。）
+
+**这一批最该记的三件事：**
+
+1. **"关掉"必须是"那个端口真的没了"。** 上一版类似的坑（预览面板）是读路径把进程又拉起来；
+   这里对应的设计是：端点默认不创建，`off` 走 `LanServer.stop()` + 落盘 `enabled:false`，
+   服务重启时只有 `enabled` 为真才重新监听 —— 手机配对的 token 还在人手里，
+   重启不该把人踢下线，但"人主动关掉"必须真的关掉。
+2. **凭据不进 `settings.json` 这条规矩，比多写一个文件值钱。** `GET /api/settings` 是整份对象回给前端的，
+   任何塞进去的 secret 都会出现在网页源码里（也就会进备份）。测试里那条
+   "设置文件里没有 hash"就是替未来的人挡这一步。
+3. **窄栏里的"一行三样东西"一定会挤爆。** 第一版设备行是 名字 + 指纹 + 时间 + 按钮 四段，
+   在 292px 里把「移除」拆成了两行。改成"名字与按钮一行（`.mrow` 的两列网格）、指纹与时间单独一行"，
+   并把时间缩成 `toLocaleTimeString()`。**这类问题只有真像素看得见**，DOM 结构检查全绿。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -1614,7 +1662,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **249 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **261 条全绿**（整套约 70 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -1639,7 +1687,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
   见上面那节）、请求体要带 `max_tokens` 且设 0 时不发、`finish_reason: length` 要原样带出去、
   被截断的空回合不能再当"网关抖动"去退避重试。
   最近几批各自的份数写在自己那一节里（回收站 5、排队 3、消息级 5、用量账本 5、
-  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13，这里不再逐条追账。
+  工具开关 4、断点恢复 4、子任务单独停 4、备份导出恢复 8、媒体工具 14、Git 面板 8、运行历史 7、终端面板（Pty 新增 2）、代码执行 8、音视频附件 3、浏览器预览面板 13、手机联动（局域网）12，这里不再逐条追账。
 - **端到端跑过真实任务**（假模型 + 真文件系统）：`todo → write → edit → read → 结论`，
   磁盘上的文件内容正确，快照与 `.haoai-output/` 都按预期出现。
 - **修掉一个一直在骗人的审批链路**（这一条最值得记）：`/api/decide` 之类的接口原本
@@ -1683,7 +1731,8 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
    HTML 产出沙箱预览、长代码块折叠、会话级工具开关、断点恢复、审批键盘决定、子任务单独停、备份导出/恢复、
    MCP 客户端与设置抽屉里的管理段、子任务（`task`）、媒体工具 ffmpeg 与产出直接播、
 Git 面板、命令面板与任务运行历史、终端页签（人和 agent 共用常驻进程）、
-音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）、浏览器预览面板（人自己看画面、自己点）。
+音视频附件、`run_code`（python/node 跑一段代码并把产出的图交回模型）、浏览器预览面板（人自己看画面、自己点）、
+   手机联动 PC 侧（局域网端点 + 配对码 + 只读会话镜像 + 远程审批；手机端那一半还欠）。
 2. **`pc/` 是仓库内的独立 Gradle 构建**，没并进根 `settings.gradle.kts`——
    根构建是正在出货的手机 App，AGP 9 的内置 Kotlin 与 `kotlin.jvm` 插件在同一条
    classpath 上会打架。方案里的 Phase 1（抽 `:core` 让两端共用）仍然欠着。
@@ -1719,6 +1768,7 @@ pc/src/main/kotlin/com/haoai/pc/
   GitPanel.kt   人用的 Git 面板后端：status/暂存/diff/提交（不吃 porcelain 行首空格）
   PreviewPanel.kt 预览面板的纯逻辑：网址白名单 + 图上坐标→页面坐标 + 状态 JSON
   RunLedger.kt  一次运行一行的 HAOAI_HOME/runs.jsonl（最近 500 条，供「用量」页回溯与 ↻）
+  Lan.kt        手机联动：配对码与设备 token（盘上只存哈希）+ 局域网 HTTP 面（默认不监听）
   Browser.kt    CDP 浏览器控制 + 手写极简 WebSocket 客户端（CdpSocket）
   Desktop.kt    屏幕理解与点击级自动化：生成的 PowerShell 模板 + PsRunner
   Engine.kt     回合循环、档位闸、两级截断、上下文压缩、中断、会话持久化

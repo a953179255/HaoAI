@@ -31,6 +31,7 @@ fun main(args: Array<String>) {
         "ask" -> addRule(settings, rest, Decision.ASK)
         "rules" -> listRules(settings, rest)
         "browser" -> browserCmd(settings, rest)
+        "lan" -> lanCmd(settings, rest)
         "screen" -> screenCmd(settings, rest)
         "task" -> task(settings, rest)
         "chat" -> chat(settings)
@@ -60,12 +61,13 @@ private fun help() {
           haoai task "…" [--auto]      跑一条任务就退出
           haoai chat                   终端对话
           haoai serve [--port 8712]    打开本地网页版
+          haoai lan [status|on|off|code]  手机联动（局域网端点与配对码）
         """.trimIndent()
     )
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.50.0-pc"
+const val PC_VERSION = "0.51.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -262,6 +264,83 @@ private fun chat(s: PcSettings) {
  * 直通透传给 browser 工具。存在的理由有两个：① 没密钥时也能验收 CDP 这条路；
  * ② 出问题时人可以直接敲一条命令复现，不用先跟模型解释一遍。
  */
+/**
+ * `haoai lan …`：手机联动（局域网端点）。
+ *
+ * CLI 与正在跑的 `serve` 是两个进程，所以这里**先试着通知活着的服务**（它才是真正持有
+ * 端口与配对状态的那个），通知不上才只改盘上的开关并说清楚"下一次 serve 才生效"。
+ * 上一版类似的坑是"CLI 写了设置、界面还是旧的"，这里宁可多打一行也不让人猜。
+ */
+private fun lanCmd(settings: PcSettings, rest: List<String>) {
+    val sub = rest.firstOrNull { !it.startsWith("--") } ?: "status"
+    val opts = rest.filter { it.startsWith("--") }.associate {
+        it.removePrefix("--").substringBefore('=').trim() to it.substringAfter('=', "").trim()
+    }
+    val port = opts["port"]?.toIntOrNull() ?: LanStore.port()
+    when (sub) {
+        "status" -> {
+            println("局域网端点：" + (if (LanStore.enabled()) "开" else "关") + "（记在 ${LanStore.file.absolutePath}）")
+            println("端口：$port    内网地址：${LanServer.lanAddress()}:$port")
+            println("已配对设备：${LanStore.devices().size} 台")
+            LanStore.devices().forEach {
+                println("  ${it.hash.take(10)}  ${it.name}  上次活动 ${it.lastSeen}")
+            }
+        }
+        "on" -> {
+            val told = notifyLan("""{"on":"1"}""")
+            LanStore.save(true, port)
+            println(if (told != null) "已打开（正在跑的服务已经接上）：$told"
+            else "已记下要开。服务没在跑，下一次 `haoai serve` 会开在 ${LanServer.lanAddress()}:$port")
+            println("接着 `haoai lan code` 生成配对码给手机。")
+        }
+        "off" -> {
+            val told = notifyLan("""{"on":"0"}""")
+            LanStore.save(false, port)
+            println(if (told != null) "已关闭（正在跑的服务已经停下）：$told" else "已关闭。")
+        }
+        "code" -> {
+            val told = notifyLan("code")
+            if (told != null) {
+                println(told)
+            } else {
+                println("没有正在跑的服务，配对码只能由服务发（它才在听那个端口）。先 `haoai serve`。")
+            }
+        }
+        "devices" -> LanStore.devices().forEach {
+            println("${it.hash.take(12)}  ${it.name}  加于 ${it.added}  上次 ${it.lastSeen}")
+        }
+        "pair" -> {
+            val name = rest.getOrNull(rest.indexOf(sub) + 1)?.takeIf { !it.startsWith("--") } ?: "命令行配对"
+            val (dev, token) = LanStore.pair(name)
+            println("设备：${dev.name}    指纹：${dev.hash.take(12)}")
+            println("token（只出现这一次，盘上只存哈希）：")
+            println(token)
+        }
+        "unpair" -> {
+            val prefix = rest.getOrNull(rest.indexOf(sub) + 1) ?: ""
+            println(if (LanStore.remove(prefix)) "已解除：$prefix" else "没找到以「$prefix」开头的设备")
+        }
+        else -> println("用法：haoai lan status|on|off|code|devices|pair <名>|unpair <前缀>")
+    }
+}
+
+/** 通知活着的 `haoai serve`；连不上就回 null（不抛，CLI 还要能只改开关）。 */
+private fun notifyLan(body: String): String? {
+    val path = if (body == "code") "/api/lan/code" else "/api/lan/toggle"
+    return runCatching {
+        val c = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(1)).build()
+        val r = c.send(
+            java.net.http.HttpRequest.newBuilder(java.net.URI("http://127.0.0.1:8712" + path))
+                .header("Content-Type", "application/json")
+                .timeout(java.time.Duration.ofSeconds(3))
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
+                    if (body == "code") "{}" else body)).build(),
+            java.net.http.HttpResponse.BodyHandlers.ofString()
+        )
+        if (r.statusCode() != 200) null else r.body().take(200)
+    }.getOrNull()
+}
+
 private fun browserCmd(s: PcSettings, rest: List<String>) {
     val sub = rest.firstOrNull { !it.startsWith("--") } ?: "status"
     val opts = rest.filter { it.startsWith("--") }.associate {

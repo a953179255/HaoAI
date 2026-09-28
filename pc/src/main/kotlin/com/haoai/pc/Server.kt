@@ -31,13 +31,17 @@ import java.util.concurrent.atomic.AtomicInteger
 class WebServer(settings: PcSettings, port: Int,
                /** 同时最多跑几条。没有上限的话用户可以一路开下去把网关和磁盘都刷爆。
                 *  做成构造参数只为一件事能被测：满了时的一次失败发送不许留下空会话。 */
-               private val maxRunning: Int = 4) {
+               private val maxRunning: Int = 4) : LanHost {
 
     @Volatile
     private var settings = settings
 
 
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
+
+    /** 局域网端点（手机联动）。默认不存在 —— 只有 lan.json 里显式打开才有。 */
+    @Volatile
+    private var lan: LanServer? = null
     private val seq = AtomicInteger()
     private val pending = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<String>>()
     private val pendingRule = ConcurrentHashMap<String, Pair<String, String>>()
@@ -116,6 +120,10 @@ class WebServer(settings: PcSettings, port: Int,
         server.start()
         // 定时任务的线程跟着服务起落：daemon 线程，JVM 退了它自己就没了
         sched = Scheduler { s -> runSchedule(s) }.also { it.start() }
+        // 上次开过就接着开：手机配对的 token 还在人手里，服务重启不该把人踢下线
+        if (LanStore.enabled()) {
+            lan = LanServer(this).also { if (!it.start()) lan = null }
+        }
         return server.address.port
     }
 
@@ -125,6 +133,8 @@ class WebServer(settings: PcSettings, port: Int,
     fun schedules(): Scheduler? = sched
 
     fun stop() {
+        runCatching { lan?.stop() }
+        lan = null
         sched?.stopped = true
         sched = null
         server.stop(0)
@@ -183,6 +193,10 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/gitdiff" -> gitDiff(ex)
                 "/api/gitstage" -> gitStage(ex)
                 "/api/gitcommit" -> gitCommit(ex)
+                "/api/lan" -> lanStatus(ex)
+                "/api/lan/toggle" -> lanToggle(ex)
+                "/api/lan/code" -> lanCode(ex)
+                "/api/lan/unpair" -> lanUnpair(ex)
                 "/api/shells" -> shellsList(ex)
                 "/api/shell/tail" -> shellTail(ex)
                 "/api/shell/open" -> shellOpen(ex)
@@ -1817,6 +1831,112 @@ class WebServer(settings: PcSettings, port: Int,
 
     private fun previewOff(ex: HttpExchange) {
         send(ex, 200, PreviewPanel.errJson(PreviewPanel.OFF_NOTE), "application/json; charset=utf-8")
+    }
+
+
+    // ---- 手机联动（局域网）：这一组是**只回本机网页**的控制口，真正的对外面在 LanServer ----
+
+    private fun lanStatusJson(): String {
+        val (code, until) = LanStore.codeState()
+        val devs = LanStore.devices().joinToString(",") { d ->
+            """{"hash":${quote(d.hash.take(12))},"name":${quote(d.name)},"lastSeen":${d.lastSeen}}"""
+        }
+        val live = lan?.running == true
+        return """{"ok":true,"enabled":${LanStore.enabled()},"running":$live,""" +
+            """"port":${lan?.boundPort ?: LanStore.port()},"addr":${quote(LanServer.lanAddress())},""" +
+            """"code":${quote(code)},"expires":$until,"devices":[$devs]}"""
+    }
+
+    private fun lanStatus(ex: HttpExchange) =
+        send(ex, 200, lanStatusJson(), "application/json; charset=utf-8")
+
+    private fun lanToggle(ex: HttpExchange) {
+        val want = Body(ex).str("on") == "1"
+        val port = LanStore.port()
+        if (!want) {
+            runCatching { lan?.stop() }
+            lan = null
+            LanStore.save(false, port)
+            send(ex, 200, """{"ok":true,"note":"已关掉局域网端点（手机那边会立刻连不上）"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        LanStore.save(true, port)
+        val s = LanServer(this)
+        if (!s.start()) {
+            LanStore.save(false, port)
+            send(ex, 200, """{"ok":false,"error":"端口 $port 起不来（被占了？换端口：haoai lan on --port 8899）"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        lan = s
+        send(ex, 200, """{"ok":true,"note":"已开在 ${LanServer.lanAddress()}:$port —— 现在生成配对码给手机扫一次"}""",
+            "application/json; charset=utf-8")
+    }
+
+    private fun lanCode(ex: HttpExchange) {
+        if (lan?.running != true) {
+            send(ex, 200, """{"ok":false,"error":"先打开局域网端点再生成配对码"}""",
+                "application/json; charset=utf-8")
+            return
+        }
+        val (c, until) = LanStore.issueCode()
+        send(ex, 200, """{"ok":true,"code":${quote(c)},"expires":$until}""",
+            "application/json; charset=utf-8")
+    }
+
+    private fun lanUnpair(ex: HttpExchange) {
+        val prefix = Body(ex).str("hash")
+        val ok = LanStore.remove(prefix)
+        send(ex, 200, """{"ok":$ok,"note":${quote(if (ok) "已解除这台设备" else "没找到这台设备")}}""",
+            "application/json; charset=utf-8")
+    }
+
+    // ---- LanHost：手机看到的三样东西（会话列表 / 单条正文 / 待批），全是只读镜像 ----
+
+    /**
+     * 镜像里刻意**不放**的东西：模型密钥（本来就不在会话里，但这里也不带任何设置）、
+     * 工作区绝对路径（只给目录名）、工具原始输出（只给截断后的正文）。
+     * 手机丢了的代价应该是"看不了这几条会话"，不是"读到 D 盘所有路径"。
+     */
+    override fun sessionsJson(): String {
+        val rows = sessions.entries.sortedByDescending { it.value.engine.session.file.lastModified() }
+            .joinToString(",") { (id, m) ->
+                val e = m.engine
+                """{"id":${quote(id)},"title":${quote(e.session.title.get())},""" +
+                    """"mode":${quote(e.session.mode)},"running":${m.running},""" +
+                    """"msgs":${e.messages().size},""" +
+                    """"ws":${quote(e.session.workspace.name)},""" +
+                    """"updated":${e.session.file.lastModified()}}"""
+            }
+        return """{"ok":true,"items":[$rows]}"""
+    }
+
+    override fun sessionJson(sid: String): String {
+        val m = sessions[pick(sid)] ?: return """{"ok":false,"error":"没有这条会话"}"""
+        val rows = m.engine.messages().takeLast(60).joinToString(",") { msg ->
+            val text = (msg.content ?: "").take(600).replace('\u0000', ' ')
+            """{"role":${quote(msg.role)},"name":${quote(msg.name)},"text":${quote(text)}}"""
+        }
+        return """{"ok":true,"sid":${quote(m.engine.session.id)},""" +
+            """"title":${quote(m.engine.session.title.get())},"running":${m.running},""" +
+            """"items":[$rows]}"""
+    }
+
+    override fun pendingJson(): String {
+        val rows = pending.keys.filter { pendingPayload[it]?.ev == "approval" }.joinToString(",") { id ->
+            val w = pendingPayload[id]
+            val payload = w?.payload?.takeIf { it.isNotBlank() } ?: "{}"
+            """{"id":${quote(id)},"kind":"approval",""" +
+                """"sid":${quote(w?.sid ?: "")},"payload":$payload}"""
+        }
+        return """{"ok":true,"items":[$rows]}"""
+    }
+
+    override fun decide(id: String, decision: String): String {
+        val fut = pending[id] ?: return "这条已经不在等待了（可能刚在电脑上被处理）"
+        if (!fut.complete(decision)) return "这条已经答过了"
+        return "已按你的决定放行：$decision"
     }
 
     private fun previewState(ex: HttpExchange) {

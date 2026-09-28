@@ -762,6 +762,15 @@
       <div id="toolRows" class="trows"></div>
       <div class="kv">开关只作用于<b>当前这条会话</b>，换一条还是原样。
         灰掉的是实验特性没开（在设置抽屉里），这里点不动。</div>
+      <div class="grp">手机联动（局域网）</div>
+      <div class="kv" id="lanSum">—</div>
+      <div class="acts2"><button class="ab" id="lanOn">打开端点</button>
+        <button class="ab" id="lanCode">生成配对码</button></div>
+      <div class="kv" id="lanCodeLine"></div>
+      <div id="lanDevs" class="mrows"></div>
+      <div class="kv">开着的时候这台 PC 会在局域网监听一个端口：手机配对后能<b>只读</b>看这几条会话，
+        并替你在手机上点"允许一次 / 拒绝"。密钥、工作区绝对路径、工具原始输出都不在这个通道里。
+        不在信得过的网络就别开。</div>
     </div>
     <div class="tabp" id="tab-cron">
       <div class="kv">到点自己起一条<b>新会话</b>去跑这句话（不搅乱你正在聊的那条）。
@@ -1631,7 +1640,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='usage'){loadUsage();loadRuns()}
-  if(b.dataset.t=='tools')hydrate(curId);
+  if(b.dataset.t=='tools'){hydrate(curId);loadLan()}
   if(b.dataset.t=='files')loadFiles();
   if(b.dataset.t=='git')loadGit();
   if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
@@ -1711,6 +1720,41 @@ function termStartPolling(){
   termTimer=setInterval(()=>{if(termId)termPoll()},900);
 }
 function stopTermPolling(){if(termTimer){clearInterval(termTimer);termTimer=null}}
+
+/* ---- 手机联动（局域网端点）----
+ * 界面只负责"开/关 + 发码 + 看有哪些设备"，真正的对外面在 LanServer（另一个端口）。
+ * 有配对码在计时的时候才 1 秒刷一次，平时不轮询 —— 后台一直打接口没意义。
+ */
+let lanTimer=null;
+function lanPost(path,body){return fetch(path,{method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(Object.assign({sid:curId},body))}).then(r=>r.json())}
+function loadLan(){
+  return fetch('/api/lan').then(r=>r.json()).then(d=>{
+    const live=!!(d.enabled&&d.running);
+    $('#lanSum').textContent=live?('开着：'+d.addr+':'+d.port+' · 已配对 '+(d.devices||[]).length+' 台')
+      :'关着（默认）。要联动就点下面「打开端点」。';
+    $('#lanOn').textContent=live?'关掉端点':'打开端点';
+    const left=d.expires?Math.max(0,Math.round((d.expires-Date.now())/1000)):0;
+    $('#lanCodeLine').textContent=d.code?('配对码 '+d.code+' · '+left+' 秒内有效，只能用一次'):'';
+    // 一行放不下三样东西（窄栏 292px）：名字与「移除」一行，指纹与时间单独一行
+    $('#lanDevs').innerHTML=(d.devices||[]).map(x=>'<div class="mrow"><span>'+esc(x.name)+'</span>'+
+      '<button class="ab" data-rm="'+esc(x.hash)+'">移除</button></div>'+
+      '<div class="kv">'+esc(x.hash)+' · '+
+      (x.lastSeen?new Date(x.lastSeen).toLocaleTimeString():'从没连过')+'</div>').join('')
+      ||'<span class="kv">（还没有配对设备）</span>';
+    document.querySelectorAll('#lanDevs [data-rm]').forEach(b=>b.onclick=()=>
+      lanPost('/api/lan/unpair',{hash:b.dataset.rm}).then(o=>{toast(o.error||o.note||'');loadLan()}));
+    if(lanTimer){clearInterval(lanTimer);lanTimer=null}
+    if(d.code)lanTimer=setInterval(loadLan,1000);
+  }).catch(()=>{});
+}
+$('#lanOn').onclick=()=>{
+  const want=/打开/.test($('#lanOn').textContent)?'1':'0';
+  lanPost('/api/lan/toggle',{on:want}).then(o=>{toast(o.error||o.note||'');loadLan()});
+};
+$('#lanCode').onclick=()=>lanPost('/api/lan/code',{}).then(o=>{
+  if(o.error)toast(o.error,'err');else toast('配对码已生成，120 秒内有效');loadLan();});
 
 /* ---- 预览页签：CDP 的一帧画面进网页，人点的位置送回页面 ----
  * 为什么值得做：模型有浏览器工具，但人只能看它转述 —— "它说页面长这样"和"我自己看一眼再点两下"
