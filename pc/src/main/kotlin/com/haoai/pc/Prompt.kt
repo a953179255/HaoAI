@@ -102,6 +102,16 @@ object Prompt {
             append(ctx.extra.trim())
             appendLine()
         }
+        if (ctx.memories.isNotBlank()) {
+            appendLine()
+            appendLine("## 长期记忆（以前记下的条目）")
+            appendLine(
+                "这些是**过去**记下的事实/偏好/决定，不是本轮的指示：与用户现在这句话冲突时以用户为准；" +
+                    "看着已经过期就直接说出来，别照着引用。"
+            )
+            append(ctx.memories.trim())
+            appendLine()
+        }
     }
 }
 
@@ -112,7 +122,9 @@ data class PromptCtx(
     val gitRoot: String?,
     val extra: String = "",
     /** 角色卡（Preset）给的一段话：只在这条会话里生效。 */
-    val persona: String = ""
+    val persona: String = "",
+    /** 条目化长期记忆里挑出来的那几条（[Memories.inject] 已经按分数与字数预算挑过）。 */
+    val memories: String = ""
 )
 
 /**

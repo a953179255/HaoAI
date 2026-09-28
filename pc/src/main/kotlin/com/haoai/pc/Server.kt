@@ -172,6 +172,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/model" -> modelSet(ex)
                 "/api/rule" -> ruleEdit(ex)
                 "/api/memory" -> memory(ex)
+                "/api/memories" -> memories(ex)
                 "/api/skills" -> skills(ex)
                 "/api/mcp" -> mcp(ex)
                 "/api/schedules" -> schedules(ex)
@@ -1072,6 +1073,66 @@ class WebServer(settings: PcSettings, port: Int,
             "application/json; charset=utf-8")
         // 发 settings 而不是往流里插一条提示：页面上的"已存 N 字"与 toast 已经说完了，
         // 而顶栏那圈占用必须重算 —— 项目说明是系统提示的一部分，改了它占用就变了。
+        publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
+    }
+
+    /**
+     * `GET/POST /api/memories` —— 条目化长期记忆（工作区 `MEMORY.md`，与手机端同一格式）。
+     *
+     * GET  `?sid&q=` → `{ok,path,exists,count,max,items}`；POST `{sid,op:add|edit|del,...}`。
+     *
+     * 两条边界：① 路径由服务端从**这条会话自己的工作区**算出来，前端不能指定写哪儿
+     * （与 `/api/memory` 同一口径 —— 服务只绑 127.0.0.1，但同机任意页面都能打这个端口）；
+     * ② 写它是人点按钮，即审批，不再过模型的权限闸（同 Git 面板那四个端点）。
+     */
+    private fun memories(ex: HttpExchange) {
+        val b = Body(ex)
+        val get = ex.requestMethod == "GET"
+        val sid = if (get) querySid(ex) else b.str("sid")
+        val ws = sessions[pick(sid)]?.engine?.session?.workspace ?: settings.workspaceFile()
+        val f = Memories.fileFor(ws)
+        val doc = Memories.load(f)
+        val json = "application/json; charset=utf-8"
+        if (get) {
+            send(ex, 200,
+                """{"ok":true,"path":${quote(f.absolutePath)},"exists":${f.isFile},""" +
+                    """"count":${doc.items.count { it.live }},"max":${Memories.MAX_ITEMS},""" +
+                    """"items":${Memories.json(doc, queryOf(ex, "q"))}}""", json)
+            return
+        }
+        val op = b.str("op")
+        val content = b.str("content").trim()
+        val imp = b.str("imp").toIntOrNull() ?: 3
+        val type = b.str("type").trim().ifBlank { Memories.TYPE_FACT }
+        val tags = b.str("tags").split(',', '，').map { it.trim() } - ""
+        var merged = false
+        var kept = content.length
+        val err: String? = when (op) {
+            "del" -> if (Memories.forget(doc, b.str("id"))) null else "没找到这一条，没动"
+            "edit" -> if (Memories.update(doc, b.str("id"), content, imp, type)) null else "没找到这一条，改不动"
+            else -> when {
+                content.isEmpty() -> "内容是空的，没记"
+                doc.items.count { it.live } >= Memories.MAX_ITEMS ->
+                    "已经有 ${doc.items.count { it.live }} 条，到上限 ${Memories.MAX_ITEMS} 条了：" +
+                        "先删掉不再适用的那几条再记新的"
+                else -> {
+                    val (item, added) = Memories.add(doc, content, type, imp, tags, "manual")
+                    merged = !added
+                    kept = item.content.length
+                    null
+                }
+            }
+        }
+        if (err != null) { send(ex, 200, """{"ok":false,"error":${quote(err)}}""", json); return }
+        if (!Memories.save(f, doc)) {
+            send(ex, 200, """{"ok":false,"error":${quote("写不下去：" + f.absolutePath)}}""", json); return
+        }
+        val note = if (kept < content.length)
+            ""","note":${quote("这条超过 ${Memories.MAX_CHARS} 字，只留下前 ${Memories.MAX_CHARS} 字")}""" else ""
+        send(ex, 200,
+            """{"ok":true,"merged":$merged,"count":${doc.items.count { it.live }}$note,""" +
+                """"items":${Memories.json(doc)}}""", json)
+        // 记忆也是系统提示的一部分：改了它，顶栏那圈上下文占用要重算
         publish("settings", """{"mode":${quote(settings.permissionMode)}}""")
     }
 

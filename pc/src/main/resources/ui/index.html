@@ -477,6 +477,15 @@
   /* 角色卡这一行宁可长高也别用省略号：被切掉的恰好是"这张卡把档位/模型设成了什么"，
      而那正是列表存在的理由（cron 那两行同理，但它的按钮少，暂时没被挤到） */
   #roleList .rl span{white-space:normal;line-height:1.4}
+  /* 记忆条目是一句话，截断就等于没显示；所以这里放开换行（.rl 默认是省略号）。 */
+  #memItems .rl span{white-space:normal;line-height:1.45}
+  #memItems .imp{font-style:normal;color:var(--acc2);margin-right:4px}
+  /* 窄栏里一行放三样一定会挤爆（技能那行的两个输入框是刻意各占一行的）：
+     类型与重要度各占一半，标签另起一行 —— 别去动 .addrow 的通用规则，技能那两行会跟着变样。 */
+  #tab-mem .memrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  #tab-mem .memrow select{min-width:0;background:var(--glass);border:1px solid var(--line);
+    border-radius:8px;color:var(--fg);font:inherit;font-size:11.5px;padding:5px 6px;font-family:inherit}
+  #tab-mem .memrow input{grid-column:1/-1;min-width:0}
   /* 抽屉里那行是"名字 + 说明"挤在一行：不留间隙就粘成 "other1 条会话" */
   #dialog .rl em{margin-left:6px}
   .addrow{display:flex;gap:6px;align-items:center}
@@ -777,6 +786,24 @@
       <div class="kv" id="gitState"></div>
     </div>
     <div class="tabp" id="tab-mem">
+      <div class="grp">条目记忆（与手机端同一份 MEMORY.md）</div>
+      <div class="kv">一条一句。模型每轮只被喂<b>最相关的几条</b>（最多 8 条、约 1200 字），
+        不是整篇 —— 所以记得越多不会把要干的活挤没。文件就在<b>工作区的 MEMORY.md</b>，
+        手机端的 HaoAI 读写同一份格式。</div>
+      <div class="addrow"><input type="text" id="memQ" placeholder="搜一下都记过什么…" style="flex:1"></div>
+      <div class="rl" id="memItems">（还没有）</div>
+      <textarea id="memNew" class="mem" rows="2" placeholder="记一条：一句话说清一个事实 / 偏好 / 决定"></textarea>
+      <div class="addrow memrow">
+        <select id="memType"><option value="fact">事实</option><option value="preference">偏好</option>
+          <option value="decision">决定</option><option value="event">事件</option></select>
+        <select id="memImp"><option value="3">重要度 3</option><option value="4">重要度 4</option>
+          <option value="5">重要度 5</option><option value="2">重要度 2</option>
+          <option value="1">重要度 1</option></select>
+        <input type="text" id="memTags" placeholder="标签，逗号分隔">
+      </div>
+      <div class="acts2 pinned"><button class="ab" id="memAdd">记住这条</button>
+        <span class="fp" id="memAddState"></span></div>
+      <div class="grp" style="margin-top:12px">项目说明（整篇）</div>
       <div class="kv">这里的规则<b>每回合都喂给模型</b>（现读不缓存，改完下一句就生效）。
         写进工作区的 <b>AGENTS.md</b>（已有就用它，别的 agent 也认这份），没有则写 <b>.haoai/memory.md</b>。</div>
       <div class="fp" id="memPath">—</div>
@@ -1839,7 +1866,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='git')loadGit();
   if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
   if(b.dataset.t=='pv')pvStart(); else pvStop();
-  if(b.dataset.t=='mem')loadMemory();
+  if(b.dataset.t=='mem'){loadMemory();loadMems($('#memQ').value)}
   if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest();loadWorkflows()}
   if(b.dataset.t=='role'){loadPresets();loadHooks()}
 });
@@ -2192,6 +2219,42 @@ document.querySelector('.fbar').onclick=e=>{
   if(x=='up'){fpath=fpath.split('/').slice(0,-1).join('/');loadFiles()}
   if(x=='reload')loadFiles();
 };
+
+/* ---- 条目记忆（工作区 MEMORY.md，与手机端同一格式）---- */
+let MEMS=[],memT=0;
+function loadMems(q){
+  return fetch('/api/memories?sid='+encodeURIComponent(curId||'')+'&q='+encodeURIComponent(q||''))
+    .then(r=>r.ok?r.json():Promise.reject(r.status))
+    .then(d=>{MEMS=d.items||[];paintMems(d)})
+    .catch(()=>{MEMS=[];paintMems({})});
+}
+function paintMems(d){
+  const box=$('#memItems');
+  const live=MEMS.filter(m=>m.active);
+  box.innerHTML=live.length?live.map(m=>`<div class="rl"><span><i class="imp">${m.imp}</i> ${esc(m.content)}`+
+    `${m.tags?' <em>'+esc(m.tags)+'</em>':''}</span>`+
+    `<button class="ab" data-forget="${esc(m.id)}" title="忘掉这条（文件里留痕，不静默删）">忘</button></div>`).join('')
+    :(($('#memQ').value||'')?'（没有匹配的条目）':'（还没有记过东西）');
+  box.querySelectorAll('[data-forget]').forEach(b=>b.onclick=()=>
+    post('/api/memories',{sid:curId,op:'del',id:b.dataset.forget}).then(x=>{
+      if(!x||!x.ok){toast((x&&x.error)||'没忘掉','err');return}
+      loadMems($('#memQ').value);toast('已忘掉（文件里还留着，能回看）');
+    }));
+  $('#memAddState').textContent=(d.count==null)?'':('现有 '+d.count+' 条 · 上限 '+(d.max||200));
+}
+$('#memAdd').onclick=()=>{
+  const t=$('#memNew').value.trim();
+  if(!t){toast('先写一句要记的东西','err');return}
+  post('/api/memories',{sid:curId,op:'add',content:t,type:$('#memType').value,
+    imp:$('#memImp').value,tags:$('#memTags').value}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没记上','err');return}
+      if(d.note)toast(d.note,'err');
+      $('#memNew').value='';$('#memTags').value='';
+      loadMems($('#memQ').value);
+      toast(d.merged?'已经有同样的一条，只把重要度抬了抬':'记住了');
+    });
+};
+$('#memQ').oninput=()=>{clearTimeout(memT);memT=setTimeout(()=>loadMems($('#memQ').value),260)};
 
 /* ---- 项目说明（AGENTS.md 那一类）与全局记忆 ---- */
 function memLoad(scope){

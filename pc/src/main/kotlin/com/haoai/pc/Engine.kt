@@ -808,6 +808,11 @@ class Engine(
                     gitRoot = gitRoot(session.workspace),
                     // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
                     extra = Memory.read(session.workspace, gitRoot(session.workspace)),
+                    // 条目记忆按"这一轮在问什么"挑几条注入（挑剩的整条丢，不截半句）
+                    memories = runCatching {
+                        val q = history.lastOrNull { m -> m.role == "user" }?.content?.take(300)
+                        Memories.inject(Memories.load(Memories.fileFor(session.workspace)), q)
+                    }.getOrDefault(""),
                     persona = session.persona
                 )
             )

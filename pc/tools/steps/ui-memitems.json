@@ -1,0 +1,132 @@
+[
+ {
+  "goto": "#box"
+ },
+ {
+  "click": "#tabs button[data-t=\"mem\"]"
+ },
+ {
+  "goto": "#memItems"
+ },
+ {
+  "eval": "({items:document.querySelectorAll('#memItems .rl').length,empty:(document.querySelector('#memItems').textContent||'').trim(),state:document.querySelector('#memAddState').textContent})"
+ },
+ {
+  "type": {
+   "sel": "#memNew",
+   "text": "这个项目用 gradle 9.6 构建，JDK 是 Temurin 25，仓库根没有 gradlew"
+  }
+ },
+ {
+  "click": "#memAdd"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "type": {
+   "sel": "#memNew",
+   "text": "回答先给结论再给依据，中文，短句"
+  }
+ },
+ {
+  "eval": "(()=>{const s=document.querySelector('#memType');s.value='preference';s.dispatchEvent(new Event('change',{bubbles:true}));return '偏好'})()"
+ },
+ {
+  "click": "#memAdd"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];const spans=rows.map(r=>r.querySelector('span').innerText.replace(/\\s+/g,' '));return {items:rows.length,texts:spans.join(' | '),state:document.querySelector('#memAddState').textContent,noClip:rows.every(r=>{const s=r.querySelector('span');return s.scrollWidth<=s.clientWidth+1}),overflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()",
+  "must": [
+   "items",
+   "noClip",
+   "overflow"
+  ]
+ },
+ {
+  "shot": "m01-memitems"
+ },
+ {
+  "eval": "(()=>{const a=document.querySelector('#memType').getBoundingClientRect(),b=document.querySelector('#memImp').getBoundingClientRect(),c=document.querySelector('#memTags').getBoundingClientRect(),panel=document.querySelector('#tab-mem').getBoundingClientRect();return{selects:Math.round(a.width)+'x'+Math.round(b.width),sameRow:Math.abs(a.top-b.top)<2,tagsFull:Math.round(c.width),tagsBelow:a.bottom<=c.top+2,inPanel:[a,b,c].every(r=>r.right<=panel.right+1&&r.left>=panel.left-1),noClip:c.scrollWidth<=c.clientWidth+1}})()",
+  "must": [
+   "sameRow",
+   "tagsFull",
+   "tagsBelow",
+   "inPanel",
+   "noClip"
+  ]
+ },
+ {
+  "click": "#memAdd"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('#memNew');t.value='回答先给结论再给依据，中文，短句';return 'same'})()"
+ },
+ {
+  "click": "#memAdd"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];return {items:rows.length,dupRefused:rows.length==2,texts:rows.map(r=>r.querySelector('span').innerText.replace(/\\s+/g,' ')).join(' | '),toast:(document.querySelector('#toast').textContent||'')}})()",
+  "must": [
+   "items",
+   "dupRefused"
+  ]
+ },
+ {
+  "type": {
+   "sel": "#memQ",
+   "text": "gradle"
+  }
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];return {q:document.querySelector('#memQ').value,items:rows.length,text:(rows[0]?rows[0].querySelector('span').innerText.replace(/\\s+/g,' '):''),onlyGradle:rows.every(r=>/gradle/.test(r.textContent))}})()",
+  "must": [
+   "items",
+   "onlyGradle"
+  ]
+ },
+ {
+  "shot": "m02-memsearch"
+ },
+ {
+  "eval": "(()=>{const q=document.querySelector('#memQ');q.value='';q.dispatchEvent(new Event('input',{bubbles:true}));return 'cleared'})()"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": "#memItems .rl [data-forget]"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#memItems .rl')];return {left:rows.length,oneLeft:rows.length==1,texts:rows.map(r=>r.querySelector('span').innerText.replace(/\\s+/g,' ')).join(' | '),state:document.querySelector('#memAddState').textContent}})()",
+  "must": [
+   "left",
+   "oneLeft"
+  ]
+ },
+ {
+  "eval": "(async()=>{const p=await fetch('/api/file?path=MEMORY.md').then(r=>r.json());const t=p.text||'';return {hasArchived:t.indexOf('sup:archived')>=0,keptLine:/gradle 9\\.6/.test(t),stillListed:(t.match(/^- \\[/gm)||[]).length,head:t.slice(0,60).replace(/\\n/g,'⏎')}})()",
+  "must": [
+   "hasArchived",
+   "keptLine"
+  ]
+ },
+ {
+  "shot": "m03-memforgot"
+ }
+]

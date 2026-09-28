@@ -593,4 +593,24 @@ class EngineFlowTest {
 
     private fun kotlinx.serialization.json.JsonElement.jsonObjectOf(): Map<String, kotlinx.serialization.json.JsonElement> =
         (this as kotlinx.serialization.json.JsonObject).toMap()
+    /**
+     * 条目记忆要**真的进系统提示**，不是只把文件写对。
+     *
+     * 判据取的是"网关收到的那条 system"：那是记忆生效的唯一真凭据 ——
+     * 文件写得再漂亮，没被喂进请求就是没生效。
+     */
+    @Test
+    fun `item memories reach the system prompt the model actually sees`() {
+        val ws = tempWorkspace()
+        val doc = Memories.Doc()
+        Memories.add(doc, "这个仓库用 gradle 9.6 构建，JDK 是 Temurin 25",
+            Memories.TYPE_FACT, importance = 5)
+        assertTrue("记忆文件没写进去", Memories.save(Memories.fileFor(ws), doc))
+        val (engine, scripted, _) = harness(ws, mutableListOf(turn("知道了")))
+        engine.submit("构建命令是什么")
+        val sys = scripted.lastMessages.firstOrNull { it.role == "system" }?.content ?: ""
+        assertTrue("系统提示里没有长期记忆那一段：" + sys.take(300), sys.contains("长期记忆"))
+        assertTrue("那条 gradle 记忆没被喂进去", sys.contains("gradle 9.6"))
+        assertTrue("不可信来源不该进提示", !sys.contains("手机端同步"))
+    }
 }
