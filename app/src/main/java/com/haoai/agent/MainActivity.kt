@@ -341,6 +341,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             "sessions" -> { leaveChat(); screen = 4 }
             "skills" -> { leaveChat(); screen = 5 }
             "mcp" -> { leaveChat(); screen = 6 }
+            "pc" -> { leaveChat(); screen = 19 }
             "browser" -> { leaveChat(); screen = 7 }
             "workflows" -> { leaveChat(); screen = 8 }
             "search" -> { leaveChat(); screen = 17 }
@@ -975,6 +976,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onOpenSchedules = { screen = 3 },
                     onOpenSkills = { screen = 5 },
                     onOpenMcp = { screen = 6 },
+                    onOpenPcLink = { screen = 19 },
                     onOpenWorkflows = { screen = 8 },
                     // 独立 screen 化的 section 子页：与技能库/MCP/工作流同机制
                     // （转场动画 + 全局壁纸），消除「瞬切无动画」的不一致
@@ -1069,6 +1071,11 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     }
                 )
                 6 -> com.haoai.agent.ui.settings.McpSettingsScreen(
+                    backdrop = backdrop,
+                    onBack = { screen = 1 },
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null
+                )
+                19 -> com.haoai.agent.ui.settings.PcLinkScreen(
                     backdrop = backdrop,
                     onBack = { screen = 1 },
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null

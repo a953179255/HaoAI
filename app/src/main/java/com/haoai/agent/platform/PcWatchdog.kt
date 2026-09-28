@@ -1,0 +1,264 @@
+package com.haoai.agent.platform
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat
+import com.haoai.agent.MainActivity
+import com.haoai.agent.R
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+/**
+ * 电脑上"有人在等"的那条通知 —— B4 安卓第三片的功能核。
+ *
+ * 为什么不塞进 `KeepAliveService`：那份服务管的是**手机自己**跑的任务（`RunObserver` 读的是
+ * 本进程状态）；这一份读的是**另一台机器**上的待批。两者失败方式完全不同（一个是"任务结束了"，
+ * 一个是"连不上那台电脑"），混进同一个循环，出错时说不清是谁坏了。
+ *
+ * 三条刻意的取舍：
+ * ① **节律 20 秒，不是网页端那个 4 秒**：网页端是"人盯着页面才刷"，后台轮询是常驻的，
+ *    4 秒一次会让手机在兜里持续联网；而电脑上真正卡住的那一步本来就要等人几十秒到几分钟。
+ * ② **只在保活服务活着的时候跑**：不谎称"任何情况下都收得到"。省电策略把服务杀掉之后这条通道
+ *    就是断的 —— 那正是必须真机验、模拟器验不了的那件事。
+ * ③ 通知**只在真的多出新的时候**才响（差集在 `PcWatch`），批完要收回去：后台版最容易坏在
+ *    "反复弹到人关不掉"和"批完了还挂着一条假待办"这两处。
+ */
+object PcWatchdog {
+
+    const val CHANNEL_PC = "haoai_pc_wait"
+    private const val NOTIFICATION_ID = 4311
+
+    /** 后台轮询节律（毫秒）。放宽的理由见类注释 ①。 */
+    const val POLL_MS = 20_000L
+
+    data class State(
+        val paired: Boolean = false,
+        val base: String = "",
+        val device: String = "",
+        val waiting: Int = 0,
+        val lastAt: Long = 0L,
+        /** 上一次问的结果说明：连不上、没配对、还是"没有要批的"。界面直接显示这一句。 */
+        val lastNote: String = "",
+        val polling: Boolean = false
+    )
+
+    private var app: Context? = null
+    private var store: PcStore? = null
+    private val watch = PcWatch()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var job: Job? = null
+
+    private val _state = MutableStateFlow(State())
+    val state = _state.asStateFlow()
+
+    /** 应用起来时调一次（保活服务的 onCreate 里）：拿住 context 并建好通知渠道。 */
+    fun init(context: Context) {
+        if (app != null) return
+        val c = context.applicationContext
+        app = c
+        store = PcStore(KeystorePcCipher(), File(c.filesDir, "pc-link.json"))
+        (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .createNotificationChannel(
+                NotificationChannel(CHANNEL_PC, "电脑待确认", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "电脑上的 HaoAI 在等你批准时提醒（跨端联动）"
+                }
+            )
+        refreshConfig()
+    }
+
+    private fun file(): File? = app?.filesDir?.let { File(it, "pc-link.json") }
+
+    fun refreshConfig() {
+        val f = file() ?: return
+        val ep = store?.load(f)
+        _state.value = _state.value.copy(
+            paired = ep != null && ep.token.isNotBlank(),
+            base = ep?.base.orEmpty(),
+            device = ep?.device.orEmpty()
+        )
+        if (ep == null) watch.reset()
+    }
+
+    fun save(base: String, token: String, device: String): PcOut<String> {
+        val s = store ?: return PcOut.Fail("应用还没起完")
+        val f = file() ?: return PcOut.Fail("应用还没起完")
+        val out = s.save(f, base, token, device)
+        refreshConfig()
+        return out
+    }
+
+    /**
+     * 解除配对。**两边都要忘**：只清本地会留下一条"电脑还当这台手机配着"的僵尸设备，
+     * 而它已经拿不到 token 了 —— 真机上就是这么发现的（手机显示"没配对"，
+     * 电脑上那台设备还在列表里）。电脑连不上时仍然清本地：人要走不能被他拦在门外。
+     */
+    suspend fun forget(): String {
+        val f = file() ?: return "应用还没起完"
+        val ep = store?.load(f)
+        val pcSaid = if (ep != null && ep.token.isNotBlank())
+            when (val out = PcLink(ep.base, ep.token).unpair()) {
+                is PcOut.Ok -> out.value
+                is PcOut.Fail -> "（那台电脑没答上：${out.message}）"
+            } else "（本地本来就没配对）"
+        store?.clear(f)
+        hideNotification()
+        refreshConfig()
+        return pcSaid
+    }
+
+    /** 幂等：已经在跑就直接返回。保活服务每次 onCreate 都会调它。 */
+    fun start() {
+        if (job?.isActive == true) return
+        if (app == null) return
+        job = scope.launch {
+            while (isActive) {
+                if (_state.value.paired) pollOnce() else delay(POLL_MS * 3)
+                delay(POLL_MS)
+            }
+        }
+        _state.value = _state.value.copy(polling = true)
+    }
+
+    fun stop() {
+        job?.cancel(); job = null
+        _state.value = _state.value.copy(polling = false)
+    }
+
+    /** 问一次电脑上有没有在等的。返回这次该对通知做什么（界面的"现在问一次"也走这条）。 */
+    suspend fun pollOnce(): PcWatchAction {
+        val f = file() ?: return PcWatchAction.Same
+        val ep = store?.load(f)
+        if (ep == null || ep.token.isBlank()) {
+            _state.value = _state.value.copy(lastNote = "还没配对那台电脑")
+            return PcWatchAction.Same
+        }
+        return when (val out = PcLink(ep.base, ep.token).pending()) {
+            is PcOut.Fail -> {
+                // 连不上/被解除：先把"在等"的假象收掉，并清空差集 —— 重连之后如果还是那几条，
+                // 应该重新提醒一次（人可能根本没看到刚才那条）。
+                watch.reset()
+                hideNotification()
+                _state.value = _state.value.copy(
+                    waiting = 0, lastAt = System.currentTimeMillis(), lastNote = out.message,
+                    paired = !out.unauthorized
+                )
+                PcWatchAction.Clear
+            }
+            is PcOut.Ok -> {
+                val items = out.value
+                val act = watch.onPending(items.map { it.id })
+                _state.value = _state.value.copy(
+                    waiting = items.size, lastAt = System.currentTimeMillis(),
+                    lastNote = if (items.isEmpty()) "问过了：电脑上没有要批的"
+                    else "电脑上有 ${items.size} 条在等你批"
+                )
+                when (act) {
+                    is PcWatchAction.Notify -> showNotification(items, act.total)
+                    PcWatchAction.Clear -> hideNotification()
+                    PcWatchAction.Same -> Unit
+                }
+                act
+            }
+        }
+    }
+
+    /** 在通知上点了"允许一次 / 本任务都允许 / 拒绝"。 */
+    suspend fun decide(id: String, decision: String) {
+        val f = file() ?: return
+        val ep = store?.load(f) ?: return
+        _state.value = _state.value.copy(
+            lastNote = when (val out = PcLink(ep.base, ep.token).decide(id, decision)) {
+                is PcOut.Ok -> out.value
+                is PcOut.Fail -> out.message
+            }
+        )
+        // 点完立刻再问一次：批条数变了通知就该跟着变（全批完就该消失）
+        pollOnce()
+    }
+
+    private fun showNotification(items: List<PcApproval>, total: Int) {
+        val a = app ?: return
+        val first = items.firstOrNull() ?: return
+        val body = buildString {
+            append(first.payload.title.ifBlank { "（没标题）" })
+            if (first.payload.detail.isNotBlank()) append('\n').append(first.payload.detail)
+            if (first.payload.riskWhy.isNotBlank()) append('\n').append("为什么算高危：${first.payload.riskWhy}")
+        }
+        val b = NotificationCompat.Builder(a, CHANNEL_PC)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(if (total > 1) "电脑上有 $total 条在等你批" else "电脑上有 1 条在等你批")
+            .setContentText(body.lineSequence().first())
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(openAppIntent(a))
+            .setAutoCancel(false)
+        // 三个动作直接挂在通知上：人在外面不用解锁找应用就能放行或拒绝
+        listOf("允许一次" to "allow_once", "本任务都允许" to "allow_session", "拒绝" to "deny")
+            .forEach { (label, d) -> b.addAction(0, label, decidePi(a, first.id, d, label.hashCode())) }
+        (a.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFICATION_ID, b.build())
+    }
+
+    private fun hideNotification() {
+        val a = app ?: return
+        (a.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID)
+    }
+
+    private fun decidePi(a: Context, id: String, decision: String, code: Int): PendingIntent {
+        val i = Intent(a, PcActionReceiver::class.java)
+            .setAction(PcActionReceiver.ACTION_PC_DECIDE)
+            .putExtra(PcActionReceiver.EXTRA_ID, id)
+            .putExtra(PcActionReceiver.EXTRA_DECISION, decision)
+        return PendingIntent.getBroadcast(
+            a, code, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    private fun openAppIntent(a: Context): PendingIntent {
+        val i = Intent(a, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = android.net.Uri.parse("haoai://debug/pc")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        return PendingIntent.getActivity(
+            a, 900, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+}
+
+/**
+ * 通知上那三个决定按钮的落点。
+ *
+ * 刻意不复用 `RunActionReceiver`：那个路由的是"手机自己的任务"（停止 / 回答提问），
+ * 这个是"替另一台机器点审批"。两条路的权限与后果不一样，混在一个 action 空间里，
+ * 以后加一种决定就会互相误伤。
+ */
+class PcActionReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != ACTION_PC_DECIDE) return
+        val id = intent.getStringExtra(EXTRA_ID) ?: return
+        val decision = intent.getStringExtra(EXTRA_DECISION) ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { PcWatchdog.decide(id, decision) }
+                .onFailure { android.util.Log.w("HaoPcLink", "点决定没送到：${it.message}") }
+        }
+    }
+
+    companion object {
+        const val ACTION_PC_DECIDE = "com.haoai.agent.action.PC_DECIDE"
+        const val EXTRA_ID = "pc_ask_id"
+        const val EXTRA_DECISION = "pc_decision"
+    }
+}

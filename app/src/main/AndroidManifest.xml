@@ -128,6 +128,11 @@
             android:name=".platform.RunActionReceiver"
             android:exported="false" />
 
+        <!-- 跨端待批：通知上那三个决定按钮的落点（只接自己发的广播） -->
+        <receiver
+            android:name=".platform.PcActionReceiver"
+            android:exported="false" />
+
         <service
             android:name=".platform.a11y.HaoAccessibilityService"
             android:exported="true"

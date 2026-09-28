@@ -56,6 +56,10 @@ class KeepAliveService : Service() {
                 description = "Agent 等待你确认危险操作时提醒"
             }
         )
+        // 跨端待批：这条通道跟着保活服务的命走（服务被省电策略杀掉就没有提醒，
+        // 这件事在 README 里明确写成"未验证/不保证"，不假装任何情况下都收得到）
+        PcWatchdog.init(applicationContext)
+        PcWatchdog.start()
         scope.launch { observe() }
     }
 

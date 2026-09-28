@@ -37,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -167,6 +168,8 @@ fun SettingsScreen(
     onOpenSchedules: () -> Unit = {},
     onOpenSkills: () -> Unit = {},
     onOpenMcp: () -> Unit = {},
+    /** 「电脑联动」页：把这台手机配到电脑上那台 HaoAI（B4） */
+    onOpenPcLink: () -> Unit = {},
     onOpenWorkflows: () -> Unit = {},
     /** section 子页独立 screen 化：主页菜单点击回调（参数为 section key → screen 号由 MainActivity 映射） */
     onOpenSection: (Int) -> Unit = {},
@@ -442,6 +445,21 @@ fun SettingsScreen(
                             showChevron = true,
                             divider = true,
                             onClick = onOpenMcp
+                        )
+                        val pcWait = com.haoai.agent.platform.PcWatchdog.state.value
+                        HaoRow(
+                            icon = Icons.Filled.Computer,
+                            tintIndex = 3,
+                            title = "电脑联动",
+                            subtitle = if (pcWait.paired) "已连 ${pcWait.base}" else "配到电脑那台 HaoAI，锁屏外也能替它点批准",
+                            trailing = {
+                                if (pcWait.waiting > 0) HaoChip("等 ${pcWait.waiting} 条", HaoTone.Warn)
+                                else HaoChip(if (pcWait.paired) { if (pcWait.polling) "盯着" else "没在轮询" } else "未配对",
+                                    if (pcWait.paired) HaoTone.Accent else HaoTone.Neutral)
+                            },
+                            showChevron = true,
+                            divider = true,
+                            onClick = onOpenPcLink
                         )
                         run {
                             // Linux 行：状态"需要你处理"才用琥珀，其余走中性；已就绪用强调色

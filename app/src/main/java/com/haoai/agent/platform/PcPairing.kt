@@ -133,6 +133,13 @@ class PcWatch {
         // 一条都没多就不该再响：只有"确实没见过"才值得打断人
         return if (fresh > 0) PcWatchAction.Notify(now.size, fresh) else PcWatchAction.Same
     }
+
+    /**
+     * 忘掉"已经提醒过谁"。
+     * 断线、解除配对、以及"通知被我们主动收掉"之后都要调：不然重连时那几条老待办
+     * 会被当成"已经弹过了"，屏幕上就再也没有提醒了 —— 而这正是最需要它响的时候。
+     */
+    fun reset() { seen = emptySet() }
 }
 
 /**

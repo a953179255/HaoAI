@@ -100,6 +100,16 @@ class PcPairingTest {
         assertEquals("已经清空之后再问，不该反复说'收回'", PcWatchAction.Same, w.onPending(emptyList()))
     }
 
+    /** 断线 / 解除配对之后重连：同一批待办要能再提醒一次，不然屏幕上就再也没有它了。 */
+    @Test
+    fun `after a reset the same items count as new again`() {
+        val w = PcWatch()
+        assertEquals(PcWatchAction.Notify(1, 1), w.onPending(listOf("a")))
+        assertEquals(PcWatchAction.Same, w.onPending(listOf("a")))
+        w.reset()
+        assertEquals("重连之后同一批该重新提醒", PcWatchAction.Notify(1, 1), w.onPending(listOf("a")))
+    }
+
     @Test
     fun `blank ids do not count as somebody waiting`() {
         val w = PcWatch()
