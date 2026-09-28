@@ -641,6 +641,7 @@
       </div>
       <button class="iconb" id="themeBtn" title="切换明暗主题">◐</button>
       <button class="iconb" id="expBtn" title="导出这条会话为 markdown">⇩</button>
+      <button class="iconb" id="shareBtn" title="导出只读 HTML 快照（发给别人看，页面里没有脚本）">↗</button>
       <button class="iconb" id="panelBtn" title="任务 / 用量 / 产出面板">▤</button>
     </header>
     <div class="ctxp" id="ctxPanel"></div>
@@ -1181,7 +1182,7 @@ const PALSET=[
   ['右栏：Git','#tabs button[data-t=git]'],
   ['右栏：终端','#tabs button[data-t=term]'],['右栏：预览','#tabs button[data-t=pv]'],['右栏：记忆','#tabs button[data-t=mem]'],
   ['右栏：定时','#tabs button[data-t=cron]'],['右栏：工具','#tabs button[data-t=tools]'],
-  ['打开回收站','#trashBtn'],['导出这条会话','#expBtn'],['切换明暗主题','#themeBtn'],
+  ['打开回收站','#trashBtn'],['导出这条会话','#expBtn'],['导出只读快照','#shareBtn'],['切换明暗主题','#themeBtn'],
 ];
 /** 抽屉是 fetch 回来才渲染的，所以"跳到某一节"要等它出现（最多等 2 秒）。 */
 function palJumpCfg(needle){
@@ -2477,6 +2478,18 @@ function openWs(){
 }
 $('#wsBtn').onclick=openWs;
 $('#expBtn').onclick=()=>{if(curId)location.href='/api/export?sid='+encodeURIComponent(curId)};
+/* 快照：写一份自包含 HTML 到 HAOAI_HOME/share/，顺手在新标签里打开看一眼。
+   不往工作区写 —— 那是个 git 仓库，导出的东西不该混进用户的 diff。 */
+$('#shareBtn').onclick=()=>{
+  if(!curId){toast('先选一条会话');return}
+  post('/api/share',{sid:curId}).then(d=>{
+    if(!d||!d.ok){toast((d&&d.error)||'没导出来','err');return}
+    toast('快照已存：'+d.name);
+    // 挂在按钮上：验收剧本要能知道刚那份的地址（不靠读 toast 文本）
+    $('#shareBtn').dataset.url=d.url;$('#shareBtn').dataset.path=d.path;
+    window.open(d.url,'_blank');
+  }).catch(()=>toast('快照没导出来','err'));
+};
 $('#trashBtn').onclick=openTrash;
 /* 回收站：删除是移进 sessions/.trash，但"可恢复"没有入口就等于没有 ——
    之前只有 tooltip 上那半句话，删错一条只能去开文件管理器。 */

@@ -1,0 +1,19 @@
+[
+  {"goto": "#box"},
+  {"type": {"sel": "#box", "text": "验收：这条会话要能被导出成只读快照"}},
+  {"sleep": 3500},
+  {"eval": "({btn:!!document.querySelector('#shareBtn'), url0:(document.querySelector('#shareBtn').dataset||{}).url||''})",
+   "must": ["btn"], "note": "顶栏那颗 ↗ 在"},
+  {"click": "#shareBtn"},
+  {"sleep": 1500},
+  {"eval": "(()=>{const d=document.querySelector('#shareBtn').dataset||{};return {url:d.url||'',path:d.path||''}})()",
+   "must": ["url", "path"], "note": "点一下之后要知道那份文件在哪、从哪个地址能读回来"},
+  {"eval": "(()=>{const u=document.querySelector('#shareBtn').dataset.url;return fetch(u).then(r=>r.text()).then(t=>({shown:t.indexOf('验收：这条会话要能被导出成只读快照')>=0, noScript:!/<script[ >]/.test(t), noControl:t.indexOf('<button')<0&&t.indexOf('<input')<0, noRemote:t.indexOf('src=')<0}))})()",
+   "must": ["shown", "noScript", "noControl", "noRemote"],
+   "note": "快照里既没有脚本也没有控件与外链 —— 它是给人看的成品，不是第二个应用"},
+  {"eval": "location.href=document.querySelector('#shareBtn').dataset.url;'navigating'"},
+  {"goto": "section", "timeout": 15000},
+  {"eval": "(()=>{const t=document.body.innerText;const m=document.querySelector('main');return {shown:t.indexOf('验收：这条会话要能被导出成只读快照')>=0, sections:document.querySelectorAll('section').length, noControls:document.querySelectorAll('button,input,script').length===0, roomy:m.getBoundingClientRect().width>320, dark:getComputedStyle(document.body).backgroundColor}})()",
+   "must": ["shown", "sections", "noControls", "roomy"], "note": "真的用浏览器打开一遍：消息在、排版不挤、什么都点不动"},
+  {"shot": "sh01-snapshot-page"}
+]

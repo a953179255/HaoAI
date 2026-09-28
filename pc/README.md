@@ -2147,6 +2147,43 @@ URL 导入 `.md` 与 `.zip` 各进一份且 `file:` 被拒、删目录删干净�
    压力测试里"读侧丢会话"从 32/120 降到 0。**改并发的时候，判据必须自己造并发**
    （`AtomicWriteTest` 一个线程狂写、一个线程用产品那个 `read()` 狂读）。
 
+## 这一批：只读快照 —— 一条会话导成一个"打开就能看"的 HTML（v0.64.0，B12 第二件）
+
+以前只有"导出 markdown"。markdown 是**给编辑器和机器**的形态：发给别人，对方得先有个能渲染的人。
+OpenCode 的 `/share` 给的是成品 —— 这一批补的就是这个形态。
+
+- **`Share.kt`**：`render(title, workspace, model, mode, madeAt, msgs)` → 一个**自包含**的 HTML 字符串，
+  `write` 落到 `HAOAI_HOME/share/pc-<sid>-<时间>.html`。
+  **不写进工作区** —— 那是个 git 仓库，导出的东西不该混进用户的 diff。
+- **三条硬规矩**：① 页面里**一行 JS 都没有**（正文是模型写的，不转义就是"在别人机器上跑"）；
+  ② **不引任何外部资源**（断网能看，也不泄露访问记录）；③ 读回来的 `name` 只认我们自己写出去的那种文件名
+  （`safeName` + canonical 双重校验，`../` 与 `.htm` 与空名全拒）。
+- **markdown 只渲染一小撮**（服务端渲染，页面依旧零脚本）：围栏代码块、行内代码、`#` 小标题、
+  `-`/`*` 列表、`**粗**`。**先转义再套标签**，所以 `<img onerror=…>` 只会是文本。
+  整套 md.js 搬不过来（要么引外部脚本，要么在 Kotlin 里重写一个渲染器），
+  而快照里最常见的就是这几样 —— 少了它们，页面看着就像贴了源码。
+- **接口**：`POST /api/share {sid}` → `{ok,name,path,url,blocks}`；`GET /api/share?name=` 把那份 HTML 发回来。
+- **界面**：顶栏 ⇩ 旁边多一颗 ↗（命令面板里叫"导出只读快照"）。点一下写文件 + 新标签打开看一眼；
+  地址同时挂在按钮的 `data-url` 上，剧本据此断言（不靠读 toast 文本）。
+
+判据（Kotlin 新增 7 条 `ShareTest`）：
+每条消息都在页面里、正文里的 `<script>` 被转义成文本、整页没有真 script 标签 / 没有 `src=` / 没有 http 外链、
+空会话也出一页并写明"还没有说过话"、markdown 那一小撮真的变成结构（`<h4>`/`<li>`/`<code>`/`<pre class="code">`）
+且围栏符号不再外露、没收尾的围栏不会死循环、`../` 与非法名一律读不出来、
+端点写出的文件确实在 `share/` 目录里且 `GET` 回来的与写进去的是同一份。
+（像素，`SHOT_MODE=chat bash pc/tools/ui-shot.sh tools/steps/ui-share.json`，12 步：
+说一句话 → 点 ↗ → 读回那份 HTML（消息在、无脚本、无控件、无外链）→
+**浏览器真的导航到那个地址**再量一次：`section` 有 2 段、`button/input/script` 数量为 0、
+正文宽度 >320、深色底 —— 这是"给人看的成品"该有的判据，不是"文件存在"。）
+
+**这一批最该记的一件事：**
+**响应里的 JSON 要用手上的 `quote()`，别手搓引号。**
+第一版写成 `"""url":"/api/share?name=${quote(name)}""""` —— `quote` 自己会加引号，
+于是拼出来是 `"url":"/api/share?name="pc-x.html"`，一个非法 JSON。
+Kotlin 侧表现为 `JsonDecodingException`，而界面侧只是"点了没反应"（`post()` 解析失败走了 catch 分支）。
+⇒ 拼 JSON 的每个值都走同一个 `quote()`；这类错在测试里第一秒就红了，前提是**判据真的读那个字段**
+（这条测试断言的是 `field(made,"name")`/`path`/`url`，不是"接口回了 200"）。
+
 ## 与手机端同源的行为
 
 - **上下文压缩**：历史正文超过 `compactTriggerChars`（默认 6 万字符）就把早期消息折成一条摘要，
@@ -2339,6 +2376,7 @@ pc/src/main/kotlin/com/haoai/pc/
   Secrets.kt      凭据条目：key 的读/改/撤与掩码（明文只进磁盘，任何响应都不回）
   Hooks.kt        钩子：事件（run-end）挂一段用户自己写的命令，异步跑、失败只记账不打断会话
   SkillDocs.kt    技能目录：HAOAI_HOME/skills/<slug>/SKILL.md（与手机端同一形状）+ 粘贴/网址/zip 三个入口
+  Share.kt        只读快照：一条会话导成一个自包含 HTML（零脚本、零外链，markdown 在服务端渲一小撮）
   Server.kt     127.0.0.1 HTTP + SSE + 审批/提问回环（请求体每个 handler 只读一次）；
                 每条会话一个引擎，事件按 sid 分流（sid 走 SSE 的 id: 字段），
                 同条会话一次一个任务、不同会话最多并行 4 条、常驻超过 12 条请出最久没碰的

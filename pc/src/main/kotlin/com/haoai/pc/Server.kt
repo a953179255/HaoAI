@@ -194,6 +194,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/img" -> imageFile(ex)
                 "/api/media" -> mediaFile(ex)
                 "/api/export" -> exportSession(ex)
+                "/api/share" -> share(ex)
                 "/api/delete" -> deleteSession(ex)
                 "/api/unqueue" -> unqueue(ex)
                 "/api/delmsg" -> deleteMessage(ex)
@@ -1452,6 +1453,47 @@ class WebServer(settings: PcSettings, port: Int,
         }
         ex.responseHeaders.add("Content-Disposition", """attachment; filename="haoai-$sid.md"""")
         send(ex, 200, sb.toString(), "text/markdown; charset=utf-8")
+    }
+
+    /**
+     * `POST /api/share` 出一份只读快照；`GET /api/share?name=` 把它读回来。
+     *
+     * 快照落在 `HAOAI_HOME/share/`，**不**写进用户的工作区 ——
+     * 那是个 git 仓库，导出的东西不该混进用户的 diff 里。
+     */
+    private fun share(ex: HttpExchange) {
+        val want = queryOf(ex, "name")
+        if (ex.requestMethod == "GET" && want.isNotBlank()) {
+            val f = Share.read(want)
+            if (f == null) {
+                send(ex, 404, "没有这个快照（名字不合法或已经被清掉）", "text/plain; charset=utf-8"); return
+            }
+            send(ex, 200, runCatching { f.readText(Charsets.UTF_8) }.getOrDefault(""),
+                "text/html; charset=utf-8")
+            return
+        }
+        val sid = pick(Body(ex).str("sid"))
+        val e = sid.takeIf { it.isNotBlank() }?.let { sessions[it]?.engine }
+        if (e == null) {
+            send(ex, 200, """{"ok":false,"error":"没有这条会话"}""",
+                "application/json; charset=utf-8"); return
+        }
+        val msgs = e.messages().map { Triple(it.role, it.name ?: "", it.content ?: "") }
+        val name = Share.nameFor(sid)
+        val file = Share.write(
+            name, Share.render(
+                e.session.title.get(), e.session.workspace.absolutePath,
+                e.settings.model, e.session.mode, System.currentTimeMillis(), msgs
+            )
+        )
+        if (file == null) {
+            send(ex, 200, """{"ok":false,"error":"快照没写进去（磁盘或权限）"}""",
+                "application/json; charset=utf-8"); return
+        }
+        send(ex, 200,
+            """{"ok":true,"name":${quote(name)},"path":${quote(file.absolutePath)},""" +
+                """"url":${quote("/api/share?name=$name")},"blocks":${msgs.size}}""",
+            "application/json; charset=utf-8")
     }
 
     private fun queryOf(ex: HttpExchange, key: String): String = ex.requestURI.query
