@@ -239,7 +239,7 @@ check(badSteps.length === 0, '每份剧本里的 eval 都是合法 JS', badSteps
  * 一次补完不现实，所以做成**棘轮**：只许变好。每补完一份就把下面的上限改小，
  * 补不完不许加新的零判据剧本。
  */
-const ZERO_GATE_CEILING = 33;   // 本轮补掉 ui-ask(18 条) 与 ui-askkeys(23 条)
+const ZERO_GATE_CEILING = 32;   // 又补掉 ui-mem(11 条)
 const zeroGate = [];
 for (const f of stepFiles) {
   let arr;

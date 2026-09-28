@@ -1,34 +1,150 @@
 [
-  {"goto": "#box"},
-  {"click": "#tabs button[data-t=\"mem\"]"},
-  {"goto": "#memBox"},
-  {"eval": "({project:document.getElementById('memPath').innerText.slice(0,4),global:document.getElementById('gPath').innerText.slice(0,4),skills:document.getElementById('skillList').innerText.slice(0,10)})"},
-  {"shot": "m01-memory-tab"},
-  {"type": {"sel": "#memBox", "text": "构建只用 gradlew.bat；不要改 build/ 下的任何文件。", "enter": false}},
-  {"click": "#memSave"},
-  {"sleep": 900},
-  {"eval": "({state:document.getElementById('memState').innerText,path:document.getElementById('memPath').innerText.slice(0,4)})"},
-  {"type": {"sel": "#gBox", "text": "回答一律用中文，短句优先。", "enter": false}},
-  {"click": "#gSave"},
-  {"sleep": 900},
-  {"eval": "Promise.all([fetch('/api/memory?scope=global').then(r=>r.json())]).then(a=>'全局记忆读回 ['+a[0].text+'] at '+a[0].path.split(String.fromCharCode(92)).slice(-1))"},
-  {"shot": "m02-memory-saved"},
-  {"type": {"sel": "#skName", "text": "review", "enter": false}},
-  {"type": {"sel": "#skDesc", "text": "先给我看这次改动的问题", "enter": false}},
-  {"type": {"sel": "#skText", "text": "把刚才那一轮改动的文件逐个 read 回来，指出：1) 有没有改错的地方 2) 有没有漏掉的调用点。不要直接动手改。", "enter": false}},
-  {"click": "#skSave"},
-  {"sleep": 900},
-  {"eval": "({rows:document.querySelectorAll('#skillList .rl').length,state:document.getElementById('skState').innerText})"},
-  {"eval": "(()=>{const b=document.getElementById('box');b.value='/rev';b.dispatchEvent(new Event('input',{bubbles:true}))})()"},
-  {"sleep": 500},
-  {"eval": "document.querySelector('#slash').innerText.replace(/\\n+/g,' | ').slice(0,80)"},
-  {"shot": "m03-slash-with-skill"},
-  {"click": "#slash .it:last-child"},
-  {"sleep": 400},
-  {"eval": "document.getElementById('box').value.slice(0,24)"},
-  {"shot": "m04-skill-inserted"},
-  {"eval": "(()=>{const b=document.getElementById('box');b.value='';b.dispatchEvent(new Event('input',{bubbles:true}))})()"},
-  {"click": "#skillList [data-sk]"},
-  {"sleep": 700},
-  {"eval": "({rows:document.querySelectorAll('#skillList .rl').length})"}
+  {
+    "goto": "#box"
+  },
+  {
+    "click": "#tabs button[data-t=\"mem\"]"
+  },
+  {
+    "goto": "#memBox"
+  },
+  {
+    "eval": "(()=>{const g=s=>(document.getElementById(s)||{}).innerText||'';return JSON.stringify({project:g('memPath').slice(0,4),global:g('gPath').slice(0,4),skills:g('skillList').slice(0,10),pathsShown:g('memPath').length>0&&g('gPath').length>0})})()",
+    "must": [
+      "pathsShown"
+    ],
+    "note": "记忆页签一开就要看得见两条路径（项目那份与全局那份），技能区没内容也要写明「还没有技能」而不是空一块"
+  },
+  {
+    "shot": "m01-memory-tab"
+  },
+  {
+    "type": {
+      "sel": "#memBox",
+      "text": "构建只用 gradlew.bat；不要改 build/ 下的任何文件。",
+      "enter": false
+    }
+  },
+  {
+    "click": "#memSave"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>{const s=document.getElementById('memState').innerText;return JSON.stringify({state:s,path:document.getElementById('memPath').innerText.slice(0,4),savedOk:s.indexOf('已存')>=0,takesEffect:s.indexOf('生效')>=0})})()",
+    "must": [
+      "savedOk",
+      "takesEffect"
+    ],
+    "note": "存完要说两件事：存了多少字、从下一条消息起生效。只回「已保存」不够——人不知道有没有真的落盘、什么时候起作用"
+  },
+  {
+    "type": {
+      "sel": "#gBox",
+      "text": "回答一律用中文，短句优先。",
+      "enter": false
+    }
+  },
+  {
+    "click": "#gSave"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "Promise.all([fetch('/api/memory?scope=global').then(r=>r.json())]).then(a=>JSON.stringify({readBack:a[0].text,at:a[0].path.split(String.fromCharCode(92)).slice(-1),ok:a[0].text.indexOf('回答一律用中文')>=0,inFile:a[0].path.indexOf('MEMORY.md')>=0}))",
+    "must": [
+      "ok",
+      "inFile"
+    ],
+    "note": "全局记忆那句要**从盘上读回来**（不是界面自己记着），而且落在 MEMORY.md 这个文件名上——界面上写着存了、盘上没有，是这类功能最坏的坏法"
+  },
+  {
+    "shot": "m02-memory-saved"
+  },
+  {
+    "type": {
+      "sel": "#skName",
+      "text": "review",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#skDesc",
+      "text": "先给我看这次改动的问题",
+      "enter": false
+    }
+  },
+  {
+    "type": {
+      "sel": "#skText",
+      "text": "把刚才那一轮改动的文件逐个 read 回来，指出：1) 有没有改错的地方 2) 有没有漏掉的调用点。不要直接动手改。",
+      "enter": false
+    }
+  },
+  {
+    "click": "#skSave"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>{const rows=document.querySelectorAll('#skillList .rl').length;const st=document.getElementById('skState').innerText;return JSON.stringify({rows,state:st,one:rows==1,slashHint:st.indexOf('/')>=0})})()",
+    "must": [
+      "one",
+      "slashHint"
+    ],
+    "note": "存完技能列表该正好一条，并且状态那句要告诉人怎么用（打 / 就能用）——只说「保存成功」等于把下一步留给人猜"
+  },
+  {
+    "eval": "(()=>{const b=document.getElementById('box');b.value='/rev';b.dispatchEvent(new Event('input',{bubbles:true}))})()"
+  },
+  {
+    "sleep": 500
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#slash').innerText;return JSON.stringify({menu:t.replace(/\\s+/g,' | ').slice(0,80),hasSkill:t.indexOf('技能')>=0,hasReview:t.indexOf('review')>=0})})()",
+    "must": [
+      "hasSkill",
+      "hasReview"
+    ],
+    "note": "刚存的技能要出现在 / 菜单里，并且**标出它是技能**（技能和命令混在一列时，人分不清该点哪个）"
+  },
+  {
+    "shot": "m03-slash-with-skill"
+  },
+  {
+    "click": "#slash .it:last-child"
+  },
+  {
+    "sleep": 400
+  },
+  {
+    "eval": "(()=>{const v=document.getElementById('box').value;return JSON.stringify({filled:v.slice(0,24),ok:v.indexOf('把刚才那一轮')>=0})})()",
+    "must": [
+      "ok"
+    ],
+    "note": "点菜单里那条之后，输入框里填进去的是**技能正文**而不是技能名——填成名字的话人以为成功了，模型收到的却是一句标题"
+  },
+  {
+    "shot": "m04-skill-inserted"
+  },
+  {
+    "eval": "(()=>{const b=document.getElementById('box');b.value='';b.dispatchEvent(new Event('input',{bubbles:true}))})()"
+  },
+  {
+    "click": "#skillList [data-sk]"
+  },
+  {
+    "sleep": 700
+  },
+  {
+    "eval": "(()=>{const rows=document.querySelectorAll('#skillList .rl').length;return JSON.stringify({rows,gone:rows==0})})()",
+    "must": [
+      "gone"
+    ],
+    "note": "删完列表要真的空掉（期望是 0，所以判据自己算成布尔：must 里写 rows 会把「删干净了」判成失败）"
+  }
 ]
