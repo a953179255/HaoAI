@@ -25,6 +25,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.unit.dp
 import com.haoai.agent.platform.PcLink
 import com.haoai.agent.platform.PcOut
@@ -68,164 +75,214 @@ fun PcLinkScreen(
     // 页内那颗箭头走 onBack（screen 19→1 回设置），返回键得做同一件事。
     androidx.activity.compose.BackHandler { onBack() }
 
-    Column(
+    // 与定时任务/技能库/MCP 那三屏同一套「全局壁纸」接线：那三屏都是收了 wallpaper 参数
+    // 并真的画出来，本屏原本只收不画——开了「壁纸应用于所有页面」之后别的页面都铺上壁纸，
+    // 唯独这屏是一块实底色（2026-09-30 用户报：电脑联动页背景是白的）。
+    Box(
         Modifier
             .fillMaxSize()
-            // 转场页面必须有实底，否则卡片缝隙透空黑（与设置页同一处理）
+            // 转场页面必须有实底，否则卡片缝隙透空黑（与设置页同一处理）；
+            // 壁纸开着时由下面那层 Image 盖上它，这块实底只在没壁纸时兜底
             .background(MaterialTheme.colorScheme.background)
     ) {
-        GlassPageBar(backdrop = backdrop, title = "电脑联动", onBack = onBack)
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        // ★ 页面专属采样画布（与 ScheduleScreen 同因）：转场中主/子页并存时若共用共享画布，
+        //   两壳挂载节点每帧互相 record 覆盖 → 磨砂消失约一秒。挂载与采样都留在本页。
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
+        // ★ 首帧预热：新页首帧采样层是空的（挂载节点 draw 之后才 record），转场中玻璃会空几帧；
+        //   先 record 一张壁纸打底，首帧即磨砂。只做一次——每帧都 record 会让壁纸抽搐。
+        var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+        var glassPreheated by remember { mutableStateOf(false) }
+        val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
+        val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
+        androidx.compose.runtime.SideEffect {
+            if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
+                val img = wallpaper.asImageBitmap()
+                glassPreheated = true
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                    drawImage(
+                        img,
+                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
+                    )
+                }
+            }
+        }
+        // 壁纸层本身铺在采样宿主里：玻璃采的就是这一层，卡片磨砂才对得上背景
+        Box(
+            Modifier
+                .matchParentSize()
+                .appLayer(localBackdrop)
+                .onSizeChanged { glassHostSize = it }
         ) {
-            item {
-                GlassCard(
-                    onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp),
-                    surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            HaoChip(if (st.paired) "已配对" else "没配对", if (st.paired) HaoTone.Accent else HaoTone.Neutral)
-                            HaoChip(if (st.polling) "轮询中" else "没在轮询", HaoTone.Neutral)
-                            if (st.waiting > 0) HaoChip("等 ${st.waiting} 条", HaoTone.Warn)
-                        }
-                        Text(
-                            if (st.paired) "${st.base}　·　设备名 ${st.device.ifBlank { "未命名" }}"
-                            else "在电脑上：HaoAI 网页界面 →「工具」页签 → 手机联动 → 生成配对码（六位、120 秒内有效、只能用一次）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (st.lastNote.isNotBlank()) {
-                            Text(
-                                "上一次问：" + st.lastNote +
-                                    (if (st.lastAt > 0) "（${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(st.lastAt))}）" else ""),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
+            if (wallpaper != null) {
+                val wpImage = remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
             }
-
-            item { HaoGroupLabel("配对新电脑") }
-            item {
-                GlassCard(
-                    onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp),
-                    surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
+        }
+        Column(Modifier.fillMaxSize()) {
+                GlassPageBar(backdrop = localBackdrop, title = "电脑联动", onBack = onBack)
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedTextField(
-                            value = base, onValueChange = { base = it }, singleLine = true,
-                            label = { Text("电脑地址") },
-                            placeholder = { Text("如 192.168.1.20:8720") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = code, onValueChange = { if (it.length <= 6) code = it }, singleLine = true,
-                            label = { Text("配对码") },
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        if (note.isNotBlank()) {
-                            // 成没成要用颜色分开说：这句是"配上了"还是"没配上"，人扫一眼就该知道
-                            Text(note, style = MaterialTheme.typography.bodySmall,
-                                color = if (noteOk) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.error)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
-                                enabled = !busy && pcNormalizeBase(base) != null && code.length == 6,
-                                onClick = {
-                                    busy = true; note = ""
-                                    scope.launch {
-                                        // 先 pair 拿到 token，再落盘：中间任何一步失败都不该留下半份配置
-                                        val pr = PcLink(base).pair(code, android.os.Build.MODEL ?: "手机")
-                                        when (pr) {
-                                            is PcOut.Ok -> {
-                                                val sv = PcWatchdog.save(base, pr.value.token, pr.value.device)
-                                                noteOk = sv is PcOut.Ok
-                                                note = when (sv) {
-                                                    is PcOut.Ok -> "配上了：${pr.value.device}"
-                                                    is PcOut.Fail -> sv.message
-                                                }
-                                            }
-                                            is PcOut.Fail -> { note = pr.message; noteOk = false }
-                                        }
-                                        busy = false
-                                    }
-                                }
-                            ) { Text(if (busy) "配对中…" else "配对") }
-                            OutlinedButton(
-                                onClick = { note = "地址要的是 IP 或主机名，可以带端口（不填用 8720）。手机和电脑得在同一个网段。"; noteOk = false }
-                            ) { Text("地址要求") }
-                        }
-                    }
-                }
-            }
-
-            item { HaoGroupLabel("提醒") }
-            item {
-                GlassCard(
-                    onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp),
-                    surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    item {
+                        GlassCard(
+                            onClick = {}, backdrop = localBackdrop, shape = RoundedCornerShape(16.dp),
+                            surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
                         ) {
-                            Column(Modifier.fillMaxWidth(0.72f)) {
-                                Text("后台提醒", style = MaterialTheme.typography.bodyMedium)
+                            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    HaoChip(if (st.paired) "已配对" else "没配对", if (st.paired) HaoTone.Accent else HaoTone.Neutral)
+                                    HaoChip(if (st.polling) "轮询中" else "没在轮询", HaoTone.Neutral)
+                                    if (st.waiting > 0) HaoChip("等 ${st.waiting} 条", HaoTone.Warn)
+                                }
                                 Text(
-                                    "电脑上有要批的东西时弹通知，通知上可直接点「允许一次 / 本任务都允许 / 拒绝」",
+                                    if (st.paired) "${st.base}　·　设备名 ${st.device.ifBlank { "未命名" }}"
+                                    else "在电脑上：HaoAI 网页界面 →「工具」页签 → 手机联动 → 生成配对码（六位、120 秒内有效、只能用一次）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (st.lastNote.isNotBlank()) {
+                                    Text(
+                                        "上一次问：" + st.lastNote +
+                                            (if (st.lastAt > 0) "（${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(st.lastAt))}）" else ""),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item { HaoGroupLabel("配对新电脑") }
+                    item {
+                        GlassCard(
+                            onClick = {}, backdrop = localBackdrop, shape = RoundedCornerShape(16.dp),
+                            surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedTextField(
+                                    value = base, onValueChange = { base = it }, singleLine = true,
+                                    label = { Text("电脑地址") },
+                                    placeholder = { Text("如 192.168.1.20:8720") },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = code, onValueChange = { if (it.length <= 6) code = it }, singleLine = true,
+                                    label = { Text("配对码") },
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                if (note.isNotBlank()) {
+                                    // 成没成要用颜色分开说：这句是"配上了"还是"没配上"，人扫一眼就该知道
+                                    Text(note, style = MaterialTheme.typography.bodySmall,
+                                        color = if (noteOk) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.error)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Button(
+                                        enabled = !busy && pcNormalizeBase(base) != null && code.length == 6,
+                                        onClick = {
+                                            busy = true; note = ""
+                                            scope.launch {
+                                                // 先 pair 拿到 token，再落盘：中间任何一步失败都不该留下半份配置
+                                                val pr = PcLink(base).pair(code, android.os.Build.MODEL ?: "手机")
+                                                when (pr) {
+                                                    is PcOut.Ok -> {
+                                                        val sv = PcWatchdog.save(base, pr.value.token, pr.value.device)
+                                                        noteOk = sv is PcOut.Ok
+                                                        note = when (sv) {
+                                                            is PcOut.Ok -> "配上了：${pr.value.device}"
+                                                            is PcOut.Fail -> sv.message
+                                                        }
+                                                    }
+                                                    is PcOut.Fail -> { note = pr.message; noteOk = false }
+                                                }
+                                                busy = false
+                                            }
+                                        }
+                                    ) { Text(if (busy) "配对中…" else "配对") }
+                                    OutlinedButton(
+                                        onClick = { note = "地址要的是 IP 或主机名，可以带端口（不填用 8720）。手机和电脑得在同一个网段。"; noteOk = false }
+                                    ) { Text("地址要求") }
+                                }
+                            }
+                        }
+                    }
+
+                    item { HaoGroupLabel("提醒") }
+                    item {
+                        GlassCard(
+                            onClick = {}, backdrop = localBackdrop, shape = RoundedCornerShape(16.dp),
+                            surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.fillMaxWidth(0.72f)) {
+                                        Text("后台提醒", style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            "电脑上有要批的东西时弹通知，通知上可直接点「允许一次 / 本任务都允许 / 拒绝」",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    com.haoai.agent.ui.common.HaoSwitch(
+                                        checked = st.polling,
+                                        onCheckedChange = { on ->
+                                            if (on) { PcWatchdog.init(ctx); PcWatchdog.start() }
+                                            else PcWatchdog.stop()
+                                        }
+                                    )
+                                }
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    "每 20 秒问一次，且只在后台保活服务活着的时候问 —— 省电策略把服务杀掉之后就不会提醒。",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    OutlinedButton(enabled = !busy && st.paired, onClick = {
+                                        busy = true
+                                        scope.launch {
+                                            val act = PcWatchdog.pollOnce()
+                                            noteOk = true
+                                            note = when (act) {
+                                                is PcWatchAction.Notify -> "有 ${act.total} 条在等（其中 ${act.fresh} 条是新的），通知已弹"
+                                                PcWatchAction.Clear -> "电脑上没有要批的了，通知已收回"
+                                                PcWatchAction.Same -> "和上次一样，没有新的（不重复弹）"
+                                            }
+                                            busy = false
+                                        }
+                                    }) { Text("现在问一次") }
+                                    OutlinedButton(enabled = st.paired, onClick = {
+                                        scope.launch {
+                                            noteOk = true
+                                            // 电脑回的那句本身就说清了，别再冠一遍（实测拼出
+                                            // "已解除这台设备的配对：已解除这台设备的配对"）
+                                            note = PcWatchdog.forget().ifBlank { "已解除这台设备的配对" }
+                                        }
+                                    }) { Text("解除配对") }
+                                }
                             }
-                            com.haoai.agent.ui.common.HaoSwitch(
-                                checked = st.polling,
-                                onCheckedChange = { on ->
-                                    if (on) { PcWatchdog.init(ctx); PcWatchdog.start() }
-                                    else PcWatchdog.stop()
-                                }
-                            )
-                        }
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "每 20 秒问一次，且只在后台保活服务活着的时候问 —— 省电策略把服务杀掉之后就不会提醒。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedButton(enabled = !busy && st.paired, onClick = {
-                                busy = true
-                                scope.launch {
-                                    val act = PcWatchdog.pollOnce()
-                                    noteOk = true
-                                    note = when (act) {
-                                        is PcWatchAction.Notify -> "有 ${act.total} 条在等（其中 ${act.fresh} 条是新的），通知已弹"
-                                        PcWatchAction.Clear -> "电脑上没有要批的了，通知已收回"
-                                        PcWatchAction.Same -> "和上次一样，没有新的（不重复弹）"
-                                    }
-                                    busy = false
-                                }
-                            }) { Text("现在问一次") }
-                            OutlinedButton(enabled = st.paired, onClick = {
-                                scope.launch {
-                                    noteOk = true
-                                    // 电脑回的那句本身就说清了，别再冠一遍（实测拼出
-                                    // "已解除这台设备的配对：已解除这台设备的配对"）
-                                    note = PcWatchdog.forget().ifBlank { "已解除这台设备的配对" }
-                                }
-                            }) { Text("解除配对") }
                         }
                     }
                 }
-            }
         }
     }
 }
