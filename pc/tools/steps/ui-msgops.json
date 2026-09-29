@@ -16,7 +16,9 @@
   "sleep": 2500
  },
  {
-  "eval": "({btns:[...document.querySelectorAll('.view.on .acts2 .ab')].map(x=>x.textContent),cards:document.querySelectorAll('.view.on .card').length})"
+  "eval": "(()=>{const btns=[...document.querySelectorAll('.view.on .acts2 .ab')].map(x=>x.textContent);return {hasQuote:btns.some(t=>t=='引用'),hasDel:btns.some(t=>t=='删这一句'),hasCard:document.querySelectorAll('.view.on .card').length>=1}})()",
+  "must": ["hasQuote", "hasDel", "hasCard"],
+  "note": "跑完之后：工具卡在、消息操作条上有后面两步真要用的那两颗钮（引用 / 删这一句）——按钮没了，下面的步骤会变成「点不到」的空转"
  },
  {
   "eval": "(()=>{const m=document.querySelector('.view.on .msg.user');m.querySelector?0:0;[...m.parentElement.querySelectorAll('*')];const bar=m.nextElementSibling;const b=[...bar.querySelectorAll('.ab')].find(x=>x.textContent=='引用');b.click();return 'clicked'})()"
@@ -25,7 +27,9 @@
   "sleep": 600
  },
  {
-  "eval": "({head:document.querySelector('#box').value.slice(0,18),quoted:document.querySelector('#box').value.startsWith('> '),caret:document.querySelector('#box').selectionStart,toast:document.querySelector('#toast').textContent})"
+  "eval": "(()=>{const b=document.querySelector('#box');return {quoted:b.value.startsWith('> '),head:b.value.indexOf('写一个')>=0,caretAtEnd:b.selectionStart===b.value.length}})()",
+  "must": ["quoted", "head", "caretAtEnd"],
+  "note": "引用之后：输入框开头是 markdown 引用行且带的是那句原文，光标落在引用末尾（不然人接着打的字会插到引用前面）"
  },
  {
   "shot": "m01-quote"
@@ -40,10 +44,14 @@
   "sleep": 1200
  },
  {
-  "eval": "({tag:(document.querySelector('#sessions .ptag')||{}).textContent,first:document.querySelector('#sessions .it').dataset.pinned,rows:document.querySelectorAll('#sessions .it').length})"
+  "eval": "(()=>{const first=document.querySelector('#sessions .it');return {tagged:!!document.querySelector('#sessions .ptag'),pinnedFlag:!!first&&first.dataset.pinned=='1',rows:document.querySelectorAll('#sessions .it').length>0}})()",
+  "must": ["tagged", "pinnedFlag", "rows"],
+  "note": "点置顶之后：列表行挂上「置顶」标签、行上的 data-pinned 翻成 1（不是只在界面上画了一下）"
  },
  {
-  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'服务端第一条 pinned='+l[0].pinned+' 共 '+l.length+' 条')"
+  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>({pinned:!!(l[0]&&l[0].pinned),has:l.length>0}))",
+  "must": ["pinned", "has"],
+  "note": "服务端也认：置顶落了盘（界面改了、盘上没改=刷新就没了）"
  },
  {
   "shot": "m02-pinned"
@@ -55,7 +63,9 @@
   "sleep": 1200
  },
  {
-  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'再点一次之后 pinned='+l[0].pinned+' 标签还在不在：'+!!document.querySelector('#sessions .ptag'))"
+  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>({none:l.every(s=>!s.pinned),tagGone:!document.querySelector('#sessions .ptag')}))",
+  "must": ["none", "tagGone"],
+  "note": "再点一次真的取消：服务端没有任何置顶、界面上标签也收回（只收界面不收盘=刷新又冒出来）"
  },
  {
   "shot": "m04-after-unpin"
@@ -67,7 +77,9 @@
   "sleep": 700
  },
  {
-  "eval": "(()=>{const i=window.__s.messages.findIndex(m=>m.role=='tool');return fetch('/api/delmsg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:curId,index:String(i)})}).then(r=>r.json()).then(d=>'删工具回复：'+JSON.stringify(d))})()"
+  "eval": "(()=>{const i=window.__s.messages.findIndex(m=>m.role=='tool');return fetch('/api/delmsg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:curId,index:String(i)})}).then(r=>r.json()).then(d=>({found:i>=0,refused:d.ok===false&&String(d.error||'').indexOf('工具回复')>=0}))})()",
+  "must": ["found", "refused"],
+  "note": "单独删工具回复要被拒（Engine.deleteAt：工具回复不能单独删，得删它上面那条调用）——悄悄删掉会让历史里留下没有调用方的孤儿结果"
  },
  {
   "eval": "(()=>{window.confirm=()=>true;const ms=[...document.querySelectorAll('.view.on .msg.user')],m=ms[ms.length-1],b=[...m.nextElementSibling.querySelectorAll('.ab')].find(x=>x.textContent=='删这一句');b.click();return 'deleting'})()"
@@ -76,7 +88,9 @@
   "sleep": 2200
  },
  {
-  "eval": "({toast:document.querySelector('#toast').textContent,msgs:document.querySelectorAll('.view.on .msg').length,cards:document.querySelectorAll('.view.on .card').length})"
+  "eval": "(()=>{const toast=document.querySelector('#toast').textContent;return {toast:toast.length>0,gone:document.querySelectorAll('.view.on .msg.user').length===0,msgs:document.querySelectorAll('.view.on .msg').length,cards:document.querySelectorAll('.view.on .card').length}})()",
+  "must": ["gone"],
+  "note": "删这一句真的没了（用户消息一条不剩）；toast 与剩余条数只打印给人看"
  },
  {
   "shot": "m03-deleted"

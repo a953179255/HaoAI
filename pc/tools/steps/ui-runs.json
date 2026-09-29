@@ -33,7 +33,9 @@
     "sleep": 3000
   },
   {
-    "eval": "fetch('/api/runs').then(r=>r.json()).then(d=>({count:d.count,goals:d.items.map(x=>x.goal.slice(0,12)),triggers:d.items.map(x=>x.trigger),verdicts:d.items.map(x=>x.verdict)}))"
+    "eval": "fetch('/api/runs').then(r=>r.json()).then(d=>({count:d.count>=3,items:(d.items||[]).length>=3,allGoal:(d.items||[]).every(x=>!!x.goal)}))",
+    "must": ["count", "items", "allGoal"],
+    "note": "三句话跑完：运行账本三条都在、每条带目标（不留档=自动化不可回看）"
   },
   {
     "click": "#tabs button[data-t=usage]"
@@ -42,10 +44,14 @@
     "sleep": 1400
   },
   {
-    "eval": "(()=>{const rows=[...document.querySelectorAll('#runs .rr')];const r=rows[0];const rr=r?r.getBoundingClientRect():null;return {rows:rows.length,first:r?r.textContent.replace(/\\s+/g,' ').slice(0,70):'',inViewport:!!(rr&&rr.top>=0&&rr.bottom<=innerHeight),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,btns:rows.map(x=>!!x.querySelector('[data-r]')).filter(Boolean).length}})()"
+    "eval": "(()=>{const rows=[...document.querySelectorAll('#runs .rr')];const r=rows[0];const rr=r?r.getBoundingClientRect():null;return {rows:rows.length>=3,inViewport:!!(rr&&rr.top>=0&&rr.bottom<=innerHeight),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,btns:rows.filter(x=>!!x.querySelector('[data-r]')).length>=1}})()",
+    "must": ["rows", "inViewport", "noOverflow", "btns"],
+    "note": "用量页签底部：三条历史在、第一行看得见、页面没被撑宽、每行带重跑按钮"
   },
   {
-    "eval": "(()=>{const r=document.querySelector('#runs .rr');if(!r)return 'no row';const rail=document.querySelector('.rail.r').getBoundingClientRect();const sp=r.querySelector('.r2 span').getBoundingClientRect();const btn=r.querySelector('[data-r]').getBoundingClientRect();return {goalW:Math.round(sp.width),goalText:r.querySelector('.r2 span').textContent.slice(0,18),rowH:Math.round(r.getBoundingClientRect().height),btnFits:btn.right<=rail.right+1,btnVisible:btn.width>0&&btn.right<=rail.right+1,railRight:Math.round(rail.right),btnRight:Math.round(btn.right),railScrollX:document.querySelector('.rail.r').scrollWidth>rail.width+1}})()"
+    "eval": "(()=>{const r=document.querySelector('#runs .rr');if(!r)return {hasRow:false};const rail=document.querySelector('.rail.r').getBoundingClientRect();const sp=r.querySelector('.r2 span').getBoundingClientRect();const btn=r.querySelector('[data-r]').getBoundingClientRect();return {hasRow:true,goalW:Math.round(sp.width),rowH:Math.round(r.getBoundingClientRect().height)>0,btnFits:btn.right<=rail.right+1,btnVisible:btn.width>0,noRailOverflow:!(document.querySelector('.rail.r').scrollWidth>rail.width+1)}})()",
+    "must": ["hasRow", "goalW", "rowH", "btnFits", "btnVisible", "noRailOverflow"],
+    "note": "行的几何：目标列有宽度、行有高、重跑按钮在右栏里且没被裁（按钮跑出栏外=看得见点不到）、右栏不横向溢出"
   },
   {
     "shot": "h01-runs"
@@ -57,7 +63,9 @@
     "sleep": 700
   },
   {
-    "eval": "(()=>({boxValue:document.querySelector('#box').value,focused:document.activeElement.id,toast:document.querySelector('.toast')?document.querySelector('.toast').textContent:''}))()"
+    "eval": "(()=>({filled:document.querySelector('#box').value.length>0,focused:document.activeElement.id==='box'}))()",
+    "must": ["filled", "focused"],
+    "note": "点重跑：目标填回输入框并聚焦（人可以直接回车，也可以改两个字再发）"
   },
   {
     "key": "Enter"
@@ -66,7 +74,9 @@
     "sleep": 3200
   },
   {
-    "eval": "fetch('/api/runs').then(r=>r.json()).then(d=>({count:d.count,newest:d.items[0]&&d.items[0].goal.slice(0,14),trigger:d.items[0]&&d.items[0].trigger}))"
+    "eval": "fetch('/api/runs').then(r=>r.json()).then(d=>({count:d.count>=4,newest:!!(d.items[0]&&d.items[0].goal)}))",
+    "must": ["count", "newest"],
+    "note": "回车发出之后账本多出第四条（重跑也是要留档的）"
   },
   {
     "key": "P",
@@ -79,7 +89,9 @@
     "sleep": 700
   },
   {
-    "eval": "(()=>{const p=document.querySelector('#pal');const items=[...document.querySelectorAll('#palList .pi')];const r=p.getBoundingClientRect();return {open:p.classList.contains('on'),items:items.length,groups:[...new Set(items.slice(0,12).map(x=>x.querySelector('em').textContent))].join(','),focused:document.activeElement.id,w:Math.round(r.width),top:Math.round(r.top),inViewport:r.top>=0&&r.right<=innerWidth+1}})()"
+    "eval": "(()=>{const p=document.querySelector('#pal');const items=[...document.querySelectorAll('#palList .pi')];const r=p.getBoundingClientRect();return {open:p.classList.contains('on'),items:items.length>=10,groups:items.slice(0,12).some(x=>!!x.querySelector('em')),inViewport:r.top>=0&&r.right<=innerWidth+1}})()",
+    "must": ["open", "items", "groups", "inViewport"],
+    "note": "Ctrl+Shift+P 打开面板：条目够多、每条带分组标签、浮层在视口里"
   },
   {
     "type": {
@@ -92,7 +104,9 @@
     "sleep": 1200
   },
   {
-    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];return {items:items.length,texts:items.map(x=>x.textContent.replace(/\\s+/g,' ').slice(0,26)).join(' | '),firstSel:items[0]&&items[0].classList.contains('sel')}})()"
+    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];return {one:items.length===1,firstSel:!!(items[0]&&items[0].classList.contains('sel'))}})()",
+    "must": ["one", "firstSel"],
+    "note": "搜 git：只该命中「打开 Git」这一条（命令、面板、会话、文件都不含 git），且它就是选中态——多匹配一条=回车可能开错东西"
   },
   {
     "shot": "h02-palette"
@@ -104,7 +118,9 @@
     "sleep": 300
   },
   {
-    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];const i=items.findIndex(x=>x.classList.contains('sel'));return {selIndex:i,total:items.length,picked:items[i]?items[i].textContent.replace(/\\s+/g,' ').slice(0,24):''}})()"
+    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];const i=items.findIndex(x=>x.classList.contains('sel'));return {one:items.length===1,stillFirst:i===0,valid:i>=0}})()",
+    "must": ["one", "stillFirst", "valid"],
+    "note": "只有一条结果时下方向键不越界也不换人（选中态还停在那唯一一条上，回车才不会开错）"
   },
   {
     "key": "Enter"
@@ -113,7 +129,9 @@
     "sleep": 1200
   },
   {
-    "eval": "(()=>({palClosed:!document.querySelector('#pal').classList.contains('on'),gitTabOn:document.querySelector('#tabs button[data-t=git]').classList.contains('on'),panelOn:!!document.querySelector('#tab-git.on'),gitRows:document.querySelectorAll('#gitList .gr').length}))()"
+    "eval": "(()=>({palClosed:!document.querySelector('#pal').classList.contains('on'),gitTabOn:document.querySelector('#tabs button[data-t=git]').classList.contains('on'),panelOn:!!document.querySelector('#tab-git.on')}))()",
+    "must": ["palClosed", "gitTabOn", "panelOn"],
+    "note": "回车执行：面板收掉、Git 页签被打开并激活（入口漂了=点了只关面板不开页）"
   },
   {
     "key": "P",
@@ -136,7 +154,9 @@
     "sleep": 900
   },
   {
-    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];return {items:items.length,first:items[0]?items[0].textContent.replace(/\\s+/g,' ').slice(0,30):''}})()"
+    "eval": "(()=>{const items=[...document.querySelectorAll('#palList .pi')];return {has:items.length>=1,firstHit:!!(items[0]&&items[0].textContent.indexOf('数据')>=0)}})()",
+    "must": ["has", "firstHit"],
+    "note": "搜「数据与备份」：有结果且排第一的是那个设置节（点回车要跳到它）"
   },
   {
     "key": "Enter"
@@ -145,7 +165,9 @@
     "sleep": 800
   },
   {
-    "eval": "(()=>{const hl=document.querySelector('.palnum');const dg=document.querySelector('#dialog');return {maskOn:document.querySelector('#mask').classList.contains('on'),drawerOpen:!!(dg&&dg.textContent.indexOf('数据与备份')>=0),highlighted:!!hl,scrolled:hl?Math.round(hl.getBoundingClientRect().top):-1}})()"
+    "eval": "(()=>{const hl=document.querySelector('.palnum');const dg=document.querySelector('#dialog');return {maskOn:document.querySelector('#mask').classList.contains('on'),drawerOpen:!!(dg&&dg.textContent.indexOf('数据与备份')>=0),highlighted:!!hl}})()",
+    "must": ["maskOn", "drawerOpen", "highlighted"],
+    "note": "回车跳进设置抽屉、那一节被滚过去并套上高亮框（面板把人带到地方=入口的价值所在）"
   },
   {
     "shot": "h03-settings-jump"
@@ -157,7 +179,9 @@
     "sleep": 600
   },
   {
-    "eval": "(()=>({maskClosed:!document.querySelector('#mask').classList.contains('on'),palClosed:!document.querySelector('#pal').classList.contains('on')}))()"
+    "eval": "(()=>({maskClosed:!document.querySelector('#mask').classList.contains('on'),palClosed:!document.querySelector('#pal').classList.contains('on')}))()",
+    "must": ["maskClosed", "palClosed"],
+    "note": "Esc 把设置抽屉关掉，面板本来就是收着的"
   },
   {
     "eval": "(()=>{document.querySelector('#box').value='正在打字时不该被抢键';document.querySelector('#box').focus();return 'ready'})()"
@@ -166,7 +190,9 @@
     "key": "y"
   },
   {
-    "eval": "(()=>({boxValue:document.querySelector('#box').value,palStillClosed:!document.querySelector('#pal').classList.contains('on')}))()"
+    "eval": "(()=>({typed:document.querySelector('#box').value.endsWith('y'),palStillClosed:!document.querySelector('#pal').classList.contains('on')}))()",
+    "must": ["typed", "palStillClosed"],
+    "note": "面板关着的时候按 y 就该是打字（快捷键不许在面板关闭后继续吃键）"
   },
   {
     "key": "P",
@@ -179,7 +205,9 @@
     "sleep": 500
   },
   {
-    "eval": "(()=>({opened:document.querySelector('#pal').classList.contains('on')}))()"
+    "eval": "(()=>({opened:document.querySelector('#pal').classList.contains('on'),items:document.querySelectorAll('#palList .pi').length>=10}))()",
+    "must": ["opened", "items"],
+    "note": "面板还能再打开，且列表是满的（上一次关面板时把列表清空=下次打开是空壳）"
   },
   {
     "click": "#box"
@@ -188,6 +216,8 @@
     "sleep": 400
   },
   {
-    "eval": "(()=>({closedByOutsideClick:!document.querySelector('#pal').classList.contains('on')}))()"
+    "eval": "(()=>({closedByOutsideClick:!document.querySelector('#pal').classList.contains('on')}))()",
+    "must": ["closedByOutsideClick"],
+    "note": "点面板外面把它关掉（点外面不关=浮层会把页面锁死）"
   }
 ]

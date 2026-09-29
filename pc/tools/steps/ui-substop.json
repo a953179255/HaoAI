@@ -14,10 +14,14 @@
     "timeout": 25000
   },
   {
-    "eval": "(()=>{const c=document.querySelector('.view.on .card.sub');const b=c.querySelector('.substop');const s=c.querySelector('.sb');const r=b.getBoundingClientRect();const sr=c.querySelector('summary').getBoundingClientRect();const lr=s.getBoundingClientRect();return {cards:document.querySelectorAll('.view.on .card.sub').length,label:s.textContent,btnText:b.textContent,w:Math.round(r.width),h:Math.round(r.height),notFullWidth:r.width<sr.width/3,rightOfLabel:r.left>=lr.right,insideSummary:r.top>=sr.top-1&&r.bottom<=sr.bottom+1,noOverlapWithTick:r.left>lr.left}})()"
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.sub');const b=c.querySelector('.substop');const s=c.querySelector('.sb');const r=b.getBoundingClientRect();const sr=c.querySelector('summary').getBoundingClientRect();const lr=s.getBoundingClientRect();return {one:document.querySelectorAll('.view.on .card.sub').length===1,labeled:s.textContent.length>0,btnSized:r.width>0&&r.height>0,notFullWidth:r.width<sr.width/3,rightOfLabel:r.left>=lr.right,insideSummary:r.top>=sr.top-1&&r.bottom<=sr.bottom+1,noOverlapWithTick:r.left>lr.left}})()",
+   "must": ["one", "labeled", "btnSized", "notFullWidth", "rightOfLabel", "insideSummary", "noOverlapWithTick"],
+   "note": "「停掉它」在卡头里：尺寸正常、不占满整行、排在标题右边不压着 tick 与文字（几何是这批判据的重点——按钮挤到标题上=点标题会误触停任务）"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running,subs:s.subs}))"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running===true,subs:(s.subs||[]).length>=1}))",
+   "must": ["running", "subs"],
+   "note": "状态侧：父会话在跑、子任务挂着（subloop 模式每轮睡 0.5 秒，才来得及按停止）"
   },
   {
     "shot": "s01-sub-running"
@@ -29,10 +33,14 @@
     "sleep": 900
   },
   {
-    "eval": "(()=>{const b=document.querySelector('.view.on .card.sub .substop');return {btn:b?b.textContent:'(gone)',disabled:b?b.disabled:null}})()"
+    "eval": "(()=>{const b=document.querySelector('.view.on .card.sub .substop');return {settled:!b||b.disabled===true,stillRunning:!!b&&b.disabled!==true}})()",
+   "must": ["settled"],
+   "note": "按下去之后两条路都算数：按钮禁用着（正在收尾）或已经随 done 摘掉（mock 这条收得快，900ms 内就结束了）——关键是它不再是可点的「停掉它」（停请求没发出去=白按）；stillRunning 只打印"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({subsAfterClick:s.subs,running:s.running}))"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({finished:s.running===false,subsGone:(s.subs||[]).length===0}))",
+   "must": ["finished", "subsGone"],
+   "note": "收尾比预想快：900ms 时整轮已经停干净（running=false、子任务摘牌）——停请求要的就是这个终态"
   },
   {
     "shot": "s02-sub-stopping"
@@ -41,10 +49,14 @@
     "sleep": 6000
   },
   {
-    "eval": "(()=>{const c=document.querySelector('.view.on .card.sub');return {cards:document.querySelectorAll('.view.on .card.sub').length,done:!!(c&&c.classList.contains('done')),logLines:c?c.querySelectorAll('.sublog .sl').length:0,stopBtnGone:!(c&&c.querySelector('.substop')),lastAns:[...document.querySelectorAll('.view.on .msg.ans')].pop().textContent.replace(/\\s+/g,' ').slice(0,30)}})()"
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.sub');const ans=[...document.querySelectorAll('.view.on .msg.ans')].pop();return {one:document.querySelectorAll('.view.on .card.sub').length===1,done:!!(c&&c.classList.contains('done')),logLines:c?c.querySelectorAll('.sublog .sl').length>=2:false,stopBtnGone:!(c&&c.querySelector('.substop')),hasAns:!!ans&&ans.textContent.replace(/\\s+/g,' ').trim().slice(0,30).length>0}})()",
+   "must": ["one", "done", "logLines", "stopBtnGone", "hasAns"],
+   "note": "停完之后：子任务卡收尾打勾、停按钮消失（做完了就没得停）、日志有两行以上、父会话把话说完了（不是停掉=整条会话死掉）"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running,subs:s.subs,taskNote:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='task').map(m=>(m.content||'').replace(/\\s+/g,' ').slice(0,46)),roles:(s.messages||[]).map(m=>m.role).join(',')}))"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({finished:s.running===false,subsGone:(s.subs||[]).length===0,taskNoted:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='task').some(m=>(m.content||'').length>0)}))",
+   "must": ["finished", "subsGone", "taskNoted"],
+   "note": "状态侧收口：整轮停干净了（running=false、子任务摘牌）、task 那条工具结果非空（父会话拿到的是「被停掉的交代」而不是空手）"
   },
   {
     "shot": "s03-after-stop"

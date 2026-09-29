@@ -9,7 +9,9 @@
   "sleep": 1200
  },
  {
-  "eval": "(()=>{const pr=document.querySelector('.md pre.fold'),cs=getComputedStyle(pr);return({pv:document.querySelectorAll('.cp.pv').length,more:document.querySelectorAll('.cp.more').length,folded:document.querySelectorAll('.md pre.fold').length,scrollH:pr.scrollHeight,shownH:Math.round(pr.getBoundingClientRect().height),maxH:cs.maxHeight})})()"
+  "eval": "(()=>{const pr=document.querySelector('.md pre.fold'),cs=pr?getComputedStyle(pr):null;return {pv:document.querySelectorAll('.cp.pv').length>=1,more:document.querySelectorAll('.cp.more').length>=1,folded:document.querySelectorAll('.md pre.fold').length>=1,taller:!!pr&&pr.scrollHeight>Math.round(pr.getBoundingClientRect().height)+20,maxH:!!cs&&cs.maxHeight!=='none'&&cs.maxHeight!=='0px'}})()",
+  "must": ["pv", "more", "folded", "taller", "maxH"],
+  "note": "HTML 块带「预览」钮、超 20 行的块被折起来且真有更多内容（scrollHeight 大于显示高=不是空折）、折高由 max-height 压着"
  },
  {
   "click": ".cp.pv"
@@ -18,7 +20,9 @@
   "sleep": 900
  },
  {
-  "eval": "({on:document.querySelector('#mask').classList.contains('on'),h3:document.querySelector('#dialog h3').textContent,sandbox:document.querySelector('#pvFrame').getAttribute('sandbox'),hasSameOrigin:document.querySelector('#pvFrame').getAttribute('sandbox').includes('same-origin'),w:Math.round(document.querySelector('#dialog').getBoundingClientRect().width),title:document.title,srcdoc:document.querySelector('#pvFrame').getAttribute('srcdoc').includes('静态样式已经生效')})"
+  "eval": "(()=>{const fr=document.querySelector('#pvFrame');const h3=(document.querySelector('#dialog h3')||{}).textContent||'';return {on:document.querySelector('#mask').classList.contains('on'),title:h3.indexOf('预览')>=0,scriptsOff:(fr.getAttribute('sandbox')||'')==='',notHacked:document.title!=='HACKED',srcdoc:fr.getAttribute('srcdoc').indexOf('静态样式已经生效')>=0,w:Math.round(document.querySelector('#dialog').getBoundingClientRect().width)>300}})()",
+  "must": ["on", "title", "scriptsOff", "notHacked", "srcdoc", "w"],
+  "note": "预览弹出来：标题对、sandbox 一开始什么都不给（脚本不跑、碰不到父页——document.title 还没被改成 HACKED）、正文是那个 html、宽度像回事"
  },
  {
   "shot": "p01-preview-sandboxed"
@@ -30,7 +34,9 @@
   "sleep": 1600
  },
  {
-  "eval": "({sandbox:document.querySelector('#pvFrame').getAttribute('sandbox'),titleAfter:document.title,hacked:document.title=='HACKED'})"
+  "eval": "(()=>{const fr=document.querySelector('#pvFrame');const sb=fr.getAttribute('sandbox')||'';return {scriptsOn:sb.indexOf('allow-scripts')>=0,noSameOrigin:sb.indexOf('allow-same-origin')<0,notHacked:document.title!=='HACKED'}})()",
+  "must": ["scriptsOn", "noSameOrigin", "notHacked"],
+  "note": "勾「允许脚本」：sandbox 只多出 allow-scripts、仍然没有 allow-same-origin，于是那段 parent.document.title='HACKED' 够不着父页（给了脚本又给同源=模型写的页面能操作本机这个端口）"
  },
  {
   "shot": "p02-preview-scripts-on"
@@ -42,7 +48,9 @@
   "sleep": 600
  },
  {
-  "eval": "(()=>{const t=document.querySelector('.cp.more'),pr=t.closest('pre');const before=Math.round(pr.getBoundingClientRect().height);t.click();return({foldedAfter:pr.classList.contains('fold'),before:before,after:Math.round(pr.getBoundingClientRect().height),scrollH:pr.scrollHeight,label:t.textContent})})()"
+  "eval": "(()=>{const t=document.querySelector('.cp.more'),pr=t.closest('pre');const before=Math.round(pr.getBoundingClientRect().height);const label0=t.textContent;t.click();return {expanded:!pr.classList.contains('fold'),grew:Math.round(pr.getBoundingClientRect().height)>before,label:label0}})()",
+  "must": ["expanded", "grew"],
+  "note": "「展开全部」把折起来的长代码摊开（折高 320 → 全高，且 fold 类真摘了——只改文字不改类=刷新回折）"
  },
  {
   "shot": "p03-long-code-expanded"

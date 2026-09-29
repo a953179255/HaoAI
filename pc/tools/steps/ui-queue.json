@@ -12,7 +12,9 @@
   "sleep": 2500
  },
  {
-  "eval": "({running:cur().running,btn:document.querySelector('#send').textContent.trim(),msgs:document.querySelectorAll('.view.on .msg').length})"
+  "eval": "(()=>{const b=document.querySelector('#send');return {running:cur().running===true,stopMode:b.classList.contains('stop'),msgs:document.querySelectorAll('.view.on .msg').length>=1}})()",
+  "must": ["running", "stopMode", "msgs"],
+  "note": "长任务跑着：会话在跑、发送钮切成停止态（class 挂上了样式才会红）、这句话进历史了"
  },
  {
   "type": {
@@ -24,10 +26,14 @@
   "sleep": 1200
  },
  {
-  "eval": "({row:document.querySelector('#queueRow').classList.contains('on'),chips:[...document.querySelectorAll('.qchip b')].map(x=>x.textContent),label:(document.querySelector('.qrow .ql')||{}).textContent,msgs:document.querySelectorAll('.view.on .msg').length,box:document.querySelector('#box').value})"
+  "eval": "(()=>{const row=document.querySelector('#queueRow');const chips=[...document.querySelectorAll('.qchip b')].map(x=>x.textContent);return {row:row.classList.contains('on'),queued:chips.some(t=>t.indexOf('排在后面')>=0),box:document.querySelector('#box').value===''}})()",
+  "must": ["row", "queued", "box"],
+  "note": "跑着的时候再打一句：进了队列条（那句话出现在 chip 上）、输入框清空（不留在框里让人重复发）"
  },
  {
-  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>'state.queue='+JSON.stringify((s.queue||[]).map(x=>x.t)))"
+  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>({queued:(s.queue||[]).length===1,running:s.running===true}))",
+  "must": ["queued", "running"],
+  "note": "状态侧：队列里一条、任务还在跑（界面画的和状态里存的是两套，只验一边会漏）"
  },
  {
   "shot": "q01-queued"
@@ -39,10 +45,14 @@
   "sleep": 1200
  },
  {
-  "eval": "({row:document.querySelector('#queueRow').classList.contains('on'),chips:document.querySelectorAll('.qchip').length,msgs:document.querySelectorAll('.view.on .msg').length})"
+  "eval": "(()=>{const row=document.querySelector('#queueRow');return {rowOff:!row.classList.contains('on'),gone:document.querySelectorAll('.qchip').length===0}})()",
+  "must": ["rowOff", "gone"],
+  "note": "点 ✕ 撤回：队列条收掉、chip 清空（只收界面不收状态=下一次 hydrate 又冒出来）"
  },
  {
-  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>'撤回后 state.queue='+(s.queue||[]).length+' 还在跑='+s.running)"
+  "eval": "fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).then(s=>({empty:(s.queue||[]).length===0,running:s.running===true}))",
+  "must": ["empty", "running"],
+  "note": "状态里队列也空了、长任务没被撤回顺手停掉（撤回的是那句话，不是这个活）"
  },
  {
   "shot": "q02-withdrawn"

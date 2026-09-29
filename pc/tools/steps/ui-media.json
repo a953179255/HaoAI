@@ -17,19 +17,29 @@
     "sleep": 14000
   },
   {
-    "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const as=[...document.querySelectorAll('.view.on .pvmed audio')];const v=vs[0];const a=as[0];const card=v?v.closest('.card'):null;const vr=v?v.getBoundingClientRect():null;const ar=a?a.getBoundingClientRect():null;const cr=card?card.getBoundingClientRect():null;return {videos:vs.length,audios:as.length,decodeW:v?v.videoWidth:0,decodeH:v?v.videoHeight:0,vidDur:+(v?v.duration:0).toFixed(2),readyState:v?v.readyState:-1,audioDur:+(a?a.duration:0).toFixed(2),geoVW:vr?Math.round(vr.width):0,geoVH:vr?Math.round(vr.height):0,geoAW:ar?Math.round(ar.width):0,geoAH:ar?Math.round(ar.height):0,insideCard:!!(vr&&cr&&vr.left>=cr.left-2&&vr.right<=cr.right+2),noPageOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,frameThumb:(()=>{const i=document.querySelector('.view.on .thumbs img');return i?{nw:i.naturalWidth,nh:i.naturalHeight}:'none'})()}})()"
+    "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const as=[...document.querySelectorAll('.view.on .pvmed audio')];const v=vs[0];const a=as[0];const card=v?v.closest('.card'):null;const vr=v?v.getBoundingClientRect():null;const cr=card?card.getBoundingClientRect():null;const i=document.querySelector('.view.on .thumbs img');return {video:vs.length>=1,audio:as.length>=1,decodeW:v?v.videoWidth:0,decodeH:v?v.videoHeight:0,vidDur:+(v?v.duration:0).toFixed(2)>0,audioDur:+(a?a.duration:0).toFixed(2)>0,geo:vr?vr.width>0:false,insideCard:!!(vr&&cr&&vr.left>=cr.left-2&&vr.right<=cr.right+2),noPageOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth,frameOk:!!i&&i.naturalWidth>0}})()",
+   "must": ["video", "audio", "decodeW", "decodeH", "vidDur", "audioDur", "geo", "insideCard", "noPageOverflow", "frameOk"],
+   "note": "两个播放器都在卡里：视频解出160宽的画面、时长为正、音频也解得出、抽的那一帧缩略图像素在、页面没被撑破"
   },
   {
-    "eval": "(()=>{const out=[];document.querySelectorAll('.view.on .pvmed video,.view.on .pvmed audio').forEach(el=>{el.scrollIntoView({block:'center',behavior:'instant'});const r=el.getBoundingClientRect();const card=el.closest('.card');out.push(el.tagName+' w='+Math.round(r.width)+' h='+Math.round(r.height)+' inViewport='+(r.top>=0&&r.bottom<=innerHeight+1)+' cardOpen='+(card?card.open:'none'))});return out.join(' | ')})()"
+    "eval": "(()=>{const els=[...document.querySelectorAll('.view.on .pvmed video,.view.on .pvmed audio')];let eachOk=els.length>=2;for(const el of els){el.scrollIntoView({block:'center',behavior:'instant'});const r=el.getBoundingClientRect();if(!(r.width>0&&r.top>=-1&&r.bottom<=innerHeight+1))eachOk=false}return {n:els.length>=2,eachInView:eachOk}})()",
+   "must": ["n", "eachInView"],
+   "note": "逐个滚进视野量一遍：每个播放器都滚得进来、有宽、在视口内（卡比视口高时「整卡居中」会把上下两头挤出去，所以按元素各自量）"
   },
   {
-    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r('no element');if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState});const t=setTimeout(()=>r({timeout:true,rs:el.readyState,ns:el.networkState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState})};el.load()});const v=document.querySelector('.view.on .pvmed video');const a=document.querySelector('.view.on .pvmed audio');return {video:await one(v),audio:await one(a)}})()"
+    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r({w:0,d:0,missing:true});if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState});const t=setTimeout(()=>r({timeout:true,w:el.videoWidth||0,d:0,rs:el.readyState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState})};el.load()});const v=document.querySelector('.view.on .pvmed video');const a=document.querySelector('.view.on .pvmed audio');const video=await one(v),audio=await one(a);return {videoOk:!video.missing&&!video.timeout&&video.w>0&&video.d>0,audioOk:!audio.missing&&!audio.timeout&&audio.d>0}})()",
+   "must": ["videoOk", "audioOk"],
+   "note": "强制 load 一遍元数据也要拿得到（readyState<1 时等 loadedmetadata；9 秒等不到=文件或 Range 有问题）"
   },
   {
-    "eval": "(async()=>{const p=(s)=>encodeURIComponent(s);const out={};const r1=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('小.mp4'),{headers:{Range:'bytes=100-199'}});out.rangeStatus=r1.status;out.contentRange=r1.headers.get('content-range');out.acceptRanges=r1.headers.get('accept-ranges');out.gotBytes=(await r1.arrayBuffer()).byteLength;const r2=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('音轨.mp3'));out.mp3Status=r2.status;out.mp3Type=r2.headers.get('content-type');const r3=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('../../../Windows/win.ini'));out.escapeStatus=r3.status;const r4=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('根本没有这个.mp4'));out.missingStatus=r4.status;return out})()"
+    "eval": "(async()=>{const p=(s)=>encodeURIComponent(s);const out={};const r1=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('小.mp4'),{headers:{Range:'bytes=100-199'}});out.rangeStatus=r1.status;out.acceptRanges=r1.headers.get('accept-ranges');out.gotBytes=(await r1.arrayBuffer()).byteLength;const r2=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('音轨.mp3'));out.mp3Status=r2.status;out.mp3Type=r2.headers.get('content-type');const r3=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('../../../Windows/win.ini'));out.escapeStatus=r3.status;const r4=await fetch('/api/media?sid='+encodeURIComponent(curId)+'&path='+p('根本没有这个.mp4'));out.missingStatus=r4.status;return {range:out.rangeStatus===206&&out.gotBytes===100,accepts:(out.acceptRanges||'').indexOf('bytes')>=0,mp3:out.mp3Status===200&&(out.mp3Type||'').indexOf('audio')===0,escapeBlocked:out.escapeStatus>=400,missing:out.missingStatus>=400}})()",
+   "must": ["range", "accepts", "mp3", "escapeBlocked", "missing"],
+   "note": "播放要靠的 HTTP 边界：Range 真回 206 且只给 100 字节、声明可分段、mp3 按音频发、越界与不存在的一律 4xx（200 兜底=把工作区外的文件当媒体发出去）"
   },
   {
-    "eval": "(async()=>{const v=document.querySelector('.view.on .pvmed video');const t0=v.currentTime;return await new Promise(res=>{const to=setTimeout(()=>res({seeked:false,before:+t0.toFixed(2),after:+v.currentTime.toFixed(2)}),6000);v.onseeked=()=>{clearTimeout(to);res({seeked:true,before:+t0.toFixed(2),after:+v.currentTime.toFixed(2)})};v.currentTime=2.0})})()"
+    "eval": "(async()=>{const v=document.querySelector('.view.on .pvmed video');const t0=v.currentTime;return await new Promise(res=>{const to=setTimeout(()=>res({seeked:false,before:+t0.toFixed(2),after:+v.currentTime.toFixed(2)}),6000);v.onseeked=()=>{clearTimeout(to);res({seeked:true,before:+t0.toFixed(2),after:+v.currentTime.toFixed(2)})};v.currentTime=2.0})})()",
+    "must": ["seeked"],
+    "note": "拖到第 2 秒要真的 seek 得动（没有 Range 支持=播放器只能从头播，拖进度条会弹回去）"
   },
   {
     "shot": "b07-players"
@@ -45,54 +55,78 @@
     "timeout": 20000
   },
   {
-    "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const as=[...document.querySelectorAll('.view.on .pvmed audio')];const v=vs[0];return {videosAfterReload:vs.length,audiosAfterReload:as.length,decodeW:v?v.videoWidth:0,inCard:!!(v&&v.closest('.card')),toolHeads:[...document.querySelectorAll('.view.on .card b')].map(b=>b.textContent).join(','),lastAns:[...document.querySelectorAll('.view.on .msg.ans')].pop().textContent.replace(/\\s+/g,' ').slice(0,40)}})()"
+    "eval": "(()=>{const vs=[...document.querySelectorAll('.view.on .pvmed video')];const as=[...document.querySelectorAll('.view.on .pvmed audio')];const v=vs[0];const heads=[...document.querySelectorAll('.view.on .card b')].map(b=>b.textContent);const ans=[...document.querySelectorAll('.view.on .msg.ans')].pop();return {video:vs.length>=1,audio:as.length>=1,inCard:!!(v&&v.closest('.card')),hasMediaCard:heads.some(t=>t==='media'),hasAns:!!ans&&ans.textContent.replace(/\\s+/g,' ').trim().length>0}})()",
+   "must": ["video", "audio", "inCard", "hasMediaCard", "hasAns"],
+   "note": "刷新之后播放器还在（持久化的是 media 字段与工具卡，不是内存里的 <video>）"
   },
   {
-    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r('no element');if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState});const t=setTimeout(()=>r({timeout:true,rs:el.readyState,ns:el.networkState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState})};el.load()});const v=document.querySelector('.view.on .pvmed video');const a=document.querySelector('.view.on .pvmed audio');return {afterReloadVideo:await one(v),afterReloadAudio:await one(a)}})()"
+    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r({w:0,d:0,missing:true});if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState});const t=setTimeout(()=>r({timeout:true,w:0,d:0,rs:el.readyState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState})};el.load()});const v=document.querySelector('.view.on .pvmed video');const a=document.querySelector('.view.on .pvmed audio');const video=await one(v),audio=await one(a);return {videoOk:!video.missing&&!video.timeout&&video.w>0&&video.d>0,audioOk:!audio.missing&&!audio.timeout&&audio.d>0}})()",
+    "must": ["videoOk", "audioOk"],
+    "note": "刷新后元数据重新拿：视频要宽有宽时长有值、音频也一样（读不到=Range 或文件本身坏了）"
   },
   {
-    "eval": "(async()=>{const wait=(el,ms)=>new Promise(r=>{const t=setTimeout(()=>r('TIMEOUT rs='+el.readyState+' ns='+el.networkState+' err='+(el.error?el.error.code:'-')),ms);el.onloadedmetadata=()=>{clearTimeout(t);r('OK w='+el.videoWidth+' d='+el.duration)}});const v=document.querySelector('.view.on .pvmed video');const inCard=v.closest('.card');const open=inCard?inCard.open:'no-card';inCard&&(inCard.open=true);v.preload='auto';v.load();const a=await wait(v,7000);const fresh=document.createElement('video');fresh.src=v.getAttribute('src');fresh.preload='auto';document.body.appendChild(fresh);const b=await wait(fresh,7000);fresh.remove();return 'vis='+document.visibilityState+' detailsOpen='+open+' 卡里的='+a+' 新塞body的='+b})()"
+    "eval": "(async()=>{const wait=(el,ms)=>new Promise(r=>{if(!el)return r('MISSING');const t=setTimeout(()=>r('TIMEOUT rs='+el.readyState+' ns='+el.networkState+' err='+(el.error?el.error.code:'-')),ms);el.onloadedmetadata=()=>{clearTimeout(t);r('OK w='+el.videoWidth+' d='+el.duration)}});const v=document.querySelector('.view.on .pvmed video');const inCard=v?v.closest('.card'):null;const open=inCard?inCard.open:'no-card';inCard&&(inCard.open=true);v.preload='auto';v.load();const a=await wait(v,7000);const fresh=document.createElement('video');fresh.src=v.getAttribute('src');fresh.preload='auto';document.body.appendChild(fresh);const b=await wait(fresh,7000);fresh.remove();return {wasOpen:open===true,inCardOk:String(a).indexOf('OK')===0,freshOk:String(b).indexOf('OK')===0}})()",
+    "must": ["inCardOk", "freshOk"],
+    "note": "卡里那条与新塞进 body 的那条都要能加载出来——两条都测才能分清「卡的问题」还是「src/服务端的问题」"
   },
   {
-    "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=files]');if(!b)return 'no tab btn';b.click();return {tabOn:b.classList.contains('on'),filesBox:!!document.querySelector('#files')}})()"
+    "eval": "(()=>{const b=document.querySelector('#tabs button[data-t=files]');if(!b)return {noTab:true};b.click();return {tabOn:b.classList.contains('on'),filesBox:!!document.querySelector('#files')}})()",
+    "must": ["tabOn", "filesBox"],
+    "note": "切到文件页签（产物要在文件页里点得开）"
   },
   {
     "sleep": 1800
   },
   {
-    "eval": "(()=>{const e=[...document.querySelectorAll('#files .fe')];return {root:document.querySelector('#filePath').textContent,listed:e.map(x=>x.dataset.p)}})()"
+    "eval": "(()=>{const e=[...document.querySelectorAll('#files .fe')];return {listed:e.length>=1,hasAudio:e.some(x=>x.dataset.p==='音轨.mp3'),hasVideo:e.some(x=>x.dataset.p==='小.mp4')}})()",
+    "must": ["listed", "hasAudio", "hasVideo"],
+    "note": "两个产物都在文件清单里（转码版与音轨——找不到=跑完还得自己去目录里翻）"
   },
   {
-    "eval": "(()=>{const hit=[...document.querySelectorAll('#files .fe')].find(x=>x.dataset.p==='音轨.mp3');if(hit)hit.click();return {clickedAudioFile:!!hit}})()"
+    "eval": "(()=>{const hit=[...document.querySelectorAll('#files .fe')].find(x=>x.dataset.p==='音轨.mp3');if(hit)hit.click();return {clickedAudioFile:!!hit}})()",
+    "must": ["clickedAudioFile"],
+    "note": "清单里点得到音轨"
   },
   {
     "sleep": 1600
   },
   {
-    "eval": "(()=>{const d=document.querySelector('#dialog');const a=d?d.querySelector('audio'):null;const r=a?a.getBoundingClientRect():null;return {maskOn:document.querySelector('#mask').classList.contains('on'),hasAudio:!!a,srcHead:a?a.currentSrc.slice(0,40):'',geoW:r?Math.round(r.width):0,geoH:r?Math.round(r.height):0,decodeDur:+(a?a.duration:0).toFixed(2)}})()"
+    "eval": "(()=>{const d=document.querySelector('#dialog');const a=d?d.querySelector('audio'):null;const r=a?a.getBoundingClientRect():null;return {mask:document.querySelector('#mask').classList.contains('on'),hasAudio:!!a,srcOk:!!a&&a.currentSrc.indexOf('/api/media')>=0,geo:!!r&&r.width>0&&r.height>0,dur:+(a?a.duration:0).toFixed(2)>0}})()",
+    "must": ["mask", "hasAudio", "srcOk", "geo", "dur"],
+    "note": "点文件页里的音轨：弹出播放器、src 走 /api/media、元素有尺寸、时长解得出来"
   },
   {
     "shot": "b07-file-audio"
   },
   {
-    "eval": "(()=>{const c=document.querySelector('#dialog .acts .btn');if(c)c.click();return {closed:!document.querySelector('#mask').classList.contains('on')}})()"
+    "eval": "(()=>{const c=document.querySelector('#dialog .acts .btn');if(c)c.click();return {closed:!document.querySelector('#mask').classList.contains('on')}})()",
+    "must": ["closed"],
+    "note": "关得掉（弹窗卡住=下一个文件点不开）"
   },
   {
-    "eval": "(()=>{const hit=[...document.querySelectorAll('#files .fe')].find(x=>x.dataset.p==='小.mp4');if(hit)hit.click();return {clickedVideoFile:!!hit}})()"
+    "eval": "(()=>{const hit=[...document.querySelectorAll('#files .fe')].find(x=>x.dataset.p==='小.mp4');if(hit)hit.click();return {clickedVideoFile:!!hit}})()",
+    "must": ["clickedVideoFile"],
+    "note": "清单里也点得到转码版"
   },
   {
     "sleep": 1800
   },
   {
-    "eval": "(()=>{const d=document.querySelector('#dialog');const v=d?d.querySelector('video'):null;const r=v?v.getBoundingClientRect():null;return {hasVideo:!!v,decodeW:v?v.videoWidth:0,decodeH:v?v.videoHeight:0,geoW:r?Math.round(r.width):0,geoH:r?Math.round(r.height):0,inDialog:!!(v&&v.closest('#dialog'))}})()"
+    "eval": "(()=>{const d=document.querySelector('#dialog');const v=d?d.querySelector('video'):null;const r=v?v.getBoundingClientRect():null;return {hasVideo:!!v,geo:!!r&&r.width>0&&r.height>0,inDialog:!!(v&&v.closest('#dialog'))}})()",
+    "must": ["hasVideo", "geo", "inDialog"],
+    "note": "视频也弹得出来且有尺寸（decode 放下一步带超时地等，这里不赌元数据时机）"
   },
   {
-    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r('no element');if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState});const t=setTimeout(()=>r({timeout:true,rs:el.readyState,ns:el.networkState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState,ns:el.networkState})};el.load()});const v=document.querySelector('#dialog .pvmed video');const a=document.querySelector('#dialog .pvmed audio');return {video:await one(v),audio:await one(a)}})()"
+    "eval": "(async()=>{const one=(el)=>new Promise(r=>{if(!el)return r({w:0,d:0,missing:true});if(el.readyState>=1)return r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState});const t=setTimeout(()=>r({timeout:true,w:0,d:0,rs:el.readyState}),9000);el.onloadedmetadata=()=>{clearTimeout(t);r({w:el.videoWidth||0,d:+(el.duration||0).toFixed(2),rs:el.readyState})};el.load()});const v=document.querySelector('#dialog .pvmed video');const a=document.querySelector('#dialog .pvmed audio');const video=await one(v);return {videoOk:!video.missing&&!video.timeout&&video.w>0&&video.d>0,audioThere:!!a}})()",
+    "must": ["videoOk"],
+    "note": "对话框里的播放器也要真解得出来（.pvmed 是共用的渲染路径；视频文件的弹窗只有视频，audioThere 只打印）"
   },
   {
     "shot": "b07-file-video"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>({running:s.running,mediaMsgs:(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='media').map(m=>({head:(m.content||'').split('\\n')[0].slice(0,30),media:m.media}))}))"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>{const t=(s.messages||[]).filter(m=>m.role=='tool'&&m.name=='media');return {finished:s.running===false,mediaMsgs:t.length>=3,withMedia:t.some(m=>(m.media||[]).length>0)}})",
+    "must": ["finished", "mediaMsgs", "withMedia"],
+    "note": "收口：这轮跑完了、media 工具至少三次调用都在历史里、有结果真带着媒体附件（player 的数据来源）"
   }
 ]

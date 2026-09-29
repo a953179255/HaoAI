@@ -8,10 +8,12 @@
   {"type": {"sel": "#crPrompt", "text": "把今天的会话归档一下，有失败的说清哪一条"}},
   {"click": "#crAdd"},
   {"sleep": 700},
-  {"eval": "(()=>{const r=document.querySelector('.rail.r').getBoundingClientRect();const b=document.querySelector('#crAdd'),s=getComputedStyle(b);return {w:innerWidth,inView:r.right<=innerWidth+1&&r.width>100,rows:document.querySelectorAll('#cronList .rl.cron').length,name:(document.querySelector('#cronList b')||{}).textContent,addBtn:s.borderTopWidth+'/'+s.color+'/w'+Math.round(b.getBoundingClientRect().width),cutBelow:[...document.querySelectorAll('#cronList .rl.cron')].map(c=>Math.round(c.getBoundingClientRect().bottom)).filter(x=>x>Math.round(r.bottom)+1).length}})()"},
+  {"eval": "(()=>{const r=document.querySelector('.rail.r');const rr=r.getBoundingClientRect();const b=document.querySelector('#crAdd');const cards=[...document.querySelectorAll('#cronList .rl.cron')];const cut=cards.map(c=>Math.round(c.getBoundingClientRect().bottom)).filter(x=>x>Math.round(rr.bottom)+1).length;return {narrow:innerWidth<=900,inView:rr.right<=innerWidth+1&&rr.width>100,one:cards.length===1,named:(document.querySelector('#cronList b')||{}).textContent==='夜间归档',addBtn:!!b&&b.getBoundingClientRect().width>0,reachable:cut===0||r.scrollHeight>r.clientHeight}})()",
+   "must": ["narrow", "inView", "one", "named", "addBtn", "reachable"], "note": "窄栏（760px）里：右栏浮层在视口内、任务加进去了且名字对、「加为定时任务」钮有宽度（窄栏最容易把它挤没）、被裁的行能滚出来"},
   {"shot": "n01-cron-narrow"},
   {"click": "#cronList [data-cr=\"run\"]"},
   {"sleep": 2500},
-  {"eval": "({sessions:[...document.querySelectorAll('.sess .it')].map(i=>i.textContent.trim().slice(0,24)),unread:document.querySelectorAll('.sess .it .nb').length})"},
+  {"eval": "(()=>{const sess=[...document.querySelectorAll('.sess .it')].map(i=>i.textContent);return {ran:sess.some(t=>t.indexOf('夜间归档')>=0),unread:document.querySelectorAll('.sess .it .nb').length}})()",
+   "must": ["ran"], "note": "窄栏里点「跑一次」同样起会话（窄栏最容易把操作钮藏起来导致点了没反应）；unread 只打印"},
   {"shot": "n02-cron-narrow-ran"}
 ]

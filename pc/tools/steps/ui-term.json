@@ -6,7 +6,9 @@
     "sleep": 900
   },
   {
-    "eval": "(()=>({panelOn:!!document.querySelector('#tab-term.on'),out:document.querySelector('#termOut').textContent.slice(0,20),tabs:document.querySelectorAll('#termTabs button').length}))()"
+    "eval": "(()=>({panelOn:!!document.querySelector('#tab-term.on'),hasIn:!!document.querySelector('#tIn'),hasNew:!!document.querySelector('#tNew')}))()",
+   "must": ["panelOn", "hasIn", "hasNew"],
+   "note": "终端页签打开：面板激活、输入框与「开一个」按钮都在（空面板=页签只是个壳）"
   },
   {
     "type": {
@@ -22,10 +24,14 @@
     "sleep": 2500
   },
   {
-    "eval": "fetch('/api/shells').then(r=>r.json()).then(d=>({n:d.shells.length,labels:d.shells.map(x=>x.label),alive:d.shells.map(x=>x.alive),cwdTail:d.shells.map(x=>x.cwd.split(String.fromCharCode(92)).pop())}))"
+    "eval": "fetch('/api/shells').then(r=>r.json()).then(d=>({opened:d.shells.length>=1,label:d.shells.some(x=>x.label==='面板开的'),alive:d.shells.some(x=>x.alive===true)}))",
+   "must": ["opened", "label", "alive"],
+   "note": "开出来的 shell 落了注册表：数量、标签（下一步按它认人）、活着（起来又立刻死=白开）"
   },
   {
-    "eval": "(()=>({tabs:[...document.querySelectorAll('#termTabs button')].map(b=>b.textContent),on:[...document.querySelectorAll('#termTabs button.on')].map(b=>b.textContent)}))()"
+    "eval": "(()=>{const tabs=[...document.querySelectorAll('#termTabs button')];return {has:tabs.length>=1,active:tabs.filter(b=>b.classList.contains('on')).length===1}})()",
+   "must": ["has", "active"],
+   "note": "界面上多出一个页签且它是当前页（没有激活态=下面读的是空面板）"
   },
   {
     "type": {
@@ -41,10 +47,14 @@
     "sleep": 2000
   },
   {
-    "eval": "(()=>{const t=document.querySelector('#termOut').textContent;return {sawLine:t.indexOf('面板里跑的一行')>=0,lines:t.split('\\n').filter(Boolean).length}})()"
+    "eval": "(()=>{const t=document.querySelector('#termOut').textContent;return {sawLine:t.indexOf('面板里跑的一行')>=0}})()",
+   "must": ["sawLine"],
+   "note": "命令的输出真回到面板（echo 的那行在；管道版没有回显与提示符，判据只认输出本身）"
   },
   {
-    "eval": "(()=>{const id=document.querySelector('#termTabs button.on').dataset.id;return fetch('/api/shell/tail?id='+id+'&after=0').then(r=>r.json()).then(d=>({again:d.lines.filter(x=>x.indexOf('面板里跑的一行')>=0).length,alive:d.alive}))})()"
+    "eval": "(()=>{const id=document.querySelector('#termTabs button.on').dataset.id;return fetch('/api/shell/tail?id='+id+'&after=0').then(r=>r.json()).then(d=>({again:d.lines.filter(x=>x.indexOf('面板里跑的一行')>=0).length>=1,alive:d.alive===true}))})()",
+   "must": ["again", "alive"],
+   "note": "接口侧同一行也在（界面与 /api/shell/tail 读的是同一份缓冲，只验一边会漏）"
   },
   {
     "type": {
@@ -73,16 +83,24 @@
     "sleep": 2000
   },
   {
-    "eval": "(()=>{const t=document.querySelector('#termOut').textContent;return {stateKept:t.indexOf('值是 42')>=0,tail:t.split('\\n').filter(Boolean).slice(-3).join(' / ')}})()"
+    "eval": "(()=>{const t=document.querySelector('#termOut').textContent;return {stateKept:t.indexOf('值是 42')>=0}})()",
+   "must": ["stateKept"],
+   "note": "同一个进程里前后两条命令共享状态（v=42 下一条读得到；每条命令各起一个进程=「终端」就是假的）"
   },
   {
-    "eval": "(()=>{const rail=document.querySelector('.rail.r').getBoundingClientRect();const bad=[];document.querySelectorAll('#tab-term button,#tab-term input,#tab-term select').forEach(e=>{const r=e.getBoundingClientRect();if(r.right>rail.right+1||r.width<=0)bad.push((e.id||e.tagName)+' right='+Math.round(r.right)+' w='+Math.round(r.width))});return {railRight:Math.round(rail.right),overflowing:bad.length?bad.join(' , '):'none',sendW:Math.round(document.querySelector('#tSend').getBoundingClientRect().width),inW:Math.round(document.querySelector('#tIn').getBoundingClientRect().width),pageOverflow:document.documentElement.scrollWidth>document.documentElement.clientWidth}})()"
+    "eval": "(()=>{const rail=document.querySelector('.rail.r').getBoundingClientRect();const bad=[];document.querySelectorAll('#tab-term button,#tab-term input,#tab-term select').forEach(e=>{const r=e.getBoundingClientRect();if(r.right>rail.right+1||r.width<=0)bad.push(e.id||e.tagName)});return {fits:bad.length===0,sendW:Math.round(document.querySelector('#tSend').getBoundingClientRect().width)>0,inW:Math.round(document.querySelector('#tIn').getBoundingClientRect().width)>0,noPageOverflow:!(document.documentElement.scrollWidth>document.documentElement.clientWidth)}})()",
+   "must": ["fits", "sendW", "inW", "noPageOverflow"],
+   "note": "几何：面板里每个控件都在右栏内且有宽（挤出栏外=看得见点不到）、页面不横向溢出"
   },
   {
-    "eval": "fetch('/api/shell/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,shell:'bash',cwd:'../../',label:'越界'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:(d.error||'').slice(0,46)}))"
+    "eval": "fetch('/api/shell/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,shell:'bash',cwd:'../../',label:'越界'})}).then(r=>r.json()).then(d=>({refused:d.ok===false,says:!!d.error}))",
+   "must": ["refused", "says"],
+   "note": "cwd 越界当场拒并说清为什么（悄悄落在工作区外=终端成了逃逸口）"
   },
   {
-    "eval": "fetch('/api/shell/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,shell:'../calc',cwd:'',label:'任意程序'})}).then(r=>r.json()).then(d=>({ok:d.ok,error:(d.error||'').slice(0,46)}))"
+    "eval": "fetch('/api/shell/open',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sid:curId,shell:'../calc',cwd:'',label:'任意程序'})}).then(r=>r.json()).then(d=>({refused:d.ok===false,says:!!d.error}))",
+   "must": ["refused", "says"],
+   "note": "shell 只许白名单里的那几个（../calc 这种任意程序要拒——这是面板上「开一个」按下去会执行的东西）"
   },
   {
     "shot": "t01-terminal"
@@ -94,10 +112,14 @@
     "sleep": 1800
   },
   {
-    "eval": "fetch('/api/shells').then(r=>r.json()).then(d=>({left:d.shells.length,alive:d.shells.map(x=>x.alive)}))"
+    "eval": "fetch('/api/shells').then(r=>r.json()).then(d=>({left:d.shells.length===0,noAlive:d.shells.every(x=>x.alive!==true)}))",
+   "must": ["left", "noAlive"],
+   "note": "关掉终端=进程真的收掉（注册表空了、没有残留活口——只关界面不杀进程=留一堆后台 shell）"
   },
   {
-    "eval": "(()=>({state:document.querySelector('#termState').textContent,tabs:document.querySelectorAll('#termTabs button').length}))()"
+    "eval": "(()=>({said:document.querySelector('#termState').textContent.length>0,noTabs:document.querySelectorAll('#termTabs button').length===0}))()",
+   "must": ["said", "noTabs"],
+   "note": "关掉之后：状态行有交代、页签收干净"
   },
   {
     "shot": "t02-closed"

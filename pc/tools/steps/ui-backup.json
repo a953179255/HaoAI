@@ -9,7 +9,9 @@
     "sleep": 900
   },
   {
-    "eval": "(()=>{const dg=document.querySelector('#dialog');const k=dg.querySelector('#bKeys');return {section:!!dg.querySelector('#bList'),keyDefaultOn:k.checked,keyHint:(k.closest('.sw')||{textContent:''}).textContent.replace(/\\s+/g,' ').trim().slice(0,60),exportBtn:dg.querySelector('#bExport').textContent,state:dg.querySelector('#bState').textContent,note:dg.querySelector('#bList').textContent.trim().slice(0,40)}})()"
+    "eval": "(()=>{const dg=document.querySelector('#dialog');const k=dg.querySelector('#bKeys');return {section:!!dg.querySelector('#bList'),keysOffByDefault:k.checked===false,hasHint:(k.closest('.sw')||{textContent:''}).textContent.indexOf('明文 Key')>=0,exportBtn:dg.querySelector('#bExport').textContent.indexOf('导出')>=0}})()",
+   "must": ["section", "keysOffByDefault", "hasHint", "exportBtn"],
+   "note": "备份小节在设置里：列表格子在、**明文 Key 默认不勾**（默认带 key=一次导出把凭据摊在盘上）、说明写着是明文、导出按钮在"
   },
   {
     "shot": "b01-section"
@@ -21,7 +23,9 @@
     "sleep": 1800
   },
   {
-    "eval": "(()=>{const dg=document.querySelector('#dialog');const rows=[...dg.querySelectorAll('#bList .rl')];return {state:dg.querySelector('#bState').textContent,rows:rows.length,first:rows[0]?rows[0].textContent.replace(/\\s+/g,' ').trim().slice(0,70):null,hasRestore:!!(rows[0]&&rows[0].querySelector('[data-bres]')),hasDelete:!!(rows[0]&&rows[0].querySelector('[data-bdel]'))}})()"
+    "eval": "(()=>{const dg=document.querySelector('#dialog');const rows=[...dg.querySelectorAll('#bList .rl')];return {exported:dg.querySelector('#bState').textContent.indexOf('已导出')>=0,rows:rows.length>=1,hasRestore:!!(rows[0]&&rows[0].querySelector('[data-bres]')),hasDelete:!!(rows[0]&&rows[0].querySelector('[data-bdel]'))}})()",
+   "must": ["exported", "rows", "hasRestore", "hasDelete"],
+   "note": "导出之后：状态行报了已导出、列表多一行、那行带恢复与删除两颗按钮（没有恢复=白备份）"
   },
   {
     "shot": "b02-exported"
@@ -33,13 +37,17 @@
     "sleep": 400
   },
   {
-    "eval": "(()=>{const b=document.querySelector('#bList [data-bres]');const r=b.getBoundingClientRect();const row=b.closest('.rl').getBoundingClientRect();return {armed:b.textContent,w:Math.round(r.width),fits:r.right<=row.right+1&&r.left>=row.left,stillRows:document.querySelectorAll('#bList .rl').length,mask:document.querySelector('#mask').classList.contains('on')}})()"
+    "eval": "(()=>{const b=document.querySelector('#bList [data-bres]');const r=b.getBoundingClientRect();const row=b.closest('.rl').getBoundingClientRect();return {armed:b.getAttribute('data-arm')==='1',fits:r.right<=row.right+1&&r.left>=row.left&&r.width>0,stillRows:document.querySelectorAll('#bList .rl').length>=1,mask:document.querySelector('#mask').classList.contains('on')}})()",
+   "must": ["armed", "fits", "stillRows", "mask"],
+   "note": "第一下只是上膛（data-arm=1、按钮仍在行内、对话框不弹 confirm 也不关）——恢复会覆盖当前状态，一次点击就动手是不可逆的"
   },
   {
     "shot": "b03-armed"
   },
   {
-    "eval": "(()=>{const b=document.querySelector('#bList [data-bres]');const r=b.getBoundingClientRect();const row=b.closest('.rl');return {text:b.textContent,btnW:Math.round(r.width),btnLeft:Math.round(r.left),rowW:Math.round(row.getBoundingClientRect().width),btns:[...row.querySelectorAll('.ab')].map(x=>x.textContent)}})()"
+    "eval": "(()=>{const b=document.querySelector('#bList [data-bres]');const row=b.closest('.rl');const btns=[...row.querySelectorAll('.ab')].map(x=>x.textContent);return {stillArmed:b.getAttribute('data-arm')==='1',twoBtns:btns.length>=2}})()",
+   "must": ["stillArmed", "twoBtns"],
+   "note": "五秒内第二下之前上膛状态还在（没被重绘冲掉），行上两颗按钮都在"
   },
   {
     "click": "#bList [data-bres]"
@@ -48,10 +56,14 @@
     "sleep": 3000
   },
   {
-    "eval": "({reloaded:document.querySelector('#dialog h3')===null,mask:document.querySelector('#mask').classList.contains('on'),toast:document.querySelector('#toast').textContent})"
+    "eval": "(()=>({reloaded:document.querySelector('#dialog h3')===null,maskClosed:document.querySelector('#mask').classList.contains('on')===false}))()",
+   "must": ["reloaded", "maskClosed"],
+   "note": "恢复成功后页面自己重读了一遍（对话框回到未打开态、mask 收了——状态根都换了，留在旧页面上是脏的）"
   },
   {
-    "eval": "fetch('/api/backups').then(r=>r.json()).then(j=>({count:j.items.length,names:j.items.map(i=>i.name),hasPre:j.items.some(i=>i.name.indexOf('pre-restore-')===0)}))"
+    "eval": "fetch('/api/backups').then(r=>r.json()).then(j=>({count:j.items.length>=1,hasPre:j.items.some(i=>i.name.indexOf('pre-restore-')===0)}))",
+   "must": ["count", "hasPre"],
+   "note": "恢复前自动留了 pre-restore 备份（恢复本身不可逆时的后悔药，#1 的判据之一）"
   },
   {
     "shot": "b04-after-restore"

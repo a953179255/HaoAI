@@ -247,7 +247,7 @@ check(badSteps.length === 0, '每份剧本里的 eval 都是合法 JS', badSteps
  * 一次补完不现实，所以做成**棘轮**：只许变好。每补完一份就把下面的上限改小，
  * 补不完不许加新的零判据剧本。
  */
-const ZERO_GATE_CEILING = 30;   // 又补掉 ui-review(15 条判据，顺带抓到 --bad 从来没定义过)
+const ZERO_GATE_CEILING = 0;    // #99 清零：30 份零判据剧本已全部补上（本批只补判据，不许再出现新的零判据剧本）
 const zeroGate = [];
 for (const f of stepFiles) {
   let arr;

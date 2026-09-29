@@ -3,11 +3,16 @@
   {"type": {"sel": "#box", "text": "让子任务去调研 hello.txt 里有什么"}},
   {"goto": ".card.sub", "timeout": 25000},
   {"sleep": 600},
-  {"eval": "({subs:document.querySelectorAll('.card.sub').length,label:(document.querySelector('.card.sub .sb')||{}).textContent,lines:[...document.querySelectorAll('.card.sub .sl')].map(x=>x.textContent.slice(0,40)),tick:document.querySelector('.card.sub .tick').className})"},
+  {"eval": "(()=>{const c=document.querySelector('.card.sub');const label=(c&&c.querySelector('.sb')||{}).textContent||'';const tick=(c&&c.querySelector('.tick')||{}).className||'';return {one:document.querySelectorAll('.card.sub').length===1,labeled:label.indexOf('调研 hello.txt')>=0,tickState:tick==='tick run'||tick==='tick ok'}})()",
+   "must": ["one", "labeled", "tickState"],
+   "note": "子任务卡开出来：一张、标题带着 label（收起也看得见派了什么活）、tick 处在 run/ok 其中一个状态。注：sub 模式下 mock 没有节流，600ms 时子任务多半已经 done——「跑动中」那一帧拍不到，不拿它当判据"},
   {"shot": "s01-sub-running"},
   {"sleep": 6000},
-  {"eval": "({done:document.querySelectorAll('.card.sub.done').length,ans:([...(document.querySelectorAll('.card.sub .sl.ans'))].map(x=>x.textContent.slice(0,60)).join(' || '))})"},
+  {"eval": "(()=>{const done=document.querySelectorAll('.card.sub.done').length;const ans=[...document.querySelectorAll('.card.sub .sl.ans')].map(x=>x.textContent);return {done:done===1,hasAns:ans.some(t=>t.indexOf('结论')>=0)}})()",
+   "must": ["done", "hasAns"], "note": "跑完：卡片收起打勾、结论行回来了（.sl.ans 是 spawn 拿回的那份结论）"},
   {"shot": "s02-sub-done"},
-  {"eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'磁盘上的会话数='+l.length+' 标题='+l.map(s=>s.title).join(','))"},
-  {"eval": "({bodies:[...document.querySelectorAll('.card > .body')].map(b=>b.innerText.slice(0,36))})"}
+  {"eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>({single:l.length===1}))",
+   "must": ["single"], "note": "子任务不落盘（Engine.kt:1003：一次性调研出现在左侧列表里只会碍事）——列表还是原来那条"},
+  {"eval": "(()=>{const ans=[...document.querySelectorAll('.view.on .msg.ans')].pop();return {concluded:!!ans&&ans.textContent.indexOf('hello from HaoAI PC')>=0}})()",
+   "must": ["concluded"], "note": "父会话把子任务的结论说了出来（结论没回到父上下文=子任务白跑，父答的还是自己的话）"}
 ]

@@ -9,7 +9,9 @@
   "sleep": 1000
  },
  {
-  "eval": "({on:document.querySelector('#attRow').classList.contains('on'),chips:[...document.querySelectorAll('.atchip')].map(x=>x.textContent.replace(/\\s+/g,' ').trim()),box:document.querySelector('#box').value.replace(/\\s+/g,' ').trim().slice(0,70)})"
+  "eval": "(()=>{const chips=[...document.querySelectorAll('.atchip')].map(x=>x.textContent.replace(/\\s+/g,' ').trim());return {on:document.querySelector('#attRow').classList.contains('on'),one:chips.length===1,named:chips[0]?chips[0].indexOf('shot.png')>=0:false}})()",
+  "must": ["on", "one", "named"],
+  "note": "拖进来一张图：附件行亮起、一颗 chip、名字是它"
  },
  {
   "shot": "i01-chip"
@@ -17,21 +19,25 @@
  {
   "eval": "(()=>{const b=new Uint8Array([137,80,78,71,13,10,26,10].concat(Array(40).fill(67)));attachFiles([new File([b],'second.png',{type:'image/png'})]);return 'second'})()"
  },
- {
-  "sleep": 1000
- },
- {
-  "eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),n:document.querySelectorAll('.atchip').length})"
- },
+  {
+   "sleep": 1000
+  },
+  {
+   "eval": "(()=>{const names=[...document.querySelectorAll('.atchip b')].map(x=>x.textContent);return {two:document.querySelectorAll('.atchip').length===2,named:names.indexOf('second.png')>=0}})()",
+   "must": ["two", "named"],
+   "note": "第二张接得上（两张并排，不是替换掉第一张）"
+  },
  {
   "click": ".atchip:last-child em"
  },
- {
-  "sleep": 400
- },
- {
-  "eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),n:document.querySelectorAll('.atchip').length})"
- },
+  {
+   "sleep": 400
+  },
+  {
+   "eval": "(()=>{const names=[...document.querySelectorAll('.atchip b')].map(x=>x.textContent);return {one:document.querySelectorAll('.atchip').length===1,dropped:names.indexOf('second.png')<0}})()",
+   "must": ["one", "dropped"],
+   "note": "点 ✕ 摘掉的是刚那张（少一张、且正是 second.png）"
+  },
  {
   "shot": "i02-dropped"
  },
@@ -49,13 +55,17 @@
   "sleep": 2500
  },
  {
-  "eval": "({chips:document.querySelectorAll('.atchip').length,on:document.querySelector('#attRow').classList.contains('on'),user:(document.querySelector('.msg.user')||{}).textContent.replace(/\\s+/g,' ').trim().slice(0,60)})"
+  "eval": "(()=>{const u=document.querySelector('.msg.user');return {cleared:document.querySelectorAll('.atchip').length===0,rowOff:!document.querySelector('#attRow').classList.contains('on'),user:!!u&&u.textContent.replace(/\\s+/g,' ').indexOf('这张图里有什么')>=0}})()",
+  "must": ["cleared", "rowOff", "user"],
+  "note": "发出去之后附件行清空（不残留到下一句）、用户气泡里是那句话"
  },
  {
   "shot": "i03-sent"
  },
  {
-  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>'会话数='+l.length)"
+  "eval": "fetch('/api/sessions').then(r=>r.json()).then(l=>({single:l.length===1}))",
+  "must": ["single"],
+  "note": "发图没有把会话搞成两条（带着附件重开会话=下一句的图丢在旧会话里）"
  },
  {
   "eval": "(()=>{const bin=atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC');const b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);attachFiles([new File([b],'real.png',{type:'image/png'})]);return 'real png '+bin.length+'B'})()"
@@ -64,7 +74,9 @@
   "sleep": 1200
  },
  {
-  "eval": "({chips:[...document.querySelectorAll('.atchip b')].map(x=>x.textContent),running:!!document.querySelector('#send')&&document.querySelector('#box').value.length})"
+  "eval": "(()=>{const names=[...document.querySelectorAll('.atchip b')].map(x=>x.textContent);return {real:names.indexOf('real.png')>=0}})()",
+  "must": ["real"],
+  "note": "真图（1x1 PNG）接进附件行"
  },
  {
   "type": {
@@ -83,7 +95,9 @@
   "sleep": 3500
  },
  {
-  "eval": "({users:document.querySelectorAll('.msg.user').length,thumbs:document.querySelectorAll('.thumbs img').length,last:(a=>a?a.naturalWidth+'x'+a.naturalHeight+' '+(a.currentSrc||a.src).slice(-24):'')(document.querySelectorAll('.thumbs img')[document.querySelectorAll('.thumbs img').length-1]),labels:[...document.querySelectorAll('.thumbs i')].map(x=>x.textContent),chips:document.querySelectorAll('.atchip').length})"
+  "eval": "(()=>{const im=[...document.querySelectorAll('.thumbs img')];const last=im[im.length-1];return {users:document.querySelectorAll('.msg.user').length>=2,thumbs:im.length>=2,decoded:!!last&&last.naturalWidth>0,chips:document.querySelectorAll('.atchip').length===0}})()",
+  "must": ["users", "thumbs", "decoded", "chips"],
+  "note": "第二条也带图发出：两张图都进了消息流、真图解得出像素、附件行清空"
  },
  {
   "shot": "i04-thumb-live"
@@ -92,7 +106,9 @@
   "eval": "setTimeout(()=>location.reload(),60)"
  },
  {
-  "eval": "(async()=>{const im=[...document.querySelectorAll('.thumbs img')];const out=[];for(const i of im){const r=await fetch(i.src);out.push({src:i.src.slice(-30),status:r.status,ct:r.headers.get('content-type'),len:(await r.blob()).size,lazy:i.loading,complete:i.complete,w:i.naturalWidth})}return out})()"
+  "eval": "(async()=>{const im=[...document.querySelectorAll('.thumbs img')];const out=[];for(const i of im){const r=await fetch(i.src);out.push({st:r.status,ct:r.headers.get('content-type'),len:(await r.blob()).size})}return {n:im.length>=2,ok:out.length>=2&&out.every(x=>x.st===200&&x.ct==='image/png'&&x.len>0)}})()",
+  "must": ["n", "ok"],
+  "note": "刷新前先探一遍：每张缩略图都拉得动（200 + image/png + 真字节——404 或当文本发=换个页面就花）"
  },
  {
   "goto": "#box"
@@ -101,7 +117,9 @@
   "sleep": 1800
  },
  {
-  "eval": "(async()=>{const im=[...document.querySelectorAll('.thumbs img')];const out=[];for(const i of im){const r=await fetch(i.src);out.push({st:r.status,ct:(r.headers.get('content-type')||'').slice(0,9),bytes:(await r.blob()).size,w:i.naturalWidth})}return {users:document.querySelectorAll('.msg.user').length,thumbs:im.length,probe:out}})()"
+  "eval": "(async()=>{const im=[...document.querySelectorAll('.thumbs img')];const out=[];for(const i of im){const r=await fetch(i.src);out.push({st:r.status,ct:(r.headers.get('content-type')||'').slice(0,9),bytes:(await r.blob()).size})}return {users:document.querySelectorAll('.msg.user').length>=2,thumbs:im.length>=2,probe:out.length>=2&&out.every(x=>x.st===200&&x.ct==='image/png'&&x.bytes>0)}})()",
+  "must": ["users", "thumbs", "probe"],
+  "note": "刷新之后两条消息与两张图都还在，且照样拉得动（图只活在内存里=一刷新就没）"
  },
  {
   "shot": "i05-thumb-after-reload"

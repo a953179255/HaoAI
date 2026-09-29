@@ -31,18 +31,25 @@
   "sleep": 1200
  },
  {
-  "eval": "({all:document.querySelector('#usageAll').textContent,models:[...document.querySelectorAll('#usageModels .mrow b')].map(x=>x.textContent),row0:(document.querySelector('#usageModels .mrow span')||{}).textContent,barW:(document.querySelector('#usageModels .mrow i')||{}).style?document.querySelector('#usageModels .mrow i').style.width:null})"
+  "eval": "(()=>{const all=(document.querySelector('#usageAll')||{}).textContent||'';const rows=[...document.querySelectorAll('#usageModels .mrow')];const bar=rows[0]?rows[0].querySelector('i'):null;return {hasAll:all.length>0,one:rows.length>=1,bar:!!bar&&(bar.style.width||'').length>0}})()",
+  "must": ["hasAll", "one", "bar"],
+  "note": "用量总账有数、按模型至少一行、那一行的占比条有宽度（宽度是算出来填进 style 的，空=排版没跑）"
  },
  {
-  "eval": "({bars:document.querySelectorAll('#usageDays .bar').length,heights:[...document.querySelectorAll('#usageDays .bar span')].map(x=>Math.round(x.getBoundingClientRect().height)).filter(h=>h>0),labels:[...document.querySelectorAll('#usageDays .bar em')].slice(-2).map(x=>x.textContent),meta:document.querySelector('#usageMeta').textConten?t:''})"
+  "eval": "(()=>{const bars=[...document.querySelectorAll('#usageDays .bar')];const fills=bars.map(x=>x.querySelector('span')).filter(Boolean);const heights=fills.map(x=>Math.round(x.getBoundingClientRect().height)).filter(h=>h>0);const labels=[...document.querySelectorAll('#usageDays .bar em')].slice(-2).map(x=>x.textContent);const meta=(document.querySelector('#usageMeta')||{}).textContent||'';return {bars:bars.length>=1,grown:heights.length>=1,labels:labels.length>=1,hasMeta:meta.length>0}})()",
+  "must": ["bars", "grown", "labels", "hasMeta"],
+  "note": "按天的柱状图：有柱子、今天这根真的有高度（0 高=数据没接上）、带日期标签、下面那行汇总在（原剧本这里把 textContent 打成了 textConten，恒空）"
  },
  {
-  "eval": "({meta:document.querySelector('#usageMeta').textContent,overflow:document.querySelector('#tab-usage').scrollWidth-document.querySelector('#tab-usage').clientWidth})"
+  "eval": "(()=>{const q=s=>document.querySelector(s);const t=q('#tab-usage');return {meta:((q('#usageMeta')||{}).textContent||'').length>0,noHScroll:t.scrollWidth-t.clientWidth<=1}})()",
+  "must": ["meta", "noHScroll"], "note": "汇总行在、页签不横向溢出（图表把面板撑宽=窄屏上被裁掉）"
  },
  {
   "shot": "u01-usage-board"
  },
  {
-  "eval": "fetch('/api/usage').then(r=>r.json()).then(u=>'账本 '+u.rows+' 行 · 今天 '+u.today.n+' 次 ↑'+u.today.prompt+' ↓'+u.today.completion+' · 模型 '+u.models.map(m=>m.model+'='+m.n).join(','))"
+  "eval": "fetch('/api/usage').then(r=>r.json()).then(u=>({rows:u.rows>0,today:u.today&&u.today.n>=2,models:u.models&&u.models.length>=1}))",
+  "must": ["rows", "today", "models"],
+  "note": "接口侧与界面对得上：账本有行、今天至少记了这两次请求、按模型分过账（界面画的和接口给的是两套代码，只验一边会漏）"
  }
 ]

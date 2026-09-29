@@ -14,21 +14,31 @@
     "timeout": 30000
   },
   {
-    "eval": "(()=>{const cards=[...document.querySelectorAll('.view.on .card')];const rc=cards.find(c=>c.querySelector('b')&&c.querySelector('b').textContent==='run_code');const body=rc?rc.querySelector('.body').textContent:'';const img=document.querySelector('.view.on .thumbs img');return {cards:cards.length,hasRunCode:!!rc,exit0:body.indexOf('exit=0')>=0,sawStdout:body.indexOf('结果是 42')>=0,mentionsRunDir:body.indexOf('.haoai-output')>=0,thumbs:document.querySelectorAll('.view.on .thumbs img').length,imgW:img?img.naturalWidth:0,imgH:img?img.naturalHeight:0}})()"
+    "eval": "(()=>{const cards=[...document.querySelectorAll('.view.on .card')];const rc=cards.find(c=>c.querySelector('b')&&c.querySelector('b').textContent==='run_code');const body=rc?rc.querySelector('.body').textContent:'';const img=document.querySelector('.view.on .thumbs img');return {hasRunCode:!!rc,exit0:body.indexOf('exit=0')>=0,sawStdout:body.indexOf('结果是 42')>=0,mentionsRunDir:body.indexOf('.haoai-output')>=0,thumbs:document.querySelectorAll('.view.on .thumbs img').length>=1,imgReal:!!img&&img.naturalWidth>0}})()",
+   "must": ["hasRunCode", "exit0", "sawStdout", "mentionsRunDir", "thumbs", "imgReal"],
+   "note": "run_code 那张卡：退出码 0、stdout 回来了、产出写在 .haoai-output 下、产的 PNG 解得出像素（假字节 naturalWidth=0）"
   },
   {
-    "eval": "(()=>{const cards=[...document.querySelectorAll('.view.on .card')];const rc=cards.find(c=>c.querySelector('b')&&c.querySelector('b').textContent==='run_code');rc&&(rc.open=true);const img=rc?rc.parentElement.querySelector('.thumbs img'):document.querySelector('.view.on .thumbs img');const r=img?img.getBoundingClientRect():null;return {cardOpen:!!(rc&&rc.open),imgBox:r?{w:Math.round(r.width),h:Math.round(r.height)}:null,inViewport:!!(r&&r.top>=0&&r.bottom<=innerHeight),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()"
+    "eval": "(()=>{const cards=[...document.querySelectorAll('.view.on .card')];const rc=cards.find(c=>c.querySelector('b')&&c.querySelector('b').textContent==='run_code');const img=document.querySelector('.view.on .thumbs img');const r=img?img.getBoundingClientRect():null;return {hasCard:!!rc,imgVisible:!!r&&r.width>0&&r.height>0,inViewport:!!(r&&r.top>=0&&r.bottom<=innerHeight),noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth}})()",
+   "must": ["hasCard", "imgVisible", "inViewport", "noOverflow"],
+   "note": "卡片与产出图摊开在视口里、页面没被撑宽（图跑出屏外=截图里根本看不见它）"
   },
   {
-    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>{const t=(s.messages||[]).filter(m=>m.role=='tool'&&m.name==='run_code');const u=(s.messages||[]).filter(m=>m.role=='user'&&m.images&&m.images.length);return {runCodeMsgs:t.length,exit0:t.length>0&&(t[0].content||'').indexOf('exit=0')>=0,pixelsHandedToModel:u.map(m=>m.images.map(x=>x.split(String.fromCharCode(92)).pop()))}})"
+    "eval": "fetch('/api/state').then(r=>r.json()).then(s=>{const t=(s.messages||[]).filter(m=>m.role=='tool'&&m.name==='run_code');const u=(s.messages||[]).filter(m=>m.role=='user'&&m.images&&m.images.length);return {runCodeMsgs:t.length>=1,exit0:t.length>0&&(t[0].content||'').indexOf('exit=0')>=0,pixelsHandedToModel:u.length>=1}})",
+   "must": ["runCodeMsgs", "exit0", "pixelsHandedToModel"],
+   "note": "历史里：工具那条带 exit=0、且有一条 user 消息真带着图片（Engine 把产出图交回模型的那条——没有它=模型只听见「画好了」看不见图）"
   },
   {
-    "eval": "fetch('/api/files?sid='+encodeURIComponent(curId)+'&path=.haoai-output/runs').then(r=>r.json()).then(d=>({at:d.path,dirs:(d.entries||[]).map(x=>x.n+(x.d?'/':''))}))"
+    "eval": "fetch('/api/files?sid='+encodeURIComponent(curId)+'&path=.haoai-output/runs').then(r=>r.json()).then(d=>({atOk:(d.path||'').indexOf('.haoai-output')>=0,dirs:(d.entries||[]).length>=1}))",
+   "must": ["atOk", "dirs"],
+   "note": "运行目录在 .haoai-output/runs 下且真有内容（路径走偏或空目录=图只是碰巧在别处）"
   },
   {
     "shot": "c01-run-code"
   },
   {
-    "eval": "(()=>({lastAns:[...document.querySelectorAll('.view.on .msg.ans')].pop().textContent.replace(/\\s+/g,' ').slice(0,40),running:null}))()"
+    "eval": "(()=>{const a=[...document.querySelectorAll('.view.on .msg.ans')].pop();return {hasAns:!!a&&a.textContent.replace(/\\s+/g,' ').trim().length>0}})()",
+   "must": ["hasAns"],
+   "note": "最后一句回答落地了（跑完但没有正文=模型没说结论）"
   }
 ]

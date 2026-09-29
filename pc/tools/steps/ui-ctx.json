@@ -7,7 +7,8 @@
   {"sleep": 900},
   {"click": "#ctxBtn"},
   {"sleep": 700},
-  {"eval": "document.getElementById('ctxPanel').innerText.replace(/\\n+/g,' | ').slice(0,160)"},
+  {"eval": "(()=>{const t=document.getElementById('ctxPanel').innerText.replace(/\\n+/g,' | ');const st=(document.getElementById('memState')||{}).textContent||'';return {open:t.indexOf('合计')>=0,rows:document.querySelectorAll('#ctxPanel .row').length>=1,saved:st.indexOf('已存')>=0}})()",
+   "must": ["open", "rows", "saved"], "note": "占用面板开着且有占用明细行；保存记忆那一下要落库——memState 由服务端回的字节数刷新（写着「已存 N 字」），光在框里有字不算存过"},
   {"shot": "c01-ctx-with-memory"},
   {"click": "#ctxBtn"}
 ]
