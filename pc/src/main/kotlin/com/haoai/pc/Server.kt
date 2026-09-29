@@ -2798,6 +2798,7 @@ class WebServer(settings: PcSettings, port: Int,
             """"model":${quote(st.model)},"mode":${quote(st.permissionMode)},"maxTokens":${st.maxTokens},""" +
             """"reasoningEffort":${quote(st.reasoningEffort)},""" +
             """"searchProvider":${quote(st.searchProvider)},""" +
+            """"fallback":${quote(st.fallback)},""" +
             // 只报"有没有 key"，不报 key 本身：这份对象会整体发给浏览器
             """"hasSearchKey":${Search.key().isNotBlank()},""" +
             // 上下文窗口必须回得去：抽屉里那一格原来永远是空的，用户以为没配，
@@ -2830,6 +2831,8 @@ class WebServer(settings: PcSettings, port: Int,
         body["reasoningEffort"]?.jsonPrimitive?.contentOrNull?.let {
             n = n.copy(reasoningEffort = it.trim().lowercase())
         }
+        // 降级链同理：留空就是"不要降级"，得让人能清掉
+        body["fallback"]?.jsonPrimitive?.contentOrNull?.let { n = n.copy(fallback = it.trim()) }
         body["mode"]?.jsonPrimitive?.contentOrNull?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
             n = n.copy(permissionMode = it)
             // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话引擎上，

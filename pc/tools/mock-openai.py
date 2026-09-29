@@ -377,6 +377,19 @@ class Handler(BaseHTTPRequestHandler):
         msgs = req.get("messages", [])
         tool_rounds = sum(1 for m in msgs if m.get("role") == "tool")
         key, plan = (None, PLAN.get(MODE, PLAN["tools"]))
+        if MODE == "fallback":
+            # 主模型一律 429（可重试），备胎正常答。答案里带上模型名 ——
+            # "界面上这句话到底是谁说的"只有这句能区分（降级那句提示是引擎发的，不是模型发的）。
+            m = str(req.get("model", ""))
+            if m.startswith("primary"):
+                body = json.dumps({"error": {"message": "rate limit exceeded (mock)"}}).encode()
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            key, plan = None, [("这句是备胎模型「%s」答的" % m, None)]
         if MODE == "multi":
             key, plan = self.plan_for(msgs)
         if MODE == "subloop":
@@ -427,7 +440,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8099)
-    ap.add_argument("--mode", default="tools", choices=list(PLAN.keys()) + ["multi", "subloop"])
+    ap.add_argument("--mode", default="tools",
+                    choices=list(PLAN.keys()) + ["multi", "subloop", "fallback"])
     a = ap.parse_args()
     global MODE
     MODE = a.mode

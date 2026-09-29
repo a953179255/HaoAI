@@ -1,0 +1,35 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "eval": "fetch('/api/settings').then(r=>r.json()).then(s=>JSON.stringify({chain:s.fallback||'',configured:(s.fallback||'').length>0,primary:s.model||''}))",
+    "must": ["configured", "primary"],
+    "note": "先确认这次跑的确实是配了降级链的服务：链没落进设置，后面看到的一切降级现象都可能是别的原因。`fallback` 与 `model` 都在 /api/settings 那份对象里 —— 那份是整份回给前端的，所以密钥绝不能进它（这条也是同一份契约的护栏）"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "说一句就行",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const n=[...document.querySelectorAll('.notice')].map(e=>e.textContent||'');const hit=n.find(x=>/已降级/.test(x));if(hit)return JSON.stringify({sawFallback:true,notice:hit.slice(0,120),ms:Date.now()-t0});if(Date.now()-t0>90000)return JSON.stringify({sawFallback:false,notices:n.join(' | ').slice(0,160)});await new Promise(z=>setTimeout(z,800))}})()",
+    "must": ["sawFallback"],
+    "note": "主模型一直 429：同一档重试三档退避（3/8/20 秒）用完，才换下一档 —— 所以这条要等半分钟才出现，等的是真行为，不是脚本慢。90 秒还没等到就是真没降级"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const a=[...document.querySelectorAll('.msg.ans')].map(e=>e.textContent||'').filter(x=>x.trim());const last=a[a.length-1]||'';if(/备胎模型/.test(last))return JSON.stringify({answeredByBackup:true,tail:last.slice(0,90),fromWho:(/backup-ok/.test(last)?'backup-ok':'?')});if(Date.now()-t0>20000)return JSON.stringify({answeredByBackup:false,tail:last.slice(0,90)});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": ["answeredByBackup"],
+    "note": "这句话是**证据链的关键一条**：降级提示是引擎发的，答案正文才是模型发的。只有正文里带着「备胎模型backup-ok」，才能说回合真的换了一个模型跑完，而不是弹了句提示然后照旧失败"
+  },
+  {
+    "shot": "fb01-fallback"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(!s.running&&!(s.queue||[]).length)return JSON.stringify({settled:true,err:(s.messages||[]).filter(m=>m.role=='assistant').length});if(Date.now()-t0>25000)return JSON.stringify({settled:false});await new Promise(z=>setTimeout(z,900))}})()",
+    "must": ["settled"],
+    "note": "收尾：这一回合要真的结束（不是卡在跑的状态上）。降级成功却不收口，界面上就是一条永远转圈的假成功"
+  }
+]

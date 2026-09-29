@@ -3367,6 +3367,11 @@ function openCfg(){
         placeholder="sk-…（留空则不改；只写进 HAOAI_HOME/apikey，不进仓库）">
         <div class="acts2"><span class="kv" id="st-apikey">读不到</span>
         <button class="ab" data-sec="apikey">撤掉这把</button></div></div>
+      <div class="fld"><label>降级链（留空 = 不降级）</label><input type="text" id="fFallback" autocomplete="off"
+        placeholder="glm-4-flash, tiny@http://127.0.0.1:8080/v1">
+        <div class="kv">主模型<b>重试三次还是不行</b>才换下一个（429/5xx/超时这类可重试的错）；
+          400 这种"请求本身不合法"换了模型也没用，所以不换。带 <code>@地址</code> 是换网关，
+          <b>换网关时不会把这把 key 带过去</b>（除非两台是同一个主机）。</div></div>
       <div class="grp" style="margin-top:12px">搜索（web_search）</div>
       <div class="fld"><label>用哪家</label>
         <select id="fSProv">
@@ -3413,6 +3418,7 @@ function openCfg(){
     // 搜索提供方只认这三个值；设置里被写成别的（CLI 手滑）就留着 auto，不跟着犯糊
     const prov=dg.querySelector('#fSProv');
     if(['auto','duckduckgo','bocha'].indexOf(c.searchProvider)>=0)prov.value=c.searchProvider;
+    dg.querySelector('#fFallback').value=c.fallback||'';
     dg.querySelectorAll('.rules [data-del]').forEach(b=>b.onclick=()=>ruleEdit('del',b.dataset.del));
     dg.querySelector('#addRule').onclick=()=>ruleEdit('add',dg.querySelector('#fRule').value.trim());
     // 列表是异步填的，所以删除按钮走事件委托，不能在填之前就 query 一遍
@@ -3491,7 +3497,9 @@ function openCfg(){
           workspace:dg.querySelector('#fWs').value.trim(),mode:dg.querySelector('#fMode').value.trim(),
           maxTokens:num('#fMax'),contextChars:num('#fCtx'),flags,
           reasoningEffort:dg.querySelector('#fEff').value,
-          searchProvider:dg.querySelector('#fSProv').value};
+          searchProvider:dg.querySelector('#fSProv').value,
+          // 降级链允许清空（"" = 不降级），所以这里不判空
+          fallback:dg.querySelector('#fFallback').value.trim()};
       // 密钥留空就是"不改"：placeholder 里回显的是掩码，不能顺手把它当新值写回去
       const keys=[['#fKey','apikey'],['#fSKey','searchkey']]
         .map(x=>({id:x[1],v:(dg.querySelector(x[0]).value||'').trim()})).filter(x=>x.v);

@@ -97,6 +97,14 @@ class Engine(
     private val gate: Gate,
     private val emit: (Ev) -> Unit,
     client: ChatClient = chatClient(settings),
+    /**
+     * 造某一档客户端的工厂。默认就是真那个 `chatClient`；
+     * 单独开出来只为一个原因：**降级这条路径没法用真网关测**（要等 3+8+20 秒退避，
+     * 而且要有一个真会 429 的模型）。测试里换成假的，产品行为一行不变。
+     */
+    private val clientFor: (PcSettings, ModelSlot?) -> ChatClient = { s, k -> chatClient(s, k) },
+    /** 同一档的重试间隔（毫秒）。同样是为了测的时候不用真等 31 秒。 */
+    private val backoffs: LongArray = longArrayOf(3_000, 8_000, 20_000),
     /** 0=用户直接说话的这条会话；>0 是被派出来的子任务。子任务不许再派子任务。 */
     val depth: Int = 0
 ) {
@@ -115,10 +123,28 @@ class Engine(
     @Volatile
     private var client: ChatClient = client
 
+    /**
+     * 降级链：第 0 档是设置里那个主模型，后面是 `fallback` 上写的备胎。
+     * 换设置（含按会话换模型）时整条重建 —— 不然改了主模型，链上还挂着上一个。
+     */
+    @Volatile
+    private var chain: List<ModelSlot> = slotChain(settings)
+
+    @Volatile
+    private var slot = 0
+
+    /** 这一回合**实际**在用的模型名。账本按它记，不按设置里那个（降级发生过就要看得见）。 */
+    val modelNow: String get() = (chain.getOrNull(slot)?.model ?: "").ifBlank { settings.model }
+
+    private fun slotChain(s: PcSettings): List<ModelSlot> =
+        listOf(ModelSlot(s.model, s.baseUrl)) + parseFallback(s.fallback)
+
     /** 换用新的全局设置（顺带重建 HTTP 客户端：baseUrl/model 都在里面）。 */
     fun useSettings(s: PcSettings) {
         settings = s
-        client = chatClient(s)
+        chain = slotChain(s)
+        slot = 0
+        client = clientFor(s, chain[slot])
     }
 
     private val history = mutableListOf<Msg>()
@@ -616,7 +642,6 @@ class Engine(
         var lastText = ""
         var turnNo = 0
         var retry = 0
-        val backoffs = longArrayOf(3_000, 8_000, 20_000)
 
         while (turnNo < settings.maxTurns) {
             if (stopRequested) {
@@ -649,13 +674,35 @@ class Engine(
                     turnNo--
                     continue
                 }
+                /*
+                 * 同一个模型重试到头了 —— 换链上下一个，而不是把错误抛给一个不在电脑前的人看。
+                 *
+                 * 这条是给夜里写的：定时任务与任务链都以 auto 档跑，撞上一次 429 或"这个模型
+                 * 没余额"，原来就是整条链停在那儿等人早上去点。手机端早就这么做了
+                 * （`AppContainer.clientFor` 的 FallbackClient），这是把 PC 侧补齐。
+                 *
+                 * 说清两件它**不**处理的：
+                 * ① 只吃 `transient` —— 400（请求本身不合法）换模型也没用，换了反而把同一个
+                 *    错误重复三遍；② 上一档已经流出来的半截文字不回滚（与"同档重试"同一套取舍），
+                 *    所以那句提示要写明是从谁降到谁，别让人以为界面那句话是同一个模型说的。
+                 */
+                if (e.transient && slot + 1 < chain.size) {
+                    val from = modelNow
+                    slot++
+                    client = clientFor(settings, chain[slot])
+                    retry = 0
+                    emit(Ev.Notice("「$from」重试 ${backoffs.size} 次仍不可用（${e.message?.take(120)}），" +
+                        "已降级到「$modelNow」继续跑"))
+                    turnNo--
+                    continue
+                }
                 lastError = "模型调用失败：${e.message?.take(400)}"
-                UsageLedger.add(settings.model, session.id, 0, 0, 0, false)   // 失败也要入账：成功率不是装饰
+                UsageLedger.add(modelNow, session.id, 0, 0, 0, false)   // 失败也要入账：成功率不是装饰
                 emit(Ev.Err(lastError!!))
                 break
             } catch (e: Exception) {
                 lastError = "模型调用异常：${e.message ?: e.javaClass.simpleName}"
-                UsageLedger.add(settings.model, session.id, 0, 0, 0, false)
+                UsageLedger.add(modelNow, session.id, 0, 0, 0, false)
                 emit(Ev.Err(lastError!!))
                 break
             }
@@ -689,7 +736,7 @@ class Engine(
                 history += Msg("assistant", turn.text, reasoning = turn.reasoning.ifBlank { null },
                     pt = pt, ct = ct, ms = ms)
                 emit(Ev.TurnStats(pt, ct, ms, turnNo))
-                UsageLedger.add(settings.model, session.id, pt, ct, ms, true)
+                UsageLedger.add(modelNow, session.id, pt, ct, ms, true)
                 runTurn = turnNo
                 break
             }
@@ -698,7 +745,7 @@ class Engine(
             history += Msg("assistant", turn.text, calls = turn.calls,
                 reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms)
             emit(Ev.TurnStats(pt, ct, ms, turnNo))
-            UsageLedger.add(settings.model, session.id, pt, ct, ms, true)
+            UsageLedger.add(modelNow, session.id, pt, ct, ms, true)
             runTurn = turnNo
             persist()      // 每轮留一次现场：被打断时"跑到第几轮"才是量出来的
 

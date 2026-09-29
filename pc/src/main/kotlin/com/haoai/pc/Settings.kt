@@ -38,6 +38,18 @@ data class PcSettings(
     val maxTokens: Int = 4096,
     /** 思考强度："" = 不发这个字段；low / medium / high 按网关的写法发。 */
     val reasoningEffort: String = "",
+    /**
+     * 降级链：主模型重试耗尽之后，按顺序换下一个。逗号或换行分隔，
+     * 每项写 `模型名`（同一个网关）或 `模型名@https://别处/v1`（换网关）。
+     *
+     * 为什么要有它：定时任务与任务链都以 auto 档在夜里跑，撞上一次 429 或"该模型没余额"
+     * 就是整条链白等 —— 原来只有 3/8/20 秒三档退避，退完直接报错给人看。
+     * 手机端早就有这套（`AppContainer.clientFor` 的 `FallbackClient`），这是把 PC 侧补齐。
+     *
+     * 换网关时**不把主网关的 key 带出门**，除非两台是同一个主机 ——
+     * 把一个自己填的备用地址当成"反正都是网关"，等于把凭据发给陌生主机。
+     */
+    val fallback: String = "",
     /** 搜索提供方：auto = 有 key 走博查、没 key 走 DuckDuckGo。 */
     val searchProvider: String = "auto",
     /**
@@ -90,6 +102,7 @@ data class PcSettings(
                     temperature = o.dbl("temperature") ?: 0.3,
                     maxTokens = o.int("maxTokens") ?: 4096,
                     reasoningEffort = o.str("reasoningEffort") ?: "",
+                    fallback = o.str("fallback") ?: "",
                     searchProvider = o.str("searchProvider") ?: "auto",
                     contextChars = o.int("contextChars") ?: 128_000,
                     storedCap = o.int("storedCap") ?: 16_000,
@@ -121,6 +134,7 @@ data class PcSettings(
                         put("temperature", s.temperature)
                         put("maxTokens", s.maxTokens)
                         put("reasoningEffort", s.reasoningEffort)
+                        put("fallback", s.fallback)
                         put("searchProvider", s.searchProvider)
                         put("contextChars", s.contextChars)
                         put("storedCap", s.storedCap)

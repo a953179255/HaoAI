@@ -165,6 +165,13 @@ fi
 "$BIN" set base="http://127.0.0.1:$MOCK_PORT/v1" model=mock "workspace=$WS_WIN" mode="${SHOT_PERM:-auto}" maxTokens=2048 \
   > "$HOME_DIR/set.log" 2>&1
 tail -2 "$HOME_DIR/set.log"
+# 有的链路要在设置里多写几项才验得到（降级链就是：主模型与备胎都得先落进设置）。
+# 一律走同一个 CLI，不手改 settings.json —— 落盘口径（哪些字段存默认值）由代码自己保证。
+# 空格分隔的 k=v；值里不许有空格（有就会在这里被拆成两项，报出来像"设置项不认识"）。
+for kv in ${PRE_SET:-}; do
+  "$BIN" set "$kv" >> "$HOME_DIR/set.log" 2>&1 || { echo "x set $kv 失败（看 $HOME_DIR/set.log）"; exit 1; }
+  echo "  set $kv"
+done
 
 # 有的链路要"实验特性是开的"才验得到（预览面板：browser_control 关着时端点压根不动浏览器）。
 # 走 CLI 而不是手改 settings.json —— 开关的落盘口径（只存与默认值不同的那些）由代码自己保证。

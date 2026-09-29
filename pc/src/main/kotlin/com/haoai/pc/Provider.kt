@@ -168,10 +168,54 @@ interface ChatClient {
 }
 
 /** 按设置造真实网关（含密钥解析）。 */
-fun chatClient(s: PcSettings): ChatClient {
+fun chatClient(s: PcSettings): ChatClient = chatClient(s, null)
+
+/**
+ * 按链上某一档造客户端。`slot=null` 就是主档（用设置里的 model 与 baseUrl）。
+ *
+ * 那把 key 只在**同一个主机**上才跟着走：备用地址是用户自己填的，可能是本机 llama-server，
+ * 也可能是陌生人的网关。把 sensenova 的 key 发去陌生主机，等于为了"别断"而泄露凭据 ——
+ * 本地 llama-server 本来就不看 key，所以不带也不影响它工作。
+ */
+fun chatClient(s: PcSettings, slot: ModelSlot?): ChatClient {
     val key = System.getenv("HAOAI_API_KEY")?.takeIf { it.isNotBlank() }
         ?: runCatching { Env.apiKeyFile.takeIf { it.isFile }?.readText()?.trim() }.getOrNull().orEmpty()
-    return Provider(s.baseUrl, key, s.model, s.temperature, s.maxTokens, s.reasoningEffort)
+    val base = slot?.baseUrl?.takeIf { it.isNotBlank() } ?: s.baseUrl
+    val sendKey = if (sameHost(base, s.baseUrl)) key else ""
+    return Provider(base, sendKey, slot?.model?.takeIf { it.isNotBlank() } ?: s.model,
+        s.temperature, s.maxTokens, s.reasoningEffort)
+}
+
+/** 降级链上的一档。`baseUrl` 空 = 沿用主网关。 */
+data class ModelSlot(val model: String, val baseUrl: String = "")
+
+/**
+ * 解析 `fallback` 那串：`glm-5.2, tiny@http://127.0.0.1:8080/v1` → 两档。
+ *
+ * 主档不在这里（它由设置里的 model/baseUrl 决定），这里只解析"备胎"。
+ * 认逗号、分号、换行三种分隔，是因为这串东西既可能在命令行里写、也可能在设置抽屉的
+ * 单行输入框里粘贴 —— 只认一种就会"我明明填了三个，怎么只降了一次"。
+ */
+fun parseFallback(raw: String): List<ModelSlot> =
+    raw.split(',', ';', '\n').map { it.trim() }.filter { it.isNotEmpty() }.map { e ->
+        val at = e.indexOf('@')
+        if (at < 0) ModelSlot(e, "")
+        else ModelSlot(e.substring(0, at).trim(), e.substring(at + 1).trim())
+    }.filter { it.model.isNotEmpty() }
+
+/** 两个地址是不是同一台主机（协议、主机、端口三项都要一致：8080 与 8081 上是两套凭据）。 */
+fun sameHost(a: String, b: String): Boolean {
+    // 默认端口自己算，不用 URI.getDefaultPort()：这台机器的编译环境解析不到那个方法，
+    // 而这里只需要 http/https 两种（别的协议一律按"没写端口 = -1"处理，两边一致就能比）。
+    fun key(u: String): String = runCatching {
+        val x = java.net.URI(u.trim())
+        val scheme = x.scheme?.lowercase() ?: ""
+        val port = if (x.port > 0) x.port else when (scheme) {
+            "http" -> 80; "https" -> 443; else -> -1
+        }
+        "$scheme|${x.host?.lowercase()}|$port"
+    }.getOrDefault("bad|$u")
+    return key(a) == key(b)
 }
 
 /**
