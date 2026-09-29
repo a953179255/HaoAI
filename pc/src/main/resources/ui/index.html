@@ -3319,6 +3319,11 @@ function applyState(s){
     if(m.role=='assistant')turn++;
     if(m.role=='assistant'&&m.calls)
       m.calls.forEach(c=>{if(c.name=='write'||c.name=='edit')q.push([c.name,pathArg(c.args)])});
+    /* 引擎这一轮发过的小字（重试 / 降级 / 截断 / 到上限）跟着历史回来。
+       它原来是瞬时节点：回合收尾时这句 `v.el.innerHTML=''` 一执行就全没了，
+       于是"这句是降级后的模型答的"在人看完答案之后查不出来（实测：插入 4 次、移除 4 次）。 */
+    if(m.notice)m.notice.split('\n').forEach(x=>{
+      if(x.trim())v.el.appendChild(el('<div class="notice">'+esc(x)+'</div>'))});
     // 思考过程要跟着回放：否则"刷新一下，模型刚才怎么想的就没了"
     if(m.reasoning){
       const th=el('<details class="think"><summary><span>思考了 '+((m.ms||0)/1000).toFixed(1)+

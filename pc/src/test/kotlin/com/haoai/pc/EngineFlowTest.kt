@@ -346,6 +346,31 @@ class EngineFlowTest {
     }
 
     @Test
+    fun `a notice emitted outside the loop still lands on the last answer`() {
+        // 「已达单轮工具调用上限」是在循环之外发的，它后面不会再有消息。
+        // 收尾时若不贴回最后一条 assistant，人刷新之后就只剩"它话说完了"这一种表象 ——
+        // 而"为什么停"恰恰是这时候唯一有意义的问题。
+        val ws = tempWorkspace()
+        val scripted = Scripted(
+            mutableListOf(
+                turn("还在跑", toolCall("c1", "shell", """{"command":"echo 1","shell":"bash","timeout":10}""")),
+                turn("还在跑2", toolCall("c2", "shell", """{"command":"echo 2","shell":"bash","timeout":10}""")),
+                turn("收尾")
+            )
+        )
+        val session = Session("cap" + System.nanoTime(), ws)
+        session.mode = "auto"
+        val engine = Engine(
+            session, PcSettings(permissionMode = "auto", maxTurns = 2),
+            builtinTools(), RecordingGate(true), {}, scripted
+        )
+        engine.submit("说一句")
+        val last = engine.messages().last { it.role == "assistant" }
+        assertTrue("那句上限提示要能在历史里查到（最后一条 assistant 的 notice 是「" + last.notice + "」）",
+            last.notice.contains("上限"))
+    }
+
+    @Test
     fun `todo tool updates the shared list and emits an event`() {
         val ws = tempWorkspace()
         val events = mutableListOf<Ev>()

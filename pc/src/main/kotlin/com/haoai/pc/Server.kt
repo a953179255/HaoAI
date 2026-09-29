@@ -303,7 +303,7 @@ class WebServer(settings: PcSettings, port: Int,
         session.mode = meta?.mode ?: settings.permissionMode
         // 闸口要能拿到"这条会话的引擎"，但引擎构造时还握不住自己的引用 —— 拿个可变槽位接上
         var made: Engine? = null
-        val e = Engine(session, settings, allTools(), webGate(id) { made }, emit = { ev -> forward(id, ev) })
+        val e = Engine(session, settings, allTools(), webGate(id) { made }, sink = { ev -> forward(id, ev) })
         made = e
         // 会话自己的模型与工具开关要在这里接上：引擎构造时拿的是全局设置，
         // 不补这一步，"这条会话用的是本地 7B、shell 已关掉"重启后就悄悄没了。
@@ -417,6 +417,7 @@ class WebServer(settings: PcSettings, port: Int,
                 .append(",\"reasoning\":").append(quote(m.reasoning ?: ""))
                 .append(",\"diff\":").append(quote(m.diff))
                 .append(",\"note\":").append(quote(m.note))
+                .append(",\"notice\":").append(quote(m.notice))
                 .append(",\"sub\":").append(quote(m.sub))
                 .append(",\"images\":").append(m.images.joinToString(",", "[", "]") { quote(it) })
                 .append(",\"media\":").append(m.media.joinToString(",", "[", "]") { quote(it) })
@@ -1663,7 +1664,7 @@ class WebServer(settings: PcSettings, port: Int,
         session.role = preset?.name.orEmpty()
         var made: Engine? = null
         val e = Engine(session, settings, allTools(), webGate(session.id) { made },
-            emit = { ev -> forward(session.id, ev) })
+            sink = { ev -> forward(session.id, ev) })
         made = e
         if (preset != null && preset.model.isNotBlank()) e.useSettings(settings.copy(model = preset.model))
         e.persistNow()

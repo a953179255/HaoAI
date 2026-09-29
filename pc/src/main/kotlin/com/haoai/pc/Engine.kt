@@ -95,7 +95,7 @@ class Engine(
     settings: PcSettings,
     val tools: List<Tool>,
     private val gate: Gate,
-    private val emit: (Ev) -> Unit,
+    private val sink: (Ev) -> Unit,
     client: ChatClient = chatClient(settings),
     /**
      * 造某一档客户端的工厂。默认就是真那个 `chatClient`；
@@ -108,6 +108,44 @@ class Engine(
     /** 0=用户直接说话的这条会话；>0 是被派出来的子任务。子任务不许再派子任务。 */
     val depth: Int = 0
 ) {
+
+    /**
+     * 这一轮发过的小字（重试 / 降级 / 截断 / 上限…），等着挂到下一条消息上。
+     *
+     * 为什么要挂住而不是只流一次：回合收尾时前端会 `hydrate` 重建这一屏
+     * （`v.el.innerHTML=''`），当场插进去的 `.notice` 节点跟着一起没。
+     * 量出来的事实是「插入 4 次、移除 4 次」—— 事件到了浏览器、也写进了正确的会话容器，
+     * 只是**在人看完答案那一刻被抹掉了**。于是"这一轮是降级后的模型答的"这件事查不出来，
+     * 而它恰好是人决定要不要信这句答案的关键信息。
+     * 同一套办法早就用在审批结论 [Msg.note] 与行级 [Msg.diff] 上：瞬时事件要么落库，要么就是缺陷。
+     */
+    private val turnNotices = mutableListOf<String>()
+
+    /** 唯一的事件出口：顺手把小字记下来（`sink` 才是真正往外发的那个）。 */
+    private fun emit(ev: Ev) {
+        if (ev is Ev.Notice && ev.s.isNotBlank()) turnNotices += ev.s
+        sink(ev)
+    }
+
+    /** 取走并清空：挂到紧接着落的那条消息上。 */
+    private fun drainNotices(): String =
+        if (turnNotices.isEmpty()) "" else turnNotices.joinToString("\n").also { turnNotices.clear() }
+
+    /**
+     * 收尾时把还挂着的小字贴到**最后一条 assistant 消息**上。
+     *
+     * 走这一条的是"已达单轮工具调用上限"那种在循环之外发的：它后面不会再有消息了，
+     * 而它恰恰是人最想回头看清的一句（"它为什么停了"）。一条 assistant 都没有就不硬造，
+     * 那种情况只随流一次 —— 宁可少一句历史，也不往历史里塞没有作者的行。
+     */
+    private fun flushNotices() {
+        if (turnNotices.isEmpty()) return
+        val i = history.indexOfLast { it.role == "assistant" }
+        if (i < 0) { turnNotices.clear(); return }
+        val text = drainNotices()
+        val old = history[i]
+        history[i] = old.copy(notice = if (old.notice.isBlank()) text else old.notice + "\n" + text)
+    }
 
     /**
      * 设置与网关客户端都是**可换的**。
@@ -743,7 +781,8 @@ class Engine(
 
             if (turn.text.isNotBlank()) lastText = turn.text
             history += Msg("assistant", turn.text, calls = turn.calls,
-                reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms)
+                reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms,
+                notice = drainNotices())
             emit(Ev.TurnStats(pt, ct, ms, turnNo))
             UsageLedger.add(modelNow, session.id, pt, ct, ms, true)
             runTurn = turnNo
@@ -856,6 +895,9 @@ class Engine(
                 trigger = runTrigger, stopped = stopRequested, finalText = lastText
             )
         )
+        // 循环之外发的小字（"已达上限"、"已按你的要求中断"）在这里落到最后一条 assistant 上，
+        // 否则 hydrate 一重建就什么都查不到了。
+        flushNotices()
         persist()
         emit(Ev.TextDone(lastText))
         return lastText
@@ -1014,6 +1056,7 @@ class Engine(
                                     if (m.media.isNotEmpty())
                                         put("media", buildJsonArray { m.media.forEach { add(JsonPrimitive(it)) } })
                                     if (m.note.isNotBlank()) put("note", m.note)
+                                    if (m.notice.isNotBlank()) put("notice", m.notice)
                                     if (m.sub.isNotBlank()) put("sub", m.sub)
                                     if (m.pt > 0) put("pt", m.pt)
                                     if (m.ct > 0) put("ct", m.ct)
@@ -1085,6 +1128,7 @@ class Engine(
                     reasoning = m["reasoning"]?.jsonPrimitive?.contentOrNull,
                     diff = m["diff"]?.jsonPrimitive?.contentOrNull ?: "",
                     note = m["note"]?.jsonPrimitive?.contentOrNull ?: "",
+                    notice = m["notice"]?.jsonPrimitive?.contentOrNull ?: "",
                     sub = m["sub"]?.jsonPrimitive?.contentOrNull ?: "",
                     pt = m["pt"]?.jsonPrimitive?.intOrNull ?: 0,
                     ct = m["ct"]?.jsonPrimitive?.intOrNull ?: 0,

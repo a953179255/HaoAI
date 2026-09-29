@@ -41,8 +41,11 @@ class FallbackTest {
 
     /** 每个模型一个假客户端：`fail` 里写的那个模型永远抛（写 `*` = 全都抛）。 */
     private class Fake(val model: String, private val fail: ProviderError?, private val log: MutableList<String>) : ChatClient {
+        /** 每次请求看见的历史 —— 用来验"只给界面看的那几样不许发给模型"。 */
+        val sent = mutableListOf<List<Msg>>()
         override fun chat(messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit): AssistantTurn {
             log += model
+            sent += messages
             fail?.let { throw it }
             onText("来自 $model 的回答")
             return AssistantTurn("来自 $model 的回答", emptyList(), Usage(10, 5), "stop")
@@ -179,6 +182,51 @@ class FallbackTest {
         assertTrue("同主机换模型时 key 该照常带：" + sawPrimary.get(),
             sawPrimary.get().contains("sk-must-not-travel"))
         primary.stop(0); backup.stop(0)
+    }
+
+    /**
+     * 降级那句话必须**跟着消息落库**。
+     *
+     * 原来它只随 SSE 流一次：回合收尾时前端 `hydrate` 会 `v.el.innerHTML=''` 重建这一屏，
+     * 瞬时插进去的 `.notice` 节点跟着一起没 —— 像素诊断量到的是「插入 4 次、移除 4 次」，
+     * 事件确实到了浏览器、也写进了正确会话的容器，只是在人看完答案那一刻被抹掉。
+     * 于是"这句是降级后的模型答的"事后查不出来，而这恰恰是人决定要不要信这句话的依据。
+     */
+    @Test
+    fun `the degradation notice rides on the message so a refresh keeps it`() {
+        val (engine, _, notices) = drive()
+        val ans = engine.messages().last { it.role == "assistant" }
+        assertTrue("降级那句话要挂在答它的那条消息上：" + ans.notice, ans.notice.contains("已降级"))
+        assertTrue("实时也要发（落库不能代替流）：" + notices.joinToString(" | "),
+            notices.any { it.contains("已降级") })
+        val seen = mutableListOf<String>()
+        val back = Engine(
+            engine.session, PcSettings(model = "big", fallback = "small"), builtinTools(), AllowGate(),
+            {}, Fake("big", null, seen)
+        )
+        val again = back.messages().last { it.role == "assistant" }
+        assertEquals("从会话文件里恢复出来还得是同一句", ans.notice, again.notice)
+    }
+
+    @Test
+    fun `a notice is never sent to the model`() {
+        val seen = mutableListOf<String>()
+        val fails = Fake("big", transient429, seen)
+        val backup = Fake("small", null, seen)
+        val session = Session("n" + System.nanoTime(), ws())
+        session.mode = "auto"
+        val engine = Engine(
+            session, PcSettings(model = "big", fallback = "small", permissionMode = "auto"),
+            builtinTools(), AllowGate(), {}, fails,
+            clientFor = { _, slot -> if ((slot?.model ?: "big") == "big") fails else backup },
+            backoffs = longArrayOf(1, 1, 1)
+        )
+        engine.submit("说一句")
+        assertTrue("这条测试本身要成立：确实发过降级提示",
+            engine.messages().any { it.notice.contains("已降级") })
+        val all = (fails.sent + backup.sent).flatten().joinToString("\n") { it.content ?: "" }
+        assertFalse("界面用的小字不许混进发给模型的历史：" + all.take(200), all.contains("已降级"))
+        assertFalse("重试那几句也一样（它们说的是传输，不是内容）：" + all.take(200), all.contains("网关抖动"))
     }
 
     /** 只回一行 `[DONE]` 的假网关，作用是把对方看到的 Authorization 头记下来。 */

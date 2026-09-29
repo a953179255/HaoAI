@@ -18,11 +18,12 @@
     }
   },
   {
-    "eval": "(()=>{const t=document.querySelector('#stream').innerText;return JSON.stringify({stillRunning:document.getElementById('send').classList.contains('stop'),noErrorBubble:/模型调用失败/.test(t)})})()",
+    "eval": "(async()=>{const t0=Date.now();for(;;){const n=[...document.querySelectorAll('.view.on .notice')].map(x=>x.textContent||'');const running=document.getElementById('send').classList.contains('stop');if(n.length)return JSON.stringify({noticeLive:n.some(t=>/网关抖动|已降级/.test(t)),count:n.length,stillRunning:running,sample:n[0].slice(0,70)});if(Date.now()-t0>25000)return JSON.stringify({noticeLive:false,count:0,stillRunning:running});await new Promise(z=>setTimeout(z,500))}})()",
     "must": [
+      "noticeLive",
       "stillRunning"
     ],
-    "note": "降级发生在跑的过程中：此刻发送键还该是「停止」（= 回合没被 429 打断，只是换了个模型继续）。\n\n原来这一步断的是「界面上看得见那条『已降级』提示」，它一直是红的 —— SSE 确实把三条 notice 推出来了（curl 打时间戳量过），浏览器里 .notice 全程为 0，那是 #111 还没查完的独立缺陷。判据换成这条是因为**要求本身已经由顶栏那颗状态驱动的芯片满足了**（下一步就是它的判据，而且刷新之后还在）；留一条永远红的判据只会让整套审计变成噪音。#111 记着这个替换和原因。"
+    "note": "跑的过程中引擎发的小字必须**当场看得见**，而且回合没被打断（发送键还是「停止」）。\n\n这一步原来断的是同一件事，但因为 #111 一直红着而被换成只判 stillRunning —— 现在回来了：诊断量到的是「notice 插入 4 次、移除 4 次」，也就是**实时其实是好的**，坏的是收尾时 `hydrate` 把 `v.el.innerHTML=''` 一清，瞬时节点跟着一起没。所以真正的修复在下一条判据（刷新之后还在）上。"
   },
   {
     "eval": "(async()=>{const t0=Date.now();for(;;){const a=[...document.querySelectorAll('.msg.ans')].map(e=>e.textContent||'').filter(x=>x.trim());const last=a[a.length-1]||'';if(/备胎模型/.test(last))return JSON.stringify({answeredByBackup:true,tail:last.slice(0,90),fromWho:(/backup-ok/.test(last)?'backup-ok':'?')});if(Date.now()-t0>70000)return JSON.stringify({answeredByBackup:false,tail:last.slice(0,90)});await new Promise(z=>setTimeout(z,700))}})()",
@@ -50,11 +51,12 @@
     "timeout": 25000
   },
   {
-    "eval": "(()=>{const chip=document.getElementById('model').textContent||'';return JSON.stringify({survivesReload:/降级/.test(chip),chip:chip})})()",
+    "eval": "(async()=>{const t0=Date.now();for(;;){const chip=document.getElementById('model').textContent||'';const n=[...document.querySelectorAll('.view.on .notice')].map(x=>x.textContent||'');if(/降级/.test(chip)&&n.length)return JSON.stringify({survivesReload:/降级/.test(chip),noticeBack:n.some(t=>/已降级|网关抖动/.test(t)),chip:chip,sample:n[0].slice(0,70),count:n.length});if(Date.now()-t0>20000)return JSON.stringify({survivesReload:/降级/.test(chip),noticeBack:false,chip:chip,count:n.length});await new Promise(z=>setTimeout(z,700))}})()",
     "must": [
-      "survivesReload"
+      "survivesReload",
+      "noticeBack"
     ],
-    "note": "刷新之后还在，才算「落库了」而不是「闪了一下」。这条判据的形状是从「配置类信息必须落库，不能只发 SSE 瞬时事件」那条抄来的"
+    "note": "刷新之后还在，才算「落库了」而不是「闪了一下」。芯片那条是从「配置类信息必须落库」抄来的；**noticeBack 这条是 #111 的修复判据** —— 引擎那几句小字原来只随 SSE 流一次，回合收尾时 hydrate 清空整屏就没了，现在它们挂在触发它们的那条 assistant 消息上（`Msg.notice`，只给界面、不发模型），回放时重新画出来。\n\n两条一起轮询：notice 是随历史回来的，芯片是随 /api/state 回来的，谁先到都可能，写死 sleep 就会偶发假红"
   },
   {
     "shot": "fb02-fallback-after-reload"
