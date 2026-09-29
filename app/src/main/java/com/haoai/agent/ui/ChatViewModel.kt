@@ -25,6 +25,7 @@ import com.haoai.agent.agent.policy.ApprovalRequest
 import com.haoai.agent.agent.policy.PolicyEngine
 import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.data.AppContainer
+import com.haoai.agent.data.SessionStartup
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.toModel
 import com.haoai.agent.data.toStored
@@ -484,11 +485,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         com.haoai.agent.platform.RunObserver.askAnswerSink = { askId, optionIndex ->
             answerAsk(askId, optionIndex)
         }
-        if (_sessions.value.isNotEmpty()) {
-            selectSession(_sessions.value.first().id)
-        } else {
-            newSession()
-        }
+        // 冷启动打开哪条：上次看过的那条，没记过就取最近更新的那条。
+        // 不取 _sessions.value.first()——那是抽屉的「置顶优先」排序，拿它当启动目标，
+        // 用户一置顶某个会话就等于把"每次打开都跳进哪条"也改了（置顶只是为了好找）。
+        val startId = SessionStartup.pick(c.sessionStore.list(), c.sessionStore.lastOpenedId())
+        if (startId != null) selectSession(startId) else newSession()
     }
 
     override fun onCleared() {
@@ -528,6 +529,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val s = StoredSession.create(c.workspace.workspaceUriForSession)
         currentSession = s
         c.sessionStore.save(s)
+        c.sessionStore.rememberOpened(s.id) // 新建也算"上次看的"：下次冷启动回到这条，而不是回到置顶那条
         // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定
         publishLiveTools()
         sessionIn = 0
@@ -549,6 +551,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             runCatching { c.sessionStore.save(s) }
         }
         currentSession = s
+        c.sessionStore.rememberOpened(id) // 记下"用户现在看的是这条"，冷启动回到这里（见 SessionStartup）
         // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定：
         // 切到其他会话透空，切回运行会话时间轴无缝续上
         publishLiveTools()

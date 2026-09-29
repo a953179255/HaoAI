@@ -325,6 +325,32 @@ class SessionStore(private val dir: File) {
     fun listDeleted(): List<StoredSession> =
         allStored().filter { it.deletedAt > 0L }.sortedByDescending { it.deletedAt }
 
+    /**
+     * 「上次看过的是哪条会话」这一条指针的落盘位置。
+     *
+     * **刻意不叫 `.json`**：[allStored] 与 [markStaleRunsInterrupted] 都是按
+     * `extension == "json"` 扫这个目录的，叫 `last-opened.json` 就会被当成一条会话解析出来
+     * （写盘后还会多出一条空白会话挂在抽屉里）。writeAtomic 顺手产生的
+     * `.txt.tmp` / `.txt.bak` 同样落在这个目录里，也不带 `.json` 后缀。
+     */
+    private val lastOpenedFile = File(dir, "last-opened.txt")
+
+    /**
+     * 记住"用户此刻看的是这条"。冷启动要靠它决定打开哪条会话（见 [SessionStartup]）。
+     *
+     * 同步写：内容就一个 id（36 字节），writeAtomic 里没有 fsync，
+     * 比一次会话 JSON 解析便宜得多。丢进 [io] 队列反而更糟——那个队列前面可能压着
+     * 几条几百 KB 的会话序列化，用户点开会话后立刻划掉应用，指针就没落下来。
+     */
+    fun rememberOpened(id: String) {
+        runCatching { HaoJson.writeAtomic(lastOpenedFile, id) }
+    }
+
+    /** 上次看过的那条会话 id；没记过/文件被清 → null（调用方回落到"最近更新"）。 */
+    fun lastOpenedId(): String? = runCatching {
+        if (!lastOpenedFile.isFile) null else lastOpenedFile.readText().trim().ifBlank { null }
+    }.getOrNull()
+
     fun load(id: String): StoredSession? {
         if (id in tombstones) return null
         latest[id]?.let { return it }
