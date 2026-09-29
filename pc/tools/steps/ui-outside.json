@@ -1,0 +1,25 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "把一句话写到工作区外面去",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const t=document.querySelector('#stream').innerText;if(/工作区之外/.test(t))return JSON.stringify({refused:true,saysHow:/outside_write/.test(t),saysWhere:/改到工作区里/.test(t),ms:Date.now()-t0});if(Date.now()-t0>30000)return JSON.stringify({refused:false,tail:t.slice(-160)});await new Promise(z=>setTimeout(z,600))}})()",
+    "must": ["refused", "saysHow", "saysWhere"],
+    "note": "自动档下这条要**当场拒**，而且拒得能说清两件事：为什么（工作区之外）与怎么办（改路径，或 `haoai flags on outside_write`）。原来它也会拦，但是弹一张没人看的卡等 300 秒，最后模型收到的是「超时未答，按拒绝处理」—— 分不清是边界问题还是网关问题，于是换个写法再试一次。\n\nsaysHow/saysWhere 这两条**是被截断逼出来的**：工具结果那一行只看得见前约九十个字符，第一版把「怎么办」写在第二句，界面上就只剩 `haoai flags on outside_w` —— 文案顺序改成「结论 → 怎么办 → 哪个文件」之后，这两条才真的看得见。判据读的是**渲染出来的文本**，不是返回值"
+  },
+  {
+    "shot": "o01-outside-refused"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const left=document.querySelectorAll('.card.ask:not(.done)').length;const running=document.getElementById('send').classList.contains('stop');if(!running&&left==0)return JSON.stringify({noCardLeft:true,settled:true,ms:Date.now()-t0});if(Date.now()-t0>20000)return JSON.stringify({noCardLeft:left==0,settled:!running,left:left});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": ["noCardLeft", "settled"],
+    "note": "当场拒就意味着**不该留下挂着等决定的卡**（有卡 = 又回到等 300 秒那条路），回合也要收口。这一条要轮询：上一版在这里不等待，于是抓到的是「还在跑」这个中间态，判据红得毫无信息量"
+  }
+]

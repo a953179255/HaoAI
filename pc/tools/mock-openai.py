@@ -227,6 +227,14 @@ PLAN = {
                          "arguments": json.dumps({"path": "theme.txt", "content": "green\n"})}]),
         ("好，按你说的写好了 theme.txt。", None),
     ],
+    # 沙箱第一层：模型要往工作区**外面**写（`../` 解析出来就在外面，不用知道绝对路径）。
+    # 自动档下这条该被当场拒并说清怎么显式允许；把开关打开之后同一条要真的写得出去。
+    "outside": [
+        ("写到外面去", [{"id": "call_out", "name": "write",
+                        "arguments": json.dumps({"path": "../haoai-outside.txt",
+                                                 "content": "不该出现的内容\n"})}]),
+        ("好，这轮结束。", None),
+    ],
     # 手机审批这条链路要"审批卡一直挂着"：ask 档下 write 会问人，
     # 人在手机上点"允许一次"之后文件才出现 —— 这条剧本就是那一次。
     "approve": [

@@ -185,8 +185,44 @@ class ToolCtx(
         }
         if (verdict?.decision == Decision.ALLOW) return null
         val out = subjectIsPath && kind == "write" && outside(resolve(subject))
-        val risk = RiskOf.of(tool, subject, detail(), out,
-            subjectIsPath && kind == "write" && runCatching { resolve(subject).isFile }.getOrDefault(false))
+        val exists = subjectIsPath && kind == "write" &&
+            runCatching { resolve(subject).isFile }.getOrDefault(false)
+        val risk = RiskOf.of(tool, subject, detail(), out, exists)
+        // 用户显式开了"允许写到工作区外"之后，"在外面"这一项不再计入风险；
+        // 但**只摘掉这一项**：强推、删文件、覆盖已有文件那些照样拦。
+        // 不这么做的话这个开关就成了"关掉整个审批"的别名，而它的名字只承诺了"允许写到外面"。
+        val outAllowed = out && HaoFlag.enabled(HaoFlag.OUTSIDE_WRITE, settings.flags)
+        val effective = if (outAllowed) RiskOf.of(tool, subject, detail(), false, exists) else risk
+        /*
+         * 沙箱第一层：**auto 档不许往工作区外写**（要往外卖得自己在设置里开）。
+         *
+         * 原来这里已经会弹卡（高危不跳审批），但那等于"夜里白等五分钟再自动拒"：
+         * 定时任务与任务链都以 auto 档跑，没人看卡，模型最后收到的那句是
+         * "超时未答，按拒绝处理" —— 看不出是边界问题还是网关问题，于是它会换个写法再试一次。
+         * 当场拒 + 说清为什么 + 说清怎么显式允许，才是这一档该有的样子。
+         * ask 档**故意不改**：人在电脑前，弹卡让他点是对的，凭什么替他决定。
+         *
+         * 只管 `write`/`edit` 这两个"按模型给的路径落文件"的工具，**不管 media/record**：
+         * 后者是"把产物导到用户指定的输出路径"，素材库在 D:\ 是常态，
+         * 那条路自己已经有判据（工作区外的产物不进页面、正文里写明"在工作区外面"，
+         * 见 MediaTest `files outside the workspace are not offered to the page`）。
+         * 第一版没想清这一层，把 media 导出也一起挡了 —— 是整套测试跑出来才看见的，
+         * 不是想出来的。**边界要挡的是"改坏别人的文件"，不是"生成一个大文件"。**
+         */
+        val boundaryTool = tool == "write" || tool == "edit"
+        if (out && boundaryTool && mode == "auto" && !outAllowed) {
+            /*
+             * 顺序是量出来的：工具结果那一行在界面上只看得见前九十个字符
+             * （截图里第一版把绝对路径写在第二句，结果"怎么办"整段被截没 ——
+             * 一条说不清该怎么办的拒绝，等于让人或模型自己猜）。
+             * 所以：**结论 → 怎么办 → 才是要动哪个文件**。
+             * 路径用模型自己写的那个（多半是相对的），别摆绝对路径占字数。
+             * 也不用 `**加粗**`：这一行按纯文本渲染，星号会原样显示出来。
+             */
+            return "已拒绝：这条要写到工作区之外。要允许就开 haoai flags on outside_write；" +
+                "或把路径改到工作区里。别原样重试，也别改用 shell 绕（那层这规则管不到，但风险闸照样拦）。" +
+                "被拒的路径：$subject"
+        }
         /*
          * auto 档跳过审批，但**高危不跳**。
          *
@@ -195,12 +231,12 @@ class ToolCtx(
          * 等于把不可逆的那一下也交给了模型自己决定。现在低/中危照旧自动过，
          * 高危仍然弹卡 —— 而卡可以在手机上点（v0.55 那条路），不会真把人堵在工位外。
          */
-        if (mode == "auto" && risk.level != Risk.HIGH && verdict?.decision != Decision.ASK) return null
+        if (mode == "auto" && effective.level != Risk.HIGH && verdict?.decision != Decision.ASK) return null
 
         val extra = if (out) "（在工作区之外）" else ""
         val why = if (verdict != null) "\n为什么还要问：${verdict.why}" else ""
         val pattern = if (tool == "shell") PolicyStore.commandPrefix(subject) else subject
-        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern, risk)
+        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern, effective)
         return if (ok) null else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
     }
 

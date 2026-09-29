@@ -16,6 +16,15 @@ MODE="${SHOT_MODE:-tools}"
 
 BIN=build/install/haoai-pc/bin/haoai-pc.bat
 if [ ! -f "$BIN" ]; then echo "x 没有 $BIN —— 先跑 gradle installDist"; exit 1; fi
+# 装好的二进制比源码旧 = 这一轮验的是**上一版程序**。
+# 症状特别坏：界面表现的是旧行为，测试却是新的（改完 Tools.kt 只跑 test 忘了 installDist，
+# 于是像素里弹的还是老审批卡，判据红成"新代码没生效"，看着像产品坏了）。
+# 取两边最新的时间戳比一下，源码更新就直接停在这里，别往下跑两分钟才让人猜。
+NEWEST_SRC=$(find src/main -type f \( -name '*.kt' -o -name '*.html' \) -newer "$BIN" -print -quit 2>/dev/null)
+if [ -n "$NEWEST_SRC" ]; then
+  echo "x 装好的二进制比源码旧（$NEWEST_SRC 更新过）—— 先跑 gradle installDist 再来"
+  exit 1
+fi
 
 # 端口必须挑"当前真没人听"的：BaseHTTPRequestHandler 开了 SO_REUSEADDR，
 # 在 Windows 上第二个进程**能绑上同一个端口**（不报错），于是请求被先起来的那个
