@@ -122,9 +122,11 @@ class SessionStartupTest {
         val dir = tmp.newFolder("store-" + UUID.randomUUID())
         val store = SessionStore(dir)
         assertNull(store.lastOpenedId())
-        // 回落路径要能走通（真机第一次打开应用就是这个状态）
-        store.save(session("a", 1L))
-        store.save(session("b", 2L))
+        // 回落路径要能走通（真机第一次打开应用就是这个状态）。
+        // 必须 touch=false：save 默认会把 updatedAt 刷成"现在"，两次连存会落在同一毫秒，
+        // 那条"取最近更新"的断言就变成看运气（这条测试第一次全量跑就是这么红的）。
+        store.save(session("a", 1L), touch = false)
+        store.save(session("b", 2L), touch = false)
         assertEquals("b", SessionStartup.pick(store.list(), store.lastOpenedId()))
     }
 
