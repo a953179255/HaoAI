@@ -488,20 +488,21 @@ fun ChatScreen(
     // Int（keyboardLiftPx 参数）不会注册订阅——这正是输入栏透出抬升前旧背景的根因
     val keyboardLiftState = remember { androidx.compose.runtime.mutableIntStateOf(0) }
     keyboardLiftState.intValue = keyboardLiftPx
-    // /task 强制展开任务面板（即使清单为空或已全部完成）
-    // v9 方案B：按会话绑定——切换/新建会话时重置，杜绝他处开过的面板残留到新会话
-    var taskPanelExpanded by remember { mutableStateOf(false) }
-    var taskPanelForcedVisible by remember { mutableStateOf(false) }
+    // 任务面板的展开态挂在 VM 的 TaskPanelState 上，**不放在这儿的 remember 里**：
+    // 去一趟设置页再回来，这棵 Composable 树整个重建，remember 归零、下面那条自动展开
+    // 又跑一遍 = 面板"每次回来都重新展开一次"（2026-09-30 用户报的现场缺陷），
+    // 他自己刚收起的那一步也会一起丢。
+    // v9 方案B 的语义照旧：按会话绑定——切换/新建会话时归位，他处开过的面板不残留。
     val taskSession = vm.session.collectAsState().value
     val taskSessionKey = taskSession?.id
     androidx.compose.runtime.LaunchedEffect(taskSessionKey) {
-        taskPanelExpanded = false
-        taskPanelForcedVisible = false
+        vm.taskPanel.onEnter(taskSessionKey)
     }
 
-    // 新任务清单到达（首条 id 变化）时自动展开一次顶栏任务面板
+    // 新任务清单到达（首条 id 变化）时自动展开一次；同一份清单不再重复展开，
+    // 所以"收起来之后重进本会话"不会再被拉开。
     LaunchedEffect(todoItems.firstOrNull()?.id) {
-        if (todoItems.isNotEmpty()) taskPanelExpanded = true
+        vm.taskPanel.maybeAutoExpand(todoItems.firstOrNull()?.id)
     }
 
     // 系统返回手势：弹层优先关闭，其次侧边栏，避免把应用最小化
@@ -920,7 +921,7 @@ fun ChatScreen(
                 // 任务浮层（方案 A · 形状连续形变）：胶囊⇄面板是同一颗玻璃，
                 // 宽/圆角/图标旋转/内容交叉由 morph 单值驱动（420ms easeOutQuint），
                 // 高度由清单 AnimatedVisibility + animateContentSize 生长。
-                val taskFloatVisible = todoItems.isNotEmpty() || taskPanelForcedVisible
+                val taskFloatVisible = todoItems.isNotEmpty() || vm.taskPanel.forcedVisible
                 androidx.compose.animation.AnimatedVisibility(
                     visible = taskFloatVisible,
                     enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
@@ -928,8 +929,8 @@ fun ChatScreen(
                 ) {
                     TaskFloat(
                         items = todoItems,
-                        expanded = taskPanelExpanded,
-                        onToggle = { taskPanelExpanded = !taskPanelExpanded },
+                        expanded = vm.taskPanel.expanded,
+                        onToggle = { vm.taskPanel.toggleExpanded() },
                         backdrop = backdrop
                     )
                 }
@@ -1233,10 +1234,7 @@ fun ChatScreen(
                                 when (cmd.name) {
                                     "help" -> showSlashHelp = true
                                     "status" -> showStatusPopup = true
-                                    "task" -> {
-                                        taskPanelExpanded = !taskPanelExpanded
-                                        taskPanelForcedVisible = !taskPanelForcedVisible
-                                    }
+                                    "task" -> vm.taskPanel.toggleForcedVisible()
                                 }
                             }
                         }
@@ -1258,10 +1256,7 @@ fun ChatScreen(
                                 when (cmd.name) {
                                     "help" -> showSlashHelp = true
                                     "status" -> showStatusPopup = true
-                                    "task" -> {
-                                        taskPanelExpanded = !taskPanelExpanded
-                                        taskPanelForcedVisible = !taskPanelForcedVisible
-                                    }
+                                    "task" -> vm.taskPanel.toggleForcedVisible()
                                 }
                             }
                         }

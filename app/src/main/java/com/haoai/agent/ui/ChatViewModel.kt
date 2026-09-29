@@ -474,6 +474,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _todoItems = MutableStateFlow<List<TodoItem>>(emptyList())
     val todoItems = _todoItems.asStateFlow()
 
+    /**
+     * 顶栏任务面板的展开态。挂在这里而不是 ChatScreen 的 `remember` 里，
+     * 因为切屏（去设置页再回来）会重建聊天界面那棵 Composable 树，`remember` 归零，
+     * 面板就会"每次回来都重新展开一次"——VM 是 activity 作用域的，跨屏还在。
+     * 详见 [com.haoai.agent.ui.chat.TaskPanelState]。
+     */
+    val taskPanel = com.haoai.agent.ui.chat.TaskPanelState()
+
     private val todoStore = TodoStore(c.appFilesDir)
 
     init {
