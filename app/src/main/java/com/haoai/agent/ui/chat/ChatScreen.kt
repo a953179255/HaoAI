@@ -220,6 +220,27 @@ class DrawerController {
      */
     var frozenParallax = false
 
+    /**
+     * 上一次处理过的分栏模式（横屏=两栏）。**注意它记的是"方向"而不是"抽屉开合"**。
+     *
+     * 为什么要有这个：聊天页那个"横屏自动展开侧栏 / 竖屏收起"的效果键在方向上，
+     * 可 `LaunchedEffect` 在**每次进入聊天页**时都会跑一遍（从设置返回就是重新进入），
+     * 而返回聊天时 MainActivity 刻意把侧栏恢复成展开（[snapOpen]）——
+     * 于是竖屏那条分支立刻把刚恢复的侧栏又关掉了，用户看到"从设置回来，侧边栏自己收了"
+     * （2026-09-30 报的缺陷）。方向没变就不该动抽屉。
+     */
+    private var lastTwoPane: Boolean? = null
+
+    /**
+     * 报告当前分栏模式，返回**这次是不是真的换了方向**（首次进入也算换，行为与旧版一致）。
+     * 只有返回 true 时调用方才该去开/收侧栏。
+     */
+    fun onPaneMode(twoPane: Boolean): Boolean {
+        val changed = lastTwoPane != twoPane
+        lastTwoPane = twoPane
+        return changed
+    }
+
     /** 打开态弹性参数：中低刚度+轻微回弹（damping 0.85），有「果冻到位」感而不狂振荡 */
     private fun settleSpec() = androidx.compose.animation.core.spring(
         dampingRatio = 0.85f,
@@ -446,7 +467,12 @@ fun ChatScreen(
     val drawerPanelWidthDp = (cfgNow.screenWidthDp * drawerPanelRatio).dp
     // 横屏进屏自动展开侧栏（两栏）：只在"进入横屏"这一刻跑，之后用户可手动收起，不反复强制；
     // 转回竖屏时收起——竖屏侧栏是盖层，留着会挡住整屏聊天。
+    // 横屏 = 两栏模式：侧栏占 28%（≈340dp），常驻可见；竖屏保持 0.72 抽屉盖层
+    // 只在"方向真的变了"那一刻开/收侧栏（判据在 DrawerController.onPaneMode）：
+    // 这个效果每次进入聊天页都会跑，而"从设置返回聊天"时 MainActivity 刻意把侧栏恢复成展开，
+    // 不加这道闸就会立刻把刚恢复的侧栏又关掉（用户 2026-09-30 报的现象）。
     androidx.compose.runtime.LaunchedEffect(landscapeTwoPane) {
+        if (!drawer.onPaneMode(landscapeTwoPane)) return@LaunchedEffect
         if (landscapeTwoPane) { if (!drawer.isOpen) drawer.snapOpen() }
         else if (drawer.isOpen) drawer.close()
     }

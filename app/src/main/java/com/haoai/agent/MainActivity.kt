@@ -218,17 +218,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// 页面导航深度：转场方向判定用（push = 进入更深一层）。
-// v0.18.2 修复：旧 screenLevel 把记忆库(2)与记忆与梦境(11)粗归同一层，
-// 两个方向都命中「to>=from」→ 进入和返回播同一个动画（用户反馈）。
-// 记忆库是记忆与梦境的下一级（唯一入口在其中，onBack 回 11），深度必须更高。
-private fun screenDepth(s: Int) = when (s) {
-    0 -> 0          // 聊天（根）
-    1, 4, 7 -> 1    // 设置根 / 会话列表 / 浏览器
-    2 -> 3          // 记忆库（记忆与梦境的下级）
-    in 9..18 -> 2   // 设置 section 子页（记忆与梦境/模型大脑/搜索服务/搜索目录/…）
-    else -> 2       // 定时 / 技能 / MCP / 工作流（设置根直接进入）
-}
+// 页面导航深度与"上一级是谁"这两张表挪到了 `ui/ScreenNav.kt`：
+// 那儿还多一份 parentOf，给下面那个兜底 BackHandler 用（详见那个文件的注释）。
 
 @Composable
 private fun RootApp(wallpaper: android.graphics.Bitmap?) {
@@ -862,7 +853,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 流畅感来源。
             // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
             // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
-            fun levelOf(s: Int) = screenDepth(s)
+            fun levelOf(s: Int) = com.haoai.agent.ui.ScreenNav.depth(s)
             val ease = androidx.compose.animation.core.FastOutSlowInEasing
             // spring 而非固定 tween：先快后缓的自然减速比匀速机械感更「丝滑」。
             // 刚度用 Medium（原 MediumLow）：全宽 1080px 位移下 MediumLow 收敛
@@ -881,6 +872,19 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
                     visibilityThreshold = 0.001f
                 )
+            // 系统返回键兜底（2026-09-30）：本 App 换屏是一个 `screen: Int`，不是 NavHost，
+            // 返回键不会自己"退一屏"——每屏得自己装 BackHandler。电脑联动(19) 那屏没装，
+            // 结果手势返回把 Activity finish 了，用户看到的是"不返回上一级，而是直接退出应用"。
+            // 这里按 ScreenNav.parentOf 兜底：屏自己有处理器时**后注册者优先**（子组合晚于这行注册，
+            // 弹窗/分区/抽屉仍旧归页面自己管），只有没人接时才退回上一级，而不是甩回桌面。
+            // 退到聊天(0) 时要顺手解除转场冻结，否则聊天页会停在设置页录下的旧快照。
+            androidx.activity.compose.BackHandler(
+                enabled = !com.haoai.agent.ui.ScreenNav.isRoot(screen)
+            ) {
+                val to = com.haoai.agent.ui.ScreenNav.parentOf(screen) ?: 0
+                if (to == 0) { enterChat(); drawer.snapshotFresh = false }
+                screen = to
+            }
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
                 transitionSpec = {

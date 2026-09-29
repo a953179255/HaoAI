@@ -63,6 +63,11 @@ fun PcLinkScreen(
     /** 上面那句是好消息还是坏消息（同一行文字，红绿得跟着事实走）。 */
     var noteOk by remember { mutableStateOf(false) }
 
+    // 系统返回键：这一屏原本没接住它，手势返回等于把 Activity finish 掉
+    // ——用户看到的是"不返回上一级，而是直接退出应用"（2026-09-30 真机实锤）。
+    // 页内那颗箭头走 onBack（screen 19→1 回设置），返回键得做同一件事。
+    androidx.activity.compose.BackHandler { onBack() }
+
     Column(
         Modifier
             .fillMaxSize()
