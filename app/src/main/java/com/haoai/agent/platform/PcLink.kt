@@ -90,7 +90,11 @@ data class PcPayload(
 data class PcApproval(val id: String = "", val kind: String = "", val sid: String = "", val payload: PcPayload = PcPayload())
 
 @Serializable
-data class PcDigestItem(val at: String = "", val title: String = "", val verdict: String = "", val text: String = "")
+data class PcDigestItem(
+    /** 那一轮的开始时刻（毫秒）。这份 JSON 里唯一的稳定主键 —— 差集全靠它，见 [PcDigestWatch]。 */
+    val t: Long = 0L,
+    val at: String = "", val title: String = "", val verdict: String = "", val text: String = ""
+)
 
 /** 电脑端几个口的信封一样（`{"ok":..,"items":[..]}`），共用一份。 */
 @Serializable

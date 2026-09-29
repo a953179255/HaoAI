@@ -38,7 +38,10 @@ import kotlinx.coroutines.launch
 object PcWatchdog {
 
     const val CHANNEL_PC = "haoai_pc_wait"
+    /** 跑完的结果走**另一条渠道**：它不是"在等你"，用同一条会把人的"这条可以划掉了"和"这条要你决定"混成一堆。 */
+    const val CHANNEL_DONE = "haoai_pc_done"
     private const val NOTIFICATION_ID = 4311
+    private const val NOTIFICATION_ID_DONE = 4312
 
     /** 后台轮询节律（毫秒）。放宽的理由见类注释 ①。 */
     const val POLL_MS = 20_000L
@@ -57,6 +60,8 @@ object PcWatchdog {
     private var app: Context? = null
     private var store: PcStore? = null
     private val watch = PcWatch()
+    /** 定时结果走另一套判重：审批是当下状态，结果是过去事件（见 [PcDigestWatch]）。 */
+    private val results = PcDigestWatch()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
 
@@ -75,6 +80,13 @@ object PcWatchdog {
                     description = "电脑上的 HaoAI 在等你批准时提醒（跨端联动）"
                 }
             )
+        // IMPORTANCE_DEFAULT 而不是 HIGH：跑完一条简报不该盖过"在等你决定"那条。
+        (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .createNotificationChannel(
+                NotificationChannel(CHANNEL_DONE, "电脑跑完了", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "电脑上的定时任务/任务链跑完之后，把结果送到这里（跨端联动）"
+                }
+            )
         refreshConfig()
     }
 
@@ -88,7 +100,7 @@ object PcWatchdog {
             base = ep?.base.orEmpty(),
             device = ep?.device.orEmpty()
         )
-        if (ep == null) watch.reset()
+        if (ep == null) { watch.reset(); results.reset() }
     }
 
     fun save(base: String, token: String, device: String): PcOut<String> {
@@ -149,6 +161,7 @@ object PcWatchdog {
                 // 连不上/被解除：先把"在等"的假象收掉，并清空差集 —— 重连之后如果还是那几条，
                 // 应该重新提醒一次（人可能根本没看到刚才那条）。
                 watch.reset()
+                results.reset()
                 hideNotification()
                 _state.value = _state.value.copy(
                     waiting = 0, lastAt = System.currentTimeMillis(), lastNote = out.message,
@@ -169,6 +182,14 @@ object PcWatchdog {
                     PcWatchAction.Clear -> hideNotification()
                     PcWatchAction.Same -> Unit
                 }
+                /*
+                 * 顺手问一次"有没有刚跑完的"。放在 pending 之后而不是并起来：
+                 * pending 失败时上面已经 reset 过判重了，这时候再拿一份可能过期的
+                 * digest 去判重，会把"其实没见过"的那几条永久记成"说过了"。
+                 * 一次轮询两个请求（20 秒一轮）换的是"人不在电脑前也知道结果出来了"，
+                 * 值；真要省，就该把两个口合成一个，而不是少问一次。
+                 */
+                announceResults(PcLink(ep.base, ep.token).digest())
                 act
             }
         }
@@ -239,6 +260,42 @@ object PcWatchdog {
         }
         (a.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, b.build())
+    }
+
+    /**
+     * 把"电脑上刚跑完的那次"发成一条通知。
+     *
+     * 三条刻意的取舍：
+     * ① **正文里就带结果**（哪一轮、结论、正文第一行）—— 多数时候人看一眼就够了，
+     *    不该为了读一句话再跳一层；
+     * ② 点开之后打开的是电脑上那个手机网页端的「结果」页签 —— 应用内现在没有结果列表，
+     *    按钮指一个没有内容的屏就是假出口（同一个理由见「在网页上答」）；
+     * ③ `setAutoCancel(true)`：这是"告知"，不是"在等你"，划过就该消失，
+     *    不像待批那条要一直挂着。
+     */
+    private fun announceResults(out: PcOut<List<PcDigestItem>>) {
+        val a = app ?: return
+        if (out !is PcOut.Ok) return
+        val fresh = results.onDigest(out.value)
+        if (fresh.isEmpty()) return
+        val last = fresh.last()
+        val more = fresh.size - 1
+        val body = buildString {
+            append(last.at).append(" · ").append(last.title.ifBlank { "（没标题）" })
+            append('\n').append(last.verdict.ifBlank { "跑完了" })
+            if (last.text.isNotBlank()) append('\n').append(last.text.lineSequence().first().take(120))
+            if (more > 0) append('\n').append("还有 $more 条：点进去看")
+        }
+        val n = NotificationCompat.Builder(a, CHANNEL_DONE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(if (more > 0) "电脑上有 $fresh.size 次跑完了" else "电脑上的一次任务跑完了")
+            .setContentText(body.lineSequence().first())
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(openWebIntent(a, _state.value.base))
+            .setAutoCancel(true)
+        (a.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFICATION_ID_DONE, n.build())
+        _state.value = _state.value.copy(lastNote = "结果已经送到手机：" + last.title)
     }
 
     private fun hideNotification() {

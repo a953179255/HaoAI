@@ -353,6 +353,29 @@ class LanTest {
         assertTrue("该回一份 items：" + body, body.contains(""","items":"""))
     }
 
+    /**
+     * 手机端"跑完了要不要震一下"全靠每条结果里那个 **`t`** 判重
+     * （`app/.../PcDigestWatch`：没有稳定主键就宁可不弹，否则每 20 秒重弹一次）。
+     * 那是另一端写的代码，PC 这边改个字段名它是不会红的 —— 所以在这里把契约钉住：
+     * 真跑一轮进去，`Digest.json()` 的每条都必须带一个正数的 `t`。
+     */
+    @Test
+    fun `every digest row carries the stable key the phone dedups on`() {
+        RunLedger.add("pc-digest-a", "早间简报", "说一句", "定时", 2, 1500L, false, "今天有 3 条更新")
+        RunLedger.add("pc-digest-b", "手动那条", "说一句", "手动", 1, 10L, false, "不该进汇总")
+        val json = Digest.json(20)
+        val rows = Json.parseToJsonElement(json).jsonObject["items"]?.jsonArray ?: emptyList()
+        assertTrue("定时那一轮该进汇总：" + json, rows.isNotEmpty())
+        rows.forEach { e ->
+            val o = e.jsonObject
+            val t = o["t"]?.jsonPrimitive?.content?.toLongOrNull()
+            assertTrue("每条都要有可判重的 t（缺了手机上不是漏报就是重弹）：" + o, t != null && t > 0L)
+            assertTrue("标题要在：" + o, !o["title"]?.jsonPrimitive?.content.isNullOrBlank())
+        }
+        assertTrue("手动起的那条不该混进来：" + json,
+            rows.none { it.jsonObject["title"]?.jsonPrimitive?.content == "手动那条" })
+    }
+
     // ---- 从手机派活（默认关，且它是"让这台电脑动手"的那条口）----
 
     @Test
