@@ -24,17 +24,27 @@ LOG="${AUDIT_LOG:-$TEMP/pc-steps-audit.log}"
 # ② Windows 上 python 往管道里默认按 GBK 编码，README 里的 `PRE_CLIP=素材.mp4` 会被写成
 #    另一串字节，bash 读回去就是错的文件名 —— 红起来看着像产品坏了，其实是夹具没造出来。
 export PYTHONIOENCODING=utf-8
-python - "$PC/README.md" > "$TEMP/pc-steps-commands.txt" <<'PY'
-import io, re, sys
+python - "$PC/README.md" "$PC/tools/steps" 2> "$TEMP/pc-steps-missing.txt" > "$TEMP/pc-steps-commands.txt" <<'PY'
+import io, os, re, sys
 t = io.open(sys.argv[1], encoding='utf-8').read()
 best = {}
+# `(?:pc/)?` 不是宽容，是**补漏**：README 里两种写法都有（从仓库根跑的 `pc/tools/…`
+# 和从 pc/ 里跑的 `tools/…`），只认前一种的话，后一种写下的剧本**从来没进过全量审计**——
+# 实测 65 份里漏了 18 份，包括 ui-skill / ui-product / ui-risk 这几份刚验收过的。
 for full, name in re.findall(
-        r'((?:[A-Z_]+=(?:"[^"]*"|\'[^\']*\'|\S+)\s+)*bash pc/tools/ui-shot\.sh pc/tools/steps/([a-z0-9\-]+)\.json[^\n`#]*?)\s*(?:#|`|\r|$)', t, re.M):
+        r'((?:[A-Z_]+=(?:"[^"]*"|\'[^\']*\'|\S+)\s+)*bash (?:pc/)?tools/ui-shot\.sh (?:pc/)?tools/steps/([a-z0-9\-]+)\.json[^\n`#]*?)\s*(?:#|`|\r|$)', t, re.M):
     full = re.split(r'\s{2,}#', full.strip())[0].strip()
     if 'SHOT_DPR' in full:      # 高倍率重拍不是验收跑法
         continue
+    # 统一成"从仓库根跑"的形状：本脚本下面是在 ROOT 下执行的
+    full = full.replace('bash tools/ui-shot.sh tools/steps/', 'bash pc/tools/ui-shot.sh pc/tools/steps/')
     if name not in best or len(full) > len(best[name]):
         best[name] = full
+have = {f[:-5] for f in os.listdir(sys.argv[2]) if f.endswith('.json')}
+# 有文件、没跑法 = 这份剧本压根没被审计过。静默跳过就是"跑了 47 份、红 0 份"那种假绿，
+# 所以这里既打印到 stderr（给人看），也**照样不为它编一条命令**（宁可少跑，也不要跑错夹具）。
+for m in sorted(have - set(best)):
+    sys.stderr.write("MISS %s  steps/%s.json 在 README 里没有原样跑法，这份没进审计\n" % (m, m))
 for k in sorted(best):
     print(best[k])
 PY
@@ -77,6 +87,16 @@ while IFS= read -r cmd; do
     printf 'ok   %-16s 判据=%s\n' "$name" "$asserts" | tee -a "$LOG"
   fi
 done < "$TEMP/pc-steps-commands.txt"
+
+# 有文件、没跑法：这份剧本**根本没被审计过**，比"红"更糟（红至少说明有人跑过它）。
+# 计入 bad，让退出码替它说话 —— 否则"跑了 47 份、红 0 份"会一直骗下去（实测漏了 18 份）。
+if [ -s "$TEMP/pc-steps-missing.txt" ]; then
+  while read -r _ name _; do
+    [ -n "$name" ] || continue
+    total=$((total+1)); bad=$((bad+1))
+    printf 'RED  %-16s README 里没有原样跑法 —— 这份从来没进过审计\n' "$name" | tee -a "$LOG"
+  done < <(sed -n 's/^MISS \([^ ]*\).*/\1/p' "$TEMP/pc-steps-missing.txt")
+fi
 
 echo "----"
 echo "跑了 $total 份，红 $bad 份；汇总在 $LOG"

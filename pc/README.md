@@ -330,10 +330,28 @@ toast、快捷键（`Ctrl+N/K/B`、`Alt+1/2/3`、`Esc`）。markdown 渲染器�
 全量重跑所有像素剧本（按**退出码**判，不看打印）：
 
 ```
-bash pc/tools/audit-steps.sh                 # 41 份（这份数字以脚本自己打印的为准），跑法一律从本 README 原样抄
+bash pc/tools/audit-steps.sh                 # 全量：跑法一律从本 README 原样抄（份数以脚本自己打印的为准）
 bash pc/tools/audit-steps.sh ui-files        # 只跑名字里含该子串的
 bash pc/tools/api-smoke.sh                   # 外部程序那条路：客户端发任务 → 终端批卡 → 文件真写出来
 ```
+
+**审计的覆盖面本身也要有跑法可抄**（2026-09-29 补）：`ui-check.js` 只数"零判据的剧本"，
+它假设每份剧本都在被跑。实际不是——`audit-steps.sh` 从 README 里抓命令，抓不到的那份**静默跳过**，
+于是"跑了 47 份、红 0 份"里藏着 18 份从没进过审计的剧本（`ui-skill`、`ui-risk`、`ui-rewind`、
+带 16 条判据的 `ui-memitems` 都在里面）。两个成因：README 里两种前缀混写
+（从仓库根跑的 `pc/tools/…` 与从 pc/ 里跑的 `tools/…`），以及六处把 `ui-shot.sh` 打漏成
+`bash pc/tools/steps/x.json`。现在两种前缀都认、**有文件没跑法直接算红**，并补上这几条：
+
+```
+bash pc/tools/ui-shot.sh pc/tools/steps/ui.json          # 全流程冒烟（83 步，零判据，见 #99）
+bash pc/tools/ui-shot.sh pc/tools/steps/ui-tour.json     # 首屏引导
+bash pc/tools/ui-shot.sh pc/tools/steps/ui-ctx.json      # 记忆页与 @ 提及
+bash pc/tools/ui-shot.sh pc/tools/steps/ui-memitems.json # 条目化记忆：加/改/忘（16 条判据）
+```
+
+最后那条**不能加 `PRE_MEMORY=1`**：这份剧本的判据是绝对行数（`rows.length==2`），
+带上夹具种的 6 条记忆之后它一定红。第一次试跑就是这么红的，别把它记成产品回归——
+判据写绝对行数的剧本，天生和夹具互相绑死。
 
 这一轮跑出来的账：3 份剧本在点 0 尺寸的元素（其中一份是**第二个点击本来就是空操作**，
 一份是 `#railBtn` 只点了一次＝收起侧栏之后再去点被收起的条目 —— 现在改成"收起→展开"各判一次），
@@ -411,10 +429,10 @@ SHOT_MODE=chat PRE_MEMORY=1 bash pc/tools/ui-shot.sh pc/tools/steps/ui-pal.json 
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-term.json  # 终端页签：人与 agent 共用同一常驻进程（各一个游标）
 SHOT_MODE=chat PRE_CLIP=素材.mp4 bash pc/tools/ui-shot.sh pc/tools/steps/ui-attach.json  # 音视频附件：胶囊 + 播放器 + 刷新重放
 SHOT_MODE=code bash pc/tools/ui-shot.sh pc/tools/steps/ui-code.json  # run_code：跑 python 出图，图真的交回模型
-SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/steps/ui-iab.json  # 「预览」页签：CDP 画面进网页、人点的位置送回页面
-SHOT_MODE=chat PRE_LAN=1 bash pc/tools/steps/ui-lan.json  # 手机联动：开/关端点、配对码倒数、设备移除（端口每轮现挑）
-SHOT_MODE=tools bash pc/tools/steps/ui-rewind.json  # 检查点：两步确认整轮撤销一次任务的改动
-SHOT_MODE=rec bash pc/tools/steps/ui-record.json  # 录屏：真录桌面 → 停 → 界面里真能播
+SHOT_MODE=chat PRE_FLAGS=browser_control bash pc/tools/ui-shot.sh pc/tools/steps/ui-iab.json  # 「预览」页签：CDP 画面进网页、人点的位置送回页面
+SHOT_MODE=chat PRE_LAN=1 bash pc/tools/ui-shot.sh pc/tools/steps/ui-lan.json  # 手机联动：开/关端点、配对码倒数、设备移除（端口每轮现挑）
+SHOT_MODE=tools bash pc/tools/ui-shot.sh pc/tools/steps/ui-rewind.json  # 检查点：两步确认整轮撤销一次任务的改动
+SHOT_MODE=rec bash pc/tools/ui-shot.sh pc/tools/steps/ui-record.json  # 录屏：真录桌面 → 停 → 界面里真能播
 SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-tools.json  # 会话级工具开关 + 切会话要重画面板
 PRE_RUNSTATE="$(cat pc/tools/fixtures/resume-sessions.json)" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-resume.json  # 断点恢复：横幅 / 续跑 / 丢掉，两条会话各管各的现场
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-askkeys.json  # 审批/提问按键盘决定 + 输入框里打字不误伤
@@ -646,7 +664,7 @@ Kotlin 侧新增 `FileMentionTest`（6 条：相对路径与正斜杠、排序�
    就是第一个子元素。于是新会话的模型/工作区两行一直是"—"，切换器上线后左栏还亮着旧目录。
    判据改成"有没有真的气泡"（`.msg`），既保住"别把刚发出去的消息抹掉"的原意，也让空会话刷得到 state。
 
-验收：`PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/steps/ui-ws.json`（真像素里看到：
+验收：`PRE_DIRS="other" SHOT_MODE=chat bash pc/tools/ui-shot.sh pc/tools/steps/ui-ws.json`（真像素里看到：
 抽屉列出两个目录并标出当前、填一个不存在的目录 → toast 说清是哪个目录打不开且**不**多出一条会话、
 换到 `other` 之后左栏标签与顶栏一起跟着变、点回旧会话又跟着变回来、三条会话各在自己的目录里）。
 Kotlin 侧新增 `WorkspaceTest`（6 条），共 132 条全绿。
@@ -3077,7 +3095,7 @@ v0.76 做沙箱第一层时，`write`/`edit` 改成"auto 档当场拒 + 说清�
 **验收**：`RiskTest` 新增 1 条（新建产物=中危 / 覆盖已有=高危 / `write` 不受影响），
 `OutsideWriteTest` 从 1 条 media 测试拆成 4 条（auto 不弹卡、覆盖仍弹且仍高危、ask 仍弹、当场拒那条照旧）。
 新剧本 `pc/tools/steps/ui-product.json` **4 步 / 4 条判据全过**，
-命令：`SHOT_MODE=product bash pc/tools/steps/ui-product.json` ——
+命令：`SHOT_MODE=product bash pc/tools/ui-shot.sh pc/tools/steps/ui-product.json` ——
 判据是"全程没出现过一张卡"**并且**"模型自己 read 回来看得见盘上的字节"：
 只验前者会把"被静默挡掉"当成通过。量到的收口时间是 **502ms**（原来 300 秒）。
 变异验过：把 `product` 那一句关掉，四条判据一起红（卡又弹出来了）。

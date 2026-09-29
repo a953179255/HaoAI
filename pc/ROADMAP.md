@@ -163,6 +163,16 @@
      再走一次真机配对界面。**下一步别再从这里重做**：直接 `uiautomator dump` 拿坐标 → 慢按（`input swipe X Y X Y 120`）
      → 地址与码都用 `input text`（纯 ASCII，注意 120 秒过期，先输地址再要码）。
    - `uiautomator dump /sdcard/x.xml` 在 Git Bash 下会被改成 `/E:/Git/sdcard/...` —— 要 `MSYS_NO_PATHCONV=1`。
+     **而且 `$TEMP`（= `/tmp`）同样会被改写**，所以落盘点要用相对路径。已把这套 dump+pull+解析（含 `content-desc`，
+     图标按钮的语义全在那儿）固化成 `bash /g/hbt/udump.sh <serial>`。
+   - **2026-09-29 09:36 复测：这次卡在一个新的、更硬的地方——手机正在被人用。**
+   - 电脑侧全绿：`lan on --port 8952` → `serve`（它不吃 `set port=`，默认 8712）→ `POST /api/lan/code` 出码
+     → 手机侧 `curl http://192.168.1.37:8952/lan/health` 通。**端口要避开审计**：`ui-shot.sh` 占 8720-8790（web/LAN）
+     与 8791-8890（mock），我这轮用 8952/8712 才没撞上（撞上的那次把一条 `POST /api/lan/code` 发进了审计的服务里）。
+   - 但 `uiautomator dump` 拿回来的是一个 407 字节的空树，`package="com.tencent.mm"`，随后 `topResumedActivity` 是
+     `tv.danmaku.bili` —— **人在刷手机，这时候往设备上点就是抢用户的手机**。已把自己起的 serve 按 PID 收掉，没动审计的进程。
+   - ⇒ 这三项现在缺的不是方法，是**一段没人用手机的空档**。下次动手前先 `dumpsys activity activities | grep topResumedActivity`
+     确认前台是 `com.haoai.agent` 或者至少不是别的应用；不是的话就别开始，改做别的。
 2. **旧中文路径的 junction**（`#35`）：那个目录是真实快照，删或移之前要问你。
 
 ### 5.3 对外部那份 Gap 清单（桌面 `HaoAI-PC-Gap-List.md`）的逐条核对
