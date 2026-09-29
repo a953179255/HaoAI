@@ -143,6 +143,18 @@ object DreamTriggerMonitor {
             )
             return
         }
+        // B10 第二步：两端共写一份 MEMORY.md，自动整理先让位 —— 闲置期内文件被改过
+        // （通常是 PC 端在跑它自己的整理/写记忆），本轮跳过并留一行原因（见 DreamYield）。
+        if (!manual) {
+            val container = (app as com.haoai.agent.HaoApplication).container
+            val idle = idleMinutes(app)
+            val mtime = runCatching { container.memoryBank.storageFile().lastModified() }.getOrDefault(0L)
+            if (DreamYield.pcWroteDuringIdle(mtime, System.currentTimeMillis(), idle)) {
+                android.util.Log.d("HaoDream", "yield: MEMORY.md modified during ${idle}min idle window (pc writing), skip this round")
+                WorkspaceDocs.appendDreamSkip(container, "MEMORY.md 在闲置的 ${idle} 分钟内被改过（PC 端在写），本轮自动整理让位")
+                return
+            }
+        }
         android.util.Log.d("HaoDream", "fire! manual=$manual")
         MemoryTidyWorker.enqueueOnce(app, force = manual)
     }

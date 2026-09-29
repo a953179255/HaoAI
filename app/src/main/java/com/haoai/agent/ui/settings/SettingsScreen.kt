@@ -2195,7 +2195,7 @@ private fun LazyListScope.memoryItems(
         GlassGroup(backdrop) {
             ToggleRow(
                 title = "闲置时自动整理记忆",
-                subtitle = "充电且灭屏持续所选时间后执行，仅 00:00–7:00 夜间时段生效；亮屏或断电即取消。固化历史写入 DREAMS.md。",
+                subtitle = "充电且灭屏持续所选时间后执行，仅 00:00–7:00 夜间时段生效；亮屏或断电即取消。闲置期内 PC 端写过 MEMORY.md 则本轮让位（DREAMS.md 留一行原因）。固化历史写入 DREAMS.md。",
                 checked = settings.deepDream,
                 onChange = { vm.setDeepDream(it) },
                 backdrop = backdrop

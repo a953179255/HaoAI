@@ -72,6 +72,7 @@ object WorkspaceDocs {
             "> 两层机制：**规则整理**（每次都跑，零成本）= 重要日志晋升 MEMORY.md + 过期清理 + 去重；\n" +
             "> **深度梦境**（设置开启时）= 由「记忆管理模型」做语义去重与合并，模型不可用自动回退规则层。\n" +
             "> 触发条件：充电 + 灭屏闲置，且仅在 00:00–07:00。条目由系统追加，一般无需手改。\n" +
+            "> 让位：若闲置期间 MEMORY.md 被改过（PC 端在写），本轮自动整理跳过并在此留一行原因。\n" +
             "\n"
 
     /**
@@ -91,6 +92,21 @@ object WorkspaceDocs {
             .firstOrNull { it.startsWith("## ") }
             ?.let { old.substring(old.indexOf(it)) } // 从标题行起保留全部日记条目
         f.writeText(DREAMS_HEADER + (rest ?: ""))
+    }
+
+    /**
+     * B10 第二步：自动整理让位时留一行为什么（跳过也要在日记里看得见，否则像没跑过）。
+     * 工作区无文件路径（SAF 后端）时没有可写的日记，仅由调用方 logcat 记录。
+     */
+    fun appendDreamSkip(c: AppContainer, why: String) {
+        val root = workspaceRoot(c) ?: return
+        runCatching {
+            val tsFull = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date())
+            val dreams = root.resolve("DREAMS.md")
+            dreams.parentFile?.mkdirs()
+            if (!dreams.exists()) dreams.writeText(DREAMS_HEADER)
+            dreams.appendText("\n## $tsFull · 让位\n- $why\n")
+        }
     }
 
     /** 固化完成后追加梦境日记与当日报告。 */
