@@ -999,7 +999,12 @@ function show(sid,keep){
   // 左栏那颗工作区标签跟着会话走：点回旧会话却亮着刚才那个目录，比不显示更坏
   $('#wsName').textContent=v.workspace?baseName(v.workspace):'工作区';
   $('#wsBtn').title=v.workspace||'换个工作区开一条新任务';
-  $('#model').textContent=v.model?shortModel(v.model):'—';
+  // 降级之后这颗芯片要说真话：显示"设置里那个模型"等于宣称这句是它答的
+  const mn=v.modelNow||v.model,deg=!!(v.modelNow&&v.model&&v.modelNow!==v.model);
+  $('#model').textContent=mn?(shortModel(mn)+(deg?'（降级）':'')):'—';
+  $('#modelChip').title=deg
+    ?('已降级：设置里是「'+v.model+'」，这一条现在由「'+v.modelNow+'」回答。点这里切换模型')
+    :'切换模型';
   // 角色名跟着会话走：没有角色就整颗藏掉，摆一个空的"（无）"是在占人的注意力
   $('#roleChip').hidden=!v.role;
   $('#roleChip').textContent=v.role?('角色 · '+v.role):'';
@@ -3245,7 +3250,7 @@ function jumpToMsg(v,i){
 function applyState(s){
   const v=view(s.sessionId||curId);
   v.hydrated=true;v.running=!!s.running;v.title=s.title||'新会话';v.mode=s.mode;
-  v.workspace=s.workspace;v.model=s.model;v.role=s.role||'';
+  v.workspace=s.workspace;v.model=s.model;v.role=s.role||'';v.modelNow=s.modelNow||'';
   // 版本号由服务端报：这里以前自己写死 v0.2.0，而仓库已经走到 0.23 —— 界面上那行是骗人的
   if(s.version)$('#ver').textContent=s.version;
   v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.outputs=[];

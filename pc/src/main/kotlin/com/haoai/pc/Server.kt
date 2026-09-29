@@ -355,6 +355,13 @@ class WebServer(settings: PcSettings, port: Int,
         sb.append("\"subs\":[").append((e?.subNames() ?: emptyList())
             .joinToString(",") { quote(it) }).append("],")
         sb.append("\"version\":\"").append(esc(PC_VERSION)).append("\",")
+        /*
+         * 这一条**实际在用哪个模型**。降级是引擎在回合中间发生的：顶栏那颗芯片如果一直显示
+         * 设置里那个模型，人回看界面就会以为"这句是主模型答的"，而它其实是备胎答的
+         * （那条降级提示是 SSE 瞬时事件，跑完 hydrate 重画整屏就没了 —— 见 #111）。
+         * 所以这里报的是**状态**而不是事件：刷新、切回来、 hydrate 之后它都还在。
+         */
+        sb.append("\"modelNow\":\"").append(esc(e?.modelNow ?: settings.model)).append("\",")
         sb.append("\"title\":\"").append(esc(e?.session?.title?.get() ?: "新会话")).append("\",")
         // 角色名要报**这条会话自己的**：顶栏那个标签如果显示的是"上一次选过的角色"，
         // 就等于在说一条没在跑的会话正在跑。

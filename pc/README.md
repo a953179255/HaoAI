@@ -2839,7 +2839,25 @@ CLI `haoai set fallback=…`、设置抽屉一个输入框，两边都能改。
 而浏览器里 `.notice` 全程为 0 —— 同一时刻的 `delta`/`answer` 却渲染得好好的。
 按仓库那条老教训（**配置类信息必须落库，不能只发 SSE 瞬时事件**），这不是选择器写错了，
 是这条提示压根没进可重画的状态里（`runs.jsonl` + `/api/state` 才是它该待的地方）。
-已立 `#111`。所以这份剧本**故意还没写进上面的运行命令**——它现在不在全量审计里，别说它一直在跑。
+已立 `#111`。
+
+**补记（同日，v0.76.0 之后）**：`#111` 查了一半 —— 顶栏那颗模型芯片改成**状态驱动**了：
+`/api/state` 多报一个 `modelNow`，降级之后芯片显示实际在答的模型并带「（降级）」，
+hover 写清「设置里是 X，这一条由 Y 回答」。原来它一直显示设置里那个模型，
+而那句降级提示是 SSE 瞬时事件、跑完 hydrate 就没了 —— 回看界面只会以为"这句是主模型答的"。
+判据：刷新一次之后芯片还写着降级（剧本第 8-10 步）。
+剩下那半条还开着：**长回合进行中引擎发的 `notice` 在浏览器里渲染不出来**（服务端推出是量过的）。
+剧本里那一步换成了"此刻还在跑 = 回合没被 429 打断"，替换理由写在那步的 note 里 ——
+不是把判据写松，是要求已由更强的机制满足；留一条永远红的判据只会让整套审计变噪音。
+
+两份剧本现在都进全量审计了：
+
+```
+SHOT_MODE=fallback SHOT_PERM=auto PRE_SET="model=primary-429 fallback=backup-ok" bash pc/tools/ui-shot.sh pc/tools/steps/ui-fallback.json
+SHOT_MODE=outside SHOT_PERM=auto bash pc/tools/ui-shot.sh pc/tools/steps/ui-outside.json
+```
+
+前者 12 步 / 7 条判据全过，后者 5 步 / 5 条判据全过。
 能验的部分先验了：剧本第 5 步（回答正文里带着「这句是备胎模型『backup-ok』答的」）与
 第 7 步（回合真的收口）都是绿的，`ui-check.js` 也全绿。
 
