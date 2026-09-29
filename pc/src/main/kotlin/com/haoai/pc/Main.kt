@@ -14,9 +14,14 @@ import java.nio.charset.StandardCharsets
  *   haoai serve           本地网页（127.0.0.1:8712），带工具卡 / diff / 待办 / 审批弹窗
  *   haoai task "..."      跑一条就走（脚本化、可被别的 agent 调）
  *   haoai doctor          自检：状态根、密钥、模型连通、工作区
+ *
+ * **不带参数 = 起 serve**，不是打帮助。理由很具体：双击 `haoai.cmd` 或 `HaoAI-PC.exe`
+ * 就是不带参数，而"打一屏帮助然后 0 退出"会让控制台窗口一闪就没——
+ * 实测用户据此报的是"闪退"。帮助没丢：`haoai help` / `-h` / 打错命令都还会给（见下面 else 分支）。
  */
 fun main(args: Array<String>) {
-    val cmd = args.firstOrNull() ?: "help"
+    val desktop = args.isEmpty()
+    val cmd = args.firstOrNull() ?: "serve"
     val rest = args.drop(1)
     val settings = PcSettings.load()
 
@@ -35,7 +40,7 @@ fun main(args: Array<String>) {
         "screen" -> screenCmd(settings, rest)
         "task" -> task(settings, rest)
         "chat" -> chat(settings)
-        "serve" -> serve(settings, rest)
+        "serve" -> serve(settings, rest, openPage = desktop)
         "sessions" -> sessions()
         "help", "--help", "-h" -> help()
         else -> {
@@ -49,6 +54,7 @@ private fun help() {
     println(
         """
         HaoAI PC 端 $PC_VERSION
+          （不带任何参数直接跑 = 起本地网页版，双击图标走的就是这条）
           haoai doctor                 自检（状态根 / 密钥 / 模型连通 / 工作区）
           haoai key <sk-...>           存密钥到 HAOAI_HOME（不进仓库）
           haoai init [目录]            设定工作区
@@ -416,7 +422,7 @@ private fun screenCmd(s: PcSettings, rest: List<String>) {
     println((if (r.error) "× " else "") + r.content)
 }
 
-private fun serve(s: PcSettings, rest: List<String>) {
+private fun serve(s: PcSettings, rest: List<String>, openPage: Boolean = false) {
     val port = rest.indexOf("--port").takeIf { it >= 0 && it + 1 < rest.size }?.let { rest[it + 1].toIntOrNull() } ?: 8712
     val ws = WebServer(s, port)
     val actual = ws.start()
@@ -424,6 +430,20 @@ private fun serve(s: PcSettings, rest: List<String>) {
     println("  打开浏览器访问  http://127.0.0.1:$actual/")
     println("  工作区 ${s.workspaceFile().absolutePath}   模型 ${s.model}   档位 ${s.permissionMode}")
     println("  Ctrl+C 退出")
+    // 只有"双击进来"的那条路才顺手开浏览器：脚本与测试里 `serve` 也常跑，弹一个窗口出来是干扰。
+    // 打不开就算了，上面那行网址就是给人复制的——不因为"自动打开失败"把服务本身判成没起来。
+    if (openPage) openInBrowser("http://127.0.0.1:$actual/")
+}
+
+/**
+ * 用系统默认浏览器打开一个地址。
+ *
+ * 走 `rundll32 url.dll,FileProtocolHandler` 而不是 `cmd /c start`：后者要经过一次 shell 解析，
+ * 地址里的 `&` 之类会被当成命令分隔符；前者是把 URL 当参数直接交给关联程序。
+ * 这只用于本机 127.0.0.1 的地址，不接受任何外部输入拼进来的 URL。
+ */
+private fun openInBrowser(url: String) {
+    runCatching { ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", url).start() }
 }
 
 private fun sessions() {

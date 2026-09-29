@@ -38,6 +38,8 @@ build/install/haoai-pc/bin/haoai-pc.bat serve       # 本地网页版 → http:/
 build/install/haoai-pc/bin/haoai-pc.bat task "…" --auto   # 跑一条就走，可被脚本调用
 ```
 
+**不带任何参数 = 起 `serve` 并自动开浏览器**——这一条是给双击准备的：以前不带参数是打一屏帮助然后退 0，控制台窗口跟着一起关，看起来就是「闪退」。
+
 `pc/tools/haoai.cmd` 是包了一层的启动器，会先 `chcp 65001`——不做这步，
 中文系统（cp936）的控制台会把所有中文输出显示成乱码。
 
@@ -3194,6 +3196,57 @@ Python 按系统代码页（这台机器 cp936）编码，中文全成乱码 —
 加了状态就变成"换个入口绕过"，真要挡得两端都挡，那已经是签名校验的范围）。
 预览与安装之间也没有"这份正文没变过"的比对：源可以在你看完之后换掉内容，这一版不防这个。
 手机端没有订阅源，只有 PC 装完之后打 `/` 用。
+
+
+## 这一批：双击不再闪退，打包件从"构建成功但跑不起来"里救出来（v0.79.0 收尾）
+
+用户报的是"直接打开 `pc/tools/haoai.cmd` 会闪退"。量完之后是**两个各自独立的缺陷**，
+而且第二个更严重：能双击的那个东西，从来就没真的能跑。
+
+**① 不带参数 = 打一屏帮助然后 0 退出。** 双击 `.cmd` 或 `.exe` 就是不带参数，
+而控制台窗口跟着进程一起关——看起来就是"闪退"。现在**不带参数直接起 `serve`**（并顺手用默认浏览器
+打开 `http://127.0.0.1:8712/`），帮助没丢：`haoai help` / `-h` / 打错命令都还给。
+开浏览器只在"不带参数"这条路上做：脚本与测试里 `serve` 也常跑，弹窗口是干扰；
+`rundll32 url.dll,FileProtocolHandler` 而不是 `cmd /c start`，因为后者要过一次 shell 解析。
+打不开就算了——上面那行网址本来就是给人复制的，不因为"自动打开失败"把服务判成没起来。
+
+**② `packageExe` 打出来的 exe 是坏的，而构建一路 BUILD SUCCESSFUL。** 真跑一次才看见：
+
+```
+错误: 加载主类 com.haoai.pc.MainKt 时出现 LinkageError
+  java.lang.UnsupportedClassVersionError: ... class file version 69.0,
+  this version of the Java Runtime only recognizes class file versions up to 65.0
+```
+
+产物是 Java 25 的字节码，捆绑进 exe 的 runtime 却是 Java 21 —— 因为 `findJpackage()`
+只搜 `%USERPROFILE%\.gradle\jdks` 与 `C:\Program Files\*`，机器上唯一命中那里的是
+Gradle 自己拉的 JetBrains 21；真正在编译的那把 Temurin 25 装在 **`%LOCALAPPDATA%\Programs\`**
+（用户级安装），旧逻辑根本没搜到那儿。三处一起改：
+
+- **先问产物要 Java 几**：直接读 `MainKt.class` 头两个字节的 class 版本（69），
+  不靠"我以为 Gradle 用哪个 JDK"——那个数这几天就变过；
+- **按版本挑 jpackage**：候选顺序改成 PATH/JAVA_HOME 上那个 java 的 bin → `JPACKAGE` →
+  含 `%LOCALAPPDATA%\Programs\*` 的各安装根；**没有一个够新就直接报错**，
+  宁可不打包也不打出一个双击只会崩的 exe；
+- **打完必须真跑一次产物**：`doLast` 里执行 `HaoAI-PC.exe help`，要求退 0 且输出里有 `HaoAI PC`。
+  用 `help` 是特意挑的：打印完就退，不会顺手起一个服务占端口。
+
+顺带两处同类的"两处各写一遍"：**版本号**从写死的 `0.64.0` 改成读 `Main.kt` 的 `PC_VERSION`
+（现在 exe 属性里是 0.79.0，和界面顶栏一致）；**删旧产物**要先清只读位——jpackage 产出的
+`HaoAI-PC.exe` 是 `r-xr-xr-x`，Windows 上 `deleteRecursively()` 对着只读文件就是删不掉，
+而它报的错写着"可能 HaoAI-PC.exe 正在运行"，进程列表里根本没有，白查一轮。
+
+**验收**：`gradle test` 仍 **489 条全绿**（这批没动引擎与界面，所以既没有新单测也没有新剧本——
+改的是 `main()` 的默认分支与构建脚本，判据走的是构建期的那次真跑）；
+`gradle packageExe` 连跑两次都过（第二次才真的踩到"删旧目录"那条路径），
+产物 127MB、内嵌 runtime `JAVA_VERSION="25.0.2"`；
+`HaoAI-PC.exe serve --port 8771` 起得来、`/` 回 200、横幅打印正确，测完按 PID 收掉；
+不带参数的路径用 installDist 那份验过（8712 起服务、HTTP 200）。
+
+**还没解决的那一件**：现在设置里 `base=http://127.0.0.1:8106/v1`、`model=mock`，
+是某次测试留下的假网关——**双击能打开界面，但发一句话必报错**。
+这台机器上现在唯一稳的模型来源是自己起一个 llama-server（`api.b.ai` 这一阵连不通，
+8080 上那个 opencode 代理一发对话就 429）。改的是用户真实配置，所以没替他们动。
 
 
 ## 与手机端同源的行为
