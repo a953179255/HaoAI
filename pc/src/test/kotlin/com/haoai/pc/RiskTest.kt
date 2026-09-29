@@ -103,6 +103,20 @@ class RiskTest {
     }
 
     @Test
+    fun `a product file outside the workspace is not the same risk as overwriting one`() {
+        // #112：素材库与成片目录在 D:\ 是常态。把"导出去"判成高危的代价不是安全性，
+        // 而是 auto 档（定时任务、任务链）弹一张没人看的卡等 300 秒，然后模型收到"超时未答，按拒绝处理"。
+        // 分界线是**动没动别人已有的文件**：新建产物 = 中危（auto 直接过），覆盖已有 = 仍然高危。
+        assertEquals("导出去（新建）：中危", Risk.MID, level("media", "D:\\素材\\成片.mp3", "", true, false))
+        assertEquals("导出去但要覆盖已有文件：仍然高危", Risk.HIGH,
+            level("media", "D:\\素材\\成片.mp3", "", true, true))
+        assertEquals("write 到外面不受这条影响（它可能盖掉别人的源码）", Risk.HIGH,
+            level("write", "..\\sibling.md", "", true, false))
+        val why = RiskOf.of("media", "D:\\素材\\x.mp3", "", true, false).why
+        assertTrue("中危那句要说得清为什么不算高危：" + why, why.contains("新建") && why.contains("不动"))
+    }
+
+    @Test
     fun `the reason is a sentence a human can act on`() {
         val v = RiskOf.of("shell", "git push --force origin main", "", false)
         assertTrue("要说清为什么：" + v.why, v.why.contains("git push --force") && v.why.contains("不可逆"))

@@ -1,0 +1,20 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "把台词写成字幕文件，放到工作区外面（../产物/ 下面）",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();let sawCard=false;let cards=0;for(;;){if(document.querySelectorAll('.card.ask:not(.done)').length)sawCard=true;cards=document.querySelectorAll('.card.ask').length;const running=document.getElementById('send').classList.contains('stop');const t=document.querySelector('#stream').textContent;if(!running&&(/第一句台词/).test(t))return JSON.stringify({noCardEver:!sawCard,anyCardAtAll:cards>0,fileReadBack:true,saysOutside:(/工作区外面/).test(t),settled:true,ms:Date.now()-t0});if(Date.now()-t0>60000)return JSON.stringify({noCardEver:!sawCard,anyCardAtAll:cards>0,fileReadBack:false,saysOutside:false,settled:false,tail:t.slice(-200)});await new Promise(z=>setTimeout(z,500))}})()",
+    "must": ["noCardEver", "fileReadBack", "saysOutside", "settled"],
+    "note": "自动档下把产物导到工作区**外面**，全程不该出现一张等人点的卡 —— v0.76 只把 write/edit 改成当场拒，media 那条留着没动，结果就是夜里导一段字幕也要弹一张没人看的卡，300 秒之后模型收到「超时未答，按拒绝处理」，分不清是边界问题还是网关问题。\n\n分界线是**动没动别人已有的文件**：新建产物 = 中危（auto 直接过），覆盖已有 = 仍然高危（还是要问）。所以这里必须同时验 `noCardEver` 与 `fileReadBack`：不弹卡**并且**真的写成了 —— 只验前者会把「被静默挡掉」当成通过。\n\n读的是模型自己 read 回来的那份（第二回合调 read），卡上显示的就是盘上的字节。saysOutside 钉的是它没有假装写在工作区里。"
+  },
+  {
+    "shot": "pd01-no-card-outside-product"
+  }
+]

@@ -140,7 +140,7 @@ class OutsideWriteTest {
     }
 
     @Test
-    fun `media exports to a path outside the workspace are not blocked by this rule`() {
+    fun `a media export outside the workspace is not blocked by this rule`() {
         dirs()
         /*
          * 这条是被全量测试逼出来的：第一版按 `kind == "write"` 判，把 media/record
@@ -152,8 +152,40 @@ class OutsideWriteTest {
         val msg = ctx("auto", gate = gate).guard(
             "media", outside.absolutePath, "导出音频", { "产物写到 " + outside.absolutePath })
         assertEquals("media 导到工作区外不该被这条挡：" + msg, null, msg)
-        // 弹一次卡是 v0.59 就有的行为（"在工作区之外"算高危，auto 档也不跳高危），
-        // 本批没动它；MediaTest 里那条既有测试跑的也是这个假闸口（它答"允许"）。
-        assertEquals("仍然走既有的高危弹卡，不是新规则的当场拒：" + gate.asked, 1, gate.asked.size)
+    }
+
+    @Test
+    fun `a fresh product file outside does not stall an unattended run any more`() {
+        // #112：v0.76 只把 write/edit 改成"当场拒"，media 那条留着说"以后再说" ——
+        // 留着的结果是定时任务导一段音频到 D:\ 时，弹一张没人看的卡等 300 秒，
+        // 然后模型收到"超时未答，按拒绝处理"。新建产物不动任何人的文件，不该走这条路。
+        dirs()
+        val gate = Spy()
+        val msg = ctx("auto", gate = gate).guard(
+            "media", outside.absolutePath, "导出音频", { "产物写到 " + outside.absolutePath })
+        assertEquals("该直接过：" + msg, null, msg)
+        assertEquals("auto 档下不该弹卡（弹 = 白等五分钟）：" + gate.asked, 0, gate.asked.size)
+        assertTrue("没弹卡就不该有分级记录（别把这条当成「判过了」）：" + gate.levels, gate.levels.isEmpty())
+    }
+
+    @Test
+    fun `overwriting an existing file outside still asks even in auto`() {
+        dirs()
+        outside.writeText("别人早就放在这儿的东西")
+        val gate = Spy()
+        val msg = ctx("auto", gate = gate).guard(
+            "media", outside.absolutePath, "导出音频", { "产物写到 " + outside.absolutePath })
+        assertEquals("覆盖这件事还是要放人（弹卡后这条测试的假闸口答「允许」）：" + msg, null, msg)
+        assertEquals("要弹卡：" + gate.asked, 1, gate.asked.size)
+        assertEquals("而且仍然是高危（分级没被放宽）：" + gate.levels, listOf(Risk.HIGH), gate.levels)
+    }
+
+    @Test
+    fun `ask mode still shows the media card to the human`() {
+        dirs()
+        val gate = Spy()
+        ctx("ask", gate = gate).guard("media", outside.absolutePath, "导出音频",
+            { "产物写到 " + outside.absolutePath })
+        assertEquals("人在电脑前时弹卡是对的，凭什么替他决定：" + gate.asked, 1, gate.asked.size)
     }
 }
