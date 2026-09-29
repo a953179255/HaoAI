@@ -5,6 +5,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.nio.charset.StandardCharsets
+import kotlin.system.exitProcess
 
 /**
  * PC 端入口。
@@ -39,6 +40,7 @@ fun main(args: Array<String>) {
         "lan" -> lanCmd(settings, rest)
         "screen" -> screenCmd(settings, rest)
         "task" -> task(settings, rest)
+        "review" -> review(settings, rest)
         "chat" -> chat(settings)
         "serve" -> serve(settings, rest, openPage = desktop)
         "sessions" -> sessions()
@@ -65,6 +67,7 @@ private fun help() {
           haoai ask   <模式>           记住"这类必须问"（auto 也绕不过）
           haoai rules [clear]          看/清本工作区的规则表
           haoai task "…" [--auto]      跑一条任务就退出
+          haoai review <base> [--json] 本地 diff 审查：改了啥 / 风险 / 建议（只读，永不外发；有高危退出码 2）
           haoai chat                   终端对话
           haoai serve [--port 8712]    打开本地网页版
           haoai lan [status|on|off|code|devices|pair <名>|unpair <前缀>|allow-send on|off]  手机联动
@@ -239,6 +242,38 @@ private fun task(s: PcSettings, rest: List<String>) {
     val engine = Sessions.create(settings, settings.workspaceFile(), cliGate(auto || plan, settings.workspaceFile()), printer)
     // 正文由 printer 的 TextDelta/TextDone 事件负责，这里不再手动补一遍（会打印两次）
     engine.submit(text)
+}
+
+/**
+ * 本地 diff 审查（§3.2 "可做"的那一半）：`haoai review <base>` 把 base 之后的所有变更
+ * （含未提交）读成 改了啥 / 风险 / 建议。只读、零网络出口；有高危项退出码 2（1 = 用法/base 错）。
+ * 外发 PR comment 那一半明确不做——永远要人点，见 pc/ROADMAP §3.2。
+ */
+private fun review(s: PcSettings, rest: List<String>) {
+    val json = rest.contains("--json")
+    val base = rest.firstOrNull { !it.startsWith("--") }
+    if (base.isNullOrBlank()) {
+        println("用法：haoai review <base> [--json]   （base 如 HEAD~1、main、某个 tag —— 对着它看之后的所有变更）")
+        return
+    }
+    if (GitCli.available() == null) {
+        println("这台机器没有 git（PATH 里找不到），review 跑不了")
+        exitProcess(1)
+    }
+    val ws = s.workspaceFile()
+    val repoPath = Engine.gitRoot(ws)
+    if (repoPath == null) {
+        println("工作区不在 git 仓库里：${ws.absolutePath}")
+        exitProcess(1)
+    }
+    val collected = Review.collect(File(repoPath), base)
+    if (collected == null) {
+        println("拿不到 ${base} 的 diff —— 这个 base 存在吗？（git rev-parse --verify 没过）")
+        exitProcess(1)
+    }
+    val report = Review.analyze(base, collected.first, collected.second)
+    if (json) println(Review.toJson(report)) else println(Review.render(report))
+    if (report.high > 0) exitProcess(2)
 }
 
 private fun chat(s: PcSettings) {
