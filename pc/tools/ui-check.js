@@ -212,6 +212,14 @@ for (const f of stepFiles) {
     continue;
   }
   (Array.isArray(arr) ? arr : []).forEach((st, i) => {
+    /*
+     * 一步同时写两个动词 = 后面那个被静默丢掉。shot.js 的执行链是 if/else 按
+     * goto→sleep→eval→click… 取第一个，而它打印的标签走另一条顺序，
+     * 所以"eval + sleep"会只睡不判、日志还印成「断言」。
+     * v0.79.0 那份订阅源剧本就这么空转了四步，34 条判据全绿而截图里没有被测的东西。
+     */
+    const used = ['goto', 'sleep', 'eval', 'click', 'key', 'type', 'shot', 'viewport'].filter(v => st && st[v] !== undefined);
+    if (used.length > 1) badSteps.push(f + ' 第 ' + (i + 1) + ' 步同时写了 ' + used.join(' + ') + '，只会执行第一个');
     if (!st || typeof st.eval !== 'string') return;
     // 剧本里两种写法都有：一条表达式，或"点一下再回个话"的语句串。
     // 只按表达式解析会把后者全判成错（实测四份老剧本被冤枉），所以两种都试。

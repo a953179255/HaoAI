@@ -1,0 +1,141 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "click": "#tabs button[data-t=\"mem\"]"
+  },
+  {
+    "sleep": 700
+  },
+  {
+    "eval": "({url:!!document.querySelector('#fdUrl'),add:!!document.querySelector('#fdAdd'),list:!!document.querySelector('#fdList'),box:!!document.querySelector('#fdEntries'),note:!!document.querySelector('.kv')&&document.querySelector('#tab-mem').textContent.indexOf('没有来源校验')>=0})",
+    "must": [
+      "url",
+      "add",
+      "list",
+      "box",
+      "note"
+    ],
+    "note": "订阅源那一格存在，并且「没有来源校验、没有签名」这句边界写在面板上而不是只写在代码注释里。"
+  },
+  {
+    "shot": "fd00-feed-panel"
+  },
+  {
+    "eval": "(async()=>{const on=document.querySelector('#tab-mem').classList.contains('on');if(!on)return JSON.stringify({panelOn:false,urlFilled:false,typedBack:''});const s=await fetch('/api/settings').then(r=>r.json());const host=new URL(s.baseUrl).host;const u='http://'+host+'/skills/index.json';const i=document.querySelector('#fdUrl');i.value=u;i.focus();i.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#fdAdd').click();return JSON.stringify({panelOn:true,urlFilled:i.value===u,typedBack:i.value.indexOf('/skills/index.json')>=0})})()",
+    "must": [
+      "panelOn",
+      "urlFilled",
+      "typedBack"
+    ],
+    "note": "填的是这次真的跑到那个端口上的清单地址（写死端口会拿到一份连不上的清单，那看着像功能坏了其实是测试坏了）。"
+  },
+  {
+    "sleep": 2500
+  },
+  {
+    "eval": "(()=>{const rows=document.querySelectorAll('#fdList .rl');const fds=document.querySelectorAll('#fdEntries .fd');const txt=n=>n?(n.textContent||''):'';const chips=n=>n?Array.from(n.querySelectorAll('.perm i')).map(x=>x.textContent):[];const c0=chips(fds[0]),c1=chips(fds[1]);const warnAll=Array.from(document.querySelectorAll('#fdEntries .perm i.warn'));const plainAll=Array.from(document.querySelectorAll('#fdEntries .perm i:not(.warn)'));const probe=document.createElement('span');probe.style.cssText='color:var(--bad);display:none';document.body.appendChild(probe);const badCol=getComputedStyle(probe).color;probe.remove();const wCol=warnAll.length?getComputedStyle(warnAll[0]).color:'';const pCol=plainAll.length?getComputedStyle(plainAll[0]).color:'';const note=txt(document.querySelector('#fdEntries .permnote'));return JSON.stringify({oneFeed:rows.length===1,threeEntries:fds.length===3,blindStillListed:txt(fds[2]).indexOf('取不到的那份')>=0&&txt(fds[2]).indexOf('没扫到')>=0,declaredShown:c0.some(t=>t.indexOf('write')===0&&t.indexOf('作者声明')>=0)&&c0.some(t=>t.indexOf('media')===0),declaredReadMarked:c0.some(t=>t.indexOf('read')===0&&t.indexOf('只读')>=0),bodyInferred:c0.some(t=>t.indexOf('shell')===0&&t.indexOf('正文里这么写')>=0),unknownNamed:c1.some(t=>t.indexOf('totally_made_up')>=0&&t.indexOf('没有这把工具')>=0),mcpFlagged:c1.some(t=>t.indexOf('mcp__github')>=0&&t.indexOf('外部 MCP')>=0),noReadOnlyInference:c1.every(t=>t.indexOf('grep')!==0),warnIsRed:!!wCol&&wCol===badCol&&!!pCol&&pCol!==badCol,noteAboveList:note.indexOf('不是沙箱保证')>=0,noInstallYet:document.querySelectorAll('#fdEntries [data-in]').length===0})})()",
+    "must": [
+      "oneFeed",
+      "threeEntries",
+      "blindStillListed",
+      "declaredShown",
+      "declaredReadMarked",
+      "bodyInferred",
+      "unknownNamed",
+      "mcpFlagged",
+      "noReadOnlyInference",
+      "warnIsRed",
+      "noteAboveList",
+      "noInstallYet"
+    ],
+    "note": "三行都在，包括正文 404 的那一行 —— 「拉不到就不列」会让人以为这个源上没有这个技能，而真实原因（源挂了、网关挡了）就此消失。\n\n权限分三档看得见：作者声明的（含声明了但只读的）、正文里点名要用的、以及本机根本没有这个名字的。外部 MCP 单独标出来是因为它落在 HaoAI 的工具表之外 —— 那把工具会做什么，这份清单说了不算。\n\nnoReadOnlyInference 钉的是反方向：正文里写「先 grep 一遍」不该生成一张 grep 权限牌。只读工具到处被提及，给每个技能都盖一个「它要读文件」的章，这张清单看两次就没人看了。\n\nwarnIsRed 不写死色值：插一个 color:var(--bad) 的探针，比的是「红牌等于令牌色」且「普通牌不等于令牌色」。上一批 --bad 在两套主题里都没定义过，于是「删行红」那条判据长期假绿 —— 探针这种写法在令牌缺失时自己就会红。\n\nnoInstallYet 是本批最要紧的一条：**没点「看清单」之前，界面上不该有任何装按钮**。这一版没有签名校验，「先看正文」是唯一那道闸，闸必须长在布局上而不是说明里。"
+  },
+  {
+    "eval": "document.querySelector('#fdEntries .permnote')&&document.querySelector('#fdEntries .permnote').scrollIntoView({block:'start',behavior:'instant'});'ok'"
+  },
+  {
+    "sleep": 300
+  },
+  {
+    "shot": "fd01-entries-with-perms"
+  },
+  {
+    "click": "#fdEntries [data-pv='0']"
+  },
+  {
+    "sleep": 1500
+  },
+  {
+    "eval": "(()=>{const fd=document.querySelectorAll('#fdEntries .fd');const txt=n=>n?(n.textContent||''):'';const p0=fd[0]?fd[0].querySelector('.fdprev'):null;return JSON.stringify({prevShown:!!p0&&txt(p0).indexOf('ffprobe')>=0,installAppeared:!!(fd[0]&&fd[0].querySelector('[data-in]')),gateIsPerEntry:!!(fd[1]&&fd[2]&&!fd[1].querySelector('[data-in]')&&!fd[2].querySelector('[data-in]')),noteTravels:!!(fd[0]&&txt(fd[0].querySelector('.fdmore .permnote')).indexOf('不是沙箱保证')>=0),chipsNotDoubled:!!(fd[0]&&fd[0].querySelectorAll('.fdmore .perm i').length===0&&fd[0].querySelectorAll('.fd > .perm i').length===4)})})()",
+    "must": [
+      "prevShown",
+      "installAppeared",
+      "gateIsPerEntry",
+      "noteTravels",
+      "chipsNotDoubled"
+    ],
+    "note": "展开的是正文开头而不是又一段说明 —— 判据取的是文档里那句 ffprobe，它只可能来自 SKILL.md 本身。\n\ngateIsPerEntry 钉的是「打开一份不会把三份都解锁」：如果实现偷懒把按钮挂到容器上，上一轮的 noInstallYet 与这一轮的 installAppeared 都会绿，而用户只要点过任意一份就能盲装其余几份。\n\nchipsNotDoubled：预览会拿刚读到的正文重扫一遍并**原地换掉**行上那排牌（清单那遍可能是几秒前扫的，装的是这一份），所以行里 4 张、展开块里 0 张。展开块里再摆一排一模一样的牌，人只会以为第二排是别的信息，而两排不一致时更没人去对。"
+  },
+  {
+    "eval": "document.querySelector('#fdEntries [data-in]')&&document.querySelector('#fdEntries [data-in]').scrollIntoView({block:'start',behavior:'instant'});'ok'"
+  },
+  {
+    "sleep": 300
+  },
+  {
+    "shot": "fd02-preview-and-install"
+  },
+  {
+    "click": "#fdEntries [data-in]"
+  },
+  {
+    "sleep": 2000
+  },
+  {
+    "eval": "(()=>{const t=(document.querySelector('#skillList')||{}).textContent||'';const rows=document.querySelectorAll('#skillList .rl').length;const src=document.querySelector('#skillList .src');const r=src?src.getBoundingClientRect():null;return JSON.stringify({installed:t.indexOf('剪片助手')>=0,originShown:!!src&&(src.textContent||'').indexOf('/skills/cut.md')>=0,srcVisible:!!r&&r.width>60&&r.height>6,srcNotClipped:!!src&&src.scrollWidth<=src.clientWidth+2&&src.scrollHeight<=src.clientHeight+2,oneRow:rows===1,usableInSlash:t.indexOf('/剪片助手')>=0})})()",
+    "must": [
+      "installed",
+      "originShown",
+      "srcVisible",
+      "srcNotClipped",
+      "oneRow",
+      "usableInSlash"
+    ],
+    "note": "装完直接出现在技能列表里，并且单独一行写着「来自 http://127.0.0.1:xxxx/skills/cut.md」——来源存在同目录的 .source.json 而不是写进 SKILL.md：那是用户会跟手机端对拷的文件，我的元数据不该混进去。\n\nsrcVisible / srcNotClipped 是这一批自己抓出来的坑：第一版把来源塞进标题行那个 <em> 里，而那一行是 nowrap + ellipsis，长名字一挤来源就没了 —— 但 textContent 仍是全文，判据全绿、像素上什么都没有。现在量的是盒子宽高与 scrollWidth/scrollHeight：占两行可以，剪掉不行。\n\noneRow 顺带钉住「装一次只多一份」：撞名后缀那条逻辑在 SkillDocs 里，这里验的是界面没把一次点击发成两次请求。"
+  },
+  {
+    "eval": "document.querySelector('#skillList')&&document.querySelector('#skillList').scrollIntoView({block:'start',behavior:'instant'});'ok'"
+  },
+  {
+    "sleep": 300
+  },
+  {
+    "shot": "fd03-installed-with-origin"
+  },
+  {
+    "click": "#fdList [data-fdx]"
+  },
+  {
+    "sleep": 1200
+  },
+  {
+    "eval": "(()=>{const l=(document.querySelector('#fdList')||{}).textContent||'';const sk=(document.querySelector('#skillList')||{}).textContent||'';return JSON.stringify({unsubscribed:l.indexOf('还没有订阅源')>=0,entriesCleared:document.querySelectorAll('#fdEntries .fd').length===0,skillSurvivesUnsubscribe:sk.indexOf('剪片助手')>=0})})()",
+    "must": [
+      "unsubscribed",
+      "entriesCleared",
+      "skillSurvivesUnsubscribe"
+    ],
+    "note": "退订只该撤掉那条源，不该顺手把已经装进目录的技能删掉 —— 用户订错了源和装错了技能是两件事，一次点击同时做掉两件是不可逆的越权。"
+  },
+  {
+    "eval": "document.querySelector('#fdList')&&document.querySelector('#fdList').scrollIntoView({block:'start',behavior:'instant'});'ok'"
+  },
+  {
+    "sleep": 300
+  },
+  {
+    "shot": "fd04-unsubscribed"
+  }
+]

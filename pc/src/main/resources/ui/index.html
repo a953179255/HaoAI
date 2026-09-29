@@ -325,6 +325,9 @@
     border-radius:5px;padding:0 4px;flex:none}
   .skills{display:flex;flex-direction:column;gap:3px;margin:2px 0 6px}
   .skills em{font-style:normal;color:var(--dim)}
+  /* 装完之后还能追回去的那一行：允许换行，长 URL 也不许被剪掉（宁可占两行） */
+  .skills .src{font-size:11px;color:var(--dim2);font-family:var(--mono);
+    word-break:break-all;line-height:1.4;margin:-2px 0 2px 1px}
   .pill{position:absolute;left:50%;transform:translateX(-50%);bottom:92px;z-index:9;
     border:1px solid var(--line2);background:var(--panel);color:var(--fg);border-radius:999px;
     padding:5px 13px;font-size:12px;cursor:pointer;box-shadow:var(--shadow);display:none;font-family:inherit}
@@ -479,6 +482,20 @@
   .hk.off{opacity:.5;background:transparent}
   .hk.off b{text-decoration:line-through}
   .hk .dif{max-height:120px;border-top:none;padding:3px 0;background:transparent}
+  /* ---- 技能订阅源 ----
+     装按钮长在展开块里面，不放行首：这一版没有签名校验，"先看过"是唯一的闸，
+     那就得让闸体现在布局上，而不是写在说明里等人自觉。 */
+  .fd{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:4px 0;background:var(--glass)}
+  .fd .fdh{display:flex;gap:8px;align-items:center;font-size:12.5px}
+  .fd .fdh>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fd .fdh em{font-style:normal;color:var(--dim2);font-size:11px;font-family:var(--mono)}
+  .perm{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+  .perm i{font-style:normal;font-family:var(--mono);font-size:11px;border:1px solid var(--line);
+    border-radius:999px;padding:1px 8px;color:var(--dim2)}
+  .perm i.warn{border-color:var(--bad);color:var(--bad)}
+  .permnote{font-size:11.5px;color:var(--dim2);line-height:1.5}
+  .fdprev{font-family:var(--mono);font-size:11px;color:var(--dim2);white-space:pre-wrap;
+    max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0}
   /* ---- 子任务卡 ---- */
   .tick.run{background:var(--warn);animation:p 1s infinite}
   .card.sub .sublog{display:flex;flex-direction:column;gap:2px;padding:6px 12px;border-top:1px solid var(--line);
@@ -864,6 +881,16 @@
         <span class="fp" id="skImpState"></span></div>
       <textarea id="skPaste" class="mem" rows="3" placeholder="或者把一份 SKILL.md 直接粘在这里"></textarea>
       <div class="acts2 pinned"><button class="ab" id="skPasteGo">导入这段</button></div>
+      <div class="grp" style="margin-top:12px">订阅源（装之前先看它会用到哪些工具）</div>
+      <div class="kv">一条网址 = 一份「这里有哪些技能」的清单，点刷新就把每一项的正文扫一遍。
+        <b>这里没有来源校验、没有签名</b>：清单只说明它「打算」用哪几把工具，
+        挡不住正文里让模型做别的事。所以「装」这个按钮只在看过清单之后才出现。</div>
+      <div class="addrow"><input type="text" id="fdName" placeholder="名字（可空）">
+        <input type="text" id="fdUrl" placeholder="清单地址，http(s)://" style="flex:1">
+        <button class="ab" id="fdAdd">订阅</button></div>
+      <div class="skills" id="fdList">（还没有订阅源）</div>
+      <div class="fp" id="fdState"></div>
+      <div id="fdEntries"></div>
     </div>
     <div class="tabp" id="tab-role">
       <div class="kv">角色卡 = <b>一段人设 + 模型 + 工作区 + 档位</b>存下来。点「用它开一条」，这四样一次带上 ——
@@ -2432,13 +2459,20 @@ function loadSkills(){
   return fetch('/api/skills').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
     SKILLS=d.items||[];paintSkills();
     if(d.dir&&$('#skDir'))$('#skDir').textContent=d.dir;
+    FEEDS=d.feeds||[];PERMNOTE=d.permNote||'';paintFeeds();
   }).catch(()=>{SKILLS=[];paintSkills()});
 }
 function paintSkills(){
   const el2=$('#skillList');
+  /*
+   * 来源单独一行，不塞进标题那行的 <em> 里：那一行是 `nowrap + ellipsis`，
+   * 名字和说明一长，"来自哪个地址"就被剪没了 —— 而 innerText 照样是全文，
+   * 判据会绿，像素上什么都没有。来源恰恰是装完之后唯一还能追回去的东西。
+   */
   el2.innerHTML=SKILLS.length?SKILLS.map(s=>`<div class="rl"><span>/${esc(s.name)} <em>${esc(s.desc||'')}${
       s.doc?' · SKILL.md':''}</em></span>
-    <button class="ab" data-sk="${esc(s.name)}" data-doc="${s.doc?esc(s.slug||''):''}">删除</button></div>`).join('')
+    <button class="ab" data-sk="${esc(s.name)}" data-doc="${s.doc?esc(s.slug||''):''}">删除</button></div>`+
+    (s.origin?`<div class="src">来自 ${esc(s.origin)}</div>`:'')).join('')
     :'（还没有技能）';
   // 导入的那份删的是目录，手写的那份删的是列表里的一条 —— 两件事别混成一个 op
   el2.querySelectorAll('[data-sk]').forEach(b=>b.onclick=()=>
@@ -2495,6 +2529,121 @@ $('#skSave').onclick=()=>{
     loadSkills().then(()=>{$('#skState').textContent='现有 '+SKILLS.length+' 个技能 · 打 / 就能用'});
     toast('技能已保存');
   }).catch(c=>toast('技能没保存（'+c+'）','err'));
+};
+/* ---- 技能订阅源：清单列出来，装之前先看过正文 ----
+ * 声明必须排在 loadSkills() 之前：那是个 `let`，在 TDZ 里被读一次整段技能面板就打不开了。
+ */
+let FEEDS=[],ENTRIES=[],PERMNOTE='';
+function fdState(t){const e=$('#fdState');if(e)e.textContent=t||''}
+/** 工具名里的"外部 MCP""本机没有这把工具""没扫到"要标红：这三类是人最该看一眼的。 */
+function permTags(tools){
+  return (tools||[]).map(t=>{
+    const warn=/外部 MCP|没有这把工具|没扫到|没扫出/.test(t);
+    return '<i'+(warn?' class="warn"':'')+'>'+esc(t)+'</i>';
+  }).join('');
+}
+function permChips(tools){return '<div class="perm">'+permTags(tools)+'</div>'}
+function paintFeeds(){
+  const el=$('#fdList');if(!el)return;
+  el.innerHTML=FEEDS.length?FEEDS.map(f=>`<div class="rl"><span>${esc(f.name||f.url)} <em>${esc(f.url)}</em></span>
+    <button class="ab" data-fd="${esc(f.id)}">刷新</button>
+    <button class="ab" data-fdx="${esc(f.id)}">退订</button></div>`).join('')
+    :'（还没有订阅源）';
+  el.querySelectorAll('[data-fd]').forEach(b=>b.onclick=()=>refreshFeed(b.dataset.fd));
+  el.querySelectorAll('[data-fdx]').forEach(b=>b.onclick=()=>
+    post('/api/skills',{op:'feed-del',id:b.dataset.fdx}).then(d=>{
+      afterFeed(d);if(d&&d.ok){ENTRIES=[];paintEntries()}
+    }));
+}
+function afterFeed(d){
+  if(!d){fdState('服务端没回应');return null}
+  FEEDS=d.feeds||[];if(d.permNote)PERMNOTE=d.permNote;paintFeeds();
+  if(d.items){SKILLS=d.items;paintSkills()}
+  if(!d.ok)fdState(d.error||'没成');
+  return d;
+}
+function refreshFeed(id){
+  fdState('在拉清单…');
+  return post('/api/skills',{op:'feed-refresh',id}).then(d=>{
+    if(!d){fdState('服务端没回应');return}
+    FEEDS=d.feeds||[];if(d.permNote)PERMNOTE=d.permNote;paintFeeds();
+    if(!d.ok){ENTRIES=[];fdState(d.error||'这份清单没读出来')}
+    else{
+      ENTRIES=d.entries||[];
+      const blind=ENTRIES.filter(e=>e.scanError).length;
+      fdState('清单里 '+ENTRIES.length+' 项'+(blind?'（'+blind+' 项没读到正文，仍然列着）':'')+
+        ' · 想装哪个就点它的「看清单」');
+    }
+    paintEntries();
+  }).catch(c=>fdState('刷新失败（'+c+'）'));
+}
+function paintEntries(){
+  const box=$('#fdEntries');if(!box)return;
+  // 免责句放在列表头上而不是每条后面：二十条就刷二十遍，看两遍之后人就跳过去了
+  box.innerHTML=ENTRIES.length?('<div class="permnote">'+esc(PERMNOTE)+'</div>'+ENTRIES.map((e,i)=>{
+    const chips=(e.tools||[]).slice();
+    if(e.scanError)chips.push('没扫到：'+e.scanError);
+    // 一张牌都没有 ≠ 安全。可能是正文里全是自然语言，也可能是这份东西压根不用工具 ——
+    // 两种都要说出来，否则"没有红牌"会被读成"这个技能无害"。
+    if(!chips.length)chips.push('这份没扫出任何会动东西的工具');
+    return `<div class="fd" data-e="${i}"><div class="fdh"><span>${esc(e.name)} <em>${esc(e.desc||'')}</em></span>
+      <button class="ab" data-pv="${i}">看清单</button></div>${permChips(chips)}</div>`;
+  }).join('')):'';
+  box.querySelectorAll('[data-pv]').forEach(b=>b.onclick=()=>previewEntry(+b.dataset.pv,b));
+}
+/**
+ * 展开这一份的正文。装按钮**只在这里出现** ——
+ * 这一版没有签名校验，"先看正文"是唯一那道闸，所以它得体现在布局上，
+ * 不能只写在说明里等人自觉。
+ */
+function previewEntry(i,btn){
+  const e=ENTRIES[i],host=btn.closest('.fd');
+  if(!e||!host)return;
+  const old=host.querySelector('.fdmore');if(old)old.remove();
+  btn.textContent='在读…';
+  post('/api/skills',{op:'feed-preview',url:e.url}).then(d=>{
+    btn.textContent='看清单';
+    const p=d&&d.preview;
+    if(!p||!p.ok){
+      const div=document.createElement('div');div.className='fdmore';
+      div.innerHTML=permChips(['读不到正文：'+((p&&p.error)||'服务端没回应')]);
+      host.appendChild(div);return;
+    }
+    /* 刷新时扫的那一遍可能已经旧了（源改了正文、或者当时压根没读到）。
+       这里用刚读到的这份重扫，并把行上那排牌原地换掉 —— 不在展开块里再放一排同样的牌，
+       两排一样的东西只会让人以为其中一排是别的什么信息。 */
+    e.tools=p.tools||[];
+    const row=host.querySelector('.perm');if(row)row.innerHTML=permTags(e.tools);
+    const div=document.createElement('div');div.className='fdmore';
+    div.innerHTML='<div class="fdprev">'+esc(p.head)+'</div>'+
+      '<div class="permnote">'+esc(PERMNOTE)+'</div>'+
+      '<button class="btn pri" data-in="'+i+'">看过了，装进技能目录</button>';
+    host.appendChild(div);
+    div.querySelector('[data-in]').onclick=installEntry;
+  }).catch(c=>{btn.textContent='看清单';toast('读不到这份技能（'+c+'）','err')});
+}
+function installEntry(ev){
+  const i=+ev.currentTarget.dataset.in,e=ENTRIES[i],b=ev.currentTarget;
+  if(!e)return;
+  b.disabled=true;b.textContent='在装…';
+  post('/api/skills',{op:'feed-install',url:e.url}).then(d=>{
+    b.disabled=false;b.textContent='看过了，装进技能目录';
+    if(!d){toast('服务端没回应','err');return}
+    if(d.items){SKILLS=d.items;paintSkills()}
+    if(d.ok){toast('已装进技能目录 · 打 / 就能用');fdState('装了 '+e.name+' · 来自 '+e.url)}
+    else fdState(d.error||'没装上');
+  }).catch(()=>{b.disabled=false;b.textContent='看过了，装进技能目录';toast('装失败了','err')});
+}
+$('#fdAdd').onclick=()=>{
+  const u=$('#fdUrl').value.trim();
+  if(!u){toast('先填一个清单地址');return}
+  fdState('在订阅…');
+  post('/api/skills',{op:'feed-add',name:$('#fdName').value,url:u}).then(d=>{
+    if(!afterFeed(d))return;
+    $('#fdName').value='';$('#fdUrl').value='';
+    const f=(d.feeds||[]).filter(x=>x.url==u)[0];
+    if(f)refreshFeed(f.id);else fdState('已订阅');
+  }).catch(c=>fdState('订阅失败（'+c+'）'));
 };
 loadSkills();
 

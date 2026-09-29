@@ -1232,9 +1232,53 @@ class WebServer(settings: PcSettings, port: Int,
     private fun skillsJson(): String =
         """{"ok":true,"items":${skillItems()},""" +
             """"taken":${quote(BUILTIN_CMDS.joinToString(","))},""" +
+            """"feeds":${SkillFeeds.json()},"permNote":${quote(SkillPerms.NOTE)},""" +
             """"dir":${quote(SkillDocs.dir().absolutePath)},"maxDocs":${SkillDocs.MAX_DOCS}}"""
 
     private fun arrOf(list: List<String>): String = list.joinToString(",", "[", "]") { quote(it) }
+
+    /**
+     * 订阅源那几条操作。返回 false 表示这条 op 归这里管了（已发送响应）。
+     *
+     * `feed-install` **不重新拉一遍正文**给人看 —— 它直接走 `SkillDocs.importUrl`，
+     * 所以"看过清单再装"这件事必须由界面保证（装按钮只出现在预览展开之后），
+     * 而不是服务端假装自己拦得住：这里没有任何"预览过才允许装"的状态，
+     * 有状态就会变成"换了个入口就绕过"。要挡就得两边都挡，那已是签名校验的范围。
+     */
+    private fun skillFeeds(ex: HttpExchange, b: Body): Boolean {
+        // 成功/失败都回同一套字段：ok + error + feeds + items，界面只用判 ok，不用记五种形状
+        fun reply(err: String, msg: String = "") {
+            send(ex, 200, """{"ok":${err.isEmpty()},"error":${quote(err)},"msg":${quote(msg)},""" +
+                """"feeds":${SkillFeeds.json()},"permNote":${quote(SkillPerms.NOTE)},""" +
+                """"items":${skillItems()}}""", "application/json; charset=utf-8")
+        }
+        when (b.str("op")) {
+            "feed-add" -> {
+                val (f, err) = SkillFeeds.add(b.str("name"), b.str("url"))
+                reply(err, f?.name ?: "")
+            }
+            "feed-del" -> reply(if (SkillFeeds.remove(b.str("id"))) "" else "没有这条订阅源", "已删掉")
+            "feed-refresh" -> {
+                val (entries, err) = SkillFeeds.refresh(b.str("id"))
+                if (entries.isEmpty()) reply(err)
+                else send(ex, 200, """{"ok":true,"error":"","entries":${SkillFeeds.entriesJson(entries)},""" +
+                    """"feeds":${SkillFeeds.json()},"permNote":${quote(SkillPerms.NOTE)}}""",
+                    "application/json; charset=utf-8")
+            }
+            "feed-preview" -> send(ex, 200,
+                """{"ok":true,"preview":${SkillFeeds.previewJson(SkillFeeds.preview(b.str("url")))},""" +
+                    """"permNote":${quote(SkillPerms.NOTE)}}""", "application/json; charset=utf-8")
+            "feed-install" -> {
+                val r = SkillDocs.importUrl(b.str("url"))
+                send(ex, 200, """{"ok":${r.ok},"added":${arrOf(r.added)},"skipped":${arrOf(r.skipped)},""" +
+                    """"error":${quote(r.error)},"items":${skillItems()},""" +
+                    """"feeds":${SkillFeeds.json()},"permNote":${quote(SkillPerms.NOTE)}}""",
+                    "application/json; charset=utf-8")
+            }
+            else -> return false
+        }
+        return true
+    }
 
     private fun skills(ex: HttpExchange) {
         val b = Body(ex)
@@ -1243,6 +1287,16 @@ class WebServer(settings: PcSettings, port: Int,
             return
         }
         val op = b.str("op")
+        /*
+         * 订阅源五条操作先走 [skillFeeds]：它管的是"列表页"，
+         * 装进去之后仍然由下面 `import-url` 那条路落盘（一个入口，一套 sanitize 与上限）。
+         */
+        if (op.startsWith("feed-")) {
+            if (skillFeeds(ex, b)) return
+            send(ex, 200, """{"ok":false,"error":"不认这个订阅源操作：$op"}""",
+                "application/json; charset=utf-8")
+            return
+        }
         /*
          * 导入这条路只管"装进 HAOAI_HOME/skills/<slug>/"，
          * 越界与超限的判定都在 [SkillDocs] 里（zip 条目名是外部输入，防线只有一处）。

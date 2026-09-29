@@ -46,6 +46,19 @@ const MOBILE = process.argv.includes('--mobile');
  */
 const DPR = Math.max(1, Number(process.env.SHOT_DPR || (MOBILE ? 2 : 1)) || 1);
 const steps = JSON.parse(fs.readFileSync(path.resolve(arg('steps', '')), 'utf8'));
+/*
+ * 一步只许一个动词。下面的执行链是 if/else 按 goto→sleep→eval→click… 挑**第一个**命中的，
+ * 而打印用的标签链是另一套顺序（goto→shot→eval→click…）。两条顺序不一致，
+ * 于是"同时写了 eval 和 sleep"的步骤会只睡不判，日志上还印成「断言」。
+ * 真咬到过：v0.79.0 那份订阅源剧本里四步"截图前先把目标滚进视野"全是空转，
+ * 34 条判据全绿，而截图里根本没有被测的东西。宁可在这里拒绝启动。
+ */
+const VERBS = ['goto', 'sleep', 'eval', 'click', 'key', 'type', 'shot', 'viewport'];
+for (const [i, s] of steps.entries()) {
+  const used = VERBS.filter(v => s && s[v] !== undefined);
+  if (used.length > 1)
+    throw new Error(`第 ${i + 1} 步同时写了 ${used.join(' + ')}：动词链只会执行第一个，其余静默丢掉。拆成两步。`);
+}
 const EDGE = arg('edge', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe');
 
 fs.mkdirSync(OUT, {recursive: true});

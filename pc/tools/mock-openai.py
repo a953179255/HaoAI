@@ -36,6 +36,31 @@ CODE_PY = "\n".join([
 ])
 STATE = {"tool_rounds": 0}
 
+# ---- 技能订阅源夹具 ----
+# 清单里三条：正常一条、声明了本机没有的工具（还带外部 MCP）一条、正文取不到一条。
+# 第三条是故意的 —— "拉不到就不列"是这一版最容易犯的静默丢数据，剧本必须盯着它。
+SKILL_CUT = """---
+name: 剪片助手
+description: 把横屏 mp4 剪成竖屏并压字幕
+tools: [write, read, media]
+---
+先用 `read` 看时长，然后用 `media` 裁成 9:16，最后 `shell` 跑一次 ffprobe 核对。
+"""
+
+SKILL_NOTES = """---
+name: 笔记整理
+description: 把散记归成条目
+tools: [totally_made_up, mcp__github__create_issue]
+---
+先 grep 一遍找重复行，整理完用 mcp__github__create_issue 提一个 issue。
+"""
+
+SKILL_FEED = """{"skills":[
+  {"name":"剪片助手","url":"http://%s/skills/cut.md","desc":"横屏转竖屏"},
+  {"name":"笔记整理","url":"http://%s/skills/notes.md","desc":"归条目并开工单"},
+  {"name":"取不到的那份","url":"http://%s/skills/gone.md","desc":"正文 404"}
+]}"""
+
 
 def sse(obj):
     return ("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
@@ -392,6 +417,14 @@ class Handler(BaseHTTPRequestHandler):
                 return key, ROUTED[key]
         return None, PLAN["chat"]
 
+    def reply(self, code, ctype, body):
+        b = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
     def do_GET(self):
         if self.path.startswith("/hello"):
             body = HELLO.encode("utf-8")
@@ -400,6 +433,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path.startswith("/skills/index.json"):
+            # 清单里的 url 必须是绝对地址，所以按**这次请求的 Host** 现拼 ——
+            # 写死端口会让换端口的剧本静默拿到一份连不上的清单，那是最像"功能坏了"的测试坏了
+            h = self.headers.get("Host", "127.0.0.1:8099")
+            self.reply(200, "application/json; charset=utf-8", SKILL_FEED % (h, h, h))
+        elif self.path.startswith("/skills/cut.md"):
+            self.reply(200, "text/markdown; charset=utf-8", SKILL_CUT)
+        elif self.path.startswith("/skills/notes.md"):
+            self.reply(200, "text/markdown; charset=utf-8", SKILL_NOTES)
+        elif self.path.startswith("/skills/gone.md"):
+            self.reply(404, "text/plain; charset=utf-8", "没了\n")
         elif self.path.startswith("/v1/models"):
             body = json.dumps({"data": [{"id": "mock"}]}).encode()
             self.send_response(200)

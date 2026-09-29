@@ -27,7 +27,15 @@ data class SkillDoc(
     val name: String,
     val desc: String,
     val body: String,
-    val file: File
+    val file: File,
+    /**
+     * 从哪个地址装的（订阅源条目 / URL 导入才有）。
+     *
+     * 存在同目录的 `.source.json` 里，**不写进 SKILL.md**：正文是别人写的，
+     * 我改它就等于在一份用户可能拿去和手机端同步的文件里插自己的字段；
+     * 而手机端 `SkillStore` 只认 `SKILL.md`，多一个文件它直接无视，两端都不受伤。
+     */
+    val origin: String = ""
 )
 
 /** 一次导入的账：进了哪几份、跳过了哪几份、为什么。 */
@@ -94,9 +102,17 @@ object SkillDocs {
             if (!f.isFile) return@mapNotNull null
             val text = runCatching { f.readText(Charsets.UTF_8) }.getOrDefault("")
             val (name, desc, body) = parse(text)
-            SkillDoc(d.name, name.ifBlank { d.name }, desc, body, f)
+            SkillDoc(d.name, name.ifBlank { d.name }, desc, body, f, readOrigin(d))
         }
     }.getOrDefault(emptyList())
+
+    /** 装它的那个地址；手写的 / 本地粘的自然就是空。 */
+    private fun sourceFile(d: File) = File(d, ".source.json")
+
+    fun readOrigin(d: File): String = runCatching {
+        Regex(""""url"\s*:\s*"([^"]*)"""").find(sourceFile(d).readText(Charsets.UTF_8))
+            ?.groupValues?.get(1)?.replace("\\\"", "\"")?.replace("\\\\", "\\").orEmpty()
+    }.getOrDefault("")
 
     fun find(slug: String): SkillDoc? = list().firstOrNull { it.slug == slug }
 
@@ -109,7 +125,7 @@ object SkillDocs {
     }
 
     /** 存一份新技能。返回 null = 没存（空正文 / 目录满了 / 写不进去）。 */
-    fun saveDoc(rawName: String, text: String): SkillDoc? {
+    fun saveDoc(rawName: String, text: String, origin: String = ""): SkillDoc? {
         if (text.isBlank()) return null
         if (text.length > MAX_BYTES) return null
         if (list().size >= MAX_DOCS) return null
@@ -120,7 +136,13 @@ object SkillDocs {
         return runCatching {
             d.mkdirs()
             File(d, "SKILL.md").writeText(text, Charsets.UTF_8)
-            SkillDoc(slug, name.ifBlank { slug }, desc, body, File(d, "SKILL.md"))
+            // 来源单独一个文件：正文保持原样，用户拿它跟手机端对拷时不会多出一行我的东西
+            if (origin.isNotBlank())
+                sourceFile(d).writeText(
+                    """{"url":"${origin.replace("\\", "\\\\").replace("\"", "\\\"").take(2000)}"}""",
+                    Charsets.UTF_8
+                )
+            SkillDoc(slug, name.ifBlank { slug }, desc, body, File(d, "SKILL.md"), origin)
         }.getOrNull()
     }
 
@@ -131,9 +153,10 @@ object SkillDocs {
     }
 
     /** 从一段 markdown 导入（界面上"粘贴 SKILL.md"走这条）。 */
-    fun importText(text: String): ImportReport {
+    fun importText(text: String, origin: String = ""): ImportReport {
         if (text.isBlank()) return ImportReport(error = "内容是空的")
-        val d = saveDoc("", text) ?: return ImportReport(error = "没存进去：正文为空、超过 ${MAX_BYTES / 1000} KB，或技能目录已满 $MAX_DOCS 份")
+        val d = saveDoc("", text, origin)
+            ?: return ImportReport(error = "没存进去：正文为空、超过 ${MAX_BYTES / 1000} KB，或技能目录已满 $MAX_DOCS 份")
         return ImportReport(added = listOf(d.slug))
     }
 
@@ -143,7 +166,7 @@ object SkillDocs {
      * 三道闸：条目数、单份大小、**目录名 sanitize**（zip 里的路径是外部输入）。
      * 被拒的条目要出现在 skipped 里 —— 静默丢掉一份技能，用户只会以为"没导入成功"。
      */
-    fun importZip(bytes: ByteArray): ImportReport {
+    fun importZip(bytes: ByteArray, origin: String = ""): ImportReport {
         if (bytes.size < 4 || bytes[0] != 'P'.code.toByte() || bytes[1] != 'K'.code.toByte())
             return ImportReport(error = "这不是 zip（开头不是 PK）")
         val added = mutableListOf<String>()
@@ -163,7 +186,7 @@ object SkillDocs {
                     val buf = z.readNBytes(MAX_BYTES + 1)
                     if (buf.size > MAX_BYTES) { skipped += "$nm：超过 ${MAX_BYTES / 1000} KB"; continue }
                     val text = String(buf, Charsets.UTF_8)
-                    val d = saveDoc(sanitize(raw), text)
+                    val d = saveDoc(sanitize(raw), text, origin)
                     if (d == null) skipped += "$nm：没存下（空、超限或目录已满）" else added += d.slug
                 }
             }
@@ -184,6 +207,7 @@ object SkillDocs {
             ?: return ImportReport(error = "这个网址读不出来")
         if (uri.scheme != "http" && uri.scheme != "https")
             return ImportReport(error = "只支持 http/https，不碰 ${uri.scheme ?: "这种"}地址")
+        val src = url.trim()
         return runCatching {
             val c = client ?: HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(15))
@@ -195,15 +219,15 @@ object SkillDocs {
             val bytes = res.body() ?: return ImportReport(error = "带回来的是空的")
             val ct = (res.headers().firstValue("content-type").orElse("")).lowercase()
             if (ct.contains("zip") || (bytes.size > 1 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()))
-                importZip(bytes)
-            else importText(String(bytes, Charsets.UTF_8))
+                importZip(bytes, src)
+            else importText(String(bytes, Charsets.UTF_8), src)
         }.getOrElse { ImportReport(error = "拉不下来：${it.message}") }
     }
 
     /** 给 `/api/skills` 用：技能目录里的东西，与手写的 /命令 同构（name/desc/text）。 */
     fun jsonItems(): String = list().joinToString(",") { d ->
         """{"name":${js(d.name.ifBlank { d.slug })},"desc":${js(d.desc)},""" +
-            """"text":${js(d.body)},"slug":${js(d.slug)},"doc":true}"""
+            """"text":${js(d.body)},"slug":${js(d.slug)},"origin":${js(d.origin)},"doc":true}"""
     }
 
     private fun js(s: String): String = "\"" +
