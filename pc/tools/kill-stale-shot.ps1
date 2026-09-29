@@ -30,3 +30,26 @@ Sweep 'preview-edge' 'msedge.exe' { param($p) $p.CommandLine -like '*haoai-brows
 # run dies with "no free port" while ten python processes sit there doing nothing.
 # Match on the script path, never on "python": other agents run python too.
 Sweep 'mock-gateway' 'python.exe' { param($p) $p.CommandLine -like '*mock-openai.py*' }
+
+# Every run makes a fresh state root (haoai-uishot-HHMMSS) and deletes it in its EXIT trap --
+# but on Windows the just-killed java server still holds that directory as its current one,
+# so `rm -rf` fails and the trap deliberately ignores it (a green run must not turn red over
+# cleanup). The result is a slow leak: 84 of them were lying around after one audit.
+# Reap the ones that are clearly abandoned: older than an hour (a playbook takes < 3 minutes,
+# so nothing live is that old) and only under this exact prefix.
+# They go to the Recycle Bin, not the void -- these are throwaway harness dirs, but the rule
+# on this machine is that anything I made gets un-doable.
+$stale = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'haoai-uishot-*' -ErrorAction SilentlyContinue |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-60) })
+if ($stale.Count) {
+  Add-Type -AssemblyName Microsoft.VisualBasic
+  $gone = 0
+  foreach ($d in $stale) {
+    try {
+      [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(
+        $d.FullName, 'OnlyErrorDialogs', 'SendToRecycleBin')
+      $gone++
+    } catch { }        # held by a live process: leave it for the next run, never fail the audit
+  }
+  Write-Output ("recycled state-roots: {0}/{1}" -f $gone, $stale.Count)
+}
