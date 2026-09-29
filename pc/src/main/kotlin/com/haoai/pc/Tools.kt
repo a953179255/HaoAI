@@ -95,6 +95,24 @@ interface Gate {
         pattern: String,
         risk: RiskOf.Verdict?
     ): Boolean = approveRule(title, detail, kind, tool, pattern)
+
+    /**
+     * 带**逐块选择**的版本：[plan] 非空说明这次改动切得开，卡片上该摆勾选框。
+     *
+     * 默认实现把 plan 扔掉、退化成整条批准 —— CLI、定时任务、手机点的都是这条路：
+     * 前两者没有人可问，手机上只有三个整条按钮。所以"能不能逐块"这件事
+     * 由界面能力决定，而不是由工具决定，工具只是把基线交给闸口。
+     * 网页壳覆盖它，把人勾选的结果写回 [HunkPlan.keep] 再返回 true。
+     */
+    fun approveRule(
+        title: String,
+        detail: String,
+        kind: String,
+        tool: String,
+        pattern: String,
+        risk: RiskOf.Verdict?,
+        plan: HunkPlan?
+    ): Boolean = approveRule(title, detail, kind, tool, pattern, risk)
 }
 
 data class Todo(var text: String, var status: String = "pending")
@@ -150,7 +168,7 @@ class ToolCtx(
         title: String,
         detail: String,
         subjectIsPath: Boolean = true
-    ): String? = guardCore(tool, subject, title, { detail }, subjectIsPath)
+    ): String? = guardCore(tool, subject, title, { detail }, subjectIsPath, null)
 
     /**
      * 惰性版本：detail 只在**真的要问人**时才算。
@@ -158,21 +176,57 @@ class ToolCtx(
      * 为什么需要：screen 工具的 detail 要查"此刻哪个窗口在前台"，那是一次 PowerShell 调用
      * （约 1 秒）。放在规则/档位的判定之前算，就等于每次被拒绝的动作都白付一次钱，
      * 计划模式下尤其离谱 —— 只读模式根本不会弹框。
+     *
+     * [plan] 非空时审批卡会摆逐块勾选，人挑完的结果写在 plan 上（见 [HunkPlan]）。
+     * 只有 `write`/`edit` 会给：它们才是"一次调用里可能有好几处不相关的改动"的那种动作。
      */
     fun guard(
         tool: String,
         subject: String,
         title: String,
         detail: () -> String,
-        subjectIsPath: Boolean = true
-    ): String? = guardCore(tool, subject, title, detail, subjectIsPath)
+        subjectIsPath: Boolean = true,
+        plan: HunkPlan? = null
+    ): String? = guardCore(tool, subject, title, detail, subjectIsPath, plan)
+
+    /**
+     * 逐块切分的基线 = 这个文件**现在**的内容。拿不到（不该问人、太大、读不动）就返回 null，
+     * 意思是"这次不摆勾选框，按整条审批"。
+     *
+     * 为什么要在弹卡**之前**读：勾掉的那几块要落回原样，就得先有原样可比。
+     * `plan` 档先挡掉：只读档根本不会弹卡，白读一遍大文件（这条与 detail 惰性化是同一个理由）。
+     */
+    fun diffBase(target: File): String? {
+        if (mode == "plan") return null
+        if (!target.isFile) return ""
+        if (target.length() > Hunks.MAX_BYTES) return null
+        return runCatching { target.readText() }.getOrNull()
+    }
+
+    /** 切块这件事本身不许把工具搞崩：切不出来就按整条审批，工具照常干活。 */
+    fun hunksOf(base: String, target: String): HunkPlan? =
+        runCatching { Hunks.plan(base, target) }.getOrNull()
+
+    /**
+     * 逐块合并的基线已经过期时要回给模型的那句话。
+     *
+     * 为什么要有这一句：卡片挂着等人看的这几分钟里，文件完全可能被人改了 —— 用户自己在编辑器里
+     * 动了一行、别的会话的 agent 写了同一个文件、甚至格式化工具跑了一遍。这时候按**旧基线**算出来的
+     * 块往哪里落都是猜，猜错的代价是盖掉别人的改动。所以一个字都不写，并让模型重读再重提。
+     * 整条覆盖不走这条路（它本来就是"以模型给的为准"，与本功能出现之前一致）。
+     */
+    fun staleBaseline(rel: String): String =
+        "没有写入 $rel：这张审批卡挂着的几分钟里，文件内容变了。" +
+            "逐块合并是按弹卡时的内容算的，基线一变落点就会错，宁可不写。" +
+            "请重新 read 一次 $rel，再按现状重新提这条改动。"
 
     private fun guardCore(
         tool: String,
         subject: String,
         title: String,
         detail: () -> String,
-        subjectIsPath: Boolean
+        subjectIsPath: Boolean,
+        plan: HunkPlan?
     ): String? {
         val kind = if (tool == "shell") "exec" else "write"
         val verdict = Policies.get().decide(workspace, tool, subject)
@@ -236,7 +290,7 @@ class ToolCtx(
         val extra = if (out) "（在工作区之外）" else ""
         val why = if (verdict != null) "\n为什么还要问：${verdict.why}" else ""
         val pattern = if (tool == "shell") PolicyStore.commandPrefix(subject) else subject
-        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern, effective)
+        val ok = gate.approveRule(title, detail() + extra + why, kind, tool, pattern, effective, plan)
         return if (ok) null else "用户拒绝了这次「$title」。不要原样重试，换个方案或用 ask_user 问清楚。"
     }
 
@@ -378,16 +432,30 @@ class WriteTool : Tool(
         val path = req(args, "path") ?: return fail("write 缺少 path")
         val content = args["content"]?.jsonPrimitive?.content ?: return fail("write 缺少 content")
         val f = ctx.resolve(path)
-        val why = ctx.guard("write", ctx.rel(f), "写入文件 ${ctx.rel(f)}", "新建或覆盖，共 ${content.length} 字符")
+        /*
+         * 基线要在**弹卡之前**拿到，不然"勾掉的那几块保持原样"就无从算起。
+         * 代价是自动档也白读一次文件（多一遍 readText + 一次切块，几十毫秒级）：
+         * 换回来的正是"夜里那条高危卡也能逐块挑"，比省一遍读值钱。
+         */
+        val base = ctx.diffBase(f)
+        val plan = base?.let { ctx.hunksOf(it, content) }
+        val why = ctx.guard(
+            "write", ctx.rel(f), "写入文件 ${ctx.rel(f)}",
+            { "新建或覆盖，共 ${content.length} 字符" + (plan?.offer ?: "") },
+            plan = plan
+        )
         if (why != null) return fail(why)
         return try {
-            val before = if (f.isFile) f.readText() else ""
+            if (plan != null && ctx.diffBase(f) != base) return fail(ctx.staleBaseline(ctx.rel(f)))
+            val before = base ?: if (f.isFile) f.readText() else ""
+            val toWrite = plan?.content() ?: content
             ctx.snapshotBefore(f)
             f.parentFile?.mkdirs()
-            f.writeText(content)
+            f.writeText(toWrite)
             ToolResult(
-                "已写入 ${ctx.rel(f)}（${content.length} 字符 / ${content.lines().size} 行）",
-                card = "diff", diff = Diff.unified(ctx.rel(f), before, content)
+                if (plan?.partial == true) plan.outcome(ctx.rel(f), toWrite)
+                else "已写入 ${ctx.rel(f)}（${toWrite.length} 字符 / ${toWrite.lines().size} 行）",
+                card = "diff", diff = Diff.unified(ctx.rel(f), before, toWrite)
             )
         } catch (e: Exception) {
             fail("写入失败：${e.message}")
@@ -410,19 +478,36 @@ class EditTool : Tool(
         val all = bool(args, "all")
         val f = ctx.resolve(path)
         if (!f.isFile) return fail("文件不存在：${ctx.rel(f)}")
-        val why = ctx.guard("write", ctx.rel(f), "编辑 ${ctx.rel(f)}", "${old.length} → ${new.length} 字符")
+        /*
+         * 匹配检查挪到审批**之前**了。
+         *
+         * 原来是人批完五分钟、写到一半才发现 old_string 根本没找到 —— 那张卡白等了，
+         * 而"逐块"还需要先有替换后的内容才能切。这条改动的对错与放不放行无关，
+         * 先问"能不能做"再问"让不让做"才是省人的顺序。
+         */
+        val text = runCatching { f.readText() }.getOrNull()
+            ?: return fail("读不到 ${ctx.rel(f)}，没改任何东西")
+        val hits = text.split(old).size - 1
+        if (hits == 0) return fail("没找到要替换的内容。先用 read 看清当前文本（注意缩进与换行是否一致）。")
+        if (hits > 1 && !all) return fail("匹配到 $hits 处，不唯一。扩大 old_string 的上下文，或传 all=true。")
+        val updated = if (hits == 1) text.replaceFirst(old, new) else text.replace(old, new)
+        // all=true 的替换常常散在好几处 —— 那正是"整条批太粗"的场景：一次调用里第 1 处对、第 3 处不对
+        val plan = ctx.hunksOf(text, updated)
+        val why = ctx.guard(
+            "write", ctx.rel(f), "编辑 ${ctx.rel(f)}",
+            { "${old.length} → ${new.length} 字符（匹配 $hits 处）" + (plan?.offer ?: "") },
+            plan = plan
+        )
         if (why != null) return fail(why)
         return try {
-            val text = f.readText()
-            val hits = text.split(old).size - 1
-            if (hits == 0) return fail("没找到要替换的内容。先用 read 看清当前文本（注意缩进与换行是否一致）。")
-            if (hits > 1 && !all) return fail("匹配到 $hits 处，不唯一。扩大 old_string 的上下文，或传 all=true。")
-            val updated = if (hits == 1) text.replaceFirst(old, new) else text.replace(old, new)
+            if (plan != null && ctx.diffBase(f) != text) return fail(ctx.staleBaseline(ctx.rel(f)))
+            val toWrite = plan?.content() ?: updated
             ctx.snapshotBefore(f)
-            f.writeText(updated)
+            f.writeText(toWrite)
             ToolResult(
-                "已编辑 ${ctx.rel(f)}（替换 ${if (all) hits else 1} 处）",
-                card = "diff", diff = Diff.unified(ctx.rel(f), text, updated)
+                if (plan?.partial == true) plan.outcome(ctx.rel(f), toWrite)
+                else "已编辑 ${ctx.rel(f)}（替换 ${if (all) hits else 1} 处）",
+                card = "diff", diff = Diff.unified(ctx.rel(f), text, toWrite)
             )
         } catch (e: Exception) {
             fail("编辑失败：${e.message}")
@@ -798,6 +883,22 @@ object Diff {
      * 公共前后缀之外的整段算一个替换块 —— 够用、线性时间、不会在长文件上炸。
      */
     fun unified(path: String, old: String, new: String, maxLines: Int = 80): String {
+        /*
+         * 改在几处就按几块渲染，块与块之间不再糊成一坨。
+         *
+         * 原来"公共前后缀之外整段算一块"，于是一篇文章里第 2 行和第 16 行各改一行，卡上写的是
+         * **−15 行 / +15 行**，而中间那 13 行一个字节都没动。逐块上线之后这个数更扎眼：
+         * 人刚退回一块，统计却说改了 15 行 —— 那会让人怀疑自己刚才到底点了什么。
+         * 切得出块就照块报数（与 git 的 hunk 口径一致：并块后按整段替换区计），
+         * 切不出（文件太大、超过 LCS 预算）才退回原来那份线性近似。
+         */
+        val hs = runCatching { Hunks.of(old, new) }.getOrDefault(emptyList())
+        if (hs.size >= 2) {
+            val rm = hs.sumOf { it.removed.size }
+            val ad = hs.sumOf { it.added.size }
+            return "−$rm 行 / +$ad 行   $path（${hs.size} 处）\n" +
+                hs.joinToString("\n") { it.text(maxLines) } + "\n"
+        }
         val a = old.lines()
         val b = new.lines()
         var p = 0
@@ -829,6 +930,246 @@ object Diff {
         var s = 0
         while (s < a.size - p && s < b.size - p && a[a.size - 1 - s] == b[b.size - 1 - s]) s++
         return "−${a.size - p - s} 行 / +${b.size - p - s} 行"
+    }
+}
+
+/**
+ * 一处连续的改动 —— 审批卡上"逐块接受 / 拒绝"的那一块。
+ *
+ * 为什么不并进 [Diff]：`Diff.unified` 用的是"公共前后缀之外整段算一坨"的线性近似，
+ * 那份够给模型看一句摘要，但一篇文章改三处它只给**一个**块 —— 而这次要拆的恰好就是"一坨"。
+ * 切块要真做行级 LCS，两套算法不一样，塞进同一个对象里会让人以为 `unified` 也能返回多块。
+ */
+data class Hunk(
+    /** 第几块（从 1 起）。界面、卡片、回给模型的那句话都按这个数说话。 */
+    val no: Int,
+    /** 旧文件里的起始**下标**（0 基）。给人看的行号是 `oldAt + 1`，界面与文案都别忘了 +1。 */
+    val oldAt: Int,
+    /** 这一块替掉的旧行数（0 = 纯插入）。 */
+    val oldCount: Int,
+    val removed: List<String>,
+    val added: List<String>,
+    val before: List<String>,
+    val after: List<String>,
+) {
+    val stat: String get() = "−${removed.size} / +${added.size}"
+
+    /**
+     * 卡片上这一块的正文（`@@` + 上下文 + −/+ 行）。
+     *
+     * 上限只管**显示**：`added` 一直是全的，所以人被截断的长块批准之后写进去的内容仍然完整 ——
+     * 否则"看了一半就放行"会变成"写了一半进文件"，那是数据损坏而不是显示问题。
+     */
+    fun text(maxLines: Int = 60): String {
+        val sb = StringBuilder()
+        sb.append("@@ 第 ").append(oldAt + 1).append(" 行起 @@  ").append(stat).append('\n')
+        // 显示时把 CRLF 文件行尾那个 \r 抹掉：它是行尾的一部分，不是要给人看的内容
+        fun emit(m: Char, s: String) { sb.append(m).append(s.trimEnd('\r')).append('\n') }
+        before.forEach { emit(' ', it) }
+        removed.take(maxLines).forEach { emit('-', it) }
+        if (removed.size > maxLines)
+            sb.append("-…（另有 ").append(removed.size - maxLines).append(" 行没显示）\n")
+        added.take(maxLines).forEach { emit('+', it) }
+        if (added.size > maxLines)
+            sb.append("+…（另有 ").append(added.size - maxLines).append(" 行没显示）\n")
+        after.forEach { emit(' ', it) }
+        return sb.toString().trimEnd('\n')
+    }
+}
+
+/** 把一份文件改动切成**互相分得开**的块，并决定这次要不要摆逐块勾选。 */
+object Hunks {
+    const val CONTEXT = 3
+    const val MIN = 2
+    const val MAX = 12
+
+    /** LCS 动态规划的格数上限：再大就退回"整段一块"（那块只有一块，逐块勾选自然消失）。 */
+    const val CELLS = 1_000_000L
+
+    /** 基线或目标超过这个长度就不切块：卡片放不下，而切块是 quadratic 的。 */
+    const val MAX_BYTES = 400_000
+
+    /**
+     * 按行拆，**行尾算在行里**。
+     *
+     * 为什么不用 `String.lines()`：它把结尾那个换行拆成了一个空尾项，而那是**行尾**不是**空行** ——
+     * 留着它，逐块合回去就凭空多出一行空行（这条是被测试抓出来的，不是想出来的）。
+     * 自己拆的第二份收益更大：`\r` 留在行里，于是 CRLF 的文件被逐块合并之后仍然是 CRLF，
+     * 不需要"猜一个 eol 再 join"那种会把整篇行尾改掉的做法。
+     */
+    private fun lines(s: String): List<String> {
+        if (s.isEmpty()) return emptyList()
+        val out = ArrayList<String>()
+        var i = 0
+        while (i < s.length) {
+            val nl = s.indexOf('\n', i)
+            if (nl < 0) { out.add(s.substring(i)); break }
+            out.add(s.substring(i, nl))
+            i = nl + 1
+        }
+        return out
+    }
+
+    /** 有几行（结尾有没有换行都不多数）。 */
+    fun rows(s: String): Int = lines(s).size
+
+    fun of(old: String, new: String, context: Int = CONTEXT): List<Hunk> {
+        val a = lines(old)
+        val b = lines(new)
+        var p = 0
+        while (p < a.size && p < b.size && a[p] == b[p]) p++
+        var s = 0
+        while (s < a.size - p && s < b.size - p && a[a.size - 1 - s] == b[b.size - 1 - s]) s++
+        val lo = p
+        val hiA = a.size - s
+        val hiB = b.size - s
+        // [旧起, 旧止, 新起, 新止]，都是文件级下标、区间右开
+        val cs = if ((hiA - lo).toLong() * (hiB - lo) > CELLS) listOf(intArrayOf(lo, hiA, lo, hiB))
+        else changes(a.subList(lo, hiA), b.subList(lo, hiB), lo)
+        val out = ArrayList<Hunk>()
+        var i = 0
+        while (i < cs.size) {
+            var j = i
+            // 间隔小于一份上下文的两个改动并成一块：中间那几行反正两边都会被显示成上下文，
+            // 拆成两块只会让人以为是两件不同的事。
+            while (j + 1 < cs.size && cs[j + 1][0] - cs[j][1] < context * 2) j++
+            val oldAt = cs[i][0]
+            val oldEnd = cs[j][1]
+            out.add(
+                Hunk(
+                    no = out.size + 1,
+                    oldAt = oldAt,
+                    oldCount = oldEnd - oldAt,
+                    removed = a.subList(oldAt, oldEnd).toList(),
+                    // 并块之后新内容跨了两段改动，直接取整段：中间那些行与旧文件逐字相同，
+                    // 从新的一份抄过来不会改变结果。
+                    added = b.subList(cs[i][2], cs[j][3]).toList(),
+                    before = a.subList(maxOf(0, oldAt - context), oldAt).toList(),
+                    after = a.subList(oldEnd, minOf(a.size, oldEnd + context)).toList()
+                )
+            )
+            i = j + 1
+        }
+        return out
+    }
+
+    /**
+     * 这次改动值不值得摆逐块勾选。返回 null = 按整条审批（与本功能出现之前逐字节一致）。
+     *
+     * 三个"不给"各有各的理由：
+     * - **只有一块**：勾选框只会让人多点一下，而它能说的话"拒绝"按钮已经说了；
+     * - **块太多**：卡片变成一屏滚屏，逐块反而比整条更难读，也更难看出漏勾了哪块；
+     * - **文件太大**：切块是 quadratic 的，把人卡在审批界面上等十几秒不值 ——
+     *   而 `of()` 在超预算时自己会退成一整块，那条路也是 null。
+     */
+    fun plan(old: String, new: String): HunkPlan? {
+        if (old.length > MAX_BYTES || new.length > MAX_BYTES) return null
+        val hs = runCatching { of(old, new) }.getOrDefault(emptyList())
+        if (hs.size < MIN || hs.size > MAX) return null
+        return HunkPlan(hs, old, new)
+    }
+
+    /**
+     * 按勾选把块合回文件。
+     *
+     * 被退的块**不动**：那几行由"下一块之前把旧行照抄"这一步带出来，所以不需要单独处理。
+     * 结尾换行跟着最后落笔的那一侧（全接受时不走这里，见 [HunkPlan.content]）。
+     */
+    fun merge(base: String, hunks: List<Hunk>, keep: List<Boolean>, wanted: String): String {
+        val a = lines(base)
+        val out = ArrayList<String>()
+        var cursor = 0
+        var tail = base.endsWith("\n")
+        hunks.forEachIndexed { i, h ->
+            if (!keep.getOrElse(i) { true }) return@forEachIndexed
+            if (h.oldAt > cursor) out.addAll(a.subList(cursor, h.oldAt))
+            out.addAll(h.added)
+            cursor = h.oldAt + h.oldCount
+            if (cursor >= a.size) tail = wanted.endsWith("\n")
+        }
+        if (a.size > cursor) out.addAll(a.subList(cursor, a.size))
+        if (out.isEmpty()) return ""
+        return out.joinToString("\n") + (if (tail) "\n" else "")
+    }
+
+    private fun changes(a: List<String>, b: List<String>, off: Int): List<IntArray> {
+        val out = ArrayList<IntArray>()
+        var i = 0
+        var j = 0
+        for (pr in lcs(a, b)) {
+            if (pr[0] > i || pr[1] > j) out.add(intArrayOf(i + off, pr[0] + off, j + off, pr[1] + off))
+            i = pr[0] + 1
+            j = pr[1] + 1
+        }
+        if (i < a.size || j < b.size) out.add(intArrayOf(i + off, a.size + off, j + off, b.size + off))
+        return out
+    }
+
+    /** 行级 LCS 的匹配对（中段内部下标，两侧都递增）。纯行比较，不做词内 diff —— 审批要的是"哪几行动了"。 */
+    private fun lcs(a: List<String>, b: List<String>): List<IntArray> {
+        val n = a.size
+        val m = b.size
+        val dp = Array(n + 1) { IntArray(m + 1) }
+        for (i in n - 1 downTo 0) for (j in m - 1 downTo 0) {
+            dp[i][j] = if (a[i] == b[j]) dp[i + 1][j + 1] + 1
+            else maxOf(dp[i + 1][j], dp[i][j + 1])
+        }
+        val out = ArrayList<IntArray>()
+        var i = 0
+        var j = 0
+        while (i < n && j < m) {
+            when {
+                a[i] == b[j] -> { out.add(intArrayOf(i, j)); i++; j++ }
+                dp[i + 1][j] >= dp[i][j + 1] -> i++
+                else -> j++
+            }
+        }
+        return out
+    }
+}
+
+/**
+ * 审批卡上的逐块选择去向。
+ *
+ * 为什么是"闸口往里写 [keep]、工具在外面读"，而不是把 [Gate.approveRule] 的 Boolean 换成三态：
+ * Gate 有 CLI、网页和六份测试假闸口，而逐块只有网页壳做得到 —— 换返回类型要所有实现一起改，
+ * 换回来的收益是零（其余几份的正确答案本来就还是 true/false）。
+ * 没人写 keep ⇒ 整条应用；手机上点的那几下也走这条路（那边只发整条决定）。
+ */
+class HunkPlan(val hunks: List<Hunk>, val base: String, val wanted: String) {
+    var keep: List<Boolean>? = null
+
+    /** 挑过**而且**至少退了一块才算"部分接受"：全勾就是整条放行，不该让人误以为被挑过。 */
+    val partial: Boolean get() = keep?.any { !it } == true
+
+    val accepted: Int get() = keep?.count { it } ?: hunks.size
+
+    /** 卡片 detail 末尾补的那一句 —— 只在真会给勾选框的时候说，整条审批那次不该多占一行。 */
+    val offer: String get() = "\n这次改动分成 ${hunks.size} 处，可以一块一块挑（勾掉的保持原样）"
+
+    private val rejected: List<Hunk> get() =
+        hunks.filterIndexed { i, _ -> keep?.getOrNull(i) == false }
+
+    /** 要写进文件的那一份。全接受时直接返回模型给的内容，逐字节相同（测试钉着这条）。 */
+    fun content(): String {
+        val k = keep ?: return wanted
+        if (k.all { it }) return wanted
+        return Hunks.merge(base, hunks, k, wanted)
+    }
+
+    /**
+     * 部分接受时回给模型的那句话。
+     *
+     * 顺序仍是"结论 → 哪几块没进 → 接下来该怎么办"（工具结果那一行界面上只看得见前约九十个字，
+     * 见沙箱那批的注释）。这句必须存在：模型以为整条都过了，下一轮就会基于一个不存在的世界继续改。
+     */
+    fun outcome(rel: String, written: String): String {
+        val rs = rejected
+        val where = rs.joinToString("、") { "第 ${it.no} 块（旧第 ${it.oldAt + 1} 行起，${it.stat}）" }
+        val rows = Hunks.rows(written)
+        return "已部分写入 $rel：${hunks.size} 块里退了 ${rs.size} 块，$where 保持原样。" +
+            "现在文件 $rows 行。这次不是整条通过，别按你原本设想的内容继续改 —— " +
+            "要动被退的那几处，先 read 看清现状再重新提。"
     }
 }
 

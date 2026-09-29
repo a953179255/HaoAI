@@ -1,0 +1,80 @@
+[
+  {
+    "goto": "#box"
+  },
+  {
+    "type": {
+      "sel": "#box",
+      "text": "先建一份二十行的文件，然后把第 2、9、16 行各改一处，我要一块一块挑",
+      "enter": true
+    }
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const c=document.querySelector('.view.on .card.ask:not(.done)');if(c){const t=c.innerText;return JSON.stringify({card:true,noBoxes:c.querySelectorAll('.hk input').length===0,noHint:!(/分成/.test(t)),hasFile:t.indexOf('notes.md')>=0,tail:t.slice(0,90)});}if(Date.now()-t0>30000)return JSON.stringify({card:false,noBoxes:false,noHint:false,hasFile:false});await new Promise(z=>setTimeout(z,500))}})()",
+    "must": ["card", "noBoxes", "noHint", "hasFile"],
+    "note": "第一张卡是**新建文件**：一整块，所以不该摆勾选框，也不该说「分成几处」。这条把「只有一块不给挑」钉在界面上 —— 否则每个新建文件都要人多点三下，人很快就会不看内容乱勾一通。\n\nnoBoxes/noHint 是 eval 现算的布尔值（must 只认真值）；rows 与 tail 一起打出来，红了能一眼分清是「没等到卡」还是「卡长错了样子」"
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');if(!c)return JSON.stringify({answered:false});c.querySelector('[data-dec=allow_once]').click();return JSON.stringify({answered:!!document.querySelector('.view.on .card.ask.done'),momentarilyClear:!document.querySelector('.view.on .card.ask:not(.done)')})})()",
+    "must": ["answered"],
+    "note": "这一步与下面点「允许一次」那条都必须**限定在当前那张卡**里找按钮。上一版直接 click('[data-dec=allow_once]')，命中的是**第一张已经答完的卡**上那个按钮（它的 onclick 见 .done 就 return），第二张卡于是永远挂着 —— 症状是判据全 false，看着像逐块没生效，其实是点击根本没送到。同一份页面里可以同时存在好几张审批卡，选择器要自己带上 .card.ask:not(.done)"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const c=document.querySelector('.view.on .card.ask:not(.done)');const rows=c?c.querySelectorAll('.hunks .hk'):[];if(rows.length>=2){const t=c.innerText;return JSON.stringify({three:rows.length===3,rows:rows.length,saysCount:(/分成 3 处/).test(t),eachSaysWhere:[...rows].every(r=>(/第 \\d 处 · 旧第 \\d+ 行起/).test(r.querySelector('b').innerText)),headHasAt:(/@@ 第 \\d+ 行起 @@/).test(t),colored:!!c.querySelector('.hk .dif .dp')&&!!c.querySelector('.hk .dif .dm'),allOn:[...c.querySelectorAll('.hk input')].every(b=>b.checked),saysWholeRule:(/本任务都允许/).test(t)});}if(Date.now()-t0>45000)return JSON.stringify({three:false,rows:rows.length,card:!!c,saysCount:false,eachSaysWhere:false,headHasAt:false,colored:false,allOn:false,saysWholeRule:false});await new Promise(z=>setTimeout(z,500))}})()",
+    "must": ["three", "saysCount", "eachSaysWhere", "headHasAt", "colored", "allOn", "saysWholeRule"],
+    "note": "第二张卡才是逐块：三块、每块写明「第几处 · 旧第几行起」、块头带 @@、−/+ 行真的着了色（不是把 diff 当纯文本糊上去）、默认全勾。\n\nsaysWholeRule 钉的是那句免责：勾选只作用于「允许一次」，另外两个放行按钮是整条放行。这句不写在卡上就一定有人勾了两块再点「本任务都允许」，然后以为第三块没写进去 —— 而规则一旦写下，以后这类就再也不问了"
+  },
+  {
+    "shot": "h01-three-blocks"
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');[...c.querySelectorAll('.hk input')].forEach(b=>{if(b.checked)b.click();});const p=c.querySelector('[data-dec=allow_once]');return JSON.stringify({off:[...c.querySelectorAll('.hk input')].every(b=>!b.checked),disabled:!!p.disabled,tip:(p.getAttribute('title')||'').length>0,darkened:c.querySelectorAll('.hk.off').length===3})})()",
+    "must": ["off", "disabled", "tip", "darkened"],
+    "note": "一块都不勾的时候「允许一次」必须置灰并说明为什么。这一步防的是最难看的一种谎：把三块全退回发成 partial:000，界面上却写「已允许一次」，模型那边收到「已部分写入」，而文件一个字没动 —— 三方各说各话。\n\n（服务端也挡着：全退回时闸口直接返回拒，见 HunkTest none checked means nothing is written；这条把它在界面上的样子一起钉住。）darkened 钉的是勾掉之后整块压暗：只靠一个小方框，人扫一眼卡片看不出自己退了哪块。"
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');const bs=[...c.querySelectorAll('.hk input')];bs.forEach((b,i)=>{const want=i!==1;if(b.checked!==want)b.click();});const p=c.querySelector('[data-dec=allow_once]');return JSON.stringify({firstAndThird:bs[0].checked&&!bs[1].checked&&bs[2].checked,oneDark:c.querySelectorAll('.hk.off').length===1,enabled:!p.disabled,secondIsTheL09One:(/旧第 9 行起/).test(bs[1].closest('.hk').innerText)})})()",
+    "must": ["firstAndThird", "oneDark", "enabled", "secondIsTheL09One"],
+    "note": "只留第 1、3 块。secondIsTheL09One 核对的是**顺序**：卡片列的「第 2 块」必须就是旧文件第 9 行那一处。块序与 diff 顺序一旦不一致，人退掉的就是另一处，而这种错在界面上完全看不出来"
+  },
+  {
+    "eval": "(()=>{const s=document.querySelector('#stream');s.scrollTo({top:s.scrollHeight,behavior:'instant'});return JSON.stringify({atBottom:s.scrollHeight-s.clientHeight-s.scrollTop<4,sh:s.scrollHeight,ch:s.clientHeight})})()",
+    "must": ["atBottom"],
+    "note": "截图之前先把消息流滚到底：上一版三张图长得一模一样（都停在卡片上半截），勾掉的那块在折叠线以下，等于没看。**判据全绿不等于看过像素** —— 这张图要证明的是「退掉的那块一眼看得出来」。\n\n必须 `behavior:'instant'`：#stream 上有 `scroll-behavior:smooth`，直接设 scrollTop 会开始动画，同一拍读回来还是 0 —— 于是这条 atBottom 判据永远红（红得像「滚动没生效」，其实是量具读早了）"
+  },
+  {
+    "shot": "h02-second-block-off"
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');if(!c)return JSON.stringify({sent:false,secondOff:false,cardClosed:false,ansSays:false});const bs=[...c.querySelectorAll('.hk input')];const bits=bs.map(b=>b.checked?'1':'0').join('');c.querySelector('[data-dec=allow_once]').click();const a=c.querySelector('.ans-line');return JSON.stringify({sent:true,secondOff:bits==='101',checkedBeforeClick:bits,cardClosed:!!a,ansSays:!!a&&(/接受 2 块，退回 1 块/).test(a.textContent)})})()",
+    "must": ["sent", "secondOff", "cardClosed", "ansSays"],
+    "note": "这里把**发出去的位串**也量一遍（checkedBeforeClick 必须是 101）：光看界面勾了哪几块不算，服务端按那三位决定写不写。secondOff 是剧本自己核对「第 2 位是 0」，判据写在**将要发出去的那份数据**上，而不是写在界面状态上。\n\nansSays 必须在这一刻量：卡片收起那行是一次性反馈，回合跑完界面会按历史重建，那句话就不在了（留到刷新之后的是卡头那枚结论标，见下一步 tagSays）。判据要挑**在它成立的那个时刻**去量，不然就是量具自己坏了。"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const t=document.querySelector('#stream').textContent;if((/部分写入/).test(t)&&(/退了 1 块/).test(t))return JSON.stringify({saysPartial:true,namesBlock:(/第 2 块/).test(t),toldToReRead:(/先 read|重新 ?read/).test(t),saysRows:(/现在文件 20 行/).test(t),tagSays:(/部分接受：3 块里接了 2 块、退了 1 块/).test(t)});if(Date.now()-t0>45000)return JSON.stringify({saysPartial:false,namesBlock:false,toldToReRead:false,saysRows:false,tagSays:false,tail:t.slice(-220)});await new Promise(z=>setTimeout(z,600))}})()",
+    "must": ["saysPartial", "namesBlock", "toldToReRead", "saysRows", "tagSays"],
+    "note": "读的是 **textContent 不是 innerText**：答完的卡会自己收起（details 关上），innerText 会把收起的内容整段跳过 —— 于是卡片里那句话永远量不到，看着像功能没做。这是本批踩到的一次假红：同一个字符串，innerText 全 false、textContent 全 true。\n\n模型侧必须看见「部分接受」—— 本批最要紧的一条：少了这句，它以为整条都过了，下一轮就基于一个不存在的世界继续改。三个地方说的必须是同一件事，所以三个都断言：工具结果（发给模型的）、卡片收起那行「允许一次：接受 2 块，退回 1 块」（给人的）、卡头那枚结论标（刷新之后还在的）"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();const txt=()=>document.querySelector('#stream').textContent;const line=(pre,val)=>txt().split('\\n').some(l=>l.trim().startsWith(pre)&&l.indexOf(val)>=0);for(;;){if((/共 20 行/).test(txt())&&(/1: L01/.test(txt().replace(/\\s+/g,' '))))return JSON.stringify({sawNumbered:line('2:','X')||line('2:','L'),block1:line('2:','X02'),block3:line('16:','X16'),block2keptOriginal:line('9:','L09'),block2NotWritten:!line('9:','X09'),rowsStill20:!line('21:','L')});if(Date.now()-t0>45000)return JSON.stringify({sawNumbered:false,block1:false,block3:false,block2keptOriginal:false,block2NotWritten:false,rowsStill20:false,tail:txt().slice(-220)});await new Promise(z=>setTimeout(z,600))}})()",
+    "must": ["sawNumbered", "block1", "block3", "block2keptOriginal", "block2NotWritten", "rowsStill20"],
+    "note": "判据读的是**模型自己 read 回来的那份**，不是任何一侧自报的状态：假网关在第三回合调 read，卡上显示的就是盘上现在的字节。被退的第 2 块保持 L09，接受的两块变成 X02/X16，而且总行数仍是 20 行（逐块合并不许凭空多一行或少一行）。\n\n这条是整套东西唯一能证明「有没有写坏」的证据 —— 卡片的措辞、SSE 的事件、工具的返回值都由同一个函数生成，它们互相对得上不代表盘上对了。\n\nsawNumbered 是给两条**反向判据**配的证人：block2NotWritten 与 rowsStill20 都是「不存在某行」，读不到正文时它们会一起变成真空为真。上一版就是这样红得毫无信息量 —— 加一条正向的，负向才有意义。"
+  },
+  {
+    "eval": "(()=>{const cs=[...document.querySelectorAll('#stream .card')].reverse();const c=cs.find(x=>/\\[notes\\.md\\] 共 20 行/.test(x.textContent));if(c)c.open=true;const t=c?c.textContent.replace(/\\s+/g,' '):'';return JSON.stringify({found:!!c,opened:!!(c&&c.open===true),showsL09:t.indexOf('9: L09')>=0,showsX02:t.indexOf('2: X02')>=0,showsX16:t.indexOf('16: X16')>=0,noX09:t.indexOf('9: X09')<0})})()",
+    "must": ["found", "opened", "showsL09", "showsX02", "showsX16", "noX09"],
+    "note": "read 那张卡默认是收起的 —— 收起的正文在截图里什么都看不见，所以这一步把它展开，再按**这一张卡自己的文本**判一次（比整页 grep 更严：证明的就是这次 read 回来的那 20 行）。"
+  },
+  {
+    "eval": "(()=>{const s=document.querySelector('#stream');s.scrollTo({top:s.scrollHeight,behavior:'instant'});return JSON.stringify({atBottom:s.scrollHeight-s.clientHeight-s.scrollTop<4,sh:s.scrollHeight,ch:s.clientHeight})})()",
+    "must": ["atBottom"]
+  },
+  {
+    "shot": "h03-on-disk-truth"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const left=document.querySelectorAll('.view.on .card.ask:not(.done)').length;const running=document.getElementById('send').classList.contains('stop');if(!running&&left==0)return JSON.stringify({settled:true,noCardLeft:true,ms:Date.now()-t0});if(Date.now()-t0>25000)return JSON.stringify({settled:!running,noCardLeft:left==0,left:left});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": ["settled", "noCardLeft"],
+    "note": "回合收口、不留挂着的卡（这条要轮询：上一批有剧本在这里不等，抓到的是「还在跑」那个中间态，红了也没有信息量）"
+  }
+]

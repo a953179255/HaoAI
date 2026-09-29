@@ -13,6 +13,10 @@
     --fg:#e8efeb; --fg2:#cfe0d7; --dim:#9fb0a8; --dim2:#6f817a;
     --acc:#34d399; --acc2:#1f6f4a; --acc3:#17553a; --onacc:#062017;
     --warn:#f0b866; --err:#f27d72; --code:#0c110f; --num:#8ab4f8;
+    /* --bad 是"删掉的那一行"的字色。它被 .dif .dm / .atchip em / .qchip em 用着，
+       却一直没在这里定义过 —— 未定义的 var() 让整条声明失效，于是**删行从来没红过**
+       （只有背景那层淡红，字色继承正文）。像素判据把它抓到过一次，别再删。 */
+    --bad:#f27d72;
     --shadow:0 24px 60px rgba(0,0,0,.5);
   }
   :root[data-theme="light"]{
@@ -22,6 +26,7 @@
     --fg:#14201a; --fg2:#2d3d35; --dim:#5d6f66; --dim2:#87978e;
     --acc:#0f8b5c; --acc2:#d6ece0; --acc3:#c7e5d5; --onacc:#08281b;
     --warn:#a05a10; --err:#b3352a; --code:#f7f9f7; --num:#1a6fb5;
+    --bad:#b3352a;
     --shadow:0 18px 44px rgba(20,40,30,.18);
   }
   :root{--mono:ui-monospace,"Cascadia Mono",Consolas,"Noto Sans Mono CJK SC",monospace;--r:12px;--r2:16px}
@@ -457,6 +462,23 @@
   .dif .dn{color:var(--warn)}
   .ntag{margin-left:auto;font-size:11px;color:var(--dim2);font-variant-numeric:tabular-nums;
     padding-left:8px;white-space:nowrap;flex:none}
+  /* ---- 审批卡上的逐块勾选 ----
+     一次调用改了三处、人只想接受其中两处 —— 原来只能整条批或整条拒，两条都是亏的。
+     这一排不是"更详细的 diff"：它是**决定的入口**，所以每块一个真复选框，
+     而不是把整篇 diff 摊在卡上让人自己数第几行开始算一块。 */
+  .hunks{display:flex;flex-direction:column;gap:6px;padding:8px 12px 4px;border-top:1px solid var(--line)}
+  .hkh{font-size:11.5px;color:var(--dim);line-height:1.5}
+  .hk{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);
+    border-radius:8px;background:var(--code);cursor:pointer}
+  .hk input{margin:3px 0 0;flex:none;accent-color:var(--acc)}
+  .hk .hkb{flex:1;min-width:0}
+  .hk b{display:block;font-size:11.5px;color:var(--dim2);font-weight:600;margin-bottom:2px}
+  .hk .hkx{font-family:var(--mono);font-size:11px;color:var(--dim2)}
+  /* 勾掉的块一眼就要看出来是"不要了"：整块压暗 + 标题划掉。
+     只靠那个空方框是不够的 —— 人扫一眼卡片看的是整块的形状。 */
+  .hk.off{opacity:.5;background:transparent}
+  .hk.off b{text-decoration:line-through}
+  .hk .dif{max-height:120px;border-top:none;padding:3px 0;background:transparent}
   /* ---- 子任务卡 ---- */
   .tick.run{background:var(--warn);animation:p 1s infinite}
   .card.sub .sublog{display:flex;flex-direction:column;gap:2px;padding:6px 12px;border-top:1px solid var(--line);
@@ -1736,15 +1758,45 @@ function ask(d,kind,v){
   const put=(label,cls,run,key,dec)=>{
     const b=el('<button class="btn '+cls+'">'+esc(label)+(key?'<kbd>'+key+'</kbd>':'')+'</button>');
     if(key)b.dataset.key=key;if(dec)b.dataset.dec=dec;
-    b.onclick=()=>{if(c.classList.contains('done'))return;run(b)};acts.appendChild(b)};
+    b.onclick=()=>{if(c.classList.contains('done'))return;run(b)};acts.appendChild(b);return b};
   const done=label=>{c.classList.add('done');c.open=false;
     c.appendChild(el('<div class="ans-line">已'+esc(label)+'，这条会话继续跑</div>'))};
   if(kind=='approval'){
+    /*
+     * 逐块审阅。一次 write 改了三处，原来只能整条批或整条拒 —— 而人常常是"这两处对、那一处别动"，
+     * 于是他要么忍着放行，要么全拒让模型重跑一遍。卡片上把改动切成块，勾掉的那块保持原样不写。
+     *
+     * 勾选**只作用于「允许一次」**：另外两个放行按钮说的是"以后这类/这一路还要不要问"，
+     * 不是"要哪几块"。让勾选去改它们的语义，就会写出"按 2/3 块建立的永久规则"这种东西。
+     */
+    const hs=(d.hunks||[]).filter(h=>h&&h.text);
+    const boxes=[];
+    if(hs.length>1){
+      const w=el('<div class="hunks"><div class="hkh">这次改动分成 '+hs.length+
+        ' 处，勾掉的保持原样。勾选只作用于「允许一次」；「本任务都允许」和「以后这类都允许」是整条放行，不看勾选。</div></div>');
+      hs.forEach(h=>{
+        const t=String(h.text).split('\n');
+        const lab=el('<label class="hk"><input type="checkbox" checked data-hk="'+esc(String(h.no))+'">'+
+          '<div class="hkb"><b>'+esc('第 '+(h.no||'?')+' 处 · 旧第 '+(h.at||'?')+' 行起 · '+(h.stat||''))+
+          '</b><div class="hkx">'+esc(t[0])+'</div>'+diffHtml(h.text)+'</div></label>');
+        boxes.push(lab.querySelector('input'));w.appendChild(lab)});
+      c.appendChild(w);
+    }
+    const bits=()=>boxes.map(b=>b.checked?'1':'0').join('');
+    const nOn=()=>boxes.filter(b=>b.checked).length;
     // 顺序按"最常用的在右边"排：允许一次是默认动作，拒绝要离它远一点免得误点
     if(d.tool)put('以后这类都允许','',()=>{decide(d.id,'allow_rule','');done('写入规则并放行')},'r','allow_rule');
     put('拒绝','deny',()=>{decide(d.id,'deny','');done('拒绝')},'n','deny');
     put('本任务都允许','',()=>{decide(d.id,'allow_session','');done('本任务都允许')},'a','allow_session');
-    put('允许一次','pri',()=>{decide(d.id,'allow_once','');done('允许一次')},'y','allow_once');
+    const pri=put('允许一次','pri',()=>{
+      if(boxes.length&&!nOn())return;   // 一块都没勾不该被叫成"允许"（下面 sync 已经把按钮置灰，这里只是兜住键盘那条路）
+      decide(d.id,boxes.length?('partial:'+bits()):'allow_once','');
+      done(boxes.length?('允许一次：接受 '+nOn()+' 块，退回 '+(boxes.length-nOn())+' 块'):'允许一次')},'y','allow_once');
+    const sync=()=>{if(!boxes.length)return;pri.disabled=nOn()==0;
+      pri.title=nOn()?'':'一块都没勾 —— 那请用「拒绝」，别把全退回说成允许'};
+    boxes.forEach(b=>b.onchange=()=>{
+      const r=b.closest('.hk');if(r)r.classList.toggle('off',!b.checked);sync()});
+    sync();
   }else{
     // 选项按 1..9 编号：ask_user 的选项常常是"选第几个"，鼠标反而慢
     (d.options||[]).slice(0,9).forEach((o,i)=>put(o,'pri',()=>{decide(d.id,'',o);done('回答：'+o)},String(i+1)));

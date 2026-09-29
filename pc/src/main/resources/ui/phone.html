@@ -212,8 +212,12 @@ function refresh(){
             '<button data-a="__own__" data-i="'+esc(p.id)+'">发送回答</button>'+
             '</div></div>'
         }
-        return '<div class="card'+(pl.risk=='high'?' hi':'')+'" data-risk="'+esc(pl.risk||'')+'"><h3>'+esc(pl.title||'(没标题)')+rk+'</h3>'+
+        return '<div class="card'+(pl.risk=='high'?' hi':'')+'" data-risk="'+esc(pl.risk||'')+'" data-hunks="'+esc(String(pl.hunkCount||0))+'"><h3>'+esc(pl.title||'(没标题)')+rk+'</h3>'+
           '<p>'+esc(pl.detail||'')+'</p>'+
+          /* 逐块的正文不发到手机上（那边只有三个整条按钮，4 秒一次的轮询也不该背着几十行 diff），
+             但**数量要说**：不然人在手机上点"允许一次"，并不知道自己替 3 处改动一起点了头。 */
+          (pl.hunkCount>0?('<p class="why">这次改动分成 '+esc(String(pl.hunkCount))+
+            ' 处。手机上只有整条按钮 —— 要一块一块挑，得回电脑上点那张卡。</p>'):'')+
           (pl.riskWhy?'<p class="why">'+esc(pl.riskWhy)+'</p>':'')+'<div class="acts">'+
           '<button class="ok" data-d="allow_once" data-i="'+esc(p.id)+'">允许一次</button>'+
           '<button data-d="allow_session" data-i="'+esc(p.id)+'">本任务都允许</button>'+

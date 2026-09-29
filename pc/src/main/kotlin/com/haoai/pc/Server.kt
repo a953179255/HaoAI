@@ -1869,34 +1869,22 @@ class WebServer(settings: PcSettings, port: Int,
      */
     private fun webGate(sid: String, engineOf: () -> Engine? = { sessions[sid]?.engine }): Gate = object : Gate {
         override fun approve(title: String, detail: String, kind: String): Boolean =
-            approveRule(title, detail, kind, "", "*", null)
+            approveRule(title, detail, kind, "", "*", null, null)
 
         override fun approveRule(
             title: String, detail: String, kind: String, tool: String, pattern: String,
             risk: RiskOf.Verdict?
+        ): Boolean = approveRule(title, detail, kind, tool, pattern, risk, null)
+
+        override fun approveRule(
+            title: String, detail: String, kind: String, tool: String, pattern: String,
+            risk: RiskOf.Verdict?, plan: HunkPlan?
         ): Boolean {
             val id = "a${seq.incrementAndGet()}"
             val fut = java.util.concurrent.CompletableFuture<String>()
             pending[id] = fut
             if (tool.isNotBlank()) pendingRule[id] = tool to pattern
-            /*
-             * 分级在 payload 里是**两样东西**：`risk` 是给 CSS 挑颜色用的稳定码，
-             * `riskLabel` 是给人看的那句中文。合成一个字段就会有界面按中文匹配，
-             * 于是"高危"改成"高风险"的同一分钟，红框静默消失。
-             */
-            val payload = buildString {
-                val fields = mutableListOf(
-                    "\"id\":${quote(id)}", "\"title\":${quote(title)}",
-                    "\"detail\":${quote(detail)}", "\"kind\":${quote(kind)}",
-                    "\"tool\":${quote(tool)}", "\"pattern\":${quote(pattern)}"
-                )
-                if (risk != null) {
-                    fields.add("\"risk\":${quote(risk.code())}")
-                    fields.add("\"riskLabel\":${quote(RiskOf.label(risk.level))}")
-                    fields.add("\"riskWhy\":${quote(risk.why)}")
-                }
-                append('{').append(fields.joinToString(",")).append('}')
-            }
+            val payload = approvalPayload(id, title, detail, kind, tool, pattern, risk, plan)
             pendingPayload[id] = Waiter("approval", payload, sid)
             publish("approval", payload, sid)
             var timedOut = false
@@ -1914,6 +1902,16 @@ class WebServer(settings: PcSettings, port: Int,
                 pendingPayload.remove(id)
             }
             /*
+             * 逐块：把人勾的结果交回工具（写在 plan 上）。
+             * 手机上点的永远是整条决定 ⇒ hunkKeep 给 null ⇒ 全部应用，与逐块功能出现之前一致。
+             */
+            val keep = hunkKeep(ans, plan)
+            val noneKept = keep != null && keep.none { it }
+            val allKept = keep != null && keep.all { it }
+            if (keep != null && !noneKept) plan?.keep = keep
+            val got = keep?.count { it } ?: 0
+            val total = plan?.hunks?.size ?: 0
+            /*
              * 结论挂到紧接着落的那条工具消息上。
              * 之前它只随 SSE 流一次：内联卡答完就收起，刷新之后卡没了，
              * 于是"这个文件到底是用户点头写的、还是自动写的、还是超时被拒的"查不出来。
@@ -1921,6 +1919,9 @@ class WebServer(settings: PcSettings, port: Int,
             engineOf()?.markApproval(
                 when {
                     timedOut -> "超时未答，按拒绝处理"
+                    noneKept -> "$total 块全被退回，这次一个字都没写"
+                    keep != null && allKept -> "允许一次：$total 块全收"
+                    keep != null -> "部分接受：$total 块里接了 $got 块、退了 ${total - got} 块"
                     ans == "allow_once" -> "允许一次"
                     ans == "allow_session" -> "本任务都允许"
                     ans == "allow_rule" -> "写入规则并允许"
@@ -1932,7 +1933,8 @@ class WebServer(settings: PcSettings, port: Int,
                 Policies.get().add(settings.workspaceFile(), Rule(tool, pattern, Decision.ALLOW))
                 publish("notice", quote("已记住规则：$tool($pattern)"), sid)
             }
-            return ans == "allow_once" || ans == "allow_session" || ans == "allow_rule"
+            return !noneKept &&
+                (keep != null || ans == "allow_once" || ans == "allow_session" || ans == "allow_rule")
         }
 
         override fun ask(question: String, options: List<String>): String {
@@ -2908,7 +2910,14 @@ internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String)
     val body: JsonObject = when (ev) {
         "approval" -> buildJsonObject {
             put("id", id); put("kind", "approval"); put("sid", sid)
-            put("payload", runCatching { Json.parseToJsonElement(p) }.getOrNull() ?: JsonObject(emptyMap()))
+            val a = runCatching { Json.parseToJsonElement(p).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
+            // 逐块的正文**不发到手机上**：那边只有三个整条按钮，把十几块 × 几十行 diff 塞进
+            // 4 秒一次的轮询只是白占流量（手机用户关心的也不是每一块长什么样）。
+            // 但数量要发 —— 不然人在手机上点"允许一次"时，并不知道自己是替 3 处改动一起点的。
+            val n = runCatching { a["hunks"]?.jsonArray?.size ?: 0 }.getOrDefault(0)
+            val light = a.filterKeys { it != "hunks" }.toMutableMap()
+            if (n > 0) light["hunkCount"] = JsonPrimitive(n)
+            put("payload", JsonObject(light))
         }
         // 提问归一成 {title, options:[..]}：两份手机客户端读同一组字段，不用各认一种载荷
         "ask" -> buildJsonObject {
@@ -2937,5 +2946,82 @@ internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String)
  * 「已按你的决定放行：绿色」—— 那是"有人替某个操作开了绿灯"的意思，
  * 而这次只是回了一句选择题的答案。
  */
-internal fun decideNote(isAsk: Boolean, value: String): String =
-    if (isAsk) "已把回答送回电脑：$value" else "已按你的决定放行：$value"
+internal fun decideNote(isAsk: Boolean, value: String): String = when {
+    isAsk -> "已把回答送回电脑：$value"
+    // 逐块是**在电脑上**勾的：手机上那句"已按你的决定放行"这时候是假话（人只点了整条）。
+    value.startsWith(HUNK_PREFIX) -> "已在电脑上逐块挑过，部分放行"
+    // 点拒绝却回一句"已按你的决定放行：deny"是两处错：动词反了，还把内部码露给人看。
+    // 手机屏幕上这句话是点完按钮唯一能看到的回执，它必须说人话。
+    value == "deny" -> "已拒绝，这条不会执行"
+    value in DECISION_CN -> "已按你的决定放行：" + DECISION_CN.getValue(value)
+    else -> "已按你的决定送出：$value"
+}
+
+/** 那三个放行决定的中文名。手机端的按钮标签与这句回执都从这里说话，别再各写一份。 */
+private val DECISION_CN = mapOf(
+    "allow_once" to "允许一次",
+    "allow_session" to "本任务都允许",
+    "allow_rule" to "写入规则并允许"
+)
+
+/** 审批答复里带逐块勾选时的前缀。界面发的是 `partial:101`（一位一块，1=要）。 */
+internal const val HUNK_PREFIX = "partial:"
+
+/**
+ * 审批卡的那份 JSON。
+ *
+ * 为什么不再手搓字符串：这份 payload 会被 `/lan/pending` 原样透给手机，而上一批正是
+ * "手搓多一个括号"让手机页空白、`LanTest` 却因为断的是桩自己搓的那份而全绿。
+ * 逐块之后 payload 里第一次带**多行 diff 文本**（含引号、反斜杠、中文），出事的面更大，
+ * 所以从这一版起由 JsonObject 构造保证合法，测试直接 parse 产品真身。
+ *
+ * 分级在 payload 里仍是**两样东西**：`risk` 是给 CSS 挑颜色用的稳定码，`riskLabel` 是给人看的中文。
+ * 合成一个字段就会有界面按中文匹配，于是"高危"改成"高风险"的同一分钟，红框静默消失。
+ */
+internal fun approvalPayload(
+    id: String,
+    title: String,
+    detail: String,
+    kind: String,
+    tool: String,
+    pattern: String,
+    risk: RiskOf.Verdict?,
+    plan: HunkPlan?
+): String = buildJsonObject {
+    put("id", id); put("title", title); put("detail", detail); put("kind", kind)
+    put("tool", tool); put("pattern", pattern)
+    if (risk != null) {
+        put("risk", risk.code())
+        put("riskLabel", RiskOf.label(risk.level))
+        put("riskWhy", risk.why)
+    }
+    val hs = plan?.hunks ?: emptyList()
+    // 只有一块的时候不摆勾选框（Hunks.plan 已经挡了，这里再兜一层）：界面上多一排勾选
+    // 只会让人以为"这里有得挑"，而它能说的话"拒绝"按钮已经说了。
+    if (hs.size >= Hunks.MIN) put("hunks", buildJsonArray {
+        hs.forEach { h ->
+            add(
+                buildJsonObject {
+                    put("no", h.no)
+                    put("at", h.oldAt + 1)
+                    put("stat", h.stat)
+                    put("text", h.text())
+                }
+            )
+        }
+    })
+}.toString()
+
+/**
+ * 从答复里取出逐块勾选。返回 null 有两种意思，都由调用方分：
+ * 整条放行（`allow_once` 那几个）与**这张卡本来就没有勾选框**（plan 为 null）。
+ *
+ * 位数与块数对不上时一块都不应用：宁可少写也不能多写 —— 猜错方向的代价是把用户
+ * 没点头的那几行盖进去，而那种写坏的现场是回不来的（快照只到上一版）。
+ */
+internal fun hunkKeep(ans: String, plan: HunkPlan?): List<Boolean>? {
+    if (plan == null || !ans.startsWith(HUNK_PREFIX)) return null
+    val bits = ans.substring(HUNK_PREFIX.length)
+    if (bits.length != plan.hunks.size || bits.any { it != '0' && it != '1' }) return List(plan.hunks.size) { false }
+    return bits.map { it == '1' }
+}

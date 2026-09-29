@@ -23,6 +23,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODE = "tools"
 CLIP = os.environ.get("PRE_CLIP", "素材.mp4")
+# 逐块审批这条剧本要一份"改了三处"的文件：先建二十行，再把第 2/9/16 行换掉。
+# 行号写成 L02 这种自报家门的内容，剧本里"第几行现在是什么"一眼可判，不用数。
+HUNK_BASE = "".join("L%02d\n" % i for i in range(1, 21))
+HUNK_WANT = HUNK_BASE.replace("L02", "X02").replace("L09", "X09").replace("L16", "X16")
 CODE_PY = "\n".join([
     'import os',
     'b = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a252242600000000049454e44ae426082")',
@@ -261,6 +265,20 @@ PLAN = {
     "loop": [
         ("我再数一轮", [{"id": "call_loop", "name": "shell",
                          "arguments": json.dumps({"command": "echo round", "shell": "bash", "timeout": 30})}]),
+    ],
+    # 逐块审批：一次调用改三处，卡上要能一块一块挑。
+    # 第一回合先**新建**那份二十行的文件 —— 新建就是一整块，那张卡不该有勾选框；
+    # 第二回合改第 2/9/16 行 → 三块；第三回合自己 read 回来，
+    # 界面上那张 read 卡显示的就是盘上现在的内容 —— 那是"被退的那块真的没写"的唯一硬证据。
+    "hunk": [
+        ("先建一份二十行的文件", [{"id": "call_h1", "name": "write",
+                                    "arguments": json.dumps({"path": "notes.md",
+                                                             "content": HUNK_BASE})}]),
+        ("再改三处", [{"id": "call_h2", "name": "write",
+                       "arguments": json.dumps({"path": "notes.md", "content": HUNK_WANT})}]),
+        ("把文件读回来，看看盘上到底剩什么", [{"id": "call_h3", "name": "read",
+                                               "arguments": json.dumps({"path": "notes.md"})}]),
+        ("第二处是你退回的，我按现状继续。", None),
     ],
 }
 
