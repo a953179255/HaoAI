@@ -35,24 +35,33 @@
    - **伪终端本身建得起来**：`CreatePipe` × 2 + `CreatePseudoConsole(100x30)` 返回 hr=0、句柄有效。
      探可用性要**真开一个再关掉**，别读版本号：JVM 在 Windows 11 上把 `os.version` 报成 `10.0`，
      拿它比 ">= 1809" 会把支持的机器判成不支持（第一版就是这么红的）。
-   - **卡点**：`CreateProcessW` 带 `EXTENDED_STARTUPINFO_PRESENT` 一律 `ERROR_INVALID_PARAMETER(87)`，而
-     ① 同一个 STARTUPINFOEX（`cb=120`，偏移 104 处读回来确实是属性表指针）**不带这个 flag → 成功**；
-     ② 用 jna-platform 自带的 `Kernel32.CreateProcess` + 普通 STARTUPINFO → **成功**（真起来了 cmd.exe，有 pid）；
-     ③ `InitializeProcThreadAttributeList` 两趟（先问出 48 字节再初始化）返回 true，
-       `UpdateProcThreadAttribute(PSEUDOCONSOLE, hpc, 8)` 也返回 true；
-     ④ `lpValue` 传 HPCON 本身 / 传"指向 HPCON 的指针"，两种都 87；
-     ⑤ `si`、`pi` 改成裸 `Pointer` 传（绕开 Structure marshalling）也 87。
-     → 不是结构体布局、也不是字符串宽度（但**确实**踩过一条：`Native.load` 不传
-     `W32APIOptions.UNICODE_OPTIONS` 时 `String` 按 ANSI 走，必须传）。
-     剩下最可疑的是 `attribute` 这个 `DWORD_PTR` 参数在 JNA 里怎么过去（值 vs 指针）。
-   - **下次从这里接着查**：(a) 用 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 做对照，分清"属性表整体不行"
-     还是"只有 PSEUDOCONSOLE 这项不行"；(b) 照抄一个能跑的开源调用序列（rust `portable-pty`、
-     Java 的 conpty 绑定）逐参数对齐；(c) 小坑备忘：`WinBase.STARTUPINFO.cb` 是 `WinDef.DWORD` 不是 `Int`。
-   - **别把量具算进结论**：`GetLastError()` 要在失败那一步**立刻**读（`DeleteProcThreadAttributeList`
-     会覆盖它），而 `runCatching { ... }` 会把 JNA 的异常吞成 `false` —— 两个都做过之后，
-     我拿到过一条"失败 err=0"的假线索，绕了三四轮。
-   - **退路**（如果 ConPTY 一时拿不下）：`shell_open` 加 `tty` 选项，能建就建、建不了就在工具结果里
-     写明"这台没有 TTY：Ctrl+C 与回显不可用"，而不是静默用管道假装成功。
+   - ~~**卡点**：`CreateProcessW` 带 `EXTENDED_STARTUPINFO_PRESENT` 一律 87~~ ✅ **已破（2026-09-29）**：
+     `ConPtyProbeTest` 实证整条回环——`cmd /q` 起在伪终端上、父端写 `echo hello-conpty\r\n`、
+     **从 `conOut.read` 把回显捞了回来**（含 cmd 横幅与提示符）。三层原因缺一不可：
+     ① `STARTUPINFOEXW.cb` 必须是 **112**（STARTUPINFOW=104 + 属性表指针 8）——09-28 记的 `cb=120`
+       多算了 8 字节；探针 case D 用 cb=120 **精确复现 87**、case B 用 112 通过；
+     ② `InitializeProcThreadAttributeList(list, dwAttributeCount, dwFlags, lpSize)` —— 第 2 个参数是
+       **count**（先 `(NULL,1,0,&size)` 问出 48 字节再初始化，文档与实测一致，之前把顺序记混了）；
+       表缓冲要 **8 字节对齐**；`UpdateProcThreadAttribute` 第 2 个才是 dwFlags（0x00020016 不变）；
+     ③ CreateProcess 必须 **`bInheritHandles=FALSE`** + `STARTF_USESTDHANDLES` 且
+       `hStd*=INVALID_HANDLE_VALUE`（wezterm `pseudocon.rs` / node-pty `conpty.cc` 同款，
+       node-pty 注释 "VERY IMPORTANT that this is false"）。TRUE 时子进程**继承 JVM 被重定向的 std**，
+       提示符与回显全进别人的终端——这就是"mode con 查得到控制台、echo 却永远不回来"的全部原因；
+       成功后立刻 CloseHandle 交给伪终端的两端（conhost 已 dup，关掉才能正确检测断链）。
+   - **实现层三课（写 Pty.kt 时照抄，都是这轮真金白银踩出来的）**：
+     `PeekNamedPipe(NULL 缓冲)` 在这台 Windows 把可用字节写在**第 5 个出参**（lpBytesRead 恒 0）；
+     peek **只看不消费**，拿到 n 必须 ReadFile 掉（否则同一段字节读成 N 遍，真输出永远排在后面）；
+     conhost 的输出要**持续 drain**（独立线程；管道缓冲写满会互相堵死，表现就像"没输出"）；
+     输入写 UTF-8 + `\r\n`，且要**等客户端接上再发**（CreateProcess 返回 ≠ cmd 进入输入循环）。
+   - **工程环境备忘**：pc 零第三方依赖 → 走 **JDK FFM**（不是 JNA）。这台 JDK 的分配工厂在
+     `SegmentAllocator`/`Arena.allocate(size, align)`（`MemorySegment.allocateFrom` 不存在）；
+     `structLayout` 要显式 `paddingLayout`；符号要 `SymbolLookup.libraryLookup("kernel32.dll")`
+     （`defaultLookup()` 找不到 kernel32）。探针全文见 `ConPtyProbeTest`，单次结果落 `%TEMP%\conpty-probe.txt`。
+   - **退路仍保留**（实现批遇到别的机型问题再用）：`shell_open` 加 `tty` 选项，能建就建、
+     建不了就在工具结果里写明"这台没有 TTY：Ctrl+C 与回显不可用"，而不是静默用管道假装成功。
+   - ⇒ **下一步 = 实现批**（机制已实证，不再是探路）：把这条序列包进 `Pty.kt`——
+     常驻读线程 pump（conIn.write / conOut.read 两端）+ `ProcRegistry` 换底 + `shell_open` 的 `tty`
+     参数 + `write_stdin` 语义 + 测试与像素剧本；照旧一批一提交。
 
 3. **跨端：会话镜像 + 远程审批** —— 🟡 v0.51.0 落了 **PC 侧**（`Lan.kt`：配对码 6 位 / 120 秒 / 一次一用 / 错 8 次作废；设备 token 只存 SHA-256 且常量时间比较；端点默认不监听；`/lan/pending` 只列审批不列问答；镜像只给工作区目录名不给绝对路径）｜ OpenClaw gateway 多通道 + DM 配对审批、Hermes 单 gateway 跨平台会话连续 ｜ 原缺陷：两端完全隔离，PC 的审批卡只有本机能点 ｜ 你对 PC 端的首要定位就是"和手机端联动" ｜ **还欠手机端那一半**：配对界面、镜像列表、审批卡片（要动 Android 端与模拟器） ｜ 安全边界已写死并测过（12 条 `LanTest`）｜ **两端**
 4. **记忆条目化 + 两端同步** ｜ Hermes FTS5 跨会话检索、OpenClaw memory-wiki/dreaming、ZCODE `MEMORY.md` 索引 ｜ 🟡 **PC 侧 v0.67.0 已落地**：`Memories.kt` 把工作区 `MEMORY.md` 读成一行一条，**格式与手机端 `MemoryBank.kt` 逐字对齐**（~~那边没有单测钉住格式~~ → **v0.71.0 两端各有一份锁**：手机端 `MemoryBankFormatTest` 用真实写盘量 PC 的解析正则，PC 这边有"照手机端形状读 + 幂等 + 不许擦掉对方文件头说明"）；条目 CRUD / 搜索 / 软取代；注入按 k=8、单条 180 字、总 1200 字挑，打分公式与手机端同一组常数；`/api/memories` + 记忆页签顶部那块条目区 ｜ **还欠**：两端同步（走 B4 那条通道，要先定谁是主 —— 两边都开自动整理会互相整理对方的文件）｜ **v0.69.0 又补了 PC 侧两块**：使用反馈按手机端同一组口径回写（一条每小时最多 +1、`uq` 只数没见过的查询指纹、打 `rc:1` 防召回环；只有真发请求记，看上下文占用不记），以及"整理一次"= 手动两步确认（降级 30 天没用且重要度≤2 / 合并归一化或 Jaccard>0.85 的重复 / 清掉失效满 30 天；**合并不是删掉而是指到保留那条**，误合能改回来）｜ 助手与 vibe coding 的长期记忆都靠它 ｜ **两端**
@@ -135,12 +144,12 @@
 
 | # | 欠账 | 现状与证据 | 为什么排这个位置 |
 |---|---|---|---|
-| 1 | **30 份像素剧本一条判据都没有**（`#99`） | 全量审计 43 份：0 个真故障、31 份只打印不断言。已补 5 份（`ui-ask` 18 / `ui-askkeys` 23 / `ui-mem` 11 / `ui-git` 32 / `ui-review` 16 条），`ui-check.js` 的棘轮 `ZERO_GATE_CEILING` 现在钉在 **30** | 不补，以后每批改坏了都不会自己红 —— 它放大的是**所有**后续批次的风险。`ui-review` 补上判据的当天就掉出两个真缺陷（`.dstat` 早就不存在、`--bad` 从来没定义过），这个顺序还要照原样推 |
-| 2 | **B10 第二步**：两端共写一份 `MEMORY.md` 时手机端"充电自动整理"要默认让位（`#72`） | 第一步（合并留痕）已落 `c72f4f1`；三方提案合并按 09-26 那份文档**继续暂缓**，别再问"谁是主"（权威源=PC 已拍板） | 不做的话两端会互相整理对方的文件，是正在漏的那种坏 |
+| 1 | ~~**30 份像素剧本一条判据都没有**（`#99`）~~ ✅ **已清零**（2026-09-29 晚）：65 份剧本全部带判据（全量 1166 条），`ZERO_GATE_CEILING` 降到 **0**；补的过程抓出 7 类"打印从不判"的真问题（恒 false 的字段、量错的类名、恒空的状态行…），记在 pc/README「这一批：30 份零判据剧本全部补上判据」 | ~~不补，以后每批改坏了都不会自己红~~ 这条判断已兑现：判据写出来当天就暴露了 ui-msgops/ui-tools/ui-compact/ui-ws/ui-runs 里几处从未被验过的预期 |
+| 2 | ~~**B10 第二步**：两端共写一份 `MEMORY.md` 时手机端"充电自动整理"要默认让位（`#72`）~~ ✅ 当晚完工 | 第一步（合并留痕）已落 `c72f4f1`；三方提案合并按 09-26 那份文档**继续暂缓**，别再问"谁是主"（权威源=PC 已拍板） | ~~不做的话两端会互相整理对方的文件~~ 已修：`DreamYield` 判据（闲置窗口内 mtime 更新=让位）+ `appendDreamSkip` 在 DREAMS.md 留原因；`DreamYieldTest` 6 条，手机全套 197 条全绿 |
 | 3 | ~~**定时任务跑完的结果推到手机通知**~~ ✅ **第五片已落**（`#103`，`937ff21`） | `PcDigestWatch` 判重 + 独立渠道 `haoai_pc_done` + 点开进手机网页端；契约钉在 `LanTest`（每条 digest 必须带正数 `t`） | 剩下的只有"真机上看一眼"，挪到 5.2 |
 | 4 | **`AtomicWriteTest` 满负载偶发红**，尚未定位 | 隔离跑 3/3 绿、加 CPU 忙轮询也绿、整套并跑红过一次 `lost=1`。断言消息里已装**现场分类**（文件不见了 / 半截 JSON / 内容其实是好的只是被共享冲突挤兑掉 300ms 重试窗口） | 下次红先看分类再决定改不改产品，别再猜 |
 | 5 | ~~**PC 侧多模型自动降级**~~ ✅ **v0.75.0 已落**（`#100`） | 设置里 `fallback`（`模型名` 或 `模型名@地址`）、只吃可重试的错、**换网关不带 key**（跨主机时）、账本按实际用的那档记。`FallbackTest` 8 条 + 变异验过 | 界面上"看得见降级"这件事还欠着 ⇒ `#111`（SSE 发了、DOM 里没有，按"瞬时事件要落库"那条修） |
-| 6 | 第 1 批扫尾：S1 覆盖面核对 + A2 可用性探测（`#36`） | — | 小 |
+| 6 | 第 1 批扫尾：S1 覆盖面核对 + A2 可用性探测（`#36`） | **S1/A2/#36 的释义已丢失**：全仓 + git 全史只有本行这一条循环引用（桌面旧版清单也没留下），不猜着做——等用户回忆或裁定作废 | 待定（原标"小"，但没定义就无法开工） |
 | 7 | **逐块只能挑一次，且只在电脑上**（v0.77.0 的两处取舍） | ① 手机上只有三个整条按钮（卡片会写明"分成 N 处"，但 diff 正文不发过去 —— 4 秒一次的轮询不该背几十行）；② 卡片上整块都是 `<label>`，在正文里选文字会顺手把勾去掉 | ①要做得搬块列表 + 触屏布局另做一版，等真有人在手机上挑；② 改成只有方框可点很便宜，下次碰这块 UI 时顺手做 |
 | 8 | **重试那三句小字是一堵黄墙**（v0.77.0 留下的） | 现在每条 `Ev.Notice` 各占一行，撞满退避就是"网关抖动（HTTP 429 {原始 JSON}）×3 + 已降级"。对排查有用、对阅读有害 | 要收成一行得能**替换**已发的那条（现在的事件模型只有 append）；顺带把网关原始 JSON 截短。别单为这一条改事件模型，下次动事件流时一起做 |
 | 9 | **订阅源那"唯一一道闸"只在界面上**（`#110` v0.79.0 的取舍） | `feed-install` 不检查"这个人预览过没有"，也不比对正文从预览到安装之间有没有被换掉；直接 POST `/api/skills` 就能装任意网址 | 加服务端状态就会变成"换个入口绕过"，真要挡得两端都挡 —— 那已经是签名校验/来源白名单的范围，而这两样是明确决定不做的。触发条件：哪天真要接公共源，这条必须先于接源完成 |
@@ -188,8 +197,8 @@
 
 **核对之后仍然成立的缺口**（按它自己的优先级，去掉你说不做的语音类）：
 
-- **P0**：#2 真 PTY/ConPTY（卡点在 ROADMAP 第 2 条，撞过一次墙，别当夜重推）、#6 Codebase 语义索引（`embedding` 全仓零命中，需要外部 embedding 来源）、#7 沙箱第一层（小改）
-- **P1**：#8 CI/PR review（要外部 token 与仓库授权）、#10 后台 agent + worktree、#12 Agent Teams（架构级）、#11 API 文档化 + 客户端
+- **P0**：#2 真 PTY/ConPTY —— **卡点已破**（2026-09-29 `ConPtyProbeTest` 回环实证，配方见第 2 条，只欠实现批）、~~#6 Codebase 语义索引~~ 前置量测已完成（本机 llama-server 3.6s ready、2560 维、同句 1.0000/异句 0.7453，等拍板"要不要索引"）、~~#7 沙箱第一层~~ ✅ v0.76.0 已落
+- **P1**：#8 CI/PR review —— **本地 `haoai review` 已落**（改了啥/风险/建议，只读不外发，高危 exit 2；`ReviewTest` 12 条）｜外发 comment 仍永远要人点（要外部 token 与仓库授权）、#10 后台 agent + worktree、#12 Agent Teams（架构级）、#11 API 文档化 + 客户端
 - **P2**：#17 Run/Verify 闭环（有 `run_code`，缺"检测项目类型→构建→启动→验证"那条链）
 - **两端收尾**：#3 跨端只剩真机验证
 
@@ -214,8 +223,8 @@
 
 ~~`#100` PC 侧自动降级~~ ✅v0.75.0 → ~~`#101` 沙箱第一层~~ ✅v0.76.0 → ~~`#111` 降级提示看不见~~ ✅v0.77.0（真因是 hydrate 抹掉瞬时节点，不是 SSE 没到）→ ~~`#103` 结果推手机通知~~ ✅ 第五片 →
 ~~`#102` diff 逐块接受/拒绝~~ ✅v0.77.0 → ~~`#112` 产物导到工作区外白等 300 秒~~ ✅v0.77.0 收尾 → ~~`#107` API 文档化 + 客户端~~ ✅v0.78.0 → ~~`#110` 技能订阅源~~ ✅v0.79.0（用户裁定"会装别人的，但要先看过"）→
-`#99` 补零判据剧本（还剩 30 份，棘轮钉着）→
-`#64` ConPTY 单独一批（通了才轮得到 `#109` Run/Verify）→
+~~`#99` 补零判据剧本~~ ✅ 已清零（65 份全带判据、棘轮 0）→
+`#64` ConPTY 单独一批（**卡点已破、配方齐——见第 2 条，随时可开工**；通了才轮得到 `#109` Run/Verify）→
 `#104` 语义索引（**先量 embedding 端点再决定排不排**）→
 `#106` + `#108` + B15 同一片地基，一起设计一次。
 

@@ -345,7 +345,7 @@ bash pc/tools/api-smoke.sh                   # 外部程序那条路：客户端
 `bash pc/tools/steps/x.json`。现在两种前缀都认、**有文件没跑法直接算红**，并补上这几条：
 
 ```
-bash pc/tools/ui-shot.sh pc/tools/steps/ui.json          # 全流程冒烟（83 步，零判据，见 #99）
+bash pc/tools/ui-shot.sh pc/tools/steps/ui.json          # 全流程冒烟（83 步 / 22 条判据，#99 已清）
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-tour.json     # 首屏引导
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-ctx.json      # 记忆页与 @ 提及
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-memitems.json # 条目化记忆：加/改/忘（16 条判据）
@@ -3249,6 +3249,89 @@ Gradle 自己拉的 JetBrains 21；真正在编译的那把 Temurin 25 装在 **
 8080 上那个 opencode 代理一发对话就 429）。改的是用户真实配置，所以没替他们动。
 
 
+## 这一批：30 份零判据剧本全部补上判据（#99 清零，只补量具不动产品代码）
+
+**要解决的问题**：`ui-check.js` 的棘轮 `ZERO_GATE_CEILING` 钉在 30 —— 全量 65 份像素剧本里有 30 份一条 `must` 都没有，
+界面坏了、按钮没了、卡不重画了，它们照样"绿"。这是整个验收体系最大的一笔债（v0.67 那条恒 false 的判据就是从这类剧本里混过去的）。
+
+**做法**：逐份读剧本，把"只打印不断言"的字段改成**布尔判据**，期望按用例声明——
+"没按钮"可能是设计，所以判据不写"必须有按钮"，写这一步**本该发生什么**（例：删工具回复那步的判据是"要被 Engine 拒绝并给出理由"，
+而不是"接口返回 200"）。不确定的先跑一遍拿实测值，再按实测修期望——凡与原假设不符的，以产品代码为准改判据、不改产品。
+
+**结果**：65 份剧本零判据归零，`ZERO_GATE_CEILING` 降到 **0**；全量判据 **1166 条**（原 35 份有判据的剧本一条未动）。
+
+**补的过程中抓出来的真问题**（打印从不判、所以一个都没暴露过）：
+
+1. `ui-msgops`：单独删工具回复这条路，`Engine.deleteAt` 明确拒绝（"工具回复不能单独删"）——原剧本把响应 JSON 打出来就完了。
+   现在把"必须被拒 + 理由里带工具回复"钉成判据：悄悄删掉会在历史里留下没有调用方的孤儿结果。
+2. `ui-tools` 的 `switched` **恒 false**：记录 `curId` 的那步排在点「新任务」之后，切完才记，之后再也没人切——判据写出来才看见。
+   改成先记再点（note 里写明原顺序为什么永远等不出变化）。
+3. `ui-compact` 想拿 `#cmpState` 当判据，而它**收尾即清空**（成功失败都置空，"压缩中…"只在途中）——恒空的字段当判据永远红。
+   改判会话里那行"已压缩并摘要 N 条"的 notice。
+4. `ui-ws` 原来量 `.sess .it.on`，而行上的类是 `cur`——这个字段恒 0 也从没人看见；"当前行会阻止分组排序"这类行为一并写进 note。
+5. `ui-runs` 搜 `git` 实际**只命中一条**（命令/面板/会话/文件都不含 git），所以下方向键那步的真判据是"单条结果下选中态不越界、不换人"，
+   回车落点由下一条"必须打开 Git 页签"钉住；跳设置节的 `.palnum` 高亮、Esc 关抽屉、聚焦时打字不抢键也都补上了。
+6. `ui-at` 的斜杠菜单首条比对前要掐掉空白——模板串里 `<code>` 前有换行缩进，直接 `indexOf('/plan')===0` 恒 false（判据自己踩了一次）。
+7. `ui`（主巡览）的终态判据（表格/代码块/停止态）把 `.cbar` 之后的等待从 2.5s 提到 6s：2.5s 时四轮工具调用常没收尾，
+   "跑完一轮"的判据会撞在半路上；"删到这里"那步的终态（保留那一句、其后全清）现在是三条硬判据。
+
+**验收**：`gradle test` **489 条全绿**；`node tools/ui-check.js`（棘轮 0，实测 0）与 `node tools/md-check.js` 全绿；
+全量审计 `bash pc/tools/audit-steps.sh` 跑 **65 份**：64 份一轮过，`ui-product` 报 rc=127（量具瞬时故障、日志停在服务端启动后一行，复跑 4 条判据全过）。
+另记两笔诚实账：① 曾误同时启动两轮审计互杀进程，留下 13 个红，全部在干净机器上复跑转绿——**并发跑审计等于没跑**；
+② `ui-ask` 有一次红在"卡壳出来了、内容还没渲染完"的窗口（goto 与断言之间），复跑即绿，属既有偶发，不是本批引入。
+
+## 这一批：本地 review 落地（#8 可做的那一半）+ embedding 源量完（#6 第一步）
+
+**`haoai review <base> [--json]`** —— 把 base 之后的所有变更（含未提交、含未跟踪的新文件）读成三段：**改了啥 / 风险 / 建议**。
+只读、零网络出口（连 Provider 都不构造），"外发 PR comment 永远要人点"那半按 §3.2 保持不做。
+
+- **为什么是确定性规则不是先上模型**：自动 review 在没做真模型验收之前质量不可控；而密钥、大段删除、发布面、测试变少这类判据
+  可解释、可测、两次结论一样。规则六条（`Review.kt`，每条都有 `ReviewTest` 钉方向）：
+  新增行疑似密钥=高 / ≥200 行删除=中 / workflow·签名·gradle 属性·清单=中 / 测试文件整份删=中 / 二进制变更=低 / 源码动了测试没动=提醒。
+- **判据看结果**：结论按高危翻转（有高危退出码 **2**，base 错/没 git 退出码 **1**——脚本能直接拿来当闸）。
+  `ReviewTest` 12 条：包括"密钥只归到那一个文件"（按 patch 分段归属，不许一处密钥全文件刷屏）、
+  "干净改动不许无中生有"（报告一惊一乍第二天就没人看了）。
+- **冒烟抓到的真缺口**：第一版只跑 `git diff`，**未跟踪的新文件一个都看不见**——而新加的文件恰恰最容易藏密钥。
+  已改成 `ls-files --others` 合成 numstat + patch 段喂给同一个纯函数（行数全文件流式数、patch 每文件只攒前 4000 行，内存有界）。
+  自举冒烟：`haoai review HEAD` 在本仓库报出 1 条高危 = `ReviewTest.kt` 里的假密钥夹具（exit 2）——
+  规则方向对，测试夹具撞真扫描器是已知现象，人看完该忽略就忽略；`review no-such-base` 正确 exit 1。
+- 验收：`gradle test` **501 条全绿**（489 + 本批 12），`installDist` 已刷新（像素量具的"二进制不许比源码旧"闸仍会把住）。
+
+**#6 embedding 源量测（ROADMAP §5.3 要求的"第一步不是写代码"）**——量完了，结论是**能用**：
+
+- `G:\AI\llama.cpp\Vulkan\llama-server.exe`（薄壳 + `llama-server-impl.dll` 布局）带 `--embeddings`，
+  Agents-A1-4B-Q4_K_M（2.6GB）**3.6 秒 ready**；`/v1/embeddings` 回 400（载荷形状不同），**legacy `/embeddings` 可用**，
+  返回 `[{index, embedding:[[…]]}]`——多一层 batch 维，取向量要剥一层。
+- 实测：**维度 2560**；同句余弦 **1.0000** / 无关句 **0.7453**（能区分）；同一进程 `/v1/chat/completions` 照常可用——
+  一个服务同时当聊天网关与向量源，不用起两份。
+- ⇒ #6 的前置（embedding 从哪来）已答：来源=本机 llama-server。**下一步是"要不要建索引"**——
+  §3.3 留的那个问题仍然等你回答：*你现在真的搜不到东西吗？* `grep` + `@` 提及可能就够用了。
+
+## 这一批：ConPTY 卡点判别并击破（#2 的第一步，回环已实证）
+
+09-28 撞过的那堵墙（`CreateProcessW` + `EXTENDED_STARTUPINFO_PRESENT` 恒 87）**拆掉了**。
+`ConPtyProbeTest`（JDK FFM 探针，pc 零第三方依赖所以不是 JNA）现在是一条绿判据：
+cmd 起在伪终端上、父端写 `echo hello-conpty\r\n`、**从 `conOut.read` 把回显捞回来**（含横幅与提示符）；
+普通管道自检（写 ABC 读 ABC）与"cb=120 必 87"的复现也在同一条测试里。
+
+**三层原因，缺一不可**（详细数据在 pc/ROADMAP 第 2 条）：
+
+1. `STARTUPINFOEXW.cb = 112`（旧实验记的 120 多算 8 字节——探针 case D 用 120 精确复现 87、用 112 通过）；
+2. `InitializeProcThreadAttributeList(list, count, flags, &size)`——**第 2 个参数是 count**（先 `(NULL,1,0,&size)`
+   问出 48 字节），表缓冲 8 对齐；`UpdateProcThreadAttribute` 第 2 个才是 dwFlags；
+3. CreateProcess：**`bInheritHandles=FALSE` + `STARTF_USESTDHANDLES` + `hStd*=INVALID_HANDLE_VALUE`**
+   （wezterm/node-pty 同款）。TRUE 会把 **JVM 被重定向的 std 傅给子进程**——"mode con 查得到控制台、
+   echo 却永远不回来"的全部原因；成功后立刻关掉交给伪终端的两端。
+
+**踩出来的实现课**（写 Pty.kt 时照抄）：`PeekNamedPipe(NULL 缓冲)` 这台 Windows 把可用字节写在第 5 出参；
+peek **只看不消费**（拿到 n 必须 ReadFile 掉）；conhost 输出要**持续 drain**（管道满会互堵，症状像"没输出"）；
+输入 UTF-8 + `\r\n`，**等客户端接上再发**。FFM 备忘：分配工厂在 `Arena.allocate(size, align)`
+（`MemorySegment.allocateFrom` 不存在）、`structLayout` 要显式 padding、kernel32 要 `libraryLookup` 显式加载。
+
+**验收**：`gradle test` **502 条全绿**（501 + 本探针 1 条）。⇒ #2 从"卡点待查"变成
+**"实现批随时可开工"**（`Pty.kt` pump + `ProcRegistry` 换底 + `shell_open` 的 `tty` 参数 + 测试/像素），
+路线见 ROADMAP 第 2 条末尾与 §5.4。
+
 ## 与手机端同源的行为
 
 
@@ -3319,7 +3402,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **489 条全绿**（新增 26 条订阅源与权限扫描）（整套约 75 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **502 条全绿**（v0.79 加了 26 条订阅源与权限扫描，#99 批加 12 条本地 review，ConPTY 探针 +1；累计 489→502）（整套约 75 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
