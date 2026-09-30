@@ -18,6 +18,9 @@ object WallpaperStore {
 
     private fun file(context: Context): File = File(context.filesDir, "wallpaper.img")
 
+    /** 备份/恢复用：壁纸落盘文件。路径只此一处定义，别处不得再写死。 */
+    fun storedFile(context: Context): File = file(context)
+
     fun has(context: Context): Boolean = file(context).exists() && file(context).length() > 0
 
     fun set(context: Context, bytes: ByteArray) {

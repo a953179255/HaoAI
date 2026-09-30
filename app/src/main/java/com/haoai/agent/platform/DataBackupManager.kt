@@ -28,6 +28,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /** 备份范围。每一项都是"能独立看懂的一堆文件"，不做半个域的拆分（恢复要么整包要么不恢复）。 */
@@ -36,7 +37,8 @@ enum class BackupScope(val label: String, val hint: String) {
     SESSIONS("会话记录", "全部对话与工具轨迹，含压缩摘要与水位"),
     MEMORY("记忆与日志", "MEMORY.md、每日日志、固化报告"),
     SKILLS("技能", "工作区 skills 目录（含候选态与启用状态）"),
-    TASKS("待办与用量账本", "各会话任务清单、按月 token 账本")
+    TASKS("待办与用量账本", "各会话任务清单、按月 token 账本"),
+    EXTRAS("界面与自动化", "聊天壁纸、工作流、定时任务")
 }
 
 /** 一次导出的结果统计。 */
@@ -188,6 +190,19 @@ object DataBackupManager {
                 File(c.appFilesDir, "usage").listByPrefix("usage-")
             ).flatten().map {
                 (if (it.extension == "json") "todos/" else "usage/") + it.name to it
+            }
+
+            BackupScope.EXTRAS -> buildList {
+                addAll(
+                    WallpaperStore.storedFile(c.appContext).takeIf { it.isFile }?.let {
+                        listOf("extras/wallpaper.img" to it)
+                    }.orEmpty()
+                )
+                File(c.appFilesDir, "workflows").listByExt("json")
+                    .forEach { add("extras/workflows/${it.name}" to it) }
+                File(c.appFilesDir, "schedules.json").takeIf { it.isFile }?.let {
+                    add("extras/schedules.json" to it)
+                }
             }
         }).filter { it.second.isFile }
 
@@ -422,6 +437,7 @@ object DataBackupManager {
     data class Manifest(
         val formatVersion: Int,
         val packageName: String,
+        val appVersionName: String,
         val createdAt: Long,
         val keysIncluded: Boolean,
         val scopes: List<String>,
@@ -433,6 +449,7 @@ object DataBackupManager {
         Manifest(
             formatVersion = (o["formatVersion"] as? JsonPrimitive)?.intOrNull() ?: 0,
             packageName = (o["packageName"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            appVersionName = (o["appVersionName"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
             createdAt = (o["createdAt"] as? JsonPrimitive)?.long ?: 0L,
             keysIncluded = (o["keysIncluded"] as? JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull() ?: false,
             scopes = (o["scopes"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
@@ -447,4 +464,245 @@ object DataBackupManager {
     }.getOrNull()
 
     private fun JsonPrimitive.intOrNull(): Int? = contentOrNull?.toIntOrNull()
+
+    // ── 恢复 ────────────────────────────────────────────────────────
+
+    /** 一次恢复的结果统计。[keysReEncrypted] 是用本机 Keystore 重新加密入库的明文 Key 数。 */
+    data class RestoreSummary(val scopes: Set<BackupScope>, val entries: Int, val keysReEncrypted: Int)
+
+    private fun newRestoreTmp(c: AppContainer): File =
+        File(c.appContext.cacheDir, "restore-" + System.currentTimeMillis())
+
+    /**
+     * 只读校验：解包到缓存目录并按 manifest 逐条验 sha256，不碰任何在线数据。
+     * UI 先用返回的 manifest 展示包信息，用户确认范围后再调 [restore]。
+     */
+    fun inspect(c: AppContainer, uri: Uri): Result<Manifest> = runCatching {
+        val tmp = newRestoreTmp(c)
+        try {
+            extractAndValidate(c, uri, tmp)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    /**
+     * 应用备份包：解包校验全部通过后才逐域落盘——校验不过就整包拒绝，绝不写一半。
+     * 恢复完成后必须重启应用：会话/记忆/配置桥的内存缓存与定时器都要重载。
+     */
+    fun restore(c: AppContainer, uri: Uri, scopes: Set<BackupScope>): Result<RestoreSummary> = runCatching {
+        val tmp = newRestoreTmp(c)
+        try {
+            val manifest = extractAndValidate(c, uri, tmp)
+            // 按 name 求交集而不是 intersect：manifest.scopes 是 List<String>，
+            // 直接 intersect 会把泛型推到 BackupScope&String 的公共父类型上
+            val applied = scopes.filter { it.name in manifest.scopes }.toSet()
+            require(applied.isNotEmpty()) { "所选范围在这份备份包里都不存在" }
+            var keys = 0
+            if (BackupScope.SETTINGS in applied) keys += restoreSettings(c, tmp, manifest.keysIncluded)
+            if (BackupScope.SESSIONS in applied)
+                copyTree(File(tmp, "payload/sessions"), c.sessionStore.sessionsDir())
+            if (BackupScope.MEMORY in applied) restoreMemory(c, tmp)
+            if (BackupScope.SKILLS in applied) {
+                val root = runCatching { SkillStore.currentDir() }.getOrNull()
+                if (root != null && (root.isDirectory || root.mkdirs()))
+                    copyTree(File(tmp, "payload/skills"), root)
+            }
+            if (BackupScope.TASKS in applied) {
+                copyTree(File(tmp, "payload/todos"), File(c.appFilesDir, "todos"))
+                copyTree(File(tmp, "payload/usage"), File(c.appFilesDir, "usage"))
+            }
+            if (BackupScope.EXTRAS in applied) {
+                copyTree(File(tmp, "payload/extras/workflows"), File(c.appFilesDir, "workflows"))
+                copyFile(File(tmp, "payload/extras/schedules.json"), File(c.appFilesDir, "schedules.json"))
+                copyFile(
+                    File(tmp, "payload/extras/wallpaper.img"),
+                    WallpaperStore.storedFile(c.appContext)
+                )
+            }
+            RestoreSummary(applied, manifest.items.size, keys)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    private fun extractAndValidate(c: AppContainer, uri: Uri, tmp: File): Manifest {
+        val ins = c.appContext.contentResolver.openInputStream(uri) ?: error("无法打开备份包")
+        ins.use { return extractZipValidated(it, tmp, c.appContext.packageName) }
+    }
+
+    /**
+     * 纯 IO 的解包校验核心（JVM 可测）：manifest 的每条 size+sha256 都要对得上真实字节，
+     * 条目集合也要与 manifest 完全一致。任何不一致都在写在线数据之前抛出。
+     */
+    internal fun extractZipValidated(ins: InputStream, tmp: File, expectedPackage: String): Manifest {
+        var manifestText: String? = null
+        val digests = HashMap<String, Pair<Long, String>>()   // path -> (size, sha256)
+        ZipInputStream(ins.buffered()).use { zip ->
+            while (true) {
+                val e = zip.nextEntry ?: break
+                if (e.isDirectory) continue
+                val name = e.name
+                if (name == MANIFEST_NAME) {
+                    manifestText = zip.readBytes().decodeToString()
+                    continue
+                }
+                require(name.startsWith(PAYLOAD)) { "备份包里混入了意外条目：$name" }
+                // zip-slip 两道闸：① ".." 段一律拒绝（payload/../x 的 canonical 仍在目录内、
+                // 只有 canonical 检查拦不住，导出器也从不写这种名字）；② canonical 逃逸兜底
+                require(!name.contains("..")) { "备份包条目路径异常：$name" }
+                val dst = tmp.resolve(name)
+                require(dst.canonicalPath.startsWith(tmp.canonicalPath + File.separator)) {
+                    "备份包条目路径异常：$name"
+                }
+                dst.parentFile?.mkdirs()
+                val digest = MessageDigest.getInstance("SHA-256")
+                var n = 0L
+                dst.outputStream().buffered().use { out ->
+                    val dis = DigestInputStream(zip, digest)
+                    val buf = ByteArray(1 shl 16)
+                    while (true) {
+                        val r = dis.read(buf)
+                        if (r < 0) break
+                        out.write(buf, 0, r)
+                        n += r
+                    }
+                }
+                digests[name] = n to digest.hex()
+            }
+        }
+        val manifest = readManifest(manifestText ?: "") ?: error("备份包缺少 manifest.json 或格式不认识")
+        require(manifest.formatVersion == FORMAT_VERSION) {
+            "备份包格式版本不受支持：${manifest.formatVersion}（当前支持 $FORMAT_VERSION）"
+        }
+        require(manifest.packageName == expectedPackage) { "这是别的应用的备份包" }
+        val byPath = manifest.items.associateBy { it.path }
+        require(digests.keys == byPath.keys) {
+            val extra = digests.keys - byPath.keys
+            val missing = byPath.keys - digests.keys
+            buildString {
+                append("备份包与 manifest 不一致")
+                if (extra.isNotEmpty()) append("；多出 $extra")
+                if (missing.isNotEmpty()) append("；缺少 $missing")
+            }
+        }
+        byPath.forEach { (path, item) ->
+            val got = digests.getValue(path)
+            require(got.first == item.size && got.second == item.sha256) {
+                "校验失败：$path 与 manifest 记录不符"
+            }
+        }
+        return manifest
+    }
+
+    /**
+     * 落盘两份配置真源（settings.json + haoai.config.json，必须成对）。
+     * manifest 声明含明文 Key 时用**本机** Keystore 重新加密——卸载/换机后 AndroidKeyStore
+     * 旧密钥已不可恢复，旧密文就是死字，这正是"导出剥 Key、恢复重加密"这条契约存在的理由。
+     * 做 JsonObject 手术而不是反序列化成 AppSettings：备份可能来自更新的版本，
+     * 未知字段必须原样保留，交给下次启动的迁移逻辑处理。
+     */
+    private fun restoreSettings(c: AppContainer, tmp: File, keysIncluded: Boolean): Int {
+        var keys = 0
+        val encrypt: (String) -> String? = { plain -> runCatching { c.cipher.encrypt(plain) }.getOrNull() }
+        val settingsSrc = File(tmp, "payload/settings/settings.json")
+        if (settingsSrc.isFile) {
+            val text = settingsSrc.readText()
+            val out = if (keysIncluded) {
+                val (t, n) = reEncryptConfigJson(text, encrypt); keys += n; t
+            } else text
+            HaoJson.writeAtomic(File(c.appFilesDir, "settings/settings.json"), out)
+        }
+        val bridgeSrc = File(tmp, "payload/state/haoai.config.json")
+        if (bridgeSrc.isFile) {
+            val text = bridgeSrc.readText()
+            val out = if (keysIncluded) {
+                val (t, n) = reEncryptConfigJson(text, encrypt); keys += n; t
+            } else text
+            HaoJson.writeAtomic(File(c.appFilesDir, "state/haoai.config.json"), out)
+        }
+        return keys
+    }
+
+    /**
+     * [inlineSecrets] 的逆操作：`apiKey`/`apiKeyPool`/`searchApiKeys` 明文 → 本机密文字段。
+     * [encrypt] 解不出来的 Key（Keystore 异常等）整条剔除——宁可让用户重贴，
+     * 也绝不把明文写进落盘文件。返回改写后的 JSON 与重新加密的 Key 数。
+     */
+    internal fun reEncryptConfigJson(text: String, encrypt: (String) -> String?): Pair<String, Int> {
+        val root = runCatching { HaoJson.json.parseToJsonElement(text) }.getOrNull()
+            ?: return text to 0
+        var count = 0
+        fun providerRe(p: JsonElement): JsonElement {
+            if (p !is JsonObject) return p
+            val plain = (p["apiKey"] as? JsonPrimitive)?.contentOrNull
+            val pool = (p["apiKeyPool"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            if (plain == null && pool.isEmpty()) return p
+            return buildJsonObject {
+                p.forEach { (k, v) -> if (k != "apiKey" && k != "apiKeyPool") put(k, v) }
+                val main = plain?.let(encrypt)
+                if (main != null) { put("apiKeyCipher", main); count++ }
+                val poolCiphers = pool.mapNotNull(encrypt)
+                if (poolCiphers.isNotEmpty()) {
+                    putJsonArray("apiKeyPoolCiphers") { poolCiphers.forEach { add(it) } }
+                    count += poolCiphers.size
+                }
+            }
+        }
+        fun walk(el: JsonElement): JsonElement = when (el) {
+            is JsonObject -> buildJsonObject {
+                el.forEach { (k, v) ->
+                    when {
+                        k == "providers" && v is JsonArray ->
+                            putJsonArray("providers") { v.forEach { add(providerRe(it)) } }
+                        k == "searchApiKeys" && v is JsonObject -> {
+                            val out = buildJsonObject {
+                                v.forEach { (backend, key) ->
+                                    val plain = (key as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                                    val cipherText = encrypt(plain) ?: return@forEach
+                                    put(backend, cipherText); count++
+                                }
+                            }
+                            if (out.isNotEmpty()) put("searchApiKeyCiphers", out)
+                        }
+                        else -> put(k, walk(v))
+                    }
+                }
+            }
+            is JsonArray -> buildJsonArray { el.forEach { add(walk(it)) } }
+            else -> el
+        }
+        return HaoJson.json.encodeToString(JsonElement.serializer(), walk(root)) to count
+    }
+
+    private fun restoreMemory(c: AppContainer, tmp: File) {
+        copyFile(File(tmp, "payload/memory/MEMORY.md"), c.memoryBank.storageFile())
+        runCatching { c.journal.currentStorageDir() }.getOrNull()?.let {
+            copyTree(File(tmp, "payload/memory/journal"), it)
+        }
+        WorkspaceDocs.workspaceRoot(c)?.let { root ->
+            listOf("USER.md", "DREAMS.md").forEach { n ->
+                copyFile(File(tmp, "payload/workspace/$n"), root.resolve(n))
+            }
+            copyTree(File(tmp, "payload/workspace/dreaming"), root.resolve("dreaming"))
+        }
+    }
+
+    /** 单文件还原：源不存在就跳过（一个范围在包里可能只有部分文件），目标父目录自动建。 */
+    private fun copyFile(src: File, dst: File) {
+        if (!src.isFile) return
+        dst.parentFile?.mkdirs()
+        src.copyTo(dst, overwrite = true)
+    }
+
+    /** 目录级还原：src 不存在 = 该域在这份包里没有内容，静默跳过。 */
+    private fun copyTree(src: File, dst: File) {
+        if (!src.isDirectory) return
+        src.walkTopDown().filter { it.isFile }.forEach { f ->
+            val target = dst.resolve(f.relativeTo(src).path)
+            target.parentFile?.mkdirs()
+            f.copyTo(target, overwrite = true)
+        }
+    }
 }

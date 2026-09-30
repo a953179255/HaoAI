@@ -195,4 +195,134 @@ class DataBackupManagerTest {
         assertTrue(junk.exists())
         assertEquals(8, dir.listFiles { f -> f.name.startsWith("pre-2026091") }!!.size)
     }
+
+    // ── 恢复侧 ──────────────────────────────────────────────────────
+
+    /**
+     * 导出（inlineSecrets）→ 恢复（reEncryptConfigJson）必须互为镜像：明文字段消失、
+     * 密文字段回来、Key 数一条不差。这条契约错了，换机恢复就会静默丢 Key。
+     */
+    @Test
+    fun reEncryptMirrorsExportInlineContract() {
+        val inlined = DataBackupManager.transformSecrets(
+            settingsWithKeys,
+            mapOf(
+                "p1" to listOf("sk-plain-1", "sk-a", "sk-b"),
+                "p2" to listOf("decrypted-2"),
+                "search:zhipu" to listOf("sk-zhipu-plain")
+            )
+        )
+        val table = mapOf(
+            "sk-plain-1" to "E1", "sk-a" to "E2", "sk-b" to "E3",
+            "decrypted-2" to "E4", "sk-zhipu-plain" to "E5"
+        )
+        val (restored, n) = DataBackupManager.reEncryptConfigJson(inlined) { table[it] }
+        assertEquals(5, n)
+        assertTrue(restored.contains("\"apiKeyCipher\":\"E1\""))
+        assertTrue(restored.contains("\"apiKeyPoolCiphers\":[\"E2\",\"E3\"]"))
+        assertTrue(restored.contains("\"apiKeyCipher\":\"E4\""))
+        assertTrue(restored.contains("\"searchApiKeyCiphers\":{\"zhipu\":\"E5\"}"))
+        // 明文字段一个都不许留在落盘文件里
+        assertFalse(restored.contains("\"apiKey\":"))
+        assertFalse(restored.contains("\"apiKeyPool\":"))
+        assertFalse(restored.contains("\"searchApiKeys\":"))
+        // 没带 Key 的 provider 原样保留，不被动出多余字段
+        val noKey = "{\"providers\":[{\"id\":\"p9\",\"name\":\"裸\"}]}"
+        val (same, n0) = DataBackupManager.reEncryptConfigJson(noKey) { "x" }
+        assertEquals(0, n0)
+        assertTrue(same.contains("\"name\":\"裸\""))
+        assertFalse(same.contains("apiKeyCipher"))
+        // 加不出来的 Key 整条剔除，绝不明文落盘
+        val (dropped, n1) = DataBackupManager.reEncryptConfigJson(
+            "{\"providers\":[{\"id\":\"p1\",\"apiKey\":\"sk-plain-1\"}]}"
+        ) { null }
+        assertEquals(0, n1)
+        assertFalse(dropped.contains("sk-plain-1"))
+        assertFalse(dropped.contains("apiKey"))
+    }
+
+    private fun packZip(
+        payload: List<DataBackupManager.Payload>,
+        manifestFor: (List<DataBackupManager.Item>) -> String
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        DataBackupManager.packEntries(out, payload, manifestFor)
+        return out.toByteArray()
+    }
+
+    @Test
+    fun extractValidatesChecksumsAndRejectsTampering() {
+        val f = File.createTempFile("session", ".json").apply {
+            writeText("{\"id\":\"a\",\"messages\":[1,2,3]}")
+            deleteOnExit()
+        }
+        val payload = listOf(DataBackupManager.Payload.OfFile("payload/sessions/a.json", f))
+        val manifestOf: (List<DataBackupManager.Item>) -> String = { items ->
+            DataBackupManager.manifestJson(
+                "com.haoai.agent", "0.18.4", setOf(BackupScope.SESSIONS), false, items, 1L
+            )
+        }
+        val good = packZip(payload, manifestOf)
+        val dir = tmp.newFolder("x-ok")
+        val m = DataBackupManager.extractZipValidated(ByteArrayInputStream(good), dir, "com.haoai.agent")
+        assertEquals("com.haoai.agent", m.packageName)
+        assertTrue(File(dir, "payload/sessions/a.json").isFile)
+        // 篡改：payload 换成别的字节、manifest 沿用好包原件 → sha 对不上，整包拒绝。
+        // （不能让 packEntries 重新生成 manifest——它会按实际字节算 sha，等于自己证明自己）
+        val evil = File.createTempFile("evil", ".json").apply {
+            writeText("{\"id\":\"a\",\"messages\":[9,9,9]}")
+            deleteOnExit()
+        }
+        val goodManifest = zipOf(good).getValue("manifest.json")
+        val tampered = ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(tampered).use { z ->
+            z.putNextEntry(java.util.zip.ZipEntry("payload/sessions/a.json"))
+            z.write(evil.readBytes())
+            z.closeEntry()
+            z.putNextEntry(java.util.zip.ZipEntry("manifest.json"))
+            z.write(goodManifest)
+            z.closeEntry()
+        }
+        try {
+            DataBackupManager.extractZipValidated(
+                ByteArrayInputStream(tampered.toByteArray()), tmp.newFolder("x-bad"), "com.haoai.agent"
+            )
+            error("篡改包必须被拒绝")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("校验失败"))
+        }
+    }
+
+    @Test
+    fun extractRejectsForeignPackageAndSlipPaths() {
+        val f = File.createTempFile("sess", ".json").apply { writeText("{}"); deleteOnExit() }
+        val payload = listOf(DataBackupManager.Payload.OfFile("payload/sessions/a.json", f))
+        // 别的应用的包
+        val foreign = packZip(payload) { items ->
+            DataBackupManager.manifestJson("com.other.app", "1.0", setOf(BackupScope.SESSIONS), false, items, 1L)
+        }
+        try {
+            DataBackupManager.extractZipValidated(
+                ByteArrayInputStream(foreign), tmp.newFolder("x-foreign"), "com.haoai.agent"
+            )
+            error("他包必须被拒绝")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("别的应用"))
+        }
+        // zip-slip：条目名带 ../ 逃出解包目录
+        val slip = ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(slip).use { z ->
+            z.putNextEntry(java.util.zip.ZipEntry("payload/../evil.txt"))
+            z.write("x".toByteArray())
+            z.closeEntry()
+        }
+        try {
+            DataBackupManager.extractZipValidated(
+                ByteArrayInputStream(slip.toByteArray()), tmp.newFolder("x-slip"), "com.haoai.agent"
+            )
+            error("zip-slip 必须被拒绝")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("路径异常"))
+        }
+    }
 }

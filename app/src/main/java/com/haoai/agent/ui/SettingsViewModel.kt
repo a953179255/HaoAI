@@ -433,6 +433,75 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /** 恢复预览（manifest）：SAF 选包后先 inspect 校验，用户确认范围后才落盘。 */
+    var restoreManifest by mutableStateOf<com.haoai.agent.platform.DataBackupManager.Manifest?>(null)
+        private set
+    var restoreBusy by mutableStateOf(false)
+        private set
+
+    fun inspectBackup(uri: android.net.Uri, onResult: (Result<String>) -> Unit) {
+        if (restoreBusy) return
+        restoreBusy = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = com.haoai.agent.platform.DataBackupManager.inspect(c, uri)
+            withContext(Dispatchers.Main) {
+                restoreBusy = false
+                r.onSuccess { restoreManifest = it }
+                onResult(r.map { m ->
+                    val t = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA)
+                        .format(java.util.Date(m.createdAt))
+                    "备份包 ${m.appVersionName.ifBlank { "?" }} · $t · ${m.items.size} 项" +
+                        if (m.keysIncluded) " · 含明文 Key" else " · 不含 Key"
+                })
+            }
+        }
+    }
+
+    fun closeRestoreManifest() {
+        if (!restoreBusy) restoreManifest = null
+    }
+
+    fun restoreBackup(
+        uri: android.net.Uri,
+        scopes: Set<com.haoai.agent.platform.BackupScope>,
+        onResult: (Result<String>) -> Unit
+    ) {
+        if (restoreBusy) return
+        if (com.haoai.agent.platform.RunObserver.state.value.active) {
+            onResult(Result.failure(IllegalStateException("有任务正在运行，等它结束或先停止再恢复")))
+            return
+        }
+        restoreBusy = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = com.haoai.agent.platform.DataBackupManager.restore(c, uri, scopes)
+            withContext(Dispatchers.Main) {
+                restoreBusy = false
+                restoreManifest = null
+                onResult(r.map { s ->
+                    "已恢复 ${s.scopes.size} 个范围 · ${s.entries} 项" +
+                        if (s.keysReEncrypted > 0) " · 重新加密 ${s.keysReEncrypted} 把 Key" else ""
+                })
+            }
+        }
+    }
+
+    /** 恢复/换配置后干净重启：会话缓存、记忆、定时器、配置桥的内存态全部重载。 */
+    fun restartApp() {
+        val ctx = c.appContext
+        val i = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.apply {
+            addFlags(
+                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+            )
+        } ?: return
+        ctx.startActivity(i)
+        // 给 startActivity 一点落地时间再杀进程，否则存在重启意图被一起带走的竞态
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(250)
+            Runtime.getRuntime().exit(0)
+        }
+    }
+
     /** 用量页会话排行显示标题（5.4）；读取失败回退空串。 */
     fun sessionTitleOf(sessionId: String): String =
         runCatching { c.sessionStore.load(sessionId)?.title.orEmpty() }.getOrDefault("")

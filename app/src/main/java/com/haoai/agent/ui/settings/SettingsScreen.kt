@@ -2919,6 +2919,118 @@ private fun LazyListScope.generalItems(
     }
 
     item {
+        // 恢复：SAF 选包 → inspect 整包校验并展示 → 勾选范围确认 → 落盘 → 自动重启
+        // （导出侧只保证包是好的；这里补上"读回来"的另一半，换机/卸载重装才真正闭环）
+        var restoreUri by remember { mutableStateOf<android.net.Uri?>(null) }
+        val restoreLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            restoreUri = uri
+            if (uri != null) {
+                vm.inspectBackup(uri) { r ->
+                    android.widget.Toast.makeText(
+                        context,
+                        r.getOrElse { "无法读取备份包：${it.message ?: it.javaClass.simpleName}" },
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        GlassGroup(backdrop, modifier = Modifier.padding(vertical = 6.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("从备份包恢复", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "选择之前导出的 haoai-backup-*.zip。恢复会覆盖当前同域数据，" +
+                            "建议仅在新装或清空数据后使用",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                if (vm.restoreBusy) {
+                    CircularProgressIndicator(
+                        Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    TextButton(onClick = { restoreLauncher.launch(arrayOf("application/zip")) }) {
+                        Text("选择备份包")
+                    }
+                }
+            }
+        }
+        vm.restoreManifest?.let { m ->
+            val packScopes = m.scopes.mapNotNull {
+                runCatching { com.haoai.agent.platform.BackupScope.valueOf(it) }.getOrNull()
+            }
+            var selected by remember(m) { mutableStateOf(packScopes.toSet()) }
+            val packedAt = remember(m) {
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA)
+                    .format(java.util.Date(m.createdAt))
+            }
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = backdrop,
+                title = "确认恢复数据",
+                onDismiss = { vm.closeRestoreManifest() },
+                confirmLabel = "开始恢复",
+                onConfirm = {
+                    val u = restoreUri ?: return@GlassAlertDialog
+                    vm.restoreBackup(u, selected) { r ->
+                        android.widget.Toast.makeText(
+                            context,
+                            r.getOrElse { "恢复失败：${it.message ?: it.javaClass.simpleName}" },
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                        // 成功即重启：会话/记忆/配置桥的内存缓存不重启不会看到恢复的数据
+                        r.onSuccess { vm.restartApp() }
+                    }
+                },
+                dismissLabel = "取消"
+            ) {
+                Column {
+                    Text(
+                        "备份自 v${m.appVersionName.ifBlank { "?" }} · $packedAt · ${m.items.size} 项\n" +
+                            if (m.keysIncluded)
+                                "含明文 Key：恢复时用本机新 Keystore 重新加密入库"
+                            else
+                                "不含 Key：恢复后需到供应商设置里重贴 API Key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    packScopes.forEach { sc ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    selected = if (sc in selected) selected - sc else selected + sc
+                                },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = sc in selected,
+                                onCheckedChange = {
+                                    selected = if (sc in selected) selected - sc else selected + sc
+                                }
+                            )
+                            Text(sc.label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "恢复会覆盖所选范围的当前数据；完成后应用将自动重启",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f)
+                    )
+                }
+            }
+        }
+    }
+
+    item {
         // 配置文件桥（从「通用」搬来：它管的就是上面这份 haoai.config.json）
         GlassGroup(backdrop, modifier = Modifier.padding(vertical = 6.dp)) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
