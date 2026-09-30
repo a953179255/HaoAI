@@ -1,5 +1,9 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
 /**
  * 诊断用**内存**轨迹缓冲（跟随判定 + 慢帧），需要时经 debug 深链一次导出：
  *
@@ -8,8 +12,19 @@ package com.haoai.agent.ui.chat
  *
  * 为什么是内存：滚动路径上做主线程 IO 会自己制造卡顿（2026-09-16 踩过）。
  * 两个独立缓冲：跟随判定帧（高频，环形 240 条）+ 慢帧记录（低频，环形 60 条）。
+ *
+ * [enabled] 探针总开关（发热治理 P0-2，默认关）：跟随轨迹字符串是**每渲染帧**拼一条、
+ * 慢帧探针更是自续 120Hz Choreographer 回调 + 每帧两次 Debug.getRuntimeStat——
+ * 这套东西只为排查滚动卡顿服务，平时开着就是纯发热。followdump 深链打开它。
  */
 object FollowTrace {
+    var enabled by mutableStateOf(false)
+        private set
+
+    internal fun enable() {
+        enabled = true
+    }
+
     private const val CAP = 240
     private const val SLOW_CAP = 60
     private val buf = ArrayDeque<String>(CAP)

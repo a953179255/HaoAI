@@ -446,6 +446,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 // 导出跟随判定的**内存**轨迹（滚动期不落盘，避免主线程 IO 卡顿）：
                 //   adb shell am start -d "haoai://debug/followdump" com.haoai.agent
                 //   adb shell run-as com.haoai.agent cat files/follow-probe.txt
+                // P0-2：导出即视为排查会话开始——顺带打开探针（跟随轨迹+慢帧探针默认关）
+                com.haoai.agent.ui.chat.FollowTrace.enable()
                 rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     val txt = com.haoai.agent.ui.chat.FollowTrace.dump()
                     runCatching {

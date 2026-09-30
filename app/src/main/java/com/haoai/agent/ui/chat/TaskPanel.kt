@@ -105,13 +105,13 @@ fun TaskFloat(
         label = "taskFloatMorph"
     )
 
-    val infinite = androidx.compose.animation.core.rememberInfiniteTransition(label = "pillDot")
-    val breath by infinite.animateFloat(
-        0.35f, 1f,
-        androidx.compose.animation.core.infiniteRepeatable(
-            androidx.compose.animation.core.tween(900),
-            androidx.compose.animation.core.RepeatMode.Reverse
-        ), label = "pillBreath"
+    // P0-3：呼吸脉冲按需组合——只有收起态胶囊点、展开态的进行中行内点需要它。
+    // rememberPulse 是 delay(33) 驱动，只要在组合里就每 33ms 写一次状态（旧
+    // infiniteTransition 等帧时钟、会随页面静止一起停摆，delay 不会）——
+    // 展开+无进行中任务的挂机页曾被它钉在常驻 30fps（真机实测 447帧/15s）。
+    val breath = com.haoai.agent.ui.common.rememberPulse(
+        0.35f, 1f, 1800, reverse = true,
+        enabled = !expanded || activeTask != null
     )
 
     val density = androidx.compose.ui.platform.LocalDensity.current

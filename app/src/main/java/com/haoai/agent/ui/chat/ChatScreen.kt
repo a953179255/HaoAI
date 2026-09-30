@@ -2399,11 +2399,14 @@ private fun MessageList(
                 if (busyFrames < 1 && follow) pinned = scrollState.pinToBottom()
                 // 诊断走**内存**（不落盘：滚动路径上做主线程 IO 会卡顿），
                 // 需要时用 haoai://debug/followdump 一次性导出。
-                FollowTrace.add(
-                    "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
-                        "follow=$follow pinned=$pinned scrolled=${userScrolledThisRun.value} " +
-                        "pos=${scrollState.value}/${scrollState.maxValue}"
-                )
+                // P0-2：这条字符串每渲染帧拼一条，探针关着时连拼都不拼
+                if (FollowTrace.enabled) {
+                    FollowTrace.add(
+                        "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
+                            "follow=$follow pinned=$pinned scrolled=${userScrolledThisRun.value} " +
+                            "pos=${scrollState.value}/${scrollState.maxValue}"
+                    )
+                }
                 prevAtBottom = atBottom
         }
         } catch (c: kotlinx.coroutines.CancellationException) {
@@ -2424,6 +2427,9 @@ private fun MessageList(
     // 做法：Choreographer 逐帧回调，帧间隔 >=50ms 时把"可见行区间 + 各行高度"写进内存轨迹
     // （FollowTrace.addSlow，零文件 IO，不在滚动路径上分配）。
     // 判读：卡顿帧的可见区间相对上一帧扩张的那一侧 = 新进入视口的行 = 首要嫌疑。
+    // P0-2：此探针是自续 120Hz Choreographer 回调 + 每帧两次 getRuntimeStat，常开即常烧；
+    // 只在 followdump 深链打开 FollowTrace.enabled 后才启动（默认零成本）
+    if (FollowTrace.enabled) {
     LaunchedEffect(scrollState) {
         val choreographer = android.view.Choreographer.getInstance()
         var prevFrame = 0L
@@ -2463,6 +2469,7 @@ private fun MessageList(
         } finally {
             choreographer.removeFrameCallback(cb)
         }
+    }
     }
 
     // ── Phase 3：显示窗口 ────────────────────────────────────────────────
@@ -3114,19 +3121,13 @@ private fun ThinkingIndicator(hint: String? = null) {
             kotlinx.coroutines.delay(100)
         }
     }
-    // shimmer：渐变高光横扫文字（animateFloat 驱动 Brush 偏移）
-    val shimmer by androidx.compose.animation.core.rememberInfiniteTransition(label = "shim")
-        .animateFloat(
-            initialValue = 0f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
-            label = "shimmer"
-        )
+    // shimmer：渐变高光横扫文字（P0-3：30fps 装饰驱动，不再 120Hz 全速）
+    val shimmer = com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1600)
     val base = MaterialTheme.colorScheme.onSurfaceVariant
     val hi = MaterialTheme.colorScheme.primary
     Row(verticalAlignment = Alignment.CenterVertically) {
         // 连接状态点（呼吸）
-        val breathe by androidx.compose.animation.core.rememberInfiniteTransition(label = "conn")
-            .animateFloat(0.4f, 1f, infiniteRepeatable(tween(900)), label = "breathe")
+        val breathe = com.haoai.agent.ui.common.rememberPulse(0.4f, 1f, 900)
         Box(
             Modifier
                 .size(7.dp)
@@ -3235,8 +3236,7 @@ private fun ReasoningPanel(
                 }
                 if (live) {
                     // 标题 shimmer：渐变高光横扫
-                    val shim by androidx.compose.animation.core.rememberInfiniteTransition(label = "rshim")
-                        .animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "rp")
+                    val shim = com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
                     Text(
                         "正在思考",
                         style = MaterialTheme.typography.labelMedium.copy(
@@ -3517,9 +3517,9 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
     }
-    // shimmer：渐变高光横扫标题（live 时）
-    val shim by androidx.compose.animation.core.rememberInfiniteTransition(label = "rshim")
-        .animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "rp")
+    // shimmer：渐变高光横扫标题（live 时）。live=false 的历史行不组合动画，
+    // 否则每条已完成推理行都把页面钉在常驻 30fps（P0-3 真机实测教训）
+    val shim = if (live) com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700) else 0f
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
         if (live) {
             CircularProgressIndicator(
@@ -3754,8 +3754,7 @@ private fun InlineToolPill(
                 // 状态点：运行中蓝色呼吸 / 完成绿色 / 失败红色
                 when {
                     isRunning -> {
-                        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "pillRun")
-                            .animateFloat(0.35f, 1f, infiniteRepeatable(tween(900)), label = "pp")
+                        val pulse = com.haoai.agent.ui.common.rememberPulse(0.35f, 1f, 900)
                         Box(
                             Modifier
                                 .size(7.dp)
@@ -4271,8 +4270,7 @@ private fun ToolChip(
                             .clickable { onStopRun() },
                         contentAlignment = Alignment.Center
                     ) {
-                        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "stop")
-                            .animateFloat(0.55f, 1f, infiniteRepeatable(tween(1100)), label = "sp")
+                        val pulse = com.haoai.agent.ui.common.rememberPulse(0.55f, 1f, 1100)
                         Box(
                             Modifier
                                 .size(9.dp)

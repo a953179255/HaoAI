@@ -964,8 +964,7 @@ private fun TableSkeletonBlock(header: List<String>) {
     val bg = if (dark) Color(0xFF141A24) else Color(0xFFF4F6FA)
     val base = if (dark) Color(0xFF2A3342) else Color(0xFFDDE3EC)
     val hi = if (dark) Color(0xFF3D4A61) else Color(0xFFC3CCDA)
-    val phase by androidx.compose.animation.core.rememberInfiniteTransition(label = "skel")
-        .animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1400)), label = "p")
+    val phase = rememberPulse(0f, 1f, 1400)
     val brush = androidx.compose.ui.graphics.Brush.linearGradient(
         colors = listOf(base, hi, base),
         start = androidx.compose.ui.geometry.Offset((phase * 2f - 0.5f) * 360f, 0f),

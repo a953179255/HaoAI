@@ -353,9 +353,7 @@ private fun StepIconBox(content: @Composable () -> Unit) {
 /** 三点跳动（RikkaHub DotLoading 同款） */
 @Composable
 private fun DotLoading() {
-    val t by rememberInfiniteTransition(label = "cotDot").animateFloat(
-        0f, 1f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "d"
-    )
+    val t = com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1200)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         for (i in 0..2) {
             val phase = (t + i * 0.18f) % 1f
@@ -373,9 +371,7 @@ private fun DotLoading() {
 @Composable
 private fun shimmerBrush(active: Boolean): Brush? {
     if (!active) return null
-    val s by rememberInfiniteTransition(label = "cotShim").animateFloat(
-        0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing)), label = "s"
-    )
+    val s = com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
     return Brush.linearGradient(
         colors = listOf(
             MaterialTheme.colorScheme.onSurfaceVariant,
