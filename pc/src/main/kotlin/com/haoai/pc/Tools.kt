@@ -581,11 +581,13 @@ class GlobTool : Tool(
 }
 
 class GrepTool : Tool(
-    "grep", "在文件内容里搜正则，返回 文件:行号:内容。找符号、定位问题用它，别整篇读。",
+    "grep",
+    "在文件内容里搜正则，返回 文件:行号:内容。找符号、定位问题用它，别整篇读。" +
+        "文本 0 命中且配置了 settings.embedUrl 时，会附带「语义近邻」（把 pattern 的字面当自然语句去问向量端点）——" +
+        "适合\"意思相近但用词不同\"的找法；正则写法对语义这段无效。",
     schema(
         "pattern" to "string", "path" to "string", "glob" to "string", "ignore_case" to "boolean",
-        required = arrayOf("pattern")
-    )
+        required = arrayOf("pattern"))
 ) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val pattern = req(args, "pattern") ?: return fail("grep 缺少 pattern")
@@ -617,7 +619,26 @@ class GrepTool : Tool(
             }
             if (n >= 500) break
         }
-        return ToolResult(if (n == 0) "(无匹配) $pattern" else sb.toString().trimEnd() + "\n— 命中 $n 处")
+        var out = if (n == 0) "(无匹配) $pattern" else sb.toString().trimEnd() + "\n— 命中 $n 处"
+        /*
+         * #6 语义回退：文本 0 命中才问向量端点 —— 有字面命中就不掺和（不改变 grep 的既有输出）。
+         * 端点没配/失败只追加一行原因，文本结果永远在前面（语义是增强，不能拖死搜索）。
+         */
+        val emb = ctx.settings.embedUrl.trim()
+        if (n == 0 && emb.isNotBlank()) {
+            val r = SemanticIndex.query(ctx.workspace, pattern, emb)
+            when {
+                r.hits.isNotEmpty() -> {
+                    out += "\n语义近邻（embedding 相似度，按 pattern 字面查询，正则写法对这段无效）："
+                    for (h in r.hits) {
+                        out += "\n  %.2f  %s  — %s".format(h.score, h.path, h.snippet.replace('\n', ' '))
+                    }
+                }
+                r.note != null -> out += "\n（语义检索没跑：${r.note}）"
+                else -> out += "\n（语义近邻无结果）"
+            }
+        }
+        return ToolResult(out)
     }
 }
 
@@ -1177,7 +1198,7 @@ fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), WebSearchTool(),
-    BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool()
+    BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool(), RunVerifyTool()
 )
 
 /**

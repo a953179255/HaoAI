@@ -53,6 +53,12 @@ data class PcSettings(
     /** 搜索提供方：auto = 有 key 走博查、没 key 走 DuckDuckGo。 */
     val searchProvider: String = "auto",
     /**
+     * 语义检索的向量端点（#6）：完整 URL，如 `http://127.0.0.1:8199/embeddings`。
+     * 空 = 关闭语义检索（grep 保持纯文本，行为与没这功能时逐字一致）。
+     * 本机 llama-server 实测：legacy `/embeddings` 可用（`/v1/` 回 400），见 ROADMAP §5.3 #6。
+     */
+    val embedUrl: String = "",
+    /**
      * 这个模型的上下文窗口（字/符口径，用来画界面上那圈"用了多少"）。
      *
      * 网关不会主动告诉我们窗口多大，而移动端是靠"模型能力自动检测"拿到的；
@@ -104,6 +110,7 @@ data class PcSettings(
                     reasoningEffort = o.str("reasoningEffort") ?: "",
                     fallback = o.str("fallback") ?: "",
                     searchProvider = o.str("searchProvider") ?: "auto",
+                    embedUrl = o.str("embedUrl") ?: "",
                     contextChars = o.int("contextChars") ?: 128_000,
                     storedCap = o.int("storedCap") ?: 16_000,
                     reqCap = o.int("reqCap") ?: 4_000,
@@ -136,6 +143,7 @@ data class PcSettings(
                         put("reasoningEffort", s.reasoningEffort)
                         put("fallback", s.fallback)
                         put("searchProvider", s.searchProvider)
+                        put("embedUrl", s.embedUrl)
                         put("contextChars", s.contextChars)
                         put("storedCap", s.storedCap)
                         put("reqCap", s.reqCap)
