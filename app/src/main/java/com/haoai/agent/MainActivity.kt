@@ -337,6 +337,30 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             "workflows" -> { leaveChat(); screen = 8 }
             "search" -> { leaveChat(); screen = 17 }
             "searchcat" -> { leaveChat(); screen = 18 }
+            // 调试直出备份包：Flyme documentsui 的 CreateDocument 保存会 moveTaskToBack
+            // 丢结果（实测），SAF 路径走不通时用它把包写到应用外部目录再 adb pull
+            "exportbackup" -> {
+                rootScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val dir = java.io.File(container.appContext.getExternalFilesDir(null), "export")
+                        .apply { mkdirs() }
+                    val out = java.io.File(
+                        dir,
+                        "haoai-backup-debug-" + java.text.SimpleDateFormat(
+                            "yyyyMMdd-HHmmss", java.util.Locale.CHINA
+                        ).format(java.util.Date()) + ".zip"
+                    )
+                    val r = com.haoai.agent.platform.DataBackupManager.exportZip(
+                        container,
+                        android.net.Uri.fromFile(out),
+                        com.haoai.agent.platform.BackupScope.entries.toSet(),
+                        container.settingsFlow.value.backupIncludeKeys
+                    )
+                    android.util.Log.i(
+                        "HaoBackup",
+                        "exportbackup ${out.absolutePath} ok=${r.isSuccess} ${r.exceptionOrNull()?.message ?: ""}"
+                    )
+                }
+            }
             "vscreen" -> {
                 enterChat()
                 screen = 0
