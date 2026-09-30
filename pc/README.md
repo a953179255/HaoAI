@@ -3332,6 +3332,67 @@ peek **只看不消费**（拿到 n 必须 ReadFile 掉）；conhost 输出要**
 **"实现批随时可开工"**（`Pty.kt` pump + `ProcRegistry` 换底 + `shell_open` 的 `tty` 参数 + 测试/像素），
 路线见 ROADMAP 第 2 条末尾与 §5.4。
 
+## 这一批：v0.80.0 —— ConPTY 落地（B2）：`shell_open` 的 `tty` 选项
+
+上一批证明了机制，这一批把它变成产品能力。`shell_open` 新增 **`tty=true`**：起一个挂在
+Windows ConPTY 上的常驻进程（`ConPty.kt`，JDK FFM 直调 kernel32，零第三方依赖），
+配合 `shell_send`/`shell_read`/`shell_close` 原样工作。
+
+- **拿到的四件管道给不了的东西**（也是这批的验收判据）：
+  1. **`isatty()` 为真** —— `test -t 0; echo rc=$?` 必须是 `rc=0`（管道恒 1）。判据特意不写
+     "echo isatty"：TTY 会**回显输入**，命令原文里就带着那些字，断言分不清是跑出来的还是被回显的，
+     `rc=$?` 展开后只出现在输出里才分得开；
+  2. **Ctrl+C 是真的信号** —— `sleep 30` 后送 `text="\u0003", enter=false`，6 秒内要等到
+     `after-interrupt`（管道里 0x03 只是缓冲里的一个字节，得等 30 秒才轮到下一行）；
+  3. 输入回显、行编辑、颜色/进度条（isatty 的下游，程序自己会用）；
+  4. 状态跨 send 保留（`x=hello` 下一条还读得到 —— 和管道同一判据口径）。
+- **边界**：默认仍是管道（`tty` 不传就是原行为，省资源且不碰 ConPTY）；`tty=true` 建不起来时
+  **明确报错**（每一步带 GetLastError：CreatePipe/hr/建表/挂表/CreateProcess），绝不静默降级；
+  只支持 Windows。终端**面板**（人用的那个页签）这一批仍是管道，换 TTY 等面板自己的批次。
+- **实现要点**（都在 ConPty.kt KDoc，动它之前先读）：cb=112、参数序 (count,flags)、
+  bInherit=FALSE+std=INVALID、建后关 pty 端、输出持续 drain（peek 只看不消费、半行安静 250ms 推出
+  ——提示符没有换行，不推就永远看不见）、UTF-8 跨管道边界的劈字留 carry、关会话先 Terminate 再 ClosePseudoConsole。
+- **验收**：`gradle test` **504 条全绿**（502 + `PtyTest` 新增 2 条 TTY）；`PC_VERSION` 升 **0.80.0-pc**；
+  `installDist` 已刷新。⇒ B2 完成，**#17 Run/Verify 的前置（中断长驻进程）就位**。
+
+## 这一批：Run/Verify 闭环（#17）：`run_verify` 工具
+
+把「**检测项目类型 → 构建 → 启动 → 验证 → 停止**」一条链接成一个工具（第 23 把内置工具），
+逐段报告，死在哪一段一眼可见——模型自己用 shell 拼这条链，最常见的烂法是
+"构建完不起、起了不停、停用硬杀"。
+
+- **检测**按文件猜（gradlew/build.gradle/pom/package/Cargo/pyproject…），**默认构建表**只给确定性命令：
+  没把握的（python 无统一构建、npm 没有 `scripts.build`）**跳过而不是猜**——猜错的构建命令比不构建更糟；
+  `build` 可覆盖、`build:"-"` 显式跳过。
+- **启动**优先走 TTY（`shell_open` 的 tty 路径，v0.80.0），建不了退回管道并写明；
+  **停止**先 Ctrl+C 礼貌中断（给进程收尾机会），5 秒没收敛再关闭兜底——验证失败的路径**同样停干净**
+  （`RunVerifyTest` 有一条专测"失败不留僵尸"）。
+- **验证**三选一可组合：`verify_file`（产物存在）/ `verify_port`（TCP 通）/ `verify_url`
+  （HTTP **<500 即算活**——404 也是有服务在应答，那是"起来了"不是"没起来"），轮询到 `timeout_ms`。
+- 构建失败/超时**就地停住**，不进启动与验证；全程一把 `guard`（审批标题列出整条链要跑的东西）。
+- **验收**：`gradle test` **510 条全绿**（504 + `RunVerifyTest` 6）；工具总数钉在 23 的两处断言同步更新；
+  `installDist` 已刷新。⇒ **#17 完成，§七 里"能自己开工"的名单再次清零。**
+
+## 这一批：Codebase 语义索引（#6）：grep 的 0 命中回退
+
+量测（见上一批）证明本机能出向量之后，这一批把索引接进了 **`grep` 的回退位**——
+**文本 0 命中**且配置了 `settings.embedUrl` 时，附一段「语义近邻」（embedding 余弦 Top3）。
+有字面命中时输出**逐字不变**；端点没配/挂了只追加一行原因——语义是增强，不是依赖。
+
+- **用法**：`haoai set embedUrl=http://127.0.0.1:8199/embeddings`（本机 llama-server 的 legacy 端点，
+  实测可用；清空 = 关闭）。查询语句就是 pattern 的字面——正则写法对语义这段无效（工具描述里写了）。
+- **实现**（`SemanticIndex.kt` + `Embed.kt`）：按行攒 ~600 字/块；缓存在状态根
+  `HAOAI_HOME/embed-index/<sha1(ws)>.json`，**按文件 hash 增量**（没动的文件绝不重新向量化）；
+  向量 Float32 → Base64 落盘（2560 维 × 几百块若用 JSON 数字数组，上百万 JsonPrimitive 会把堆吃穿——
+  量级算过才选的这条路）；两种端点形状都认（legacy `[{index,embedding:[[..]]}]` 与 OpenAI `{data:[…]}`）；
+  `dim`/`ver` 不匹配整体重建；**刻意不做进程内缓存**（"文件改了但进程活着"会让索引永远陈旧，比慢更糟）。
+- **判据**（`SemanticIndexTest` 8 条，假端点按"含配置"给向量）：**词不相同意思相近能搜到**（问"配置怎么加载"
+  命中 `config.kt` 得分 1.0）；**增量**（文件没动只多 1 次请求=只嵌查询那句，改了才重嵌）；端点挂了给原因不抛；
+  没配端点 grep 输出**逐字不变**；配上后 0 命中才附语义段、有命中不夹带。
+- **验收**：`gradle test` **518 条全绿**（510 + 8）；`installDist` 已刷新。
+  ⇒ §3.3 留的问题（"你现在真的搜不到东西吗"）现在有了答案工具：搜不到时它会多给你一次机会，
+  搜得到时它一个字都不加。
+
 ## 与手机端同源的行为
 
 
@@ -3402,7 +3463,7 @@ OpenAI 兼容网关在"这一帧只有 tool_calls"时标准写法就是 content:
 
 ## 已验证到哪一步
 
-- `gradle test` → **502 条全绿**（v0.79 加了 26 条订阅源与权限扫描，#99 批加 12 条本地 review，ConPTY 探针 +1；累计 489→502）（整套约 75 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
+- `gradle test` → **518 条全绿**（v0.79 加 26 条订阅源与权限扫描；#99 批 +12 本地 review；ConPTY 探针 +1；v0.80 ConPTY 实现 +2；run_verify +6；语义索引 +8；累计 489→518）（整套约 75 秒，媒体那 14 条要真跑 ffmpeg、代码那 8 条要起解释器，所以慢）：21 条引擎流程（计划模式拒写且 write 不进 schema、
   审批放行/拒绝两条路、溢出落文件与指针、快照、会话落库与恢复、todo、ask_user、
   grep/glob、未知工具不崩循环、**关着的开关工具即使被模型硬调也不执行**、
   **停止：不执行剩余工具 + 每个 tool_call_id 都有回复 + 历史里留下中断这件事**），
@@ -3499,7 +3560,7 @@ pc/src/main/kotlin/com/haoai/pc/
   Settings.kt   设置落库 + HaoFlag 注册表
   Provider.kt   ChatClient 接口 + OpenAI 兼容流式网关
   Prompt.kt     系统提示（身份 / 环境事实 / 工作纪律 / 工具使用 / Windows 须知）+ Memory（项目说明与全局记忆）
-  Tools.kt      22 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
+  Tools.kt      23 把内置工具 + 溢出落文件 + 快照 + diff；allTools() = 内置 + 外部 MCP
   Mcp.kt        MCP 客户端：stdio 上的换行 JSON-RPC，把外部 server 的工具包成引擎的 Tool
   Policies.kt   S2 权限规则表：tool(pattern) 有序匹配 + 命令前缀归约 + alwaysAsk
   Risk.kt       审批风险分级：三档判据（整词集合 / 管道形状 / 路径落点）+ 一句"为什么"
