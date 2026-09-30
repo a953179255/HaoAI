@@ -2,25 +2,29 @@ package com.haoai.agent.ui.common
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import kotlin.math.abs
 
 /**
- * 装饰动画专用低频驱动（发热治理 P0-3）。
+ * 装饰动画驱动（v2，按用户裁决回归全帧率）：跟随系统刷新率的脉冲/扫光相位。
  *
- * shimmer 渐变、呼吸点、脉冲这类纯装饰动画原先用 infiniteTransition 全帧率驱动：
- * 120Hz 屏上每秒 120 次重组+重绘，而聊天页的玻璃元素背后是全屏 backdrop——
- * 每一帧都连带一次全屏采样重模糊，运行期 GPU/CPU 被装饰动画钉死在满帧。
+ * 用 withFrameNanos（Compose 帧时钟）驱动——时钟跑在系统当前刷新率上：
+ * 120Hz 屏就是 120fps，省电模式降到 60 就跟着 60，视觉与原 infiniteTransition 一致。
+ * 用户裁决：帧数低的涩感远比发热难受，不牺牲流畅换降温。
  *
- * 改成 delay(33) 驱动的 ~30fps 状态写入：肉眼几乎无差别，帧产出直接降到 1/4。
- * 刻意不用 withFrameNanos/动画时钟——delay 走 Handler 队列，不会把 vsync 钉在全速。
+ * **返回 [State] 而不是裸 Float 是刻意的**：订阅发生在调用方读取（`.value` 或
+ * 委托变量）的作用域。值只在 `if (live)`、`if (deleteArmed)` 这类分支里读的场合，
+ * 分支没走 → 写入零订阅 → 不产出渲染帧（帧时钟本身不逼 RenderThread 出帧，
+ * 静置页面实测 0-2fps）；分支走到（动画可见）→ 写入照常出帧、全帧率丝滑。
+ * delay(33) 限帧版已被否决：30fps 的动画涩感用户实测不可接受。
  *
- * **[enabled]=false 时直接早退**，不组合任何状态与协程：delay 驱动与旧
- * infiniteTransition 有本质区别——后者等帧时钟，页面静止时跟着停摆；前者只要在
- * 组合里就每 33ms 写一次状态。所以"当前不需要动画"的场合（任务面板展开且无
- * 进行中项等挂机态）必须显式关掉，否则挂机页被钉在常驻 30fps（真机实测）。
- * 返回裸 Float：调用方的读取随组合发生，组合了才订阅，不组合零成本。
+ * [enabled]=false 直接不启动协程：已知"组合着但必然看不见"的场合（抽屉关闭时
+ * 的会话行——offset 平移无离屏层；任务面板展开且无进行中项）用它整个关掉。
+ *
+ * [reverse]=true 对应 infiniteRepeatable(…, RepeatMode.Reverse) 的三角波形：
+ * 完整周期是 tween 时长的两倍（去程+回程），调用方传 2×时长。
  */
 @Composable
 fun rememberPulse(
@@ -29,17 +33,18 @@ fun rememberPulse(
     periodMs: Int,
     reverse: Boolean = false,
     enabled: Boolean = true,
-): Float {
-    if (!enabled) return min
+): State<Float> {
     val phase = remember { mutableFloatStateOf(min) }
-    LaunchedEffect(periodMs, reverse) {
-        val t0 = System.nanoTime() / 1_000_000L
-        while (true) {
-            val p = ((System.nanoTime() / 1_000_000L - t0) % periodMs) / periodMs.toFloat()
-            val v = if (reverse) 1f - abs(2f * p - 1f) else p
-            phase.floatValue = min + (max - min) * v
-            kotlinx.coroutines.delay(33)
+    if (enabled) {
+        LaunchedEffect(periodMs, reverse) {
+            while (true) {
+                androidx.compose.runtime.withFrameNanos { now ->
+                    val p = ((now / 1_000_000L) % periodMs) / periodMs.toFloat()
+                    val v = if (reverse) 1f - abs(2f * p - 1f) else p
+                    phase.floatValue = min + (max - min) * v
+                }
+            }
         }
     }
-    return phase.floatValue
+    return phase
 }

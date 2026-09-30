@@ -176,7 +176,7 @@ fun SwipeRevealCard(
             // P0-3：armPulse 只服务上膛态的「松手删除」呼吸提示。抽屉是 offset 平移
             // （无离屏层），关闭时会话行仍常驻组合——不门控的话整个聊天页被它钉在
             // 常驻 30fps（真机实测：任意会话闲置 360+ 帧/12s，设置页同机 0 帧）
-            val armPulse = rememberPulse(0.55f, 1f, 1240, reverse = true, enabled = deleteArmed)
+            val armPulse by rememberPulse(0.55f, 1f, 1240, reverse = true, enabled = deleteArmed)
             if (bandAlpha > 0f) {
                 Box(
                     Modifier

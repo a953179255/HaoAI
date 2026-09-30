@@ -3122,12 +3122,12 @@ private fun ThinkingIndicator(hint: String? = null) {
         }
     }
     // shimmer：渐变高光横扫文字（P0-3：30fps 装饰驱动，不再 120Hz 全速）
-    val shimmer = com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1600)
+    val shimmer by com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1600)
     val base = MaterialTheme.colorScheme.onSurfaceVariant
     val hi = MaterialTheme.colorScheme.primary
     Row(verticalAlignment = Alignment.CenterVertically) {
         // 连接状态点（呼吸）
-        val breathe = com.haoai.agent.ui.common.rememberPulse(0.4f, 1f, 900)
+        val breathe by com.haoai.agent.ui.common.rememberPulse(0.4f, 1f, 900)
         Box(
             Modifier
                 .size(7.dp)
@@ -3236,7 +3236,7 @@ private fun ReasoningPanel(
                 }
                 if (live) {
                     // 标题 shimmer：渐变高光横扫
-                    val shim = com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
+                    val shim by com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
                     Text(
                         "正在思考",
                         style = MaterialTheme.typography.labelMedium.copy(
@@ -3517,9 +3517,10 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
             }
         }
     }
-    // shimmer：渐变高光横扫标题（live 时）。live=false 的历史行不组合动画，
-    // 否则每条已完成推理行都把页面钉在常驻 30fps（P0-3 真机实测教训）
-    val shim = if (live) com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700) else 0f
+    // shimmer：渐变高光横扫标题（live 时）。by 委托=读取发生在 if(live) 内：
+    // live=false 的历史行零订阅零帧；live 时全帧率跟随系统刷新率（用户裁决：
+    // 涩感远比发热难受，不牺牲流畅）
+    val shim by com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
         if (live) {
             CircularProgressIndicator(
@@ -3754,7 +3755,7 @@ private fun InlineToolPill(
                 // 状态点：运行中蓝色呼吸 / 完成绿色 / 失败红色
                 when {
                     isRunning -> {
-                        val pulse = com.haoai.agent.ui.common.rememberPulse(0.35f, 1f, 900)
+                        val pulse by com.haoai.agent.ui.common.rememberPulse(0.35f, 1f, 900)
                         Box(
                             Modifier
                                 .size(7.dp)
@@ -4270,7 +4271,7 @@ private fun ToolChip(
                             .clickable { onStopRun() },
                         contentAlignment = Alignment.Center
                     ) {
-                        val pulse = com.haoai.agent.ui.common.rememberPulse(0.55f, 1f, 1100)
+                        val pulse by com.haoai.agent.ui.common.rememberPulse(0.55f, 1f, 1100)
                         Box(
                             Modifier
                                 .size(9.dp)
