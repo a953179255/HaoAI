@@ -230,3 +230,84 @@
 ~~`#104` 语义索引~~ ✅ 已落（grep 0 命中回退 + `embedUrl`，见 README「这一批」）→
 `#106` + `#108` + B15 同一片地基，一起设计一次。
 
+## 6. 结构对标：已有功能的调整项（2026-09-30）
+
+跟 ZCODE / OpenClaw / Hermes / codex / pi 比**代码结构** —— 只管"已有功能怎么组织"，
+功能缺口在 §2，别把两份混起来。证据来源：本机 `G:\Gongzuotai\openclaw-main` 全源码、
+`E:\ZCode\resources\glm\zcode.cjs` bundle 逐段解析、`G:\Gongzuotai\hermes-mobile-main`
+（agent 核心是 Capacitor 壳里的 Python）、`api.github.com` 的 openai/codex 与 earendil-works/pi。
+格式同 §2：**编号 · 干什么** ｜ 对标 ｜ 现状（查证）｜ 为什么 ｜ 验收判据 ｜ 涉及端
+
+**施工顺序**：~~S3 → S1~~ ✅ **同批已落**（2026-09-30，`UiContractTest` 4 条，README「这一批」）
+→ S6（动 UI 美化之前）→ S5 与 B15/#106/#108 合一片 → S7 单独小批 ｜ S8 缓。
+
+- **S1 · ✅ 已落：SSE 事件契约 `forward` 穷尽 + 事件名单两头对齐** ｜ OpenClaw `AgentEvent`
+  一个 union 同时驱动流式/审批/UI（`agent-core/src/types.ts:548`）、codex `event_mapping.rs`
+  把内部事件映射成唯一 `EventMsg` 单一事实源 ｜ `Server.forward:1762` 的 when 带
+  `else -> Unit`（:1798）—— 新加 `Ev` 变体编译不红、前端静默收不到，`#111`（降级提示
+  SSE 发了 DOM 没有）就是这类病；事件名两头手维护（服务端 `publish("x"` 52 处 + 心跳
+  `hello/ping` :257/:261，前端 `on('x')` 20 个 + `addEventListener` 2 个），没有任何测试核对 ｜
+  事件是这层壳的骨髓，漂了没人知道 ｜ ①去掉 `else`，`ApprovalRequest/AskRequest` 显式分支
+  （它们走 webGate 专用通道 :1944/:2002，注释写明）⇒ 加变体忘了表态=编译红；
+  ②`SseContractTest` 扫两边产品源码（`ApiDocTest` 模式）：前端订阅 ⊆ 服务端发出、
+  服务端发出 − {hello,ping} ⊆ 前端订阅 ｜ PC
+
+- **S2 · ~~审批载荷同源~~ 已落，别再做** ｜ 原计划是把 `approvalPayload`（web）与
+  `lanPendingRow`（手机投影）合成一份 ｜ 查证：**前一批已经做完了** —— 两个都是
+  JsonObject 结构化构造且挪成了顶层函数（手搓多括号那次的修法与教训就写在 :2951 的注释里），
+  链路测试是真身喂真身（`HunkTest:357`），`LanTest:47` 喂的也是产品真身 ｜ — ｜ — ｜ PC
+
+- **S3 · ✅ 已落：命令表两处手抄 → 修 `compact` 漂移 + 对齐测试** ｜ ZCODE 的命令是纯数据数组
+  一条表同时喂 `/help` 与 CLI help（`zcode.cjs@884782`） ｜ **实测已经漂了**：前端 `CMDS`
+  12 条（`index.html:3154`），服务端 `BUILTIN_CMDS` 11 条（`Server.kt:82`）—— 少 `compact`。
+  后果是技能可以叫 `compact`（重名闸 :1340 拦不住），而前端内置在前（:3170），
+  这个技能永远点不到 ｜ :81 的注释原话就是"两份实现靠这份对齐"—— 靠注释对齐必然漂，
+  当天核对当天就找到一处 ｜ `compact` 补进 `BUILTIN_CMDS`（:1234 下发的 `taken` 与
+  :1340 的拒绝闸一起变对）；`CmdContractTest` 扫 `index.html` 的 `a:'…'` 集合 ==
+  产品代码的 `BUILTIN_CMDS`（提成 internal 顶层供测试直接引用） ｜ PC
+
+- **S4 · ✅ 死代码已删（`Lan.quote`），统一收敛降级为不做** ｜ 原计划收进一个 `JsonUtil` ｜
+  查证后论据塌了三处：①7 处里 3 处根本不是 JSON —— `Desktop:495` 是 SQL 转义
+  （`'`→`''`）、`Share:42` 是 HTML 转义、`Media:678` 是 ffmpeg filter 转义，各有各的域；
+  ②4 处 JSON 的都合法（`Memories:479` 转了 `\n`，`Mcp:202`/`UsageLedger:127` 只处理
+  模型名与 method 名这种不可能带控制字符的值）；③`\t`/`\r` 的不同处理是**有意的显示语义**
+  （Server tab→4 空格、Memories tab→1 空格），统一 = 改行为 = 像素重判 ｜
+  真正剩下的：`Lan.quote:188` 是**死代码**（0 个调用点，grep 过）⇒ 顺手删；
+  防"以后再手写一份"靠 review 时不批，不靠这批 ｜ 删掉后编译与测试全绿 ｜ PC
+
+- **S5 · `Server.kt` 按 `//----` 拆域 + Engine 工厂单路径（与 B15/#106/#108 同一片地基）** ｜
+  OpenClaw `src/gateway/server-methods/` 234 文件按域一文件、codex
+  `app-server/src/request_processors/` 同理 ｜ `Server.kt` 3082 行单类 =
+  85 个路由 `when` 平铺（:153-249）+ SSE + 会话池/排队 + 审批闸 + 定时器 + LAN 宿主 +
+  PTY/CDP 代理 + git + 静态资源；引擎构造**双路径**（CLI `Sessions.create:1170` vs
+  `Server.engineFor:296`，settings/toolsOff/gate 的接线只有 Server 侧有 :308-315）｜
+  拆分标记 `//----` 源码里早就备好（:2321 终端、:2390 预览、:2446 手机…），
+  `ApiDocTest`+`WebApiTest` 兜底 ⇒ 拆是安全的；双构造路径是"改一处漏一处"的结构 ｜
+  按域拆成同包 handler 类，`Server.kt` 只留路由分发 + SSE + 会话池；引擎留一个工厂，
+  两壳同接线；行为零变化、测试全绿 ｜ PC
+
+- **S6 · `index.html` 面板模块化 + 与 phone 的共享件（动 UI 美化之前必须做）** ｜
+  OpenClaw control-ui（用户认可的 UI）每页一目录（`pages/<名>/route.ts` 约 11 行 +
+  `view.ts` + 测试）+ 单一 store（`ui/src/app/gateway-store.ts`）+ WS 单通道 ｜
+  `index.html` 3813 行：183 个顶层函数、65 处 `innerHTML`、104 处内联 `onclick`；
+  `show` 在 index:1039 与 phone:150 同名不同义；`esc/decide/answer` 两份手抄；
+  审批改内联那次的注释自证"队列本身就是 bug 的来源"（:1757）｜
+  你说的"UI 简陋"要动外观，在 3813 行平铺上改 = 高风险手术，先分区再美化 ｜
+  每面板收进一个对象（init/render/dispose），顶层函数进命名空间，index 与 phone 的
+  共用件（esc/decide/answer）提进共享文件；`ui-check.js` 既有判据 + "面板入口存在"全绿 ｜ PC
+
+- **S7 · hooks 事件面扩到 ZCODE 的 7 种** ｜ ZCODE：`SessionStart / UserPromptSubmit /
+  PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop`，
+  退出码 0 放行 / 2 拦截、stdout 严格 JSON、带 timeout（官方 skill 文档
+  `plugins/cache/.../diagnosing-hooks/SKILL.md`）｜ `Hooks.kt` 只有 `run-end`，
+  **没有工具执行前能拦截的钩子** ｜ 合规检查、自动 deny 这类"用户自己的闸"是 hooks 的
+  头号用途，与 `Risk.kt` 确定性打分是互补层（一个拦高危命令，一个拦用户自己定的规矩）｜
+  挂 `PreToolUse` 脚本、退出码 2 → 该次工具被拦且原因进历史；脚本失败只记日志不打断
+  （现有语义不变）｜ PC
+
+- **S8 ·（缓）审批等待状态机化、工具 schema builder** ｜ OpenClaw 把审批的
+  request/wait/超时/持久化归 gateway 单独拥有（`src/gateway/exec-approval-manager.ts`，
+  timeout 分类），工具只在 `before_tool_call` 问一次 ｜ 我们是 `fut.get(300s):1947` /
+  ask 900s:2004 阻塞在裸 `Thread:586` 上 —— 有超时、有排队、有停止语义、有测试，
+  目前是稳的 ｜ 收益不够急；等 S3（拆 Server）动到那片时一起重新评估 ｜ — ｜ PC
+

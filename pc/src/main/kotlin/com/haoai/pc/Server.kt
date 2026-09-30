@@ -25,6 +25,19 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
+ * 前端 `/` 命令面板里的内置项：自定义技能不许占用这些名字
+ * （技能重名闸 `skillsOp` 与下发给界面的 `taken` 字段都用它）。
+ *
+ * 以前这份只存在于服务端，前端 `index.html` 的 `CMDS` 表各写各的、**靠注释对齐**——
+ * 2026-09-30 核对当天就漂了一处：前端 12 条、这份 11 条，少 `compact`。
+ * 漂移的后果不是报错而是静默：技能可以叫 `compact`（重名闸拦不住），
+ * 而前端内置在前，那个技能永远点不到。从这版起两份由 `UiContractTest` 钉住。
+ */
+internal val BUILTIN_CMDS = setOf(
+    "plan", "ask", "auto", "new", "model", "stop", "clear", "compact", "export", "theme", "status", "help"
+)
+
+/**
  * 本地 HTTP 服务 + SSE。
  *
  * 只绑 127.0.0.1：PC 端"权威源"的角色不等于把 agent 开放到局域网。
@@ -77,11 +90,6 @@ class WebServer(settings: PcSettings, port: Int,
     }
 
     private val sessions = ConcurrentHashMap<String, Managed>()
-
-    /** 前端 `/` 命令面板里的内置项：自定义技能不许占用这些名字（两份实现靠这份对齐）。 */
-    private val BUILTIN_CMDS = setOf(
-        "plan", "ask", "auto", "new", "model", "stop", "clear", "export", "theme", "status", "help"
-    )
 
     /** 最近使用顺序（新的在前），用来在没指定 sid 时挑"当前会话"。 */
     private val order = Collections.synchronizedList(mutableListOf<String>())
@@ -1795,7 +1803,12 @@ class WebServer(settings: PcSettings, port: Int,
             is Ev.Notice -> publish("notice", quote(ev.s), sid)
             is Ev.Err -> publish("err", quote(ev.s), sid)
             is Ev.Title -> publish("title", """{"title":${quote(ev.s)}}""", sid)
-            else -> Unit
+            // 这两类**不**从这条通用通道走：webGate 需要时直接 publish("approval"/"ask")
+            // （:1944/:2002），连 pending 的 future 一起给。显式列出来是为了让这个 when
+            // 保持穷尽 —— 以前这里是 else -> Unit，新加的 Ev 变体会被静默吞掉、编译器不吭声，
+            // 表现就是"SSE 发了但前端永远收不到"（#111 的同族病）。见 UiContractTest。
+            is Ev.ApprovalRequest -> Unit
+            is Ev.AskRequest -> Unit
         }
     }
 

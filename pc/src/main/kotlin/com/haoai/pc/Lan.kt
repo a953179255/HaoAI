@@ -185,8 +185,6 @@ object LanStore {
         return true
     }
 
-    private fun quote(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-
     const val DEFAULT_PORT = 8720
     const val CODE_TTL_MS = 120_000L
     const val CODE_MAX_WRONG = 8
