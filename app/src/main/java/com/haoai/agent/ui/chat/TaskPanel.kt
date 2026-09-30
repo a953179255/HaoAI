@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -130,10 +131,43 @@ fun TaskFloat(
         contentAlignment = Alignment.TopEnd
     ) {
         val fullPx = with(density) { maxWidth.toPx() }
-        // 收起态胶囊宽度：固定两档（进行中 200dp / 空闲 150dp）。原先由内容实测
-        // （任务名限宽 130dp）驱动：长任务名会把胶囊撑到接近全宽、且任务名每换一步
-        // 形变起点就跳一次。固定后同一轮内恒定，只在"开始/结束任务"两个事件点切档。
-        val pillPx = with(density) { (if (hasPending) 200.dp else 150.dp).toPx() }
+        // 收起态胶囊宽度：**内容实测**（2026-10-01 用户反馈：固定两档在"无进行中任务"
+        // 档位右侧留一大块空白）。隐形测量容器量头部内容自然宽（点 + 任务名(≤130dp
+        // 截断) + N/M + 左右内距），宽度随内容变化；锚点 TopEnd 右缘钉住，左缘伸缩。
+        // 任务名每换一步左缘会跳一次——固定两档当年就是为治这个，用户裁决贴合优先。
+        // 未量到首帧（pillContentPx=0）退回旧两档兜底。
+        var pillContentPx by remember { mutableFloatStateOf(0f) }
+        Row(
+            Modifier
+                .alpha(0f)
+                .wrapContentSize(Alignment.TopStart, unbounded = true)
+                .onSizeChanged { if (it.width > 0) pillContentPx = it.width.toFloat() }
+                .padding(start = 12.dp, end = 38.dp)
+        ) {
+            if (hasPending) {
+                Box(Modifier.size(7.dp))
+                Spacer(Modifier.width(7.dp))
+            }
+            Text(
+                activeTask?.text ?: "任务",
+                style = MaterialTheme.typography.labelMedium,
+                fontSize = 11.5.sp,
+                maxLines = 1,
+                modifier = Modifier.widthIn(max = 130.dp)
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "$doneCount/$total",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        val measuredPillPx = if (pillContentPx > 0f) {
+            with(density) { (pillContentPx + 2f).toDp() }   // +2px 抗锯齿余量
+        } else (if (hasPending) 200.dp else 150.dp)
+        val pillPx = with(density) {
+            measuredPillPx.toPx().coerceAtMost(fullPx - with(density) { 16.dp.toPx() })
+        }
         val wPx = pillPx + (fullPx - pillPx) * morph
         val corner = androidx.compose.ui.unit.lerp(17.dp, 15.dp, morph)
         // 方案 E：高度 = 头部 34dp + 清单高 × morphEase(morph)，单一进度源驱动，
@@ -144,8 +178,8 @@ fun TaskFloat(
         val hPx = headerPx + targetListPx * revealEase
 
         // 隐形测量区（alpha=0 不渲染但保持自然布局）：玻璃外量**清单固有高**。
-        // （胶囊宽度已改为固定两档，不再需要宽度实测——2026-09-20 选型 B；
-        //  玻璃内测量五坑的注意事项仍适用于下面这个高度测量容器）
+        // （胶囊宽度 2026-10-01 起也改内容实测，量法同款；玻璃内测量五坑的注意事项
+        //  仍适用于下面这个高度测量容器）
         // 清单固有高测量：独立容器 + wrapContentSize 钉在右上（不占布局空间），
         // 宽度给足（BoxWithConstraints 全宽）保证行内文本不折行、行高真实
         Column(

@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.ColumnScope
@@ -111,10 +112,19 @@ val LocalGlassRefract = compositionLocalOf { true }
  * 深色 alpha 需要放大补偿黑雾的低对比度。
  */
 @Composable
-internal fun glassSurfaceColor(alpha: Float): Color {
+internal fun glassSurfaceColor(alpha: Float, floating: Boolean = false): Color {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    return if (dark) Color(0xFF0A0D12).copy(alpha = (alpha * 1.8f).coerceAtMost(0.94f))
-    else Color.White.copy(alpha = alpha)
+    // 深色浮层必须**全不透明**（2026-10-01 任务胶囊实测）：深色下浮层背后采样的
+    // 内容亮暗不定，半透明深表面会把亮采样透出来发白发灰（0.94 都压不住，
+    // 实测胶囊渲染 139 亮度）；浮层的层级感由库三件套（高光/外阴影/内阴影）表达，
+    // 不依赖表面透光。非浮层玻璃采样内容以暗色聊天区为主，维持半透明。
+    return if (dark) {
+        val a = if (floating) 1f else (alpha * 1.8f).coerceAtMost(0.94f)
+        // 深色浮层用暗板岩而非近黑：Flyme 深色模式增强会把**不透明近黑表面**提亮成
+        // 灰（实测 0xFF0A0D12@1f 渲染 144 亮度，红/绿等高饱和色不受影响），
+        // 跳出近黑区间反而拿到真实渲染色。板岩色也是深色卡片的标准用色。
+        Color(0xFF262D36).copy(alpha = a)
+    } else Color.White.copy(alpha = alpha)
 }
 
 /**
@@ -236,7 +246,12 @@ fun GlassPanel(
     content: @Composable () -> Unit
 ) {
     val r = refract ?: LocalGlassRefract.current
-    val surface = glassSurfaceColor(surfaceAlpha)
+    val surface = glassSurfaceColor(surfaceAlpha, floating)
+    // 表面色状态观察（⚠️ 2026-10-01 深浅翻转滞留修复）：玻璃层是画进 graphicsLayer
+    // 的缓存渲染，主题翻转时仅靠重组换绘制 lambda 不总能触发层重绘——实测深→浅→深
+    // 翻转后任务胶囊滞留浅色表面（点一下交互才恢复）。绘制期读取这个 State：
+    // 值变化经库的 ObserverModifierNode 强制层重绘（与 redrawKey 同机制）。
+    val surfaceState = rememberUpdatedState(surface)
     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val border2 = glassBorderColor(0.45f)
 
@@ -315,7 +330,12 @@ fun GlassPanel(
                     // 坐标重算。直接传值无效（读参数不注册快照订阅）——必须传
                     // 「读取 State 的 lambda」
                     redrawKey?.invoke()
-                    vibrancy()
+                    surfaceState.value
+                    // ⚠️ 深色下跳过 vibrancy（2026-10-01 任务胶囊实测）：效果链作用在
+                    // 整层输出上（含 onDrawSurface 的表面色），vibrancy 的亮度提拉会把
+                    // 接近黑的表面抬成灰（0.94 近黑实测渲染 139-144 亮度），高饱和色
+                    // （红/绿实验）不受影响。深色玻璃的质感由 blur+lens 承担。
+                    if (!darkTheme) vibrancy()
                     blur(blurRadius.toPx())
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。

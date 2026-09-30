@@ -947,18 +947,24 @@ fun ChatScreen(
                 // 任务浮层（方案 A · 形状连续形变）：胶囊⇄面板是同一颗玻璃，
                 // 宽/圆角/图标旋转/内容交叉由 morph 单值驱动（420ms easeOutQuint），
                 // 高度由清单 AnimatedVisibility + animateContentSize 生长。
-                val taskFloatVisible = todoItems.isNotEmpty() || vm.taskPanel.forcedVisible
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = taskFloatVisible,
-                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
-                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
-                ) {
-                    TaskFloat(
-                        items = todoItems,
-                        expanded = vm.taskPanel.expanded,
-                        onToggle = { vm.taskPanel.toggleExpanded() },
-                        backdrop = backdrop
-                    )
+                // key(背景色)：主题翻转时玻璃缓存层会滞留旧表面（实测深→浅→深后胶囊
+                // 滞留浅色玻璃、内容文字却已变深）——以背景色为 key 强制子树整体重建，
+                // 玻璃层随主题重生。主题切换是低频事件，重建成本可忽略。
+                val themeBgKey = MaterialTheme.colorScheme.background
+                androidx.compose.runtime.key(themeBgKey) {
+                    val taskFloatVisible = todoItems.isNotEmpty() || vm.taskPanel.forcedVisible
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = taskFloatVisible,
+                        enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                        exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+                    ) {
+                        TaskFloat(
+                            items = todoItems,
+                            expanded = vm.taskPanel.expanded,
+                            onToggle = { vm.taskPanel.toggleExpanded() },
+                            backdrop = backdrop
+                        )
+                    }
                 }
                 // 上下文用量详情（Z3 最上位，2026-09-10 三次修正）：保留「顶栏下沿从上
                 // 往下滑出」动画与位置。关键：遮罩 Box 不得在 Column 流里占无限高度
