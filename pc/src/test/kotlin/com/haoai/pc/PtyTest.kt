@@ -158,6 +158,68 @@ class PtyTest {
         }
     }
 
+    /**
+     * TTY 的核心判据：`test -t 0` 必须为真（管道会话恒 1）。
+     * 为什么不能直接 echo "isatty-yes"：TTY 会把**输入也回显**出来，命令原文里就带着那些字，
+     * 断言分不清是"跑出来的"还是"被回显的"——`rc=$?` 展开后只出现在输出里，才分得开。
+     */
+    @Test
+    fun `tty session is a real tty and keeps state between sends`() {
+        assumeTrue("非 Windows 跳过", Env.isWindows)
+        assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
+        val c = ctx()
+        val opened = ShellOpenTool().run(args("""{"label":"tty","shell":"bash","tty":"true"}"""), c)
+        assertFalse(opened.content, opened.error)
+        assertTrue("结果行里要标明 tty：" + opened.content, opened.content.contains("tty=true"))
+        val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
+        try {
+            val s0 = ShellSendTool().run(args("""{"id":"$id","text":"x=hello"}"""), c)
+            assertFalse(s0.content, s0.error)
+            val D = '$'
+            val cmd = "{\"id\":\"$id\",\"text\":\"test -t 0; echo rc=${D}?; echo got-${D}x\"}"
+            val s1 = ShellSendTool().run(args(cmd), c)
+            assertFalse(s1.content, s1.error)
+            val r = ShellReadTool().run(args("""{"id":"$id","wait_ms":5000}"""), c)
+            assertFalse(r.content, r.error)
+            assertTrue("stdin 不是 TTY（没拿到 rc=0）：[${r.content}]", r.content.contains("rc=0"))
+            assertFalse("同一份输出里不许出现 rc=1（命令原文只有 rc=${D}?，出现 rc=1 就是 test 判了假）：[${r.content}]", r.content.contains("rc=1"))
+            assertTrue("状态没跨 send 保住：[${r.content}]", r.content.contains("got-hello"))
+        } finally {
+            ProcRegistry.close(id)
+        }
+    }
+
+    /**
+     * Ctrl+C：TTY 里0x03 是信号（打断 sleep）；管道里它只是缓冲里的一个字节，
+     * `echo` 要等 sleep 自然结束（30 秒）才轮得到 —— 所以 6 秒内拿到 after-interrupt
+     * 就同时证明了"中断生效"与"不是管道"。
+     */
+    @Test
+    fun `ctrl-c interrupts a long command in tty mode`() {
+        assumeTrue("非 Windows 跳过", Env.isWindows)
+        assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
+        val c = ctx()
+        val opened = ShellOpenTool().run(args("""{"label":"tty2","shell":"bash","tty":"true"}"""), c)
+        assertFalse(opened.content, opened.error)
+        val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
+        try {
+            val s0 = ShellSendTool().run(args("""{"id":"$id","text":"sleep 30"}"""), c)
+            assertFalse(s0.content, s0.error)
+            Thread.sleep(900)
+            // enter=false：把 0x03 当原始字节送进终端（tty 行编辑把它变成 SIGINT）
+            val s1 = ShellSendTool().run(args("""{"id":"$id","text":"\u0003","enter":false}"""), c)
+            assertFalse(s1.content, s1.error)
+            Thread.sleep(300)
+            val s2 = ShellSendTool().run(args("""{"id":"$id","text":"echo after-interrupt"}"""), c)
+            assertFalse(s2.content, s2.error)
+            val r = ShellReadTool().run(args("""{"id":"$id","wait_ms":6000}"""), c)
+            assertFalse(r.content, r.error)
+            assertTrue("中断没生效（6 秒内没等到 after-interrupt，sleep 30 还在占着）：[${r.content}]", r.content.contains("after-interrupt"))
+        } finally {
+            ProcRegistry.close(id)
+        }
+    }
+
     private fun waitUntil(poll: () -> Pair<Long, List<String>>): Pair<Long, List<String>> {
         var last = 0L to emptyList<String>()
         repeat(40) {

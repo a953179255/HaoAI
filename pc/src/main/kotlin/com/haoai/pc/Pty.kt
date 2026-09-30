@@ -22,9 +22,9 @@ import java.util.concurrent.atomic.AtomicLong
  * 手机端不需要（它交互的对象是 App 界面），PC 端是刚需 —— codex 的 `unified_exec` +
  * `write_stdin`、dsh 的 `terminal_open/send/read/signal/close/list` 都是为这个存在的。
  *
- * 实现选择：**管道而不是伪终端**。真 PTY 在 Windows 上要引 ConPTY/JNI，而绝大多数交互式
- * CLI 用管道 stdin 就能喂（差别只在没有彩色 TTY 与行编辑）。先把"进程活着、能喂、能捞"
- * 做扎实，ConPTY 等真遇到需要 TTY 的程序再上。
+ * 实现选择：**默认管道**，`shell_open(tty=true)` 走 ConPTY 真伪终端（v0.80.0，见 ConPty.kt）。
+ * 管道够用的场景（只捞输出、不看颜色）保持默认——更省资源；要 isatty/回显/Ctrl+C/全屏 TTY 时
+ * 显式开 tty（配方与三层卡点结论都在 ConPty.kt 的 KDoc 与 ROADMAP 第 2 条）。
  *
  * 生命周期：记 `lastUsed`，超过 [ProcRegistry.IDLE_TTL_MS] 没被碰过就回收 ——
  * 无人值守跑一晚上不能攒下几百个僵尸 shell。
@@ -38,8 +38,12 @@ object ProcRegistry {
         val id: String,
         val label: String,
         val display: String,
-        val proc: Process,
-        val writer: Writer,
+        /** 管道模式（默认）：标准 java 进程；TTY 模式为 null。 */
+        val proc: Process?,
+        /** 管道模式的 stdin；TTY 模式为 null（输入走 [tty].write）。 */
+        val writer: Writer?,
+        /** 真伪终端会话（`shell_open` 传 tty=true 且 ConPTY 建得起来时）；与 proc/writer 二选一。 */
+        val tty: ConPty?,
         val cwd: File
     ) {
         @Volatile
@@ -62,10 +66,36 @@ object ProcRegistry {
         @Volatile
         var toolCur = 0L
 
+        /** TTY 输出可能停在半行上（提示符没有换行），先攒着，安静一拍再当一行推出去。 */
+        private val pending = StringBuilder()
+
         fun push(line: String): Unit = synchronized(buf) {
             n += 1
             buf.addLast(n to line)
             while (buf.size > TAIL) buf.pollFirst()
+        }
+
+        /**
+         * TTY 泵喂进来的原始块：按 `\n` 切行进缓冲；`\r` 剥掉（进度条的回车覆盖对"读输出"
+         * 没有意义，留着会把行切碎）。没凑满一行的留在 [pending]。
+         */
+        fun feed(chunk: String) = synchronized(pending) {
+            pending.append(chunk.replace("\r\n", "\n").replace("\r", "\n"))
+            var idx: Int
+            while (true) {
+                idx = pending.indexOf("\n")
+                if (idx < 0) break
+                push(pending.substring(0, idx))
+                pending.delete(0, idx + 1)
+            }
+        }
+
+        /** 安静一拍后把半行（提示符）也推出去——`shell_read` 等的就是这种"程序在等输入"的信号。 */
+        fun flushPending(): Unit = synchronized(pending) {
+            if (pending.isNotEmpty()) {
+                push(pending.toString())
+                pending.setLength(0)
+            }
         }
 
         /** 序号大于 [after] 的行，最多 [max] 条；回 (新游标, 行)。 */
@@ -76,7 +106,10 @@ object ProcRegistry {
 
         fun touch() { lastUsed = System.currentTimeMillis() }
 
-        fun alive(): Boolean = !closed && proc.isAlive
+        fun alive(): Boolean = !closed && if (tty != null) tty.alive() else proc?.isAlive == true
+
+        /** 退出码；还活着（或还没收干净）返回 null。 */
+        fun exitCode(): Int? = tty?.exitCode() ?: runCatching { proc?.exitValue() }.getOrNull()
 
         companion object {
             /** 每个进程最多留多少行：面板要能往回滚一点，又不能一晚上吃掉几百 MB。 */
@@ -91,45 +124,89 @@ object ProcRegistry {
 
     fun get(id: String): Live? = live.firstOrNull { it.id == id || it.label == id }
 
-    /** 起一个常驻 shell。[initial] 非空就立刻喂进去（等价于用户打开终端后敲的第一行）。 */
-    fun open(label: String, shell: String, cwd: File, initial: String): Result<Live> = runCatching {
+    /** 起一个常驻 shell。[initial] 非空就立刻喂进去（等价于用户打开终端后敲的第一行）。[tty]=true 走 ConPTY。 */
+    fun open(label: String, shell: String, cwd: File, initial: String, tty: Boolean = false): Result<Live> = runCatching {
         reapIdle()
         if (live.size >= MAX_LIVE) error("已有 ${live.size} 个常驻进程，先 shell_close 一个")
         val launcher = ShellLauncher.persistentForName(shell)
             ?: error("这台机器上找不到 $shell（可用：bash / pwsh / cmd）")
-        val p = ProcessBuilder(listOf(launcher.first) + launcher.second)
-            .directory(if (cwd.isDirectory) cwd else File(System.getProperty("user.dir")))
-            .redirectErrorStream(true)
-            .start()
         val id = "p" + seq.incrementAndGet()
-        val rec = Live(
-            id = id,
-            label = label.ifBlank { id },
-            display = "$shell @ ${cwd.name}",
-            proc = p,
-            writer = OutputStreamWriter(p.outputStream, Charsets.UTF_8),
-            cwd = cwd
-        )
-        val t = Thread {
-            runCatching {
-                p.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line -> rec.push(line) }
+        if (tty) {
+            val sess = ConPty.spawn(listOf(launcher.first) + launcher.second, cwd)
+                ?: error("这台没有 TTY：ConPTY 建不起来（仅 Windows 1809+，见 ConPty.kt 的配方）——去掉 tty 用管道模式即可")
+            val rec = Live(id, label.ifBlank { id }, "$shell @ ${cwd.name} (tty)", proc = null, writer = null, tty = sess, cwd)
+            val t = Thread {
+                var lastData = System.currentTimeMillis()
+                try {
+                    while (!rec.closed) {
+                        val chunk = runCatching { sess.readAvailable() }.getOrDefault("")
+                        if (chunk.isNotEmpty()) {
+                            rec.feed(chunk)
+                            lastData = System.currentTimeMillis()
+                        } else {
+                            if (!sess.alive()) {
+                                runCatching { sess.readAvailable() }.getOrDefault("").takeIf { it.isNotEmpty() }
+                                    ?.let { rec.feed(it) }
+                                break
+                            }
+                            // 半行（提示符没有换行）安静一拍就当一行推出去——shell_read 等的就是它
+                            if (System.currentTimeMillis() - lastData > 250) rec.flushPending()
+                            Thread.sleep(60)
+                        }
+                    }
+                } finally {
+                    rec.flushPending()
+                    rec.closed = true
+                }
             }
-            rec.closed = true
+            t.isDaemon = true
+            t.name = "haoai-tty-$id"
+            t.start()
+            live += rec
+            if (initial.isNotBlank()) send(id, initial, true)
+            rec
+        } else {
+            val p = ProcessBuilder(listOf(launcher.first) + launcher.second)
+                .directory(if (cwd.isDirectory) cwd else File(System.getProperty("user.dir")))
+                .redirectErrorStream(true)
+                .start()
+            val rec = Live(
+                id = id,
+                label = label.ifBlank { id },
+                display = "$shell @ ${cwd.name}",
+                proc = p,
+                writer = OutputStreamWriter(p.outputStream, Charsets.UTF_8),
+                tty = null,
+                cwd = cwd
+            )
+            val t = Thread {
+                runCatching {
+                    p.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line -> rec.push(line) }
+                }
+                rec.closed = true
+            }
+            t.isDaemon = true
+            t.name = "haoai-proc-$id"
+            t.start()
+            live += rec
+            if (initial.isNotBlank()) send(id, initial, true)
+            rec
         }
-        t.isDaemon = true
-        t.name = "haoai-proc-$id"
-        t.start()
-        live += rec
-        if (initial.isNotBlank()) send(id, initial, true)
-        rec
     }
 
-    /** 往 stdin 写。[enter] 决定要不要补换行 —— 多数 CLI 在等一整行。 */
+    /** 往 stdin 写。[enter] 决定要不要补换行 —— 多数 CLI 在等一整行。TTY 会话补 `\r\n`（行编辑要求）。 */
     fun send(id: String, text: String, enter: Boolean): Result<Unit> = runCatching {
         val l = get(id) ?: error("没有这个进程：$id（先用 shell_list 看现有的）")
         if (!l.alive()) error("进程 $id 已退出")
-        l.writer.write(if (enter) text + "\n" else text)
-        l.writer.flush()
+        if (l.tty != null) {
+            // TTY 下 enter=false 可以送原始控制字节：Ctrl+C = "\u0003"（管道模式只是塞进缓冲，没人当信号）
+            val ok = l.tty.write(if (enter) text + "\r\n" else text)
+            if (!ok) error("终端通道已断（进程 $id 可能已退出）")
+        } else {
+            val w = l.writer ?: error("进程 $id 没有可用的输入通道")
+            w.write(if (enter) text + "\n" else text)
+            w.flush()
+        }
         l.touch()
     }
 
@@ -156,7 +233,7 @@ object ProcRegistry {
         l.toolCur = cur
         l.touch()
         val tail = if (!l.alive()) {
-            "\n（进程已退出，exit=${runCatching { l.proc.exitValue() }.getOrDefault(-1)}）"
+            "\n（进程已退出，exit=${l.exitCode() ?: -1}）"
         } else ""
         got.toString().trimEnd() + tail
     }
@@ -165,8 +242,10 @@ object ProcRegistry {
         val l = get(id) ?: return@runCatching "本来就没有这个进程：$id"
         live.remove(l)
         l.closed = true
-        runCatching { l.writer.close() }
-        if (l.proc.isAlive) {
+        runCatching { l.writer?.close() }
+        // TTY：Terminate → ClosePseudoConsole → 关句柄（ConPty.close 内部顺序，防客户端卡住挂死）
+        runCatching { l.tty?.close() }
+        if (l.proc != null && l.proc.isAlive) {
             l.proc.destroy()
             if (!l.proc.waitFor(3, TimeUnit.SECONDS)) l.proc.destroyForcibly()
         }
@@ -249,7 +328,10 @@ private fun required(vararg names: String) = buildJsonArray {
 class ShellOpenTool : Tool(
     "shell_open",
     "起一个**常驻**的交互式进程（bash/pwsh/cmd），之后用 shell_send 喂输入、shell_read 捞输出。" +
-        "适合 ssh、mysql>、python -i、需要回答确认提示的构建命令。command 非空则启动后立刻执行。",
+        "适合 ssh、mysql>、python -i、需要回答确认提示的构建命令。command 非空则启动后立刻执行。" +
+        "tty=true 走 Windows ConPTY 真伪终端（isatty 为真：有颜色/进度条/行编辑，Ctrl+C 真的是中断——" +
+        "shell_send 传 text=\"\\u0003\" 且 enter=false）；建不了会明确报错，不会静默降级。" +
+        "只要读输出、不需要 TTY 时保持默认（管道模式更省资源）。",
     buildJsonObject {
         put("type", "object")
         put("properties", buildJsonObject {
@@ -257,6 +339,7 @@ class ShellOpenTool : Tool(
             put("shell", buildJsonObject { put("type", "string") })
             put("command", buildJsonObject { put("type", "string") })
             put("cwd", buildJsonObject { put("type", "string") })
+            put("tty", buildJsonObject { put("type", "boolean") })
         })
     },
     kind = "exec"
@@ -266,14 +349,15 @@ class ShellOpenTool : Tool(
         val label = req(args, "label") ?: ""
         val command = req(args, "command") ?: ""
         val cwd = req(args, "cwd")?.let { ctx.resolve(it) } ?: ctx.workspace
-        val why = ctx.guard("shell", command.ifBlank { "shell $shell" }, "起常驻进程 $label（$shell）", "$shell 交互会话")
+        val tty = args["tty"]?.jsonPrimitive?.contentOrNull == "true"
+        val why = ctx.guard("shell", command.ifBlank { "shell $shell" }, "起常驻进程 $label（$shell${if (tty) " tty" else ""}）", "$shell 交互会话")
         if (why != null) return fail(why)
-        return ProcRegistry.open(label, shell, cwd, command).fold(
+        return ProcRegistry.open(label, shell, cwd, command, tty).fold(
             onSuccess = { l ->
                 ToolResult(
                     // id 单独占一行：调用方（和测试）用 "已启动 (\S+)" 取 id，
                     // 后面紧跟中文括号会让 \S+ 一路吞进 label。
-                    "已启动 ${l.id}\nlabel=${l.label} shell=$shell cwd=${ctx.rel(l.cwd)}\n" +
+                    "已启动 ${l.id}\nlabel=${l.label} shell=$shell${if (tty) " tty=true" else ""} cwd=${ctx.rel(l.cwd)}\n" +
                         "shell_send(id=\"${l.id}\", text=…) 喂输入，shell_read(id=\"${l.id}\") 捞输出，" +
                         "用完 shell_close(id=\"${l.id}\")。空闲 20 分钟自动回收。"
                 )
@@ -284,7 +368,9 @@ class ShellOpenTool : Tool(
 }
 
 class ShellSendTool : Tool(
-    "shell_send", "往常驻进程的 stdin 写一行输入（enter=false 可发不带换行的原始字符）。",
+    "shell_send",
+    "往常驻进程的 stdin 写一行输入（enter=false 可发不带换行的原始字符；tty 会话里传 text=\"\\u0003\" 且 " +
+        "enter=false = 发 Ctrl+C 中断当前命令，管道会话发了也没人当信号）。",
     buildJsonObject {
         put("type", "object")
         put("properties", buildJsonObject {

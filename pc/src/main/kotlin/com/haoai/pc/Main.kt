@@ -76,7 +76,7 @@ private fun help() {
 }
 
 /** 版本只有一个真源：界面顶栏那行以前自己写死着 v0.2.0，仓库其实已经走到 0.23。 */
-const val PC_VERSION = "0.79.0-pc"
+const val PC_VERSION = "0.80.0-pc"
 
 private fun doctor(s: PcSettings) {
     line("HaoAI PC $PC_VERSION")
@@ -148,6 +148,8 @@ private fun set(s: PcSettings, rest: List<String>) {
             "contextChars" -> n.copy(contextChars = int(k, v, n.contextChars))
             "reasoningEffort", "effort" -> n.copy(reasoningEffort = v.trim())
             "searchProvider" -> n.copy(searchProvider = v.trim().lowercase())
+            // 语义检索端点（#6）：`haoai set embedUrl=http://127.0.0.1:8199/embeddings`，空串=关闭
+            "embedUrl" -> n.copy(embedUrl = v.trim())
             // 降级链：`haoai set fallback=glm-4-flash,small@http://127.0.0.1:8080/v1`
             "fallback", "fallbackChain" -> n.copy(fallback = v.trim())
             "storedCap" -> n.copy(storedCap = int(k, v, n.storedCap))

@@ -2334,7 +2334,7 @@ class WebServer(settings: PcSettings, port: Int,
             """{"id":${quote(l.id)},"label":${quote(l.label)},"display":${quote(l.display)},""" +
                 """"cwd":${quote(Env.abs(l.cwd))},"alive":${l.alive()},""" +
                 """"idle":${System.currentTimeMillis() - l.lastUsed},""" +
-                """"exit":${if (l.alive()) -1 else runCatching { l.proc.exitValue() }.getOrDefault(-1)}}"""
+                """"exit":${if (l.alive()) -1 else (l.exitCode() ?: -1)}}"""
         } + "]}"
 
     private fun shellsList(ex: HttpExchange) {
