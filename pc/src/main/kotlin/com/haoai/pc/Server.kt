@@ -164,6 +164,7 @@ class WebServer(settings: PcSettings, port: Int,
             when (path) {
                 "/", "/index.html" -> sendFile(ex, "ui/index.html", "text/html; charset=utf-8")
                 "/md.js" -> sendFile(ex, "ui/md.js", "text/javascript; charset=utf-8")
+    "/shared.js" -> sendFile(ex, "ui/shared.js", "text/javascript; charset=utf-8")
                 "/api/events" -> sse(ex)
                 "/api/state" -> state(ex)
                 "/api/task" -> task(ex)

@@ -122,14 +122,14 @@ footer{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;align-
   <button class="ghost" id="btnUnpair" hidden>解除配对</button>
 </footer>
 
+<script src="/shared.js"></script>
 <script>
 var SKEY='haoai-lan-device';
 var token=localStorage.getItem(SKEY)||'';
 var devName=localStorage.getItem(SKEY+'-dev')||'';
 var view='sess',openSid='',busy=false;
 function $(id){return document.getElementById(id)}
-function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
-  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+/* esc 在 /shared.js（与桌面端同一份实现，S6 起不再各抄各的）。 */
 function api(path,body){
   var opt={headers:{'X-HaoAI-Token':token}};
   if(body){opt.method='POST';opt.headers['Content-Type']='application/json';

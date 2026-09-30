@@ -15,7 +15,7 @@
 
   {"type": {"sel": "#crName", "text": "周报草稿"}},
   {"type": {"sel": "#crPrompt", "text": "把这周改了什么写成一份周报草稿"}},
-  {"eval": "$('#crKind').value='daily';$('#crAt').value='18:30';syncCronKind()"},
+  {"eval": "$('#crKind').value='daily';$('#crAt').value='18:30';Cron.sync()"},
   {"eval": "(()=>({everyHidden:$('#crEvery').offsetParent===null,atShown:$('#crAt').offsetParent!==null}))()",
    "must": ["everyHidden", "atShown"], "note": "切成「每天几点」：隔多久那格让位、几点那格现身（两格都开着=人不知道该填哪个）"},
   {"click": "#crAdd"},

@@ -96,7 +96,7 @@
  },
  {"shot": "p04-search-compact"},
  {
-  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];window.__need=it.findIndex(x=>/手动压缩/.test(x.textContent));palMove(window.__need-palSel);const s=document.querySelector('#palList .pi.sel');return {naved:window.__need>=1,selIsAction:s.querySelector('em').textContent=='动作',selLabel:s.querySelector('b').textContent.replace(/\\s+/g,' ').slice(0,30)}})()",
+  "eval": "(()=>{const it=[...document.querySelectorAll('#palList .pi')];window.__need=it.findIndex(x=>/手动压缩/.test(x.textContent));Palette.move(window.__need-Palette.sel());const s=document.querySelector('#palList .pi.sel');return {naved:window.__need>=1,selIsAction:s.querySelector('em').textContent=='动作',selLabel:s.querySelector('b').textContent.replace(/\\s+/g,' ').slice(0,30)}})()",
   "must": ["naved", "selIsAction"],
   "note": "用键盘走到动作那一行（palMove 就是上下键调的那个函数）：这里刻意不选第一行，因为第一行是 /compact 命令，选它就测不到动作那条分派"
  },

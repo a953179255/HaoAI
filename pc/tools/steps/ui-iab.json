@@ -83,7 +83,7 @@
     "click": "#tabs button[data-t=tasks]"
   },
   {
-    "eval": "(()=>JSON.stringify({stopped:pvTimer===null,leftTab:document.querySelector('#tab-pv').classList.contains('on')===false}))()",
+    "eval": "(()=>JSON.stringify({stopped:Pv.timer()===null,leftTab:document.querySelector('#tab-pv').classList.contains('on')===false}))()",
     "must": [
       "stopped",
       "leftTab"

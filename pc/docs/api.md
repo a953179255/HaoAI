@@ -102,7 +102,7 @@ Git 面板：`/api/gitstatus`、`/api/gitdiff`、`/api/gitstage`、`/api/gitcomm
 
 手机联动的桌面侧：`/api/lan`、`/api/lan/toggle`、`/api/lan/code`、`/api/lan/unpair`、`/api/lan/allow`
 
-页面与静态资源：`/`、`/index.html`、`/md.js`
+页面与静态资源：`/`、`/index.html`、`/md.js`、`/shared.js`
 
 > **`/api/settings` 把整份设置对象原样回给前端**，所以密钥永远不进它 ——
 > API key 存在 `HAOAI_HOME/apikey`、搜索 key 存在 `HAOAI_HOME/searchkey`，

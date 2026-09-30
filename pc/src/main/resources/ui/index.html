@@ -983,6 +983,7 @@
 <div id="dropMask"><div class="dz">松开：作为附件加进这条会话<i>图片走视觉输入，文本文件直接贴进这句话</i></div></div>
 <div class="toast" id="toast"></div>
 <script src="/md.js"></script>
+<script src="/shared.js"></script>
 <script>
 const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box'), app=$('#app');
 let mode='ask', stopping=false, curId='', duoId='', lastId='';
@@ -1060,7 +1061,7 @@ function show(sid,keep){
   setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintOutputs(v);
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件
-  fpath='';if(document.querySelector('#tab-files').classList.contains('on'))loadFiles();
+  Files.reset();
   paintSend();paintPill();paintQueue(v);paintResume(v,v.runState);paintTools(v.toolList);
   if(!keep)scroll(true,v);
   markSessions();
@@ -1127,11 +1128,7 @@ stream.addEventListener('mouseup',e=>{
 });
 
 function el(html){const d=document.createElement('div');d.innerHTML=html;return d.firstElementChild}
-/* esc 必须能吃数字：(t||'').replace 遇到数字直接 TypeError，
-   而设置抽屉里只要有一处把数字塞进模板，整个弹窗就画不出来。 */
-/* 引号也要转：这些字符串大量被插进 value="…" / data-ws="…" 这类属性里，
-   只转 &<> 的话，一个带引号的模型名或目录名就能把自己关到属性外面去。 */
-function esc(t){return String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+/* esc 挪进了 /shared.js（与手机端同一份实现）—— 两份手抄迟早分叉，S6 起只留一份。 */
 /* 流里的图片：缩略图走 /api/img（服务端限定在这条会话的工作区里），点开是新标签页看原图。
    图读不出来时至少还剩文件名那一行 —— 不让界面出现"这里本来有张图"的空白。 */
 function thumbs(sid,paths){
@@ -1367,11 +1364,13 @@ function paintUsage(u,v){
   $('#usage2').textContent=u?`输入 ${(u.prompt||0).toLocaleString()} / 输出 ${(u.completion||0).toLocaleString()}`:'输入 0 / 输出 0';
   $('#usage3').textContent=u&&u.turns?`${u.turns} 轮 · ↑ ${(u.prompt||0).toLocaleString()} · ↓ ${(u.completion||0).toLocaleString()}`:'—';
 }
+/* ==== [S6 面板对象] Palette：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 命令面板（Ctrl+Shift+P）----
  * 一个浮层找得到所有入口：命令、会话、工作区文件、设置项、最近运行。
  * 刻意**不**在这里做危险操作的第二步 —— 面板只负责"跳到那件事"，
  * 真正的确认仍留在原处（清空历史、恢复备份这些还是要点两下）。
  */
+const Palette = (() => {
 let palOpen=false,palSel=0,palList=[],palTimer=null;
 const PALSET=[
   ['设置：模型与网关','模型'],['设置：API 密钥','API 密钥'],['设置：工作区','工作区'],
@@ -1410,7 +1409,7 @@ function palTabBtn(tab,sel){
 }
 /** 抽屉是 fetch 回来才渲染的，所以"跳到某一节"要等它出现（最多等 2 秒）。 */
 function palJumpCfg(needle){
-  openCfg();
+  Cfg.open();
   let tries=0;
   const tick=()=>{
     const nodes=[...document.querySelectorAll('#dialog .grp, #dialog label')];
@@ -1477,24 +1476,35 @@ function palExec(){
   const x=palList[palSel];palToggle(false);
   if(x&&x.run)x.run();
 }
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    document.addEventListener('mousedown',e=>{
+      if(!palOpen)return;
+      const p=document.querySelector('#pal');
+      if(p&&!p.contains(e.target))palToggle(false);
+    });
+    $('#palQ').addEventListener('input',()=>palRender($('#palQ').value));
+    $('#palQ').addEventListener('keydown',e=>{
+      if(e.key=='ArrowDown'){e.preventDefault();palMove(1)}
+      else if(e.key=='ArrowUp'){e.preventDefault();palMove(-1)}
+      else if(e.key=='Tab'){e.preventDefault();palMove(e.shiftKey?-1:1)}
+      else if(e.key=='Enter'){e.preventDefault();palExec()}
+      else if(e.key=='Escape'){e.preventDefault();palToggle(false)}
+    });
+    },
+    toggle: palToggle,
+    opened(){ return palOpen },
+    move: palMove,
+    sel(){ return palSel },
+  };
+})();
+Palette.init();
 function rerunGoal(g){
   document.querySelector('#tabs button[data-t=tasks]').click();
   $('#box').value=g;$('#box').dispatchEvent(new Event('input'));
   toast('已把那句话填回输入框，回车就跑');$('#box').focus();
 }
-document.addEventListener('mousedown',e=>{
-  if(!palOpen)return;
-  const p=document.querySelector('#pal');
-  if(p&&!p.contains(e.target))palToggle(false);
-});
-$('#palQ').addEventListener('input',()=>palRender($('#palQ').value));
-$('#palQ').addEventListener('keydown',e=>{
-  if(e.key=='ArrowDown'){e.preventDefault();palMove(1)}
-  else if(e.key=='ArrowUp'){e.preventDefault();palMove(-1)}
-  else if(e.key=='Tab'){e.preventDefault();palMove(e.shiftKey?-1:1)}
-  else if(e.key=='Enter'){e.preventDefault();palExec()}
-  else if(e.key=='Escape'){e.preventDefault();palToggle(false)}
-});
 let runsCache=[];
 function loadRuns(){
   return fetch('/api/runs').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
@@ -2005,20 +2015,22 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='usage'){loadUsage();loadRuns()}
-  if(b.dataset.t=='tools'){hydrate(curId);loadLan()}
-  if(b.dataset.t=='files'){loadFiles();loadCk()}
-  if(b.dataset.t=='git')loadGit();
-  if(b.dataset.t=='term')termStartPolling(); else stopTermPolling();
-  if(b.dataset.t=='pv')pvStart(); else pvStop();
-  if(b.dataset.t=='mem'){loadMemory();loadMems($('#memQ').value)}
-  if(b.dataset.t=='cron'){loadCron();syncCronKind();loadDigest();watchDigest();loadWorkflows()}
-  if(b.dataset.t=='role'){loadPresets();loadHooks()}
+  if(b.dataset.t=='tools'){hydrate(curId);Lan.render()}
+  if(b.dataset.t=='files'){Files.render();Ck.render()}
+  if(b.dataset.t=='git')Git.render();
+  if(b.dataset.t=='term')Term.render(); else Term.dispose();
+  if(b.dataset.t=='pv')Pv.render(); else Pv.dispose();
+  if(b.dataset.t=='mem'){Mem.render()}
+  if(b.dataset.t=='cron'){Cron.render()}
+  if(b.dataset.t=='role'){Presets.render();Hooks.render()}
 });
 
+/* ==== [S6 面板对象] Term：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 终端页签：人与 agent 共用同一份常驻进程 ----
  * 服务端按行给序号，前端自己记"我看到哪了"，所以这里刷新/切标签都不会
  * 把模型那一路该读的输出吃掉（两边各一个游标）。
  */
+const Term = (() => {
 let termId='',termCur=0,termTimer=null,termShells=[];
 function loadShells(){
   return fetch('/api/shells').then(r=>r.json()).then(d=>{
@@ -2066,12 +2078,6 @@ function termAct(url,body,btn){
   }).catch(e=>{st.textContent='× 请求没成（'+e+'）'})
     .finally(()=>{if(btn)btn.disabled=false});
 }
-$('#tNew').onclick=e=>termAct('/api/shell/open',
-  {shell:$('#tShell').value,label:$('#tLabel').value.trim()},e.target);
-$('#tClose').onclick=e=>{if(!termId){toast('还没选终端','err');return}
-  termAct('/api/shell/close',{id:termId},e.target).then(()=>{termId='';termCur=0})};
-$('#tSend').onclick=()=>termSendKey(false);
-$('#tIn').addEventListener('keydown',e=>{if(e.key=='Enter'){e.preventDefault();termSendKey(e.shiftKey)}});
 function termSendKey(noEnter){
   const t=$('#tIn').value;
   if(!termId){toast('先开一个终端','err');return}
@@ -2086,12 +2092,29 @@ function termStartPolling(){
   termTimer=setInterval(()=>{if(termId)termPoll()},900);
 }
 function stopTermPolling(){if(termTimer){clearInterval(termTimer);termTimer=null}}
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#tNew').onclick=e=>termAct('/api/shell/open',
+      {shell:$('#tShell').value,label:$('#tLabel').value.trim()},e.target);
+    $('#tClose').onclick=e=>{if(!termId){toast('还没选终端','err');return}
+      termAct('/api/shell/close',{id:termId},e.target).then(()=>{termId='';termCur=0})};
+    $('#tSend').onclick=()=>termSendKey(false);
+    $('#tIn').addEventListener('keydown',e=>{if(e.key=='Enter'){e.preventDefault();termSendKey(e.shiftKey)}});
+    },
+    render: termStartPolling,
+    dispose: stopTermPolling,
+  };
+})();
+Term.init();
 
+/* ==== [S6 面板对象] Ck：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 检查点：把"这次任务做的改动"整轮撤掉 ----
  * 单文件回滚早就有了（工具卡上那颗），但跑歪的往往不止一个文件，还可能新建了三个。
  * 这颗钮要的是"回到我按发送之前"。它会覆盖与删除工作区里的文件，所以**必须两步确认**：
  * 第一下只把按钮变成"再点一次确认"，第二下才动手。
  */
+const Ck = (() => {
 let ckCache=[];
 function loadCk(){
   return fetch('/api/checkpoints?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(d=>{
@@ -2116,14 +2139,22 @@ function rewind(run){
     body:JSON.stringify({sid:curId,run:run})}).then(r=>r.json()).then(o=>{
     if(o.error){toast(o.error,'err');return}
     toast((o.ok?'':'（有没处理完的）')+ (o.note||''),o.ok?'':'err');
-    loadCk();loadFiles();
+    loadCk();Files.render();
   });
 }
+  return {
+    init(){ /* 没有静态接线：列表行的按钮随 loadCk 每次重画现挂 */ },
+    render: loadCk,
+  };
+})();
+Ck.init();
 
+/* ==== [S6 面板对象] Lan：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 手机联动（局域网端点）----
  * 界面只负责"开/关 + 发码 + 看有哪些设备"，真正的对外面在 LanServer（另一个端口）。
  * 有配对码在计时的时候才 1 秒刷一次，平时不轮询 —— 后台一直打接口没意义。
  */
+const Lan = (() => {
 let lanTimer=null;
 function lanPost(path,body){return fetch(path,{method:'POST',
   headers:{'Content-Type':'application/json'},
@@ -2153,24 +2184,34 @@ function loadLan(){
     if(d.code)lanTimer=setInterval(loadLan,1000);
   }).catch(()=>{});
 }
-$('#lanSend').onchange=()=>{
-  const on=$('#lanSend').checked;
-  lanPost('/api/lan/allow',{on:on?'1':'0'})
-    .then(()=>{toast(on?'已允许从手机派活':'已收回：手机只能看和批');loadLan()})
-    .catch(()=>{$('#lanSend').checked=!on;toast('没送到，开关没改')});
-};
-$('#lanOn').onclick=()=>{
-  const want=/打开/.test($('#lanOn').textContent)?'1':'0';
-  lanPost('/api/lan/toggle',{on:want}).then(o=>{toast(o.error||o.note||'');loadLan()});
-};
-$('#lanCode').onclick=()=>lanPost('/api/lan/code',{}).then(o=>{
-  if(o.error)toast(o.error,'err');else toast('配对码已生成，120 秒内有效');loadLan();});
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#lanSend').onchange=()=>{
+      const on=$('#lanSend').checked;
+      lanPost('/api/lan/allow',{on:on?'1':'0'})
+        .then(()=>{toast(on?'已允许从手机派活':'已收回：手机只能看和批');loadLan()})
+        .catch(()=>{$('#lanSend').checked=!on;toast('没送到，开关没改')});
+    };
+    $('#lanOn').onclick=()=>{
+      const want=/打开/.test($('#lanOn').textContent)?'1':'0';
+      lanPost('/api/lan/toggle',{on:want}).then(o=>{toast(o.error||o.note||'');loadLan()});
+    };
+    $('#lanCode').onclick=()=>lanPost('/api/lan/code',{}).then(o=>{
+      if(o.error)toast(o.error,'err');else toast('配对码已生成，120 秒内有效');loadLan();});
+    },
+    render: loadLan,
+  };
+})();
+Lan.init();
 
+/* ==== [S6 面板对象] Pv：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 预览页签：CDP 的一帧画面进网页，人点的位置送回页面 ----
  * 为什么值得做：模型有浏览器工具，但人只能看它转述 —— "它说页面长这样"和"我自己看一眼再点两下"
  * 是两种信任度。这条通道同时是视频/直播工作流里"盯一眼产出页"的地方。
  * 边界在服务端：开关没开一律不动浏览器，网址只收 http/https。
  */
+const Pv = (() => {
 let pvTimer=null,pvVw=0,pvVh=0,pvOn=false,pvBusy=false,pvBlob='',pvHalted=false;
 function pvPost(body){return fetch('/api/preview/input',{method:'POST',
   headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({sid:curId},body))})
@@ -2211,55 +2252,67 @@ function pvTick(){
     });
   }).catch(()=>{}).then(()=>{pvBusy=false});
 }
-$('#pvImg').onclick=e=>{
-  if(!pvOn)return;
-  const r=e.currentTarget.getBoundingClientRect();
-  if(r.width<10||r.height<10)return;
-  pvPost({kind:'click',x:e.clientX-r.left,y:e.clientY-r.top,iw:Math.round(r.width),ih:Math.round(r.height)});
-  pvState();setTimeout(pvTick,300);
-};
-// 滚轮也送过去：只看一屏的画面没法验长页面，而"再截一张"要人手动翻页很别扭
-$('#pvImg').onwheel=e=>{
-  if(!pvOn)return;
-  e.preventDefault();
-  const r=e.currentTarget.getBoundingClientRect();
-  pvPost({kind:'wheel',x:Math.round(r.width/2),y:Math.round(r.height/2),dy:e.deltaY});
-  pvState();setTimeout(pvTick,300);
-};
-$('#pvGo').onclick=()=>{
-  const u=$('#pvUrl').value.trim();
-  if(!u){toast('先输个网址','err');return}
-  pvHalted=false;toast('正在打开…');
-  fetch('/api/preview/open',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({sid:curId,url:u})}).then(r=>r.json()).then(o=>{
-    if(o.error){toast(o.error,'err');return}
-    toast(o.note||'已打开');pvState();setTimeout(pvTick,700);});
-};
-$('#pvUrl').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('#pvGo').click()}};
-$('#pvSend').onclick=()=>{
-  const t=$('#pvText').value;
-  if(!t){toast('要先有字','err');return}
-  pvPost({kind:'text',text:t}).then(()=>{$('#pvText').value='';pvState();setTimeout(pvTick,300)});
-};
-$('#pvReload').onclick=()=>{pvHalted=false;pvState();pvTick()};
-// 关掉就停手：不再轮询、也不再报状态，否则"关掉"会被下一次取帧顶掉
-$('#pvClose').onclick=()=>{
-  pvHalted=true;pvStop();
-  fetch('/api/preview/close',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({sid:curId})}).then(r=>r.json()).then(o=>{
-    toast(o.error||o.note||'已关掉');
-    $('#pvImg').style.display='none';$('#pvMeta').textContent='—';$('#pvPages').innerHTML='';});
-};
-$('#pvKey').onchange=e=>{
-  const k=e.target.value;if(!k)return;
-  pvPost({kind:'key',key:k});e.target.value='';pvState();setTimeout(pvTick,300);
-};
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#pvImg').onclick=e=>{
+      if(!pvOn)return;
+      const r=e.currentTarget.getBoundingClientRect();
+      if(r.width<10||r.height<10)return;
+      pvPost({kind:'click',x:e.clientX-r.left,y:e.clientY-r.top,iw:Math.round(r.width),ih:Math.round(r.height)});
+      pvState();setTimeout(pvTick,300);
+    };
+    // 滚轮也送过去：只看一屏的画面没法验长页面，而"再截一张"要人手动翻页很别扭
+    $('#pvImg').onwheel=e=>{
+      if(!pvOn)return;
+      e.preventDefault();
+      const r=e.currentTarget.getBoundingClientRect();
+      pvPost({kind:'wheel',x:Math.round(r.width/2),y:Math.round(r.height/2),dy:e.deltaY});
+      pvState();setTimeout(pvTick,300);
+    };
+    $('#pvGo').onclick=()=>{
+      const u=$('#pvUrl').value.trim();
+      if(!u){toast('先输个网址','err');return}
+      pvHalted=false;toast('正在打开…');
+      fetch('/api/preview/open',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sid:curId,url:u})}).then(r=>r.json()).then(o=>{
+        if(o.error){toast(o.error,'err');return}
+        toast(o.note||'已打开');pvState();setTimeout(pvTick,700);});
+    };
+    $('#pvUrl').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('#pvGo').click()}};
+    $('#pvSend').onclick=()=>{
+      const t=$('#pvText').value;
+      if(!t){toast('要先有字','err');return}
+      pvPost({kind:'text',text:t}).then(()=>{$('#pvText').value='';pvState();setTimeout(pvTick,300)});
+    };
+    $('#pvReload').onclick=()=>{pvHalted=false;pvState();pvTick()};
+    // 关掉就停手：不再轮询、也不再报状态，否则"关掉"会被下一次取帧顶掉
+    $('#pvClose').onclick=()=>{
+      pvHalted=true;pvStop();
+      fetch('/api/preview/close',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sid:curId})}).then(r=>r.json()).then(o=>{
+        toast(o.error||o.note||'已关掉');
+        $('#pvImg').style.display='none';$('#pvMeta').textContent='—';$('#pvPages').innerHTML='';});
+    };
+    $('#pvKey').onchange=e=>{
+      const k=e.target.value;if(!k)return;
+      pvPost({kind:'key',key:k});e.target.value='';pvState();setTimeout(pvTick,300);
+    };
+    },
+    render: pvStart,
+    dispose: pvStop,
+    timer(){ return pvTimer },
+  };
+})();
+Pv.init();
 
+/* ==== [S6 面板对象] Git：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- Git 面板 ----
  * 给**人**看 diff、勾文件、写提交说明的地方。模型有 git 工具，但"它改完我扫一眼再提交"
  * 这件事走模型既慢又要反复审批 —— 而且人点按钮本身就是审批。
  * 四条动作各对应一个 /api/git* 端点；边界在服务端（只认这条会话的仓库 + 路径白名单）。
  */
+const Git = (() => {
 let gitSel={};
 function gitChecked(){const o=[];document.querySelectorAll('#gitList .gr input').forEach(i=>{if(i.checked)o.push(i.dataset.p)});return o}
 function loadGit(){
@@ -2307,24 +2360,34 @@ function gitDiff(p,staged){
     }).catch(c=>toast('读不到差异（'+c+'）','err'));
 }
 function chr(n){return String.fromCharCode(n)}
-$('#gStage').onclick=e=>gitPost('/api/gitstage',{paths:gitChecked(),unstage:'0'},e.target);
-$('#gUnstage').onclick=e=>gitPost('/api/gitstage',{paths:gitChecked(),unstage:'1'},e.target);
-$('#gCommit').onclick=e=>{
-  const msg=$('#gitMsg').value.trim();
-  if(!msg){
-    // 只弹 toast 不够：那行"✓ 已提交…"会留在原地，看着像这次也提交成功了
-    $('#gitState').textContent='× 提交说明是空的 —— 写一句人话再点';
-    toast('提交说明是空的','err');$('#gitMsg').focus();return
-  }
-  gitPost('/api/gitcommit',{message:msg,paths:gitChecked()},e.target);
-  $('#gitMsg').value='';
-};
-$('#gOnlyStaged').onchange=()=>loadGit();
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#gStage').onclick=e=>gitPost('/api/gitstage',{paths:gitChecked(),unstage:'0'},e.target);
+    $('#gUnstage').onclick=e=>gitPost('/api/gitstage',{paths:gitChecked(),unstage:'1'},e.target);
+    $('#gCommit').onclick=e=>{
+      const msg=$('#gitMsg').value.trim();
+      if(!msg){
+        // 只弹 toast 不够：那行"✓ 已提交…"会留在原地，看着像这次也提交成功了
+        $('#gitState').textContent='× 提交说明是空的 —— 写一句人话再点';
+        toast('提交说明是空的','err');$('#gitMsg').focus();return
+      }
+      gitPost('/api/gitcommit',{message:msg,paths:gitChecked()},e.target);
+      $('#gitMsg').value='';
+    };
+    $('#gOnlyStaged').onchange=()=>loadGit();
+    },
+    render: loadGit,
+  };
+})();
+Git.init();
 
+/* ==== [S6 面板对象] Files：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 工作区文件浏览（右栏「产出」页签）----
  * 放在这一栏的理由很实在：agent 改完一堆文件，用户的下一个动作就是"那我看看那个文件"。
  * 没有它就得开资源管理器、记住路径 —— 而路径本来就写在界面上。
  */
+const Files = (() => {
 let fpath='';
 function kb(n){return n<1024?n+' B':(n/1024).toFixed(1)+' KB'}
 function loadFiles(){
@@ -2358,13 +2421,24 @@ function fEntry(p,isDir){
       $('#dialog').querySelector('#dlgClose').onclick=()=>$('#mask').classList.remove('on');
     }).catch(c=>toast('打不开（'+c+'）','err'));
 }
-document.querySelector('.fbar').onclick=e=>{
-  const x=(e.target.dataset||{}).fx;
-  if(x=='up'){fpath=fpath.split('/').slice(0,-1).join('/');loadFiles()}
-  if(x=='reload')loadFiles();
-};
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    document.querySelector('.fbar').onclick=e=>{
+      const x=(e.target.dataset||{}).fx;
+      if(x=='up'){fpath=fpath.split('/').slice(0,-1).join('/');loadFiles()}
+      if(x=='reload')loadFiles();
+    };
+    },
+    render: loadFiles,
+    reset(){ fpath=''; if(document.querySelector('#tab-files').classList.contains('on')) loadFiles(); },
+  };
+})();
+Files.init();
 
+/* ==== [S6 面板对象] Mem：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 条目记忆（工作区 MEMORY.md，与手机端同一格式）---- */
+const Mem = (() => {
 let MEMS=[],memT=0;
 function loadMems(q){
   if(TIDY)disarmTidy();   // 列表一刷新，刚才那份预览就不作数了
@@ -2387,41 +2461,11 @@ function paintMems(d){
     }));
   $('#memAddState').textContent=(d.count==null)?'':('现有 '+d.count+' 条 · 上限 '+(d.max||200));
 }
-$('#memAdd').onclick=()=>{
-  const t=$('#memNew').value.trim();
-  if(!t){toast('先写一句要记的东西','err');return}
-  post('/api/memories',{sid:curId,op:'add',content:t,type:$('#memType').value,
-    imp:$('#memImp').value,tags:$('#memTags').value}).then(d=>{
-      if(!d||!d.ok){toast((d&&d.error)||'没记上','err');return}
-      if(d.note)toast(d.note,'err');
-      $('#memNew').value='';$('#memTags').value='';
-      loadMems($('#memQ').value);
-      toast(d.merged?'已经有同样的一条，只把重要度抬了抬':'记住了');
-    });
-};
-$('#memQ').oninput=()=>{clearTimeout(memT);memT=setTimeout(()=>loadMems($('#memQ').value),260)};
 
 /* 整理一次：第一次点击只要预览（服务端不写文件），按钮上写出"将要动几条"，
    第二次点击才带 apply=true。自动判断改的是用户的长期记忆，点错一次能合掉十几条。 */
 let TIDY=null;
 function disarmTidy(){TIDY=null;const b=$('#memTidy');if(b)b.textContent='整理一次';const s=$('#memTidyState');if(s)s.hidden=true}
-$('#memTidy').onclick=()=>{
-  if(TIDY){post('/api/memories',{sid:curId,op:'tidy',apply:'true'}).then(d=>{
-      if(!d||!d.ok){disarmTidy();toast((d&&d.error)||'没整理成','err');return}
-      disarmTidy();loadMems($('#memQ').value);
-      toast('整理好了：降级 '+(d.degraded||0)+' 条 · 合并 '+(d.merged||0)+' 条 · 清掉 '+(d.purged||0)+' 条');
-    });return}
-  post('/api/memories',{sid:curId,op:'tidy'}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'预览没拿到','err');return}
-    const n=(d.degraded||0)+(d.merged||0)+(d.purged||0);
-    const s=$('#memTidyState');s.hidden=false;
-    if(!n){s.textContent='看过了：没有久没用的、也没有重复的，不用整理。';return}
-    TIDY=d;$('#memTidy').textContent='确认整理（动 '+n+' 条）';
-    s.textContent='将要：降级 '+(d.degraded||0)+' 条（30 天没用且重要度≤2）、合并 '+(d.merged||0)+' 条（内容重复）、'+
-      '清掉 '+(d.purged||0)+' 条（早已失效、满 30 天）。合并是留痕的（那条指到保留的那条上），不是删掉。'+
-      ((d.detail||[]).length?'\n'+d.detail.map(x=>'· '+esc(x.why)+'：'+esc(x.content)).join('\n'):'');
-  });
-};
 
 /* ---- 项目说明（AGENTS.md 那一类）与全局记忆 ---- */
 function memLoad(scope){
@@ -2450,10 +2494,50 @@ function memSave(scope,box,paths,state){
     }).catch(c=>toast('保存失败（'+c+'）','err'));
   };
 }
-$('#memSave').onclick=memSave('project','#memBox','#memPath','#memState');
-$('#gSave').onclick=memSave('global','#gBox','#gPath','#gState');
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#memAdd').onclick=()=>{
+      const t=$('#memNew').value.trim();
+      if(!t){toast('先写一句要记的东西','err');return}
+      post('/api/memories',{sid:curId,op:'add',content:t,type:$('#memType').value,
+        imp:$('#memImp').value,tags:$('#memTags').value}).then(d=>{
+          if(!d||!d.ok){toast((d&&d.error)||'没记上','err');return}
+          if(d.note)toast(d.note,'err');
+          $('#memNew').value='';$('#memTags').value='';
+          loadMems($('#memQ').value);
+          toast(d.merged?'已经有同样的一条，只把重要度抬了抬':'记住了');
+        });
+    };
+    $('#memQ').oninput=()=>{clearTimeout(memT);memT=setTimeout(()=>loadMems($('#memQ').value),260)};
+    $('#memTidy').onclick=()=>{
+      if(TIDY){post('/api/memories',{sid:curId,op:'tidy',apply:'true'}).then(d=>{
+          if(!d||!d.ok){disarmTidy();toast((d&&d.error)||'没整理成','err');return}
+          disarmTidy();loadMems($('#memQ').value);
+          toast('整理好了：降级 '+(d.degraded||0)+' 条 · 合并 '+(d.merged||0)+' 条 · 清掉 '+(d.purged||0)+' 条');
+        });return}
+      post('/api/memories',{sid:curId,op:'tidy'}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'预览没拿到','err');return}
+        const n=(d.degraded||0)+(d.merged||0)+(d.purged||0);
+        const s=$('#memTidyState');s.hidden=false;
+        if(!n){s.textContent='看过了：没有久没用的、也没有重复的，不用整理。';return}
+        TIDY=d;$('#memTidy').textContent='确认整理（动 '+n+' 条）';
+        s.textContent='将要：降级 '+(d.degraded||0)+' 条（30 天没用且重要度≤2）、合并 '+(d.merged||0)+' 条（内容重复）、'+
+          '清掉 '+(d.purged||0)+' 条（早已失效、满 30 天）。合并是留痕的（那条指到保留的那条上），不是删掉。'+
+          ((d.detail||[]).length?'\n'+d.detail.map(x=>'· '+esc(x.why)+'：'+esc(x.content)).join('\n'):'');
+      });
+    };
+    $('#memSave').onclick=memSave('project','#memBox','#memPath','#memState');
+    $('#gSave').onclick=memSave('global','#gBox','#gPath','#gState');
+    },
+    render(){ loadMemory(); loadMems($('#memQ').value); },
+  };
+})();
+Mem.init();
 
+/* ==== [S6 面板对象] Skills：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 自定义命令（技能）：名字 + 一段提示词，存在 HAOAI_HOME/skills.json ---- */
+const Skills = (() => {
 let SKILLS=[];
 function loadSkills(){
   return fetch('/api/skills').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
@@ -2497,39 +2581,6 @@ function afterImport(d){
   if(d.ok){toast('技能已导入 · 打 / 就能用');loadSkills()}
   else toast(d.error||'什么都没进','err');
 }
-$('#skUrlGo').onclick=()=>{
-  const u=$('#skUrl').value.trim();
-  if(!u){toast('先填一个网址');return}
-  $('#skImpState').textContent='在拉…';
-  post('/api/skills',{op:'import-url',url:u}).then(afterImport)
-    .catch(()=>{$('#skImpState').textContent='';toast('导入失败','err')});
-};
-$('#skFileGo').onclick=()=>{
-  const f=($('#skFile').files||[])[0];
-  if(!f){toast('先选一个 .zip 或 .md 文件');return}
-  $('#skImpState').textContent='在读…';
-  const isZip=/\.zip$/i.test(f.name);
-  const fr=new FileReader();
-  fr.onload=()=>post('/api/skills',
-      isZip?{op:'import-zip',data:b64(fr.result)}:{op:'import-text',text:String(fr.result)})
-    .then(afterImport).catch(()=>{$('#skImpState').textContent='';toast('导入失败','err')});
-  fr.onerror=()=>{$('#skImpState').textContent='';toast('文件没读出来','err')};
-  if(isZip)fr.readAsArrayBuffer(f);else fr.readAsText(f,'utf-8');
-};
-$('#skPasteGo').onclick=()=>{
-  const t=$('#skPaste').value;
-  if(!t.trim()){toast('先把一份 SKILL.md 粘进来');return}
-  post('/api/skills',{op:'import-text',text:t}).then(d=>{if(d&&d.ok)$('#skPaste').value='';afterImport(d)})
-    .catch(()=>toast('导入失败','err'));
-};
-$('#skSave').onclick=()=>{
-  post('/api/skills',{op:'add',name:$('#skName').value,desc:$('#skDesc').value,text:$('#skText').value}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
-    $('#skName').value='';$('#skDesc').value='';$('#skText').value='';
-    loadSkills().then(()=>{$('#skState').textContent='现有 '+SKILLS.length+' 个技能 · 打 / 就能用'});
-    toast('技能已保存');
-  }).catch(c=>toast('技能没保存（'+c+'）','err'));
-};
 /* ---- 技能订阅源：清单列出来，装之前先看过正文 ----
  * 声明必须排在 loadSkills() 之前：那是个 `let`，在 TDZ 里被读一次整段技能面板就打不开了。
  */
@@ -2634,20 +2685,63 @@ function installEntry(ev){
     else fdState(d.error||'没装上');
   }).catch(()=>{b.disabled=false;b.textContent='看过了，装进技能目录';toast('装失败了','err')});
 }
-$('#fdAdd').onclick=()=>{
-  const u=$('#fdUrl').value.trim();
-  if(!u){toast('先填一个清单地址');return}
-  fdState('在订阅…');
-  post('/api/skills',{op:'feed-add',name:$('#fdName').value,url:u}).then(d=>{
-    if(!afterFeed(d))return;
-    $('#fdName').value='';$('#fdUrl').value='';
-    const f=(d.feeds||[]).filter(x=>x.url==u)[0];
-    if(f)refreshFeed(f.id);else fdState('已订阅');
-  }).catch(c=>fdState('订阅失败（'+c+'）'));
-};
-loadSkills();
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#skUrlGo').onclick=()=>{
+      const u=$('#skUrl').value.trim();
+      if(!u){toast('先填一个网址');return}
+      $('#skImpState').textContent='在拉…';
+      post('/api/skills',{op:'import-url',url:u}).then(afterImport)
+        .catch(()=>{$('#skImpState').textContent='';toast('导入失败','err')});
+    };
+    $('#skFileGo').onclick=()=>{
+      const f=($('#skFile').files||[])[0];
+      if(!f){toast('先选一个 .zip 或 .md 文件');return}
+      $('#skImpState').textContent='在读…';
+      const isZip=/\.zip$/i.test(f.name);
+      const fr=new FileReader();
+      fr.onload=()=>post('/api/skills',
+          isZip?{op:'import-zip',data:b64(fr.result)}:{op:'import-text',text:String(fr.result)})
+        .then(afterImport).catch(()=>{$('#skImpState').textContent='';toast('导入失败','err')});
+      fr.onerror=()=>{$('#skImpState').textContent='';toast('文件没读出来','err')};
+      if(isZip)fr.readAsArrayBuffer(f);else fr.readAsText(f,'utf-8');
+    };
+    $('#skPasteGo').onclick=()=>{
+      const t=$('#skPaste').value;
+      if(!t.trim()){toast('先把一份 SKILL.md 粘进来');return}
+      post('/api/skills',{op:'import-text',text:t}).then(d=>{if(d&&d.ok)$('#skPaste').value='';afterImport(d)})
+        .catch(()=>toast('导入失败','err'));
+    };
+    $('#skSave').onclick=()=>{
+      post('/api/skills',{op:'add',name:$('#skName').value,desc:$('#skDesc').value,text:$('#skText').value}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+        $('#skName').value='';$('#skDesc').value='';$('#skText').value='';
+        loadSkills().then(()=>{$('#skState').textContent='现有 '+SKILLS.length+' 个技能 · 打 / 就能用'});
+        toast('技能已保存');
+      }).catch(c=>toast('技能没保存（'+c+'）','err'));
+    };
+    $('#fdAdd').onclick=()=>{
+      const u=$('#fdUrl').value.trim();
+      if(!u){toast('先填一个清单地址');return}
+      fdState('在订阅…');
+      post('/api/skills',{op:'feed-add',name:$('#fdName').value,url:u}).then(d=>{
+        if(!afterFeed(d))return;
+        $('#fdName').value='';$('#fdUrl').value='';
+        const f=(d.feeds||[]).filter(x=>x.url==u)[0];
+        if(f)refreshFeed(f.id);else fdState('已订阅');
+      }).catch(c=>fdState('订阅失败（'+c+'）'));
+    };
+    loadSkills();
+    },
+    all(){ return SKILLS },
+  };
+})();
+Skills.init();
 
+/* ==== [S6 面板对象] Cron：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 定时任务 ---- */
+const Cron = (() => {
 function whenText(s){return s.when||(s.kind=='daily'?'每天 '+s.at:'每 '+s.every+' 分钟')}
 function whenTime(t){if(!t)return '不会跑';
   return new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
@@ -2668,27 +2762,125 @@ function loadWorkflows(){
   return fetch('/api/workflows').then(r=>r.json())
     .then(d=>paintWorkflows(d.items)).catch(()=>{$('#wfList').textContent='读不到'});
 }
-$('#wfAdd').onclick=()=>{
-  const steps=$('#wfSteps').value.trim();
-  if(!steps){toast('一行一步，先写几步');return}
-  post('/api/workflows',{op:'save',id:'',name:$('#wfName').value,steps:steps}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
-    $('#wfName').value='';$('#wfSteps').value='';paintWorkflows(d.items);toast('任务链已加');
-  }).catch(()=>toast('任务链没加上','err'));
-};
-$('#wfList').onclick=e=>{
-  const b=e.target.closest?e.target.closest('[data-wf]'):null;
-  if(!b)return;
-  post('/api/workflows',{op:b.dataset.wf,id:b.dataset.id}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没做成','err');return}
-    paintWorkflows(d.items);toast(b.dataset.wf=='run'?'已开跑第一步':'已更新');
-    loadSessions();
-  }).catch(()=>toast('任务链动不了','err'));
-};
+function paintCron(list){
+
+  $('#cronList').innerHTML=(list||[]).length?list.map(s=>
+    `<div class="rl cron${s.enabled?'':' off'}"><span><b>${esc(s.name)}</b>`+
+    `<em>${whenText(s)} · 下次 ${whenTime(s.nextDue)}</em>`+
+    `<em>${s.lastRun?('上次 '+whenTime(s.lastRun)+(s.lastError?' · '+esc(s.lastError):'')):'还没跑过'}</em></span>`+
+    `<button class="ab" data-cr="run" data-id="${esc(s.id)}" title="立刻起一条会话跑一次">跑一次</button>`+
+    `<button class="ab" data-cr="toggle" data-id="${esc(s.id)}">${s.enabled?'停用':'启用'}</button>`+
+    `<button class="ab" data-cr="del" data-id="${esc(s.id)}">删</button></div>`).join('')
+    :'（还没配）';
+}
+/* 选「每天一次」就别再显示"几分钟"，反过来也是：两个都摆着，用户会以为是一起生效的 */
+function syncCronKind(){
+  const d=$('#crKind').value=='daily';
+  $('#crEvery').style.display=d?'none':'';
+  $('#crAt').style.display=d?'':'none';
+}
+function loadCron(){
+  return fetch('/api/schedules').then(r=>r.ok?r.json():Promise.reject(r.status))
+    .then(d=>paintCron(d.items)).catch(()=>{$('#cronList').textContent='读不到'});
+}
+/* 一句话排期：边打边解析，把"理解成什么"和"下一次什么时候跑"摆在眼前让人确认。
+   解析不出来就明说 —— 服务端这时不会退回默认时间，猜错的时间会在人睡着时起真任务。 */
+let crWhenTimer=null;
+/* 跑完的结果：只收 trigger=定时 的那些运行（手动的那类人在电脑前，看得见）。
+   数据直接取自运行账本，不另存一份 —— 两份真相迟早对不上。 */
+function paintDigest(it){
+  $('#dgSum').textContent=it.length?('最近 '+it.length+' 条定时结果，最新的在上方')
+    :'还没有跑完过的定时任务。到点后这里会出现它说的那句话。';
+  $('#dgList').innerHTML=it.map(e=>
+    '<div class="rl"><span><b>'+esc(e.at)+' · '+esc(e.title)+'</b>'+
+    '<em>'+esc(e.verdict)+(e.text?(' · '+esc(e.text.slice(0,60))):'')+'</em></span></div>').join('')||'';
+}
+function loadDigest(){
+  return fetch('/api/digest').then(r=>r.json())
+    .then(d=>paintDigest(d.items||[])).catch(()=>{$('#dgSum').textContent='读不到结果汇总'});
+}
+/* 定时任务是在后台跑完的：只看一次的话，"跑完的结果"这块会永远停在打开页签那一刻的样子。
+   所以页签开着时每 4 秒拉一次，切走就不拉（本地接口，但没必要在背后一直打）。 */
+let dgTimer=null;
+function watchDigest(){
+  if(dgTimer)return;
+  dgTimer=setInterval(()=>{
+    const on=document.querySelector('#tab-cron');
+    if(!on||!on.classList.contains('on'))return;
+    fetch('/api/digest').then(r=>r.json()).then(d=>paintDigest(d.items||[])).catch(()=>{});
+  },4000);
+}
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#wfAdd').onclick=()=>{
+      const steps=$('#wfSteps').value.trim();
+      if(!steps){toast('一行一步，先写几步');return}
+      post('/api/workflows',{op:'save',id:'',name:$('#wfName').value,steps:steps}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+        $('#wfName').value='';$('#wfSteps').value='';paintWorkflows(d.items);toast('任务链已加');
+      }).catch(()=>toast('任务链没加上','err'));
+    };
+    $('#wfList').onclick=e=>{
+      const b=e.target.closest?e.target.closest('[data-wf]'):null;
+      if(!b)return;
+      post('/api/workflows',{op:b.dataset.wf,id:b.dataset.id}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没做成','err');return}
+        paintWorkflows(d.items);toast(b.dataset.wf=='run'?'已开跑第一步':'已更新');
+        loadSessions();
+      }).catch(()=>toast('任务链动不了','err'));
+    };
+    $('#crKind').onchange=syncCronKind;
+    $('#cronList').onclick=e=>{
+      const b=e.target.closest?e.target.closest('[data-cr]'):null;
+      if(!b)return;
+      post('/api/schedules',{op:b.dataset.cr,id:b.dataset.id}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
+        paintCron(d.items);toast('已更新');
+        if(b.dataset.cr=='run')loadSessions();   // 跑一次会冒出一条新会话
+      }).catch(()=>toast('定时任务改不动','err'));
+    };
+    $('#crWhen').oninput=()=>{
+      const v=$('#crWhen').value.trim();
+      $('#crManual').style.display=v?'none':'';
+      const e=$('#crWhenEcho');
+      clearTimeout(crWhenTimer);
+      if(!v){e.textContent='';e.style.color='';return}
+      crWhenTimer=setTimeout(()=>fetch('/api/sched/parse?when='+encodeURIComponent(v))
+        .then(r=>r.json()).then(d=>{
+          e.style.color=d.ok?'var(--acc)':'var(--err)';
+          e.textContent=d.ok?('理解为：'+d.echo+' 下次 '+d.nextText):d.error;
+        }).catch(()=>{e.style.color='var(--err)';e.textContent='解析口没回应'}),350);
+    };
+    $('#crAdd').onclick=()=>{
+      const p=$('#crPrompt').value.trim();
+      if(!p){toast('那句话是空的');return}
+      const w=$('#crWhen').value.trim();
+      post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,when:w,kind:$('#crKind').value,
+        every:$('#crEvery').value,at:$('#crAt').value,flow:$('#crFlow').value}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+        $('#crName').value='';$('#crPrompt').value='';$('#crWhen').value='';$('#crWhenEcho').textContent='';
+        $('#crManual').style.display='';
+        paintCron(d.items);toast('定时任务已加');
+      }).catch(()=>toast('定时任务没加上','err'));
+    };
+    $('#dgExport').onclick=()=>{
+      post('/api/digest/export',{}).then(d=>{
+        toast(d&&d.ok?(d.note||'已导出'):'没导出：'+((d&&d.note)||d&&d.error||''),d&&d.ok?'':'err');
+      }).catch(()=>toast('没导出','err'));
+    };
+    },
+    render(){ loadCron(); syncCronKind(); loadDigest(); watchDigest(); loadWorkflows(); },
+    sync: syncCronKind,
+  };
+})();
+Cron.init();
+/* ==== [S6 面板对象] Presets：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 角色卡（预设 agent）：人设 + 模型 + 工作区 + 档位，一次带上 ----
  * 这里刻意只做"存 / 用 / 改 / 删"，不在列表上摆开关：
  * 一张卡生效与否的判据是"那条会话是不是这样"，而那条会话的顶栏已经报出来了。
  */
+const Presets = (() => {
 const ROLE_MODES={plan:'计划',ask:'询问',auto:'自动'};
 let roleEditing='';
 function paintPresets(list){
@@ -2718,37 +2910,47 @@ function loadPresets(){
   }).catch(()=>{$('#roleList').textContent='读不到'});
 }
 let presets=[];
-$('#roleAdd').onclick=()=>{
-  const name=$('#roleName').value.trim(),persona=$('#rolePersona').value.trim();
-  if(!name&&!persona){toast('至少给个名字或一段人设');return}
-  post('/api/presets',{op:'save',id:roleEditing,name:name,persona:persona,
-    model:$('#roleModel').value,workspace:$('#roleWs').value.trim(),mode:$('#roleMode').value})
-    .then(d=>{
-      if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
-      paintPresets(d.items);presets=d.items||[];roleEditing='';
-      $('#roleName').value='';$('#rolePersona').value='';$('#roleWs').value='';
-      $('#roleState').textContent='已存';toast('角色卡已存');
-    }).catch(()=>toast('角色卡没存上','err'));
-};
-$('#roleList').onclick=e=>{
-  const b=e.target.closest?e.target.closest('[data-role]'):null;
-  if(!b)return;
-  const p=presets.find(x=>x.id==b.dataset.id);
-  if(b.dataset.role=='use'){newTask('',b.dataset.id);return}
-  if(b.dataset.role=='edit'){
-    if(!p)return;
-    roleEditing=p.id;$('#roleName').value=p.name;$('#rolePersona').value=p.persona||'';
-    $('#roleWs').value=p.workspace||'';$('#roleMode').value=p.mode||'';$('#roleModel').value=p.model||'';
-    $('#roleState').textContent='改的是「'+p.name+'」';return;
-  }
-  post('/api/presets',{op:'del',id:b.dataset.id}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没删掉','err');return}
-    paintPresets(d.items);presets=d.items||[];
-    if(roleEditing==b.dataset.id)roleEditing='';
-    $('#roleState').textContent='';toast('角色卡已删');
-  }).catch(()=>toast('角色卡删不掉','err'));
-};
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#roleAdd').onclick=()=>{
+      const name=$('#roleName').value.trim(),persona=$('#rolePersona').value.trim();
+      if(!name&&!persona){toast('至少给个名字或一段人设');return}
+      post('/api/presets',{op:'save',id:roleEditing,name:name,persona:persona,
+        model:$('#roleModel').value,workspace:$('#roleWs').value.trim(),mode:$('#roleMode').value})
+        .then(d=>{
+          if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
+          paintPresets(d.items);presets=d.items||[];roleEditing='';
+          $('#roleName').value='';$('#rolePersona').value='';$('#roleWs').value='';
+          $('#roleState').textContent='已存';toast('角色卡已存');
+        }).catch(()=>toast('角色卡没存上','err'));
+    };
+    $('#roleList').onclick=e=>{
+      const b=e.target.closest?e.target.closest('[data-role]'):null;
+      if(!b)return;
+      const p=presets.find(x=>x.id==b.dataset.id);
+      if(b.dataset.role=='use'){newTask('',b.dataset.id);return}
+      if(b.dataset.role=='edit'){
+        if(!p)return;
+        roleEditing=p.id;$('#roleName').value=p.name;$('#rolePersona').value=p.persona||'';
+        $('#roleWs').value=p.workspace||'';$('#roleMode').value=p.mode||'';$('#roleModel').value=p.model||'';
+        $('#roleState').textContent='改的是「'+p.name+'」';return;
+      }
+      post('/api/presets',{op:'del',id:b.dataset.id}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没删掉','err');return}
+        paintPresets(d.items);presets=d.items||[];
+        if(roleEditing==b.dataset.id)roleEditing='';
+        $('#roleState').textContent='';toast('角色卡已删');
+      }).catch(()=>toast('角色卡删不掉','err'));
+    };
+    },
+    render: loadPresets,
+  };
+})();
+Presets.init();
+/* ==== [S6 面板对象] Hooks：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 钩子：一轮跑完自动执行的一段命令 ---- */
+const Hooks = (() => {
 function paintHooks(list){
   $('#hookList').innerHTML=(list||[]).length?(list||[]).map(h=>
     `<div class="rl${h.enabled?'':' off'}" title="${esc(h.command)}"><span><b>${esc(h.name)}</b>`+
@@ -2767,112 +2969,33 @@ function loadHooks(){
   }).catch(()=>{$('#hookList').textContent='读不到'});
 }
 let hooks=[];
-$('#hookAdd').onclick=()=>{
-  const cmd=$('#hookCmd').value.trim();
-  if(!cmd){toast('要跑什么？命令是空的');return}
-  post('/api/hooks',{op:'save',id:'',name:$('#hookName').value,command:cmd,
-    event:$('#hookEvent').value||'run-end',shell:$('#hookShell').value,
-    timeoutSec:$('#hookTimeout').value||'30'}).then(d=>{
-      if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
-      $('#hookName').value='';$('#hookCmd').value='';paintHooks(d.items);hooks=d.items||[];
-      toast('钩子已加，下一轮跑完就执行');
-    }).catch(()=>toast('钩子没加上','err'));
-};
-$('#hookList').onclick=e=>{
-  const b=e.target.closest?e.target.closest('[data-hk]'):null;
-  if(!b)return;
-  post('/api/hooks',{op:b.dataset.hk,id:b.dataset.id}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没做成','err');return}
-    paintHooks(d.items);hooks=d.items||[];
-  }).catch(()=>toast('钩子动不了','err'));
-};
-function paintCron(list){
-
-  $('#cronList').innerHTML=(list||[]).length?list.map(s=>
-    `<div class="rl cron${s.enabled?'':' off'}"><span><b>${esc(s.name)}</b>`+
-    `<em>${whenText(s)} · 下次 ${whenTime(s.nextDue)}</em>`+
-    `<em>${s.lastRun?('上次 '+whenTime(s.lastRun)+(s.lastError?' · '+esc(s.lastError):'')):'还没跑过'}</em></span>`+
-    `<button class="ab" data-cr="run" data-id="${esc(s.id)}" title="立刻起一条会话跑一次">跑一次</button>`+
-    `<button class="ab" data-cr="toggle" data-id="${esc(s.id)}">${s.enabled?'停用':'启用'}</button>`+
-    `<button class="ab" data-cr="del" data-id="${esc(s.id)}">删</button></div>`).join('')
-    :'（还没配）';
-}
-/* 选「每天一次」就别再显示"几分钟"，反过来也是：两个都摆着，用户会以为是一起生效的 */
-function syncCronKind(){
-  const d=$('#crKind').value=='daily';
-  $('#crEvery').style.display=d?'none':'';
-  $('#crAt').style.display=d?'':'none';
-}
-$('#crKind').onchange=syncCronKind;
-function loadCron(){
-  return fetch('/api/schedules').then(r=>r.ok?r.json():Promise.reject(r.status))
-    .then(d=>paintCron(d.items)).catch(()=>{$('#cronList').textContent='读不到'});
-}
-$('#cronList').onclick=e=>{
-  const b=e.target.closest?e.target.closest('[data-cr]'):null;
-  if(!b)return;
-  post('/api/schedules',{op:b.dataset.cr,id:b.dataset.id}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
-    paintCron(d.items);toast('已更新');
-    if(b.dataset.cr=='run')loadSessions();   // 跑一次会冒出一条新会话
-  }).catch(()=>toast('定时任务改不动','err'));
-};
-/* 一句话排期：边打边解析，把"理解成什么"和"下一次什么时候跑"摆在眼前让人确认。
-   解析不出来就明说 —— 服务端这时不会退回默认时间，猜错的时间会在人睡着时起真任务。 */
-let crWhenTimer=null;
-$('#crWhen').oninput=()=>{
-  const v=$('#crWhen').value.trim();
-  $('#crManual').style.display=v?'none':'';
-  const e=$('#crWhenEcho');
-  clearTimeout(crWhenTimer);
-  if(!v){e.textContent='';e.style.color='';return}
-  crWhenTimer=setTimeout(()=>fetch('/api/sched/parse?when='+encodeURIComponent(v))
-    .then(r=>r.json()).then(d=>{
-      e.style.color=d.ok?'var(--acc)':'var(--err)';
-      e.textContent=d.ok?('理解为：'+d.echo+' 下次 '+d.nextText):d.error;
-    }).catch(()=>{e.style.color='var(--err)';e.textContent='解析口没回应'}),350);
-};
-$('#crAdd').onclick=()=>{
-  const p=$('#crPrompt').value.trim();
-  if(!p){toast('那句话是空的');return}
-  const w=$('#crWhen').value.trim();
-  post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,when:w,kind:$('#crKind').value,
-    every:$('#crEvery').value,at:$('#crAt').value,flow:$('#crFlow').value}).then(d=>{
-    if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
-    $('#crName').value='';$('#crPrompt').value='';$('#crWhen').value='';$('#crWhenEcho').textContent='';
-    $('#crManual').style.display='';
-    paintCron(d.items);toast('定时任务已加');
-  }).catch(()=>toast('定时任务没加上','err'));
-};
-/* 跑完的结果：只收 trigger=定时 的那些运行（手动的那类人在电脑前，看得见）。
-   数据直接取自运行账本，不另存一份 —— 两份真相迟早对不上。 */
-function paintDigest(it){
-  $('#dgSum').textContent=it.length?('最近 '+it.length+' 条定时结果，最新的在上方')
-    :'还没有跑完过的定时任务。到点后这里会出现它说的那句话。';
-  $('#dgList').innerHTML=it.map(e=>
-    '<div class="rl"><span><b>'+esc(e.at)+' · '+esc(e.title)+'</b>'+
-    '<em>'+esc(e.verdict)+(e.text?(' · '+esc(e.text.slice(0,60))):'')+'</em></span></div>').join('')||'';
-}
-function loadDigest(){
-  return fetch('/api/digest').then(r=>r.json())
-    .then(d=>paintDigest(d.items||[])).catch(()=>{$('#dgSum').textContent='读不到结果汇总'});
-}
-/* 定时任务是在后台跑完的：只看一次的话，"跑完的结果"这块会永远停在打开页签那一刻的样子。
-   所以页签开着时每 4 秒拉一次，切走就不拉（本地接口，但没必要在背后一直打）。 */
-let dgTimer=null;
-function watchDigest(){
-  if(dgTimer)return;
-  dgTimer=setInterval(()=>{
-    const on=document.querySelector('#tab-cron');
-    if(!on||!on.classList.contains('on'))return;
-    fetch('/api/digest').then(r=>r.json()).then(d=>paintDigest(d.items||[])).catch(()=>{});
-  },4000);
-}
-$('#dgExport').onclick=()=>{
-  post('/api/digest/export',{}).then(d=>{
-    toast(d&&d.ok?(d.note||'已导出'):'没导出：'+((d&&d.note)||d&&d.error||''),d&&d.ok?'':'err');
-  }).catch(()=>toast('没导出','err'));
-};
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#hookAdd').onclick=()=>{
+      const cmd=$('#hookCmd').value.trim();
+      if(!cmd){toast('要跑什么？命令是空的');return}
+      post('/api/hooks',{op:'save',id:'',name:$('#hookName').value,command:cmd,
+        event:$('#hookEvent').value||'run-end',shell:$('#hookShell').value,
+        timeoutSec:$('#hookTimeout').value||'30'}).then(d=>{
+          if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
+          $('#hookName').value='';$('#hookCmd').value='';paintHooks(d.items);hooks=d.items||[];
+          toast('钩子已加，下一轮跑完就执行');
+        }).catch(()=>toast('钩子没加上','err'));
+    };
+    $('#hookList').onclick=e=>{
+      const b=e.target.closest?e.target.closest('[data-hk]'):null;
+      if(!b)return;
+      post('/api/hooks',{op:b.dataset.hk,id:b.dataset.id}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没做成','err');return}
+        paintHooks(d.items);hooks=d.items||[];
+      }).catch(()=>toast('钩子动不了','err'));
+    };
+    },
+    render: loadHooks,
+  };
+})();
+Hooks.init();
 function newTask(ws,preset){
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
   fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -3108,13 +3231,13 @@ document.addEventListener('keydown',e=>{
   const mod=e.ctrlKey||e.metaKey;
   if(e.key=='Escape'){
     app.classList.remove('show-l','show-r');
-    if(cfgOpen)closeCfg();
+    if(cfgOpen)Cfg.close();
     else $('#mask').classList.remove('on');
-    if(palOpen){palToggle(false);return}
+    if(Palette.opened()){Palette.toggle(false);return}
     hideSlash();return;
   }
   if(mod&&e.key.toLowerCase()=='n'){e.preventDefault();$('#newBtn').click();return}
-  if(mod&&e.shiftKey&&e.key.toLowerCase()=='p'){e.preventDefault();palToggle();return}
+  if(mod&&e.shiftKey&&e.key.toLowerCase()=='p'){e.preventDefault();Palette.toggle();return}
   if(mod&&e.key.toLowerCase()=='k'){e.preventDefault();$('#sessQ').focus();return}
   if(mod&&e.key.toLowerCase()=='b'){e.preventDefault();$('#railBtn').click();return}
   if(e.altKey&&['1','2','3'].includes(e.key)){e.preventDefault();setModeNow(['plan','ask','auto'][+e.key-1])}
@@ -3167,7 +3290,7 @@ const CMDS=[
 ];
 let slashOpen=false,slashSel=0,slashList=[];
 /* 自定义技能与内置命令共用这一个面板：内置在前，技能在后（重名时内置赢，服务端也会拒重名） */
-function slashItems(){return CMDS.concat(SKILLS.map(s=>({c:'/'+s.name,d:s.desc||'自定义技能',skill:s.text})))}
+function slashItems(){return CMDS.concat(Skills.all().map(s=>({c:'/'+s.name,d:s.desc||'自定义技能',skill:s.text})))}
 function showSlash(q){
   atOpen=false;clearTimeout(atTimer);
   slashList=slashItems().filter(x=>x.c.slice(1).toLowerCase().startsWith(q.toLowerCase()));
@@ -3233,7 +3356,7 @@ function runCommand(t){
   const hit=CMDS.find(x=>x.c==cmd);
   if(!hit){
     // 自定义技能：把提示词填进输入框而不是直接发出去 —— 用户多半还要补两句（要改哪个文件）
-    const sk=SKILLS.find(x=>('/'+x.name).toLowerCase()==cmd);
+    const sk=Skills.all().find(x=>('/'+x.name).toLowerCase()==cmd);
     if(!sk)return false;
     box.value='';box.style.height='auto';hideSlash();
     insertAtCursor(sk.text||'');toast('已插入 /'+sk.name);return true;
@@ -3552,7 +3675,9 @@ function applyState(s){
   return s;
 }
 
+/* ==== [S6 面板对象] Cfg：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
 /* ---- 设置抽屉 ---- */
+const Cfg = (() => {
 function openCfg(){
   fetch('/api/settings').then(r=>r.json()).then(c=>{
     cfgOpen=true;
@@ -3738,7 +3863,6 @@ function loadBackups(dg){
     }).join(''):'<div class="kv">还没有备份包 —— 上面点「导出一份」就有了。</div>';
   }).catch(()=>{box.innerHTML='<div class="kv">读不到备份列表</div>'});
 }
-$('#cfgBtn').onclick=openCfg;
 function ruleEdit(op,text){
   if(!text){toast('规则是空的');return}
   post('/api/rule',{op:op,text:text,sid:curId}).then(d=>{
@@ -3769,6 +3893,16 @@ function mcpEdit(op,name,command){
   }).catch(()=>{$('#mcState').textContent='';toast('服务器改不动','err')});
 }
 function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');paintSend()}
+  return {
+    /* 静态接线全收进 init：IIFE 求值时立即执行，时机与从前逐字节一致。 */
+    init(){
+    $('#cfgBtn').onclick=openCfg;
+    },
+    open: openCfg,
+    close: closeCfg,
+  };
+})();
+Cfg.init();
 
 /* ---- 轻提示：一句话的事，不往对话流里塞气泡 ---- */
 let toastT=null;

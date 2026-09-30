@@ -41,7 +41,7 @@ class ApiDocTest {
     private fun documented(): Set<String> {
         val text = doc.readText().replace(Regex("(?s)```.*?```"), " ")
         val out = LinkedHashSet<String>()
-        val pages = setOf("/", "/index.html", "/md.js", "/phone")
+        val pages = setOf("/", "/index.html", "/md.js", "/shared.js", "/phone")
         Regex("`([^`]+)`").findAll(text).forEach { m ->
             // 按"不是路径里能出现的字符"切开，再逐个整段判前缀 ——
             // 直接拿正则去抓会吃掉 `bash pc/tools/api-smoke.sh` 里的 "/api-smoke.sh"

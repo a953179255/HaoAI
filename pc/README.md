@@ -3425,6 +3425,45 @@ Windows ConPTY 上的常驻进程（`ConPty.kt`，JDK FFM 直调 kernel32，零�
 
 - **验收**：`gradle test` **522 条全绿**（518 + 4）；`ui-check`、`md-check` 全过。
 
+## 这一批：面板模块化 —— 13 个面板收进对象，动 UI 美化之前先分区（ROADMAP §6 S6）
+
+`index.html` 是 3813 行、183 个顶层函数的单文件：面板各自为政、状态散在全局、
+`show` 与 phone 同名不同义 —— 你说的"UI 简陋"要动外观，在这上面改就是高风险手术。
+这一批**先分区、不动一个像素**：行为零变化是判据，结构变化是全部内容。
+
+- **13 个面板对象**（`Palette / Term / Ck / Lan / Pv / Git / Files / Mem / Skills /
+  Cron / Presets / Hooks / Cfg`）：每个 = **状态 + `init()`（静态接线）+ `render()`（页签
+  刷新）+ `dispose()`（只给真有得收的：Term/Pv）**。IIFE 求值时立即跑 `init()`，
+  接线时机与从前逐字节一致；面板内声明**保持列 0 缩进**（ui-check 的正则不依赖缩进）。
+- **Cron 是一个对象**：workflows / crontab / digest 本来就是同一个「定时」页签，
+  只是文本被角色卡、钩子两段夹开 —— 输出顺序调成 Cron → Presets → Hooks（都是接线，执行序无影响）。
+- **核心侧跨界调用逐处改写**（扫描出的全部引用，一只手数得过来）：页签分派 8 处走
+  `X.render()/dispose()`；会话切换重置文件路径收进 `Files.reset()`；Escape 与
+  Ctrl+Shift+P 走 `Palette.toggle/打开了没`；斜杠菜单读技能走 `Skills.all()`；
+  命令面板跳设置走 `Cfg.open()`。**像素剧本同步改 3 处**：`Cron.sync()`、`Pv.timer()===null`、
+  `Palette.move(...Palette.sel())` —— 判据语义一个字没变。
+- **`shared.js`（两端共用件）**：查证后**只有 `esc` 两边逐字等价** —— 原判据写的
+  `decide/answer/show` 同名**不同义**（phone 的 answer 是"把回答发回电脑"，index 的
+  answer 是"画流式正文"），合到一起是埋雷，所以只抽 esc。两个服务都要发它：
+  主服务 `Server.kt` 与 **Lan 端点 `Lan.kt`**（phone 是从 LAN 出的 —— 第一版只加了主服务，
+  手机页会 404 出白屏，而症状会伪装成"配对页坏了"）。
+
+判据（全静态、秒级，跑 `node tools/ui-check.js`）：
+
+1. `shared.js` 存在、**两页都引**、**Lan 端点也发**（那条白屏陷阱钉死）；
+2. 13 个面板都是 `const X = (() => {` 对象且 `X.init();` 被调（init 删了 = 接线全哑，
+   语法照样绿，所以要单独挡）；
+3. 页签分派 ≥8 处走 `X.render()`、且没有残留的裸 `loadGit()` 老名；
+4. **面板私有成员不在对象外裸用**（裸用 = 运行时 ReferenceError，语法查不出来）——
+   这条不是拍脑袋：第一轮像素就红了 `ui-at`（Escape 处理里残留一个 `palOpen`，
+   整个 `hideSlash()` 被跳过，@ 列表关不掉），修完才想起来该有这道门。
+
+- **验收**：像素审计 65 份——第一轮 **64 绿 1 红**（`ui-at`，上条说的那个），修完重跑
+  **全绿**；`gradle test` **522 条全绿**；`ui-check`（含新 4 类判据）、`md-check` 全过。
+- **范围的诚实交代**：聊天核心、会话侧栏、用量/任务页签**留在顶层** —— 它们不是面板，
+  且是像素剧本的契约 API（`cur/finishAnswer/openSession/markSessions/mode/views` 点名要全局）。
+  全量命名空间化留给 UI 美化批一起做，别在这一批里赌 64 份剧本。
+
 ## 与手机端同源的行为
 
 

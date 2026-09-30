@@ -238,8 +238,9 @@
 （agent 核心是 Capacitor 壳里的 Python）、`api.github.com` 的 openai/codex 与 earendil-works/pi。
 格式同 §2：**编号 · 干什么** ｜ 对标 ｜ 现状（查证）｜ 为什么 ｜ 验收判据 ｜ 涉及端
 
-**施工顺序**：~~S3 → S1~~ ✅ **同批已落**（2026-09-30，`UiContractTest` 4 条，README「这一批」）
-→ S6（动 UI 美化之前）→ S5 与 B15/#106/#108 合一片 → S7 单独小批 ｜ S8 缓。
+**施工顺序**：~~S3 → S1~~ ✅ 同批已落（2026-09-30，`UiContractTest` 4 条，README「这一批」）
+→ ~~S6~~ ✅ **已落**（13 面板对象 + shared.js + ui-check 四类新判据；像素 65 份全绿，
+README「面板模块化」）→ S5 与 B15/#106/#108 合一片 → S7 单独小批 ｜ S8 缓。
 
 - **S1 · ✅ 已落：SSE 事件契约 `forward` 穷尽 + 事件名单两头对齐** ｜ OpenClaw `AgentEvent`
   一个 union 同时驱动流式/审批/UI（`agent-core/src/types.ts:548`）、codex `event_mapping.rs`
@@ -286,15 +287,18 @@
   按域拆成同包 handler 类，`Server.kt` 只留路由分发 + SSE + 会话池；引擎留一个工厂，
   两壳同接线；行为零变化、测试全绿 ｜ PC
 
-- **S6 · `index.html` 面板模块化 + 与 phone 的共享件（动 UI 美化之前必须做）** ｜
-  OpenClaw control-ui（用户认可的 UI）每页一目录（`pages/<名>/route.ts` 约 11 行 +
+- **S6 · ✅ 已落：`index.html` 面板模块化 + 与 phone 的共享件** ｜ OpenClaw control-ui（用户认可的 UI）每页一目录（`pages/<名>/route.ts` 约 11 行 +
   `view.ts` + 测试）+ 单一 store（`ui/src/app/gateway-store.ts`）+ WS 单通道 ｜
   `index.html` 3813 行：183 个顶层函数、65 处 `innerHTML`、104 处内联 `onclick`；
   `show` 在 index:1039 与 phone:150 同名不同义；`esc/decide/answer` 两份手抄；
   审批改内联那次的注释自证"队列本身就是 bug 的来源"（:1757）｜
   你说的"UI 简陋"要动外观，在 3813 行平铺上改 = 高风险手术，先分区再美化 ｜
-  每面板收进一个对象（init/render/dispose），顶层函数进命名空间，index 与 phone 的
-  共用件（esc/decide/answer）提进共享文件；`ui-check.js` 既有判据 + "面板入口存在"全绿 ｜ PC
+  **已落**：13 面板对象（init/render/dispose）+ ui-check 四类判据（含"私有成员不许
+  对象外裸用"的静态 ReferenceError 门 —— 第一轮像素红 ui-at 就是这类：Escape 里残留
+  `palOpen`，`hideSlash` 被跳过）｜ 共享件**查证后收窄**：逐字等价的只有 `esc`
+  （`decide/answer/show` 同名不同义，不合）；`/shared.js` 主服务与 Lan 端点各一条路由
+  （phone 走 LAN，漏了就是伪装成"配对页坏了"的白屏）｜ 聊天核心/侧栏/用量页签留顶层
+  （像素契约点名全局），全量命名空间化留给 UI 美化批 ｜ PC
 
 - **S7 · hooks 事件面扩到 ZCODE 的 7 种** ｜ ZCODE：`SessionStart / UserPromptSubmit /
   PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop`，

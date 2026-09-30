@@ -23,18 +23,27 @@ function check(ok, label, extra) {
 }
 
 // ---- 1) 脚本语法：不执行，只让 V8 解析一遍 ----
-// 壳子现在有两段脚本：内联的主逻辑 + 单独一个 md.js（渲染器）。两边都要解析，
-// 也要两边一起扫 class —— 只扫 index.html 的话，渲染器挂的 class 就没人对账了。
+// 壳子现在有三段脚本：内联的主逻辑 + 渲染器 md.js + 两端共用件 shared.js。
+// 两边都要解析，也要一起扫 class —— 只扫 index.html 的话，别的文件挂的 class 就没人对账了。
 const uiDir = path.resolve(__dirname, '..', 'src', 'main', 'resources', 'ui');
 const mdFile = path.join(uiDir, 'md.js');
 const mdSrc = fs.existsSync(mdFile) ? fs.readFileSync(mdFile, 'utf8') : '';
+const sharedFile = path.join(uiDir, 'shared.js');
+const sharedSrc = fs.existsSync(sharedFile) ? fs.readFileSync(sharedFile, 'utf8') : '';
 const scriptSrc = (html.match(/<script>([\s\S]*?)<\/script>/) || [, ''])[1];
-const allSrc = scriptSrc + '\n' + mdSrc;
+const allSrc = scriptSrc + '\n' + mdSrc + '\n' + sharedSrc;
 check(scriptSrc.length > 200, '取到了 <script> 里的内容', '长度 ' + scriptSrc.length);
 check(mdSrc.length > 200, '渲染器 md.js 在（且被 index.html 引用）',
   '没找到 ui/md.js —— 页面会直接白屏');
 check(/src="\/md\.js"/.test(html), 'index.html 里确实引了 /md.js');
-for (const [label, code] of [['主脚本', scriptSrc], ['md.js', mdSrc]]) {
+/*
+ * shared.js：S6 起两端共用件（esc）只存在这一份。两份 HTML 各自少了它就是白屏
+ * （esc 满页都在用），所以引用与存在性都要挡。
+ */
+check(sharedSrc.length > 50, '共用件 shared.js 在', '没找到 ui/shared.js —— 两端 esc 会变未定义');
+check(/src="\/shared\.js"/.test(html), 'index.html 里确实引了 /shared.js');
+for (const [label, code] of [['主脚本', scriptSrc], ['md.js', mdSrc], ['shared.js', sharedSrc]]) {
+  if (!code) continue;
   try { new Function(code); check(true, label + ' 语法能过 V8 解析'); }
   catch (e) { check(false, label + ' 语法能过 V8 解析', e.message); }
 }
@@ -172,12 +181,13 @@ check(jsBad === '', '整段前端 JS 能解析', jsBad);
  * 桌面这边一切正常。上一版就是被一次写入截断（localStorage 变成 localS…tem）坑掉的，
  * 现象是"配对按钮点了没反应"，查了两轮才想到去看 rect=0x0。
  */
-let phoneBad = '', phonePages = 0, lanMissing = [];
+let phoneBad = '', phonePages = 0, lanMissing = [], phoneShared = false;
 const lanSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc', 'Lan.kt'), 'utf8');
 const lanRoutes = new Set([...lanSrc.matchAll(/"(\/lan\/[a-z]+)"/g)].map(m => m[1].slice(1)));
 for (const f of fs.readdirSync(uiDir).filter(x => x.endsWith('.html') && x !== 'index.html')) {
   phonePages++;
   const pageSrc = fs.readFileSync(path.join(uiDir, f), 'utf8');
+  if (/src="\/shared\.js"/.test(pageSrc)) phoneShared = true;
   for (const m of pageSrc.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
     if (!m[1].trim()) continue;
     try { new Function(m[1]); } catch (e) { phoneBad = f + '：' + e.message; break; }
@@ -189,6 +199,65 @@ for (const f of fs.readdirSync(uiDir).filter(x => x.endsWith('.html') && x !== '
 check(phonePages > 0, '抓到手机网页端', phonePages + ' 个非主页面');
 check(phoneBad === '', '手机网页端 JS 能解析', phoneBad);
 check(lanMissing.length === 0, '手机网页端没有调到不存在的 /lan 接口', lanMissing.join(', '));
+check(phoneShared, '手机网页端也引了 /shared.js', 'phone 的 esc 会变未定义（原来两份各抄一份，S6 起只有一份）');
+// phone 是从 **Lan 端点**出的（不是主服务）：那边不发 /shared.js 的话，
+// 手机页的 esc 是未定义 —— 白屏发生在"还没配对"那一步，看起来像配对页坏了。
+check(!phoneShared || /path == "\/shared\.js"/.test(lanSrc),
+  'Lan 端点也发 /shared.js', 'phone 引了但 Lan.kt 没这条路由（手机页会白屏）');
+
+/*
+ * ---- 6.6) S6：每个面板一个对象，静态接线收进 init ----
+ * 面板对象化是"动 UI 之前先分区"的那一步：状态、接线(init)、刷新(render) 要在一个地方看得见。
+ * 这条判据防的是回退 —— 哪天有人图省事又在顶层加一个 `function loadXxx()`，
+ * 或者把 `Xxx.init();` 删了（接线全哑，按钮点了没反应但语法照样绿）。
+ */
+const PANELS = ['Palette', 'Term', 'Ck', 'Lan', 'Pv', 'Git', 'Files', 'Mem', 'Skills', 'Cron', 'Presets', 'Hooks', 'Cfg'];
+const panelBad = [];
+for (const p of PANELS) {
+  if (!new RegExp('const ' + p + ' = \\(\\(\\) => \\{').test(scriptSrc)) panelBad.push(p + ' 没收成对象');
+  if (!new RegExp('^' + p + '\\.init\\(\\);', 'm').test(scriptSrc)) panelBad.push(p + '.init() 没被调（静态接线全哑）');
+}
+check(panelBad.length === 0, '13 个面板都是对象且 init 被调', panelBad.join('、'));
+// 页签分派必须走面板对象（改回裸函数名 = 又一份顶层散函数）
+const tabBlockSrc = (scriptSrc.match(/querySelectorAll\('#tabs button'\)\.forEach\(b=>b\.onclick=\(\)=>\{([\s\S]*?)\n\}\);/) || [, ''])[1];
+const tabCalls = [...tabBlockSrc.matchAll(/([A-Z]\w+)\.render\(\)/g)].map(m => m[1]);
+check(tabCalls.length >= 8, '页签分派走面板对象的 render', '只抓到 ' + tabCalls.length + ' 处：' + tabCalls.join(','));
+check(!/\b(loadGit|loadFiles|loadLan|loadCron|loadPresets|loadHooks|loadMems|loadDigest)\(\)/.test(tabBlockSrc),
+  '页签分派里没有残留的裸面板函数调用', '还指着顶层旧名：' + tabBlockSrc.match(/\b(load\w+)\(\)/g));
+
+/*
+ * ---- 6.7) 面板私有成员不许在对象外裸用 ----
+ * S6 把状态与函数关进了对象之后，核心代码里再写 `palOpen` 这种裸名字 = 运行时
+ * ReferenceError，而且炸的位置常常在没人想到的地方：实测残留一个 `palOpen` 在
+ * Escape 处理里，整个 hideSlash 被跳过，@ 列表关不掉 —— 是 ui-at 的判据红了才看见的。
+ * 静态挡：每个面板对象区间（`const X = (() => {` … `X.init();`）之外，
+ * 它的私有名字只许以 `Panel.成员` 的形式出现，裸用一律报出来。
+ */
+const panelLeaks = [];
+for (const p of PANELS) {
+  const start = scriptSrc.indexOf('const ' + p + ' = (() => {');
+  const end = scriptSrc.indexOf('\n' + p + '.init();', start);
+  if (start < 0 || end < 0) continue;   // 上一条判据已经报过"没收成对象"
+  const span = scriptSrc.slice(start, end);
+  // 对象内的列 0 声明 = 私有成员（init 里的缩进声明是 init 局部，核心看不见）
+  const priv = new Set();
+  for (const m of span.matchAll(/^(?:function|let|const|var)\s+([A-Za-z_$][\w$]*)/gm)) priv.add(m[1]);
+  priv.delete(p);   // IIFE 头那行 `const X = (() => {` 不是成员
+  for (const name of priv) {
+    const re = new RegExp('\\b' + name + '\\b', 'g');
+    for (const m of scriptSrc.matchAll(re)) {
+      if (m.index >= start && m.index < end) continue;
+      const before = scriptSrc[m.index - 1] || '';
+      if (before === '#' || before === "'" || before === '"' || before === '.') continue;   // $('#palList') 这类 id/属性位
+      const lineStart = scriptSrc.lastIndexOf('\n', m.index) + 1;
+      const line = scriptSrc.slice(lineStart, scriptSrc.indexOf('\n', m.index));
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;   // 注释里提名字不算用
+      panelLeaks.push(p + '.' + name + ' 在对象外裸用：' + line.trim().slice(0, 90));
+    }
+  }
+}
+check(panelLeaks.length === 0, '面板私有成员没有在对象外裸用（裸用 = 运行时 ReferenceError）',
+  panelLeaks.join('\n         '));
 
 // ---- 6) 像素剧本里的每条 eval 必须能解析 ----
 /*

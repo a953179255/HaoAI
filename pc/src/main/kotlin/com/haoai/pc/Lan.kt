@@ -251,6 +251,10 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
                 // 手机网页端先于鉴权：不让人先把页面打开，他连配对码往哪填都不知道。
                 // 这份 HTML 里没有任何凭据，数据全走下面那些要 token 的 /lan/* 口。
                 path == "/" || path == "/index.html" || path == "/phone" -> page(ex)
+                // phone.html 引 /shared.js（两端共用件）：这份和 page() 一样走预鉴权 ——
+                // 404 的话 esc 是未定义，手机页整页白屏，而且错误发生在"还没配对"那一步，
+                // 表面上像"配对页坏了"。主服务（Server.kt）有一份同名路由，两边都要有。
+                path == "/shared.js" -> sharedJs(ex)
                 path == "/lan/health" -> send(ex, 200, """{"ok":true,"service":"haoai-pc"}""")
                 path == "/lan/pair" && ex.requestMethod == "POST" -> pair(ex)
                 else -> {
@@ -289,6 +293,15 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
         ex.responseHeaders.add("Cache-Control", "no-store")
         ex.sendResponseHeaders(200, html.size.toLong())
         ex.responseBody.use { it.write(html) }
+    }
+
+    private fun sharedJs(ex: HttpExchange) {
+        val js = javaClass.classLoader.getResourceAsStream("ui/shared.js")?.readBytes()
+            ?: "shared.js 资源缺失（打包时没带上 ui/shared.js）".toByteArray(Charsets.UTF_8)
+        ex.responseHeaders.add("Content-Type", "text/javascript; charset=utf-8")
+        ex.responseHeaders.add("Cache-Control", "no-store")
+        ex.sendResponseHeaders(200, js.size.toLong())
+        ex.responseBody.use { it.write(js) }
     }
 
     private fun pair(ex: HttpExchange) {
