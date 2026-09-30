@@ -135,9 +135,14 @@ check(palActs >= 2, '面板里"两步动作"的页签与按钮都能静态对上
 check(palBad.length === 0, '命令面板每条入口都真的存在', '漂了：' + palBad.join('、'));
 
 // ---- 4) 服务端事件名与前端监听名要对得上 ----
-const server = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc', 'Server.kt'), 'utf8');
+// 扫**整个** com/haoai/pc 源码目录：S5 按域拆分后 publish("x" 散在 Server*.kt 各页里
+// （settings 发自 ServerConfig、model 发自 ServerModel…），只盯 Server.kt 会把名单读少。
+const pcDir = path.resolve(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc');
 const emitted = new Set();
-for (const m of server.matchAll(/publish\(\s*"([\w]+)"/g)) emitted.add(m[1]);
+for (const f of fs.readdirSync(pcDir).filter(x => x.endsWith('.kt'))) {
+  const kt = fs.readFileSync(path.join(pcDir, f), 'utf8');
+  for (const m of kt.matchAll(/publish\(\s*"([\w]+)"/g)) emitted.add(m[1]);
+}
 const listened = new Set();
 for (const m of scriptSrc.matchAll(/es\.addEventListener\('([\w]+)'/g)) listened.add(m[1]);
 for (const m of scriptSrc.matchAll(/^on\('([\w]+)'/gm)) listened.add(m[1]);
@@ -147,6 +152,7 @@ const orphan = [...emitted].filter(e => !listened.has(e));
 check(orphan.length === 0, '服务端发的每个事件名前端都有人接', '没人接：' + orphan.join(', '));
 
 // ---- 5) 前端调用的接口必须在服务端路由表里 ----
+const server = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'main', 'kotlin', 'com', 'haoai', 'pc', 'Server.kt'), 'utf8');
 /*
  * 这份清单**不能**再手抄：手抄的那份只记得起老接口，新加的一律报"陌生接口"，
  * 而这个检查真正要防的恰恰是"前端打了一个服务端没注册的地址"（那是 404，

@@ -3464,6 +3464,37 @@ Windows ConPTY 上的常驻进程（`ConPty.kt`，JDK FFM 直调 kernel32，零�
   且是像素剧本的契约 API（`cur/finishAnswer/openSession/markSessions/mode/views` 点名要全局）。
   全量命名空间化留给 UI 美化批一起做，别在这一批里赌 64 份剧本。
 
+## 这一批：Server.kt 拆域 + 引擎工厂单路径（ROADMAP §6 S5，B15 的地基）
+
+`Server.kt` 3091 行单类 = 85 个路由 + SSE + 会话池 + 排队 + 审批闸 + 定时器 + LAN 宿主 +
+终端/浏览器代理 + git + 备份 + 设置。这一批**不改一个行为**，只动结构：
+
+- **引擎工厂（EngineFactory）**：以前 `Engine(...)` 这行两壳各写一遍（CLI `Sessions.create`、
+  网页 `engineFor`），"构造时要接什么"只能对照两处代码。现在构造调用只出现在工厂一处，
+  会话级 overlay（恢复出来的模型/toolsOff 补写）也收进去 —— **B15 要两壳共用的是这层，
+  不是那 3000 行网页壳**。
+- **按域拆 8 个文件、搬 55 个方法**，`Server.kt` **3091 → 1484 行**：
+  `ServerMessages`（消息级/附件/检查点）· `ServerFiles`（文件与媒体）· `ServerAbility`
+  （规则/记忆/技能/订阅源/MCP/凭据/钩子）· `ServerAutomation`（定时/工作流/结果）·
+  `ServerDevProxy`（终端与浏览器代理）· `ServerGit` · `ServerConfig`（备份/设置）·
+  `ServerModel`（模型/导出/分享）。路由分派表、SSE、会话池、审批闸、编排留原地。
+- **形状是同包扩展函数，不是独立 handler 类**（与判据原文的偏差，理由写在这）：
+  类体拆成独立类要给每个内部引用加 `ctx.` 前缀（改动面 ×10、每处都可能改错），
+  而 `internal fun WebServer.xxx` 是**纯搬移** —— 方法名未变、route 表一字未动，
+  可见性只对搬走代码引用到的成员定向放宽（`settings/sessions/publish/send/quote/…` 与
+  嵌套类 `Body/Managed/Waiter`）。
+- **纯搬移纪律**：方法体连注释与段标记整体搬、**保持原缩进**（多行字符串与续行模板里的
+  缩进是内容的一部分，dedent 就是改行为）、域文件头写明来历。
+
+量具跟着拆分走（两个都是"只盯 Server.kt"读出的**假红**，本身证明名单该按全目录算）：
+`UiContractTest` 与 `ui-check` 的事件名单原来只扫 `Server.kt`，拆完当场红出
+`settings/model` 没人发 —— 其实它们从 `ServerConfig/ServerModel` 发得欢。
+两个都改成扫 `com/haoai/pc` 全目录。
+
+- **验收**：`gradle test` **522 条全绿**（WebApi/审批/定时/备份/git/媒体那些 HTTP 层测试
+  正好压在搬走的域上）；`ui-check`、`md-check` 全过；代表域像素 8 份全绿
+  （settings / git / preview / cron(+narrow) / skill(+feed) / tour）。
+
 ## 与手机端同源的行为
 
 

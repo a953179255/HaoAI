@@ -239,8 +239,10 @@
 格式同 §2：**编号 · 干什么** ｜ 对标 ｜ 现状（查证）｜ 为什么 ｜ 验收判据 ｜ 涉及端
 
 **施工顺序**：~~S3 → S1~~ ✅ 同批已落（2026-09-30，`UiContractTest` 4 条，README「这一批」）
-→ ~~S6~~ ✅ **已落**（13 面板对象 + shared.js + ui-check 四类新判据；像素 65 份全绿，
-README「面板模块化」）→ S5 与 B15/#106/#108 合一片 → S7 单独小批 ｜ S8 缓。
+→ ~~S6~~ ✅ 已落（13 面板对象 + shared.js + ui-check 四类新判据；像素 65 份全绿）
+→ ~~S5~~ ✅ **已落**（EngineFactory 单路径 + Server.kt 3091→1484 行按域拆 8 文件；
+事件名单量具改扫全目录；522 全绿 + 8 份代表像素全绿，README「这一批」）
+→ S7 单独小批 ｜ S8 缓。
 
 - **S1 · ✅ 已落：SSE 事件契约 `forward` 穷尽 + 事件名单两头对齐** ｜ OpenClaw `AgentEvent`
   一个 union 同时驱动流式/审批/UI（`agent-core/src/types.ts:548`）、codex `event_mapping.rs`
@@ -276,16 +278,20 @@ README「面板模块化」）→ S5 与 B15/#106/#108 合一片 → S7 单独�
   真正剩下的：`Lan.quote:188` 是**死代码**（0 个调用点，grep 过）⇒ 顺手删；
   防"以后再手写一份"靠 review 时不批，不靠这批 ｜ 删掉后编译与测试全绿 ｜ PC
 
-- **S5 · `Server.kt` 按 `//----` 拆域 + Engine 工厂单路径（与 B15/#106/#108 同一片地基）** ｜
+- **S5 · ✅ 已落：`Server.kt` 按 `//----` 拆域 + Engine 工厂单路径（与 B15 同一片地基）** ｜
   OpenClaw `src/gateway/server-methods/` 234 文件按域一文件、codex
   `app-server/src/request_processors/` 同理 ｜ `Server.kt` 3082 行单类 =
   85 个路由 `when` 平铺（:153-249）+ SSE + 会话池/排队 + 审批闸 + 定时器 + LAN 宿主 +
   PTY/CDP 代理 + git + 静态资源；引擎构造**双路径**（CLI `Sessions.create:1170` vs
   `Server.engineFor:296`，settings/toolsOff/gate 的接线只有 Server 侧有 :308-315）｜
-  拆分标记 `//----` 源码里早就备好（:2321 终端、:2390 预览、:2446 手机…），
-  `ApiDocTest`+`WebApiTest` 兜底 ⇒ 拆是安全的；双构造路径是"改一处漏一处"的结构 ｜
-  按域拆成同包 handler 类，`Server.kt` 只留路由分发 + SSE + 会话池；引擎留一个工厂，
-  两壳同接线；行为零变化、测试全绿 ｜ PC
+  **已落**：`EngineFactory`（构造 + 会话 overlay 各一处，两壳都走）；按域拆 8 文件
+  （Messages/Files/Ability/Automation/DevProxy/Git/Config/Model，55 个方法），
+  `Server.kt` 3091→1484 行 ｜ **与判据原文的偏差**：形状是**同包扩展函数**不是独立
+  handler 类 —— 独立类要给每个内部引用加 `ctx.` 前缀（改动面 ×10 且易错），扩展是纯搬移、
+  route 表一字未动、可见性只定向放宽；B15 真正要两壳共用的是 Engine 这层 ｜
+  量具同步：`UiContractTest` 与 `ui-check` 的事件名单从"只扫 Server.kt"改扫全目录
+  （拆分当场红出的假红，正是名单该按全目录算的证据）｜ 判据：522 全绿、ui/md-check 过、
+  代表域像素 8 份全绿 ｜ PC
 
 - **S6 · ✅ 已落：`index.html` 面板模块化 + 与 phone 的共享件** ｜ OpenClaw control-ui（用户认可的 UI）每页一目录（`pages/<名>/route.ts` 约 11 行 +
   `view.ts` + 测试）+ 单一 store（`ui/src/app/gateway-store.ts`）+ WS 单通道 ｜

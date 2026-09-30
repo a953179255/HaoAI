@@ -23,12 +23,22 @@ class UiContractTest {
         return f.readText(Charsets.UTF_8)
     }
 
-    /** 服务端发出的全部 SSE 事件名：publish("x" 的字面量 + sse() 里那两声心跳。 */
+    /** 服务端发出的全部 SSE 事件名：publish("x" 的字面量 + sse() 里那两声心跳。
+     *  扫**整个服务端源码目录**而不是单个 Server.kt —— S5 按域拆分后 publish 散在
+     *  Server*.kt 各页里，只盯一个文件会把"发了"的名单读少，制造假红。 */
     private fun sentEvents(): Set<String> {
-        val src = read(server)
-        val pub = Regex("publish\\(\\s*\"([a-z]+)\"").findAll(src).map { it.groupValues[1] }.toSet()
-        val beat = Regex("write\\(\\s*os,\\s*\"([a-z]+)\"").findAll(src).map { it.groupValues[1] }.toSet()
-        assertTrue("Server.kt 里一个 publish(\"…\") 都没抓到 —— 正则或文件布局变了，先修这条测试", pub.isNotEmpty())
+        val dir = File("src/main/kotlin/com/haoai/pc")
+        assertTrue("找不到服务端源码目录 " + dir.path, dir.isDirectory)
+        val files = dir.listFiles { f -> f.isFile && f.extension == "kt" }
+        assertTrue("服务端一个 .kt 都没有", files != null && files.isNotEmpty())
+        val pub = mutableSetOf<String>()
+        val beat = mutableSetOf<String>()
+        for (f in files) {
+            val src = f.readText(Charsets.UTF_8)
+            pub += Regex("publish\\(\\s*\"([a-z]+)\"").findAll(src).map { it.groupValues[1] }
+            beat += Regex("write\\(\\s*os,\\s*\"([a-z]+)\"").findAll(src).map { it.groupValues[1] }
+        }
+        assertTrue("服务端一个 publish(\"…\") 都没抓到 —— 正则或文件布局变了，先修这条测试", pub.isNotEmpty())
         return pub + beat
     }
 

@@ -1162,6 +1162,43 @@ class Engine(
 }
 
 /**
+ * 引擎构造的**唯一入口**（S5）。
+ *
+ * 以前 `Engine(...)` 这行在两壳各写一遍：CLI 走 [Sessions.create]、网页走
+ * `WebServer.engineFor`，差别（新会话 vs 从磁盘恢复、闸口接线、sink）全散在两边，
+ * 于是"构造时要接什么"只能靠对照两处代码才知道。现在构造调用只许出现在这里：
+ * 两壳的差别体现在参数上，而不是体现在各写各的构造。
+ *
+ * 真正要两壳**共用**的是这层（B15 把 `:core` 并进来之后，手机端也走这里）——
+ * 而 WebServer 那 3000 行是网页壳自己的事，不进这份工厂。
+ */
+object EngineFactory {
+    fun build(
+        session: Session,
+        settings: PcSettings,
+        gate: Gate,
+        emit: (Ev) -> Unit,
+        client: ChatClient? = null
+    ): Engine =
+        if (client == null) Engine(session, settings, allTools(), gate, emit)
+        else Engine(session, settings, allTools(), gate, emit, client)
+
+    /**
+     * 会话级覆盖：引擎构造时拿的是**全局**设置，恢复出来的会话可能写着自己的
+     * 模型与被关掉的工具 —— 不补这一步，"这条会话用本地 7B、shell 已关"
+     * 重启后就悄悄没了（网页壳 engineFor 的老注释，逻辑原样收进工厂）。
+     */
+    fun applySessionOverlay(engine: Engine, settings: PcSettings, model: String, toolsOff: List<String>) {
+        if (model.isNotBlank() || toolsOff.isNotEmpty()) {
+            engine.useSettings(settings.copy(
+                model = model.ifBlank { settings.model },
+                toolsOff = toolsOff
+            ))
+        }
+    }
+}
+
+/**
  * 会话登记。一次只跑一个回合（审批是同步阻塞的），所以这里只是个 id → Engine 的表。
  */
 object Sessions {
@@ -1176,8 +1213,7 @@ object Sessions {
     ): Engine {
         val s = Session(UUID.randomUUID().toString().take(8), workspace)
         s.mode = settings.permissionMode
-        val e = if (client == null) Engine(s, settings, allTools(), gate, emit)
-        else Engine(s, settings, allTools(), gate, emit, client)
+        val e = EngineFactory.build(s, settings, gate, emit, client)
         map[s.id] = e
         return e
     }
