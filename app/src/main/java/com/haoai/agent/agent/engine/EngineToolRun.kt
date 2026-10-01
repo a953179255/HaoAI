@@ -42,7 +42,7 @@ internal suspend fun AgentEngine.executeCall(
     // 序列重新发送。"非 READ 工具 + 同名同参 + 紧邻上一次执行"→ 判定为重放，
     // 返回上次结果不再执行（写类重复可能产生真实副作用）；READ 类放行（连续
     // 滚动/重复读页是合法操作）。
-    val replaySig = call.name + "|" + call.argumentsJson.trim()
+    val replaySig = call.name + "|" + call.args.trim()
     val isReplay = replaySig == lastExecutedSig &&
         lastExecutedResult != null &&
         policy.riskOf(call.name) != com.haoai.agent.agent.policy.RiskLevel.READ
@@ -51,7 +51,7 @@ internal suspend fun AgentEngine.executeCall(
         onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.DONE, briefOf(call), "重放跳过：与上一次调用相同，返回已有结果")))
         val storedP = TextCap.middle(prev.content, STORED_CAP)
         appendAndNotify(
-            ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, toolCallId = call.id, toolName = call.name),
+            ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, callId = call.id, name = call.name),
             onEvent
         )
         return
@@ -60,14 +60,14 @@ internal suspend fun AgentEngine.executeCall(
     onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.RUNNING, briefOf(call))))
 
     val tool = tools.firstOrNull { it.name == call.name }
-    val args = parseArgs(call.argumentsJson)
+    val args = parseArgs(call.args)
     // 畸形参数防护（OpenClaw #142176 精神）：解析失败不静默当空参跑——那会把
     // memory save 误变成默认的 list 之类的动作且模型毫不知情。此刻没有任何动作
     // 执行过（replay-safe），给显性错误让模型重新完整调用。走 finishCall 落历史，
     // 模型下一轮就能看到错误并自愈。
     if (args == null) {
         val err = ToolResult(
-            "工具参数 JSON 损坏（模型输出被截断或编码错误）：${call.argumentsJson.take(160)}。" +
+            "工具参数 JSON 损坏（模型输出被截断或编码错误）：${call.args.take(160)}。" +
                 "请完整重新调用 ${call.name}，参数必须是合法 JSON。",
             true
         )
@@ -95,7 +95,7 @@ internal suspend fun AgentEngine.executeCall(
         finalState = ToolRunState.DONE
         val storedP = TextCap.middle(result.content, STORED_CAP)
         appendAndNotify(
-            ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, toolCallId = call.id, toolName = call.name),
+            ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, callId = call.id, name = call.name),
             onEvent
         )
         onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.DONE, briefOf(call), "已拦截（Plan 模式）")))
@@ -281,7 +281,7 @@ internal suspend fun AgentEngine.finishCall(
     // B1 空转守卫：观测收尾结果（与 E5 失败熔断并列；在 hooks 之后，保证 finalResult 已定）
     val guardDecision = loopGuard.observe(
         toolName = call.name,
-        argsJson = call.argumentsJson,
+        argsJson = call.args,
         resultContent = finalResult.content,
         isError = finalResult.error,
         isRead = policy.riskOf(call.name) == com.haoai.agent.agent.policy.RiskLevel.READ
@@ -331,8 +331,8 @@ internal suspend fun AgentEngine.finishCall(
     val message = ChatMessage(
         role = ChatMessage.ROLE_TOOL,
         content = storedContent,
-        toolCallId = call.id,
-        toolName = call.name,
+        callId = call.id,
+        name = call.name,
         error = finalResult.error
     )
     appendAndNotify(message, onEvent)
@@ -391,7 +391,7 @@ internal suspend fun AgentEngine.executeParallelCalls(
         return
     }
     val prepared = calls.map { call ->
-        PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.argumentsJson), ctx)
+        PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.args), ctx)
     }
     prepared.forEach { p ->
         onEvent(ToolChanged(ToolUpdate(p.call.id, ToolRunState.RUNNING, briefOf(p.call))))
@@ -417,7 +417,7 @@ internal suspend fun AgentEngine.runParallelBody(p: PreparedCall): Triple<ToolRe
     if (p.args == null) {
         return Triple(
             ToolResult(
-                "工具参数 JSON 损坏（模型输出被截断或编码错误）：${p.call.argumentsJson.take(160)}。" +
+                "工具参数 JSON 损坏（模型输出被截断或编码错误）：${p.call.args.take(160)}。" +
                     "请完整重新调用 ${p.call.name}，参数必须是合法 JSON。",
                 true
             ),
@@ -431,23 +431,31 @@ internal suspend fun AgentEngine.runParallelBody(p: PreparedCall): Triple<ToolRe
 
 internal suspend fun AgentEngine.invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =
     try {
-        // bash（3.3 多后端）允许显式放宽到 600s（长构建），按请求 +20s 余量；其余工具维持 180s
-        val budget = if (tool.name == "bash") {
-            var t = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000).toLong()
-            // 包管理命令与 BashTool 同步保底抬升（引擎先超时会连 dpkg 一起杀，
-            // 留 interrupted 锁；toybox/ssh 误抬无害——工具内部自有 exec 超时）
-            runCatching {
-                val cmd = args["command"]?.jsonPrimitive?.contentOrNull ?: ""
-                val floorMs = com.haoai.agent.agent.tools.BashTool.pkgMgmtTimeoutFloorMs(cmd)
-                if (floorMs > t) t = floorMs
-            }
-            t + 20_000L
-        } else TOOL_TIMEOUT_MS
-        // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
-        // （browser_* 工具内部自行 withContext(Main) 操作 WebView，嵌套切换安全）
-        withTimeout(budget) {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                tool.run(args, ctx)
+        // 提问类工具（ask_user/ask_user_batch）的"执行"就是挂起等用户拍板，不受工具看门狗
+        // 约束：180s 无人应答判超时等于替用户弃权——模型会拿到"工具执行超时"自己编个
+        // 理由继续跑（真机 MBTI 实测两次）。等待本就没有时钟上限，收口是作答 /
+        // 通知快捷回答 / 用户停止任务。
+        if (tool.name == "ask_user" || tool.name == "ask_user_batch") {
+            kotlinx.coroutines.withContext(Dispatchers.IO) { tool.run(args, ctx) }
+        } else {
+            // bash（3.3 多后端）允许显式放宽到 600s（长构建），按请求 +20s 余量；其余工具维持 180s
+            val budget = if (tool.name == "bash") {
+                var t = (args.optInt("timeout_ms") ?: 30_000).coerceIn(1000, 600_000).toLong()
+                // 包管理命令与 BashTool 同步保底抬升（引擎先超时会连 dpkg 一起杀，
+                // 留 interrupted 锁；toybox/ssh 误抬无害——工具内部自有 exec 超时）
+                runCatching {
+                    val cmd = args["command"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val floorMs = com.haoai.agent.agent.tools.BashTool.pkgMgmtTimeoutFloorMs(cmd)
+                    if (floorMs > t) t = floorMs
+                }
+                t + 20_000L
+            } else TOOL_TIMEOUT_MS
+            // 工具实现普遍含文件/网络 IO：统一切到 IO 线程，避免卡主线程
+            // （browser_* 工具内部自行 withContext(Main) 操作 WebView，嵌套切换安全）
+            withTimeout(budget) {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    tool.run(args, ctx)
+                }
             }
         }
     } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
