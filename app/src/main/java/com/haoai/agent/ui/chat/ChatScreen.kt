@@ -363,6 +363,8 @@ fun ChatScreen(
     val streamingReasoning by vm.visibleStreamingReasoning.collectAsState()
     // ask_user 提问卡（会话门控）：模型发起"等你拍板"时渲染在流式区下方
     val pendingAskNow by vm.visiblePendingAsk.collectAsState()
+    // ask_user_batch 题组卡（会话门控）：整批问卷本地循环出题
+    val pendingQuizNow by vm.visiblePendingQuiz.collectAsState()
     val thinkingMs by vm.thinkingMs.collectAsState()
     val running by vm.running.collectAsState()
     val liveToolsSnapshot by vm.liveToolsSnapshotFlow.collectAsState()
@@ -1118,6 +1120,16 @@ fun ChatScreen(
                     )
                 }
             }
+            // ask_user_batch 题组卡：同位置；选完自动跳下一题（点选即作答，无确认环节）
+            pendingQuizNow?.let { quiz ->
+                androidx.compose.runtime.key("pending-quiz-${quiz.id}") {
+                    PendingQuizCard(
+                        quiz = quiz,
+                        onAnswer = { id, qIndex, oIndex -> vm.answerQuiz(id, qIndex, oIndex) },
+                        onAnswerFree = { id, qIndex, text -> vm.answerQuizFree(id, qIndex, text) }
+                    )
+                }
+            }
             // E8 插话排队提示（生成期间用户发送的消息在队列中等待间隙注入）
             val interjectCount by vm.interjectCount.collectAsState()
             if (interjectCount > 0) {
@@ -1177,6 +1189,8 @@ fun ChatScreen(
                             val phaseText = when {
                                 // ask_user 挂起等用户：优先级最高——工具在 RUNNING，但真正的事件是"等你回答"
                                 pendingAskNow != null -> "等你回答"
+                                // 题组同理：等的是答题进度，不是单词作答
+                                pendingQuizNow != null -> "等你答题"
                                 retrying != null ->
                                     (retrying.brief.ifBlank { "网络波动" }) + " · 自动重试中"
                                 runningTool != null -> {
@@ -2962,6 +2976,205 @@ private fun PendingAskCard(
                             .fillMaxWidth()
                             .padding(vertical = 11.dp)
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * ask_user_batch 题组卡：本地循环出题——点选项即记录并自动跳下一题（不回模型），
+ * 答满整卡消失、引擎恢复。头部固定显示题组标题 + 第 n/N 题 + 进度条。
+ * stale 防御：作答携带出题时下标，VM 比对当前下标，重组前的重复点击被丢弃。
+ */
+@Composable
+private fun PendingQuizCard(
+    quiz: com.haoai.agent.ui.ChatViewModel.PendingQuiz,
+    onAnswer: (askId: String, questionIndex: Int, optionIndex: Int) -> Unit,
+    onAnswerFree: (askId: String, questionIndex: Int, text: String) -> Unit
+) {
+    val qIndex = quiz.answered
+    val total = quiz.req.questions.size
+    // 答满瞬间 _pendingQuiz 已清空，正常不会重组出越界；防御性取值兜底
+    val current = quiz.req.questions.getOrNull(qIndex) ?: return
+    val primary = MaterialTheme.colorScheme.primary
+    var freeOpen by remember(quiz.id, qIndex) { mutableStateOf(false) }
+    var freeText by remember(quiz.id, qIndex) { mutableStateOf("") }
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
+        shape = RoundedCornerShape(18.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, primary.copy(alpha = 0.55f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp, bottom = 4.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            // 头部：题组标题 + 当前进度
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(primary)
+                )
+                Text(
+                    quiz.req.title,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = primary,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 7.dp).weight(1f)
+                )
+                Text(
+                    "第 ${qIndex + 1} / $total 题",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 进度条：分段跳变无动画（动画只在答题时长存在，静止零帧）
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .height(3.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(primary.copy(alpha = 0.14f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth((qIndex + 1).toFloat() / total.coerceAtLeast(1))
+                        .background(primary)
+                )
+            }
+            Text(
+                current.question,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+            current.options.forEachIndexed { i, opt ->
+                Surface(
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                    shape = RoundedCornerShape(13.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .clickable { onAnswer(quiz.id, qIndex, i) }
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AskRadioDot(false, primary)
+                            Text(
+                                opt.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                        if (opt.description.isNotBlank()) {
+                            Text(
+                                opt.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.padding(start = 24.dp, top = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            // 自由输入：展开后出现提交按钮（选项路点选即答、无按钮，两路提交入口不同）
+            if (quiz.req.allowFreeText) {
+                if (!freeOpen) {
+                    Surface(
+                        color = Color.Transparent,
+                        shape = RoundedCornerShape(13.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .clip(RoundedCornerShape(13.dp))
+                            .clickable { freeOpen = true }
+                    ) {
+                        Text(
+                            "其他…（自由输入）",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                        shape = RoundedCornerShape(13.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, primary.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    ) {
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = freeText,
+                            onValueChange = { freeText = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                onDone = {
+                                    if (freeText.isNotBlank())
+                                        onAnswerFree(quiz.id, qIndex, freeText.trim())
+                                }
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(primary),
+                            decorationBox = { inner ->
+                                Box(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                                    if (freeText.isEmpty()) {
+                                        Text(
+                                            "输入你的回答，回车或点下方提交",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                    inner()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    val ready = freeText.isNotBlank()
+                    Surface(
+                        color = if (ready) primary.copy(alpha = 0.92f)
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(enabled = ready) {
+                                onAnswerFree(quiz.id, qIndex, freeText.trim())
+                            }
+                    ) {
+                        Text(
+                            if (ready) "提交回答" else "先输入你的回答",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (ready) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 11.dp)
+                        )
+                    }
                 }
             }
         }

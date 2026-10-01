@@ -85,6 +85,8 @@ class AgentEngine(
     /** ask_user 提问门：模型发起"暂停等用户拍板"，由前台聊天 VM 注入弹卡挂起；
      *  null（无人值守/子代理）时 AskUserTool 按"取默认假设继续"指引收场。 */
     internal val askUser: (suspend (com.haoai.agent.agent.tools.AskUserRequest) -> com.haoai.agent.agent.tools.AskUserAnswer)? = null,
+    /** ask_user_batch 整批问卷门：同 [askUser] 生死条件，VM 层注入本地循环出题卡。 */
+    internal val askUserBatch: (suspend (com.haoai.agent.agent.tools.AskUserBatchRequest) -> List<String>)? = null,
     /** C1 config_set 预检：合并补丁→同源解析→语义 diff；err 非空=补丁非法（免审批直接拒绝）。 */
     internal val configPreview: suspend (JsonObject) -> com.haoai.agent.data.ConfigFileBridge.Preview = {
         com.haoai.agent.data.ConfigFileBridge.Preview(err = "配置预检不可用", diff = "")
@@ -381,6 +383,7 @@ class AgentEngine(
             configMutator = configMutator,
             configRender = configRender,
             askUser = askUser,
+            askUserBatch = askUserBatch,
             onToolChange = onToolChange,
             vscreenEnabled = vscreenEnabled,
             vscreenBitrateKbps = vscreenBitrateKbps,

@@ -99,8 +99,8 @@ class PolicyEngine(private val mode: PermissionMode) {
         "bash" -> RiskLevel.EXEC
         "write", "edit" -> RiskLevel.WRITE
         "config_set" -> RiskLevel.WRITE // C6：配置写恒审批（引擎另有特判，YOLO 下同样强制弹窗）
-        // ask_user 主动提问永远免审：它是"问用户"本身，弹审批就死锁了
-        "ask_user" -> RiskLevel.READ
+        // ask_user 主动提问永远免审：它是"问用户"本身，弹审批就死锁了（batch 同理）
+        "ask_user", "ask_user_batch" -> RiskLevel.READ
         // 起草+删除工作流均改配置：delete 曾因默认 READ 在 ASK_WRITES 下免审批（可路径穿越删文件）
         "workflow_save" -> RiskLevel.WRITE
         "tap", "swipe", "type_text", "key" -> RiskLevel.EXEC

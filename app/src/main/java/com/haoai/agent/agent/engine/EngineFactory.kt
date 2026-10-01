@@ -37,7 +37,9 @@ object EngineFactory {
         val onToolChange: (() -> Unit)? = null,
         val planGate: () -> Boolean = { false },
         /** ask_user 提问门：仅前台聊天注入（弹卡挂起等用户回答）；无人值守留空。 */
-        val askUser: (suspend (com.haoai.agent.agent.tools.AskUserRequest) -> com.haoai.agent.agent.tools.AskUserAnswer)? = null
+        val askUser: (suspend (com.haoai.agent.agent.tools.AskUserRequest) -> com.haoai.agent.agent.tools.AskUserAnswer)? = null,
+        /** ask_user_batch 整批问卷门：仅前台聊天注入；无人值守留空。 */
+        val askUserBatch: (suspend (com.haoai.agent.agent.tools.AskUserBatchRequest) -> List<String>)? = null
     )
 
     /** 交互身份块：Agent 名字与性格，由设置在 VM 侧渲染成提示词片段。 */
@@ -75,6 +77,7 @@ object EngineFactory {
             policy = interaction.policy,
             approve = interaction.approve,
             askUser = interaction.askUser,
+            askUserBatch = interaction.askUserBatch,
             session = session,
             persist = { container.sessionStore.save(session) },
             backend = container.workspace.current,

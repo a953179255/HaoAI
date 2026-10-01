@@ -42,6 +42,9 @@ data class ToolContext(
     /** ask_user 提问门：模型发起"暂停等用户拍板"，VM 层弹卡挂起直到用户回答。
      *  null=当前环境无法提问（定时/工作流等无人值守路径），工具按"自行取默认假设"指引收场。 */
     val askUser: (suspend (AskUserRequest) -> AskUserAnswer)? = null,
+    /** ask_user_batch 整批问卷门：一次提交题库 → UI 本地循环出题 → 答完一次性回传全部答案。
+     *  与 [askUser] 同一生死条件（null=无人值守，工具自行收场）。 */
+    val askUserBatch: (suspend (AskUserBatchRequest) -> List<String>)? = null,
     /** 工具状态变更回调（todo 修改后刷新 UI）。 */
     val onToolChange: (() -> Unit)? = null,
     /** 4.3 虚拟屏后台自动化总开关（设置页），关闭时 vscreen_* 不注册进工具清单。 */
@@ -114,6 +117,22 @@ data class AskUserRequest(
 
 /** ask_user 回答：optionIndex≥0 = 选中选项；否则取 freeText。 */
 data class AskUserAnswer(val optionIndex: Int = -1, val freeText: String = "")
+
+/** ask_user_batch 单题：题干 + 2~6 个互斥选项。 */
+data class AskUserBatchQuestion(val question: String, val options: List<AskUserOption>)
+
+/**
+ * ask_user_batch 请求：整批问卷一次提交，UI 本地循环出题（选完自动下一题、
+ * 全程不回模型），答完把全部答案作为单个工具结果回传——连续多题场景把
+ * N 次模型往返压缩成 1 次。
+ */
+data class AskUserBatchRequest(
+    /** 卡片头标题（如「MBTI 性格测试」）。 */
+    val title: String,
+    val questions: List<AskUserBatchQuestion>,
+    /** 每题是否提供「其他…（自由输入）」出口，默认 false（问卷场景按选项作答即可）。 */
+    val allowFreeText: Boolean = false
+)
 
 internal fun JsonObject.primitive(key: String): JsonPrimitive? =
     (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }

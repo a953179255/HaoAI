@@ -58,8 +58,12 @@ object ToolRegistry {
         add(TodoTool())
         add(MemoryTool())
         // ask_user 主动提问：core 恒开（模型随时可用的交互通道）；子代理不注册（depth>0），
-        // 提问由主代理负责——子代理挂起等用户会拖住整条任务线
-        if (ctx.depth == 0) add(AskUserTool())
+        // 提问由主代理负责——子代理挂起等用户会拖住整条任务线。
+        // ask_user_batch（整批问卷）同组同理由，一起只在主代理注册
+        if (ctx.depth == 0) {
+            add(AskUserTool())
+            add(AskUserBatchTool())
+        }
         add(ScreenTool())
         add(TapTool())
         add(SwipeTool())

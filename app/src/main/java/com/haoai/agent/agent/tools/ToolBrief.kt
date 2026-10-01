@@ -83,6 +83,9 @@ object ToolBrief {
             "config_get" -> "读取配置"
             "config_set" -> "修改配置"
             "ask_user" -> "向你提问 · " + args.optString("question").take(30)
+            "ask_user_batch" -> "向你答题 · " + args.optString("title").ifBlank {
+                "共 ${(args["questions"] as? JsonArray)?.size ?: 0} 题"
+            }.take(24)
             "camera" -> "拍照"
             "location" -> "获取位置"
             "job_output" -> "查看后台任务日志"
@@ -125,7 +128,7 @@ object ToolBrief {
         toolName in setOf("tap", "swipe", "scroll", "find", "wait", "key", "type_text", "launch_app", "open_uri", "list_apps") -> "📱"
         toolName in setOf("todo", "schedule") -> "✅"
         toolName in setOf("memory", "config_get", "config_set", "app_status", "tools_enable") -> "⚙️"
-        toolName == "ask_user" -> "❓"
+        toolName in setOf("ask_user", "ask_user_batch") -> "❓"
         toolName.startsWith("spawn") -> "🤖"
         toolName == "location" -> "📍"
         else -> "🔧"

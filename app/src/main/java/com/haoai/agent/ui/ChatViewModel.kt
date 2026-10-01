@@ -53,8 +53,21 @@ data class UiTool(
      */
     val imageData: String? = null,
     /** ask_user 问答数据：非空时 ChainCard 把该步骤渲染成"问题+所选答案"卡（ask_user 专用）。 */
-    val ask: UiAskData? = null
+    val ask: UiAskData? = null,
+    /** ask_user_batch 问答数据：非空时渲染成"题组+逐题作答"批量卡。 */
+    val askBatch: UiBatchAskData? = null
 )
+
+/** ask_user_batch 步骤的题组数据：标题 + 逐题（题干/选项/作答）；历史回看用，运行中为 null。 */
+data class UiBatchAskData(
+    val title: String,
+    val questions: List<UiBatchQuestion>,
+    /** 与 questions 等长：用户作答（选项 label 或自由输入）；null=未作答（运行中断）。 */
+    val answers: List<String?> = emptyList()
+)
+
+/** UiBatchAskData 单题：题干 + 选项 label 列表。 */
+data class UiBatchQuestion(val question: String, val options: List<String> = emptyList())
 
 /** ask_user 步骤的问答数据：问题 + 选项 + 用户回答（历史回看用；运行中 live 步骤为 null）。 */
 data class UiAskData(
@@ -443,6 +456,38 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private val _pendingAsk = MutableStateFlow<PendingAsk?>(null)
 
+    /**
+     * ask_user_batch 挂起会话：题库本地循环的推进器。
+     * [answered] 是 snapshot int state——UI 借它切到下一题；gate 只在答满时完成，
+     * 引擎侧（AskUserBatchTool）一直挂起到整批结束。取消走协程取消（与单题一致）。
+     */
+    class PendingQuiz(
+        val id: String,
+        val req: com.haoai.agent.agent.tools.AskUserBatchRequest,
+        val gate: CompletableDeferred<List<String>>
+    ) {
+        /** 已答题数 == 当前题下标（用户每次作答 +1，UI 据此重绘）。 */
+        var answered by androidx.compose.runtime.mutableStateOf(0)
+        private val answers = ArrayList<String>(req.questions.size)
+
+        /** 作答一道题；返回是否整批答满（完成 gate 用）。stale 重复点击靠调用方比对下标拦截。 */
+        fun advance(answer: String): Boolean {
+            answers.add(answer)
+            answered++
+            return answered >= req.questions.size
+        }
+
+        fun snapshot(): List<String> = answers.toList()
+    }
+
+    private val _pendingQuiz = MutableStateFlow<PendingQuiz?>(null)
+
+    /** 会话门控的题组卡（与 [visiblePendingAsk] 同规则：切走不渲染）。 */
+    val visiblePendingQuiz = kotlinx.coroutines.flow.combine(
+        _pendingQuiz, _runSessionId, _session
+    ) { p, owner, s -> if (p != null && owner != null && s?.id == owner) p else null }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
+
     /** 会话门控的提问卡：切走后不渲染（与本会话无关的提问不落在当前界面上）。 */
     val visiblePendingAsk = kotlinx.coroutines.flow.combine(
         _pendingAsk, _runSessionId, _session
@@ -490,9 +535,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         refreshSessions()
         refreshDeletedSessions()
         refreshTodos()
-        // P2 通知快捷选项：回答广播 → 本 VM 的提问挂起点（onCleared 摘除，防悬空路由）
+        // P2 通知快捷选项：回答广播 → 本 VM 的提问挂起点（onCleared 摘除，防悬空路由）。
+        // 题组（ask_user_batch）与单题共用一个 askId 命名空间，按挂起对象分流
         com.haoai.agent.platform.RunObserver.askAnswerSink = { askId, optionIndex ->
-            answerAsk(askId, optionIndex)
+            if (_pendingQuiz.value?.id == askId) answerQuizFromNotification(askId, optionIndex)
+            else answerAsk(askId, optionIndex)
         }
         // 冷启动打开哪条：上次看过的那条，没记过就取最近更新的那条。
         // 不取 _sessions.value.first()——那是抽屉的「置顶优先」排序，拿它当启动目标，
@@ -1339,6 +1386,79 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /** ask_user_batch 挂起：题组卡本地循环推进，整批答满才返回；中断与单题同路径。 */
+    private suspend fun requestAskBatch(
+        req: com.haoai.agent.agent.tools.AskUserBatchRequest
+    ): List<String> {
+        val quiz = PendingQuiz(
+            java.util.UUID.randomUUID().toString(),
+            req,
+            CompletableDeferred()
+        )
+        _pendingQuiz.value = quiz
+        refreshQuizNotification(quiz)
+        try {
+            return quiz.gate.await()
+        } finally {
+            _pendingQuiz.value = null
+            com.haoai.agent.platform.RunObserver.setAsk(null)
+        }
+    }
+
+    /**
+     * 通知载荷跟随当前题刷新：快捷按钮答的是"通知上写着的那道题"。
+     * askId 整批不变，题面带「第 n/N 题：」前缀，用户在通知里也看得出进度。
+     */
+    private fun refreshQuizNotification(quiz: PendingQuiz) {
+        val q = quiz.req.questions.getOrNull(quiz.answered) ?: return
+        com.haoai.agent.platform.RunObserver.setAsk(
+            com.haoai.agent.platform.RunObserver.PendingAskInfo(
+                quiz.id,
+                "第 ${quiz.answered + 1}/${quiz.req.questions.size} 题：${q.question}",
+                q.options.map { it.label },
+                quiz.req.allowFreeText
+            )
+        )
+    }
+
+    /** 题组卡点选项作答：id + 题目下标双重防串卡（重组前的 stale 点击直接丢弃）。 */
+    fun answerQuiz(askId: String, questionIndex: Int, optionIndex: Int) {
+        val quiz = _pendingQuiz.value ?: return
+        if (quiz.id != askId || quiz.answered != questionIndex) return
+        val label = quiz.req.questions.getOrNull(questionIndex)
+            ?.options?.getOrNull(optionIndex)?.label ?: return
+        advanceQuiz(quiz, label)
+    }
+
+    /** 题组卡自由输入作答。 */
+    fun answerQuizFree(askId: String, questionIndex: Int, text: String) {
+        if (text.isBlank()) return
+        answerQuizText(askId, questionIndex, text.trim())
+    }
+
+    private fun answerQuizText(askId: String, questionIndex: Int, text: String) {
+        val quiz = _pendingQuiz.value ?: return
+        if (quiz.id != askId || quiz.answered != questionIndex) return
+        advanceQuiz(quiz, text)
+    }
+
+    /** 通知快捷按钮 → 当前题（题面即通知载荷）。 */
+    private fun answerQuizFromNotification(askId: String, optionIndex: Int) {
+        val quiz = _pendingQuiz.value ?: return
+        if (quiz.id != askId) return
+        answerQuiz(askId, quiz.answered, optionIndex)
+    }
+
+    private fun advanceQuiz(quiz: PendingQuiz, answer: String) {
+        if (quiz.advance(answer)) {
+            quiz.gate.complete(quiz.snapshot())
+            _pendingQuiz.value = null
+            com.haoai.agent.platform.RunObserver.setAsk(null)
+        } else {
+            refreshQuizNotification(quiz)
+        }
+    }
+
     /** 提问卡点选项回答（按 id 防串卡：已切走/已回答的请求直接忽略）。 */
     fun answerAsk(askId: String, optionIndex: Int) {
         val p = _pendingAsk.value ?: return
@@ -1600,7 +1720,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         // ask_user 步骤：参数+存储结果解析成问答卡数据；运行中 live 步骤无 ask，
                         // 回答落库后 stored 分支接管 → 链卡里立即变成"问题+所选答案"
                         val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
-                        val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson), ask = ask)
+                        // ask_user_batch 步骤：题库+逐题作答解析（见 askDataOfBatch）
+                        val askBatch = if (call.name == "ask_user_batch")
+                            askDataOfBatch(call.argumentsJson, stored?.first) else null
+                        val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson), ask = ask, askBatch = askBatch)
                         when {
                             live != null && live.state == ToolRunState.RUNNING -> live
                             stored != null -> base.copy(
@@ -1692,6 +1815,46 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     /**
+     * ask_user_batch 调用参数 + 存储结果 → 题组卡数据。
+     * 结果文本由 AskUserBatchTool 生成（"用户已按顺序回答 N 题：" + 逐题 "i. 作答"），
+     * 改前缀必须同步该工具。解析失败返回 null（步骤退回普通工具行渲染，不丢数据）。
+     */
+    private fun askDataOfBatch(argsJson: String, result: String?): UiBatchAskData? {
+        val obj = runCatching {
+            com.haoai.agent.data.HaoJson.json.parseToJsonElement(argsJson.ifBlank { "{}" })
+        }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+        val title = (obj["title"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?.trim().orEmpty().ifBlank { "答题" }
+        val qArr = obj["questions"] as? kotlinx.serialization.json.JsonArray ?: return null
+        val questions = qArr.mapNotNull { q ->
+            val o = q as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            val text = (o["question"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                ?.trim()?.ifBlank { null } ?: return@mapNotNull null
+            val opts = (o["options"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { opt ->
+                (opt as? kotlinx.serialization.json.JsonObject)
+                    ?.let {
+                        (it["label"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                            ?.trim()?.ifBlank { null }
+                    }
+            }.orEmpty()
+            UiBatchQuestion(text, opts)
+        }
+        if (questions.isEmpty()) return null
+        // 结果缺失（运行中断/未答）→ 全 null 逐题标"未作答"
+        if (result == null || !result.startsWith("用户已按顺序回答")) {
+            return UiBatchAskData(title, questions, List(questions.size) { null })
+        }
+        val answers = questions.indices.map { i ->
+            val prefix = "${i + 1}. "
+            result.lineSequence()
+                .firstOrNull { it.trim().startsWith(prefix) }
+                ?.trim()?.removePrefix(prefix)?.trim()
+                ?.takeIf { it.isNotBlank() && it != "未作答" }
+        }
+        return UiBatchAskData(title, questions, answers)
+    }
+
+    /**
      * 引擎注入的截图消息识别：content = "[<工具名>] …（…供图像分析）" 且带 imageData。
      * 返回工具名（配对用），非截图消息返回 null。
      */
@@ -1721,6 +1884,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 policy = PolicyEngine(st.permissionMode),
                 approve = { req -> requestApproval(req) },
                 askUser = { req -> requestAskUser(req) },
+                askUserBatch = { req -> requestAskBatch(req) },
                 onUsage = { pin, pout -> addUsage(pin, pout) },
                 statusProvider = { buildStatusText() },
                 identity = com.haoai.agent.agent.engine.EngineFactory.identityOf(st.agentName, st.soul),

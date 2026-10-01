@@ -31,7 +31,8 @@ class AskUserTool : Tool {
             "两个方案都可行、删除/覆盖等不可逆操作前 → 问。" +
             "不要用于纯闲聊，也不要连续高频调用。把推荐项放在第一个；用户总可以看到自由输入出口。" +
             "低风险、选错也无代价的问题加 confirm=false 让用户点选即回答，交互更省事；" +
-            "问卷/测试等无优劣之分的选择加 recommend=false 隐藏「推荐」徽标。"
+            "问卷/测试等无优劣之分的选择加 recommend=false 隐藏「推荐」徽标；" +
+            "连续多题（≥5 题同型问卷/测试）改用 ask_user_batch 整批提交，别一题一调。"
 
     override val params = buildJsonObject {
         put("type", "object")

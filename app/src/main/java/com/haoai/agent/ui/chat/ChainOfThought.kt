@@ -509,6 +509,11 @@ private fun ToolStep(
         AskStepCard(tool.ask, isError)
         return
     }
+    // ask_user_batch 题组步骤：渲染成"标题+逐题作答"批量卡（见 ChatViewModel.askDataOfBatch）
+    if (tool.name == "ask_user_batch" && tool.askBatch != null) {
+        BatchAskStepCard(tool.askBatch, isError)
+        return
+    }
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
     // CompositionLocal 读取须在组合期（onClick 是普通 lambda，不能现场 .current）
@@ -725,6 +730,89 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
     }
 }
 
+/**
+ * ask_user_batch 已答题组卡：标题 + 逐题"题干 + ✓ 作答"。
+ * 100 题级题组会撑爆消息流——列表限高内滚动（嵌套滚动与 LazyColumn 正常协作）。
+ */
+@Composable
+private fun BatchAskStepCard(data: com.haoai.agent.ui.UiBatchAskData, isError: Boolean) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            StepIconBox {
+                Icon(
+                    Icons.Filled.Lightbulb,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Text(
+                data.title,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "${data.questions.size} 题",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        val scroll = androidx.compose.foundation.rememberScrollState()
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 300.dp)
+                .verticalScroll(scroll),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            data.questions.forEachIndexed { i, q ->
+                val answer = data.answers.getOrNull(i)
+                Surface(
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            "${i + 1}. ${q.question}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            when {
+                                answer != null -> "✓ $answer"
+                                isError -> "未回答（失败）"
+                                else -> "未回答（运行中断）"
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = if (answer != null && !isError) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 工具名 → 步骤图标（按语义关键字归类，未匹配走通用工具图标） */
 private fun toolIcon(name: String): ImageVector = when {
     name.contains("browser") || name.contains("web") || name.contains("search") || name.contains("fetch") ->
@@ -733,7 +821,7 @@ private fun toolIcon(name: String): ImageVector = when {
     name == "write" || name == "edit" -> Icons.Filled.Description
     name == "read" || name.contains("file") || name.contains("grep") -> Icons.Filled.Article
     name.contains("spawn") || name.contains("agent") -> Icons.Filled.AccountTree
-    name == "ask_user" -> Icons.Filled.Lightbulb
+    name == "ask_user" || name == "ask_user_batch" -> Icons.Filled.Lightbulb
     else -> Icons.Filled.Build
 }
 
