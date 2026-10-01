@@ -2848,7 +2848,7 @@ private fun PendingAskCard(
                                 color = if (isSel) primary else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.padding(start = 8.dp)
                             )
-                            if (i == 0 && req.options.size > 1) {
+                            if (req.recommend && i == 0 && req.options.size > 1) {
                                 Text(
                                     "推荐",
                                     style = MaterialTheme.typography.labelSmall,

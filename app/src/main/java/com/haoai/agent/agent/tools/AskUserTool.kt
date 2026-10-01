@@ -30,7 +30,8 @@ class AskUserTool : Tool {
             "「让回答更有创意」可以调温度也可以改提示词 → 问；" +
             "两个方案都可行、删除/覆盖等不可逆操作前 → 问。" +
             "不要用于纯闲聊，也不要连续高频调用。把推荐项放在第一个；用户总可以看到自由输入出口。" +
-            "低风险、选错也无代价的问题加 confirm=false 让用户点选即回答，交互更省事。"
+            "低风险、选错也无代价的问题加 confirm=false 让用户点选即回答，交互更省事；" +
+            "问卷/测试等无优劣之分的选择加 recommend=false 隐藏「推荐」徽标。"
 
     override val params = buildJsonObject {
         put("type", "object")
@@ -71,6 +72,15 @@ class AskUserTool : Tool {
                         "删除/覆盖/花钱等不可逆或高代价的分叉必须保持 true"
                 )
             }
+            putJsonObject("recommend") {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "是否给第一个选项标「推荐」徽标，默认 true。" +
+                        "仅当你确实倾向该选项时才标；" +
+                        "各选项无优劣之分的问题（测试问卷、量表打分、抽签类）设 false，不要标推荐"
+                )
+            }
         }
         put("required", JsonArray(listOf(
             kotlinx.serialization.json.JsonPrimitive("question"),
@@ -94,11 +104,12 @@ class AskUserTool : Tool {
         }
         val allowFree = args.optBool("allow_free_text", true)
         val confirm = args.optBool("confirm", true)
+        val recommend = args.optBool("recommend", true)
         val gate = ctx.askUser ?: return ToolResult(
             "当前运行环境无法向用户提问（后台/定时/工作流任务）。" +
                 "请按上下文选择最稳妥的默认方案继续执行，并在最终回复中明确说明你做了该假设。"
         )
-        val ans = gate(AskUserRequest(question, opts, allowFree, confirm))
+        val ans = gate(AskUserRequest(question, opts, allowFree, confirm, recommend))
         return when {
             ans.optionIndex in opts.indices -> ToolResult("用户选择了：${opts[ans.optionIndex].label}")
             ans.freeText.isNotBlank() -> ToolResult("用户回答：${ans.freeText.takeSafe(2000)}")
