@@ -544,22 +544,27 @@ fun SettingsScreen(
                             divider = true,
                             onClick = { onOpenSection(15) }
                         )
-                        HaoRow(
-                            icon = Icons.Filled.Tune,
-                            tintIndex = 5,
-                            tone = HaoTone.Neutral,
-                            title = "玻璃实验室",
-                            subtitle = "实时调节玻璃的模糊 / 折射 / 白雾",
-                            divider = true,
-                            onClick = {
-                                context.startActivity(
-                                    android.content.Intent(
-                                        context,
-                                        com.haoai.agent.glasslab.GlassLabActivity::class.java
+                        // 玻璃实验室是调参工具：只在 debug 构建露入口；release 留 adb 启动通道给调试
+                        if (context.applicationInfo.flags and
+                            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+                        ) {
+                            HaoRow(
+                                icon = Icons.Filled.Tune,
+                                tintIndex = 5,
+                                tone = HaoTone.Neutral,
+                                title = "玻璃实验室",
+                                subtitle = "实时调节玻璃的模糊 / 折射 / 白雾",
+                                divider = true,
+                                onClick = {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            context,
+                                            com.haoai.agent.glasslab.GlassLabActivity::class.java
+                                        )
                                     )
-                                )
-                            }
-                        )
+                                }
+                            )
+                        }
                     }
                 }
 

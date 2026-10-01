@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -57,7 +57,12 @@ class GlassLabActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme { GlassLab() }
+            // 套真实应用主题（跟随系统深浅）：此前裸 MaterialTheme=浅色紫基准，
+            // 且页面文字全部写死深色，深色模式下整页糊底（2026-10-02 用户反馈）
+            val dark = androidx.compose.foundation.isSystemInDarkTheme()
+            com.haoai.agent.ui.theme.HaoTheme(darkTheme = dark) {
+                GlassLab()
+            }
         }
     }
 }
@@ -76,7 +81,12 @@ private fun GlassLab() {
     CompositionLocalProvider(
         com.haoai.agent.ui.theme.LocalOnWallpaper provides true
     ) {
-        Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                // 壁纸缺失时（新机/模拟器）兜底主题底色，否则浅色主题的深色文字糊在黑窗上
+                .background(MaterialTheme.colorScheme.background)
+        ) {
             wallpaper?.let {
                 Image(
                     bitmap = it,
@@ -119,13 +129,13 @@ private fun GlassLab() {
                         androidx.compose.material3.Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "返回",
-                            tint = Color(0xFF26261F)
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
                         "玻璃实验室 —— 拖滑杆实时改全 App 玻璃质感",
                         style = MaterialTheme.typography.titleMedium,
-                        color = Color(0xFF26261F)
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
 
@@ -133,7 +143,7 @@ private fun GlassLab() {
                 Text(
                     "① 演示 App 配方  blur 4 / lens(16, 32) / 白雾 0.5",
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFF26261F),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
                 GlassPanel(
@@ -155,7 +165,7 @@ private fun GlassLab() {
                 Text(
                     "② 当前配方（= 设置页/聊天页正在用的，拖动全局变化）",
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFF26261F),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
                 HaoGroup(backdrop = backdrop, modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -185,7 +195,7 @@ private fun GlassLab() {
                 Text(
                     "定稿后点「复制当前参数」把数值发我，我固化成默认值。",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF33332E),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
@@ -207,9 +217,9 @@ private fun LabControls() {
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("整面折射", style = MaterialTheme.typography.labelMedium)
+            Text("整面折射", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
             Switch(checked = GlassTuning.lensFull, onCheckedChange = { GlassTuning.lensFull = it })
-            Text("色差", style = MaterialTheme.typography.labelMedium)
+            Text("色差", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
             Switch(checked = GlassTuning.ca, onCheckedChange = { GlassTuning.ca = it })
         }
         Row(
@@ -240,7 +250,7 @@ private fun SliderRow(label: String, value: Float, min: Float, max: Float, onCha
         Text(
             "$label   ${"%.2f".format(value)}",
             style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFF33332E)
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Slider(value = value, onValueChange = onChange, valueRange = min..max)
     }
