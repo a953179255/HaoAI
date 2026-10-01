@@ -408,6 +408,7 @@ SHOT_DPR=2 bash pc/tools/ui-shot.sh pc/tools/steps/ui-memitems.json  # 2 倍采�
 
 ```
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-ask.json      # 内联审批/提问：mask 不再出现
+SHOT_MODE=ask_batch bash pc/tools/ui-shot.sh pc/tools/steps/ui-askbatch.json  # T2 整批问卷：本地出题 1/3→3/3、答完一次回传、落库前缀原文
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-review.json                 # diff 着色 + 两种附件
 SHOT_W=900 bash pc/tools/ui-shot.sh pc/tools/steps/ui-narrow.json      # 窄屏浮层（700 同理）
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件浏览 + 三条越界尝试
@@ -3713,6 +3714,42 @@ videoPath/model/ts`）作为并集进 core、PC 不写不读。
   像素三条全绿：`ui-ask` 24 步/21 条、`ui-askkeys` 33 步/26 条、`ui-phoneask` 28 步
  （三份剧本各补了确认步判据、终点锚改成前缀原文，mock 夹具选项改对象 + 带 desc）；
   桌面卡与手机卡截图亲验（徽标、desc 列表、置灰的「回答」键都在该在的位置）。
+
+## T2：`ask_user_batch` 移植到 PC（整批问卷本地出题，N 题只占 1 次往返）
+
+手机端 10-01 落了 `ask_user_batch`（性格测试/满意度/知识测验这类"连续多题的同型问法"）。
+B22 当时把它记成 **T2 未移植**，这一批补上 —— 契约、结果文本、题量上限都对齐手机端。
+
+| 维度 | 做法 | 为什么这样 |
+| --- | --- | --- |
+| 出题在哪 | **界面本地循环**：第 i 题点选即答、自动跳下一题，全程不回模型 | N 题只占 1 次模型往返；答到一半不烧 token |
+| 闸口 | `Gate.askBatch(title, questions, allowFree)`，**默认桥=逐题走 `ask`**（confirm/recommend 关掉） | CLI 与 28 个测试替身零改动就天然拿到"一题一问"；网页壳覆盖它拿整批等待 |
+| 题量 | 1~100 题、每题 2~6 个互斥选项（题干空、选项畸形都**点名报错**，不静默丢题） | 与手机端同一把尺子；题组长就分批提交（提示词里写了 30~50 题一批） |
+| 结果文本 | `用户已按顺序回答 N 题：` + 逐行 `i. 作答`（缺答补"未作答"） | 这是历史回显"已答卡"的数据源，两端逐字节同格式 |
+| 桌面卡 | 头部"第 i / N 题 · 选完自动下一题"、题干、整行选项键、`allow_free_text` 开时给"其他…"出口 | 与单题卡同一套玻璃，不另起样式 |
+| 手机网页端 | 同款卡，状态挂 `window.__batchSt` | 那页每 4 秒重绘一次，状态不挂出去答到第二题就丢 |
+| 通知（安卓） | 批量行**不摆选项按钮**，改口成"N 题问卷 · 到网页上逐题作答" | 通知按钮是给一句话提问的；问卷要逐题答 |
+| 回执 | `decideNote` 批量分支只说题数 | 答案原文不外泄进回执 |
+
+- **连带修了安卓侧的一处死活问题**：B22 起 PC 的 `options` 发的是 `{label,description}` 对象，
+  而 `PcPayload.options` 按 `List<String>` 解 —— 解不下不是"少几个选项"，是**整份 pending 解码失败**、
+  `decode` 回 Fail、轮询把通知全撤掉，**审批通知跟着一起哑**。改成自定义解码
+  `PcOptListSerializer`（字符串取原文、对象取 `label`、元素畸形只丢那一个）。
+  这条不装机就会哑，所以**必须装回真机**（见下"还欠"）。
+- **交接过来时抓到的两处**：① `PcOptListSerializer` 里 `String.serializer()` 少了
+  `kotlinx.serialization.builtins.serializer` 这个 import（1.9.0 把 `Decoder/Encoder` 搬进
+  `encoding` 包之后连带暴露），`:app:compileDebugKotlin` 四处红；② 新加的三条 `PcLinkTest` 夹具
+  **`"payload":` 后面漏了一个 `{`**，JSON 不合法 → 两条用例红，而红话说的是"电脑回的不是 JSON"
+  —— 看着像产品坏了，其实是夹具自己没造出来。补上 `{` 之后两条转绿，并做了变异检查：
+  把自定义解码摘掉，对象选项那条立刻红（证明判据真的咬在产品代码上，不是咬在夹具上）。
+- **判据**：`gradle test` **554 条全绿**（新增 `AskUserBatchToolTest` 6 条 + `ApprovalBrokerTest`
+  批量载荷 + `EngineFlowTest` 走默认桥端到端 + `LanTest` 批量行 + `HunkTest` 批量回执措辞，
+  工具计数锁 23→24）；安卓 `:app:testDebugUnitTest` **238 条全绿**（`PcLinkTest` +2 条形状用例）；
+  `ui-check`/`md-check` 过；像素 `ui-askbatch` **20 步 / 14 条判据全绿**，四张图亲验
+ （第 1 题两选项、第 3 题题干与选项、提交后卡片收成"已答"、落库原文 `用户已按顺序回答 3 题：…`）。
+- **还欠**：手机网页端批量卡的像素（只做了桌面那份，单题的 `ui-phoneask` 仍绿可参照）；
+  **装机**（`assembleRelease` + `install -r`）—— 交接当晚设备无线调试掉了，连不上就没硬试；
+  在装回之前，PC 一发对象选项，手机上那条通知通道是哑的。
 
 ## 与手机端同源的行为
 
