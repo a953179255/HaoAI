@@ -2761,6 +2761,8 @@ private fun PendingAskCard(
     onAnswerFree: (String, String) -> Unit
 ) {
     val req = ask.req
+    // 快速模式（模型声明 confirm=false）：点选项即提交，运行立刻继续；只保留自由输入的提交钮
+    val quick = !req.confirm
     var selected by remember(ask.id) { mutableStateOf(-1) }
     var freeOpen by remember(ask.id) { mutableStateOf(false) }
     var freeText by remember(ask.id) { mutableStateOf("") }
@@ -2798,7 +2800,7 @@ private fun PendingAskCard(
                         .background(primary)
                 )
                 Text(
-                    "需要你决定",
+                    if (quick) "点选即回答" else "需要你决定",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = primary,
@@ -2827,8 +2829,13 @@ private fun PendingAskCard(
                         .padding(top = 8.dp)
                         .clip(RoundedCornerShape(13.dp))
                         .clickable {
-                            selected = if (isSel) -1 else i
-                            if (selected >= 0) freeOpen = false
+                            if (quick) {
+                                // 快速模式：点选即回答，无确认环节
+                                onAnswer(ask.id, i)
+                            } else {
+                                selected = if (isSel) -1 else i
+                                if (selected >= 0) freeOpen = false
+                            }
                         }
                 ) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
@@ -2925,34 +2932,37 @@ private fun PendingAskCard(
                     }
                 }
             }
-            // 底部统一确认按钮：就绪前禁用态提示"先选择一个选项"
-            val ready = confirmTarget != null
-            Surface(
-                color = if (ready) primary.copy(alpha = 0.92f)
-                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(enabled = ready) {
-                        when {
-                            selected in req.options.indices -> onAnswer(ask.id, selected)
-                            freeText.isNotBlank() -> onAnswerFree(ask.id, freeText.trim())
-                        }
-                    }
-            ) {
-                Text(
-                    if (ready) "确认：" + confirmTarget.orEmpty().take(24) else "先选择一个选项",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = if (ready) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            // 底部统一确认按钮：就绪前禁用态提示"先选择一个选项"。
+            // 快速模式且自由输入未展开时不渲染——点选项即已提交，无需确认。
+            if (req.confirm || freeOpen) {
+                val ready = confirmTarget != null
+                Surface(
+                    color = if (ready) primary.copy(alpha = 0.92f)
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 11.dp)
-                )
+                        .padding(top = 12.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = ready) {
+                            when {
+                                selected in req.options.indices -> onAnswer(ask.id, selected)
+                                freeText.isNotBlank() -> onAnswerFree(ask.id, freeText.trim())
+                            }
+                        }
+                ) {
+                    Text(
+                        if (ready) "确认：" + confirmTarget.orEmpty().take(24) else "先选择一个选项",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = if (ready) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 11.dp)
+                    )
+                }
             }
         }
     }

@@ -105,7 +105,9 @@ data class AskUserRequest(
     val question: String,
     val options: List<AskUserOption>,
     /** false=只允许从选项里挑（不渲染自由输入行）。 */
-    val allowFreeText: Boolean = true
+    val allowFreeText: Boolean = true,
+    /** false=快速模式：用户点选项即提交、运行立刻继续（低风险问题用）。 */
+    val confirm: Boolean = true
 )
 
 /** ask_user 回答：optionIndex≥0 = 选中选项；否则取 freeText。 */

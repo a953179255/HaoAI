@@ -29,7 +29,8 @@ class AskUserTool : Tool {
             "例——用户说「设个 9 点的闹钟」没说早上还是晚上 → 问；" +
             "「让回答更有创意」可以调温度也可以改提示词 → 问；" +
             "两个方案都可行、删除/覆盖等不可逆操作前 → 问。" +
-            "不要用于纯闲聊，也不要连续高频调用。把推荐项放在第一个；用户总可以看到自由输入出口。"
+            "不要用于纯闲聊，也不要连续高频调用。把推荐项放在第一个；用户总可以看到自由输入出口。" +
+            "低风险、选错也无代价的问题加 confirm=false 让用户点选即回答，交互更省事。"
 
     override val params = buildJsonObject {
         put("type", "object")
@@ -60,6 +61,16 @@ class AskUserTool : Tool {
                 put("type", "boolean")
                 put("description", "是否允许用户自由输入其他回答，默认 true")
             }
+            putJsonObject("confirm") {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "是否需要用户点选后再按确认按钮（防误触）。默认 true。" +
+                        "低风险、选错也无代价的事实/偏好选择（如早上还是晚上）设 false：" +
+                        "用户点选项即回答、任务立刻继续；" +
+                        "删除/覆盖/花钱等不可逆或高代价的分叉必须保持 true"
+                )
+            }
         }
         put("required", JsonArray(listOf(
             kotlinx.serialization.json.JsonPrimitive("question"),
@@ -82,11 +93,12 @@ class AskUserTool : Tool {
             return ToolResult("options 需要 2~4 个互斥选项（收到 ${opts.size} 个），请修正后重试", true)
         }
         val allowFree = args.optBool("allow_free_text", true)
+        val confirm = args.optBool("confirm", true)
         val gate = ctx.askUser ?: return ToolResult(
             "当前运行环境无法向用户提问（后台/定时/工作流任务）。" +
                 "请按上下文选择最稳妥的默认方案继续执行，并在最终回复中明确说明你做了该假设。"
         )
-        val ans = gate(AskUserRequest(question, opts, allowFree))
+        val ans = gate(AskUserRequest(question, opts, allowFree, confirm))
         return when {
             ans.optionIndex in opts.indices -> ToolResult("用户选择了：${opts[ans.optionIndex].label}")
             ans.freeText.isNotBlank() -> ToolResult("用户回答：${ans.freeText.takeSafe(2000)}")
