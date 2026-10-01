@@ -3575,6 +3575,89 @@ PostToolUse / PostToolUseFailure / Stop`），落地 6 种：
   审批链像素 5 份全绿（queue / review / risk / preview / tour）。
   **§6 的 S1–S8 到此全部落地。**
 
+## 这一批：B15 第一片 —— `:core` 立起来，工具契约两端共用（ROADMAP §3 B15 🟡→部分）
+
+**拓扑（解锁的部分）**：根构建新增 `:core` 子模块，`include(":app", ":core")`。
+
+- 实测 **AGP 9.4.0 + `kotlin("jvm") version "2.4.10"` 直接可用**——`pc/settings` 注释里
+  记的"内置 Kotlin 与 kotlin.jvm 同 classpath 版本打架"**没有复现**（当时炸的写法与现在不同）。
+  `:core:test` 根构建直接跑 ✓；Android `project(":core")` ✓。
+- PC 是另一个构建，走 **mavenLocal 消费**（与 pc/settings 注释的 Phase 1 一致）：
+  改了 core 先 `gradle :core:publishToMavenLocal`，忘这步的症状是"pc 在用昨天的 core"。
+
+**搬进 `:core` 的三件（两端真共用，各一处定义）**：
+
+| 类型 | 取舍 |
+|---|---|
+| `AgentTool<C>` 工具契约 | `suspend` 取手机端形状、字段名取 PC 的 `desc/params`；**泛型上下文**吸收两端分歧（PC=ToolCtx 审批闸/快照，手机=ToolContext 无障碍/缓存）——接口共用、上下文各带各的 |
+| `ToolResult` | 字段顺序沿用 PC（位置传参动一个就是全体红），手机的 `imageDataUrl` 挂末尾；`isError→error` 按 PC 为准 |
+| `TextCap` + `takeSafe/takeLastSafe` | 取**手机端原版**（PC 旧版没代理对保护、还没有 tail）——"两端截断口径必须一致"这句老话第一次变成物理事实 |
+
+**采用方式是"原地 typealias"**：同包同名，两端现有 import 一个不改（`typealias ToolResult =
+com.haoai.core.ToolResult` 这种）。PC 的 25 把工具函数体加 `suspend`（引擎唯一调用点
+`runBlocking` 包一层，调度语义不变；测试侧一个 `runB` 桥，111 处调用点只做文本替换）；
+手机 69 处 `description/parameters → desc/params`、`isError → error`。
+
+**过程中抓出的坑（都进了注释/提交）**：批量改名误伤 3 处——`Scheduler.run`（那是
+**Thread.run** 不是工具）、Compose `OutlinedTextField(isError=)`、`ToolLoopGuard.observe`
+的参数名；`globToRegex` 重写时步进差点改错（git diff 救回）；PS5.1 给 42 个文件偷偷加 BOM
+（全剥）；`ChatViewModel` 里一句 "package installs" 被 import 插入正则误命中插进字符串。
+
+**还欠第二片（会话模型）**：`Msg` vs `ChatMessage` 两端持久化字段名已分叉
+（`calls/callId/pt/ct/ms` vs `toolCalls/id/promptTokens/...`），合型必须带 `@JsonNames`
+旧名兼容解码，**不许裸改**（改坏=两边历史都读不出来）。见 ROADMAP B15 行。
+
+- **验收**：`:core:test` 根构建直跑 ✓；`gradle test`（pc）**538 全绿** ✓；
+  Android `testDebugUnitTest` 全绿 ✓；`assembleDebug/Release` ✓；
+  工具类像素 3 份绿（tour/term/git）✓；`ui-check`/`md-check` 全过 ✓。
+
+## 这一批：真机三条收官（ROADMAP §5.2）—— ②③ 实证 + ① 四条发现
+
+**先说模拟器（查清了，按用户指示改用真机）**：`.android\avd` 空、Studio 的 SDK（E:\Android）
+无 system-images、`emulator -list-avds` 空、注册表无 MuMu/夜神/雷电/WSA —— **本机当前没有任何
+可用模拟器**；但 `.android` 里留着 `modem-nv-ram-5554/5556/5558`，过去至少跑过三个 AVD（镜像
+后来被清了，复用要重下 ~800MB）。
+
+**真机链路（MEIZU 20 Pro，adb TLS 直连）**：手机上装的是 release 签名 0.18.6 → 打
+`assembleRelease`（release.jks）`install -r` 过、**配对与数据无损**；全程 `uiautomator dump +
+input tap/text` 导航到「设置→电脑联动」，120 秒内完成配对（`lastSeen` 实时刷新）。
+
+### ② 提问通知（含锁屏）✅ 端到端实证
+- `ask_user` 任务 → PC 挂起 q1 → 后台轮询 → **通知带两个选项按钮**；
+- **锁屏实拍**：[phone-ask-lock.png](G:/hbt/pc-demo/phone-ask-lock.png)（20:40，标题
+  "电脑上有话要问你" + 火锅/烧烤按钮 + 保活通知同屏）；
+- **按钮不是摆设**：`input tap` 点"火锅" → PC 端 pending 立即清空、会话正常收尾 ——
+  锁屏上点一下，答案真的送回了电脑。
+- 操作约束记档：息屏 2 分钟自动锁（解锁要指纹/密码，代理做不了）；**screencap 不需要解锁**。
+
+### ③ 定时结果通知 ✅ 送达，且抓到一个真机才照得出的 bug
+- 每分钟 schedule → 跑完进 digest → `haoai_pc_done` 通道通知送达（autoCancel、正文
+  "10-01 20:48 · S6验收定时"）；判重的"一次多条只弹一条、正文说还有几条"与设计一致。
+- **产品 bug（已修）**：批量≥2 时标题是 `电脑上有 [PcDigestItem(…), …].size 次跑完了` ——
+  Kotlin 模板 `$fresh.size` = `${fresh}` + 字面量 `.size`，列表原样吐出。单条走 else 分支
+  一直躲着，**一攒批就现形**（正是"真机看一眼"的价值）。改 `${fresh.size}` 并已重打包装回。
+
+### ① Flyme 省电回收 —— 四条发现（#66 的实测答案）
+1. **充电 + 息屏 30 分钟，Flyme 没有杀进程**：pid 稳定 40+ 分钟（充电态是原因之一）。
+2. **系统手段模拟"回收"全被挡**：`am kill` 杀不动前台服务、`am crash` 只对 debug 包生效、
+   shell `kill -9` 无权限 —— 真·严格省电回收要在**设置里手动把 HaoAI 调成严格限制**（需解锁，
+   留给人工复测这一条）。
+3. **更隐蔽的失效形态找到了：息屏后台约 6 分钟后轮询静默** —— `lastSeen` 从 20:57 冻结到
+   21:37（整整 40 分钟无请求），而**进程活着、保活通知挂着、局域网 ping 通**（11ms 0%丢包）。
+   即"冻结式"后台限制：不杀你，但让你发不出请求 —— 通知形同虚设，**比杀进程更难察觉**。
+4. **恢复能力 OK**：人一碰手机（前台恢复）→ `lastSeen` 立刻刷新 → 挂了 6 分钟的 ask 通知
+   **当场补发**（actions=2 的提问卡）—— 链路本身没坏，坏在后台静默期。
+- 附带实锤：这台机存在**分身空间 user999**（`am crash` 打错用户的原因）；观察 E：长时间
+  静默后 prime（"首见不响"）没有误伤恢复首条 —— 因为静默是"不发请求"而非 Fail-重置，设计自洽。
+- **遗留一项（需你解锁配合）**：设置 → 省电 → HaoAI 设为"允许后台/不清理"的**反面**（严格
+  省电）后重跑一遍，才能拿到真 Flyme 杀进程后的恢复结论。
+
+### 验收
+`assembleRelease` 重打包装回（含 `$fresh.size` 修复）✓；PC `gradle test` **538 全绿**、
+Android 单测全绿 ✓；`ui-check`/`md-check` 全过 ✓；截图存档
+[G:/hbt/pc-demo/phone-ask-lock.png](G:/hbt/pc-demo/phone-ask-lock.png)；
+Octop 已收录进 ROADMAP §0 证据来源（单进程 ADR、HarnessProcessor 统一入口、tool_guard、ACP 双向）。
+
 ## 与手机端同源的行为
 
 

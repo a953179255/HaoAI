@@ -12,6 +12,7 @@
 | Hermes | `github.com/NousResearch/hermes-agent` 文档 | 单 gateway 连多平台、会话连续、语音转写、`execute_code`、cron 自然语言、结果投递、FTS5 跨会话检索、7 种终端后端（本地/Docker/SSH/…）、技能自我改进 |
 | vibe-coding 头部 | Claude Code / Codex / OpenCode 文档 | 计划模式、沙箱与权限、Hooks、Skills、子 agent 与后台 agent、Routines 定时与 `/loop`、`/share`、`/undo`、IDE 内联 diff、code review、定时任务 |
 | star 清单 | `api.github.com/users/a953179255/starred`（私有 list 拿不到，退回全量 57 个 star 筛 agent/coding） | claude-code、codex、opencode、hermes-agent、openclaw、ZCode、deepseek-harness、pi、mem0、ClawPanel 等 30 个 |
+| Octop（2026-10-01 应用户要求新增） | `github.com/TencentCloud/Octop`（README 架构节 + ADR 索引，6.2k star） | 单进程模型（ADR-001/002：重启全靠控制面库重建，无消息队列）、`HarnessProcessor` 统一入口（Web/IM/cron 一个管道——与我们 startRun 单入口同向）、`src/octop/{infra,api,cli}` 分层（≈S5 拆域的 python 版）、`security/tool_guard/` 文件式 shell 允禁规则（≈我们的 Rules JSON）、ACP 双向（既能被 IDE 调、也能把活委派给 OpenCode/Claude Code/Codex）、工作区后端可插拔（本地/Docker/PG/COS）与"记忆随工作区走" |
 
 ## 1. 我们已经有的（别重复造）
 
@@ -127,7 +128,7 @@
 | **B19** | ✅ v0.71.0 已落地：**两端共用 `MEMORY.md` 的格式钉上了**（手机端新增 `MemoryBankFormatTest` 6 条，用真实写盘量 PC 解析器用的同一批正则；PC 修掉"存一次盘就擦掉手机端文件头那两行 `>` 说明"——`Doc.prelude` 原样带回且幂等） | B10 | 两端 |
 | **B20** | ✅ v0.72.0 已落地：**剪辑链第三段** —— `speed`（变速，setpts+atempo 串级）/ `fade`（按真实时长算淡出，两种退化都拒绝）/ `mix`（BGM 压在主音下面、`normalize=0`、在主音结束处截断、画面 `-c:v copy`） | B7 | PC |
 | **B21** | ✅ v0.73.0 已落地：**命令面板补齐后面几批的入口**（分屏 / 整理条目记忆 / 手动压缩 / 自动化页签 / 新会话，`PALSET` 的目标可以是函数＝「动作」组，`palTabBtn` 先开页签再等按钮出来并滚到看得见）；看像素顺手修了三处：面板透明底（假玻璃）、分屏提示说反了方向、`palRender` 局部 `box` 撞了输入框的全局名导致三句空操作；`ui-check.js` 新增"面板每条入口都真的存在" | — | PC |
-| **B15** | `:core` 合并 | B4 | 两端 |
+| **B15** | `:core` 合并 → 🟡 **第一片已落地（2026-10-01）**：根构建新增 `:core` 子模块（AGP 9.4 下 `kotlin("jvm") version "2.4.10"` 直接可用 —— pc/settings 注释里记的版本打架**没有复现**），Tool 契约（`AgentTool<C>`，suspend+泛型上下文）/`ToolResult`/`TextCap`（代理对安全超集版）三件**两端真共用**：pc 经 `mavenLocal` 消费（改 core 先 `:core:publishToMavenLocal`，忘这步="pc 在用昨天的 core"），Android 经 `project(":core")`，两端**原地 typealias**保住全部旧 import 路径；pc 25 把工具函数体加 suspend（引擎唯一调用点 runBlocking 包一层）、移动端 69 处 `description/parameters→desc/params`。判据：`:core:test` 根构建直跑 ✓、pc **538 全绿** ✓、Android 单测全绿 ✓、tool 类像素 3 份绿 ✓。**还欠第二片：会话模型（Msg/ChatMessage）**——两端持久化字段名已分叉（calls vs toolCalls、pt vs promptTokens），合型要带 `@JsonNames` 旧名兼容解码的迁移批，不许裸改（改坏=两边历史都读不出来）｜ B4 | 两端 |
 
 **执行顺序**：B1 → B2 → B3 → B5 → B6 → B7 → B8 → B9 → B4 → B10 → B11 → B12 → B13 → B14 → B15
 （B4 跨端通道放在前面几批做完、手稳了再动它 —— 它要开监听端口，安全边界必须一次做对。）
@@ -158,32 +159,19 @@
 
 ### 5.2 需要设备或需要你点头的
 
-1. **真机三条**（`#66`/`#97`/`#98`/`#103` 的余款）：灭屏 30 分钟、被 Flyme 省电回收之后还收不收得到；
-   安卓"提问通知"在锁屏上长什么样（v0.74.0 那半边只过了 JVM 单测）；定时任务结果通知（v0.75 第五片，同样没在真机上看过）。
-   **2026-09-29 08:00 试过一轮，卡在第 2 步，把省下来的路写清楚：**
-   - 现场：`127.0.0.1:5555` 是**模拟器**（`sdk_gphone64_x86_64`），真机的 serial 是
-     `adb-391QYFCP2266T-VtTJb1._adb-tls-connect._tcp`（MEIZU 20 Pro，`192.168.1.105`，PC 是 `192.168.1.37`）。
-     不带 `-s` 的 adb 命令在多设备下直接报错，这是防呆，别绕。
-   - 已经把当前构建装到真机上（debug 签名一致 ⇒ `install -r` 直接过，Flyme 这次没弹安装闸门），
-     无障碍开关按老规矩补回去了。**手机现在跑的是我这轮的包**，不是之前那个 03:56 的。
-   - 电脑侧起法可行且已验通：`HAOAI_HOME` 指临时目录 → `haoai lan on --port 8723` → `serve` →
-     `POST /api/lan/code` 出 6 位码；手机侧 `curl http://192.168.1.37:8723/lan/health` 通 ⇒ 防火墙与路由都没挡。
-   - **卡住的那一步：配对必须在手机上打字，不能替它写文件。** `PcPairing` 把 token 存成 Keystore 加密的
-     `files/pc-link.json`，`run-as` 手写一份是伪造不出来的（这正是它的设计目的）。
-     所以要么人自己在「设置 → 电脑联动」里输地址 + 6 位码，要么先用 `haoai lan pair 测试手机` 拿到 token
-     再走一次真机配对界面。**下一步别再从这里重做**：直接 `uiautomator dump` 拿坐标 → 慢按（`input swipe X Y X Y 120`）
-     → 地址与码都用 `input text`（纯 ASCII，注意 120 秒过期，先输地址再要码）。
-   - `uiautomator dump /sdcard/x.xml` 在 Git Bash 下会被改成 `/E:/Git/sdcard/...` —— 要 `MSYS_NO_PATHCONV=1`。
-     **而且 `$TEMP`（= `/tmp`）同样会被改写**，所以落盘点要用相对路径。已把这套 dump+pull+解析（含 `content-desc`，
-     图标按钮的语义全在那儿）固化成 `bash /g/hbt/udump.sh <serial>`。
-   - **2026-09-29 09:36 复测：这次卡在一个新的、更硬的地方——手机正在被人用。**
-   - 电脑侧全绿：`lan on --port 8952` → `serve`（它不吃 `set port=`，默认 8712）→ `POST /api/lan/code` 出码
-     → 手机侧 `curl http://192.168.1.37:8952/lan/health` 通。**端口要避开审计**：`ui-shot.sh` 占 8720-8790（web/LAN）
-     与 8791-8890（mock），我这轮用 8952/8712 才没撞上（撞上的那次把一条 `POST /api/lan/code` 发进了审计的服务里）。
-   - 但 `uiautomator dump` 拿回来的是一个 407 字节的空树，`package="com.tencent.mm"`，随后 `topResumedActivity` 是
-     `tv.danmaku.bili` —— **人在刷手机，这时候往设备上点就是抢用户的手机**。已把自己起的 serve 按 PID 收掉，没动审计的进程。
-   - ⇒ 这三项现在缺的不是方法，是**一段没人用手机的空档**。下次动手前先 `dumpsys activity activities | grep topResumedActivity`
-     确认前台是 `com.haoai.agent` 或者至少不是别的应用；不是的话就别开始，改做别的。
+1. ~~**真机三条**（`#66`/`#97`/`#98`/`#103` 的余款）~~ ✅ **2026-10-01 收官**（README「真机三条」一节有全档）：
+   - **②提问通知含锁屏**：通知+双选项按钮在锁屏上实拍（[phone-ask-lock.png](G:/hbt/pc-demo/phone-ask-lock.png)），
+     `input tap` 点"火锅"→ PC pending 清空、会话收尾 —— **锁屏按钮端到端实证**；
+   - **③定时结果通知**：`haoai_pc_done` 送达，且**抓到真机才现形的 bug**（`$fresh.size` 模板 =
+     `${fresh}.size`，批量≥2 标题吐列表；已修+重装）；
+   - **①Flyme 回收四发现**：充电+息屏 30min **不杀进程**；系统模拟杀全被挡（`am kill` 不杀 FGS、
+     `am crash` 只限 debug 包、shell `kill -9` 无权限）；**真发现是"息屏后台 ~6 分钟轮询静默"**
+     （`lastSeen` 冻结 40min，进程/保活通知/ping 全在 = 冻结式限制，比杀更隐蔽）；人一碰手机
+     前台恢复→轮询复活→挂了 6 分钟的通知**当场补发**（恢复能力 OK）；
+   - **遗留（需解锁配合的一次人工操作）**：设置→省电→把 HaoAI 调成**严格省电**再复测一次真回收；
+   - 沉淀的方法别丢：serial `adb-391QYFCP2266T-VtTJb1._adb-tls-connect._tcp`（多设备必须 `-s`）、
+     端口避开审计（ui-shot 占 8720-8890）、`uiautomator dump + input tap/text` 配对法
+     （release 签名 `install -r` 免卸载；PS5.1 给 curl 传带引号 JSON 会在空格截断——POST 一律走 python）。
 2. **旧中文路径的 junction**（`#35`）：那个目录是真实快照，删或移之前要问你。
 
 ### 5.3 对外部那份 Gap 清单（桌面 `HaoAI-PC-Gap-List.md`）的逐条核对

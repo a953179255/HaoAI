@@ -288,7 +288,10 @@ object PcWatchdog {
         }
         val n = NotificationCompat.Builder(a, CHANNEL_DONE)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(if (more > 0) "电脑上有 $fresh.size 次跑完了" else "电脑上的一次任务跑完了")
+            // 真机实测抓的：`$fresh.size` 在 Kotlin 模板里 = `${fresh}` + 字面量 ".size" ——
+            // 批量≥2 时标题把整个列表 toString 吐出来（"电脑上有 [PcDigestItem(...)].size 次跑完了"）。
+            // 单条走 else 分支躲过了，一攒批就现形：模板里必须写 `${fresh.size}`。
+            .setContentTitle(if (more > 0) "电脑上有 ${fresh.size} 次跑完了" else "电脑上的一次任务跑完了")
             .setContentText(body.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(openWebIntent(a, _state.value.base))
