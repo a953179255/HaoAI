@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
 import java.io.File
@@ -106,7 +106,7 @@ class RecordTool : Tool(
     kind = "exec"
 ) {
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         when ((req(args, "action") ?: "").trim().lowercase()) {
             "status" -> {
                 val rows = Recordings.list()

@@ -500,8 +500,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                         }
                         log("[bt] shellDir=${ws.absolutePath} backend=$backendArg")
                         log("[bt] cmd=$cmd")
-                        val r = com.haoai.agent.agent.tools.BashTool().run(args, tctx)
-                        log("[bt] isError=${r.isError}")
+                        val r = kotlinx.coroutines.runBlocking { com.haoai.agent.agent.tools.BashTool().run(args, tctx) }
+                        log("[bt] error =${r.error}")
                         log("[bt] output >>>")
                         log(r.content.take(3000))
                         log("[bt] <<< output")

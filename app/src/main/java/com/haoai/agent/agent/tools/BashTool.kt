@@ -45,9 +45,9 @@ class BashTool : Tool {
     }
 
     override val name = "bash"
-    override val description =
+    override val desc =
         "在工作空间目录内执行 shell 命令。默认 backend=auto：Linux 沙箱（proot 发行版）就绪时在沙箱内执行（glibc 环境，宿主工作区=沙箱内 /workspace），否则回落 Android toybox（/system/bin/sh）。可显式 backend=\"toybox\"|\"linux\"|\"ssh\"。timeout_ms 默认 30 秒、上限 600 秒（长构建）。高危命令会被安全策略拦截（三个后端一致）。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("command") {

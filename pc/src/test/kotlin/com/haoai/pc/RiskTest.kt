@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -146,7 +146,7 @@ class RiskTest {
     @Test
     fun `auto mode still asks before an irreversible command`() {
         val g = Spy().apply { allow = false }
-        val r = ShellTool().run(args("""{"command":"git push --force origin main"}"""), ctx("auto", g))
+        val r = ShellTool().runB(args("""{"command":"git push --force origin main"}"""), ctx("auto", g))
         assertEquals("auto 档下高危必须弹卡", 1, g.asked)
         assertEquals(Risk.HIGH, g.verdict?.level)
         assertTrue("卡上要有为什么：${g.verdict?.why}", g.verdict?.why?.contains("不可逆") == true)
@@ -158,7 +158,7 @@ class RiskTest {
     @Test
     fun `auto mode does not interrupt for a low-risk write`() {
         val g = Spy()
-        val r = WriteTool().run(args("""{"path":"fresh.md","content":"新文件"}"""), ctx("auto", g))
+        val r = WriteTool().runB(args("""{"path":"fresh.md","content":"新文件"}"""), ctx("auto", g))
         assertEquals("低危不该打扰人：" + r.content, 0, g.asked)
         assertFalse("写文件本身要成功：" + r.content, r.error)
         assertEquals("新文件", File(ws, "fresh.md").readText().trim())
@@ -168,7 +168,7 @@ class RiskTest {
     fun `ask mode carries the level for an ordinary write too`() {
         File(ws, "b.txt").writeText("旧")
         val g = Spy()
-        EditTool().run(args("""{"path":"b.txt","old_string":"旧","new_string":"新"}"""), ctx("ask", g))
+        EditTool().runB(args("""{"path":"b.txt","old_string":"旧","new_string":"新"}"""), ctx("ask", g))
         assertEquals("ask 档要弹卡", 1, g.asked)
         assertEquals(Risk.MID, g.verdict?.level)
         assertTrue("为什么必须非空", g.verdict?.why?.isNotBlank() == true)
@@ -177,7 +177,7 @@ class RiskTest {
     @Test
     fun `the badge ships a stable code and the wording separately`() {
         val g = Spy().apply { allow = false }
-        ShellTool().run(args("""{"command":"rm -rf C:\\\\out"}"""), ctx("auto", g))
+        ShellTool().runB(args("""{"command":"rm -rf C:\\\\out"}"""), ctx("auto", g))
         val v = g.verdict ?: error("高危没分级")
         // 界面按 code 配色：文案改了徽标不能跟着失效，这是上一版按中文匹配踩过的坑
         assertEquals("high", v.code())

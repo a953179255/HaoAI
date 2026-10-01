@@ -21,9 +21,9 @@ class SubAgentsTool(
 ) : Tool {
 
     override val name = "spawn_agents"
-    override val description =
+    override val desc =
         "并行派出多个子代理（mode=research 只读调研 / work 读写执行，权限随主代理），全部完成后汇总返回。tasks 为任务字符串数组（2~4 个，每个任务描述必须自包含）。适合互不依赖的多路任务；单任务或后台模式用 spawn_agent。运行中可用 steer_agent 纠偏、stop_agent 终止单路（id 见各路标注，被终止的路会回收已完成步骤）。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("tasks") {

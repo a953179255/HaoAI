@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -97,7 +97,7 @@ class MediaTest {
             // 源文件必须真的存在：工具先验文件再验 ffmpeg，缺一个就只能收到那一句
             File(dir, "a.mp4").writeBytes(byteArrayOf(0, 1, 2, 3))
             val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-            val r = MediaTool().run(args("""{"sub":"transcode","input":"a.mp4"}"""), ctx)
+            val r = MediaTool().runB(args("""{"sub":"transcode","input":"a.mp4"}"""), ctx)
             assertTrue(r.content, r.error)
             // 这句必须"能照着做"：给装法、给环境变量、给重启提示，而不是一个 exit=1
             assertTrue(r.content, r.content.contains("winget"))
@@ -111,10 +111,10 @@ class MediaTest {
     @Test
     fun `bad sub and missing input are actionable`() {
         val ctx = ToolCtx(ws(), PcSettings(), "auto", SpyGate())
-        val bad = MediaTool().run(args("""{"sub":"mixtape","input":"a.mp4"}"""), ctx)
+        val bad = MediaTool().runB(args("""{"sub":"mixtape","input":"a.mp4"}"""), ctx)
         assertTrue(bad.content, bad.error)
         assertTrue(bad.content, bad.content.contains("info/transcode/cut/frame/audio/cover"))
-        val noIn = MediaTool().run(args("""{"sub":"info"}"""), ctx)
+        val noIn = MediaTool().runB(args("""{"sub":"info"}"""), ctx)
         assertTrue(noIn.content, noIn.error)
         assertTrue(noIn.content, noIn.content.contains("input"))
     }
@@ -126,7 +126,7 @@ class MediaTest {
         val src = clip(dir)
         val gate = SpyGate()
         val ctx = ToolCtx(dir, PcSettings(), "plan", gate)
-        val r = MediaTool().run(args("""{"sub":"audio","input":"${src.name}"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"audio","input":"${src.name}"}"""), ctx)
         assertTrue(r.content, r.error)
         assertTrue(r.content, r.content.contains("计划模式"))
         assertTrue("只该问一次都不问", gate.asked.isEmpty())
@@ -159,7 +159,7 @@ class MediaTest {
         val src = clip(dir)
         val gate = SpyGate()
         val ctx = ToolCtx(dir, PcSettings(), "ask", gate)
-        val r = MediaTool().run(args("""{"sub":"info","input":"${src.name}"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"info","input":"${src.name}"}"""), ctx)
         assertFalse(r.content, r.error)
         assertTrue(r.content, r.content.contains("codec_type=video"))
         assertTrue(r.content, r.content.contains("codec_type=audio"))
@@ -174,7 +174,7 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args("""{"sub":"frame","input":"${src.name}","start":"2"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"frame","input":"${src.name}","start":"2"}"""), ctx)
         assertFalse(r.content, r.error)
         assertEquals(1, r.images.size)
         val png = File(r.images[0])
@@ -189,7 +189,7 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args("""{"sub":"audio","input":"${src.name}"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"audio","input":"${src.name}"}"""), ctx)
         assertFalse(r.content, r.error)
         assertEquals(1, r.media.size)
         assertTrue(r.images.isEmpty())
@@ -210,7 +210,7 @@ class MediaTest {
         // 绝对路径要写成 / 分隔：塞进 JSON 字符串字面量的反斜杠是非法转义，
         // 而 Windows 的 File 与 ffmpeg 都认正斜杠
         val target = File(outside, "产物.mp3").invariantSeparatorsPath
-        val r = MediaTool().run(
+        val r = MediaTool().runB(
             args("""{"sub":"audio","input":"${src.name}","output":"$target"}"""), ctx
         )
         assertFalse(r.content, r.error)
@@ -225,7 +225,7 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(
+        val r = MediaTool().runB(
             args("""{"sub":"cut","input":"${src.name}","start":"1","dur":"2","output":"片断.mp4"}"""), ctx
         )
         assertFalse(r.content, r.error)
@@ -244,7 +244,7 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(
+        val r = MediaTool().runB(
             args("""{"sub":"transcode","input":"${src.name}","output":"小.mp4","width":"160"}"""), ctx
         )
         assertFalse(r.content, r.error)
@@ -264,13 +264,13 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val wrongExt = MediaTool().run(args("""{"sub":"frame","input":"${src.name}","output":"a.mp4"}"""), ctx)
+        val wrongExt = MediaTool().runB(args("""{"sub":"frame","input":"${src.name}","output":"a.mp4"}"""), ctx)
         assertTrue(wrongExt.content, wrongExt.error)
         assertTrue(wrongExt.content, wrongExt.content.contains("只能输出"))
-        val badFps = MediaTool().run(args("""{"sub":"transcode","input":"${src.name}","fps":"三十"}"""), ctx)
+        val badFps = MediaTool().runB(args("""{"sub":"transcode","input":"${src.name}","fps":"三十"}"""), ctx)
         assertTrue(badFps.content, badFps.error)
         assertTrue(badFps.content, badFps.content.contains("fps"))
-        val badTime = MediaTool().run(args("""{"sub":"cut","input":"${src.name}","start":"3sec"}"""), ctx)
+        val badTime = MediaTool().runB(args("""{"sub":"cut","input":"${src.name}","start":"3sec"}"""), ctx)
         assertTrue(badTime.content, badTime.error)
         assertTrue(badTime.content, badTime.content.contains("start"))
     }
@@ -281,7 +281,7 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args("""{"sub":"cut","input":"${src.name}","output":"${src.name}"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"cut","input":"${src.name}","output":"${src.name}"}"""), ctx)
         assertTrue(r.content, r.error)
         assertTrue(r.content, r.content.contains("同一个文件"))
         assertTrue("源文件必须还在", src.isFile)
@@ -295,7 +295,7 @@ class MediaTest {
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
         val items = """[{"start":"0","end":"2.5","text":"第一句：中文，带冒号 : 也无妨"},""" +
             """{"start":"1:05","end":"1:07.25","text":"第二句"}]"""
-        val r = MediaTool().run(args("""{"sub":"srt","items":${json(items)}}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"srt","items":${json(items)}}"""), ctx)
         assertFalse(r.content, r.error)
         val f = File(dir, ".haoai-output/media/字幕.srt")
         assertTrue("字幕没落到默认位置：${r.content}", f.isFile)
@@ -313,20 +313,20 @@ class MediaTest {
     fun `srt refuses bad cues and needs force to overwrite`() {
         val dir = ws()
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val badEnd = MediaTool().run(args("""{"sub":"srt","items":${json("""[{"start":"3","end":"2","text":"倒着走"}]""")}}"""), ctx)
+        val badEnd = MediaTool().runB(args("""{"sub":"srt","items":${json("""[{"start":"3","end":"2","text":"倒着走"}]""")}}"""), ctx)
         assertTrue(badEnd.content, badEnd.error)
         assertTrue(badEnd.content, badEnd.content.contains("不晚于"))
-        val notArray = MediaTool().run(args("""{"sub":"srt","items":"第一句"}"""), ctx)
+        val notArray = MediaTool().runB(args("""{"sub":"srt","items":"第一句"}"""), ctx)
         assertTrue(notArray.content, notArray.error)
-        val empty = MediaTool().run(args("""{"sub":"srt","items":"[]"}"""), ctx)
+        val empty = MediaTool().runB(args("""{"sub":"srt","items":"[]"}"""), ctx)
         assertTrue(empty.content, empty.error)
 
-        val ok = MediaTool().run(args("""{"sub":"srt","output":"cap.srt","items":${json("""[{"start":"0","end":"1","text":"一句"}]""")}}"""), ctx)
+        val ok = MediaTool().runB(args("""{"sub":"srt","output":"cap.srt","items":${json("""[{"start":"0","end":"1","text":"一句"}]""")}}"""), ctx)
         assertFalse(ok.content, ok.error)
-        val again = MediaTool().run(args("""{"sub":"srt","output":"cap.srt","items":${json("""[{"start":"0","end":"1","text":"改了"}]""")}}"""), ctx)
+        val again = MediaTool().runB(args("""{"sub":"srt","output":"cap.srt","items":${json("""[{"start":"0","end":"1","text":"改了"}]""")}}"""), ctx)
         assertTrue("已存在的字幕默认不许盖", again.error)
         assertTrue(again.content, again.content.contains("force"))
-        val forced = MediaTool().run(args("""{"sub":"srt","output":"cap.srt","force":true,"items":${json("""[{"start":"0","end":"1","text":"改了"}]""")}}"""), ctx)
+        val forced = MediaTool().runB(args("""{"sub":"srt","output":"cap.srt","force":true,"items":${json("""[{"start":"0","end":"1","text":"改了"}]""")}}"""), ctx)
         assertFalse(forced.content, forced.error)
         assertTrue(File(dir, "cap.srt").readText(Charsets.UTF_8).contains("改了"))
     }
@@ -345,7 +345,7 @@ class MediaTest {
             """{"sub":"join","input":"${src.name}","input2":"没这第二段.mp4"}""" to "没有这第二个文件",
             """{"sub":"caption","input":"${src.name}","text":"标题","pos":"中间"}""" to "pos"
         ).forEach { (body, want) ->
-            val r = MediaTool().run(args(body), ctx)
+            val r = MediaTool().runB(args(body), ctx)
             assertTrue("$body ⇒ ${r.content}", r.error)
             assertTrue("$body 该说到「$want」：${r.content}", r.content.contains(want))
         }
@@ -357,9 +357,9 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val plain = MediaTool().run(args("""{"sub":"cover","input":"${src.name}","output":"a.png","start":"1"}"""), ctx)
+        val plain = MediaTool().runB(args("""{"sub":"cover","input":"${src.name}","output":"a.png","start":"1"}"""), ctx)
         assertFalse(plain.content, plain.error)
-        val cap = MediaTool().run(
+        val cap = MediaTool().runB(
             args("""{"sub":"caption","input":"${src.name}","output":"b.png","start":"1","text":"第三期 : 冒号也要能画"}"""), ctx)
         assertFalse("caption 没跑成：${cap.content}", cap.error)
         val a = File(dir, "a.png"); val b = File(dir, "b.png")
@@ -376,10 +376,10 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val s = MediaTool().run(args(
+        val s = MediaTool().runB(args(
             """{"sub":"srt","output":"字幕.srt","input":"${src.name}","items":${json("""[{"start":"0.5","end":"2","text":"烧进去的字幕"}]""")}}"""), ctx)
         assertFalse(s.content, s.error)
-        val b = MediaTool().run(args("""{"sub":"subtitle","input":"${src.name}","output":"out.mp4","subs":"字幕.srt"}"""), ctx)
+        val b = MediaTool().runB(args("""{"sub":"subtitle","input":"${src.name}","output":"out.mp4","subs":"字幕.srt"}"""), ctx)
         assertFalse("烧字幕没成功：${b.content}", b.error)
         val out = File(dir, "out.mp4")
         assertTrue(out.isFile)
@@ -395,7 +395,7 @@ class MediaTest {
         val dir = ws()
         val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args("""{"sub":"join","input":"${src.name}","input2":"${src.name}","output":"j.mp4"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"join","input":"${src.name}","input2":"${src.name}","output":"j.mp4"}"""), ctx)
         assertFalse("拼接没成功：${r.content}", r.error)
         val p = probe(File(dir, "j.mp4"))
         val d = Regex("duration=([0-9.]+)").find(p)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
@@ -423,7 +423,7 @@ class MediaTest {
     fun `speed 2x halves the duration and keeps the audio track`() {
         assumeTrue("这台机器上没有 ffmpeg", have())
         val dir = ws(); val src = clip(dir)
-        val r = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"2","output":"快.mp4"}"""),
+        val r = MediaTool().runB(args("""{"sub":"speed","input":"${src.name}","rate":"2","output":"快.mp4"}"""),
             ToolCtx(dir, PcSettings(), "auto", SpyGate()))
         assertFalse("两倍速没成：${r.content}", r.error)
         val out = File(dir, "快.mp4")
@@ -436,13 +436,13 @@ class MediaTest {
         assumeTrue("这台机器上没有 ffmpeg", have())
         val dir = ws(); val src = clip(dir)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"4","output":"x4.mp4"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"speed","input":"${src.name}","rate":"4","output":"x4.mp4"}"""), ctx)
         assertFalse("四倍速没成（atempo 只吃 0.5~2，得自己拆级）：${r.content}", r.error)
         assertTrue("四倍速后该 1~2 秒，实际 ${durOf(File(dir, "x4.mp4"))}",
             durOf(File(dir, "x4.mp4")) in 0.8..2.0)
-        val bad = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"40","output":"n.mp4"}"""), ctx)
+        val bad = MediaTool().runB(args("""{"sub":"speed","input":"${src.name}","rate":"40","output":"n.mp4"}"""), ctx)
         assertTrue("倍速离谱要挡下来：${bad.content}", bad.error && bad.content.contains("0.25"))
-        val junk = MediaTool().run(args("""{"sub":"speed","input":"${src.name}","rate":"2;rm","output":"n2.mp4"}"""), ctx)
+        val junk = MediaTool().runB(args("""{"sub":"speed","input":"${src.name}","rate":"2;rm","output":"n2.mp4"}"""), ctx)
         assertTrue("非数字的 rate 一个字都不该进过滤串：${junk.content}", junk.error)
     }
 
@@ -451,15 +451,15 @@ class MediaTest {
         assumeTrue("这台机器上没有 ffmpeg", have())
         val dir = ws(); val src = clip(dir)          // 5 秒
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args("""{"sub":"fade","input":"${src.name}","output":"f.mp4"}"""), ctx)
+        val r = MediaTool().runB(args("""{"sub":"fade","input":"${src.name}","output":"f.mp4"}"""), ctx)
         assertFalse("淡入淡出没成：${r.content}", r.error)
         val out = File(dir, "f.mp4")
         assertTrue("加淡入淡出不该改时长，实际 ${durOf(out)}", durOf(out) in 4.5..5.6)
         assertTrue("结尾也要淡出（画面流要在）", probe(out).contains("codec_type=video"))
-        val tooLong = MediaTool().run(
+        val tooLong = MediaTool().runB(
             args("""{"sub":"fade","input":"${src.name}","fadeIn":"3","fadeOut":"3","output":"g.mp4"}"""), ctx)
         assertTrue("淡入+淡出比整段还长必须拒绝（那样整段是黑的）：${tooLong.content}", tooLong.error)
-        val zero = MediaTool().run(
+        val zero = MediaTool().runB(
             args("""{"sub":"fade","input":"${src.name}","fadeIn":"0","fadeOut":"0","output":"h.mp4"}"""), ctx)
         assertTrue("两个都是 0 等于什么都不做，要说出来：${zero.content}", zero.error)
     }
@@ -469,7 +469,7 @@ class MediaTest {
         assumeTrue("这台机器上没有 ffmpeg", have())
         val dir = ws(); val voice = clip(dir)                       // 5 秒
         val music = clipSecs(dir, "背景音乐.mp4", 8)                 // 8 秒，故意更长
-        val r = MediaTool().run(args(
+        val r = MediaTool().runB(args(
             """{"sub":"mix","input":"${voice.name}","input2":"${music.name}","output":"混好.mp4"}"""),
             ToolCtx(dir, PcSettings(), "auto", SpyGate()))
         assertFalse("混音没成：${r.content}", r.error)
@@ -487,12 +487,12 @@ class MediaTest {
         val mute = clipSecs(dir, "无声素材.mp4", 4, audio = false)
         val music = clipSecs(dir, "背景音乐.mp4", 6)
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = MediaTool().run(args(
+        val r = MediaTool().runB(args(
             """{"sub":"mix","input":"${mute.name}","input2":"${music.name}","output":"x.mp4"}"""), ctx)
         assertTrue("主素材没音轨要直说，不能悄悄出一条无声视频：${r.content}", r.error)
-        val noSecond = MediaTool().run(args("""{"sub":"mix","input":"${music.name}","output":"y.mp4"}"""), ctx)
+        val noSecond = MediaTool().runB(args("""{"sub":"mix","input":"${music.name}","output":"y.mp4"}"""), ctx)
         assertTrue("不给 input2 要报错：${noSecond.content}", noSecond.error)
-        val badGain = MediaTool().run(args(
+        val badGain = MediaTool().runB(args(
             """{"sub":"mix","input":"${music.name}","input2":"${music.name}","gain":"12","output":"z.mp4"}"""), ctx)
         assertTrue("gain 超范围要挡：${badGain.content}", badGain.error)
     }

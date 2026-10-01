@@ -41,11 +41,11 @@ object BrowserIntents {
 class BrowserSearchTool : Tool {
 
     override val name = "browser_search"
-    override val description =
+    override val desc =
         "在真实浏览器中搜索关键词（EXEC 级审批）：拉起默认浏览器打开搜索结果页。" +
             "打开后用 wait(mode=idle) 等页面加载，再 screen 读编号、tap(index) 点击结果。" +
             "纯文本资料优先用 web_fetch/web_search（省步骤）；需要真实浏览器环境时用本工具。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("query") {
@@ -73,11 +73,11 @@ class BrowserSearchTool : Tool {
 class BrowserOpenTool : Tool {
 
     override val name = "browser_open"
-    override val description =
+    override val desc =
         "在真实浏览器中打开网址（EXEC 级审批）：拉起默认浏览器打开页面，用户可见。" +
             "打开后用 wait(mode=idle) 等页面加载，再 screen 读编号、tap(index) 操作。" +
             "url 缺协议时自动补 https://。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("url") {
@@ -105,11 +105,11 @@ private fun noBrowser() = ToolResult("内置浏览器不可用（控制器未初
 class BrowserNavigateTool : Tool {
 
     override val name = "browser_navigate"
-    override val description =
+    override val desc =
         "在内置浏览器（App 内 WebView，EXEC 级审批）中加载网页：自动等页面加载完成 + 渲染余量，" +
             "返回最终标题与 URL。之后用 browser_read 取编号结构再操作。" +
             "需要 JS 渲染页面/自动化/批量读取时用本组；要给用户看或用登录态时才用 browser_open。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("url") {
@@ -130,11 +130,11 @@ class BrowserNavigateTool : Tool {
 class BrowserReadTool : Tool {
 
     override val name = "browser_read"
-    override val description =
+    override val desc =
         "读取内置浏览器当前页结构（READ）：标题/URL/滚动位置 + 可交互元素编号列表 " +
             "[index] 标签 \"文本\" href 坐标（可见元素优先，上限 80）。" +
             "编号每次 read 刷新，页面变了必须重读；点击/输入前先 read。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("max_nodes") {
@@ -157,10 +157,10 @@ class BrowserReadTool : Tool {
 class BrowserClickTool : Tool {
 
     override val name = "browser_click"
-    override val description =
+    override val desc =
         "点击内置浏览器页面上编号对应的元素（WRITE，编号来自 browser_read）。" +
             "自动滚到元素中央并派发完整鼠标事件序列；页面跳转后用 browser_read 确认结果。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("index") {
@@ -180,10 +180,10 @@ class BrowserClickTool : Tool {
 class BrowserInputTool : Tool {
 
     override val name = "browser_input"
-    override val description =
+    override val desc =
         "向内置浏览器页面编号对应的输入框填文本（WRITE，编号来自 browser_read）。" +
             "submit=true 时提交表单（无表单则派发回车）。兼容 React/Vue 受控输入。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("index") {
@@ -212,9 +212,9 @@ class BrowserInputTool : Tool {
 class BrowserPageScrollTool : Tool {
 
     override val name = "browser_scroll"
-    override val description =
+    override val desc =
         "滚动内置浏览器页面（WRITE）：direction=up/down/left/right，amount=视口比例 0.1-0.9 默认 0.7。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("direction") {
@@ -237,10 +237,10 @@ class BrowserPageScrollTool : Tool {
 class BrowserFindTool : Tool {
 
     override val name = "browser_find"
-    override val description =
+    override val desc =
         "在内置浏览器页面查找文本（READ）：滚动到首个命中处并重新编号，返回命中列表" +
             "（含可交互元素编号）+ 最新结构，可直接 browser_click 命中编号。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("text") { put("type", "string") }
@@ -260,8 +260,8 @@ class BrowserFindTool : Tool {
 class BrowserBackTool : Tool {
 
     override val name = "browser_back"
-    override val description = "内置浏览器后退一步（WRITE）。"
-    override val parameters = buildJsonObject { put("type", "object") }
+    override val desc = "内置浏览器后退一步（WRITE）。"
+    override val params = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
         if (!com.haoai.agent.agent.browser.BrowserController.ready) return noBrowser()
@@ -272,10 +272,10 @@ class BrowserBackTool : Tool {
 class BrowserScreenshotTool : Tool {
 
     override val name = "browser_screenshot"
-    override val description =
+    override val desc =
         "截取内置浏览器当前视口（READ）：图像会注入对话，视觉模型可直接描述页面内容。" +
             "需要视觉判断（验证码/布局/图表）时用；常规结构信息用 browser_read 更省。"
-    override val parameters = buildJsonObject { put("type", "object") }
+    override val params = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
         if (!com.haoai.agent.agent.browser.BrowserController.ready) return noBrowser()

@@ -24,10 +24,10 @@ import kotlin.coroutines.resume
 class OcrImageTool : Tool {
 
     override val name = "ocr_image"
-    override val description =
+    override val desc =
         "识别图片中的文字（OCR，中文/英文，离线）。输入图片路径（工作区相对路径或 /storage 绝对路径），" +
             "返回全文与按行的文本。适合让代理「看懂」截图和照片里的文字。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("path") { put("type", "string") }

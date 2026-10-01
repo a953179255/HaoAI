@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
 import java.io.File
@@ -25,7 +25,7 @@ class RunCodeTool : Tool(
     kind = "exec"
 ) {
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val code = req(args, "code")?.takeIf { it.isNotBlank() }
             ?: return fail("run_code 缺少 code（要跑的那段代码本身）")
         val lang = (req(args, "lang") ?: "python").trim().lowercase()

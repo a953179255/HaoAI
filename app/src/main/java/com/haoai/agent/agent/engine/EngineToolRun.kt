@@ -110,7 +110,7 @@ internal suspend fun AgentEngine.executeCall(
             val d = h.before(call, args, callCtx)
             if (d is ToolHook.HookDecision.Handled) {
                 result = d.result
-                finalState = if (d.result.isError) ToolRunState.ERROR else ToolRunState.DONE
+                finalState = if (d.result.error) ToolRunState.ERROR else ToolRunState.DONE
                 decision = "hook"
                 handledByHook = true
                 break
@@ -184,7 +184,7 @@ internal suspend fun AgentEngine.executeCall(
                     decision = "approved"
                     toolStartMs = System.currentTimeMillis()
                     result = invokeTool(tool, args, callCtx)
-                    if (result.isError) finalState = ToolRunState.ERROR
+                    if (result.error) finalState = ToolRunState.ERROR
                 }
             }
         }
@@ -200,7 +200,7 @@ internal suspend fun AgentEngine.executeCall(
                 decision = "approved"
                 toolStartMs = System.currentTimeMillis()
                 result = invokeTool(tool, args, callCtx)
-                if (result.isError) finalState = ToolRunState.ERROR
+                if (result.error) finalState = ToolRunState.ERROR
             }
         }
 
@@ -208,7 +208,7 @@ internal suspend fun AgentEngine.executeCall(
             // YOLO 等免审批模式同样要拍快照（5.5 回滚依赖），否则全自动下写入无档可回
             toolStartMs = System.currentTimeMillis()
             result = invokeTool(tool, args, callCtx)
-            if (result.isError) finalState = ToolRunState.ERROR
+            if (result.error) finalState = ToolRunState.ERROR
         }
     }
     // 记录签名供重放保护比对（仅非 READ 工具参与判定）。
@@ -269,7 +269,7 @@ internal suspend fun AgentEngine.finishCall(
     if (toolStartMs > 0) {
         ledgerTool(
             call.name, System.currentTimeMillis() - toolStartMs,
-            ok = !result.isError, decision = decision ?: "direct"
+            ok = !result.error, decision = decision ?: "direct"
         )
     }
     // E7b hooks：E3 失败升级 / 5.7 技能提示 / E7c 写文件校验统一在 after 阶段按列表序执行
@@ -283,7 +283,7 @@ internal suspend fun AgentEngine.finishCall(
         toolName = call.name,
         argsJson = call.argumentsJson,
         resultContent = finalResult.content,
-        isError = finalResult.isError,
+        isError = finalResult.error,
         isRead = policy.riskOf(call.name) == com.haoai.agent.agent.policy.RiskLevel.READ
     )
     when (guardDecision) {
@@ -292,7 +292,7 @@ internal suspend fun AgentEngine.finishCall(
             // 引导挂在工具结果尾部：模型下一轮立刻看到，不打断循环
             finalResult = finalResult.copy(
                 content = finalResult.content + "\n\n" + guardDecision.message,
-                isError = finalResult.isError
+                error = finalResult.error
             )
             onEvent(
                 ToolChanged(
@@ -303,7 +303,7 @@ internal suspend fun AgentEngine.finishCall(
         is ToolLoopGuard.Decision.Halt -> {
             finalResult = finalResult.copy(
                 content = finalResult.content + "\n\n" + guardDecision.message,
-                isError = true
+                error = true
             )
             _loopStallHalt = true
             onEvent(
@@ -316,7 +316,7 @@ internal suspend fun AgentEngine.finishCall(
 
     // E5 连续工具失败熔断：必须排在 hooks 之后判定——conFailCount 的自增发生在
     // EscalationHook.after（EngineHooks.kt:90），先前置读会让阈值 8 拖到第 9 次失败才触发。
-    if (toolFailCap > 0 && result.isError && (conFailCount[call.name] ?: 0) >= toolFailCap) {
+    if (toolFailCap > 0 && result.error && (conFailCount[call.name] ?: 0) >= toolFailCap) {
         _loopFailedCap = true
     }
     // S4：落库出口。默认与改造前逐字相同（TextCap.middle 同一套 65%/25% 切分）；
@@ -333,11 +333,11 @@ internal suspend fun AgentEngine.finishCall(
         content = storedContent,
         toolCallId = call.id,
         toolName = call.name,
-        error = finalResult.isError
+        error = finalResult.error
     )
     appendAndNotify(message, onEvent)
     // B2：外部内容污点标记（web/search/browser 成功且有正文 → 本回合后续 auto 提取按 untrusted）
-    if (!finalResult.isError && call.name in TAINT_TOOLS && finalResult.content.isNotBlank()) {
+    if (!finalResult.error && call.name in TAINT_TOOLS && finalResult.content.isNotBlank()) {
         turnTainted = true
     }
     // 图像注入通路（browser_screenshot/camera/vscreen 等）：工具结果带图时追加一条 user 图像消息，
@@ -426,7 +426,7 @@ internal suspend fun AgentEngine.runParallelBody(p: PreparedCall): Triple<ToolRe
     }
     val start = System.currentTimeMillis()
     val result = invokeTool(p.tool, p.args, p.ctx)
-    return Triple(result, if (result.isError) ToolRunState.ERROR else ToolRunState.DONE, System.currentTimeMillis() - start)
+    return Triple(result, if (result.error) ToolRunState.ERROR else ToolRunState.DONE, System.currentTimeMillis() - start)
 }
 
 internal suspend fun AgentEngine.invokeTool(tool: Tool, args: JsonObject, ctx: ToolContext): ToolResult =

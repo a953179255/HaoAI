@@ -20,9 +20,9 @@ import kotlin.coroutines.resume
 class LocationTool : Tool {
 
     override val name = "location"
-    override val description =
+    override val desc =
         "获取手机当前地理位置（经纬度、精度、定位来源与时间）。首次使用需要定位权限；系统定位服务需开启。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") { }
     }

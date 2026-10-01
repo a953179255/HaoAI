@@ -9,6 +9,12 @@ plugins {
 // 理由：手机端那套引擎在 JVM 单测里已经证明能脱开 Android 跑，PC 端没必要再拖
 // OkHttp/协程/Ktor 进来增加解析与启动面。
 dependencies {
+    // B15：两端共用的 :core —— TextCap / ToolResult / AgentTool 契约只有一份定义。
+    // 来自 mavenLocal（根构建 `:core:publishToMavenLocal`），见 settings 的仓库顺序注释。
+    implementation("com.haoai:core:0.1.0")
+    // suspend 契约的配套：pc 引擎在唯一的 tool 调用点用 runBlocking 包一层
+    // （引擎本来就在自己的线程上阻塞跑，包一层不改变任何调度语义）。
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation(kotlin("test"))

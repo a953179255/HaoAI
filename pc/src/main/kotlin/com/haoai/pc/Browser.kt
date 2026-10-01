@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -54,7 +54,7 @@ class BrowserTool : Tool(
     kind = "net",
     flag = HaoFlag.BROWSER_CONTROL
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val sub = (req(args, "sub") ?: "").trim().lowercase()
         if (sub.isEmpty()) return fail("browser 缺少 sub。可用：${SUBS.joinToString("|")}")
         if (sub !in SUBS) return fail("不支持的 sub：$sub。可用：${SUBS.joinToString("|")}")

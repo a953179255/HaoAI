@@ -1,4 +1,6 @@
 package com.haoai.agent.platform
+import com.haoai.core.takeSafe
+import com.haoai.core.takeLastSafe
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,7 +13,6 @@ import com.haoai.agent.agent.engine.AgentEngine
 import com.haoai.agent.agent.policy.PermissionMode
 import com.haoai.agent.agent.policy.PolicyEngine
 import com.haoai.agent.agent.schedule.ScheduleStore
-import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.agent.schedule.Scheduler
 import com.haoai.agent.agent.schedule.ScheduleState
 import com.haoai.agent.agent.schedule.ScheduleTask

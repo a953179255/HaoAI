@@ -863,7 +863,9 @@ class Engine(
                 }
                 emit(Ev.ToolStart(call.id, call.name, brief(args), subjectOf(args)))
                 val res = try {
-                    tool.run(args, ctx)
+                    // suspend 契约（B15）：接口两端共用，PC 的引擎是阻塞线程模型 ——
+                    // 在这个唯一的调用点包一层 runBlocking，函数体与调度语义照旧。
+                    kotlinx.coroutines.runBlocking { tool.run(args, ctx) }
                 } catch (e: Exception) {
                     ToolResult("工具内部异常：${e.message ?: e.javaClass.simpleName}", true)
                 }

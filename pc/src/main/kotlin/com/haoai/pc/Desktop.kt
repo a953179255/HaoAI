@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -41,7 +41,7 @@ class ScreenTool : Tool(
     kind = "exec",
     flag = HaoFlag.DESKTOP_CONTROL
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val sub = (req(args, "sub") ?: "").trim().lowercase()
         if (sub !in SUBS) return fail("screen 不支持的 sub：$sub。可用：${SUBS.joinToString("|")}")
 

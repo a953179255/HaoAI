@@ -1,8 +1,9 @@
 package com.haoai.agent.data
+import com.haoai.core.takeSafe
+import com.haoai.core.takeLastSafe
 
 import android.content.Context
 import com.haoai.agent.agent.model.ChatMessage
-import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.agent.model.ToolCallData
 import kotlinx.serialization.Serializable
 import java.io.File

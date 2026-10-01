@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -329,7 +329,7 @@ class ShellOpenTool : Tool(
     ),
     kind = "exec"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val shell = req(args, "shell") ?: "bash"
         val label = req(args, "label") ?: ""
         val command = req(args, "command") ?: ""
@@ -359,7 +359,7 @@ class ShellSendTool : Tool(
     schema("id" to "string", "text" to "string", "enter" to "boolean", required = arrayOf("id")),
     kind = "exec"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val id = req(args, "id") ?: return fail("shell_send 缺少 id")
         val text = req(args, "text") ?: ""
         val enter = args["enter"]?.jsonPrimitive?.contentOrNull != "false"
@@ -376,7 +376,7 @@ class ShellReadTool : Tool(
     "shell_read", "取常驻进程新产生的输出。wait_ms 是「等多久算这一轮说完」，默认 1200。",
     schema("id" to "string", "wait_ms" to "integer", "max_chars" to "integer", required = arrayOf("id"))
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val id = req(args, "id") ?: return fail("shell_read 缺少 id")
         val wait = int(args, "wait_ms", 1200)
         val max = int(args, "max_chars", 8000)
@@ -392,14 +392,14 @@ class ShellCloseTool : Tool(
     schema("id" to "string", required = arrayOf("id")),
     kind = "exec"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val id = req(args, "id") ?: return fail("shell_close 缺少 id")
         return ProcRegistry.close(id).fold({ ToolResult(it) }, { fail(it.message ?: "关闭失败") })
     }
 }
 
 class ShellListTool : Tool("shell_list", "列出当前常驻进程：id、在跑什么、多久没被碰、是否还活着。", schema()) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         ProcRegistry.reapIdle()
         val l = ProcRegistry.list()
         if (l.isEmpty()) return ToolResult("(没有常驻进程)")

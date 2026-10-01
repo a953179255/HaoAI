@@ -27,14 +27,14 @@ class McpTool(
     override val name: String =
         "mcp_${manager.shortNameOf(cfg)}_${sanitize(info.name)}"
 
-    override val description: String = buildString {
+    override val desc: String = buildString {
         append("[MCP·${cfg.name}] ")
         append(info.description.ifBlank { info.name })
         append("（远程工具，执行前会请求用户批准）")
     }
 
     /** 远端 schema 防御性补全：缺 type 时按 object 补全，缺 root 对象用默认空参，避免模型端解析失败。 */
-    override val parameters: JsonObject by lazy {
+    override val params: JsonObject by lazy {
         val raw = runCatching {
             if (info.schemaJson.isBlank()) null
             else com.haoai.agent.data.HaoJson.json.parseToJsonElement(info.schemaJson) as? JsonObject

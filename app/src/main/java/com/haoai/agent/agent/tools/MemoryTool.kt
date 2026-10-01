@@ -11,7 +11,7 @@ import kotlinx.serialization.json.putJsonArray
 class MemoryTool : Tool {
 
     override val name = "memory"
-    override val description =
+    override val desc =
         "记忆系统（两层）。action: save / journal / search(query) / list / forget / merge(ids, content)。" +
             "save=长期记忆库（容量有限，宁缺毋滥）：content 一句话、type 取 preference(用户偏好)/fact(稳定事实)/decision(重要决定)/event(带日期事件)，importance 1-5。" +
             "journal=每日日志（当天发生的事，7 天后过期）：content 一句话、importance 1-5；夜间重要日志(importance>=4)会自动晋升为长期记忆。" +
@@ -21,7 +21,7 @@ class MemoryTool : Tool {
             "journal 记：今天完成的重要进展、遇到的问题与解决方式、用户交代的事项。" +
             "两者都不要记：闲聊内容、能随时查到的信息、当前会话的临时状态、与已有记录重复的内容、" +
             "以及系统提示里召回展示的记忆（那是已入库内容的回显，更新它用 merge 而不是重新 save）。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("action") {

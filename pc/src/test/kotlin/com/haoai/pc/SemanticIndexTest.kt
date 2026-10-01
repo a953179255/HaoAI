@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -187,7 +187,7 @@ class SemanticIndexTest {
             override fun ask(question: String, options: List<String>) = ""
         })
         // 没配端点：字面搜不到就是搜不到，输出不许多一个字
-        val plain = GrepTool().run(
+        val plain = GrepTool().runB(
             Json.parseToJsonElement("""{"pattern":"根本不存在的词组"}""").jsonObject, c
         )
         assertFalse(plain.error)
@@ -200,7 +200,7 @@ class SemanticIndexTest {
                     override fun approve(title: String, detail: String, kind: String) = true
                     override fun ask(question: String, options: List<String>) = ""
                 })
-                val sem = GrepTool().run(
+                val sem = GrepTool().runB(
                     Json.parseToJsonElement("""{"pattern":"配置怎么加载"}""").jsonObject, c2
                 )
                 assertFalse(sem.error)
@@ -209,7 +209,7 @@ class SemanticIndexTest {
                 assertTrue("文本结果的那句还要在：" + sem.content, sem.content.contains("(无匹配)"))
 
                 // 字面有命中时不掺和语义（不改变既有输出）
-                val lit = GrepTool().run(
+                val lit = GrepTool().runB(
                     Json.parseToJsonElement("""{"pattern":"fun load"}""").jsonObject, c2
                 )
                 assertFalse(lit.error)

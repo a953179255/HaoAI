@@ -15,9 +15,9 @@ import java.util.Locale
 class ScheduleTool(private val appFilesDir: java.io.File) : Tool {
 
     override val name = "schedule"
-    override val description =
+    override val desc =
         "定时任务。action: create(name,spec,prompt) / list / remove(id) / toggle(id)。spec 格式：every:30m（每30分钟）、every:2h、every:1d、daily:09:30（每天定点）、hourly。prompt 为到点后交给代理执行的指令。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("action") { put("type", "string") }

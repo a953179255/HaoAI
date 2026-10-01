@@ -208,7 +208,7 @@ object WorkflowRunner {
         val result = withContext(Dispatchers.IO) {
             withTimeoutOrNull(180_000.milliseconds) { tool.run(args, ctx) } ?: throw Exception("工具执行超时")
         }
-        if (result.isError) throw Exception(result.content.take(160))
+        if (result.error) throw Exception(result.content.take(160))
         return result.content
     }
 

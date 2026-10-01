@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -42,7 +42,7 @@ class RunVerifyTool : Tool(
     kind = "exec"
 ) {
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val typeHint = req(args, "type")?.trim().orEmpty()
         val buildOverride = req(args, "build")?.trim()
         val startCmd = req(args, "start")?.trim().orEmpty()

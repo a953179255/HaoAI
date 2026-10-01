@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -189,7 +189,7 @@ class DesktopTest {
     @Test
     fun `read-only subs still ask nobody`() {
         val gate = SpyGate()
-        val r = ScreenTool().run(args("""{"sub":"nope"}"""), ctx("ask", gate))
+        val r = ScreenTool().runB(args("""{"sub":"nope"}"""), ctx("ask", gate))
         assertTrue("不认识的 sub 该报错：" + r.content, r.error)
         assertTrue(r.content.contains("windows"))
         assertEquals(0, gate.asked.size)
@@ -206,7 +206,7 @@ class DesktopTest {
             """{"sub":"key"}""" to "keys"
         )) {
             val gate = SpyGate()
-            val r = ScreenTool().run(args(json), ctx("ask", gate))
+            val r = ScreenTool().runB(args(json), ctx("ask", gate))
             assertTrue("$json 该失败：${r.content}", r.error)
             assertTrue("${json} 的提示不可照做：${r.content}", r.content.contains(hint))
             assertEquals("$json 不该弹审批", 0, gate.asked.size)
@@ -216,7 +216,7 @@ class DesktopTest {
     @Test
     fun `plan mode refuses a click without going through the gate`() {
         val gate = SpyGate()
-        val r = ScreenTool().run(args("""{"sub":"click","x":"1","y":"2"}"""), ctx("plan", gate))
+        val r = ScreenTool().runB(args("""{"sub":"click","x":"1","y":"2"}"""), ctx("plan", gate))
         assertTrue(r.error)
         assertTrue("没说是计划模式：${r.content}", r.content.contains("计划模式"))
         assertEquals("计划模式不该弹审批", 0, gate.asked.size)
@@ -230,7 +230,7 @@ class DesktopTest {
         try {
             Policies.get().add(ws, Rule("screen", "click*", Decision.DENY))
             val gate = SpyGate()
-            val r = ScreenTool().run(
+            val r = ScreenTool().runB(
                 args("""{"sub":"click","x":"1","y":"2"}"""), ToolCtx(ws, PcSettings(flags = mapOf("desktop_control" to true)), "auto", gate)
             )
             assertTrue("规则没拦住点击：${r.content}", r.error)
@@ -247,7 +247,7 @@ class DesktopTest {
         // 这条同时也是 Ps.focus() 的联机冒烟测试（它真的会跑一次 PowerShell）。
         // gate 用 allow=false：一按 F1 就可能打开某个窗口的帮助页，测试不该有副作用。
         val gate = SpyGate(allow = false)
-        val r = ScreenTool().run(args("""{"sub":"key","keys":"{F1}"}"""), ctx("ask", gate))
+        val r = ScreenTool().runB(args("""{"sub":"key","keys":"{F1}"}"""), ctx("ask", gate))
         assertTrue("拒绝了却还执行：${r.content}", r.error)
         assertEquals(1, gate.asked.size)
         val detail = gate.asked[0].second

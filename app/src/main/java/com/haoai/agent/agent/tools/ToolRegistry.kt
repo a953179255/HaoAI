@@ -148,7 +148,7 @@ object ToolRegistry {
 }
 
 fun Tool.toApi(): ApiTool = ApiTool(
-    function = ApiToolDef(name, description, sanitizeParameters(parameters))
+    function = ApiToolDef(name, desc, sanitizeParameters(params))
 )
 
 /**

@@ -12,12 +12,12 @@ import kotlinx.serialization.json.putJsonObject
 class HandoffTool(private val onHandoff: (String, Int) -> Unit) : Tool {
 
     override val name = "handoff"
-    override val description =
+    override val desc =
         "上下文压缩：当系统提示「上下文即将超限」时必须调用。用 summary 传五段式交接文档：" +
             "【目标】本次任务要达成什么 /【约束】限制与要求 /【已完成】关键进展与产物路径 /【关键决定】已确定的做法 /【下一步】接下来做什么。" +
             "importance 传本次任务的重要度 2-4（日常任务 2，重要里程碑 3，关键节点 4），用于记忆日志分级。" +
             "调用后早期对话会被压缩为该文档，当前任务无缝继续。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("summary") {

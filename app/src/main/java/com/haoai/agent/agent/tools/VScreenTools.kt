@@ -34,10 +34,10 @@ private fun activeDisplayId(): Int? = VirtualScreenController.displayId
 class VScreenLaunchTool : Tool {
 
     override val name = "vscreen_launch"
-    override val description =
+    override val desc =
         "把目标 App 启动到后台虚拟屏：用户主屏不被占用、可继续用手机。虚拟屏自动化第一步。target 支持：应用名（如「掌上英雄联盟」，自动按已安装应用解析）、包名（如 com.android.notes）或 http(s) 网址。" +
             "启动失败（App 拒绝多屏）时按提示降级前台 screen/tap 流程。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("target") {
@@ -172,9 +172,9 @@ private fun resolveAppTarget(app: android.content.Context, target: String): AppT
 class VScreenScreenTool : Tool {
 
     override val name = "vscreen_screen"
-    override val description =
+    override val desc =
         "读取虚拟屏：输出可交互控件编号列表 [index]（与主屏 screen 同一编号体系）+ 附截图（红框=上一步动作目标）。操作前先读屏；界面变了要重新读。若界面元素不在编号列表里（游戏/自绘内容），改用 vscreen_tap_xy/vscreen_swipe_xy 按截图内相对位置操作。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("max_nodes") { put("type", "integer") }
@@ -208,12 +208,12 @@ class VScreenScreenTool : Tool {
 class VScreenTapXyTool : Tool {
 
     override val name = "vscreen_tap_xy"
-    override val description =
+    override val desc =
         "按坐标点按虚拟屏（无需控件编号）。坐标为 0..1000 归一化值：以最新一张 vscreen_screen 截图为准，" +
             "左上角 (0,0)、右下角 (1000,1000)，按目标在截图内的相对位置换算。" +
             "仅用于控件编号读不到的界面（游戏/自绘内容）；普通界面优先用 vscreen_tap（编号点按更稳）。" +
             "需要 Shizuku 或 Root 授权。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("x") { put("type", "integer"); put("description", "归一化横坐标 0..1000（截图内相对位置）") }
@@ -260,11 +260,11 @@ class VScreenTapXyTool : Tool {
 class VScreenSwipeXyTool : Tool {
 
     override val name = "vscreen_swipe_xy"
-    override val description =
+    override val desc =
         "在虚拟屏上按坐标滑动（无需控件编号），用于自绘/游戏界面的滚动或拖拽。" +
             "坐标为 0..1000 归一化值（同 vscreen_tap_xy：以最新截图为准，左上 (0,0) 右下 (1000,1000)）。" +
             "durationMs 可选（默认 400，越大越慢）。需要 Shizuku 或 Root 授权。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("x1") { put("type", "integer"); put("description", "起点归一化横坐标 0..1000") }
@@ -318,8 +318,8 @@ class VScreenSwipeXyTool : Tool {
 class VScreenTapTool : Tool {
 
     override val name = "vscreen_tap"
-    override val description = "点击虚拟屏控件（index=vscreen_screen 的编号）。节点点击，不占主屏、无需手势注入。"
-    override val parameters = buildJsonObject {
+    override val desc = "点击虚拟屏控件（index=vscreen_screen 的编号）。节点点击，不占主屏、无需手势注入。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("index") { put("type", "integer") }
@@ -344,8 +344,8 @@ class VScreenTapTool : Tool {
 class VScreenTextTool : Tool {
 
     override val name = "vscreen_text"
-    override val description = "向虚拟屏输入框（index=vscreen_screen 编号）填入文本。节点 SET_TEXT，无需键盘。"
-    override val parameters = buildJsonObject {
+    override val desc = "向虚拟屏输入框（index=vscreen_screen 编号）填入文本。节点 SET_TEXT，无需键盘。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("index") { put("type", "integer") }
@@ -374,8 +374,8 @@ class VScreenTextTool : Tool {
 class VScreenScrollTool : Tool {
 
     override val name = "vscreen_scroll"
-    override val description = "虚拟屏滚动：direction=down/up；可给 index 指定可滚动控件，不给则自动找屏上第一个可滚容器。"
-    override val parameters = buildJsonObject {
+    override val desc = "虚拟屏滚动：direction=down/up；可给 index 指定可滚动控件，不给则自动找屏上第一个可滚容器。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("direction") {
@@ -396,30 +396,30 @@ class VScreenScrollTool : Tool {
         if (dir != "down" && dir != "up") return ToolResult("未知方向：$dir（支持 down/up）", true)
         val msg = HaoAccessibilityService.instance!!.scrollOnDisplay(id, args.optInt("index"), dir == "down")
         delay(300)
-        return ToolResult(msg, isError = msg.contains("不存在") || msg.contains("未找到"))
+        return ToolResult(msg, error = msg.contains("不存在") || msg.contains("未找到"))
     }
 }
 
 class VScreenBackTool : Tool {
 
     override val name = "vscreen_back"
-    override val description = "虚拟屏内返回：点界面里的返回/导航控件（不代按全局返回键，避免打断用户主屏）。找不到返回控件会明确提示。"
-    override val parameters = buildJsonObject { put("type", "object") }
+    override val desc = "虚拟屏内返回：点界面里的返回/导航控件（不代按全局返回键，避免打断用户主屏）。找不到返回控件会明确提示。"
+    override val params = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
         vscreenGuard(ctx)?.let { return ToolResult(it, true) }
         val id = activeDisplayId() ?: return ToolResult("虚拟屏未启动，先用 vscreen_launch", true)
         val msg = HaoAccessibilityService.instance!!.backOnDisplay(id)
         delay(300)
-        return ToolResult(msg, isError = !msg.startsWith("已"))
+        return ToolResult(msg, error = !msg.startsWith("已"))
     }
 }
 
 class VScreenHomeTool : Tool {
 
     override val name = "vscreen_home"
-    override val description = "让虚拟屏回到桌面（home 定向到虚拟屏，屏上应用退到后台；用户主屏不受影响）。"
-    override val parameters = buildJsonObject { put("type", "object") }
+    override val desc = "让虚拟屏回到桌面（home 定向到虚拟屏，屏上应用退到后台；用户主屏不受影响）。"
+    override val params = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
         vscreenGuard(ctx)?.let { return ToolResult(it, true) }
@@ -432,8 +432,8 @@ class VScreenHomeTool : Tool {
 class VScreenCloseTool : Tool {
 
     override val name = "vscreen_close"
-    override val description = "销毁虚拟屏（屏上应用随之退出）。任务完成或失败后必须调用，释放资源省电。"
-    override val parameters = buildJsonObject { put("type", "object") }
+    override val desc = "销毁虚拟屏（屏上应用随之退出）。任务完成或失败后必须调用，释放资源省电。"
+    override val params = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
         vscreenGuard(ctx)?.let { return ToolResult(it, true) }

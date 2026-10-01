@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -80,7 +80,7 @@ class RunVerifyTest {
     @Test
     fun `链路：构建覆盖 + verify_file 逐段报告`() {
         val c = ctx()
-        val r = RunVerifyTool().run(
+        val r = RunVerifyTool().runB(
             args("""{"build":"echo built>run-verify-marker.txt","verify_file":"run-verify-marker.txt"}"""), c
         )
         assertFalse(r.content, r.error)
@@ -93,7 +93,7 @@ class RunVerifyTest {
     @Test
     fun `链路：构建失败就地停住不往下走`() {
         val c = ctx()
-        val r = RunVerifyTool().run(
+        val r = RunVerifyTool().runB(
             args("""{"build":"exit 3","verify_file":"never.txt"}"""), c
         )
         assertTrue("构建失败必须标 error：" + r.content, r.error)
@@ -106,7 +106,7 @@ class RunVerifyTest {
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
         File(c.workspace, "up.marker").writeText("x")
-        val r = RunVerifyTool().run(
+        val r = RunVerifyTool().runB(
             args("""{"start":"while true; do sleep 1; done","verify_file":"up.marker","timeout_ms":8000}"""), c
         )
         assertFalse(r.content, r.error)
@@ -124,7 +124,7 @@ class RunVerifyTest {
     fun `链路：验证失败也要把起过的进程停干净`() {
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val r = RunVerifyTool().run(
+        val r = RunVerifyTool().runB(
             args("""{"start":"while true; do sleep 1; done","verify_url":"http://127.0.0.1:9/nothing","timeout_ms":1500}"""), c
         )
         assertTrue("验证失败必须标 error：" + r.content, r.error)

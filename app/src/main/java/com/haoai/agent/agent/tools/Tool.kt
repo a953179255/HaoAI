@@ -11,6 +11,17 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 
+/*
+ * B15（两端共用的 :core）：工具契约、结果与截断口径的**定义**都在 `com.haoai.core`。
+ * 这里用**原地 typealias**——同包同名，别的包 `import ...agent.tools.Tool / ToolResult /
+ * TextCap` 的现有 import 一个都不用改（typealias 的名字同样可被 import）。
+ * 取舍记在 core 的 KDoc 里：接口取 suspend（这边引擎是协程）、字段名取 PC 侧的
+ * `desc/params/error`（那边位置传参不能动）、TextCap 取这边的原版（代理对安全 + tail）。
+ */
+typealias Tool = com.haoai.core.AgentTool<ToolContext>
+typealias ToolResult = com.haoai.core.ToolResult
+typealias TextCap = com.haoai.core.TextCap
+
 data class ToolContext(
     val backend: FileBackend?,
     val shellDir: java.io.File?,
@@ -86,13 +97,6 @@ data class ToolContext(
     }
 }
 
-data class ToolResult(
-    val content: String,
-    val isError: Boolean = false,
-    /** 非空时引擎在工具结果后追加一条带图 user 消息（browser_screenshot 图像注入通路）。 */
-    val imageDataUrl: String? = null
-)
-
 /** ask_user 单个选项：label 显示用短标签；description 给用户看的一句话补充（可空串）。 */
 data class AskUserOption(val label: String, val description: String = "")
 
@@ -106,13 +110,6 @@ data class AskUserRequest(
 
 /** ask_user 回答：optionIndex≥0 = 选中选项；否则取 freeText。 */
 data class AskUserAnswer(val optionIndex: Int = -1, val freeText: String = "")
-
-interface Tool {
-    val name: String
-    val description: String
-    val parameters: JsonObject
-    suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult
-}
 
 internal fun JsonObject.primitive(key: String): JsonPrimitive? =
     (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }
@@ -159,36 +156,4 @@ fun globToRegex(pattern: String): Regex {
     }
     sb.append("$")
     return Regex(sb.toString())
-}
-
-/** UTF-16 安全截断（防切断 emoji 代理对）：截断点落在高代理上时回退一位，宁少勿残。 */
-fun String.takeSafe(n: Int): String {
-    if (length <= n) return this
-    if (n <= 0) return ""
-    return substring(0, if (Character.isHighSurrogate(this[n - 1])) n - 1 else n)
-}
-
-/** UTF-16 安全尾部截断：起点落在低代理上时丢弃孤儿半个 emoji，宁少勿残。 */
-fun String.takeLastSafe(n: Int): String {
-    if (length <= n) return this
-    if (n <= 0) return ""
-    val start = length - n
-    return substring(if (Character.isLowSurrogate(this[start])) start + 1 else start)
-}
-
-object TextCap {
-
-    fun middle(text: String, max: Int): String {
-        if (text.length <= max) return text
-        val head = (max * 0.65).toInt()
-        val tail = (max * 0.25).toInt()
-        val omitted = text.length - head - tail
-        return text.takeSafe(head) + "\n…［中间省略约 $omitted 字符］…\n" + text.takeLastSafe(tail)
-    }
-
-    fun tail(text: String, max: Int): String =
-        if (text.length <= max) text else "…" + text.takeLastSafe(max)
-
-    fun head(text: String, max: Int): String =
-        if (text.length <= max) text else text.takeSafe(max) + "…"
 }

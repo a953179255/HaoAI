@@ -27,10 +27,10 @@ class DelegateVisionTool(
     private val runner: suspend (String, String) -> String
 ) : Tool {
     override val name = "delegate_to_vision"
-    override val description =
+    override val desc =
         "把图片交给视觉委派模型代看（当前模型不支持图像输入时用）：传图片本机路径与想问的问题，" +
             "返回该模型对图片的详细文字描述（可用于截图/照片/图表理解）。未配置委派模型时会提示不可用。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("path") { put("type", "string"); put("description", "图片文件本机路径（绝对路径）") }
@@ -46,7 +46,7 @@ class DelegateVisionTool(
             if (path.isBlank()) return@withContext ToolResult("path 不能为空", true)
             runCatching { runner(path, question) }
                 .fold(
-                    onSuccess = { out -> ToolResult(out, isError = out.startsWith("委派")) },
+                    onSuccess = { out -> ToolResult(out, error = out.startsWith("委派")) },
                     onFailure = { ToolResult("委派看图失败：${it.message}", true) }
                 )
         }
@@ -56,10 +56,10 @@ class TranscribeAudioTool(
     private val runner: suspend (String) -> String
 ) : Tool {
     override val name = "transcribe_audio"
-    override val description =
+    override val desc =
         "把音频交给语音委派模型转写成文字（当前模型不支持音频输入时用）：传音频本机路径，" +
             "返回转写文本。视频可先用 shell ffmpeg 抽音轨再转写。未配置委派模型时会提示不可用。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("path") { put("type", "string"); put("description", "音频文件本机路径（wav/mp3/m4a 等）") }
@@ -73,7 +73,7 @@ class TranscribeAudioTool(
             if (path.isBlank()) return@withContext ToolResult("path 不能为空", true)
             runCatching { runner(path) }
                 .fold(
-                    onSuccess = { out -> ToolResult(out, isError = out.startsWith("委派")) },
+                    onSuccess = { out -> ToolResult(out, error = out.startsWith("委派")) },
                     onFailure = { ToolResult("委派转写失败：${it.message}", true) }
                 )
         }

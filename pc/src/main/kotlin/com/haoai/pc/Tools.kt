@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -18,50 +18,18 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 
-/** 与手机端 `TextCap` 同一套算法 —— 两端截断口径必须一致。 */
-object TextCap {
-    fun middle(text: String, max: Int): String {
-        if (text.length <= max) return text
-        val head = (max * 0.65).toInt()
-        val tail = (max * 0.25).toInt()
-        val omitted = text.length - head - tail
-        return text.substring(0, head) + "\n…［中间省略约 $omitted 字符］…\n" + text.takeLast(tail)
-    }
+/**
+ * 两端共用的截断口径（B15）：定义在 `:core`，这里原地 typealias ——
+ * 同包同名，7 个引用文件一个 import 都不用加。
+ * PC 旧版没有代理对保护、也没有 tail；core 版是手机端原版的超集（口径从此真的只有一份）。
+ */
+typealias TextCap = com.haoai.core.TextCap
 
-    fun head(text: String, max: Int): String = if (text.length <= max) text else text.substring(0, max) + "…"
-}
-
-data class ToolResult(
-    val content: String,
-    val error: Boolean = false,
-    /**
-     * 工具产出的图片（**文件路径**）：引擎会在本轮工具跑完后单独补一条 user 消息，
-     * 把像素本身递给模型。以前 `screen capture` 只回一个 png 路径，"屏幕理解"
-     * 其实是模型在猜那个文件里有什么。
-     */
-    val images: List<String> = emptyList(),
-    /**
-     * 工具产出的**音视频**文件路径：界面按它摆播放器，字节走 `/api/media`。
-     *
-     * 与 images 分两份是因为递给模型的方式不同：图片能把像素直接塞进上下文，
-     * 一段 mp4 不能 —— 它只该出现在界面上让人自己看/听，历史里留路径就够。
-     */
-    val media: List<String> = emptyList(),
-    /** 渲染意图：generic | terminal | diff —— 前端按这个决定摆哪种卡（照 dsh 的插槽注册）。 */
-    val card: String = "generic",
-    /**
-     * 只给界面看的行级 diff，**不进历史**：工具结果会原样发给模型，
-     * 整篇 diff 塞进去等于每改一次文件就多付几百行 token，而模型刚刚已经知道改了什么。
-     */
-    val diff: String = "",
-    /**
-     * 子任务的中间过程（一行一条），只给界面。
-     *
-     * 和 diff 同一个道理：这些是"它是怎么查出来的"，用户想核对时才看，
-     * 发给模型纯属浪费 token —— 模型要的是结论。
-     */
-    val sub: String = ""
-)
+/**
+ * 工具结果（B15）：定义在 `:core`，字段顺序沿用 PC 旧版（位置传参不能动），
+ * 移动端的 `imageDataUrl` 挂在末尾、PC 不用它。
+ */
+typealias ToolResult = com.haoai.core.ToolResult
 
 /** 审批与提问的出口。CLI 与 Web 各实现一份，工具层不关心前面是谁。 */
 interface Gate {
@@ -376,21 +344,31 @@ internal fun File.resolveRel(p: String): File {
 }
 
 abstract class Tool(
-    val name: String,
-    val desc: String,
-    val params: JsonObject,
+    name: String,
+    desc: String,
+    params: JsonObject,
     val kind: String = "read",
     /**
      * 挂在这个工具上的实验特性。不为 null 且开关关着时，工具**不进 schema** ——
      * 模型看不见它，也就不会去调、不会调通了再收到一句"没权限"。
      * 这就是 S6 开关注册表存在的意义：新能力可以"先上代码，再按需给可见性"。
+     * （`flag` 是 PC 端私有字段，不在 [AgentTool] 接口里 —— 手机端没有这套开关。）
      */
     val flag: HaoFlag? = null
-) {
+) : com.haoai.core.AgentTool<ToolCtx> {
+    override val name: String = name
+    override val desc: String = desc
+    override val params: JsonObject = params
+
     fun visibleWhen(settings: PcSettings): Boolean =
         flag == null || HaoFlag.enabled(flag, settings.flags)
 
-    abstract fun run(args: JsonObject, ctx: ToolCtx): ToolResult
+    /**
+     * suspend 是两端共用契约（B15）：手机端工具真在协程里跑，PC 这边函数体照旧是
+     * 普通阻塞代码 —— 调用点（引擎的工具执行处）用 `runBlocking` 包一层，
+     * 引擎本来就活在自己的线程上，包一层不改变调度语义。
+     */
+    abstract override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult
 
     fun req(args: JsonObject, k: String): String? = args[k]?.jsonPrimitive?.content
     fun int(args: JsonObject, k: String, dflt: Int): Int = args[k]?.jsonPrimitive?.content?.toIntOrNull() ?: dflt
@@ -403,7 +381,7 @@ class ReadTool : Tool(
     "read", "读取文件内容，返回带行号。大文件用 offset/limit 分段读。",
     schema("path" to "string", "offset" to "integer", "limit" to "integer", required = arrayOf("path"))
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val path = req(args, "path") ?: return fail("read 缺少 path")
         val f = ctx.resolve(path)
         if (!f.isFile) return fail("文件不存在：${ctx.rel(f)}")
@@ -428,7 +406,7 @@ class WriteTool : Tool(
     schema("path" to "string", "content" to "string", required = arrayOf("path", "content")),
     kind = "write"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val path = req(args, "path") ?: return fail("write 缺少 path")
         val content = args["content"]?.jsonPrimitive?.content ?: return fail("write 缺少 content")
         val f = ctx.resolve(path)
@@ -471,7 +449,7 @@ class EditTool : Tool(
     ),
     kind = "write"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val path = req(args, "path") ?: return fail("edit 缺少 path")
         val old = args["old_string"]?.jsonPrimitive?.content ?: return fail("edit 缺少 old_string")
         val new = args["new_string"]?.jsonPrimitive?.content ?: return fail("edit 缺少 new_string")
@@ -544,7 +522,7 @@ class TaskTool : Tool(
     ),
     kind = "read"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val prompt = req(args, "prompt")?.trim() ?: return fail("task 缺少 prompt")
         val label = (req(args, "label")?.trim() ?: "").ifBlank { prompt.take(24) }
         val spawn = ctx.spawn ?: return fail("当前环境没接引擎，派不了子任务")
@@ -566,7 +544,7 @@ class GlobTool : Tool(
     "glob", "按通配找文件，如 **/*.kt。返回相对工作区的路径列表。",
     schema("pattern" to "string", "path" to "string", required = arrayOf("pattern"))
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val pattern = req(args, "pattern") ?: return fail("glob 缺少 pattern")
         val root = req(args, "path")?.let { ctx.resolve(it) } ?: ctx.workspace
         if (!root.isDirectory) return fail("目录不存在：${ctx.rel(root)}")
@@ -589,7 +567,7 @@ class GrepTool : Tool(
         "pattern" to "string", "path" to "string", "glob" to "string", "ignore_case" to "boolean",
         required = arrayOf("pattern"))
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val pattern = req(args, "pattern") ?: return fail("grep 缺少 pattern")
         val root = req(args, "path")?.let { ctx.resolve(it) } ?: ctx.workspace
         val fileRx = req(args, "glob")?.let { globToRegex(it) }
@@ -650,7 +628,7 @@ class ShellTool : Tool(
         required = arrayOf("command")),
     kind = "exec"
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val command = req(args, "command") ?: return fail("shell 缺少 command")
         val shell = (req(args, "shell") ?: "pwsh").lowercase()
         val timeoutSec = int(args, "timeout", 180).coerceIn(1, 1800)
@@ -733,7 +711,7 @@ class TodoTool : Tool(
     "todo", "维护本次任务的步骤清单（整体替换，每次传完整列表）。status ∈ pending|doing|done|cancelled",
     schema("items" to "array", required = arrayOf("items"))
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val items = args["items"]?.jsonArray ?: return fail("todo 缺少 items")
         ctx.todos.clear()
         items.forEach { el ->
@@ -754,7 +732,7 @@ class AskUserTool : Tool(
     "ask_user", "向用户提一个需要拿主意的问题。options 给 2-4 个候选（可空）。返回用户回答原文。",
     schema("question" to "string", "options" to "array", required = arrayOf("question"))
 ) {
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val q = req(args, "question") ?: return fail("ask_user 缺少 question")
         val opts = args["options"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content } ?: emptyList()
         val a = ctx.gate.ask(q, opts)
@@ -771,7 +749,7 @@ class WebFetchTool : Tool(
         .connectTimeout(Duration.ofSeconds(15))
         .followRedirects(HttpClient.Redirect.NORMAL).build()
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val url = req(args, "url") ?: return fail("web_fetch 缺少 url")
         if (!url.startsWith("http")) return fail("url 必须以 http/https 开头")
         val max = int(args, "max_chars", 8000).coerceIn(200, 30_000)

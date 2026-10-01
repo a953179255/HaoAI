@@ -12,11 +12,11 @@ import kotlinx.serialization.json.putJsonObject
 class WebSearchTool : Tool {
 
     override val name = "web_search"
-    override val description =
+    override val desc =
         "联网搜索。返回与 query 相关的网页列表（标题/链接/摘要）。" +
             "凡产出物会含具体事实、数据、时效性说法或具名对象（文章/报告/文案/评测/对比/推荐/答疑），先搜索再动笔，不要凭模型记忆直接成文；" +
             "需要完整正文时对结果里的 url 调用 web_fetch。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("query") { put("type", "string") }

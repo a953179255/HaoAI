@@ -1,7 +1,8 @@
 package com.haoai.agent.agent.engine
+import com.haoai.core.takeSafe
+import com.haoai.core.takeLastSafe
 
 import com.haoai.agent.agent.model.ToolCallData
-import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.data.HaoJson
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull

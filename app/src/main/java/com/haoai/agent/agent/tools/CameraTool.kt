@@ -20,9 +20,9 @@ import kotlin.coroutines.resume
 class CameraTool : Tool {
 
     override val name = "camera"
-    override val description =
+    override val desc =
         "调用手机摄像头拍一张照片，保存为 JPG 并返回文件路径。首次使用需要相机权限。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") { }
     }

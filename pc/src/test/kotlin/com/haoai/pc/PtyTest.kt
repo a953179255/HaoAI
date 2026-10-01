@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -43,19 +43,19 @@ class PtyTest {
     fun `a persistent shell answers and keeps state between sends`() {
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val opened = ShellOpenTool().run(args("""{"label":"calc","shell":"bash"}"""), c)
+        val opened = ShellOpenTool().runB(args("""{"label":"calc","shell":"bash"}"""), c)
         assertFalse(opened.content, opened.error)
         val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
         try {
-            ShellSendTool().run(args("""{"id":"$id","text":"x=hello"}"""), c)
-            val r1 = ShellReadTool().run(args("""{"id":"$id","wait_ms":2500}"""), c)
+            ShellSendTool().runB(args("""{"id":"$id","text":"x=hello"}"""), c)
+            val r1 = ShellReadTool().runB(args("""{"id":"$id","wait_ms":2500}"""), c)
             assertFalse(r1.content, r1.error)
 
             val D = '$'   // shell 变量要用字面量 $，Kotlin 里只能绕出来
             val sendCmd = "{\"id\":\"$id\",\"text\":\"echo got-${D}x-${D}((6*7))\"}"
-            val second = ShellSendTool().run(args(sendCmd), c)
+            val second = ShellSendTool().runB(args(sendCmd), c)
             assertFalse(second.content, second.error)
-            val r2 = ShellReadTool().run(args("""{"id":"$id","wait_ms":3000}"""), c)
+            val r2 = ShellReadTool().runB(args("""{"id":"$id","wait_ms":3000}"""), c)
             // got-hello-42：变量 x 还在 → 是同一个进程；算术展开 → 真的在跑 bash
             assertTrue("没拿到预期回显：[${r2.content}]", r2.content.contains("got-hello-42"))
         } finally {
@@ -67,20 +67,20 @@ class PtyTest {
     fun `closed processes disappear from the list and nothing is left running`() {
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val opened = ShellOpenTool().run(args("""{"label":"tmp","shell":"bash"}"""), c)
+        val opened = ShellOpenTool().runB(args("""{"label":"tmp","shell":"bash"}"""), c)
         val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
         assertEquals(1, ProcRegistry.list().count { it.id == id })
-        val closed = ShellCloseTool().run(args("""{"id":"$id"}"""), c)
+        val closed = ShellCloseTool().runB(args("""{"id":"$id"}"""), c)
         assertFalse(closed.content, closed.error)
         assertTrue(ProcRegistry.list().none { it.id == id })
-        val after = ShellReadTool().run(args("""{"id":"$id"}"""), c)
+        val after = ShellReadTool().runB(args("""{"id":"$id"}"""), c)
         assertTrue("关掉后还能读，说明句柄没清", after.error)
     }
 
     @Test
     fun `a denied open starts no process`() {
         val c = ctx(DenyGate())
-        val r = ShellOpenTool().run(args("""{"label":"nope","shell":"bash"}"""), c)
+        val r = ShellOpenTool().runB(args("""{"label":"nope","shell":"bash"}"""), c)
         assertTrue("被拒了却还是起了进程", r.error)
         assertTrue(ProcRegistry.list().isEmpty())
     }
@@ -89,9 +89,9 @@ class PtyTest {
     fun `idle reaper collects processes whose shell already exited`() {
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val opened = ShellOpenTool().run(args("""{"label":"bye","shell":"bash"}"""), c)
+        val opened = ShellOpenTool().runB(args("""{"label":"bye","shell":"bash"}"""), c)
         val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
-        ShellSendTool().run(args("""{"id":"$id","text":"exit"}"""), c)
+        ShellSendTool().runB(args("""{"id":"$id","text":"exit"}"""), c)
         Thread.sleep(1500)
         val n = ProcRegistry.reapIdle()
         assertEquals(1, n)
@@ -102,10 +102,10 @@ class PtyTest {
     fun `list tool reports what is alive`() {
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val opened = ShellOpenTool().run(args("""{"label":"visible","shell":"bash"}"""), c)
+        val opened = ShellOpenTool().runB(args("""{"label":"visible","shell":"bash"}"""), c)
         val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
         try {
-            val l = ShellListTool().run(args("{}"), c)
+            val l = ShellListTool().runB(args("{}"), c)
             assertTrue(l.content, l.content.contains(id))
             assertTrue(l.content, l.content.contains("visible"))
         } finally {
@@ -168,18 +168,18 @@ class PtyTest {
         assumeTrue("非 Windows 跳过", Env.isWindows)
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val opened = ShellOpenTool().run(args("""{"label":"tty","shell":"bash","tty":"true"}"""), c)
+        val opened = ShellOpenTool().runB(args("""{"label":"tty","shell":"bash","tty":"true"}"""), c)
         assertFalse(opened.content, opened.error)
         assertTrue("结果行里要标明 tty：" + opened.content, opened.content.contains("tty=true"))
         val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
         try {
-            val s0 = ShellSendTool().run(args("""{"id":"$id","text":"x=hello"}"""), c)
+            val s0 = ShellSendTool().runB(args("""{"id":"$id","text":"x=hello"}"""), c)
             assertFalse(s0.content, s0.error)
             val D = '$'
             val cmd = "{\"id\":\"$id\",\"text\":\"test -t 0; echo rc=${D}?; echo got-${D}x\"}"
-            val s1 = ShellSendTool().run(args(cmd), c)
+            val s1 = ShellSendTool().runB(args(cmd), c)
             assertFalse(s1.content, s1.error)
-            val r = ShellReadTool().run(args("""{"id":"$id","wait_ms":5000}"""), c)
+            val r = ShellReadTool().runB(args("""{"id":"$id","wait_ms":5000}"""), c)
             assertFalse(r.content, r.error)
             assertTrue("stdin 不是 TTY（没拿到 rc=0）：[${r.content}]", r.content.contains("rc=0"))
             assertFalse("同一份输出里不许出现 rc=1（命令原文只有 rc=${D}?，出现 rc=1 就是 test 判了假）：[${r.content}]", r.content.contains("rc=1"))
@@ -199,20 +199,20 @@ class PtyTest {
         assumeTrue("非 Windows 跳过", Env.isWindows)
         assumeTrue("这台机器上没有 Git Bash", ShellLauncher.persistentForName("bash") != null)
         val c = ctx()
-        val opened = ShellOpenTool().run(args("""{"label":"tty2","shell":"bash","tty":"true"}"""), c)
+        val opened = ShellOpenTool().runB(args("""{"label":"tty2","shell":"bash","tty":"true"}"""), c)
         assertFalse(opened.content, opened.error)
         val id = Regex("已启动 (\\S+)").find(opened.content)!!.groupValues[1]
         try {
-            val s0 = ShellSendTool().run(args("""{"id":"$id","text":"sleep 30"}"""), c)
+            val s0 = ShellSendTool().runB(args("""{"id":"$id","text":"sleep 30"}"""), c)
             assertFalse(s0.content, s0.error)
             Thread.sleep(900)
             // enter=false：把 0x03 当原始字节送进终端（tty 行编辑把它变成 SIGINT）
-            val s1 = ShellSendTool().run(args("""{"id":"$id","text":"\u0003","enter":false}"""), c)
+            val s1 = ShellSendTool().runB(args("""{"id":"$id","text":"\u0003","enter":false}"""), c)
             assertFalse(s1.content, s1.error)
             Thread.sleep(300)
-            val s2 = ShellSendTool().run(args("""{"id":"$id","text":"echo after-interrupt"}"""), c)
+            val s2 = ShellSendTool().runB(args("""{"id":"$id","text":"echo after-interrupt"}"""), c)
             assertFalse(s2.content, s2.error)
-            val r = ShellReadTool().run(args("""{"id":"$id","wait_ms":6000}"""), c)
+            val r = ShellReadTool().runB(args("""{"id":"$id","wait_ms":6000}"""), c)
             assertFalse(r.content, r.error)
             assertTrue("中断没生效（6 秒内没等到 after-interrupt，sleep 30 还在占着）：[${r.content}]", r.content.contains("after-interrupt"))
         } finally {

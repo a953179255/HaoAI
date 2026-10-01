@@ -14,7 +14,13 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { mavenCentral() }
+    repositories {
+        // B15：两端共用的 `:core`（根构建的子项目）发布到 mavenLocal，这里消费。
+        // 改了 core 的代码要先跑根构建的 `gradle :core:publishToMavenLocal`，再回来构建 PC ——
+        // 忘了这步的症状是"pc 在用昨天的 core"（两套截断口径又分家）。
+        mavenLocal()
+        mavenCentral()
+    }
 }
 
 rootProject.name = "haoai-pc"

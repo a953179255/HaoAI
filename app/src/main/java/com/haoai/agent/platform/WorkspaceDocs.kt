@@ -1,4 +1,4 @@
-﻿package com.haoai.agent.platform
+package com.haoai.agent.platform
 
 import com.haoai.agent.agent.memory.MemoryConsolidation
 import com.haoai.agent.data.AppContainer

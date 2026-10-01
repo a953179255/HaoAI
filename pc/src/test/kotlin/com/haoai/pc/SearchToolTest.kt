@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
@@ -125,7 +125,7 @@ class SearchToolTest {
         val old = Search.ddgBase
         Search.ddgBase = "$base/html"
         try {
-            val r = WebSearchTool().run(args("""{"query":"kotlin 协程"}"""), ctx())
+            val r = WebSearchTool().runB(args("""{"query":"kotlin 协程"}"""), ctx())
             assertFalse("不该报错：" + r.content, r.error)
             assertTrue("要带上提供方与关键词：" + r.content.take(60),
                 r.content.contains("duckduckgo") && r.content.contains("kotlin 协程"))
@@ -142,7 +142,7 @@ class SearchToolTest {
         val old = Search.ddgBase
         Search.ddgBase = "$base/empty"
         try {
-            val r = WebSearchTool().run(args("""{"query":"随便什么"}"""), ctx())
+            val r = WebSearchTool().runB(args("""{"query":"随便什么"}"""), ctx())
             assertTrue(r.error)
             assertTrue("要给出下一步怎么办：" + r.content,
                 r.content.contains("换个说法") && r.content.contains("web_fetch"))
@@ -153,7 +153,7 @@ class SearchToolTest {
 
     @Test
     fun `an empty query is refused before spending a request`() {
-        val r = WebSearchTool().run(args("""{"query":"   "}"""), ctx())
+        val r = WebSearchTool().runB(args("""{"query":"   "}"""), ctx())
         assertTrue(r.error)
         assertTrue(r.content.contains("query"))
     }

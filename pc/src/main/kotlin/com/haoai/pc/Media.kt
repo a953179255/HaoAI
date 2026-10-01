@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -254,7 +254,7 @@ class MediaTool : Tool(
     kind = "exec"
 ) {
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val sub = (req(args, "sub") ?: "").trim().lowercase()
         if (sub !in SUBS) return fail("media 不认的子命令：「$sub」。可用：$SUB_LIST")
         // 字幕文件是"我们自己写文本"，既不需要源文件也不碰 ffmpeg：

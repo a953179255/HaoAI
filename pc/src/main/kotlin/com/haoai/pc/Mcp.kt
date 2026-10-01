@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -230,7 +230,7 @@ object Mcp {
         private val client: () -> McpClient?
     ) : Tool("mcp_${slug(serverName)}_${slug(remoteName)}".take(64), desc, schema, kind = "write",
         flag = HaoFlag.MCP_CLIENT) {
-        override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
             val why = ctx.guard(
                 "mcp", "$serverName/$remoteName",
                 "调用外部工具 $serverName/$remoteName",

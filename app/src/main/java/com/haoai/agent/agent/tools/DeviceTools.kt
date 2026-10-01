@@ -22,10 +22,10 @@ import kotlinx.serialization.json.putJsonObject
 class ClipboardReadTool : Tool {
 
     override val name = "clipboard_read"
-    override val description =
+    override val desc =
         "读取系统剪贴板的文本内容。注意：Android 10 起仅当应用在前台时才允许读取，" +
             "若读取失败请告知用户复制后立即在本应用内重试。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") { }
     }
@@ -50,8 +50,8 @@ class ClipboardReadTool : Tool {
 class CalendarQueryTool : Tool {
 
     override val name = "calendar_query"
-    override val description = "查询手机日历中指定时间范围内的事件（标题/时间/地点/描述）。首次使用需要日历权限。"
-    override val parameters = buildJsonObject {
+    override val desc = "查询手机日历中指定时间范围内的事件（标题/时间/地点/描述）。首次使用需要日历权限。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("days_ahead") {
@@ -106,8 +106,8 @@ class CalendarQueryTool : Tool {
 class CalendarCreateTool : Tool {
 
     override val name = "calendar_create"
-    override val description = "在系统日历中创建一个事件（写入操作，执行前会请求用户确认）。"
-    override val parameters = buildJsonObject {
+    override val desc = "在系统日历中创建一个事件（写入操作，执行前会请求用户确认）。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("title") { put("type", "string") }
@@ -170,8 +170,8 @@ class CalendarCreateTool : Tool {
 class ContactsSearchTool : Tool {
 
     override val name = "contacts_search"
-    override val description = "按名字模糊搜索手机联系人，返回姓名与号码（最多 20 条）。首次使用需要联系人权限。"
-    override val parameters = buildJsonObject {
+    override val desc = "按名字模糊搜索手机联系人，返回姓名与号码（最多 20 条）。首次使用需要联系人权限。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("query") { put("type", "string") }
@@ -220,10 +220,10 @@ class ContactsSearchTool : Tool {
 class AlarmSetTool : Tool {
 
     override val name = "alarm_set"
-    override val description =
+    override val desc =
         "通过系统时钟 App 设置一个闹钟（跳转到系统时钟确认，无需任何权限）。" +
             "hour 为 0-23，minute 为 0-59；重复规则如 MON,TUE（可省略表示只响一次）。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("hour") { put("type", "integer") }
@@ -277,10 +277,10 @@ class AlarmSetTool : Tool {
 class NotificationsReadTool : Tool {
 
     override val name = "notifications_read"
-    override val description =
+    override val desc =
         "读取最近收到的系统通知（应用名/标题/内容/时间，最多 50 条）。" +
             "需要用户在系统设置 → 通知使用权中授权本应用。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("limit") {

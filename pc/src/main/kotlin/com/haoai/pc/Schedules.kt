@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -223,6 +223,8 @@ class Scheduler(private val fire: (Schedule) -> Unit) : Thread("haoai-sched") {
         isDaemon = true
     }
 
+    // 注意：这是 Thread.run（调度线程的主循环），不是工具的 suspend run ——
+    // B15 批量给工具加 suspend 时这里被正则误伤过一次，改回来。
     override fun run() {
         while (!stopped) {
             runCatching { tick(System.currentTimeMillis()) }

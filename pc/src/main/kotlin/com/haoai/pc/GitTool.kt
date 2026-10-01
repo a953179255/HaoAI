@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -30,7 +30,7 @@ class GitTool : Tool(
 
     private val readOnly = setOf("status", "diff", "log", "show", "blame", "rev-parse", "ls-files")
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val sub = (req(args, "sub") ?: "").trim()
         if (sub.isEmpty()) return fail("git 缺少 sub（可用：${READABLE_SUBS}）")
         if (sub !in ALLOWED) return fail("不支持的 git 子命令：$sub。可用：$READABLE_SUBS")

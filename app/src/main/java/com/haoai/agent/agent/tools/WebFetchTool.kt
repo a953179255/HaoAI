@@ -14,9 +14,9 @@ import java.util.concurrent.TimeUnit
 class WebFetchTool : Tool {
 
     override val name = "web_fetch"
-    override val description =
+    override val desc =
         "抓取网页并转为可读文本（自动去除 HTML 标签）。仅支持 http(s) 链接。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("url") { put("type", "string") }

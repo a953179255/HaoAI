@@ -1,4 +1,6 @@
 package com.haoai.agent.ui
+import com.haoai.core.takeSafe
+import com.haoai.core.takeLastSafe
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,7 +25,6 @@ import com.haoai.agent.agent.engine.TurnEvent
 import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.policy.ApprovalRequest
 import com.haoai.agent.agent.policy.PolicyEngine
-import com.haoai.agent.agent.tools.takeSafe
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.SessionStartup
 import com.haoai.agent.data.StoredSession

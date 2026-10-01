@@ -16,9 +16,9 @@ import kotlinx.serialization.json.putJsonObject
 class JobOutputTool : Tool {
 
     override val name = "job_output"
-    override val description =
+    override val desc =
         "查看后台任务的输出日志（配合 bash 工具的 background=true 使用）。返回日志尾部与运行状态（运行中/已结束及退出码）。可省略 id 查看最近一个任务。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("id") {

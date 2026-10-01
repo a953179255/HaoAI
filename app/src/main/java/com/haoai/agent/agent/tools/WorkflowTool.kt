@@ -17,7 +17,7 @@ import org.json.JSONObject
 class WorkflowTool(private val appFilesDir: java.io.File) : Tool {
 
     override val name = "workflow_save"
-    override val description =
+    override val desc =
         "把重复任务沉淀为工作流（需用户在管理页确认后才会启用执行）。action: save(name, triggerType, triggerConfig, steps) / list / delete(id)。" +
             "triggerType: manual|schedule|boot|notification；triggerConfig 为 schedule 时的规格（every:30m / daily:09:30 / hourly）；" +
             "notification 时为触发关键词。" +
@@ -25,7 +25,7 @@ class WorkflowTool(private val appFilesDir: java.io.File) : Tool {
             "步骤间数据传递：text/args 里可用 {{prev}} 引用上一步输出、{{step1}}/{{step2}} 引用第 N 步输出（tool 的 args 会做 JSON 转义）。" +
             "条件分支：condition 为 prev_contains:关键词 或 prev_not_contains:关键词（对上一步输出判断，不满足则跳过该步）。" +
             "外部触发：启用后管理页提供令牌，Tasker/adb 广播 com.haoai.agent.WORKFLOW_RUN 可拉起。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("action") { put("type", "string") }

@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -37,7 +37,7 @@ class RunCodeTest {
     /** 跑一条必然成功的代码；解释器不在场就跳过本用例。 */
     private fun mustRun(lang: String, code: String): Pair<ToolResult, ToolCtx> {
         val c = ctx()
-        val r = RunCodeTool().run(args("""{"lang":"$lang","code":${jsonStr(code)}}"""), c)
+        val r = RunCodeTool().runB(args("""{"lang":"$lang","code":${jsonStr(code)}}"""), c)
         assumeTrue("这台机器上没有 $lang：" + r.content, !r.content.contains("这台机器上找不到"))
         return r to c
     }
@@ -85,7 +85,7 @@ class RunCodeTest {
             "print('写了 out.png')"
         ).joinToString(10.toChar().toString())
         val c = ctx()
-        val r = RunCodeTool().run(args("""{"lang":"python","code":${jsonStr(code)}}"""), c)
+        val r = RunCodeTool().runB(args("""{"lang":"python","code":${jsonStr(code)}}"""), c)
         assumeTrue("这台机器上没有 python：" + r.content, !r.content.contains("这台机器上找不到"))
         assertTrue("结果该说 exit=0：" + r.content, r.content.contains("exit=0"))
         assertEquals("运行目录里那张图该被认出来：" + r.content, 1, r.images.size)
@@ -105,7 +105,7 @@ class RunCodeTest {
     @Test
     fun `unknown language is refused with the list`() {
         val c = ctx()
-        val r = RunCodeTool().run(args("""{"lang":"cobol","code":"x"}"""), c)
+        val r = RunCodeTool().runB(args("""{"lang":"cobol","code":"x"}"""), c)
         assertTrue(r.content, r.error)
         assertTrue(r.content, r.content.contains("python"))
         assertTrue(r.content, r.content.contains("node"))
@@ -114,7 +114,7 @@ class RunCodeTest {
     @Test
     fun `plan mode refuses to run and leaves nothing behind`() {
         val c = ctx(mode = "plan")
-        val r = RunCodeTool().run(args("""{"lang":"python","code":"print(1)"}"""), c)
+        val r = RunCodeTool().runB(args("""{"lang":"python","code":"print(1)"}"""), c)
         assertTrue(r.content, r.error)
         assertTrue(r.content, r.content.contains("计划模式"))
         val runs = File(c.workspace, "${Env.TOOL_OUTPUT_DIR}/runs")
@@ -125,7 +125,7 @@ class RunCodeTest {
     fun `timeout is bounded and says so`() {
         val c = ctx()
         val began = System.currentTimeMillis()
-        val r = RunCodeTool().run(args("""{"lang":"python","timeout":"5","code":${jsonStr("import time\ntime.sleep(60)")}}"""), c)
+        val r = RunCodeTool().runB(args("""{"lang":"python","timeout":"5","code":${jsonStr("import time\ntime.sleep(60)")}}"""), c)
         val secs = (System.currentTimeMillis() - began) / 1000.0
         assumeTrue("这台机器上没有 python：" + r.content, !r.content.contains("这台机器上找不到"))
         assertTrue("该报超时，实际：" + r.content, r.content.contains("超时"))

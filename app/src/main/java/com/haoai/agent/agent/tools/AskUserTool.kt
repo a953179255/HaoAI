@@ -1,4 +1,6 @@
 package com.haoai.agent.agent.tools
+import com.haoai.core.takeSafe
+import com.haoai.core.takeLastSafe
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -21,7 +23,7 @@ import kotlinx.serialization.json.putJsonObject
 class AskUserTool : Tool {
 
     override val name = "ask_user"
-    override val description =
+    override val desc =
         "向用户提出带选项的问题并暂停等待回答（运行挂起，用户点选后继续）。" +
             "遇到分叉、歧义或要替用户做假设时，先调用本工具问清再动手，不要自己猜：" +
             "例——用户说「设个 9 点的闹钟」没说早上还是晚上 → 问；" +
@@ -29,7 +31,7 @@ class AskUserTool : Tool {
             "两个方案都可行、删除/覆盖等不可逆操作前 → 问。" +
             "不要用于纯闲聊，也不要连续高频调用。把推荐项放在第一个；用户总可以看到自由输入出口。"
 
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("question") {

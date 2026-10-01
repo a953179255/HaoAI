@@ -1,4 +1,4 @@
-pluginManagement {
+﻿pluginManagement {
     repositories {
         google {
             content {
@@ -22,4 +22,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "HaoAI"
-include(":app")
+include(":app", ":core")

@@ -229,7 +229,7 @@ internal suspend fun AgentEngine.runSubAgent(
             // P1.2 步骤留痕：失败/终止时的部分结果由此构成
             handle.steps.add(
                 "${call.name}(${TextCap.middle(call.argumentsJson, 60)}) → ${TextCap.middle(result.content, 90)}" +
-                    if (result.isError) " [错误]" else ""
+                    if (result.error) " [错误]" else ""
             )
             report("RUNNING", subPrompt + subCompletion, "已完成 ${call.name}（第 ${handle.steps.size} 步）")
             msgs.add(

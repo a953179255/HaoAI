@@ -431,7 +431,7 @@ private fun browserCmd(s: PcSettings, rest: List<String>) {
     }
     val ws = s.workspaceFile()
     val ctx = ToolCtx(ws, s, "auto", cliGate(true, ws))
-    val r = BrowserTool().run(args, ctx)
+    val r = kotlinx.coroutines.runBlocking { BrowserTool().run(args, ctx) }
     println((if (r.error) "× " else "") + r.content)
 }
 
@@ -455,7 +455,7 @@ private fun screenCmd(s: PcSettings, rest: List<String>) {
     }
     val ws = s.workspaceFile()
     val ctx = ToolCtx(ws, s, "auto", cliGate(true, ws))
-    val r = ScreenTool().run(args, ctx)
+    val r = kotlinx.coroutines.runBlocking { ScreenTool().run(args, ctx) }
     println((if (r.error) "× " else "") + r.content)
 }
 

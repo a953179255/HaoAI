@@ -89,6 +89,8 @@ tasks.withType<Test>().configureEach {
 
 dependencies {
     // OCR 中文捆绑版（2.4 ocr_image）：模型打进 APK（约 4MB/ABI），Apache-2.0
+    // B15：两端共用的 :core —— Tool 契约 / ToolResult / TextCap 只有一份定义（与 PC 同源）。
+    implementation(project(":core"))
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.documentfile)

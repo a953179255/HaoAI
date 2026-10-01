@@ -22,7 +22,7 @@ class ValidateWriteHook : ToolHook {
         ctx: ToolContext,
         result: ToolResult
     ): ToolResult {
-        if (result.isError) return result
+        if (result.error) return result
         val path = args.optString("path")
         if (path.isBlank() || !isCodeFile(path)) return result
         val content = args.optString("content")
@@ -86,7 +86,7 @@ class EscalationHook(
                 "停止相同重试：修正参数、换方法，或向用户说明。"
             repeatCount.set(0)
         }
-        if (result.isError) {
+        if (result.error) {
             val n = conFailCount.merge(call.name, 1) { a, b -> a + b } ?: 1
             when {
                 n == 2 -> content += "\n\n[恢复提示] 工具 ${call.name} 已连续失败 2 次。先验证前置条件（路径存在？参数格式？权限模式？），或改用替代工具。"
@@ -124,11 +124,11 @@ class SkillHintHook(
         // useCount 口径分裂（技能页出现"使用 0 次 · 成 1/败 0"）。
         if (action != "view") return result
         val skillName = args.optString("name").ifBlank { "unknown" }
-        val resultTag = if (result.isError) "failed: ${result.content.take(80)}" else "success"
+        val resultTag = if (result.error) "failed: ${result.content.take(80)}" else "success"
         // 仅当技能确实存在（记录成功）才追加自改进提示：view 不存在的技能名不该提示"修订该技能"
         val recorded = runCatching { store.recordUseResult(skillName, resultTag) }.getOrDefault(false)
         if (recorded && hintedSkills.add(skillName)) {
-            val hint = if (result.isError) {
+            val hint = if (result.error) {
                 "\n\n[技能自改进] 技能「$skillName」刚被使用（结果：失败——${result.content.take(80)}）。若失败暴露了技能步骤缺陷，用 skill save 修订该技能。"
             } else {
                 "\n\n[技能自改进] 技能「$skillName」刚被使用（结果：成功）。若发现技能内容有改进空间，用 skill save 修订该技能。"

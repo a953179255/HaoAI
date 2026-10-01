@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -71,14 +71,14 @@ class RecordTest {
 
     @Test
     fun `a malformed area is refused with a sentence`() {
-        val r = RecordTool().run(args("""{"action":"start","area":"all"}"""), ctx(ws()))
+        val r = RecordTool().runB(args("""{"action":"start","area":"all"}"""), ctx(ws()))
         assertTrue(r.content, r.error)
         assertTrue(r.content, r.content.contains("x,y"))
     }
 
     @Test
     fun `an audio name with a newline is refused`() {
-        val r = RecordTool().run(args("""{"action":"start","audio":"a\nb"}"""), ctx(ws()))
+        val r = RecordTool().runB(args("""{"action":"start","audio":"a\nb"}"""), ctx(ws()))
         assertTrue(r.content, r.error)
         assertTrue(r.content, r.content.contains("设备名"))
     }
@@ -87,7 +87,7 @@ class RecordTest {
     fun `no ffmpeg says where to get it instead of a stack trace`() {
         Ffmpeg.ffmpegPath = ""   // 空串 = 强制按"没装"处理
         try {
-            val r = RecordTool().run(args("""{"action":"start"}"""), ctx(ws()))
+            val r = RecordTool().runB(args("""{"action":"start"}"""), ctx(ws()))
             assertTrue(r.content, r.error)
             assertTrue("要给出装的地方：" + r.content,
                 r.content.contains("winget") || r.content.contains("ffmpeg.org"))
@@ -99,7 +99,7 @@ class RecordTest {
     @Test
     fun `a refused approval never spawns a process`() {
         // ask 档才会问人；auto 档直接放行，那是设计不是漏
-        val r = RecordTool().run(args("""{"action":"start"}"""), ctx(ws(), NoGate(), "ask"))
+        val r = RecordTool().runB(args("""{"action":"start"}"""), ctx(ws(), NoGate(), "ask"))
         assertTrue(r.content, r.error)
         assertTrue("被拒之后不该有录制在跑", Recordings.list().isEmpty())
     }
@@ -143,7 +143,7 @@ class RecordTest {
 
     @Test
     fun `status with nothing running says so`() {
-        val r = RecordTool().run(args("""{"action":"status"}"""), ctx(ws()))
+        val r = RecordTool().runB(args("""{"action":"status"}"""), ctx(ws()))
         assertFalse(r.content, r.error)
         assertTrue(r.content, r.content.contains("没有在录"))
     }

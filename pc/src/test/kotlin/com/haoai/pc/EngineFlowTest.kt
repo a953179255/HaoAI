@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -352,7 +352,7 @@ class EngineFlowTest {
     fun `shell tool executes a real command and reports the exit code`() {
         val ws = tempWorkspace()
         val ctx = ToolCtx(ws, PcSettings(), "auto", RecordingGate(true))
-        val r = ShellTool().run(
+        val r = ShellTool().runB(
             kotlinx.serialization.json.Json.parseToJsonElement(
                 """{"command":"echo haoai-shell-ok","shell":"bash","timeout":60}"""
             ).let { it as kotlinx.serialization.json.JsonObject },
@@ -454,10 +454,10 @@ class EngineFlowTest {
         File(ws, "src").mkdirs()
         File(ws, "src/Main.kt").writeText("package x\nfun hello() = 1\n")
         val ctx = ToolCtx(ws, PcSettings(), "auto", RecordingGate(true))
-        val g = GrepTool().run(buildJsonObject { put("pattern", "fun\\s+hello") }, ctx)
+        val g = GrepTool().runB(buildJsonObject { put("pattern", "fun\\s+hello") }, ctx)
         assertFalse(g.error)
         assertTrue("grep 没命中：${g.content}", g.content.contains("src/Main.kt:2:"))
-        val gl = GlobTool().run(buildJsonObject { put("pattern", "**/*.kt") }, ctx)
+        val gl = GlobTool().runB(buildJsonObject { put("pattern", "**/*.kt") }, ctx)
         assertTrue("glob 没命中：${gl.content}", gl.content.contains("src/Main.kt"))
     }
 
@@ -481,7 +481,7 @@ class EngineFlowTest {
         val ws = tempWorkspace()
         File(ws, "keep.txt").writeText("v1\n")
         val ctx = ToolCtx(ws, PcSettings(flags = mapOf("snapshot_before_write" to true)), "auto", RecordingGate(true))
-        WriteTool().run(
+        WriteTool().runB(
             buildJsonObject {
                 put("path", "keep.txt")
                 put("content", "v2\n")

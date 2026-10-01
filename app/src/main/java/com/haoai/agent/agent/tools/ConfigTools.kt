@@ -17,10 +17,10 @@ import kotlinx.serialization.json.putJsonObject
 class ConfigGetTool(private val renderCurrent: () -> String) : Tool {
 
     override val name = "config_get"
-    override val description =
+    override val desc =
         "读取当前应用配置（JSON）：providers（模型服务清单，apiKey 一律掩码 ****）+ settings（可修改字段）。" +
             "准备用 config_set 修改配置前先调用本工具拿当前结构；provider 的 id 字段在修改时必须沿用。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {}
     }
@@ -44,7 +44,7 @@ class ConfigGetTool(private val renderCurrent: () -> String) : Tool {
 class ConfigSetTool(private val mutator: suspend (JsonObject) -> ToolResult) : Tool {
 
     override val name = "config_set"
-    override val description =
+    override val desc =
         "修改应用配置（JSON patch，每次都会弹窗请用户批准）。先 config_get 拿当前结构，再只传要改的字段：" +
             "改/加模型传 providers 数组（按 id 合并，新增必须带明文 apiKey；改已有模型的 baseUrl/protocol 也必须带明文 apiKey 重认证）；" +
             "删模型传 providers 数组 + providers_removed=true（缺席的云端模型会被删除，过半会警告）；" +
@@ -56,7 +56,7 @@ class ConfigSetTool(private val mutator: suspend (JsonObject) -> ToolResult) : T
             "title_provider / summarize_provider / daily_token_budget_k / keep_alive / dream_provider / dream_idle_minutes / " +
             "theme_mode / theme_seed / amoled_mode / bubble_opacity / wallpaper_global / dynamic_color / reasoning_effort）。" +
             "用户要求「添加模型/换模型/调设置/换主题/加 MCP 服务器/加 SSH 目标」等时使用。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonArrayDesc("providers", "要新增/更新的 provider 对象数组（按 id 合并，缺席 provider 保留）")

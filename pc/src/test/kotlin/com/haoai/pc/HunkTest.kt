@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import java.io.File
 import java.nio.file.Files
@@ -226,7 +226,7 @@ class HunkTest {
         f.writeText(b)
         val wanted = edited(b, 2 to "X02", 9 to "X09", 16 to "X16")
         val gate = BlockGate(keep = listOf(true, false, true))
-        val r = WriteTool().run(writeArgs("notes.md", wanted), ctx(w, "ask", gate))
+        val r = WriteTool().runB(writeArgs("notes.md", wanted), ctx(w, "ask", gate))
         assertEquals("该弹一张带勾选的卡：" + gate.sawPlan, 1, gate.sawPlan)
         assertTrue("卡上要说清分了几处：" + gate.asks, gate.asks[0].contains("分成 3 处"))
         assertEquals("被退的那块保持原样，其余两块落盘",
@@ -244,7 +244,7 @@ class HunkTest {
         File(w, "notes.md").writeText(b)
         val wanted = edited(b, 2 to "X02", 9 to "X09", 16 to "X16")
         val gate = PlainGate()
-        val r = WriteTool().run(writeArgs("notes.md", wanted), ctx(w, "ask", gate))
+        val r = WriteTool().runB(writeArgs("notes.md", wanted), ctx(w, "ask", gate))
         assertEquals("CLI 那类闸口只答 true/false，就该整条写下去", wanted, File(w, "notes.md").readText())
         assertFalse("没人挑过就不许说「部分写入」：" + r.content, r.content.contains("部分写入"))
         assertEquals("仍然只弹一次卡：" + gate.n, 1, gate.n)
@@ -260,7 +260,7 @@ class HunkTest {
         val gate = BlockGate(keep = listOf(true, false, true))
         // 人在读卡片的那几分钟里，别的窗口把这一行改了 —— 逐块合并的基线已经不成立
         gate.whileWaiting = { f.writeText(b.replace("L09", "别人刚改的")) }
-        val r = WriteTool().run(writeArgs("notes.md", wanted), ctx(w, "ask", gate))
+        val r = WriteTool().runB(writeArgs("notes.md", wanted), ctx(w, "ask", gate))
         assertTrue("基线变了要拒绝写入并说清原因：" + r.content, r.error && r.content.contains("文件内容变了"))
         val l = f.readText().lines()
         assertEquals("一个字都不许多写（别人的改动不能被盖掉）", "别人刚改的", l[8])
@@ -274,7 +274,7 @@ class HunkTest {
         val f = File(w, "log.txt")
         f.writeText(base().replace("L02", "DUP").replace("L16", "DUP"))
         val gate = BlockGate(keep = listOf(true, false))
-        val r = EditTool().run(editArgs("log.txt", "DUP", "OK", all = true), ctx(w, "ask", gate))
+        val r = EditTool().runB(editArgs("log.txt", "DUP", "OK", all = true), ctx(w, "ask", gate))
         assertEquals("一次调用改两处就该给两块：" + gate.sawPlan, 1, gate.sawPlan)
         assertTrue("卡上该说分成 2 处：" + gate.asks, gate.asks[0].contains("分成 2 处"))
         val l = f.readText().lines()
@@ -288,7 +288,7 @@ class HunkTest {
         val w = ws()
         File(w, "a.txt").writeText("第一行\n")
         val gate = PlainGate()
-        val r = EditTool().run(editArgs("a.txt", "根本没这一句", "x"), ctx(w, "ask", gate))
+        val r = EditTool().runB(editArgs("a.txt", "根本没这一句", "x"), ctx(w, "ask", gate))
         assertTrue("该直接说不匹配：" + r.content, r.content.contains("没找到"))
         assertEquals("匹配都不过就不该弹卡等人：" + gate.n, 0, gate.n)
     }

@@ -131,7 +131,7 @@ class McpClient(private val transport: McpTransport) {
         }
     }
 
-    /** 调用远端工具；result.isError 映射为错误结果，content 数组文本拼接。 */
+    /** 调用远端工具；result.error 映射为错误结果，content 数组文本拼接。 */
     suspend fun callTool(name: String, arguments: JsonObject): Result<McpToolResult> = mutex.withLock {
         try {
             val resp = transport.send(

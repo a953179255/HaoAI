@@ -14,9 +14,9 @@ import kotlinx.serialization.json.putJsonObject
 class ReadTool : Tool {
 
     override val name = "read"
-    override val description =
+    override val desc =
         "读取工作空间内文本文件（带行号），或列出目录内容。支持 offset/limit 行范围，大文件自动截断。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("path") {
@@ -78,8 +78,8 @@ class ReadTool : Tool {
 class WriteTool : Tool {
 
     override val name = "write"
-    override val description = "新建或覆盖工作空间内的文件（UTF-8 文本，最大 256KB）。"
-    override val parameters = buildJsonObject {
+    override val desc = "新建或覆盖工作空间内的文件（UTF-8 文本，最大 256KB）。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("path") { put("type", "string") }
@@ -106,9 +106,9 @@ class WriteTool : Tool {
 class EditTool : Tool {
 
     override val name = "edit"
-    override val description =
+    override val desc =
         "精确替换文件中的文本片段。old_string 必须与文件内容完全一致（含缩进换行）；出现多次时需提供更多上下文或设置 replace_all=true。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("path") { put("type", "string") }
@@ -155,8 +155,8 @@ class EditTool : Tool {
 class GrepTool : Tool {
 
     override val name = "grep"
-    override val description = "在工作空间内按正则搜索文件内容，返回「路径:行号: 内容」。可用 glob 过滤文件名。"
-    override val parameters = buildJsonObject {
+    override val desc = "在工作空间内按正则搜索文件内容，返回「路径:行号: 内容」。可用 glob 过滤文件名。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("pattern") { put("type", "string") }
@@ -215,9 +215,9 @@ class GrepTool : Tool {
 class GlobTool : Tool {
 
     override val name = "glob"
-    override val description =
+    override val desc =
         "按通配模式查找文件（支持 **、*、?），按最近修改排序。示例：**/*.kt、src/*.java、*.md"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("pattern") { put("type", "string") }

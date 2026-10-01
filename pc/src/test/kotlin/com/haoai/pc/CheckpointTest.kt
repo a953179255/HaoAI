@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -35,12 +35,12 @@ class CheckpointTest {
         Json.parseToJsonElement(s).jsonObject
 
     private fun write(c: ToolCtx, path: String, content: String) {
-        val r = WriteTool().run(args("""{"path":"$path","content":"$content"}"""), c)
+        val r = WriteTool().runB(args("""{"path":"$path","content":"$content"}"""), c)
         assertFalse("write 失败：" + r.content, r.error)
     }
 
     private fun edit(c: ToolCtx, path: String, old: String, new: String) {
-        val r = EditTool().run(
+        val r = EditTool().runB(
             args("""{"path":"$path","old_string":"$old","new_string":"$new"}"""), c)
         assertFalse("edit 失败：" + r.content, r.error)
     }

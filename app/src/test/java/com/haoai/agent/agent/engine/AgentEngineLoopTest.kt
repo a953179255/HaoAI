@@ -212,7 +212,7 @@ class AgentEngineLoopTest {
             "研究预算要说清不是免检索许可",
             SystemPrompt.PREFIX.contains("只管检索广度")
         )
-        val desc = WebSearchTool().description
+        val desc = WebSearchTool().desc
         assertTrue("web_search 描述要与系统提示同判据", desc.contains("先搜索再动笔"))
     }
 

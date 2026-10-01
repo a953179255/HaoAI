@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -64,10 +64,10 @@ class GitToolTest {
         val ctx = ToolCtx(r, PcSettings(), "ask", gate)
         File(r, "a.txt").appendText("two\n")
 
-        val st = GitTool().run(args("""{"sub":"status","args":"--porcelain"}"""), ctx)
+        val st = GitTool().runB(args("""{"sub":"status","args":"--porcelain"}"""), ctx)
         assertFalse(st.content, st.error)
         assertTrue("status 没看到改动：${st.content}", st.content.contains("a.txt"))
-        val df = GitTool().run(args("""{"sub":"diff","args":"-- a.txt"}"""), ctx)
+        val df = GitTool().runB(args("""{"sub":"diff","args":"-- a.txt"}"""), ctx)
         assertTrue("diff 里没有 +two：${df.content}", df.content.contains("+two"))
         assertEquals("只读子命令不该问人", 0, gate.asked.size)
     }
@@ -78,13 +78,13 @@ class GitToolTest {
         val r = repo()
         val ctx = ToolCtx(r, PcSettings(), "auto", SpyGate())
         File(r, "b.txt").writeText("hello\n")
-        val added = GitTool().run(args("""{"sub":"add","args":"b.txt"}"""), ctx)
+        val added = GitTool().runB(args("""{"sub":"add","args":"b.txt"}"""), ctx)
         assertFalse(added.content, added.error)
-        val committed = GitTool().run(
+        val committed = GitTool().runB(
             args("""{"sub":"commit","args":"-m \"add b\""}"""), ctx
         )
         assertFalse(committed.content, committed.error)
-        val log = GitTool().run(args("""{"sub":"log","args":"--oneline"}"""), ctx)
+        val log = GitTool().runB(args("""{"sub":"log","args":"--oneline"}"""), ctx)
         assertTrue("log 里没有新提交：${log.content}", log.content.contains("add b"))
         assertEquals("应该有两个提交", 2, GitCli.out(r, listOf("rev-list", "--count", "HEAD")).trim().toInt())
     }
@@ -98,8 +98,8 @@ class GitToolTest {
         Policies.get().add(r, Rule("shell", "git commit*", Decision.DENY))
         val ctx = ToolCtx(r, PcSettings(), "auto", SpyGate())
         File(r, "c.txt").writeText("x\n")
-        GitTool().run(args("""{"sub":"add","args":"c.txt"}"""), ctx)
-        val blocked = GitTool().run(args("""{"sub":"commit","args":"-m nope"}"""), ctx)
+        GitTool().runB(args("""{"sub":"add","args":"c.txt"}"""), ctx)
+        val blocked = GitTool().runB(args("""{"sub":"commit","args":"-m nope"}"""), ctx)
         assertTrue("规则没拦住 commit：${blocked.content}", blocked.error)
         assertTrue(blocked.content.contains("规则拒绝"))
         assertEquals("commit 居然真进去了", 1, GitCli.out(r, listOf("rev-list", "--count", "HEAD")).trim().toInt())
@@ -110,7 +110,7 @@ class GitToolTest {
     fun `outside a repo the tool says so instead of crashing`() {
         val dir = Files.createTempDirectory("haoai-nogit").toFile().apply { mkdirs() }
         val ctx = ToolCtx(dir, PcSettings(), "auto", SpyGate())
-        val r = GitTool().run(args("""{"sub":"status"}"""), ctx)
+        val r = GitTool().runB(args("""{"sub":"status"}"""), ctx)
         assertTrue("不在仓库里却成功了", r.error)
         assertTrue("没给出下一步：${r.content}", r.content.contains("git init") || r.content.contains("不在 git 仓库"))
     }
@@ -120,7 +120,7 @@ class GitToolTest {
         assumeTrue("这台机器上没有 git", GitCli.available() != null)
         val r = repo()
         val ctx = ToolCtx(r, PcSettings(), "auto", SpyGate())
-        val bad = GitTool().run(args("""{"sub":"filter-branch"}"""), ctx)
+        val bad = GitTool().runB(args("""{"sub":"filter-branch"}"""), ctx)
         assertTrue(bad.error)
         assertTrue("没提示可用子命令：${bad.content}", bad.content.contains("status"))
     }

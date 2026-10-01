@@ -15,9 +15,9 @@ import kotlinx.serialization.json.putJsonObject
 class ToolsEnableTool(private val enable: (String) -> String) : Tool {
 
     override val name = "tools_enable"
-    override val description =
+    override val desc =
         "启用一个工具组，启用后该组工具注入工具清单且本会话保持。可用组：extended（无障碍操作/内置浏览器/虚拟屏/相机/定位/设备工具包/工作流等）、mcp（MCP 外部服务器工具）。core 组常驻无需启用。仅当系统提示标注某组未加载、且当前任务确需该组工具时才调用。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("group") {

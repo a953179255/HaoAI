@@ -15,10 +15,10 @@ class SessionSearchTool(
 ) : Tool {
 
     override val name = "session_search"
-    override val description =
+    override val desc =
         "搜索过往聊天会话（标题与消息正文）。query 为关键词；返回标题命中优先的会话列表（id + 标题 + 摘要）。" +
             "用于回忆用户此前的约定、项目背景或说过的话；不要用它代替 memory（长期记忆）。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("query") {

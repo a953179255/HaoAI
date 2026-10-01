@@ -1,4 +1,4 @@
-package com.haoai.pc
+﻿package com.haoai.pc
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -41,7 +41,7 @@ class WebSearchTool : Tool(
         .connectTimeout(Duration.ofSeconds(15))
         .followRedirects(HttpClient.Redirect.NORMAL).build()
 
-    override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val q = req(args, "query")?.trim() ?: return fail("web_search 缺少 query")
         if (q.isEmpty()) return fail("query 是空的：要搜什么？")
         val limit = int(args, "limit", 6).coerceIn(1, 15)

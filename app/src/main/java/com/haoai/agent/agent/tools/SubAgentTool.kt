@@ -28,12 +28,12 @@ class SubAgentTool(
 ) : Tool {
 
     override val name = "spawn_agent"
-    override val description =
+    override val desc =
         "派出一个子代理独立完成任务。mode=research(默认)只读调研（read/grep/glob/web_fetch/memory）；" +
             "mode=work 可读写文件/执行命令，写权限随主代理（计划模式下不可用；config_set/tools_enable/todo 不可用，改动可回滚）。" +
             "background=true 时立即返回、子代理后台运行（用 collect_agent 收结果、steer_agent 纠偏、stop_agent 终止；回合结束会一并终止）。" +
             "不可嵌套。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("task") { put("type", "string") }
@@ -85,9 +85,9 @@ class SubAgentTool(
 class CollectAgentTool(private val controls: SubagentControl) : Tool {
 
     override val name = "collect_agent"
-    override val description =
+    override val desc =
         "收取子代理的进度或结果（id 见 spawn 结果标注，后台子代理必须用本工具收取）。wait_seconds=0 只看当前快照；>0 最多等待该秒数直到完成，返回状态、已完成步骤与最终结论。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("id") { put("type", "string") }
@@ -124,9 +124,9 @@ class CollectAgentTool(private val controls: SubagentControl) : Tool {
 class StopAgentTool(private val controls: SubagentControl) : Tool {
 
     override val name = "stop_agent"
-    override val description =
+    override val desc =
         "终止一个运行中的子代理（id 见 spawn 结果各路标注）。被终止的子代理会把已完成步骤与中间结论回收到本次 spawn 的返回里，主代理可据此继续。后台子代理终止后用 collect_agent 取部分结果。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("id") { put("type", "string") }
@@ -145,9 +145,9 @@ class StopAgentTool(private val controls: SubagentControl) : Tool {
 class SteerAgentTool(private val controls: SubagentControl) : Tool {
 
     override val name = "steer_agent"
-    override val description =
+    override val desc =
         "向运行中的子代理追加指令（不打断当前执行，下一轮前生效）。用于纠偏、收窄范围或补充线索。id 见 spawn 结果标注。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("id") { put("type", "string") }

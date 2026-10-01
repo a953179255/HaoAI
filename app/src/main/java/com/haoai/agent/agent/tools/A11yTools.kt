@@ -19,9 +19,9 @@ private suspend fun a11yGate(ctx: ToolContext): ToolResult? {
 class ScreenTool : Tool {
 
     override val name = "screen"
-    override val description =
+    override val desc =
         "读取当前手机屏幕：输出可交互控件的编号列表 [index] 类型 \"文本\" 坐标。操作前先看屏幕；记住目标编号，用 tap(index=编号) 点击。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("max_nodes") { put("type", "integer") }
@@ -39,9 +39,9 @@ class ScreenTool : Tool {
 class TapTool : Tool {
 
     override val name = "tap"
-    override val description =
+    override val desc =
         "点击屏幕控件。优先 index（screen 输出的编号，最可靠），其次 text（模糊匹配）或 view_id，或坐标 x,y。long_press=true 长按。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("index") { put("type", "integer") }
@@ -87,9 +87,9 @@ class TapTool : Tool {
 class WaitTool : Tool {
 
     override val name = "wait"
-    override val description =
+    override val desc =
         "等待条件满足再继续：mode=text 等文案出现、mode=gone 等文案消失、mode=idle 等界面停止变化、mode=time 固定等待。加载慢的页面先 wait 再操作，避免盲点。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("mode") {
@@ -151,9 +151,9 @@ class WaitTool : Tool {
 class FindTool : Tool {
 
     override val name = "find"
-    override val description =
+    override val desc =
         "在可滚动列表中查找目标文案：自动朝 direction 方向滚动最多 max_swipes 次，找到返回编号与坐标（同时更新 screen 缓存），找不到返回失败。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("text") { put("type", "string") }
@@ -196,9 +196,9 @@ class FindTool : Tool {
 class ScrollTool : Tool {
 
     override val name = "scroll"
-    override val description =
+    override val desc =
         "语义滚动：direction=up/down/left/right（up=内容向上滚即看下方），amount=幅度比例 0-1 默认 0.5。比 swipe 方便，无需算坐标。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("direction") {
@@ -236,8 +236,8 @@ class ScrollTool : Tool {
 class SwipeTool : Tool {
 
     override val name = "swipe"
-    override val description = "从 (x1,y1) 滑动到 (x2,y2)，duration_ms 默认 300。列表滚动、翻页、下拉刷新用。"
-    override val parameters = buildJsonObject {
+    override val desc = "从 (x1,y1) 滑动到 (x2,y2)，duration_ms 默认 300。列表滚动、翻页、下拉刷新用。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("x1") { put("type", "integer") }
@@ -264,8 +264,8 @@ class SwipeTool : Tool {
 class TypeTextTool : Tool {
 
     override val name = "type_text"
-    override val description = "向当前屏幕的输入框填入文本（先确保目标输入框已聚焦，必要时先 tap 它）。"
-    override val parameters = buildJsonObject {
+    override val desc = "向当前屏幕的输入框填入文本（先确保目标输入框已聚焦，必要时先 tap 它）。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("text") { put("type", "string") }
@@ -284,8 +284,8 @@ class TypeTextTool : Tool {
 class KeyTool : Tool {
 
     override val name = "key"
-    override val description = "系统级按键：back / home / recents / notifications / quick_settings。"
-    override val parameters = buildJsonObject {
+    override val desc = "系统级按键：back / home / recents / notifications / quick_settings。"
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("action") { put("type", "string") }
@@ -302,9 +302,9 @@ class KeyTool : Tool {
 class LaunchAppTool : Tool {
 
     override val name = "launch_app"
-    override val description =
+    override val desc =
         "启动应用（可用 list_apps 先查询包名）。默认打开应用首页；activity 可指定应用内页面（如 com.android.settings/.Settings\$BluetoothSettingsActivity），extras 传启动键值参数。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("package") { put("type", "string") }
@@ -349,13 +349,13 @@ class LaunchAppTool : Tool {
 class OpenUriTool : Tool {
 
     override val name = "open_uri"
-    override val description =
+    override val desc =
         "直达打开目标页面（打开系统设置/网页/应用子页优先用它，一步到位，代替 screen→tap 视觉循环）。uri 三种写法：" +
             "① 系统设置 action，如 android.settings.APPLICATION_DEVELOPMENT_SETTINGS（开发者选项）、" +
             "android.settings.WIRELESS_DEBUGGING_SETTINGS（无线调试，Android13+）、BLUETOOTH_SETTINGS、WIFI_SETTINGS、SETTINGS（设置首页）；" +
             "② 包名/类名 指定应用内页面，如 com.android.settings/.Settings\$WirelessDebuggingActivity；" +
             "③ 普通协议 https://网页、geo:经度,纬度、market://应用详情、tel: 等。失败会返回原因，可换写法重试。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("uri") {
@@ -378,8 +378,8 @@ class OpenUriTool : Tool {
 class ListAppsTool : Tool {
 
     override val name = "list_apps"
-    override val description = "列出手机上可启动的应用（名称 + 包名）。"
-    override val parameters = buildJsonObject { put("type", "object") }
+    override val desc = "列出手机上可启动的应用（名称 + 包名）。"
+    override val params = buildJsonObject { put("type", "object") }
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult {
         a11yGate(ctx)?.let { return it }

@@ -13,7 +13,7 @@ import kotlinx.serialization.json.putJsonObject
 class SkillTool(private val store: SkillStore) : Tool {
 
     override val name = "skill"
-    override val description =
+    override val desc =
         "技能库：沉淀与复用做事方法。action: save(name, description, content) 创建或**改进**已有技能；" +
             "list 列出全部技能索引；view(name) 读全文；delete(name) 删除。" +
             "何时 save：走通了值得复用的多步流程、踩坑后找到可行路径、被用户纠正了做法；" +
@@ -21,7 +21,7 @@ class SkillTool(private val store: SkillStore) : Tool {
             "content 建议结构：When to Use（适用场景）/ Procedure（步骤）/ Pitfalls（坑与注意）。" +
             "沉淀纪律：同一教训只存一条——先 view 检查已有技能，强化旧条目而不是追加复制品；" +
             "环境故障要记『修复方法』而不是『该工具不可用』（环境会变，永久负面断言会误导后续所有任务）；未解决的失败不要存。"
-    override val parameters = buildJsonObject {
+    override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("action") { put("type", "string") }
