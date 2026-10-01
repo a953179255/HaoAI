@@ -49,6 +49,10 @@
   .acts button{flex:1 1 96px;font-size:13.5px;padding:12px 8px}
   .ok{border-color:var(--acc);color:var(--acc)}
   .no{border-color:#5a2b2b;color:var(--bad)}
+  /* B22 问卡：推荐徽标 / 确认步的选中态（与桌面卡同一套语义） */
+  .card.ask .rec{margin-left:6px;padding:0 5px;font-size:10px;font-weight:700;border-radius:8px;
+    border:1px solid currentColor;font-style:normal}
+  .card.ask .opt.sel{outline:2px solid var(--acc);outline-offset:-3px}
   .card.hi{border-color:var(--bad)}
   .rk{font-size:11px;padding:1px 7px;border-radius:999px;margin-left:6px;border:1px solid var(--line);
     color:var(--mut);vertical-align:2px}
@@ -199,18 +203,26 @@ function refresh(){
         var rk=pl.risk?('<span class="rk '+
           (pl.risk=='high'?'hi':(pl.risk=='mid'?'mid':'lo'))+'">'+esc(pl.riskLabel||pl.risk)+'</span>'):'';
         if(p.kind=='ask'){
-          /* 提问走的是"回答文字"，不是那三个决定值：按选项给按钮，
-             没有选项（或超过三个）就给一个输入框 —— 电脑上问自由问题时手机也答得了。 */
-          var os=pl.options||[];
+          /* 选项与桌面卡同款 {label,description}（旧字符串载荷也收，当 label）。
+             confirm=true（默认）= 点一下选中、再按「回答」提交（同一颗再点一次也提交）；
+             recommend=true = 第一个按钮带「推荐」；allow_free_text=false = 不摆输入框。
+             描述排在按钮下面 —— 那一句"含义/代价"就是防止人凭标签瞎选的。 */
+          var os=(pl.options||[]).map(function(o){
+              return typeof o=='string'?{label:String(o),description:''}:o;})
+            .filter(function(o){return o&&o.label}).slice(0,3);
+          var rec=pl.recommend!==false, conf=pl.confirm!==false, free=pl.allowFreeText!==false;
+          window.__askSt={id:p.id,conf:conf,picked:null};
           return '<div class="card ask"><h3>❓ '+esc(pl.title||'(没问出口)')+'</h3>'+
             '<p class="mut">这是电脑上的一句提问，答了它才继续跑。</p><div class="acts">'+
-            os.slice(0,3).map(function(o){return '<button class="ok" data-a="'+esc(o)+'" data-i="'+
-              esc(p.id)+'">'+esc(o)+'</button>'}).join('')+
-            /* 输入框一直在：选项不够贴切（或根本没给选项）时，人得能自己写一句。
-               以前"自己写…"在没有输入框时点下去只会提示"先写一句回答" —— 那是个假出口。 */
-            '<input id="answ" placeholder="或自己写一句回答" maxlength="200">'+
-            '<button data-a="__own__" data-i="'+esc(p.id)+'">发送回答</button>'+
-            '</div></div>'
+            os.map(function(o,i){return '<button class="ok opt" data-a="'+esc(o.label)+'" data-i="'+
+              esc(p.id)+'">'+esc(o.label)+(i===0&&rec?'<i class="rec">推荐</i>':'')+'</button>'}).join('')+
+            '<button id="askSubmit" data-a="__sub__" data-i="'+esc(p.id)+'" hidden>回答</button>'+
+            (free?'<input id="answ" placeholder="或自己写一句回答" maxlength="200">'+
+              '<button data-a="__own__" data-i="'+esc(p.id)+'">发送回答</button>':'')+
+            '</div>'+
+            os.map(function(o,i){return o.description?'<p class="mut" style="margin:4px 0 0">'+
+              (i+1)+'. '+esc(o.description)+'</p>':''}).join('')+
+            '</div>'
         }
         return '<div class="card'+(pl.risk=='high'?' hi':'')+'" data-risk="'+esc(pl.risk||'')+'" data-hunks="'+esc(String(pl.hunkCount||0))+'"><h3>'+esc(pl.title||'(没标题)')+rk+'</h3>'+
           '<p>'+esc(pl.detail||'')+'</p>'+
@@ -229,7 +241,20 @@ function refresh(){
         b.onclick=function(){
           var v=b.dataset.a;
           if(v=='__own__'){var el=document.querySelector('#answ');v=(el&&el.value||'').trim();
-            if(!v){say('先写一句回答',true);return}}
+            if(!v){say('先写一句回答',true);return}
+            answer(b.dataset.i,v,b);return}
+          if(v=='__sub__'){var st=window.__askSt;
+            if(!st||st.picked==null){say('先点一个选项',true);return}
+            answer(st.id,st.picked,b);return}
+          var st=window.__askSt;
+          if(st&&st.conf){ /* 确认模式：点一下选中，同一颗再点一次（或按「回答」）提交 */
+            if(st.picked===v){answer(st.id,v,b);return}
+            st.picked=v;
+            [].forEach.call(document.querySelectorAll('#appr .opt'),function(x){x.classList.remove('sel')});
+            b.classList.add('sel');
+            var sb=document.getElementById('askSubmit');if(sb)sb.hidden=false;
+            return;
+          }
           answer(b.dataset.i,v,b)}});
     }),
     api('/lan/digest').then(function(d){

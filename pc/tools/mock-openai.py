@@ -251,7 +251,9 @@ PLAN = {
     ],
     "ask": [
         ("先问一下", [{"id": "call_q", "name": "ask_user",
-                       "arguments": json.dumps({"question": "要绿色还是蓝色主题？", "options": ["绿色", "蓝色"]})}]),
+                       "arguments": json.dumps({"question": "要绿色还是蓝色主题？",
+                                                "options": [{"label": "绿色", "description": "护眼的深绿"},
+                                                            {"label": "蓝色", "description": "沉静的海蓝"}]})}]),
         ("要动文件了", [{"id": "call_w", "name": "write",
                          "arguments": json.dumps({"path": "theme.txt", "content": "green\n"})}]),
         ("好，按你说的写好了 theme.txt。", None),
@@ -367,9 +369,12 @@ ROUTED = {
         ("丁做完了：mock-d.txt。", None),
     ],
     # ask_user 的选项按钮挂在 data-i 上，重写弹窗时这段绑定丢过一次 —— 只有真点一下才发现
+    # （B22：选项是 {label,description} 对象，与手机端 schema 同款 —— 字符串会被 2~4 校验按 0 个拒掉）
     "并行戊": [
         ("戊先问一句", [{"id": "call_e1", "name": "ask_user",
-                         "arguments": json.dumps({"question": "要绿色还是蓝色？", "options": ["绿色", "蓝色"]})}]),
+                         "arguments": json.dumps({"question": "要绿色还是蓝色？",
+                                                  "options": [{"label": "绿色", "description": "护眼的深绿"},
+                                                              {"label": "蓝色", "description": "沉静的海蓝"}]})}]),
         ("戊记下了你选的颜色，写进 mock-e.txt。",
          [{"id": "call_e2", "name": "write",
            "arguments": json.dumps({"path": "mock-e.txt", "content": "ok\n"})}]),

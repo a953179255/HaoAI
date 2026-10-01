@@ -586,14 +586,27 @@ private fun cliGate(auto: Boolean, workspace: File): Gate = object : Gate {
         }
     }
 
-    override fun ask(question: String, options: List<String>): String {
-        println("\n  ? $question")
-        options.forEachIndexed { i, o -> println("      ${i + 1}. $o") }
-        print("  回答 > ")
-        val a = br.readLine()?.trim() ?: ""
-        val idx = a.toIntOrNull()
-        return if (idx != null && idx in 1..options.size) options[idx - 1] else a
+    /** 旧签名走默认桥；这里直接实现完整版：desc 跟着标签印，allow_free_text 收窄可选项。
+     *  confirm/recommend 对终端是无物之物（打字本身审慎、没有徽标可标），语义上等同快速模式。 */
+    override fun ask(req: AskReq): String {
+        println("\n  ? ${req.question}")
+        req.options.forEachIndexed { i, o ->
+            val mark = if (i == 0 && req.recommend) "（推荐）" else ""
+            val why = if (o.desc.isNotBlank()) "  — ${o.desc}" else ""
+            println("      ${i + 1}. ${o.label}$mark$why")
+        }
+        while (true) {
+            print(if (req.allowFree) "  回答（编号或文字）> " else "  选编号 > ")
+            val a = br.readLine()?.trim() ?: ""
+            val idx = a.toIntOrNull()
+            if (idx != null && idx in 1..req.options.size) return req.options[idx - 1].label
+            if (!req.allowFree) { println("  这道题只能选 1..${req.options.size} 的编号"); continue }
+            if (a.isNotEmpty()) return a
+        }
     }
+
+    override fun ask(question: String, options: List<String>): String =
+        ask(AskReq(question, options.map { AskOpt(it) }))
 }
 
 private fun line(t: String) {

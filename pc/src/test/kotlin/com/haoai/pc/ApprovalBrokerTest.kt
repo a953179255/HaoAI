@@ -72,11 +72,15 @@ class ApprovalBrokerTest {
     @Test
     fun `ask timeout returns empty and stays quiet`() {
         val b = broker(askSec = 1)
-        val r = b.awaitAsk("s1", "红的还是绿的？", listOf("红", "绿"))
+        val r = b.awaitAsk("s1", AskReq("红的还是绿的？", listOf(AskOpt("红", "暖色"), AskOpt("绿", "冷色"))))
         assertTrue(r.timedOut)
         assertEquals("提问超时 = 没人回答", "", r.value)
         // 与旧实现一致：提问超时**不发通知**（那条通知是审批专属的）
         assertFalse("提问超时该安静", sent.any { it.first == "notice" })
+        // 载荷是完整 AskReq（B22）：对象选项 + 三个开关，桌面卡与手机卡同读这一份
+        val askPayload = sent.firstOrNull { it.first == "ask" }?.second ?: ""
+        assertTrue("载荷里要有对象选项：" + askPayload, askPayload.contains("\"label\":\"红\"") && askPayload.contains("\"description\":\"暖色\""))
+        assertTrue("三个开关要在载荷里（缺省 true）", askPayload.contains("\"confirm\":true") && askPayload.contains("\"recommend\":true") && askPayload.contains("\"allowFreeText\":true"))
         assertEquals(0, b.sizeForTest())
     }
 
@@ -99,7 +103,7 @@ class ApprovalBrokerTest {
         // 提问的中止语义：空串（模型看到"用户没回答"）
         val b2 = broker(askSec = 30)
         var res2: ApprovalBroker.Resolution? = null
-        val t2 = thread { res2 = b2.awaitAsk("s2", "选哪个？", emptyList()) }
+        val t2 = thread { res2 = b2.awaitAsk("s2", AskReq("选哪个？", emptyList())) }
         waitCard(b2, event = "ask")
         val sum2 = b2.abort("s2")
         t2.join(3000)

@@ -11,6 +11,13 @@
   },
   {"shot": "a01-inline-approval"},
   {"click": ".card.ask .btn.pri"},
+  {"sleep": 400},
+  {
+    "eval": "(()=>{const a=document.querySelector('.card.ask:not(.done)');const sel=a&&a.querySelector('.btn.sel');const sub=a&&a.querySelector('.ansbtn');return JSON.stringify({selected:!!sel,subReady:!!sub&&!sub.disabled,stillWaiting:!!a&&!a.classList.contains('done')})})()",
+    "must": ["selected", "subReady", "stillWaiting"],
+    "note": "B22 确认步（confirm 默认 true，与手机端同款）：点一下只是选中，卡不许就这么答完 ——「回答」键要从灰变亮，等人的第二下"
+  },
+  {"click": ".card.ask .ansbtn"},
   {"sleep": 2000},
   {
     "eval": "(()=>{const done=document.querySelectorAll('.card.ask.done').length;const left=[...document.querySelectorAll('.card.ask:not(.done)')];return JSON.stringify({answered:done>=1,approvalUp:left.length==1&&/允许一次/.test(left[0].innerText),noMask:!document.getElementById('mask').classList.contains('on')})})()",

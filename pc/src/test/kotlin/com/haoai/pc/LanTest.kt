@@ -233,7 +233,10 @@ class LanTest {
         assertTrue("提问该被镜像过来（以前只挑 approval，手机上根本看不到提问）：$body",
             body.contains("\"kind\":\"ask\""))
         assertTrue("问题原文要带过来：" + body, body.contains("要绿色还是蓝色主题？"))
-        assertTrue("候选项要带过来：" + body, body.contains("\"options\":[\"绿色\",\"蓝色\"]"))
+        // 归一化之后 options 是对象（旧字符串载荷也折成 label/description，见下一条产品真身测试）
+        assertTrue("候选项要带过来：" + body, body.contains("\"label\":\"绿色\"") && body.contains("\"label\":\"蓝色\""))
+        assertTrue("三个开关要带过去（缺省 true）：" + body,
+            body.contains("\"confirm\":true") && body.contains("\"allowFreeText\":true"))
     }
 
     /**
@@ -251,7 +254,21 @@ class LanTest {
         val pl = o["payload"]?.jsonObject
         assertEquals("提问行没带 payload：" + ask, "要绿色还是蓝色主题？",
             pl?.get("title")?.jsonPrimitive?.content)
-        assertEquals(listOf("绿色", "蓝色"), pl?.get("options")?.jsonArray?.map { it.jsonPrimitive.content })
+        // 旧字符串载荷要被归一成 {label,description}（手机页只认这一种形状）
+        assertEquals(listOf("绿色", "蓝色"), pl?.get("options")?.jsonArray?.map { it.jsonObject["label"]?.jsonPrimitive?.content })
+        assertEquals("归一化要补空 description", "",
+            pl?.get("options")?.jsonArray?.map { it.jsonObject["description"]?.jsonPrimitive?.content }?.get(0))
+
+        // 对象载荷（B22 起 broker 的真身形状）：desc 与三个开关原样过到手机行
+        val askObj = lanPendingRow("q2", "ask", "s1",
+            """{"question":"选哪个？","options":[{"label":"甲","description":"方案一"},{"label":"乙"}],"confirm":false,"recommend":false,"allowFreeText":true}""")
+        val plo = Json.parseToJsonElement(askObj ?: "null").jsonObject["payload"]?.jsonObject
+        val opts = plo?.get("options")?.jsonArray?.map { it.jsonObject }
+        assertEquals("方案一", opts?.get(0)?.get("description")?.jsonPrimitive?.content)
+        assertEquals("", opts?.get(1)?.get("description")?.jsonPrimitive?.content)
+        assertEquals("false", plo?.get("confirm")?.jsonPrimitive?.content)
+        assertEquals("false", plo?.get("recommend")?.jsonPrimitive?.content)
+        assertEquals("true", plo?.get("allowFreeText")?.jsonPrimitive?.content)
 
         // 审批那行的 payload 是整段透传的，最容易被引号与换行弄坏
         val appr = lanPendingRow("a1", "approval", "s1",

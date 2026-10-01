@@ -1,13 +1,17 @@
 ﻿package com.haoai.pc
 
+import com.haoai.core.takeSafe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -31,10 +35,33 @@ typealias TextCap = com.haoai.core.TextCap
  */
 typealias ToolResult = com.haoai.core.ToolResult
 
+/** ask_user 的一个选项：label 卡上直接显示，desc 是给用户看的一句含义说明（与手机端同款）。 */
+data class AskOpt(val label: String, val desc: String = "")
+
+/**
+ * ask_user 的完整请求 —— 与手机端 `AskUserRequest` 同一组语义（B22 起两端一致）：
+ * [allowFree] 摆不摆自由输入、[confirm] 点选后还要不要再按一下（防误触）、
+ * [recommend] 第一个选项标不标「推荐」徽标。
+ */
+data class AskReq(
+    val question: String,
+    val options: List<AskOpt>,
+    val allowFree: Boolean = true,
+    val confirm: Boolean = true,
+    val recommend: Boolean = true
+)
+
 /** 审批与提问的出口。CLI 与 Web 各实现一份，工具层不关心前面是谁。 */
 interface Gate {
     fun approve(title: String, detail: String, kind: String): Boolean
     fun ask(question: String, options: List<String>): String
+
+    /**
+     * 带完整参数的提问。默认把标签喂给旧的 [ask] —— 只关心"问什么、选哪个"的
+     * 壳（CLI、测试替身）零改动跟上；要携带 desc/徽标/确认步的壳（网页卡、
+     * LAN 手机卡）覆盖它。与 approveRule 一族同一个套路：新能力默认退化。
+     */
+    fun ask(req: AskReq): String = ask(req.question, req.options.map { it.label })
 
     /**
      * 带"以后这类都允许"的审批。默认实现退化成普通 approve，
@@ -728,15 +755,51 @@ class TodoTool : Tool(
     }
 }
 
+/**
+ * ask_user：暂停等用户拍板。参数面、结果前缀与手机端逐条对齐（B22）——
+ * 同名工具在两端必须是同一个契约，模型拿到的 desc、用户看到的交互才不漂。
+ * 结果文本（「用户选择了：/用户回答：」前缀）是界面回显已答卡的数据源。
+ */
 class AskUserTool : Tool(
-    "ask_user", "向用户提一个需要拿主意的问题。options 给 2-4 个候选（可空）。返回用户回答原文。",
-    schema("question" to "string", "options" to "array", required = arrayOf("question"))
+    "ask_user",
+    "向用户提出带选项的问题并暂停等待回答（运行挂起，用户点选后继续）。" +
+        "遇到分叉、歧义或要替用户做假设时，先调用本工具问清再动手，不要自己猜：" +
+        "例——用户说「设个 9 点的闹钟」没说早上还是晚上 → 问；" +
+        "「让回答更有创意」可以调温度也可以改提示词 → 问；" +
+        "两个方案都可行、删除/覆盖等不可逆操作前 → 问。" +
+        "不要用于纯闲聊，也不要连续高频调用。把推荐项放在第一个；用户总可以看到自由输入出口。" +
+        "低风险、选错也无代价的问题加 confirm=false 让用户点选即回答，交互更省事；" +
+        "问卷/测试等无优劣之分的选择加 recommend=false 隐藏「推荐」徽标。",
+    askUserParams()
 ) {
     override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
-        val q = req(args, "question") ?: return fail("ask_user 缺少 question")
-        val opts = args["options"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content } ?: emptyList()
-        val a = ctx.gate.ask(q, opts)
-        return ToolResult(if (a.isBlank()) "(用户没回答，按最合理的默认继续，并在回复里说明你替他做了什么决定)" else a)
+        val question = req(args, "question") ?: return fail("ask_user 缺少 question")
+        val opts = args["options"]?.jsonArray?.mapNotNull { o ->
+            (o as? JsonObject)?.let {
+                val label = it["label"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@let null
+                if (label.isEmpty()) return@let null
+                AskOpt(label, it["description"]?.jsonPrimitive?.contentOrNull?.trim() ?: "")
+            }
+        }.orEmpty()
+        // 与手机端同一把校验：options 是对象数组、恰好 2~4 个；字符串载荷按 0 个算
+        // （老夹具/旧模型习惯会当场收到这句纠偏，手机端同款）。
+        if (opts.size < 2 || opts.size > 4) {
+            return fail("options 需要 2~4 个互斥选项（收到 ${opts.size} 个），请修正后重试")
+        }
+        // 三个开关默认 true：字段缺省 = 老实盘（手机端 optBool 的语义）
+        val allowFree = args["allow_free_text"]?.jsonPrimitive?.contentOrNull != "false"
+        val confirm = args["confirm"]?.jsonPrimitive?.contentOrNull != "false"
+        val recommend = args["recommend"]?.jsonPrimitive?.contentOrNull != "false"
+        val ans = ctx.gate.ask(AskReq(question, opts, allowFree, confirm, recommend))
+        val labels = opts.map { it.label }
+        // 前缀即契约：界面按「用户选择了：」回显已答卡，改动前缀要同步两端渲染
+        return ToolResult(
+            when {
+                ans.isBlank() -> "用户未给出有效回答；请按默认假设继续并在回复中说明"
+                ans in labels -> "用户选择了：$ans"
+                else -> "用户回答：${ans.takeSafe(2000)}"
+            }
+        )
     }
 }
 
@@ -839,6 +902,67 @@ internal fun schema(vararg props: Pair<String, String>, required: Array<String> 
             put("required", buildJsonArray { required.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } })
         }
     }
+
+/**
+ * ask_user 的参数面与手机端**逐字节同款**（options 是 {label,description} 对象数组、
+ * 三个开关语义一致），所以不走 `schema(...)` 的极简形状 —— 富度对齐才叫同一个工具。
+ * `ToolSchemaTest` 钉的形状规则为此放宽到「type/description/items」三键集
+ * （items 只许是对象数组）；其余 builtin 仍是纯 {type}。
+ */
+internal fun askUserParams(): JsonObject = buildJsonObject {
+    put("type", "object")
+    putJsonObject("properties") {
+        putJsonObject("question") {
+            put("type", "string")
+            put("description", "完整提问：一句话说清背景与要决定的事，以问号结尾")
+        }
+        putJsonObject("options") {
+            put("type", "array")
+            putJsonObject("items") {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("label") {
+                        put("type", "string")
+                        put("description", "选项短标签（≤12 字），卡片上直接显示")
+                    }
+                    putJsonObject("description") {
+                        put("type", "string")
+                        put("description", "该选项的含义/代价/后果，一行话；可省略")
+                    }
+                }
+                put("required", buildJsonArray { add(JsonPrimitive("label")) })
+            }
+            put("description", "2~4 个互斥选项；推荐项放第一个")
+        }
+        putJsonObject("allow_free_text") {
+            put("type", "boolean")
+            put("description", "是否允许用户自由输入其他回答，默认 true")
+        }
+        putJsonObject("confirm") {
+            put("type", "boolean")
+            put(
+                "description",
+                "是否需要用户点选后再按确认按钮（防误触）。默认 true。" +
+                    "低风险、选错也无代价的事实/偏好选择（如早上还是晚上）设 false：" +
+                    "用户点选项即回答、任务立刻继续；" +
+                    "删除/覆盖/花钱等不可逆或高代价的分叉必须保持 true"
+            )
+        }
+        putJsonObject("recommend") {
+            put("type", "boolean")
+            put(
+                "description",
+                "是否给第一个选项标「推荐」徽标，默认 true。" +
+                    "仅当你确实倾向该选项时才标；" +
+                    "各选项无优劣之分的问题（测试问卷、量表打分、抽签类）设 false，不要标推荐"
+            )
+        }
+    }
+    put("required", buildJsonArray {
+        add(JsonPrimitive("question"))
+        add(JsonPrimitive("options"))
+    })
+}
 
 /** 溢出落文件：与手机端 `EngineToolSpill` 同构。 */
 const val SPILL_KEEP_FILES = 40

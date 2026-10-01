@@ -58,6 +58,7 @@ class EngineFlowTest {
     private class RecordingGate(private val allow: Boolean) : Gate {
         val asked = mutableListOf<String>()
         var lastQuestion: String = ""
+        var lastReq: AskReq? = null
         override fun approve(title: String, detail: String, kind: String): Boolean {
             asked += title
             return allow
@@ -66,6 +67,11 @@ class EngineFlowTest {
         override fun ask(question: String, options: List<String>): String {
             lastQuestion = question
             return options.firstOrNull() ?: "就用第一个"
+        }
+
+        override fun ask(req: AskReq): String {
+            lastReq = req
+            return ask(req.question, req.options.map { it.label })
         }
     }
 
@@ -438,14 +444,29 @@ class EngineFlowTest {
         val (engine, _, g) = harness(
             ws,
             mutableListOf(
-                turn("问一下", toolCall("q1", "ask_user", """{"question":"要哪种主题色？","options":["绿色","蓝色"]}""")),
+                turn(
+                    "问一下",
+                    toolCall(
+                        "q1", "ask_user",
+                        """{"question":"要哪种主题色？","options":[{"label":"绿色","description":"护眼一点"},{"label":"蓝色","description":"冷静一点"}],"confirm":false,"recommend":false}"""
+                    )
+                ),
                 turn("收到")
             )
         )
         engine.submit("问我一句")
         assertEquals("要哪种主题色？", g.lastQuestion)
-        assertTrue("用户的选择没回填给模型", (engine.messages().last { it.role == "tool" }.content ?: "").contains("绿色"))
-        assertEquals("绿色", gate.lastQuestion.let { "绿色" })
+        // 结果前缀契约（B22 与手机端同款）：选中的是选项时必须长这样
+        assertTrue(
+            "用户的选择没按前缀回填给模型",
+            (engine.messages().last { it.role == "tool" }.content ?: "").contains("用户选择了：绿色")
+        )
+        // desc 与开关要原样到达闸口（界面按它们渲染徽标/确认步）
+        assertEquals("绿色", g.lastReq?.options?.get(0)?.label)
+        assertEquals("护眼一点", g.lastReq?.options?.get(0)?.desc)
+        assertEquals("冷静一点", g.lastReq?.options?.get(1)?.desc)
+        assertEquals("confirm=false 要传到卡上", false, g.lastReq?.confirm)
+        assertEquals("recommend=false 要传到卡上", false, g.lastReq?.recommend)
     }
 
     @Test

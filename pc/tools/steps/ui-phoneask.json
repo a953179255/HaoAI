@@ -10,7 +10,7 @@
     }
   },
   {
-    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const a=(s.pending||[]).find(p=>p.ev=='ask');if(a)return JSON.stringify({askParked:true,question:a.data.question||'',opts:(a.data.options||[]).join('|'),n:(s.pending||[]).length});if(Date.now()-t0>40000)return JSON.stringify({askParked:false,evs:(s.pending||[]).map(p=>p.ev).join('|')});await new Promise(z=>setTimeout(z,700))}})()",
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const a=(s.pending||[]).find(p=>p.ev=='ask');if(a)return JSON.stringify({askParked:true,question:a.data.question||'',opts:(a.data.options||[]).map(function(o){return o.label||o}).join('|'),n:(s.pending||[]).length});if(Date.now()-t0>40000)return JSON.stringify({askParked:false,evs:(s.pending||[]).map(p=>p.ev).join('|')});await new Promise(z=>setTimeout(z,700))}})()",
     "must": [
       "askParked",
       "question",
@@ -60,7 +60,7 @@
     "timeout": 25000
   },
   {
-    "eval": "(()=>{const cards=[...document.querySelectorAll('#appr .card')];const ask=cards.filter(c=>/❓/.test(c.innerText));const a=ask[0];const btns=a?[...a.querySelectorAll('[data-a]')]:[];const r=a?a.getBoundingClientRect():{left:0,right:0,width:0,height:0};return JSON.stringify({apprShown:!document.querySelector('#appr').hidden,noReadError:!/没能读到/.test(document.querySelector('#appr').innerText),kindAsk:ask.length==1,question:/要绿色还是蓝色/.test(a?a.innerText:''),optNames:btns.map(b=>b.dataset.a).join('|'),hasInput:!!(a&&a.querySelector('#answ')),badgeOne:(document.querySelector('#badge').textContent||'')=='1',noDecideBtns:!!(a&&a.querySelectorAll('[data-d]').length==0),inWide:r.width>200&&r.right<=innerWidth+1,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+1})})()",
+    "eval": "(()=>{const cards=[...document.querySelectorAll('#appr .card')];const ask=cards.filter(c=>/❓/.test(c.innerText));const a=ask[0];const btns=a?[...a.querySelectorAll('[data-a]')]:[];const r=a?a.getBoundingClientRect():{left:0,right:0,width:0,height:0};return JSON.stringify({apprShown:!document.querySelector('#appr').hidden,noReadError:!/没能读到/.test(document.querySelector('#appr').innerText),kindAsk:ask.length==1,question:/要绿色还是蓝色/.test(a?a.innerText:''),optNames:btns.map(b=>b.dataset.a).filter(function(v){return v!='__sub__'}).join('|'),hasInput:!!(a&&a.querySelector('#answ')),badgeOne:(document.querySelector('#badge').textContent||'')=='1',noDecideBtns:!!(a&&a.querySelectorAll('[data-d]').length==0),inWide:r.width>200&&r.right<=innerWidth+1,noOverflow:document.documentElement.scrollWidth<=document.documentElement.clientWidth+1})})()",
     "must": [
       "apprShown",
       "noReadError",
@@ -83,7 +83,23 @@
     "must": [
       "clicked"
     ],
-    "note": "点的是「绿色」这个**回答**。先别急着信它送到了：空回答在服务端会被换成一句「用户没回答」，回合照样往下跑，所以\"推进到审批\"根本不能当送达的凭据 —— 最后一步回桌面查 tool 结果原文"
+    "note": "先点「绿色」——B22 确认步（confirm 默认 true）下这只是选中，还没送出去"
+  },
+  {
+    "eval": "(()=>{const st=window.__askSt;const sel=document.querySelector('#appr .opt.sel');const sb=document.getElementById('askSubmit');return JSON.stringify({picked:!!(st&&st.picked=='绿色'),selShown:!!sel,submitShown:!!sb&&!sb.hidden})})()",
+    "must": [
+      "picked",
+      "selShown",
+      "submitShown"
+    ],
+    "note": "选中态要看得见：卡面高亮 + 「回答」键亮出来。先别急着信它送到了 —— 空回答在服务端会被换成一句「用户没回答」，回合照样往下跑，所以\"推进到审批\"根本不能当送达的凭据"
+  },
+  {
+    "eval": "(()=>{const sb=document.getElementById('askSubmit');if(!sb)return JSON.stringify({submitted:false,err:'没有回答键'});sb.click();return JSON.stringify({submitted:true})})()",
+    "must": [
+      "submitted"
+    ],
+    "note": "按「回答」才真的把答案送回 /lan/decide。送达凭据在两头：手机底下浮的那句「送回电脑」，与最后回桌面查的 tool 结果原文"
   },
   {
     "eval": "(async()=>{const t0=Date.now();for(;;){const n=document.querySelector('#note').textContent||'';if(/送回电脑/.test(n)&&!/放行/.test(n))return JSON.stringify({noteSaysAnswer:true,note:n});if(/放行/.test(n))return JSON.stringify({noteSaysAnswer:false,note:n});if(Date.now()-t0>9000)return JSON.stringify({noteSaysAnswer:false,note:n||'(一句提示都没浮出来)'});await new Promise(z=>setTimeout(z,400))}})()",
@@ -134,11 +150,11 @@
     "timeout": 25000
   },
   {
-    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const ms=s.messages||[];const hit=ms.find(m=>(m.content||'')=='绿色');if(hit&&ms.some(m=>/theme\\.txt/.test(m.content||'')))return JSON.stringify({answerLanded:true,role:hit.role,name:hit.name||'',turnDone:true,n:ms.length,ms:Date.now()-t0});if(Date.now()-t0>30000)return JSON.stringify({answerLanded:false,turnDone:false,n:ms.length,tail:JSON.stringify(ms.slice(-3)).slice(0,160)});await new Promise(z=>setTimeout(z,900))}})()",
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const ms=s.messages||[];const hit=ms.find(m=>/^用户选择了：绿色$/.test((m.content||'').trim()));if(hit&&ms.some(m=>/theme\\.txt/.test(m.content||'')))return JSON.stringify({answerLanded:true,role:hit.role,name:hit.name||'',turnDone:true,n:ms.length,ms:Date.now()-t0});if(Date.now()-t0>30000)return JSON.stringify({answerLanded:false,turnDone:false,n:ms.length,tail:JSON.stringify(ms.slice(-3)).slice(0,160)});await new Promise(z=>setTimeout(z,900))}})()",
     "must": [
       "answerLanded",
       "turnDone"
     ],
-    "note": "这一条才是「回答真的送到了引擎」的凭据：落库的消息里有一条内容**正好是**「绿色」的 tool 结果（AskUserTool 把 fut 拿到的原文当结果返回）。空字符串会被换成「(用户没回答…)」，那样这条就红 —— 中间任何一环（手机按钮 → /lan/decide 的 answer 字段 → fut.complete → 引擎）断了都会被抓出来。turnDone 顺带证明这一回合跑到了最后一句"
+    "note": "这一条才是「回答真的送到了引擎」的凭据：落库的消息里有一条内容**正好是**「用户选择了：绿色」的 tool 结果（B22 起结果带前缀，与手机端同一把尺子 —— 界面回显已答卡按前缀解析）。空字符串会被换成「用户未给出有效回答…」，前缀对不上这条就红 —— 中间任何一环（手机按钮 → /lan/decide 的 answer 字段 → fut.complete → 引擎）断了都会被抓出来。turnDone 顺带证明这一回合跑到了最后一句"
   }
 ]

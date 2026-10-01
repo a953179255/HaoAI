@@ -51,6 +51,17 @@
     "key": "2"
   },
   {
+    "sleep": 600
+  },
+  {
+    "eval": "(()=>{const c=document.querySelector('.view.on .card.ask:not(.done)');const sel=c&&c.querySelector('.btn.sel');const sub=c&&c.querySelector('.ansbtn');return JSON.stringify({selected:!!sel,subReady:!!sub&&!sub.disabled,untouched:!!c&&!c.classList.contains('done')})})()",
+    "must": ["selected", "subReady", "untouched"],
+    "note": "B22：空框按 2 第一下=选中（confirm 默认 true），卡不许直接答完、「回答」键要亮出来"
+  },
+  {
+    "key": "2"
+  },
+  {
     "sleep": 2500
   },
   {

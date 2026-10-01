@@ -1,5 +1,8 @@
 package com.haoai.pc
 
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -96,13 +99,27 @@ class ApprovalBroker(
         }
     }
 
-    /** 提问：同上，但超时/失败都回 `""`（模型看到"用户没回答"），不发通知 —— 与旧实现一致。 */
-    fun awaitAsk(sid: String, question: String, options: List<String>): Resolution {
+    /** 提问：同上，但超时/失败都回 `""`（模型看到"用户没回答"），不发通知 —— 与旧实现一致。
+     *  载荷带完整 AskReq（对象选项 + 三个开关）：桌面卡与 LAN 手机卡读同一份。 */
+    fun awaitAsk(sid: String, req: AskReq): Resolution {
         val id = "q${seq.incrementAndGet()}"
         val fut = CompletableFuture<String>()
         pending[id] = fut
-        val payload =
-            """{"id":"$id","question":${js(question)},"options":${options.joinToString(",", "[", "]") { js(it) }}}"""
+        val payload = buildJsonObject {
+            put("id", id)
+            put("question", req.question)
+            put("options", buildJsonArray {
+                req.options.forEach { o ->
+                    add(buildJsonObject {
+                        put("label", o.label)
+                        put("description", o.desc)
+                    })
+                }
+            })
+            put("allowFreeText", req.allowFree)
+            put("confirm", req.confirm)
+            put("recommend", req.recommend)
+        }.toString()
         waiters[id] = Waiter("ask", payload, sid)
         publish("ask", payload, sid)
         return try {

@@ -865,8 +865,13 @@ class WebServer(settings: PcSettings, port: Int,
                 (keep != null || ans == "allow_once" || ans == "allow_session" || ans == "allow_rule")
         }
 
+        /** 完整请求：对象选项 + 三个开关进载荷，桌面卡与 LAN 手机卡同读一份（B22）。 */
+        override fun ask(req: AskReq): String =
+            approvals.awaitAsk(sid, req).value
+
+        /** 旧签名的壳（CLI/测试走默认桥也来这里）：缺省全按 true 处理。 */
         override fun ask(question: String, options: List<String>): String =
-            approvals.awaitAsk(sid, question, options).value
+            ask(AskReq(question, options.map { AskOpt(it) }))
     }
 
     private fun decide(ex: HttpExchange) {
@@ -1348,20 +1353,30 @@ internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String)
             if (n > 0) light["hunkCount"] = JsonPrimitive(n)
             put("payload", JsonObject(light))
         }
-        // 提问归一成 {title, options:[..]}：两份手机客户端读同一组字段，不用各认一种载荷
+        // 提问归一成 {title, options:[{label,description}], 三开关}：两份手机客户端读同一组字段。
+        // 旧字符串载荷（老夹具/旧会话重放）按 label 收下，不至于把整张卡弄空。
         "ask" -> buildJsonObject {
             val a = runCatching { Json.parseToJsonElement(p).jsonObject }.getOrNull()
+            fun flag(k: String) = a?.get(k)?.jsonPrimitive?.contentOrNull != "false" // 缺省 = true
             put("id", id); put("kind", "ask"); put("sid", sid)
             put("payload", buildJsonObject {
                 put("title", a?.get("question")?.jsonPrimitive?.contentOrNull ?: "")
                 put("detail", "")
                 put("options", buildJsonArray {
-                    // 一个元素不是字符串也不能把整份列表带崩：这一句抛了就是 /lan/pending 500，
+                    // 一个元素畸形也不能把整份列表带崩：这一句抛了就是 /lan/pending 500，
                     // 手机上表现成"待批页什么都看不见"，和本批要修的那个症状一模一样。
                     a?.get("options")?.jsonArray?.forEach { o ->
-                        runCatching { o.jsonPrimitive.contentOrNull }.getOrNull()?.let { add(JsonPrimitive(it)) }
+                        val lab = runCatching { o.jsonPrimitive.contentOrNull }.getOrNull()
+                            ?: runCatching { o.jsonObject["label"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                        if (lab.isNullOrEmpty()) return@forEach
+                        val dsc = runCatching { o.jsonObject["description"]?.jsonPrimitive?.contentOrNull }
+                            .getOrNull() ?: ""
+                        add(buildJsonObject { put("label", lab); put("description", dsc) })
                     }
                 })
+                put("allowFreeText", flag("allowFreeText"))
+                put("confirm", flag("confirm"))
+                put("recommend", flag("recommend"))
             })
         }
         else -> return null
