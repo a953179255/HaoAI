@@ -24,17 +24,7 @@ class GitTool : Tool(
     "git",
     "在工作区仓库里跑 git。sub ∈ status|diff|log|show|blame|add|commit|branch|checkout|restore|stash|rev-parse。" +
         "args 传该子命令的参数串。只读子命令不问；改仓库的按权限规则走。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("sub", buildJsonObject { put("type", "string") })
-            put("args", buildJsonObject { put("type", "string") })
-            put("cwd", buildJsonObject { put("type", "string") })
-        })
-        put("required", kotlinx.serialization.json.buildJsonArray {
-            add(kotlinx.serialization.json.JsonPrimitive("sub"))
-        })
-    },
+    schema("sub" to "string", "args" to "string", "cwd" to "string", required = arrayOf("sub")),
     kind = "exec"
 ) {
 

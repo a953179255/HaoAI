@@ -238,12 +238,11 @@
 （agent 核心是 Capacitor 壳里的 Python）、`api.github.com` 的 openai/codex 与 earendil-works/pi。
 格式同 §2：**编号 · 干什么** ｜ 对标 ｜ 现状（查证）｜ 为什么 ｜ 验收判据 ｜ 涉及端
 
-**施工顺序**：~~S3 → S1~~ ✅ 同批已落（2026-09-30，`UiContractTest` 4 条，README「这一批」）
-→ ~~S6~~ ✅ 已落（13 面板对象 + shared.js + ui-check 四类新判据；像素 65 份全绿）
-→ ~~S5~~ ✅ 已落（EngineFactory + Server.kt 3091→1484 行按域拆 8 文件；522 全绿 + 8 份代表像素）
-→ ~~S7~~ ✅ **已落**（hooks 六事件、pre-tool 同步闸 exit=2 拦下进历史；
-顺手逮住第三个 Engine 直连点 newSessionId 收进工厂；530 全绿 + ui-hook/ui-tour 像素绿，
-README「这一批」）→ S8 缓（审批等待状态机化 + 工具 schema builder）。
+**施工顺序**：~~S3 → S1~~ ✅ → ~~S6~~ ✅ → ~~S5~~ ✅ → ~~S7~~ ✅ → ~~S8~~ ✅
+**—— §6 全部落地（2026-10-01）**：审批等待收编 `ApprovalBroker`（超时可注入 ⇒
+超时路径首次被测；死状态 pendingRule 删除；回调名保持 publish 保住两个字面量扫描量具）、
+工具 schema 统一 `schema(...)` + `ToolSchemaTest` 形状门；538 全绿 + 审批链像素 5 份绿，
+README「这一批」。余下未做的只有 S6 节里注明的"全量命名空间化留给 UI 美化批"。
 
 - **S1 · ✅ 已落：SSE 事件契约 `forward` 穷尽 + 事件名单两头对齐** ｜ OpenClaw `AgentEvent`
   一个 union 同时驱动流式/审批/UI（`agent-core/src/types.ts:548`）、codex `event_mapping.rs`
@@ -323,9 +322,16 @@ README「这一批」）→ S8 缓（审批等待状态机化 + 工具 schema bu
   当时说早了，已在 README S7 节更正）｜ 判据：HookGateTest 5 + EngineFlow 端到端 1 +
   HookTest 真进程 2；530 全绿、ui-hook/ui-tour 像素绿 ｜ PC
 
-- **S8 ·（缓）审批等待状态机化、工具 schema builder** ｜ OpenClaw 把审批的
+- **S8 · ✅ 已落：审批等待状态机化 + 工具 schema builder** ｜ OpenClaw 把审批的
   request/wait/超时/持久化归 gateway 单独拥有（`src/gateway/exec-approval-manager.ts`，
-  timeout 分类），工具只在 `before_tool_call` 问一次 ｜ 我们是 `fut.get(300s):1947` /
-  ask 900s:2004 阻塞在裸 `Thread:586` 上 —— 有超时、有排队、有停止语义、有测试，
-  目前是稳的 ｜ 收益不够急；等 S3（拆 Server）动到那片时一起重新评估 ｜ — ｜ PC
+  timeout 分类），工具只在 `before_tool_call` 问一次 ｜ 旧实现 `fut.get(300s):1947` /
+  ask 900s 阻塞在裸 `Thread` 上，超时路径**没有任何测试**（没人等五分钟）｜
+  **已落**：`ApprovalBroker`（状态线 PENDING→ANSWERED/TIMED_OUT/ABORTED、收摊一处、
+  超时构造参数化 ⇒ 测试 1 秒真跑超时；行为逐字节同旧；死状态 `pendingRule` 查证只写不读
+  删除；per-server 实例）；接线 webGate/decide/stopTask/stateJson/pendingJson/LanHost 全走它 ｜
+  **教训入档**：回调包成 `out(...)` 让 `publish("approval")` 字面量从两个源码扫描量具里
+  消失（UiContractTest 当场红）—— 回调保持叫 publish、事件名保持字面量 ｜
+  schema：查证收窄为"14 处已用帮助器、5 文件手搭但形状逐字节相同"→ 全部收编
+  （Pty 三个本地 helper 删除），`ToolSchemaTest` 全量钉形状 ｜
+  判据：ApprovalBrokerTest 7 + ToolSchemaTest 1；538 全绿；审批链像素 5 份绿 ｜ PC
 

@@ -312,18 +312,9 @@ object ShellLauncher {
     }
 }
 
-private val noParams: JsonObject = buildJsonObject {
-    put("type", "object")
-    put("properties", buildJsonObject { })
-}
-
-private fun strProps(vararg names: String): JsonObject = buildJsonObject {
-    names.forEach { put(it, buildJsonObject { put("type", "string") }) }
-}
-
-private fun required(vararg names: String) = buildJsonArray {
-    names.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
-}
+// schema 统一走 Tools.kt 的 schema(...) 帮助器（S8）：本文件原来手搭了 4 份 +
+// noParams/strProps/required 三个本地 helper —— 形状与帮助器逐字节相同，
+// 纯重复；删掉之后全仓工具参数只有一种写法，由 ToolSchemaTest 钉住。
 
 class ShellOpenTool : Tool(
     "shell_open",
@@ -332,16 +323,10 @@ class ShellOpenTool : Tool(
         "tty=true 走 Windows ConPTY 真伪终端（isatty 为真：有颜色/进度条/行编辑，Ctrl+C 真的是中断——" +
         "shell_send 传 text=\"\\u0003\" 且 enter=false）；建不了会明确报错，不会静默降级。" +
         "只要读输出、不需要 TTY 时保持默认（管道模式更省资源）。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("label", buildJsonObject { put("type", "string") })
-            put("shell", buildJsonObject { put("type", "string") })
-            put("command", buildJsonObject { put("type", "string") })
-            put("cwd", buildJsonObject { put("type", "string") })
-            put("tty", buildJsonObject { put("type", "boolean") })
-        })
-    },
+    schema(
+        "label" to "string", "shell" to "string", "command" to "string",
+        "cwd" to "string", "tty" to "boolean"
+    ),
     kind = "exec"
 ) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
@@ -371,15 +356,7 @@ class ShellSendTool : Tool(
     "shell_send",
     "往常驻进程的 stdin 写一行输入（enter=false 可发不带换行的原始字符；tty 会话里传 text=\"\\u0003\" 且 " +
         "enter=false = 发 Ctrl+C 中断当前命令，管道会话发了也没人当信号）。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("id", buildJsonObject { put("type", "string") })
-            put("text", buildJsonObject { put("type", "string") })
-            put("enter", buildJsonObject { put("type", "boolean") })
-        })
-        put("required", required("id"))
-    },
+    schema("id" to "string", "text" to "string", "enter" to "boolean", required = arrayOf("id")),
     kind = "exec"
 ) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
@@ -397,15 +374,7 @@ class ShellSendTool : Tool(
 
 class ShellReadTool : Tool(
     "shell_read", "取常驻进程新产生的输出。wait_ms 是「等多久算这一轮说完」，默认 1200。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("id", buildJsonObject { put("type", "string") })
-            put("wait_ms", buildJsonObject { put("type", "integer") })
-            put("max_chars", buildJsonObject { put("type", "integer") })
-        })
-        put("required", required("id"))
-    }
+    schema("id" to "string", "wait_ms" to "integer", "max_chars" to "integer", required = arrayOf("id"))
 ) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val id = req(args, "id") ?: return fail("shell_read 缺少 id")
@@ -420,11 +389,7 @@ class ShellReadTool : Tool(
 
 class ShellCloseTool : Tool(
     "shell_close", "关掉一个常驻进程。shell_list 可看现有的；空闲 20 分钟会自动回收。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", strProps("id"))
-        put("required", required("id"))
-    },
+    schema("id" to "string", required = arrayOf("id")),
     kind = "exec"
 ) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
@@ -433,7 +398,7 @@ class ShellCloseTool : Tool(
     }
 }
 
-class ShellListTool : Tool("shell_list", "列出当前常驻进程：id、在跑什么、多久没被碰、是否还活着。", noParams) {
+class ShellListTool : Tool("shell_list", "列出当前常驻进程：id、在跑什么、多久没被碰、是否还活着。", schema()) {
     override fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         ProcRegistry.reapIdle()
         val l = ProcRegistry.list()

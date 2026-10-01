@@ -46,21 +46,11 @@ class BrowserTool : Tool(
     "browser",
     "控制一台本机浏览器（Edge/Chrome，走 CDP）。sub ∈ status|open|navigate|read|eval|click|type|screenshot|shot|tabs|close。shot = navigate + 截图一步到位。" +
         "read 拿正文，eval 跑 JS，screenshot 存 PNG 到工作区。首次调用会自动拉起一台用独立配置的浏览器。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("sub", buildJsonObject { put("type", "string") })
-            put("url", buildJsonObject { put("type", "string") })
-            put("selector", buildJsonObject { put("type", "string") })
-            put("text", buildJsonObject { put("type", "string") })
-            put("script", buildJsonObject { put("type", "string") })
-            put("path", buildJsonObject { put("type", "string") })
-            put("max_chars", buildJsonObject { put("type", "integer") })
-        })
-        put("required", kotlinx.serialization.json.buildJsonArray {
-            add(kotlinx.serialization.json.JsonPrimitive("sub"))
-        })
-    },
+    schema(
+        "sub" to "string", "url" to "string", "selector" to "string", "text" to "string",
+        "script" to "string", "path" to "string", "max_chars" to "integer",
+        required = arrayOf("sub")
+    ),
     kind = "net",
     flag = HaoFlag.BROWSER_CONTROL
 ) {

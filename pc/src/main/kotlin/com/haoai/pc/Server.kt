@@ -58,14 +58,15 @@ class WebServer(settings: PcSettings, port: Int,
     /** 局域网端点（手机联动）。默认不存在 —— 只有 lan.json 里显式打开才有。 */
     @Volatile
     private var lan: LanServer? = null
-    private val seq = AtomicInteger()
-    private val pending = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<String>>()
-    private val pendingRule = ConcurrentHashMap<String, Pair<String, String>>()
 
-    /** 待决请求：事件名、原始负载、属于哪条会话。见 [stateJson] 里的 pending 字段。 */
-    internal data class Waiter(val ev: String, val payload: String, val sid: String)
+    /**
+     * 审批/提问的等待状态机（S8）。原来散在这里的四个字段（seq / pending /
+     * pendingRule / pendingPayload）与两份手写的 try/finally 全部收进
+     * [ApprovalBroker] —— 超时因此变得可注入可测，死状态 `pendingRule` 顺手删掉。
+     * 每台服务一个实例（测试同 JVM 起好几台，状态不许全局）。
+     */
+    private val approvals = ApprovalBroker({ ev, payload, sid -> publish(ev, payload, sid) })
 
-    private val pendingPayload = ConcurrentHashMap<String, Waiter>()
     private val subscribers: MutableList<OutputStream> = Collections.synchronizedList(mutableListOf())
 
     /**
@@ -399,7 +400,7 @@ class WebServer(settings: PcSettings, port: Int,
          * 内联卡，一条会话摆一张，"只回一条"就变成了**另一条没人管** —— 所以全交。
          */
         sb.append("\"pending\":[")
-        pendingPayload.values.filter { it.sid == id }.forEachIndexed { i, w ->
+        approvals.pendingFor(id).forEachIndexed { i, w ->
             if (i > 0) sb.append(',')
             sb.append("{\"ev\":").append(quote(w.ev)).append(",\"data\":").append(w.payload).append('}')
         }
@@ -699,23 +700,18 @@ class WebServer(settings: PcSettings, port: Int,
     private fun stopTask(ex: HttpExchange) {
         val sid = pick(Body(ex).str("sid"))
         val managed = sessions[sid]
-        val waiters = pendingPayload.entries.toList().filter { it.value.sid == sid }
-        var approvals = 0
-        waiters.forEach { (id, w) ->
-            // 审批的 id 以 a 开头、提问以 q 开头：两者"被中止"的语义不一样，
-            // 审批给 deny（fail-closed），提问给空串（模型会看到"用户没回答"）。
-            if (w.ev == "ask") pending[id]?.complete("")
-            else { pending[id]?.complete("deny"); approvals++ }
-        }
+        // 判掉这条会话挂着的等待：审批给 deny（fail-closed），提问给空串（"用户没回答"）。
+        // 语义与收摊都在 ApprovalBroker.abort 里，这里只拿账来写那句通知。
+        val aborted = approvals.abort(sid)
         managed?.engine?.requestStop()
         publish(
             "notice", quote(
-                if (managed?.running == true || waiters.isNotEmpty())
-                    "已请求停止${if (approvals > 0) "（顺手拒掉 $approvals 个待确认）" else ""}，正在收尾…"
+                if (managed?.running == true || aborted.total > 0)
+                    "已请求停止${if (aborted.approvals > 0) "（顺手拒掉 ${aborted.approvals} 个待确认）" else ""}，正在收尾…"
                 else "这条会话现在没有正在跑的任务。"
             ), sid
         )
-        send(ex, 200, """{"ok":true,"pending":${waiters.size}}""", "application/json; charset=utf-8")
+        send(ex, 200, """{"ok":true,"pending":${aborted.total}}""", "application/json; charset=utf-8")
     }
 
     private fun forward(sid: String, ev: Ev) {
@@ -826,27 +822,13 @@ class WebServer(settings: PcSettings, port: Int,
             title: String, detail: String, kind: String, tool: String, pattern: String,
             risk: RiskOf.Verdict?, plan: HunkPlan?
         ): Boolean {
-            val id = "a${seq.incrementAndGet()}"
-            val fut = java.util.concurrent.CompletableFuture<String>()
-            pending[id] = fut
-            if (tool.isNotBlank()) pendingRule[id] = tool to pattern
-            val payload = approvalPayload(id, title, detail, kind, tool, pattern, risk, plan)
-            pendingPayload[id] = Waiter("approval", payload, sid)
-            publish("approval", payload, sid)
-            var timedOut = false
-            val ans = try {
-                fut.get(300, TimeUnit.SECONDS)
-            } catch (e: TimeoutException) {
-                timedOut = true
-                publish("notice", quote("300 秒无人应答，按拒绝处理"), sid)
-                "deny"
-            } catch (e: Exception) {
-                "deny"
-            } finally {
-                pending.remove(id)
-                pendingRule.remove(id)
-                pendingPayload.remove(id)
+            // 等待（注册/推卡/超时/收摊）在状态机里；这里只做"答案怎么解读"：
+            // 逐块勾选、落规则、把结论挂到紧接着的那条工具消息上。
+            val res = approvals.awaitApproval(sid) { id ->
+                approvalPayload(id, title, detail, kind, tool, pattern, risk, plan)
             }
+            val timedOut = res.timedOut
+            val ans = res.value
             /*
              * 逐块：把人勾的结果交回工具（写在 plan 上）。
              * 手机上点的永远是整条决定 ⇒ hunkKeep 给 null ⇒ 全部应用，与逐块功能出现之前一致。
@@ -883,23 +865,8 @@ class WebServer(settings: PcSettings, port: Int,
                 (keep != null || ans == "allow_once" || ans == "allow_session" || ans == "allow_rule")
         }
 
-        override fun ask(question: String, options: List<String>): String {
-            val id = "q${seq.incrementAndGet()}"
-            val fut = java.util.concurrent.CompletableFuture<String>()
-            pending[id] = fut
-            val askPayload =
-                """{"id":"$id","question":${quote(question)},"options":${options.joinToString(",", "[", "]") { quote(it) }}}"""
-            pendingPayload[id] = Waiter("ask", askPayload, sid)
-            publish("ask", askPayload, sid)
-            return try {
-                fut.get(900, TimeUnit.SECONDS)
-            } catch (e: Exception) {
-                ""
-            } finally {
-                pending.remove(id)
-                pendingPayload.remove(id)
-            }
-        }
+        override fun ask(question: String, options: List<String>): String =
+            approvals.awaitAsk(sid, question, options).value
     }
 
     private fun decide(ex: HttpExchange) {
@@ -907,11 +874,12 @@ class WebServer(settings: PcSettings, port: Int,
         val id = b.str("id")
         val decision = b.str("decision")
         val answer = b.str("answer")
-        val fut = pending[id]
-        if (fut != null) fut.complete(if (answer.isNotBlank()) answer else decision)
+        // isAsk/sid 都在 complete **之前**由状态机取好（complete 之后它可能已销号）
+        val done = approvals.complete(id, if (answer.isNotBlank()) answer else decision)
         if (decision == "allow_session") {
-            // "本任务都允许"只影响发起这条审批的那条会话，不该把别的会话也切成 auto
-            val sid = pendingPayload[id]?.sid ?: currentId() ?: ""
+            // "本任务都允许"只影响发起这条审批的那条会话，不该把别的会话也切成 auto。
+            // 找不到那条等待时退回"当前会话"——与旧行为一致（stale 答复不该静默无效）。
+            val sid = done.sid.ifBlank { currentId() ?: "" }
             sessions[sid]?.engine?.session?.mode = "auto"
             publish("mode", """{"mode":"auto"}""", sid)
         }
@@ -1284,15 +1252,15 @@ class WebServer(settings: PcSettings, port: Int,
      * 提问归一成 `{title, options:[..]}`，让两份手机客户端读同一组字段。
      */
     override fun pendingJson(): String {
-        val rows = pending.keys.mapNotNull { id ->
-            val w = pendingPayload[id] ?: return@mapNotNull null
-            lanPendingRow(id, w.ev, w.sid, w.payload)
-        }.joinToString(",")
+        // mapNotNull 保住旧行为：不认识的事件 lanPendingRow 回 null，那一行不发给手机。
+        val rows = approvals.rows()
+            .mapNotNull { (id, w) -> lanPendingRow(id, w.ev, w.sid, w.payload) }
+            .joinToString(",")
         return """{"ok":true,"items":[$rows]}"""
     }
 
     /** 跨端那一面要知道这条是审批还是提问（决定只能填那三个值，回答填的是文字本身）。 */
-    override fun pendingKind(id: String): String = pendingPayload[id]?.ev ?: ""
+    override fun pendingKind(id: String): String = approvals.kind(id)
 
     /**
      * 手机上发来的活。`sid` 空 = 另起一条新会话（不去挤用户正在聊的那条）。
@@ -1316,12 +1284,12 @@ class WebServer(settings: PcSettings, port: Int,
     override fun digestJson(): String = Digest.json(20)
 
     override fun decide(id: String, decision: String): String {
-        val fut = pending[id] ?: return "这条已经不在等待了（可能刚在电脑上被处理）"
-        // 先取事件名再 complete：complete 之后引擎可能立刻把这条销号（pendingPayload.remove），
-        // 那时 ev 就读不到了，回话就会退化成审批那句。
-        val isAsk = pendingPayload[id]?.ev == "ask"
-        if (!fut.complete(decision)) return "这条已经答过了"
-        return decideNote(isAsk, decision)
+        // isAsk 在 complete **之前**取好：complete 之后引擎可能立刻销号，
+        // 事后补读 ev 会退化成审批那句回执（旧代码在注释里记过这个坑，状态机收进一处）。
+        val done = approvals.complete(id, decision)
+        if (!done.existed) return "这条已经不在等待了（可能刚在电脑上被处理）"
+        if (done.already) return "这条已经答过了"
+        return decideNote(done.isAsk, decision)
     }
 
     private fun stopSubtask(ex: HttpExchange) {

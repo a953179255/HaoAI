@@ -34,18 +34,11 @@ class RunVerifyTool : Tool(
         "停止先 Ctrl+C=shell_send text=\"\\u0003\" enter=false 再兜底关闭）；" +
         "verify_url / verify_port / verify_file 至少给一个当验证判据（可多个，全过才算过；" +
         "url 状态码 <500 即算活，404 也是有服务在应答）；timeout_ms 是验证轮询上限（默认 30000）。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("type", buildJsonObject { put("type", "string") })
-            put("build", buildJsonObject { put("type", "string") })
-            put("start", buildJsonObject { put("type", "string") })
-            put("verify_url", buildJsonObject { put("type", "string") })
-            put("verify_port", buildJsonObject { put("type", "integer") })
-            put("verify_file", buildJsonObject { put("type", "string") })
-            put("timeout_ms", buildJsonObject { put("type", "integer") })
-        })
-    },
+    schema(
+        "type" to "string", "build" to "string", "start" to "string",
+        "verify_url" to "string", "verify_port" to "integer", "verify_file" to "string",
+        "timeout_ms" to "integer"
+    ),
     kind = "exec"
 ) {
 

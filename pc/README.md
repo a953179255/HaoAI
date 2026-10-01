@@ -3539,6 +3539,42 @@ PostToolUse / PostToolUseFailure / Stop`），落地 6 种：
 - **验收**：`gradle test` **530 条全绿**（522 + 8）；`ui-check`、`md-check` 全过；
   像素 `ui-hook`（13 判据）+ `ui-tour`（14 判据）全绿。
 
+## 这一批：审批等待收进状态机 + 工具 schema 一种写法（ROADMAP §6 S8 —— §6 收官）
+
+**审批等待状态机（`Approval.kt` / `ApprovalBroker`，对标 OpenClaw `exec-approval-manager`）**：
+
+- 状态只有一条线 `PENDING → ANSWERED / TIMED_OUT / ABORTED`，出路唯一、收摊在一处
+  `finally`（maps 漏删的表现是"这条审批永远在等人"）；futures、载荷、id 序列从
+  `WebServer` 的四个字段 + 两份手写 try/finally 里收编进来。
+- **超时可注入**：`approvalTimeoutSec(300) / askTimeoutSec(900)` 是构造参数 ——
+  旧实现 `fut.get(300, SECONDS)` 这条路径**从来没有测试**（没人等五分钟），
+  现在测试用 1 秒真跑："没人应答 → 按拒绝处理 + 通知带真实秒数 + 收摊干净"。
+- 行为逐字节同旧：超时审批=deny+通知、超时提问=`""` 且**不发通知**、异常=deny 不闹；
+  `isAsk/sid` 在 complete **之前**取好（旧代码在两个地方各写了一遍这个时序注释，收进一处）。
+- **死状态删除**：`pendingRule` 查证**只写不读**（`allow_rule` 用闭包里的 tool/pattern，
+  手机端答复也走 await 回来的 `ans`）—— 随收编一并删掉。
+- 每台服务一个实例（测试同 JVM 起好几台，状态绝不许全局）。
+  接线：`webGate`（等待进状态机，"答案怎么解读"——逐块/落规则/挂结论——留在原地）、
+  `decide` / `stopTask` / `stateJson` / `pendingJson` / `pendingKind` / 手机端 `decide` 全走它。
+- **量具教训（写进 Approval.kt 头）**：第一版把回调包成 `out(...)`，
+  `publish("approval")` 字面量立刻从 `UiContractTest` 和 `ui-check` 的源码扫描里消失
+  （它们靠扫字面量对账事件名单）——当场红。回调**保持叫 `publish`、事件名保持字面量**：
+  契约是靠"字面量可扫"活着的，别拆。
+
+**工具 schema 一种写法（`schema(...)` 帮助器统一）**：
+
+- 查证后形状收窄：不是"手搭 JsonObject 满天飞"——14 处已用帮助器，5 个文件
+  （desktop / browser / git / shell_* / run_verify）各自手搭但**产出逐字节相同**。
+  全部收进 `schema(...)`（Pty 的 `noParams/strProps/required` 三个本地 helper 删掉），
+  纯去重零行为变化。
+- `ToolSchemaTest` 全量钉形状：`type=object`、每个属性**恰好** `{type}`、
+  `required ⊆ properties`、type ∈ 已知集合 —— 谁哪天又开始手搭、或悄悄塞 description/enum
+  （要么都加要么别加），当场红。MCP 的外部 schema 不在此列（人家的地盘）。
+
+- **验收**：`gradle test` **538 条全绿**（530 + 7 + 1）；`ui-check`、`md-check` 全过；
+  审批链像素 5 份全绿（queue / review / risk / preview / tour）。
+  **§6 的 S1–S8 到此全部落地。**
+
 ## 与手机端同源的行为
 
 

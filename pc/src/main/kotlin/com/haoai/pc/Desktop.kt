@@ -32,26 +32,12 @@ class ScreenTool : Tool(
         "**type/key 之前先 focus**：键盘输入发给的是此刻的前台窗口，不一定是你刚点过的那个。" +
         "type 走 Unicode 直发，中文/特殊字符都不会被输入法改写；" +
         "key 走 SendKeys 语法（^=Ctrl、%=Alt、{Enter}），输入法处于中文模式时 ^a 这类组合键可能被输入法截走。",
-    buildJsonObject {
-        put("type", "object")
-        put("properties", buildJsonObject {
-            put("sub", buildJsonObject { put("type", "string") })
-            put("path", buildJsonObject { put("type", "string") })
-            put("title", buildJsonObject { put("type", "string") })
-            put("name", buildJsonObject { put("type", "string") })
-            put("x", buildJsonObject { put("type", "integer") })
-            put("y", buildJsonObject { put("type", "integer") })
-            put("button", buildJsonObject { put("type", "string") })
-            put("double", buildJsonObject { put("type", "boolean") })
-            put("text", buildJsonObject { put("type", "string") })
-            put("keys", buildJsonObject { put("type", "string") })
-            put("max_depth", buildJsonObject { put("type", "integer") })
-            put("max_nodes", buildJsonObject { put("type", "integer") })
-        })
-        put("required", kotlinx.serialization.json.buildJsonArray {
-            add(kotlinx.serialization.json.JsonPrimitive("sub"))
-        })
-    },
+    schema(
+        "sub" to "string", "path" to "string", "title" to "string", "name" to "string",
+        "x" to "integer", "y" to "integer", "button" to "string", "double" to "boolean",
+        "text" to "string", "keys" to "string", "max_depth" to "integer", "max_nodes" to "integer",
+        required = arrayOf("sub")
+    ),
     kind = "exec",
     flag = HaoFlag.DESKTOP_CONTROL
 ) {
