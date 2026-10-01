@@ -6,7 +6,17 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -82,9 +92,39 @@ data class PcMessage(val role: String = "", val name: String = "", val text: Str
 data class PcPayload(
     val title: String = "", val detail: String = "",
     val risk: String = "", val riskLabel: String = "", val riskWhy: String = "",
-    /** `kind=="ask"` 时才有：电脑上那句提问给的候选项（可能为空 = 自由回答）。 */
-    val options: List<String> = emptyList()
+    /**
+     * `kind=="ask"` 时才有：候选项的 label 列表（通知按钮挂的就是它）。
+     * B22 起电脑端发的是 `[{label,description}]` 对象，旧版发纯字符串 —— 两种都要收：
+     * 收不下不是"少几个选项"，是**整份 pending 解码失败**，审批通知也一起哑掉
+     * （`decode` 对形状不符回 Fail，轮询会把通知全撤了）。所以这里自定义解码。
+     */
+    @Serializable(PcOptListSerializer::class) val options: List<String> = emptyList(),
+    /** T2 批量问卷：电脑上那句"提问"其实是一份题库，逐题作答要到网页上做。 */
+    val batch: Boolean = false,
+    val questionCount: Int = 0
 )
+
+/** 选项数组解码：字符串取原文、对象取 label；元素畸形就丢那一个，不许拖垮整份载荷。 */
+object PcOptListSerializer : KSerializer<List<String>> {
+    override val descriptor: SerialDescriptor = ListSerializer(String.serializer()).descriptor
+
+    override fun deserialize(decoder: Decoder): List<String> {
+        val json = decoder as? JsonDecoder
+            ?: return decoder.decodeSerializableValue(ListSerializer(String.serializer()))
+        val arr = json.decodeJsonElement() as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            when (el) {
+                is JsonPrimitive -> el.contentOrNull
+                is JsonObject -> el["label"]?.let { (it as? JsonPrimitive)?.contentOrNull }
+                else -> null
+            }
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: List<String>) {
+        encoder.encodeSerializableValue(ListSerializer(String.serializer()), value)
+    }
+}
 
 @Serializable
 data class PcApproval(val id: String = "", val kind: String = "", val sid: String = "", val payload: PcPayload = PcPayload())

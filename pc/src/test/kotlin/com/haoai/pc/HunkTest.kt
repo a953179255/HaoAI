@@ -413,5 +413,9 @@ class HunkTest {
             decideNote(false, "deny").contains("放行"))
         assertTrue(decideNote(false, "deny").contains("不会执行"))
         assertEquals("已把回答送回电脑：绿色", decideNote(true, "绿色"))
+        // 批量问卷的答案是一串 JSON：糊到手机上是内部格式外泄，人要的是"答完了 N 题"
+        val batch = decideNote(true, """["春","热","早起"]""")
+        assertTrue("问卷回执要说题数：" + batch, batch.contains("3 题"))
+        assertFalse("数组原文不许外泄：" + batch, batch.contains("["))
     }
 }

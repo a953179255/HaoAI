@@ -260,6 +260,24 @@ PLAN = {
     ],
     # 沙箱第一层：模型要往工作区**外面**写（`../` 解析出来就在外面，不用知道绝对路径）。
     # 自动档下这条该被当场拒并说清怎么显式允许；把开关打开之后同一条要真的写得出去。
+    # 批量问卷（T2）：3 题一次提交、界面本地循环答完 —— tool_rounds 计数意味着
+    # 第 1 轮发出 ask_user_batch，拿到整批答案后的第 2 轮收尾（1 次往返，不多不少）。
+    "ask_batch": [
+        ("来一套三题的小测验", [{"id": "call_bq", "name": "ask_user_batch",
+                       "arguments": json.dumps({"title": "三题小测",
+                                                "questions": [
+                                                    {"question": "第一题：喜欢什么季节？",
+                                                     "options": [{"label": "春", "description": "花开的季节"},
+                                                                 {"label": "夏", "description": "蝉鸣的季节"}]},
+                                                    {"question": "第二题：喝热的还是冰的？",
+                                                     "options": [{"label": "热", "description": "暖胃"},
+                                                                 {"label": "冰", "description": "解渴"}]},
+                                                    {"question": "第三题：早起还是晚睡？",
+                                                     "options": [{"label": "早起", "description": "晨型人"},
+                                                                 {"label": "晚睡", "description": "夜型人"}]}
+                                                ]})}]),
+        ("三题都收到答案了，测验完成。", None),
+    ],
     "outside": [
         ("写到外面去", [{"id": "call_out", "name": "write",
                         "arguments": json.dumps({"path": "../haoai-outside.txt",

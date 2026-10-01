@@ -1,7 +1,11 @@
 package com.haoai.pc
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -120,6 +124,45 @@ class ApprovalBroker(
             put("confirm", req.confirm)
             put("recommend", req.recommend)
         }.toString()
+        return awaitFut(id, fut, payload, sid)
+    }
+
+    /**
+     * 批量问卷（T2）：一条 Waiter 挂整份题库，界面本地循环出题（不回模型），
+     * 提交时 [complete] 收到的是**答案数组的 JSON**（`["选A","自由输入",…]`，
+     * 由 [parseBatchAnswers] 解回）。超时/中止回 `""` → 解析成空表 → 工具按"未作答"兜底。
+     * `question` 字段刻意放题组标题：/api/state 的 pending 投影与像素剧本只认这一个键。
+     */
+    fun awaitAskBatch(sid: String, title: String, questions: List<AskReq>, allowFree: Boolean): Resolution {
+        val id = "q${seq.incrementAndGet()}"
+        val fut = CompletableFuture<String>()
+        pending[id] = fut
+        val payload = buildJsonObject {
+            put("id", id)
+            put("batch", true)
+            put("question", title)
+            put("allowFreeText", allowFree)
+            put("questions", buildJsonArray {
+                questions.forEach { q ->
+                    add(buildJsonObject {
+                        put("question", q.question)
+                        put("options", buildJsonArray {
+                            q.options.forEach { o ->
+                                add(buildJsonObject {
+                                    put("label", o.label)
+                                    put("description", o.desc)
+                                })
+                            }
+                        })
+                    })
+                }
+            })
+        }.toString()
+        return awaitFut(id, fut, payload, sid)
+    }
+
+    /** 两条 await 的公共收尾（try/finally 一字不差地共用，别再抄第三遍）。 */
+    private fun awaitFut(id: String, fut: CompletableFuture<String>, payload: String, sid: String): Resolution {
         waiters[id] = Waiter("ask", payload, sid)
         publish("ask", payload, sid)
         return try {
@@ -132,6 +175,18 @@ class ApprovalBroker(
             pending.remove(id)
             waiters.remove(id)
         }
+    }
+
+    companion object {
+        /**
+         * 答案数组 JSON → 按题序的答案表。任何一步不合法都回**空表**（= 全部"未作答"）：
+         * 中止/超时留下的 `""` 与畸形载荷走同一条兜底，调用方不需要分辨失败种类。
+         */
+        fun parseBatchAnswers(raw: String): List<String> =
+            runCatching {
+                val arr = Json.parseToJsonElement(raw).jsonArray
+                arr.map { it.jsonPrimitive.contentOrNull ?: "" }
+            }.getOrElse { emptyList() }
     }
 
     /**

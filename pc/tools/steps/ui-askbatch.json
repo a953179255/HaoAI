@@ -1,0 +1,46 @@
+[
+  {"goto": "#box"},
+  {"click": "#modes button[data-m=\"ask\"]"},
+  {"sleep": 300},
+  {"type": {"sel": "#box", "text": "验收：来一套三题的小测验"}},
+  {"goto": ".card.ask", "timeout": 25000},
+  {
+    "eval": "(()=>{const a=document.querySelector('.card.ask');const b=a&&a.querySelector('.batch');const head=a?(a.querySelector('.qhead')||{}).innerText||'':'';const qtext=a?(a.querySelector('.qtext')||{}).innerText||'':'';const keys=a?[...a.querySelectorAll('.qopts [data-key]')].map(x=>x.dataset.key).join('|'):'';return JSON.stringify({hasBatch:!!b,firstQ:/1 \\/ 3/.test(head),qIsSeason:/季节/.test(qtext),twoOptKeys:keys=='1|2',noDecBtns:a?a.querySelectorAll('[data-dec]').length==0:true})})()",
+    "must": ["hasBatch", "firstQ", "qIsSeason", "twoOptKeys", "noDecBtns"],
+    "note": "T2 批量问卷卡：本地循环容器在、进度是 1/3、题面是第一题、选项键号 1/2 跟着当前题、问卡上不许出现审批的决定按钮"
+  },
+  {"shot": "bq01-question-one"},
+  {"click": ".card.ask .qopts .opt"},
+  {"sleep": 400},
+  {
+    "eval": "(()=>{const a=document.querySelector('.card.ask:not(.done)');const head=a?(a.querySelector('.qhead')||{}).innerText||'':'';const qtext=a?(a.querySelector('.qtext')||{}).innerText||'':'';return JSON.stringify({secondQ:/2 \\/ 3/.test(head),qIsDrink:/冰的还是热的|热的还是冰的/.test(qtext),notDone:!a.classList.contains('done')})})()",
+    "must": ["secondQ", "qIsDrink", "notDone"],
+    "note": "点选自动下一题：第 1 题答完立刻出第 2 题，卡不许就此 done（答案还没攒齐，一个字都还没送回模型）"
+  },
+  {"key": "2"},
+  {"sleep": 400},
+  {
+    "eval": "(()=>{const a=document.querySelector('.card.ask:not(.done)');const head=a?(a.querySelector('.qhead')||{}).innerText||'':'';const qtext=a?(a.querySelector('.qtext')||{}).innerText||'':'';return JSON.stringify({thirdQ:/3 \\/ 3/.test(head),qIsMorning:/早起/.test(qtext)})})()",
+    "must": ["thirdQ", "qIsMorning"],
+    "note": "键盘路径也要跟题走：空框按 2 = 当前题（第 2 题）的第二个选项，然后推进到第 3 题"
+  },
+  {"shot": "bq02-question-three"},
+  {"key": "1"},
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const a=document.querySelector('.card.ask');if(a&&a.classList.contains('done'))return JSON.stringify({answered:true,doneLine:/已答 3 题/.test((a.querySelector('.ans-line')||{}).innerText||''),via:'dom'});const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const hit=((s.messages||[]).find(m=>m.role=='tool'&&m.name=='ask_user_batch'));if(hit&&(hit.content||'').includes('用户已按顺序回答 3 题'))return JSON.stringify({answered:true,doneLine:true,via:'state'});if(Date.now()-t0>4000)return JSON.stringify({answered:false,doneLine:false,via:'timeout'});await new Promise(z=>setTimeout(z,80))}})()",
+    "must": ["answered", "doneLine"],
+    "note": "提交那一刻的双保险：抢到 done 卡（via=dom，回执线「已答 3 题」）或以落库为准（via=state）。批量卡在历史重画后不重绘（既有行为：问卡不进历史 DOM），单题场景靠审批还挂着抢得到 2 秒窗口，批量回合收得快、窗口更窄 —— 所以两条路都算数，但一条都没有就是真没提交"
+  },
+  {"shot": "bq03-submitted"},
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const ms=s.messages||[];const hit=ms.find(m=>m.role=='tool'&&m.name=='ask_user_batch');if(hit){const c=hit.content||'';const ok=c.includes('用户已按顺序回答 3 题：')&&c.includes('1. 春')&&c.includes('2. 冰')&&c.includes('3. 早起');if(ok)return JSON.stringify({landed:true,content:c.slice(0,150)});if(Date.now()-t0>15000)return JSON.stringify({landed:false,content:c.slice(0,150)})}if(Date.now()-t0>30000)return JSON.stringify({landed:false,noTool:true});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": ["landed"],
+    "note": "与手机端同一把尺子的结果契约：落库的 tool 结果必须是「用户已按顺序回答 3 题：」+ 逐题行，且三题答案按序是 春/冰/早起（第 1 题鼠标点、第 2 题键盘 2、第 3 题键盘 1 —— 两条输入路径各验一半）"
+  },
+  {
+    "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const last=(s.messages||[]).slice(-1)[0]||{};if(/测验完成/.test(last.content||''))return JSON.stringify({turnDone:true});if(Date.now()-t0>20000)return JSON.stringify({turnDone:false,tail:(last.content||'').slice(0,60)});await new Promise(z=>setTimeout(z,700))}})()",
+    "must": ["turnDone"],
+    "note": "整批答案回流后模型收到的是**一轮**结果（N 题 1 次往返），随即收尾 —— 没有多出第二轮提问"
+  },
+  {"shot": "bq04-turn-done"}
+]

@@ -132,6 +132,50 @@ class PcLinkTest {
         }
     }
 
+    /**
+     * B22 起电脑端 ask 载荷的 options 是 `{label,description}` 对象数组。
+     * 这条钉的是**整份 pending 的死活**：解不下不是"少几个选项"，是 decode 回 Fail，
+     * 轮询把通知全撤掉 —— 审批通知跟着一起哑，比缺选项严重得多。
+     * 旧字符串载荷也同一条测试里保住（老电脑/回滚场景）。
+     */
+    @Test
+    fun `ask options accept both object and legacy string shapes`() {
+        FakePc(
+            pendingBody = """{"ok":true,"items":[{"id":"q1","kind":"ask","sid":"pc1","payload":{"title":""" +
+                """"要绿色还是蓝色？","options":[{"label":"绿色","description":"护眼"},{"label":"蓝色"}],""" +
+                """"confirm":false,"recommend":true,"allowFreeText":true,"batch":false}}]}"""
+        ).use { pc ->
+            val out = runBlocking { PcLink(pc.base, "tk-77").pending() }
+            assertTrue("对象选项要能解：${(out as? PcOut.Fail)?.message}", out is PcOut.Ok<List<PcApproval>>)
+            assertEquals(listOf("绿色", "蓝色"), (out as PcOut.Ok).value.single().payload.options)
+        }
+        FakePc(
+            pendingBody = """{"ok":true,"items":[{"id":"q2","kind":"ask","sid":"pc1","payload":{"title":""" +
+                """"老版问法","options":["红","绿"]}}]}"""
+        ).use { pc ->
+            val out = runBlocking { PcLink(pc.base, "tk-77").pending() }
+            assertTrue("旧字符串选项要能解：${(out as? PcOut.Fail)?.message}", out is PcOut.Ok<List<PcApproval>>)
+            assertEquals(listOf("红", "绿"), (out as PcOut.Ok).value.single().payload.options)
+        }
+    }
+
+    /** T2 批量问卷行：batch/questionCount 要读得出来（通知按它改口成"N 题问卷"）。 */
+    @Test
+    fun `batch ask rows expose count and leave options empty`() {
+        FakePc(
+            pendingBody = """{"ok":true,"items":[{"id":"q9","kind":"ask","sid":"pc1","payload":{"title":""" +
+                """"三题小测","options":[],"batch":true,"questionCount":3,"allowFreeText":false}}]}"""
+        ).use { pc ->
+            val out = runBlocking { PcLink(pc.base, "tk-77").pending() }
+            assertTrue("批量行要能解：${(out as? PcOut.Fail)?.message}", out is PcOut.Ok<List<PcApproval>>)
+            val p = (out as PcOut.Ok).value.single().payload
+            assertTrue("batch 要读得出来", p.batch)
+            assertEquals(3, p.questionCount)
+            assertTrue("批量通知上不摆选项按钮（空表）", p.options.isEmpty())
+            assertEquals(false, p.title.isEmpty())
+        }
+    }
+
     @Test
     fun `decide posts the id and the decision and returns the PC's sentence`() {
         FakePc(decideEcho = "已记在本会话的规则里").use { pc ->

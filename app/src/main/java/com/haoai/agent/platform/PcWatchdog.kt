@@ -54,7 +54,14 @@ object PcWatchdog {
         val lastAt: Long = 0L,
         /** 上一次问的结果说明：连不上、没配对、还是"没有要批的"。界面直接显示这一句。 */
         val lastNote: String = "",
-        val polling: Boolean = false
+        val polling: Boolean = false,
+        /**
+         * 最近一次轮询落地的时刻（毫秒）。10-01 真机：进程活着、通知挂着，
+         * 轮询协程却在长寿命进程里静默死了 40 分钟 —— 从外面看"进程没死"和
+         * "轮询没死"完全分不开。这个时间戳就是把两者分开的那把尺：
+         * 界面按它显示"上次轮询 X 秒前"，超 [POLL_MS]×3 没动就当死轮处理（见 [ensureRunning]）。
+         */
+        val lastPollAt: Long = 0L
     )
 
     private var app: Context? = null
@@ -135,12 +142,49 @@ object PcWatchdog {
         if (job?.isActive == true) return
         if (app == null) return
         job = scope.launch {
-            while (isActive) {
-                if (_state.value.paired) pollOnce() else delay(POLL_MS * 3)
-                delay(POLL_MS)
+            try {
+                while (isActive) {
+                    // 循环体整体兜底：10-01 真机那次"轮询静默 40 分钟"的根因就是
+                    // 循环体里任何一次抛出都会把整个 while 带走，而外面什么都看不见。
+                    // 一轮出错只许记账（界面显示一句），绝不能杀通道（硬规矩 1 同款）。
+                    try {
+                        if (_state.value.paired) pollOnce() else delay(POLL_MS * 3)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        android.util.Log.w("HaoPcLink", "轮询一轮失败，继续下一轮：${t.message}")
+                        _state.value = _state.value.copy(lastNote = "这轮没问成（下一轮会继续）：${t.message}")
+                    }
+                    _state.value = _state.value.copy(lastPollAt = System.currentTimeMillis())
+                    delay(POLL_MS)
+                }
+            } finally {
+                _state.value = _state.value.copy(polling = false)
             }
         }
         _state.value = _state.value.copy(polling = true)
+    }
+
+    /**
+     * 自检：循环死了或卡死了就地重启。由界面打开时与任何"看见状态"的地方调。
+     *
+     * 判据只有两条：① job 不在跑（异常把 while 带走过 / 从没起来）；
+     * ② job 在跑但 [State.lastPollAt] 超过 3 个节律没动（卡在网络调用里出不来 ——
+     * 正常一轮 20 秒 + 请求超时十几秒，60 秒不动必有毛病）。第二条靠的是
+     * "设了尺就要有人读尺"：光有时间戳没人看，那次 40 分钟静默照样能重演。
+     */
+    fun ensureRunning() {
+        if (app == null) return
+        val st = _state.value
+        val dead = job?.isActive != true
+        val stale = st.lastPollAt > 0L && System.currentTimeMillis() - st.lastPollAt > POLL_MS * 3
+        if (!dead && !stale) return
+        android.util.Log.w(
+            "HaoPcLink",
+            if (dead) "轮询不在跑，重启" else "轮询 ${System.currentTimeMillis() - st.lastPollAt}ms 没动，重启"
+        )
+        stop()
+        start()
     }
 
     fun stop() {
@@ -226,18 +270,26 @@ object PcWatchdog {
         val a = app ?: return
         val first = items.firstOrNull() ?: return
         val ask = first.kind == "ask"
+        val batch = ask && first.payload.batch
         val body = buildString {
             append(first.payload.title.ifBlank { if (ask) "（没问出口）" else "（没标题）" })
             if (first.payload.detail.isNotBlank()) append('\n').append(first.payload.detail)
-            if (ask && first.payload.options.isNotEmpty())
+            // 批量问卷不摆题面选项（通知按钮是给"一句话提问"的；问卷要逐题在网页上答）
+            if (batch) append('\n').append("${first.payload.questionCount} 题问卷 · 选完自动下一题，到网页上逐题作答")
+            else if (ask && first.payload.options.isNotEmpty())
                 append('\n').append("可选：").append(first.payload.options.take(4).joinToString(" / "))
             if (first.payload.riskWhy.isNotBlank()) append('\n').append("为什么算高危：${first.payload.riskWhy}")
         }
         val b = NotificationCompat.Builder(a, CHANNEL_PC)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(
-                if (ask) (if (total > 1) "电脑上有话要问你（还有 ${total - 1} 条要批）" else "电脑上有话要问你")
-                else if (total > 1) "电脑上有 $total 条在等你批" else "电脑上有 1 条在等你批"
+                when {
+                    batch -> if (total > 1) "电脑上有 ${first.payload.questionCount} 题问卷要答（还有 ${total - 1} 条）"
+                    else "电脑上有 ${first.payload.questionCount} 题问卷要答"
+                    ask -> if (total > 1) "电脑上有话要问你（还有 ${total - 1} 条要批）" else "电脑上有话要问你"
+                    total > 1 -> "电脑上有 $total 条在等你批"
+                    else -> "电脑上有 1 条在等你批"
+                }
             )
             .setContentText(body.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

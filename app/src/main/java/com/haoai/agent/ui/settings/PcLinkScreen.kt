@@ -75,6 +75,10 @@ fun PcLinkScreen(
     // 页内那颗箭头走 onBack（screen 19→1 回设置），返回键得做同一件事。
     androidx.activity.compose.BackHandler { onBack() }
 
+    // 进屏自检（5.1 #10）：轮询协程死了/卡了当场重启。10-01 真机那次静默 40 分钟，
+    // 外面看"进程活着"什么异常都没有 —— 光有 lastPollAt 这把尺还不够，得有人读它。
+    androidx.compose.runtime.LaunchedEffect(Unit) { PcWatchdog.ensureRunning() }
+
     // 与定时任务/技能库/MCP 那三屏同一套「全局壁纸」接线：那三屏都是收了 wallpaper 参数
     // 并真的画出来，本屏原本只收不画——开了「壁纸应用于所有页面」之后别的页面都铺上壁纸，
     // 唯独这屏是一块实底色（2026-09-30 用户报：电脑联动页背景是白的）。
@@ -145,6 +149,16 @@ fun PcLinkScreen(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     HaoChip(if (st.paired) "已配对" else "没配对", if (st.paired) HaoTone.Accent else HaoTone.Neutral)
                                     HaoChip(if (st.polling) "轮询中" else "没在轮询", HaoTone.Neutral)
+                                    // 5.1 #10：上次轮询时间上台面 —— "进程活着"和"轮询活着"是两件事，
+                                    // 10-01 静默 40 分钟就是因为这两件事在界面上长得一模一样
+                                    if (st.lastPollAt > 0) {
+                                        val age = System.currentTimeMillis() - st.lastPollAt
+                                        val stale = age > PcWatchdog.POLL_MS * 3
+                                        HaoChip(
+                                            if (stale) "轮询停了 ${age / 60_000} 分钟" else "上次轮询 ${age / 1000} 秒前",
+                                            if (stale) HaoTone.Warn else HaoTone.Neutral
+                                        )
+                                    }
                                     if (st.waiting > 0) HaoChip("等 ${st.waiting} 条", HaoTone.Warn)
                                 }
                                 Text(

@@ -872,6 +872,10 @@ class WebServer(settings: PcSettings, port: Int,
         /** 旧签名的壳（CLI/测试走默认桥也来这里）：缺省全按 true 处理。 */
         override fun ask(question: String, options: List<String>): String =
             ask(AskReq(question, options.map { AskOpt(it) }))
+
+        /** 整批问卷：一条等待挂全部题，答案以数组 JSON 回流（见 [ApprovalBroker.parseBatchAnswers]）。 */
+        override fun askBatch(title: String, questions: List<AskReq>, allowFree: Boolean): List<String> =
+            ApprovalBroker.parseBatchAnswers(approvals.awaitAskBatch(sid, title, questions, allowFree).value)
     }
 
     private fun decide(ex: HttpExchange) {
@@ -1355,6 +1359,8 @@ internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String)
         }
         // 提问归一成 {title, options:[{label,description}], 三开关}：两份手机客户端读同一组字段。
         // 旧字符串载荷（老夹具/旧会话重放）按 label 收下，不至于把整张卡弄空。
+        // 批量问卷（batch:true）额外透传 questions + questionCount —— 手机通知据此改口
+        // （"N 题问卷"），答题走网页；options 保持空数组（通知上不摆题面选项按钮）。
         "ask" -> buildJsonObject {
             val a = runCatching { Json.parseToJsonElement(p).jsonObject }.getOrNull()
             fun flag(k: String) = a?.get(k)?.jsonPrimitive?.contentOrNull != "false" // 缺省 = true
@@ -1377,6 +1383,14 @@ internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String)
                 put("allowFreeText", flag("allowFreeText"))
                 put("confirm", flag("confirm"))
                 put("recommend", flag("recommend"))
+                val batch = runCatching { a?.get("batch")?.jsonPrimitive?.contentOrNull == "true" }.getOrDefault(false)
+                put("batch", batch)
+                if (batch) {
+                    put("questionCount", runCatching { a?.get("questions")?.jsonArray?.size ?: 0 }.getOrDefault(0))
+                    // 题库整份过到手机页（本地循环的数据源）。broker 拼的载荷已经过过一轮
+                    // JSON.parse，这里原样搬 —— 再手搓一遍就是第二次出错机会（S4 的教训）。
+                    a?.get("questions")?.let { put("questions", it) }
+                }
             })
         }
         else -> return null
@@ -1391,6 +1405,10 @@ internal fun lanPendingRow(id: String, ev: String, sid: String, payload: String)
  * 而这次只是回了一句选择题的答案。
  */
 internal fun decideNote(isAsk: Boolean, value: String): String = when {
+    // 批量问卷的答案是一串 JSON（`["选A","选B"]`）：把数组原文糊到手机上是内部格式外泄，
+    // 人要的是"答完了"这个事实（题数从数组长度来，坏数据按 0 题只说"答完"）。
+    isAsk && value.startsWith("[") ->
+        "已把回答送回电脑（问卷答完 ${ApprovalBroker.parseBatchAnswers(value).size} 题）"
     isAsk -> "已把回答送回电脑：$value"
     // 逐块是**在电脑上**勾的：手机上那句"已按你的决定放行"这时候是假话（人只点了整条）。
     value.startsWith(HUNK_PREFIX) -> "已在电脑上逐块挑过，部分放行"

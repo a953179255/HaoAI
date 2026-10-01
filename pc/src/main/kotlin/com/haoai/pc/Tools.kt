@@ -64,6 +64,14 @@ interface Gate {
     fun ask(req: AskReq): String = ask(req.question, req.options.map { it.label })
 
     /**
+     * 批量问卷（T2）：题库一次交出去，界面本地循环出题、答完一次性回传。
+     * 默认桥 = 逐题走 [ask]（confirm/recommend 关掉：问卷是点选即答、没有推荐可言）——
+     * CLI 于是天然拿到"一题一问"，测试替身一行不用改；网页壳覆盖它拿整批等待。
+     */
+    fun askBatch(title: String, questions: List<AskReq>, allowFree: Boolean): List<String> =
+        questions.map { ask(it.copy(allowFree = allowFree, confirm = false, recommend = false)) }
+
+    /**
      * 带"以后这类都允许"的审批。默认实现退化成普通 approve，
      * 这样测试与脚本化场景不用改；CLI 与网页各自覆盖它来落规则。
      */
@@ -964,6 +972,116 @@ internal fun askUserParams(): JsonObject = buildJsonObject {
     })
 }
 
+/**
+ * ask_user_batch：整批问卷/测试题一次提交，界面本地循环答完再回传（T2，与手机端同款）。
+ *
+ * 与 ask_user 的分工同手机端：单个决策分叉用 ask_user（一题一往返）；连续多题的
+ * 同型问法（性格测试/满意度/知识测验）用本工具 —— N 题只占 1 次模型往返。
+ * 结果文本（"用户已按顺序回答 N 题：" + 逐题 "i. 作答"）是历史回显的数据源，
+ * 与手机端逐字节同格式（`AskUserBatchToolTest` 两端各自钉同一把尺子）。
+ */
+class AskUserBatchTool : Tool(
+    "ask_user_batch",
+    "整批问卷/测试题一次提交并挂起等待：界面本地循环出题，用户选完自动跳下一题、" +
+        "全程不回模型，答完所有题一次性把全部答案返回给你（N 题只占 1 次往返）。" +
+        "连续多题的同型问法用本工具：性格测试、满意度调查、知识测验、偏好批量收集等 ≥5 题的题组。" +
+        "题组较长时分批提交（每次 30~50 题，答完一批再提交下一批）。" +
+        "单个决策分叉/一次性提问仍用 ask_user。" +
+        "题目与选项描述是写给用户看的：不要夹带内部记分、题号编排等元信息。",
+    askBatchParams()
+) {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val title = (req(args, "title") ?: "").takeSafe(40)
+        val allowFree = args["allow_free_text"]?.jsonPrimitive?.contentOrNull == "true"
+        val rawQuestions = args["questions"]?.jsonArray ?: emptyList()
+        if (rawQuestions.isEmpty() || rawQuestions.size > 100) {
+            return fail("questions 需要 1~100 道题（收到 ${rawQuestions.size} 道），请修正后重试")
+        }
+        val questions = rawQuestions.mapIndexed { qi, q ->
+            val obj = q as? JsonObject
+                ?: return fail("questions[$qi] 不是对象，无法解析")
+            val text = obj["question"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            if (text.isEmpty()) return fail("questions[$qi].question 不能为空")
+            val opts = obj["options"]?.jsonArray?.mapNotNull { o ->
+                (o as? JsonObject)?.let {
+                    val label = it["label"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@let null
+                    if (label.isEmpty()) return@let null
+                    AskOpt(label, it["description"]?.jsonPrimitive?.contentOrNull?.trim() ?: "")
+                }
+            }.orEmpty()
+            if (opts.size < 2 || opts.size > 6) {
+                return fail(
+                    "questions[$qi]（${text.takeSafe(16)}…）需要 2~6 个互斥选项，收到 ${opts.size} 个"
+                )
+            }
+            AskReq(text, opts, allowFree = allowFree)
+        }
+        val answers = ctx.gate.askBatch(title, questions, allowFree)
+        // 界面答满才提交；这里仍做对齐兜底（每题必须有作答）——与手机端同一把尺子
+        val filled = questions.mapIndexed { i, q ->
+            answers.getOrNull(i)?.takeIf { it.isNotBlank() } ?: "未作答"
+        }
+        return ToolResult(
+            "用户已按顺序回答 ${filled.size} 题：" + filled.mapIndexed { i, a ->
+                "\n${i + 1}. ${a.takeSafe(200)}"
+            }.joinToString("")
+        )
+    }
+}
+
+private fun askBatchParams(): JsonObject = buildJsonObject {
+    put("type", "object")
+    putJsonObject("properties") {
+        putJsonObject("title") {
+            put("type", "string")
+            put("description", "题组标题，显示在卡片头部（如「MBTI 性格测试」）")
+        }
+        putJsonObject("questions") {
+            put("type", "array")
+            putJsonObject("items") {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("question") {
+                        put("type", "string")
+                        put("description", "题干，一句话，以问号或句号结尾")
+                    }
+                    putJsonObject("options") {
+                        put("type", "array")
+                        putJsonObject("items") {
+                            put("type", "object")
+                            putJsonObject("properties") {
+                                putJsonObject("label") {
+                                    put("type", "string")
+                                    put("description", "选项短标签（≤12 字）")
+                                }
+                                putJsonObject("description") {
+                                    put("type", "string")
+                                    put("description", "该选项含义的一行补充，可省略")
+                                }
+                            }
+                            put("required", buildJsonArray { add(JsonPrimitive("label")) })
+                        }
+                        put("description", "2~6 个互斥选项，各题可不等长")
+                    }
+                }
+                put("required", buildJsonArray {
+                    add(JsonPrimitive("question"))
+                    add(JsonPrimitive("options"))
+                })
+            }
+            put("description", "1~100 道题，按出题顺序排列")
+        }
+        putJsonObject("allow_free_text") {
+            put("type", "boolean")
+            put("description", "每题是否提供「其他…（自由输入）」出口，默认 false")
+        }
+    }
+    put("required", buildJsonArray {
+        add(JsonPrimitive("title"))
+        add(JsonPrimitive("questions"))
+    })
+}
+
 /** 溢出落文件：与手机端 `EngineToolSpill` 同构。 */
 const val SPILL_KEEP_FILES = 40
 const val SPILL_MAX_CHARS = 2_000_000
@@ -1299,7 +1417,7 @@ class HunkPlan(val hunks: List<Hunk>, val base: String, val wanted: String) {
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
-    GitTool(), TodoTool(), AskUserTool(), WebFetchTool(), WebSearchTool(),
+    GitTool(), TodoTool(), AskUserTool(), AskUserBatchTool(), WebFetchTool(), WebSearchTool(),
     BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool(), RunVerifyTool()
 )
 

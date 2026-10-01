@@ -284,6 +284,28 @@ class LanTest {
         assertNull("不认识的事件别硬凑一行", lanPendingRow("x", "notice", "s1", "{}"))
     }
 
+    @Test
+    fun `batch ask rows carry questions and count for the phone`() {
+        val row = lanPendingRow("q9", "ask", "s1",
+            """{"batch":true,"question":"三题小测","allowFreeText":false,"questions":[
+                {"question":"第一题？","options":[{"label":"春","description":"花开"},{"label":"夏"}]},
+                {"question":"第二题？","options":[{"label":"热"},{"label":"冰"}]},
+                {"question":"第三题？","options":[{"label":"早起"},{"label":"晚睡"}]}]}""")
+        val pl = Json.parseToJsonElement(row ?: "null").jsonObject["payload"]?.jsonObject
+        assertEquals("题组标题要当 title 给手机", "三题小测", pl?.get("title")?.jsonPrimitive?.content)
+        assertEquals("true", pl?.get("batch")?.jsonPrimitive?.content)
+        assertEquals("3", pl?.get("questionCount")?.jsonPrimitive?.content)
+        assertEquals("批量不在通知上摆选项按钮", 0, pl?.get("options")?.jsonArray?.size)
+        assertEquals("false", pl?.get("allowFreeText")?.jsonPrimitive?.content)
+        // 题库要能过到手机页（本地循环的数据源）：题干 + 对象选项 + desc
+        val qs = pl?.get("questions")?.jsonArray?.map { it.jsonObject }
+        assertEquals(3, qs?.size)
+        assertEquals("第一题？", qs?.get(0)?.get("question")?.jsonPrimitive?.content)
+        val o0 = qs?.get(0)?.get("options")?.jsonArray?.get(0)?.jsonObject
+        assertEquals("春", o0?.get("label")?.jsonPrimitive?.content)
+        assertEquals("花开", o0?.get("description")?.jsonPrimitive?.content)
+    }
+
     /**
      * 回答走的是 `answer`，而审批走的是 `decision`。这条判据守的是两件事：
      * ① 手机上答得了提问；② **不能拿 answer 蒙混过审批**（那样"随便写句什么"就等于替人放行）。

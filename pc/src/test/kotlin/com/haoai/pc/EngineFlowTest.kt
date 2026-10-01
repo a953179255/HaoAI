@@ -57,6 +57,7 @@ class EngineFlowTest {
 
     private class RecordingGate(private val allow: Boolean) : Gate {
         val asked = mutableListOf<String>()
+        val askedQs = mutableListOf<String>()
         var lastQuestion: String = ""
         var lastReq: AskReq? = null
         override fun approve(title: String, detail: String, kind: String): Boolean {
@@ -66,6 +67,7 @@ class EngineFlowTest {
 
         override fun ask(question: String, options: List<String>): String {
             lastQuestion = question
+            askedQs += question
             return options.firstOrNull() ?: "就用第一个"
         }
 
@@ -470,6 +472,33 @@ class EngineFlowTest {
     }
 
     @Test
+    fun `ask_user_batch lands one round trip with the shared result format`() {
+        val ws = tempWorkspace()
+        val gate = RecordingGate(true)
+        val (engine, _, g) = harness(
+            ws,
+            mutableListOf(
+                turn(
+                    "来个两题问卷",
+                    toolCall(
+                        "q1", "ask_user_batch",
+                        """{"title":"两题小测","questions":[{"question":"喜欢猫还是狗？","options":[{"label":"猫"},{"label":"狗"}]},{"question":"红的还是绿的？","options":[{"label":"红"},{"label":"绿"}]}]}"""
+                    )
+                ),
+                turn("收到")
+            )
+        )
+        engine.submit("出两道题")
+        // 默认桥把整批拆给单题闸（RecordingGate 只覆写了单题）——两题都问到了
+        assertEquals(listOf("喜欢猫还是狗？", "红的还是绿的？"), g.askedQs)
+        val toolMsg = engine.messages().last { it.role == "tool" }.content ?: ""
+        // 结果前缀与逐题行 = 与手机端同一把尺子（历史回显的数据源）
+        assertTrue("前缀要是共享契约：" + toolMsg, toolMsg.contains("用户已按顺序回答 2 题："))
+        assertTrue(toolMsg.contains("\n1. 猫"))
+        assertTrue(toolMsg.contains("\n2. 红"))
+    }
+
+    @Test
     fun `grep and glob find what write put there`() {
         val ws = tempWorkspace()
         File(ws, "src").mkdirs()
@@ -661,8 +690,8 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        // 23 把：20 + run_code + record + run_verify
-        assertEquals(23, schemas.size)
+        // 24 把：20 + run_code + record + run_verify + ask_user_batch
+        assertEquals(24, schemas.size)
         assertTrue(
             "常驻进程工具没注册进来",
             setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")

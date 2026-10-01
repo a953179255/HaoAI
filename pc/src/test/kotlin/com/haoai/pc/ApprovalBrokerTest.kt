@@ -85,6 +85,36 @@ class ApprovalBrokerTest {
     }
 
     @Test
+    fun `batch ask waits once for the whole quiz and returns the answers json`() {
+        val b = broker(askSec = 30)
+        var res: ApprovalBroker.Resolution? = null
+        val t = thread {
+            res = b.awaitAskBatch(
+                "s1", "三题小测",
+                listOf(
+                    AskReq("第一题？", listOf(AskOpt("春", "花开"), AskOpt("夏"))),
+                    AskReq("第二题？", listOf(AskOpt("热"), AskOpt("冰")))
+                ),
+                allowFree = false
+            )
+        }
+        waitCard(b, event = "ask")
+        // 载荷是整份题库 + batch 标记（桌面卡与手机卡本地循环的数据源）
+        val payload = sent.firstOrNull { it.first == "ask" }?.second ?: ""
+        assertTrue("batch 标记要在：" + payload, payload.contains("\"batch\":true"))
+        assertTrue("题组标题当 question 给旧投影：" + payload, payload.contains("\"question\":\"三题小测\""))
+        assertTrue("题库要整份过到界面：" + payload, payload.contains("\"question\":\"第一题？\"") && payload.contains("\"description\":\"花开\""))
+        assertTrue("allowFreeText 要带：" + payload, payload.contains("\"allowFreeText\":false"))
+        // 提交：答案数组 JSON 原样回流（工具侧 parseBatchAnswers 解）
+        val id = Regex("\"id\":\"(q\\d+)\"").find(payload)?.groupValues?.get(1) ?: error("载荷里没有 id")
+        val answersJson = listOf("春", "冰").joinToString(",", "[", "]") { "\"$it\"" }
+        b.complete(id, answersJson)
+        t.join(3000)
+        assertEquals("答案数组要原样交回闸口", answersJson, res!!.value)
+        assertEquals(0, b.sizeForTest())
+    }
+
+    @Test
     fun `abort settles approvals as deny and asks as empty`() {
         // 时序：先让 await 把卡推出去（waiter 已注册），再 abort —— 否则 abort 可能
         // 跑在注册前头，账就是 0，断言随机红。旧实现没这条判据是因为 300 秒等不起。

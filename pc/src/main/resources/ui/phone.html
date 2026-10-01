@@ -203,7 +203,53 @@ function refresh(){
         var rk=pl.risk?('<span class="rk '+
           (pl.risk=='high'?'hi':(pl.risk=='mid'?'mid':'lo'))+'">'+esc(pl.riskLabel||pl.risk)+'</span>'):'';
         if(p.kind=='ask'){
-          /* 选项与桌面卡同款 {label,description}（旧字符串载荷也收，当 label）。
+          /* 批量问卷（T2）：一题一屏、点选自动下一题，答完一次性提交。
+             循环状态（第几题、已答什么）挂在 window 上 —— 页面每 4 秒整卡重画，
+             闭包状态活不过下一次刷新：答到第 7 题被刷回第 1 题就是这么来的。 */
+          if(pl.batch){
+            var qs=(pl.questions||[]).filter(function(q){return q&&q.question});
+            var bfree=pl.allowFreeText===true;
+            var st=(window.__batchSt&&window.__batchSt.id===p.id)?window.__batchSt:
+              {id:p.id,idx:0,answers:[]};
+            window.__batchSt=st;
+            var bhost=document.createElement('div');
+            var bcard=document.createElement('div');
+            bcard.className='card ask';
+            bcard.appendChild(bhost);
+            var bmount=function(){
+              if(st.idx>=qs.length){
+                bhost.innerHTML='<h3>❓ '+esc(pl.title||'问卷')+'</h3><p class="mut">已答完 '+qs.length+' 题，送回电脑…</p>';
+                answer(p.id,JSON.stringify(qs.map(function(q,i){return st.answers[i]||''})),null);
+                window.__batchSt=null;
+                return;
+              }
+              var q=qs[st.idx];
+              var opts=(q.options||[]).map(function(o){
+                  return typeof o=='string'?{label:String(o),description:''}:o;})
+                .filter(function(o){return o&&o.label}).slice(0,4);
+              bhost.innerHTML='<h3>❓ '+esc(pl.title||'问卷')+'</h3>'+
+                '<p class="mut">第 '+(st.idx+1)+' / '+qs.length+' 题 · 选完自动下一题</p>'+
+                '<p>'+esc(q.question)+'</p><div class="acts">'+
+                opts.map(function(o){return '<button class="ok opt">'+esc(o.label)+'</button>'}).join('')+
+                '</div>'+
+                opts.map(function(o,i){return o.description?'<p class="mut" style="margin:4px 0 0">'+
+                  (i+1)+'. '+esc(o.description)+'</p>':''}).join('')+
+                (bfree?'<div class="acts" style="margin-top:8px"><input id="bqIn" placeholder="或自己写一句" maxlength="120" style="flex:1">'+
+                  '<button class="ok bqSend">发送</button></div>':'');
+              var bs=bhost.querySelectorAll('.acts .opt');
+              bs.forEach(function(b,i){b.onclick=function(){
+                st.answers[st.idx]=opts[i].label;st.idx++;bmount()}});
+              if(bfree){
+                var send=bhost.querySelector('.bqSend');
+                if(send)send.onclick=function(){
+                  var v=(bhost.querySelector('#bqIn').value||'').trim();
+                  if(!v)return;st.answers[st.idx]=v;st.idx++;bmount()};
+              }
+            };
+            bmount();
+            return bcard;
+          }
+          /* 单题（B22 起与桌面卡同款 {label,description}，旧字符串载荷也收，当 label）。
              confirm=true（默认）= 点一下选中、再按「回答」提交（同一颗再点一次也提交）；
              recommend=true = 第一个按钮带「推荐」；allow_free_text=false = 不摆输入框。
              描述排在按钮下面 —— 那一句"含义/代价"就是防止人凭标签瞎选的。 */
