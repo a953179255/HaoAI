@@ -129,7 +129,7 @@ e: file:///G:/HaoAI/app/src/main/java/com/haoai/agent/platform/PcLink.kt:108:49
 |---|---|---|
 | 1 修编译红 | ✅ | 根因是 `String.serializer()` 缺 `kotlinx.serialization.builtins.serializer` 这个 import（1.9.0 搬包之后才暴露），四处红一次修完；`:app:compileDebugKotlin` 绿 |
 | 2 安卓全量 | ✅ **238 条 0 红** | 但**新增的三条夹具本身是坏的**：`"payload":` 后面漏了 `{` → JSON 不合法 → 两条用例红，红话还是"电脑回的不是 JSON"（看着像产品坏了）。补 `{` 后转绿；另做了变异检查：摘掉 `PcOptListSerializer` 自定义解码，对象选项那条立刻红 —— 判据真咬在产品代码上 |
-| 3 双检 + 像素 | ✅ | `ui-check`/`md-check` 过；`ui-askbatch` 20 步/14 条判据全绿，四张图亲验（第 1 题、第 3 题、提交后收成已答、落库原文）；PC `gradle test` **554 条 fresh 重跑 0 红**（不是复用上次的 XML：`cleanTest test`）；全量像素审计见下 |
+| 3 双检 + 像素 | ✅ | `ui-check`/`md-check` 过；`ui-askbatch` 20 步/14 条判据全绿，四张图亲验（第 1 题、第 3 题、提交后收成已答、落库原文）；PC `gradle test` **554 条 fresh 重跑 0 红**（不是复用上次的 XML：`cleanTest test`）；**全量像素审计也重跑了：66 份 / 红 0 份 / MISS 0 份**（含新加的 `ui-askbatch`，零判据剧本仍是 0） |
 | 4 装机 | ⛔ **没做** | 手机无线调试掉了：`adb devices` 空、`adb mdns services` 也空，`connect 192.168.1.87:40931` 被拒。**§4 那条警告仍然成立**：在装回带新解码的包之前，PC 一发对象选项，手机那条通知通道（审批+提问）是哑的 |
 | 5 B4 回收实验 | ⛔ **没重跑**（设备同上） | 但按既有证据**已销账**：本文件 §3.5 要的那次复测，ROADMAP 5.2 已记录 2026-10-02 凌晨做过（严格省电配置 + 息屏 27 分钟窗口：不自动杀、后台轮询全程活跃 = 正面结论；"真被杀后复活"这半条在该窗口不可诱发，方法已固化）。还想看的是"装了看门狗这版之后轮询冻住能否自己爬起来"，那要先装机 |
 | 6 文档 | ✅ | ROADMAP：B10 行删"还欠"、B13 行改口（digest 已落 + 语音用户裁定不做）、5.1 #10 看门狗销账并写清落了什么、5.2 #35 销账（全部保留不动）、新增 T2 行、顺手把 B22 行那个全角 `｜` 改回半角让"依赖"真的成一格；README：新增「T2」节 + **给 `ui-askbatch` 补了可抄的跑法**（不补，`audit-steps.sh` 会把它算成 MISS 红掉——这条规矩是 09-30 那晚立的） |
