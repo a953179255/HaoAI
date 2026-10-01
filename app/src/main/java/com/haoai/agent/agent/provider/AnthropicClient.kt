@@ -114,7 +114,7 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
                     // 用本轮下标会跨轮撞号（见 newFallbackCallId 注释）
                     id = p.id.ifBlank { newFallbackCallId() },
                     name = name,
-                    argumentsJson = p.args.toString().ifBlank { "{}" }
+                    args = p.args.toString().ifBlank { "{}" }
                 )
             }
     }

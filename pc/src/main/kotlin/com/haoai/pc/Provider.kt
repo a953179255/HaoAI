@@ -18,68 +18,15 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 
-/** 一条会话消息。role ∈ system|user|assistant|tool。 */
-data class Msg(
-    val role: String,
-    val content: String?,
-    val calls: List<ToolCall> = emptyList(),
-    val callId: String? = null,
-    /** 工具结果属于哪把工具。不存这个，历史回放时工具卡就只剩一个空壳。 */
-    val name: String = "",
-    /**
-     * 模型的思考过程（DeepSeek/llama.cpp 的 `reasoning_content`）。
-     *
-     * 以前整个字段被直接丢掉：界面上看不到模型在想什么，而**长任务一旦答错，
-     * 用户完全无从判断它是理解错了还是工具用错了**。移动端早就有思考链卡，
-     * PC 端这次补上。存下来而不是只流一次，是为了刷新页面与重开会话还能展开看。
-     */
-    val reasoning: String? = null,
-    /**
-     * 工具卡上的行级 diff（只给界面看，[requestMessages] 不会把它发给模型）。
-     *
-     * 存下来是为了"刷新之后还能审阅这次改了什么"——只随 SSE 流一次的话，
-     * 页面一刷新 diff 就没了，而用户往往正是看完回答才回头去核对改动。
-     */
-    val diff: String = "",
-    /** 子任务的中间过程（只给界面，不发模型）。 */
-    val sub: String = "",
-    /**
-     * 用户对这一步的审批结论（"允许一次 / 本任务都允许 / 写了规则 / 拒绝"）。
-     *
-     * 之前只随 SSE 流一次：内联卡答完就地收起，刷新之后卡没了，
-     * 于是"这个文件到底是用户点头写的还是自动写的"在历史里查不出来。
-     */
-    val note: String = "",
-    /**
-     * 这一轮里引擎发过的小字（重试、降级、达到上限…），只给界面，**不发模型**。
-     *
-     * 为什么要挂到消息上而不是只随 SSE 流一次：回合收尾时前端会 `hydrate` 重建这一屏
-     * （`v.el.innerHTML=''`），瞬时插进去的 `.notice` 节点跟着一起没 —— 实测是
-     * "插入 4 次、移除 4 次"，于是"这一轮是降级后的模型答的"这件事在人看完答案之后查不出来。
-     * 同一套办法早就用在 [note] 与 [diff] 上（审批结论、行级 diff 都要能刷新之后还在）。
-     */
-    val notice: String = "",
-    /**
-     * 随这条消息一起发给模型的图片（**存的是路径**，发请求时才编码成 data URL）。
-     *
-     * 为什么不把 base64 存进历史：一张截图编码后 3~4 MB，会话文件会被自己撑爆，
-     * 而图片本来就在工作区里躺着。见 [Images]。
-     */
-    val images: List<String> = emptyList(),
-    /**
-     * 工具产出的音视频文件路径（与 [images] 同样只存路径）。
-     *
-     * 存下来是为了"刷新之后播放器还在"：只随 SSE 流一次的话，
-     * 页面一刷新生成的视频就只剩一行路径文字了。
-     */
-    val media: List<String> = emptyList(),
-    /** 这一回合自己的用量与耗时（不是会话累计），画在回答下面那行小字。 */
-    val pt: Int = 0,
-    val ct: Int = 0,
-    val ms: Long = 0L
-)
+/**
+ * 一条会话消息（B15 第二片：定义进了 `:core`，这里原地 typealias —— 同包同名，
+ * pc 全部引用点零改动）。字段名 = PC 手写落盘格式，**不许改**（538 条里有持久化锁）；
+ * 移动端独有字段（id/error/imageData/…）是 core 里的并集字段，PC 不写不读。
+ */
+typealias Msg = com.haoai.core.Msg
 
-data class ToolCall(val id: String, val name: String, val args: String)
+/** 一次工具调用（同上：core 定义、原地别名）。 */
+typealias ToolCall = com.haoai.core.ToolCall
 
 data class ToolSchema(val name: String, val desc: String, val params: JsonObject)
 

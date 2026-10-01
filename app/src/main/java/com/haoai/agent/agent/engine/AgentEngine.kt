@@ -313,8 +313,8 @@ class AgentEngine(
                             "它的副作用可能已经发生。禁止用相同参数盲目重跑：先用只读方式核实当前状态" +
                             "（文件是否已存在/内容是否已改、命令是否已生效），确认未完成再重做。"
                     },
-                    toolCallId = call.id,
-                    toolName = call.name,
+                    callId = call.id,
+                    name = call.name,
                     error = true
                 ),
                 onEvent
@@ -712,9 +712,11 @@ class AgentEngine(
                         // 思考过程一并留下：此前停止会把气泡里的思考链丢掉
                         reasoning = transcript.reasoningOrNull(),
                         // 用户中途停止：已消耗的部分也记上（best effort，供统计行展示）
-                        promptTokens = st.promptTokens.toInt().takeIf { it > 0 },
-                        completionTokens = st.completionTokens.toInt().takeIf { it > 0 },
-                        durationMs = System.currentTimeMillis() - turnStartMs,
+                        // 规范字段 pt/ct 是非空 Int（PC 侧锁）：旧的 takeIf null 语义落回 0
+                        // （st.promptTokens 是 TurnState 的字段 —— 曾被按行改名连坐成 st.pt，手工修回）
+                        pt = st.promptTokens.toInt().takeIf { it > 0 } ?: 0,
+                        ct = st.completionTokens.toInt().takeIf { it > 0 } ?: 0,
+                        ms = System.currentTimeMillis() - turnStartMs,
                         model = provider.model
                     ),
                     onEvent

@@ -3658,6 +3658,29 @@ Android 单测全绿 ✓；`ui-check`/`md-check` 全过 ✓；截图存档
 [G:/hbt/pc-demo/phone-ask-lock.png](G:/hbt/pc-demo/phone-ask-lock.png)；
 Octop 已收录进 ROADMAP §0 证据来源（单进程 ADR、HarnessProcessor 统一入口、tool_guard、ACP 双向）。
 
+### 第二片：会话模型统一（Msg/ToolCall 下沉 core，🟢 全落）
+
+**先查清的事实决定了对齐方向**：两端**磁盘格式是各自独立的**——PC 手写 JSON 落盘
+（字段名即格式，538 条里有持久化锁）、移动端存独立的 `StoredMessage` DTO + 显式
+`toModel/toStored` 转换。**运行时模型改名碰不到任何磁盘**，所以规范名取 PC 侧
+（`calls/callId/name/pt/ct/ms`），移动端独有 7 字段（`id/error/imageData/audioPath/
+videoPath/model/ts`）作为并集进 core、PC 不写不读。
+
+- **core**：`Msg.kt`（含 `ToolCall` + `ROLE_*` companion）——纯 data class，不需要任何
+  序列化注解（全仓没有一处直接序列化 ChatMessage，grep 验过）。
+- **PC**：Provider.kt 原地 typealias → **零调用点改动**，538 全绿即磁盘格式锁的证明。
+- **移动端**：ChatMessage.kt/ToolCallData 改 typealias（同包同名，旧 import 全活）；
+  ~360 处字段改名 + `content: String?` 的可空涟漪（`?: ""` 逐处兜）；两个转换函数是
+  **唯一的改名边界**（磁盘字段名一个没动）——`SessionStoreRoundTripTest` 3 条锁往返
+  保真与 DTO 可空缺省的兜底（pt/ct/ms→0、name→空串）。
+- **改名纪律（这次学到的，已入档）**：**报错行所在的类型**才是判据 —— 同名字段满天飞
+  （`ApiMessage.toolCalls`、`AssistantStats.promptTokens`、`ChatRow.durationMs`、
+  `StoredMessage.*` 一个都不能动），编译器指哪、人工核型到哪；按行盲替连坐过
+  `st.promptTokens`、把 `observe(toolName=)` 改坏、把 ApiMessage 线上参数改错 ——
+  每一处都靠"这行的接收者到底是谁"逐个定案（磁盘侧函数误判了三次，git checkout 救回）。
+- **验收**：`:core:build/publish` ✓、pc **538 全绿**（对新 core 重跑）✓、Android 单测
+  全绿（含新保真测试）✓、`assembleRelease` 装回真机 ✓。
+
 ## 与手机端同源的行为
 
 

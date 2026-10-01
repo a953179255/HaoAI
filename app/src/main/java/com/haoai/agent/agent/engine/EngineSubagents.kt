@@ -172,7 +172,7 @@ internal suspend fun AgentEngine.runSubAgent(
             ApiMessage(
                 role = "assistant",
                 content = finalText.ifBlank { null },
-                toolCalls = calls.map { toolCallToApi(it.id, it.name, it.argumentsJson) }
+                toolCalls = calls.map { toolCallToApi(it.id, it.name, it.args) }
             )
         )
         for (call in calls) {
@@ -181,9 +181,9 @@ internal suspend fun AgentEngine.runSubAgent(
             currentCoroutineContext().ensureActive()
             // P1.1 逐工具进度：子代理此刻在干什么直接上任务卡
             handle.currentTool = briefOf(call)
-            report("RUNNING", subPrompt + subCompletion, "工具 ${call.name} · ${TextCap.middle(call.argumentsJson, 60)}")
+            report("RUNNING", subPrompt + subCompletion, "工具 ${call.name} · ${TextCap.middle(call.args, 60)}")
             val tool = tools.firstOrNull { it.name == call.name }
-            val childArgs = parseArgs(call.argumentsJson)
+            val childArgs = parseArgs(call.args)
             // P3-A work 模式：before hooks（写盘快照，回滚依赖）与主循环同源
             var hookHandled: ToolResult? = null
             if (mode == "work" && tool != null && childArgs != null) {
@@ -207,7 +207,7 @@ internal suspend fun AgentEngine.runSubAgent(
                         tool == null -> ToolResult("未知工具：${call.name}", true)
                         // 子代理同样不得拿损坏参数当空参跑（畸形参数显性报错）
                         childArgs == null -> ToolResult(
-                            "工具参数 JSON 损坏（截断/编码错误）：${call.argumentsJson.take(120)}。请完整重新调用 ${call.name}。",
+                            "工具参数 JSON 损坏（截断/编码错误）：${call.args.take(120)}。请完整重新调用 ${call.name}。",
                             true
                         )
                         hookHandled != null -> hookHandled
@@ -228,7 +228,7 @@ internal suspend fun AgentEngine.runSubAgent(
             handle.currentTool = null
             // P1.2 步骤留痕：失败/终止时的部分结果由此构成
             handle.steps.add(
-                "${call.name}(${TextCap.middle(call.argumentsJson, 60)}) → ${TextCap.middle(result.content, 90)}" +
+                "${call.name}(${TextCap.middle(call.args, 60)}) → ${TextCap.middle(result.content, 90)}" +
                     if (result.error) " [错误]" else ""
             )
             report("RUNNING", subPrompt + subCompletion, "已完成 ${call.name}（第 ${handle.steps.size} 步）")
@@ -236,7 +236,7 @@ internal suspend fun AgentEngine.runSubAgent(
                 ApiMessage(
                     role = "tool",
                     content = TextCap.middle(result.content, 6000),
-                    toolCallId = call.id,
+                    toolCallId = call.id,   // ApiMessage 线上参数名是 toolCallId（不是模型侧的 callId）
                     name = call.name
                 )
             )

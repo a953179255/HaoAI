@@ -389,7 +389,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                     // 序号是进程内单调的，**不能按本轮下标**（会跨轮撞号，见 newFallbackCallId 注释）
                     id = p.id?.takeIf { it.isNotBlank() } ?: newFallbackCallId(),
                     name = name,
-                    argumentsJson = p.args.toString().ifBlank { "{}" }
+                    args = p.args.toString().ifBlank { "{}" }
                 )
             }
             emit(SseEvent.Completed(calls))

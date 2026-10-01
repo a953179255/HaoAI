@@ -136,7 +136,7 @@ class AnthropicProtocolTest {
         assertEquals(1, calls?.size)
         assertEquals("tu_1", calls?.get(0)?.id)
         assertEquals("read", calls?.get(0)?.name)
-        assertEquals("{\"path\":\"a\"}", calls?.get(0)?.argumentsJson) // 分片 JSON 累积后完整
+        assertEquals("{\"path\":\"a\"}", calls?.get(0)?.args) // 分片 JSON 累积后完整
         assertEquals(120, state.inputTokens)
         assertEquals(55, state.outputTokens)
     }

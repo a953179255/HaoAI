@@ -13,7 +13,7 @@ import org.junit.Test
 class ContextUsageEstimateTest {
 
     private fun toolMsg(id: String, content: String) =
-        ChatMessage(role = ChatMessage.ROLE_TOOL, content = content, toolCallId = id, toolName = "web_fetch")
+        ChatMessage(role = ChatMessage.ROLE_TOOL, content = content, callId = id, name = "web_fetch")
 
     private fun userMsg(text: String) = ChatMessage(role = ChatMessage.ROLE_USER, content = text)
 
@@ -89,7 +89,7 @@ class ContextUsageEstimateTest {
         val msgs = listOf(
             ChatMessage(
                 role = ChatMessage.ROLE_ASSISTANT, content = "",
-                toolCalls = listOf(com.haoai.agent.agent.model.ToolCallData("c1", "bash", "{}"))
+                calls = listOf(com.haoai.agent.agent.model.ToolCallData("c1", "bash", "{}"))
             ),
             toolMsg("c1", "exit=0"),
             userMsg("新指令")

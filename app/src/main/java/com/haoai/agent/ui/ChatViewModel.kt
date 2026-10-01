@@ -1574,11 +1574,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 最终消息接管显示后又闪回流式区（内容已入 rows，不丢数据，纯观感）
                 flushStreamBuf()
                 _streamingText.value = null
-                ev.message.toolCalls.forEach { call ->
-                    liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson))
+                ev.message.calls.forEach { call ->
+                    liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.args))
                 }
                 // 截图消息（方案 A）：流式期就把它挂到对应工具的步骤上，卡片即刻出缩略图
-                screenshotToolName(ev.message.content, ev.message.imageData)?.let { shotName ->
+                screenshotToolName(ev.message.content ?: "", ev.message.imageData)?.let { shotName ->
                     val target = liveTools.values.lastOrNull {
                         it.name == shotName && it.imageData.isNullOrBlank()
                     }

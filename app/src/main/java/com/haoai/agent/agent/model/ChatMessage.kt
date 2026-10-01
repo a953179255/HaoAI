@@ -1,10 +1,22 @@
 package com.haoai.agent.agent.model
 
-import kotlinx.serialization.Serializable
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-/**
+/*
+ * B15 第二片：会话模型的**定义**进了两端共用的 `com.haoai.core.Msg`。
+ * 这里原地 typealias —— 同包同名，别的包 `import ...model.ChatMessage / ToolCallData`
+ * 的现有 import 一个都不用改（typealias 同样可被 import）。
+ *
+ * 字段名统一到 PC 侧的规范（calls/callId/name/pt/ct/ms）：PC 的历史是手写 JSON 落盘、
+ * 字段名即格式（538 条测试里有持久化锁）；而移动端磁盘存的是独立的 StoredMessage DTO
+ * + 显式转换（SessionStore.toModel/toStored）—— 运行时模型改名**碰不到磁盘**。
+ * 所以这边约 300 处字段引用要跟着改名，DTO 那边一个字都不动（编译器会精确指认：
+ * 只有 ChatMessage 类型的接收者会报 Unresolved，StoredMessage 同名字段照常解析）。
+ */
+typealias ChatMessage = com.haoai.core.Msg
+typealias ToolCallData = com.haoai.core.ToolCall
+
+/*
  * 兜底 tool_call id 的序号：**进程内单调**，绝不按轮/按响应重置。
  *
  * 为什么单独拎出来：不少供应商流式不带 tool_call id（deepseek-v4-flash 直接回 `"id": ""`，
@@ -16,46 +28,3 @@ private val toolCallIdSeq = AtomicLong()
 
 /** 生成一个不会与上一轮重复的兜底 call id。 */
 fun newFallbackCallId(prefix: String = "call"): String = "${prefix}_${toolCallIdSeq.incrementAndGet()}"
-
-@Serializable
-data class ToolCallData(
-    val id: String,
-    val name: String,
-    val argumentsJson: String
-)
-
-@Serializable
-data class ChatMessage(
-    /** 消息唯一 id（旧 JSON 缺省时补新生成，用于长按操作/截断/搜索定位）。 */
-    val id: String = UUID.randomUUID().toString(),
-    val role: String,
-    val content: String = "",
-    val toolCalls: List<ToolCallData> = emptyList(),
-    val toolCallId: String? = null,
-    val toolName: String? = null,
-    val error: Boolean = false,
-    /** 用户附加图片的 data URL（base64），仅端侧多模态模型使用。 */
-    val imageData: String? = null,
-    /** 用户附加音频的本机文件路径（应用私有 attachments 目录）；模型有 audio-in 时读取转 input_audio。 */
-    val audioPath: String? = null,
-    /** 用户附加视频的本地文件路径（应用私有目录）；引擎注记路径让 Agent 用 ffmpeg 抽帧/抽音轨绕行。 */
-    val videoPath: String? = null,
-    /** 思考过程文本（reasoning_content / <think>），仅展示用，不回传 API。 */
-    val reasoning: String? = null,
-    /** 本轮（含工具循环多次调用）累计输入 tokens，assistant 消息统计行用。 */
-    val promptTokens: Int? = null,
-    /** 本轮累计输出 tokens。 */
-    val completionTokens: Int? = null,
-    /** 整轮耗时（用户发出→回复落库，含工具执行），毫秒。 */
-    val durationMs: Long? = null,
-    /** 生成该回复的模型名（统计行/操作面板元信息展示）。 */
-    val model: String? = null,
-    val ts: Long = System.currentTimeMillis()
-) {
-    companion object {
-        const val ROLE_SYSTEM = "system"
-        const val ROLE_USER = "user"
-        const val ROLE_ASSISTANT = "assistant"
-        const val ROLE_TOOL = "tool"
-    }
-}

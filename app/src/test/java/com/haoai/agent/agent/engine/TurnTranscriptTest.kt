@@ -41,7 +41,7 @@ class TurnTranscriptTest {
         // 模型只调工具不回话时正文为空，但协议要求 assistant 的 tool_calls 必须落一条消息
         val msg = t.buildAssistant(listOf(ToolCallData("c1", "bash", "{}")))
         assertEquals("assistant", msg?.role)
-        assertEquals(1, msg?.toolCalls?.size)
+        assertEquals(1, msg?.calls?.size)
         assertNull(msg?.reasoning)
     }
 

@@ -267,7 +267,7 @@ class AgentEngineLoopTest {
         val blockedFilesDir = File(parent, "occupied").apply { writeText("我是文件不是目录") }
         val hook = SnapshotHook(blockedFilesDir, "session-1", null)
         val call = ToolCallData("c1", "write", """{"path":"a.txt","content":"hello"}""")
-        val args = kotlinx.serialization.json.Json.parseToJsonElement(call.argumentsJson)
+        val args = kotlinx.serialization.json.Json.parseToJsonElement(call.args)
             as kotlinx.serialization.json.JsonObject
         val ctx = com.haoai.agent.agent.tools.ToolContext(
             null, null, com.haoai.agent.agent.tools.TodoStore(blockedFilesDir), blockedFilesDir

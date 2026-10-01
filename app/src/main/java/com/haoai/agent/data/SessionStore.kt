@@ -212,21 +212,27 @@ data class StoredSession(
     }
 }
 
+/*
+ * B15 第二片：ChatMessage 已 = com.haoai.core.Msg（字段名统一到 PC 规范
+ * calls/callId/name/pt/ct/ms）。**StoredMessage/StoredToolCall 是磁盘格式，一个字不改** ——
+ * 改名只发生在这两个转换函数的边界上（这也是"改名碰不到磁盘"的机制所在）。
+ * 可空的 DTO 字段（旧 JSON 缺省 null）落到非空 core 字段时用 ?: 0 兜底。
+ */
 fun StoredMessage.toModel(): ChatMessage = ChatMessage(
     id = id,
     role = role,
     content = content,
-    toolCalls = toolCalls.map { ToolCallData(it.id, it.name, it.argumentsJson) },
-    toolCallId = toolCallId,
-    toolName = toolName,
+    calls = toolCalls.map { ToolCallData(it.id, it.name, it.argumentsJson) },
+    callId = toolCallId,
+    name = toolName ?: "",   // Msg.name 非空（PC 侧锁）：DTO 的可空落 ""
     error = error,
     imageData = imageData,
     audioPath = audioPath,
     videoPath = videoPath,
     reasoning = reasoning,
-    promptTokens = promptTokens,
-    completionTokens = completionTokens,
-    durationMs = durationMs,
+    pt = promptTokens ?: 0,
+    ct = completionTokens ?: 0,
+    ms = durationMs ?: 0L,
     model = model,
     ts = ts
 )
@@ -234,18 +240,18 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
 fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     id = id,
     role = role,
-    content = content,
-    toolCalls = toolCalls.map { StoredToolCall(it.id, it.name, it.argumentsJson) },
-    toolCallId = toolCallId,
-    toolName = toolName,
+    content = content ?: "",
+    toolCalls = calls.map { StoredToolCall(it.id, it.name, it.args) },
+    toolCallId = callId,
+    toolName = name,
     error = error,
     imageData = imageData,
     audioPath = audioPath,
     videoPath = videoPath,
     reasoning = reasoning,
-    promptTokens = promptTokens,
-    completionTokens = completionTokens,
-    durationMs = durationMs,
+    promptTokens = pt,
+    completionTokens = ct,
+    durationMs = ms,
     model = model,
     ts = ts
 )

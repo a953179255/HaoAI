@@ -92,7 +92,7 @@ internal suspend fun AgentEngine.memoryFlushTurn() {
         // 结果只记日志不落会话——assistant 侧没存，tool 消息入库即成孤儿（API 构建时
         // 会被 pairSanitized 裁掉，白占存储与估算）。沉淀本身已经由 tool.run 落盘完成。
         runCatching {
-            val flushArgs = parseArgs(call.argumentsJson) ?: return@runCatching
+            val flushArgs = parseArgs(call.args) ?: return@runCatching
             val result = tool.run(flushArgs, ctx)
             android.util.Log.d(
                 "HaoEngine",

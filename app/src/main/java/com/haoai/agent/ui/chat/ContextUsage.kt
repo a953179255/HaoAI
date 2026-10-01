@@ -53,14 +53,16 @@ data class ContextUsage(
          */
         fun estimateMessageTokens(msg: ChatMessage, toolContentCap: Int = 0): Int {
             var tokens = MSG_OVERHEAD
+            // content 与 PC 侧 Msg 对齐为可空：null 当空串估算（估算口径不受影响）
+            val raw = msg.content ?: ""
             val content =
-                if (toolContentCap > 0 && msg.role == ChatMessage.ROLE_TOOL && msg.content.length > toolContentCap)
-                    TextCap.middle(msg.content, toolContentCap)
-                else msg.content
+                if (toolContentCap > 0 && msg.role == ChatMessage.ROLE_TOOL && raw.length > toolContentCap)
+                    TextCap.middle(raw, toolContentCap)
+                else raw
             tokens += estimateStringTokens(content)
-            for (tc in msg.toolCalls) {
+            for (tc in msg.calls) {
                 tokens += estimateStringTokens(tc.name)
-                tokens += estimateStringTokens(tc.argumentsJson)
+                tokens += estimateStringTokens(tc.args)
             }
             if (!msg.imageData.isNullOrBlank()) tokens += IMAGE_TOKENS
             return tokens

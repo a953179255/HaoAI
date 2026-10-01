@@ -77,11 +77,11 @@ class TurnTranscript(
         return ChatMessage(
             role = ChatMessage.ROLE_ASSISTANT,
             content = textString(),
-            toolCalls = toolCalls,
+            calls = toolCalls,                        // ChatMessage 规范字段是 calls（目标侧）
             reasoning = reasoningOrNull(),
-            promptTokens = stats?.promptTokens,
-            completionTokens = stats?.completionTokens,
-            durationMs = stats?.durationMs,
+            pt = stats?.promptTokens ?: 0,            // AssistantStats 源字段名不动
+            ct = stats?.completionTokens ?: 0,
+            ms = stats?.durationMs ?: 0L,             // pt/ct/ms 非空（PC 侧锁）：null 落 0
             model = stats?.model
         )
     }

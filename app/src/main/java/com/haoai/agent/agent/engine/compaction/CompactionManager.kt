@@ -43,9 +43,11 @@ class CompactionManager(
         val len = messages.size
         val cutoff = (len - 6).coerceAtLeast(0)
         return messages.mapIndexed { i, msg ->
-            if (i < cutoff && msg.role == ChatMessage.ROLE_TOOL && msg.content.length > settings.toolOutputKeepChars) {
-                val original = msg.content.length
-                val pruned = msg.content.take(settings.toolOutputKeepChars) + "\n...[已修剪]"
+            // content 现为 String?（与 PC 侧 Msg 对齐）：null 没东西可剪，直接跳过
+            val c = msg.content
+            if (i < cutoff && msg.role == ChatMessage.ROLE_TOOL && c != null && c.length > settings.toolOutputKeepChars) {
+                val original = c.length
+                val pruned = c.take(settings.toolOutputKeepChars) + "\n...[已修剪]"
                 savedChars += original - pruned.length
                 msg.copy(content = pruned)
             } else {
@@ -79,7 +81,7 @@ class CompactionManager(
             throw ce
         } catch (_: Exception) {
             // LLM 调用失败，使用 fallback 截断
-            val allText = messages.map { "${it.role}: ${it.content.take(200)}" }
+            val allText = messages.map { "${it.role}: ${it.content?.take(200) ?: ""}" }
             CompactionPrompts.fallbackTruncate(allText)
         }
 
@@ -130,16 +132,17 @@ class CompactionManager(
     private fun messagesToText(messages: List<ChatMessage>): String = buildString {
         for (msg in messages) {
             when (msg.role) {
-                ChatMessage.ROLE_USER -> appendLine("[用户]: ${msg.content}")
+                ChatMessage.ROLE_USER -> appendLine("[用户]: ${msg.content ?: ""}")
                 ChatMessage.ROLE_ASSISTANT -> {
                     appendLine("[助手]: ${msg.content}")
-                    for (tc in msg.toolCalls) {
-                        appendLine("  [工具调用] ${tc.name}(${tc.argumentsJson.take(200)})")
+                    for (tc in msg.calls) {
+                        appendLine("  [工具调用] ${tc.name}(${tc.args.take(200)})")
                     }
                 }
                 ChatMessage.ROLE_TOOL -> {
-                    val brief = if (msg.content.length > 300) msg.content.take(300) + "..." else msg.content
-                    appendLine("  [工具结果] $brief")
+                    val cc = msg.content ?: ""
+                    val brief = if (cc.length > 300) cc.take(300) + "..." else cc
+                    appendLine("[工具结果] $brief")
                 }
             }
         }

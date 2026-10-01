@@ -27,7 +27,7 @@ internal fun parseArgs(json: String): JsonObject? =
 internal fun maskSecretArgs(calls: List<ToolCallData>): List<ToolCallData> =
         calls.map { c ->
             if (c.name == "config_set") {
-                c.copy(argumentsJson = com.haoai.agent.data.ConfigFileBridge.maskApiKeys(c.argumentsJson))
+                c.copy(args = com.haoai.agent.data.ConfigFileBridge.maskApiKeys(c.args))
             } else c
         }
 
@@ -94,7 +94,7 @@ internal fun handoffEvent(summary: String): String {
     }
 
 internal fun briefOf(call: ToolCallData): String =
-        com.haoai.agent.agent.tools.ToolBrief.of(call.name, call.argumentsJson)
+        com.haoai.agent.agent.tools.ToolBrief.of(call.name, call.args)
 
 internal fun previewOf(content: String): String =
         content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
