@@ -104,6 +104,48 @@ class EngineFlowTest {
     }
 
     /**
+     * S7 的核心判据：`pre-tool` 钩子退出码 2 → **这一步真的没发生**，
+     * 原因**真的进了历史**（模型下一轮看得见），且这一轮**照常收尾** ——
+     * 拦截是"换条路走"，不是"跑挂了"。
+     */
+    @Test
+    fun `a pre-tool hook exiting 2 blocks the tool, the reason lands in history, the run continues`() {
+        val oldHome = System.getProperty("haoai.home")
+        val tmp = Files.createTempDirectory("haoai-engine-gate").toFile()
+        System.setProperty("haoai.home", File(tmp, "home").absolutePath)
+        try {
+            Hooks.save(
+                listOf(
+                    Hook(
+                        id = "gate1", name = "禁写", event = Hooks.PRE_TOOL,
+                        command = "echo blocked-by-hook& exit /b 2", shell = "cmd", timeoutSec = 10
+                    )
+                )
+            )
+            val ws = tempWorkspace()
+            val (engine, _, _) = harness(
+                ws,
+                mutableListOf(
+                    turn("要写文件", toolCall("c1", "write", """{"path":"blocked.txt","content":"x"}""")),
+                    turn("知道了")
+                )
+            )
+            val out = engine.submit("建个 blocked.txt")
+            assertFalse("被钩子拦下的工具不该落地", File(ws, "blocked.txt").exists())
+            val toolMsg = engine.messages().last { it.role == "tool" }
+            assertTrue("拦截原因要进历史（模型下一轮看得见）：${toolMsg.content}",
+                (toolMsg.content ?: "").contains("拦下"))
+            assertTrue("要说得出是哪条钩子拦的：${toolMsg.content}",
+                (toolMsg.content ?: "").contains("禁写"))
+            assertEquals("循环要继续到正常收尾", "知道了", out)
+        } finally {
+            runCatching { Hooks.save(emptyList()) }
+            if (oldHome == null) System.clearProperty("haoai.home")
+            else System.setProperty("haoai.home", oldHome)
+        }
+    }
+
+    /**
      * "删到这里"与"编辑重发"这两种截法的分界。
      *
      * 两者本来共用一个 cutTo，于是要么多删一句、要么少删一句：

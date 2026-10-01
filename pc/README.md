@@ -3470,9 +3470,10 @@ Windows ConPTY 上的常驻进程（`ConPty.kt`，JDK FFM 直调 kernel32，零�
 终端/浏览器代理 + git + 备份 + 设置。这一批**不改一个行为**，只动结构：
 
 - **引擎工厂（EngineFactory）**：以前 `Engine(...)` 这行两壳各写一遍（CLI `Sessions.create`、
-  网页 `engineFor`），"构造时要接什么"只能对照两处代码。现在构造调用只出现在工厂一处，
-  会话级 overlay（恢复出来的模型/toolsOff 补写）也收进去 —— **B15 要两壳共用的是这层，
-  不是那 3000 行网页壳**。
+  网页 `engineFor`），"构造时要接什么"只能对照两处代码。现在构造与会话级 overlay
+  都在工厂里，**两壳 + 新会话（`newSessionId`，S7 又逮到的第三处直连）都走它**；
+  唯一刻意留在外面的是子任务 spawn（不是"一条会话的开始"，理由注在调用点）——
+  **B15 要两壳共用的是这层，不是那 3000 行网页壳**。
 - **按域拆 8 个文件、搬 55 个方法**，`Server.kt` **3091 → 1484 行**：
   `ServerMessages`（消息级/附件/检查点）· `ServerFiles`（文件与媒体）· `ServerAbility`
   （规则/记忆/技能/订阅源/MCP/凭据/钩子）· `ServerAutomation`（定时/工作流/结果）·
@@ -3494,6 +3495,49 @@ Windows ConPTY 上的常驻进程（`ConPty.kt`，JDK FFM 直调 kernel32，零�
 - **验收**：`gradle test` **522 条全绿**（WebApi/审批/定时/备份/git/媒体那些 HTTP 层测试
   正好压在搬走的域上）；`ui-check`、`md-check` 全过；代表域像素 8 份全绿
   （settings / git / preview / cron(+narrow) / skill(+feed) / tour）。
+
+## 这一批：hooks 事件面扩到六种，`pre-tool` 是真闸（ROADMAP §6 S7）
+
+对标 ZCODE 的 7 事件（`SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest /
+PostToolUse / PostToolUseFailure / Stop`），落地 6 种：
+
+| 事件 | 触发点 | 形状 |
+|---|---|---|
+| `run-end`（既有，≈ZCODE Stop） | 引擎收尾 | 异步记账 |
+| `session-start` | `EngineFactory.build`（两壳+新会话都从工厂过） | 异步记账 |
+| `user-prompt` | `submit` 入口（只父会话，话走 `HAOAI_OUTFILE`） | 异步记账 |
+| **`pre-tool`** | 工具循环，**同步闸** | **退出码 2 = 拦下** |
+| `post-tool` / `post-tool-fail` | 工具执行后按 `res.error` 分流 | 异步记账 |
+
+- **闸的语义**（对标 PreToolUse：0 放行 / 2 拦截）：拦下时**什么都没发生过** ——
+  位置在四层可见性检查之后、`ToolStart` 之前，走"未知工具/被关掉"同款路：
+  tool 回复写明「被钩子「名」拦下：理由」进历史（模型下一轮看得见）、`ToolEnd` 上屏、
+  循环继续（每个 `tool_call_id` 都要有一条回复，协议硬要求）。**失败、超时、跑不起来
+  只记账不拦** —— 硬规矩 1 对闸同样成立，反面是"配一次坏钩子，agent 从此什么都干不了"。
+  这层与 `Risk.kt` 打分**互补**：一个拦机器判的高危，一个拦用户自己写的规矩。
+- **`PermissionRequest` 刻意不做**（写进 Hooks.kt 文件头）：它的语义是"替审批做决定"，
+  要把异步审批回环接进钩子；而"要不要放行"已经有 `Risk.kt` 确定性打分与审批闸口
+  （fail-closed、可测试），再叠一个会跑脚本的决策层只会两头打架 —— 等 S8 把审批等待
+  状态机化之后再议。
+- **工具上下文进脚本**：`HAOAI_TOOL / HAOAI_TOOL_ARGS / HAOAI_TOOL_RESULT`
+  （都截断 —— 写文件的 content 能有几 MB，环境变量块是有上限的）；下拉框摆中文标签
+  （服务端 `eventLabels` 下发，事件 id 给机器、标签给人）。
+- **顺手逮到第三个 `Engine(...)` 直连点**：`newSessionId`（`/api/new` 造完引擎就进表，
+  `engineFor` 再也不会被调 —— session-start 一声不发，HookTest 用 `last=""` 逮住的）→
+  收进工厂。**S5 那节"构造只在工厂一处"当时说早了**：真实构造点 = 工厂（两壳+新会话）
+  + spawn 子任务（直连并注明理由：子任务不是"一条会话的开始"）。
+
+判据（全真进程，cmd shell，Windows 自带不设跳过）：
+
+- `HookGateTest` 5 条：exit=2 拦且 stdout=理由、exit=0 放行、exit=3 只记账不拦、
+  超时不拦、六事件中文标签 + `load()` 不把新事件摔回 `run-end` + `json()` 带 `eventLabels`；
+- `EngineFlowTest` +1（端到端核心判据）：真引擎真文件 —— 拦下的 `write` **没落地**、
+  原因进历史、`禁写` 报得出名字、这一轮**照常收尾**；
+- `HookTest` +2：`session-start` 真的在引擎构造时发（sid 经环境变量到脚本）、
+  `user-prompt` 真拿到那句原话（OUTFILE 复制回来）。
+
+- **验收**：`gradle test` **530 条全绿**（522 + 8）；`ui-check`、`md-check` 全过；
+  像素 `ui-hook`（13 判据）+ `ui-tour`（14 判据）全绿。
 
 ## 与手机端同源的行为
 

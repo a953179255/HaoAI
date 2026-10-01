@@ -2965,7 +2965,7 @@ function loadHooks(){
     hooks=d.items||[];paintHooks(hooks);
     const sel=$('#hookEvent');
     if(sel.options.length!=(d.events||[]).length)
-      sel.innerHTML=(d.events||['run-end']).map(e=>`<option value="${esc(e)}">${esc(e)}</option>`).join('');
+      sel.innerHTML=(d.events||['run-end']).map(e=>`<option value="${esc(e)}">${esc((d.eventLabels&&d.eventLabels[e])||e)}</option>`).join('');
   }).catch(()=>{$('#hookList').textContent='读不到'});
 }
 let hooks=[];

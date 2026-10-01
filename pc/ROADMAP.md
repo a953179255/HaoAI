@@ -240,9 +240,10 @@
 
 **施工顺序**：~~S3 → S1~~ ✅ 同批已落（2026-09-30，`UiContractTest` 4 条，README「这一批」）
 → ~~S6~~ ✅ 已落（13 面板对象 + shared.js + ui-check 四类新判据；像素 65 份全绿）
-→ ~~S5~~ ✅ **已落**（EngineFactory 单路径 + Server.kt 3091→1484 行按域拆 8 文件；
-事件名单量具改扫全目录；522 全绿 + 8 份代表像素全绿，README「这一批」）
-→ S7 单独小批 ｜ S8 缓。
+→ ~~S5~~ ✅ 已落（EngineFactory + Server.kt 3091→1484 行按域拆 8 文件；522 全绿 + 8 份代表像素）
+→ ~~S7~~ ✅ **已落**（hooks 六事件、pre-tool 同步闸 exit=2 拦下进历史；
+顺手逮住第三个 Engine 直连点 newSessionId 收进工厂；530 全绿 + ui-hook/ui-tour 像素绿，
+README「这一批」）→ S8 缓（审批等待状态机化 + 工具 schema builder）。
 
 - **S1 · ✅ 已落：SSE 事件契约 `forward` 穷尽 + 事件名单两头对齐** ｜ OpenClaw `AgentEvent`
   一个 union 同时驱动流式/审批/UI（`agent-core/src/types.ts:548`）、codex `event_mapping.rs`
@@ -306,14 +307,21 @@
   （phone 走 LAN，漏了就是伪装成"配对页坏了"的白屏）｜ 聊天核心/侧栏/用量页签留顶层
   （像素契约点名全局），全量命名空间化留给 UI 美化批 ｜ PC
 
-- **S7 · hooks 事件面扩到 ZCODE 的 7 种** ｜ ZCODE：`SessionStart / UserPromptSubmit /
-  PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop`，
-  退出码 0 放行 / 2 拦截、stdout 严格 JSON、带 timeout（官方 skill 文档
-  `plugins/cache/.../diagnosing-hooks/SKILL.md`）｜ `Hooks.kt` 只有 `run-end`，
-  **没有工具执行前能拦截的钩子** ｜ 合规检查、自动 deny 这类"用户自己的闸"是 hooks 的
-  头号用途，与 `Risk.kt` 确定性打分是互补层（一个拦高危命令，一个拦用户自己定的规矩）｜
-  挂 `PreToolUse` 脚本、退出码 2 → 该次工具被拦且原因进历史；脚本失败只记日志不打断
-  （现有语义不变）｜ PC
+- **S7 · ✅ 已落：hooks 事件面扩到 ZCODE 的 7 种（落 6 种 + 1 种刻意不做）** ｜
+  ZCODE：`SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest /
+  PostToolUse / PostToolUseFailure / Stop`，退出码 0 放行 / 2 拦截、stdout 理由、timeout ｜
+  `Hooks.kt` 原来只有 `run-end`，**没有工具执行前能拦截的钩子** ｜
+  合规检查、自动 deny 这类"用户自己的闸"是 hooks 的头号用途，与 `Risk.kt` 确定性打分互补 ｜
+  **已落**：六事件（run-end/session-start/user-prompt/pre-tool/post-tool/post-tool-fail）；
+  `pre-tool` 同步闸 exit=2 → 原因进历史 + ToolEnd 上屏 + 循环继续（位置在四层可见性检查后、
+  ToolStart 前，拦下=什么都没发生）；失败/超时只记账不拦；`HAOAI_TOOL/ARGS/RESULT` 进环境；
+  下拉框中文标签（eventLabels 下发）｜ **`PermissionRequest` 刻意不做**：语义是替审批做决定，
+  而放行决策已有 Risk.kt+闸口（fail-closed、可测），叠脚本决策层两头打架 —— 等 S8 审批
+  状态机化后再议（理由写进 Hooks.kt 文件头）｜ 顺手逮住**第三个** `Engine(...)` 直连点
+  （`newSessionId`：/api/new 造完就进表，engineFor 永不调，session-start 声都不发，
+  HookTest `last=""` 逮住）→ 收进工厂；spawn 子任务直连并注明理由（S5"构造只在工厂一处"
+  当时说早了，已在 README S7 节更正）｜ 判据：HookGateTest 5 + EngineFlow 端到端 1 +
+  HookTest 真进程 2；530 全绿、ui-hook/ui-tour 像素绿 ｜ PC
 
 - **S8 ·（缓）审批等待状态机化、工具 schema builder** ｜ OpenClaw 把审批的
   request/wait/超时/持久化归 gateway 单独拥有（`src/gateway/exec-approval-manager.ts`，

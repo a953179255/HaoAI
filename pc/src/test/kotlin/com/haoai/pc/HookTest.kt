@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.BeforeClass
@@ -108,10 +109,13 @@ class HookTest {
 
     private fun quote(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-    private fun addHook(name: String, command: String, enabled: Boolean = true): String {
-        val resp = post("/api/hooks",
-            """{"op":"save","name":${quote(name)},"command":${quote(command)},""" +
-                """"event":"run-end","shell":"pwsh","timeoutSec":"40"}""")
+    private fun addHook(
+        name: String, command: String, enabled: Boolean = true,
+        event: String = "run-end", shell: String = "pwsh"
+    ): String {
+        val body = """{"op":"save","name":${quote(name)},"command":${quote(command)},""" +
+            """"event":${quote(event)},"shell":${quote(shell)},"timeoutSec":"40"}"""
+        val resp = post("/api/hooks", body)
         assertTrue("加钩子该成功：" + resp.take(120), resp.contains("\"ok\":true"))
         val id = items(resp).last().jsonObject["id"]!!.jsonPrimitive.content
         if (!enabled) post("/api/hooks", """{"op":"toggle","id":${quote(id)}}""")
@@ -218,5 +222,49 @@ class HookTest {
         assertTrue("要说清命令是空的：" + empty.take(90), empty.contains("命令是空的"))
         val unknown = post("/api/hooks", """{"op":"save","name":"乱事件","command":"x","event":"on-moon"}""")
         assertTrue("不认识的事件要拒绝：" + unknown.take(90), unknown.contains("还不认识事件"))
+    }
+
+    /*
+     * ---- S7 新事件的真进程判据（cmd shell，Windows 自带）----
+     * 与 run-end 那几条同一形状：钩子真的被执行、上下文真的到了脚本里。
+     * 异步触发 → 一律 awaitFile 等它落地。
+     */
+
+    @Test
+    fun `session-start fires when the engine is first built`() {
+        Assume.assumeTrue("这台机器上没有 cmd，跳过真进程判据", ShellLauncher.forName("cmd") != null)
+        val marker = File(ws, "hook-start.txt")
+        marker.delete()
+        val id = addHook("会话开始", "> hook-start.txt echo %HAOAI_SID%", event = "session-start", shell = "cmd")
+        try {
+            val sid = runOne("触发 session-start 的一句话")
+            val got = awaitFile(marker)
+            if (!got) {
+                val row = rowOf(id)
+                fail("session-start 没钩到：last=" + (row?.get("last")) +
+                    " event=" + (row?.get("event")) + " sid=" + sid +
+                    " home=" + System.getProperty("haoai.home"))
+            }
+            assertEquals("sid 该经环境变量到脚本", sid, marker.readText().trim())
+        } finally {
+            post("/api/hooks", """{"op":"del","id":${quote(id)}}"""); marker.delete()
+        }
+    }
+
+    @Test
+    fun `user-prompt hook sees the prompt text through the outfile`() {
+        Assume.assumeTrue("这台机器上没有 cmd，跳过真进程判据", ShellLauncher.forName("cmd") != null)
+        val copy = File(ws, "hook-prompt.txt")
+        copy.delete()
+        val id = addHook("话进来了", """copy /y "%HAOAI_OUTFILE%" hook-prompt.txt > nul""",
+            event = "user-prompt", shell = "cmd")
+        try {
+            runOne("把这句话抄给 user-prompt 钩子")
+            assertTrue("user-prompt 没钩到", awaitFile(copy))
+            assertTrue("钩子该拿到的就是这句原话：" + copy.readText(),
+                copy.readText().contains("把这句话抄给 user-prompt 钩子"))
+        } finally {
+            post("/api/hooks", """{"op":"del","id":${quote(id)}}"""); copy.delete()
+        }
     }
 }

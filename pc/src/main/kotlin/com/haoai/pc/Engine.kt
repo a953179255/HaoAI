@@ -291,7 +291,8 @@ class Engine(
         val s = Session("sub" + System.nanoTime().toString(16).take(8), session.workspace)
         s.mode = mode
         val log = StringBuilder()
-        val child = Engine(
+        val child = Engine(   // 子任务**直连构造**、刻意不走工厂：它不是"一条会话的开始"
+            // （不发 session-start，也没有壳的会话恢复/overlay 那套），接线就是最朴素的一份。
             s, subSettings, subTools, gate,
             { ev -> forwardSub(label, ev, log) },
             childClient?.invoke(subSettings) ?: chatClient(subSettings),
@@ -677,6 +678,12 @@ class Engine(
         // at = 这一轮开头那句话在历史里的下标。"回到这一句之前"要靠它把消息对上轮次 ——
         // 按时间猜会退错：定时任务、手机派活都往同一条会话里追加消息。
         Checkpoints.begin(session.id, ctx.runId, runGoal ?: "", history.indexOfLast { m -> m.role == "user" })
+        // 话进来了（S7）：异步、只记账 —— "用户 prompt 触发的脚本"是清单化巡检类用法的入口
+        // （收到任务 → 建工单 / 发条通知）。finalText 放的就是这句话，走 HAOAI_OUTFILE。
+        if (depth == 0) Hooks.fire(
+            Hooks.USER_PROMPT,
+            hookCtx(finalText = userText)
+        )
         var lastText = ""
         var turnNo = 0
         var retry = 0
@@ -836,6 +843,24 @@ class Engine(
                     continue
                 }
                 val args = parseArgs(call.args)
+                /*
+                 * 用户自己的闸（S7，对标 ZCODE PreToolUse）：`pre-tool` 钩子**同步**跑，
+                 * 任何一条退出码 2 = 这一步不许做，理由随 tool 回复进历史、随 ToolEnd 上屏。
+                 *
+                 * 位置在四层可见性检查之后、`ToolStart` 之前 —— 拦下时**什么都没发生过**，
+                 * 所以走"未知工具/被关掉"那条同款路：每个 tool_call_id 都要有一条 tool 回复
+                 * （OpenAI 协议硬要求），循环继续而不是整轮崩掉。钩子失败/超时只记账不拦
+                 * （见 [Hooks.gate]）；这层与 [Risk.kt] 打分互补：一个拦机器判的高危，
+                 * 一个拦用户自己写的规矩。
+                 */
+                val hg = Hooks.gate(Hooks.PRE_TOOL, hookCtx(tool = call.name, toolArgs = call.args))
+                if (hg.blocked) {
+                    val why = "被钩子「${hg.hook}」拦下：${hg.reason}（这是用户在 hooks 里配的规矩，" +
+                        "要执行它得先去改那条钩子。）"
+                    history += Msg("tool", why, callId = call.id, name = call.name)
+                    emit(Ev.ToolEnd(call.id, call.name, false, why, "generic"))
+                    continue
+                }
                 emit(Ev.ToolStart(call.id, call.name, brief(args), subjectOf(args)))
                 val res = try {
                     tool.run(args, ctx)
@@ -852,6 +877,15 @@ class Engine(
                     sub = res.sub, media = res.media)
                 shotPaths += res.images
                 emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub, res.media))
+                // 工具后记账（S7）：异步。失败走 post-tool-failure（ZCODE 的 PostToolUseFailure），
+                // 与 pre 的闸配成对 —— 拦下是"没发生"，失败是"发生了但坏了"，两种都该有钩子面。
+                if (res.error) Hooks.fire(
+                    Hooks.POST_TOOL_FAIL,
+                    hookCtx(tool = call.name, toolArgs = call.args, result = res.content)
+                ) else Hooks.fire(
+                    Hooks.POST_TOOL,
+                    hookCtx(tool = call.name, toolArgs = call.args, result = res.content)
+                )
             }
             /*
              * 工具产出的图片（screen capture / 浏览器截图）单独补一条 user 消息递给模型。
@@ -901,6 +935,19 @@ class Engine(
         persist()
         emit(Ev.TextDone(lastText))
         return lastText
+    }
+
+    /** S7 钩子上下文的统一拼装：会话字段取当下值，runId 用这一轮的（runStarted 还没被清）。 */
+    private fun hookCtx(
+        tool: String = "", toolArgs: String = "", result: String = "", finalText: String = ""
+    ): Hooks.Ctx {
+        val began = if (runStarted > 0L) runStarted else System.currentTimeMillis()
+        return Hooks.Ctx(
+            sid = session.id, runId = "r" + began, title = session.title.get(),
+            model = settings.model, workspace = session.workspace, mode = session.mode,
+            trigger = runTrigger, stopped = stopRequested, finalText = finalText,
+            tool = tool, toolArgs = toolArgs, result = result
+        )
     }
 
     fun apiKey(): String? = System.getenv("HAOAI_API_KEY")?.takeIf { it.isNotBlank() }
@@ -1164,10 +1211,11 @@ class Engine(
 /**
  * 引擎构造的**唯一入口**（S5）。
  *
- * 以前 `Engine(...)` 这行在两壳各写一遍：CLI 走 [Sessions.create]、网页走
- * `WebServer.engineFor`，差别（新会话 vs 从磁盘恢复、闸口接线、sink）全散在两边，
- * 于是"构造时要接什么"只能靠对照两处代码才知道。现在构造调用只许出现在这里：
- * 两壳的差别体现在参数上，而不是体现在各写各的构造。
+ * 以前 `Engine(...)` 这行在各处各写一遍：CLI 走 [Sessions.create]、网页走
+ * `engineFor` 与 `newSessionId`，差别（新会话 vs 从磁盘恢复、闸口接线、sink）全散在
+ * 于是"构造时要接什么"只能靠对照几处代码才知道。现在**两壳加新会话**都走这里：
+ * 差别体现在参数上，而不是体现在各写各的构造。唯一刻意留在外面的是子任务 spawn
+ * （不是"一条会话的开始"，注释写在调用点）。
  *
  * 真正要两壳**共用**的是这层（B15 把 `:core` 并进来之后，手机端也走这里）——
  * 而 WebServer 那 3000 行是网页壳自己的事，不进这份工厂。
@@ -1179,9 +1227,21 @@ object EngineFactory {
         gate: Gate,
         emit: (Ev) -> Unit,
         client: ChatClient? = null
-    ): Engine =
-        if (client == null) Engine(session, settings, allTools(), gate, emit)
+    ): Engine {
+        val e = if (client == null) Engine(session, settings, allTools(), gate, emit)
         else Engine(session, settings, allTools(), gate, emit, client)
+        // 会话开始（S7）：两壳都从工厂过，这一声就只在这里发。异步、runCatching 全包 ——
+        // 钩子坏在构造路径上会变成"这条会话打不开"，那是最贵的一类坏法。
+        if (session.id.isNotBlank()) Hooks.fire(
+            Hooks.SESSION_START,
+            Hooks.Ctx(
+                sid = session.id, runId = "", title = session.title.get(),
+                model = settings.model, workspace = session.workspace, mode = session.mode,
+                trigger = "session", stopped = false, finalText = ""
+            )
+        )
+        return e
+    }
 
     /**
      * 会话级覆盖：引擎构造时拿的是**全局**设置，恢复出来的会话可能写着自己的

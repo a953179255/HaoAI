@@ -671,10 +671,15 @@ class WebServer(settings: PcSettings, port: Int,
         session.persona = preset?.persona.orEmpty()
         session.role = preset?.name.orEmpty()
         var made: Engine? = null
-        val e = Engine(session, settings, allTools(), webGate(session.id) { made },
-            sink = { ev -> forward(session.id, ev) })
+        // 走工厂（S5/S7）：以前这里第三处直连 `Engine(...)`，`/api/new` 造完引擎就进了
+        // sessions 表，engineFor 再也不会被调 —— session-start 钩子因此一声都不发
+        // （HookTest 用 last="" 逮住的）。构造与会话级 overlay 只许在工厂里出现。
+        val e = EngineFactory.build(session, settings, webGate(session.id) { made },
+            emit = { ev -> forward(session.id, ev) })
         made = e
-        if (preset != null && preset.model.isNotBlank()) e.useSettings(settings.copy(model = preset.model))
+        // 角色卡带的模型：语义是"这条会话的初始模型"，toolsOff 不参与 ——
+        // 用工厂的 overlay 表达（model 为空时它自己就跳过，与原来的 if 条件等价）。
+        if (preset != null) EngineFactory.applySessionOverlay(e, settings, preset.model, emptyList())
         e.persistNow()
         sessions[session.id] = Managed(e)
         touch(session.id)
