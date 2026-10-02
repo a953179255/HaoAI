@@ -323,7 +323,14 @@ class LanServer(private val host: LanHost, private val wantPort: Int = LanStore.
         val body = readBody(ex)
         val id = field(body, "id")
         val decision = field(body, "decision")
-        val answer = field(body, "answer")
+        /**
+         * 回答用 [textField] 而不是 [field]：`field` 的正则是 `"([^"]*)"`，**遇到第一个引号就停**，
+         * 也不反转义。批量问卷手机上交的是 `JSON.stringify(["春","冰","早起"])`，
+         * 落到请求体里是 `"answer":"[\"春\",\"冰\",\"早起\"]"` —— `field` 只截到一个 `[`，
+         * 服务端 `parseBatchAnswers("[")` 解析失败回空表，三题于是全部记成"未作答"：
+         * 手机上一页答得好好的，电脑收到的却是一份空答案（2026-10-02 手机页像素抓到的）。
+         */
+        val answer = textField(body, "answer")
         /*
          * 两种挂起填的东西不一样：**审批**只能填那三个值（填错了就等于替人放行），
          * **提问**填的是回答文字本身（选项原文或自由输入）—— 引擎那边 `fut.complete(字符串)`

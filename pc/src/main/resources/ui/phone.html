@@ -196,9 +196,13 @@ $('tDgst').onclick=function(){tabs('dgst')};
 
 function refresh(){
   if(busy)return;busy=true;
+  /* 批量问卷卡的挂载器：map 只能返回**字符串**（innerHTML 收到 DOM 元素会把它
+     字符串化成 [object HTMLDivElement]，整块待批就剩这一行字 —— 手机页像素当场抓到的）。
+     所以先占位、DOM 就位之后再回来把事件挂上。 */
+  var mounts=[];
   var jobs=[api('/lan/pending').then(function(d){
       var ps=(d&&d.items)||[];$('badge').hidden=!ps.length;$('badge').textContent=ps.length;
-      $('appr').innerHTML=ps.length?ps.map(function(p){
+      $('appr').innerHTML=ps.length?ps.map(function(p,pi){
         var pl=p.payload||{};
         var rk=pl.risk?('<span class="rk '+
           (pl.risk=='high'?'hi':(pl.risk=='mid'?'mid':'lo'))+'">'+esc(pl.riskLabel||pl.risk)+'</span>'):'';
@@ -212,10 +216,10 @@ function refresh(){
             var st=(window.__batchSt&&window.__batchSt.id===p.id)?window.__batchSt:
               {id:p.id,idx:0,answers:[]};
             window.__batchSt=st;
-            var bhost=document.createElement('div');
-            var bcard=document.createElement('div');
-            bcard.className='card ask';
-            bcard.appendChild(bhost);
+            var bhostId='bqhost-'+pi;
+            mounts.push(function(){
+            var bhost=document.getElementById(bhostId);
+            if(!bhost)return;
             var bmount=function(){
               if(st.idx>=qs.length){
                 bhost.innerHTML='<h3>❓ '+esc(pl.title||'问卷')+'</h3><p class="mut">已答完 '+qs.length+' 题，送回电脑…</p>';
@@ -247,7 +251,8 @@ function refresh(){
               }
             };
             bmount();
-            return bcard;
+            });
+            return '<div class="card ask"><div id="'+bhostId+'"></div></div>';
           }
           /* 单题（B22 起与桌面卡同款 {label,description}，旧字符串载荷也收，当 label）。
              confirm=true（默认）= 点一下选中、再按「回答」提交（同一颗再点一次也提交）；
@@ -281,6 +286,7 @@ function refresh(){
           '<button data-d="allow_session" data-i="'+esc(p.id)+'">本任务都允许</button>'+
           '<button class="no" data-d="deny" data-i="'+esc(p.id)+'">拒绝</button></div></div>'}).join('')
         :'<p class="mut">没有在等你的。电脑上要人批准或要人回答的时候，会自动出现在这里。</p>';
+      mounts.forEach(function(f){f()});   // 占位卡就位之后再挂事件（顺序不能提前：那时 DOM 里还没有宿主）
       [].forEach.call(document.querySelectorAll('#appr [data-d]'),function(b){
         b.onclick=function(){decide(b.dataset.i,b.dataset.d,b)}});
       [].forEach.call(document.querySelectorAll('#appr [data-a]'),function(b){

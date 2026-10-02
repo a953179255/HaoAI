@@ -326,6 +326,36 @@ class LanTest {
     }
 
     /**
+     * 批量问卷交上来的**整份答案是一段 JSON 数组文本**（手机页 `JSON.stringify(["春","冰","早起"])`），
+     * 落到请求体里满是被转义的引号。`/lan/decide` 原来用 `field()` 取 answer —— 那个正则
+     * `"([^"]*)"` **遇到第一个引号就停、也不反转义**，于是三题只截到一个 `[`，
+     * 服务端 `parseBatchAnswers("[")` 解析失败回空表，引擎记成"未作答 ×3"：
+     * 手机上一页答得好好的，电脑上收到的是一份空答案（2026-10-02 手机页像素抓到的，
+     * 桌面那份像素全绿也照不出来 —— 桌面走的是 `/api/decide`，另一套解析）。
+     * 改法是 answer 走 `textField()`（派活那条口早就用它，就是为这个）。
+     */
+    @Test
+    fun `an answer survives escaped quotes`() {
+        val token = paired()
+        val arr = """["春","冰","早起"]"""
+        val (code, body) = post(
+            "/lan/decide", """{"id":"q1","answer":"${arr.replace("\"", "\\\"")}"}""", token
+        )
+        assertEquals(200, code)
+        assertEquals(
+            "整段数组要一个字符不差地交给引擎（截断一处就是一份空答案）：" + host.decided,
+            "q1" to arr, host.decided
+        )
+        assertTrue("回话只报题数、不外泄答案原文（那 3 题正是从这段数组解析出来的）：" + body,
+            body.contains("问卷答完 3 题") && !body.contains("春"))
+
+        host.decided = null
+        val quoted = """他说"行"，就这个"""
+        post("/lan/decide", """{"id":"q1","answer":"${quoted.replace("\"", "\\\"")}"}""", token)
+        assertEquals("带引号的自由回答也不能被截断", "q1" to quoted, host.decided)
+    }
+
+    /**
      * 答完提问回的那句话不许借用审批的词。像素验收抓到过手机底下浮出
      * 「已按你的决定放行：绿色」—— 答一句选择题不等于替谁开了绿灯。
      */
