@@ -54,40 +54,50 @@
   .app.no-l{--lw:0px}
   .app.no-r{--rw:0px}
   .app.no-l .rail.l,.app.no-r .rail.r{display:none}
-  /* 左上角有机点缀：色洗 + 液态 blob（fixed 于视口，透过左栏磨砂渗出；不挡交互） */
-  .corner-art{position:fixed;top:0;left:0;width:320px;height:300px;pointer-events:none;z-index:0}
-  .corner-art .cw{position:absolute;top:-100px;left:-110px;width:340px;height:300px;
-    background:radial-gradient(ellipse at 42% 44%,rgba(140,191,108,.42),rgba(140,191,108,0) 66%),
-               radial-gradient(ellipse at 70% 62%,rgba(127,179,232,.26),rgba(127,179,232,0) 70%);
-    filter:blur(20px);animation:cwDrift 14s ease-in-out infinite alternate}
+  /* 左上角有机点缀：在左栏内部从壳角"生长"（坐标与方案一致）。
+     层级：左栏背景 < 点缀 < 左栏内容（*:not(.corner-art) 抬到 z1）。
+     之前放在 body 的 fixed 层会被 .app 的 backdrop-filter 磨掉 + 位置跑到壳外 —— 用户实锤。 */
+  .rail.l{position:relative}
+  .rail.l>*:not(.corner-art){position:relative;z-index:1}
+  .corner-art{position:absolute;top:0;left:0;width:300px;height:230px;pointer-events:none;z-index:0;overflow:visible}
+  .corner-art .cw{position:absolute;top:-70px;left:-80px;width:260px;height:200px;
+    background:radial-gradient(ellipse at 40% 40%,rgba(140,191,108,.40),rgba(140,191,108,0) 68%),
+               radial-gradient(ellipse at 70% 65%,rgba(127,179,232,.26),rgba(127,179,232,0) 70%);
+    filter:blur(18px);animation:cwDrift 14s ease-in-out infinite alternate}
   .corner-art .cb{position:absolute;filter:blur(.4px)}
-  .corner-art .b1{top:-46px;left:-50px;width:130px;height:112px;
-    background:linear-gradient(135deg,rgba(156,204,120,.45),rgba(127,179,232,.26));
+  .corner-art .b1{top:-26px;left:-30px;width:110px;height:96px;
+    background:linear-gradient(135deg,rgba(156,204,120,.50),rgba(127,179,232,.28));
     border-radius:56% 44% 52% 48% / 48% 55% 45% 52%;
     animation:cbMorph 12s ease-in-out infinite alternate, cbFloat 8s ease-in-out infinite}
-  .corner-art .b2{top:150px;left:-16px;width:46px;height:42px;
-    background:linear-gradient(160deg,rgba(201,155,224,.38),rgba(140,191,108,.22));
+  .corner-art .b2{top:52px;left:-14px;width:46px;height:42px;
+    background:linear-gradient(160deg,rgba(201,155,224,.42),rgba(140,191,108,.24));
     border-radius:44% 56% 58% 42% / 55% 44% 56% 45%;
     animation:cbMorph 9s ease-in-out infinite alternate-reverse, cbFloat 6.5s ease-in-out .8s infinite}
-  .corner-art .b3{top:64px;left:118px;width:18px;height:18px;
-    background:linear-gradient(160deg,rgba(127,179,232,.42),rgba(156,204,120,.28));
+  .corner-art .b3{top:6px;left:88px;width:20px;height:20px;
+    background:linear-gradient(160deg,rgba(127,179,232,.45),rgba(156,204,120,.30));
     border-radius:50% 50% 44% 56% / 56% 44% 50% 50%;
     animation:cbFloat 7.5s ease-in-out .4s infinite}
-  .corner-art .ca{position:absolute;top:-26px;left:-56px;width:270px;height:180px;
-    border:1.5px solid rgba(62,122,30,.14);border-radius:0 0 100% 0 / 0 0 100% 0;
+  .corner-art .ca{position:absolute;top:-14px;left:-40px;width:230px;height:130px;
+    border:1.5px solid rgba(62,122,30,.16);border-radius:0 0 100% 0 / 0 0 100% 0;
     border-top:none;border-left:none;animation:caBreath 10s ease-in-out infinite alternate}
-  [data-theme="dark"] .corner-art .cw{background:radial-gradient(ellipse at 42% 44%,rgba(140,191,108,.16),rgba(140,191,108,0) 66%),
-               radial-gradient(ellipse at 70% 62%,rgba(127,179,232,.12),rgba(127,179,232,0) 70%)}
-  [data-theme="dark"] .corner-art .b1{background:linear-gradient(135deg,rgba(156,204,120,.18),rgba(127,179,232,.12))}
-  [data-theme="dark"] .corner-art .b2{background:linear-gradient(160deg,rgba(201,155,224,.16),rgba(140,191,108,.10))}
-  [data-theme="dark"] .corner-art .ca{border-color:rgba(156,204,120,.12)}
+  [data-theme="dark"] .corner-art .cw{background:radial-gradient(ellipse at 40% 40%,rgba(140,191,108,.16),rgba(140,191,108,0) 68%),
+               radial-gradient(ellipse at 70% 65%,rgba(127,179,232,.12),rgba(127,179,232,0) 70%)}
+  [data-theme="dark"] .corner-art .b1{background:linear-gradient(135deg,rgba(156,204,120,.20),rgba(127,179,232,.14))}
+  [data-theme="dark"] .corner-art .b2{background:linear-gradient(160deg,rgba(201,155,224,.18),rgba(140,191,108,.12))}
+  [data-theme="dark"] .corner-art .b3{background:linear-gradient(160deg,rgba(127,179,232,.22),rgba(156,204,120,.14))}
+  [data-theme="dark"] .corner-art .ca{border-color:rgba(156,204,120,.14)}
   @keyframes cbMorph{0%{border-radius:56% 44% 52% 48% / 48% 55% 45% 52%}
     50%{border-radius:46% 54% 58% 42% / 54% 46% 54% 46%}
     100%{border-radius:52% 48% 44% 56% / 44% 56% 48% 52%}}
   @keyframes cbFloat{0%,100%{transform:translate(0,0) rotate(0deg)}50%{transform:translate(5px,-7px) rotate(3deg)}}
-  @keyframes cwDrift{from{transform:translate(0,0) scale(1)}to{transform:translate(14px,10px) scale(1.1)}}
+  @keyframes cwDrift{from{transform:translate(0,0) scale(1)}to{transform:translate(14px,10px) scale(1.12)}}
   @keyframes caBreath{from{transform:translate(0,0);opacity:.8}to{transform:translate(6px,5px);opacity:.5}}
-  @media (prefers-reduced-motion:reduce){.corner-art *{animation:none}}
+  /* 第④层：logo 本体同节奏呼吸（9px↔11px 圆角流转，与 blob 一个节奏家族） */
+  .dot{animation:dotMorph 9s ease-in-out infinite alternate}
+  @keyframes dotMorph{0%{border-radius:11px 8px 10px 9px/9px 11px 8px 10px}
+    50%{border-radius:9px 11px 8px 10px/10px 8px 11px 9px}
+    100%{border-radius:10px 9px 11px 8px/8px 10px 9px 11px}}
+  @media (prefers-reduced-motion:reduce){.corner-art *,.dot{animation:none}}
   .rail{background:linear-gradient(180deg,var(--glass),transparent);border-right:1px solid var(--line);
     padding:14px 12px;overflow:auto;display:flex;flex-direction:column;min-height:0}
   .rail.r{border-right:0;border-left:1px solid var(--line)}
@@ -763,7 +773,9 @@
   .btn.pri{border-radius:11px;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),0 6px 16px rgba(31,111,74,.32)}
   .wsrow,.srch input{border-radius:11px}
   .sess .it{border:1px solid transparent;background:transparent;border-radius:11px;
-    padding:7px 66px 7px 10px;transition:background .14s,box-shadow .14s}
+    padding:7px 66px 7px 10px;transition:box-shadow .14s}
+  /* ⚠️ 背景不许过渡：切主题时 body 即时变亮、胶囊若 background 过渡(~250ms)就会出现
+     「亮页面 + 暗胶囊」的混合帧（截图与真机都实锤过）。移除 background 过渡 → 翻转原子化。 */
   .sess .it:hover{background:var(--glass2)}
   .sess .it.cur{background:var(--bg2);border-color:transparent;box-shadow:0 3px 12px rgba(20,40,30,.16)}
   :root[data-theme="dark"] .sess .it.cur{box-shadow:0 3px 12px rgba(0,0,0,.45)}
@@ -811,10 +823,11 @@
 </style>
 </head>
 <body>
-<div class="corner-art" aria-hidden="true"><i class="cw"></i><i class="ca"></i><i class="cb b1"></i><i class="cb b2"></i><i class="cb b3"></i></div>
 <div class="app" id="app">
   <aside class="rail l">
+    <div class="corner-art" aria-hidden="true"><i class="cw"></i><i class="ca"></i><i class="cb b1"></i><i class="cb b2"></i><i class="cb b3"></i></div>
     <div class="brand"><span class="dot"></span><span>HaoAI</span><span class="vpill">PC · <span id="ver">连接中…</span></span></div>
+    <div class="grp">工作台</div>
     <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
     <button class="wsrow" id="wsBtn" title="换个工作区开一条新任务"><span id="wsName">工作区</span><em>换 ▾</em></button>
     <div class="grp">历史会话 <button class="mini" id="trashBtn" title="删掉的会话先进回收站，这里可以放回">回收站</button> <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
