@@ -1,0 +1,63 @@
+[
+  {
+    "eval": "(async()=>{const r=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',id:'',name:'巡检专家',persona:'你是巡检专家，回答要短。',model:'',workspace:'',mode:'auto',desc:'看日志'})});const d=await r.json();const it=(d.items||[]).find(x=>x.name==='巡检专家');window.__p=it?it.id:'';return {saved:!!it}})()",
+    "must": ["saved"],
+    "note": "先建一张专家卡，等下要把它指定给定时任务"
+  },
+  {"click": "#tabs button[data-t=\"cron\"]"},
+  {"goto": "#crPreset", "timeout": 8000},
+  {"sleep": 900},
+  {
+    "eval": "(()=>{const s=document.querySelector('#crPreset');const o=[...s.options].map(x=>x.value);return {hasBlank:o[0]==='',blankText:s.options[0].textContent.indexOf('不指定')>=0,hasCard:o.includes(window.__p),visible:!!s.offsetParent}})()",
+    "must": ["hasBlank", "blankText", "hasCard", "visible"],
+    "note": "定时表单里有专家下拉、看得见、第一项是「不指定」（不指定是合法选择而不是空值），并且刚建的那张卡在选项里"
+  },
+  {"type": {"sel": "#crName", "text": "早间巡检"}},
+  {"type": {"sel": "#crPrompt", "text": "看一眼今天的构建日志，有报错就写清是哪一条"}},
+  {"type": {"sel": "#crWhen", "text": "每天 8 点"}},
+  {"sleep": 900},
+  {
+    "eval": "(()=>{const s=document.querySelector('#crPreset');s.value=window.__p;s.dispatchEvent(new Event('change'));return {picked:s.value===window.__p}})()",
+    "must": ["picked"],
+    "note": "选那张专家卡（下拉的值真的落上了，不是只画了个样子）"
+  },
+  {"click": "#crAdd"},
+  {"sleep": 1200},
+  {
+    "eval": "(()=>{const row=document.querySelector('#cronList .rl.cron');const t=row?row.innerText:'';return {added:!!row,showsExpert:t.indexOf('专家：巡检专家')>=0,notBlank:t.indexOf('不指定')<0}})()",
+    "must": ["added", "showsExpert", "notBlank"],
+    "note": "右栏那一行要写清「这条是谁在跑」—— 没有这一行，用户看不出用的是谁的模型与目录，只能凭记忆"
+  },
+  {"shot": "cx01-cron-row-with-expert"},
+  {
+    "eval": "(async()=>{const d=await fetch('/api/schedules').then(r=>r.json());const s=(d.items||[]).find(x=>x.name==='早间巡检')||{};return {id:s.preset===window.__p,name:s.presetName==='巡检专家',missing:s.presetMissing===false,when:/每天/.test(s.when||'')}})()",
+    "must": ["id", "name", "missing", "when"],
+    "note": "接口侧：卡 id 存住了、显示名给得出、没被误标成缺失（排期文本也照旧，加字段不能把老功能挤坏）"
+  },
+  {"click": "[data-view=\"sched\"]"},
+  {"goto": "#schedList .xcard", "timeout": 8000},
+  {"sleep": 800},
+  {
+    "eval": "(()=>{const c=document.querySelector('#schedList .xcard');const t=c?c.innerText:'';return {page:!!c,shows:t.indexOf('专家：巡检专家')>=0}})()",
+    "must": ["page", "shows"],
+    "note": "日程整页也要显示（两处都得看得见：只在右栏显示的话，从整页进来的人还是不知道这条是谁在跑）"
+  },
+  {
+    "eval": "(async()=>{await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'del',id:window.__p})});const d=await fetch('/api/schedules').then(r=>r.json());const s=(d.items||[]).find(x=>x.name==='早间巡检')||{};return {stillThere:!!s.id,missing:s.presetMissing===true}})()",
+    "must": ["stillThere", "missing"],
+    "note": "把卡删掉：任务还在（不许偷偷删用户的排期），但必须被标成「卡已不在」—— 后端这时不会跑它，也不会降级成没有角色"
+  },
+  {"click": "#tabs button[data-t=\"cron\"]"},
+  {"sleep": 900},
+  {
+    "eval": "(()=>{const row=document.querySelector('#cronList .rl.cron');const t=row?row.innerText:'';const err=row?row.querySelector('[style*=err]'):null;return {warn:t.indexOf('专家卡已不在')>=0||t.indexOf('不会跑')>=0,red:!!err}})()",
+    "must": ["warn", "red"],
+    "note": "右栏那行要红字说清「到点不会跑」：静默不跑是最坏的一种失败，人只会以为它跑了"
+  },
+  {"shot": "cx02-missing-card-warning"},
+  {
+    "eval": "(async()=>{const d=await fetch('/api/schedules').then(r=>r.json());const s=(d.items||[]).find(x=>x.name==='早间巡检')||{};const r=await fetch('/api/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'add',id:s.id,name:s.name,prompt:s.prompt,kind:s.kind,every:String(s.every),at:s.at,days:s.days,flow:s.flow,preset:'不存在的卡'})});const back=await r.json();return {rejected:back.ok===false,saysCard:/专家卡/.test(back.error||''),notSaved:!(await fetch('/api/schedules').then(x=>x.json())).items.some(y=>y.preset==='不存在的卡')}})()",
+    "must": ["rejected", "saysCard", "notSaved"],
+    "note": "手改请求塞一张不存在的卡：现在就拒（而不是到点才发现），错误话里要说是专家卡，且不许写进盘"
+  }
+]

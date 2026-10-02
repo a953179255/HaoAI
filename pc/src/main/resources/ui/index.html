@@ -1453,6 +1453,7 @@
         <input type="text" id="crEvery" class="tin" value="60" placeholder="分钟">
         <input type="text" id="crAt" class="tin" value="09:00" placeholder="HH:MM">
         <select id="crFlow" class="tin"><option value="">跑上面那句话</option></select>
+        <select id="crPreset" class="tin" title="到点用哪张专家卡起会话：人设、模型、目录、档位都跟着卡走"><option value="">不指定专家（全局默认）</option></select>
       </div>
       <div class="acts2 pinned"><button class="ab" id="crAdd">加为定时任务</button>
         <span class="fp" id="crState"></span></div>
@@ -3322,15 +3323,33 @@ function loadWorkflows(){
     .then(d=>paintWorkflows(d.items)).catch(()=>{$('#wfList').textContent='读不到'});
 }
 function paintCron(list){
-
+  cronItems=list||[];
   $('#cronList').innerHTML=(list||[]).length?list.map(s=>
     `<div class="rl cron${s.enabled?'':' off'}"><span><b>${esc(s.name)}</b>`+
     `<em>${whenText(s)} · 下次 ${whenTime(s.nextDue)}</em>`+
+    // 指定的专家要看得见：没这一行，"每天 8 点跑"到底是谁在跑、在哪个目录跑，全凭记忆
+    `<em>${s.presetMissing?'<span style="color:var(--err)">专家卡已不在，到点不会跑</span>'
+      :(s.presetName?('专家：'+esc(s.presetName)):'专家：不指定（全局默认）')}</em>`+
     `<em>${s.lastRun?('上次 '+whenTime(s.lastRun)+(s.lastError?' · '+esc(s.lastError):'')):'还没跑过'}</em></span>`+
     `<button class="ab" data-cr="run" data-id="${esc(s.id)}" title="立刻起一条会话跑一次">跑一次</button>`+
     `<button class="ab" data-cr="toggle" data-id="${esc(s.id)}">${s.enabled?'停用':'启用'}</button>`+
     `<button class="ab" data-cr="del" data-id="${esc(s.id)}">删</button></div>`).join('')
     :'（还没配）';
+}
+/* 专家下拉：只列真角色卡（团队不是卡，到点没有"用谁的目录"这回事）。
+   重画时保住当前选择——加完一条任务不该把下拉跳回"不指定"。 */
+let cronItems=[];
+function paintCronExperts(items){
+  const sel=$('#crPreset');if(!sel)return;
+  const keep=sel.value;
+  sel.innerHTML='<option value="">不指定专家（全局默认）</option>'+
+    (items||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  if(keep&&[...sel.options].some(o=>o.value===keep))sel.value=keep;
+  else if(cronItems.some(s=>s.preset&&[...sel.options].some(o=>o.value===s.preset)))
+    sel.value=cronItems.find(s=>s.preset).preset;
+}
+function loadCronExperts(){
+  return fetch('/api/presets').then(r=>r.json()).then(d=>paintCronExperts(d.items||[])).catch(()=>{});
 }
 /* 选「每天一次」就别再显示"几分钟"，反过来也是：两个都摆着，用户会以为是一起生效的 */
 function syncCronKind(){
@@ -3340,7 +3359,7 @@ function syncCronKind(){
 }
 function loadCron(){
   return fetch('/api/schedules').then(r=>r.ok?r.json():Promise.reject(r.status))
-    .then(d=>paintCron(d.items)).catch(()=>{$('#cronList').textContent='读不到'});
+    .then(d=>{paintCron(d.items);loadCronExperts()}).catch(()=>{$('#cronList').textContent='读不到'});
 }
 /* 一句话排期：边打边解析，把"理解成什么"和"下一次什么时候跑"摆在眼前让人确认。
    解析不出来就明说 —— 服务端这时不会退回默认时间，猜错的时间会在人睡着时起真任务。 */
@@ -3416,7 +3435,8 @@ function watchDigest(){
       if(!p){toast('那句话是空的');return}
       const w=$('#crWhen').value.trim();
       post('/api/schedules',{op:'add',name:$('#crName').value,prompt:p,when:w,kind:$('#crKind').value,
-        every:$('#crEvery').value,at:$('#crAt').value,flow:$('#crFlow').value}).then(d=>{
+        every:$('#crEvery').value,at:$('#crAt').value,flow:$('#crFlow').value,
+        preset:($('#crPreset')||{}).value||''}).then(d=>{
         if(!d||!d.ok){toast((d&&d.error)||'没加上','err');return}
         $('#crName').value='';$('#crPrompt').value='';$('#crWhen').value='';$('#crWhenEcho').textContent='';
         $('#crManual').style.display='';
@@ -5085,6 +5105,8 @@ function card(s){
       <i class="mbtib" ${on?'':'style="color:var(--dim2)"'}>${on?'启用':'停用'}</i></div>
     <div class="ds">${esc(s.when||'')}</div>
     <div class="ds" style="color:var(--dim2)">${esc((s.prompt||'').slice(0,90))}${(s.prompt||'').length>90?'…':''}</div>
+    <div class="meta">${s.presetMissing?'<span style="color:var(--err)">指定的专家卡已经不在了，到点不会跑</span>'
+      :(s.presetName?('专家：'+esc(s.presetName)):'专家：不指定（用全局默认模型与目录）')}</div>
     <div class="meta">${on?('下一次：'+fmt(s.nextDue)):'已停用'}</div>
     ${s.lastError?`<div class="ds" style="color:var(--err)">上次出错：${esc(s.lastError.slice(0,80))}</div>`:''}
     <div class="ft"><button class="ab pri" data-s="run" data-id="${esc(s.id)}">立即跑</button>

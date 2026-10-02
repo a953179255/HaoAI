@@ -50,6 +50,13 @@ import com.haoai.pc.WebServer.Body
                     }
                     val at = parsed?.first
                     val old = list.firstOrNull { it.id == id }
+                    // 指定的专家卡必须真存在：手改请求塞一个不存在的 id，
+                    // 到点是"静默没有角色"还是"明确失败"这件事只有在这里能决定（见 scheduleExpert）
+                    val presetId = b.str("preset").trim()
+                    if (presetId.isNotEmpty() && Presets.find(presetId) == null) {
+                        send(ex, 200, """{"ok":false,"error":${quote("没有这张专家卡：" + presetId)}}""",
+                            "application/json; charset=utf-8"); return
+                    }
                     Schedules.update(
                         Schedule(
                             id = id,
@@ -61,6 +68,7 @@ import com.haoai.pc.WebServer.Body
                             days = at?.days ?: b.str("days"),
                             runAt = at?.runAt ?: 0L,
                             flow = b.str("flow"),
+                            preset = presetId,
                             created = old?.created ?: System.currentTimeMillis(),
                             enabled = old?.enabled ?: true,
                             lastRun = old?.lastRun ?: 0L,
@@ -77,9 +85,13 @@ import com.haoai.pc.WebServer.Body
 
 
     internal fun WebServer.schedulesJson(): String = Schedules.load().joinToString(",", "[", "]") { s ->
+        val p = if (s.preset.isBlank()) null else Presets.find(s.preset)
         """{"id":${quote(s.id)},"name":${quote(s.name)},"prompt":${quote(s.prompt)},""" +
             """"kind":${quote(s.kind)},"every":${s.every},"at":${quote(s.at)},""" +
             """"days":${quote(s.days)},"runAt":${s.runAt},"flow":${quote(s.flow)},""" +
+            // preset = 卡 id（编辑时要回填下拉）；presetName 给人看；presetMissing 让卡片能标红
+            """"preset":${quote(s.preset)},"presetName":${quote(p?.name ?: "")},""" +
+            """"presetMissing":${s.preset.isNotBlank() && p == null},""" +
             """"when":${quote(SchedulePlan.describe(s.kind, s.every, s.at, s.days, s.runAt))},""" +
             """"enabled":${s.enabled},"lastRun":${s.lastRun},"lastSid":${quote(s.lastSid)},""" +
             """"lastError":${quote(s.lastError)},"nextDue":${Schedule.nextDue(s, System.currentTimeMillis())}}"""
@@ -199,8 +211,18 @@ import com.haoai.pc.WebServer.Body
         item.lastRun = System.currentTimeMillis()
         item.lastError = ""
         Schedules.update(item)
+        // 指定的专家卡被删了：记一条明确的错，**不要**降级成"没有角色"继续跑
+        val (card, perr) = scheduleExpert(item)
+        if (perr != null) {
+            item.lastError = perr
+            item.lastRun = 0L        // 没跑成就别占着 lastRun：修好卡之后下一槽照常触发
+            Schedules.update(item)
+            Env.log("sched", perr)
+            return
+        }
         val sid = try {
-            val (newId, err) = startRun("", item.prompt, named = item.name, fresh = true, trigger = "定时")
+            val (newId, err) = startRun("", item.prompt, named = item.name, fresh = true,
+                trigger = "定时", preset = card)
             if (err != null) throw IllegalStateException(err)
             publish("title", """{"title":${quote(item.name)}}""", newId)
             // 侧栏要立刻刷出来：定时任务跑那几分钟里用户得看得见它在动，而不是"到点没反应"

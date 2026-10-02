@@ -520,7 +520,15 @@ class WebServer(settings: PcSettings, port: Int,
                          images: List<String> = emptyList(),
                          goal: String? = null,
                          trigger: String = "手动",
-                         media: List<String> = emptyList()): Pair<String, String?> {
+                         media: List<String> = emptyList(),
+                         /**
+                          * 定时任务指定的那张专家卡（[Schedule.preset] 解析出来的）。
+                          *
+                          * 只在**新建会话**时生效：往一条已经存在的会话里塞句子时改人设，
+                          * 等于把用户正在聊的那条悄悄换成另一个角色 —— 那比不换更糟。
+                          * 定时任务永远 `fresh=true`，所以这条路一定会走到新建。
+                          */
+                         preset: Preset? = null): Pair<String, String?> {
         /*
          * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
          * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
@@ -550,7 +558,10 @@ class WebServer(settings: PcSettings, port: Int,
             } else if (use.isNotEmpty() && sessions[use]?.running == true) {
                 use to null
             } else {
-                val target = use.ifBlank { newSessionId() }
+                val target = use.ifBlank {
+                    // 卡上写了目录就用它的：定时任务"每天整理那个仓库"靠的就是这一句
+                    newSessionId(preset?.let { Presets.workspaceOf(it) }, preset)
+                }
                 val m = sessions[target] ?: Managed(engineFor(target)).also { sessions[target] = it }
                 touch(target)
                 // 清停止旗要和置 running 在同一把锁里：见 Engine.beginRun 的注释
