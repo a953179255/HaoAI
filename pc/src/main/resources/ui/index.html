@@ -150,24 +150,32 @@
   /* 档位不 再裸印 "auto/ask/plan"：一枚小胶囊，颜色语义跟顶栏三档同源 */
   .sess .it .mp{font-style:normal;font-size:9.5px;font-weight:600;color:var(--acc);background:var(--glass2);
     border-radius:6px;padding:1px 5px;margin-right:5px;vertical-align:1px}
-  /* 操作钮 = 一枚悬浮工具药丸：面板底+描边+投影，三枚图标住在一起、垂直居中。
-     之前是散装三个小方块贴在右上角，又小又挤（用户实锤"不好看"）。
-     垂直居中还有个好处：不跟右上角的未读/置顶角标抢位置。 */
-  .sess .it .act{position:absolute;right:5px;top:50%;transform:translateY(-50%);
-    display:flex;gap:1px;opacity:0;transition:opacity .14s;
-    padding:3px;border-radius:999px;background:var(--panel);border:1px solid var(--line2);
-    box-shadow:0 4px 12px rgba(0,0,0,.18)}
-  .sess .it:hover .act{opacity:1}
-  .sess .it .act b{width:26px;height:22px;display:flex;align-items:center;justify-content:center;
-    cursor:pointer;color:var(--dim);border-radius:999px;transition:background .12s,color .12s,transform .12s}
-  .sess .it .act b svg{width:14px;height:14px;stroke:currentColor;fill:none;
-    stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-  .sess .it .act b:hover{background:var(--glass2);color:var(--fg)}
-  .sess .it .act b[data-a="pin"]:hover{color:var(--acc)}
-  .sess .it .act b[data-a="del"]:hover{color:var(--err)}
-  /* 已置顶的卡：pin 常亮，与卡上的「置顶」胶囊呼应，一眼知道这卡是钉住的 */
-  .sess .it[data-pinned="1"] .act b[data-a="pin"]{color:var(--acc)}
-  .sess .it .act b:active{transform:scale(.88)}
+  /* 行操作 = 一枚 ⋯ 菜单钮（OpenClaw 同款：网页端没有长按/右键菜单的肌肉记忆，
+     悬停出钮 + 点开菜单面才是网页的习惯用法）。菜单面全屏唯一一份（#sessMenu），
+     不跟着每张卡渲染 —— 渲染一份、定位一次。当前卡上的 ⋯ 常驻可见。 */
+  .sess .it .more{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+    width:26px;height:26px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+    color:var(--dim);cursor:pointer;opacity:0;transition:opacity .14s,background .12s,color .12s}
+  .sess .it:hover .more,.sess .it.cur .more{opacity:1}
+  .sess .it .more:hover{background:var(--glass2);color:var(--fg)}
+  .sess .it .more svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round}
+  /* 未读/等待角标悬停让位：一枚钮的宽度 */
+  .sess .it:hover .nb{right:40px}
+  /* 会话操作菜单面：玻璃、窄、贴着按钮弹出；贴底时翻到按钮上方 */
+  .smenu{position:fixed;z-index:30;min-width:178px;display:none;
+    background:var(--panel);backdrop-filter:blur(24px) saturate(1.35);
+    border:1px solid var(--line2);border-radius:12px;box-shadow:var(--shadow);padding:5px}
+  .smenu.on{display:block}
+  .smenu .mh{font-size:10.5px;color:var(--dim2);padding:5px 10px 4px;max-width:230px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .smenu .mi{display:flex;gap:9px;align-items:center;padding:7px 10px;border-radius:8px;
+    font-size:12.5px;color:var(--fg2);cursor:pointer;white-space:nowrap}
+  .smenu .mi:hover{background:var(--glass2);color:var(--fg)}
+  .smenu .mi svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round;flex:none}
+  .smenu .mi.danger{color:var(--err)}
+  .smenu .mi.danger:hover{background:rgba(214,84,84,.12);color:var(--err)}
+  .smenu .msep{height:1px;background:var(--line);margin:4px 6px}
   /* 多会话并行：一条会话一个视图容器，只有当前这条可见。
      后台会话的事件照样写进它自己那个容器 —— 切回去不用重拉、也不丢中间输出。 */
   .view{display:none}
@@ -195,8 +203,8 @@
     background:var(--acc);color:var(--onacc);font-size:10px;font-weight:700;text-align:center;line-height:15px}
   .sess .it.wait .nb{background:var(--warn);color:#241a08}
   .sess .it.wait{border-color:var(--warn)}
-  /* 悬停时工具药丸出现在右侧中部，把未读角标往左挪而不是藏起来 */
-  .sess .it:hover .nb{right:100px}
+  /* 悬停时 ⋯ 钮出现在右侧中部，未读角标往左挪 */
+  .sess .it:hover .nb{right:40px}
   .sess .it .ptag{font-style:normal;font-size:9.5px;font-weight:600;color:var(--acc);background:var(--glass2);
     border-radius:6px;padding:1px 5px;margin-left:5px;vertical-align:1px}
   .sess .it .hit{display:block;white-space:normal;color:var(--dim2);font-size:11px;line-height:1.4;
@@ -266,11 +274,17 @@
   .newchat:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 6px 16px rgba(62,122,30,.42)}
   .newchat:active{transform:scale(.98)}
   .sessgrp{display:flex;align-items:center;gap:6px}
-  /* ---- 专家整页（pagev）：主区切页时聊天三件套让位 ---- */
+  /* ---- 专家整页（pagev）：主区切页时聊天三件套让位 ----
+     泛化成 data-page：experts / sched 都走同一套"主区换页"的机制。 */
   .pagev{display:none;flex:1;min-height:0;flex-direction:column;overflow:hidden}
-  .main.on-exp>header,.main.on-exp>.stream,.main.on-exp>footer,.main.on-exp>.ctxp,
-  .main.on-exp>.pill,.main.on-exp>.qrow,.main.on-exp>.atts{display:none!important}
-  .main.on-exp>.pagev{display:flex}
+  .main[data-page=""]>.pagev{display:none}
+  .main[data-page]:not([data-page=""])>header,
+  .main[data-page]:not([data-page=""])>.stream,
+  .main[data-page]:not([data-page=""])>footer,
+  .main[data-page]:not([data-page=""])>.ctxp,
+  .main[data-page]:not([data-page=""])>.pill{display:none!important}
+  .main[data-page="experts"]>#page-experts,
+  .main[data-page="sched"]>#page-sched{display:flex}
   .xp-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 18px 10px;flex-wrap:wrap}
   .xp-head h2{margin:0;font-size:17px;color:var(--fg)}
   .xp-head .sp{flex:1}
@@ -439,11 +453,21 @@
   .tk-c{color:var(--dim2);font-style:italic}
   .tk-n{color:var(--num)}
   footer{padding:8px 14px 12px;border-top:1px solid var(--line);background:var(--bg);position:relative}
-  .inwrap{max-width:880px;margin:0 auto;display:flex;gap:8px;align-items:flex-end;
-    background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);padding:8px}
+  /* 输入区两行（Octop 式）：上行=输入框，下行=工具条（附件/命令/提文件）+ 发送。
+     原来附件钮孤零零立在输入框左边，/ 与 @ 的用法全靠占位符小字 —— 现在看得见也点得着。 */
+  .inwrap{max-width:880px;margin:0 auto;display:flex;flex-direction:column;align-items:stretch;gap:2px;
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);padding:7px 8px 7px 6px}
   .inwrap:focus-within{border-color:var(--acc2)}
   textarea{flex:1;border:0;outline:0;resize:none;background:transparent;color:var(--fg);
-    font:inherit;max-height:200px;min-height:24px;padding:4px}
+    font:inherit;max-height:200px;min-height:24px;padding:4px 8px}
+  .ibar{display:flex;gap:4px;align-items:center}
+  .ib{width:28px;height:28px;border-radius:999px;border:0;background:transparent;color:var(--dim);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit;font-size:13px;
+    transition:background .12s,color .12s;flex:none}
+  .ib:hover{background:var(--glass2);color:var(--fg)}
+  .ib svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round}
+  .ihint{margin-left:auto;font-size:10.5px;color:var(--dim2);padding-right:4px}
   .send{width:36px;height:36px;flex:none;border-radius:50%;border:0;
     background:linear-gradient(160deg,var(--acc),var(--acc2));
     color:var(--onacc);font-size:16px;cursor:pointer;font-weight:700;
@@ -738,6 +762,7 @@
     align-items:center;justify-content:center;color:var(--dim);font-size:12px;cursor:pointer;min-height:120px;
     background:transparent;font-family:inherit}
   .xadd:hover{border-color:var(--acc2);color:var(--fg)}
+  .xcard.off{opacity:.6}
   .swatches{display:flex;gap:6px;flex-wrap:wrap}
   .swatches i{width:22px;height:22px;border-radius:8px;cursor:pointer;border:2px solid transparent;flex:none}
   .swatches i.on{border-color:var(--fg)}
@@ -974,7 +999,7 @@
     <div class="navrow" data-act="kb" title="工作区 .haoai-kb/ 语料：导入参考文档，自动进语义检索"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 3v18M12 8h5M12 12h5"/></svg>知识库</div>
     <div class="navrow" data-act="skills" title="自定义命令（技能）与技能订阅源在设置里"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4L15 12l-3-3z"/></svg>技能</div>
     <div class="grp">助理</div>
-    <div class="navrow" data-act="cron" title="定时任务与运行结果"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>定时任务</div>
+    <div class="navrow" data-view="sched" title="定时任务的时间线与近期结果"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>日程</div>
     <div class="navrow" data-act="mem" title="长期记忆条目"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 1 7 7c0 3-2 5-4 6v3h-6v-3c-2-1-4-3-4-6a7 7 0 0 1 7-7z"/></svg>记忆</div>
     <div class="grp">设置</div>
     <div class="navrow" data-act="theme" title="切换明暗主题"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>外观</div>
@@ -1032,10 +1057,15 @@
       <div class="qrow" id="queueRow"></div>
       <div class="atts" id="attRow"></div>
       <div class="inwrap">
-        <button class="clip" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L14 6"/></svg></button>
-        <input type="file" id="att" multiple hidden>
-        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（Enter 发送 · Shift+Enter 换行 · / 命令 · @ 文件 · 拖进来或 Ctrl+V 贴截图）"></textarea>
-        <button class="send" id="send"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+        <textarea id="box" rows="1" placeholder="给 HaoAI 派个活…（拖进来或 Ctrl+V 贴截图）"></textarea>
+        <div class="ibar">
+          <button class="ib" id="clip" title="附一个文件：文本直接贴进这句话，其它类型落到工作区再让模型按路径读"><svg viewBox="0 0 24 24"><path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L14 6"/></svg></button>
+          <input type="file" id="att" multiple hidden>
+          <button class="ib" id="slashBtn" title="技能与命令（/）"><svg viewBox="0 0 24 24"><path d="M14.5 4l-5 16"/><path d="M4 9h5M15 15h5"/></svg></button>
+          <button class="ib" id="atBtn" title="提工作区文件（@）"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1"/></svg></button>
+          <span class="ihint">Enter 发送 · Shift+Enter 换行</span>
+          <button class="send" id="send"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+        </div>
       </div>
     </footer>
 
@@ -1059,6 +1089,26 @@
           <div id="xpRuns" class="runs"><div class="kv">（还没跑过）</div></div>
           <div class="grp">团队速览</div>
           <div id="xpTeams" class="kv">—</div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- 日程整页：定时任务的时间线视角（右栏「定时」页签保留编辑表单，页里管"看与跑"） -->
+    <div class="pagev" id="page-sched">
+      <div class="xp-head">
+        <h2>日程</h2>
+        <div class="kv" id="schedSum" style="margin:0">—</div>
+        <span class="sp"></span>
+        <button class="btn pri" id="schedNew">＋ 新建定时任务</button>
+      </div>
+      <div class="xp-body">
+        <div class="xp-gridwrap"><div class="xgrid" id="schedList"></div></div>
+        <aside class="xp-aside">
+          <div class="grp">即将运行</div>
+          <div id="schedNext" class="kv">—</div>
+          <div class="grp">最近结果</div>
+          <div id="schedDigest" class="kv">—</div>
+          <div class="kv">新建与改排期在右栏「定时」页签：一句话就能排（"每周一三五早八"），边打边预览下一次什么时候跑。</div>
         </aside>
       </div>
     </div>
@@ -3659,6 +3709,7 @@ document.addEventListener('keydown',e=>{
   const mod=e.ctrlKey||e.metaKey;
   if(e.key=='Escape'){
     app.classList.remove('show-l','show-r');
+    closeSessMenu();
     if(cfgOpen)Cfg.close();
     else if(Experts.opened())Experts.close();
     else $('#mask').classList.remove('on');
@@ -3894,7 +3945,7 @@ function sessRow(m,run){
   const dtag=m.id===duoId?'<em class="ptag" title="已在右栏并排">并排</em>':'';
   const mp=MODE_CN[m.mode]?`<em class="mp">${MODE_CN[m.mode]}</em>`:'';
   return `<div class="it${m.id===curId?' cur':''}${m.id===duoId?' duo':''}${run?' run':''}${v.wait?' wait':''}" data-id="${m.id}" data-hit="${m.hitAt==null?-1:m.hitAt}" data-pinned="${m.pinned?1:0}" data-t="${esc(m.title)}" title="${esc(m.workspace||'')}">
-      <span class="act"><b data-a="pin" title="置顶 / 取消置顶">${SICONS.pin}</b><b data-a="ren" title="重命名">${SICONS.ren}</b><b data-a="del" title="删除（移进回收站，可恢复）">${SICONS.del}</b></span>${nb}${ptag}${dtag}
+      <span class="more" data-a="menu" title="会话操作（右键卡片也可以）"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg></span>${nb}${ptag}${dtag}
       <b class="ti">${esc(m.title)}</b><br><i>${mp}${run?'正在跑 · ':''}${m.messages} 条 · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i>
       ${m.hit?`<span class="hit">${esc(m.hit)}</span>`:''}</div>`;
 }
@@ -3911,6 +3962,64 @@ function dayLabel(ts){
   return '更早';
 }
 const TIME_ORDER=['今天','昨天','近 7 天','更早'];
+/* ==== 会话操作菜单：全屏唯一一份玻璃菜单面（对齐 OpenClaw 的 ⋯+dropdown 模式） ====
+ * 卡片上只画一枚 ⋯ 钮，点开/右键弹出；渲染一份、按按钮位置定位，贴底翻到上方。 */
+const SICON_DUO='<svg viewBox="0 0 24 24"><rect x="4" y="5" width="7" height="14" rx="1.5"/><rect x="13" y="5" width="7" height="14" rx="1.5"/></svg>';
+const smenu=(()=>{const d=document.createElement('div');d.className='smenu';document.body.appendChild(d);return d})();
+let smenuId='';
+function openSessMenu(id,x,y){
+  const card=document.querySelector('#sessions .it[data-id="'+CSS.escape(id)+'"]');
+  if(!card)return;
+  smenuId=id;
+  const pinned=card.dataset.pinned==='1';
+  smenu.innerHTML=`<div class="mh">${esc(card.dataset.t||'')}</div>`+
+    `<div class="mi" data-m="pin">${SICONS.pin}${pinned?'取消置顶':'置顶'}</div>`+
+    `<div class="mi" data-m="ren">${SICONS.ren}重命名</div>`+
+    `<div class="mi" data-m="duo">${SICON_DUO}${duoId===id?'退出并排':'并排到左栏'}</div>`+
+    `<div class="msep"></div>`+
+    `<div class="mi danger" data-m="del">${SICONS.del}删除（进回收站）</div>`;
+  smenu.classList.add('on');
+  const w=smenu.offsetWidth,h=smenu.offsetHeight;
+  const left=Math.max(8,Math.min(x,innerWidth-w-8));
+  let top=y;
+  if(top+h>innerHeight-8)top=Math.max(8,y-h-10);
+  smenu.style.left=left+'px';smenu.style.top=top+'px';
+}
+function closeSessMenu(){smenu.classList.remove('on');smenuId=''}
+smenu.addEventListener('click',e=>{
+  const b=e.target.closest('.mi');
+  if(!b||!smenuId)return;
+  const card=document.querySelector('#sessions .it[data-id="'+CSS.escape(smenuId)+'"]');
+  if(card)sessAct(smenuId,b.dataset.m,card);
+  closeSessMenu();
+});
+document.addEventListener('click',e=>{
+  if(!smenu.classList.contains('on'))return;
+  if(smenu.contains(e.target))return;
+  if(e.target.closest&&e.target.closest('.more'))return;   // 再点 ⋯ 由行上的 handler 重新定位打开
+  closeSessMenu();
+});
+function sessAct(id,act,card){
+  if(act==='ren'){
+    askText('重命名会话','只改标题，不动历史。',card.dataset.t||'',t=>
+      post('/api/rename',{id:id,title:t}).then(loadSessions));
+    return;
+  }
+  if(act==='pin'){post('/api/pin',{id:id,pinned:card.dataset.pinned==='1'?'0':'1'}).then(loadSessions);return}
+  if(act==='duo'){setDuo(id);return}
+  if(act==='del'){
+    if(!confirm('删除这个会话？文件会移进 sessions/.trash，不是就地抹掉。'))return;
+    // 409 的正文里写着"为什么不让删"（正在跑），所以不能只看 ok
+    fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:id})})
+      .then(r=>r.json().then(d=>({ok:r.ok,d:d})))
+      .then(x=>{
+        if(!x.ok){alert((x.d&&x.d.error)||'删除失败');return}
+        dropView(id);loadSessions();toast('已移进回收站，会话栏「回收站」里可以放回');
+      });
+    return;
+  }
+}
 function markSessions(){
   const box2=$('#sessions');
   const qq=($('#sessQ').value||'').trim().toLowerCase();
@@ -3970,26 +4079,16 @@ function markSessions(){
   box2.querySelectorAll('.it').forEach(e=>{
     const id=e.dataset.id;
     if(!id)return;
+    /* 右键 = 同一份菜单（桌面用户对着列表行按右键是肌肉记忆） */
+    e.addEventListener('contextmenu',ev=>{
+      ev.preventDefault();
+      openSessMenu(id,ev.clientX,ev.clientY);
+    });
     e.onclick=ev=>{
-      /* 图标钮里是真 SVG：点到图形时 target 是 path/svg 自己，必须向上找带 data-a 的钮 */
       const ab=ev.target.closest('[data-a]');
-      const a=ab?ab.dataset.a:undefined;
-      if(a==='ren'){
-        askText('重命名会话','只改标题，不动历史。',e.dataset.t||'',t=>
-          post('/api/rename',{id:id,title:t}).then(loadSessions));
-        return;
-      }
-      if(a==='pin'){post('/api/pin',{id:id,pinned:e.dataset.pinned=='1'?'0':'1'}).then(loadSessions);return}
-      if(a==='del'){
-        if(!confirm('删除这个会话？文件会移进 sessions/.trash，不是就地抹掉。'))return;
-        // 409 的正文里写着"为什么不让删"（正在跑），所以不能只看 ok
-        fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({id:id})})
-          .then(r=>r.json().then(d=>({ok:r.ok,d:d})))
-          .then(x=>{
-            if(!x.ok){alert((x.d&&x.d.error)||'删除失败');return}
-            dropView(id);loadSessions();toast('已移进回收站，左栏「回收站」里可以放回');
-          });
+      if(ab&&ab.dataset.a==='menu'){
+        const r=ab.getBoundingClientRect();
+        openSessMenu(id,r.left,r.bottom+6);
         return;
       }
       openSession(id,parseInt(e.dataset.hit||'-1',10));
@@ -4621,16 +4720,17 @@ return {
 })();
 Experts.init();
 
-/* ==== 主区视图切换：会话 / 专家整页（四区骨架的"当前页"） ====
+/* ==== 主区视图切换：会话 / 专家 / 日程（四区骨架的"当前页"） ====
  * 导航行只管"去哪"：data-view 切主区，data-act 跳右栏页签或开弹窗。
  * 切页不拆 SSE —— 隐藏的是聊天三件套，后台会话的事件照常入流。 */
 function setView(v){
   document.querySelectorAll('.navrow[data-view]').forEach(r=>r.classList.toggle('on',r.dataset.view===v));
-  document.querySelector('.main').classList.toggle('on-exp',v==='experts');
+  document.querySelector('.main').dataset.page=(v==='chat')?'':v;
 }
 document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
   const v=r.dataset.view, a=r.dataset.act;
   if(v==='experts'){setView(v);Experts.openAt();return}
+  if(v==='sched'){setView(v);SchedPage.render();return}
   if(v){setView(v);return}
   if(a==='kb'){setView('chat');document.querySelector('#tabs button[data-t=kb]').click()}
   else if(a==='cron'){setView('chat');document.querySelector('#tabs button[data-t=cron]').click()}
@@ -4721,6 +4821,86 @@ return {
 };
 })();
 Kb.init();
+
+/* ==== [S6 面板对象] SchedPage：日程整页（定时任务的时间线视角） ====
+ * 右栏「定时」页签负责编辑（一句话排期表单在那里），这页负责"看与跑"：
+ * 即将运行的排最前、停用的沉底。下一次运行时间用服务端算好的 nextDue，
+ * 不在前端重算排期 —— 两处算"下一次"迟早算出两个答案。 */
+const SchedPage=(()=>{
+function fmt(ms){
+  if(!ms)return '—';
+  const d=new Date(ms),now=Date.now();
+  const s=d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+  const diff=ms-now;
+  if(diff<=0)return s+' · 已过期（醒来补跑一次）';
+  const rel=diff<3600e3?Math.max(1,Math.round(diff/60e3))+' 分钟后'
+    :diff<86400e3?Math.round(diff/3600e3)+' 小时后':Math.round(diff/86400e3)+' 天后';
+  return s+' · '+rel;
+}
+function card(s){
+  const on=!!s.enabled;
+  return `<div class="xcard${on?'':' off'}">
+    <div class="hd"><b><span>${esc(s.name||'(未命名)')}</span></b>
+      <i class="mbtib" ${on?'':'style="color:var(--dim2)"'}>${on?'启用':'停用'}</i></div>
+    <div class="ds">${esc(s.when||'')}</div>
+    <div class="ds" style="color:var(--dim2)">${esc((s.prompt||'').slice(0,90))}${(s.prompt||'').length>90?'…':''}</div>
+    <div class="meta">${on?('下一次：'+fmt(s.nextDue)):'已停用'}</div>
+    ${s.lastError?`<div class="ds" style="color:var(--err)">上次出错：${esc(s.lastError.slice(0,80))}</div>`:''}
+    <div class="ft"><button class="ab pri" data-s="run" data-id="${esc(s.id)}">立即跑</button>
+      <button class="ab" data-s="toggle" data-id="${esc(s.id)}">${on?'停用':'启用'}</button>
+      <button class="ab" data-s="edit" data-id="${esc(s.id)}">编辑</button>
+      <button class="ab" data-s="del" data-id="${esc(s.id)}">删除</button></div>
+  </div>`;
+}
+function render(){
+  fetch('/api/schedules').then(r=>r.json()).then(d=>{
+    items=Array.isArray(d)?d:(d.items||[]);
+    const on=items.filter(s=>s.enabled).sort((a,b)=>(a.nextDue||0)-(b.nextDue||0));
+    const off=items.filter(s=>!s.enabled);
+    $('#schedList').innerHTML=(on.map(card).join('')+off.map(card).join(''))||
+      '<div class="kv">还没有定时任务 —— 右上角「新建定时任务」，一句话就能排。</div>';
+    $('#schedSum').textContent=items.length?
+      (on.length+' 个启用中'+(on.length?' · 最近的下一次：'+fmt(on[0].nextDue):'')):'还没有排期';
+    $('#schedNext').innerHTML=on.length?on.slice(0,5).map(s=>
+      `<div class="rl"><span><b>${esc(s.name||'(未命名)')}</b><em>${fmt(s.nextDue)}</em></span></div>`).join('')
+      :'（没有启用的任务）';
+    return fetch('/api/digest').then(r=>r.json()).then(d=>{
+      const it=d.items||[];
+      $('#schedDigest').innerHTML=it.length?it.slice(0,6).map(e=>
+        `<div class="rl"><span><b>${esc(e.title)}</b><em>${esc(e.at)} · ${esc(e.verdict)}</em></span></div>`).join('')
+        :'（定时任务跑完后，结果会出现在这里）';
+    }).catch(()=>{});
+  }).catch(()=>{$('#schedList').innerHTML='<div class="kv">读不到定时任务</div>'});
+}
+let items=[];
+return {
+  init(){
+    $('#schedList').addEventListener('click',e=>{
+      const b=e.target.closest('[data-s]');
+      if(!b)return;
+      const id=b.dataset.id;
+      if(b.dataset.s==='edit'){setView('chat');document.querySelector('#tabs button[data-t=cron]').click();
+        toast('在右栏「定时」页签里改排期（一句话排期表单在那里）');return}
+      if(b.dataset.s==='del'){
+        if(!confirm('删除这个定时任务？'))return;
+        post('/api/schedules',{op:'del',id:id}).then(()=>{render();toast('已删除')}).catch(()=>toast('删不掉','err'));return;
+      }
+      post('/api/schedules',b.dataset.s==='run'?{op:'run',id:id}:{op:'toggle',id:id})
+        .then(()=>{render();toast(b.dataset.s==='run'?'已派下去跑':'已切换')}).catch(()=>toast('没成功','err'));
+    });
+    $('#schedNew').onclick=()=>{setView('chat');document.querySelector('#tabs button[data-t=cron]').click();
+      toast('在右栏「定时」页签里一句话排期')};
+  },
+  render,
+};
+})();
+SchedPage.init();
+
+/* 输入区工具条：/ 与 @ 的入口做成看得见的圆钮（原来全靠占位符小字）。
+   点下去不是插个字符完事——focus + 置值 + 派 input 事件，走的还是
+   那套边打边过滤的斜杠/提及列表，一条代码路径。 */
+$('#slashBtn').onclick=()=>{box.focus();box.value='/';box.dispatchEvent(new Event('input'))};
+$('#atBtn').onclick=()=>{box.focus();box.value='@';box.dispatchEvent(new Event('input'))};
 
 /* ---- 轻提示：一句话的事，不往对话流里塞气泡 ---- */
 let toastT=null;
