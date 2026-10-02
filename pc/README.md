@@ -409,6 +409,7 @@ SHOT_DPR=2 bash pc/tools/ui-shot.sh pc/tools/steps/ui-memitems.json  # 2 倍采�
 ```
 SHOT_MODE=ask bash pc/tools/ui-shot.sh pc/tools/steps/ui-ask.json      # 内联审批/提问：mask 不再出现
 SHOT_MODE=ask_batch bash pc/tools/ui-shot.sh pc/tools/steps/ui-askbatch.json  # T2 整批问卷：本地出题 1/3→3/3、答完一次回传、落库前缀原文
+SHOT_MODE=ask_batch SHOT_PERM=ask PRE_LAN=1 SHOT_MOBILE=1 SHOT_W=390 SHOT_H=844 bash pc/tools/ui-shot.sh pc/tools/steps/ui-phoneaskbatch.json  # 手机网页端答批量问卷：跨端配对 + 4 秒重画后状态还在 + 答案原文落库
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-review.json                 # diff 着色 + 两种附件
 SHOT_W=900 bash pc/tools/ui-shot.sh pc/tools/steps/ui-narrow.json      # 窄屏浮层（700 同理）
 bash pc/tools/ui-shot.sh pc/tools/steps/ui-files.json                  # 文件浏览 + 三条越界尝试
@@ -3742,14 +3743,23 @@ B22 当时把它记成 **T2 未移植**，这一批补上 —— 契约、结果
   **`"payload":` 后面漏了一个 `{`**，JSON 不合法 → 两条用例红，而红话说的是"电脑回的不是 JSON"
   —— 看着像产品坏了，其实是夹具自己没造出来。补上 `{` 之后两条转绿，并做了变异检查：
   把自定义解码摘掉，对象选项那条立刻红（证明判据真的咬在产品代码上，不是咬在夹具上）。
-- **判据**：`gradle test` **554 条全绿**（新增 `AskUserBatchToolTest` 6 条 + `ApprovalBrokerTest`
+- **判据**：`gradle cleanTest test` **555 条全绿**（新增 `AskUserBatchToolTest` 6 条 + `LanTest` 转义答案 1 条 + `ApprovalBrokerTest`
   批量载荷 + `EngineFlowTest` 走默认桥端到端 + `LanTest` 批量行 + `HunkTest` 批量回执措辞，
   工具计数锁 23→24）；安卓 `:app:testDebugUnitTest` **238 条全绿**（`PcLinkTest` +2 条形状用例）；
-  `ui-check`/`md-check` 过；像素 `ui-askbatch` **20 步 / 14 条判据全绿**，四张图亲验
+  `ui-check`/`md-check` 过；像素两份全绿 —— 桌面 `ui-askbatch` **20 步 / 14 条**、
+  手机网页端 `ui-phoneaskbatch`（390×844）**23 步 / 35 条**，各四张图亲验
  （第 1 题两选项、第 3 题题干与选项、提交后卡片收成"已答"、落库原文 `用户已按顺序回答 3 题：…`）。
-- **还欠**：手机网页端批量卡的像素（只做了桌面那份，单题的 `ui-phoneask` 仍绿可参照）；
-  **装机**（`assembleRelease` + `install -r`）—— 交接当晚设备无线调试掉了，连不上就没硬试；
-  在装回之前，PC 一发对象选项，手机上那条通知通道是哑的。
+- **手机页那份像素跑出来才发现的两个真缺陷**（桌面全绿照不出来，因为走的是另一套渲染 + 另一条口）：
+  ① 批量分支在 `map` 里 `return` 了一个 **DOM 元素**，而外层是 `innerHTML = ps.map(...).join('')`
+ —— 元素被字符串化成 `[object HTMLDivElement]`，手机上整块待批只剩这一行字，问卷根本答不了。
+  改成"先占位字符串、DOM 就位之后再回来挂事件"（`mounts` 那一层）。
+  ② 手机上答完，电脑上落的是 **`1. 未作答 2. 未作答 3. 未作答`** —— `/lan/decide` 用 `field()` 取
+  `answer`，那个正则 `"([^"]*)"` 遇第一个引号就停、也不反转义，而手机交的是 `JSON.stringify([...])`，
+  三题只截到一个 `[`，`parseBatchAnswers` 解析失败回空表。改走 `textField()`（派活那条口早就用它）。
+  两条各钉了一道判据：像素里的 `noStringifiedNode`/`answerLanded`，与 `LanTest` 新加的
+  `an answer survives escaped quotes`（把 `answer` 换回 `field()` 它立刻红 —— 变异验过）。
+- **还欠**：**装机**（`assembleRelease` + `install -r`）—— 交接当晚设备无线调试掉了，连不上就没硬试；
+  在装回之前，PC 一发对象选项，手机上那条通知通道是哑的（现在又多一条：批量答案也送不回来）。
 
 ## 与手机端同源的行为
 
