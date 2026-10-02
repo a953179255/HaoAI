@@ -150,18 +150,24 @@
   /* 档位不 再裸印 "auto/ask/plan"：一枚小胶囊，颜色语义跟顶栏三档同源 */
   .sess .it .mp{font-style:normal;font-size:9.5px;font-weight:600;color:var(--acc);background:var(--glass2);
     border-radius:6px;padding:1px 5px;margin-right:5px;vertical-align:1px}
-  /* 悬停才露出置顶/改名/删除：常驻的话侧栏每条都挂三个小方块，比要管的会话还显眼 */
-  .sess .it .act{position:absolute;right:3px;top:3px;display:flex;gap:2px;opacity:0;transition:opacity .14s;
-    padding:0 4px 0 12px;border-radius:8px;background:linear-gradient(90deg,transparent,var(--raise) 42%)}
+  /* 操作钮 = 一枚悬浮工具药丸：面板底+描边+投影，三枚图标住在一起、垂直居中。
+     之前是散装三个小方块贴在右上角，又小又挤（用户实锤"不好看"）。
+     垂直居中还有个好处：不跟右上角的未读/置顶角标抢位置。 */
+  .sess .it .act{position:absolute;right:5px;top:50%;transform:translateY(-50%);
+    display:flex;gap:1px;opacity:0;transition:opacity .14s;
+    padding:3px;border-radius:999px;background:var(--panel);border:1px solid var(--line2);
+    box-shadow:0 4px 12px rgba(0,0,0,.18)}
   .sess .it:hover .act{opacity:1}
-  .sess .it .act b{width:22px;height:20px;display:flex;align-items:center;justify-content:center;
-    cursor:pointer;color:var(--dim);border-radius:7px;transition:background .12s,color .12s,transform .12s}
-  .sess .it .act b svg{width:12px;height:12px;stroke:currentColor;fill:none;
-    stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .sess .it .act b{width:26px;height:22px;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;color:var(--dim);border-radius:999px;transition:background .12s,color .12s,transform .12s}
+  .sess .it .act b svg{width:14px;height:14px;stroke:currentColor;fill:none;
+    stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
   .sess .it .act b:hover{background:var(--glass2);color:var(--fg)}
   .sess .it .act b[data-a="pin"]:hover{color:var(--acc)}
   .sess .it .act b[data-a="del"]:hover{color:var(--err)}
-  .sess .it .act b:active{transform:scale(.86)}
+  /* 已置顶的卡：pin 常亮，与卡上的「置顶」胶囊呼应，一眼知道这卡是钉住的 */
+  .sess .it[data-pinned="1"] .act b[data-a="pin"]{color:var(--acc)}
+  .sess .it .act b:active{transform:scale(.88)}
   /* 多会话并行：一条会话一个视图容器，只有当前这条可见。
      后台会话的事件照样写进它自己那个容器 —— 切回去不用重拉、也不丢中间输出。 */
   .view{display:none}
@@ -189,8 +195,8 @@
     background:var(--acc);color:var(--onacc);font-size:10px;font-weight:700;text-align:center;line-height:15px}
   .sess .it.wait .nb{background:var(--warn);color:#241a08}
   .sess .it.wait{border-color:var(--warn)}
-  /* 悬停时三个操作钮会出现在同一个右上角，把角标往左挪而不是藏起来 */
-  .sess .it:hover .nb{right:88px}
+  /* 悬停时工具药丸出现在右侧中部，把未读角标往左挪而不是藏起来 */
+  .sess .it:hover .nb{right:100px}
   .sess .it .ptag{font-style:normal;font-size:9.5px;font-weight:600;color:var(--acc);background:var(--glass2);
     border-radius:6px;padding:1px 5px;margin-left:5px;vertical-align:1px}
   .sess .it .hit{display:block;white-space:normal;color:var(--dim2);font-size:11px;line-height:1.4;
@@ -3892,6 +3898,19 @@ function sessRow(m,run){
       <b class="ti">${esc(m.title)}</b><br><i>${mp}${run?'正在跑 · ':''}${m.messages} 条 · ${new Date(m.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</i>
       ${m.hit?`<span class="hit">${esc(m.hit)}</span>`:''}</div>`;
 }
+/* 时间组标签（对齐效果图 置顶/今天/更早 的分组）：今天/昨天/近 7 天/更早。
+   按"自然日"切，不按 24 小时——昨晚 23:00 的会话今天看就该在「昨天」。 */
+function dayLabel(ts){
+  const d=new Date(ts||0),now=new Date();
+  const day=86_400_000;
+  const sd=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+  const t=new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime();
+  if(t===sd)return '今天';
+  if(t===sd-day)return '昨天';
+  if(t>sd-7*day)return '近 7 天';
+  return '更早';
+}
+const TIME_ORDER=['今天','昨天','近 7 天','更早'];
 function markSessions(){
   const box2=$('#sessions');
   const qq=($('#sessQ').value||'').trim().toLowerCase();
@@ -3916,17 +3935,29 @@ function markSessions(){
     const k=b.dataset.more;wsMore[k]=(wsMore[k]||0)+12;markSessions();
   });
   if(groups.length===1){
-    const gws=groups[0][0],gl=groups[0][1],n=cap(gws);
-    box2.innerHTML=gl.slice(0,n).map(m=>sessRow(m,views[m.id]&&views[m.id].running||m.running)).join('')+
-      (gl.length>n?moreLine(gws,gl.length-n):'');
-    moreHook();
+    /* 单工作区：对齐效果图的 置顶/今天/昨天/近 7 天/更早 分组。
+       时间组**不设条数帽也不可折叠**——组头本身就是导航，搜索框就在上面，
+       帽只会把"上周"藏起来；置顶组永远在最上。 */
+    const gl=groups[0][1].slice();
+    if(!gl.some(m=>m.id===curId))gl.sort((a,b)=>(b.updated||0)-(a.updated||0));
+    const pins=gl.filter(m=>m.pinned),rest=gl.filter(m=>!m.pinned);
+    const buckets=new Map();
+    rest.forEach(m=>{const k=dayLabel(m.updated);if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(m)});
+    const seg=(label,list)=>{
+      if(!list.length)return '';
+      return `<div class="wsg"><span>${esc(label)}</span><i>${list.length} 条</i></div>`+
+        list.map(m=>sessRow(m,views[m.id]&&views[m.id].running||m.running)).join('');
+    };
+    box2.innerHTML=seg('置顶',pins)+TIME_ORDER.filter(k=>buckets.has(k)).map(k=>seg(k,buckets.get(k))).join('')+
+      (pins.length||rest.length?'':`<div class="it" style="cursor:default">（没有会话）</div>`);
   }else{
     box2.innerHTML=groups.map(([ws,list])=>{
       const name=baseName(ws)||'（未定目录）';
       const off=folded.indexOf(ws)>=0;
       const head=`<div class="wsg" data-wsg="${esc(ws)}" title="${esc(ws)}（点一下${off?'展开':'收起'}）">`+
         `<span>${esc(name)}</span><i>${list.length} 条</i><em>${off?'+':'−'}</em></div>`;
-      if(!list.some(m=>m.id===curId))list.sort((a,b)=>(b.updated||0)-(a.updated||0));
+      // 多目录时置顶的排前面（跨目录的"置顶成组"只在单目录模式做——组头是目录名，插一个置顶组反而看不懂）
+      list.sort((a,b)=>(b.pinned?1:0)-(a.pinned?1:0)||((b.updated||0)-(a.updated||0)));
       const n=cap(ws),take=off?0:list.slice(0,n);
       return head+(off?`<div class="wsf">${list.length} 条已收起</div>`
         :take.map(m=>sessRow(m,views[m.id]&&views[m.id].running||m.running)).join('')+
