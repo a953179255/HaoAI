@@ -74,6 +74,12 @@ class Session(val id: String, val workspace: File) {
     /** 这条会话是哪个角色卡起的（只为在顶栏显示名字，判据不看它）。 */
     @Volatile
     var role: String = ""
+    /**
+     * 起这条会话的**角色卡 id**。[role] 是显示名（会改名、卡会被删），这一个才是索引：
+     * Token 统计"按专家"要按卡归并，而账本按回合落 —— 两个都得在落账那一刻带上。
+     */
+    @Volatile
+    var preset: String = ""
     val todos = mutableListOf<Todo>()
     val file: File get() = File(Env.sessionsDir, "pc-$id.json")
     val title = java.util.concurrent.atomic.AtomicReference("新会话")
@@ -268,6 +274,19 @@ class Engine(
     }
 
     /**
+     * 落一行用量账。**只有引擎自己知道**这一笔是谁花的（角色卡 / 团队 / 子任务）、
+     * 命中了多少缓存，所以落账口收在这里 —— 四个调用点各拼一遍参数，
+     * 迟早有一个忘了带 `expert`，而"按专家"那张表就会莫名多出几行未挂专家。
+     */
+    private fun ledger(
+        model: String, pt: Int, ct: Int, ms: Long, ok: Boolean, cached: Int = 0
+    ) = UsageLedger.add(
+        model, session.id, pt, ct, ms, ok, cached,
+        session.role, session.preset,
+        if (depth > 0) UsageLedger.SUB else UsageLedger.MAIN
+    )
+
+    /**
      * 派一条子任务。可以按子任务换模型与工具，但**权限不能从这条路绕过去**：
      * 档位只能比父会话更严（plan 的父会话不能派一条 auto 出去替它写文件），
      * 工具只能是父会话现在有的那个子集（不能凭训练记忆要一把没给的工具）。
@@ -286,13 +305,36 @@ class Engine(
             return ("子任务要的工具这条会话没有：${unknown.joinToString("/")}。" +
                 "能用的是：${have.joinToString("/")}" to "")
         val subTools = if (want.isEmpty()) tools else tools.filter { it.name in want }
-        val subSettings = if (opts.model.isBlank()) settings else settings.copy(model = opts.model)
+        /*
+         * **按卡派工**：`preset` 给了卡 id，人设与模型就从卡上现取，不必让主持人把
+         * 整段人设抄进 `persona`。
+         *
+         * 抄那条路是上一批留下的：主持人提示里写着"persona 整段抄该成员的人设"，
+         * 于是每轮把成员人设全文重发一遍（窗口当仓库用），而且**抄错一个字都不报错** ——
+         * 成员跑出来的东西不像那个成员，没人能看出为什么。现在按 id 取，取不到就明确拒。
+         * 显式 `persona` 仍然优先：那是"临时给一个没建卡的角色"，是有意为之。
+         */
+        val card = opts.preset.takeIf { it.isNotBlank() }?.let { Presets.find(it) }
+        if (opts.preset.isNotBlank() && card == null)
+            return ("没有这张角色卡：${opts.preset}。派工前先在「专家」页确认那张卡还在。" to "")
+        val persona = opts.persona.ifBlank { card?.persona.orEmpty() }
+        val model = opts.model.ifBlank { card?.model.orEmpty() }
+        val subSettings = if (model.isBlank()) settings else settings.copy(model = model)
         val label = uniqueSubName(rawLabel.ifBlank { "子任务" })
         val s = Session("sub" + System.nanoTime().toString(16).take(8), session.workspace)
         s.mode = mode
         // 团队派工的成员人设（task 的 persona 参数）：跟 label 一起构成"这条子任务是谁在干"。
         // 子会话的 persona 走与主会话同一条系统提示通路（「本次角色」一节），不用另开注入点。
-        if (opts.persona.isNotBlank()) s.persona = opts.persona
+        if (persona.isNotBlank()) s.persona = persona
+        /*
+         * 子任务这笔账记在谁名下：**团队派工记成员，普通派工跟着父会话的卡**。
+         *
+         * 都记成 label 的话，"帮我查一下 X" 这种一次性子任务会在 Token 统计里
+         * 造出一堆只有三条记录的假专家；都不记的话，团队会话里成员花掉的钱全算到
+         * 主持人头上 —— 而"这个队里谁最贵"恰恰是开团队的人要看的数。
+         */
+        s.role = if (persona.isNotBlank()) label else session.role
+        s.preset = if (persona.isNotBlank()) opts.preset else session.preset
         val log = StringBuilder()
         val child = Engine(   // 子任务**直连构造**、刻意不走工厂：它不是"一条会话的开始"
             // （不发 session-start，也没有壳的会话恢复/overlay 那套），接线就是最朴素的一份。
@@ -303,7 +345,7 @@ class Engine(
         )
         liveSubs[label] = child
         val cfg = listOfNotNull(
-            if (opts.model.isBlank()) null else "模型 ${opts.model}",
+            if (model.isBlank()) null else "模型 $model",
             if (want.isEmpty()) null else "只给 ${want.joinToString("/")}",
             if (mode == session.mode) null else "$mode 档"
         ).joinToString(" · ")
@@ -745,12 +787,12 @@ class Engine(
                     continue
                 }
                 lastError = "模型调用失败：${e.message?.take(400)}"
-                UsageLedger.add(modelNow, session.id, 0, 0, 0, false)   // 失败也要入账：成功率不是装饰
+                ledger(modelNow, 0, 0, 0, false)   // 失败也要入账：成功率不是装饰
                 emit(Ev.Err(lastError!!))
                 break
             } catch (e: Exception) {
                 lastError = "模型调用异常：${e.message ?: e.javaClass.simpleName}"
-                UsageLedger.add(modelNow, session.id, 0, 0, 0, false)
+                ledger(modelNow, 0, 0, 0, false)
                 emit(Ev.Err(lastError!!))
                 break
             }
@@ -784,7 +826,7 @@ class Engine(
                 history += Msg("assistant", turn.text, reasoning = turn.reasoning.ifBlank { null },
                     pt = pt, ct = ct, ms = ms)
                 emit(Ev.TurnStats(pt, ct, ms, turnNo))
-                UsageLedger.add(modelNow, session.id, pt, ct, ms, true)
+                ledger(modelNow, pt, ct, ms, true, turn.usage.cachedTokens)
                 runTurn = turnNo
                 break
             }
@@ -794,7 +836,7 @@ class Engine(
                 reasoning = turn.reasoning.ifBlank { null }, pt = pt, ct = ct, ms = ms,
                 notice = drainNotices())
             emit(Ev.TurnStats(pt, ct, ms, turnNo))
-            UsageLedger.add(modelNow, session.id, pt, ct, ms, true)
+            ledger(modelNow, pt, ct, ms, true, turn.usage.cachedTokens)
             runTurn = turnNo
             persist()      // 每轮留一次现场：被打断时"跑到第几轮"才是量出来的
 
@@ -1078,6 +1120,9 @@ class Engine(
                     // 而顶栏还写着角色名 —— 显示与事实分家。
                     put("persona", session.persona)
                     put("role", session.role)
+                    // 卡 id 只在有的时候写：老会话文件没这一键，读回来是空 = "没挂专家"，
+                    // 与"卡被删了"是同一种情况，账本会归到（未挂专家）
+                    if (session.preset.isNotBlank()) put("preset", session.preset)
                     put("model", settings.model)
                     // 会话级开关要落盘：不然刷新/重开之后界面上还写着"已关掉"，
                     // 而引擎其实拿着全开的工具表在跑

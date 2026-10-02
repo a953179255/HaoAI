@@ -1,0 +1,100 @@
+[
+  {"goto": "#box"},
+  {"type": {"sel": "#box", "text": "说一句就好"}},
+  {"goto": ".msg.ans", "timeout": 25000},
+  {"sleep": 2200},
+  {
+    "eval": "(async()=>{const r=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',id:'',name:'甲专家',persona:'你是甲专家，回答要短。',model:'',workspace:'',mode:'auto',desc:'验收用'})});const d=await r.json();const it=(d.items||[]).find(x=>x.name==='甲专家');window.__tkP=it?it.id:'';return {saved:!!it}})()",
+    "must": ["saved"],
+    "note": "先存一张角色卡：按专家切片要有第二个专家可分，否则这一页只验了半张表"
+  },
+  {
+    "eval": "(async()=>{const r=await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:window.__tkP})});const d=await r.json();window.__tkS=d.id;return {ok:!!(d.ok&&d.id)}})()",
+    "must": ["ok"],
+    "note": "用这张卡开一条会话，并把新会话 id 留在 window 上下一步用"
+  },
+  {"sleep": 1500},
+  {
+    "eval": "(async()=>{const r=await fetch('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'再说一句',sid:window.__tkS})});const d=await r.json();return {started:!!(d.ok||d.sid)}})()",
+    "must": ["started"],
+    "note": "直接往那条专家会话发一句话（走 /api/task 而不是打字：#box 打的是「当前这一条」，脚本调 /api/new 并不会让前端切过去 —— 这本身就是要记下来的一条事实）"
+  },
+  {"sleep": 7000},
+  {
+    "eval": "(async()=>{const u=await fetch('/api/usage').then(r=>r.json());return {rows:u.rows>=2,experts:(u.byExpert||[]).length>=2,noExpert:(u.byExpert||[]).some(x=>x.name.indexOf('未挂')>=0),named:(u.byExpert||[]).some(x=>x.name==='甲专家'),hasSummary:!!u.summary,hasRange:!!u.range}})()",
+    "must": ["rows", "experts", "noExpert", "named", "hasSummary", "hasRange"],
+    "note": "接口侧先立住：两条会话分别落在「甲专家」与「未挂专家」名下 —— 顶栏那个名字真的进了账本，不是页面自己拼的"
+  },
+  {"click": "#tokensBtn"},
+  {"goto": "#page-tokens", "timeout": 8000},
+  {"sleep": 1500},
+  {
+    "eval": "(()=>{const p=document.querySelector('#page-tokens');const cards=[...document.querySelectorAll('#tkCards .tk-card')];const b0=cards[0]?cards[0].querySelector('b').textContent:'';const donuts=[...document.querySelectorAll('#tkDonuts svg circle')];const bars=[...document.querySelectorAll('#tkBars .b')].filter(x=>x.getBoundingClientRect().height>0);const nav=document.querySelector('.navrow[data-view=tokens]');return {shown:p.getBoundingClientRect().height>200,navOn:nav.classList.contains('on'),sixCards:cards.length>=6,totalPositive:/[1-9]/.test(b0),rings:donuts.length>=3,bars:bars.length>=1,range:document.querySelector('#tkRange').textContent.length>10}})()",
+    "must": ["shown", "navOn", "sixCards", "totalPositive", "rings", "bars", "range"],
+    "note": "整页真的画出来了：容器有高度（CSS 里没这条规则就永远 display:none）、导航点亮、六张卡、总 TOKENS 是个正数、三个环有弧、趋势柱有真实高度、标题行写了区间"
+  },
+  {"shot": "tk01-summary"},
+  {
+    "eval": "(()=>{document.querySelector('#tkTable').scrollIntoView({block:'end'});return {scrolled:true}})()",
+    "note": "把那张表滚进画面再拍：不滚的话两张截图长得一模一样，看着像验了其实什么都没看"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#tkTable');const head=[...t.querySelectorAll('thead th')].map(x=>x.textContent);const rows=t.querySelectorAll('tbody tr').length;return {hasTable:rows>=1,dayCountHead:head.indexOf('这一段时间')>=0,noOverflow:t.scrollWidth-t.clientWidth<=1}})()",
+    "must": ["hasTable", "dayCountHead", "noOverflow"],
+    "note": "汇总页签下面是那张概览表，而且表格没把页面撑出横向滚动（窄屏上被裁掉的图就是这种排版）"
+  },
+  {
+    "eval": "(async()=>{const want=['按天','按专家','按模型'];const got=[];for(const label of want){const b=[...document.querySelectorAll('#tktabs button')].find(x=>x.textContent.trim()===label);b.click();await new Promise(r=>setTimeout(r,260));const t=document.querySelector('#tkTable');got.push([...t.querySelectorAll('thead th')].map(x=>x.textContent).join('|')+'='+t.querySelectorAll('tbody tr').length)}return {three:got.length==3,day:got[0].indexOf('缓存输入')>=0,expert:got[1].indexOf('其中子任务')>=0&&got[1].indexOf('卡 id')>=0,model:got[2].indexOf('模型')>=0,allHaveRows:got.every(x=>!/\\=0$/.test(x))}})()",
+    "must": ["three", "day", "expert", "model", "allHaveRows"],
+    "note": "三个页签各换一张表：表头按 Octop 那几列（缓存输入 / 卡 id / 其中子任务），而且每张表都有行（点了不换内容=假页签）"
+  },
+  {"shot": "tk02-by-expert"},
+  {
+    "eval": "(async()=>{const before=(await fetch('/api/usage').then(r=>r.json())).summary.total;const sel=document.querySelector('#tkExpert');const opt=[...sel.options].find(o=>o.textContent.indexOf('甲专家')>=0);if(!opt)return {picked:false};sel.value=opt.value;sel.dispatchEvent(new Event('change'));await new Promise(r=>setTimeout(r,900));const card=document.querySelector('#tkCards .tk-card b').textContent.replace(/\\D/g,'');const api=await fetch('/api/usage?'+Tokens.qs()).then(r=>r.json());return {picked:true,smaller:+card>0&&+card<before,oneExpert:(api.byExpert||[]).length===1,filterEcho:Tokens.qs().indexOf('expert=')>=0}})()",
+    "must": ["picked", "smaller", "oneExpert", "filterEcho"],
+    "note": "下拉里选「甲专家」：卡片数字变小、接口只剩这一个专家、查询串真的带上了 expert —— 三处一致才叫筛对了"
+  },
+  {
+    "eval": "(async()=>{const sel=document.querySelector('#tkExpert');sel.value='';sel.dispatchEvent(new Event('change'));await new Promise(r=>setTimeout(r,800));const k=document.querySelector('#tkKind');k.value='sub';k.dispatchEvent(new Event('change'));await new Promise(r=>setTimeout(r,800));const api=await fetch('/api/usage?'+Tokens.qs()).then(r=>r.json());k.value='';k.dispatchEvent(new Event('change'));await new Promise(r=>setTimeout(r,800));return {kindSent:true,zeroWhenSub:(api.summary||{}).n===0}})()",
+    "must": ["kindSent", "zeroWhenSub"],
+    "note": "类型筛选（只看子任务）现在应该是空的：这两条会话都没派过子任务 —— 空表要老实是空，不能拿全量数字糊上去"
+  },
+  {
+    "eval": "(async()=>{const p=n=>String(n).padStart(2,'0');const d=new Date();const iso=d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());const f=document.querySelector('#tkFrom'),t=document.querySelector('#tkTo');f.value=iso;t.value=iso;f.dispatchEvent(new Event('change'));await new Promise(r=>setTimeout(r,900));const api=await fetch('/api/usage?'+Tokens.qs()).then(r=>r.json());const rows=document.querySelectorAll('#tkTable tbody tr').length;const win=document.querySelector('#tkWin').value;return {oneDay:(api.byDay||[]).length===1,isToday:api.range.fromText===iso&&api.range.toText===iso,custom:win==='',keptData:rows>=1}})()",
+    "must": ["oneDay", "isToday", "custom", "keptData"],
+    "note": "把区间收成「只看今天」：接口只给一天、起止都是今天、快捷窗口自动落成自定义（改了日期还说「近 30 天」是骗人）"
+  },
+  {
+    "eval": "(async()=>{const r=await fetch('/api/usage/export?'+Tokens.qs());const b=await r.arrayBuffer();const u=new Uint8Array(b);const cd=r.headers.get('content-disposition')||'';return {status:r.status===200,attach:cd.indexOf('attachment')>=0,named:/filename=\"haoai-tokens-/.test(cd),zip:u[0]===80&&u[1]===75,big:u.length>1500}})()",
+    "must": ["status", "attach", "named", "zip", "big"],
+    "note": "导出真的下一份 .xlsx：200、Content-Disposition 是附件带文件名、字节以 PK 开头（zip 魔数）、不是几百字节的空壳 —— 页面选了什么区间，文件就是那一段"
+  },
+  {"click": "#tktabs button[data-t=\"expert\"]"},
+  {"sleep": 500},
+  {"eval": "(()=>{document.querySelector('#tkTable').scrollIntoView({block:'end'});return {ok:true}})()"},
+  {"shot": "tk02-by-expert"},
+  {"click": "#tktabs button[data-t=\"day\"]"},
+  {"sleep": 500},
+  {"eval": "(()=>{document.querySelector('#tkTable').scrollIntoView({block:'end'});return {ok:true}})()"},
+  {"shot": "tk03-by-day"},
+  {"click": "#tktabs button[data-t=\"sum\"]"},
+  {"sleep": 400},
+  {"eval": "(()=>{document.querySelector('#page-tokens .tk-body').scrollTo(0,0);return {ok:true}})()"},
+  {"shot": "tk04-narrow-check"},
+  {
+    "eval": "(()=>{const doc=document.querySelector('#page-tokens .tk-body');const cards=document.querySelector('#tkCards').getBoundingClientRect();const dn=document.querySelector('#tkDonuts').getBoundingClientRect();return {noHScroll:document.documentElement.scrollWidth-document.documentElement.clientWidth<=1,cardsAboveDonuts:cards.top<dn.top,cardsWrap:document.querySelectorAll('#tkCards .tk-card').length>=6}})()",
+    "must": ["noHScroll", "cardsAboveDonuts", "cardsWrap"],
+    "note": "整页不横向溢出（溢出的话窄窗口下右侧那张卡与环图直接被裁掉），卡片在环图上面，六张卡都在"
+  },
+  {
+    "eval": "(()=>{const b=document.querySelector('.navrow[data-act=cfg]');b.click();return {clicked:true}})()",
+    "note": "点导航栏的「设置」行 —— 这一条是给本轮抓到的那个预存在缺陷留的证据：那行原来调的是 openCfg()，而 openCfg 关在 Cfg 那个 IIFE 里，对象外裸用＝ReferenceError，设置抽屉永远打不开（ui-check 的「私有成员裸用」判据逮的，但它自己也被 /api/presets 误报了一次，两边都修了）"
+  },
+  {"sleep": 700},
+  {
+    "eval": "(()=>{const el=document.querySelector('#fMax');return {visible:!!el&&!!el.offsetParent&&el.getBoundingClientRect().width>0}})()",
+    "must": ["visible"],
+    "note": "设置抽屉真的开了（#fMax 那个 maxTokens 输入框看得见）。改之前那一下点击是静默抛错，什么也不会发生"
+  },
+  {"shot": "tk05-settings-nav"}
+]

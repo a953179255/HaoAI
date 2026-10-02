@@ -95,11 +95,16 @@ object Teams {
 }
 
 /**
- * 团队主持人的系统提示人设：成员名单（各自专长与模型）+ 调度规矩。
+ * 团队主持人的系统提示人设：成员名单（各自专长与**卡 id**）+ 调度规矩。
  *
- * 成员**派工时才拿自己的完整人设**（task 工具的 persona 参数，见 [SubOpts]）——
- * 主持人提示里只放"摘要"（专长一句 + 人设前 160 字）：整段人设 × N 个成员
- * 全文塞进主持人的每一轮，是把窗口当仓库用。模型够用摘要选人，干活的人设随 task 走。
+ * 成员**派工时按卡 id 取自己的人设**（task 的 `preset` 参数，见 [Engine.spawn]）——
+ * 主持人提示里只放摘要（专长一句 + 人设前 160 字）：整段人设 × N 个成员
+ * 全文塞进主持人的每一轮，是把窗口当仓库用。
+ *
+ * 上一版这里写的是"persona 整段抄该成员的人设"，那是个真缺陷而不只是啰嗦：
+ * 抄出来的那一份**没有任何一处会校验**，主持人少抄一段、把 A 成员的规矩抄给 B 成员，
+ * 成员照样跑、界面照样出卡，只是跑出来的不像那个人 —— 而 Token 统计也认不出是谁花的。
+ * 现在按 id 取，取不到就明确报错。
  */
 internal fun teamCoordinatorPersona(team: Team, members: List<Preset>): String {
     val roster = members.joinToString("\n") { m ->
@@ -107,7 +112,8 @@ internal fun teamCoordinatorPersona(team: Team, members: List<Preset>): String {
             append("· ").append(m.name)
             if (m.mbti.isNotBlank()) append("（").append(m.mbti).append("）")
             append("：").append(m.desc.ifBlank { "（没写专长）" })
-            if (m.model.isNotBlank()) append(" ｜派它时 task 的 model 填 ").append(m.model)
+            append(" ｜派它时 task 的 preset 填 ").append(m.id)
+            if (m.model.isNotBlank()) append("（模型 ").append(m.model).append("）")
             append("\n  人设摘要：").append(m.persona.trim().take(160).ifBlank { "（没写人设）" })
         }
     }
@@ -116,7 +122,8 @@ internal fun teamCoordinatorPersona(team: Team, members: List<Preset>): String {
         appendLine(roster)
         appendLine("调度规矩：")
         appendLine("1) 用户的话先过你。寒暄、澄清、给结论这类你自己答；专业工作用 task 工具派给成员。")
-        appendLine("2) 派工时 task 的 label 必须写成员名（界面按它标牌），persona 整段抄该成员的人设，" +
+        appendLine("2) 派工时 task 的 label 必须写成员名（界面按它标牌），preset 填上面那个卡 id" +
+            "（人设与模型系统会按卡取，**不要**自己抄 persona），" +
             "prompt 把任务、上下文、要产出什么一次写清。同一回合可以并行派多个成员。")
         appendLine("3) 成员只回结论。你消化、核对、拼装后再向用户汇报，不要把成员原文整段贴回来。")
         appendLine("4) 成员结论互相矛盾时你裁决，并说明裁决理由。")

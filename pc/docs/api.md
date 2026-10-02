@@ -35,7 +35,8 @@
 | `GET /api/sessions?q=` | 会话列表（`q` 会连消息正文一起搜） | — | `[{id,title,workspace,updated,…}]` |
 | `POST /api/new` | 开一条新会话 | `{"workspace?":"…"}` | `{"ok":true,"sid":"…"}` |
 | `GET /api/runs` | 任务运行账本（谁在什么时候跑了多久、成没成） | — | `[{sid,title,trigger,turns,ms,stopped,out}]` |
-| `GET /api/usage` | 用量汇总（按模型分档，降级之后看得出实际是谁答的） | — | `{total:{prompt,completion},byModel:{…}}` |
+| `GET /api/usage` | Token 统计报表：区间 + 按专家 / 按模型切片 | `?from=&to=`（epoch ms，含首尾两天）、`&expert=`（卡 id 或显示名）、`&kind=main\|sub` | `{range{from,to,fromText,toText},summary{n,prompt,completion,cached,total,okRate,tps},byDay[],byExpert[],byModel[],experts[]}`；老键 `today/week/all/models/days/okRate/tps/rows` 一并保留（**按全量算**，不随区间漂） |
+| `GET /api/usage/export` | 同一口径导成 .xlsx（汇总 / 按天 / 按专家 / 按模型 / 明细五张表） | 同上 | 二进制：`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` + `Content-Disposition: attachment`（数字是真数字，能在 Excel 里求和） |
 
 ### SSE 的事件类型
 

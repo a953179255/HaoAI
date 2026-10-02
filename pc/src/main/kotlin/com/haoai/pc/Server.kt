@@ -204,8 +204,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/digest/export" -> digestExport(ex)
                 "/api/runs" -> send(ex, 200, RunLedger.json(),
                     "application/json; charset=utf-8")
-                "/api/usage" -> send(ex, 200, UsageLedger.report(),
-                    "application/json; charset=utf-8")
+                "/api/usage" -> usageReport(ex)
+                "/api/usage/export" -> usageExportXlsx(ex)
                 "/api/file" -> fileOne(ex)
                 "/api/img" -> imageFile(ex)
                 "/api/media" -> mediaFile(ex)
@@ -676,6 +676,8 @@ class WebServer(settings: PcSettings, port: Int,
         session.mode = preset?.let { Presets.modeOf(it, settings.permissionMode) } ?: settings.permissionMode
         session.persona = preset?.persona.orEmpty()
         session.role = preset?.name.orEmpty()
+        // 卡 id 也要落到会话上：Token 统计"按专家"按 id 归并，改名之后历史账还认得
+        session.preset = preset?.id.orEmpty()
         var made: Engine? = null
         // 走工厂（S5/S7）：以前这里第三处直连 `Engine(...)`，`/api/new` 造完引擎就进了
         // sessions 表，engineFor 再也不会被调 —— session-start 钩子因此一声都不发

@@ -284,7 +284,54 @@
   .main[data-page]:not([data-page=""])>.ctxp,
   .main[data-page]:not([data-page=""])>.pill{display:none!important}
   .main[data-page="experts"]>#page-experts,
-  .main[data-page="sched"]>#page-sched{display:flex}
+  .main[data-page="sched"]>#page-sched,
+  .main[data-page="tokens"]>#page-tokens{display:flex}
+  /* ---- Token 统计整页：卡片 + 三个环 + 趋势 + 一张按页签换的表 ---- */
+  .tk-body{flex:1;min-height:0;overflow:auto;padding:0 18px 18px}
+  .tk-note{display:flex;gap:8px;align-items:flex-start;background:var(--glass);border:1px solid var(--line);
+    border-radius:10px;padding:9px 12px;margin:2px 0 12px;font-size:12px;color:var(--fg2)}
+  .tk-note i{flex:none;width:15px;height:15px;border-radius:50%;background:var(--acc);color:#fff;
+    font-style:normal;font-size:10px;display:grid;place-items:center;margin-top:1px}
+  .tk-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+  .tk-filters select,.tk-filters input[type=date]{background:var(--glass);border:1px solid var(--line);
+    border-radius:9px;color:var(--fg);padding:5px 8px;font:inherit;font-size:12px;outline:0;color-scheme:light dark}
+  .tk-filters select:focus,.tk-filters input:focus{border-color:var(--acc2)}
+  /* 换行之后按钮不许铺满一整行（截图里"只看这一天"被拉成了一条横幅） */
+  .tk-filters .btn{flex:none;width:auto}
+  .tk-cards{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+  /* 六张卡分两行时，第二行那两张不许把宽度摊满整行（flex:1 会均分剩下的空间） */
+  .tk-card{flex:1 1 150px;min-width:140px;max-width:240px;background:var(--glass);
+    border:1px solid var(--line);border-radius:12px;padding:11px 13px}
+  .tk-card small{display:block;font-size:10px;letter-spacing:.06em;color:var(--fg2);text-transform:uppercase}
+  .tk-card b{display:block;font-size:22px;font-weight:650;color:var(--fg);margin-top:3px;
+    font-variant-numeric:tabular-nums}
+  .tk-card em{display:block;font-style:normal;font-size:11px;color:var(--fg2);margin-top:2px}
+  .tk-donuts{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+  .tk-dn{flex:1 1 220px;min-width:200px;background:var(--glass);border:1px solid var(--line);
+    border-radius:12px;padding:11px 13px}
+  .tk-dn h4{margin:0 0 6px;font-size:12px;color:var(--fg)}
+  .tk-dn .in{display:flex;gap:10px;align-items:center}
+  .tk-dn svg{flex:none}
+  .tk-lg{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--fg2);min-width:0}
+  .tk-lg span{display:flex;gap:5px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tk-lg i{width:8px;height:8px;border-radius:2px;flex:none}
+  .tk-trend{background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin:0 0 14px}
+  .tk-trend h4{margin:0 0 8px;font-size:12px;color:var(--fg)}
+  .tk-bars{display:flex;gap:3px;align-items:flex-end;height:104px;overflow:auto}
+  .tk-bars .b{flex:1 0 14px;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;
+    height:100%;align-items:center}
+  .tk-bars .b span{width:100%;max-width:16px;border-radius:2px 2px 0 0;background:var(--acc)}
+  .tk-bars .b span.o{background:#8b5cf6;border-radius:0}
+  .tk-bars .b em{font-style:normal;font-size:9px;color:var(--fg2);margin-top:4px;white-space:nowrap}
+  .tk-tb{width:100%;border-collapse:collapse;font-size:12px;background:var(--glass);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .tk-tb th,.tk-tb td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);
+    font-variant-numeric:tabular-nums}
+  .tk-tb th:first-child,.tk-tb td:first-child{text-align:left}
+  .tk-tb th{font-weight:600;color:var(--fg2);font-size:11px;background:var(--glass)}
+  .tk-tb tr:hover td{background:rgba(127,127,127,.06)}
+  .tk-tb td.nm{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tk-empty{padding:26px;text-align:center;color:var(--fg2);font-size:12px}
   .xp-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 18px 10px;flex-wrap:wrap}
   .xp-head h2{margin:0;font-size:17px;color:var(--fg)}
   .xp-head .sp{flex:1}
@@ -1000,6 +1047,7 @@
     <div class="navrow" data-act="skills" title="自定义命令（技能）与技能订阅源在设置里"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4L15 12l-3-3z"/></svg>技能</div>
     <div class="grp">助理</div>
     <div class="navrow" data-view="sched" title="定时任务的时间线与近期结果"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>日程</div>
+    <div class="navrow" data-view="tokens" id="tokensBtn" title="Token 统计：汇总 / 按天 / 按专家 / 按模型，能选日期区间并导出 Excel"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 5-8 4 5"/><path d="M3 21h18"/></svg>Token 统计</div>
     <div class="navrow" data-act="mem" title="长期记忆条目"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 1 7 7c0 3-2 5-4 6v3h-6v-3c-2-1-4-3-4-6a7 7 0 0 1 7-7z"/></svg>记忆</div>
     <div class="grp">设置</div>
     <div class="navrow" data-act="theme" title="切换明暗主题"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>外观</div>
@@ -1110,6 +1158,45 @@
           <div id="schedDigest" class="kv">—</div>
           <div class="kv">新建与改排期在右栏「定时」页签：一句话就能排（"每周一三五早八"），边打边预览下一次什么时候跑。</div>
         </aside>
+      </div>
+    </div>
+
+    <!-- Token 统计整页：区间 + 专家/类型筛选 + 四张卡 + 三个环 + 趋势 + 一张按页签换的表。
+         数据一次 GET /api/usage 拿全（服务端一次算齐四种切片），前端不再发第二发请求。 -->
+    <div class="pagev" id="page-tokens">
+      <div class="xp-head">
+        <h2>Token 统计</h2>
+        <div class="kv" id="tkRange" style="margin:0">—</div>
+        <span class="sp"></span>
+        <button class="btn" id="tkExport" title="按当前区间与筛选导出一份 .xlsx（汇总 / 按天 / 按专家 / 按模型 / 明细）">⬇ 导出 Excel</button>
+      </div>
+      <div class="tk-body">
+        <div class="tk-note"><i>i</i><span>只记引擎的模型回合（网关回包的计费 token）。语义索引的嵌入请求、
+          压缩摘要那一次调用、以及工具自己花掉的钱都不在这份账里 —— 所以页面数字不等于账单。</span></div>
+        <div class="xtabs" id="tktabs">
+          <button data-t="sum" class="on">汇总</button><button data-t="day">按天</button>
+          <button data-t="expert">按专家</button><button data-t="model">按模型</button>
+        </div>
+        <div class="tk-filters">
+          <select id="tkWin" title="快捷窗口">
+            <option value="30">近 30 天</option><option value="7">近 7 天</option>
+            <option value="1">今天</option><option value="2">昨天</option>
+            <option value="0">全部</option><option value="">自定义</option>
+          </select>
+          <input type="date" id="tkFrom" title="开始那天（含）">
+          <span class="kv" style="margin:0">→</span>
+          <input type="date" id="tkTo" title="结束那天（含）">
+          <select id="tkExpert" title="只看某个专家花的"><option value="">全部专家</option></select>
+          <select id="tkKind" title="只看主会话或只看子任务">
+            <option value="">主会话 + 子任务</option><option value="main">只要主会话</option>
+            <option value="sub">只要子任务</option>
+          </select>
+          <button class="btn" id="tkOne" title="把区间收成上面开始那一天：只看那一天">只看这一天</button>
+        </div>
+        <div class="tk-cards" id="tkCards"></div>
+        <div class="tk-donuts" id="tkDonuts"></div>
+        <div class="tk-trend"><h4>每日消耗趋势（下=输入，上=输出）</h4><div class="tk-bars" id="tkBars"></div></div>
+        <div id="tkTable"></div>
       </div>
     </div>
   </main>
@@ -1787,6 +1874,7 @@ const PALSET=[
    * 第三格可以显式盖掉左边那枚徽标（默认：函数=动作、其余=跳转）。 */
   ['右栏：自动化（角色卡与钩子）','#tabs button[data-t=role]'],
   ['专家与团队（卡片 / 内置库 / 团队）','#expertsBtn'],
+  ['Token 统计（按天 / 按专家 / 按模型 / 导出 Excel）','#tokensBtn'],
   ['右栏：知识库（导入参考文档）','#tabs button[data-t=kb]'],
   ['动作：把刚才看的那条并排到左边（分屏）','#duoBtn','动作'],
   ['动作：整理条目记忆（先给预览再点头）',()=>palTabBtn('mem','#memTidy')],
@@ -4731,11 +4819,12 @@ document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
   const v=r.dataset.view, a=r.dataset.act;
   if(v==='experts'){setView(v);Experts.openAt();return}
   if(v==='sched'){setView(v);SchedPage.render();return}
+  if(v==='tokens'){setView(v);Tokens.open();return}
   if(v){setView(v);return}
   if(a==='kb'){setView('chat');document.querySelector('#tabs button[data-t=kb]').click()}
   else if(a==='cron'){setView('chat');document.querySelector('#tabs button[data-t=cron]').click()}
   else if(a==='mem'){setView('chat');document.querySelector('#tabs button[data-t=mem]').click()}
-  else if(a==='skills'||a==='cfg'){openCfg()}
+  else if(a==='skills'||a==='cfg'){Cfg.open()}
   else if(a==='theme'){$('#themeBtn').click()}
   else if(a==='help'){showHelp()}
 });
@@ -4752,6 +4841,158 @@ function showHelp(){
   $('#mask').classList.add('on');
   dg.querySelector('#hpx').onclick=()=>$('#mask').classList.remove('on');
 }
+
+/* ==== [S6 面板对象] Tokens：Token 统计整页（汇总 / 按天 / 按专家 / 按模型 + 导出 Excel） ====
+ * 一次 GET /api/usage 拿全四种切片：服务端读一遍账本就都算完了。
+ * （Octop 那页是发四发请求、每发算一种粒度 —— 账本会长，别把同一个 jsonl 解析四遍。）
+ */
+const Tokens=(()=>{
+const DAY=86400000;
+const PAL=['#5b8def','#8b5cf6','#22c55e','#f59e0b','#ef4444','#06b6d4','#ec4899','#84cc16'];
+let u=null,tab='sum',wired=false;
+const $id=s=>document.querySelector(s);
+const nf=v=>(v||0).toLocaleString();
+function iso(ms){const d=new Date(ms),p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())}
+function dayStart(s){return new Date(s+'T00:00:00').getTime()}
+/** 快捷窗口：0=全部（不收区间，服务端用它自己的默认窗），1=今天，2=昨天，其他=近 N 天。 */
+function setWin(n){
+  const now=Date.now();
+  if(n===0){$id('#tkFrom').value='';$id('#tkTo').value='';return}
+  if(n===2){const y=now-DAY;$id('#tkFrom').value=iso(y);$id('#tkTo').value=iso(y);return}
+  const days=n===1?1:n;
+  $id('#tkFrom').value=iso(now-(days-1)*DAY);$id('#tkTo').value=iso(now);
+}
+function qs(){
+  const p=new URLSearchParams();
+  const f=$id('#tkFrom').value,t=$id('#tkTo').value;
+  if(f)p.set('from',dayStart(f));
+  // 结束那天要**整天**算进去：只传 00:00 的话"到 10-03"实际只覆盖 10-03 那一瞬
+  if(t)p.set('to',dayStart(t)+DAY-1);
+  const e=$id('#tkExpert').value;if(e)p.set('expert',e);
+  const k=$id('#tkKind').value;if(k)p.set('kind',k);
+  return p.toString();
+}
+function load(){
+  fetch('/api/usage?'+qs()).then(r=>r.json()).then(d=>{u=d;paint()}).catch(()=>{
+    $id('#tkCards').innerHTML='<div class="tk-empty">读不到账本（服务没起来？）</div>';});
+}
+function card(t,v,e){return `<div class="tk-card"><small>${esc(t)}</small><b>${v}</b><em>${esc(e)}</em></div>`}
+function cards(s){
+  const pct=s.prompt?Math.round(100*(s.cached||0)/s.prompt):0;
+  $id('#tkCards').innerHTML=
+    card('总 TOKENS',nf(s.total),'输入 + 输出')+
+    card('输入',nf(s.prompt),'其中缓存命中 '+pct+'%')+
+    card('输出',nf(s.completion),nf(s.n)+' 个回合')+
+    card('缓存输入',nf(s.cached),'命中上下文缓存，通常按折扣计费')+
+    card('成功率',Math.round((s.okRate||0)*100)+'%','失败的回合也入账')+
+    card('平均速度',(s.tps||0)+' tok/s','补全 token / 秒');
+}
+function donutSvg(parts,tot){
+  const R=34,C=2*Math.PI*R;let off=0;
+  const arcs=tot?parts.map((p,i)=>{
+    const len=Math.max(0,C*(p.value||0)/tot);
+    const s=`<circle cx="45" cy="45" r="${R}" fill="none" stroke="${PAL[i%PAL.length]}" stroke-width="15"`+
+      ` stroke-dasharray="${len.toFixed(2)} ${(C-len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"`+
+      ` transform="rotate(-90 45 45)"/>`;off+=len;return s}).join('')
+    :`<circle cx="45" cy="45" r="${R}" fill="none" stroke="rgba(127,127,127,.22)" stroke-width="15"/>`;
+  return `<svg viewBox="0 0 90 90" width="96" height="96" role="img" aria-label="占比环图">${arcs}</svg>`;
+}
+function dn(title,parts){
+  const tot=parts.reduce((a,b)=>a+(b.value||0),0);
+  return `<div class="tk-dn"><h4>${esc(title)}</h4><div class="in">${donutSvg(parts,tot)}`+
+    `<div class="tk-lg">${tot?parts.map((p,i)=>`<span title="${esc(p.label)}">`+
+      `<i style="background:${PAL[i%PAL.length]}"></i>${esc(p.label)} ${nf(p.value)}</span>`).join('')
+      :'<span>（这段时间没有账）</span>'}</div></div></div>`;
+}
+function donuts(s){
+  $id('#tkDonuts').innerHTML=
+    dn('输入 / 输出',[{label:'输入',value:s.prompt||0},{label:'输出',value:s.completion||0}])+
+    dn('专家分布',(u.byExpert||[]).slice(0,8).map(x=>({label:x.name,value:x.total})))+
+    dn('模型分布',(u.byModel||[]).slice(0,8).map(x=>({label:shortModel(x.model)||'（未知）',value:x.total})));
+}
+function trend(){
+  const ds=u.byDay||[],mx=Math.max(1,...ds.map(d=>d.prompt+d.completion));
+  $id('#tkBars').innerHTML=ds.length?ds.map(d=>{
+    const hi=Math.max(1,Math.round(96*d.prompt/mx));
+    const ho=d.completion?Math.max(2,Math.round(96*d.completion/mx)):0;
+    return `<div class="b" title="${esc(d.d)}：↑${nf(d.prompt)} ↓${nf(d.completion)}，${d.n||0} 次">`+
+      `<span class="o" style="height:${ho}px"></span><span style="height:${hi}px"></span>`+
+      `<em>${esc(d.d.slice(5))}</em></div>`}).join('')
+    :'<div class="tk-empty">这段时间没有账</div>';
+}
+function tb(cols,rows,empty){
+  if(!rows.length)return `<div class="tk-tb"><div class="tk-empty">${esc(empty)}</div></div>`;
+  return `<table class="tk-tb"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>`+
+    rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${i===0?'nm':''}"${typeof c==='string'&&c.length>28?` title="${esc(c)}"`:''}>`+
+      (i===0?esc(c):typeof c==='number'?nf(c):esc(String(c)))+'</td>').join('')}</tr>`).join('')+
+    '</tbody></table>';
+}
+function table(){
+  const el=$id('#tkTable'),tot=(u.summary||{}).total||0;
+  const pc=v=>tot?((100*(v||0)/tot).toFixed(1)+'%'):'0%';
+  if(tab==='day')
+    el.innerHTML=tb(['日期','总 TOKENS','输入','输出','缓存输入','回合数','占比'],
+      (u.byDay||[]).slice().reverse().map(d=>[d.d,d.total,d.prompt,d.completion,d.cached,d.n,pc(d.total)]),
+      '这段时间没有账');
+  else if(tab==='expert')
+    el.innerHTML=tb(['专家','卡 id','总 TOKENS','输入','输出','缓存输入','回合数','其中子任务','模型数','占比'],
+      (u.byExpert||[]).map(x=>[x.name,x.preset||'—',x.total,x.prompt,x.completion,x.cached,x.n,x.sub,x.models,pc(x.total)]),
+      '这段时间没有账');
+  else if(tab==='model')
+    el.innerHTML=tb(['模型','总 TOKENS','输入','输出','缓存输入','回合数','占比'],
+      (u.byModel||[]).map(m=>[m.model,m.total,m.prompt,m.completion,m.cached,m.n,pc(m.total)]),
+      '这段时间没有账');
+  else{
+    const days=(u.byDay||[]).filter(d=>d.total>0);
+    const topDay=days.length?days.reduce((a,b)=>b.total>a.total?b:a):null;
+    const topEx=(u.byExpert||[])[0];
+    el.innerHTML=tb(['这一段时间','值'],
+      [['活跃天数',(u.summary||{}).dayCount||0],
+       ['覆盖专家',(u.byExpert||[]).length],
+       ['覆盖模型',(u.byModel||[]).length],
+       ['最贵的一天',topDay?topDay.d+'（'+nf(topDay.total)+'）':'—'],
+       ['最贵的专家',topEx?topEx.name+'（'+nf(topEx.total)+'）':'—'],
+       ['账本总行数',(u.rows||0)+' 行']],
+      '这段时间没有账');
+  }
+}
+function paint(){
+  if(!u)return;
+  const s=u.summary||{};
+  $id('#tkRange').textContent=`${(u.range&&u.range.fromText)||''} → ${(u.range&&u.range.toText)||''}`+
+    ` · ${nf(s.total)} tokens · ${nf(s.n)} 个回合`;
+  const sel=$id('#tkExpert'),want=sel.value;
+  sel.innerHTML='<option value="">全部专家</option>'+(u.experts||[]).map(e=>
+    `<option value="${esc(e.key)}">${esc(e.name)}（${nf(e.total)}）</option>`).join('');
+  sel.value=want;
+  cards(s);donuts(s);trend();table();
+}
+function open(){
+  if(!wired){wired=true;
+    $id('#tktabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+      tab=b.dataset.t;
+      $id('#tktabs').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+      table();});
+    $id('#tkWin').onchange=()=>{setWin(+$id('#tkWin').value);load()};
+    $id('#tkFrom').onchange=()=>{$id('#tkWin').value='';load()};
+    $id('#tkTo').onchange=()=>{$id('#tkWin').value='';load()};
+    $id('#tkExpert').onchange=load;
+    $id('#tkKind').onchange=load;
+    $id('#tkOne').onclick=()=>{
+      const f=$id('#tkFrom').value;
+      if(!f){toast('先在「开始那天」里选一天');return}
+      $id('#tkTo').value=f;$id('#tkWin').value='';load();
+      toast('只看 '+f+' 那一天');};
+    $id('#tkExport').onclick=()=>{
+      const q=qs();
+      location.href='/api/usage/export'+(q?'?'+q:'');
+      toast('正在导出 .xlsx：汇总 / 按天 / 按专家 / 按模型 / 明细');};
+  }
+  setWin(+$id('#tkWin').value||30);load();
+}
+return {open,load,paint,qs,setWin,table};
+})();
 
 /* ==== [S6 面板对象] Kb：知识库（工作区 .haoai-kb/ 语料） ==== */
 /* ---- 导入在前端读文件文本再 POST：服务端只收纯文本（扩展名白名单 + 200KB 上限），

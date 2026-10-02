@@ -240,6 +240,28 @@ check(!/\b(loadGit|loadFiles|loadLan|loadCron|loadPresets|loadHooks|loadMems|loa
  * 它的私有名字只许以 `Panel.成员` 的形式出现，裸用一律报出来。
  */
 const panelLeaks = [];
+/*
+ * 判断某个下标落在不在**字符串字面量**里。
+ *
+ * 为什么必须判：私有名常常只是字符串的一段文字 —— `'/api/kb'` 里的 `kb` 是 Files 面板的
+ * 私有函数名、`'#tabs button[data-t=kb]'` 里也是、`/api/presets` 里的 `presets` 是 Presets
+ * 的私有数组名。把它们当"裸用"报出来，这条判据就会长期红着六行假故障，
+ * 而**一条一直红的判据等于没有判据**（下一批的人只会当噪音跳过，真裸用反而没人看）。
+ *
+ * 为什么按**行**扫而不是整份文件扫一遍：整份扫会被中文注释里的一个撇号带偏，
+ * 状态一旦错位，后面每一处都被判成"在字符串里"—— 判据会静默变成永远绿，比永远红更坏。
+ * 一行之内引号成对，扫这一行就够。
+ */
+function insideString(src, idx) {
+  const lineStart = src.lastIndexOf('\n', idx) + 1;
+  let q = '';
+  for (let i = lineStart; i < idx; i++) {
+    const c = src[i];
+    if (q) { if (c === '\\') i++; else if (c === q) q = ''; }
+    else if (c === "'" || c === '"' || c === '`') q = c;
+  }
+  return q !== '';
+}
 for (const p of PANELS) {
   const start = scriptSrc.indexOf('const ' + p + ' = (() => {');
   const end = scriptSrc.indexOf('\n' + p + '.init();', start);
@@ -253,11 +275,14 @@ for (const p of PANELS) {
     const re = new RegExp('\\b' + name + '\\b', 'g');
     for (const m of scriptSrc.matchAll(re)) {
       if (m.index >= start && m.index < end) continue;
+      if (insideString(scriptSrc, m.index)) continue;   // 字符串里的一段文字，不是标识符引用
       const before = scriptSrc[m.index - 1] || '';
-      if (before === '#' || before === "'" || before === '"' || before === '.') continue;   // $('#palList') 这类 id/属性位
+      if (before === '#' || before === "'" || before === '"' || before === '.') continue;
       const lineStart = scriptSrc.lastIndexOf('\n', m.index) + 1;
       const line = scriptSrc.slice(lineStart, scriptSrc.indexOf('\n', m.index));
       if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;   // 注释里提名字不算用
+      // 别处**自己声明**的同名（另一个 IIFE 里也有一份 ROLE_MODES）是遮蔽，不是引用它
+      if (new RegExp('^\\s*(?:function|let|const|var)\\s+' + name.replace(/\$/g, '\\$') + '\\b').test(line)) continue;
       panelLeaks.push(p + '.' + name + ' 在对象外裸用：' + line.trim().slice(0, 90));
     }
   }
