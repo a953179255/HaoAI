@@ -127,7 +127,11 @@
     color:var(--fg);padding:6px 8px 6px 22px;font:inherit;font-size:12px;outline:0}
   .srch input:focus{border-color:var(--acc2)}
   .srch::before{content:'⌕';position:absolute;left:7px;top:4px;color:var(--dim);font-size:13px}
-  .sess{display:flex;flex-direction:column;gap:4px;overflow:auto;min-height:60px;flex:1}
+  .sess{display:flex;flex-direction:column;gap:4px;overflow:auto;min-height:60px;flex:1;
+    /* ⚠️ overflow:auto 会在容器边界把子项 box-shadow 裁平（四角呈直角，用户实锤）：
+       负 margin 把裁剪盒向两侧各扩 10px、padding 占回等宽 → 内容宽度不变、影子落在
+       padding 区内不被裁。改阴影参数前先想清楚裁剪容器在哪一层。 */
+    margin:0 -10px;padding:2px 10px 8px}
   .sess .it{border:1px solid var(--line);background:var(--glass);border-radius:9px;padding:6px 66px 6px 9px;
     cursor:pointer;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     position:relative}
@@ -781,9 +785,12 @@
   :root[data-theme="dark"] .sess .it.cur{box-shadow:0 3px 12px rgba(0,0,0,.45)}
   .sess .it.run{background:var(--glass2);border-color:transparent}
   /* 搜索图标 → 线性放大镜 */
-  .srch::before{content:'';left:8px;top:7px;width:8px;height:8px;border:1.5px solid var(--dim);border-radius:50%}
-  .srch::after{content:'';position:absolute;left:16px;top:15px;width:5px;height:1.5px;background:var(--dim);
-    transform:rotate(45deg);border-radius:1px}
+  /* 放大镜改为 input 的背景 SVG：background-position:center 天然垂直居中，
+     不再用伪元素手算坐标（老版手柄旋转后 tip 伸进文字起始区 = 文字图标重叠，用户实锤） */
+  .srch::before,.srch::after{content:none}
+  .srch input{padding:6px 8px 6px 30px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237d8674' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M15.5 15.5L21 21'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:9px center;background-size:12px 12px}
   /* D. 消息气泡：用户=绿色渐变 / AI=玻璃气泡 + H 头像 */
   .msg.user{background:linear-gradient(160deg,#5C9A3A,#3E7A1E);border:1px solid rgba(255,255,255,.22);
     border-radius:15px 15px 4px 15px;color:#fff;
