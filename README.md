@@ -246,6 +246,26 @@ arm64 真机对应 `app/src/main/jniLibs/arm64-v8a/libllamaserver.so`。
 | Coroutines | 1.10.2 |
 | llama.cpp | 2026-08 master |
 
+### 移动端这一轮（2026-10-02）：冷启动回到哪儿、"换屏"之后状态还在不在
+
+移动端没有独立的界面路由表：`MainActivity` 里就是一个 `screen: Int`，**换一次屏＝整棵 Compose 树重建一次**。
+这一批的五处毛病看着不相干（冷启动跳错会话、返回聊天侧栏自己收了、任务面板反复展开、手势返回直接退应用、
+某个设置子页不吃壁纸），根子其实是同一条：**该活得比一次组合更久的东西，被放在了组合里**。
+
+| 现象 | 真正的因 | 落点 |
+| --- | --- | --- |
+| 置顶过的会话，重开应用就被它抢了台 | 冷启动直接取了抽屉排序的第一条（置顶＝排最前） | `data/SessionStartup.kt` 纯函数挑起点 + `SessionStore` 记 `last-opened.txt`：**置顶只管找得到，不管打开哪条** |
+| 进设置再回聊天，任务面板重新展开一次 | 展开态寄居在 `remember` 里，重建即归零；且自动展开写在 `LaunchedEffect` 里，首次组合必重放 | `ui/chat/TaskPanelState.kt`（挂在 ViewModel 上，按会话各记一份）＋ 记忆闸 |
+| 从设置返回聊天，侧栏自己收了 | 同一条 `LaunchedEffect` 重放：横屏双栏那条 effect 每次进屏都执行一遍"竖屏就收起" | `DrawerController.onPaneMode()`：**只在模式真的变了**才开或收 |
+| 电脑联动页用系统手势返回＝退出应用 | 那一页没有自己的 `BackHandler`，事件落到"退出" | `ui/ScreenNav.kt`：`depth` / `parentOf` 一张表，`MainActivity` 兜底 + 该页就地接住 |
+| 电脑联动页背景是白的，全局壁纸不生效 | `PcLinkScreen` 收了 `wallpaper` 参数却一次没用，页面铺的是实底色 | 补壁纸＋玻璃接线；`ui/WallpaperWiringTest.kt` 扫源码钉住："声明了 `wallpaper` 的屏必须真的用它"、"调用处必须真的传进去" |
+
+- **判据**：`:app:testDebugUnitTest` **238 条全绿**（本批新增 `SessionStartupTest` 9 / `TaskPanelStateTest` 7 /
+  `ScreenNavTest` 6 / `DrawerPaneModeTest` 3 / `WallpaperWiringTest` 3）；逐条在真机（MEIZU 20 Pro，
+  release 0.18.6）看过改前改后的对比图，不是只看断言绿
+- **两条留档的教训**：① `remember` 不是"跨屏状态"的家，凡"返回之后还得保持"的一律先问它该活多久；
+  ② 写在 `LaunchedEffect` 里的自动动作默认每次进屏都会重放一遍——要记忆闸，不能靠 key 没变来兜底
+
 ---
 
 ## ⚠️ 已知限制

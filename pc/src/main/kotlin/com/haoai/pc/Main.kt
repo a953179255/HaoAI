@@ -316,6 +316,25 @@ private fun chat(s: PcSettings) {
  * 端口与配对状态的那个），通知不上才只改盘上的开关并说清楚"下一次 serve 才生效"。
  * 上一版类似的坑是"CLI 写了设置、界面还是旧的"，这里宁可多打一行也不让人猜。
  */
+/**
+ * 把"某个时刻离现在多久"说成人话。
+ *
+ * `lan status` / `lan devices` 原来直接把 epoch 毫秒打出来（`上次 1790924465189`）——
+ * 而这行输出唯一的用途，就是让人判断"手机到底还在不在问"：一串毫秒谁也看不出来，
+ * 10-02 那次装机复测就是被它绊的（要看的是"上次活动离现在几秒"，不是去心算时间戳）。
+ * 0 表示从没活动过，说"从没"而不是"1790924465 秒前"。
+ */
+internal fun agoLabel(ms: Long, now: Long = System.currentTimeMillis()): String {
+    if (ms <= 0L) return "从没"
+    val s = ((now - ms) / 1000).coerceAtLeast(0L)
+    return when {
+        s < 60 -> "$s 秒前"
+        s < 3600 -> "${s / 60} 分前"
+        s < 86400 -> "${s / 3600} 小时前"
+        else -> java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(ms))
+    }
+}
+
 private fun lanCmd(settings: PcSettings, rest: List<String>) {
     /*
      * 参数解析要认两种写法：`--port=8899` 和 `--port 8899`。原来只认前者，
@@ -347,7 +366,7 @@ private fun lanCmd(settings: PcSettings, rest: List<String>) {
             println("端口：$port    内网地址：${LanServer.lanAddress()}:$port")
             println("已配对设备：${LanStore.devices().size} 台")
             LanStore.devices().forEach {
-                println("  ${it.hash.take(10)}  ${it.name}  上次活动 ${it.lastSeen}")
+                println("  ${it.hash.take(10)}  ${it.name}  上次活动 ${agoLabel(it.lastSeen)}")
             }
         }
         "on" -> {
@@ -371,7 +390,9 @@ private fun lanCmd(settings: PcSettings, rest: List<String>) {
             }
         }
         "devices" -> LanStore.devices().forEach {
-            println("${it.hash.take(12)}  ${it.name}  加于 ${it.added}  上次 ${it.lastSeen}")
+            println("${it.hash.take(12)}  ${it.name}  加于 " +
+                java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(it.added)) +
+                "  上次 ${agoLabel(it.lastSeen)}")
         }
         "pair" -> {
             val name = pos.getOrNull(1) ?: "命令行配对"
