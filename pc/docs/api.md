@@ -90,6 +90,13 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 `/api/rule`、`/api/memory`、`/api/memories`、`/api/skills`、`/api/mcp`、`/api/presets`、
 `/api/secrets`、`/api/hooks`、`/api/workspaces`
 
+专家与团队：`/api/teams`（GET 清单（成员展开成摘要）；POST `op:'save'|'del'`，
+`name`+`members`≥2 个 preset id；编制只存成员 id，人设跟着角色卡走）、
+`/api/experts/library`（GET，随包内置专家卡，只读）、
+`/api/kb`（GET `?sid=` 语料清单与检索可用性；POST `op:'import'`（name+text，纯文本 ≤200KB）
+`|'del'`（name，删后语义缓存一并清）`|'test'`（q，跑一次语义检索返回命中））。
+`/api/new` 可带 `team:<id>` 开团队会话（服务端现拼主持人人设，成员人设经 task 的 `persona` 参数随派工下发）。
+
 排程与产出：`/api/schedules`、`/api/sched/parse`、`/api/workflows`、`/api/digest`、
 `/api/digest/export`、`/api/backups`、`/api/backup`
 

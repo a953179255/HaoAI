@@ -6,3 +6,6 @@ build/
 apikey
 *.key
 local.properties
+
+# 知识库语料（用户放进工作区的私人文档，同 apikey 一族）
+.haoai-kb/

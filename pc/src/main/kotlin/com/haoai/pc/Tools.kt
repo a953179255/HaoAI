@@ -529,17 +529,21 @@ class EditTool : Tool(
 }
 
 /**
- * 派子任务时能交代的两件事：用哪个模型、只给哪几把工具（还有档位）。
+ * 派子任务时能交代的事：用哪个模型、只给哪几把工具、档位、以及**让谁去干**（persona）。
  *
  * 为什么允许"按子任务"换：一条大任务里既有"把这三份日志读一遍 summarize"（脏活，
  * 本地小模型就够）又有"据此定方案"（要强的），全用同一个模型就是拿贵的干便宜的活。
  * 但**权限不能靠换子任务绕过**：档位只能更严、工具只能是父会话已有的子集，
  * 见 [Engine.spawn]。
+ *
+ * persona 是给团队会话用的：主持人的提示里只有成员摘要，完整人设随派工走 ——
+ * 子引擎把它当自己 Session 的 persona，进系统提示的「本次角色」一节。
  */
 data class SubOpts(
     val model: String = "",
     val tools: String = "",
-    val mode: String = ""
+    val mode: String = "",
+    val persona: String = ""
 )
 
 class TaskTool : Tool(
@@ -549,10 +553,11 @@ class TaskTool : Tool(
         "要并行就同一回合里多调几次。" +
         "可选 model（这条子任务用哪个模型，例如脏活交给本地小模型）、" +
         "tools（只给它哪几把工具，逗号分隔；不写就是父会话现在能用的那些）、" +
-        "mode（plan/ask/auto；**只能比父会话更严，不能更松**）。",
+        "mode（plan/ask/auto；**只能比父会话更严，不能更松**）、" +
+        "persona（让子任务扮演谁：团队调度时把该成员的整段人设抄给它）。",
     schema(
         "prompt" to "string", "label" to "string",
-        "model" to "string", "tools" to "string", "mode" to "string",
+        "model" to "string", "tools" to "string", "mode" to "string", "persona" to "string",
         required = arrayOf("prompt")
     ),
     kind = "read"
@@ -564,7 +569,8 @@ class TaskTool : Tool(
         val opts = SubOpts(
             model = (req(args, "model") ?: "").trim(),
             tools = (req(args, "tools") ?: "").trim(),
-            mode = (req(args, "mode") ?: "").trim().lowercase()
+            mode = (req(args, "mode") ?: "").trim().lowercase(),
+            persona = (req(args, "persona") ?: "").trim()
         )
         if (opts.mode.isNotEmpty() && opts.mode !in MODES)
             return fail("mode 只认 ${MODES.joinToString("/")}，现在是「${opts.mode}」")

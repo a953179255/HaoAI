@@ -639,6 +639,52 @@
   .addrow{display:flex;gap:6px;align-items:center}
   .addrow input{flex:1;min-width:0;background:var(--glass);border:1px solid var(--line);border-radius:8px;
     color:var(--fg);font:inherit;font-size:12px;padding:5px 8px;outline:0}
+  /* ---- 专家与团队：卡片弹层 ----
+     #dialog 常规 580px 装表单够、装卡片网格不够。预览那条 :has(.pvfile) 的先例是怕
+     "下一个弹窗继承宽度"，这里改成显式 .wide 类：打开加上、任何关闭路都摘掉。 */
+  .dialog.wide{width:min(1080px,96vw)}
+  .xhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .xtabs{display:flex;gap:2px;background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:3px}
+  .xtabs button{border:0;background:transparent;color:var(--dim);font-size:12px;padding:5px 14px;
+    border-radius:999px;cursor:pointer;font-family:inherit}
+  .xtabs button.on{background:var(--acc2);color:var(--fg)}
+  :root[data-theme="dark"] .xtabs button.on{color:#eafff5}
+  .xgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-top:12px}
+  .xcard{border:1px solid var(--line);background:var(--glass);border-radius:var(--r);padding:12px;
+    display:flex;flex-direction:column;gap:7px;transition:border-color .14s,transform .14s}
+  .xcard:hover{border-color:var(--line2);transform:translateY(-2px)}
+  /* 头像：底色来自卡自己的 color 字段；内高光让纯色有一点"玻璃"厚度 */
+  .avatar{width:38px;height:38px;border-radius:11px;flex:none;display:flex;align-items:center;justify-content:center;
+    font-size:17px;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 3px 9px rgba(0,0,0,.22)}
+  .xcard .hd{display:flex;gap:10px;align-items:center}
+  .xcard .hd b{font-size:13px;color:var(--fg);display:flex;align-items:center;gap:6px;min-width:0}
+  .xcard .hd b span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mbtib{font-size:9px;font-weight:700;color:var(--acc);border:1px solid currentColor;border-radius:5px;
+    padding:0 4px;flex:none}
+  .xcard .ds{font-size:11.5px;color:var(--dim);line-height:1.55}
+  .xcard .meta{font-size:10.5px;color:var(--dim2)}
+  .quick{display:flex;flex-direction:column;gap:4px}
+  .quick button{text-align:left;border:1px dashed var(--line);background:transparent;color:var(--dim);
+    border-radius:8px;padding:4px 9px;font-size:11px;cursor:pointer;font-family:inherit;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .quick button:hover{color:var(--fg);border-color:var(--acc2);border-style:solid}
+  .xcard .ft{display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
+  /* 成员叠头像：负 margin 挤在一起，描边用面板底色切开相邻头像 */
+  .stack{display:flex;flex:none}
+  .stack .avatar{width:24px;height:24px;font-size:11px;border-radius:8px;margin-left:-7px}
+  .stack .avatar:first-child{margin-left:0}
+  .xadd{border:1px dashed var(--line2);border-radius:var(--r);display:flex;flex-direction:column;gap:4px;
+    align-items:center;justify-content:center;color:var(--dim);font-size:12px;cursor:pointer;min-height:120px;
+    background:transparent;font-family:inherit}
+  .xadd:hover{border-color:var(--acc2);color:var(--fg)}
+  .swatches{display:flex;gap:6px;flex-wrap:wrap}
+  .swatches i{width:22px;height:22px;border-radius:8px;cursor:pointer;border:2px solid transparent;flex:none}
+  .swatches i.on{border-color:var(--fg)}
+  .memgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:6px}
+  .memgrid label{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:9px;
+    padding:5px 8px;font-size:12px;color:var(--fg2);cursor:pointer}
+  .memgrid label:has(input:checked){border-color:var(--acc2);background:var(--glass2);color:var(--fg)}
+  .memgrid .avatar{width:22px;height:22px;font-size:10px;border-radius:7px}
   .addrow .btn{width:auto;flex:none;padding:5px 10px;font-size:12px}
   .mem{width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--line);
     border-radius:9px;color:var(--fg);font:inherit;font-size:12px;line-height:1.6;padding:8px;
@@ -859,6 +905,7 @@
     <div class="grp">工作台</div>
     <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
     <button class="wsrow" id="wsBtn" title="换个工作区开一条新任务"><span id="wsName">工作区</span><em>换 ▾</em></button>
+    <button class="wsrow" id="expertsBtn" title="专家卡与团队：人设+模型+工作区一次带上；团队由主持人调度成员"><span>专家与团队</span><em id="expertsCount"></em></button>
     <div class="grp">历史会话 <button class="mini" id="trashBtn" title="删掉的会话先进回收站，这里可以放回">回收站</button> <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
     <div class="srch"><input type="text" id="sessQ" placeholder="搜标题与消息正文…"></div>
     <div id="sessions" class="sess"></div>
@@ -930,6 +977,7 @@
       <button data-t="cron">定时</button>
       <button data-t="role">自动化</button>
       <button data-t="tools">工具</button>
+      <button data-t="kb">知识</button>
     </div>
     <div class="tabp on" id="tab-tasks">
       <div class="prog" id="prog"><i style="width:0%"></i></div>
@@ -1126,6 +1174,24 @@
       <div class="kv">开着的时候这台 PC 会在局域网监听一个端口：手机配对后能<b>只读</b>看这几条会话，
         并替你在手机上点"允许一次 / 拒绝"。密钥、工作区绝对路径、工具原始输出都不在这个通道里。
         不在信得过的网络就别开。</div>
+    </div>
+    <div class="tabp" id="tab-kb">
+      <div class="kv" id="kbNote">读不到</div>
+      <div class="grp">语料（当前工作区 .haoai-kb/）</div>
+      <div class="kv">放进来的文档自动进语义检索：grep 按字面搜不到时按意思搜到这里；模型也会在系统提示里看到这份名单，需要背景时会来读。</div>
+      <div id="kbList" class="runs"></div>
+      <div class="addrow" style="margin-top:8px">
+        <input type="file" id="kbFile" multiple hidden>
+        <button class="ab" id="kbPick">＋ 导入文档</button>
+        <span class="fp" id="kbState"></span>
+      </div>
+      <div class="kv" id="kbExts">—</div>
+      <div class="grp">试一把检索</div>
+      <div class="addrow">
+        <input type="text" id="kbQ" placeholder="写一句要查的，看能搜出什么">
+        <button class="ab" id="kbGo">检索</button>
+      </div>
+      <div class="kv" id="kbHits">（还没查）</div>
     </div>
     <div class="tabp" id="tab-cron">
       <div class="kv">到点自己起一条<b>新会话</b>去跑这句话（不搅乱你正在聊的那条）。
@@ -1571,6 +1637,8 @@ const PALSET=[
    * 目标写成函数的是"动作"：不跳到哪里，而是替你把两步一次做完（先开页签、再点页签里那颗）。
    * 第三格可以显式盖掉左边那枚徽标（默认：函数=动作、其余=跳转）。 */
   ['右栏：自动化（角色卡与钩子）','#tabs button[data-t=role]'],
+  ['专家与团队（卡片 / 内置库 / 团队）','#expertsBtn'],
+  ['右栏：知识库（导入参考文档）','#tabs button[data-t=kb]'],
   ['动作：把刚才看的那条并排到左边（分屏）','#duoBtn','动作'],
   ['动作：整理条目记忆（先给预览再点头）',()=>palTabBtn('mem','#memTidy')],
   ['动作：手动压缩一次上下文（把早期消息折进摘要）',()=>palTabBtn('usage','#cmpBtn')],
@@ -2276,6 +2344,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='mem'){Mem.render()}
   if(b.dataset.t=='cron'){Cron.render()}
   if(b.dataset.t=='role'){Presets.render();Hooks.render()}
+  if(b.dataset.t=='kb'){Kb.render()}
 });
 
 /* ==== [S6 面板对象] Term：状态、接线(init)、刷新(render) 收进这一个对象，别再往顶层加零散函数 ==== */
@@ -3249,23 +3318,28 @@ let hooks=[];
   };
 })();
 Hooks.init();
-function newTask(ws,preset){
+function newTask(ws,preset,firstMsg,team){
   // 开新会话不再要求"先停止"：每条会话有自己的引擎与 running，后台那条继续跑。
+  // firstMsg：快捷提问那条路——会话建好、界面切过去之后立刻把这句话发出去；
+  // team：开的是团队会话（服务端拼主持人人设）。
+  const body=Object.assign({},ws?{ws:ws}:{},preset?{preset:preset}:{},team?{team:team}:{});
   fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(Object.assign({},ws?{ws:ws}:{},preset?{preset:preset}:{}))}).then(r=>r.json()).then(d=>{
+    body:JSON.stringify(body)}).then(r=>r.json()).then(d=>{
     if(d&&!d.ok&&d.error){toast(d.error,'err');return}
     if(!d.id)return;
     $('#mask').classList.remove('on');
     const v=view(d.id);
     v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.todos=[];v.usage=null;v.outputs=[];
     v.title='新会话';if(d.mode)v.mode=d.mode;   // 没这个字段就留着旧显示，别自己编一个
-    v.role=d.role||'';                          // 角色卡带的名字，顶栏那颗徽标读它
+    v.role=d.role||'';                          // 角色卡/团队带的名字，顶栏那颗徽标读它
     show(d.id);paintUsage(null);box.focus();
     // 工作区/模型这两行只有 /api/state 会给。但用户手快得已经把话发出去了就别重画：
     // 那会儿服务端还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
     // 判据是"有没有真的气泡"，不能用 children.length —— 起手卡自己就是一个子元素，
     // 那样一条刚建好的空会话永远刷不到 state，顶栏停在"—"、左栏工作区还是上一条的。
     if(!v.running&&!v.el.querySelector('.msg'))hydrate(d.id);
+    // 快捷提问：等 hydrate 排上后再发——send() 读的是 box，先把话放进去再按发送
+    if(firstMsg){box.value=firstMsg;send();}
   }).catch(()=>toast('开不了新会话，检查一下服务是否还在跑','err'));
 }
 $('#newBtn').onclick=()=>newTask('');
@@ -3487,6 +3561,7 @@ document.addEventListener('keydown',e=>{
   if(e.key=='Escape'){
     app.classList.remove('show-l','show-r');
     if(cfgOpen)Cfg.close();
+    else if(Experts.opened())Experts.close();
     else $('#mask').classList.remove('on');
     if(Palette.opened()){Palette.toggle(false);return}
     hideSlash();return;
@@ -4169,6 +4244,288 @@ function closeCfg(){cfgOpen=false;$('#mask').classList.remove('on');paintSend()}
   };
 })();
 Cfg.init();
+
+/* ==== [S6 面板对象] Experts：专家卡 / 内置专家库 / 团队 ==== */
+/* ---- 为什么是弹层不是独立页：主区永远是会话流，专家是"开会的入口"而不是开会本身 ——
+ * 从卡片点"开始对话"要落回的正是主区。弹层用 #dialog（与设置同壳），宽度显式加 .wide。
+ * 团队只管编制：成员是普通专家卡（可跨团队），主持人人设由服务端在开会话那一刻现拼。 */
+const Experts=(()=>{
+let opened_=false, tab='my', lib=[], teams=[], editingP='', editingT='';
+let my=[], selColor='', selMembers=[], dialogModels='<option value="">模型：跟全局默认</option>';
+/* 注意：右栏「自动化」页签的 presets 列表是 Presets IIFE 的私有态，这里**不借** ——
+ * 自己拉一份 /api/presets（存/删之后顺手 Presets.render() 把右栏那份也刷掉），
+ * 两个面板各自成立，谁也别依赖谁的闭包。 */
+const COLORS=['#3E7A1E','#D97A2E','#3E6FB0','#8A54B8','#C98A2D','#2F8F6B','#B3452E','#4E7FB5'];
+const MBTIS=['INTJ','INTP','ENTJ','ENTP','INFJ','INFP','ENFJ','ENFP','ISTJ','ISFJ','ESTJ','ESFJ','ISTP','ISFP','ESTP','ESFP'];
+const ROLE_MODES={plan:'计划',ask:'询问',auto:'自动'};
+function colOf(p){
+  if(p&&p.color&&/^#[0-9a-fA-F]{6}/.test(p.color))return p.color.slice(0,7);
+  let h=0;const s=String((p&&p.name)||'?');
+  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
+  return COLORS[h%COLORS.length];
+}
+function avatar(p,extra){
+  return `<div class="avatar ${extra||''}" style="background:${colOf(p)}">${esc(p.icon||(p.name||'?').slice(0,1))}</div>`;
+}
+function metaLine(p){
+  return `${ROLE_MODES[p.mode]||'档位跟全局'} · ${p.model?('模型 '+esc(shortModel(p.model))):'模型跟全局'} · `+
+    `${p.workspace?('目录 '+esc(baseName(p.workspace))):'目录跟全局'}`;
+}
+function myCard(p){
+  return `<div class="xcard">
+    <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b></div>
+    ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
+    <div class="meta">${metaLine(p)}</div>
+    ${(p.quick&&p.quick.length)?`<div class="quick">${p.quick.map(q=>
+      `<button data-x="quick" data-id="${esc(p.id)}" data-q="${esc(q)}" title="${esc(q)}">${esc(q)}</button>`).join('')}</div>`:''}
+    <div class="ft"><button class="ab pri" data-x="use" data-id="${esc(p.id)}">开始对话</button>
+      <button class="ab" data-x="edit" data-id="${esc(p.id)}">编辑</button>
+      <button class="ab" data-x="del" data-id="${esc(p.id)}">删除</button></div>
+  </div>`;
+}
+function libCard(p){
+  const have=my.some(x=>x.name===p.name);
+  return `<div class="xcard">
+    <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b></div>
+    ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
+    <details style="font-size:11px;color:var(--dim)"><summary style="cursor:pointer;outline:none">人设（${String(p.persona||'').length} 字，可先看再启用）</summary>
+      <div style="margin-top:5px;line-height:1.6;white-space:pre-wrap">${esc(p.persona||'')}</div></details>
+    <div class="ft">${have?'<span class="meta">已在「我的专家」里</span>'
+      :`<button class="ab pri" data-x="enable" data-id="${esc(p.key)}">启用（可先改再存）</button>`}</div>
+  </div>`;
+}
+function teamCard(t){
+  const ms=t.members||[];
+  return `<div class="xcard">
+    <div class="hd">${avatar(t)}<b><span>${esc(t.name)}</span></b></div>
+    ${t.desc?`<div class="ds">${esc(t.desc)}</div>`:''}
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="stack">${ms.map(m=>`<div class="avatar" title="${esc(m.name||m.id)}" style="background:${m.missing?'#8b937f':colOf(m)}">${esc(m.icon||(m.name||'?').slice(0,1))}</div>`).join('')}</span>
+      <span class="meta">${ms.length} 名成员 · 主持人调度</span></div>
+    ${ms.some(m=>m.missing)?'<div class="ds" style="color:var(--err)">有成员的专家卡被删了，开团前先补齐编制</div>':''}
+    <div class="ft"><button class="ab pri" data-x="teamgo" data-id="${esc(t.id)}">开团队会话</button>
+      <button class="ab" data-x="tedit" data-id="${esc(t.id)}">编辑</button>
+      <button class="ab" data-x="tdel" data-id="${esc(t.id)}">删除</button></div>
+  </div>`;
+}
+function paint(){
+  $('#xtabs').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+  const body=$('#xBody');
+  if(tab==='my')body.innerHTML=`<div class="xgrid">${my.map(myCard).join('')||
+      '<div class="kv">还没有专家卡 —— 点下面新建，或去「内置专家」一键启用。</div>'}
+    <button class="xadd" data-x="newp">＋ 新建专家<br><span style="font-size:10.5px">人设 + 模型 + 工作区，一次配好</span></button></div>`;
+  else if(tab==='lib')body.innerHTML=`<div class="kv">随包内置的专家卡。「启用」会打开预填好的表单：工作区、模型都能按你的情况改，存下来就是你自己的卡。</div>
+    <div class="xgrid">${lib.map(libCard).join('')||'<div class="kv">（内置库是空的）</div>'}</div>`;
+  else body.innerHTML=`<div class="xgrid">${teams.map(teamCard).join('')||
+      '<div class="kv">还没有团队 —— 一支团队 = 几张专家卡 + 一位负责调度的主持人。</div>'}
+    <button class="xadd" data-x="newt">＋ 新建团队<br><span style="font-size:10.5px">勾 2 名以上成员，主持人负责派工与汇总</span></button></div>`;
+}
+function skeleton(){
+  const dg=$('#dialog');dg.classList.add('wide');
+  dg.innerHTML=`<div class="xhead"><h3 style="margin:0">专家与团队</h3>
+    <div class="xtabs" id="xtabs">
+      <button data-t="my">我的专家</button><button data-t="lib">内置专家</button><button data-t="team">我的团队</button>
+    </div><span style="flex:1"></span><button class="ab" id="xClose">关闭</button></div>
+    <div id="xBody"></div>`;
+  $('#xClose').onclick=close;
+  $('#xtabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;paint()});
+  dg.onclick=e=>{
+    const b=e.target.closest?e.target.closest('[data-x],[data-c]'):null;
+    if(!b)return;
+    if(b.dataset.c){selColor=b.dataset.c;
+      dg.querySelectorAll('#xfColors i,#xtColors i').forEach(i=>i.classList.toggle('on',i.dataset.c===selColor));return}
+    act(b.dataset.x,b);
+  };
+}
+function close(){opened_=false;$('#dialog').classList.remove('wide');$('#dialog').onclick=null;$('#mask').classList.remove('on')}
+function refreshBadge(){
+  const e=$('#expertsCount');if(e)e.textContent=((my.length||teams.length)?my.length+' 卡'+(teams.length?' · '+teams.length+' 队':''):'');
+}
+function loadAll(){
+  return Promise.all([
+    fetch('/api/presets').then(r=>r.json()).then(d=>{my=d.items||[]}).catch(()=>{my=[]}),
+    Presets.render(),
+    fetch('/api/experts/library').then(r=>r.json()).then(d=>{lib=d.items||[]}).catch(()=>{lib=[]}),
+    fetch('/api/teams').then(r=>r.json()).then(d=>{teams=d.items||[]}).catch(()=>{teams=[]}),
+    fetch('/api/models?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(list=>{
+      dialogModels='<option value="">模型：跟全局默认</option>'+
+        (list||[]).map(m=>`<option value="${esc(m.id)}">${esc(shortModel(m.id))}</option>`).join('');
+    }).catch(()=>{}),
+  ]).then(refreshBadge);
+}
+function openAt(t){
+  tab=t||'my';opened_=true;
+  $('#mask').classList.add('on');
+  loadAll().then(()=>{skeleton();paint()}).catch(()=>{close();toast('读不到专家与团队','err')});
+}
+/* ---- 专家表单：新建 / 编辑 / 从内置库启用（预填）共用这一份 ---- */
+function pForm(p,fromLib){
+  const v=p||{};
+  selColor=colOf(v);
+  $('#xBody').innerHTML=`<div class="xhead"><h3 style="margin:0">${fromLib?'启用内置专家':(editingP?'编辑专家':'新建专家')}</h3>
+    <span style="flex:1"></span><button class="ab" data-x="back">← 返回</button></div>
+  <div class="fld"><label>名字</label><input type="text" id="xfName" value="${esc(v.name||'')}" placeholder="如 代码工程师 / 直播助手"></div>
+  <div class="fld"><label>一句专长（卡片第二行）</label><input type="text" id="xfDesc" value="${esc(v.desc||'')}" placeholder="擅长什么、产出什么"></div>
+  <div class="fld"><label>头像字符与颜色</label><div class="addrow">
+    <input type="text" id="xfIcon" value="${esc(v.icon||'')}" style="flex:0 0 64px;text-align:center" maxlength="4" placeholder="Emoji">
+    <div class="swatches" id="xfColors">${COLORS.map(c=>`<i data-c="${c}" class="${selColor===c?'on':''}" style="background:${c}"></i>`).join('')}</div></div></div>
+  <div class="fld"><label>MBTI（可选，纯展示徽标）</label><select id="xfMbti"><option value="">不标</option>
+    ${MBTIS.map(m=>`<option ${v.mbti===m?'selected':''}>${m}</option>`).join('')}</select></div>
+  <div class="fld"><label>人设（原样进系统提示的「本次角色」一节）</label>
+    <textarea id="xfPersona" rows="6" style="width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;color:var(--fg);font:inherit;padding:8px">${esc(v.persona||'')}</textarea></div>
+  <div class="fld"><label>快捷提问（最多 3 条：专家卡上点一下，就带着这套配置发出去）</label>
+    ${[0,1,2].map(i=>`<input type="text" id="xfQ${i}" value="${esc((v.quick||[])[i]||'')}" style="margin-bottom:4px" placeholder="例：评审我刚改的这几个文件">`).join('')}</div>
+  <div class="fld"><label>模型</label><select id="xfModel">${dialogModels}</select></div>
+  <div class="fld"><label>工作区绝对路径（留空 = 跟全局）</label><input type="text" id="xfWs" value="${esc(v.workspace||'')}"></div>
+  <div class="fld"><label>档位</label><select id="xfMode"><option value="">跟全局默认</option>
+    <option value="plan" ${v.mode==='plan'?'selected':''}>计划（只读）</option>
+    <option value="ask" ${v.mode==='ask'?'selected':''}>询问</option>
+    <option value="auto" ${v.mode==='auto'?'selected':''}>自动</option></select></div>
+  <div class="acts"><button class="btn" data-x="back">取消</button>
+    <button class="btn pri" data-x="psave" data-lib="${fromLib?esc(v.key||''):''}">${fromLib?'启用这张卡':'保存'}</button></div>`;
+  $('#xfModel').value=v.model||'';$('#xfMode').value=v.mode||'';
+}
+function tForm(t){
+  const v=t||{};
+  selMembers=(v.members||[]).map(m=>m.id||m);
+  selColor=colOf(v);
+  $('#xBody').innerHTML=`<div class="xhead"><h3 style="margin:0">${editingT?'编辑团队':'新建团队'}</h3>
+    <span style="flex:1"></span><button class="ab" data-x="back">← 返回</button></div>
+  <div class="fld"><label>团队名字</label><input type="text" id="xtName" value="${esc(v.name||'')}" placeholder="如 项目冲刺小组"></div>
+  <div class="fld"><label>一句话（这个队干什么）</label><input type="text" id="xtDesc" value="${esc(v.desc||'')}"></div>
+  <div class="fld"><label>头像字符与颜色</label><div class="addrow">
+    <input type="text" id="xtIcon" value="${esc(v.icon||'')}" style="flex:0 0 64px;text-align:center" maxlength="4" placeholder="Emoji">
+    <div class="swatches" id="xtColors">${COLORS.map(c=>`<i data-c="${c}" class="${selColor===c?'on':''}" style="background:${c}"></i>`).join('')}</div></div></div>
+  <div class="fld"><label>成员编制（从「我的专家」里勾，至少 2 名；成员可同时属于多支团队）</label>
+    <div class="memgrid">${my.map(p=>
+      `<label>${avatar(p)}<input type="checkbox" value="${esc(p.id)}" ${selMembers.includes(p.id)?'checked':''}><span>${esc(p.name)}</span></label>`).join('')
+      ||'<span class="kv">还没有专家卡——先去建两张再来组队。</span>'}</div></div>
+  <div class="acts"><button class="btn" data-x="back">取消</button><button class="btn pri" data-x="tsave">保存</button></div>`;
+}
+function act(x,b){
+  const id=b.dataset.id||'';
+  if(x==='back'){paint();return}
+  if(x==='newp'){editingP='';pForm(null,false);return}
+  if(x==='edit'){const p=my.find(z=>z.id===id);if(p){editingP=p.id;pForm(p,false)}return}
+  if(x==='del'){
+    if(!confirm('删除这张专家卡？加入的团队里它会显示为"缺员"。'))return;
+    post('/api/presets',{op:'del',id:id}).then(()=>{loadAll().then(()=>{paint();})}).catch(()=>toast('删不掉','err'));return;
+  }
+  if(x==='use'){close();newTask('',id);return}
+  if(x==='quick'){close();newTask('',id,b.dataset.q||'');return}
+  if(x==='enable'){const p=lib.find(z=>z.key===id);if(p){editingP='';pForm(p,true)}return}
+  if(x==='psave'){
+    const name=$('#xfName').value.trim(),persona=$('#xfPersona').value.trim();
+    if(!name&&!persona){toast('至少给个名字或一段人设');return}
+    const quick=[0,1,2].map(i=>$('#xfQ'+i).value.trim()).filter(Boolean);
+    post('/api/presets',{op:'save',id:editingP,name:name,persona:persona,
+      desc:$('#xfDesc').value.trim(),icon:$('#xfIcon').value.trim(),color:selColor,
+      mbti:$('#xfMbti').value,quick:quick,model:$('#xfModel').value,
+      workspace:$('#xfWs').value.trim(),mode:$('#xfMode').value})
+      .then(d=>{if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
+        editingP='';toast(fromLibLabel(b)?'专家已启用':'专家已存');loadAll().then(paint);})
+      .catch(()=>toast('没存上','err'));return;
+  }
+  if(x==='newt'){editingT='';tForm(null);return}
+  if(x==='tedit'){const t=teams.find(z=>z.id===id);if(t){editingT=t.id;tForm(t)}return}
+  if(x==='tdel'){
+    if(!confirm('解散这支团队？（成员的专家卡不受影响）'))return;
+    post('/api/teams',{op:'del',id:id}).then(()=>loadAll().then(paint)).catch(()=>toast('删不掉','err'));return;
+  }
+  if(x==='teamgo'){close();newTask('','','',id);return}
+  if(x==='tsave'){
+    const name=$('#xtName').value.trim();
+    const mems=[...$('#xBody').querySelectorAll('.memgrid input:checked')].map(i=>i.value);
+    if(!name){toast('团队得有个名字');return}
+    if(mems.length<2){toast('至少勾 2 名成员');return}
+    post('/api/teams',{op:'save',id:editingT,name:name,desc:$('#xtDesc').value.trim(),
+      icon:$('#xtIcon').value.trim(),color:selColor,members:mems})
+      .then(d=>{if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
+        editingT='';toast('团队已存');loadAll().then(paint);})
+      .catch(()=>toast('没存上','err'));return;
+  }
+}
+function fromLibLabel(b){return !!b.dataset.lib}
+return {
+  init(){
+    $('#expertsBtn').onclick=()=>openAt('my');
+    // 徽标首屏就填：不用等弹层打开才知道自己有几张卡几支队（两个 GET 都很轻）
+    fetch('/api/presets').then(r=>r.json()).then(d=>{my=d.items||[];refreshBadge()}).catch(()=>{});
+    fetch('/api/teams').then(r=>r.json()).then(d=>{teams=d.items||[];refreshBadge()}).catch(()=>{});
+  },
+  openAt, close, opened:()=>opened_, refreshBadge,
+};
+})();
+Experts.init();
+
+/* ==== [S6 面板对象] Kb：知识库（工作区 .haoai-kb/ 语料） ==== */
+/* ---- 导入在前端读文件文本再 POST：服务端只收纯文本（扩展名白名单 + 200KB 上限），
+ * PDF/DOCX 那类要解析器的，收进来读不了等于骗用户，v1 直接不收。 ---- */
+const Kb=(()=>{
+function load(){
+  return fetch('/api/kb?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(d=>{
+    $('#kbNote').innerHTML=d.ok
+      ?(d.embed?'语义检索可用（向量化端点已配置）。'
+        :'<b>还没配置向量化端点</b>（<code>haoai set embedUrl=…/embeddings</code>）：语义检索暂不可用，导入的文档仍能被直接读取。')
+      :'读不到';
+    const items=d.items||[];
+    $('#kbList').innerHTML=items.length?items.map(f=>
+      `<div class="rl"><span><b>${esc(f.name)}</b><em>${(f.size/1000).toFixed(1)} KB · `+
+      `${new Date(f.updated).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</em></span>`+
+      `<button class="ab" data-kbdel="${esc(f.name)}">删</button></div>`).join('')
+      :'<div class="kv">（还没有语料）</div>';
+    $('#kbList').querySelectorAll('[data-kbdel]').forEach(btn=>btn.onclick=()=>{
+      post('/api/kb',{op:'del',sid:curId||'',name:btn.dataset.kbdel}).then(()=>{toast('已删除');load()})
+        .catch(()=>toast('删不掉','err'));
+    });
+    $('#kbExts').textContent='收这些格式：'+(d.exts||[]).join(' / ')+'，单个 ≤200KB；同名再导一次就是更新。';
+    $('#kbState').textContent=d.ws?('工作区：'+d.ws):'';
+  }).catch(()=>{$('#kbNote').textContent='读不到知识库';});
+}
+function pick(){
+  $('#kbFile').click();
+}
+function importFiles(files){
+  const list=[...files];let done=0,failed=0;
+  if(!list.length)return;
+  $('#kbState').textContent='导入中…';
+  list.forEach(f=>{
+    const fin=()=>{done++;
+      $('#kbState').textContent=done<list.length?('导入中 '+done+'/'+list.length+'…')
+        :(failed?('完成，'+failed+' 个失败'):'导入完成 · 下一条消息起模型就知道');
+      if(done>=list.length)load();
+    };
+    if(f.size>200*1000){failed++;toast(f.name+' 超过 200KB，先拆再导','err');fin();return}
+    const r=new FileReader();
+    r.onload=()=>post('/api/kb',{op:'import',sid:curId||'',name:f.name,text:String(r.result||'')})
+      .then(d=>{if(!d||!d.ok){failed++;toast((d&&d.error)||(f.name+' 没收'),  'err')}fin()})
+      .catch(()=>{failed++;fin()});
+    r.readAsText(f);
+  });
+}
+function test(){
+  const q=$('#kbQ').value.trim();
+  if(!q)return;
+  $('#kbHits').textContent='检索中…';
+  post('/api/kb',{op:'test',sid:curId||'',q:q}).then(d=>{
+    if(!d||!d.ok){$('#kbHits').textContent=(d&&d.error)||'检索失败';return}
+    if(d.note&&!(d.hits||[]).length){$('#kbHits').textContent='没搜到：'+d.note;return}
+    $('#kbHits').innerHTML=(d.hits||[]).map(h=>
+      `<div style="margin:4px 0"><b>${esc(h.path)}</b> <span style="color:var(--dim2)">· ${h.score}</span><br>${esc(h.snippet)}</div>`).join('')
+      ||'（没搜到）';
+  }).catch(()=>{$('#kbHits').textContent='检索失败'});
+}
+return {
+  init(){
+    $('#kbPick').onclick=pick;
+    $('#kbFile').onchange=e=>{importFiles(e.target.files);e.target.value=''};
+    $('#kbGo').onclick=test;
+    $('#kbQ').addEventListener('keydown',e=>{if(e.key==='Enter')test()});
+  },
+  render:load,
+};
+})();
+Kb.init();
 
 /* ---- 轻提示：一句话的事，不往对话流里塞气泡 ---- */
 let toastT=null;

@@ -19,6 +19,10 @@ import java.io.File
  *
  * 刻意**不**存"关掉的工具"：会话级工具开关（v0.40）已经在那条会话上了，
  * 角色卡再叠一层白名单，出问题时得同时看两处才知道是谁关的 —— 收益不值这个账。
+ *
+ * 专家卡字段（desc/icon/color/mbti/quick）是角色卡的展示层升级：原来列表里只有名字，
+ * 人设全文塞 title 悬停才看得见 —— "专家"要的是一张能扫一眼就知道谁擅长什么的卡片。
+ * 全部可缺省：老 presets.json 原样读入，一个字段都不补。
  */
 data class Preset(
     val id: String,
@@ -31,12 +35,28 @@ data class Preset(
     val workspace: String,
     /** plan / ask / auto；留空或非法 = 跟全局默认档位。 */
     val mode: String,
+    /** 一句专长描述（卡片第二行）。 */
+    val desc: String = "",
+    /** 头像字符：emoji 或单字；留空取名字首字。 */
+    val icon: String = "",
+    /** 头像底色 #RRGGBB；留空用哈希色。 */
+    val color: String = "",
+    /** 四字母 MBTI，纯展示徽标。 */
+    val mbti: String = "",
+    /** 快捷提问：专家卡上点一下就带着这套配置发出去。 */
+    val quick: List<String> = emptyList(),
     val created: Long = System.currentTimeMillis()
-)
+) {
+    /** 头像字符的统一出口：没设 icon 就拿名字第一个字。 */
+    fun avatarChar(): String = icon.ifBlank { name.take(1) }
+}
 
 object Presets {
-    /** 角色卡数量上限：真正常用的就那几个，列表长了就没人看。 */
-    const val MAX = 12
+    /**
+     * 上限从 12 提到 24：内置专家库上线后"启用一个"是一句话的事，
+     * 12 张很容易撞顶，而撞顶的报错出现在用户点了"启用"之后，最扫兴。
+     */
+    const val MAX = 24
 
     val MODES = listOf("plan", "ask", "auto")
 
@@ -55,6 +75,11 @@ object Presets {
                 model = o["model"]?.jsonPrimitive?.contentOrNull ?: "",
                 workspace = o["workspace"]?.jsonPrimitive?.contentOrNull ?: "",
                 mode = (o["mode"]?.jsonPrimitive?.contentOrNull ?: "").takeIf { it in MODES } ?: "",
+                desc = o["desc"]?.jsonPrimitive?.contentOrNull ?: "",
+                icon = o["icon"]?.jsonPrimitive?.contentOrNull ?: "",
+                color = o["color"]?.jsonPrimitive?.contentOrNull ?: "",
+                mbti = (o["mbti"]?.jsonPrimitive?.contentOrNull ?: "").uppercase(),
+                quick = o["quick"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
                 created = o["created"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
             )
         }.toMutableList()
@@ -64,7 +89,9 @@ object Presets {
         val body = list.joinToString(",", "[", "]") { p ->
             """{"id":${js(p.id)},"name":${js(p.name)},"persona":${js(p.persona)},""" +
                 """"model":${js(p.model)},"workspace":${js(p.workspace)},""" +
-                """"mode":${js(p.mode)},"created":${p.created}}"""
+                """"mode":${js(p.mode)},"desc":${js(p.desc)},"icon":${js(p.icon)},""" +
+                """"color":${js(p.color)},"mbti":${js(p.mbti)},""" +
+                """"quick":${p.quick.joinToString(",", "[", "]") { js(it) }},"created":${p.created}}"""
         }
         runCatching {
             file().parentFile?.mkdirs()
@@ -101,7 +128,9 @@ object Presets {
     fun json(): String {
         val items = load().joinToString(",") { p ->
             """{"id":${js(p.id)},"name":${js(p.name)},"persona":${js(p.persona)},""" +
-                """"model":${js(p.model)},"workspace":${js(p.workspace)},"mode":${js(p.mode)}}"""
+                """"model":${js(p.model)},"workspace":${js(p.workspace)},"mode":${js(p.mode)},""" +
+                """"desc":${js(p.desc)},"icon":${js(p.icon)},"color":${js(p.color)},""" +
+                """"mbti":${js(p.mbti)},"quick":${p.quick.joinToString(",", "[", "]") { js(it) }}}"""
         }
         return """{"ok":true,"items":[$items],"max":$MAX,"modes":${MODES.joinToString(",", "[", "]") { js(it) }}}"""
     }

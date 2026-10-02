@@ -290,6 +290,9 @@ class Engine(
         val label = uniqueSubName(rawLabel.ifBlank { "子任务" })
         val s = Session("sub" + System.nanoTime().toString(16).take(8), session.workspace)
         s.mode = mode
+        // 团队派工的成员人设（task 的 persona 参数）：跟 label 一起构成"这条子任务是谁在干"。
+        // 子会话的 persona 走与主会话同一条系统提示通路（「本次角色」一节），不用另开注入点。
+        if (opts.persona.isNotBlank()) s.persona = opts.persona
         val log = StringBuilder()
         val child = Engine(   // 子任务**直连构造**、刻意不走工厂：它不是"一条会话的开始"
             // （不发 session-start，也没有壳的会话恢复/overlay 那套），接线就是最朴素的一份。
@@ -992,6 +995,15 @@ class Engine(
                 Memories.bumpUsage(Memories.fileFor(session.workspace), ids, memQuery)
             text
         }.getOrDefault("")
+        // 知识库名单每回合现读：导入/删除语料，下一句话就该被模型知道（与 AGENTS.md 同一哲学）。
+        // 只在真有语料时才占这几十个 token —— 空目录的提示是纯噪音。
+        val kbNote = runCatching {
+            val fs = java.io.File(session.workspace, ".haoai-kb").listFiles()?.filter { it.isFile }.orEmpty()
+            if (fs.isEmpty()) "" else
+                "这个工作区的 .haoai-kb/ 下有 ${fs.size} 份参考资料（" +
+                    fs.take(12).joinToString("、") { it.name } + (if (fs.size > 12) " 等" else "") + "）。" +
+                    "需要背景知识时先 read/grep 它们再回答，不要凭空编。"
+        }.getOrDefault("")
         val sys = Msg(
             "system", Prompt.system(
                 PromptCtx(
@@ -1002,7 +1014,8 @@ class Engine(
                     // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
                     extra = Memory.read(session.workspace, gitRoot(session.workspace)),
                     memories = mem,
-                    persona = session.persona
+                    persona = session.persona,
+                    kb = kbNote
                 )
             )
         )

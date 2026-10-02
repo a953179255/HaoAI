@@ -1,0 +1,125 @@
+package com.haoai.pc
+
+import com.sun.net.httpserver.HttpExchange
+import com.haoai.pc.WebServer.Body
+import java.io.File
+
+/**
+ * 专家与团队的 Web 面：`/api/teams`（编制的读与增删改）与 `/api/experts/library`（随包内置专家库）。
+ *
+ * 为什么团队只存编制不存人设：成员是人，人设跟着角色卡走 —— 改了卡，下一个团队会话就跟着变。
+ * 主持人的完整人设在开会话那一刻由成员名单现拼（[teamCoordinatorPersona]），没有第二真源。
+ */
+
+/**
+ * `GET/POST /api/teams` —— 团队的读与增删改。
+ * `POST {op:'save'|'del', id?, name?, desc?, icon?, color?, members?:[presetId,…]}`
+ *
+ * GET 返回的每条成员都带着**解析后的角色卡摘要**：前端卡片要画头像叠、
+ * 还要能看出"某个成员的卡已经被删了"（missing=true），而不是开团那一刻才炸。
+ */
+internal fun WebServer.teams(ex: HttpExchange) {
+    val b = Body(ex)
+    if (ex.requestMethod != "GET") {
+        when (b.str("op")) {
+            "del" -> Teams.remove(b.str("id"))
+            else -> {
+                val name = b.str("name").trim()
+                val members = b.list("members").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                if (name.isBlank()) {
+                    send(ex, 200, """{"ok":false,"error":"团队得有个名字"}""",
+                        "application/json; charset=utf-8"); return
+                }
+                if (members.size < Teams.MIN_MEMBERS) {
+                    send(ex, 200, """{"ok":false,"error":${quote("一个队至少 ${Teams.MIN_MEMBERS} 名成员（不含主持人）——一个人的团队就是一条普通角色会话")}}""",
+                        "application/json; charset=utf-8"); return
+                }
+                // 成员必须是真角色卡：手改请求塞进不存在的 id，开团那一刻才炸不如现在就拒
+                val unknown = members.filter { Presets.find(it) == null }
+                if (unknown.isNotEmpty()) {
+                    send(ex, 200, """{"ok":false,"error":${quote("这些成员不是有效的角色卡：" + unknown.joinToString("、"))}}""",
+                        "application/json; charset=utf-8"); return
+                }
+                val id = b.str("id").ifBlank { "tm" + System.nanoTime().toString(16).take(8) }
+                val old = Teams.find(id)
+                if (old == null && Teams.load().size >= Teams.MAX) {
+                    send(ex, 200, """{"ok":false,"error":${quote("团队最多 " + Teams.MAX + " 支，先删一支")}}""",
+                        "application/json; charset=utf-8"); return
+                }
+                Teams.update(
+                    Team(
+                        id = id,
+                        name = name,
+                        desc = b.str("desc").trim(),
+                        icon = b.str("icon").trim().take(4),
+                        color = b.str("color").trim().take(9),
+                        members = members,
+                        created = old?.created ?: System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+    }
+    send(ex, 200, teamsJson(), "application/json; charset=utf-8")
+}
+
+/** 团队清单：成员展开成摘要（名字/头像/档位/是否还在），前端不用再发第二发请求去对。 */
+internal fun WebServer.teamsJson(): String {
+    val items = Teams.load().joinToString(",") { t ->
+        val ms = t.members.joinToString(",", "[", "]") { mid ->
+            val p = Presets.find(mid)
+            if (p == null) """{"id":${quote(mid)},"missing":true}"""
+            else """{"id":${quote(p.id)},"name":${quote(p.name)},"icon":${quote(p.avatarChar())},""" +
+                """"color":${quote(p.color)},"mbti":${quote(p.mbti)},"model":${quote(p.model)}}"""
+        }
+        """{"id":${quote(t.id)},"name":${quote(t.name)},"desc":${quote(t.desc)},""" +
+            """"icon":${quote(t.icon)},"color":${quote(t.color)},"members":$ms}"""
+    }
+    return """{"ok":true,"items":[$items],"max":${Teams.MAX},"minMembers":${Teams.MIN_MEMBERS}}"""
+}
+
+/**
+ * `GET /api/experts/library` —— 随包内置专家库（只读）。
+ *
+ * 为什么随包不走远端：市场要账号/评分/下架，是双边生意（路线图 §5.3 的裁定）；
+ * 内置库是"开箱就有几张能用的卡"，与裁定不冲突。启用 = 前端把它当普通表单
+ * POST 给 /api/presets，从此就是用户自己的卡，想改想删都行。
+ */
+internal fun WebServer.expertLibrary(ex: HttpExchange) {
+    val bytes = javaClass.classLoader.getResourceAsStream("expert-library.json")?.readBytes()
+    if (bytes == null) {
+        send(ex, 200, """{"ok":true,"items":[]}""", "application/json; charset=utf-8"); return
+    }
+    send(ex, 200, String(bytes, Charsets.UTF_8), "application/json; charset=utf-8")
+}
+
+/**
+ * 开一条团队会话：主持人人设现拼、role 写团队名。
+ *
+ * 从 /api/new 拆出来是因为那里已经三件事套着了；团队的"拼人设+落盘"自成一段，
+ * 失败（成员卡被删光）要在这里就挡住并说清是谁不见了。
+ */
+internal fun WebServer.newTeamSession(ex: HttpExchange, team: Team, at: File?): Boolean {
+    val members = team.members.mapNotNull { Presets.find(it) }
+    if (members.size < Teams.MIN_MEMBERS) {
+        send(ex, 200, """{"ok":false,"error":${quote(
+            "这支团队能用的成员不足 ${Teams.MIN_MEMBERS} 名（角色卡可能被删了），先去「专家与团队」补齐编制")}}""",
+            "application/json; charset=utf-8")
+        return false
+    }
+    val id = newSessionId(at, preset = null)
+    val eng = sessions[id]?.engine ?: run {
+        send(ex, 200, """{"ok":false,"error":"会话引擎没起来"}""", "application/json; charset=utf-8")
+        return false
+    }
+    eng.session.persona = teamCoordinatorPersona(team, members)
+    eng.session.role = "团队 · ${team.name}"
+    eng.persistNow()
+    val md = eng.session.mode
+    val role = quote(eng.session.role)
+    send(ex, 200, """{"ok":true,"id":${quote(id)},"mode":${quote(md)},"role":$role,"reused":false}""",
+        "application/json; charset=utf-8")
+    publish("opened", """{"id":${quote(id)},"title":"新会话","mode":${quote(md)},"role":$role}""", id)
+    publish("sessions", "{}", id)
+    return true
+}

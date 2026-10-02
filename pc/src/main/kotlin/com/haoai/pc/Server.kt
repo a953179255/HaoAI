@@ -194,6 +194,9 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/compact" -> compactNow(ex)
                 "/api/workflows" -> workflows(ex)
                 "/api/presets" -> presets(ex)
+                "/api/teams" -> teams(ex)
+                "/api/experts/library" -> expertLibrary(ex)
+                "/api/kb" -> kb(ex)
                 "/api/secrets" -> secrets(ex)
                 "/api/hooks" -> hooks(ex)
                 "/api/digest" -> send(ex, 200, Digest.json(),
@@ -666,7 +669,9 @@ class WebServer(settings: PcSettings, port: Int,
      * 档位这里必须**当场定下来**并回给调用方 —— 界面上那个"新会话继承全局默认"的语义
      * 已经在 v0.44 修过一次（新会话顶上亮着上一条的档位＝骗人），带角色卡时同理。
      */
-    private fun newSessionId(at: File? = null, preset: Preset? = null): String {
+    // internal：团队会话（ServerExpert.newTeamSession）也要从这里起会话 —— 工厂/落盘/sessions
+    // 登记只允许这一条路，放宽可见性而不是让第二处直连构造。
+    internal fun newSessionId(at: File? = null, preset: Preset? = null): String {
         val session = Session("pc" + System.nanoTime().toString(16).take(8), at ?: settings.workspaceFile())
         session.mode = preset?.let { Presets.modeOf(it, settings.permissionMode) } ?: settings.permissionMode
         session.persona = preset?.persona.orEmpty()
@@ -794,6 +799,12 @@ class WebServer(settings: PcSettings, port: Int,
                             model = b.str("model").trim(),
                             workspace = ws,
                             mode = b.str("mode").trim().takeIf { it in Presets.MODES } ?: "",
+                            // 专家卡的展示层字段：内置专家"启用"就是把这些一起带过来存成普通角色卡
+                            desc = b.str("desc").trim(),
+                            icon = b.str("icon").trim().take(4),
+                            color = b.str("color").trim().take(9),
+                            mbti = b.str("mbti").trim().uppercase().take(4),
+                            quick = b.list("quick").map { it.trim() }.filter { it.isNotEmpty() }.take(4),
                             created = old?.created ?: System.currentTimeMillis()
                         )
                     )
@@ -952,6 +963,14 @@ class WebServer(settings: PcSettings, port: Int,
             send(ex, 200, """{"ok":false,"error":"没有这个角色卡，可能已经被删掉了"}""",
                 "application/json; charset=utf-8"); return
         }
+        // 团队会话：成员不足/卡被删的报错在 newTeamSession 里说清（谁不见了）。
+        // 团队不带工作区（成员各有所属），只有用户显式指定了 ws 才落到那个目录。
+        val teamId = b.str("team")
+        val team = if (teamId.isBlank()) null else Teams.find(teamId)
+        if (teamId.isNotBlank() && team == null) {
+            send(ex, 200, """{"ok":false,"error":"没有这个团队，可能已经被删掉了"}""",
+                "application/json; charset=utf-8"); return
+        }
         // 角色卡带了目录就必须用它的：打不开就明确报错，**不退回全局**。
         // 退回等于把用户送进一个他没选的仓库里写文件 —— 那比失败更糟。
         val presetWs = preset?.let { Presets.workspaceOf(it) }
@@ -959,12 +978,17 @@ class WebServer(settings: PcSettings, port: Int,
             send(ex, 200, """{"ok":false,"error":${quote("这个角色卡的目录打不开：" + preset.workspace)}}""",
                 "application/json; charset=utf-8"); return
         }
-        if (want.isNotBlank() || preset != null) {
+        if (want.isNotBlank() || preset != null || team != null) {
             val ok = if (want.isBlank()) presetWs else runCatching { File(want).canonicalFile }
                 .getOrNull()?.takeIf { it.isDirectory }
             if (want.isNotBlank() && ok == null) {
                 send(ex, 200, """{"ok":false,"error":${quote("这个目录打不开：" + want)}}""",
                     "application/json; charset=utf-8"); return
+            }
+            if (team != null) {
+                // 响应（成功或失败原因）总在 newTeamSession 里发出
+                newTeamSession(ex, team, ok)
+                return
             }
             val newId = newSessionId(ok, preset)
             val eng = sessions[newId]?.engine

@@ -101,6 +101,16 @@ object SemanticIndex {
         MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { "%02x".format(it) }.take(16)
 
+    /**
+     * 丢掉这个工作区的向量缓存（下一轮查询全量重建）。增量重建本身能感知删除 ——
+     * loadOrBuild 只沿用在盘上的文件 —— 这里是给调用方的"清场开关"：
+     * 删语料后旧向量一并清掉，也兜住"换了向量化模型、维度不匹配"那种
+     * 原本只能手动删 HAOAI_HOME/embed-index 的局面。
+     */
+    fun dropCache(ws: File) {
+        runCatching { cacheFile(ws).delete() }
+    }
+
     // ---- 端点无关的编解码：FloatArray ↔ Base64（小端）----
 
     fun encodeVecs(vecs: List<List<Float>>): String {

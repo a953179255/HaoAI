@@ -121,6 +121,12 @@ object Prompt {
             append(ctx.memories.trim())
             appendLine()
         }
+        if (ctx.kb.isNotBlank()) {
+            appendLine()
+            appendLine("## 知识库（用户放进这个工作区的参考资料）")
+            append(ctx.kb.trim())
+            appendLine()
+        }
     }
 }
 
@@ -133,7 +139,9 @@ data class PromptCtx(
     /** 角色卡（Preset）给的一段话：只在这条会话里生效。 */
     val persona: String = "",
     /** 条目化长期记忆里挑出来的那几条（[Memories.inject] 已经按分数与字数预算挑过）。 */
-    val memories: String = ""
+    val memories: String = "",
+    /** 知识库提示：工作区 .haoai-kb/ 有语料时，名单与用法由引擎每回合现读现填。 */
+    val kb: String = ""
 )
 
 /**
