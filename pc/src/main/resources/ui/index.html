@@ -50,11 +50,13 @@
       radial-gradient(800px 600px at 88% 100%,rgba(120,190,255,.34),transparent 55%),
       radial-gradient(700px 500px at 0% 100%,rgba(140,220,160,.38),transparent 50%),
       linear-gradient(135deg,#FFF3E0 0%,#FCE4EC 30%,#E3F2FD 62%,#E8F5E9 100%)}
-  .app{display:grid;grid-template-columns:var(--lw,252px) minmax(0,1fr) var(--rw,292px);height:100%;
+  /* 四区骨架（对齐效果图/Octop）：导航栏 + 会话列表栏 + 会话/页面主区 + 右侧面板。
+     --nw 收起的是导航，--sw 收起的是会话栏 —— Ctrl B 一起收（no-l 同时置零两个变量）。 */
+  .app{display:grid;grid-template-columns:var(--nw,198px) var(--sw,252px) minmax(0,1fr) var(--rw,292px);height:100%;
     position:relative;z-index:1;backdrop-filter:blur(22px) saturate(1.35)}
-  .app.no-l{--lw:0px}
+  .app.no-l{--nw:0px;--sw:0px}
   .app.no-r{--rw:0px}
-  .app.no-l .rail.l,.app.no-r .rail.r{display:none}
+  .app.no-l .navcol,.app.no-l .sesscol,.app.no-r .rail.r{display:none}
   /* 左上角有机点缀：在左栏内部从壳角"生长"（坐标与方案一致）。
      层级：左栏背景 < 点缀 < 左栏内容（*:not(.corner-art) 抬到 z1）。
      之前放在 body 的 fixed 层会被 .app 的 backdrop-filter 磨掉 + 位置跑到壳外 —— 用户实锤。 */
@@ -225,6 +227,58 @@
   .wsrow:hover{border-color:var(--acc2);color:var(--fg)}
   .wsrow span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .wsrow em{font-style:normal;color:var(--acc);font-size:11px;flex:none}
+  /* ---- 四区骨架：导航栏（navcol）+ 会话栏（sesscol） ----
+     对齐效果图/Octop 的结构：左边一根窄导航（去哪），第二列放会话（正在管什么），
+     主区是"当前页"。原先全部塞一根栏里，功能再多也长得像个工具箱而不是个应用。 */
+  .navcol{width:var(--nw,198px);padding:14px 10px 12px;display:flex;flex-direction:column;min-height:0}
+  .navcol .brand{padding:2px 6px 12px}
+  .navrow{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:10px;font-size:12.5px;
+    color:var(--fg2);cursor:pointer;user-select:none;margin:1px 0;
+    transition:background .12s,color .12s}
+  .navrow svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round;flex:none}
+  .navrow:hover{background:var(--hov,var(--glass2));color:var(--fg)}
+  .navrow.on{background:var(--glass2);color:var(--acc);font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+  .navrow .nb2{margin-left:auto;font-style:normal;font-size:9.5px;font-weight:700;color:var(--acc);
+    background:var(--glass2);border-radius:999px;padding:1px 7px;flex:none}
+  .navrow .nb2:empty{display:none}
+  .navcol .spring{flex:1}
+  /* 底部身份卡：点开"怎么用"（原 details 折叠条升格为导航行 + 卡） */
+  .ucard{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:11px;cursor:pointer;
+    border:1px solid var(--line);background:var(--glass);transition:border-color .12s,background .12s}
+  .ucard:hover{border-color:var(--line2)}
+  .ucard b{font-size:12px;color:var(--fg);display:block}
+  .ucard small{font-size:10px;color:var(--dim);display:block;margin-top:1px}
+  /* 会话栏：新对话按钮走效果图那颗绿色渐变大钮 */
+  .sesscol{width:var(--sw,252px);padding:14px 12px 10px}
+  .newchat{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 10px;
+    border-radius:var(--r);border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;
+    color:#fff;background:linear-gradient(160deg,#5C9A3A,#2F5D14);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 4px 12px rgba(62,122,30,.3);
+    transition:box-shadow .18s,transform .12s}
+  .newchat kbd{border-color:rgba(255,255,255,.35);color:rgba(255,255,255,.85);background:rgba(255,255,255,.14)}
+  .newchat:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 6px 16px rgba(62,122,30,.42)}
+  .newchat:active{transform:scale(.98)}
+  .sessgrp{display:flex;align-items:center;gap:6px}
+  /* ---- 专家整页（pagev）：主区切页时聊天三件套让位 ---- */
+  .pagev{display:none;flex:1;min-height:0;flex-direction:column;overflow:hidden}
+  .main.on-exp>header,.main.on-exp>.stream,.main.on-exp>footer,.main.on-exp>.ctxp,
+  .main.on-exp>.pill,.main.on-exp>.qrow,.main.on-exp>.atts{display:none!important}
+  .main.on-exp>.pagev{display:flex}
+  .xp-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 18px 10px;flex-wrap:wrap}
+  .xp-head h2{margin:0;font-size:17px;color:var(--fg)}
+  .xp-head .sp{flex:1}
+  .xp-head input{width:220px;background:var(--glass);border:1px solid var(--line);border-radius:9px;
+    color:var(--fg);padding:6px 10px;font:inherit;font-size:12px;outline:0}
+  .xp-head input:focus{border-color:var(--acc2)}
+  .xp-body{flex:1;min-height:0;display:flex;gap:0;padding:0 18px 16px}
+  .xp-gridwrap{flex:1;min-width:0;overflow:auto;padding:4px 4px 8px}
+  .xp-gridwrap .xgrid{margin-top:0}
+  /* 页面右栏：概览/最近任务/团队速览（效果图里的 aside） */
+  .xp-aside{width:264px;flex:none;border-left:1px solid var(--line);padding:4px 0 8px 14px;overflow:auto}
+  .xp-aside .xcard{margin-bottom:10px}
+  .xp-aside .rl{background:var(--glass)}
+  @media (max-width:1240px){.xp-aside{display:none}}
   /* 待发的图片附件：看得见"这句会带哪几张图"，也能当场撤掉一张 */
   .atts{display:none;gap:6px;flex-wrap:wrap;max-width:880px;margin:0 auto 4px;padding:0 4px}
   .atts.on{display:flex}
@@ -543,17 +597,18 @@
    * "以浮层形式重新出现"的路，而不是只把列收掉。
    */
   @media (max-width:1080px){
-    .app{grid-template-columns:var(--lw,252px) minmax(0,1fr) 0}
+    .app{grid-template-columns:var(--nw,198px) var(--sw,252px) minmax(0,1fr) 0}
     .rail.r{display:none}
     #panelBtn{display:inline-flex}
     .app.show-r .rail.r{display:flex;position:fixed;right:0;top:0;bottom:0;width:min(320px,86%);
       z-index:8;background:var(--panel);box-shadow:var(--shadow);border-left:1px solid var(--line)}
   }
-  /* 手机宽：正文独占，两栏都改成浮层（☰ 与 ▤ 各开一个） */
-  @media (max-width:780px){
+  /* 手机宽：正文独占，导航栏让位（导航动作走命令面板 Ctrl K），会话栏变浮层（☰ 开关） */
+  @media (max-width:860px){
     .app{grid-template-columns:minmax(0,1fr)}
-    .rail.l{display:none}
-    .app.show-l .rail.l{display:flex;position:fixed;left:0;top:0;bottom:0;width:min(300px,86%);
+    .navcol{display:none}
+    .sesscol{display:none}
+    .app.show-l .sesscol{display:flex;position:fixed;left:0;top:0;bottom:0;width:min(300px,86%);
       z-index:8;background:var(--panel);box-shadow:var(--shadow)}
     .ctx,.brand small{display:none}
     .msg.user,.msg.ans{max-width:94%}
@@ -895,30 +950,44 @@
   .chip{border-radius:999px}
   .modes button.on{box-shadow:0 2px 8px rgba(31,111,74,.35)}
   .grp{letter-spacing:.8px}
+  /* 专家整页头部的两件控件要收回来：全局 input[type=text] 是 width:100%、.btn 也是
+     width:100%（侧栏整行按钮靠它）——不写这两条，筛选框横贯整行、新建钮通栏绿。 */
+  .xp-head input[type=text]{width:220px;flex:none}
+  .xp-head .btn{width:auto;flex:none}
 </style>
 </head>
 <body>
 <div class="app" id="app">
-  <aside class="rail l">
+  <!-- 导航栏：只回答"去哪"（效果图/Octop 的左一根） -->
+  <aside class="rail l navcol">
     <div class="corner-art" aria-hidden="true"><i class="cw"></i><i class="ca"></i><i class="cb b1"></i><i class="cb b2"></i><i class="cb b3"></i></div>
     <div class="brand"><span class="dot"></span><span>HaoAI</span><span class="vpill">PC · <span id="ver">连接中…</span></span></div>
     <div class="grp">工作台</div>
-    <button class="btn pri" id="newBtn"><span>＋ 新任务</span><kbd>Ctrl N</kbd></button>
+    <div class="navrow on" data-view="chat" title="会话与任务"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg>会话<span class="nb2" id="navSessCnt"></span></div>
+    <div class="navrow" data-view="experts" id="expertsBtn" title="专家卡与团队：人设+模型+工作区一次带上；团队由主持人调度成员"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>专家<span class="nb2" id="expertsCount"></span></div>
+    <div class="navrow" data-act="kb" title="工作区 .haoai-kb/ 语料：导入参考文档，自动进语义检索"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 3v18M12 8h5M12 12h5"/></svg>知识库</div>
+    <div class="navrow" data-act="skills" title="自定义命令（技能）与技能订阅源在设置里"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4L15 12l-3-3z"/></svg>技能</div>
+    <div class="grp">助理</div>
+    <div class="navrow" data-act="cron" title="定时任务与运行结果"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>定时任务</div>
+    <div class="navrow" data-act="mem" title="长期记忆条目"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 1 7 7c0 3-2 5-4 6v3h-6v-3c-2-1-4-3-4-6a7 7 0 0 1 7-7z"/></svg>记忆</div>
+    <div class="grp">设置</div>
+    <div class="navrow" data-act="theme" title="切换明暗主题"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>外观</div>
+    <div class="navrow" data-act="cfg" id="cfgBtn" title="模型 / 工作区 / 密钥 / 技能 / 降级链"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12"/></svg>设置</div>
+    <div class="navrow" data-act="help" title="快捷键与用法"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M7 14h10"/></svg>快捷键</div>
+    <div class="spring"></div>
+    <div class="ucard" data-act="help" title="点开「怎么用」">
+      <span class="dot"></span>
+      <div><b>HaoAI PC</b><small>本机优先 · 数据不出门</small></div>
+    </div>
+  </aside>
+
+  <!-- 会话栏：正在管什么（新对话 / 工作区 / 搜索 / 会话卡） -->
+  <aside class="rail sesscol">
+    <button class="newchat" id="newBtn"><span>＋ 新对话</span><kbd>Ctrl N</kbd></button>
     <button class="wsrow" id="wsBtn" title="换个工作区开一条新任务"><span id="wsName">工作区</span><em>换 ▾</em></button>
-    <button class="wsrow" id="expertsBtn" title="专家卡与团队：人设+模型+工作区一次带上；团队由主持人调度成员"><span>专家与团队</span><em id="expertsCount"></em></button>
-    <div class="grp">历史会话 <button class="mini" id="trashBtn" title="删掉的会话先进回收站，这里可以放回">回收站</button> <button class="mini" id="cfgBtn" title="设置">⚙ 设置</button></div>
+    <div class="grp sessgrp">历史会话 <button class="mini" id="trashBtn" title="删掉的会话先进回收站，这里可以放回">回收站</button></div>
     <div class="srch"><input type="text" id="sessQ" placeholder="搜标题与消息正文…"></div>
     <div id="sessions" class="sess"></div>
-    <details class="helpd"><summary>怎么用</summary>
-    <div class="kv">
-      <b>计划</b> 只读调研出方案<br>
-      <b>询问</b> 写文件/执行命令先问<br>
-      <b>自动</b> 全自动，不再打断<br>
-      <kbd>Enter</kbd> 发送 · <kbd>/</kbd> 命令 · <kbd>@</kbd> 提文件 · <kbd>Esc</kbd> 关弹窗<br>
-      <kbd>拖进来</kbd> 或 <kbd>Ctrl V</kbd> 加附件与截图 · <kbd>Ctrl N</kbd> 新任务<br>
-      <kbd>Ctrl K</kbd> 搜会话 · <kbd>Ctrl B</kbd> 收侧栏 · <kbd>Alt 1/2/3</kbd> 切档
-    </div>
-    </details>
   </aside>
 
   <main class="main">
@@ -963,6 +1032,30 @@
         <button class="send" id="send"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
       </div>
     </footer>
+
+    <!-- 专家整页：导航切过来时聊天三件套让位（.main.on-exp）。
+         表单（新建/编辑/组队）仍走弹窗——卡片列表归页面，一次性的编辑归弹窗。 -->
+    <div class="pagev" id="page-experts">
+      <div class="xp-head">
+        <h2>专家</h2>
+        <div class="xtabs" id="xptabs">
+          <button data-t="my">我的专家</button><button data-t="lib">内置专家</button><button data-t="team">我的团队</button>
+        </div>
+        <input type="text" id="xpQ" placeholder="按名称 / 专长筛选">
+        <span class="sp"></span>
+        <button class="btn pri" id="xpNew">＋ 新建专家</button>
+      </div>
+      <div class="xp-body">
+        <div class="xp-gridwrap"><div class="xgrid" id="xpGrid"></div></div>
+        <aside class="xp-aside">
+          <div id="xpOverview"></div>
+          <div class="grp">最近任务</div>
+          <div id="xpRuns" class="runs"><div class="kv">（还没跑过）</div></div>
+          <div class="grp">团队速览</div>
+          <div id="xpTeams" class="kv">—</div>
+        </aside>
+      </div>
+    </div>
   </main>
 
   <aside class="rail r">
@@ -3808,6 +3901,8 @@ function markSessions(){
     .map(id=>({id:id,title:views[id].title||'新会话',messages:0,mode:views[id].mode||mode,
                updated:Date.now(),workspace:views[id].workspace||''}));
   const all=live.concat(sessList);
+  /* 导航栏「会话」徽标：总数随列表事件走（新建/删除/搜索都会经过这里） */
+  const navCnt=$('#navSessCnt');if(navCnt)navCnt.textContent=all.length?String(all.length):'';
   if(!all.length){box2.innerHTML='<div class="it" style="cursor:default">（没有匹配的会话）</div>';return}
   const byWs=new Map();
   all.forEach(m=>{const k=m.workspace||'';if(!byWs.has(k))byWs.set(k,[]);byWs.get(k).push(m)});
@@ -4308,27 +4403,53 @@ function teamCard(t){
       <button class="ab" data-x="tdel" data-id="${esc(t.id)}">删除</button></div>
   </div>`;
 }
-function paint(){
-  $('#xtabs').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
-  const body=$('#xBody');
-  if(tab==='my')body.innerHTML=`<div class="xgrid">${my.map(myCard).join('')||
-      '<div class="kv">还没有专家卡 —— 点下面新建，或去「内置专家」一键启用。</div>'}
-    <button class="xadd" data-x="newp">＋ 新建专家<br><span style="font-size:10.5px">人设 + 模型 + 工作区，一次配好</span></button></div>`;
-  else if(tab==='lib')body.innerHTML=`<div class="kv">随包内置的专家卡。「启用」会打开预填好的表单：工作区、模型都能按你的情况改，存下来就是你自己的卡。</div>
-    <div class="xgrid">${lib.map(libCard).join('')||'<div class="kv">（内置库是空的）</div>'}</div>`;
-  else body.innerHTML=`<div class="xgrid">${teams.map(teamCard).join('')||
-      '<div class="kv">还没有团队 —— 一支团队 = 几张专家卡 + 一位负责调度的主持人。</div>'}
-    <button class="xadd" data-x="newt">＋ 新建团队<br><span style="font-size:10.5px">勾 2 名以上成员，主持人负责派工与汇总</span></button></div>`;
+/* 卡片列表渲染进专家整页（#xpGrid），按名称/专长过滤；弹窗只承担一次性表单 */
+function matchQ(p){
+  const q=($('#xpQ')&&$('#xpQ').value||'').trim().toLowerCase();
+  if(!q)return true;
+  return (String(p.name||'')+' '+String(p.desc||'')+' '+String(p.persona||'')).toLowerCase().includes(q);
 }
-function skeleton(){
+function paint(){
+  $('#xptabs').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+  const grid=$('#xpGrid');
+  if(tab==='my'){
+    const cards=my.filter(matchQ).map(myCard).join('');
+    grid.innerHTML=(cards||'<div class="kv">还没有专家卡 —— 点右上新建，或去「内置专家」一键启用。</div>')+
+      '<button class="xadd" data-x="newp">＋ 新建专家<br><span style="font-size:10.5px">人设 + 模型 + 工作区，一次配好</span></button>';
+  }else if(tab==='lib'){
+    const cards=lib.filter(matchQ).map(libCard).join('');
+    grid.innerHTML='<div class="xcard" style="grid-column:1/-1"><div class="ds">随包内置的专家卡。「启用」会打开预填好的表单：工作区、模型都能按你的情况改，存下来就是你自己的卡。</div></div>'+
+      (cards||'<div class="kv">（没有匹配的内置专家）</div>');
+  }else{
+    const cards=teams.filter(matchQ).map(teamCard).join('');
+    grid.innerHTML=(cards||'<div class="kv">还没有团队 —— 一支团队 = 几张专家卡 + 一位负责调度的主持人。</div>')+
+      '<button class="xadd" data-x="newt">＋ 新建团队<br><span style="font-size:10.5px">勾 2 名以上成员，主持人负责派工与汇总</span></button>';
+  }
+  refreshAside();
+}
+function refreshAside(){
+  const ov=$('#xpOverview');if(!ov)return;
+  ov.innerHTML=`<div class="xcard"><div class="hd"><b><span>概览</span></b></div>
+    <div class="ds">${my.length} 张专家卡 · ${teams.length} 支团队 · 内置库 ${lib.length} 张</div>
+    <div class="meta">点卡上的「开始对话」即按这套配置开聊；团队由主持人调度成员。</div></div>`;
+  $('#xpTeams').innerHTML=teams.length?teams.map(t=>
+    `<div class="rl" title="${esc(t.desc||'')}"><span><b>${esc(t.name)}</b><em>${(t.members||[]).length} 名成员</em></span>`+
+    `<button class="ab" data-x="teamgo" data-id="${esc(t.id)}">开团</button></div>`).join('')
+    :'（还没有团队）';
+  fetch('/api/runs').then(r=>r.json()).then(list=>{
+    const rows=(Array.isArray(list)?list:[]).slice(0,6);
+    $('#xpRuns').innerHTML=rows.length?rows.map(x=>
+      `<div class="rl" title="${esc(x.prompt||x.label||'')}"><span><b>${esc(x.label||x.name||'任务')}</b>`+
+      `<em>${esc(x.when||x.time||'')}</em></span></div>`).join('')
+      :'（还没跑过）';
+  }).catch(()=>{});
+}
+/* 表单弹窗壳：卡片列表归页面，一次性编辑归弹窗（与设置同一个 mask 壳） */
+function formShell(){
   const dg=$('#dialog');dg.classList.add('wide');
-  dg.innerHTML=`<div class="xhead"><h3 style="margin:0">专家与团队</h3>
-    <div class="xtabs" id="xtabs">
-      <button data-t="my">我的专家</button><button data-t="lib">内置专家</button><button data-t="team">我的团队</button>
-    </div><span style="flex:1"></span><button class="ab" id="xClose">关闭</button></div>
-    <div id="xBody"></div>`;
-  $('#xClose').onclick=close;
-  $('#xtabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;paint()});
+  dg.innerHTML='<div id="xBody"></div>';
+  opened_=true;
+  $('#mask').classList.add('on');
   dg.onclick=e=>{
     const b=e.target.closest?e.target.closest('[data-x],[data-c]'):null;
     if(!b)return;
@@ -4354,10 +4475,10 @@ function loadAll(){
   ]).then(refreshBadge);
 }
 function openAt(t){
-  tab=t||'my';opened_=true;
-  $('#mask').classList.add('on');
-  loadAll().then(()=>{skeleton();paint()}).catch(()=>{close();toast('读不到专家与团队','err')});
+  if(t)tab=t;
+  loadAll().then(paint).catch(()=>toast('读不到专家与团队','err'));
 }
+function setTab(t){tab=t;paint()}
 /* ---- 专家表单：新建 / 编辑 / 从内置库启用（预填）共用这一份 ---- */
 function pForm(p,fromLib){
   const v=p||{};
@@ -4404,16 +4525,17 @@ function tForm(t){
 }
 function act(x,b){
   const id=b.dataset.id||'';
-  if(x==='back'){paint();return}
-  if(x==='newp'){editingP='';pForm(null,false);return}
-  if(x==='edit'){const p=my.find(z=>z.id===id);if(p){editingP=p.id;pForm(p,false)}return}
+  if(x==='back'){close();return}
+  if(x==='newp'){formShell();editingP='';pForm(null,false);return}
+  if(x==='edit'){const p=my.find(z=>z.id===id);if(p){formShell();editingP=p.id;pForm(p,false)}return}
   if(x==='del'){
     if(!confirm('删除这张专家卡？加入的团队里它会显示为"缺员"。'))return;
     post('/api/presets',{op:'del',id:id}).then(()=>{loadAll().then(()=>{paint();})}).catch(()=>toast('删不掉','err'));return;
   }
-  if(x==='use'){close();newTask('',id);return}
-  if(x==='quick'){close();newTask('',id,b.dataset.q||'');return}
-  if(x==='enable'){const p=lib.find(z=>z.key===id);if(p){editingP='';pForm(p,true)}return}
+  /* 从专家页开聊：先切回会话视图，再开任务 —— 开完落在聊天界面才顺 */
+  if(x==='use'){setView('chat');newTask('',id);return}
+  if(x==='quick'){setView('chat');newTask('',id,b.dataset.q||'');return}
+  if(x==='enable'){const p=lib.find(z=>z.key===id);if(p){formShell();editingP='';pForm(p,true)}return}
   if(x==='psave'){
     const name=$('#xfName').value.trim(),persona=$('#xfPersona').value.trim();
     if(!name&&!persona){toast('至少给个名字或一段人设');return}
@@ -4423,16 +4545,16 @@ function act(x,b){
       mbti:$('#xfMbti').value,quick:quick,model:$('#xfModel').value,
       workspace:$('#xfWs').value.trim(),mode:$('#xfMode').value})
       .then(d=>{if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
-        editingP='';toast(fromLibLabel(b)?'专家已启用':'专家已存');loadAll().then(paint);})
+        editingP='';close();toast(fromLibLabel(b)?'专家已启用':'专家已存');loadAll().then(paint);})
       .catch(()=>toast('没存上','err'));return;
   }
-  if(x==='newt'){editingT='';tForm(null);return}
-  if(x==='tedit'){const t=teams.find(z=>z.id===id);if(t){editingT=t.id;tForm(t)}return}
+  if(x==='newt'){formShell();editingT='';tForm(null);return}
+  if(x==='tedit'){const t=teams.find(z=>z.id===id);if(t){formShell();editingT=t.id;tForm(t)}return}
   if(x==='tdel'){
     if(!confirm('解散这支团队？（成员的专家卡不受影响）'))return;
     post('/api/teams',{op:'del',id:id}).then(()=>loadAll().then(paint)).catch(()=>toast('删不掉','err'));return;
   }
-  if(x==='teamgo'){close();newTask('','','',id);return}
+  if(x==='teamgo'){setView('chat');newTask('','','',id);return}
   if(x==='tsave'){
     const name=$('#xtName').value.trim();
     const mems=[...$('#xBody').querySelectorAll('.memgrid input:checked')].map(i=>i.value);
@@ -4441,22 +4563,64 @@ function act(x,b){
     post('/api/teams',{op:'save',id:editingT,name:name,desc:$('#xtDesc').value.trim(),
       icon:$('#xtIcon').value.trim(),color:selColor,members:mems})
       .then(d=>{if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
-        editingT='';toast('团队已存');loadAll().then(paint);})
+        editingT='';close();toast('团队已存');loadAll().then(paint);})
       .catch(()=>toast('没存上','err'));return;
   }
 }
 function fromLibLabel(b){return !!b.dataset.lib}
 return {
   init(){
-    $('#expertsBtn').onclick=()=>openAt('my');
-    // 徽标首屏就填：不用等弹层打开才知道自己有几张卡几支队（两个 GET 都很轻）
+    // 页面元素接线（整页三件：页签 / 筛选 / 新建）
+    $('#xptabs').querySelectorAll('button').forEach(b=>b.onclick=()=>setTab(b.dataset.t));
+    let qT=null;
+    $('#xpQ').addEventListener('input',()=>{clearTimeout(qT);qT=setTimeout(paint,160)});
+    $('#xpNew').onclick=()=>{formShell();editingP='';pForm(null,false)};
+    // 页面卡片的动作按钮：事件委托挂在网格上（弹窗表单另有自己的委托）
+    $('#xpGrid').onclick=e=>{
+      const b=e.target.closest?e.target.closest('[data-x]'):null;
+      if(!b)return;
+      act(b.dataset.x,b);
+    };
+    // 徽标首屏就填：不用等打开专家页才知道自己有几张卡几支队（两个 GET 都很轻）
     fetch('/api/presets').then(r=>r.json()).then(d=>{my=d.items||[];refreshBadge()}).catch(()=>{});
     fetch('/api/teams').then(r=>r.json()).then(d=>{teams=d.items||[];refreshBadge()}).catch(()=>{});
   },
-  openAt, close, opened:()=>opened_, refreshBadge,
+  openAt, setTab, close, opened:()=>opened_, refreshBadge, paint,
 };
 })();
 Experts.init();
+
+/* ==== 主区视图切换：会话 / 专家整页（四区骨架的"当前页"） ====
+ * 导航行只管"去哪"：data-view 切主区，data-act 跳右栏页签或开弹窗。
+ * 切页不拆 SSE —— 隐藏的是聊天三件套，后台会话的事件照常入流。 */
+function setView(v){
+  document.querySelectorAll('.navrow[data-view]').forEach(r=>r.classList.toggle('on',r.dataset.view===v));
+  document.querySelector('.main').classList.toggle('on-exp',v==='experts');
+}
+document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
+  const v=r.dataset.view, a=r.dataset.act;
+  if(v==='experts'){setView(v);Experts.openAt();return}
+  if(v){setView(v);return}
+  if(a==='kb'){setView('chat');document.querySelector('#tabs button[data-t=kb]').click()}
+  else if(a==='cron'){setView('chat');document.querySelector('#tabs button[data-t=cron]').click()}
+  else if(a==='mem'){setView('chat');document.querySelector('#tabs button[data-t=mem]').click()}
+  else if(a==='skills'||a==='cfg'){openCfg()}
+  else if(a==='theme'){$('#themeBtn').click()}
+  else if(a==='help'){showHelp()}
+});
+function showHelp(){
+  const dg=$('#dialog');dg.classList.remove('wide');dg.onclick=null;
+  dg.innerHTML=`<h3>怎么用</h3><div class="kv">
+    <b>计划</b> 只读调研出方案<br>
+    <b>询问</b> 写文件/执行命令先问<br>
+    <b>自动</b> 全自动，不再打断<br>
+    <kbd>Enter</kbd> 发送 · <kbd>/</kbd> 命令 · <kbd>@</kbd> 提文件 · <kbd>Esc</kbd> 关弹窗<br>
+    <kbd>拖进来</kbd> 或 <kbd>Ctrl V</kbd> 加附件与截图 · <kbd>Ctrl N</kbd> 新对话<br>
+    <kbd>Ctrl K</kbd> 命令面板（搜会话/跳页签） · <kbd>Ctrl B</kbd> 收侧栏 · <kbd>Alt 1/2/3</kbd> 切档
+  </div><div class="acts"><button class="btn" id="hpx">知道了</button></div>`;
+  $('#mask').classList.add('on');
+  dg.querySelector('#hpx').onclick=()=>$('#mask').classList.remove('on');
+}
 
 /* ==== [S6 面板对象] Kb：知识库（工作区 .haoai-kb/ 语料） ==== */
 /* ---- 导入在前端读文件文本再 POST：服务端只收纯文本（扩展名白名单 + 200KB 上限），
