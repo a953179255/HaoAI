@@ -43,6 +43,20 @@ tasks.withType<JavaExec>().configureEach {
  */
 val testTmp = File(System.getProperty("java.io.tmpdir"), "haoai-pc-test-tmp")
 tasks.test {
+    /*
+     * **判据读盘上的文件，就得把这些文件声明成输入** —— 否则 Gradle 只看 classpath，
+     * "只改了文档/源码"时它判 UP-TO-DATE，测试根本不重跑，看着就是一条绿。
+     * 10-02 做变异检查时当场被糊过一次：把 ROADMAP 里一个表格分隔符改回全角 `｜`，
+     * `gradle test --tests DocTablesTest` 回的是 `BUILD SUCCESSFUL in 1s`，加 `cleanTest` 才红 ——
+     * 也就是说这条判据"存在且绿"，但它从没为那次改动跑过。
+     * 读文件的测试有这几份（`DocTablesTest` 数文档表格、`UiContractTest`/`CliAgoLabelTest` 扫服务端源码、
+     * `ApiDocTest`/`SkillDocsTest` 读 docs 与 tools），所以输入要一起声明，别只挑自己那一份。
+     */
+    inputs.files(
+        file("ROADMAP.md"), file("README.md"), file("../README.md"),
+        file("docs/api.md"), file("src/main/kotlin"),
+        file("src/main/resources/ui"), file("tools")
+    )
     doFirst { testTmp.mkdirs() }
     systemProperty("java.io.tmpdir", testTmp.absolutePath)
     doLast { runCatching { testTmp.deleteRecursively() } }
