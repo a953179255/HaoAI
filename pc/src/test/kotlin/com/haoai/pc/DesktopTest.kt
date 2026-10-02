@@ -260,7 +260,7 @@ class DesktopTest {
         val t = ScreenTool()
         assertFalse(t.visibleWhen(PcSettings()))
         assertTrue(t.visibleWhen(PcSettings(flags = mapOf("desktop_control" to true))))
-        // 24 把：工具总数变了要同步改 EngineFlowTest 里那条断言
-        assertEquals(24, builtinTools().size)
+        // 26 把：24 + agent_list + ask_agent（多 Agent 那两把）。工具总数变了要同步改 EngineFlowTest 里那条断言
+        assertEquals(26, builtinTools().size)
     }
 }

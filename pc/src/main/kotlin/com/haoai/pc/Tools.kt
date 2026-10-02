@@ -590,6 +590,58 @@ class TaskTool : Tool(
     companion object { val MODES = setOf("plan", "ask", "auto") }
 }
 
+/**
+ * `agent_list`：让模型知道**这台机器上还有谁**。
+ *
+ * 没有这一步，`ask_agent` 就是一把没法用的工具：模型只能凭训练记忆猜一个卡名，
+ * 猜错了就报"没有这张专家卡"，然后它通常的做法是自己动手 —— 那正是我们要避免的。
+ */
+class AgentListTool : Tool(
+    "agent_list",
+    "列出这台机器上的专家（角色卡）与各自的状态：谁在跑、谁空着、谁被停了。" +
+        "要请别的专家做事，先用它认名字，再把 to 填进 ask_agent。",
+    schema(),
+    kind = "read"
+) {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult =
+        ToolResult(Agents.roster())
+}
+
+/**
+ * `ask_agent`：**同事关系**的派活，与 `task`（父子关系）互补。
+ *
+ * 差别在有没有身份：`task` 派出去的东西没有名字、没有目录、父会话结束就没了；
+ * `ask_agent` 找的是一个有常驻会话、有人设、有自己目录的专家，它这轮说的话它会记得。
+ *
+ * 同一个专家一次只接一件活（[Agents] 里那条串行闸）：并行派给两个专家是快，
+ * 并行派给同一个专家是两个会话在同一个目录里抢着写文件。
+ */
+class AskAgentTool : Tool(
+    "ask_agent",
+    "请另一个专家做一件事（它有自己的会话、人设、模型和工作目录）。" +
+        "to 填专家卡名或 id（不确定的话先调 agent_list）；text 把要它做什么、要什么产出写清楚。" +
+        "mode=sync 就地等它的回答；mode=background 先回一句「已投进收件箱」，它忙完会把回信送回你这条会话。" +
+        "同一个专家正在忙时同步问会被拒 —— 要等它就改 background，别在这里排第二件。",
+    schema(
+        "to" to "string", "text" to "string", "mode" to "string",
+        required = arrayOf("to", "text")
+    ),
+    kind = "read"
+) {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val to = req(args, "to")?.trim().orEmpty()
+        if (to.isEmpty()) return fail("ask_agent 缺少 to（要问哪个专家）")
+        val text = req(args, "text")?.trim().orEmpty()
+        if (text.isEmpty()) return fail("ask_agent 缺少 text（要它做什么）")
+        val mode = (req(args, "mode") ?: "sync").trim().lowercase()
+        if (mode !in MODES) return fail("mode 只认 ${MODES.joinToString("/")}，现在是「$mode」")
+        val (out, err) = Agents.ask(to, ctx.sid, text, mode)
+        return if (err != null) fail(err) else ToolResult(out)
+    }
+
+    companion object { val MODES = setOf("sync", "background", "bg") }
+}
+
 class GlobTool : Tool(
     "glob", "按通配找文件，如 **/*.kt。返回相对工作区的路径列表。",
     schema("pattern" to "string", "path" to "string", required = arrayOf("pattern"))
@@ -1433,7 +1485,8 @@ fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), AskUserBatchTool(), WebFetchTool(), WebSearchTool(),
-    BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool(), RunVerifyTool()
+    BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool(), RunVerifyTool(),
+    AgentListTool(), AskAgentTool()
 )
 
 /**

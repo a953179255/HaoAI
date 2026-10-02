@@ -35,6 +35,8 @@
 | `GET /api/sessions?q=` | 会话列表（`q` 会连消息正文一起搜） | — | `[{id,title,workspace,updated,…}]` |
 | `POST /api/new` | 开一条新会话 | `{"workspace?":"…"}` | `{"ok":true,"sid":"…"}` |
 | `GET /api/runs` | 任务运行账本（谁在什么时候跑了多久、成没成） | — | `[{sid,title,trigger,turns,ms,stopped,out}]` |
+| `GET /api/agents` | 多 Agent：专家实例（谁在跑）与跨专家收件箱 | `—` | `{ok,agents[{preset,name,state,stateName,sid,lastAt,turns,lastError}],inbox[{id,to,toName,from,text,state,created,doneAt,error,reply}],busy[]}` |
+| `POST /api/agents` | 启停一个实例，或直接托一句话给它 | `{"op":"start\|stop\|ask","preset":"卡id","text?":"…","mode?":"sync\|background"}` | `{"ok":true,…}`；卡不存在 / 已被停 / 它正在忙 → `{"ok":false,"error":"…"}`（**不会**降级成"没有角色"继续跑） |
 | `GET /api/usage` | Token 统计报表：区间 + 按专家 / 按模型切片 | `?from=&to=`（epoch ms，含首尾两天）、`&expert=`（卡 id 或显示名）、`&kind=main\|sub` | `{range{from,to,fromText,toText},summary{n,prompt,completion,cached,total,okRate,tps},byDay[],byExpert[],byModel[],experts[]}`；老键 `today/week/all/models/days/okRate/tps/rows` 一并保留（**按全量算**，不随区间漂） |
 | `GET /api/usage/export` | 同一口径导成 .xlsx（汇总 / 按天 / 按专家 / 按模型 / 明细五张表） | 同上 | 二进制：`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` + `Content-Disposition: attachment`（数字是真数字，能在 Excel 里求和） |
 
@@ -55,7 +57,7 @@
 | `err` | 一句错误 | 失败 |
 | `approval` | `{id,title,detail,kind,tool,pattern,risk,riskLabel,riskWhy,hunks[]}` | 要人批准 |
 | `ask` | `{id,question,options[]}` | `ask_user` 要人回答 |
-| `todo` / `queue` / `title` / `mode` / `tools` / `settings` / `sessions` / `runstate` / `hello` / `ping` | 各自的对象 | 状态变了 |
+| `todo` / `queue` / `title` / `mode` / `tools` / `settings` / `sessions` / `runstate` / `agents` / `hello` / `ping` | 各自的对象（`agents` = `{agents[],inbox[],busy[]}`，多 Agent 那一层的读数） | 状态变了 |
 
 `approval` 里的 `hunks[]` 只在**一次调用改了好几处**时出现：
 `[{no,at,stat,text}]`，`at` 是旧文件里的行号（1 基）。

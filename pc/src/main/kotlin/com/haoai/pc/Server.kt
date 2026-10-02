@@ -136,6 +136,8 @@ class WebServer(settings: PcSettings, port: Int,
         runCatching { File(Env.home, "webport").writeText(server.address.port.toString()) }
         // 定时任务的线程跟着服务起落：daemon 线程，JVM 退了它自己就没了
         sched = Scheduler { s -> runSchedule(s) }.also { it.start() }
+        // 多 Agent：读回实例状态、接上执行口、起收件箱线程（三件事必须一起做，见 wireAgents）
+        wireAgents()
         // 上次开过就接着开：手机配对的 token 还在人手里，服务重启不该把人踢下线
         if (LanStore.enabled()) {
             lan = LanServer(this).also { if (!it.start()) lan = null }
@@ -195,6 +197,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/workflows" -> workflows(ex)
                 "/api/presets" -> presets(ex)
                 "/api/teams" -> teams(ex)
+                "/api/agents" -> agents(ex)
                 "/api/experts/library" -> expertLibrary(ex)
                 "/api/kb" -> kb(ex)
                 "/api/secrets" -> secrets(ex)

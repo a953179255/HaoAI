@@ -1137,6 +1137,8 @@
           <div id="xpRuns" class="runs"><div class="kv">（还没跑过）</div></div>
           <div class="grp">团队速览</div>
           <div id="xpTeams" class="kv">—</div>
+          <div class="grp">收件箱（跨专家）</div>
+          <div id="xpInbox" class="kv">（还没有跨专家的消息）</div>
         </aside>
       </div>
     </div>
@@ -2230,6 +2232,9 @@ on('tool',(v,d)=>{d.state=='run'?toolStart(d,v):toolEnd(d,v)});
 on('sub',(v,d)=>subLine(d,v));
 on('todo',(v,d)=>setTodos(d.items,v));
 on('usage',(v,d)=>paintUsage(d,v));
+/* 专家实例与收件箱变了：专家页开着就重画。不接这个事件的话，页面会停在打开那一刻的状态，
+   别的专家正在忙、谁被停了、刚投的消息跑完没有，全都要手动重开页才看得见。 */
+on('agents',(v,d)=>Experts.applyAgents(d));
 on('notice',(v,d)=>notice(d,null,v));
 on('err',(v,d)=>notice(d,'err',v));
 on('mode',(v,d)=>{v.mode=d.mode;if(v===cur())setMode(d.mode)});
@@ -4585,6 +4590,13 @@ Cfg.init();
 const Experts=(()=>{
 let opened_=false, tab='my', lib=[], teams=[], editingP='', editingT='';
 let my=[], selColor='', selMembers=[], dialogModels='<option value="">模型：跟全局默认</option>';
+/* 实例与收件箱（多 Agent 那一层的读数）：读不到就当没有，不许把专家页整页打死 */
+let agents=[], inbox=[];
+function instOf(id){return agents.find(a=>a.preset===id)||null}
+function loadAgents(){
+  return fetch('/api/agents').then(r=>r.json()).then(d=>{agents=d.agents||[];inbox=d.inbox||[]})
+    .catch(()=>{agents=[];inbox=[]});
+}
 /* 注意：右栏「自动化」页签的 presets 列表是 Presets IIFE 的私有态，这里**不借** ——
  * 自己拉一份 /api/presets（存/删之后顺手 Presets.render() 把右栏那份也刷掉），
  * 两个面板各自成立，谁也别依赖谁的闭包。 */
@@ -4605,13 +4617,19 @@ function metaLine(p){
     `${p.workspace?('目录 '+esc(baseName(p.workspace))):'目录跟全局'}`;
 }
 function myCard(p){
+  const a=instOf(p.id);
+  const st=a?a.state:'none', stName=a?a.stateName:'没启动过';
   return `<div class="xcard">
-    <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b></div>
+    <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b>
+      <i class="mbtib" data-st="${esc(st)}" title="${a?('这个实例跑过 '+a.turns+' 次'+(a.lastError?(' · 上次出错：'+esc(a.lastError)):'')):'还没启用实例：别的专家问它时才现起'}">${esc(stName)}</i></div>
     ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
     <div class="meta">${metaLine(p)}</div>
     ${(p.quick&&p.quick.length)?`<div class="quick">${p.quick.map(q=>
       `<button data-x="quick" data-id="${esc(p.id)}" data-q="${esc(q)}" title="${esc(q)}">${esc(q)}</button>`).join('')}</div>`:''}
     <div class="ft"><button class="ab pri" data-x="use" data-id="${esc(p.id)}">开始对话</button>
+      <button class="ab" data-x="astart" data-id="${esc(p.id)}" title="让它成为一个可被别的专家点名的实例（有自己那条常驻会话）">${st==='stopped'?'重新启用':'启用实例'}</button>
+      <button class="ab" data-x="astop" data-id="${esc(p.id)}" title="停用后别的专家问它会被明确拒绝（不静默排队）">停用</button>
+      <button class="ab" data-x="aask" data-id="${esc(p.id)}" title="后台托给它一句：它忙完会把回信送回你的会话">托一件事</button>
       <button class="ab" data-x="edit" data-id="${esc(p.id)}">编辑</button>
       <button class="ab" data-x="del" data-id="${esc(p.id)}">删除</button></div>
   </div>`;
@@ -4648,6 +4666,7 @@ function matchQ(p){
   return (String(p.name||'')+' '+String(p.desc||'')+' '+String(p.persona||'')).toLowerCase().includes(q);
 }
 function paint(){
+  paintInbox();
   $('#xptabs').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
   const grid=$('#xpGrid');
   if(tab==='my'){
@@ -4697,8 +4716,22 @@ function formShell(){
   };
 }
 function close(){opened_=false;$('#dialog').classList.remove('wide');$('#dialog').onclick=null;$('#mask').classList.remove('on')}
+/* 收件箱那块单独一个函数：SSE 的 agents 事件、开页、动作之后都要刷它。
+   原来只挂在 refreshBadge 里 —— 结果是"投了消息但界面上看不见"，
+   直到你重开一次专家页才冒出来（像素里量到的）。 */
+function paintInbox(){
+  const ib=$('#xpInbox');if(!ib)return;
+  const live=inbox.filter(m=>m.state==='queued'||m.state==='running');
+  const done=inbox.filter(m=>m.state==='done'||m.state==='failed').slice(-6).reverse();
+  ib.innerHTML=(live.length||done.length)?
+    live.map(m=>`<div class="rl"><span><b>待办 → ${esc(m.toName)}</b><em>${esc(m.text.slice(0,40))} · ${m.state==='running'?'正在办':'排队中'}</em></span></div>`).join('')+
+    done.map(m=>`<div class="rl"><span><b>${m.state==='done'?'已回':'出错'} · ${esc(m.toName)}</b>`+
+      `<em>${esc((m.state==='done'?m.reply:m.error)||'').slice(0,60)}</em></span></div>`).join('')
+    :'（还没有跨专家的消息）';
+}
 function refreshBadge(){
   const e=$('#expertsCount');if(e)e.textContent=((my.length||teams.length)?my.length+' 卡'+(teams.length?' · '+teams.length+' 队':''):'');
+  paintInbox();
 }
 function loadAll(){
   return Promise.all([
@@ -4714,6 +4747,7 @@ function loadAll(){
 }
 function openAt(t){
   if(t)tab=t;
+  loadAgents();
   loadAll().then(paint).catch(()=>toast('读不到专家与团队','err'));
 }
 function setTab(t){tab=t;paint()}
@@ -4772,6 +4806,24 @@ function act(x,b){
   }
   /* 从专家页开聊：先切回会话视图，再开任务 —— 开完落在聊天界面才顺 */
   if(x==='use'){setView('chat');newTask('',id);return}
+  /* ---- 实例：启用 / 停用 / 托一件事（多 Agent 那一层的入口）---- */
+  if(x==='astart'||x==='astop'){
+    post('/api/agents',{op:x==='astart'?'start':'stop',preset:id}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
+      agents=d.agents||[];paint();toast(x==='astart'?'实例已启用，别的专家现在能点名问它':'实例已停用（问它会被明确拒绝）');
+    }).catch(()=>toast('改不动','err'));return;
+  }
+  if(x==='aask'){
+    const p=my.find(z=>z.id===id);
+    const t=prompt('托给「'+((p&&p.name)||id)+'」的一句话（后台跑，它忙完会把回信送回你这条会话）','');
+    if(t===null)return;
+    const text=(t||'').trim();
+    if(!text){toast('那句话是空的');return}
+    post('/api/agents',{op:'ask',preset:id,text:text,mode:'background'}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没投出去','err');return}
+      toast(d.reply||'已投进收件箱');loadAgents().then(paint);
+    }).catch(()=>toast('投不出去','err'));return;
+  }
   if(x==='quick'){setView('chat');newTask('',id,b.dataset.q||'');return}
   if(x==='enable'){const p=lib.find(z=>z.key===id);if(p){formShell();editingP='';pForm(p,true)}return}
   if(x==='psave'){
@@ -4824,6 +4876,9 @@ return {
     fetch('/api/teams').then(r=>r.json()).then(d=>{teams=d.items||[];refreshBadge()}).catch(()=>{});
   },
   openAt, setTab, close, opened:()=>opened_, refreshBadge, paint,
+  /* SSE 的 agents 事件进来就走这里（事件里带的就是 /api/agents 那份 JSON）。
+     不在这里刷的话，专家页会停在打开那一刻的状态：别的专家正在忙、谁被停了，全都看不见。 */
+  applyAgents(d){agents=(d&&d.agents)||[];inbox=(d&&d.inbox)||[];paintInbox();if(opened_)paint()},
 };
 })();
 Experts.init();

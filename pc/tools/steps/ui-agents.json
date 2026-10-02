@@ -1,0 +1,128 @@
+[
+  {
+    "eval": "(async()=>{const mk=async(n)=>{const r=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',id:'',name:n,persona:'你是'+n+'，回答要短。',model:'',workspace:'',mode:'auto',desc:n+'专长'})});const d=await r.json();const it=(d.items||[]).find(x=>x.name===n);return it?it.id:''};window.__a=await mk('甲专家');window.__b=await mk('乙专家');return {two:!!window.__a&&!!window.__b&&window.__a!==window.__b}})()",
+    "must": [
+      "two"
+    ],
+    "note": "建两张专家卡：多 Agent 要验的是「一个专家能不能被另一个点名」，一张卡验不出来"
+  },
+  {
+    "click": "[data-view=\"experts\"]"
+  },
+  {
+    "goto": "#xpGrid .xcard",
+    "timeout": 9000
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.innerText.indexOf('甲专家')>=0);const t=c?c.innerText:'';return {card:!!c,never:t.indexOf('没启动过')>=0,start:!!c.querySelector('[data-x=astart]'),stop:!!c.querySelector('[data-x=astop]'),ask:!!c.querySelector('[data-x=aask]')}})()",
+    "must": [
+      "card",
+      "never",
+      "start",
+      "stop",
+      "ask"
+    ],
+    "note": "卡片上有实例状态（没启动过 ≠ 待命，别说谎）与三个动作：启用实例 / 停用 / 托一件事"
+  },
+  {
+    "click": "#xpGrid .xcard [data-x=astart]"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(async()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.innerText.indexOf('甲专家')>=0);const d=await fetch('/api/agents').then(r=>r.json());const a=(d.agents||[]).find(x=>x.name==='甲专家')||{};return {badge:c.innerText.indexOf('待命')>=0,apiState:a.state==='idle',apiName:a.stateName==='待命',hasSid:typeof a.sid==='string'}})()",
+    "must": [
+      "badge",
+      "apiState",
+      "apiName",
+      "hasSid"
+    ],
+    "note": "启用之后卡片与接口要说同一句话（界面上改了、接口没改＝只改了一半）"
+  },
+  {
+    "shot": "ag01-instance-enabled"
+  },
+  {
+    "eval": "(async()=>{const r=await fetch('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'ask',preset:window.__a,text:'帮我数一下有几个 md 文件',mode:'background'})});const d=await r.json();return {ok:d.ok===true,receipt:/收件箱/.test(d.reply||''),id:/#ib/.test(d.reply||'')}})()",
+    "must": [
+      "ok",
+      "receipt",
+      "id"
+    ],
+    "note": "后台托一件事：立刻回一句带编号的回执（不是「已发送」这种什么都没有的空话）"
+  },
+  {
+    "sleep": 2500
+  },
+  {
+    "eval": "(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));let ib={};for(let i=0;i<30;i++){const d=await fetch('/api/agents').then(r=>r.json());ib=(d.inbox||[]).find(m=>m.to===window.__a)||{};if(ib.state==='done'||ib.state==='failed')break;await sleep(500)}return {seen:!!ib.id,toName:ib.toName==='甲专家',moved:ib.state==='done'||ib.state==='failed',state:ib.state||'',gotReply:ib.state!=='failed'}})()",
+    "must": [
+      "seen",
+      "toName",
+      "moved",
+      "gotReply"
+    ],
+    "note": "收件箱里这条要有归属、并且状态真的**动过**（done/failed）。后台线程没起的话它会永远停在 queued，而这条链路上没有任何一处会报错 —— 所以必须等到它动完"
+  },
+  {
+    "click": "#xpInbox"
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#xpInbox').innerText;return {shown:t.indexOf('甲专家')>=0,notEmpty:t.indexOf('还没有跨专家的消息')<0}})()",
+    "must": [
+      "shown",
+      "notEmpty"
+    ],
+    "note": "专家页右栏那块「收件箱（跨专家）」要真的列出这条 —— 投出去的东西在界面上看不见，等于用户不知道它存不存在"
+  },
+  {
+    "shot": "ag02-inbox-visible"
+  },
+  {
+    "eval": "(async()=>{const post=(b)=>fetch('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());const s=await post({op:'stop',preset:window.__a});const again=await post({op:'ask',preset:window.__a,text:'再问一次',mode:'background'});const d=await fetch('/api/agents').then(r=>r.json());const a=(d.agents||[]).find(x=>x.preset===window.__a)||{};return {stoppedOk:s.ok!==false,rejected:again.ok===false,saysStopped:/已经被停/.test(again.error||''),apiStopped:a.state==='stopped',uiStopped:a.stateName==='已停止'}})()",
+    "must": [
+      "stoppedOk",
+      "rejected",
+      "saysStopped",
+      "apiStopped",
+      "uiStopped"
+    ],
+    "note": "停用之后：同步与后台都不许绕过它去排队（这条判的是「停止」有没有真的挡住路），接口与卡片要说同一句话"
+  },
+  {
+    "eval": "(async()=>{const d=await fetch('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'start',preset:window.__a})}).then(r=>r.json());return {back:d.ok!==false}})()",
+    "must": [
+      "back"
+    ],
+    "note": "重新启用：把现场收回到可用（别让验收结束时那个专家还停在停用态）"
+  },
+  {
+    "eval": "(async()=>{await fetch('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'start',preset:window.__a})});const r=await fetch('/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'ask',preset:'没有这张卡',text:'嗨',mode:'sync'})}).then(x=>x.json());return {rejected:r.ok===false,pointsList:/agent_list/.test(r.error||'')}})()",
+    "must": [
+      "rejected",
+      "pointsList"
+    ],
+    "note": "问一个不存在的专家：要拒，并且错误话里指一条出路（agent_list）—— 模型看到这句会先去认名字，而不是自己瞎猜一个"
+  },
+  {
+    "click": "#tabs button[data-t=\"tools\"]"
+  },
+  {
+    "sleep": 900
+  },
+  {
+    "eval": "(()=>{const t=document.querySelector('#tab-tools').innerText;return {list:t.indexOf('agent_list')>=0,ask:t.indexOf('ask_agent')>=0}})()",
+    "must": [
+      "list",
+      "ask"
+    ],
+    "note": "两把新工具在会话的工具表里看得见（看不见就是没注册进 builtinTools，模型永远不会去用）"
+  },
+  {
+    "shot": "ag03-tools-registered"
+  }
+]
