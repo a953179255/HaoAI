@@ -259,8 +259,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun appendDelta(frag: String) {
         // ④ 正文首 token 到达 → 定格思考用时（供「已思考 N 秒」显示）
-        if (_thinkingMs.value == null && turnStartAt != 0L) {
-            _thinkingMs.value = System.currentTimeMillis() - turnStartAt
+        if (_thinkingMs.value == null && _turnStartAt.value != 0L) {
+            _thinkingMs.value = System.currentTimeMillis() - _turnStartAt.value
         }
         synchronized(textBuf) { textBuf.append(frag); Unit }
     }
@@ -305,7 +305,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             _runSessionId.value = sid
             _running.value = true
             _thinkingMs.value = null
-            turnStartAt = t0
+            _turnStartAt.value = t0
             liveTools.clear()
             publishLiveTools()
             _streamingReasoning.value = ""
@@ -399,7 +399,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     // ── ④ 思考计时：正文首 token 到达即定格「已思考 N 秒」──
-    @Volatile private var turnStartAt = 0L
+    /**
+     * 本轮起点时刻（0＝现在没在跑）。
+     *
+     * 原来是个裸的 `@Volatile private var`：引擎侧读它算思考用时，**界面读不到**，
+     * 于是 `ThinkingIndicator` 自己在组合里 `val t0 = System.currentTimeMillis()` 造了一个起点。
+     * 而移动端"换屏"＝整棵 Compose 树重建（这里没有 NavHost，就是一个 `screen: Int`），
+     * 进设置再回聊天，那个自造的起点就归零 —— 屏幕上的"已等 N 秒"从 0 重跳，
+     * 看着像任务被重启了一次。**起点只有一个真值：谁要显示，谁就来取。**
+     *
+     * 用 StateFlow 而不是普通 getter：getter 只在重组时读一次，"新一轮开始"换了值
+     * 不会触发重组，秒表会拿着上一轮的旧起点继续加；订阅才拿得到换轮这件事。
+     */
+    private val _turnStartAt = MutableStateFlow(0L)
+    val turnStartAt = _turnStartAt.asStateFlow()
     private val _thinkingMs = MutableStateFlow<Long?>(null)
     val thinkingMs = _thinkingMs.asStateFlow()
 
@@ -798,7 +811,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingText.value = null
         _streamingReasoning.value = null
         _thinkingMs.value = null
-        turnStartAt = System.currentTimeMillis()
+        _turnStartAt.value = System.currentTimeMillis()
         startStreamFlusher()
         // D16: 登记到进程级注册表——其他实例据此显示停止键、路由停止、豁免「死亡」误判
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
@@ -1243,7 +1256,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingText.value = null
         _streamingReasoning.value = null
         _thinkingMs.value = null
-        turnStartAt = System.currentTimeMillis()
+        _turnStartAt.value = System.currentTimeMillis()
         startStreamFlusher()
         publishLiveTools()
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)

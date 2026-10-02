@@ -366,6 +366,12 @@ fun ChatScreen(
     // ask_user_batch 题组卡（会话门控）：整批问卷本地循环出题
     val pendingQuizNow by vm.visiblePendingQuiz.collectAsState()
     val thinkingMs by vm.thinkingMs.collectAsState()
+    /**
+     * 本轮起点时刻：界面上那根"已等 N 秒"的秒表**必须从这里取**。
+     * 在组合里自己 `val t0 = now()` 起表 = 换一次屏（进设置再回聊天）就从 0 重跳，
+     * 因为移动端换屏是整棵树重建（见 [ElapsedClock] 那段）。
+     */
+    val turnStartAt by vm.turnStartAt.collectAsState()
     val running by vm.running.collectAsState()
     val liveToolsSnapshot by vm.liveToolsSnapshotFlow.collectAsState()
     val error by vm.error.collectAsState()
@@ -1213,7 +1219,7 @@ fun ChatScreen(
                                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
                                 else "正在连接模型"
                             }
-                            ThinkingIndicator(phaseText)
+                            ThinkingIndicator(phaseText, turnStartAt)
                         }
                     }
                 }
@@ -3331,7 +3337,7 @@ private fun SystemEventBar(text: String) {
  * （shimmer 渐变）+ 已用时长计时。prefill 慢（端侧模型数十秒）时给用户持续"活着"的信号。
  */
 @Composable
-private fun ThinkingIndicator(hint: String? = null) {
+private fun ThinkingIndicator(hint: String? = null, turnStartAt: Long = 0L) {
     val phrases = hint?.let { listOf(it) } ?: listOf(
         "正在连接模型…", "正在理解上下文…", "预热推理中…", "组织回答…"
     )
@@ -3343,10 +3349,17 @@ private fun ThinkingIndicator(hint: String? = null) {
             idx = (idx + 1) % phrases.size
         }
     }
-    LaunchedEffect(Unit) {
-        val t0 = System.currentTimeMillis()
+    /*
+     * 秒表：起点取**回合起点**，不取"本次组合开始"。
+     * 原来这里是 `LaunchedEffect(Unit) { val t0 = System.currentTimeMillis(); ... }` ——
+     * 换一次屏（进设置再回聊天）整棵组合树重建，t0 变成"现在"，屏幕上"已等 N 秒"
+     * 从 0 重跳，看着像任务被重启。localT0 只留作"还没进过任何一轮"时的兜底。
+     * key 用 turnStartAt：开新一轮时秒表要跟着重新起（不然会拿着旧起点继续加）。
+     */
+    val localT0 = remember(turnStartAt) { System.currentTimeMillis() }
+    LaunchedEffect(turnStartAt) {
         while (true) {
-            elapsedMs = System.currentTimeMillis() - t0
+            elapsedMs = ElapsedClock.ms(turnStartAt, localT0, System.currentTimeMillis())
             kotlinx.coroutines.delay(100)
         }
     }
@@ -3661,7 +3674,9 @@ private fun ReasoningRow(
     text: String,
     thinkingMs: Long? = null,
     /** 回合是否真的在跑（历史消息=false：不转圈、不计时、不滚动）。 */
-    live: Boolean = true
+    live: Boolean = true,
+    /** 秒表起点＝回合起点（换屏回来不从 0 重跳；见 [ElapsedClock]）。 */
+    turnStartAt: Long = 0L
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
     // 2s 无新内容 → live 语气转"已思考"（仅运行中有意义；历史直接 false）
@@ -3696,7 +3711,8 @@ private fun ReasoningRow(
                 thinkingMs = thinkingMs,
                 live = isLive,
                 showTicker = true,
-                scrolling = live
+                scrolling = live,
+                turnStartAt = turnStartAt
             )
         }
         AnimatedVisibility(open) {
@@ -3733,15 +3749,19 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
     /** 是否渲染 ticker（聚合卡收起态/思考行= true；历史消息=false 走纯省略）。 */
     showTicker: Boolean = true,
     /** 滚动跟随开关：思考中 true（跟随尾部）；已思考/历史 false（立即定格）。 */
-    scrolling: Boolean = live
+    scrolling: Boolean = live,
+    /** 秒表起点＝回合起点（0 时退回本次组合的起点）。别在组合里自己造起点，见 [ElapsedClock]。 */
+    turnStartAt: Long = 0L
 ) {
     // 实时计时（live 时每 100ms 刷新；结束态用定格的 thinkingMs）
+    // 起点同样取回合起点：这一组 composable 现在全仓没有调用点（链卡走 ChainOfThought），
+    // 但它里面藏着一根和 ThinkingIndicator 同款的自造秒表——留着不改，哪天接回去就是同一个缺陷重演。
     var elapsed by remember { mutableLongStateOf(0L) }
     if (live) {
-        LaunchedEffect(Unit) {
-            val t0 = System.currentTimeMillis()
+        val localT0 = remember(turnStartAt) { System.currentTimeMillis() }
+        LaunchedEffect(turnStartAt) {
             while (true) {
-                elapsed = System.currentTimeMillis() - t0
+                elapsed = ElapsedClock.ms(turnStartAt, localT0, System.currentTimeMillis())
                 kotlinx.coroutines.delay(100)
             }
         }

@@ -259,12 +259,19 @@ arm64 真机对应 `app/src/main/jniLibs/arm64-v8a/libllamaserver.so`。
 | 从设置返回聊天，侧栏自己收了 | 同一条 `LaunchedEffect` 重放：横屏双栏那条 effect 每次进屏都执行一遍"竖屏就收起" | `DrawerController.onPaneMode()`：**只在模式真的变了**才开或收 |
 | 电脑联动页用系统手势返回＝退出应用 | 那一页没有自己的 `BackHandler`，事件落到"退出" | `ui/ScreenNav.kt`：`depth` / `parentOf` 一张表，`MainActivity` 兜底 + 该页就地接住 |
 | 电脑联动页背景是白的，全局壁纸不生效 | `PcLinkScreen` 收了 `wallpaper` 参数却一次没用，页面铺的是实底色 | 补壁纸＋玻璃接线；`ui/WallpaperWiringTest.kt` 扫源码钉住："声明了 `wallpaper` 的屏必须真的用它"、"调用处必须真的传进去" |
+| 思考中的"已等 N 秒"，返回聊天后从 0 重跳 | 秒表在组合里自造起点（`LaunchedEffect(Unit) { val t0 = now() }`）；真起点在 `ChatViewModel`，但那是 `@Volatile private var`，**界面拿不到，就只能自己造一个** | `ui/chat/ElapsedClock.kt`：读数只认**回合起点**（`turnStartAt` 升成 StateFlow 供界面订阅，换新一轮时秒表跟着重起）；`ThinkingClockWiringTest` 扫源码钉"读数必须过 ElapsedClock""调用处必须真传起点" |
 
-- **判据**：`:app:testDebugUnitTest` **238 条全绿**（本批新增 `SessionStartupTest` 9 / `TaskPanelStateTest` 7 /
-  `ScreenNavTest` 6 / `DrawerPaneModeTest` 3 / `WallpaperWiringTest` 3）；逐条在真机（MEIZU 20 Pro，
-  release 0.18.6）看过改前改后的对比图，不是只看断言绿
-- **两条留档的教训**：① `remember` 不是"跨屏状态"的家，凡"返回之后还得保持"的一律先问它该活多久；
-  ② 写在 `LaunchedEffect` 里的自动动作默认每次进屏都会重放一遍——要记忆闸，不能靠 key 没变来兜底
+- **判据**：`:app:testDebugUnitTest` **247 条全绿**（`--rerun-tasks` 整套重跑，不是复用上次结果；
+  本批新增 `SessionStartupTest` 9 / `TaskPanelStateTest` 7 / `ScreenNavTest` 6 / `DrawerPaneModeTest` 3 /
+  `WallpaperWiringTest` 3 / `ElapsedClockTest` 5 / `ThinkingClockWiringTest` 4）；前五处逐条在真机
+  （MEIZU 20 Pro，release 0.18.6）看过改前改后的对比图，不是只看断言绿
+- **三条留档的教训**：① `remember` 不是"跨屏状态"的家，凡"返回之后还得保持"的一律先问它该活多久；
+  ② 写在 `LaunchedEffect` 里的自动动作默认每次进屏都会重放一遍——要记忆闸，不能靠 key 没变来兜底；
+  ③ **界面自造时钟起点＝把真值复制了一份**，而复制品会被重建抹掉。量一类东西（时间、进度、展开态）
+  先问"真值在谁那里"，别在显示方就地起表
+- 顺带记一笔：`ReasoningPanel` / `ReasoningRow` / `ReasoningTickerInline` 三个 composable **全仓没有调用点**
+  （链卡那套已经换到 `ChainOfThought.kt`），其中 `ReasoningTickerInline` 里也藏着一根同款自造秒表——
+  没有顺手删（那是另一个决定），先把它的起点接到同一个 `ElapsedClock` 上，哪天接回去不会带着旧缺陷重演
 
 ---
 
