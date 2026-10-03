@@ -876,10 +876,17 @@
   .xcard .ds{font-size:11.5px;color:var(--dim);line-height:1.55}
   .xcard .meta{font-size:10.5px;color:var(--dim2)}
   .quick{display:flex;flex-direction:column;gap:4px}
-  .quick button{text-align:left;border:1px dashed var(--line);background:transparent;color:var(--dim);
+  .quick button,.quick span{text-align:left;border:1px dashed var(--line);background:transparent;color:var(--dim);
     border-radius:8px;padding:4px 9px;font-size:11px;cursor:pointer;font-family:inherit;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .quick button:hover{color:var(--fg);border-color:var(--acc2);border-style:solid}
+  /* 内置库卡上的快捷提问是"先给你看它长什么样"，不是钮：卡还没启用，点了没有会话可发。
+     画成同一款条子，但光标不许骗人说能点（原来这里什么都不显示，
+     启用之前根本看不出一张内置卡会带哪三句）。 */
+  .quick span{cursor:default;border-style:dotted}
+  /* 内置卡的开场白预览：启用前就看得见新会话第一屏会写什么 */
+  .xcard .xqw{font-size:11.5px;color:var(--fg2);line-height:1.55;padding-left:8px;
+    border-left:2px solid var(--line2)}
   .xcard .ft{display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
   /* 卡底那排动作钮：九颗挤在一行里会把中文标签折成两行（"开始/对话""关/掉"），
      所以钮自己不许换行、装不下就整排换行。这条是看像素看出来的，结构判据抓不到。 */
@@ -4823,12 +4830,18 @@ function myCard(p){
 }
 function libCard(p){
   const have=my.some(x=>x.name===p.name);
+  const qs=quicks(p);
   return `<div class="xcard">
-    <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b></div>
+    <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b>
+      ${have?'<i class="mbtib">已在我的专家里</i>':''}</div>
     ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
+    <div class="meta">${metaLine(p)}</div>
+    ${paramLine(p)}
+    ${p.welcome?`<div class="xqw">${esc(p.welcome)}</div>`:''}
+    ${qs.length?`<div class="quick">${qs.map(q=>`<span${q.desc?` title="${esc(q.desc)}"`:''}>${esc(q.title)}</span>`).join('')}</div>`:''}
     <details style="font-size:11px;color:var(--dim)"><summary style="cursor:pointer;outline:none">人设（${String(p.persona||'').length} 字，可先看再启用）</summary>
       <div style="margin-top:5px;line-height:1.6;white-space:pre-wrap">${esc(p.persona||'')}</div></details>
-    <div class="ft">${have?'<span class="meta">已在「我的专家」里</span>'
+    <div class="ft">${have?'<span class="meta">同名卡已经在你手里了，改那张就行</span>'
       :`<button class="ab pri" data-x="enable" data-id="${esc(p.key)}">启用（可先改再存）</button>`}</div>
   </div>`;
 }

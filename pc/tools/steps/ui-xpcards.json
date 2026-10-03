@@ -416,5 +416,78 @@
    "on"
   ],
   "note": "右栏那颗钮是双向开关（与专家页那条 op:toggle 同一个接口，不各写一份逻辑）"
- }
+ },
+ {
+  "click": "[data-view=\"experts\"]",
+  "note": "回专家整页，去看「内置专家」那一栏"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "click": "#xptabs button[data-t=\"lib\"]",
+  "note": "切到内置专家页签"
+ },
+ {
+  "sleep": 1300
+ },
+ {
+  "eval": "(()=>{const cards=[...document.querySelectorAll('#xpGrid .xcard')].filter(x=>x.querySelector('[data-x=enable]'));const c0=cards[0]||{querySelectorAll(){return[]},querySelector(){return null}};const chip=c0.querySelector?c0.querySelector('.quick span'):null;const w=c0.querySelector?c0.querySelector('.xqw'):null;const grid=document.querySelector('#xpGrid');return {tabOn:document.querySelector('#xptabs button[data-t=lib]').classList.contains('on'),n:cards.length,chips:c0.querySelectorAll('.quick span').length,chipIsSpan:!!chip&&chip.tagName=='SPAN',chipCursor:chip?getComputedStyle(chip).cursor:'',welcome:w?w.textContent.trim().length:0,temps:cards.filter(x=>/温度/.test(x.textContent)).length,noOverflow:!!grid&&grid.scrollWidth<=grid.clientWidth+1}})()",
+  "must": ["tabOn", "n", "chips", "chipIsSpan", "welcome", "noOverflow"],
+  "note": "内置页原来只画名字+简介+人设折叠：启用前看不见这张卡会带哪三句、第一屏写什么、温度设了没 —— 而这三样正是这批给内置库补的东西。chipIsSpan 钉的是它别装成按钮（卡还没启用，点了没有会话可发，光标也不许给人能点的错觉）；chipCursor 只打印，真去断言 computed cursor 会把 'default' 和空串当成两回事。temps 也先只打印：小通那张故意不设温度，用来证明 -1 这条路。"
+ },
+ {
+  "shot": "xp07-library"
+ },
+ {
+  "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('文案写手')>=0);const b=c&&c.querySelector('[data-x=enable]');if(!b)return {found:false,why:'没找到那张卡的启用钮'};b.click();return {found:true}})()",
+  "must": ["found"],
+  "note": "挑「文案写手」：它是内置库里温度最高的一张（0.9），最适合当预填的探针"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(()=>{const v=id=>{const e=document.querySelector(id);return e?e.value:null};const q=v('#xfQ0'),qp=v('#xfQp0');return {named:v('#xfName')=='文案写手',welcome:(v('#xfWelcome')||'').length>0,qTitle:(q||'').length>0&&q.length<=40,distinct:!!q&&q!=qp,temp:v('#xfTemp')=='0.9',enabledOn:(()=>{const e=document.querySelector('#xfOn');return !!e&&e.checked})(),wsBlank:v('#xfWs')==''}})()",
+  "must": ["named", "welcome", "qTitle", "distinct", "temp", "enabledOn"],
+  "note": "「启用」不是直接建卡，是打开一张预填好的表单。温度读出 0.9 才证明那个数字真从内置库走到了表单格子（而不是前端留空的默认值）；标题与正文不同才说明两栏各有用途。wsBlank 只打印：工作区留空=跟全局，是设计。"
+ },
+ {
+  "shot": "xp08-enable-prefill"
+ },
+ {
+  "click": "[data-x=\"psave\"]",
+  "note": "按下「启用这张卡」"
+ },
+ {
+  "sleep": 1600
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/presets').then(r=>r.json());const p=(d.items||[]).find(x=>x.name==='文案写手')||{};const q=(p.quick||[])[0]||{};return {saved:!!p.id,welcome:(p.welcome||'').length>0,quick:(p.quick||[]).length,hasPrompt:!!q.prompt&&q.prompt!=q.title,temp:p.temperature==0.9,on:p.enabled!==false}})()",
+  "must": ["saved", "welcome", "quick", "hasPrompt", "temp", "on"],
+  "note": "存下来就是一张普通角色卡：欢迎语、三条富快捷提问（标题≠正文）、温度 0.9 都要在盘上。这条与上一条一个读表单、一个读服务端，断在哪一段一眼分得清。"
+ },
+ {
+  "click": "#xptabs button[data-t=\"my\"]",
+  "note": "回「我的专家」用这张卡开一条会话"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('文案写手')>=0);const b=c&&c.querySelector('[data-x=use]');if(!b)return {found:false};b.click();return {found:true}})()",
+  "must": ["found"],
+  "note": "点「开始对话」：这张刚从内置库启用的卡要真的能开出一条会话"
+ },
+ {
+  "sleep": 1800
+ },
+ {
+  "eval": "(()=>{const w=document.querySelector('.view.on .xw');if(!w)return {shown:false,nQuick:0};const qs=[...w.querySelectorAll('[data-x=quick]')];return {shown:true,name:(w.querySelector('.xwh b')||{}).textContent=='文案写手',text:((w.querySelector('.xwt')||{}).textContent||'').length>0,nQuick:qs.length==3,allButtons:qs.every(x=>x.tagName=='BUTTON'),labels:qs.map(x=>x.textContent).join(' / ')}})()",
+  "must": ["shown", "name", "text", "nQuick", "allButtons"],
+  "note": "最后一屏要的是「这张内置卡真的能聊」：空会话第一屏出现欢迎卡，标题是它、正文就是那句欢迎语、三颗快捷提问在自己的卡上就该是能点的按钮（内置页里它们只是条子）。labels 只打印给人核对字有没有被截。"
+ },
+ {
+  "shot": "xp09-lib-welcome"
+}
 ]

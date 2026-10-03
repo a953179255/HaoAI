@@ -20,7 +20,10 @@ if [ ! -f "$BIN" ]; then echo "x 没有 $BIN —— 先跑 gradle installDist"; 
 # 症状特别坏：界面表现的是旧行为，测试却是新的（改完 Tools.kt 只跑 test 忘了 installDist，
 # 于是像素里弹的还是老审批卡，判据红成"新代码没生效"，看着像产品坏了）。
 # 取两边最新的时间戳比一下，源码更新就直接停在这里，别往下跑两分钟才让人猜。
-NEWEST_SRC=$(find src/main -type f \( -name '*.kt' -o -name '*.html' \) -newer "$BIN" -print -quit 2>/dev/null)
+# 盯 src/main 下**所有**文件：上一版只盯 *.kt 与 *.html，而 `expert-library.json`
+# 这类资源同样是打进 jar 的 —— 只改内置专家库时闸门不响，那一轮像素验的还是上一版程序，
+# 现象是"界面表现是旧的、判据是新的"，红得让人去查错地方。
+NEWEST_SRC=$(find src/main -type f -newer "$BIN" -print -quit 2>/dev/null)
 if [ -n "$NEWEST_SRC" ]; then
   echo "x 装好的二进制比源码旧（$NEWEST_SRC 更新过）—— 先跑 gradle installDist 再来"
   exit 1

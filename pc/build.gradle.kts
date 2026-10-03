@@ -55,7 +55,8 @@ tasks.test {
     inputs.files(
         file("ROADMAP.md"), file("README.md"), file("../README.md"),
         file("docs/api.md"), file("src/main/kotlin"),
-        file("src/main/resources/ui"), file("tools")
+        file("src/main/resources/ui"), file("src/main/resources/expert-library.json"),
+        file("tools")
     )
     doFirst { testTmp.mkdirs() }
     systemProperty("java.io.tmpdir", testTmp.absolutePath)
