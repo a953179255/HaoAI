@@ -4531,6 +4531,30 @@ Octop 的专家页有四个入口：我的专家 / 我的团队 / 内置专家 /
 跑法：`PRE_SET="expertFeed=http://127.0.0.1:8791/experts.json" bash pc/tools/ui-shot.sh pc/tools/steps/ui-xpmarket.json`
 （`PRE_SET` 的值里不许有空格；端口是假网关的固定值 8791，剧本里不写死端口，从 `/api/settings` 读回来再填）
 
+## 这一批：像素闸门自己会误报（时间戳 → 内容指纹）
+
+收拢 #136 那条分支之后（`git checkout master` + `merge --squash`），**77 份剧本一份都跑不动**：
+`ui-shot.sh` 开头那道"装好的二进制比源码旧就停"报了 `x …ExpertFeed.kt 更新过`。
+而二进制其实是新的 —— git 按**同样内容**重写文件时把 mtime 全推到当下，
+这道闸门比的正是 mtime。误报的症状是"环境坏了"，比漏报更费时间：它会让人去重跑构建、
+怀疑 Gradle 缓存，而真相是"什么都没变"。
+
+改法：闸门加第二把锁 —— **内容指纹**。每次"二进制确实比所有源码新"（也就是真·放行）时，
+把 `src/main` 全部文件按路径排序拼接后的 SHA-1 记进 `build/install/haoai-pc/.srcsha`；
+下次 mtime 前移但指纹没变 ⇒ 只是被重写过，放行并说明。指纹变了才停。
+刻意**不做**成"没指纹就自动补"：那等于第一次误报就把锁拆了，而"改完源码忘了 installDist"
+正是这道闸门存在的唯一理由。真需要手工补记（比如刚 checkout 完、确信 dist 是新的）走
+`bash pc/tools/stamp.sh`，它会把前提写在输出里。
+
+两条都当场验过，不是推理：
+- **该放行的放行**：`touch` 一个源码文件（内容一字不改）→ 打印"内容与上次放行的二进制一致…放行"并继续启动；
+- **该拦的拦**：往 `src/main` 里加一个新文件（内容真的变了）→ 立刻停在那句 x，且提示里带上 `stamp.sh`。
+  探针文件用完移进回收站，工作树没留垃圾。
+
+顺带记两个坑：`.kts` 里 `java` 被 JavaPluginExtension 占了（`java.security.MessageDigest`
+解析不到），所以指纹算法最后整个放进 bash 而不是 Gradle；`to-recycle.ps1` 要用
+`powershell -File` 调，直接 `~/.qoder/scripts/to-recycle.ps1` 会被 bash 当 shell 脚本解析。
+
 ## 已验证到哪一步
 
 - `gradle test` → **693 条全绿**（2026-10-03 实测；566 → Token 统计 +33、定时任务指定专家 +8、

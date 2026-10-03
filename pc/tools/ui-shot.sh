@@ -19,14 +19,29 @@ if [ ! -f "$BIN" ]; then echo "x 没有 $BIN —— 先跑 gradle installDist"; 
 # 装好的二进制比源码旧 = 这一轮验的是**上一版程序**。
 # 症状特别坏：界面表现的是旧行为，测试却是新的（改完 Tools.kt 只跑 test 忘了 installDist，
 # 于是像素里弹的还是老审批卡，判据红成"新代码没生效"，看着像产品坏了）。
-# 取两边最新的时间戳比一下，源码更新就直接停在这里，别往下跑两分钟才让人猜。
 # 盯 src/main 下**所有**文件：上一版只盯 *.kt 与 *.html，而 `expert-library.json`
 # 这类资源同样是打进 jar 的 —— 只改内置专家库时闸门不响，那一轮像素验的还是上一版程序，
 # 现象是"界面表现是旧的、判据是新的"，红得让人去查错地方。
+#
+# **但时间戳单独用会误报**：`git checkout` / `merge --squash` 会按同样内容重写文件，
+# mtime 全部前移，于是收拢一次分支之后 77 份剧本一份都跑不动（今天撞上的），
+# 症状是"环境坏了"，而二进制其实是新的。
+# 所以加第二把锁：每次"二进制确实比所有源码新"时，把 `src/main` 的**内容指纹**记在
+# .srcsha 里；下次 mtime 前移但指纹没变 ⇒ 只是被重写过，放行。
+# 指纹变了才停 —— 宁可严一点：没有指纹（第一次跑）时行为与旧版一致。
 NEWEST_SRC=$(find src/main -type f -newer "$BIN" -print -quit 2>/dev/null)
+STAMP=build/install/haoai-pc/.srcsha
+SRC_SHA=$(find src/main -type f | LC_ALL=C sort | xargs cat 2>/dev/null | sha1sum | cut -d' ' -f1)
 if [ -n "$NEWEST_SRC" ]; then
-  echo "x 装好的二进制比源码旧（$NEWEST_SRC 更新过）—— 先跑 gradle installDist 再来"
-  exit 1
+  if [ -n "$SRC_SHA" ] && [ "$SRC_SHA" = "$(cat "$STAMP" 2>/dev/null || true)" ]; then
+    echo "  源码 mtime 前移但内容与上次放行的二进制一致（多半是 git 重写过），放行"
+  else
+    echo "x 装好的二进制比源码旧（$NEWEST_SRC 更新过）—— 先跑 gradle installDist 再来"
+    echo "  （若刚做过 git checkout/merge 而 dist 其实是新的：跑 bash tools/stamp.sh 补记一次指纹）"
+    exit 1
+  fi
+else
+  printf '%s' "$SRC_SHA" > "$STAMP" 2>/dev/null || true
 fi
 
 # 端口必须挑"当前真没人听"的：BaseHTTPRequestHandler 开了 SO_REUSEADDR，
