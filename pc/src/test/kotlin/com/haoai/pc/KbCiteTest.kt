@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
@@ -161,6 +162,47 @@ class KbCiteTest {
         val text = end.content!!
         assertTrue("工具该老实说没查到，而不是硬凑：" + text,
             text.contains("没有可用的知识库") || text.contains("没查到"))
+    }
+
+    /**
+     * 只读分享快照也要带出处。
+     *
+     * 这里刻意**照抄服务端那两行映射**（messages → Row(带 cid)、citesSnapshot → 按 cid 分组）：
+     * 快照的错从来不在渲染器里，而在"配对的那一步"。只测 `Share.render` 喂一份手搓的 map，
+     * 产品里那两行写错了照样全绿。
+     */
+    @Test
+    fun `the read-only snapshot carries the same citations`() {
+        val kb = termKb("快照库")
+        val ws = workspace()
+        val (engine, _) = engine(
+            ws,
+            mutableListOf(
+                turn("查一下", listOf(ToolCall("sh1", "search_knowledge", """{"q":"液态玻璃","kb":"$kb"}"""))),
+                turn("答完了")
+            )
+        )
+        engine.submit("液态玻璃是什么")
+
+        val rows = engine.messages().map {
+            Share.Row(it.role, it.name ?: "", it.content ?: "", it.callId ?: "")
+        }
+        val cs = engine.citesSnapshot()
+            .groupBy({ it.first }, { Share.CiteLine(it.second.kbName, it.second.doc, it.second.how, it.second.snippet) })
+        val html = Share.render("液态玻璃是什么", "", "mock", "auto", 1_700_000_000_000L, rows, cs)
+
+        assertTrue("快照里没有库名：" + html.takeLast(600), html.contains("快照库"))
+        assertTrue("快照里没有文档名", html.contains("术语.md"))
+        assertTrue("快照里没有命中的那段原文", html.contains("背景模糊后叠上来"))
+        assertTrue("出处要有自己的样式段（不混在工具那一行的截断文本里）", html.contains("class=\"cite\""))
+        // 负判据：没有出处的行不许自己长出一行"参考了知识库"
+        val bare = Share.render("没查库", "", "mock", "auto", 1_700_000_000_000L, rows, emptyMap())
+        assertFalse("喂空清单还画出了出处", bare.contains("class=\"cite\""))
+        // 三元组那条老入口不能被改坏（ShareTest 与 CLI 还在用）
+        assertTrue(
+            Share.render("旧入口", "", "mock", "auto", 1_700_000_000_000L,
+                listOf(Triple("user", "", "你好"))).contains("你好")
+        )
     }
 
     @Test

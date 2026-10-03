@@ -110,12 +110,15 @@ import com.haoai.pc.WebServer.Body
             send(ex, 200, """{"ok":false,"error":"没有这条会话"}""",
                 "application/json; charset=utf-8"); return
         }
-        val msgs = e.messages().map { Triple(it.role, it.name ?: "", it.content ?: "") }
+        val msgs = e.messages().map { Share.Row(it.role, it.name ?: "", it.content ?: "", it.callId ?: "") }
+        // 引用出处按 tool_call id 给：导出的是同一份账，不是再算一遍
+        val cs = e.citesSnapshot()
+            .groupBy({ it.first }, { Share.CiteLine(it.second.kbName, it.second.doc, it.second.how, it.second.snippet) })
         val name = Share.nameFor(sid)
         val file = Share.write(
             name, Share.render(
                 e.session.title.get(), e.session.workspace.absolutePath,
-                e.settings.model, e.session.mode, System.currentTimeMillis(), msgs
+                e.settings.model, e.session.mode, System.currentTimeMillis(), msgs, cs
             )
         )
         if (file == null) {

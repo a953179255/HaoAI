@@ -104,8 +104,19 @@ object Share {
     private val BULLET = Regex("""^\s*[-*]\s+""")
     private val HEAD = Regex("^(#{1,6})\\s+(.*)$")
 
+    /**
+     * 一条引用出处（那次检索真的取自哪个库的哪份文档）。
+     *
+     * 为什么在这里另开一个小类型而不是直接收 `Knowledge.Found`：这份渲染器刻意不依赖
+     * 引擎侧的类型（Server 与测试都能直接喂行），依赖抽一层留着，测试就能自己造出处。
+     */
+    data class CiteLine(val kb: String, val doc: String, val how: String, val snippet: String)
+
+    /** 一行会话：role、工具名、正文，以及这次工具调用的 id（引用出处按它配对）。 */
+    data class Row(val role: String, val name: String, val text: String, val cid: String = "")
+
     /** 一条消息 → 一段 HTML。工具行只留第一行并截断：快照是给人看结论的，不是日志转储。 */
-    private fun block(role: String, name: String, text: String): String {
+    private fun block(role: String, name: String, text: String, cites: List<CiteLine> = emptyList()): String {
         if (text.isBlank() && role != "tool") return ""
         val who = when (role) {
             "user" -> "你"
@@ -114,16 +125,33 @@ object Share {
         }
         val body = if (role == "tool") text.lineSequence().first().take(400) else mdToHtml(text)
         return "<section class=\"${esc(role)}\"><h3>${esc(who)}</h3>" +
-            (if (role == "tool") "<p>${esc(body)}</p>" else body) + "</section>\n"
+            (if (role == "tool") "<p>${esc(body)}</p>" else body) +
+            // 出处单独一段：工具行那句是按"给人看结论"截的第一行，恰好带了第一条命中的名字，
+            // 但既没有片段也没有剩下的几条 —— 拿到快照的人最需要核对的正是"这句从哪来"。
+            cites.joinToString("") { c ->
+                "<p class=\"cite\"><b>参考了知识库</b> ${esc(c.kb)} / ${esc(c.doc)} · ${esc(c.how)}" +
+                    "<br>${esc(c.snippet.take(240))}</p>"
+            } +
+            "</section>\n"
     }
 
+    /** 老口径的入口：只有三元组、没有出处。留着是为了不改一份判据就还能导出。 */
+    fun render(
+        title: String, workspace: String, model: String, mode: String,
+        madeAt: Long, msgs: List<Triple<String, String, String>>
+    ): String = render(
+        title, workspace, model, mode, madeAt,
+        msgs.map { Row(it.first, it.second, it.third) }, emptyMap()
+    )
+
     /**
-     * 渲染整页。`msgs` 是三元组（role, toolName, content），
+     * 渲染整页。`rows` 每行带自己的工具调用 id，`cites` 按那个 id 给出处 ——
+     * **不按行序配**：导出时消息可能被裁过，按位置配会把出处挂到别的行底下。
      * 故意不依赖 Msg 类型：这样 Server 与测试都能直接喂。
      */
     fun render(
         title: String, workspace: String, model: String, mode: String,
-        madeAt: Long, msgs: List<Triple<String, String, String>>
+        madeAt: Long, rows: List<Row>, cites: Map<String, List<CiteLine>> = emptyMap()
     ): String = buildString {
         append("<!doctype html><meta charset=\"utf-8\">")
         append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
@@ -138,6 +166,8 @@ object Share {
         append("section{border:1px solid #22322b;border-radius:12px;padding:12px 14px;margin:0 0 12px;background:#141d19}")
         append("section.user{border-color:#2c4a3e}")
         append("section.tool{background:#111815;color:#a9bcb2;font-size:13px}")
+        append("p.cite{border-left:2px solid #2f8f65;padding:2px 0 2px 9px;color:#9fbcae;font-size:12.5px}")
+        append("p.cite b{color:#5fd6a0;font-weight:600}")
         append("h3{margin:0 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#78907f}")
         append("p{margin:0 0 6px;white-space:pre-wrap;word-break:break-word}")
         append("p:last-child{margin:0}")
@@ -155,7 +185,9 @@ object Share {
             .append(esc(mode)).append(" · 工作区 ").append(esc(workspace.ifBlank { "—" })).append(" · ")
             .append(esc(SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(madeAt))))
             .append("</div>")
-        val body = msgs.joinToString("") { block(it.first, it.second, it.third) }
+        val body = rows.joinToString("") { r ->
+            block(r.role, r.name, r.text, if (r.cid.isBlank()) emptyList() else cites[r.cid] ?: emptyList())
+        }
         append(if (body.isBlank()) "<section><h3>空</h3><p>这条会话还没有说过话。</p></section>" else body)
         append("<footer>由 HaoAI PC 端导出的只读快照 · 页面里没有脚本，也不会连任何外部地址</footer>")
         append("</main>")

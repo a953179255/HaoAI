@@ -115,7 +115,10 @@ class ShareTest {
 
     @Test
     fun `an empty session still makes a readable page`() {
-        val html = Share.render("空的", "", "", "ask", System.currentTimeMillis(), emptyList())
+        // 类型参数是必须的：`render` 现在有两个入口（三元组 / 带出处的 Row），
+        // 光写 emptyList() 编译器推不出该走哪一条（报的是"推不出 T"，看着像产品写坏了）
+        val html = Share.render("空的", "", "", "ask", System.currentTimeMillis(),
+            emptyList<Triple<String, String, String>>())
         assertTrue("要说清是空的，别给一张白页：" + html.takeLast(120), html.contains("还没有说过话"))
     }
 

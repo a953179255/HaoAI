@@ -110,6 +110,7 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 压缩与"删这一句/删到这里"会让下标整体前移，届时的表现是引用挂在别的卡底下。
 SSE 的 `tool` 事件（结束那一条）同样带 `cites`，所以实时与回放两条路都要画；
 只写 SSE 那一路的话，回合收尾那次 `hydrate` 会把它们全抹掉（跑的时候看得见、刷新就没了）。
+`POST /api/share` 导出的那份只读快照也带同一份出处（渲染器收 `Row.cid` + 按 cid 分组的清单）。
 `/api/kb`（GET `?sid=` 语料清单与检索可用性；POST `op:'import'`（name+text，纯文本 ≤200KB）
 `|'del'`（name，删后语义缓存一并清）`|'test'`（q，跑一次语义检索返回命中））。
 `/api/new` 可带 `team:<id>` 开团队会话（服务端现拼主持人人设，成员人设经 task 的 `persona` 参数随派工下发）。

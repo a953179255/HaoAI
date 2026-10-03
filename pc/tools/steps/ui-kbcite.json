@@ -64,5 +64,21 @@
     "eval": "(async()=>{const d=await fetch('/api/sessions').then(r=>r.json());const arr=Array.isArray(d)?d:(d.items||[]);const it=arr.find(x=>(x.title||'').indexOf('液态玻璃')>=0);if(!it)return {back:false,n:arr.length};await openSession(it.id);const v=document.querySelector('.view.on');const st=v.querySelector('.kb-cites');return {back:true,strip:!!st,named:st?(st.textContent||'').indexOf('术语.md')>=0:false}})()",
     "must": ["back", "strip", "named"]
   },
-  { "shot": "kc05-back-to-cite" }
+  { "shot": "kc05-back-to-cite" },
+  {
+    "note": "导出只读快照：出处必须跟着进那份单文件 HTML —— 拿到快照的人最需要核对的就是「这句从哪来」",
+    "eval": "(async()=>{const d=await fetch('/api/share',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:curId})}).then(r=>r.json());window.__snap=d&&d.url||'';return {ok:!!(d&&d.ok),named:!!(d&&d.name),url:window.__snap.indexOf('/api/share?name=')===0}})()",
+    "must": ["ok", "named", "url"]
+  },
+  {
+    "eval": "(setTimeout(()=>{location.href=window.__snap},80),{going:true})",
+    "must": ["going"]
+  },
+  { "goto": "p.cite", "visible": true },
+  { "sleep": 500 },
+  {
+    "eval": "(()=>{const p=document.querySelector('p.cite');const t=p?(p.textContent||''):'';return {shown:!!p,named:t.indexOf('引用测试库')>=0&&t.indexOf('术语.md')>=0,snip:t.indexOf('背景模糊')>=0,how:t.indexOf('字面')>=0,noScript:document.scripts.length===0}})()",
+    "must": ["shown", "named", "snip", "how", "noScript"]
+  },
+  { "shot": "kc06-snapshot-cite" }
 ]
