@@ -405,6 +405,15 @@
   .kb-hit{border:1px solid var(--line);border-radius:9px;padding:7px 9px;font-size:11.5px}
   .kb-hit .src{color:var(--acc);font-size:11px}
   .kb-hit p{margin:4px 0 0;color:var(--fg2);white-space:pre-wrap}
+  /* 会话流里的"参考了知识库哪几段"：挂在检索卡后面，不打开卡片也看得见。
+     卡片收起时那几段正文在 details 里，用户核对出处还得先点开 —— 等于没告知。 */
+  .kb-cites{margin:2px 0 6px 2px;padding-left:9px;border-left:2px solid var(--acc)}
+  .kb-cites .ch{font-size:11px;color:var(--fg2);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .kb-cites .ch b{color:var(--acc);font-weight:600}
+  .kb-cites .one{font-size:11.5px;color:var(--fg2);margin-top:3px}
+  .kb-cites .one .src{color:var(--acc)}
+  .kb-cites .one p{margin:1px 0 0;color:var(--dim);white-space:pre-wrap;
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
   .kb-file{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
   .kb-pick{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11.5px;color:var(--fg2)}
   .kbck{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
@@ -1890,6 +1899,25 @@ function toolStart(d,v){
   c.dataset.subject=d.subject||'';
   t.tools[d.id]=c;
 }
+/*
+ * 知识库引用出处："这句参考了哪几个库的哪几段"。
+ *
+ * 实时 SSE 与 hydrate 回放**共用这一个函数**：这两条路径最容易出的错是只在其中一条画，
+ * 表现成"跑的时候看得见、刷新一下就全没了"（#111 那条降级提示就是同一个形状）。
+ * 出处也不从工具正文的正则里拆：那是给模型看的散文，文案一改引用就丢。
+ */
+function citeStrip(cs){
+  if(!cs||!cs.length)return '';
+  // 标题行只报"几段"，库名/文档名交给下面每一条 —— 一段命中时两行写同一件事是重复；
+  // 分数只在语义检索时才画：字面命中的分数是 1.0 这个占位数，摆出来像"百分之百可信"，是骗人。
+  return '<div class="kb-cites"><div class="ch"><b>参考了知识库</b><span>'+cs.length+' 段</span>'+
+    '<button class="ab" data-x="kbgo" data-id="'+esc(cs[0].kb||'')+'">去这个库</button></div>'+
+    cs.slice(0,3).map(c=>'<div class="one"><span class="src">'+esc(c.kbName||'')+' / '+esc(c.doc||'')+
+      ' · '+esc(c.how||'')+((c.how==='字面'||c.score==null||c.score==='')?'':' '+c.score)+'</span><p>'+
+      esc(c.snippet||'')+'</p></div>').join('')+
+    (cs.length>3?'<div class="one"><span class="src">其余 '+(cs.length-3)+' 段在这张卡里</span></div>':'')+
+    '</div>';
+}
 function toolEnd(d,v){
   const t=v||cur();
   const c=t.tools[d.id];if(!c)return;
@@ -1907,6 +1935,10 @@ function toolEnd(d,v){
     paintOutputs(t);
   }
   const sub=c.dataset.subject;
+  // 检索出处画在**卡片外面**：卡片这一步收尾就收了（open=false），
+  // 把出处留在 details 里等于让用户先点开才知道"这句到底查没查库"
+  const strip=citeStrip(d.cites);
+  if(strip)c.insertAdjacentElement('afterend',el(strip));
   // 写改类挂"退回上一版"：agent 一次跑十几步，用户想撤的往往就是这一个文件
   if(sub&&d.ok&&(d.name==='write'||d.name==='edit')){
     c.appendChild(el('<div class="cbar"><button class="ab" data-x="rollback" data-p="'+esc(sub)+
@@ -4436,6 +4468,9 @@ function applyState(s){
   }
   let turn=0;
   const q=[];                       // 待配对的写改路径（按 calls 顺序）
+  // 知识库引用出处按工具调用 id 归堆（消息下标会因压缩/删句前移，按它配对会指错卡）
+  const cmap={};
+  (s.cites||[]).forEach(x=>{if(!x.cid)return;(cmap[x.cid]=cmap[x.cid]||[]).push(x)});
   const pathArg=a=>{try{return JSON.parse(a||'{}').path||''}catch(e){return ''}};
   (s.messages||[]).forEach(m=>{
     if(m.role=='assistant')turn++;
@@ -4496,6 +4531,11 @@ function applyState(s){
     if(node){
       v.el.appendChild(node);
       if(m.index!=null)node.dataset.index=m.index;
+      // 引用出处与实时渲染同一个口径：挂在它自己那张工具卡后面，卡片收起也看得见
+      if(m.role=='tool'&&m.cid&&cmap[m.cid]){
+        const st=citeStrip(cmap[m.cid]);
+        if(st)v.el.appendChild(el(st));
+      }
     }
     if(m.role=='assistant'&&(m.pt||m.ct||m.ms))
       v.el.appendChild(el('<div class="stats"><span>↑ '+(m.pt||0).toLocaleString()+
@@ -5795,6 +5835,14 @@ document.addEventListener('click',e=>{
   }
   if(x=='copyout'){
     copy(e.target.closest('.card').querySelector('.body').innerText);toast('输出已复制');return;
+  }
+  // 「去这个库」：从会话流里的引用出处跳回知识库页（库已经被删就只跳页，不假装还在）
+  if(x=='kbgo'){
+    // 直接叫面板对象，别写 window.Kbs —— 顶层 const 不挂到 window 上，
+    // 那句 `window.Kbs&&…` 的守卫永远为假，于是悄悄退成只切页不加载：
+    // 落点是一页空白的知识库（实测截图 kc02），比报错更难发现。
+    Kbs.openFor(e.target.dataset.id||'');
+    return;
   }
   if(x=='rollback'){
     const p=e.target.dataset.p;

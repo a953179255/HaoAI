@@ -1,0 +1,68 @@
+[
+  {
+    "note": "灌一个「每回合自动带上」的库（不绑专家卡，走的就是 search_knowledge 不带 kb 参数那条默认路）。词写死成「液态玻璃」，脚本里模型问的也是这三个字 —— 没配 embedUrl，命中是确定的字面结果，不靠碰运气相似",
+    "eval": "(async()=>{const post=(o)=>fetch('/api/kbs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}).then(r=>r.json());const c=await post({op:'create',title:'引用测试库',desc:'验出处用的库'});if(!c||!c.ok)return {made:false,err:c&&c.error};const id=c.kb;const t=await post({op:'toggle',kb:id,on:true});const d=await post({op:'add',kb:id,name:'术语.md',text:'# 术语\\n\\n液态玻璃：一种把背景模糊后叠上来的做法。\\n别的条目：与本题无关。'});return {made:true,auto:!!(t&&t.ok),ready:d&&d.status==='ready',chunked:d&&d.chunks>0}})()",
+    "must": ["made", "auto", "ready", "chunked"]
+  },
+  { "click": "#modes [data-m=\"auto\"]", "note": "自动档：这一轮只有读类工具，档位选它是为了别被审批闸卡住回合" },
+  { "goto": "#box" },
+  { "type": { "sel": "#box", "text": "液态玻璃是什么" } },
+  { "sleep": 5000 },
+  {
+    "note": "实时那一画：出处必须挂在检索卡**外面**（卡片收尾就收了），而且库里那句话要真的写进来",
+    "eval": "(()=>{const st=document.querySelector('.view.on .kb-cites');if(!st)return {strip:false};const card=st.previousElementSibling;const b=card&&card.querySelector('summary b');return {strip:true,cardName:(b||{}).textContent==='search_knowledge',cardClosed:card?card.open===false:false,shown:!!st.offsetParent,named:(st.textContent||'').indexOf('引用测试库')>=0&&(st.textContent||'').indexOf('术语.md')>=0,snip:(st.textContent||'').indexOf('背景模糊')>=0,go:!!st.querySelector('[data-x=kbgo]'),one:st.querySelectorAll('.one').length}})()",
+    "must": ["strip", "cardName", "cardClosed", "shown", "named", "snip", "go"]
+  },
+  { "shot": "kc01-live-cite" },
+  {
+    "note": "「去这个库」：从会话流里的出处跳回知识库页 —— 上一批做的是专家卡→库，这一批补会话流→库",
+    "eval": "(()=>{const b=document.querySelector('.view.on .kb-cites [data-x=kbgo]');if(!b)return {clicked:false};b.click();return {clicked:true,id:b.dataset.id||''}})()",
+    "must": ["clicked", "id"]
+  },
+  { "sleep": 1500 },
+  {
+    "eval": "(()=>{const page=(document.querySelector('.main')||{dataset:{}}).dataset.page;const on=(document.querySelector('#kbxList .kb-item.on')||{}).textContent||'';const det=(document.querySelector('#kbDetail')||{}).textContent||'';return {onKb:page==='kb',picked:on.indexOf('引用测试库')>=0,docShown:det.indexOf('术语.md')>=0,autoTag:det.indexOf('每回合自动带上')>=0||!!document.querySelector('.kb-item .kb-def')}})()",
+    "must": ["onKb", "picked", "docShown", "autoTag"]
+  },
+  { "shot": "kc02-kb-page" },
+  {
+    "note": "真重载：引擎跑完本来就 hydrate 一次，所以只验 SSE 那条路径的字段在这里一定会露馅（#111 的同一个形状）",
+    "eval": "(setTimeout(()=>location.reload(),120),{reloading:true})",
+    "must": ["reloading"]
+  },
+  { "goto": "#box" },
+  { "sleep": 2600 },
+  {
+    "note": "重载之后按会话标题找回那一条（不赌开机默认选中哪条），再看出处还在不在",
+    "eval": "(async()=>{const d=await fetch('/api/sessions').then(r=>r.json());const arr=Array.isArray(d)?d:(d.items||[]);const it=arr.find(x=>(x.title||'').indexOf('液态玻璃')>=0)||arr[0];if(!it)return {found:false,n:arr.length};await openSession(it.id);return {found:true,title:it.title}})()",
+    "must": ["found", "title"]
+  },
+  { "sleep": 1200 },
+  {
+    "eval": "(()=>{const st=document.querySelector('.view.on .kb-cites');if(!st)return {strip:false};const card=st.previousElementSibling;const b=card&&card.querySelector('summary b');return {strip:true,cardName:(b||{}).textContent==='search_knowledge',cardClosed:card?card.open===false:false,shown:!!st.offsetParent,named:(st.textContent||'').indexOf('术语.md')>=0,snip:(st.textContent||'').indexOf('背景模糊')>=0,ans:(document.querySelector('.view.on .msg.ans')||{}).textContent!=null}})()",
+    "must": ["strip", "cardName", "cardClosed", "shown", "named", "snip", "ans"]
+  },
+  { "shot": "kc03-after-reload" },
+  {
+    "note": "回放路径的出处不能靠猜：cid 对不上就整段不画。这里验的是「卡片与出处在盘上真的按同一个 id 连着」 —— 找那条消息必须限定 role=tool：assistant 那条的 name 是它调用的工具名（服务端拿 calls 第一个补上的），不限定就会挑错那条而判据永远假",
+    "eval": "(async()=>{const sid=curId;const s=await fetch('/api/state?sid='+encodeURIComponent(sid)).then(r=>r.json());const msg=(s.messages||[]).find(m=>m.role==='tool'&&m.name==='search_knowledge');const cs=s.cites||[];return {hasCid:!!(msg&&msg.cid),pairsWith:!!msg&&cs.some(x=>x.cid===msg.cid),kbName:cs.length>0,score:cs.length>0&&typeof cs[0].score==='number',snippet:cs.length>0&&(cs[0].snippet||'').indexOf('背景模糊')>=0}})()",
+    "must": ["hasCid", "pairsWith", "kbName", "score", "snippet"]
+  },
+  {
+    "note": "新开一条会话：那条空会话上不许挂着这条会话的出处 —— 出处是按 cid 画的，不是常驻小部件",
+    "eval": "(()=>{const b=document.querySelector('#newBtn');if(!b)return {newed:false};b.click();return {newed:true}})()",
+    "must": ["newed"]
+  },
+  { "sleep": 1500 },
+  {
+    "eval": "(()=>{const v=document.querySelector('.view.on');return {clean:v&&v.querySelector('.kb-cites')===null,empty:(v?v.innerText:'').length<400}})()",
+    "must": ["clean"]
+  },
+  { "shot": "kc04-new-session-clean" },
+  {
+    "note": "回到刚才那条：出处还得在（切会话不许把它弄丢）",
+    "eval": "(async()=>{const d=await fetch('/api/sessions').then(r=>r.json());const arr=Array.isArray(d)?d:(d.items||[]);const it=arr.find(x=>(x.title||'').indexOf('液态玻璃')>=0);if(!it)return {back:false,n:arr.length};await openSession(it.id);const v=document.querySelector('.view.on');const st=v.querySelector('.kb-cites');return {back:true,strip:!!st,named:st?(st.textContent||'').indexOf('术语.md')>=0:false}})()",
+    "must": ["back", "strip", "named"]
+  },
+  { "shot": "kc05-back-to-cite" }
+]

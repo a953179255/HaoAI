@@ -78,6 +78,23 @@ const missing = [...used].filter(c => !cssClasses.has(c) && !ALLOW.has(c)).sort(
 check(missing.length === 0, 'JS 用到的 class 在 CSS 里都有规则',
   '缺规则：' + missing.join(', ') + '\n         （挂不上样式=界面上看不出差别，最容易漏）');
 /*
+ * ---- 2a2) CSS 变量用了却没定义，且没写兜底值 ----
+ * 真事故（2026-10-03，引用出处那批）：新写的片段颜色用了 `var(--muted)`，
+ * 而这套皮肤里那个变量根本不存在（这里叫 `--dim`）。浏览器对"var 解析不出来"的处理是
+ * **静默丢掉整条声明**，颜色退回继承值 —— 于是"给一段浅灰的字"这件事没生效，
+ * 而页面看上去完全正常，深浅两个主题都不会红。
+ * 同族的下一次是 `--bad` 那回：变量没定义 ⇒ "删掉的行要变红"的判据永远不可能满足。
+ * 带兜底的 `var(--x, 值)` 是刻意的，不算违规。
+ */
+for (const name of ['index.html', 'phone.html']) {
+  const src = fs.readFileSync(path.join(uiDir, name), 'utf8');
+  const declared = new Set([...src.matchAll(/(--[a-z0-9-]+)\s*:/g)].map(m => m[1]));
+  const bare = [...new Set([...src.matchAll(/var\((--[a-z0-9-]+)\s*\)/g)].map(m => m[1]))]
+    .filter(v => !declared.has(v));
+  check(bare.length === 0, name + ' 没有「用了却没定义且没兜底」的 CSS 变量',
+    '未定义：' + bare.join(', ') + '（整条声明会被静默丢掉）');
+}
+/*
  * ---- 2b) 同一个 class 被两条规则各自设了不同的 display ----
  * 真事故（2026-10-03，专家卡补齐那批）：新加的"快捷提问一行三格"顺手起名 `.qrow`，
  * 而 `.qrow` 早就被输入框上面那行"运行中排队"占了 —— 那条写的是 `display:none`，

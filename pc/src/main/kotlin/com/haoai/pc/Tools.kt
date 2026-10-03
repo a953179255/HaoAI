@@ -146,6 +146,15 @@ class ToolCtx(
      */
     var presetId: String = ""
 
+    /**
+     * 这一次工具运行**真的取自哪里**（知识库命中的那几段），由引擎在每次调用前清空。
+     *
+     * 为什么不塞进 `ToolResult.content` 让前端去解析那几行文本：正文是给模型看的散文，
+     * 前端按正则拆它 = 一次文案改动就把引用来源弄丢了。出处要有自己的字段，
+     * 引擎按 tool_call id 存下来，界面和落盘读的都是同一个结构。
+     */
+    val found = ArrayList<Knowledge.Found>()
+
     fun resolve(p: String): File {
         val clean = p.trim().replace('\\', '/')
         val f = if (File(clean).isAbsolute) File(clean) else File(workspace, clean)
@@ -678,6 +687,8 @@ class SearchKnowledgeTool : Tool(
         if (hits.isEmpty())
             return ToolResult("知识库里没查到与「$q」相近的内容" +
                 (if (note.isNullOrBlank()) "" else "（$note）"))
+        // 出处交给引擎（界面上要画"这句参考了哪几段"）；正文照旧给模型看
+        ctx.found += hits
         return ToolResult(hits.mapIndexed { i, h ->
             "${i + 1}. [${h.how}] ${h.kbName} / ${h.doc}（${"%.2f".format(h.score)}）\n" + h.snippet
         }.joinToString("\n\n"))

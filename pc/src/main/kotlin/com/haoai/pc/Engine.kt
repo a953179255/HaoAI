@@ -39,7 +39,14 @@ sealed class Ev {
         /** 子任务的中间过程（task 工具专用），只给界面。 */
         val sub: String = "",
         /** 工具产出的音视频文件路径：界面按它摆播放器（字节走 /api/media）。 */
-        val media: List<String> = emptyList()
+        val media: List<String> = emptyList(),
+        /**
+         * 这一次检索真的取自知识库里的那几段（`search_knowledge` 专用，别的工具为空）。
+         *
+         * 有了它界面才能在工具卡下面写"这句参考了 剪辑规范 / rule.md"。没有它，
+         * 用户只能猜模型到底是查了库还是凭印象编的 —— 知识库功能可信不可信就看这一行。
+         */
+        val cites: List<Knowledge.Found> = emptyList()
     ) : Ev()
     /** 子任务的动静：start/tool/err/done。界面上折进那张任务卡，不占正文。 */
     data class Sub(val label: String, val kind: String, val text: String) : Ev()
@@ -223,12 +230,41 @@ class Engine(
      */
     private var lastCompactedChars = 0
 
+    /**
+     * 每次 `search_knowledge` 命中了哪几段，按 **tool_call id** 存着。
+     *
+     * 键为什么是 id 不是消息下标：压缩、删这一句、删到这里都会让下标整体前移，
+     * 按下标配对的表现是"引用挂在别的卡底下" —— 那种错看起来像功能正常，最难发现。
+     * id 跟着消息走：消息没了这条记录就跟着掉（persist 里按活着的 id 收一遍）。
+     *
+     * **声明必须在 `init` 之前**（和上面 `lastCompactedChars` 同一个坑，文件里写着警示注释，
+     * 我加这个字段时还是踩了一遍）：属性按声明顺序初始化，放 `init` 后面的话
+     * `restoreSummaryMeta` 刚从会话文件读进来的引用会被这里的新空表整体抹掉 ——
+     * 表现是"落盘有、重开就没了"，只有重开会话的测试抓得到。
+     */
+    private val cites = LinkedHashMap<String, MutableList<Knowledge.Found>>()
+
     init {
         history += restore(session.file)
         restoreSummaryMeta(session.file)
     }
 
     fun messages(): List<Msg> = history.toList()
+
+    /** 给 `/api/state`：拍平成 (tool_call id, 命中项)，JSON 由 HTTP 层拼（那里才有 quote）。 */
+    internal fun citesSnapshot(): List<Pair<String, Knowledge.Found>> =
+        cites.flatMap { (cid, list) -> list.map { cid to it } }
+
+    /** 一次工具运行前的出处清空；跑完由回合循环取走，挂在这个 call 的 id 上。 */
+    private fun takeCites(callId: String, ok: Boolean, ctx: ToolCtx): List<Knowledge.Found> {
+        val list = if (ok) ctx.found.toList() else emptyList()
+        ctx.found.clear()
+        if (list.isEmpty()) return list
+        cites.getOrPut(callId) { ArrayList() } += list
+        // 会话里跑几十轮、每轮六段的话，落盘文件会被引用记录撑大：只留最近 40 次检索
+        while (cites.size > 40) cites.remove(cites.keys.first())
+        return list
+    }
 
     /**
      * 子任务用的客户端工厂。默认按当前设置新建一份；测试里换成脚本。
@@ -915,6 +951,8 @@ class Engine(
                     continue
                 }
                 emit(Ev.ToolStart(call.id, call.name, brief(args), subjectOf(args)))
+                // 出处按"这一次调用"计：不清空的话上一次检索的命中会跟着挂到别的卡底下
+                ctx.found.clear()
                 val res = try {
                     // suspend 契约（B15）：接口两端共用，PC 的引擎是阻塞线程模型 ——
                     // 在这个唯一的调用点包一层 runBlocking，函数体与调度语义照旧。
@@ -928,10 +966,12 @@ class Engine(
                     HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, settings.flags)
                 )
                 val note = takeNote()
+                val cs = takeCites(call.id, !res.error, ctx)
                 history += Msg("tool", stored, callId = call.id, name = call.name, diff = res.diff, note = note,
                     sub = res.sub, media = res.media)
                 shotPaths += res.images
-                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub, res.media))
+                emit(Ev.ToolEnd(call.id, call.name, !res.error, stored, res.card, res.diff, note, res.sub,
+                    res.media, cs))
                 // 工具后记账（S7）：异步。失败走 post-tool-failure（ZCODE 的 PostToolUseFailure），
                 // 与 pre 的闸配成对 —— 拦下是"没发生"，失败是"发生了但坏了"，两种都该有钩子面。
                 if (res.error) Hooks.fire(
@@ -1126,6 +1166,15 @@ class Engine(
         if (depth > 0) return
         runCatching {
             Env.sessionsDir.mkdirs()
+            /*
+             * 工具消息被"删这一句 / 删到这里 / 压缩"拿掉之后，挂在它 id 上的出处记录就成了孤儿：
+             * 只留还活着的 id。不清这一步的话，会话文件里会攒出一堆界面永远画不出来的引用，
+             * 而且"退回上一句"之后引用还在 —— 那是在说谎。
+             */
+            if (cites.isNotEmpty()) {
+                val alive = history.mapNotNull { it.callId }.toHashSet()
+                cites.keys.retainAll(alive)
+            }
             Env.atomicWrite(
                 session.file,
                 buildJsonObject {
@@ -1154,6 +1203,30 @@ class Engine(
                         })
                     }
                     put("updated", System.currentTimeMillis())
+                    /*
+                     * 知识库的引用出处（哪次检索、取自哪个库的哪份文档）。
+                     *
+                     * 单独一层而不是塞进 messages：Msg 是两端共用的数据结构，
+                     * 往里加一个手机端读不懂的字段就是给未来埋雷。按 cid 关联，
+                     * 界面回放时挂在对应的那张工具卡后面。
+                     */
+                    if (cites.isNotEmpty()) put("cites", buildJsonArray {
+                        cites.forEach { (cid, list) ->
+                            list.forEach { f ->
+                                add(
+                                    buildJsonObject {
+                                        put("cid", cid)
+                                        put("kb", f.kb)
+                                        put("kbName", f.kbName)
+                                        put("doc", f.doc)
+                                        put("how", f.how)
+                                        put("score", f.score)
+                                        put("snippet", f.snippet.take(300))
+                                    }
+                                )
+                            }
+                        }
+                    })
                     put("promptTokens", totalPrompt)
                     put("completionTokens", totalCompletion)
                     // 摘要与水位必须跟着会话走：只存 messages 的话，
@@ -1221,6 +1294,23 @@ class Engine(
                 runGoal = rs["goal"]?.jsonPrimitive?.contentOrNull
                 runTurn = rs["turn"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
                 runStarted = rs["started"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L
+            }
+            /*
+             * 引用出处要跟着回来：不读的话"刷新之后参考了哪几段就没了"，
+             * 而这恰恰是用户回头核对答案的时刻。老会话文件没这一键 = 没查过库。
+             */
+            o["cites"]?.jsonArray?.forEach { el ->
+                val c = el.jsonObject
+                val cid = c["cid"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                val f = Knowledge.Found(
+                    kb = c["kb"]?.jsonPrimitive?.contentOrNull ?: "",
+                    kbName = c["kbName"]?.jsonPrimitive?.contentOrNull ?: "",
+                    doc = c["doc"]?.jsonPrimitive?.contentOrNull ?: "",
+                    score = c["score"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                    snippet = c["snippet"]?.jsonPrimitive?.contentOrNull ?: "",
+                    how = c["how"]?.jsonPrimitive?.contentOrNull ?: ""
+                )
+                cites.getOrPut(cid) { ArrayList() } += f
             }
             // 带着摘要恢复的会话，把迟滞基线设成当前正文规模：
             // 否则"重开一个本来就很长的会话"会立刻再压一次，白花一次模型调用。

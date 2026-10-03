@@ -28,7 +28,7 @@
 |---|---|---|---|
 | `POST /api/task` | 起一个任务 | `{"text":"…","sid?":"…","images?":[…],"media?":[…]}` | `{"ok":true,"sid":"pc…"}`；同一条会话已经在跑 → **409** `{"ok":false,"error":"…"}` |
 | `GET /api/events` | 事件流（SSE） | — | `event:` + `id: <sid>` + `data: <json>`，见下表 |
-| `GET /api/state?sid=` | 一条会话现在的完整状态（不流式，适合轮询） | — | `{running,mode,model,modelNow,workspace,version,title,messages[],todos[],queue[],outputs[]…}` |
+| `GET /api/state?sid=` | 一条会话现在的完整状态（不流式，适合轮询） | — | `{running,mode,model,modelNow,workspace,version,title,messages[],cites[],todos[],queue[],outputs[]…}` |
 | `POST /api/stop` | 停掉这一轮（已经跑完的工具不会重跑） | `{"sid":"…"}` | `{"ok":true}` |
 | `POST /api/decide` | 回答审批卡或 `ask_user` 的提问 | `{"id":"a1","decision":"allow_once\|allow_session\|allow_rule\|deny\|partial:101","answer?":"…"}` | `{"ok":true}` |
 | `POST /api/mode` | 切权限档（plan/ask/auto） | `{"sid?":"…","mode":"ask"}` | `{"ok":true,"mode":"ask"}` |
@@ -104,6 +104,12 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 落到那条会话自己的设置副本上）。`op:'export'` 返回 `{ok,card}`，那份 JSON 原样交给
 `op:'import'` 就能读回来，且**必然换新 id**（导入不该覆盖用户手里那张同名卡）。
 `/api/state` 现在也报 `preset`：不报的话前端拿到"带角色的空会话"却不知道角色是谁，欢迎语画不出来。
+
+`/api/state` 的 `cites[]` 是知识库的引用出处（`{cid,kb,kbName,doc,how,score,snippet}`），
+`messages[]` 里每条带 `cid`（那次工具调用的 id）。两边按 `cid` 配对 —— **不要改用消息下标配对**：
+压缩与"删这一句/删到这里"会让下标整体前移，届时的表现是引用挂在别的卡底下。
+SSE 的 `tool` 事件（结束那一条）同样带 `cites`，所以实时与回放两条路都要画；
+只写 SSE 那一路的话，回合收尾那次 `hydrate` 会把它们全抹掉（跑的时候看得见、刷新就没了）。
 `/api/kb`（GET `?sid=` 语料清单与检索可用性；POST `op:'import'`（name+text，纯文本 ≤200KB）
 `|'del'`（name，删后语义缓存一并清）`|'test'`（q，跑一次语义检索返回命中））。
 `/api/new` 可带 `team:<id>` 开团队会话（服务端现拼主持人人设，成员人设经 task 的 `persona` 参数随派工下发）。

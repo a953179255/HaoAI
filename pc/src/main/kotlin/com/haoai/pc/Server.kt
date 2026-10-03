@@ -433,6 +433,8 @@ class WebServer(settings: PcSettings, port: Int,
                  * 折进摘要，于是"改第三句"改到别的句子上。
                  */
                 .append(",\"index\":").append(i)
+                // 工具调用的 id：引用出处按它配对（按消息下标配会在压缩/删句后指错卡）
+                .append(",\"cid\":").append(quote(m.callId ?: ""))
                 .append(",\"reasoning\":").append(quote(m.reasoning ?: ""))
                 .append(",\"diff\":").append(quote(m.diff))
                 .append(",\"note\":").append(quote(m.note))
@@ -446,7 +448,19 @@ class WebServer(settings: PcSettings, port: Int,
                 })
                 .append('}')
         }
-        sb.append("]}")
+        /*
+         * 知识库的引用出处：整条会话的一份清单，界面按 cid 挂到各自的工具卡后面。
+         *
+         * 为什么不在上面的 messages 里逐条带：Msg 是两端共用的结构，加不了这个字段；
+         * 而且一条工具消息可能命中好几段，一对一塞不平。
+         */
+        sb.append("],\"cites\":[").append(
+            (e?.citesSnapshot() ?: emptyList()).joinToString(",") { (cid, f) ->
+                """{"cid":${quote(cid)},"kb":${quote(f.kb)},"kbName":${quote(f.kbName)},""" +
+                    """"doc":${quote(f.doc)},"how":${quote(f.how)},"score":${"%.3f".format(f.score)},""" +
+                    """"snippet":${quote(f.snippet.take(300))}}"""
+            }
+        ).append("]}")
         return sb.toString()
     }
 
@@ -795,7 +809,14 @@ class WebServer(settings: PcSettings, port: Int,
                 "tool",
                 """{"id":${quote(ev.id)},"name":${quote(ev.name)},"ok":${ev.ok},"card":${quote(ev.card)},""" +
                     """"out":${quote(ev.out)},"diff":${quote(ev.diff)},"note":${quote(ev.note)},""" +
-                    """"sub":${quote(ev.sub)},"media":${ev.media.joinToString(",", "[", "]") { quote(it) }}}""",
+                    """"sub":${quote(ev.sub)},"media":${ev.media.joinToString(",", "[", "]") { quote(it) }},""" +
+                    // 检索出处跟着这一步走：卡片只写"查了知识库"而看不见查到了哪几段，
+                    // 用户就没法判断这句是查出来的还是编出来的
+                    """"cites":${ev.cites.joinToString(",", "[", "]") { f ->
+                        """{"cid":${quote(ev.id)},"kb":${quote(f.kb)},"kbName":${quote(f.kbName)},""" +
+                            """"doc":${quote(f.doc)},"how":${quote(f.how)},"score":${"%.3f".format(f.score)},""" +
+                            """"snippet":${quote(f.snippet.take(300))}}"""
+                    }}}""",
                 sid
             )
             is Ev.Sub -> publish(
