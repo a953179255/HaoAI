@@ -38,7 +38,17 @@
   "eval": "(()=>{document.querySelector('#box').value='';document.querySelector('#box').dispatchEvent(new Event('input',{bubbles:true}));return 'cleared'})()"
  },
  {
-  "eval": "(()=>{const r=document.querySelector('#sessions .it');r.querySelector('[data-a=pin]').click();return 'pinned'})()"
+  "eval": "(()=>{const r=document.querySelector('#sessions .it');const more=r&&r.querySelector('[data-a=menu]');if(!more)return {hasMore:false,why:'行上没有 ⋯ 钮'};more.click();const on=document.querySelector('.smenu.on');if(!on)return {hasMore:true,menuOpen:false};const b=on.getBoundingClientRect();const pin=on.querySelector('[data-m=pin]');return {hasMore:true,menuOpen:true,items:[...on.querySelectorAll('.mi')].map(x=>x.dataset.m).join(','),pinLabel:pin?pin.textContent.trim():'',inView:b.left>=0&&b.top>=0&&b.right<=innerWidth+1&&b.bottom<=innerHeight+1}})()",
+  "must": ["hasMore", "menuOpen", "pinLabel", "inView"],
+  "note": "2026-10-03 起（3ea9efe）会话卡上的置顶/重命名/删除收进了 ⋯ 菜单：上一版剧本直接点 [data-a=pin]，那颗钮早就不在行里了，于是报的是 null.click 而不是「功能坏了」。改按真流程走，并把菜单本身判清楚：⋯ 在不在、菜单开没开、置顶那条的文字、有没有跑出视口（贴底的行要翻到上方）"
+ },
+ {
+  "shot": "m05-sess-menu"
+ },
+ {
+  "eval": "(()=>{const mi=document.querySelector('.smenu.on [data-m=pin]');if(!mi)return {clicked:false};mi.click();return {clicked:true,closed:!document.querySelector('.smenu.on')}})()",
+  "must": ["clicked"],
+  "note": "点菜单里的「置顶」：动作走 /api/pin，点完菜单要自己收起（收起只打印，别当判据——它不是这批要守的东西）"
  },
  {
   "sleep": 1200
@@ -57,7 +67,9 @@
   "shot": "m02-pinned"
  },
  {
-  "eval": "(()=>{document.querySelector('#sessions .it [data-a=pin]').click();return 'unpin clicked'})()"
+  "eval": "(()=>{const r=document.querySelector('#sessions .it');const more=r.querySelector('[data-a=menu]');more.click();const on=document.querySelector('.smenu.on');const pin=on&&on.querySelector('[data-m=pin]');const t=pin?pin.textContent.trim():'';if(pin)pin.click();return {reopened:!!on,label:t,unpinClicked:t.indexOf('取消')>=0}})()",
+  "must": ["reopened", "unpinClicked"],
+  "note": "取消置顶走同一条路，但判据钉的是菜单上那行字：已经置顶的行要写「取消置顶」——菜单没读行状态的话，这里会拿到「置顶」，然后就会发生「再点一次又置顶一遍、界面看起来没反应」"
  },
  {
   "sleep": 1200

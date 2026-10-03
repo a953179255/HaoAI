@@ -90,8 +90,14 @@ done < "$TEMP/pc-steps-commands.txt"
 
 # 有文件、没跑法：这份剧本**根本没被审计过**，比"红"更糟（红至少说明有人跑过它）。
 # 计入 bad，让退出码替它说话 —— 否则"跑了 47 份、红 0 份"会一直骗下去（实测漏了 18 份）。
+#
+# 这一小段自己也曾是坏的：`while read -r _ name _` 是按"MISS 名字 说明"三列写的，
+# 可上面那行 sed 只吐出**一个**名字，于是 name 永远为空、每条都 continue，
+# 整个棘轮静默空转（实测：4 份没跑法的剧本，收尾仍打印"红 0 份"、退出码 0）。
+# 教训：加判据必须连"它到底会不会红"一起验 —— 做一次能翻转结论的最小实验（这里就是
+# 故意留一份没跑法的剧本，看退出码变不变）。
 if [ -s "$TEMP/pc-steps-missing.txt" ]; then
-  while read -r _ name _; do
+  while read -r name; do
     [ -n "$name" ] || continue
     total=$((total+1)); bad=$((bad+1))
     printf 'RED  %-16s README 里没有原样跑法 —— 这份从来没进过审计\n' "$name" | tee -a "$LOG"
