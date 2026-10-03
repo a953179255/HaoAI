@@ -489,5 +489,42 @@
  },
  {
   "shot": "xp09-lib-welcome"
+ },
+ {
+  "note": "卡 ↔ 库 的反向链接：专家卡上要看得见绑了哪几个库，点一下直接跳到那个库（以前只有库那边能反查专家，卡这边一片空白）。",
+  "eval": "(async()=>{const kb=(o)=>fetch('/api/kbs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)}).then(r=>r.json());const a=await kb({op:'create',title:'剪辑规范',desc:''});const b=await kb({op:'create',title:'待删的库',desc:''});await kb({op:'add',kb:a.kb,name:'rule.md',text:'# 剪辑规范\\n竖屏 9:16，字幕压在下方两成。'});const p=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',id:'xpkb-1',name:'绑库测试',persona:'你是剪辑。',model:'',workspace:'',mode:'ask',kbs:[a.kb,b.kb],welcome:'',quick:[],temperature:-1,maxTokens:-1,maxTurns:-1,enabled:true})}).then(r=>r.json());const d=await kb({op:'del',kb:b.kb});window.__kbA=a.kb;return {kbId:!!a.kb,saved:!!(p&&p.ok),deleted:!!(d&&d.ok),nameA:a.name=='剪辑规范'}})()",
+  "must": ["kbId", "saved", "deleted", "nameA"],
+  "note": "建两个库、绑上、再把其中一个删掉 —— 留一个悬空绑定是刻意的：服务端要等下次保存才剪掉失效 id，界面上这一轮就得老实说「库已删除」"
+ },
+ {
+  "click": "[data-view=\"experts\"]"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "click": "#xptabs button[data-t=\"my\"]"
+ },
+ {
+  "sleep": 1300
+ },
+ {
+  "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('绑库测试')>=0);if(!c)return {found:false};const chips=[...c.querySelectorAll('.kbc')];const live=chips.filter(x=>x.tagName=='BUTTON');const gone=chips.filter(x=>x.classList.contains('gone'));return {found:true,chips:chips.length,live:live.length,liveText:live.map(x=>x.textContent).join('|'),gone:gone.length,goneText:gone.map(x=>x.textContent).join('|')}})()",
+  "must": ["found", "live", "gone"],
+  "note": "两个绑定都该有标签：活着的是一颗能点的钮（带份数），没了的那个不许画成钮 —— 点开是空的等于骗人一次"
+ },
+ {
+  "click": "#xpGrid .xcard .kbc"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(()=>{const page=(document.querySelector('.main')||{dataset:{}}).dataset.page;const on=document.querySelector('#kbxList .kb-item.on');const det=(document.querySelector('#kbDetail')||{}).textContent||'';return {page:page,selected:!!on,selText:on?on.textContent:'',docShown:/rule\\.md/.test(det),boundBack:/绑库测试/.test(det)}})()",
+  "must": ["page", "selected", "docShown", "boundBack"],
+  "note": "点标签要真的落到知识库页、选中那个库、右边列出它的文档；boundBack 顺手钉住反向链接也对得上（那一页写着绑到这张库的专家里有「绑库测试」）—— 两头指的是同一件事，不是各存一份真相"
+ },
+ {
+  "shot": "xp10-card-to-kb"
 }
 ]

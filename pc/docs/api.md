@@ -109,7 +109,8 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 `/api/new` 可带 `team:<id>` 开团队会话（服务端现拼主持人人设，成员人设经 task 的 `persona` 参数随派工下发）。
 
 排程与产出：`/api/schedules`、`/api/sched/parse`、`/api/workflows`、`/api/digest`、
-`/api/kbs`（知识库：建库/导入含 docx-xlsx-pptx-pdf/删/重解析/预览/试检索）、
+`/api/kbs`（知识库：建库/导入含 docx-xlsx-pptx-pdf/删/重解析/预览/试检索；
+`op:create` 回 `{ok,kb,name}` —— 不带 id 的话，"建完就绑到某张专家卡上"这种两步操作只能再拉一遍列表才认得出刚建的是哪一个）、
 `/api/kbfile`（下载库里那份原文，文件名只取本体、库 id 要真存在），
 `/api/digest/export`、`/api/backups`、`/api/backup`
 

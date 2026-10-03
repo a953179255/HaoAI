@@ -32,7 +32,12 @@ internal fun WebServer.kbs(ex: HttpExchange) {
                         "application/json; charset=utf-8"); return
                 }
                 publish("kbs", Knowledge.json(settings.embedUrl.isNotBlank()))
-                base?.let { }
+                /* 把新建的 id 带回去：没有它，调用方只能再拉一遍列表才认得出刚建的是哪一个
+                   （比如"建完就绑到这张专家卡上"这种两步操作）。
+                   上一版这里写的是 `base?.let { }` —— 看着像在用这个值，其实什么都没做。 */
+                send(ex, 200, """{"ok":true,"kb":${quote(base?.id ?: "")},""" +
+                    """"name":${quote(base?.name ?: "")}}""", "application/json; charset=utf-8")
+                return
             }
             "del" -> if (!Knowledge.remove(kb)) {
                 send(ex, 200, """{"ok":false,"error":"没有这个知识库"}""",

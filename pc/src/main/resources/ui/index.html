@@ -887,6 +887,17 @@
   /* 内置卡的开场白预览：启用前就看得见新会话第一屏会写什么 */
   .xcard .xqw{font-size:11.5px;color:var(--fg2);line-height:1.55;padding-left:8px;
     border-left:2px solid var(--line2)}
+  /* 专家卡上"绑了哪几个库"：一颗颗小标签，点它直接跳到那个库（库那边早就能反查"哪些专家绑了我"，
+     卡这边以前看不到，绑没绑得去「知识库」页一个个翻）。
+     库被删了不能不出声 —— 服务端要等下次保存才剪掉失效 id，平时它是悬空的。 */
+  .kbs{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .kbc{display:inline-flex;gap:4px;align-items:baseline;border:1px solid var(--line);
+    border-radius:999px;padding:1px 8px;font-size:10.5px;color:var(--dim);background:transparent;
+    font-family:inherit;cursor:pointer;max-width:100%;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kbc:hover{color:var(--fg);border-color:var(--acc2)}
+  .kbc small{color:var(--dim2);font-size:9.5px}
+  .kbc.gone{color:var(--warn);border-color:var(--warn);cursor:default}
   .xcard .ft{display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
   /* 卡底那排动作钮：九颗挤在一行里会把中文标签折成两行（"开始/对话""关/掉"），
      所以钮自己不许换行、装不下就整排换行。这条是看像素看出来的，结构判据抓不到。 */
@@ -4809,6 +4820,25 @@ function quicks(p){
     :{title:(q&&q.title)||'',desc:(q&&q.desc)||'',prompt:(q&&q.prompt)||(q&&q.title)||''}
   ).filter(q=>q.title);
 }
+/* 库的 id→{名字, 份数}：专家卡要画"绑了哪几个库"，而 /api/presets 里只有 id。
+   跟着 loadAll 一起拉一份（不缓存到全局第二真相：库改名/删了，下次进专家页就是新的）。 */
+let kbMap={};
+/* 卡上那排库标签：点一下跳到那个库（库那边早就能反查"哪些专家绑了我"，反过来以前看不到，
+   想知道一张卡绑没绑库得去「知识库」页一个个翻）。
+   库被删了不能不出声：服务端要等下次保存才剪掉失效 id，平时它是悬空的 ——
+   这里就照实说"库已删除"，别画一颗点开是空的标签。 */
+function kbLine(p){
+  const ids=(p.kbs||[]).filter(Boolean);
+  if(!ids.length)return '';
+  return '<div class="kbs">'+ids.map(id=>{
+    const b=kbMap[id];
+    return b
+      ?`<button class="kbc" data-x="kbgo" data-id="${esc(id)}" title="打开知识库「${esc(b.name)}」">`+
+        `${esc(b.name)}<small>${b.docs} 份</small></button>`
+      :`<span class="kbc gone" title="这个库已经被删了：下次保存这张卡时会把它从绑定里剪掉">`+
+        `库已删除<small>${esc(id)}</small></span>`;
+  }).join('')+'</div>';
+}
 function myCard(p){
   const a=instOf(p.id);
   const st=a?a.state:'none', stName=a?a.stateName:'没启动过';
@@ -4818,6 +4848,7 @@ function myCard(p){
     ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
     <div class="meta">${metaLine(p)}</div>
     ${paramLine(p)}
+    ${kbLine(p)}
     ${(p.quick&&p.quick.length)?`<div class="quick">${quicks(p).map(q=>
       `<button data-x="quick" data-id="${esc(p.id)}" data-q="${esc(q.prompt)}"${q.desc?` title="${esc(q.desc)}"`:''}>${esc(q.title)}</button>`).join('')}</div>`:''}
     <div class="ft"><button class="ab pri" data-x="use" data-id="${esc(p.id)}"${p.enabled===false?' disabled':''}>开始对话</button>
@@ -4974,6 +5005,8 @@ function loadAll(){
     Presets.render(),
     fetch('/api/experts/library').then(r=>r.json()).then(d=>{lib=d.items||[]}).catch(()=>{lib=[]}),
     fetch('/api/teams').then(r=>r.json()).then(d=>{teams=d.items||[]}).catch(()=>{teams=[]}),
+    fetch('/api/kbs').then(r=>r.json()).then(d=>{kbMap={};(d.items||[]).forEach(b=>{
+      kbMap[b.id]={name:b.name,docs:(b.docs||[]).length}})}).catch(()=>{kbMap={}}),
     fetch('/api/models?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(list=>{
       dialogModels='<option value="">模型：跟全局默认</option>'+
         (list||[]).map(m=>`<option value="${esc(m.id)}">${esc(shortModel(m.id))}</option>`).join('');
@@ -5057,6 +5090,8 @@ function act(x,b){
   }
   /* 从专家页开聊：先切回会话视图，再开任务 —— 开完落在聊天界面才顺 */
   if(x==='use'){setView('chat');newTask('',id);return}
+  /* 卡上那颗库标签：跳到知识库页并选中那个库（不是弹提示说"去左栏找"） */
+  if(x==='kbgo'){Kbs.openFor(id);return}
   /* ---- 实例：启用 / 停用 / 托一件事（多 Agent 那一层的入口）---- */
   if(x==='astart'||x==='astop'){
     post('/api/agents',{op:x==='astart'?'start':'stop',preset:id}).then(d=>{
@@ -5582,6 +5617,10 @@ function open(){
   load();
 }
 return {open,load,paint,items:()=>items,
+  /** 从专家卡上那颗库标签跳进来：先选中再开页，别让左边列表回到第一个库上。
+      （名字刻意不跟专家面板里那个同名的入口一样 —— 两个面板各有一个同名方法时，
+        ui-check 的私有名判据会认错主人，它现在还没长到能分辨跨面板同名。） */
+  openFor(id){if(id)sel=id;setView('kb');open();return load()},
   /* 事件里不塞正文，只当"变了"的信号：重拉一次比在客户端拼两份真相安全 */
   apply(){const p=(document.querySelector('.main')||{}).dataset;
     if(p&&p.page==='kb')load();}
