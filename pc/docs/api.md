@@ -111,6 +111,13 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 
 `POST /api/presets` 的 `op:'default'` 把那张卡设为「默认专家」（`id` 传空串 = 取消默认）。
 **一次只许有一张**：设这张时服务端会清掉别的卡那一位。默认卡影响的是
+
+个性化与记忆漏斗（B1~B8 批次）：`/api/mbti`（GET `?what=types|questions|current&preset=`；
+POST `op:'test'`（`answers:{题id:0|1}`，≥20 题）`|'apply'`（`preset,code` 写进
+[AgentConfigs].personaMbti））、`/api/memory-funnel`（GET `?what=candidates|profile|episodes|care`；
+POST `op:'promote'|'reject'`（`id`）`|'extract'`（`sid?` 后台提炼候选）`|'regenProfile'`（`sid`）`|'care'`
+（`enabled:0|1` 主动关心开关，默认关））。候选晋升写进产生它的那条工作区的长期记忆，
+画像存 `HAOAI_HOME/memory-profile.md`（`## My Notes` 段用户手写保留）。
 `POST /api/new` 没点名 `preset` 时挂哪张卡；那张卡若已关掉或被删，就回落到"没挂专家"，
 **不会静默换成另一张**（用户没点过的卡不该被塞给他）。
 

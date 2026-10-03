@@ -788,7 +788,8 @@ class Engine(
         if (titled) emit(Ev.Title(session.title.get()))
         val ctx = ToolCtx(
             session.workspace, settings, session.mode, gate, session.todos,
-            skillsOff = session.agentConfig.skillsOff.toSet()
+            skillsOff = session.agentConfig.skillsOff.toSet(),
+            subagents = session.agentConfig.subagents
         )
         ctx.spawn = { label, prompt, opts -> spawn(label, prompt, opts) }
         ctx.presetId = session.preset
@@ -1056,6 +1057,8 @@ class Engine(
                 trigger = runTrigger, stopped = stopRequested, finalText = lastText
             )
         )
+        // 记忆抽取不在引擎里触发：单测直接驱动引擎（假客户端按剧本回话），
+        // 后台多打一次调用会抢走剧本 —— 改由 Server 在 TurnStats 事件上调（那里才是"一轮真的完了"）
         // 循环之外发的小字（"已达上限"、"已按你的要求中断"）在这里落到最后一条 assistant 上，
         // 否则 hydrate 一重建就什么都查不到了。
         flushNotices()
@@ -1090,10 +1093,22 @@ class Engine(
 
     /** 界面上「工具」页签要的清单：连被关掉的也列出来，否则"关掉"这件事看不见。 */
     data class ToolInfo(val name: String, val kind: String, val desc: String,
-                        val off: Boolean, val gated: Boolean)
+        val off: Boolean, val gated: Boolean,
+        /** 界面分组（B3）：见 [TOOL_CATEGORIES]；表里没有的名字归"外部（MCP）"。 */
+        val category: String = "",
+        /** 关不掉的那几把（[AgentConfigs.CRITICAL]）：界面要禁用开关并说明原因。 */
+        val critical: Boolean = false
+    )
 
     fun toolInfos(): List<ToolInfo> = tools.map {
-        ToolInfo(it.name, it.kind, it.desc, it.name in settings.toolsOff, !it.visibleWhen(settings))
+        ToolInfo(
+            it.name, it.kind, it.desc,
+            // off 现在是"全局 ∪ 该专家"两层的合成结果：界面按这个亮状态才不骗人
+            it.name in AgentConfigs.effectiveToolsOff(session, settings),
+            !it.visibleWhen(settings),
+            categoryOf(it.name),
+            it.name in AgentConfigs.CRITICAL
+        )
     }
 
     /** 工具可见集：实验特性开关（关着=不存在）→ 这条会话的开关 → 档位收窄。
@@ -1113,6 +1128,39 @@ class Engine(
         val base = session.persona.trim()
         return if (base.isEmpty()) extra else base + "\n" + extra
     }
+
+    /**
+     * B6：回合结束的后台抽取 —— 最近的用户发言交给一次轻量调用，产出候选与可选日记。
+     * 整段 runCatching + 独立 daemon 线程：抽取坏了绝不能碰刚跑完的这一轮，
+     * 也不能因为网络慢把下一句的发送堵住。
+     */
+    fun extractMemoryAsync(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - MemoryCandidates.lastExtractAt() < MemoryCandidates.MIN_GAP_MS) return
+        val msgs = history.asSequence()
+            .filter { it.role == "user" && !it.content.isNullOrBlank() }
+            .mapNotNull { it.content }.toList().takeLast(16)
+        if (msgs.isEmpty()) return
+        val prompt = MemoryCandidates.extractPrompt(msgs)
+        val wsPath = session.workspace.absolutePath
+        val sid = session.id
+        val cl = client
+        Thread {
+            runCatching {
+                val r = cl.chat(listOf(Msg("user", prompt)), emptyList()) { }
+                val (cands, ep) = MemoryCandidates.parseExtract(r.text)
+                MemoryCandidates.addExtracted(cands.map { it.copy(ws = wsPath) }, ep, sid)
+            }.getOrDefault(Unit)
+        }.apply { isDaemon = true; name = "mem-extract" }.start()
+    }
+
+    /** B8：用长期记忆重画用户画像（显式按钮触发，不自动烧调用）。 */
+    fun regenProfile(): Boolean = runCatching {
+        val prompt = MemoryProfile.renderPrompt(session.workspace)
+        val r = client.chat(listOf(Msg("user", prompt)), emptyList()) { }
+        val text = r.text.trim()
+        if (text.length < 40) false else { MemoryProfile.write(text); true }
+    }.getOrDefault(false)
 
     /**
      * 发给模型的窗口：system + 前情摘要 + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。
@@ -1147,6 +1195,36 @@ class Engine(
                 "绑定的知识库：$global。要里面的内容时用 search_knowledge 工具查（别凭印象编制度/规范）。"
             (local + (if (local.isBlank() || g.isBlank()) "" else " ") + g).ifBlank { "" }
         }.getOrDefault("")
+        // 每专家配置的三块注入（B2/B4/B5）：现读现拼——改配置下一句话就生效，
+        // 与 AGENTS.md/KB 同一哲学。列表都截断：清单是导航不是仓库。
+        val ac = session.agentConfig
+        val mbtiBlock = ac.personaMbti.takeIf { it.isNotBlank() }
+            ?.let { Mbti.profile(it) }
+            ?.let { b ->
+                buildString {
+                    appendLine("${b.code} ${b.name}（昵称：${b.nickname}）：${b.summary}")
+                    val labels = mapOf(
+                        "answer" to "答题风格", "casual" to "闲聊", "conflict" to "冲突处理",
+                        "creativity" to "创造", "emotion" to "情绪", "planning" to "计划"
+                    )
+                    b.behaviors.forEach { (k, v) -> appendLine("- ${labels[k] ?: k}：$v") }
+                }
+            } ?: ""
+        val skillsBlock = runCatching {
+            val dir = File(Env.home, "skills")
+            SkillDocs.list()
+                .filter { it.slug !in ac.skillsOff }
+                .take(40)
+                .joinToString("\n") { d ->
+                    "- ${d.name}（${d.slug}）：${d.desc}\n  ${File(dir, d.slug + File.separator + "SKILL.md").absolutePath}"
+                }
+        }.getOrDefault("")
+        val subsBlock = Subagents.availableFor(ac).take(60)
+            .joinToString("\n") { d -> "- ${d.slug} — ${d.description}" }
+        // 用户画像（B8）：常驻节，读不到/没生成就不占这几十个 token
+        val profile = runCatching {
+            MemoryProfile.read().take(6000).takeIf { it.isNotBlank() } ?: ""
+        }.getOrDefault("")
         val sys = Msg(
             "system", Prompt.system(
                 PromptCtx(
@@ -1157,9 +1235,13 @@ class Engine(
                     // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
                     extra = Memory.read(session.workspace, gitRoot(session.workspace)),
                     memories = mem,
-                    // 人设块 = 角色卡/团队人设 + 该专家的人格补充段（个性化枢纽里填的）
+                    // 人设块 = 角色卡/团队人设 + 该专家的人格补充段（枢纽里填，B2 的 MBTI 也挂这一块）
                     persona = personaText(),
-                    kb = kbNote
+                    profile = profile,
+                    kb = kbNote,
+                    mbti = mbtiBlock,
+                    skills = skillsBlock,
+                    subagents = subsBlock
                 )
             )
         )

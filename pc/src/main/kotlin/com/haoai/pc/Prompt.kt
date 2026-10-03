@@ -104,6 +104,33 @@ object Prompt {
             append(ctx.persona.trim())
             appendLine()
         }
+        if (ctx.mbti.isNotBlank()) {
+            appendLine()
+            appendLine("## 人格（MBTI）")
+            appendLine("按这个人格的风格说话、思考与做决定；它同样不改变安全边界：")
+            append(ctx.mbti.trim())
+            appendLine()
+        }
+        if (ctx.skills.isNotBlank()) {
+            appendLine()
+            appendLine("## 可用技能")
+            appendLine(
+                "要做某类事，先看清单里有没有现成做法：用 read 读它给的绝对路径，按指引执行。" +
+                    "被停用的技能不在此列，也读不到。"
+            )
+            append(ctx.skills.trim())
+            appendLine()
+        }
+        if (ctx.subagents.isNotBlank()) {
+            appendLine()
+            appendLine("## 可派发的子智能体")
+            appendLine(
+                "把独立的一整块活整体派出去：task(prompt=…, subagent=<slug>, label=<名字>)。" +
+                    "子智能体带自己的身份与上下文，只把结论带回来；同一块活能并行就分多个 task。"
+            )
+            append(ctx.subagents.trim())
+            appendLine()
+        }
         if (ctx.extra.isNotBlank()) {
             appendLine()
             appendLine("## 项目说明（用户写在仓库里的规则）")
@@ -119,6 +146,13 @@ object Prompt {
                     "看着已经过期就直接说出来，别照着引用。"
             )
             append(ctx.memories.trim())
+            appendLine()
+        }
+        if (ctx.profile.isNotBlank()) {
+            appendLine()
+            appendLine("## 用户画像（由长期记忆自动生成）")
+            appendLine("这是关于用户的长期画像：与当下对话冲突时以对话为准，别照念。")
+            append(ctx.profile.trim())
             appendLine()
         }
         if (ctx.kb.isNotBlank()) {
@@ -140,8 +174,17 @@ data class PromptCtx(
     val persona: String = "",
     /** 条目化长期记忆里挑出来的那几条（[Memories.inject] 已经按分数与字数预算挑过）。 */
     val memories: String = "",
+    /** 用户画像（[MemoryProfile] 自动生成的常驻节；空=还没生成）。 */
+    val profile: String = "",
     /** 知识库提示：工作区 .haoai-kb/ 有语料时，名单与用法由引擎每回合现读现填。 */
-    val kb: String = ""
+    val kb: String = "",
+    /** MBTI 人格块（[Mbti.profile] 渲染出的风格与行为指导）。与 persona 分开：
+     *  数据源在 [AgentConfig.personaMbti]、随选型换；persona 是卡/团队的内容。 */
+    val mbti: String = "",
+    /** 可用技能清单（绝对路径 + name: description），按专家启停过滤后注入（B4）。 */
+    val skills: String = "",
+    /** 可派发的子智能体清单（slug — description），按专家挂载过滤（B5）。 */
+    val subagents: String = ""
 )
 
 /**

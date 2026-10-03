@@ -1,5 +1,10 @@
 package com.haoai.pc
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.URI
@@ -149,8 +154,36 @@ object SkillDocs {
     fun remove(slug: String): Boolean {
         val d = File(dir(), sanitize(slug))
         if (!d.isDirectory || !File(d, "SKILL.md").isFile) return false
+        // 内置技能只可停不可删（删了下次启动也会被种子补回来，等于没删成）：
+        // 界面上的删按钮就该是灰的，这里是第二道防线
+        if (runCatching { readOrigin(d) }.getOrDefault("") == "builtin") return false
         return runCatching { d.deleteRecursively() && !d.exists() }.getOrDefault(false)
     }
+
+    /**
+     * 首启把随包内置技能拷进技能目录（origin=builtin 标记）。幂等：装过的跳过。
+     * **不走 saveDoc**：那份按正文的中文 name 推 slug（"Git 提交规范"→"git-提交规范"），
+     * 会把清单里的 `git-commit` 拆成两个身份；种子按清单 slug 直落。
+     * jar 里列不了目录——清单在 classpath `builtin-skills/slugs.json`（写内容时同步生成）。
+     */
+    fun seedBuiltin(): Int = runCatching {
+        val text = javaClass.classLoader.getResourceAsStream("builtin-skills/slugs.json")?.readBytes()?.toString(Charsets.UTF_8) ?: return 0
+        val slugs = Json.parseToJsonElement(text).jsonObject["slugs"]?.jsonArray
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: return 0
+        var n = 0
+        for (slug in slugs) {
+            val d = File(dir(), sanitize(slug))
+            if (File(d, "SKILL.md").isFile) continue
+            val src = javaClass.classLoader.getResourceAsStream("builtin-skills/$slug/SKILL.md")
+                ?.readBytes()?.toString(Charsets.UTF_8) ?: continue
+            runCatching {
+                d.mkdirs()
+                File(d, "SKILL.md").writeText(src, Charsets.UTF_8)
+                sourceFile(d).writeText("""{"url":"builtin"}""", Charsets.UTF_8)
+            }.onSuccess { n++ }
+        }
+        n
+    }.getOrDefault(0)
 
     /** 从一段 markdown 导入（界面上"粘贴 SKILL.md"走这条）。 */
     fun importText(text: String, origin: String = ""): ImportReport {

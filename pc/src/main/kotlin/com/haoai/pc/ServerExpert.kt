@@ -2,6 +2,10 @@ package com.haoai.pc
 
 import com.sun.net.httpserver.HttpExchange
 import com.haoai.pc.WebServer.Body
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 
 /**
@@ -129,6 +133,82 @@ internal fun WebServer.agentConfig(ex: HttpExchange) {
     }
     val items = AgentConfigs.load().values.joinToString(",") { AgentConfigs.one(it) }
     send(ex, 200, """{"ok":true,"items":[$items]}""", "application/json; charset=utf-8")
+}
+
+/**
+ * `GET/POST /api/mbti` —— MBTI 人格（数据在 [Mbti]，生效走 [AgentConfigs.personaMbti]）。
+ * `GET ?what=types` 16 型全量；`?what=questions` 28 题；`?what=current&preset=<id>` 当前选型。
+ * `POST {op:'test', answers:{题id:0|1}}` 判型（不足 20 题报错）；
+ * `POST {op:'apply', preset, code}` 把选型写进该专家的配置（不自动应用——测完看一眼再点头）。
+ */
+internal fun WebServer.mbti(ex: HttpExchange) {
+    val b = Body(ex)
+    if (ex.requestMethod != "GET") {
+        when (b.str("op")) {
+            "test" -> {
+                val answers = mutableMapOf<String, Int>()
+                val raw = b.str("answers")
+                // 答案在请求体里是 {题id: 0|1} 的扁平对象：手 parse 一次，避免为测试
+                // 单独定义序列化 DTO（答案是键值对，不是数组，jsonObject 遍历最省）
+                runCatching {
+                    val o = Json.parseToJsonElement(raw).jsonObject
+                    o.forEach { (k, v) -> (v as? JsonPrimitive)?.contentOrNull
+                        ?.toIntOrNull()?.let { answers[k] = it } }
+                }
+                if (answers.size < 20) {
+                    send(ex, 200, """{"ok":false,"error":${quote("至少答 20 题才能判型（已答 ${answers.size} 题）")}}""",
+                        "application/json; charset=utf-8"); return
+                }
+                val code = Mbti.score(answers)
+                if (code == null) {
+                    send(ex, 200, """{"ok":false,"error":"判不出型——题答得太少或格式不对"}""",
+                        "application/json; charset=utf-8"); return
+                }
+                send(ex, 200, """{"ok":true,"code":${quote(code)},"item":${profileJson(code)}}""",
+                    "application/json; charset=utf-8")
+            }
+            "apply" -> {
+                val pid = b.str("preset").trim()
+                val code = b.str("code").trim().uppercase()
+                if (pid.isBlank() || Mbti.profile(code) == null) {
+                    send(ex, 200, """{"ok":false,"error":"缺 preset 或人格 code 不存在"}""",
+                        "application/json; charset=utf-8"); return
+                }
+                // 只动 personaMbti 一个字段：先读现配置再整份写回（[AgentConfigs] 的覆盖语义）
+                val cur = AgentConfigs.of(pid)
+                AgentConfigs.save(cur.copy(personaMbti = code))
+                send(ex, 200, """{"ok":true,"item":${AgentConfigs.one(AgentConfigs.of(pid))}}""",
+                    "application/json; charset=utf-8")
+            }
+        }
+        return
+    }
+    when (queryOf(ex, "what").ifBlank { "types" }) {
+        "questions" -> send(ex, 200,
+            """{"ok":true,"items":[${Mbti.QUESTIONS.joinToString(",") {
+                """{"id":${quote(it.id)},"dim":${quote(it.dim)},"ap":${quote(it.ap.toString())},"bp":${quote(it.bp.toString())},"q":${quote(it.q)},"a":${quote(it.a)},"b":${quote(it.b)}}"""
+            }}]}""", "application/json; charset=utf-8")
+        "current" -> {
+            val pid = queryOf(ex, "preset").trim()
+            val code = if (pid.isBlank()) "" else AgentConfigs.of(pid).personaMbti
+            send(ex, 200, """{"ok":true,"code":${quote(code)},"item":${profileJson(code)}}""",
+                "application/json; charset=utf-8")
+        }
+        else -> send(ex, 200,
+            """{"ok":true,"items":[${Mbti.PROFILES.joinToString(",") { profileJson(it.code) }}]}""",
+            "application/json; charset=utf-8")
+    }
+}
+
+/** 单个人格的接口形状（找不到 code 时回 null item，前端按"尚未选择"画）。 */
+internal fun WebServer.profileJson(code: String): String {
+    val p = Mbti.profile(code) ?: return "null"
+    val behaviors = p.behaviors.entries.joinToString(",") { (k, v) -> "${quote(k)}:${quote(v)}" }
+    return """{"code":${quote(p.code)},"name":${quote(p.name)},"nickname":${quote(p.nickname)},""" +
+        """"summary":${quote(p.summary)},"color":${quote(p.color)},""" +
+        """"ei":"${p.ei}","eiPct":${p.eiPct},"sn":"${p.sn}","snPct":${p.snPct},""" +
+        """"tf":"${p.tf}","tfPct":${p.tfPct},"jp":"${p.jp}","jpPct":${p.jpPct},""" +
+        """"behaviors":{$behaviors}}"""
 }
 
 /**

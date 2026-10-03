@@ -130,7 +130,9 @@ class ToolCtx(
     var runId: String = "",
     var sid: String = "",
     /** 该专家停用的技能 slug（读/grep 落在这些技能的目录上时被拦，见 [SkillDocs]）。 */
-    val skillsOff: Set<String> = emptySet()
+    val skillsOff: Set<String> = emptySet(),
+    /** 该专家可派发的子智能体 slug（空 = 全部已装可派，见 [Subagents]）。 */
+    val subagents: List<String> = emptyList()
 ) {
     /**
      * 派子任务的能力，由引擎在建 ctx 时接上。
@@ -161,6 +163,14 @@ class ToolCtx(
         val clean = p.trim().replace('\\', '/')
         val f = if (File(clean).isAbsolute) File(clean) else File(workspace, clean)
         return runCatching { f.canonicalFile }.getOrElse { f.absoluteFile }
+    }
+
+    /** 路径撞在哪个已停用技能上（没撞上回 null）。禁用的判定按 `skills/<slug>` 片段：
+     *  提示层清单里已经不列它，这里是第二道防线——有人直接给模型喂路径也读不走。 */
+    fun blockedSkill(p: String): String? {
+        if (skillsOff.isEmpty()) return null
+        val clean = p.trim().replace('\\', '/')
+        return skillsOff.firstOrNull { s -> clean.contains("skills/$s/") || clean.endsWith("skills/$s") }
     }
 
     fun rel(f: File): String = runCatching {
@@ -437,6 +447,10 @@ class ReadTool : Tool(
 ) {
     override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val path = req(args, "path") ?: return fail("read 缺少 path")
+        // 技能停用的第二道防线：提示层不列它，直接给路径也读不走（B4）
+        ctx.blockedSkill(path)?.let {
+            return fail("技能「$it」在这个专家的配置里已停用，读不到它的内容——要启用去「专家 → 配置 → 技能」。")
+        }
         val f = ctx.resolve(path)
         if (!f.isFile) return fail("文件不存在：${ctx.rel(f)}")
         if (f.length() > 4_000_000) return fail("文件过大（${f.length()} 字节），先用 grep 定位再按行读")
@@ -580,24 +594,41 @@ class TaskTool : Tool(
         "tools（只给它哪几把工具，逗号分隔；不写就是父会话现在能用的那些）、" +
         "mode（plan/ask/auto；**只能比父会话更严，不能更松**）、" +
         "preset（派给哪一张角色卡：填卡 id，人设与模型由系统按卡现取）、" +
-        "persona（临时给一个没建卡的角色时才用它，有 preset 就别抄人设）。",
+        "persona（临时给一个没建卡的角色时才用它，有 preset 就别抄人设）、" +
+        "subagent（子智能体库的 slug —— 给这次派发一个固定身份：定义里的人设按需自动带上，" +
+        "可派的清单见系统提示「可派发的子智能体」）。",
     schema(
         "prompt" to "string", "label" to "string",
         "model" to "string", "tools" to "string", "mode" to "string", "persona" to "string",
-        "preset" to "string",
+        "preset" to "string", "subagent" to "string",
         required = arrayOf("prompt")
     ),
     kind = "read"
 ) {
     override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
         val prompt = req(args, "prompt")?.trim() ?: return fail("task 缺少 prompt")
-        val label = (req(args, "label")?.trim() ?: "").ifBlank { prompt.take(24) }
+        val labelRaw = (req(args, "label") ?: "").trim()
         val spawn = ctx.spawn ?: return fail("当前环境没接引擎，派不了子任务")
+        var persona = (req(args, "persona") ?: "").trim()
+        var subDef: Subagents.Def? = null
+        val subSlug = (req(args, "subagent") ?: "").trim()
+        if (subSlug.isNotEmpty()) {
+            // 专家可用集（AgentConfig.subagents）空 = 全部已装可派
+            if (ctx.subagents.isNotEmpty() && subSlug !in ctx.subagents)
+                return fail("这个专家只允许派这些子智能体：${ctx.subagents.joinToString("、")}")
+            subDef = Subagents.find(subSlug) ?: return fail(
+                "没有子智能体「$subSlug」。已装的有：" +
+                    (Subagents.list().take(12).joinToString("、") { it.slug }).ifBlank { "(一个都没有)" }
+            )
+            // 显式 persona/preset 优先：subagent 给的是默认身份，不是强制
+            if (persona.isEmpty() && (req(args, "preset") ?: "").isBlank()) persona = subDef.body
+        }
+        val label = labelRaw.ifBlank { subDef?.name ?: prompt.take(24) }
         val opts = SubOpts(
             model = (req(args, "model") ?: "").trim(),
             tools = (req(args, "tools") ?: "").trim(),
             mode = (req(args, "mode") ?: "").trim().lowercase(),
-            persona = (req(args, "persona") ?: "").trim(),
+            persona = persona,
             preset = (req(args, "preset") ?: "").trim()
         )
         if (opts.mode.isNotEmpty() && opts.mode !in MODES)
@@ -1535,13 +1566,72 @@ class HunkPlan(val hunks: List<Hunk>, val base: String, val wanted: String) {
     }
 }
 
+/** B8：长期记忆的主动检索。自动注入（[Memories.inject]）是"按本轮问题挑"，
+ *  这两把给模型"主动翻库"的入口——用户问"我之前说过什么"时按需拉，不用猜。 */
+class MemorySearchTool : Tool(
+    "memory_search",
+    "在长期记忆里检索与 query 最相关的几条（事实/偏好/决定）。" +
+        "不确定某件事记住没记住、或要引用用户说过的话时用它。",
+    schema("query" to "string", required = arrayOf("query")),
+    kind = "read"
+) {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val q = req(args, "query")?.trim() ?: return fail("memory_search 缺 query")
+        val doc = Memories.load(Memories.fileFor(ctx.workspace))
+        if (doc.items.isEmpty()) return ToolResult("(这条工作区还没有长期记忆)")
+        val (text, _) = Memories.injectIds(doc, q, 8)
+        return text.ifBlank { "(没有相关的记忆)" }.let { ToolResult(it) }
+    }
+}
+
+class MemoryGetTool : Tool(
+    "memory_get",
+    "按重要度列出长期记忆条目（要紧的、最近记的排前面）。limit 默认 20。",
+    schema("limit" to "integer"),
+    kind = "read"
+) {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val limit = int(args, "limit", 20).coerceIn(1, 60)
+        val doc = Memories.load(Memories.fileFor(ctx.workspace))
+        val items = doc.items
+            .sortedWith(compareByDescending<Memories.Item> { it.importance }.thenByDescending { it.createdAt })
+            .take(limit)
+        if (items.isEmpty()) return ToolResult("(这条工作区还没有长期记忆)")
+        return ToolResult(items.mapIndexed { i, it -> "${i + 1}. [${it.type}] ${it.content}" }.joinToString("\n"))
+    }
+}
+
 fun builtinTools(): List<Tool> = listOf(
     ReadTool(), WriteTool(), EditTool(), GlobTool(), GrepTool(),
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), AskUserBatchTool(), WebFetchTool(), WebSearchTool(),
     BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool(), RunVerifyTool(),
-    AgentListTool(), AskAgentTool(), SearchKnowledgeTool()
+    AgentListTool(), AskAgentTool(), SearchKnowledgeTool(),
+    CronListTool(), CronCreateTool(), CronToggleTool(),
+    MemorySearchTool(), MemoryGetTool()
 )
+
+/**
+ * 工具分组（Octop `BUILTIN_TOOL_CATALOG` 的对齐物）：界面按组渲染、说明按组归类。
+ * 单独一张表而不是给每个 Tool 子类加 category 字段：分组是**界面的展示意图**，
+ * 不是工具的行为属性——27 个子类各写一行构造参数，比一张按名查的表更容易漂。
+ * 表里没有的名字（MCP 外部工具）一律归"外部（MCP）"。
+ */
+val TOOL_CATEGORIES: Map<String, String> = buildMap {
+    listOf("read", "write", "edit", "glob", "grep", "shell", "shell_open", "shell_send",
+        "shell_read", "shell_close", "shell_list", "git", "run_code", "run_verify"
+    ).forEach { put(it, "文件与终端") }
+    listOf("web_fetch", "web_search").forEach { put(it, "网页与检索") }
+    put("search_knowledge", "知识")
+    listOf("todo", "task").forEach { put(it, "规划与子任务") }
+    listOf("ask_user", "ask_user_batch").forEach { put(it, "交互") }
+    listOf("agent_list", "ask_agent").forEach { put(it, "团队") }
+    listOf("screen", "browser", "media", "record").forEach { put(it, "桌面与媒体") }
+    listOf("cron_list", "cron_create", "cron_toggle").forEach { put(it, "定时") }
+    listOf("memory_search", "memory_get").forEach { put(it, "记忆") }
+}
+
+fun categoryOf(toolName: String): String = TOOL_CATEGORIES[toolName] ?: "外部（MCP）"
 
 /**
  * 引擎实际拿到的工具表 = 内置 + 外部 MCP。

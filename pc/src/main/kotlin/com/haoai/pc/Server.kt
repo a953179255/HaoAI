@@ -138,6 +138,11 @@ class WebServer(settings: PcSettings, port: Int,
         runCatching { File(Env.home, "webport").writeText(server.address.port.toString()) }
         // 定时任务的线程跟着服务起落：daemon 线程，JVM 退了它自己就没了
         sched = Scheduler { s -> runSchedule(s) }.also { it.start() }
+        // 内容库首启落位（B4/B5）：内置技能与子智能体拷进状态根，幂等、缺哪补哪
+        runCatching { SkillDocs.seedBuiltin() }
+        runCatching { Subagents.installBuiltin() }
+        // 主动关心（B8）：默认关，flags.proactiveCare=1 才烧调用
+        runCatching { ProactiveCare.start() }
         // 多 Agent：读回实例状态、接上执行口、起收件箱线程（三件事必须一起做，见 wireAgents）
         wireAgents()
         // 上次开过就接着开：手机配对的 token 还在人手里，服务重启不该把人踢下线
@@ -201,6 +206,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/expertfeed" -> expertFeed(ex)
                 "/api/teams" -> teams(ex)
                 "/api/agent-config" -> agentConfig(ex)
+                "/api/mbti" -> mbti(ex)
+                "/api/memory-funnel" -> memoryFunnel(ex)
                 "/api/agents" -> agents(ex)
                 "/api/experts/library" -> expertLibrary(ex)
                 "/api/kb" -> kb(ex)
@@ -804,11 +811,16 @@ class WebServer(settings: PcSettings, port: Int,
         when (ev) {
             is Ev.TextDelta -> publish("delta", quote(ev.s), sid)
             is Ev.ReasoningDelta -> publish("reason", quote(ev.s), sid)
-            is Ev.TurnStats -> publish(
-                "stats",
-                """{"pt":${ev.pt},"ct":${ev.ct},"ms":${ev.ms},"turns":${ev.turns}}""",
-                sid
-            )
+            is Ev.TurnStats -> {
+                publish(
+                    "stats",
+                    """{"pt":${ev.pt},"ct":${ev.ct},"ms":${ev.ms},"turns":${ev.turns}}""",
+                    sid
+                )
+                // B6 记忆抽取挂这里（一轮真的完了）：10 分钟节流在方法里，后台线程不占这一轮。
+                // 放引擎里会被单测的假客户端抢剧本（那些测试按序喂响应），挪到壳层才是对的。
+                sessions[sid]?.engine?.extractMemoryAsync()
+            }
             is Ev.TextDone -> publish("answer", quote(ev.s), sid)
             is Ev.ToolStart -> publish(
                 "tool",

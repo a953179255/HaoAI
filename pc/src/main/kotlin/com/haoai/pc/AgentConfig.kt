@@ -42,8 +42,11 @@ data class AgentConfig(
 )
 
 object AgentConfigs {
-    /** 这些工具关掉等于砍掉引擎（Octop CRITICAL_TOOLS 的口径，按"砍掉后失能"从严标记）。 */
-    val CRITICAL = setOf("read", "write", "edit", "glob", "grep", "task", "todo", "ask_user")
+    /** 这些工具关掉等于砍掉引擎（对齐 Octop CRITICAL_TOOLS 的口径）：
+     *  read/glob/grep=感知、task/todo=编排——失能即崩。
+     *  write/edit/shell **刻意不在列**：专家可以是只读的（plan 专家、调研究员），
+     *  关掉后模型会收到"本专家未开启写入"的明确报错而不是谜之失败。 */
+    val CRITICAL = setOf("read", "glob", "grep", "task", "todo")
 
     private val ORDER = listOf(
         "presetId", "providerName", "baseUrl", "toolsOff", "skillsOff",
