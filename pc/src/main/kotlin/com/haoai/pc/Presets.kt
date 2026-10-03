@@ -93,6 +93,15 @@ data class Preset(
     val temperature: Double = -1.0,
     val maxTokens: Int = -1,
     val maxTurns: Int = -1,
+    /**
+     * 「默认专家」徽标（对标 Octop 卡上那枚"默认"）：点「新对话」而没点名要哪张卡时，
+     * 就用这张开一条。
+     *
+     * 为什么做成卡上的一个位而不是设置里存一个 id：**只能有一张是真的默认**，
+     * 这件事由 [Presets.setDefault] 在写的时候保证（它会清掉别的卡的这一位）。
+     * 存 id 的话卡被删了设置里就留着一个悬空引用，还得再造一套"清掉失效 id"的活。
+     */
+    val defaultOne: Boolean = false,
     val created: Long = System.currentTimeMillis()
 ) {
     /** 头像字符的统一出口：没设 icon 就拿名字第一个字。 */
@@ -137,7 +146,7 @@ object Presets {
             """"quick":[${p.quick.joinToString(",") { q ->
                 """{"title":${js(q.title)},"desc":${js(q.desc)},"prompt":${js(q.prompt)}}"""
             }}],"kbs":${p.kbs.joinToString(",", "[", "]") { js(it) }},""" +
-            """"enabled":${p.enabled},"welcome":${js(p.welcome)},""" +
+            """"enabled":${p.enabled},"welcome":${js(p.welcome)},"defaultOne":${p.defaultOne},""" +
             """"temperature":${p.temperature},"maxTokens":${p.maxTokens},"maxTurns":${p.maxTurns},""" +
             """"created":${p.created}"""
 
@@ -170,6 +179,7 @@ object Presets {
             },
             kbs = o["kbs"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
             enabled = o["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
+            defaultOne = o["defaultOne"]?.jsonPrimitive?.booleanOrNull ?: false,
             welcome = o["welcome"]?.jsonPrimitive?.contentOrNull ?: "",
             temperature = o["temperature"]?.jsonPrimitive?.doubleOrNull
                 ?: Preset.NO_OVERRIDE.toDouble(),
@@ -210,6 +220,44 @@ object Presets {
     }
 
     fun find(id: String): Preset? = load().firstOrNull { it.id == id }
+
+    /** 现在被标为「默认」的那张卡（没有就空串）。 */
+    fun defaultId(): String = load().firstOrNull { it.defaultOne }?.id ?: ""
+
+    /**
+     * 把某张卡设为默认（`id` 给空串 = 取消默认）。
+     *
+     * **一次只许有一张**：设这张的同时把别的清掉。两张都写着"默认"的表现是
+     * 点「新对话」到底用哪张全看文件里的顺序 —— 那比没有默认更害人。
+     *
+     * @return 改完的清单 + 拒绝原因（空串 = 没拒）。
+     */
+    fun setDefault(id: String): Pair<List<Preset>, String> {
+        val list = load()
+        if (id.isNotBlank() && list.none { it.id == id })
+            return list to "没有这个角色卡，可能已经被删掉了（$id）"
+        var changed = false
+        list.forEachIndexed { i, p ->
+            val want = p.id == id
+            if (p.defaultOne != want) { list[i] = p.copy(defaultOne = want); changed = true }
+        }
+        if (changed) save(list)
+        return list to ""
+    }
+
+    /**
+     * 「新对话该挂哪张卡」这一条决策收成一个纯函数（Server 与测试用的是同一份逻辑）。
+     *
+     * 用户点了卡就用点的那张；团队会话由主持人负责，不许被默认卡顶掉；
+     * 只有两者都没有时才落到默认卡 —— 而且要它**现在还可用**（开着、没被删）才落，
+     * 否则宁可开一条没挂专家的会话：用户没点过任何卡，静默换成另一张才是错。
+     */
+    fun presetForNewSession(requested: String, team: Boolean, defId: String = defaultId()): String = when {
+        requested.isNotBlank() -> requested
+        team -> ""
+        defId.isNotBlank() && usable(defId) == null -> defId
+        else -> ""
+    }
 
     /**
      * 这张卡现在能不能拿来开会话。

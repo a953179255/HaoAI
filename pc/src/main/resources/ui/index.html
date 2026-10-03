@@ -882,6 +882,11 @@
   .xcard .hd{display:flex;gap:10px;align-items:center}
   .xcard .hd b{font-size:13px;color:var(--fg);display:flex;align-items:center;gap:6px;min-width:0}
   .xcard .hd b span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 「默认」徽标与那颗钮：默认是一张卡在整个系统里的地位，要一眼看出来；
+     id 那颗钮是"看得到才复制得走"，画淡一点免得跟操作钮抢 */
+  .mbtib.defb{color:var(--warn);border-style:dashed}
+  .ab.ondef{color:var(--warn);border-color:var(--warn)}
+  .ab.idc{color:var(--dim);font-family:var(--mono);font-size:10px;cursor:copy}
   .mbtib{font-size:9px;font-weight:700;color:var(--acc);border:1px solid currentColor;border-radius:5px;
     padding:0 4px;flex:none}
   .xcard .ds{font-size:11.5px;color:var(--dim);line-height:1.55}
@@ -4890,7 +4895,7 @@ function myCard(p){
   const st=a?a.state:'none', stName=a?a.stateName:'没启动过';
   return `<div class="xcard${p.enabled===false?' off':''}">
     <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b>
-      ${p.enabled===false?'<i class="mbtib offb">已关</i>':''}<i class="mbtib" data-st="${esc(st)}" title="${a?('这个实例跑过 '+a.turns+' 次'+(a.lastError?(' · 上次出错：'+esc(a.lastError)):'')):'还没启用实例：别的专家问它时才现起'}">${esc(stName)}</i></div>
+      ${p.enabled===false?'<i class="mbtib offb">已关</i>':''}${p.defaultOne?'<i class="mbtib defb" title="点「新对话」而没点名要哪张卡时，就用这张开一条">默认</i>':''}<i class="mbtib" data-st="${esc(st)}" title="${a?('这个实例跑过 '+a.turns+' 次'+(a.lastError?(' · 上次出错：'+esc(a.lastError)):'')):'还没启用实例：别的专家问它时才现起'}">${esc(stName)}</i></div>
     ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
     <div class="meta">${metaLine(p)}</div>
     ${paramLine(p)}
@@ -4900,6 +4905,8 @@ function myCard(p){
     <div class="ft"><button class="ab pri" data-x="use" data-id="${esc(p.id)}"${p.enabled===false?' disabled':''}>开始对话</button>
       <button class="ab" data-x="penable" data-id="${esc(p.id)}" title="关着的卡不进新会话候选、不能被别的专家点名，定时任务到点也会拒跑">${p.enabled===false?'打开':'关掉'}</button>
       <button class="ab" data-x="pdup" data-id="${esc(p.id)}" title="照这个样子再建一张：新 id，改副本不碰原卡">复制</button>
+      <button class="ab${p.defaultOne?' ondef':''}" data-x="pdef" data-id="${esc(p.id)}" data-on="${p.defaultOne?'false':'true'}" title="点「新对话」而没点名要哪张卡时，就用这张开一条。一次只许有一张">${p.defaultOne?'取消默认':'设为默认'}</button>
+      <button class="ab idc" data-x="pid" data-id="${esc(p.id)}" title="复制这张卡的 id：对外接口、定时任务与别的专家点名都要用它">id ${esc(p.id)}</button>
       <button class="ab" data-x="pexp" data-id="${esc(p.id)}" title="导出这张卡的 JSON，换机器或发给同事">导出</button>
       <button class="ab" data-x="astart" data-id="${esc(p.id)}" title="让它成为一个可被别的专家点名的实例（有自己那条常驻会话）">${st==='stopped'?'重新启用':'启用实例'}</button>
       <button class="ab" data-x="astop" data-id="${esc(p.id)}" title="停用后别的专家问它会被明确拒绝（不静默排队）">停用</button>
@@ -5163,6 +5170,23 @@ function act(x,b){
       my=d.items||[];refreshBadge();paint();
       toast(p.enabled===false?'这张卡已打开，能选来开会话了':'这张卡已关掉：不进候选、不能被点名、定时任务会拒跑');
     }).catch(()=>toast('改不动','err'));return;
+  }
+  if(x==='pdef'){
+    /*
+     * 「设为默认 / 取消默认」走的是同一条 op：已经是默认的那张再点一次就是取消
+     * （id 传空串）。前端不自己改 my 数组 —— 一次只许有一张默认，这件事只有
+     * Presets.setDefault 说得清（它顺手把别的卡那一位居掉），界面重画读它返回的清单。
+     */
+    const was=(my.find(z=>z.id===id)||{}).defaultOne===true;
+    post('/api/presets',{op:'default',id:was?'':id}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
+      my=d.items||[];refreshBadge();paint();
+      toast(was?'已取消默认':'以后点「新对话」默认就用这张');
+    }).catch(()=>toast('没改成','err'));return;
+  }
+  if(x==='pid'){
+    // 卡 id 是对外接口、定时任务与别的专家点名要用的东西，得能一眼看到并复制走
+    copy(id);toast('已复制这张卡的 id');return;
   }
   if(x==='pdup'){
     post('/api/presets',{op:'dup',id:id}).then(d=>{

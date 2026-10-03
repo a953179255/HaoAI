@@ -865,6 +865,18 @@ class WebServer(settings: PcSettings, port: Int,
                     val p = Presets.find(b.str("id"))
                     if (p != null) Presets.update(p.copy(enabled = b.bool("on") ?: !p.enabled))
                 }
+                /*
+                 * 「设为默认」单独一条 op：它改的是这张卡在系统里的地位（点「新对话」时
+                 * 挂哪张），不是卡的内容。走整卡 update 会把别人正在编辑的那份写回去；
+                 * 而"一次只许有一张默认"由 Presets.setDefault 保证。
+                 */
+                "default" -> {
+                    val (_, err) = Presets.setDefault(b.str("id"))
+                    if (err.isNotEmpty()) {
+                        send(ex, 200, """{"ok":false,"error":${quote(err)}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                }
                 "dup" -> {
                     val p = Presets.find(b.str("id"))
                     if (p == null) {
@@ -1108,7 +1120,10 @@ class WebServer(settings: PcSettings, port: Int,
         // 不能"退回默认工作区"—— 那等于把人送进一个他没选的仓库里写文件。
         val b = Body(ex)
         val want = b.str("ws")
-        val presetId = b.str("preset")
+        val teamAsked = b.str("team").isNotBlank()
+        // 没点名要哪张卡时落到「默认专家」（对标 Octop 卡上那枚"默认"）；
+        // 决策本身在 Presets.presetForNewSession（团队会话不许被默认卡顶掉）
+        val presetId = Presets.presetForNewSession(b.str("preset"), teamAsked)
         val preset = if (presetId.isBlank()) null else Presets.find(presetId)
         // 关着的卡与丢了的卡走同一条判定（Presets.usable）：静默改用别的卡、
         // 或者开一条没有角色的会话，都是把"我没生效"藏起来。

@@ -105,6 +105,11 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 `op:'import'` 就能读回来，且**必然换新 id**（导入不该覆盖用户手里那张同名卡）。
 `/api/state` 现在也报 `preset`：不报的话前端拿到"带角色的空会话"却不知道角色是谁，欢迎语画不出来。
 
+`POST /api/presets` 的 `op:'default'` 把那张卡设为「默认专家」（`id` 传空串 = 取消默认）。
+**一次只许有一张**：设这张时服务端会清掉别的卡那一位。默认卡影响的是
+`POST /api/new` 没点名 `preset` 时挂哪张卡；那张卡若已关掉或被删，就回落到"没挂专家"，
+**不会静默换成另一张**（用户没点过的卡不该被塞给他）。
+
 `/api/state` 的 `cites[]` 是知识库的引用出处（`{cid,kb,kbName,doc,how,score,snippet}`），
 `messages[]` 里每条带 `cid`（那次工具调用的 id）。两边按 `cid` 配对 —— **不要改用消息下标配对**：
 压缩与"删这一句/删到这里"会让下标整体前移，届时的表现是引用挂在别的卡底下。

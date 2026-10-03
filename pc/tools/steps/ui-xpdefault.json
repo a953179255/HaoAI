@@ -1,0 +1,58 @@
+[
+  {
+    "note": "两张卡：默认这件事要看得出「一次只许有一张」，所以必须两张轮着设",
+    "eval": "(async()=>{const post=(o)=>fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({op:'save'},o))}).then(r=>r.json());const a=await post({id:'',name:'默认甲',persona:'你是默认甲。',model:'',workspace:'',mode:'ask'});const b=await post({id:'',name:'默认乙',persona:'你是默认乙。',model:'',workspace:'',mode:'ask'});const items=b.items||[];window.__da=items.find(x=>x.name==='默认甲');window.__db=items.find(x=>x.name==='默认乙');return {made:!!(window.__da&&window.__db),two:items.length>=2,ids:[window.__da&&window.__da.id,window.__db&&window.__db.id].join(',')};})()",
+    "must": ["made", "two"]
+  },
+  { "click": "[data-view=\"experts\"]", "note": "进专家整页" },
+  { "sleep": 900 },
+  { "click": "#xptabs button[data-t=\"my\"]" },
+  { "sleep": 1200 },
+  {
+    "note": "卡上得先看得见那颗钮和 id —— 看不见就谈不上设",
+    "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('默认甲')>=0);if(!c)return {found:false};return {found:true,defBtn:!!c.querySelector('[data-x=pdef]'),idBtn:!!c.querySelector('[data-x=pid]'),idText:(c.querySelector('[data-x=pid]')||{}).textContent||'',noBadgeYet:!c.querySelector('.mbtib.defb'),btnSays:(c.querySelector('[data-x=pdef]')||{}).textContent==='设为默认'}})()",
+    "must": ["found", "defBtn", "idBtn", "idText", "noBadgeYet", "btnSays"]
+  },
+  {
+    "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('默认甲')>=0);const b=c&&c.querySelector('[data-x=pdef]');if(!b)return {clicked:false};b.click();return {clicked:true}})()",
+    "must": ["clicked"]
+  },
+  { "sleep": 1400 },
+  {
+    "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('默认甲')>=0);return {badge:!!(c&&c.querySelector('.mbtib.defb')),label:(c&&c.querySelector('[data-x=pdef]')||{}).textContent===''?'':(c.querySelector('[data-x=pdef]')||{}).textContent,ondef:!!(c&&c.querySelector('.ab.ondef'))}})()",
+    "must": ["badge", "ondef"]
+  },
+  { "shot": "xd01-default-set" },
+  {
+    "note": "设第二张为默认：上一张的徽标必须自己消失（两张都写默认 = 点新对话用哪张全看文件顺序）",
+    "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('默认乙')>=0);const b=c&&c.querySelector('[data-x=pdef]');if(!b)return {clicked:false};b.click();return {clicked:true}})()",
+    "must": ["clicked"]
+  },
+  { "sleep": 1400 },
+  {
+    "eval": "(()=>{const cards=[...document.querySelectorAll('#xpGrid .xcard')];const a=cards.find(x=>x.textContent.indexOf('默认甲')>=0);const b=cards.find(x=>x.textContent.indexOf('默认乙')>=0);return {stillOne:a?!a.querySelector('.mbtib.defb'):false,nowOn:!!(b&&b.querySelector('.mbtib.defb')),total:document.querySelectorAll('#xpGrid .mbtib.defb').length}})()",
+    "must": ["stillOne", "nowOn", "total"]
+  },
+  {
+    "note": "真落到行为上：点「新对话」没点名要卡 —— 服务端该把这条会话挂到默认乙，顶栏角色也是它",
+    "eval": "(async()=>{const btn=document.querySelector('#newBtn');if(btn)btn.click();await new Promise(r=>setTimeout(r,1600));const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json());return {preset:(s.preset||'')===(window.__db&&window.__db.id),role:(s.role||'')==='默认乙',sid:!!curId}})()",
+    "must": ["preset", "role"]
+  },
+  { "shot": "xd02-new-session-default" },
+  {
+    "note": "默认那张被关掉之后，新会话该回落到「没挂专家」，而不是静默换成另一张开着的卡。这里必须走接口并**指定工作区**：点 #newBtn 在「眼前这条还一句没说过」时会复用旧会话（那是刻意的），复用的那条还带着默认乙，判据就会量到上一条会话",
+    "eval": "(async()=>{const r=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'toggle',id:window.__db.id,on:false})}).then(x=>x.json());const st=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(x=>x.json());const n=await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ws:st.workspace||''})}).then(x=>x.json());const s=await fetch('/api/state?sid='+encodeURIComponent(n.id||'')).then(x=>x.json());return {toggled:!!(r&&r.ok),gotNew:!!n.id,different:n.id!==curId,noPreset:(s.preset||'')==='',noRole:(s.role||'')===''}})()",
+    "must": ["toggled", "gotNew", "different", "noPreset", "noRole"]
+  },
+  {
+    "note": "点名要一张关着的卡仍要被拒并说明原因（这是显式选择，不能悄悄没挂）",
+    "eval": "(async()=>{const r=await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:window.__db.id})}).then(x=>x.json());return {refused:r&&r.ok===false,saysWhy:(r&&r.error||'').indexOf('关')>=0}})()",
+    "must": ["refused", "saysWhy"]
+  },
+  {
+    "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('默认甲')>=0);const b=c&&c.querySelector('[data-x=pid]');if(!b)return {copied:false};b.click();return {copied:true,shown:(b.textContent||'').length>3}})()",
+    "must": ["copied"]
+  },
+  { "sleep": 700 },
+  { "shot": "xd03-id-and-off" }
+]
