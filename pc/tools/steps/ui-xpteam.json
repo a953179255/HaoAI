@@ -1,0 +1,124 @@
+[
+ {
+  "note": "团队派工的闭环：主持人按卡 id 派一条活给成员 → 界面上看得见是谁在干 → 结论回来 → 这笔钱记在那个成员名下（Token 统计「按专家」那一行）。跑法 SHOT_MODE=team。",
+  "eval": "(async()=>{const mk=(id,name,pe)=>fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',id:id,name:name,persona:pe,desc:name+' 的专长',model:'',workspace:'',mode:'ask',welcome:'',quick:[],temperature:-1,maxTokens:-1,maxTurns:-1,enabled:true})}).then(r=>r.json());const a=await mk('xpteam-a','前端老张','你是前端，负责页面与交互。');const b=await mk('xpteam-b','测试小李','');const t=await fetch('/api/teams',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',id:'',name:'冲刺小队',desc:'先把页面做出来',icon:'',color:'',members:['xpteam-a','xpteam-b']})}).then(r=>r.json());return {cards:!!(a&&a.ok&&b&&b.ok),team:!!(t&&t.ok)}})()",
+  "must": ["cards", "team"],
+  "note": "两张卡用**固定 id**：假网关的剧本里 preset 写死了 xpteam-a（模型不会知道运行时生成的 id）。小李那张刻意只填名字不填人设 —— 「新建专家」只要求二者之一，而上一版的记账条件是「persona 非空」，这种卡派出去的钱会退回主持人头上。"
+ },
+ {
+  "click": "[data-view=\"experts\"]"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "click": "#xptabs button[data-t=\"team\"]"
+ },
+ {
+  "sleep": 1100
+ },
+ {
+  "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('冲刺小队')>=0);const b=c&&c.querySelector('[data-x=teamgo]');if(!b)return {found:false};b.click();return {found:true,stack:c.querySelectorAll('.stack .avatar').length}})()",
+  "must": ["found"],
+  "note": "从页面上点「开团队会话」，不直接调 /api/new —— 这条路是人走的那条"
+ },
+ {
+  "sleep": 2000
+ },
+ {
+  "eval": "(()=>{const chip=document.querySelector('#roleChip');return {isTeam:/^团队 · 冲刺小队$/.test(chip?chip.textContent:''),chip:chip?chip.textContent:''}})()",
+  "must": ["isTeam"],
+  "note": "确认这条会话真的是团队会话（顶栏章写「团队 · 冲刺小队」），否则后面测的是普通会话派工"
+ },
+ {
+  "type": {"sel": "#box", "text": "派给前端老张", "enter": true}
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const c=document.querySelector('.view.on .card.sub');if(c)return JSON.stringify({appeared:true,ms:Date.now()-t0});if(Date.now()-t0>40000)return JSON.stringify({appeared:false});await new Promise(z=>setTimeout(z,500))}})()",
+  "must": ["appeared"],
+  "note": "主持人派出去的活要在界面上出现一张子任务卡；不出现的话，用户看到的只是「我说了句话然后没反应」"
+ },
+ {
+  "eval": "(()=>{const cs=[...document.querySelectorAll('.view.on .card.sub')];const c=cs[0]||{querySelector(){return null},textContent:''};const lbl=(c.querySelector('.sb')||{}).textContent||'';return {one:cs.length==1,labeled:lbl.indexOf('前端老张')>=0,label:lbl}})()",
+  "must": ["one", "labeled"],
+  "note": "标牌必须是成员名（label 由模型写、人设由系统按卡取）—— 读不出「前端老张」就等于看不出这条活是谁在干"
+ },
+ {
+  "shot": "xt10-team-dispatch"
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const c=document.querySelector('.view.on .card.sub');if(c&&c.classList.contains('done'))return JSON.stringify({done:true,ms:Date.now()-t0});if(Date.now()-t0>45000)return JSON.stringify({done:false,cls:c?c.className:'(没有卡)'});await new Promise(z=>setTimeout(z,800))}})()",
+  "must": ["done"],
+  "note": "成员跑完要把卡收起打勾；卡一直挂着就是父会话在等一个不会回来的结果"
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));const last=[...document.querySelectorAll('.view.on .msg.ans')].pop();if(s.running===false&&last&&/汇总/.test(last.textContent))return JSON.stringify({summarized:true,ms:Date.now()-t0});if(Date.now()-t0>45000)return JSON.stringify({summarized:false,running:s.running,text:last?last.textContent.slice(0,60):''});await new Promise(z=>setTimeout(z,900))}})()",
+  "must": ["summarized"],
+  "note": "主持人的收尾要消化成员结论而不是把原文贴回来（人设第 3 条），剧本认的是那句「汇总：」"
+ },
+ {
+  "shot": "xt11-team-summary"
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/usage?kind=sub').then(r=>r.json());const rows=d.byExpert||[];const mine=rows.find(x=>x.name=='前端老张');return {hasExpert:!!mine,tokens:(mine&&mine.total)||0,presetOk:!!mine&&mine.preset=='xpteam-a',subRows:(mine&&mine.n)||0,labelNotExpert:JSON.stringify(rows.map(x=>x.name)).indexOf('派给')<0}})()",
+  "must": ["hasExpert", "tokens", "presetOk"],
+  "note": "账要落对：按专家那张表里出现「前端老张」、token 不为 0、且这一组的卡 id 是 xpteam-a。判据一开始读的是 x.expert —— 报表里那一列叫 name（与下拉、与 matchesExpert 同一把钥匙），读不存在的键只会得到 undefined，于是「有专家」永远是 false：这是量具自己错，不是账错了。labelNotExpert 与 subRows 只打印。"
+ },
+ {
+  "click": "[data-view=\"tokens\"]",
+  "note": "去 Token 统计页，看这一笔在界面上认不认得出来"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "(()=>{const b=document.querySelector('#tktabs button[data-t=expert]');if(b)b.click();return {clicked:!!b,on:!!b&&b.classList.contains('on')}})()",
+  "must": ["clicked"],
+  "note": "切到「按专家」那一档（on 只打印：点完要等重画，别拿它当判据）"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const body=document.querySelector('.main').innerText;return {rowShown:/前端老张/.test(body),noFake:/派给前端老张/.test(body)===false}})()",
+  "must": ["rowShown"],
+  "note": "界面上要看得见「前端老张」这一行 —— 后端算对了但表里没有，等于用户看不见。noFake 只打印。"
+ },
+ {
+  "shot": "xt12-team-by-expert"
+ },
+ {
+  "click": "[data-view=\"experts\"]"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "click": "#xptabs button[data-t=\"my\"]"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(()=>{window.confirm=()=>true;const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('测试小李')>=0);const b=c&&c.querySelector('[data-x=del]');if(!b)return {found:false};b.click();return {found:true}})()",
+  "must": ["found"],
+  "note": "删掉一个成员的卡，看团队那边会不会老实说缺员"
+ },
+ {
+  "sleep": 1600
+ },
+ {
+  "click": "#xptabs button[data-t=\"team\"]"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const c=[...document.querySelectorAll('#xpGrid .xcard')].find(x=>x.textContent.indexOf('冲刺小队')>=0);if(!c)return {found:false};const warn=[...c.querySelectorAll('.ds')].find(x=>/被删了/.test(x.textContent));return {found:true,warned:!!warn,warnText:warn?warn.textContent:'',missingColor:warn?getComputedStyle(warn).color:'',stack:c.querySelectorAll('.stack .avatar').length}})()",
+  "must": ["found", "warned"],
+  "note": "缺员要在开团之前就看得见（红字 + 头像变灰），而不是等开团那一刻炸。warnText 与 missingColor 只打印给人核对颜色是不是走了 --err。"
+ },
+ {
+  "shot": "xt13-team-missing"
+ }
+]

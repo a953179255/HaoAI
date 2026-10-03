@@ -360,8 +360,24 @@ SUBLOOP_CHILD = [
     ("数完了：一共数了 9 轮，每轮 echo 一个数。", None),
 ]
 
-# multi：一个网关同时喂好几条会话，各自一份剧本。
-# 三条的话术与文件都不同，所以"事件串台"在界面上是看得见的（丙的回答出现在甲那条=立刻能发现）。
+# 团队派工：主持人**按卡 id** 派一条活给成员，成员跑完回结论，主持人再汇总。
+# 界面上要看得见三件事：子任务卡挂的是成员名、结论回来了、这笔钱记在成员名下
+# （第三件在 Token 统计那一页量，剧本里两头都读）。父子两份剧本按标记分道，理由同 subloop。
+TEAM_MARK = "团队派工"
+TEAM_CARD = "xpteam-a"        # 像素剧本会先用这个固定 id 建卡，好让 preset 对得上
+TEAM_PARENT = [
+    ("派给前端老张", [{"id": "tm1", "name": "task",
+                       "arguments": json.dumps({
+                           "prompt": TEAM_MARK + "：读 hello.txt 并告诉我第一行",
+                           "label": "前端老张", "preset": TEAM_CARD})}],
+     "这件事交给前端老张做，我只看它的结论。"),
+    ("汇总：第一行是 hello from HaoAI PC，这一条是前端老张跑出来的，我照它的结论收尾。", None),
+]
+TEAM_CHILD = [
+    ("老张这边读完了：第一行是 hello from HaoAI PC。", None),
+]
+
+# multi：一个网关同时喂好几条会话，各自一份剧本。# 三条的话术与文件都不同，所以"事件串台"在界面上是看得见的（丙的回答出现在甲那条=立刻能发现）。
 ROUTED = {
     "并行甲": PLAN["loop"],
     "并行乙": [
@@ -504,6 +520,11 @@ class Handler(BaseHTTPRequestHandler):
             plan = SUBLOOP_CHILD if SUBLOOP_MARK in joined else SUBLOOP_PARENT
             if tool_rounds:
                 time.sleep(0.5)   # 每轮慢一点，界面上才来得及点"停掉它" 
+        if MODE == "team":
+            # 主持人与成员的历史里都带 role=="tool" 的轮数，按 tool_rounds 取行会串台：
+            # 成员的第一轮会被当成主持人的第二轮。按派工标记分道（同 subloop 的办法）。
+            joined = " ".join(str(m.get("content") or "") for m in msgs)
+            plan = TEAM_CHILD if TEAM_MARK in joined else TEAM_PARENT
         idx = min(tool_rounds, len(plan) - 1)
         row = plan[idx]
         text = row[0]
@@ -548,7 +569,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8099)
     ap.add_argument("--mode", default="tools",
-                    choices=list(PLAN.keys()) + ["multi", "subloop", "fallback"])
+                    choices=list(PLAN.keys()) + ["multi", "subloop", "fallback", "team"])
     a = ap.parse_args()
     global MODE
     MODE = a.mode

@@ -332,9 +332,16 @@ class Engine(
          * 都记成 label 的话，"帮我查一下 X" 这种一次性子任务会在 Token 统计里
          * 造出一堆只有三条记录的假专家；都不记的话，团队会话里成员花掉的钱全算到
          * 主持人头上 —— 而"这个队里谁最贵"恰恰是开团队的人要看的数。
+         *
+         * 条件必须是"**这张卡在不在**"，不是上一版的"persona 非空"：卡可以只填名字
+         * 不填人设（「新建专家」只要求二者之一），那时派工照样是派给那个成员，
+         * 拿 persona 当条件就把这笔钱退回主持人头上。
+         * 专家名取卡上的名字而不是 label：label 是模型随手写的标牌（重名还会被
+         * [uniqueSubName] 加成"… 2"），拿它当专家名等于在统计里造一个假人。
+         * 只有"临时给一个没建卡的角色"（显式 persona、没有 preset）才退回 label。
          */
-        s.role = if (persona.isNotBlank()) label else session.role
-        s.preset = if (persona.isNotBlank()) opts.preset else session.preset
+        s.role = card?.name ?: if (persona.isNotBlank()) label else session.role
+        s.preset = if (card != null || persona.isNotBlank()) opts.preset else session.preset
         val log = StringBuilder()
         val child = Engine(   // 子任务**直连构造**、刻意不走工厂：它不是"一条会话的开始"
             // （不发 session-start，也没有壳的会话恢复/overlay 那套），接线就是最朴素的一份。
