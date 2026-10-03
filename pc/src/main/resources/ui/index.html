@@ -350,6 +350,10 @@
      所以：表头与操作列一律不换行，整张表给个最小宽度，装不下时由 .kb-docwrap 横向滚，
      而不是把内容裁掉 —— 报错原因那一列反过来要能换行，但限宽，别把整行顶高。 */
   /* 专家页补齐：关着的卡整张压暗（不只少一个徽标 —— 一眼扫出哪些是"暂时不用的"） */
+  /* 关着的卡在两个入口都要能一眼看出（右栏「角色」列表 + 专家页卡片） */
+  .rl.off{opacity:.6}
+  .rl .kboff{color:var(--warn);border:1px solid var(--warn);border-radius:999px;
+    padding:0 6px;font-size:10px;font-style:normal;margin-left:6px}
   .xcard.off{opacity:.62}
   /* 运行参数那行：数字要能一眼对上，所以走等宽 + 略暗（挂在 .meta 上只改这两样） */
   .meta.par{font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:11px;color:var(--dim)}
@@ -826,7 +830,10 @@
   .rl em{font-style:normal;color:var(--dim2);font-size:11px}
   /* 角色卡这一行宁可长高也别用省略号：被切掉的恰好是"这张卡把档位/模型设成了什么"，
      而那正是列表存在的理由（cron 那两行同理，但它的按钮少，暂时没被挤到） */
-  #roleList .rl span{white-space:normal;line-height:1.4}
+  /* 右栏很窄：名字与那行设置占满第一行，四颗按钮换到第二行。
+     不这么做的话四颗钮把文字挤成竖排（截图里"师阿真"一个字一行），
+     而判据要看的那句"档位跟全局"会被切成三段。 */
+  #roleList .rl span{white-space:normal;line-height:1.4;flex:1 1 100%}
   /* 记忆条目是一句话，截断就等于没显示；所以这里放开换行（.rl 默认是省略号）。 */
   #memItems .rl span{white-space:normal;line-height:1.45}
   #memItems .imp{font-style:normal;color:var(--acc2);margin-right:4px}
@@ -3592,12 +3599,16 @@ let roleEditing='';
 function paintPresets(list){
   // 一行摆得下的只有"名字 + 三样设置"：人设长句放 title（悬停能看），
   // 挤进这一行的话被省略号切掉的是**判据要看的那部分**（档位），列表就成了摆设。
+  // 关着的卡在这里也必须一眼看出来：服务端会拒，但"拒"发生在点完之后，
+  // 而这一栏就是用来挑卡的 —— 挑完才说不行，等于让同一句话讲两遍。
   $('#roleList').innerHTML=(list||[]).length?(list||[]).map(p=>
-    `<div class="rl" title="${esc(String(p.persona||''))}"><span><b>${esc(p.name)}</b>`+
+    `<div class="rl${p.enabled===false?' off':''}" title="${esc(String(p.persona||''))}"><span><b>${esc(p.name)}</b>`+
+    (p.enabled===false?'<em class="kboff">已关</em>':'')+
     `<em>${ROLE_MODES[p.mode]||'档位跟全局'} · `+
       `${p.model?('模型 '+esc(shortModel(p.model))):'模型跟全局'} · `+
       `${p.workspace?('目录 '+esc(baseName(p.workspace))):'目录跟全局'}</em></span>`+
-    `<button class="ab pri" data-role="use" data-id="${esc(p.id)}" title="按这套开一条新会话">用它开一条</button>`+
+    `<button class="ab pri" data-role="use" data-id="${esc(p.id)}"${p.enabled===false?' disabled':''} title="按这套开一条新会话">用它开一条</button>`+
+    `<button class="ab" data-role="on" data-id="${esc(p.id)}" title="关掉的卡不进候选、不能被点名，定时任务到点会拒跑">${p.enabled===false?'开':'关'}</button>`+
     `<button class="ab" data-role="edit" data-id="${esc(p.id)}">改</button>`+
     `<button class="ab" data-role="del" data-id="${esc(p.id)}">删</button></div>`).join('')
     :'（还没配）';
@@ -3636,6 +3647,14 @@ let presets=[];
       if(!b)return;
       const p=presets.find(x=>x.id==b.dataset.id);
       if(b.dataset.role=='use'){newTask('',b.dataset.id);return}
+      if(b.dataset.role=='on'){
+        if(!p)return;
+        post('/api/presets',{op:'toggle',id:p.id,on:p.enabled===false}).then(d=>{
+          if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
+          paintPresets(d.items);presets=d.items||[];
+          toast(p.enabled===false?'这张卡已打开':'这张卡已关掉：不进候选、不能被点名、定时任务会拒跑');
+        }).catch(()=>toast('改不动','err'));return;
+      }
       if(b.dataset.role=='edit'){
         if(!p)return;
         roleEditing=p.id;$('#roleName').value=p.name;$('#rolePersona').value=p.persona||'';

@@ -355,5 +355,66 @@
    "on"
   ],
   "note": "两种视图共用同一份数据、切换不残留（列表的 table 节点还留在页面上＝重画没走同一条路，下一次点编辑就会点到已失效的节点）"
+ },
+ {
+  "click": "#tabs button[data-t=\"role\"]",
+  "note": "右栏「角色」页签：那里也列卡，关着的卡在那儿同样要能看出来"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#roleList .rl')];const r=rows.find(x=>x.innerText.indexOf('剪辑师阿真')>=0)||{innerText:'',className:''};return {found:r.innerText.indexOf('剪辑师阿真')>=0,hasOn:!!(r.querySelector&&r.querySelector('[data-role=on]')),notOff:r.className.indexOf('off')<0,useEnabled:!!(r.querySelector&&r.querySelector('[data-role=use]')&&!r.querySelector('[data-role=use]').disabled)}})()",
+  "must": [
+   "found",
+   "hasOn",
+   "notOff",
+   "useEnabled"
+  ],
+  "note": "这张卡现在是开着的：右栏那一行没压暗、「用它开一条」可点、有一颗「关」钮"
+ },
+ {
+  "click": "#roleList .rl [data-role=\"on\"]",
+  "note": "从右栏直接关掉（不必绕回专家页）"
+ },
+ {
+  "sleep": 1100
+ },
+ {
+  "eval": "(async()=>{const rows=[...document.querySelectorAll('#roleList .rl')];const r=rows.find(x=>x.innerText.indexOf('剪辑师阿真')>=0)||{innerText:'',className:'',querySelector:()=>null};const d=await fetch('/api/presets').then(x=>x.json());const p=(d.items||[]).find(x=>x.name==='剪辑师阿真')||{};const use=r.querySelector?r.querySelector('[data-role=use]'):null;return {off:p.enabled===false,dim:r.className.indexOf('off')>=0,badge:r.innerText.indexOf('已关')>=0,btnDisabled:!!use&&use.disabled===true}})()",
+  "must": [
+   "off",
+   "dim",
+   "badge",
+   "btnDisabled"
+  ],
+  "note": "右栏这一行同步压暗 + 打「已关」徽标 + 那颗「用它开一条」真的 disabled（只写灰字不禁按钮，用户点了才被服务端拒，等于把同一句话讲两遍）"
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('#roleList .rl')];const r=rows.find(x=>x.innerText.indexOf('剪辑师阿真')>=0);if(!r)return {found:false};const b=r.querySelector('b');const bs=b?b.getBoundingClientRect().height:999;const btns=[...r.querySelectorAll('.ab')];const cut=btns.filter(x=>x.scrollWidth>x.clientWidth+1).length;const rr=r.getBoundingClientRect();return {found:true,nameOneLine:bs<=24,rowTall:rr.height<=110,noClip:btns.length===4&&cut===0,btnRow:btns.every(x=>x.getBoundingClientRect().top>=b.getBoundingClientRect().bottom-1)}})()",
+  "must": [
+   "found",
+   "nameOneLine",
+   "noClip",
+   "btnRow"
+  ],
+  "note": "右栏那一行的几何判据：名字不许被挤成竖排（一个字一行）、四颗按钮不许截断文字、且按钮落在名字下面那一行 —— 窄栏里加第四颗钮之前没人发现这行会被压成什么样"
+ },
+ {
+  "shot": "xp06-role-tab-off"
+ },
+ {
+  "click": "#roleList .rl [data-role=\"on\"]",
+  "note": "再打开，把现场恢复成开着的"
+ },
+ {
+  "sleep": 1100
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/presets').then(x=>x.json());const p=(d.items||[]).find(x=>x.name==='剪辑师阿真')||{};return {on:p.enabled===true}})()",
+  "must": [
+   "on"
+  ],
+  "note": "右栏那颗钮是双向开关（与专家页那条 op:toggle 同一个接口，不各写一份逻辑）"
  }
 ]
