@@ -124,7 +124,8 @@ internal fun teamCoordinatorPersona(team: Team, members: List<Preset>): String {
         appendLine("1) 用户的话先过你。寒暄、澄清、给结论这类你自己答；专业工作用 task 工具派给成员。")
         appendLine("2) 派工时 task 的 label 必须写成员名（界面按它标牌），preset 填上面那个卡 id" +
             "（人设与模型系统会按卡取，**不要**自己抄 persona），" +
-            "prompt 把任务、上下文、要产出什么一次写清。同一回合可以并行派多个成员。")
+            "prompt 把任务、上下文、要产出什么一次写清。" +
+            "一条回合里可以连着派多条，但它们会**一条接一条**跑完，不是同时跑。")
         appendLine("3) 成员只回结论。你消化、核对、拼装后再向用户汇报，不要把成员原文整段贴回来。")
         appendLine("4) 成员结论互相矛盾时你裁决，并说明裁决理由。")
         appendLine("5) 成员两次都没干成的事，如实告诉用户卡在哪，不要自己默默换路子重做。")

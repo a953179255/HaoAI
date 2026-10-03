@@ -125,4 +125,46 @@ class SubAttributionTest {
         assertTrue("错误里要带上是哪个 id，人才对得上：$res", res.contains("attr-gone"))
         assertEquals("被拒的派工不许留下一笔账", before, UsageLedger.pick(kind = UsageLedger.SUB).size)
     }
+
+    @Test
+    fun `two dispatches in one team session book two separate rows`() {
+        Presets.save(listOf(card("attr-x", "前端老张", "你是前端。"), card("attr-y", "测试小李", "你是测试。")))
+        val e = parent(ws())
+        e.spawn("老张做页面", "写 a.txt", SubOpts(preset = "attr-x"))
+        e.spawn("小李补用例", "写 b.txt", SubOpts(preset = "attr-y"))
+        val rows = UsageLedger.pick(kind = UsageLedger.SUB)
+            // 账本是整个临时 home 共用的（同 class 里前面几条测试也派过工），
+            // 所以只筛这两支卡。第一版没筛，expected 两个名字却量出四个 —— 红在测试自己身上。
+            .filter { it.preset == "attr-x" || it.preset == "attr-y" }
+        val experts = rows.map { it.expert }.distinct().sorted()
+        assertEquals("两次派工要留下两个不同的专家名（第二次盖掉第一次=按专家那张表少一行）",
+            listOf("前端老张", "测试小李"), experts)
+        assertEquals("两个卡 id 都要在账上", listOf("attr-x", "attr-y"),
+            rows.map { it.preset }.distinct().sorted())
+    }
+
+    /**
+     * 主持人提示里那句"一条接一条"必须与引擎真的做的一致。
+     *
+     * 上一版写的是「同一回合可以并行派多个成员」，而 `Engine` 那一圈是
+     * `for (call in turn.calls)` —— 顺序执行。提示对模型承诺了一件系统不做的事，
+     * 症状是"主持人一次派两条然后抱怨慢"，而没人会去查提示与循环谁在说谎。
+     * 所以两头一起钉：文案不许出现"并行"，代码那一圈还得是那个 for（真有人并行化了，
+     * 这条会红，逼着改文案的人与改引擎的人在同一处碰面）。
+     */
+    @Test
+    fun `coordinator prompt and the tool loop agree that dispatches run one after another`() {
+        val persona = teamCoordinatorPersona(
+            Team(id = "t1", name = "冲刺小队", members = listOf("attr-x", "attr-y")),
+            listOf(card("attr-x", "前端老张", "你是前端。"), card("attr-y", "测试小李", "你是测试。"))
+        )
+        assertTrue("提示不许承诺并行：回合内的工具是一条接一条跑的", !persona.contains("并行"))
+        assertTrue("要说清是接着跑，否则模型会按「同时」来安排工作：$persona",
+            persona.contains("一条接一条"))
+        val loop = File("src/main/kotlin/com/haoai/pc/Engine.kt").readText()
+        assertTrue("引擎那一圈还是顺序的 for（改了这里就要回去改提示）",
+            loop.contains("for (call in turn.calls)"))
+        assertTrue("别悄悄换成并行执行器而没人改文案",
+            !Regex("turn\\.calls\\s*\\.\\s*(parallel|concurrent)|awaitAll|executorService").containsMatchIn(loop))
+    }
 }
