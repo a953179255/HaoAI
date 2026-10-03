@@ -54,9 +54,23 @@
      --nw 收起的是导航，--sw 收起的是会话栏 —— Ctrl B 一起收（no-l 同时置零两个变量）。 */
   .app{display:grid;grid-template-columns:var(--nw,198px) var(--sw,252px) minmax(0,1fr) var(--rw,292px);height:100%;
     position:relative;z-index:1;backdrop-filter:blur(22px) saturate(1.35)}
+  /* 四列各自钉死轨道位。网格自动布位是"按可见元素顺序填格子"——display:none 掉中间列后，
+     后面的列会整体前移（实测：藏掉会话栏，主区掉进 252px 轨道、右栏掉进 1fr），
+     Ctrl+B 收栏（no-l）整窗空白就是这么来的。钉死后，藏掉的列只留一条由 --sw/--rw 控宽的轨道，
+     主区与右栏纹丝不动。 */
+  .rail.l{grid-column:1}
+  .sesscol{grid-column:2}
+  .main{grid-column:3}
+  .rail.r{grid-column:4}
   .app.no-l{--nw:0px;--sw:0px}
   .app.no-r{--rw:0px}
   .app.no-l .navcol,.app.no-l .sesscol,.app.no-r .rail.r{display:none}
+  /* 页面态（主区在专家/知识库/日程/Token 统计这些整页上）：会话栏与右栏是"会话视图"的两列，
+     效果图里它们长在 #v-chat 内部、别的视图根本没有 —— 不让位的话专家页左右各挂一列聊天配件，
+     卡片被挤成窄条。--sw/--rw 必须一并置零：display:none 只摘元素不摘轨道，
+     轨道留着就是两条 252/292px 的空缝（no-l/no-r 同款做法）。 */
+  .app.page-mode{--sw:0px;--rw:0px}
+  .app.page-mode .sesscol,.app.page-mode .rail.r{display:none}
   /* 左上角有机点缀：在左栏内部从壳角"生长"（坐标与方案一致）。
      层级：左栏背景 < 点缀 < 左栏内容（*:not(.corner-art) 抬到 z1）。
      之前放在 body 的 fixed 层会被 .app 的 backdrop-filter 磨掉 + 位置跑到壳外 —— 用户实锤。 */
@@ -781,6 +795,7 @@
   /* 手机宽：正文独占，导航栏让位（导航动作走命令面板 Ctrl K），会话栏变浮层（☰ 开关） */
   @media (max-width:860px){
     .app{grid-template-columns:minmax(0,1fr)}
+    .main{grid-column:1}   /* 轨道只剩一条：钉在 3 列的主区得挪回第 1 轨，否则掉进隐式轨道 */
     .navcol{display:none}
     .sesscol{display:none}
     .app.show-l .sesscol{display:flex;position:fixed;left:0;top:0;bottom:0;width:min(300px,86%);
@@ -2146,6 +2161,7 @@ const PALSET=[
 ];
 /** 页签里的东西常常是 fetch 回来才渲染的，所以"点开页签再点里面某颗"要等它出现（最多等 2 秒）。 */
 function palTabBtn(tab,sel){
+  setView('chat');   // 页签长在右栏：从专家/知识库页调出来得先回会话页，否则点的是藏起来的页签
   const t=document.querySelector('#tabs button[data-t='+tab+']');
   if(!t){toast('右栏没这个页签','err');return}
   t.click();
@@ -2188,8 +2204,13 @@ function palItems(q){
     out.push({g:g,t:x[0],run:typeof x[1]=='function'?x[1]:()=>{
       if(x[1][0]!='#'){palJumpCfg(x[1]);return}      // 不以 # 开头的那条是"设置里的某一节"
       const e=document.querySelector(x[1]);if(!e){toast('找不到那个入口','err');return}
+      // 这批 # 入口全是会话视图里的东西（右栏页签/顶栏按钮）：从专家页调出来得先回会话页，
+      // 否则 click 点在 display:none 的元素上 —— 选中态翻了、面板也画了，人却什么都看不见。
+      setView('chat');
       e.click();}})});
-  (sessList||[]).forEach(m=>{if(hit(m.title))out.push({g:'会话',t:m.title,run:()=>show(m.id)})});
+  (sessList||[]).forEach(m=>{if(hit(m.title))out.push({g:'会话',t:m.title,run:()=>{
+    setView('chat');   // 面板在哪个页都能唤出：跳会话得先回会话页，消息流是藏在 .main 里的
+    show(m.id)}})});
   runsCache.slice(0,6).forEach((r,i)=>{if(hit(r.goal))out.push({g:'重跑',t:'重跑：'+r.goal.slice(0,40),
     run:()=>{palToggle(false);rerunGoal(r.goal)}})});
   return out;
@@ -2253,6 +2274,7 @@ function palExec(){
 })();
 Palette.init();
 function rerunGoal(g){
+  setView('chat');   // 那句话要填回输入框，而输入框长在会话页的底栏里；任务卡也在右栏
   document.querySelector('#tabs button[data-t=tasks]').click();
   $('#box').value=g;$('#box').dispatchEvent(new Event('input'));
   toast('已把那句话填回输入框，回车就跑');$('#box').focus();
@@ -3888,6 +3910,9 @@ function newTask(ws,preset,firstMsg,team){
     v.el.innerHTML='';v.curAns=null;v.curThink=null;v.tools={};v.todos=[];v.usage=null;v.outputs=[];
     v.title='新会话';if(d.mode)v.mode=d.mode;   // 没这个字段就留着旧显示，别自己编一个
     v.role=d.role||'';                          // 角色卡/团队带的名字，顶栏那颗徽标读它
+    // Ctrl N 从哪个页都能按（专家/知识库页上会话栏是藏着的）：新会话必须真到眼前，
+    // 不然 show 画的是隐藏的聊天流，用户看到的还是刚才那个页，像"点了没反应"。
+    setView('chat');
     show(d.id);paintUsage(null);box.focus();
     // 工作区/模型这两行只有 /api/state 会给。但用户手快得已经把话发出去了就别重画：
     // 那会儿服务端还没落到那条用户消息，重画会把刚发出去的气泡抹掉。
@@ -4126,7 +4151,12 @@ document.addEventListener('keydown',e=>{
   }
   if(mod&&e.key.toLowerCase()=='n'){e.preventDefault();$('#newBtn').click();return}
   if(mod&&e.shiftKey&&e.key.toLowerCase()=='p'){e.preventDefault();Palette.toggle();return}
-  if(mod&&e.key.toLowerCase()=='k'){e.preventDefault();$('#sessQ').focus();return}
+  if(mod&&e.key.toLowerCase()=='k'){e.preventDefault();
+    // 会话栏只在会话页挂着：在专家/知识库这些页上按 Ctrl K，焦点会聚到 display:none
+    // 的搜索框上毫无动静 —— 落点改开命令面板，搜索能力别跟着栏一起消失。
+    const q=$('#sessQ');
+    if(q&&q.getBoundingClientRect().width)q.focus();else Palette.toggle();
+    return}
   if(mod&&e.key.toLowerCase()=='b'){e.preventDefault();$('#railBtn').click();return}
   if(e.altKey&&['1','2','3'].includes(e.key)){e.preventDefault();setModeNow(['plan','ask','auto'][+e.key-1])}
   decideByKey(e);
@@ -5492,7 +5522,13 @@ Experts.init();
  * 切页不拆 SSE —— 隐藏的是聊天三件套，后台会话的事件照常入流。 */
 function setView(v){
   document.querySelectorAll('.navrow[data-view]').forEach(r=>r.classList.toggle('on',r.dataset.view===v));
-  document.querySelector('.main').dataset.page=(v==='chat')?'':v;
+  const chat=(v==='chat');
+  document.querySelector('.main').dataset.page=chat?'':v;
+  // 会话栏与右栏跟着主区换页一起让位（.page-mode 那两条 CSS）——否则切到专家页，
+  // 左边还挂着一列历史会话、右边挂着任务面板，都是会话视图的配件。
+  // 窄屏的浮层态（show-l/show-r）也一起收：盖在专家页上面的会话栏比藏掉更迷惑。
+  app.classList.toggle('page-mode',!chat);
+  if(!chat)app.classList.remove('show-l','show-r');
 }
 document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
   const v=r.dataset.view, a=r.dataset.act;
