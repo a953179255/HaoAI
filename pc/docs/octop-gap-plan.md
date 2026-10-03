@@ -73,13 +73,25 @@ Octop 与 HaoAI PC 的差距不在"有没有功能"，而在**三层深度**：
 
 ### 3.2 工具目录化管理（个性化/工具）
 
-**现状**：`toolsOff` 全局平铺 + 会话级覆盖；无分组、无"必需工具"概念。
-**Octop 做法**：`BUILTIN_TOOL_CATALOG` 38 项按 category 分组（filesystem/orchestration/web/interaction/media/memory/cron/knowledge/teams/misc）；`CRITICAL_TOOLS={ls,read_file,glob,grep,write_todos,task}` 不可关（API 400）；禁用=中间件从 `request.tools` 剥除（模型看不见）。
+**现状**：`toolsOff` 全局平铺 + 会话级覆盖；无分组、无"必需工具"概念。**工具清单本身也缺**：现有 17 把（read/write/edit/glob/grep/shell/web_fetch/web_search/todo/task/ask_user×2/agent_list/ask_agent/search_knowledge/git/run_verify），Octop 有 38 把。
+**Octop 做法**：`BUILTIN_TOOL_CATALOG` 38 项按 category 分组（filesystem/orchestration/web/interaction/media/memory/cron/knowledge/teams/misc）；`CRITICAL_TOOLS={ls,read_file,glob,grep,write_todos,task}` 不可关（API 400）；禁用=中间件从 `request.tools` 剥除（模型看不见）；另有**条件挂载**（如 `media_generation:false` 时图像/视频工具根本不注册）。
 **方案**：
-- `Tools.kt` 给 `Tool` 加两个字段：`category: String`（文件与终端/检索与网页/规划与子任务/交互/团队/知识/媒体）与 `critical: Boolean`（read/write/edit/glob/grep/task/shell 标记 critical——write/shell 可辩，先按"砍掉后引擎失能"的从严口径：read/glob/grep/task/todo critical，write/edit/shell 允许关但关了要给模型一句"本专家未开启写入"的提示能力）。
+- `Tools.kt` 给 `Tool` 加两个字段：`category: String`（文件与终端/检索与网页/规划与子任务/交互/团队/知识/媒体）与 `critical: Boolean`（read/glob/grep/task/todo 标记 critical——write/edit/shell 允许关但关了要给模型一句"本专家未开启写入"的提示能力）。
 - 右栏「工具」页签按分组渲染 + 每行显示「全局：开/关」+「本专家：跟随全局/关」两级开关（专家级写 `AgentConfig.toolsOff`）。
 - 生效点已在 `Engine.schemas()`（P0 接好），只需并集逻辑。
-- **验收**：工具页签出现分组标题；关掉某专家的 `web_fetch`，该专家会话 schema 无它、全局默认会话仍有；critical 工具开关按钮 disabled+悬浮说明。单测：critical 不可关、并集过滤。
+- **工具清单补齐**（Octop 有而 HaoAI 没有的，随 B3 一并做）：
+
+| 工具 | 价值 | 工作量 | 批次 |
+|---|---|---|---|
+| `desktop_screenshot` 桌面截图 | PC 本机就是桌面：Java 原生抓屏（Robot/辅助功能 API）给模型"看屏幕"能力 | 中 | B3 |
+| `memory_search` / `memory_get` | 记忆从"自动注入"升级为"模型可主动检索"（依赖 B6 的候选漏斗） | 小 | B8 |
+| `cron_list/create/toggle/run` | 模型可代建/查/停定时任务（"每天八点提醒我"一句话落地） | 小 | B3 |
+| `generate_image` 生成图片 | 接网关图像接口（智谱 CogView 类）；手机端"真位图生成待接 API"是同一件事 | 中（依赖供应商） | P2 可选 |
+| `send_file_to_user` | Octop 把文件推给用户；PC 等价物=产出页签置顶/资源管理器打开——**不做**，现有路径更顺 | — | 裁定不做 |
+| 搜索多供应商并列 | Octop 拆 tavily/brave/google/kimi 四把；HaoAI 是单 `web_search`+provider 三选——**不拆**，一个开关比四个同义工具好 | — | 保持 |
+| 移动六件套 / `acp_runner` | PC 无此场景 | — | 不做 |
+
+- **验收**：工具页签出现分组标题；关掉某专家的 `web_fetch`，该专家会话 schema 无它、全局默认会话仍有；critical 工具开关按钮 disabled+悬浮说明；桌面截图工具出真图。单测：critical 不可关、并集过滤。
 
 ### 3.3 技能升级（个性化/技能）
 
@@ -157,6 +169,12 @@ PC 已有 终端（ConPTY 多标签）/浏览器预览（CDP）/Git/文件产出
 ### 4.5 多用户 / ACP / 云端协同 —— 裁定不做
 单用户产品。多用户留"形状"：新存储文件一律带可扩展的 JSON 结构即可。ACP 双向（把 HaoAI 暴露给 Zed / 委派给 Claude Code）记入 backlog 不排期。
 
+### 4.6 其他可选 backlog（调研中发现、暂不排期的小项）
+- **会话 fork**：把某条会话从某句开始复制成新会话（Octop threads.fork；HaoAI 已有 编辑重发/回到之前，fork 是锦上添花）。
+- **浏览器操作录制回放**（Octop record_replay）：把一段网页操作录成可重放技能——等浏览器自动化用出真实需求再说。
+- **专家发布/共享**（published_expert / is_shared）：多用户能力，随多用户一起不做。
+- **记忆迁移 .hmpkg**：跨宿主打包——单机不需要。
+
 ---
 
 ## 5. 分期施工计划
@@ -165,6 +183,8 @@ PC 已有 终端（ConPTY 多标签）/浏览器预览（CDP）/Git/文件产出
 
 **B1 专家配置中枢 + 个性化枢纽页（P0，地基）**
 - [ ] `AgentConfig` 存储 + Session 快照 + Engine 消费点（人格节渲染位、schema 过滤位）
+- [ ] `Preset` 加 `provider` 字段（每专家可带自己的网关 BaseURL，留空跟全局——Octop 专家独立 providers 的单用户简化版）
+- [ ] 专家会话起手卡：欢迎语（内置库 manifest 已有 welcome_message）+ 快捷提问 chips 直接在聊天起手卡上可点
 - [ ] 专家卡「配置」入口 + 枢纽弹窗骨架（七区块导航，未实现的区块显示"下一批"）
 - [ ] 单测：config round-trip、toolsOff 并集过滤
 - 规模：后端 ~200 行 + 前端 ~250 行
@@ -175,10 +195,11 @@ PC 已有 终端（ConPTY 多标签）/浏览器预览（CDP）/Git/文件产出
 - [ ] 枢纽"人格"区：16 型网格 + 测一测 + 应用
 - 验收见 §3.5。规模：~700 行（数据占 400）
 
-**B3 工具目录化（P0）**
+**B3 工具目录化 + 工具清单补齐（P0）**
 - [ ] Tool 加 category/critical；工具页签分组渲染 + 两级开关
 - [ ] critical 禁关 + 说明
-- 验收见 §3.2。规模：~250 行
+- [ ] 新工具：`desktop_screenshot`（Java 原生抓屏）、`cron_list/create/toggle/run`（模型代管定时任务）
+- 验收见 §3.2。规模：~400 行
 
 **B4 技能升级（P1）**
 - [ ] 系统提示"可用技能"节（启停过滤）+ 路径拦截
@@ -203,8 +224,9 @@ PC 已有 终端（ConPTY 多标签）/浏览器预览（CDP）/Git/文件产出
 - [ ] 账本按 role 聚合块 + CSV 导出
 - 规模：~120 行
 
-**B8 记忆中心二期：画像/日记/主动关心（P2）**
+**B8 记忆中心二期：画像/日记/主动关心 + 记忆工具化（P2）**
 - [ ] 画像 md 生成+注入；Episode 简化版；主动关心（复用定时器+PC 通知）
+- [ ] `memory_search` / `memory_get` 工具（模型主动检索，不止被动注入）
 - 规模：~400 行
 
 **B9 知识库 v2（P2）**
