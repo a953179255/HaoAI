@@ -2776,7 +2776,25 @@ document.querySelector('.rail.l').addEventListener('click',e=>{
   if(e.target.closest('.it')&&app.classList.contains('show-l'))app.classList.remove('show-l');
 });
 if(localStorage.getItem('haoai-noL'))app.classList.add('no-l');
+/*
+ * 要去看右栏的东西，就先让右栏出来。
+ *
+ * 窄屏（≤1080）下 `.rail.r` 被媒体查询整个 `display:none`，只留 #panelBtn 那枚"面板"钮；
+ * 而左栏的「记忆 / 定时 / 知识库」三行、命令面板里那些"右栏：X"入口，做的都是
+ * "去点右栏那一排的页签钮"。于是选中态翻了、面板也画好了（实测 `.tabp.on=tab-mem`、
+ * 正文 1457 字、7 条记忆），可宽度是 0 —— 用户看到的就是"点了记忆打不开"。
+ *
+ * 判"藏没藏"用实测宽度，不写 1080 这个数：断点以后改媒体查询，这里不会跟着烂掉。
+ * 用 add 不用 toggle：已经开着时 add 是空操作，绝不会把用户正开着的栏关掉。
+ * 两条藏栏的路都补：媒体查询走 show-r，宽屏手动收起（.no-r）走 remove。
+ */
+function revealRail(){
+  const r=document.querySelector('.rail.r');
+  if(!r)return;
+  if(!r.getBoundingClientRect().width){app.classList.remove('no-r');app.classList.add('show-r')}
+}
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  revealRail();
   document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.t));
   if(b.dataset.t=='usage'){loadUsage();loadRuns()}

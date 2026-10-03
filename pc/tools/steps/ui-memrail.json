@@ -1,0 +1,26 @@
+[
+  { "goto": "#box" },
+  { "viewport": { "width": 980, "height": 760 }, "note": "把窗口收到 861~1080 这一档：右栏被媒体查询整个藏掉，只留一枚「面板」钮 —— 用户报的「点记忆打不开」就在这条宽度带上" },
+  { "sleep": 500 },
+  {
+    "note": "先确认这一档确实把右栏藏了（不然下面那条绿是假的：宽屏下本来就看得见）",
+    "eval": "(()=>{const rail=document.querySelector('.rail.r');const pb=document.querySelector('#panelBtn');return {railHidden:rail.getBoundingClientRect().width===0,panelBtnShown:!!pb&&getComputedStyle(pb).display!=='none'}})()",
+    "must": ["railHidden", "panelBtnShown"]
+  },
+  { "click": ".navrow[data-act=\"mem\"]", "note": "点左栏「记忆」那一行：它做的只是去点右栏的页签钮，所以右栏必须跟着现身，否则选中态翻了个遍而屏幕上什么都没有" },
+  { "sleep": 1100 },
+  {
+    "eval": "(()=>{const rail=document.querySelector('.rail.r');const p=document.querySelector('#tab-mem');return {railBack:rail.getBoundingClientRect().width>0,panelW:Math.round(p.getBoundingClientRect().width),rows:document.querySelectorAll('#tab-mem .rl').length,shown:[...document.querySelectorAll('.tabp.on')].map(x=>x.id).join(','),backOnChat:document.querySelector('.main').dataset.page===''}})()",
+    "must": ["railBack", "panelW", "shown", "backOnChat"]
+  },
+  { "shot": "mr01-narrow-mem-revealed" },
+  {
+    "note": "宽屏回来：右栏本来就开着，这时点页签**不许**把用户开着的栏关掉（revealRail 用的是 add 不是 toggle）",
+    "viewport": { "width": 1500, "height": 930 }
+  },
+  { "sleep": 600 },
+  {
+    "eval": "(()=>{const app=document.querySelector('.app');const before=app.classList.contains('show-r');document.querySelector('#tabs button[data-t=mem]').click();return {stillThere:document.querySelector('.rail.r').getBoundingClientRect().width>0,panelOn:document.querySelector('#tab-mem').classList.contains('on'),notToggledOff:app.classList.contains('show-r')===before}})()",
+    "must": ["stillThere", "panelOn", "notToggledOff"]
+  }
+]
