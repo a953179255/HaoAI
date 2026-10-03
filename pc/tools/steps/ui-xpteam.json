@@ -88,6 +88,39 @@
   "shot": "xt12-team-by-expert"
  },
  {
+  "click": "[data-view=\"chat\"]",
+  "note": "回团队那条会话，试一次回合派两个人"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "type": {"sel": "#box", "text": "两个都派：老张看文件，小李补用例", "enter": true}
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const cs=[...document.querySelectorAll('.view.on .card.sub')];const xiao=cs.find(c=>/测试小李/.test((c.querySelector('.sb')||{}).textContent||''));if(xiao)return JSON.stringify({dispatched:true,cards:cs.length,ms:Date.now()-t0});if(Date.now()-t0>50000)return JSON.stringify({dispatched:false,cards:cs.length,labels:cs.map(c=>(c.querySelector('.sb')||{}).textContent).join('|')});await new Promise(z=>setTimeout(z,700))}})()",
+  "must": ["dispatched"],
+  "note": "一次派两名：主持人一轮吐两个 task 调用，界面上要出现第二张挂「测试小李」的卡。引擎那一圈是顺序 for，所以第二张会晚一点出现 —— 这条等的就是它真的被跑到，而不是被前一条挤掉"
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const cs=[...document.querySelectorAll('.view.on .card.sub')];const xiao=cs.find(c=>/测试小李/.test((c.querySelector('.sb')||{}).textContent||''));if(xiao&&xiao.classList.contains('done'))return JSON.stringify({xiaoDone:true,ms:Date.now()-t0});if(Date.now()-t0>45000)return JSON.stringify({xiaoDone:false,cls:xiao?xiao.className:'(没找到)'});await new Promise(z=>setTimeout(z,800))}})()",
+  "must": ["xiaoDone"],
+  "note": "第二张也要收尾打勾；只回一张就是父会话把第二个 tool_call 丢了（少一条 tool 回复，下一次请求会被网关判 400）"
+ },
+ {
+  "eval": "(()=>{const cs=[...document.querySelectorAll('.view.on .card.sub')];const labels=cs.map(c=>(c.querySelector('.sb')||{}).textContent||'');const last=[...document.querySelectorAll('.view.on .msg.ans')].pop();return {lao:labels.some(t=>/前端老张/.test(t)),xiao:labels.some(t=>/测试小李/.test(t)),cards:cs.length,summarized:/汇总/.test(last?last.textContent:''),tail:last?last.textContent.slice(0,40):''}})()",
+  "must": ["lao", "xiao", "summarized"],
+  "note": "两张卡各挂一个成员名，主持人的收尾把两件事并成一句（cards 只打印：重名会被 uniqueSubName 加成「… 2」，条数不该被钉死）"
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/usage?kind=sub').then(r=>r.json());const rows=d.byExpert||[];const xiao=rows.find(x=>x.name=='测试小李');const lao=rows.find(x=>x.name=='前端老张');return {xiaoBooked:!!xiao,xiaoTokens:(xiao&&xiao.total)||0,xiaoPreset:xiao?xiao.preset:'',laoBooked:!!lao,noLabelExpert:rows.every(x=>x.name!='两个都派')}})()",
+  "must": ["xiaoBooked", "xiaoTokens", "noLabelExpert"],
+  "note": "这一步才是这批的正题：成员「测试小李」那张卡**只填了名字、人设是空的**，上一版按「persona 非空」判定归属，这笔钱会退回主持人头上 —— 界面上看不出来，只有按专家那一行少一个人。xiaoPreset 期望 xpteam-b，只打印。"
+ },
+ {
+  "shot": "xt14-team-dual"
+ },
+ {
   "click": "[data-view=\"experts\"]"
  },
  {

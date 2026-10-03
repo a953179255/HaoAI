@@ -376,6 +376,29 @@ TEAM_PARENT = [
 TEAM_CHILD = [
     ("老张这边读完了：第一行是 hello from HaoAI PC。", None),
 ]
+# 同一回合派两名成员：主持人一次吐两个 task 调用，引擎按 for 循环**一条接一条**跑。
+# 提示里那句"一条接一条"就是靠这份剧本对上现实的 —— 两次派工各记各的账，
+# 界面上两张子任务卡都在，而成员「测试小李」那张卡**没有人设**（只有名字），
+# 正是上一版会把钱记回主持人头上的那种卡。
+TEAM_DUAL_MARK = "两个都派"
+TEAM_DUAL_PARENT = [
+    ("两个都派", [{"id": "tm2", "name": "task",
+                   "arguments": json.dumps({
+                       "prompt": "老张的活：读 hello.txt 告诉我第一行",
+                       "label": "前端老张", "preset": "xpteam-a"})},
+                  {"id": "tm3", "name": "task",
+                   "arguments": json.dumps({
+                       "prompt": "小李的活：给这个文件补三条用例",
+                       "label": "测试小李", "preset": "xpteam-b"})}],
+     "两件一起派出去，一条接一条跑。"),
+    ("汇总：老张说第一行是 hello from HaoAI PC；小李补了三条用例。", None),
+]
+TEAM_CHILD_A = [
+    ("老张的活办完了：第一行是 hello from HaoAI PC。", None),
+]
+TEAM_CHILD_B = [
+    ("小李这边：补了 3 条用例 —— 正常、空文件、超长行。", None),
+]
 
 # multi：一个网关同时喂好几条会话，各自一份剧本。# 三条的话术与文件都不同，所以"事件串台"在界面上是看得见的（丙的回答出现在甲那条=立刻能发现）。
 ROUTED = {
@@ -499,6 +522,7 @@ class Handler(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(n) or b"{}")
         msgs = req.get("messages", [])
         tool_rounds = sum(1 for m in msgs if m.get("role") == "tool")
+        local_rounds = None      # 只有按回合取行的模式才需要，见下面 team 分支
         key, plan = (None, PLAN.get(MODE, PLAN["tools"]))
         if MODE == "fallback":
             # 主模型一律 429（可重试），备胎正常答。答案里带上模型名 ——
@@ -524,8 +548,23 @@ class Handler(BaseHTTPRequestHandler):
             # 主持人与成员的历史里都带 role=="tool" 的轮数，按 tool_rounds 取行会串台：
             # 成员的第一轮会被当成主持人的第二轮。按派工标记分道（同 subloop 的办法）。
             joined = " ".join(str(m.get("content") or "") for m in msgs)
-            plan = TEAM_CHILD if TEAM_MARK in joined else TEAM_PARENT
-        idx = min(tool_rounds, len(plan) - 1)
+            if TEAM_DUAL_MARK in joined:
+                plan = TEAM_DUAL_PARENT
+            elif "老张的活" in joined:
+                plan = TEAM_CHILD_A
+            elif "小李的活" in joined:
+                plan = TEAM_CHILD_B
+            elif TEAM_MARK in joined:
+                plan = TEAM_CHILD
+            else:
+                plan = TEAM_PARENT
+            # **回合内**的轮数，不是整条会话累计的：`ui-xpteam` 在同一条团队会话里先跑
+            # 一段单人派工（留下一条 tool 回复），再跑"两个都派"。用累计值取行会直接跳到
+            # 剧本最后一句收尾 —— 症状是"模型一个 task 都没派，却宣称两件都办完了"，
+            # 看着像引擎吞了并行调用，其实是假网关的索引错位。
+            last_user = max([i for i, m in enumerate(msgs) if m.get("role") == "user"] + [-1])
+            local_rounds = sum(1 for m in msgs[last_user + 1:] if m.get("role") == "tool")
+        idx = min(tool_rounds if local_rounds is None else local_rounds, len(plan) - 1)
         row = plan[idx]
         text = row[0]
         calls = row[1] if len(row) > 1 else None

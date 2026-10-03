@@ -135,6 +135,53 @@ class ProviderStreamTest {
         }
     }
 
+    /**
+     * 一条回合里返回**两个** tool_call（并行工具调用）—— 多 Agent 派工就靠这个：
+     * 主持人一次派两名成员，两个调用都得活到解析结束。
+     *
+     * 这条判据是像素剧本逼出来的：`ui-xpteam.json` 的「两个都派」那一步量到界面上只有一张
+     * 子任务卡、账本里只有一个人，而用脚本客户端直接喂两个调用的引擎单测是绿的 ——
+     * 也就是说被吞掉的位置在**流式解析**这一段，不在回合循环。
+     * 分片顺序照假网关的形状来（每个调用先一帧带头 id，再紧跟自己的参数碎片）。
+     */
+    @Test
+    fun `two tool calls in one stream both survive parsing`() {
+        val args = listOf(
+            0 to """{"prompt":"老张的活","label":"前端老张","preset":"attr-d1"}""",
+            1 to """{"prompt":"小李的活","label":"测试小李","preset":"attr-d2"}"""
+        )
+        val pieces = mutableListOf<ByteArray>()
+        args.forEach { (idx, raw) ->
+            val name = "task"
+            val id = if (idx == 0) "k1" else "k2"
+            pieces.add(data("""{"choices":[{"index":0,"finish_reason":null,"delta":{"role":"assistant","tool_calls":[{"index":$idx,"id":"$id","type":"function","function":{"name":"$name","arguments":""}}]}}]}"""))
+            var i = 0
+            while (i < raw.length) {
+                val frag = raw.substring(i, minOf(i + 9, raw.length))
+                pieces.add(data("""{"choices":[{"index":0,"finish_reason":null,"delta":{"tool_calls":[{"index":$idx,"function":{"arguments":"${jsonEscape(frag)}"}}]}}]}"""))
+                i += 9
+            }
+        }
+        pieces.add(data("""{"choices":[{"index":0,"finish_reason":"tool_calls","delta":{}}]}"""))
+        pieces.add(data("[DONE]"))
+        val f = serve(pieces)
+        try {
+            val r = Provider("http://127.0.0.1:${f.port}/v1", "sk-test", "m").chat(
+                listOf(Msg("user", "两个都派")), listOf(ToolSchema("task", "d", emptyObj()))
+            ) { }
+            assertEquals("两个调用都得活到解析结束（少一个就是成员被吞掉，而主持人照样宣称办完）",
+                listOf("k1", "k2"), r.calls.map { it.id })
+            assertEquals(listOf("task", "task"), r.calls.map { it.name })
+            val o0 = Json.parseToJsonElement(r.calls[0].args).jsonObject
+            val o1 = Json.parseToJsonElement(r.calls[1].args).jsonObject
+            assertEquals("attr-d1", o0["preset"]!!.jsonPrimitive.content)
+            assertEquals("attr-d2", o1["preset"]!!.jsonPrimitive.content)
+            assertEquals("小李的活", o1["prompt"]!!.jsonPrimitive.content)
+        } finally {
+            f.server.stop(0)
+        }
+    }
+
     @Test
     fun `http errors become provider errors with a retry hint`() {
         val f = serve(emptyList(), status = 429, body = """{"error":{"message":"slow down"}}""")

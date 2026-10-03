@@ -144,6 +144,44 @@ class SubAttributionTest {
     }
 
     /**
+     * **一条回合派两名成员** —— 不是连着调两次 `spawn`，而是模型一次返回两个 `task` 调用，
+     * 由引擎那一圈 `for (call in turn.calls)` 依次跑完。
+     *
+     * 这条判据是被像素剧本逼出来的：`ui-xpteam.json` 里"两个都派"那一步量到界面上只有一张
+     * 子任务卡、账本里只有一个人，而主持人却宣称两件都办完了。到底是引擎吞了第二个调用，
+     * 还是假网关把第二个成员路由错了 —— 这一条能一刀切开。
+     */
+    @Test
+    fun `one round that returns two task calls runs both members`() {
+        Presets.save(listOf(card("attr-d1", "前端老张", "你是前端。"), card("attr-d2", "测试小李", "你是测试。")))
+        val queue = ArrayDeque<AssistantTurn>()
+        queue.add(AssistantTurn("两件一起派", listOf(
+            ToolCall("k1", "task", """{"prompt":"老张的活：读 a.txt","label":"前端老张","preset":"attr-d1"}"""),
+            ToolCall("k2", "task", """{"prompt":"小李的活：补三条用例","label":"测试小李","preset":"attr-d2"}""")
+        ), Usage(10, 5), "tool_calls"))
+        queue.add(AssistantTurn("汇总：两件都回来了", emptyList(), Usage(7, 3), "stop"))
+        val parentClient = object : ChatClient {
+            override fun chat(
+                messages: List<Msg>, tools: List<ToolSchema>, onText: (String) -> Unit
+            ): AssistantTurn {
+                val t = if (queue.isNotEmpty()) queue.removeFirst() else AssistantTurn("收尾", emptyList(), Usage(), "stop")
+                onText(t.text)
+                return t
+            }
+        }
+        val s = Session("p" + System.nanoTime(), ws())
+        val e = Engine(s, PcSettings(permissionMode = "auto"), builtinTools(), Allow(), {}, parentClient)
+        e.childClient = { Scripted("成员结论回来了") }
+        e.submit("两个都派")
+        val rows = UsageLedger.pick(kind = UsageLedger.SUB)
+            .filter { it.preset == "attr-d1" || it.preset == "attr-d2" }
+        assertEquals("一条回合里的两个 task 调用都要真的跑掉（少一个就是引擎吞了调用，而主持人照样会宣称办完）",
+            listOf("attr-d1", "attr-d2"), rows.map { it.preset }.distinct().sorted())
+        assertEquals("两个成员名都要在账上",
+            listOf("前端老张", "测试小李"), rows.map { it.expert }.distinct().sorted())
+    }
+
+    /**
      * 主持人提示里那句"一条接一条"必须与引擎真的做的一致。
      *
      * 上一版写的是「同一回合可以并行派多个成员」，而 `Engine` 那一圈是
