@@ -39,5 +39,14 @@
   {"sleep": 500},
   {"eval": "(()=>{const line=(document.querySelector('#ctxLine')||{}).textContent||'';const msgs=document.querySelectorAll('.msg').length;return {line:line.indexOf('当前')>=0,kept:msgs>0&&msgs<8}})()",
    "must": ["line", "kept"], "note": "刷新之后压缩结果还在（压过的历史落了盘，不是只在内存里改了改）"},
-  {"shot": "k05-after-reload"}
+  {"shot": "k05-after-reload"},
+  {"note": "压缩那一次模型调用要进 Token 统计：先按接口口径确认账本里有 compact 这一档、且这次真的不为 0",
+   "eval": "(async()=>{const d=await fetch('/api/usage').then(r=>r.json());const s=(d&&d.summary)||{};return {hasKey:Object.prototype.hasOwnProperty.call(s,'compact'),atLeastOne:(s.compact||0)>=1,n:s.compact||0}})()",
+   "must": ["hasKey", "atLeastOne"]},
+  {"click": "[data-view=\"tokens\"]", "note": "进 Token 统计整页，看那行口径说明在不在"},
+  {"sleep": 1800},
+  {"note": "页面上那句话必须与接口报的数一致 —— 数对不上的口径说明就是装饰",
+   "eval": "(async()=>{const d=await fetch('/api/usage').then(r=>r.json());const n=((d&&d.summary)||{}).compact||0;const el=document.querySelector('#tkNote');const t=el?(el.textContent||''):'';return {shown:!!el,visible:!!(el&&el.offsetParent),saysCount:t.indexOf('压缩 '+n+' 次')>=0,hasMoney:t.indexOf('token')>=0}})()",
+   "must": ["shown", "visible", "saysCount", "hasMoney"]},
+  {"shot": "k06-compact-counted"}
 ]

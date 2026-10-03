@@ -49,6 +49,17 @@ object UsageLedger {
     /** `task` 工具派出来的子任务（团队会话里就是被派工的成员）。 */
     const val SUB = "sub"
 
+    /**
+     * 上下文压缩自己那一次模型调用。
+     *
+     * 为什么单独一档：它不是"用户说的一句话"，而是系统为了省窗口花的一笔钱。
+     * 以前 `Engine.compactOnce` 只取 `AssistantTurn.text`，把 `usage` 丢了 ——
+     * 于是这笔真实发生的消耗在账本、Token 统计页与导出的 xlsx 里全都不存在，
+     * 而页面上写的是「总 TOKENS」。对标 Octop 那张图，它是挂一句
+     * "部分消耗尚未纳入统计"盖过去；我们只有这一个非回合调用点，记进账本比免责诚实。
+     */
+    const val COMPACT = "compact"
+
     data class Row(
         val t: Long,
         val model: String,
@@ -184,11 +195,18 @@ object UsageLedger {
         """{"n":${list.size},"prompt":${list.sumOf { it.prompt }},""" +
             """"completion":${list.sumOf { it.completion }},"ms":${list.sumOf { it.ms }}}"""
 
-    /** 新键的形状：多 `cached` 与 `total`（= 输入 + 输出，页面上最大的那个数）。 */
+    /**
+     * 新键的形状：多 `cached` 与 `total`（= 输入 + 输出，页面上最大的那个数），
+     * 以及 `compact`（这一堆行里有几次是上下文压缩自己花的）。
+     *
+     * 收在这里而不是各切片自己补：`aggFull` 是 summary/byDay/byExpert/byModel **共用**的形状，
+     * 口径只有一处，四个页签不会各算各的。
+     */
     private fun aggFull(list: List<Row>): String =
         """{"n":${list.size},"prompt":${list.sumOf { it.prompt }},""" +
             """"completion":${list.sumOf { it.completion }},"cached":${list.sumOf { it.cached }},""" +
-            """"total":${list.sumOf { it.prompt + it.completion }},"ms":${list.sumOf { it.ms }}}"""
+            """"total":${list.sumOf { it.prompt + it.completion }},"ms":${list.sumOf { it.ms }},""" +
+            """"compact":${list.count { it.kind == COMPACT }}}"""
 
     /**
      * 上面那份去掉两头花括号的**片段**，给"在前后还要再接键"的切片用。
@@ -298,6 +316,8 @@ object UsageLedger {
             """"completion":${list.sumOf { it.completion }},"cached":${list.sumOf { it.cached }},""" +
             """"total":${list.sumOf { it.prompt + it.completion }},"ms":${list.sumOf { it.ms }},""" +
             """"dayCount":${list.map { dayOf(it.t) }.distinct().size},""" +
+            // 系统自己花的那几次（上下文压缩）：口径要能在页面上说清，见 Engine.bookCompact
+            """"compact":${list.count { it.kind == COMPACT }},""" +
             """"okRate":${num(if (list.isEmpty()) 0.0 else list.count { it.ok }.toDouble() / list.size)},""" +
             """"tps":${num(rate(list))}}"""
 

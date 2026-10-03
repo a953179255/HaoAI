@@ -315,12 +315,29 @@ class Engine(
      * 迟早有一个忘了带 `expert`，而"按专家"那张表就会莫名多出几行未挂专家。
      */
     private fun ledger(
-        model: String, pt: Int, ct: Int, ms: Long, ok: Boolean, cached: Int = 0
+        model: String, pt: Int, ct: Int, ms: Long, ok: Boolean, cached: Int = 0,
+        kind: String = if (depth > 0) UsageLedger.SUB else UsageLedger.MAIN
     ) = UsageLedger.add(
         model, session.id, pt, ct, ms, ok, cached,
-        session.role, session.preset,
-        if (depth > 0) UsageLedger.SUB else UsageLedger.MAIN
+        session.role, session.preset, kind
     )
+
+    /**
+     * 把"上下文压缩"那一次模型调用记进账本。
+     *
+     * 三件事一件都不能少，少一件就是"这笔钱在页面上不存在"：
+     * 累加这条会话的累计（右栏与顶栏那个数）、落一行 `kind=compact`（Token 统计页与
+     * 导出的 xlsx 都按行算）、以及**不冒充回合**（`n` 是"人说了几句 / 模型答了几轮"，
+     * 压缩是系统自己花的，算进回合数会让"平均每次对话多少 token"虚高）。
+     */
+    private fun bookCompact(u: Usage, ms: Long) {
+        val pt = u.promptTokens
+        val ct = u.completionTokens
+        if (pt <= 0 && ct <= 0) return
+        totalPrompt += pt
+        totalCompletion += ct
+        ledger(modelNow, pt, ct, ms, true, u.cachedTokens, UsageLedger.COMPACT)
+    }
 
     /**
      * 派一条子任务。可以按子任务换模型与工具，但**权限不能从这条路绕过去**：
@@ -678,9 +695,14 @@ class Engine(
         val charsBefore = head.sumOf { it.content?.length ?: 0 }
 
         val fromModel = runCatching {
-            client.chat(
+            val t0 = System.currentTimeMillis()
+            val r = client.chat(
                 listOf(Msg("user", Compactor.promptFor(head))), emptyList()
-            ) { }.text.trim()
+            ) { }
+            // 压缩不是"免费"的：它自己就要花一次模型调用。以前这里只取 text、把 usage 丢了，
+            // 于是 Token 统计页的「总 TOKENS」少算这一笔，而页面上没有任何一句话说明这件事。
+            bookCompact(r.usage, System.currentTimeMillis() - t0)
+            r.text.trim()
         }.getOrNull().orEmpty()
         val piece = if (fromModel.length >= 40) fromModel else Compactor.digest(head)
 
