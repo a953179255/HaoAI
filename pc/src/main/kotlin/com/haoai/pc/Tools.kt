@@ -138,6 +138,14 @@ class ToolCtx(
      */
     var spawn: ((label: String, prompt: String, opts: SubOpts) -> Pair<String, String>)? = null
 
+    /**
+     * 这条会话挂的角色卡 id（没挂就是空）。
+     *
+     * `search_knowledge` 要知道"我是谁"才能找到绑给这个专家的知识库 ——
+     * 全局挂十个库、每轮都给模型看一份目录，是把窗口当仓库用。
+     */
+    var presetId: String = ""
+
     fun resolve(p: String): File {
         val clean = p.trim().replace('\\', '/')
         val f = if (File(clean).isAbsolute) File(clean) else File(workspace, clean)
@@ -642,8 +650,41 @@ class AskAgentTool : Tool(
     companion object { val MODES = setOf("sync", "background", "bg") }
 }
 
-class GlobTool : Tool(
-    "glob", "按通配找文件，如 **/*.kt。返回相对工作区的路径列表。",
+/**
+ * `search_knowledge`：查知识库。
+ *
+ * 为什么把"查"做成工具而不是每轮把正文塞进提示：一份手册几十万字，
+ * 全塞进去窗口立刻爆，而模型这一轮真正需要的那一段可能只有三行。
+ * 系统提示里只给**目录**（有哪些库、里面有什么文件），内容按需取 ——
+ * 与 grep/read 那套是同一个道理。
+ */
+class SearchKnowledgeTool : Tool(
+    "search_knowledge",
+    "在知识库里查一句话，返回命中的片段与出处（库名 / 文档名）。" +
+        "问的是制度、规范、手册、接口文档里的事实就查它，别凭印象编。" +
+        "kb 可以留空：默认查这张角色卡绑定的那些库（没绑就查标了「每回合自动带上」的库）。" +
+        "没查到会说没查到，不会硬凑一个答案给你。",
+    schema("q" to "string", "kb" to "string", required = arrayOf("q")),
+    kind = "read"
+) {
+    override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
+        val q = req(args, "q")?.trim().orEmpty()
+        if (q.isEmpty()) return fail("search_knowledge 缺少 q（要查的那句话）")
+        val only = (req(args, "kb") ?: "").trim()
+        val ids = if (only.isEmpty()) Knowledge.boundTo(ctx.presetId) else listOf(only)
+        if (ids.isEmpty())
+            return fail("没有可用的知识库：去「知识库」页建一个并导入资料，或在专家卡上绑定现有的库")
+        val (hits, note) = Knowledge.search(ids, q, ctx.settings.embedUrl, top = 6)
+        if (hits.isEmpty())
+            return ToolResult("知识库里没查到与「$q」相近的内容" +
+                (if (note.isNullOrBlank()) "" else "（$note）"))
+        return ToolResult(hits.mapIndexed { i, h ->
+            "${i + 1}. [${h.how}] ${h.kbName} / ${h.doc}（${"%.2f".format(h.score)}）\n" + h.snippet
+        }.joinToString("\n\n"))
+    }
+}
+
+class GlobTool : Tool(    "glob", "按通配找文件，如 **/*.kt。返回相对工作区的路径列表。",
     schema("pattern" to "string", "path" to "string", required = arrayOf("pattern"))
 ) {
     override suspend fun run(args: JsonObject, ctx: ToolCtx): ToolResult {
@@ -1486,7 +1527,7 @@ fun builtinTools(): List<Tool> = listOf(
     ShellTool(), ShellOpenTool(), ShellSendTool(), ShellReadTool(), ShellCloseTool(), ShellListTool(),
     GitTool(), TodoTool(), AskUserTool(), AskUserBatchTool(), WebFetchTool(), WebSearchTool(),
     BrowserTool(), ScreenTool(), TaskTool(), MediaTool(), RunCodeTool(), RecordTool(), RunVerifyTool(),
-    AgentListTool(), AskAgentTool()
+    AgentListTool(), AskAgentTool(), SearchKnowledgeTool()
 )
 
 /**

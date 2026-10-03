@@ -200,6 +200,8 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/agents" -> agents(ex)
                 "/api/experts/library" -> expertLibrary(ex)
                 "/api/kb" -> kb(ex)
+                "/api/kbs" -> kbs(ex)
+                "/api/kbfile" -> kbFile(ex)
                 "/api/secrets" -> secrets(ex)
                 "/api/hooks" -> hooks(ex)
                 "/api/digest" -> send(ex, 200, Digest.json(),
@@ -821,6 +823,15 @@ class WebServer(settings: PcSettings, port: Int,
                             color = b.str("color").trim().take(9),
                             mbti = b.str("mbti").trim().uppercase().take(4),
                             quick = b.list("quick").map { it.trim() }.filter { it.isNotEmpty() }.take(4),
+                            /**
+                             * 绑定的知识库：只留**现在真存在**的那些。
+                             *
+                             * 为什么不因为"库不存在"就拒掉整次保存：库是会被人删的，
+                             * 删了之后那张卡就打不开、改不动，比留着一个失效绑定更糟。
+                             * 也不保留失效 id：界面上会摆一个点开是空的库名，看着像坏了。
+                             */
+                            kbs = b.list("kbs").map { it.trim() }.filter { it.isNotEmpty() }
+                                .filter { Knowledge.find(it) != null }.distinct().take(6),
                             created = old?.created ?: System.currentTimeMillis()
                         )
                     )

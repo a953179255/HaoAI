@@ -57,7 +57,7 @@
 | `err` | 一句错误 | 失败 |
 | `approval` | `{id,title,detail,kind,tool,pattern,risk,riskLabel,riskWhy,hunks[]}` | 要人批准 |
 | `ask` | `{id,question,options[]}` | `ask_user` 要人回答 |
-| `todo` / `queue` / `title` / `mode` / `tools` / `settings` / `sessions` / `runstate` / `agents` / `hello` / `ping` | 各自的对象（`agents` = `{agents[],inbox[],busy[]}`，多 Agent 那一层的读数） | 状态变了 |
+| `todo` / `queue` / `title` / `mode` / `tools` / `settings` / `sessions` / `runstate` / `agents` / `kbs` / `hello` / `ping` | 各自的对象（`agents` = `{agents[],inbox[],busy[]}`，多 Agent 那一层的读数；`kbs` = 与 `GET /api/kbs` 同形） | 状态变了 |
 
 `approval` 里的 `hunks[]` 只在**一次调用改了好几处**时出现：
 `[{no,at,stat,text}]`，`at` 是旧文件里的行号（1 基）。
@@ -101,6 +101,8 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 `/api/new` 可带 `team:<id>` 开团队会话（服务端现拼主持人人设，成员人设经 task 的 `persona` 参数随派工下发）。
 
 排程与产出：`/api/schedules`、`/api/sched/parse`、`/api/workflows`、`/api/digest`、
+`/api/kbs`（知识库：建库/导入含 docx-xlsx-pptx-pdf/删/重解析/预览/试检索）、
+`/api/kbfile`（下载库里那份原文，文件名只取本体、库 id 要真存在），
 `/api/digest/export`、`/api/backups`、`/api/backup`
 
 Git 面板：`/api/gitstatus`、`/api/gitdiff`、`/api/gitstage`、`/api/gitcommit`

@@ -45,6 +45,15 @@ data class Preset(
     val mbti: String = "",
     /** 快捷提问：专家卡上点一下就带着这套配置发出去。 */
     val quick: List<String> = emptyList(),
+    /**
+     * 绑定的知识库 id（对标 Octop 的 `agents.knowledge_base_ids`）。
+     *
+     * 为什么绑在卡上而不是全局：知识库的价值是"这个角色说话有依据"。
+     * 全局挂十个库，每一轮都给模型看一份目录，是把窗口当仓库用；
+     * 绑在卡上，剪辑专家只看剪辑规范，法务卡只看制度文件。
+     * 空 = 只带"每回合自动带上"的那些库（[Knowledge.defaultOpenIds]）。
+     */
+    val kbs: List<String> = emptyList(),
     val created: Long = System.currentTimeMillis()
 ) {
     /** 头像字符的统一出口：没设 icon 就拿名字第一个字。 */
@@ -80,6 +89,7 @@ object Presets {
                 color = o["color"]?.jsonPrimitive?.contentOrNull ?: "",
                 mbti = (o["mbti"]?.jsonPrimitive?.contentOrNull ?: "").uppercase(),
                 quick = o["quick"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+                kbs = o["kbs"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
                 created = o["created"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
             )
         }.toMutableList()
@@ -91,7 +101,8 @@ object Presets {
                 """"model":${js(p.model)},"workspace":${js(p.workspace)},""" +
                 """"mode":${js(p.mode)},"desc":${js(p.desc)},"icon":${js(p.icon)},""" +
                 """"color":${js(p.color)},"mbti":${js(p.mbti)},""" +
-                """"quick":${p.quick.joinToString(",", "[", "]") { js(it) }},"created":${p.created}}"""
+                """"quick":${p.quick.joinToString(",", "[", "]") { js(it) }},""" +
+                """"kbs":${p.kbs.joinToString(",", "[", "]") { js(it) }},"created":${p.created}}"""
         }
         runCatching {
             file().parentFile?.mkdirs()
@@ -130,7 +141,8 @@ object Presets {
             """{"id":${js(p.id)},"name":${js(p.name)},"persona":${js(p.persona)},""" +
                 """"model":${js(p.model)},"workspace":${js(p.workspace)},"mode":${js(p.mode)},""" +
                 """"desc":${js(p.desc)},"icon":${js(p.icon)},"color":${js(p.color)},""" +
-                """"mbti":${js(p.mbti)},"quick":${p.quick.joinToString(",", "[", "]") { js(it) }}}"""
+                """"mbti":${js(p.mbti)},"quick":${p.quick.joinToString(",", "[", "]") { js(it) }},""" +
+                """"kbs":${p.kbs.joinToString(",", "[", "]") { js(it) }}}"""
         }
         return """{"ok":true,"items":[$items],"max":$MAX,"modes":${MODES.joinToString(",", "[", "]") { js(it) }}}"""
     }

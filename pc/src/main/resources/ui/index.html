@@ -285,6 +285,7 @@
   .main[data-page]:not([data-page=""])>.pill{display:none!important}
   .main[data-page="experts"]>#page-experts,
   .main[data-page="sched"]>#page-sched,
+  .main[data-page="kb"]>#page-kb,
   .main[data-page="tokens"]>#page-tokens{display:flex}
   /* ---- Token 统计整页：卡片 + 三个环 + 趋势 + 一张按页签换的表 ---- */
   .tk-body{flex:1;min-height:0;overflow:auto;padding:0 18px 18px}
@@ -332,6 +333,44 @@
   .tk-tb tr:hover td{background:rgba(127,127,127,.06)}
   .tk-tb td.nm{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tk-empty{padding:26px;text-align:center;color:var(--fg2);font-size:12px}
+  /* ---- 知识库整页：左边一列库，右边是选中库的文档表 + 导入 + 试检索 ---- */
+  .kb-body{flex:1;min-height:0;display:flex;gap:14px;padding:0 18px 16px}
+  .kb-list{width:210px;flex:none;overflow:auto;border-right:1px solid var(--line);padding-right:12px;
+    display:flex;flex-direction:column;gap:6px}
+  .kb-item{background:var(--glass);border:1px solid var(--line);border-radius:10px;padding:8px 10px;
+    cursor:pointer;position:relative}
+  .kb-item.on{border-color:var(--acc2);box-shadow:inset 0 0 0 1px var(--acc)}
+  .kb-item b{display:block;font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap}
+  .kb-item small{display:block;font-size:10.5px;color:var(--fg2);margin-top:2px}
+  .kb-item .kb-def{position:absolute;right:8px;top:8px;font-size:9.5px;color:var(--acc);
+    border:1px solid var(--acc2);border-radius:999px;padding:0 5px}
+  .kb-main{flex:1;min-width:0;overflow:auto}
+  /* 文档表：窄屏下七列一起挤会把表头压成两行、把最右边那颗按钮裁掉（截图里"删"字少了半笔）。
+     所以：表头与操作列一律不换行，整张表给个最小宽度，装不下时由 .kb-docwrap 横向滚，
+     而不是把内容裁掉 —— 报错原因那一列反过来要能换行，但限宽，别把整行顶高。 */
+  .kb-docwrap{overflow-x:auto}
+  .kb-docs{width:100%;min-width:720px;border-collapse:collapse;font-size:12px}
+  .kb-docs th,.kb-docs td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;
+    vertical-align:middle}
+  .kb-docs th{font-size:10.5px;color:var(--fg2);font-weight:600;white-space:nowrap}
+  .kb-docs td.ops{white-space:nowrap}
+  .kb-docs td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .kb-docs td.nm{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kb-st{font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--line2)}
+  .kb-st.ok{color:var(--acc);border-color:var(--acc2)}
+  .kb-st.bad{color:var(--err);border-color:var(--err)}
+  .kb-err{font-size:10.5px;color:var(--err);display:block;max-width:200px;white-space:normal}
+  .kb-imp,.kb-search{background:var(--glass);border:1px solid var(--line);border-radius:12px;
+    padding:10px 12px;margin-top:12px}
+  .kb-hits{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+  .kb-hit{border:1px solid var(--line);border-radius:9px;padding:7px 9px;font-size:11.5px}
+  .kb-hit .src{color:var(--acc);font-size:11px}
+  .kb-hit p{margin:4px 0 0;color:var(--fg2);white-space:pre-wrap}
+  .kb-file{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+  .kb-pick{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11.5px;color:var(--fg2)}
+  .kbck{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .kbck em{font-style:normal;color:var(--dim2);font-size:10.5px}
   .xp-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 18px 10px;flex-wrap:wrap}
   .xp-head h2{margin:0;font-size:17px;color:var(--fg)}
   .xp-head .sp{flex:1}
@@ -1043,7 +1082,7 @@
     <div class="grp">工作台</div>
     <div class="navrow on" data-view="chat" title="会话与任务"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg>会话<span class="nb2" id="navSessCnt"></span></div>
     <div class="navrow" data-view="experts" id="expertsBtn" title="专家卡与团队：人设+模型+工作区一次带上；团队由主持人调度成员"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>专家<span class="nb2" id="expertsCount"></span></div>
-    <div class="navrow" data-act="kb" title="工作区 .haoai-kb/ 语料：导入参考文档，自动进语义检索"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 3v18M12 8h5M12 12h5"/></svg>知识库</div>
+    <div class="navrow" data-view="kb" id="kbBtn" title="知识库：跨项目的资料，能绑到具体专家身上；docx/xlsx/pptx 也能收"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 3v18M12 8h5M12 12h5"/></svg>知识库<span class="nb2" id="kbCount"></span></div>
     <div class="navrow" data-act="skills" title="自定义命令（技能）与技能订阅源在设置里"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4L15 12l-3-3z"/></svg>技能</div>
     <div class="grp">助理</div>
     <div class="navrow" data-view="sched" title="定时任务的时间线与近期结果"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>日程</div>
@@ -1199,6 +1238,44 @@
         <div class="tk-donuts" id="tkDonuts"></div>
         <div class="tk-trend"><h4>每日消耗趋势（下=输入，上=输出）</h4><div class="tk-bars" id="tkBars"></div></div>
         <div id="tkTable"></div>
+      </div>
+    </div>
+
+    <!-- 知识库整页：左列是库，右边是选中库的文档表 + 导入 + 试检索。
+         与工作区 .haoai-kb/ 的分工写在页底那句说明里（两套是有意留的，见 Knowledge 的注释）。 -->
+    <div class="pagev" id="page-kb">
+      <div class="xp-head">
+        <h2>知识库</h2>
+        <div class="kv" id="kbSum" style="margin:0">—</div>
+        <span class="sp"></span>
+        <button class="btn" id="kbWsTab" title="工作区自己的 .haoai-kb/ 语料在右栏那个页签里管">工作区语料</button>
+        <button class="btn" id="kbReindexAll" title="把本库每一份文档重新解析一遍（解析器升级或当初失败的用它重试）">重新索引本库</button>
+        <button class="btn pri" id="kbNew">＋ 新建知识库</button>
+      </div>
+      <div class="kb-body">
+        <aside class="kb-list" id="kbxList"></aside>
+        <section class="kb-main">
+          <div id="kbDetail"></div>
+          <div class="kb-imp">
+            <div class="grp">导入到本库</div>
+            <input type="text" id="kbDocName" class="tin" placeholder="文件名（如 剪辑规范.md；收 docx / xlsx / pptx / pdf）">
+            <textarea id="kbDocText" class="mem" rows="4"
+              placeholder="粘一段纯文本进来（md / txt / csv 都行）。要传 docx 这类二进制就用右边的选文件。"></textarea>
+            <div class="acts2">
+              <button class="ab" id="kbAddText">存入纯文本</button>
+              <label class="ab kb-file" for="kbxFile">选文件（可多选）</label>
+              <input type="file" id="kbxFile" multiple
+                accept=".md,.txt,.csv,.tsv,.json,.yml,.yaml,.toml,.log,.rst,.html,.htm,.xml,.docx,.xlsx,.xlsm,.pptx,.pdf" hidden>
+              <span class="fp" id="kbImpState"></span>
+            </div>
+          </div>
+          <div class="kb-search">
+            <div class="grp">试检索（导入完先查一把，比等模型用错再回头查强）</div>
+            <input type="text" id="kbxQ" class="tin" placeholder="查一句：看它到底能不能命中你要的那段">
+            <div class="acts2"><button class="ab" id="kbxGo">检索本库</button><span class="fp" id="kbHow"></span></div>
+            <div class="kb-hits" id="kbxHits"></div>
+          </div>
+        </section>
       </div>
     </div>
   </main>
@@ -2235,6 +2312,8 @@ on('usage',(v,d)=>paintUsage(d,v));
 /* 专家实例与收件箱变了：专家页开着就重画。不接这个事件的话，页面会停在打开那一刻的状态，
    别的专家正在忙、谁被停了、刚投的消息跑完没有，全都要手动重开页才看得见。 */
 on('agents',(v,d)=>Experts.applyAgents(d));
+/* 知识库变了（导入/删除/重解析）：这一页开着就重画，别停在打开那一刻的文档表上 */
+on('kbs',(v,d)=>Kbs.apply(d));
 on('notice',(v,d)=>notice(d,null,v));
 on('err',(v,d)=>notice(d,'err',v));
 on('mode',(v,d)=>{v.mode=d.mode;if(v===cur())setMode(d.mode)});
@@ -4603,6 +4682,22 @@ function loadAgents(){
 const COLORS=['#3E7A1E','#D97A2E','#3E6FB0','#8A54B8','#C98A2D','#2F8F6B','#B3452E','#4E7FB5'];
 const MBTIS=['INTJ','INTP','ENTJ','ENTP','INFJ','INFP','ENFJ','ENFP','ISTJ','ISFJ','ESTJ','ESFJ','ISTP','ISFP','ESTP','ESFP'];
 const ROLE_MODES={plan:'计划',ask:'询问',auto:'自动'};
+/* 知识库多选：勾中的那些会随卡存进 presets.json（服务端只留真存在的库 id）。
+   一个库都没有时给一句出路，而不是摆一个空框让人以为坏了。 */
+function kbPicker(sel){
+  const bases=Kbs.items();
+  if(!bases.length)
+    return `<div class="fld"><label>知识库</label><div class="kv">还没有知识库 —— 去左栏「知识库」建一个再回来绑</div></div>`;
+  const on=new Set(sel||[]);
+  return `<div class="fld"><label>知识库（这个专家说话的依据）</label>
+    <div class="kb-pick">`+bases.map(b=>`<label class="kbck">
+      <input type="checkbox" value="${esc(b.id)}"${on.has(b.id)?' checked':''}>
+      ${esc(b.name)}<em>${(b.docs||[]).length} 份</em></label>`).join('')+
+    `</div></div>`;
+}
+function pickedKbs(){
+  return [...document.querySelectorAll('.kb-pick input:checked')].map(x=>x.value);
+}
 function colOf(p){
   if(p&&p.color&&/^#[0-9a-fA-F]{6}/.test(p.color))return p.color.slice(0,7);
   let h=0;const s=String((p&&p.name)||'?');
@@ -4759,6 +4854,7 @@ function pForm(p,fromLib){
     <span style="flex:1"></span><button class="ab" data-x="back">← 返回</button></div>
   <div class="fld"><label>名字</label><input type="text" id="xfName" value="${esc(v.name||'')}" placeholder="如 代码工程师 / 直播助手"></div>
   <div class="fld"><label>一句专长（卡片第二行）</label><input type="text" id="xfDesc" value="${esc(v.desc||'')}" placeholder="擅长什么、产出什么"></div>
+  ${kbPicker(v.kbs||[])}
   <div class="fld"><label>头像字符与颜色</label><div class="addrow">
     <input type="text" id="xfIcon" value="${esc(v.icon||'')}" style="flex:0 0 64px;text-align:center" maxlength="4" placeholder="Emoji">
     <div class="swatches" id="xfColors">${COLORS.map(c=>`<i data-c="${c}" class="${selColor===c?'on':''}" style="background:${c}"></i>`).join('')}</div></div></div>
@@ -4815,14 +4911,12 @@ function act(x,b){
   }
   if(x==='aask'){
     const p=my.find(z=>z.id===id);
-    const t=prompt('托给「'+((p&&p.name)||id)+'」的一句话（后台跑，它忙完会把回信送回你这条会话）','');
-    if(t===null)return;
-    const text=(t||'').trim();
-    if(!text){toast('那句话是空的');return}
-    post('/api/agents',{op:'ask',preset:id,text:text,mode:'background'}).then(d=>{
-      if(!d||!d.ok){toast((d&&d.error)||'没投出去','err');return}
-      toast(d.reply||'已投进收件箱');loadAgents().then(paint);
-    }).catch(()=>toast('投不出去','err'));return;
+    askOne('托一件事给「'+((p&&p.name)||id)+'」','它忙完会把回信送回你这条会话',text=>{
+      post('/api/agents',{op:'ask',preset:id,text:text,mode:'background'}).then(d=>{
+        if(!d||!d.ok){toast((d&&d.error)||'没投出去','err');return}
+        toast(d.reply||'已投进收件箱');loadAgents().then(paint);
+      }).catch(()=>toast('投不出去','err'));});
+    return;
   }
   if(x==='quick'){setView('chat');newTask('',id,b.dataset.q||'');return}
   if(x==='enable'){const p=lib.find(z=>z.key===id);if(p){formShell();editingP='';pForm(p,true)}return}
@@ -4832,6 +4926,7 @@ function act(x,b){
     const quick=[0,1,2].map(i=>$('#xfQ'+i).value.trim()).filter(Boolean);
     post('/api/presets',{op:'save',id:editingP,name:name,persona:persona,
       desc:$('#xfDesc').value.trim(),icon:$('#xfIcon').value.trim(),color:selColor,
+      kbs:pickedKbs(),
       mbti:$('#xfMbti').value,quick:quick,model:$('#xfModel').value,
       workspace:$('#xfWs').value.trim(),mode:$('#xfMode').value})
       .then(d=>{if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
@@ -4895,6 +4990,7 @@ document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
   if(v==='experts'){setView(v);Experts.openAt();return}
   if(v==='sched'){setView(v);SchedPage.render();return}
   if(v==='tokens'){setView(v);Tokens.open();return}
+  if(v==='kb'){setView(v);Kbs.open();return}
   if(v){setView(v);return}
   if(a==='kb'){setView('chat');document.querySelector('#tabs button[data-t=kb]').click()}
   else if(a==='cron'){setView('chat');document.querySelector('#tabs button[data-t=cron]').click()}
@@ -4903,6 +4999,28 @@ document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
   else if(a==='theme'){$('#themeBtn').click()}
   else if(a==='help'){showHelp()}
 });
+/* 要一句输入的通用弹层。**不用 window.prompt**：无头浏览器里 prompt 直接返回 null
+   （这条路径就没法被像素验到），而且在桌面应用里弹一个系统样式的框，与整体界面两套语言。
+   复用 #mask + #dialog 那套壳，与「怎么用」同一个容器。
+   名字不能叫 askText —— 上面 2615 行早有一个四参数的 askText(title,tip,value,ok)（编辑并重发/
+   重命名会话在用）。同作用域里两次 `function` 声明，**后写的那个把前面的整个覆盖掉**，
+   语法完全合法、编译一行不响：四参数那边调过来时第三个参数被当成回调丢掉，
+   点「确定」只会抛 ok is not a function，界面看起来就是"按钮没反应"。
+   ui-check.js 的第 12 条规则现在专门钉这一类撞名。 */
+function askOne(title,ph,ok){
+  const dg=$('#dialog');dg.classList.remove('wide');
+  dg.innerHTML=`<h3>${esc(title)}</h3>
+    <input type="text" id="askIn" class="tin" placeholder="${esc(ph||'')}" style="width:100%">
+    <div class="acts"><button class="btn pri" id="askOk">确定</button>
+      <button class="btn" id="askNo">取消</button></div>`;
+  $('#mask').classList.add('on');
+  const i=$('#askIn');
+  const go=()=>{const v=(i.value||'').trim();$('#mask').classList.remove('on');if(v)ok(v)};
+  $('#askOk').onclick=go;
+  $('#askNo').onclick=()=>$('#mask').classList.remove('on');
+  i.onkeydown=e=>{if(e.key==='Enter')go();if(e.key==='Escape')$('#mask').classList.remove('on')};
+  setTimeout(()=>i.focus(),60);
+}
 function showHelp(){
   const dg=$('#dialog');dg.classList.remove('wide');dg.onclick=null;
   dg.innerHTML=`<h3>怎么用</h3><div class="kv">
@@ -5067,6 +5185,172 @@ function open(){
   setWin(+$id('#tkWin').value||30);load();
 }
 return {open,load,paint,qs,setWin,table};
+})();
+
+/* ==== [S6 面板对象] Kbs：知识库整页（多库 + 文档状态 + 导入 + 试检索） ==== */
+/* 二进制走 base64 交给 /api/kbs：浏览器读成 dataURL 再剥前缀。
+   不在前端解析 docx —— 解析在服务端（同一份代码要能被 CLI 与测试用）。 */
+const Kbs=(()=>{
+let items=[],meta={},sel='',cards=[];
+const $id=s=>document.querySelector(s);
+const kb=()=>items.find(b=>b.id===sel)||null;
+function load(){
+  return Promise.all([
+    fetch('/api/kbs').then(r=>r.json()),
+    fetch('/api/presets').then(r=>r.json()).catch(()=>({items:[]}))
+  ]).then(([d,p])=>{
+    items=d.items||[];meta=d;cards=p.items||[];
+    if(sel&&!items.some(b=>b.id===sel))sel='';
+    if(!sel&&items.length)sel=items[0].id;
+    paint();
+  }).catch(()=>{$id('#kbxList').innerHTML='<div class="kv">读不到知识库</div>'});
+}
+function boundNames(id){return cards.filter(c=>(c.kbs||[]).includes(id)).map(c=>c.name)}
+function docRow(d){
+  const ok=d.status==='ready';
+  return `<tr data-n="${esc(d.name)}">
+    <td class="nm" title="${esc(d.name)}">${esc(d.name)}</td>
+    <td>${esc(d.kind||'')}</td>
+    <td class="num">${(d.bytes/1024).toFixed(1)}K</td>
+    <td class="num">${ok?d.chars.toLocaleString():'—'}</td>
+    <td class="num">${ok?d.chunks:'—'}</td>
+    <td><span class="kb-st ${ok?'ok':'bad'}">${ok?'就绪':'失败'}</span>
+      ${ok?'':`<span class="kb-err">${esc(d.error||'没抽出文字')}</span>`}</td>
+    <td class="ops"><button class="ab" data-k="prev">预览</button>
+      <button class="ab" data-k="re">重解析</button>
+      <button class="ab" data-k="dl">原文</button>
+      <button class="ab" data-k="del">删</button></td></tr>`;
+}
+function paint(){
+  const e=$id('#kbCount');
+  if(e)e.textContent=(items.length?items.length+' 库':'');
+  const docs=items.reduce((a,b)=>a+(b.docs||[]).length,0);
+  const bad=items.reduce((a,b)=>a+(b.docs||[]).filter(d=>d.status!=='ready').length,0);
+  $id('#kbSum').textContent=`${items.length} 个库 · ${docs} 份文档`+
+    (bad?` · ${bad} 份没吃进去`:'')+` · ${meta.embed?'向量检索':'字面检索（没配 embedUrl）'}`+
+    (meta.pdf?'':' · 本机无 pdftotext，PDF 收不进');
+  $id('#kbxList').innerHTML=items.length?items.map(b=>
+    `<div class="kb-item${b.id===sel?' on':''}" data-id="${esc(b.id)}">
+      ${b.defaultOpen?'<span class="kb-def">自动带上</span>':''}
+      <b>${esc(b.name)}</b><small>${(b.docs||[]).length} 份${b.desc?' · '+esc(b.desc):''}</small>
+    </div>`).join(''):'<div class="kv">还没有知识库 —— 点右上「新建知识库」</div>';
+  const b=kb(),det=$id('#kbDetail');
+  if(!b){det.innerHTML='<div class="kv">左边选一个库，或新建一个。</div>';return}
+  const bn=boundNames(b.id);
+  det.innerHTML=`<div class="xp-head" style="padding:0 0 8px">
+      <h3 style="margin:0;font-size:15px">${esc(b.name)}</h3>
+      <div class="kv" style="margin:0">${esc(b.desc||'（没写说明）')}</div><span class="sp"></span>
+      <button class="btn" data-o="toggle" data-on="${b.defaultOpen?'false':'true'}">${b.defaultOpen?'取消自动带上':'每回合自动带上'}</button>
+      <button class="btn" data-o="del">删库</button>
+    </div>
+    <div class="kv">绑到这张库的专家：${bn.length?bn.map(esc).join('、'):'（还没有 —— 在专家卡的「知识库」里勾它）'}</div>
+    <div class="kb-docwrap"><table class="kb-docs"><thead><tr><th>文档</th><th>类型</th><th>大小</th><th>字数</th>
+      <th>块数</th><th>状态</th><th></th></tr></thead>
+      <tbody>${(b.docs||[]).map(docRow).join('')||'<tr><td colspan="7" class="kv">这个库还是空的</td></tr>'}</tbody></table></div>`;
+}
+function post(b){return fetch('/api/kbs',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(b)}).then(r=>r.json())}
+function addText(){
+  const t=$id('#kbDocText').value;
+  if(!t.trim()){toast('内容是空的');return}
+  if(!sel){toast('先建一个库');return}
+  post({op:'add',kb:sel,name:$id('#kbDocName').value.trim()||'pasted.md',text:t}).then(d=>{
+    if(!d||d.ok===false){toast((d&&d.error)||'没存进来','err');return}
+    $id('#kbDocText').value='';$id('#kbDocName').value='';
+    $id('#kbImpState').textContent=d.status==='ready'?
+      ('已存入：切成 '+(d.chunks||0)+' 块'):'存了但没抽出文字：'+(d.error||'');
+    load();
+  }).catch(()=>toast('存不进来','err'));
+}
+function addFiles(list){
+  if(!sel){toast('先建一个库');return}
+  const files=[...(list||[])];
+  let done=0,bad=0;
+  $id('#kbImpState').textContent='读取中…';
+  files.forEach(f=>{
+    const rd=new FileReader();
+    rd.onload=()=>{
+      const b64=String(rd.result||'').split(',').pop();
+      post({op:'addb64',kb:sel,name:f.name,data:b64}).then(d=>{
+        done++;
+        if(!d||d.ok===false||d.status!=='ready'){bad++;
+          $id('#kbImpState').textContent=f.name+' 没吃进去：'+((d&&(d.error||d.status))||'失败')}
+        if(done===files.length&&!bad)
+          $id('#kbImpState').textContent='导入了 '+done+' 份';
+        load();
+      }).catch(()=>{done++;bad++;$id('#kbImpState').textContent=f.name+' 传失败了'});
+    };
+    rd.onerror=()=>{done++;bad++;$id('#kbImpState').textContent=f.name+' 读不出来'};
+    rd.readAsDataURL(f);
+  });
+}
+function search(){
+  const q=$id('#kbxQ').value.trim();
+  if(!sel){toast('先选一个库');return}
+  if(!q){toast('先写一句要查的');return}
+  post({op:'search',kb:sel,q:q}).then(d=>{
+    const hits=(d&&d.hits)||[];
+    $id('#kbHow').textContent=hits.length?(hits.length+' 条命中 · '+(meta.embed?'向量':'字面'))
+      :('没查到'+((d&&d.note)?('（'+d.note+'）'):''));
+    $id('#kbxHits').innerHTML=hits.map(h=>
+      `<div class="kb-hit"><span class="src">${esc(h.kb)} / ${esc(h.doc)} · ${esc(h.how)} ${h.score}</span>
+       <p>${esc(h.snippet)}</p></div>`).join('')||
+      '<div class="kv">没命中。换个说法，或先确认那份文档状态是「就绪」。</div>';
+  }).catch(()=>{$id('#kbxHits').innerHTML='<div class="kv">检索口没回应</div>'});
+}
+function docAct(k,tr){
+  const name=tr.dataset.n;
+  if(k==='dl'){location.href='/api/kbfile?kb='+encodeURIComponent(sel)+'&name='+encodeURIComponent(name);return}
+  if(k==='prev'){
+    post({op:'preview',kb:sel,name:name}).then(d=>{
+      const dg=$('#dialog');dg.classList.add('wide');
+      dg.innerHTML=`<div class="xhead"><h3 style="margin:0">${esc(name)} 抽出来的正文</h3>
+        <span style="flex:1"></span><button class="ab" data-k="close">关闭</button></div>
+        <div class="pv">${esc((d&&d.text||'').slice(0,6000))}${(d&&d.text||'').length>6000?'…（截断）':''}</div>`;
+      $('#mask').classList.add('on');
+      dg.querySelector('[data-k=close]').onclick=()=>$('#mask').classList.remove('on');
+    }).catch(()=>toast('读不到正文','err'));return;
+  }
+  post({op:k==='del'?'delDoc':'reindex',kb:sel,name:name}).then(d=>{
+    if(!d||d.ok===false){toast((d&&(d.error||d.status))||'没改成','err');return}
+    toast(k==='del'?'已删除':'重解析完：'+(d.status||''));load();
+  }).catch(()=>toast('操作失败','err'));
+}
+function open(){
+  if(!open.wired){open.wired=true;
+    $id('#kbNew').onclick=()=>askOne('知识库名字','如 剪辑规范 / 公司制度',name=>{
+      post({op:'create',title:name,desc:''}).then(d=>{
+        if(!d||d.ok===false){toast((d&&d.error)||'没建成','err');return}
+        load();toast('知识库已建');});});
+    $id('#kbxList').onclick=e=>{const it=e.target.closest?e.target.closest('.kb-item'):null;
+      if(!it)return;sel=it.dataset.id;paint();};
+    $id('#kbDetail').onclick=e=>{
+      const b=e.target.closest?e.target.closest('button'):null;if(!b)return;
+      if(b.dataset.o){
+        const act=b.dataset.o;
+        if(act==='del'){if(!confirm('删掉这个库？里面的文档与抽出的正文都会一起删。'))return;
+          post({op:'del',kb:sel}).then(()=>{sel='';load();});return}
+        post({op:'toggle',kb:sel,on:b.dataset.on}).then(load);return;
+      }
+      const tr=b.closest?b.closest('tr'):null;
+      if(tr&&tr.dataset.n)docAct(b.dataset.k,tr);
+    };
+    $id('#kbAddText').onclick=addText;
+    $id('#kbxFile').onchange=e=>addFiles(e.target.files);
+    $id('#kbxGo').onclick=search;
+    $id('#kbxQ').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
+    $id('#kbReindexAll').onclick=()=>{
+      if(!sel){toast('先选一个库');return}
+      post({op:'reindexAll',kb:sel}).then(d=>{toast('重解析完 '+(d&&d.ready||0)+' 份');load()});};
+    $id('#kbWsTab').onclick=()=>{setView('chat');document.querySelector('#tabs button[data-t=kb]').click()};
+  }
+  load();
+}
+return {open,load,paint,items:()=>items,
+  /* 事件里不塞正文，只当"变了"的信号：重拉一次比在客户端拼两份真相安全 */
+  apply(){const p=(document.querySelector('.main')||{}).dataset;
+    if(p&&p.page==='kb')load();}
+};
 })();
 
 /* ==== [S6 面板对象] Kb：知识库（工作区 .haoai-kb/ 语料） ==== */

@@ -716,6 +716,7 @@ class Engine(
         if (titled) emit(Ev.Title(session.title.get()))
         val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
         ctx.spawn = { label, prompt, opts -> spawn(label, prompt, opts) }
+        ctx.presetId = session.preset
         // 检查点按"一轮"记：这一轮动过哪些文件、改之前长什么样，
         // 之后人点「回到这次之前」才有东西可退（见 [Checkpoints]）。
         ctx.runId = "r" + runStarted
@@ -1041,10 +1042,19 @@ class Engine(
         // 只在真有语料时才占这几十个 token —— 空目录的提示是纯噪音。
         val kbNote = runCatching {
             val fs = java.io.File(session.workspace, ".haoai-kb").listFiles()?.filter { it.isFile }.orEmpty()
-            if (fs.isEmpty()) "" else
+            val local = if (fs.isEmpty()) "" else
                 "这个工作区的 .haoai-kb/ 下有 ${fs.size} 份参考资料（" +
                     fs.take(12).joinToString("、") { it.name } + (if (fs.size > 12) " 等" else "") + "）。" +
                     "需要背景知识时先 read/grep 它们再回答，不要凭空编。"
+            /*
+             * 全局知识库：名单每回合现读（同上，改完下一句话就生效）。
+             * 这里只给"有哪些库、里面有什么文件"，**不给正文** ——
+             * 正文由模型自己调 search_knowledge 去取，取它这一轮真需要的那几段。
+             */
+            val global = Knowledge.catalog(Knowledge.boundTo(session.preset))
+            val g = if (global.isBlank()) "" else
+                "绑定的知识库：$global。要里面的内容时用 search_knowledge 工具查（别凭印象编制度/规范）。"
+            (local + (if (local.isBlank() || g.isBlank()) "" else " ") + g).ifBlank { "" }
         }.getOrDefault("")
         val sys = Msg(
             "system", Prompt.system(

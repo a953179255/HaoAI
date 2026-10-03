@@ -15,6 +15,10 @@
 //   {"eval":"JS 表达式"}           在页面里跑一段（结果会打印；用于断言 DOM 事实）
 //                                 加 "must":["a","b.c"]：这些字段不为真就把整轮判成失败
 //   {"type":{"sel":"#box","text":"…","enter":true}}  往输入框打字并按发送
+//                                 enter 默认 true（等于真的敲回车，输入框会就地发送）；
+//                                 要让下一步去点"确定"钮时**必须写 "enter":false**，
+//                                 否则回车已经把弹层关掉，下一步点到的是一颗已经收起的按钮。
+//                                 目标是 0 尺寸（收着的浮层/别的页签里的同名输入框）直接报错。
 //   {"click":"选择器"}             点一下（用真实的鼠标事件序列，不用 el.click()；0 尺寸直接报错）
 //   {"shot":"文件名"}              存一张 PNG
 //   {"viewport":"phone"|"desktop"|[{"width":..,"height":..,"mobile":true}]}
@@ -236,6 +240,17 @@ async function click(sel) {
 }
 
 async function type(step) {
+  /*
+   * 先确认"打得进去"：往看不见的元素写字（收着的浮层、别的页签里的同名输入框），
+   * value 一样能改进去、input 事件一样会派发，于是判据全绿而动作其实没发生。
+   * 上一轮 ui-kbs 就是打字打到了右栏旧「知识库」页签的 #kbQ 上（整页版那颗叫 #kbxQ），
+   * 而它报出来的现象是下一步"按钮 0 尺寸点不到"—— 错的因和看到的果隔了好几步。
+   */
+  const vis = await evalJs(`(()=>{const e=document.querySelector(${JSON.stringify(step.sel)});
+    if(!e)return 'missing';const r=e.getBoundingClientRect();
+    return (r.width>0&&r.height>0)||e.offsetParent?'ok':'zero'})()`);
+  if (vis !== 'ok')
+    throw new Error((vis === 'missing' ? '找不到要打字的目标：' : '目标在页面上看不见（0 尺寸），打字打进了别的同名元素：') + step.sel);
   await evalJs(`(()=>{const e=document.querySelector(${JSON.stringify(step.sel)});
     e.focus();e.value=${JSON.stringify(step.text)};
     // 程序化改 value 之后光标位置各家浏览器不一致，而 @ 补全这类要看"光标前那段"，

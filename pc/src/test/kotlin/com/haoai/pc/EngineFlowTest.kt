@@ -690,8 +690,8 @@ class EngineFlowTest {
     @Test
     fun `schema builder produces valid openai tool json`() {
         val schemas = builtinTools().map { ToolSchema(it.name, it.desc, it.params) }
-        // 26 把：20 + run_code + record + run_verify + ask_user_batch + agent_list + ask_agent
-        assertEquals(26, schemas.size)
+        // 27 把：20 + run_code + record + run_verify + ask_user_batch + agent_list + ask_agent + search_knowledge
+        assertEquals(27, schemas.size)
         assertTrue(
             "常驻进程工具没注册进来",
             setOf("shell_open", "shell_send", "shell_read", "shell_close", "shell_list")

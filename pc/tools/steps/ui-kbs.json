@@ -1,0 +1,247 @@
+[
+ {
+  "click": "#kbBtn"
+ },
+ {
+  "goto": "#page-kb",
+  "timeout": 8000
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "(()=>{const p=document.querySelector('#page-kb');return {shown:p.getBoundingClientRect().height>200,empty:(document.querySelector('#kbxList')||{}).innerText.indexOf('还没有知识库')>=0,newBtn:!!document.querySelector('#kbNew'),navOn:document.querySelector('.navrow[data-view=kb]').classList.contains('on')}})()",
+  "must": [
+   "shown",
+   "empty",
+   "newBtn",
+   "navOn"
+  ],
+  "note": "知识库整页真的换页显示、左栏是空态（不是空白一块）、导航点亮"
+ },
+ {
+  "click": "#kbNew"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "eval": "(()=>{const i=document.querySelector('#askIn');return {dialog:!!i&&!!i.offsetParent&&i.getBoundingClientRect().width>40,mask:document.querySelector('#mask').classList.contains('on')}})()",
+  "must": [
+   "dialog",
+   "mask"
+  ],
+  "note": "新建走的是页面内的弹层，不是 window.prompt —— 无头浏览器里 prompt 直接返回 null，那条路永远验不到，桌面应用里弹系统框也和整体界面两套语言"
+ },
+ {
+  "type": {
+   "sel": "#askIn",
+   "text": "剪辑规范",
+   "enter": false
+  }
+ },
+ {
+  "click": "#askOk"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/kbs').then(r=>r.json());const it=(d.items||[])[0]||{};window.__kb=it.id||'';return {one:(d.items||[]).length===1,name:it.name==='剪辑规范',listed:(document.querySelector('#kbxList').innerText.indexOf('剪辑规范')>=0),count:(document.querySelector('#kbCount')||{}).textContent==='1 库'}})()",
+  "must": [
+   "one",
+   "name",
+   "listed",
+   "count"
+  ],
+  "note": "建库真的落盘并出现在左列，徽标跟着变（接口与界面各算一遍才算对上）"
+ },
+ {
+  "type": {
+   "sel": "#kbDocName",
+   "text": "口径.md",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#kbDocText",
+   "text": "# 剪辑口径\n\n导出要留原片，交付用 H.264。\n封面一律 3:4，标题字号不超过 42。\n液态玻璃的卡片不许放在 SurfaceView 上。"
+  }
+ },
+ {
+  "click": "#kbAddText"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('#kbDetail').innerText;const row=document.querySelector('.kb-docs tbody tr');return {hasRow:!!row,ready:t.indexOf('就绪')>=0,chunks:/[1-9]/.test((row?row.children[4].innerText:'')||''),state:(document.querySelector('#kbImpState')||{}).textContent.indexOf('已存入')>=0}})()",
+  "must": [
+   "hasRow",
+   "ready",
+   "chunks",
+   "state"
+  ],
+  "note": "纯文本导入：表里出现这一行、状态是就绪、块数是真数出来的（不是占位符）"
+ },
+ {
+  "shot": "kb01-doc-ready"
+ },
+ {
+  "eval": "(async()=>{const b64=btoa('not a real zip at all');const d=await fetch('/api/kbs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'addb64',kb:window.__kb,name:'假.docx',data:b64})}).then(r=>r.json());await new Promise(r=>setTimeout(r,700));const t=document.querySelector('#kbDetail').innerText;return {notOk:d.ok===false,status:d.status==='failed',saysWhy:(d.error||'').length>4,rowShown:t.indexOf('失败')>=0&&t.indexOf('假.docx')>=0}})()",
+  "must": [
+   "notOk",
+   "status",
+   "saysWhy",
+   "rowShown"
+  ],
+  "note": "传了一份假 docx：**这一条要留在列表里标成失败并写原因**。解析失败就从列表消失是最坏的一种做法 —— 用户以为导进去了"
+ },
+ {
+  "shot": "kb02-failed-visible"
+ },
+ {
+  "eval": "(async()=>{const b=document.querySelector('#kbDetail .btn[data-o=toggle]')||document.querySelector('#kbDetail [data-o=toggle]');b.click();await new Promise(r=>setTimeout(r,900));const d=await fetch('/api/kbs').then(r=>r.json());const it=(d.items||[]).find(x=>x.id===window.__kb)||{};return {on:it.defaultOpen===true,badge:document.querySelector('#kbxList').innerText.indexOf('自动带上')>=0}})()",
+  "must": [
+   "on",
+   "badge"
+  ],
+  "note": "「每回合自动带上」：接口与左栏徽标都要跟着变（这个开关决定没绑卡的会话能查到哪些库）"
+ },
+ {
+  "type": {
+   "sel": "#kbxQ",
+   "text": "液态玻璃"
+  }
+ },
+ {
+  "click": "#kbxGo"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const h=document.querySelector('#kbxHits');const t=h?h.innerText:'';return {one:h.querySelectorAll('.kb-hit').length>=1,src:t.indexOf('剪辑规范')>=0&&t.indexOf('口径.md')>=0,how:t.indexOf('字面')>=0||t.indexOf('语义')>=0,snippet:t.indexOf('液态玻璃')>=0}})()",
+  "must": [
+   "one",
+   "src",
+   "how",
+   "snippet"
+  ],
+  "note": "试检索：命中要带出处（库名 / 文档名）、走的是向量还是字面要标出来、片段就是那一句 —— 没配 embedUrl 时字面匹配照样能用，不是「功能不可用」"
+ },
+ {
+  "shot": "kb03-search-hit"
+ },
+ {
+  "eval": "(()=>{const rows=[...document.querySelectorAll('.kb-docs tbody tr')];const bad=rows.find(r=>r.innerText.indexOf('假.docx')>=0);const good=rows.find(r=>r.innerText.indexOf('口径.md')>=0);return {goodOk:good&&!good.innerText.match(/失败/),badFail:bad&&bad.innerText.indexOf('失败')>=0,cols:rows[0].children.length===7}})()",
+  "must": [
+   "goodOk",
+   "badFail",
+   "cols"
+  ],
+  "note": "同一张表里好的显示就绪、坏的显示失败，七列齐全（大小 / 字数 / 块数 / 状态都要有读数）"
+ },
+ {
+  "eval": "(()=>{const w=document.querySelector('.kb-docwrap');const th=[...document.querySelectorAll('.kb-docs th')];const btns=[...document.querySelectorAll('.kb-docs td.ops .ab')];const tall=th.filter(t=>t.getBoundingClientRect().height>34).length;if(!w)return {wrap:false,scrollable:false,btnOk:false,oneLine:th.length===7&&tall===0&&th.every(t=>getComputedStyle(t).whiteSpace==='nowrap')};w.scrollLeft=w.scrollWidth;const wr=w.getBoundingClientRect();const clipped=btns.filter(b=>{const r=b.getBoundingClientRect();return b.scrollWidth>b.clientWidth+1||r.right>wr.right+1||r.left<wr.left-1}).length;return {wrap:true,scrollable:w.scrollWidth<=w.clientWidth+1||getComputedStyle(w).overflowX==='auto',btnOk:btns.length>=8&&clipped===0,oneLine:th.length===7&&tall===0}})()",
+  "must": [
+   "wrap",
+   "scrollable",
+   "btnOk",
+   "oneLine"
+  ],
+  "note": "七列表格在窄容器里不许裁内容（几何判据）：先把外层壳滚到最右，再逐颗量四颗操作钮——按钮自己的文字不许截断、右边缘不许超出壳的可视区；表头一律一行；壳装不下时必须能横向滚。上一版没有这条，截图里\"删\"字被裁掉半笔而所有判据全绿 —— 结构对了不等于看得见。（表头按\"折成两行\"判：单行高度上限 34px 且计算样式必须 nowrap。上一版阈值写成 26px，被上下 padding 顶出来的 28px 当成折行 —— 判据自己错了，比没有判据更坏。）"
+ },
+ {
+  "click": "[data-view=\"experts\"]"
+ },
+ {
+  "goto": "#xpGrid",
+  "timeout": 8000
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "click": "#xpNew"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "eval": "(()=>{const box=document.querySelector('.kb-pick');const cb=box?box.querySelector('input[type=checkbox]'):null;return {picker:!!box,hasBase:!!cb&&box.innerText.indexOf('剪辑规范')>=0,count:box.innerText.indexOf('1 份')>=0||box.innerText.indexOf('2 份')>=0}})()",
+  "must": [
+   "picker",
+   "hasBase",
+   "count"
+  ],
+  "note": "专家表单里有知识库多选，列出库名与份数（绑定要在建卡时就能做，不然这个功能只有 API 用户用得到）"
+ },
+ {
+  "type": {
+   "sel": "#xfName",
+   "text": "剪辑师"
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfPersona",
+   "text": "你是剪辑专家，回答要短。"
+  }
+ },
+ {
+  "click": ".kb-pick input[type=checkbox]"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "click": "[data-x=psave]"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(async()=>{const p=await fetch('/api/presets').then(r=>r.json());const card=(p.items||[]).find(x=>x.name==='剪辑师')||{};const d=await fetch('/api/kbs').then(r=>r.json());return {bound:(card.kbs||[]).length===1,realId:(card.kbs||[])[0]===window.__kb}})()",
+  "must": [
+   "bound",
+   "realId"
+  ],
+  "note": "存卡时勾的库要真的进 presets.json（存的是库 id，不是名字 —— 名字会改，id 才认得出来）"
+ },
+ {
+  "click": "#kbBtn"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('#kbDetail').innerText;return {showsBound:t.indexOf('绑到这张库的专家')>=0&&t.indexOf('剪辑师')>=0}})()",
+  "must": [
+   "showsBound"
+  ],
+  "note": "库那一页要反过来列出「哪些专家绑了我」—— 只有单向列表的话，删库之前没人知道会牵连谁"
+ },
+ {
+  "shot": "kb04-bound-experts"
+ },
+ {
+  "click": "#tabs button[data-t=\"tools\"]"
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('#tab-tools').innerText;return {sk:t.indexOf('search_knowledge')>=0,ask:t.indexOf('ask_agent')>=0,list:t.indexOf('agent_list')>=0}})()",
+  "must": [
+   "sk",
+   "ask",
+   "list"
+  ],
+  "note": "三把新工具都在会话的工具表里看得见（看不见＝没注册进内置表，模型永远不会去用）"
+ },
+ {
+  "shot": "kb05-tools"
+ }
+]

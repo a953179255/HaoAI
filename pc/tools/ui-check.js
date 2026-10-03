@@ -212,18 +212,75 @@ check(!phoneShared || /path == "\/shared\.js"/.test(lanSrc),
   'Lan 端点也发 /shared.js', 'phone 引了但 Lan.kt 没这条路由（手机页会白屏）');
 
 /*
+ * ---- 面板区间表：行首 `const X = (() => {` 开、行首 `})();` 闭 ----
+ * 后面三条判据（6.6 面板化 / 6.7 私有名裸用 / 6.8 同名声明撞车）都要问
+ * "这行代码在不在某个面板的作用域里"，所以这张表得先算出来。
+ *
+ * 为什么不沿用上一版的 `scriptSrc.indexOf('const ' + p + ' = (() => {')`：
+ * 新面板写作 `const Kbs=(()=>{`（没有空格），indexOf 找不到就 `continue`，
+ * 于是 Experts / Tokens / Kbs / Kb / SchedPage 五份代码**从来没被这条判据看过**，
+ * 而 ui-check 一直报绿 —— 判据没跑和判据过了是两回事。
+ * 同理，`const smenu=(()=>{…})()` 是单行的 DOM 小工具，开收在同一行，
+ * 上一版把它当成"面板一直开着"，把后面 Cfg 的收口吃掉，Cfg 也漏了。
+ */
+const panelSpans = [];
+let spanUnclosed = '';
+{
+  const ls = scriptSrc.split('\n');
+  let acc = 0, cur = null;
+  for (const l of ls) {
+    const lineStart = acc;
+    acc += l.length + 1;
+    const o = l.match(/^const\s+([A-Za-z_$][\w$]*)\s*=\s*\(\s*\(\s*\)\s*=>\s*\{/);
+    if (o && !cur && !l.includes('})()')) cur = { name: o[1], start: lineStart };
+    if (l.startsWith("})();") && cur) { panelSpans.push({ name: cur.name, start: cur.start, end: acc }); cur = null }
+  }
+  if (cur) spanUnclosed = cur.name;
+}
+check(!spanUnclosed, '每个 IIFE 面板都配得上对（行首 const X = (() => { … 行首 })();）',
+  spanUnclosed + ' 找到了开头但没找到行首收口：后面所有面板的区间会错位');
+const spanOf = name => panelSpans.find(p => p.name === name) || null;
+/** 这个下标落在哪个面板里？不在任何面板里就是顶层（'TOP'）。 */
+const bucketAt = idx => (panelSpans.find(p => idx >= p.start && idx < p.end) || { name: 'TOP' }).name;
+/** 面板区间内的列 0 声明 = 这个面板的私有成员（缓存：6.7 会对每个名字回查多次）。 */
+const privCache = new Map();
+function privNames(sp) {
+  if (privCache.has(sp.name)) return privCache.get(sp.name);
+  const set = new Set();
+  const body = scriptSrc.slice(sp.start, sp.end);
+  for (const m of body.matchAll(/^(?:async\s+)?(?:function|let|const|var)\s+([A-Za-z_$][\w$]*)/gm))
+    if (m[1] !== sp.name) set.add(m[1]);
+  privCache.set(sp.name, set);
+  return set;
+}
+/** 顶层（不在任何面板里）的列 0 声明 —— 遮蔽关系要连这一份一起算。 */
+const topPriv = new Set();
+for (const m of scriptSrc.matchAll(/^(?:async\s+)?(?:function|let|const|var)\s+([A-Za-z_$][\w$]*)/gm))
+  if (bucketAt(m.index) === 'TOP') topPriv.add(m[1]);
+/** 这个下标所在的作用域（面板或顶层）自己声明了这个名字吗？ */
+function declaredHere(name, idx) {
+  const b = bucketAt(idx);
+  return b === 'TOP' ? topPriv.has(name) : privNames(spanOf(b)).has(name);
+}
+
+/*
  * ---- 6.6) S6：每个面板一个对象，静态接线收进 init ----
  * 面板对象化是"动 UI 之前先分区"的那一步：状态、接线(init)、刷新(render) 要在一个地方看得见。
  * 这条判据防的是回退 —— 哪天有人图省事又在顶层加一个 `function loadXxx()`，
  * 或者把 `Xxx.init();` 删了（接线全哑，按钮点了没反应但语法照样绿）。
+ * 名单从区间表里来，不再手抄：手抄那份永远不会发现"新面板根本没进检查"。
+ * 整页型面板（Tokens / Kbs）第一次进页才接线（open() 里的 open.wired 幂等闸），
+ * 那也是"静态接线"，和 init 等价，所以两种写法都认。
  */
-const PANELS = ['Palette', 'Term', 'Ck', 'Lan', 'Pv', 'Git', 'Files', 'Mem', 'Skills', 'Cron', 'Presets', 'Hooks', 'Cfg'];
+const PANELS = panelSpans.filter(p => /^[A-Z]/.test(p.name)).map(p => p.name);
 const panelBad = [];
+if (PANELS.length < 18) panelBad.push('面板只剩 ' + PANELS.length + ' 个（棘轮：18 个），有面板被拆回了顶层散函数');
 for (const p of PANELS) {
-  if (!new RegExp('const ' + p + ' = \\(\\(\\) => \\{').test(scriptSrc)) panelBad.push(p + ' 没收成对象');
-  if (!new RegExp('^' + p + '\\.init\\(\\);', 'm').test(scriptSrc)) panelBad.push(p + '.init() 没被调（静态接线全哑）');
+  const wired = new RegExp('^' + p + '\\.init\\(\\);', 'm').test(scriptSrc) ||
+    new RegExp('\\b' + p + '\\.open\\(\\)').test(scriptSrc);
+  if (!wired) panelBad.push(p + ' 的接线没被调（init/open 都找不到，按钮点了没反应）');
 }
-check(panelBad.length === 0, '13 个面板都是对象且 init 被调', panelBad.join('、'));
+check(panelBad.length === 0, PANELS.length + ' 个面板都成了对象且静态接线被调', panelBad.join('、'));
 // 页签分派必须走面板对象（改回裸函数名 = 又一份顶层散函数）
 const tabBlockSrc = (scriptSrc.match(/querySelectorAll\('#tabs button'\)\.forEach\(b=>b\.onclick=\(\)=>\{([\s\S]*?)\n\}\);/) || [, ''])[1];
 const tabCalls = [...tabBlockSrc.matchAll(/([A-Z]\w+)\.render\(\)/g)].map(m => m[1]);
@@ -239,7 +296,23 @@ check(!/\b(loadGit|loadFiles|loadLan|loadCron|loadPresets|loadHooks|loadMems|loa
  * 静态挡：每个面板对象区间（`const X = (() => {` … `X.init();`）之外，
  * 它的私有名字只许以 `Panel.成员` 的形式出现，裸用一律报出来。
  */
+/*
+ * 所有 IIFE 面板（含没列进 PANELS 的 Tokens / Kbs / Experts / SchedPage）的
+ * "私有名 → 作用域区间"表。
+ *
+ * 为什么要有这张表：一条规则问的是"这个名字在**声明它的那个作用域**外面被裸用了吗"。
+ * 只看 13 个老面板的话，新面板里自己声明的同名函数会被当成老面板的私有成员 ——
+ * 例如 Kbs 里的 `const kb=()=>…` 与 Files 的私有 `kb` 撞名，于是 Kbs 内部每一次
+ * `kb()` 与每一个 `{kb:sel}` 都被报成"对象外裸用"。**一条一直红的判据等于没有判据**，
+ * 而报错了还照抄白名单，比红更坏。
+ */
+/** 这个名字在这个下标处是不是"被本作用域自己声明的那个"？是就不算裸用。 */
+function shadowedAt(name, idx) {
+  return declaredHere(name, idx);
+}
 const panelLeaks = [];
+// 跨行模板串的文字段（自测：node tools/js-literals.js）
+const inTemplate = require('./js-literals').templateFlags(scriptSrc);
 /*
  * 判断某个下标落在不在**字符串字面量**里。
  *
@@ -253,6 +326,7 @@ const panelLeaks = [];
  * 一行之内引号成对，扫这一行就够。
  */
 function insideString(src, idx) {
+  if (inTemplate[idx]) return true;   // 跨行模板串里的 HTML 文字（`<table …>` 的 table）不是标识符
   const lineStart = src.lastIndexOf('\n', idx) + 1;
   let q = '';
   for (let i = lineStart; i < idx; i++) {
@@ -262,25 +336,43 @@ function insideString(src, idx) {
   }
   return q !== '';
 }
+/*
+ * 每个名字在整份文件里被声明了几次（含缩进的局部声明与函数参数）。
+ * 只有一次的名字才谈得上"这个名字就是那个面板的私有成员"；
+ * 多次的（paint / load / card / items / post / render…）静态分不出引用的是哪一份，
+ * 报出来就是几十行假故障 —— 假故障会把真故障淹掉，所以显式跳过并计数，
+ * 让"这条判据放弃了多少名字"看得见，而不是悄悄变松。
+ */
+const declCount = new Map();
+for (const m of scriptSrc.matchAll(/^[ \t]*(?:async\s+)?(?:function|let|const|var)\s+([A-Za-z_$][\w$]*)/gm))
+  declCount.set(m[1], (declCount.get(m[1]) || 0) + 1);
+const ambiguous = [];
 for (const p of PANELS) {
-  const start = scriptSrc.indexOf('const ' + p + ' = (() => {');
-  const end = scriptSrc.indexOf('\n' + p + '.init();', start);
-  if (start < 0 || end < 0) continue;   // 上一条判据已经报过"没收成对象"
-  const span = scriptSrc.slice(start, end);
+  const sp = spanOf(p);
+  if (!sp) continue;   // 区间表里没有：6.6 那条会报"没配对"，这里不重复报
+  const span = scriptSrc.slice(sp.start, sp.end);
   // 对象内的列 0 声明 = 私有成员（init 里的缩进声明是 init 局部，核心看不见）
-  const priv = new Set();
-  for (const m of span.matchAll(/^(?:function|let|const|var)\s+([A-Za-z_$][\w$]*)/gm)) priv.add(m[1]);
-  priv.delete(p);   // IIFE 头那行 `const X = (() => {` 不是成员
+  const priv = privNames(sp);
   for (const name of priv) {
+    if ((declCount.get(name) || 0) > 1) { ambiguous.push(p + '.' + name); continue }
     const re = new RegExp('\\b' + name + '\\b', 'g');
     for (const m of scriptSrc.matchAll(re)) {
-      if (m.index >= start && m.index < end) continue;
+      if (m.index >= sp.start && m.index < sp.end) continue;
       if (insideString(scriptSrc, m.index)) continue;   // 字符串里的一段文字，不是标识符引用
+      if (shadowedAt(name, m.index)) continue;          // 本作用域自己声明的同名，用的是它自己的
+      // `{kb: sel}` 这种**对象属性位**不是标识符引用：冒号前面是名字，后面是值
+      {
+        const after = scriptSrc.slice(m.index + name.length);
+        const before = scriptSrc.slice(0, m.index);
+        if (/^\s*:/.test(after) && /[,{]$/.test(before.trimEnd() ? before.replace(/\s+$/, '') : '')) continue;
+      }
       const before = scriptSrc[m.index - 1] || '';
-      if (before === '#' || before === "'" || before === '"' || before === '.') continue;
+      if (before === '#' || before === "'" || before === '"' || before === '.' || before === '|') continue;
       const lineStart = scriptSrc.lastIndexOf('\n', m.index) + 1;
       const line = scriptSrc.slice(lineStart, scriptSrc.indexOf('\n', m.index));
       if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;   // 注释里提名字不算用
+      // 对象字面量里的方法简写 `render(){ … }`（页签分派表就这么写）不是引用谁
+      if (new RegExp('^\\s*' + name.replace(/\$/g, '\\$') + '\\(\\s*\\)\\s*\\{').test(line)) continue;
       // 别处**自己声明**的同名（另一个 IIFE 里也有一份 ROLE_MODES）是遮蔽，不是引用它
       if (new RegExp('^\\s*(?:function|let|const|var)\\s+' + name.replace(/\$/g, '\\$') + '\\b').test(line)) continue;
       panelLeaks.push(p + '.' + name + ' 在对象外裸用：' + line.trim().slice(0, 90));
@@ -289,6 +381,39 @@ for (const p of PANELS) {
 }
 check(panelLeaks.length === 0, '面板私有成员没有在对象外裸用（裸用 = 运行时 ReferenceError）',
   panelLeaks.join('\n         '));
+
+/*
+ * ---- 6.8) 同一个作用域里不许有两次同名 function 声明 ----
+ * 真事故（2026-10-03，知识库那批）：顶层早就有一个 askText(title,tip,value,ok)
+ * （「编辑并重发」「重命名会话」在用），新加"输入一句话"的弹层时又写了一个
+ * askText(title,ph,ok)。两件事同时发生：
+ *   · 语法完全合法 —— 两次 function 声明同名，V8 照收，5.5 那条解析判据一片绿；
+ *   · 提升阶段后写的那份把前一份整个覆盖掉 —— 四参数调用点的第三个参数被当成 ok
+ *     回调，真正的回调落到第四位没人收，点「确定」只抛 ok is not a function。
+ * 界面上的现象就是"按钮点了没反应"，而 JVM 测试与 ui-check 其余各条全绿。
+ *
+ * 必须按**作用域**分桶再查：各面板各自的 paint / load / card / open 是彼此独立的
+ * 作用域，合法；只按名字查重复会一次报出十几行假故障，那条判据就又废了。
+ */
+const fnDup = new Map();
+{
+  const ls = scriptSrc.split('\n');
+  let acc = 0;
+  for (const l of ls) {
+    const m = l.match(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^\n]*)/);
+    if (m) {
+      const params = m[2].slice(0, m[2].indexOf(')') + 1 || m[2].length).replace(/\s+/g, ' ').trim();
+      const key = bucketAt(acc) + '::' + m[1];
+      if (!fnDup.has(key)) fnDup.set(key, []);
+      fnDup.get(key).push(params);
+    }
+    acc += l.length + 1;
+  }
+}
+const dupFns = [...fnDup].filter(([, v]) => v.length > 1)
+  .map(([k, v]) => k.replace('::', '.') + ' 被声明了 ' + v.length + ' 次（参数：' + v.join(' ｜ ') + '）');
+check(dupFns.length === 0, '同一作用域内没有两次同名 function 声明（后一份会静默覆盖前一份）',
+  dupFns.join('\n         '));
 
 // ---- 6) 像素剧本里的每条 eval 必须能解析 ----
 /*
