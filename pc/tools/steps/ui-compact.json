@@ -15,7 +15,7 @@
   {"shot": "k01-ctx-line"},
   {"click": "#cmpBtn"},
   {"sleep": 2500},
-  {"eval": "(()=>{const msgs=document.querySelectorAll('.view.on .msg').length;const st=document.querySelectorAll('.view.on .card').length;const nt=[...document.querySelectorAll('.notice')].map(x=>x.textContent);return {n:msgs,cards:st,fewer:msgs>0&&msgs<8,said:nt.some(t=>t.indexOf('压缩')>=0),why:'DOM 里 .msg='+msgs+' 张工具卡='+st+'；期望折完少于 8 条。同时读 /api/state 才能分清是「没重画」还是「服务端根本没折」'})()",
+  {"eval": "(()=>{const msgs=document.querySelectorAll('.view.on .msg').length;const st=document.querySelectorAll('.view.on .card').length;const nt=[...document.querySelectorAll('.notice')].map(x=>x.textContent);return {n:msgs,cards:st,fewer:msgs>0&&msgs<8,said:nt.some(t=>t.indexOf('压缩')>=0),why:'DOM 里 .msg='+msgs+' 张工具卡='+st+'；期望折完少于 8 条。同时读 /api/state 才能分清是「没重画」还是「服务端根本没折」'}})()",
    "must": ["fewer", "said"], "note": "手动压缩一次：消息条数要真的变少、流里要留下「已压缩并摘要 N 条」那一行（cmpState 是过程中的临时文案，收尾就清空，拿它当判据永远是空的）。**这条现在是红的（#135）**：已用二分证明不是引用出处那两批引入的；新加的 n/cards/why 三个读数是为了下次一跑就能分清「DOM 没重画」还是「服务端根本没折」，别再靠猜"},
   {"shot": "k02-after-compact"},
   {"click": "#ctxBtn"},
