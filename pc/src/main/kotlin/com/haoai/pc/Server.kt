@@ -208,6 +208,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/agent-config" -> agentConfig(ex)
                 "/api/mbti" -> mbti(ex)
                 "/api/memory-funnel" -> memoryFunnel(ex)
+                "/api/subagents" -> subagents(ex)
                 "/api/agents" -> agents(ex)
                 "/api/experts/library" -> expertLibrary(ex)
                 "/api/kb" -> kb(ex)
@@ -378,7 +379,7 @@ class WebServer(settings: PcSettings, port: Int,
         sb.append("\"tools\":[").append(
             e?.toolInfos()?.joinToString(",") { t ->
                 """{"name":${quote(t.name)},"kind":${quote(t.kind)},"desc":${quote(t.desc.take(90))},""" +
-                    """"off":${t.off},"gated":${t.gated}}"""
+                    """"off":${t.off},"gated":${t.gated},"category":${quote(t.category)},"critical":${t.critical}}"""
             } ?: ""
         ).append("],")
         // 没跑完的现场：重启后还在，就说明这条是被杀/断电打断的，界面上要举出来

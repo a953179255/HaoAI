@@ -2,6 +2,7 @@ package com.haoai.pc
 
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -121,6 +122,8 @@ import com.haoai.pc.WebServer.Body
             // 而保存时 num() 把空串读成 0 —— 于是"打开设置再保存"就把窗口清零了。
             """"contextChars":${st.contextChars},""" +
             """"workspace":${quote(st.workspaceFile().absolutePath)},""" +
+            // 全局工具开关要回得去：枢纽「工具」区的"全局"那半边按它亮状态
+            """"toolsOff":[${st.toolsOff.joinToString(",") { quote(it) }}],""" +
             """"hasKey":${key != null},""" +
             """"flags":$flags,"rules":$rules}"""
     }
@@ -164,6 +167,16 @@ import com.haoai.pc.WebServer.Body
             sessions.values.forEach { m -> m.engine.session.mode = it }
         }
         body["workspace"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { n = n.copy(workspace = it) }
+        /*
+         * 全局工具开关（B3 枢纽「工具」区的那半边）：显式数组才动、critical 写入即剔 ——
+         * 不带这个键的其它保存路径（设置抽屉）完全不受影响。
+         */
+        body["toolsOff"]?.let { el ->
+            val list = runCatching {
+                el.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }.filterNot { it in AgentConfigs.CRITICAL }
+            }.getOrNull()
+            if (list != null) n = n.copy(toolsOff = list)
+        }
         body["flags"]?.jsonObject?.let { fo ->
             val merged = n.flags.toMutableMap()
             fo.forEach { (k, v) -> merged[k] = (v.jsonPrimitive.content == "true") }

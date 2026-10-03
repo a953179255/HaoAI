@@ -5,7 +5,9 @@ import com.haoai.pc.WebServer.Body
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 /**
@@ -209,6 +211,57 @@ internal fun WebServer.profileJson(code: String): String {
         """"ei":"${p.ei}","eiPct":${p.eiPct},"sn":"${p.sn}","snPct":${p.snPct},""" +
         """"tf":"${p.tf}","tfPct":${p.tfPct},"jp":"${p.jp}","jpPct":${p.jpPct},""" +
         """"behaviors":{$behaviors}}"""
+}
+
+/**
+ * `GET/POST /api/subagents` —— 子智能体库（B5）。
+ * `GET` → `{items:[{slug,name,description,color,emoji,group}],divisions:{…}}`（group=按已装路径猜不到就空，前端用 divisions 分组）。
+ * `POST {op:'del', slug}` / `{op:'save', slug?, name, description, color, emoji, body}`（新建/编辑）。
+ */
+internal fun WebServer.subagents(ex: HttpExchange) {
+    val b = Body(ex)
+    if (ex.requestMethod != "GET") {
+        when (b.str("op")) {
+            "del" -> Subagents.remove(b.str("slug"))
+            else -> {
+                val name = b.str("name").trim()
+                val desc = b.str("description").trim()
+                val body = b.str("body").trim()
+                if (name.isBlank() || desc.isBlank() || body.isBlank()) {
+                    send(ex, 200, """{"ok":false,"error":"名字、描述、人设正文三样都要"}""",
+                        "application/json; charset=utf-8"); return
+                }
+                // slug 由服务端造：表单里那个名字是给人看的，路径上的身份要稳
+                val slug = b.str("slug").trim().ifBlank {
+                    "sa" + System.nanoTime().toString(16).take(8)
+                }
+                val ok = Subagents.save(slug, name, desc, b.str("color").trim().ifBlank { "#3E7A1E" },
+                    b.str("emoji").trim().ifBlank { "🤖" }, body)
+                if (!ok) {
+                    send(ex, 200, """{"ok":false,"error":"没存进去：slug 只许小写字母数字连字符，三样内容缺一不可"}""",
+                        "application/json; charset=utf-8"); return
+                }
+            }
+        }
+    }
+    // slug→分类从随包清单反查：装进 HAOAI_HOME 后是平铺目录，分类信息只在清单里
+    val divBySlug = runCatching {
+        val text = javaClass.classLoader.getResourceAsStream("builtin-subagents/index.json")
+            ?.readBytes()?.toString(Charsets.UTF_8) ?: ""
+        Json.parseToJsonElement(text).jsonObject["items"]?.jsonArray?.mapNotNull { el ->
+            val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+            (o["slug"]?.jsonPrimitive?.contentOrNull ?: "") to
+                (o["division"]?.jsonPrimitive?.contentOrNull ?: "")
+        }?.toMap() ?: emptyMap<String, String>()
+    }.getOrDefault(emptyMap())
+    val items = Subagents.list().joinToString(",") { d ->
+        """{"slug":${quote(d.slug)},"name":${quote(d.name)},"description":${quote(d.description)},""" +
+            """"color":${quote(d.color)},"emoji":${quote(d.emoji)},"div":${quote(divBySlug[d.slug] ?: "")}}"""
+    }
+    val divs = Subagents.divisions().entries.joinToString(",") { (k, v) ->
+        """${quote(k)}:{"label":${quote(v["label"] ?: k)},"emoji":${quote(v["emoji"] ?: "")},"color":${quote(v["color"] ?: "")}}"""
+    }
+    send(ex, 200, """{"ok":true,"items":[$items],"divisions":{$divs}}""", "application/json; charset=utf-8")
 }
 
 /**

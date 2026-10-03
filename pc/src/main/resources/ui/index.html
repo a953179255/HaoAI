@@ -938,6 +938,67 @@
     background:transparent;font-family:inherit}
   .xadd:hover{border-color:var(--acc2);color:var(--fg)}
   .xcard.off{opacity:.6}
+  /* ---- 个性化枢纽（B10 七区块：人格/工具/技能/子智能体/记忆/知识/高级） ---- */
+  .hnav{display:flex;gap:2px;flex-wrap:wrap;background:var(--glass);border:1px solid var(--line);
+    border-radius:10px;padding:3px}
+  .hnav button{border:0;background:transparent;color:var(--dim);font-size:12px;padding:5px 13px;
+    border-radius:8px;cursor:pointer;font-family:inherit;transition:background .12s,color .12s}
+  .hnav button.on{background:var(--acc2);color:var(--fg);font-weight:600}
+  :root[data-theme="dark"] .hnav button.on{color:#eafff5}
+  .hsec{min-height:260px;max-height:62vh;overflow:auto;padding-top:4px}
+  .tcat{font-size:11px;font-weight:700;color:var(--dim2);letter-spacing:.6px;margin:14px 0 4px;
+    display:flex;gap:8px;align-items:center}
+  .tcat i{flex:1;height:1px;background:var(--line)}
+  .hrow{display:flex;gap:8px;align-items:center;padding:5px 8px;border-radius:9px;font-size:12.5px}
+  .hrow:hover{background:var(--glass2)}
+  .hrow .hn{width:140px;flex:none;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hrow .hd{flex:1;min-width:0;color:var(--dim2);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hrow .crit{font-size:9px;font-weight:700;color:var(--warn);border:1px solid currentColor;
+    border-radius:5px;padding:0 4px;flex:none}
+  .hrow .org{font-size:9px;font-weight:700;color:var(--acc);background:var(--glass2);
+    border-radius:5px;padding:1px 5px;flex:none}
+  /* 两级开关：全局（settings）+ 本专家（agent-config）；critical 两边钉死 */
+  .sw2{display:flex;gap:5px;align-items:center;font-size:10.5px;color:var(--dim2);flex:none}
+  .sw2 .box{width:30px;height:17px;border-radius:999px;background:rgba(120,128,112,.35);
+    position:relative;cursor:pointer;transition:background .15s;flex:none}
+  .sw2 .box.on{background:var(--acc)}
+  .sw2 .box.dis{opacity:.35;cursor:not-allowed}
+  .sw2 .box::after{content:"";position:absolute;left:2px;top:2px;width:13px;height:13px;border-radius:50%;
+    background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+  .sw2 .box.on::after{left:15px}
+  /* MBTI 16 宫格 + 测验卡 */
+  .mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:8px}
+  .mcard{border:1px solid var(--line);border-radius:10px;padding:9px 10px;cursor:pointer;background:var(--glass);
+    transition:border-color .12s,transform .12s}
+  .mcard:hover{border-color:var(--line2);transform:translateY(-1px)}
+  .mcard.on{border-color:var(--acc);background:var(--glass2);box-shadow:0 2px 10px rgba(0,0,0,.12)}
+  .mcard b{font-size:12.5px;color:var(--fg);display:flex;gap:6px;align-items:center}
+  .mcard .nick{font-size:10px;color:var(--acc)}
+  .mcard .sm{font-size:10.5px;color:var(--dim2);margin-top:3px;line-height:1.45;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .mcard .bars{display:flex;gap:4px;margin-top:6px}
+  .mcard .bars span{flex:1;height:3px;border-radius:3px;background:var(--glass2);overflow:hidden;position:relative}
+  .mcard .bars span i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--acc)}
+  .quiz{border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--glass)}
+  .quiz .qtitle{font-size:11px;color:var(--dim2);letter-spacing:.5px}
+  .quiz .qtext{font-size:14.5px;margin:10px 0 14px;color:var(--fg);line-height:1.75}
+  .quiz .opts{display:flex;gap:10px}
+  .quiz .opts button{flex:1;padding:12px 10px;border-radius:10px;border:1px solid var(--line);
+    background:var(--glass2);color:var(--fg2);font-size:13.5px;cursor:pointer;font-family:inherit;
+    transition:border-color .12s,background .12s;line-height:1.5}
+  .quiz .opts button:hover{border-color:var(--acc2);background:var(--glass2)}
+  .quiz .qbar{display:flex;gap:4px;margin-top:14px}
+  .quiz .qbar i{flex:1;height:3px;border-radius:3px;background:var(--glass2)}
+  .quiz .qbar i.done{background:var(--acc)}
+  /* 记忆漏斗卡片 */
+  .cand{border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:7px;background:var(--glass)}
+  .cand .ty{font-size:9.5px;font-weight:700;color:var(--acc);background:var(--glass2);border-radius:5px;padding:1px 5px}
+  .cand .as{font-size:12.5px;color:var(--fg);margin-top:5px;line-height:1.55}
+  .cand .qt{font-size:11px;color:var(--dim2);margin-top:3px;border-left:2px solid var(--line2);padding-left:7px}
+  .cand .ft{display:flex;gap:6px;margin-top:7px}
+  .epi{display:flex;gap:10px;font-size:11.5px;color:var(--dim2);padding:5px 2px;border-bottom:1px dashed var(--line)}
+  .epi b{color:var(--fg2);flex:none;font-weight:600}
+  .hint{font-size:11.5px;color:var(--dim2);line-height:1.65}
   .swatches{display:flex;gap:6px;flex-wrap:wrap}
   .swatches i{width:22px;height:22px;border-radius:8px;cursor:pointer;border:2px solid transparent;flex:none}
   .swatches i.on{border-color:var(--fg)}
@@ -4057,6 +4118,7 @@ document.addEventListener('keydown',e=>{
     app.classList.remove('show-l','show-r');
     closeSessMenu();
     if(cfgOpen)Cfg.close();
+    else if(Hub.opened())Hub.close();
     else if(Experts.opened())Experts.close();
     else $('#mask').classList.remove('on');
     if(Palette.opened()){Palette.toggle(false);return}
@@ -4231,11 +4293,17 @@ function paintTools(list){
   // "这条会话关掉的"和"实验特性没开的"是两件事，混成一个数就说不清去哪儿开
   $('#toolsSum').textContent=arr.length+' 把工具 · 这条会话开着 '+(arr.length-offN-gatedN)+
     (offN?' · 这条关掉 '+offN+' 把':'')+(gatedN?' · 特性未开 '+gatedN+' 把':'');
-  box.innerHTML=arr.map(t=>`<div class="trow${t.off?' off':''}${t.gated?' gated':''}">
-      <label class="sw"><input type="checkbox" data-tn="${esc(t.name)}" ${t.off||t.gated?'':'checked'} ${t.gated?'disabled':''}>
-      <span><span class="t">${esc(t.name)}<em class="tk">${esc(t.kind)}</em></span><br>
-      <span class="d">${esc(t.desc)}</span></span></label></div>`).join('')||
-    '<div class="kv">还没拿到工具清单（这条会话没打开过）</div>';
+  /* 分组渲染（B3）：服务端 ToolInfo 带 category/critical —— 扁平 30 行没人扫得动，
+     分组 + 「必需」标才是工具目录该有的样子；session 级开关语义不变。 */
+  const order=['文件与终端','网页与检索','知识','规划与子任务','交互','团队','桌面与媒体','定时','记忆','外部（MCP）','其它'];
+  const cats={};arr.forEach(t=>{const c=t.category||'其它';(cats[c]=cats[c]||[]).push(t)});
+  const row=t=>`<div class="trow${t.off?' off':''}${t.gated?' gated':''}">
+      <label class="sw"><input type="checkbox" data-tn="${esc(t.name)}" ${t.off||t.gated?'':'checked'} ${t.gated||t.critical?'disabled':''}>
+      <span><span class="t">${esc(t.name)}<em class="tk">${esc(t.kind)}</em>${t.critical?'<em class="tk" style="color:var(--warn);border-color:currentColor">必需</em>':''}</span><br>
+      <span class="d">${esc(t.desc)}</span></span></label></div>`;
+  box.innerHTML=(order.filter(c=>cats[c]).map(c=>
+    `<div class="tcat">${c}（${cats[c].length}）<i></i></div>`+cats[c].map(row).join('')).join('')
+    )||'<div class="kv">还没拿到工具清单（这条会话没打开过）</div>';
   box.querySelectorAll('[data-tn]').forEach(c=>c.onchange=()=>{
     post('/api/tool',{sid:curId,name:c.dataset.tn,on:c.checked?'1':'0'}).then(d=>{
       if(!d||!d.ok){toast('改不动');hydrate(curId);return}
@@ -4952,6 +5020,7 @@ function myCard(p){
       <button class="ab" data-x="astart" data-id="${esc(p.id)}" title="让它成为一个可被别的专家点名的实例（有自己那条常驻会话）">${st==='stopped'?'重新启用':'启用实例'}</button>
       <button class="ab" data-x="astop" data-id="${esc(p.id)}" title="停用后别的专家问它会被明确拒绝（不静默排队）">停用</button>
       <button class="ab" data-x="aask" data-id="${esc(p.id)}" title="后台托给它一句：它忙完会把回信送回你的会话">托一件事</button>
+      <button class="ab" data-x="cfg" data-id="${esc(p.id)}" title="个性化配置：人格 / 工具 / 技能 / 子智能体 / 记忆 / 知识 / 专属网关">配置</button>
       <button class="ab" data-x="edit" data-id="${esc(p.id)}">编辑</button>
       <button class="ab" data-x="del" data-id="${esc(p.id)}">删除</button></div>
   </div>`;
@@ -5202,6 +5271,7 @@ function act(x,b){
   const id=b.dataset.id||'';
   if(x==='back'){close();return}
   if(x==='newp'){formShell();editingP='';pForm(null,false);return}
+  if(x==='cfg'){Hub.open(id);return}
   if(x==='edit'){const p=my.find(z=>z.id===id);if(p){formShell();editingP=p.id;pForm(p,false)}return}
   if(x==='del'){
     if(!confirm('删除这张专家卡？加入的团队里它会显示为"缺员"。'))return;
@@ -5949,6 +6019,289 @@ return {
 };
 })();
 SchedPage.init();
+
+/* ==== [S6 面板对象] Hub：个性化枢纽（B10 七区块） ====
+ * 专家卡「配置」开：人格(MBTI+补充段) / 工具(全局+本专家两级) / 技能 / 子智能体 /
+ * 记忆(漏斗审阅+画像+日记+关心) / 知识(跳页签) / 高级(专属网关)。
+ * 开关**即时落库**（每拨一次 POST 整份 ac 或 /api/settings）——关窗就是保存，
+ * 没有"忘了点保存丢配置"这回事；顶部关钮只负责收窗。
+ * 数据三源：/api/agent-config（本专家）、/api/settings（全局）、skills/subagents/memory-funnel。 */
+const Hub=(()=>{
+let on=false,pid='',ac=null,sec='persona',memLoaded=false;
+let types=null,quizQs=null,quizIdx=0,quizAns={},quizRes=null;
+let tools=[],globalOff=[],skills=[],subs=[],divs={},mem={cands:[],epi:[],care:{},profile:''};
+const SECS=[['persona','人格'],['tools','工具'],['skills','技能'],['subs','子智能体'],['mem','记忆'],['kb','知识'],['adv','高级']];
+
+function close(){on=false;const dg=$('#dialog');dg.classList.remove('wide');dg.onclick=null;$('#mask').classList.remove('on')}
+function save(){if(!ac)return Promise.resolve(null);
+  return post('/api/agent-config',{preset:pid,providerName:ac.providerName||'',baseUrl:ac.baseUrl||'',
+    toolsOff:ac.toolsOff||[],skillsOff:ac.skillsOff||[],subagents:ac.subagents||[],
+    personaMbti:ac.personaMbti||'',personaExtra:ac.personaExtra||'',knowledgeIds:ac.knowledgeIds||[]})
+  .catch(()=>null)}
+
+function open(presetId){
+  pid=presetId;sec='persona';quizQs=null;quizRes=null;memLoaded=false;on=true;
+  const dg=$('#dialog');dg.classList.add('wide');$('#mask').classList.add('on');
+  dg.innerHTML=`<div class="xhead"><h3 style="margin:0">个性化配置</h3>
+    <div class="hnav" id="hnav">${SECS.map(s=>`<button data-s="${s[0]}">${s[1]}</button>`).join('')}</div>
+    <span style="flex:1"></span><button class="ab" id="hClose">关闭</button></div>
+    <div class="hsec" id="hBody"><div class="kv">读取中…</div></div>`;
+  $('#hClose').onclick=close;
+  $('#hnav').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    sec=b.dataset.s;quizQs=null;quizRes=null;
+    if(sec==='mem'&&!memLoaded)loadMem().then(paint); else paint();
+  });
+  dg.onclick=e=>{
+    const b=e.target.closest?e.target.closest('[data-h]'):null;
+    if(!b)return;
+    act(b.dataset.h,b);
+  };
+  Promise.all([
+    fetch('/api/agent-config?preset='+encodeURIComponent(pid)).then(r=>r.json()).then(d=>{ac=d.item||{presetId:pid}}),
+    fetch('/api/mbti?what=types').then(r=>r.json()).then(d=>{types=d.items||[]}),
+    fetch('/api/state?sid='+encodeURIComponent(curId||'')).then(r=>r.json()).then(s=>{tools=s.tools||[]}),
+    fetch('/api/settings').then(r=>r.json()).then(s=>{globalOff=s.toolsOff||[]}),
+    fetch('/api/skills').then(r=>r.json()).then(d=>{skills=d.items||[]}),
+    fetch('/api/subagents').then(r=>r.json()).then(d=>{subs=d.items||[];divs=d.divisions||{}}),
+  ]).then(()=>paint()).catch(()=>{const b=$('#hBody');if(b)b.innerHTML='<div class="kv">读不到配置（服务没起？）</div>'});
+}
+
+function paint(){
+  if(!ac)return;
+  $('#hnav').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.s===sec));
+  ({persona:secPersona,tools:secTools,skills:secSkills,subs:secSubs,mem:secMem,kb:secKb,adv:secAdv}[sec]||secPersona)();
+}
+function setBody(h){const b=$('#hBody');if(b)b.innerHTML=h}
+/* avatar() 是 Experts 闭包的私有件——这里就画一个 16 型卡用的头像，别伸手要（闭包坑踩过一次） */
+function mbtiAvatar(p){
+  const c=/^#[0-9a-fA-F]{6}$/.test(p.color||'')?p.color:'#3E7A1E';
+  return `<div class="avatar" style="background:${c}">${esc((p.name||'?').slice(0,1))}</div>`;
+}
+function bar4(t){const w=v=>Math.max(6,Math.min(100,Math.round((v-40)*100/45)));
+  return `<div class="bars"><span><i style="width:${w(t.eiPct)}%"></i></span><span><i style="width:${w(t.snPct)}%"></i></span><span><i style="width:${w(t.tfPct)}%"></i></span><span><i style="width:${w(t.jpPct)}%"></i></span></div>`}
+
+/* ---- 人格：16 宫格（点选即生效）+ 测一测 + 补充段 ---- */
+function secPersona(){
+  if(quizQs)return paintQuiz();
+  if(quizRes)return paintQuizResult();
+  const p=(ac.personaMbti&&types)?types.find(t=>t.code===ac.personaMbti):null;
+  setBody(`
+    ${p?`<div class="xcard on" style="margin-bottom:4px"><div class="hd">${mbtiAvatar(p)}<b><span>${p.code} ${esc(p.name)}</span><i class="mbtib">${esc(p.nickname)}</i></b></div>
+      <div class="ds">${esc(p.summary)}</div>${bar4(p)}
+      <div class="ft"><button class="ab" data-h="mclear">清除选型</button>
+        <button class="ab" data-h="quiz">重新测一测</button></div></div>`
+    :`<div class="hint">还没选人格。点下面的卡片立即生效，或「测一测」答 28 题出型。人格只影响说话与思考风格，不改变安全边界。</div>`}
+    <div class="tcat">16 型<i></i></div>
+    <div class="mgrid">${(types||[]).map(t=>`<div class="mcard${ac.personaMbti===t.code?' on':''}" data-h="mpick" data-code="${t.code}">
+      <b><span>${t.code} ${esc(t.name)}</span><span class="nick">${esc(t.nickname)}</span></b>
+      <div class="sm">${esc(t.summary)}</div>${bar4(t)}</div>`).join('')}</div>
+    <div class="fld" style="margin-top:12px"><label>人格补充段（接在人设之后进系统提示，改完即生效）</label>
+      <textarea id="hExtra" rows="4" style="width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;color:var(--fg);font:inherit;padding:8px">${esc(ac.personaExtra||'')}</textarea></div>`);
+  $('#hExtra').oninput=e=>{ac.personaExtra=e.target.value;save()};
+}
+function paintQuiz(){
+  if(!quizQs||quizIdx>=quizQs.length){finishQuiz();return}
+  const q=quizQs[quizIdx];
+  setBody(`<div class="quiz"><div class="qtitle">MBTI 测验 · 第 ${quizIdx+1} / ${quizQs.length} 题（${q.dim} 维）· 20 题起判型</div>
+    <div class="qtext">${esc(q.q)}</div>
+    <div class="opts"><button data-h="qa" data-v="0">${esc(q.a)}<br><span style="font-size:11px;opacity:.6">${q.ap}</span></button>
+      <button data-h="qa" data-v="1">${esc(q.b)}<br><span style="font-size:11px;opacity:.6">${q.bp}</span></button></div>
+    <div class="qbar">${quizQs.map(x=>`<i class="${quizAns[x.id]!=null?'done':''}"></i>`).join('')}</div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      ${quizIdx>0?'<button class="ab" data-h="qback">上一题</button>':''}
+      <button class="ab" data-h="qquit">退出测验</button>
+      <span class="hint" style="align-self:center">答过的会亮进度条；错选了退回上一题改</span></div></div>`);
+}
+function finishQuiz(){
+  const n=Object.keys(quizAns).length;
+  if(n<20){quizQs=null;quizIdx=0;toast('只答了 '+n+' 题，不到 20 判不了型','err');paint();return}
+  post('/api/mbti',{op:'test',answers:JSON.stringify(quizAns)}).then(d=>{
+    quizQs=null;quizIdx=0;
+    if(!d||!d.ok){toast((d&&d.error)||'判型失败','err');paint();return}
+    quizRes=d.item;paint();
+  }).catch(()=>{toast('判型失败','err')});
+}
+function paintQuizResult(){
+  const t=quizRes;
+  setBody(`<div class="quiz"><div class="qtitle">测验结果</div>
+    <div style="display:flex;gap:14px;align-items:center;margin-top:10px;flex-wrap:wrap">
+      <div class="mcard on" style="cursor:default;min-width:230px"><b><span>${t.code} ${esc(t.name)}</span><span class="nick">${esc(t.nickname)}</span></b>
+        <div class="sm">${esc(t.summary)}</div>${bar4(t)}</div>
+      <div class="hint" style="flex:1;min-width:220px">四维百分比是 16 型的基准画像（50~85 区间）。满意就应用到这张专家卡，立刻对新回合生效。</div></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="ab pri" data-h="mapply" data-code="${t.code}">应用到本专家</button>
+      <button class="ab" data-h="mback">返回人格</button>
+      <button class="ab" data-h="quiz">再测一次</button></div></div>`);
+}
+
+/* ---- 工具：分组 + 全局/本专家两级开关（critical 钉死） ---- */
+function secTools(){
+  const order=['文件与终端','网页与检索','知识','规划与子任务','交互','团队','桌面与媒体','定时','记忆','外部（MCP）','其它'];
+  const cats={};tools.forEach(t=>{const c=t.category||'其它';(cats[c]=cats[c]||[]).push(t)});
+  let h=`<div class="hint">两级开关：<b>全局</b>=所有会话的默认；<b>本专家</b>=这张卡开出的会话在全局之上叠加。
+    标「必需」的关不掉（砍掉引擎就失能）；「实验特性没开」的去设置里开。</div>`;
+  h+=order.filter(c=>cats[c]).map(c=>
+    `<div class="tcat">${c}（${cats[c].length}）<i></i></div>`+cats[c].map(t=>{
+      const crit=!!t.critical,g=globalOff.includes(t.name),e=(ac.toolsOff||[]).includes(t.name);
+      if(t.gated)return `<div class="hrow"><span class="hn">${esc(t.name)}</span><span class="hd">实验特性未开，开了才存在</span></div>`;
+      return `<div class="hrow"><span class="hn">${esc(t.name)}</span>${crit?'<em class="crit">必需</em>':''}
+        <span class="hd">${esc(t.desc)}</span>
+        <div class="sw2"><span>全局</span><div class="box ${!g?'on':''}${crit?' dis':''}" data-h="gtool" data-n="${esc(t.name)}"></div></div>
+        <div class="sw2"><span>本专家</span><div class="box ${!e?'on':''}${crit?' dis':''}" data-h="etool" data-n="${esc(t.name)}"></div></div></div>`;
+    }).join('')
+  ).join('');
+  setBody(h);
+}
+
+/* ---- 技能：内置标 + 本专家启停 ---- */
+function secSkills(){
+  let h=`<div class="hint">这台机器装的技能（含随包内置，首启已落位、删不掉）。<b>本专家</b>开关只影响这张卡开出的会话：停用后模型的清单里没有它、直接给路径也读不到。</div>`;
+  h+=`<div class="tcat">技能（${skills.length}）<i></i></div>`;
+  h+=skills.map(s=>{
+    const e=(ac.skillsOff||[]).includes(s.slug);
+    return `<div class="hrow"><span class="hn">${esc(s.name)}</span>${s.origin==='builtin'?'<em class="org">内置</em>':''}
+      <span class="hd">${esc(s.desc||'')} · ${esc(s.slug)}</span>
+      <div class="sw2"><span>本专家</span><div class="box${e?'':' on'}" data-h="eskill" data-n="${esc(s.slug)}"></div></div></div>`;
+  }).join('')||'<div class="kv">一个技能都没有</div>';
+  setBody(h);
+}
+
+/* ---- 子智能体：全部可用 / 逐个挂载 ---- */
+function secSubs(){
+  const allOk=!(ac.subagents||[]).length;
+  const order=['engineering','data','writing','research','ops','learning'];
+  let h=`<div class="hint">子智能体=可整体派出去的「人」：task 的 <code>subagent</code> 参数按 slug 派发，
+    它带自己的人设干活、只回结论。当前已装 <b>${subs.length}</b> 个（随包 40 首启落位）。</div>`;
+  h+=`<div class="hrow"><span class="hn">全部可用</span><span class="hd">${allOk?'已装的都可派（推荐）':'只派下面勾中的'}</span>
+    <div class="sw2"><div class="box${allOk?' on':''}" data-h="suball"></div></div></div>`;
+  const seen={};
+  order.concat(Object.keys(divs).filter(d=>!order.includes(d))).forEach(d=>{
+    const list=subs.filter(s=>(s.div||'')===d);
+    if(!list.length)return;seen[d]=1;
+    h+=`<div class="tcat">${(divs[d]&&divs[d].emoji||'')+' '+(divs[d]&&divs[d].label||d)}（${list.length}）<i></i></div>`;
+    h+=list.map(s=>{
+      const inSet=(ac.subagents||[]).includes(s.slug);
+      const boxOn=allOk?true:inSet;
+      return `<div class="hrow"><span class="hn">${esc(s.name)}</span>
+        <span class="hd">${esc(s.description)}</span>
+        <div class="sw2"><span>本专家</span><div class="box${boxOn?' on':''}" data-h="sub1" data-n="${esc(s.slug)}"></div></div></div>`;
+    }).join('');
+  });
+  const rest=subs.filter(s=>!seen[s.div||'']);
+  if(rest.length)h+=`<div class="tcat">其他（${rest.length}）<i></i></div>`+rest.map(s=>
+    `<div class="hrow"><span class="hn">${esc(s.name)}</span><span class="hd">${esc(s.description)}</span>
+      <div class="sw2"><span>本专家</span><div class="box${(ac.subagents||[]).includes(s.slug)?' on':''}" data-h="sub1" data-n="${esc(s.slug)}"></div></div></div>`).join('');
+  setBody(h);
+}
+
+/* ---- 记忆：漏斗审阅 + 画像 + 日记 + 关心 ---- */
+function loadMem(){
+  return Promise.all([
+    fetch('/api/memory-funnel?what=candidates').then(r=>r.json()).then(d=>{mem.cands=d.items||[]}),
+    fetch('/api/memory-funnel?what=episodes').then(r=>r.json()).then(d=>{
+      mem.epi=(d.items||[]).map(s=>{try{return JSON.parse(s)}catch(e){return null}}).filter(Boolean)}),
+    fetch('/api/memory-funnel?what=care').then(r=>r.json()).then(d=>{mem.care=d||{}}),
+    fetch('/api/memory-funnel?what=profile').then(r=>r.json()).then(d=>{mem.profile=(d&&d.content)||''}),
+  ]).then(()=>{memLoaded=true}).catch(()=>{});
+}
+function secMem(){
+  if(!memLoaded){setBody('<div class="kv">读取中…</div>');loadMem().then(paint);return}
+  const pend=(mem.cands||[]).filter(c=>c.status==='pending');
+  const TY={fact:'事实',preference:'偏好',decision:'决定',task:'任务'};
+  let h=`<div class="hint">对话里自动提炼的候选（10 分钟一抽）——<b>晋升才进长期记忆</b>（走原有去重）；拒绝留痕。攒够几条后点「重画画像」生成常驻画像。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="ab" data-h="extract">立即提炼这一会话</button>
+      <button class="ab" data-h="regen">重画用户画像</button>
+      <span class="sw2" style="align-self:center"><span>主动关心（1~3 天随机一句）</span>
+        <div class="box${mem.care.enabled?' on':''}" data-h="care"></div></span></div>`;
+  h+=`<div class="tcat">待审候选（${pend.length}）<i></i></div>`;
+  h+=pend.length?pend.map(c=>`<div class="cand"><span class="ty">${esc(TY[c.type]||c.type)}</span>
+      <b style="margin-left:6px;font-size:12px;color:var(--dim2)">${esc(c.title)}</b>
+      <div class="as">${esc(c.assertion)}</div>${c.quote?`<div class="qt">${esc(c.quote)}</div>`:''}
+      <div class="ft"><button class="ab pri" data-h="promote" data-id="${esc(c.id)}">晋升到记忆</button>
+        <button class="ab" data-h="reject" data-id="${esc(c.id)}">拒绝</button></div></div>`).join('')
+    :'<div class="kv">（没有待审的——聊几轮它会自己攒）</div>';
+  h+=`<div class="tcat">用户画像<i></i></div>`;
+  h+=mem.profile?`<details class="cand"><summary style="cursor:pointer;font-size:12px;color:var(--fg2)">查看画像（memory-profile.md）</summary>
+      <pre style="white-space:pre-wrap;font-size:11.5px;color:var(--dim2);margin-top:6px">${esc(mem.profile)}</pre></details>`
+    :'<div class="kv">还没生成画像。晋升几条后点「重画画像」。</div>';
+  h+=`<div class="tcat">情绪日记（近 ${(mem.epi||[]).length} 条）<i></i></div>`;
+  h+=(mem.epi||[]).length?(mem.epi||[]).slice(0,10).map(e=>{
+    const d=new Date(e.ts||0);
+    return `<div class="epi"><b>${d.toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'})} · ${e.mood||'–'}分</b><span>${esc(e.summary||'')}</span></div>`
+  }).join(''):'<div class="kv">（有明显情绪/事件的发言会被记成日记）</div>';
+  if(mem.care.journal&&mem.care.journal.length){
+    h+=`<div class="tcat">关心记录<i></i></div>`+mem.care.journal.map(j=>{try{const o=JSON.parse(j);
+      return `<div class="epi"><b>${new Date(o.ts||0).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</b><span>${esc(o.text||'')}</span></div>`}catch(e){return ''}}).join('');
+  }
+  setBody(h);
+}
+
+function secKb(){
+  setBody(`<div class="hint">知识绑定 = 这张专家默认挂哪些<b>语料库</b>（公司制度、剪辑规范这类跨项目资料）。
+    库的导入与绑定在<b>知识页签</b>里管理 —— 语料属于"人"不属于某个工作区，所以不在这张卡里塞第二份管理界面。</div>
+    <div style="margin-top:12px"><button class="ab pri" data-h="tokb">去知识页签</button></div>`);
+}
+function secAdv(){
+  setBody(`<div class="hint">这张专家的<b>专属网关</b>：留空 = 跟全局设置。开了会话就用这里的地址与供应商（模型仍按卡上的走）。</div>
+    <div class="fld"><label>供应商名（写进请求的标识，留空跟全局）</label>
+      <input type="text" id="hProv" value="${esc(ac.providerName||'')}" placeholder="留空=跟全局" style="width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;color:var(--fg);font:inherit;padding:7px 9px"></div>
+    <div class="fld"><label>Base URL（留空跟全局）</label>
+      <input type="text" id="hBase" value="${esc(ac.baseUrl||'')}" placeholder="https://…/v1" style="width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;color:var(--fg);font:inherit;padding:7px 9px"></div>
+    <div class="hint">改完即存。关窗就是保存——这里没有单独的保存按钮。</div>`);
+  $('#hProv').oninput=e=>{ac.providerName=e.target.value;save()};
+  $('#hBase').oninput=e=>{ac.baseUrl=e.target.value;save()};
+}
+
+function act(x,b){
+  if(!ac)return;
+  if(x==='mpick'){const code=b.dataset.code;
+    post('/api/mbti',{op:'apply',preset:pid,code:code}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没应用成','err');return}
+      ac.personaMbti=code;paint();toast('人格已生效（下一句话起）');});return}
+  if(x==='mclear'){ac.personaMbti='';save();paint();return}
+  if(x==='quiz'){quizQs=null;quizRes=null;quizIdx=0;quizAns={};
+    fetch('/api/mbti?what=questions').then(r=>r.json()).then(d=>{quizQs=d.items||[];paint()})
+    .catch(()=>toast('题库读不到','err'));return}
+  if(x==='qa'){quizAns[quizQs[quizIdx].id]=parseInt(b.dataset.v,10);quizIdx++;paint();return}
+  if(x==='qback'){quizIdx=Math.max(0,quizIdx-1);paint();return}
+  if(x==='qquit'){quizQs=null;quizIdx=0;quizAns={};paint();return}
+  if(x==='mapply'){post('/api/mbti',{op:'apply',preset:pid,code:b.dataset.code}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没应用成','err');return}
+      ac.personaMbti=b.dataset.code;quizRes=null;paint();toast('人格已生效（下一句话起）')});return}
+  if(x==='mback'){quizRes=null;paint();return}
+  if(x==='gtool'){const n=b.dataset.n;if(b.classList.contains('dis'))return;
+    globalOff=globalOff.includes(n)?globalOff.filter(z=>z!==n):globalOff.concat([n]);
+    post('/api/settings',{toolsOff:globalOff}).then(()=>{tools=tools.map(t=>t.name===n?Object.assign({},t,{off:globalOff.includes(n)}):t);paint()});
+    return}
+  if(x==='etool'){const n=b.dataset.n;if(b.classList.contains('dis'))return;
+    ac.toolsOff=(ac.toolsOff||[]).includes(n)?(ac.toolsOff||[]).filter(z=>z!==n):(ac.toolsOff||[]).concat([n]);
+    save();paint();return}
+  if(x==='eskill'){const n=b.dataset.n;
+    ac.skillsOff=(ac.skillsOff||[]).includes(n)?(ac.skillsOff||[]).filter(z=>z!==n):(ac.skillsOff||[]).concat([n]);
+    save();paint();return}
+  if(x==='suball'){ac.subagents=[];save();paint();return}
+  if(x==='sub1'){const n=b.dataset.n;const cur=ac.subagents||[];
+    if(!cur.length){ // 全部可用状态：点某个 → 进入"只派这些"，初始=全部减这个
+      ac.subagents=subs.map(s=>s.slug).filter(z=>z!==n);
+    }else{ac.subagents=cur.includes(n)?cur.filter(z=>z!==n):cur.concat([n]);
+      if(!ac.subagents.length)ac.subagents=[]}
+    save();paint();return}
+  if(x==='extract'){post('/api/memory-funnel',{op:'extract',sid:curId||''}).then(d=>{
+      toast((d&&d.note)||((d&&d.error)||'没提成'),d&&d.ok?'':'err');
+      setTimeout(()=>loadMem().then(paint),3500)}).catch(()=>toast('没提成','err'));return}
+  if(x==='regen'){post('/api/memory-funnel',{op:'regenProfile',sid:curId||''}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'画像生成失败','err');return}
+      memLoaded=false;loadMem().then(paint);toast('画像已重画')}).catch(()=>toast('画像生成失败','err'));return}
+  if(x==='care'){post('/api/memory-funnel',{op:'care',enabled:mem.care.enabled?0:1}).then(d=>{
+      mem.care.enabled=!!(d&&d.enabled);paint();toast(mem.care.enabled?'主动关心已开（1~3 天随机一句）':'主动关心已关')});return}
+  if(x==='promote'||x==='reject'){
+    post('/api/memory-funnel',{op:x,id:b.dataset.id}).then(()=>{loadMem().then(paint);
+      toast(x==='promote'?'已晋升进长期记忆':'已拒绝');}).catch(()=>toast('没成功','err'));return}
+  if(x==='tokb'){close();setView('kb');return}
+}
+return {open, close, opened:()=>on};
+})();
 
 /* 输入区工具条：/ 与 @ 的入口做成看得见的圆钮（原来全靠占位符小字）。
    点下去不是插个字符完事——focus + 置值 + 派 input 事件，走的还是
