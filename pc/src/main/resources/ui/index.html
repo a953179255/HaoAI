@@ -1678,7 +1678,10 @@ function show(sid,keep){
     :'切换模型';
   // 角色名跟着会话走：没有角色就整颗藏掉，摆一个空的"（无）"是在占人的注意力
   $('#roleChip').hidden=!v.role;
-  $('#roleChip').textContent=v.role?('角色 · '+v.role):'';
+  // 角色名跟着会话走：没有角色就整颗藏掉，摆一个空的"（无）"是在占人的注意力。
+  // 团队会话的 role 自己就带「团队 ·」前缀，再叠一层「角色 ·」会变成「角色 · 团队 · X」
+  // ——两颗小章挤在一颗里，所以带前缀的那些原样显示。
+  $('#roleChip').textContent=v.role?(/^团队 · /.test(v.role)?v.role:('角色 · '+v.role)):'';
   setMode(v.mode||mode);paintTodos(v.todos);paintUsage(v.usage);paintOutputs(v);
   paintHello(v);
   // 每条会话自己的工作区：切了会话还停在上一条的目录里，看到的就是错的文件

@@ -1,0 +1,157 @@
+[
+ {
+  "note": "「我的团队」这条链此前只有 JVM 契约测试（编制存法、主持人现拼人设、上限），页面上从没看过一眼：页签、新建表单、成员勾选、至少 2 名的拒法、开团后顶栏那颗角色章。这份剧本走的就是人眼会走的那条路。",
+  "eval": "(async()=>{const mk=(n,pe)=>fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'save',name:n,persona:pe,desc:n+' 的专长',welcome:'',quick:[],temperature:-1,maxTokens:-1,maxTurns:-1,enabled:true})}).then(r=>r.json());await mk('前端老张','你是前端，负责页面与交互。');await mk('测试小李','你是测试，负责用例与回归。');const d=await fetch('/api/presets').then(r=>r.json());const it=(d.items||[]).filter(x=>x.name=='前端老张'||x.name=='测试小李');window.__tids=it.map(x=>x.id);return {two:it.length==2,ids:window.__tids.join(',')}})()",
+  "must": ["two"],
+  "note": "先备两张专家卡：团队编制是从「我的专家」里勾的，没卡的时候表单只有一句提示，测不出勾选这条路。卡走接口造（启用内置卡那条已由 ui-xpcards 验过），这份只管团队。"
+ },
+ {
+  "click": "[data-view=\"experts\"]"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "click": "#xptabs button[data-t=\"team\"]",
+  "note": "切到「我的团队」"
+ },
+ {
+  "sleep": 1100
+ },
+ {
+  "eval": "(()=>{const g=document.querySelector('#xpGrid');const t=g?g.textContent:'';return {tabOn:document.querySelector('#xptabs button[data-t=team]').classList.contains('on'),emptyMsg:t.indexOf('还没有团队')>=0,hasNew:!!g.querySelector('[data-x=newt]'),noCard:!g.querySelector('[data-x=teamgo]')}})()",
+  "must": ["tabOn", "emptyMsg", "hasNew"],
+  "note": "空态要说人话并给出下一步（点新建），而不是留一块白板；「还没有团队」这句也是给后面几步确认页签真切过来了"
+ },
+ {
+  "shot": "xt01-team-empty"
+ },
+ {
+  "click": "[data-x=\"newt\"]"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "(()=>{const boxes=[...document.querySelectorAll('.memgrid input')];return {hasName:!!document.querySelector('#xtName'),boxes:boxes.length,names:boxes.map(b=>{const l=b.closest('label');return l?l.textContent.trim():''}).join('/'),hint:(document.querySelector('#xBody').textContent.indexOf('至少 2 名')>=0),noCards:boxes.length>0}})()",
+  "must": ["hasName", "boxes", "hint", "noCards"],
+  "note": "成员格是从「我的专家」现生成的：boxes 读出 0 就等于这张表只能看不能勾（而它会静默显示成一句提示，肉眼很容易当成正常）"
+ },
+ {
+  "type": {"sel": "#xtName", "text": "项目冲刺组", "enter": false}
+ },
+ {
+  "type": {"sel": "#xtDesc", "text": "先把页面做出来，再补回归", "enter": false}
+ },
+ {
+  "eval": "(()=>{const boxes=[...document.querySelectorAll('.memgrid input')];boxes.forEach(b=>{if(b.checked)b.click()});boxes[0].click();document.querySelector('[data-x=tsave]').click();return {checked:boxes.filter(b=>b.checked).length}})()",
+  "must": ["checked"],
+  "note": "只勾一名就点保存 —— 下一步要的是它当场拒，并且说清为什么"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/teams').then(r=>r.json());return {refused:/至少勾 2 名/.test(document.querySelector('#toast').textContent),none:(d.items||[]).length==0,formStillOpen:!!document.querySelector('#xtName')}})()",
+  "must": ["refused", "none", "formStillOpen"],
+  "note": "三条一起看才算真拒：话说了、盘上没写、表单还开着（关掉了用户就得从头再填一遍）。只断言 toast 的话，「弹了提示但还是存进去了」抓不到。"
+ },
+ {
+  "shot": "xt02-team-refused"
+ },
+ {
+  "eval": "(()=>{const boxes=[...document.querySelectorAll('.memgrid input')];boxes.forEach(b=>{if(!b.checked)b.click()});document.querySelector('[data-x=tsave]').click();return {checked:boxes.filter(b=>b.checked).length}})()",
+  "must": ["checked"],
+  "note": "补齐两名再存"
+ },
+ {
+  "sleep": 1600
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/teams').then(r=>r.json());const t=(d.items||[])[0]||{};const g=document.querySelector('#xpGrid');const card=g?g.querySelector('.xcard'):null;const row=[...document.querySelectorAll('#xpTeams .rl')].find(x=>x.textContent.indexOf('项目冲刺组')>=0);const b=row?row.querySelector('b'):null;return {one:(d.items||[]).length==1,name:t.name=='项目冲刺组',desc:(t.desc||'').length>0,mems:(t.members||[]).length==2,names:(t.members||[]).map(m=>m.name).sort().join(','),onPage:!!card&&card.textContent.indexOf('项目冲刺组')>=0,stack:!!card&&card.querySelectorAll('.stack .avatar').length==2,meta:!!card&&/2 名成员/.test(card.textContent),go:!!card&&!!card.querySelector('[data-x=teamgo]'),aside:!!row,asideNoStrike:!!b&&getComputedStyle(b).textDecorationLine=='none',asideTall:!!row&&row.getBoundingClientRect().height>=18}})()",
+  "must": ["one", "name", "desc", "mems", "onPage", "stack", "meta", "go", "aside", "asideNoStrike", "asideTall"],
+  "note": "服务端与页面两头都读：names 排过序，成员顺序变了也不会误红。stack==2 钉的是「编制是看得见的头像」，不是只有一行字。\n  asideNoStrike / asideTall 是看像素时逼出来的：右栏「团队速览」那一行在小图上看像被划了一道删除线，\n  而 .rl 的样式里没有任何 line-through —— 要么是真有规则划在它身上，要么是我看错了图。\n  与其猜，不如把 computed text-decoration 与行高钉成判据：划了线或者行被压扁都会当场红。"
+ },
+ {
+  "shot": "xt03-team-card"
+ },
+ {
+  "eval": "(()=>{const b=document.querySelector('#xpGrid [data-x=teamgo]');if(!b)return {found:false};b.click();return {found:true}})()",
+  "must": ["found"],
+  "note": "点「开团队会话」"
+ },
+ {
+  "sleep": 2000
+ },
+ {
+  "eval": "(async()=>{const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json());const chip=document.querySelector('#roleChip');return {chatOn:document.querySelector('.main').dataset.page=='chat'||document.querySelector('.view.on')!=null,role:s.role,chip:chip?chip.textContent:'',chipShown:!!chip&&chip.hidden==false,noDouble:!(chip&&/角色 · 团队/.test(chip.textContent)),isTeam:/^团队 · /.test(chip?chip.textContent:'')}})()",
+  "must": ["chatOn", "chipShown", "isTeam", "noDouble"],
+  "note": "开团要真的落到一条会话上，顶栏那颗章要写「团队 · 项目冲刺组」。noDouble 是被像素逼出来的：章的模板是「角色 · X」，而团队会话的 role 本身就带「团队 ·」前缀，直拼出来是「角色 · 团队 · 项目冲刺组」——两个前缀叠在一颗小章上。"
+ },
+ {
+  "shot": "xt04-team-session"
+ },
+ {
+  "type": {"sel": "#box", "text": "先给个两天的排期", "enter": true}
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();for(;;){const s=await fetch('/api/state?sid='+encodeURIComponent(curId)).then(r=>r.json()).catch(()=>({}));if(s.running===false&&document.querySelectorAll('.view.on .msg.ans').length>=1)return JSON.stringify({answered:true,ms:Date.now()-t0});if(Date.now()-t0>60000)return JSON.stringify({answered:false,role:(document.querySelector('#roleChip')||{}).textContent});await new Promise(z=>setTimeout(z,1200))}})()",
+  "must": ["answered"],
+  "note": "团队会话要真的能聊（mock 模型回答一条）：只验到「会话建出来了」不够，主持人那条路的引擎、档位、人设都得接上"
+ },
+ {
+  "shot": "xt05-team-chat"
+ },
+ {
+  "click": "[data-view=\"experts\"]"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "click": "#xptabs button[data-t=\"team\"]"
+ },
+ {
+  "sleep": 1100
+ },
+ {
+  "eval": "(()=>{const b=document.querySelector('#xpGrid [data-x=tedit]');if(!b)return {found:false};b.click();return {found:true}})()",
+  "must": ["found"],
+  "note": "点「编辑」：重开表单要把编制原样带回来"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "(()=>{const boxes=[...document.querySelectorAll('.memgrid input')];return {name:document.querySelector('#xtName').value=='项目冲刺组',both:boxes.filter(b=>b.checked).length==2,total:boxes.length}})()",
+  "must": ["name", "both"],
+  "note": "名字回填 + 两个勾还在。这条不是多余：编辑表单若只按 members 的 id 勾，而卡被复制过（同 id 不同名），勾就会静默丢掉，保存时变成「少一名」"
+ },
+ {
+  "shot": "xt06-team-edit"
+ },
+ {
+  "eval": "(()=>{document.querySelector('[data-x=back]').click();const f=document.querySelector('#xtName');return {maskOff:!document.querySelector('#mask').classList.contains('on'),formInert:!f||f.offsetParent===null,onclickCleared:!document.querySelector('#dialog').onclick}})()",
+  "must": ["maskOff", "formInert"],
+  "note": "取消要真的关掉。判据一开始写成「#xtName 从 DOM 里消失」—— 不对：close() 只摘 mask 与 onclick，不清 innerHTML，字段留在原地但已经点不着。真正要守的是「关掉的表单不能再吃输入」（上一批就栽在往看不见的同名输入框打字，value 照样生效），所以这里量 offsetParent 与遮罩。onclickCleared 只打印。"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "eval": "(()=>{window.confirm=()=>true;const b=document.querySelector('#xpGrid [data-x=tdel]');if(!b)return {found:false};b.click();return {found:true}})()",
+  "must": ["found"],
+  "note": "解散这支团队（confirm 打桩：文案里写清了「成员的专家卡不受影响」）"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/teams').then(r=>r.json());const p=await fetch('/api/presets').then(r=>r.json());return {gone:(d.items||[]).length==0,emptyBack:document.querySelector('#xpGrid').textContent.indexOf('还没有团队')>=0,cardsStill:(p.items||[]).length>=2}})()",
+  "must": ["gone", "emptyBack", "cardsStill"],
+  "note": "解散只删团队：服务端没队了、页面回到空态、两张卡还在（删队顺手删人是最难查的那种坏）"
+ },
+ {
+  "shot": "xt07-team-dissolved"
+}
+]
