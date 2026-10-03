@@ -77,6 +77,38 @@ const ALLOW = new Set();
 const missing = [...used].filter(c => !cssClasses.has(c) && !ALLOW.has(c)).sort();
 check(missing.length === 0, 'JS 用到的 class 在 CSS 里都有规则',
   '缺规则：' + missing.join(', ') + '\n         （挂不上样式=界面上看不出差别，最容易漏）');
+/*
+ * ---- 2b) 同一个 class 被两条规则各自设了不同的 display ----
+ * 真事故（2026-10-03，专家卡补齐那批）：新加的"快捷提问一行三格"顺手起名 `.qrow`，
+ * 而 `.qrow` 早就被输入框上面那行"运行中排队"占了 —— 那条写的是 `display:none`，
+ * 加 `.on` 才显示。同名两条规则里后写的赢，于是表单里那三格输入框**永远不显示**：
+ * 元素在 DOM 里、querySelector 找得到、上一条"class 有没有规则"照样绿
+ * （它只问有没有规则，不问谁赢）。最后是像素剧本"打字打到 0 尺寸的元素"把它撞出来的。
+ *
+ * 只查**简单选择器**（`.x`）之间互相打架：`.x` 与 `.x.on` 是刻意的状态覆盖，不算。
+ */
+const cssNoComment = styleSrc.replace(/\/\*[\s\S]*?\*\//g, '')
+const dispRules = new Map()
+for (const m of cssNoComment.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  // 只算**顶层**规则：@media 里的覆盖（窄屏把侧栏收起来）是刻意的，不是撞名
+  if ((cssNoComment.slice(0, m.index).match(/\{/g) || []).length !==
+      (cssNoComment.slice(0, m.index).match(/\}/g) || []).length) continue
+  const d = (m[2].match(/(?:^|;)\s*display\s*:\s*([^;]+)/) || [, ''])[1].trim()
+  if (!d) continue
+  for (const piece of m[1].split(',')) {
+    const c = piece.trim().match(/^\.([A-Za-z][\w-]*)$/)
+    if (!c) continue
+    if (!dispRules.has(c[1])) dispRules.set(c[1], [])
+    dispRules.get(c[1]).push(d)
+  }
+}
+const dispClash = []
+for (const [cls, ds] of dispRules) {
+  const uniq = [...new Set(ds)]
+  if (uniq.length > 1) dispClash.push('.' + cls + ' 被写成两种 display：' + uniq.join(' / ') + '（后写的赢，前一份等于没写）')
+}
+check(dispClash.length === 0, '同一个 class 没有被两条规则写成互相冲突的 display',
+  dispClash.join('\n         '))
 
 // ---- 3) JS 取的元素 id 必须存在（在 HTML 里，或由脚本自己写出来）----
 const wanted = new Set();

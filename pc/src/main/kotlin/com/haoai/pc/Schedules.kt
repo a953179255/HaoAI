@@ -160,6 +160,10 @@ internal fun scheduleExpert(s: Schedule): Pair<Preset?, String?> {
     if (s.preset.isBlank()) return null to null
     val p = Presets.find(s.preset)
         ?: return null to "这张专家卡不在了（${s.preset}），任务没跑：去「专家」页补一张，或改掉这条任务的指定"
+    // 卡被关掉和卡被删掉是同一类"到点才发现跑不了"，必须在这里就挡住并写进 lastError，
+    // 而不是静默用别的卡跑一遍 —— 那样用户看到的是一份没人格的任务结果。
+    if (!p.enabled)
+        return null to "「${p.name}」已经关掉，任务没跑：去「专家」页打开它，或改掉这条任务的指定"
     return p to null
 }
 

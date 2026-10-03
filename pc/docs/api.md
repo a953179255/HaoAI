@@ -96,6 +96,14 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 专家与团队：`/api/teams`（GET 清单（成员展开成摘要）；POST `op:'save'|'del'`，
 `name`+`members`≥2 个 preset id；编制只存成员 id，人设跟着角色卡走）、
 `/api/experts/library`（GET，随包内置专家卡，只读）、
+`/api/presets`（GET 清单；POST `op:'save'`（默认）`|'del'`|`'toggle'`|`'dup'`|`'export'`|`'import'`）。
+角色卡除人设/模型/工作区/档位外还带：`welcome`（新会话第一屏的欢迎语）、
+`quick:[{title,desc,prompt}]`（快捷提问：标题上按钮、正文才是发出去的那句；老卡的字符串形状仍能读入）、
+`enabled`（关掉后不进新会话候选、不能被 `ask_agent` 点名、定时任务到点拒跑，并给出原因）、
+`temperature`/`maxTokens`/`maxTurns`（**每卡运行参数**，`-1` = 跟全局；只影响这张卡开出的会话，
+落到那条会话自己的设置副本上）。`op:'export'` 返回 `{ok,card}`，那份 JSON 原样交给
+`op:'import'` 就能读回来，且**必然换新 id**（导入不该覆盖用户手里那张同名卡）。
+`/api/state` 现在也报 `preset`：不报的话前端拿到"带角色的空会话"却不知道角色是谁，欢迎语画不出来。
 `/api/kb`（GET `?sid=` 语料清单与检索可用性；POST `op:'import'`（name+text，纯文本 ≤200KB）
 `|'del'`（name，删后语义缓存一并清）`|'test'`（q，跑一次语义检索返回命中））。
 `/api/new` 可带 `team:<id>` 开团队会话（服务端现拼主持人人设，成员人设经 task 的 `persona` 参数随派工下发）。

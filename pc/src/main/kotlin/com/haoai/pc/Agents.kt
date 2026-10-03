@@ -133,6 +133,11 @@ object Agents {
     fun start(preset: String, sid: String = ""): Pair<AgentState?, String?> {
         if (preset.isNotBlank() && Presets.find(preset) == null)
             return null to "没有这张专家卡：$preset"
+        // 卡上那个"关"是目录级的：关着的卡既不该被启成实例，也不该被别的专家点名（见 ask）。
+        // 不这么判的话，"停用实例"与"关掉卡"就是两套互相看不见的世界。
+        Presets.find(preset)?.takeIf { !it.enabled }?.let {
+            return null to "「${it.name}」已经关掉，去「专家」页打开再用"
+        }
         val s = synchronized(lock) {
             val cur = states.getOrPut(preset) { AgentState(preset) }
             cur.state = AgentState.IDLE
@@ -214,6 +219,7 @@ object Agents {
      */
     fun ask(to: String, from: String, text: String, mode: String = "sync"): Pair<String, String?> {
         val p = Presets.find(to) ?: return "" to "没有这张专家卡：$to（先看 agent_list 里都有谁）"
+        if (!p.enabled) return "" to "「${p.name}」已经关掉，问不动：让它在「专家」页打开"
         if (text.isBlank()) return "" to "要问的那句话是空的"
         val stopped = state(p.id)?.state == AgentState.STOPPED
         if (stopped) return "" to "「${p.name}」已经被停了，先把它启起来再问"
@@ -299,12 +305,18 @@ object Agents {
     /** 给模型看的名单（`agent_list` 工具就读这份）。 */
     fun roster(): String = synchronized(lock) {
         val cards = Presets.load()
-        if (cards.isEmpty()) "（还没有任何专家卡：去「专家」页建一张，或从内置库里启用一张）"
-        else cards.joinToString("\n") { c ->
-            val s = states[c.id]
-            "· ${c.name}（preset=${c.id}）：${c.desc.ifBlank { "没写专长" }}" +
-                " ｜" + (s?.let { AgentState.label(it.state) } ?: "没启动过") +
-                (s?.takeIf { it.state == AgentState.RUNNING }?.let { "（正在忙）" } ?: "")
+        // 关着的卡不进名单：这份名单是给模型派工用的，列一个问不动的名字只会换来
+        // 一次失败的 ask_agent —— 而模型在那之后通常就自己上手了。
+        val on = cards.filter { it.enabled }
+        when {
+            on.isNotEmpty() -> on.joinToString("\n") { c ->
+                val s = states[c.id]
+                "· ${c.name}（preset=${c.id}）：${c.desc.ifBlank { "没写专长" }}" +
+                    " ｜" + (s?.let { AgentState.label(it.state) } ?: "没启动过") +
+                    (s?.takeIf { it.state == AgentState.RUNNING }?.let { "（正在忙）" } ?: "")
+            }
+            cards.isNotEmpty() -> "（专家卡现在全被关着：去「专家」页打开要用的那张，或现建一张）"
+            else -> "（还没有任何专家卡：去「专家」页建一张，或从内置库里启用一张）"
         }
     }
 

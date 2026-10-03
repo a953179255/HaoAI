@@ -8,6 +8,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -341,6 +343,13 @@ class WebServer(settings: PcSettings, port: Int,
         // 模型要报**这条会话自己的**：从 v0.32 起可以只给一条会话换模型，
         // 还报全局那份的话，顶栏那个标签就在说谎（引擎实际用的和显示的不一样）。
         sb.append("\"model\":\"").append(esc(e?.settings?.model ?: settings.model)).append("\",")
+        /*
+         * 这条会话挂的是哪张专家卡也要报出去。
+         * 之前只有落盘的会话文件里有 `preset`，`/api/state` 里没有 —— 于是前端拿到
+         * "带角色的空会话"却不知道角色是谁，欢迎语与快捷提问永远画不出来
+         * （字段在数据层有、接口不报，等于界面上没有）。
+         */
+        sb.append("\"preset\":\"").append(esc(e?.session?.preset ?: "")).append("\",")
         // 排队的句子要跟着 state 报出去：刷新页面之后"还有两句等着说"不能看不见
         sb.append("\"queue\":[").append(
             managed?.let { m ->
@@ -467,6 +476,20 @@ class WebServer(settings: PcSettings, port: Int,
         /** 字符串数组（图片附件那类）；字段缺失或不是数组都当空表。 */
         fun list(key: String): List<String> =
             obj[key]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+
+        /**
+         * 对象数组（专家卡的快捷提问 `{title,desc,prompt}` 那类）。
+         *
+         * 为什么不让前端把三个字段拼成一个字符串塞进 `list`：那样按钮上的字与
+         * 发出去的那句就又是同一句话了（Octop 分开是有道理的），而且拼串的分隔符
+         * 早晚会撞进用户写的正文里。
+         */
+        fun objs(key: String): List<JsonObject> =
+            obj[key]?.jsonArray?.mapNotNull { runCatching { it.jsonObject }.getOrNull() } ?: emptyList()
+
+        /** 数字字段：缺失或写错类型都回落到给定的默认值（不猜）。 */
+        fun num(key: String): Double? = obj[key]?.jsonPrimitive?.doubleOrNull
+        fun bool(key: String): Boolean? = obj[key]?.jsonPrimitive?.booleanOrNull
     }
 
     /**
@@ -534,6 +557,13 @@ class WebServer(settings: PcSettings, port: Int,
                           * 定时任务永远 `fresh=true`，所以这条路一定会走到新建。
                           */
                          preset: Preset? = null): Pair<String, String?> {
+        /*
+         * 关着的卡不许跑**任何一条**路。/api/new 那边挡住了"新建会话"，但发任务、
+         * 定时任务、重新生成三条入口都从这里进，只在一处判等于没判。
+         * 返回 sid="" 是有意的：调用方按 "sid to null = 起来了" 解读，非空 reason 一律是拒。
+         */
+        if (preset != null && !preset.enabled)
+            return "" to "「${preset.name}」已经关掉，去「专家」页打开再用"
         /*
          * 先判「能不能跑」，再决定要不要新建会话：上一版是先 newSessionId() 再检查并行上限，
          * 于是四条槽都满时用户只是发送失败，列表里却多出一条空白的「新会话」——
@@ -703,7 +733,16 @@ class WebServer(settings: PcSettings, port: Int,
         made = e
         // 角色卡带的模型：语义是"这条会话的初始模型"，toolsOff 不参与 ——
         // 用工厂的 overlay 表达（model 为空时它自己就跳过，与原来的 if 条件等价）。
-        if (preset != null) EngineFactory.applySessionOverlay(e, settings, preset.model, emptyList())
+        if (preset != null) {
+            EngineFactory.applySessionOverlay(e, settings, preset.model, emptyList())
+            /*
+             * 卡上的运行参数（温度 / maxTokens / 每回合格子数）落到**这条会话**的设置副本上。
+             * 走 useSettings 而不是直接赋 settings：那个 setter 会顺带重建 HTTP 客户端，
+             * 而温度与 max_tokens 是构造客户端时烘进去的（Provider 的构造参数）——
+             * 只改字段的话这条会话发出去的还是全局那份温度，卡上填的数字等于没填。
+             */
+            e.useSettings(Presets.applyTo(preset, e.settings))
+        }
         e.persistNow()
         sessions[session.id] = Managed(e)
         touch(session.id)
@@ -786,8 +825,60 @@ class WebServer(settings: PcSettings, port: Int,
     private fun presets(ex: HttpExchange) {
         val b = Body(ex)
         if (ex.requestMethod != "GET") {
+            /**
+             * 数值型运行参数的读法：`-1` = "这张卡不管这项"。
+             *
+             * 三件事必须同时成立：界面上把输入框清空要能**清回** -1（不是留着旧值）、
+             * 请求里根本没带这个键要**沿用**卡上原有的值（编辑弹窗只改了名字时，
+             * 不能顺手把温度抹平）、越界的值要收进合理区间（模型不会因为你填了
+             * 1e9 就高兴，只会在下一轮报"参数非法"）。
+             */
+            fun numOr(key: String, keep: Int, cap: Int): Int =
+                b.num(key)?.toInt()?.let { if (it < 0) Preset.NO_OVERRIDE else it.coerceAtMost(cap) } ?: keep
+            fun dblOr(key: String, keep: Double, cap: Double): Double =
+                b.num(key)?.let { if (it < 0) Preset.NO_OVERRIDE.toDouble() else it.coerceAtMost(cap) } ?: keep
             when (b.str("op")) {
                 "del" -> Presets.remove(b.str("id"))
+                // 开关单独一条 op：卡"关掉"不是删，改天还要开回来，不该逼用户重填一遍表单
+                "toggle" -> {
+                    val p = Presets.find(b.str("id"))
+                    if (p != null) Presets.update(p.copy(enabled = b.bool("on") ?: !p.enabled))
+                }
+                "dup" -> {
+                    val p = Presets.find(b.str("id"))
+                    if (p == null) {
+                        send(ex, 200, """{"ok":false,"error":"那张卡不在了"}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    if (Presets.load().size >= Presets.MAX) {
+                        send(ex, 200, """{"ok":false,"error":${quote("角色卡最多 " + Presets.MAX + " 张，先删一张再复制")}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    Presets.update(Presets.duplicate(p))
+                }
+                "import" -> {
+                    val (card, err) = Presets.importJson(b.str("text"))
+                    if (card == null) {
+                        send(ex, 200, """{"ok":false,"error":${quote(err ?: "导入失败")}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    if (Presets.load().size >= Presets.MAX) {
+                        send(ex, 200, """{"ok":false,"error":${quote("角色卡最多 " + Presets.MAX + " 张，先删一张再导入")}}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    Presets.update(card)
+                }
+                "export" -> {
+                    // 导出的那份就是 importJson 能吃回来的那份 —— 一条判据钉着这个往返。
+                    // 外面套一层 ok/card：前端的 post() 一律按 {ok,error} 解，裸卡片会被当成失败。
+                    val p = Presets.find(b.str("id"))
+                    if (p == null) {
+                        send(ex, 200, """{"ok":false,"error":"那张卡不在了"}""",
+                            "application/json; charset=utf-8"); return
+                    }
+                    send(ex, 200, """{"ok":true,"card":${Presets.exportJson(p)}}""",
+                        "application/json; charset=utf-8"); return
+                }
                 else -> {
                     val name = b.str("name").trim()
                     val persona = b.str("persona").trim()
@@ -803,12 +894,25 @@ class WebServer(settings: PcSettings, port: Int,
                         send(ex, 200, """{"ok":false,"error":${quote("这个目录现在打不开：" + ws)}}""",
                             "application/json; charset=utf-8"); return
                     }
-                    val id = b.str("id").ifBlank { "pr" + System.nanoTime().toString(16).take(8) }
+                    val id = b.str("id").ifBlank { Presets.newId() }
                     val old = Presets.find(id)
                     if (old == null && Presets.load().size >= Presets.MAX) {
                         send(ex, 200, """{"ok":false,"error":${quote("角色卡最多 " + Presets.MAX + " 张，先删一张")}}""",
                             "application/json; charset=utf-8"); return
                     }
+                    // 绑定的知识库：只留**现在真存在**的那些。
+                    // 为什么不因为"库不存在"就拒掉整次保存：库是会被人删的，
+                    // 删了之后那张卡就打不开、改不动，比留着一个失效绑定更糟。
+                    // 也不保留失效 id：界面上会摆一个点开是空的库名，看着像坏了。
+                    val kbs = b.list("kbs").map { it.trim() }.filter { it.isNotEmpty() }
+                        .filter { Knowledge.find(it) != null }.distinct().take(6)
+                    val quick = b.objs("quick").mapNotNull { q ->
+                        val t = (q["title"]?.jsonPrimitive?.contentOrNull ?: "").trim().take(40)
+                        if (t.isEmpty()) null else QuickPrompt(
+                            t,
+                            (q["desc"]?.jsonPrimitive?.contentOrNull ?: "").trim().take(80),
+                            (q["prompt"]?.jsonPrimitive?.contentOrNull ?: "").trim().take(600))
+                    }.distinct().take(6)
                     Presets.update(
                         Preset(
                             id = id,
@@ -822,16 +926,15 @@ class WebServer(settings: PcSettings, port: Int,
                             icon = b.str("icon").trim().take(4),
                             color = b.str("color").trim().take(9),
                             mbti = b.str("mbti").trim().uppercase().take(4),
-                            quick = b.list("quick").map { it.trim() }.filter { it.isNotEmpty() }.take(4),
-                            /**
-                             * 绑定的知识库：只留**现在真存在**的那些。
-                             *
-                             * 为什么不因为"库不存在"就拒掉整次保存：库是会被人删的，
-                             * 删了之后那张卡就打不开、改不动，比留着一个失效绑定更糟。
-                             * 也不保留失效 id：界面上会摆一个点开是空的库名，看着像坏了。
-                             */
-                            kbs = b.list("kbs").map { it.trim() }.filter { it.isNotEmpty() }
-                                .filter { Knowledge.find(it) != null }.distinct().take(6),
+                            quick = quick,
+                            kbs = kbs,
+                            // 表单没带 enabled 就沿用卡上原来的：编辑弹窗只管改名字，
+                            // 顺手把一张关着的卡打开＝替用户做了他没做的决定
+                            enabled = b.bool("enabled") ?: old?.enabled ?: true,
+                            welcome = b.str("welcome").trim().take(400),
+                            temperature = dblOr("temperature", old?.temperature ?: Preset.NO_OVERRIDE.toDouble(), 2.0),
+                            maxTokens = numOr("maxTokens", old?.maxTokens ?: Preset.NO_OVERRIDE, 200000),
+                            maxTurns = numOr("maxTurns", old?.maxTurns ?: Preset.NO_OVERRIDE, 500),
                             created = old?.created ?: System.currentTimeMillis()
                         )
                     )
@@ -986,8 +1089,11 @@ class WebServer(settings: PcSettings, port: Int,
         val want = b.str("ws")
         val presetId = b.str("preset")
         val preset = if (presetId.isBlank()) null else Presets.find(presetId)
-        if (presetId.isNotBlank() && preset == null) {
-            send(ex, 200, """{"ok":false,"error":"没有这个角色卡，可能已经被删掉了"}""",
+        // 关着的卡与丢了的卡走同一条判定（Presets.usable）：静默改用别的卡、
+        // 或者开一条没有角色的会话，都是把"我没生效"藏起来。
+        val presetRefusal = Presets.usable(presetId)
+        if (presetRefusal != null) {
+            send(ex, 200, """{"ok":false,"error":${quote(presetRefusal)}}""",
                 "application/json; charset=utf-8"); return
         }
         // 团队会话：成员不足/卡被删的报错在 newTeamSession 里说清（谁不见了）。

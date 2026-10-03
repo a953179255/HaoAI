@@ -49,7 +49,9 @@ class ExpertTeamKbTest {
                 id = "ex1", name = "代码工程师", persona = "先读后写，小步修改。",
                 model = "gpt-x", workspace = "", mode = "ask",
                 desc = "架构 / 评审 / 重构", icon = "💻", color = "#D97A2E",
-                mbti = "intj", quick = listOf("先读结构", "排查报错")
+                mbti = "intj", quick = listOf(
+                    QuickPrompt("先读结构", "只看目录与依赖，不动手"),
+                    QuickPrompt("排查报错", "", "把这段报错的根因找出来，并给最小复现"))
             )
         )
         assertEquals(1, list.size)
@@ -58,7 +60,11 @@ class ExpertTeamKbTest {
         assertEquals("💻", back.icon)
         assertEquals("#D97A2E", back.color)
         assertEquals("INTJ", back.mbti)          // 存进来就归一成大写
-        assertEquals(listOf("先读结构", "排查报错"), back.quick)
+        assertEquals(listOf("先读结构", "排查报错"), back.quick.map { it.title })
+        // 富快捷提问：按钮上的字与真正发出去的那句是两件事，两者都要活着回来
+        assertEquals("只看目录与依赖，不动手", back.quick[0].desc)
+        assertEquals("把这段报错的根因找出来，并给最小复现", back.quick[1].text())
+        assertEquals("先读结构", back.quick[0].text())   // prompt 留空 = 就发标题
         assertEquals("💻", back.avatarChar())     // 头像字符 = icon 优先
         assertEquals(24, Presets.MAX)
     }

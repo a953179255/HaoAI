@@ -349,6 +349,40 @@
   /* 文档表：窄屏下七列一起挤会把表头压成两行、把最右边那颗按钮裁掉（截图里"删"字少了半笔）。
      所以：表头与操作列一律不换行，整张表给个最小宽度，装不下时由 .kb-docwrap 横向滚，
      而不是把内容裁掉 —— 报错原因那一列反过来要能换行，但限宽，别把整行顶高。 */
+  /* 专家页补齐：关着的卡整张压暗（不只少一个徽标 —— 一眼扫出哪些是"暂时不用的"） */
+  .xcard.off{opacity:.62}
+  /* 运行参数那行：数字要能一眼对上，所以走等宽 + 略暗（挂在 .meta 上只改这两样） */
+  .meta.par{font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .xcard .mbtib.offb{color:var(--warn);border-color:var(--warn)}
+  .xview{display:inline-flex;gap:2px;margin-left:8px}
+  .xview button{border:1px solid var(--line);background:var(--glass);color:var(--fg2);
+    border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
+  .xview button.on{background:var(--glass2);color:var(--fg);border-color:var(--line2)}
+  .addrow .pl{font-size:11.5px;color:var(--dim);white-space:nowrap}
+  .addrow input[type=number]{width:84px;flex:none}
+  /* 快捷提问那一行三格。类名不能叫 .qrow —— 它已经被「运行中排队」那一行占了
+     （那条写的是 display:none，加 .on 才显示），同名会让这三格永远不显示，
+     而 ui-check 的「class 有没有规则」照样绿。ui-check 现在有 2b 专抓这种撞名。 */
+  .qfields{display:flex;gap:6px;margin-bottom:4px}
+  .qfields input{flex:1;min-width:0}
+  /* 专家的列表视图：与知识库那张表同一口径（表头不换行、操作列不换行、装不下由壳横滚） */
+  .xwrap{overflow-x:auto}
+  .xlist{width:100%;min-width:820px;border-collapse:collapse;font-size:12px}
+  .xlist th,.xlist td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+  .xlist th{font-size:10.5px;color:var(--fg2);font-weight:600;white-space:nowrap}
+  .xlist td.ops{white-space:nowrap}
+  .xlist td.st,.xlist .kb-st{white-space:nowrap}
+  .xlist td.nm{white-space:nowrap}
+  .xlist td.nm .avatar{display:inline-block;vertical-align:middle;margin-right:6px;width:22px;height:22px;font-size:12px}
+  .xlist td.ds{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2)}
+  .xlist tr.off{opacity:.6}
+  /* 空会话第一屏的欢迎卡 */
+  .xw{max-width:760px;margin:26px auto 8px;padding:16px 18px;border:1px solid var(--line2);
+    border-radius:14px;background:var(--glass)}
+  .xw .xwh{display:flex;align-items:center;gap:9px}
+  .xw .xwh b{font-size:14.5px}
+  .xw .xwh .ds{font-size:11.5px;color:var(--dim);margin-left:2px}
+  .xw .xwt{margin-top:9px;font-size:13px;line-height:1.7;color:var(--fg2);white-space:pre-wrap}
   .kb-docwrap{overflow-x:auto}
   .kb-docs{width:100%;min-width:720px;border-collapse:collapse;font-size:12px}
   .kb-docs th,.kb-docs td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;
@@ -840,6 +874,10 @@
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .quick button:hover{color:var(--fg);border-color:var(--acc2);border-style:solid}
   .xcard .ft{display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
+  /* 卡底那排动作钮：九颗挤在一行里会把中文标签折成两行（"开始/对话""关/掉"），
+     所以钮自己不许换行、装不下就整排换行。这条是看像素看出来的，结构判据抓不到。 */
+  .xcard .ft{flex-wrap:wrap}
+  .xcard .ft .ab{white-space:nowrap;flex:none}
   /* 成员叠头像：负 margin 挤在一起，描边用面板底色切开相邻头像 */
   .stack{display:flex;flex:none}
   .stack .avatar{width:24px;height:24px;font-size:11px;border-radius:8px;margin-left:-7px}
@@ -1166,6 +1204,9 @@
         </div>
         <input type="text" id="xpQ" placeholder="按名称 / 专长筛选">
         <span class="sp"></span>
+        <div class="xtabs xview" id="xpView"><button data-v="card" class="on">卡片</button><button data-v="list">列表</button></div>
+        <input type="file" id="xpImp" accept=".json,application/json" hidden>
+        <button class="btn" id="xpImpBtn" title="选一张导出过的 .json 卡：会换一个新 id 存进来，不覆盖现有的">导入卡</button>
         <button class="btn pri" id="xpNew">＋ 新建专家</button>
       </div>
       <div class="xp-body">
@@ -3427,7 +3468,9 @@ function paintCronExperts(items){
   const sel=$('#crPreset');if(!sel)return;
   const keep=sel.value;
   sel.innerHTML='<option value="">不指定专家（全局默认）</option>'+
-    (items||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    // 关着的卡**照样列出来**并标一句：任务已经指着它，藏掉的话下拉会跳回"不指定"，
+    // 用户看不到"为什么这条任务到点没跑"。列出来 + 标注才是能查的状态。
+    (items||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${p.enabled===false?'（已关，到点不跑）':''}</option>`).join('');
   if(keep&&[...sel.options].some(o=>o.value===keep))sel.value=keep;
   else if(cronItems.some(s=>s.preset&&[...sel.options].some(o=>o.value===s.preset)))
     sel.value=cronItems.find(s=>s.preset).preset;
@@ -4342,6 +4385,15 @@ function applyState(s){
    * ② 右栏「产出」列表。
    * 工具消息自己不带路径，路径在它上面那条 assistant 的 calls 里 —— 按名字排队取。
    */
+  /*
+   * 专家卡的"欢迎语 + 快捷提问"画在空会话第一屏（对标 Octop 的 welcome_message）。
+   * 只在**一条话都没说过**的时候出现：说开之后还挂着欢迎语，等于在会话流里插广告。
+   * 关着的卡不画（服务端已经不许用它开新会话）。
+   */
+  if(!(s.messages||[]).length&&s.preset){
+    const w=Experts.welcomeFor(s.preset);
+    if(w)v.el.appendChild(el(w));
+  }
   let turn=0;
   const q=[];                       // 待配对的写改路径（按 calls 顺序）
   const pathArg=a=>{try{return JSON.parse(a||'{}').path||''}catch(e){return ''}};
@@ -4669,6 +4721,8 @@ Cfg.init();
 const Experts=(()=>{
 let opened_=false, tab='my', lib=[], teams=[], editingP='', editingT='';
 let my=[], selColor='', selMembers=[], dialogModels='<option value="">模型：跟全局默认</option>';
+/* 卡片 / 列表两种视图：只影响「我的专家」这一档，内置库与团队仍是卡片（它们要扫的字段少）。 */
+let view_='card';
 /* 实例与收件箱（多 Agent 那一层的读数）：读不到就当没有，不许把专家页整页打死 */
 let agents=[], inbox=[];
 function instOf(id){return agents.find(a=>a.preset===id)||null}
@@ -4711,17 +4765,36 @@ function metaLine(p){
   return `${ROLE_MODES[p.mode]||'档位跟全局'} · ${p.model?('模型 '+esc(shortModel(p.model))):'模型跟全局'} · `+
     `${p.workspace?('目录 '+esc(baseName(p.workspace))):'目录跟全局'}`;
 }
+/* 卡上设过的运行参数才写出来；没设的那几项是"跟全局"，列出来反而像被改过。 */
+function paramLine(p){
+  const a=[];
+  if(p.temperature!=null&&p.temperature>=0)a.push('温度 '+p.temperature);
+  if(p.maxTokens!=null&&p.maxTokens>=0)a.push('单次 '+p.maxTokens);
+  if(p.maxTurns!=null&&p.maxTurns>=0)a.push('回合 '+p.maxTurns);
+  return a.length?'<div class="meta par">'+esc(a.join(' · '))+'</div>':'';
+}
+/* 快捷提问：老卡是 ["一句话"]、新卡是 [{title,desc,prompt}]。两种都要能画 ——
+   只按新形状渲染的话，升级之后卡上那排按钮会变成 [object Object]。 */
+function quicks(p){
+  return (p.quick||[]).map(q=>typeof q==='string'?{title:q,desc:'',prompt:q}
+    :{title:(q&&q.title)||'',desc:(q&&q.desc)||'',prompt:(q&&q.prompt)||(q&&q.title)||''}
+  ).filter(q=>q.title);
+}
 function myCard(p){
   const a=instOf(p.id);
   const st=a?a.state:'none', stName=a?a.stateName:'没启动过';
-  return `<div class="xcard">
+  return `<div class="xcard${p.enabled===false?' off':''}">
     <div class="hd">${avatar(p)}<b><span>${esc(p.name)}</span>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</b>
-      <i class="mbtib" data-st="${esc(st)}" title="${a?('这个实例跑过 '+a.turns+' 次'+(a.lastError?(' · 上次出错：'+esc(a.lastError)):'')):'还没启用实例：别的专家问它时才现起'}">${esc(stName)}</i></div>
+      ${p.enabled===false?'<i class="mbtib offb">已关</i>':''}<i class="mbtib" data-st="${esc(st)}" title="${a?('这个实例跑过 '+a.turns+' 次'+(a.lastError?(' · 上次出错：'+esc(a.lastError)):'')):'还没启用实例：别的专家问它时才现起'}">${esc(stName)}</i></div>
     ${p.desc?`<div class="ds">${esc(p.desc)}</div>`:''}
     <div class="meta">${metaLine(p)}</div>
-    ${(p.quick&&p.quick.length)?`<div class="quick">${p.quick.map(q=>
-      `<button data-x="quick" data-id="${esc(p.id)}" data-q="${esc(q)}" title="${esc(q)}">${esc(q)}</button>`).join('')}</div>`:''}
-    <div class="ft"><button class="ab pri" data-x="use" data-id="${esc(p.id)}">开始对话</button>
+    ${paramLine(p)}
+    ${(p.quick&&p.quick.length)?`<div class="quick">${quicks(p).map(q=>
+      `<button data-x="quick" data-id="${esc(p.id)}" data-q="${esc(q.prompt)}"${q.desc?` title="${esc(q.desc)}"`:''}>${esc(q.title)}</button>`).join('')}</div>`:''}
+    <div class="ft"><button class="ab pri" data-x="use" data-id="${esc(p.id)}"${p.enabled===false?' disabled':''}>开始对话</button>
+      <button class="ab" data-x="penable" data-id="${esc(p.id)}" title="关着的卡不进新会话候选、不能被别的专家点名，定时任务到点也会拒跑">${p.enabled===false?'打开':'关掉'}</button>
+      <button class="ab" data-x="pdup" data-id="${esc(p.id)}" title="照这个样子再建一张：新 id，改副本不碰原卡">复制</button>
+      <button class="ab" data-x="pexp" data-id="${esc(p.id)}" title="导出这张卡的 JSON，换机器或发给同事">导出</button>
       <button class="ab" data-x="astart" data-id="${esc(p.id)}" title="让它成为一个可被别的专家点名的实例（有自己那条常驻会话）">${st==='stopped'?'重新启用':'启用实例'}</button>
       <button class="ab" data-x="astop" data-id="${esc(p.id)}" title="停用后别的专家问它会被明确拒绝（不静默排队）">停用</button>
       <button class="ab" data-x="aask" data-id="${esc(p.id)}" title="后台托给它一句：它忙完会把回信送回你的会话">托一件事</button>
@@ -4754,6 +4827,32 @@ function teamCard(t){
       <button class="ab" data-x="tdel" data-id="${esc(t.id)}">删除</button></div>
   </div>`;
 }
+/* 列表视图：24 张上限下"谁开着 / 谁绑了库 / 温度多少"扫一眼比翻卡片快。
+   与知识库那张表同一口径：表头不换行、操作列不换行、装不下由壳横向滚 —— 不这么写
+   最后一列会被裁掉半颗按钮，而"cols===7"这种结构判据照样绿。 */
+function myList(rows){
+  if(!rows.length)return '<div class="kv">没有匹配的专家卡。</div>';
+  return `<div class="xwrap"><table class="xlist"><thead><tr><th>名字</th><th>专长</th><th>配置</th>`+
+    `<th>运行参数</th><th>快捷提问</th><th>状态</th><th></th></tr></thead><tbody>`+
+    rows.map(p=>{
+      const a=instOf(p.id),qs=quicks(p),par=[];
+      if(p.temperature!=null&&p.temperature>=0)par.push('温度 '+p.temperature);
+      if(p.maxTokens!=null&&p.maxTokens>=0)par.push('单次 '+p.maxTokens);
+      if(p.maxTurns!=null&&p.maxTurns>=0)par.push('回合 '+p.maxTurns);
+      return `<tr data-id="${esc(p.id)}"${p.enabled===false?' class="off"':''}>`+
+        `<td class="nm">${avatar(p)}<b>${esc(p.name)}</b>${p.mbti?`<i class="mbtib">${esc(p.mbti)}</i>`:''}</td>`+
+        `<td class="ds" title="${esc(p.desc||'')}">${esc(p.desc||'—')}</td>`+
+        `<td>${metaLine(p)}</td>`+
+        `<td>${esc(par.join(' · ')||'跟全局')}</td>`+
+        `<td>${qs.length?esc(qs.map(q=>q.title).join('、')):'—'}</td>`+
+        `<td>${p.enabled===false?'<span class="kb-st">已关</span> ':''}`+
+          `<span class="kb-st${a&&a.state!=='stopped'?' ok':''}">${esc(a?a.stateName:'没启动过')}</span></td>`+
+        `<td class="ops"><button class="ab" data-x="edit" data-id="${esc(p.id)}">编辑</button>`+
+          `<button class="ab" data-x="penable" data-id="${esc(p.id)}">${p.enabled===false?'打开':'关掉'}</button>`+
+          `<button class="ab" data-x="pdup" data-id="${esc(p.id)}">复制</button>`+
+          `<button class="ab" data-x="pexp" data-id="${esc(p.id)}">导出</button></td></tr>`
+    }).join('')+`</tbody></table></div>`;
+}
 /* 卡片列表渲染进专家整页（#xpGrid），按名称/专长过滤；弹窗只承担一次性表单 */
 function matchQ(p){
   const q=($('#xpQ')&&$('#xpQ').value||'').trim().toLowerCase();
@@ -4765,9 +4864,15 @@ function paint(){
   $('#xptabs').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
   const grid=$('#xpGrid');
   if(tab==='my'){
-    const cards=my.filter(matchQ).map(myCard).join('');
-    grid.innerHTML=(cards||'<div class="kv">还没有专家卡 —— 点右上新建，或去「内置专家」一键启用。</div>')+
-      '<button class="xadd" data-x="newp">＋ 新建专家<br><span style="font-size:10.5px">人设 + 模型 + 工作区，一次配好</span></button>';
+    const rows=my.filter(matchQ);
+    if(view_==='list'){
+      // 列表模式不套 .xcard：整页换一张表，卡片那套间距在表里全是错的
+      grid.innerHTML=myList(rows)+'<button class="xadd" data-x="newp">＋ 新建专家</button>';
+    }else{
+      const cards=rows.map(myCard).join('');
+      grid.innerHTML=(cards||'<div class="kv">还没有专家卡 —— 点右上新建，或去「内置专家」一键启用。</div>')+
+        '<button class="xadd" data-x="newp">＋ 新建专家<br><span style="font-size:10.5px">人设 + 模型 + 工作区，一次配好</span></button>';
+    }
   }else if(tab==='lib'){
     const cards=lib.filter(matchQ).map(libCard).join('');
     grid.innerHTML='<div class="xcard" style="grid-column:1/-1"><div class="ds">随包内置的专家卡。「启用」会打开预填好的表单：工作区、模型都能按你的情况改，存下来就是你自己的卡。</div></div>'+
@@ -4862,8 +4967,23 @@ function pForm(p,fromLib){
     ${MBTIS.map(m=>`<option ${v.mbti===m?'selected':''}>${m}</option>`).join('')}</select></div>
   <div class="fld"><label>人设（原样进系统提示的「本次角色」一节）</label>
     <textarea id="xfPersona" rows="6" style="width:100%;background:var(--glass);border:1px solid var(--line);border-radius:9px;color:var(--fg);font:inherit;padding:8px">${esc(v.persona||'')}</textarea></div>
-  <div class="fld"><label>快捷提问（最多 3 条：专家卡上点一下，就带着这套配置发出去）</label>
-    ${[0,1,2].map(i=>`<input type="text" id="xfQ${i}" value="${esc((v.quick||[])[i]||'')}" style="margin-bottom:4px" placeholder="例：评审我刚改的这几个文件">`).join('')}</div>
+  <div class="fld"><label>欢迎语（新会话第一屏显示；留空 = 不显示）</label>
+    <input type="text" id="xfWelcome" value="${esc(v.welcome||'')}" maxlength="120" placeholder="如：把口述贴进来，我按短视频节奏断句。"></div>
+  <div class="fld"><label>快捷提问（最多 3 条：标题是按钮上的字，正文才是发出去的那句）</label>
+    ${[0,1,2].map(i=>{const q=quicks(v)[i]||{};return `<div class="qfields">
+      <input type="text" id="xfQ${i}" value="${esc(q.title||'')}" placeholder="按钮上的字，如 评审这几个文件">
+      <input type="text" id="xfQd${i}" value="${esc(q.desc||'')}" placeholder="这句会产出什么（悬停说明，可空）">
+      <input type="text" id="xfQp${i}" value="${esc(q.prompt||'')}" placeholder="真正发出去的那句（留空 = 就发上面那句）"></div>`}).join('')}</div>
+  <div class="fld"><label>运行参数（留空 = 跟全局设置；这张卡只影响自己开的会话）</label>
+    <div class="addrow"><span class="pl">温度</span>
+      <input type="number" id="xfTemp" step="0.1" min="0" max="2" value="${v.temperature>=0?v.temperature:''}" placeholder="跟全局">
+      <span class="pl">单次 token</span>
+      <input type="number" id="xfTok" min="0" step="1" value="${v.maxTokens>=0?v.maxTokens:''}" placeholder="跟全局">
+      <span class="pl">回合上限</span>
+      <input type="number" id="xfTurns" min="1" step="1" value="${v.maxTurns>=0?v.maxTurns:''}" placeholder="跟全局"></div>
+    <div class="kv" style="margin-top:4px">温度填 0 是"要确定性输出"，不是"没填"—— 所以清空输入框才是跟全局。</div></div>
+  <div class="fld"><label class="kbck"><input type="checkbox" id="xfOn"${v.enabled===false?'':' checked'}>
+    这张卡开着（关掉后不进新会话候选、不能被别的专家点名，定时任务到点会拒跑）</label></div>
   <div class="fld"><label>模型</label><select id="xfModel">${dialogModels}</select></div>
   <div class="fld"><label>工作区绝对路径（留空 = 跟全局）</label><input type="text" id="xfWs" value="${esc(v.workspace||'')}"></div>
   <div class="fld"><label>档位</label><select id="xfMode"><option value="">跟全局默认</option>
@@ -4919,14 +5039,55 @@ function act(x,b){
     return;
   }
   if(x==='quick'){setView('chat');newTask('',id,b.dataset.q||'');return}
+  /* ---- 卡的开关 / 复制 / 导出（对标 Octop「我的专家」那一层）---- */
+  if(x==='penable'){
+    const p=my.find(z=>z.id===id);if(!p)return;
+    post('/api/presets',{op:'toggle',id:id,on:p.enabled===false}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'没改成','err');return}
+      my=d.items||[];refreshBadge();paint();
+      toast(p.enabled===false?'这张卡已打开，能选来开会话了':'这张卡已关掉：不进候选、不能被点名、定时任务会拒跑');
+    }).catch(()=>toast('改不动','err'));return;
+  }
+  if(x==='pdup'){
+    post('/api/presets',{op:'dup',id:id}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'复制失败','err');return}
+      my=d.items||[];refreshBadge();paint();toast('已复制一张：改副本不会动原卡');
+    }).catch(()=>toast('复制失败','err'));return;
+  }
+  if(x==='pexp'){
+    const p=my.find(z=>z.id===id);if(!p)return;
+    post('/api/presets',{op:'export',id:id}).then(d=>{
+      if(!d||!d.ok||!d.card){toast((d&&d.error)||'导不出来','err');return}
+      const txt=JSON.stringify(d.card,null,1);
+      // 导出走"看得见 + 一键下载"，不弹系统保存框：桌面应用里那套与整体界面两套语言
+      const dg=$('#dialog');dg.classList.remove('wide');dg.onclick=null;
+      dg.innerHTML='<h3>导出这张卡</h3><div class="kv">这份 JSON 能用「导入卡」读回来；导入会换新 id，不覆盖现有的。</div>'+
+        '<pre id="xpExpTxt"></pre><div class="acts"><button class="btn" id="xpExpDl">下载 .json</button>'+
+        '<button class="btn pri" id="xpExpClose">关闭</button></div>';
+      dg.querySelector('#xpExpTxt').textContent=txt;
+      $('#mask').classList.add('on');
+      dg.querySelector('#xpExpClose').onclick=()=>$('#mask').classList.remove('on');
+      dg.querySelector('#xpExpDl').onclick=()=>{
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(new Blob([txt],{type:'application/json'}));
+        a.download=(p.name||'expert')+'.json';a.click();
+        setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+      };
+    }).catch(()=>toast('导不出来','err'));return;
+  }
   if(x==='enable'){const p=lib.find(z=>z.key===id);if(p){formShell();editingP='';pForm(p,true)}return}
   if(x==='psave'){
     const name=$('#xfName').value.trim(),persona=$('#xfPersona').value.trim();
     if(!name&&!persona){toast('至少给个名字或一段人设');return}
-    const quick=[0,1,2].map(i=>$('#xfQ'+i).value.trim()).filter(Boolean);
+    // 三条快捷提问：标题必填，正文留空就发标题（与老卡同一口径）
+    const quick=[0,1,2].map(i=>({title:$('#xfQ'+i).value.trim(),
+      desc:$('#xfQd'+i).value.trim(),prompt:$('#xfQp'+i).value.trim()})).filter(q=>q.title);
+    // 数字框清空 = 不覆盖：发 -1（服务端的哨兵值），不能发 0（那是"温度要 0"）
+    const numOr=(sel,dflt)=>{const e=$(sel),t=((e&&e.value)||'').trim();return t===''?dflt:Number(t)};
     post('/api/presets',{op:'save',id:editingP,name:name,persona:persona,
       desc:$('#xfDesc').value.trim(),icon:$('#xfIcon').value.trim(),color:selColor,
-      kbs:pickedKbs(),
+      kbs:pickedKbs(),welcome:$('#xfWelcome').value.trim(),enabled:$('#xfOn').checked,
+      temperature:numOr('#xfTemp',-1),maxTokens:numOr('#xfTok',-1),maxTurns:numOr('#xfTurns',-1),
       mbti:$('#xfMbti').value,quick:quick,model:$('#xfModel').value,
       workspace:$('#xfWs').value.trim(),mode:$('#xfMode').value})
       .then(d=>{if(!d||!d.ok){toast((d&&d.error)||'没存上','err');return}
@@ -4960,6 +5121,28 @@ return {
     let qT=null;
     $('#xpQ').addEventListener('input',()=>{clearTimeout(qT);qT=setTimeout(paint,160)});
     $('#xpNew').onclick=()=>{formShell();editingP='';pForm(null,false)};
+    // 视图切换只改一个标记再重画：两种视图共用同一份 my 与同一个过滤框，不各存一份状态
+    $('#xpView').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+      view_=b.dataset.v;
+      $('#xpView').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+      paint();
+    });
+    $('#xpImpBtn').onclick=()=>$('#xpImp').click();
+    $('#xpImp').onchange=e=>{
+      const f=e.target.files&&e.target.files[0];if(!f)return;
+      const r=new FileReader();
+      r.onload=()=>post('/api/presets',{op:'import',text:String(r.result||'')}).then(d=>{
+        if(!d||!d.ok){toast((d&&(d.error||d.status))||'导入失败','err');return}
+        my=d.items||[];refreshBadge();paint();
+        toast('卡已导入（新 id，不覆盖现有的）');
+      }).catch(()=>toast('导入失败','err'));
+      r.readAsText(f);e.target.value='';
+    };
+    // 欢迎卡上的快捷提问在会话流里，不在 #xpGrid 的委托范围内，单独挂一条
+    document.addEventListener('click',e=>{
+      const b=e.target.closest?e.target.closest('.xw [data-x=quick]'):null;
+      if(b)act('quick',b);
+    });
     // 页面卡片的动作按钮：事件委托挂在网格上（弹窗表单另有自己的委托）
     $('#xpGrid').onclick=e=>{
       const b=e.target.closest?e.target.closest('[data-x]'):null;
@@ -4971,6 +5154,23 @@ return {
     fetch('/api/teams').then(r=>r.json()).then(d=>{teams=d.items||[];refreshBadge()}).catch(()=>{});
   },
   openAt, setTab, close, opened:()=>opened_, refreshBadge, paint,
+  /**
+   * 空会话第一屏那张欢迎卡（对标 Octop 的 welcome_message）。
+   * 由 applyState 在"这条会话一条话都没说过且带着卡"时调；卡片数据用面板已经拉到的那份，
+   * 不再发第二发请求 —— 两条路读同一份卡，早晚对不上。关着的卡不画。
+   */
+  welcomeFor:(id)=>{
+    const p=my.find(z=>z.id===id);
+    if(!p||p.enabled===false)return '';
+    const qs=quicks(p);
+    if(!p.welcome&&!qs.length)return '';
+    return '<div class="xw"><div class="xwh">'+avatar(p)+'<b>'+esc(p.name)+'</b>'+
+      (p.desc?'<span class="ds">'+esc(p.desc)+'</span>':'')+'</div>'+
+      (p.welcome?'<div class="xwt">'+esc(p.welcome)+'</div>':'')+
+      (qs.length?'<div class="quick">'+qs.map(q=>'<button data-x="quick" data-id="'+esc(p.id)+
+        '" data-q="'+esc(q.prompt)+'"'+(q.desc?' title="'+esc(q.desc)+'"':'')+'>'+esc(q.title)+'</button>').join('')+'</div>':'')+
+      '</div>';
+  },
   /* SSE 的 agents 事件进来就走这里（事件里带的就是 /api/agents 那份 JSON）。
      不在这里刷的话，专家页会停在打开那一刻的状态：别的专家正在忙、谁被停了，全都看不见。 */
   applyAgents(d){agents=(d&&d.agents)||[];inbox=(d&&d.inbox)||[];paintInbox();if(opened_)paint()},

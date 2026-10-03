@@ -1,0 +1,359 @@
+[
+ {
+  "click": "[data-view=\"experts\"]",
+  "note": "进专家整页"
+ },
+ {
+  "goto": "#xpGrid",
+  "timeout": 8000
+ },
+ {
+  "sleep": 900
+ },
+ {
+  "eval": "(()=>{const v=document.querySelector('#xpView');const b=[...v.querySelectorAll('button')].map(x=>x.dataset.v);return {view:!!v&&v.getBoundingClientRect().height>0,two:b.join(',')==='card,list',imp:!!document.querySelector('#xpImpBtn'),impHidden:document.querySelector('#xpImp').hidden,cardOn:v.querySelector('button').classList.contains('on')}})()",
+  "must": [
+   "view",
+   "two",
+   "imp",
+   "impHidden",
+   "cardOn"
+  ],
+  "note": "页头三件都在：卡片/列表切换（默认停在卡片）、导入按钮、真正读文件的 input 藏起来（摆一个裸 file 控件既丑又点不准）"
+ },
+ {
+  "click": "#xpNew",
+  "note": "打开新建表单"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "eval": "(()=>{const ids=['xfName','xfPersona','xfWelcome','xfQ0','xfQd0','xfQp0','xfTemp','xfTok','xfTurns','xfOn'];const r={};for(const i of ids){const e=document.querySelector('#'+i);r[i]=!!e&&e.getBoundingClientRect().height>0}return r})()",
+  "must": [
+   "xfName",
+   "xfPersona",
+   "xfWelcome",
+   "xfQ0",
+   "xfQd0",
+   "xfQp0",
+   "xfTemp",
+   "xfTok",
+   "xfTurns",
+   "xfOn"
+  ],
+  "note": "补齐的字段真的进了表单且每一颗都看得见（欢迎语 / 快捷提问三段 / 三个运行参数 / 开关）—— 只加在数据层、界面上摆不出来等于没做"
+ },
+ {
+  "type": {
+   "sel": "#xfName",
+   "text": "剪辑师阿真",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfPersona",
+   "text": "你是剪辑专家，回答要短，先给结论再给步骤。",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfWelcome",
+   "text": "把口述贴进来，我按短视频节奏断句。",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfQ0",
+   "text": "理顺这段",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfQd0",
+   "text": "只调语序与断句，不改用词",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfQp0",
+   "text": "把下面这段口述理顺，保留我的用词：",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfQ1",
+   "text": "起三个标题",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfTemp",
+   "text": "0.2",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfTok",
+   "text": "1024",
+   "enter": false
+  }
+ },
+ {
+  "type": {
+   "sel": "#xfTurns",
+   "text": "7",
+   "enter": false
+  }
+ },
+ {
+  "click": "[data-x=\"psave\"]",
+  "note": "存卡"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/presets').then(r=>r.json());const p=(d.items||[]).find(x=>x.name==='剪辑师阿真')||{};window.__xp=p.id||'';const card=[...document.querySelectorAll('#xpGrid .xcard')].find(c=>c.innerText.indexOf('剪辑师阿真')>=0)||{innerText:''};return {saved:!!p.id,welcome:p.welcome==='把口述贴进来，我按短视频节奏断句。',rich:Array.isArray(p.quick)&&p.quick.length===2&&p.quick[0].title==='理顺这段'&&p.quick[0].desc==='只调语序与断句，不改用词'&&p.quick[0].prompt==='把下面这段口述理顺，保留我的用词：',titleOnly:Array.isArray(p.quick)&&p.quick[1].title==='起三个标题'&&p.quick[1].prompt==='',temp:p.temperature===0.2,tok:p.maxTokens===1024,turns:p.maxTurns===7,on:p.enabled===true,btnShowsTitle:card.innerText.indexOf('理顺这段')>=0&&card.innerText.indexOf('保留我的用词')<0,showsParams:card.innerText.indexOf('温度 0.2')>=0&&card.innerText.indexOf('回合 7')>=0}})()",
+  "must": [
+   "saved",
+   "welcome",
+   "rich",
+   "titleOnly",
+   "temp",
+   "tok",
+   "turns",
+   "on",
+   "btnShowsTitle",
+   "showsParams"
+  ],
+  "note": "存进去的与看得见的：按钮上是快捷提问的**标题**、**正文**只存在卡上（老写法两者同一句话，按钮会挂着一整段话）；只填标题那条 prompt 留空＝就发标题；三个参数原样落库；卡片把设过的参数列出来"
+ },
+ {
+  "shot": "xp01-card-params"
+ },
+ {
+  "eval": "(()=>{const b=[...document.querySelectorAll('#xpGrid .xcard .ft .ab')];const tall=b.filter(x=>x.getBoundingClientRect().height>34).length;const cut=b.filter(x=>x.scrollWidth>x.clientWidth+1).length;return {many:b.length>=9,oneLine:tall===0&&cut===0}})()",
+  "must": [
+   "many",
+   "oneLine"
+  ],
+  "note": "卡底那排动作钮不许把中文标签折成两行（几何判据：一颗钮一行字的高度上限 34px、文字不许截断）。九颗钮挤一行时\"开始对话\"断成\"开始/对话\"、\"关掉\"断成\"关/掉\" —— 看截图才发现，结构判据全绿"
+ },
+ {
+  "eval": "(()=>{const card=[...document.querySelectorAll('#xpGrid .xcard')].find(c=>c.innerText.indexOf('剪辑师阿真')>=0);card.querySelector('[data-x=use]').click();return {use:true}})()",
+  "must": [
+   "use"
+  ],
+  "note": "点卡上的「开始对话」—— 走前端那条路（不是直接打 /api/new）：欢迎卡是画在**这条会话的视图**里的，fetch 出来的会话在界面上根本不存在"
+ },
+ {
+  "sleep": 1600
+ },
+ {
+  "eval": "(()=>{const w=document.querySelector('.xw');const t=w?w.innerText:'';return {shown:!!w,welcome:t.indexOf('把口述贴进来')>=0,name:t.indexOf('剪辑师阿真')>=0,btns:w?w.querySelectorAll('[data-x=quick]').length===2:false,btnTitle:w?w.querySelector('[data-x=quick]').innerText==='理顺这段':false,sendsPrompt:w?w.querySelector('[data-x=quick]').dataset.q==='把下面这段口述理顺，保留我的用词：':false}})()",
+  "must": [
+   "shown",
+   "welcome",
+   "name",
+   "btns",
+   "btnTitle",
+   "sendsPrompt"
+  ],
+  "note": "空会话第一屏真的画出欢迎卡：卡名 + 欢迎语 + 两条快捷提问（按钮上是标题，data-q 才是发出去的那句）—— 这是 Octop 那张页最实用的一块，光有 API 字段不算落地"
+ },
+ {
+  "shot": "xp02-welcome"
+ },
+ {
+  "eval": "(async()=>{const r=await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:window.__xp})}).then(x=>x.json());return {ok:r.ok===true,gotId:!!r.id}})()",
+  "must": [
+   "ok",
+   "gotId"
+  ],
+  "note": "开着的卡允许再开一条（下一步关掉它做对照，两件事必须只差「开关」这一个变量）"
+ },
+ {
+  "click": "[data-view=\"experts\"]",
+  "note": "回专家页"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(()=>{const card=[...document.querySelectorAll('#xpGrid .xcard')].find(c=>c.innerText.indexOf('剪辑师阿真')>=0);const b=card?card.querySelector('[data-x=penable]'):null;return {found:!!card,label:b?b.innerText==='关掉':false,dim:!card||card.className.indexOf('off')<0}})()",
+  "must": [
+   "found",
+   "label",
+   "dim"
+  ],
+  "note": "开关在卡上，这张现在是开着的：按钮写「关掉」、卡没压暗"
+ },
+ {
+  "click": "#xpGrid .xcard [data-x=\"penable\"]",
+  "note": "真的点一下关掉（第一张卡就是它）"
+ },
+ {
+  "sleep": 1300
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/presets').then(r=>r.json());const p=(d.items||[]).find(x=>x.id===window.__xp)||{};const card=[...document.querySelectorAll('#xpGrid .xcard')].find(c=>c.innerText.indexOf('剪辑师阿真')>=0)||{className:'',innerText:''};const r=await fetch('/api/new',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:window.__xp})}).then(x=>x.json());return {off:p.enabled===false,dim:card.className.indexOf('off')>=0,badge:card.innerText.indexOf('已关')>=0,refused:r.ok===false,saysWhy:(r.error||'').indexOf('已经关掉')>=0}})()",
+  "must": [
+   "off",
+   "dim",
+   "badge",
+   "refused",
+   "saysWhy"
+  ],
+  "note": "关掉之后四件事同时成立：落库 enabled=false、卡片压暗、有「已关」徽标、**服务端拒绝用它开会话并说清原因**。只在界面上灰掉而服务端照开＝假开关"
+ },
+ {
+  "shot": "xp03-disabled"
+ },
+ {
+  "click": "#xpGrid .xcard [data-x=\"penable\"]",
+  "note": "再打开"
+ },
+ {
+  "sleep": 1300
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/presets').then(r=>r.json());const p=(d.items||[]).find(x=>x.id===window.__xp)||{};return {on:p.enabled===true}})()",
+  "must": [
+   "on"
+  ],
+  "note": "开关是双向的，不是一次性按钮"
+ },
+ {
+  "click": "#xpGrid .xcard [data-x=\"pdup\"]",
+  "note": "点「复制」"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(async()=>{const d=await fetch('/api/presets').then(r=>r.json());const it=d.items||[];const src=it.find(x=>x.id===window.__xp)||{};const cp=it.find(x=>x.id!==window.__xp&&x.name.indexOf('副本')>=0)||{};return {two:it.length===2,freshId:!!cp.id&&cp.id!==src.id,keeps:cp.persona===src.persona&&(cp.quick||[]).length===(src.quick||[]).length&&cp.temperature===src.temperature,enabled:cp.enabled===true}})()",
+  "must": [
+   "two",
+   "freshId",
+   "keeps",
+   "enabled"
+  ],
+  "note": "复制出来的卡换了新 id（不覆盖原卡）、人设/快捷提问/参数都带着，且默认是开着的（复制是为了改，复制出一张关着的还得先打开）"
+ },
+ {
+  "click": "#xpGrid .xcard [data-x=\"pexp\"]",
+  "note": "点「导出」（第一张就是原卡）"
+ },
+ {
+  "sleep": 1300
+ },
+ {
+  "eval": "(()=>{const pre=document.querySelector('#xpExpTxt');const t=pre?pre.textContent:'';let j={};let ok=false;try{j=JSON.parse(t);ok=j.id===window.__xp}catch(e){}return {shown:!!pre&&pre.getBoundingClientRect().height>0,hasWelcome:t.indexOf('welcome')>=0,hasQuick:t.indexOf('理顺这段')>=0,hasParams:t.indexOf('temperature')>=0,roundtrippable:ok}})()",
+  "must": [
+   "shown",
+   "hasWelcome",
+   "hasQuick",
+   "hasParams",
+   "roundtrippable"
+  ],
+  "note": "导出的是这一张卡的完整 JSON（用 textContent 塞进去的，不是转义过的字符串），能直接 JSON.parse 回来且 id 对得上 —— 导出一份解析不回来的东西比不导出更坏"
+ },
+ {
+  "shot": "xp04-export"
+ },
+ {
+  "click": "#xpExpClose",
+  "note": "关掉导出弹窗"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "eval": "(async()=>{const before=(await fetch('/api/presets').then(r=>r.json())).items.length;const card=JSON.stringify({id:'zzz999',name:'导入的卡',persona:'测试',welcome:'欢迎',quick:[{title:'一句',desc:'',prompt:'发这句'}],kbs:[],enabled:true,temperature:-1,maxTokens:-1,maxTurns:-1,created:1});const d=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'import',text:card})}).then(r=>r.json());const after=await fetch('/api/presets').then(r=>r.json());const got=(after.items||[]).find(x=>x.name==='导入的卡')||{};return {ok:d.ok===true,added:after.items.length===before+1,freshId:!!got.id&&got.id!=='zzz999',keeps:(got.quick||[]).length===1&&got.quick[0].prompt==='发这句'}})()",
+  "must": [
+   "ok",
+   "added",
+   "freshId",
+   "keeps"
+  ],
+  "note": "导入与前端 onchange 走同一个 op：带原 id 进来也必须换新 id（否则\"导入\"变成\"覆盖我原来那张\"），快捷提问原样带进来"
+ },
+ {
+  "eval": "(async()=>{const bad=await fetch('/api/presets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'import',text:'not json at all'})}).then(r=>r.json());return {refused:bad.ok===false,saysWhy:(bad.error||'').length>4}})()",
+  "must": [
+   "refused",
+   "saysWhy"
+  ],
+  "note": "读不懂的 JSON 要拒并说原因，不能悄悄建一张空卡（列表里多一张没名字的卡最难查）"
+ },
+ {
+  "click": "[data-view=\"chat\"]",
+  "note": "离开专家页"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "click": "[data-view=\"experts\"]",
+  "note": "再回来：面板要重新读一遍服务端（刚才那发导入是直连接口，页面里的 my 还是旧的）"
+ },
+ {
+  "sleep": 1400
+ },
+ {
+  "eval": "(()=>({three:document.querySelectorAll('#xpGrid .xcard').length>=3}))()",
+  "must": [
+   "three"
+  ],
+  "note": "回到页面上就该看到三张卡（原卡 / 副本 / 导入的卡）—— 不重新读的话，列表视图那一步会拿旧数据下结论"
+ },
+ {
+  "click": "#xpView button[data-v=\"list\"]",
+  "note": "切到列表视图"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('.xlist'),w=document.querySelector('.xwrap');if(!t)return {tbl:false};const th=[...t.querySelectorAll('thead th')];const rows=[...t.querySelectorAll('tbody tr')];const btns=[...t.querySelectorAll('td.ops .ab')];const wr=w.getBoundingClientRect();w.scrollLeft=w.scrollWidth;const clipped=btns.filter(b=>{const r=b.getBoundingClientRect();return b.scrollWidth>b.clientWidth+1||r.right>wr.right+1}).length;const on=document.querySelector('#xpView button[data-v=list]').classList.contains('on');w.scrollLeft=0;return {tbl:true,cols:th.length===7,rows:rows.length>=3,oneLine:th.every(x=>x.getBoundingClientRect().height<=34),scrollable:w.scrollWidth<=w.clientWidth+1||getComputedStyle(w).overflowX==='auto',noClip:btns.length>=12&&clipped===0,on:on,params:t.innerText.indexOf('温度 0.2')>=0,offMark:t.innerText.indexOf('没启动过')>=0}})()",
+  "must": [
+   "tbl",
+   "cols",
+   "rows",
+   "oneLine",
+   "scrollable",
+   "noClip",
+   "on",
+   "params"
+  ],
+  "note": "列表视图：七列、表头一律一行、操作列滚到最右也够得着（与知识库那张表同一套几何判据），卡上设过的运行参数在表里读得到"
+ },
+ {
+  "shot": "xp05-list"
+ },
+ {
+  "click": "#xpView button[data-v=\"card\"]",
+  "note": "切回卡片视图"
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "eval": "(()=>{const grid=document.querySelector('#xpGrid');return {back:!!grid.querySelector('.xcard'),noTable:!grid.querySelector('.xlist'),on:document.querySelector('#xpView button[data-v=card]').classList.contains('on')}})()",
+  "must": [
+   "back",
+   "noTable",
+   "on"
+  ],
+  "note": "两种视图共用同一份数据、切换不残留（列表的 table 节点还留在页面上＝重画没走同一条路，下一次点编辑就会点到已失效的节点）"
+ }
+]
