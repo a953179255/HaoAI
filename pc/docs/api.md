@@ -97,6 +97,9 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 `name`+`members`≥2 个 preset id；编制只存成员 id，人设跟着角色卡走）、
 `/api/experts/library`（GET，随包内置专家卡，只读）、
 `/api/expertfeed`（POST，远端专家市场清单，见下段）、
+`/api/agent-config`（GET `?preset=<id>` 单查 / 不带参数回全部；POST `{preset,…}`
+整份覆盖——每专家配置：`toolsOff`/`skillsOff`/`subagents`/`personaMbti`/`personaExtra`/
+`knowledgeIds`/`providerName`+`baseUrl`（专属网关）；critical 工具写入即剔除）、
 `/api/presets`（GET 清单；POST `op:'save'`（默认）`|'del'`|`'toggle'`|`'dup'`|`'export'`|`'import'`）。
 角色卡除人设/模型/工作区/档位外还带：`welcome`（新会话第一屏的欢迎语）、
 `quick:[{title,desc,prompt}]`（快捷提问：标题上按钮、正文才是发出去的那句；老卡的字符串形状仍能读入）、

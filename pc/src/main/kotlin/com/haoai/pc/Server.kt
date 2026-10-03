@@ -200,6 +200,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/presets" -> presets(ex)
                 "/api/expertfeed" -> expertFeed(ex)
                 "/api/teams" -> teams(ex)
+                "/api/agent-config" -> agentConfig(ex)
                 "/api/agents" -> agents(ex)
                 "/api/experts/library" -> expertLibrary(ex)
                 "/api/kb" -> kb(ex)
@@ -320,12 +321,17 @@ class WebServer(settings: PcSettings, port: Int,
             Session(id, settings.workspaceFile())
         }
         session.mode = meta?.mode ?: settings.permissionMode
+        // 专家配置跟着 preset 走：不恢复这一步，重启后这条会话的工具/技能启停全回到默认
+        session.agentConfig = if (session.preset.isNotBlank()) AgentConfigs.of(session.preset) else AgentConfig("")
         // 闸口要能拿到"这条会话的引擎"，但引擎构造时还握不住自己的引用 —— 拿个可变槽位接上
         var made: Engine? = null
         val e = EngineFactory.build(session, settings, webGate(id) { made }, emit = { ev -> forward(id, ev) })
         made = e
         // 会话自己的模型与工具开关：构造时拿的是全局设置，恢复时补这一刀（工厂里）
-        if (meta != null) EngineFactory.applySessionOverlay(e, settings, meta.model, meta.toolsOff)
+        if (meta != null) {
+            val ac = session.agentConfig
+            EngineFactory.applySessionOverlay(e, settings, meta.model, meta.toolsOff, ac.providerName, ac.baseUrl)
+        }
         return e
     }
 
@@ -739,6 +745,8 @@ class WebServer(settings: PcSettings, port: Int,
         session.role = preset?.name.orEmpty()
         // 卡 id 也要落到会话上：Token 统计"按专家"按 id 归并，改名之后历史账还认得
         session.preset = preset?.id.orEmpty()
+        // 每专家配置快照随会话创建读一份（工具/技能启停、人格、专属网关都从这里走）
+        session.agentConfig = preset?.let { AgentConfigs.of(it.id) } ?: AgentConfig("")
         var made: Engine? = null
         // 走工厂（S5/S7）：以前这里第三处直连 `Engine(...)`，`/api/new` 造完引擎就进了
         // sessions 表，engineFor 再也不会被调 —— session-start 钩子因此一声都不发
@@ -749,7 +757,8 @@ class WebServer(settings: PcSettings, port: Int,
         // 角色卡带的模型：语义是"这条会话的初始模型"，toolsOff 不参与 ——
         // 用工厂的 overlay 表达（model 为空时它自己就跳过，与原来的 if 条件等价）。
         if (preset != null) {
-            EngineFactory.applySessionOverlay(e, settings, preset.model, emptyList())
+            val ac = session.agentConfig
+            EngineFactory.applySessionOverlay(e, settings, preset.model, emptyList(), ac.providerName, ac.baseUrl)
             /*
              * 卡上的运行参数（温度 / maxTokens / 每回合格子数）落到**这条会话**的设置副本上。
              * 走 useSettings 而不是直接赋 settings：那个 setter 会顺带重建 HTTP 客户端，
@@ -860,7 +869,11 @@ class WebServer(settings: PcSettings, port: Int,
             fun dblOr(key: String, keep: Double, cap: Double): Double =
                 b.num(key)?.let { if (it < 0) Preset.NO_OVERRIDE.toDouble() else it.coerceAtMost(cap) } ?: keep
             when (b.str("op")) {
-                "del" -> Presets.remove(b.str("id"))
+                "del" -> {
+                    Presets.remove(b.str("id"))
+                    // 卡删了它的开关记录也走：留着不碍事，但"配置里有个没有的专家"是脏数据
+                    AgentConfigs.remove(b.str("id"))
+                }
                 // 开关单独一条 op：卡"关掉"不是删，改天还要开回来，不该逼用户重填一遍表单
                 "toggle" -> {
                     val p = Presets.find(b.str("id"))

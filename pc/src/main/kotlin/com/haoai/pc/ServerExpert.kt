@@ -94,6 +94,44 @@ internal fun WebServer.expertLibrary(ex: HttpExchange) {
 }
 
 /**
+ * `GET/POST /api/agent-config` —— 每专家配置（个性化中枢的数据底座，[AgentConfigs]）。
+ * `GET ?preset=<id>` 单查（缺省给默认配置，调用方不用判 null）；不带 preset 则回全部。
+ * `POST {preset, providerName?, baseUrl?, toolsOff?, skillsOff?, subagents?, personaMbti?, personaExtra?, knowledgeIds?}`
+ * —— 整份覆盖写（前端表单本就整份取值；部分更新的增量语义留给以后真需要时再加）。
+ */
+internal fun WebServer.agentConfig(ex: HttpExchange) {
+    val b = Body(ex)
+    if (ex.requestMethod != "GET") {
+        val pid = b.str("preset").trim()
+        if (pid.isBlank()) {
+            send(ex, 200, """{"ok":false,"error":"缺 preset 字段（这是哪张专家卡的配置）"}""",
+                "application/json; charset=utf-8"); return
+        }
+        AgentConfigs.save(AgentConfig(
+            presetId = pid,
+            providerName = b.str("providerName").trim(),
+            baseUrl = b.str("baseUrl").trim(),
+            toolsOff = b.list("toolsOff"),
+            skillsOff = b.list("skillsOff"),
+            subagents = b.list("subagents"),
+            personaMbti = b.str("personaMbti").trim().uppercase(),
+            personaExtra = b.str("personaExtra"),
+            knowledgeIds = b.list("knowledgeIds"),
+        ))
+        send(ex, 200, """{"ok":true,"item":${AgentConfigs.one(AgentConfigs.of(pid))}}""",
+            "application/json; charset=utf-8")
+        return
+    }
+    val pid = queryOf(ex, "preset").trim()
+    if (pid.isNotBlank()) {
+        send(ex, 200, """{"ok":true,"item":${AgentConfigs.one(AgentConfigs.of(pid))}}""",
+            "application/json; charset=utf-8"); return
+    }
+    val items = AgentConfigs.load().values.joinToString(",") { AgentConfigs.one(it) }
+    send(ex, 200, """{"ok":true,"items":[$items]}""", "application/json; charset=utf-8")
+}
+
+/**
  * 开一条团队会话：主持人人设现拼、role 写团队名。
  *
  * 从 /api/new 拆出来是因为那里已经三件事套着了；团队的"拼人设+落盘"自成一段，

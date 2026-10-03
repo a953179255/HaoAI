@@ -87,6 +87,13 @@ class Session(val id: String, val workspace: File) {
      */
     @Volatile
     var preset: String = ""
+    /**
+     * 这条会话的**每专家配置快照**（个性化中枢：工具/技能/子智能体启停与人格字段）。
+     * 创建会话与恢复会话时按 [preset] 读一份（[AgentConfigs.of]）——之后即使
+     * 用户在中枢里改开关，跑着的会话不追改：本轮 schema 与下一轮提示保持一致。
+     */
+    @Volatile
+    var agentConfig: AgentConfig = AgentConfig("")
     val todos = mutableListOf<Todo>()
     val file: File get() = File(Env.sessionsDir, "pc-$id.json")
     val title = java.util.concurrent.atomic.AtomicReference("新会话")
@@ -779,7 +786,10 @@ class Engine(
         // 标题一落地就要说出去：侧栏与顶栏靠它区分并行的几条会话，
         // 等回合结束才刷新的话，一条跑十分钟的任务十分钟都还叫"新会话"。
         if (titled) emit(Ev.Title(session.title.get()))
-        val ctx = ToolCtx(session.workspace, settings, session.mode, gate, session.todos)
+        val ctx = ToolCtx(
+            session.workspace, settings, session.mode, gate, session.todos,
+            skillsOff = session.agentConfig.skillsOff.toSet()
+        )
         ctx.spawn = { label, prompt, opts -> spawn(label, prompt, opts) }
         ctx.presetId = session.preset
         // 检查点按"一轮"记：这一轮动过哪些文件、改之前长什么样，
@@ -1086,11 +1096,23 @@ class Engine(
         ToolInfo(it.name, it.kind, it.desc, it.name in settings.toolsOff, !it.visibleWhen(settings))
     }
 
-    /** 工具可见集：实验特性开关（关着=不存在）→ 这条会话的开关 → 档位收窄。 */
-    private fun schemas(): List<ToolSchema> = tools.filter { t ->
-        t.visibleWhen(settings) && t.name !in settings.toolsOff &&
-            if (session.mode == "plan") readOnlyTool(t) else true
-    }.map { ToolSchema(it.name, it.desc, it.params) }
+    /** 工具可见集：实验特性开关（关着=不存在）→ 这条会话的开关 → 档位收窄。
+     *  "这条会话的开关" = 全局 toolsOff ∪ 该专家 toolsOff（critical 两层都剔，见 [AgentConfigs]）。 */
+    private fun schemas(): List<ToolSchema> {
+        val off = AgentConfigs.effectiveToolsOff(session, settings)
+        return tools.filter { t ->
+            t.visibleWhen(settings) && t.name !in off &&
+                if (session.mode == "plan") readOnlyTool(t) else true
+        }.map { ToolSchema(it.name, it.desc, it.params) }
+    }
+
+    /** 系统提示的人设块 = 角色卡/团队人设 + 该专家的人格补充段（枢纽里填，B2 的 MBTI 也挂这一块）。 */
+    private fun personaText(): String {
+        val extra = session.agentConfig.personaExtra.trim()
+        if (extra.isEmpty()) return session.persona
+        val base = session.persona.trim()
+        return if (base.isEmpty()) extra else base + "\n" + extra
+    }
 
     /**
      * 发给模型的窗口：system + 前情摘要 + 按字符预算从前往后裁的历史，tool 结果先过 REQ_CAP。
@@ -1135,7 +1157,8 @@ class Engine(
                     // 每回合现读，不缓存：用户改完 AGENTS.md，下一句话就该生效
                     extra = Memory.read(session.workspace, gitRoot(session.workspace)),
                     memories = mem,
-                    persona = session.persona,
+                    // 人设块 = 角色卡/团队人设 + 该专家的人格补充段（个性化枢纽里填的）
+                    persona = personaText(),
                     kb = kbNote
                 )
             )
@@ -1437,11 +1460,16 @@ object EngineFactory {
      * 模型与被关掉的工具 —— 不补这一步，"这条会话用本地 7B、shell 已关"
      * 重启后就悄悄没了（网页壳 engineFor 的老注释，逻辑原样收进工厂）。
      */
-    fun applySessionOverlay(engine: Engine, settings: PcSettings, model: String, toolsOff: List<String>) {
-        if (model.isNotBlank() || toolsOff.isNotEmpty()) {
+    fun applySessionOverlay(
+        engine: Engine, settings: PcSettings, model: String, toolsOff: List<String>,
+        provider: String = "", baseUrl: String = ""
+    ) {
+        if (model.isNotBlank() || toolsOff.isNotEmpty() || provider.isNotBlank() || baseUrl.isNotBlank()) {
             engine.useSettings(settings.copy(
                 model = model.ifBlank { settings.model },
-                toolsOff = toolsOff
+                toolsOff = toolsOff,
+                providerName = provider.ifBlank { settings.providerName },
+                baseUrl = baseUrl.ifBlank { settings.baseUrl }
             ))
         }
     }

@@ -36,6 +36,12 @@ object SessionIndex {
         /** 角色卡起头的会话：人设与角色名。见 [Preset]。 */
         val persona: String = "",
         val role: String = "",
+        /**
+         * 起这条会话的角色卡 id。[Engine.persist] 一直在写它，但 Meta 一直没读 ——
+         * 重启后 session.preset 变空，用量按专家从那一刻起全归"无专家"，
+         * 每专家配置（[AgentConfig]）也跟着失联。这个字段修两处。
+         */
+        val preset: String = "",
         val prompt: Long,
         val completion: Long,
         val file: File
@@ -86,6 +92,7 @@ object SessionIndex {
             }.getOrNull() ?: emptyList(),
             persona = o["persona"]?.jsonPrimitive?.contentOrNull ?: "",
             role = o["role"]?.jsonPrimitive?.contentOrNull ?: "",
+            preset = o["preset"]?.jsonPrimitive?.contentOrNull ?: "",
             prompt = o["promptTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             completion = o["completionTokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
             file = f
@@ -131,6 +138,7 @@ object SessionIndex {
         s.mode = meta.mode
         s.persona = meta.persona
         s.role = meta.role
+        s.preset = meta.preset
         s.title.set(meta.title)
         return s
     }

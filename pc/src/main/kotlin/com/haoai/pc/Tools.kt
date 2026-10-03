@@ -128,7 +128,9 @@ class ToolCtx(
     val todos: MutableList<Todo> = mutableListOf(),
     /** 这一轮的名字，由引擎在建 ctx 时填。空 = 不在任何一轮里（CLI 单发、测试）。 */
     var runId: String = "",
-    var sid: String = ""
+    var sid: String = "",
+    /** 该专家停用的技能 slug（读/grep 落在这些技能的目录上时被拦，见 [SkillDocs]）。 */
+    val skillsOff: Set<String> = emptySet()
 ) {
     /**
      * 派子任务的能力，由引擎在建 ctx 时接上。
