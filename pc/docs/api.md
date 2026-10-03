@@ -96,6 +96,7 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 专家与团队：`/api/teams`（GET 清单（成员展开成摘要）；POST `op:'save'|'del'`，
 `name`+`members`≥2 个 preset id；编制只存成员 id，人设跟着角色卡走）、
 `/api/experts/library`（GET，随包内置专家卡，只读）、
+`/api/expertfeed`（POST，远端专家市场清单，见下段）、
 `/api/presets`（GET 清单；POST `op:'save'`（默认）`|'del'`|`'toggle'`|`'dup'`|`'export'`|`'import'`）。
 角色卡除人设/模型/工作区/档位外还带：`welcome`（新会话第一屏的欢迎语）、
 `quick:[{title,desc,prompt}]`（快捷提问：标题上按钮、正文才是发出去的那句；老卡的字符串形状仍能读入）、
@@ -109,6 +110,21 @@ curl -s -X POST http://127.0.0.1:8712/api/decide -H 'Content-Type: application/j
 **一次只许有一张**：设这张时服务端会清掉别的卡那一位。默认卡影响的是
 `POST /api/new` 没点名 `preset` 时挂哪张卡；那张卡若已关掉或被删，就回落到"没挂专家"，
 **不会静默换成另一张**（用户没点过的卡不该被塞给他）。
+
+`POST /api/expertfeed` 的 `{op:'load'}` 去 `settings.expertFeed` 那个地址拉一批角色卡，
+返回 `{ok,from,note,cards:[{name,desc,card}]}`；`card` 是那张卡的**原文 JSON**。
+**这里不装卡**：装是 `{op:'import',text:<card>}` 交给 `/api/presets`（换新 id、
+拒掉"名字和人设都空"的卡），所以市场与本地文件导入共用同一道门 —— 别再开第二条写库的近路。
+源端形状收两种：卡片数组，或 `{"cards":[…]}`；一份清单最多 40 张、响应体最大 200KB，
+超了直接拒（坏源不该能把内存吃掉）。混进来的非对象项跳过并在 `note` 里说明，
+而不是让整份清单一起失败。**默认没有远端**：`expertFeed` 空串时这个功能等于不存在，
+`{ok:false,error:"还没配市场地址…"}`，页签显示空态 —— 不预置任何官方源，
+那等于替用户决定信任谁。市场卡能带进来的只有人设/模型名/工作目录/档位/绑哪几个知识库，
+这几样本身就敏感（一张 `workspace=C:\` 且 auto 档的卡等于一份"在这儿替你跑命令"的说明书），
+所以导入前必须看得见它写了什么（页签里那张卡能展开看原文）。
+
+<!-- expertfeed: 走 java.net.http.HttpClient，与 Embed/Lan/Browser 同一套；
+     这个仓库里发 HTTP 不许出现第二种客户端（URL().openConnection() 在本机对任何地址都超时）。 -->
 
 `/api/state` 的 `cites[]` 是知识库的引用出处（`{cid,kb,kbName,doc,how,score,snippet}`），
 `messages[]` 里每条带 `cid`（那次工具调用的 id）。两边按 `cid` 配对 —— **不要改用消息下标配对**：

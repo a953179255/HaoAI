@@ -198,6 +198,7 @@ class WebServer(settings: PcSettings, port: Int,
                 "/api/compact" -> compactNow(ex)
                 "/api/workflows" -> workflows(ex)
                 "/api/presets" -> presets(ex)
+                "/api/expertfeed" -> expertFeed(ex)
                 "/api/teams" -> teams(ex)
                 "/api/agents" -> agents(ex)
                 "/api/experts/library" -> expertLibrary(ex)

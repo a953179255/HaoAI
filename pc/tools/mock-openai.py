@@ -517,6 +517,22 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, "text/markdown; charset=utf-8", SKILL_NOTES)
         elif self.path.startswith("/skills/gone.md"):
             self.reply(404, "text/plain; charset=utf-8", "没了\n")
+        elif self.path.startswith("/experts.json"):
+            # 专家市场的清单：像素剧本把 settings.expertFeed 指到这里。
+            # 三行数据各有用处：一张正常卡、一张故意缺 id 的（导入必须被服务端拒 ——
+            # 市场清单必须与 op:'export' 那份同形，这条规则得有像素盯着一张真卡验），
+            # 一项根本不是对象（脏数据要跳过而不是整份失败）。
+            # 少了后两样，这条路由就只是个永远成功的摆设，验不出市场导入的闸在哪。
+            self.reply(200, "application/json; charset=utf-8", json.dumps({
+                "version": 1,
+                "cards": [
+                    {"id": "mkt-a", "name": "市场甲", "desc": "从远端来的一张卡",
+                     "persona": "你是市场甲，回答要短。", "mode": "ask",
+                     "welcome": "我是市场甲，市场里带我来的一张卡。"},
+                    {"name": "市场缺id", "desc": "故意不给 id：清单形状不对，导入该被拒并说清原因"},
+                    "这一项不是对象",
+                ],
+            }, ensure_ascii=False))
         elif self.path.startswith("/v1/models"):
             body = json.dumps({"data": [{"id": "mock"}]}).encode()
             self.send_response(200)

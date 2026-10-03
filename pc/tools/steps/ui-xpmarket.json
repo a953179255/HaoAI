@@ -1,0 +1,102 @@
+[
+  {
+    "note": "市场地址由 ui-shot.sh 的 PRE_SET 在开机时写进设置（指向假网关新加的 /experts.json）。这一条先确认设置真的生效了 —— 不生效的话后面每一步都会是「空态」，看着像功能坏了",
+    "eval": "(async()=>{const s=await fetch('/api/settings').then(r=>r.json());const feed=s.expertFeed||'';return {hasFeed:feed.indexOf('/experts.json')>0,feed:feed.slice(0,60)}})()",
+    "must": ["hasFeed"]
+  },
+  { "click": "[data-view=\"experts\"]", "note": "进专家整页" },
+  { "sleep": 900 },
+  {
+    "note": "第四个页签得真的存在（不点它就不发请求，所以这里只查按钮，不查清单）",
+    "eval": "(()=>{const b=document.querySelector('#xptabs button[data-t=\"mkt\"]');return {tabExists:!!b,label:(b?b.textContent:'').trim()}})()",
+    "must": ["tabExists"]
+  },
+  { "click": "#xptabs button[data-t=\"mkt\"]", "note": "点开市场页签：点了才去拉" },
+  { "sleep": 1600 },
+  {
+    "note": "清单要列出来：两张卡 + 一行说明来源 + 一句「跳过了几项脏数据」。假网关那份 fixture 故意混了一项不是对象的字符串，跳过了不吭声就等于骗人。每张的原文都得能展开看到（导入前看得见它带了什么，是这一页的设计前提），第二张真的没有 id 这个键 —— 它待会儿被拒不是服务端耍人",
+    "eval": "(()=>{const txt=(document.querySelector('#xpGrid')||{}).innerText||'';const imp=[...document.querySelectorAll('#xpGrid [data-x=mktimp]')];const pre=[...document.querySelectorAll('#xpGrid details.card pre')].map(p=>p.textContent||'');const q=String.fromCharCode(34);const b=document.querySelector('#xpGrid [data-x=mktsave]');const gr=document.querySelector('#xpGrid').getBoundingClientRect();const br=b?b.getBoundingClientRect():{right:1e9,left:-1};return {named:txt.indexOf('市场甲')>=0,second:txt.indexOf('市场缺id')>=0,fromShown:txt.indexOf('experts.json')>=0,skipped:txt.indexOf('1 项不是卡片')>=0,cleanNote:txt.indexOf('undefined')<0,impBtns:imp.length,rawEveryCard:pre.length===2&&pre.every(t=>t.length>20),secondLacksId:pre.length>1&&pre[1].indexOf(q+'id'+q)<0,firstHasId:pre.length>0&&pre[0].indexOf(q+'id'+q)>=0,rawOpenable:!!document.querySelector('#xpGrid details.card'),btnBoxed:!!b&&(()=>{const cs=getComputedStyle(b);return cs.borderTopColor!=='rgba(0, 0, 0, 0)'&&cs.backgroundColor!=='rgba(0, 0, 0, 0)'})(),btnInside:!!b&&br.right<=gr.right+1&&br.left>=gr.left-1}})()",
+    "must": ["named", "second", "fromShown", "skipped", "rawEveryCard", "secondLacksId", "firstHasId", "rawOpenable", "btnBoxed", "btnInside"]
+  },
+  {
+    "note": "两张卡就是两个导入按钮，不能多也不能少（按钮 data-id 是清单下标，错位就会把另一张卡装进来）",
+    "eval": "(()=>{const b=[...document.querySelectorAll('#xpGrid [data-x=mktimp]')];return {two:b.length===2,idx:[b[0]&&b[0].dataset.id,b[1]&&b[1].dataset.id].join(',')}})()",
+    "must": ["two"]
+  },
+  { "shot": "xm01-market-list" },
+  {
+    "note": "导入第一张（走界面上那颗按钮，不是自己 fetch）：装完必须回「我的专家」并给出提示",
+    "eval": "(()=>{const b=document.querySelector('#xpGrid [data-x=mktimp][data-id=\"0\"]');if(!b)return {clicked:false};b.click();return {clicked:true}})()",
+    "must": ["clicked"]
+  },
+  { "sleep": 1800 },
+  {
+    "note": "必须换新 id（源里那个 mkt-a 不许带进本地库，否则两张市场卡会撞在同一条本地记录上），人设也得真的进来了",
+    "eval": "(async()=>{const d=await fetch('/api/presets').then(r=>r.json());const items=d.items||[];const c=items.find(x=>x.name==='市场甲');const t=(document.querySelector('#toast')||{}).textContent||'';return {installed:!!c,freshId:!!c&&!!c.id&&c.id.indexOf('mkt-a')<0,persona:!!c&&(c.persona||'').indexOf('市场甲')>=0,toastSays:t.indexOf('已装进')>=0,tabMy:!!document.querySelector('#xptabs button[data-t=my]')&&document.querySelector('#xptabs button[data-t=my]').classList.contains('on')}})()",
+    "must": ["installed", "freshId", "persona", "toastSays", "tabMy"]
+  },
+  { "shot": "xm02-imported" },
+  { "click": "#xptabs button[data-t=\"mkt\"]", "note": "回市场页签，试那张故意缺 id 的卡" },
+  { "sleep": 900 },
+  {
+    "note": "拒是好事，但必须说清为什么拒：走按钮 → 看提示文案 + 确认库里没有它。这条钉的是「市场导入与文件导入共用同一道门」",
+    "eval": "(()=>{const b=document.querySelector('#xpGrid [data-x=mktimp][data-id=\"1\"]');if(!b)return {clicked:false};b.click();return {clicked:true}})()",
+    "must": ["clicked"]
+  },
+  { "sleep": 1400 },
+  {
+    "eval": "(async()=>{const t=(document.querySelector('#toast')||{}).textContent||'';const items=(await fetch('/api/presets').then(r=>r.json())).items||[];return {saysWhy:t.indexOf('角色卡')>=0,notInstalled:!items.some(x=>x.name==='市场缺id'),stillMy:items.some(x=>x.name==='市场甲')}})()",
+    "must": ["saysWhy", "notInstalled", "stillMy"]
+  },
+  { "shot": "xm03-import-refused" },
+  {
+    "note": "搜索框在市场这一页也得管用（它筛的是名称与说明，不是本地卡）",
+    "eval": "(()=>{const i=document.querySelector('#xpQ');if(!i)return {typed:false};i.value='缺id';i.dispatchEvent(new Event('input',{bubbles:true}));return {typed:true}})()",
+    "must": ["typed"]
+  },
+  { "sleep": 800 },
+  {
+    "eval": "(()=>{const t=(document.querySelector('#xpGrid')||{}).innerText||'';return {onlyOne:t.indexOf('市场缺id')>=0&&t.indexOf('市场甲')<0,oneBtn:document.querySelectorAll('#xpGrid [data-x=mktimp]').length===1}})()",
+    "must": ["onlyOne", "oneBtn"]
+  },
+  { "shot": "xm04-market-filtered" },
+  {
+    "note": "清空搜索要能回到两张（过滤是每次现算的，不是把数组改坏了）",
+    "eval": "(()=>{const i=document.querySelector('#xpQ');i.value='';i.dispatchEvent(new Event('input',{bubbles:true}));return {cleared:true}})()",
+    "must": ["cleared"]
+  },
+  { "sleep": 800 },
+  {
+    "eval": "(()=>{return {twoAgain:document.querySelectorAll('#xpGrid [data-x=mktimp]').length===2}})()",
+    "must": ["twoAgain"]
+  },
+  {
+    "note": "地址就在这一页能改（只有 CLI 能配的话，空态那句 haoai set … 等于把不敲命令的人挡在门外）。这一条先把当前地址存到 window 上，后面清空了才填得回去 —— 端口是每轮现挑的，剧本里不许写死",
+    "eval": "(async()=>{const s=await fetch('/api/settings').then(r=>r.json());window.__feed=s.expertFeed||'';const i=document.querySelector('#xmUrl');return {prefilled:!!(i&&window.__feed)&&i.value===window.__feed,url:(window.__feed||'').slice(0,60)}})()",
+    "must": ["prefilled"]
+  },
+  {
+    "note": "清空 = 关掉这一页，而且要说清怎么再打开：判据是页面上出现服务端那句「还没配市场地址」并且一张卡都不剩（只判设置项变了不算，那是另一条链）",
+    "eval": "(()=>{const i=document.querySelector('#xmUrl');if(!i)return {blanked:false};i.value='';return {blanked:true}})()",
+    "must": ["blanked"]
+  },
+  { "click": "#xpGrid [data-x=\"mktsave\"]", "note": "点界面上那颗「保存并拉取」（真点击，不是自己 fetch）" },
+  { "sleep": 1500 },
+  {
+    "eval": "(()=>{const t=(document.querySelector('#xpGrid')||{}).innerText||'';return {saysNoUrl:t.indexOf('还没配市场地址')>=0,noCards:document.querySelectorAll('#xpGrid [data-x=mktimp]').length===0}})()",
+    "must": ["saysNoUrl", "noCards"]
+  },
+  { "shot": "xm05-market-off" },
+  {
+    "eval": "(()=>{const i=document.querySelector('#xmUrl');if(!i)return {typed:false};i.value=window.__feed||'';return {typed:(window.__feed||'').length>0}})()",
+    "must": ["typed"]
+  },
+  { "click": "#xpGrid [data-x=\"mktsave\"]" },
+  { "sleep": 1800 },
+  {
+    "note": "填回去要当场又看得见清单：保存与拉取是一次动作，不用刷新页面才算数",
+    "eval": "(()=>{const t=(document.querySelector('#xpGrid')||{}).innerText||'';return {backAgain:t.indexOf('市场甲')>=0,twoBtns:document.querySelectorAll('#xpGrid [data-x=mktimp]').length===2,gone:t.indexOf('还没配市场地址')<0}})()",
+    "must": ["backAgain", "twoBtns", "gone"]
+  },
+  { "shot": "xm06-market-restored" }
+]

@@ -417,6 +417,16 @@
   .kb-cites .one p{margin:1px 0 0;color:var(--dim);white-space:pre-wrap;
     display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
   .kb-file{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+  /* 专家市场页签里的地址栏：全局 input[type=text] 是 width:100%，和按钮并排时不控宽
+     就会把按钮挤出卡片（结构判据全绿、像素不对的那一类）。 */
+  .xm-url{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .xm-url input{flex:1 1 auto;min-width:0}
+  /* 这颗按钮得看着像按钮：全局 .ab 是"平时无边框、hover 才有"的文本式动作键，
+     放在输入框旁边时静止态就是一片文字（像素里根本看不出能点）。
+     .btn 又自带 width:100%，在 flex 行里会把输入框挤没，所以这里自己给一套。 */
+  .xm-url button{flex:none;border:1px solid var(--line);border-radius:10px;padding:7px 12px;
+    background:var(--glass);color:var(--fg);white-space:nowrap}
+  .xm-url button:hover{border-color:var(--acc2)}
   .kb-pick{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11.5px;color:var(--fg2)}
   .kbck{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
   .kbck em{font-style:normal;color:var(--dim2);font-size:10.5px}
@@ -1241,7 +1251,7 @@
       <div class="xp-head">
         <h2>专家</h2>
         <div class="xtabs" id="xptabs">
-          <button data-t="my">我的专家</button><button data-t="lib">内置专家</button><button data-t="team">我的团队</button>
+          <button data-t="my">我的专家</button><button data-t="lib">内置专家</button><button data-t="team">我的团队</button><button data-t="mkt">专家市场</button>
         </div>
         <input type="text" id="xpQ" placeholder="按名称 / 专长筛选">
         <span class="sp"></span>
@@ -4816,6 +4826,19 @@ let my=[], selColor='', selMembers=[], dialogModels='<option value="">模型：�
 let view_='card';
 /* 实例与收件箱（多 Agent 那一层的读数）：读不到就当没有，不许把专家页整页打死 */
 let agents=[], inbox=[];
+/* 专家市场（对标 Octop 第四个页签）：只在点开那个页签时才去拉，且一份清单只拉一次。
+   mktErr 存的是"为什么一张都没有"（没配地址 / 拉不到 / 形状不对），空态必须把它显示出来。 */
+let mkt=[], mktFrom='', mktErr='', mktBusy=false;
+function loadMarket(){
+  mktBusy=true;
+  post('/api/expertfeed',{op:'load'}).then(d=>{
+    mktBusy=false;
+    mkt=(d&&d.cards)||[];mktFrom=(d&&d.from)||'';
+    mktErr=(d&&d.ok===false)?((d.error||'没拉到清单')+'')
+      :(((d&&d.note)||'')+(mkt.length?'':'（清单里一张能读的卡都没有）'));
+    if(tab==='mkt')paint();
+  }).catch(()=>{mktBusy=false;mkt=[];mktErr='市场请求没走通';if(tab==='mkt')paint()});
+}
 function instOf(id){return agents.find(a=>a.preset===id)||null}
 function loadAgents(){
   return fetch('/api/agents').then(r=>r.json()).then(d=>{agents=d.agents||[];inbox=d.inbox||[]})
@@ -4996,6 +5019,31 @@ function paint(){
     const cards=lib.filter(matchQ).map(libCard).join('');
     grid.innerHTML='<div class="xcard" style="grid-column:1/-1"><div class="ds">随包内置的专家卡。「启用」会打开预填好的表单：工作区、模型都能按你的情况改，存下来就是你自己的卡。</div></div>'+
       (cards||'<div class="kv">（没有匹配的内置专家）</div>');
+  }else if(tab==='mkt'){
+    const qq=($('#xpQ')&&$('#xpQ').value||'').trim().toLowerCase();
+    const rows=mkt.map((c,i)=>[c,i]).filter(x=>!qq||
+      (((x[0].name||'')+' '+(x[0].desc||'')).toLowerCase().includes(qq)));
+    grid.innerHTML='<div class="xcard" style="grid-column:1/-1">'+
+      '<div class="ds">市场里的卡来自一份远端清单'+(mktFrom?('（'+esc(mktFrom)+'）'):'')+
+      '。这一页只列给你看，<b>点「导入这张」才会装进来</b>：装进来是一张新 id 的本地卡，'+
+      '之后想改想删都在「我的专家」。清单本身不会执行任何东西。</div>'+
+      // 地址直接在这一页给：只有 CLI 能配的话，空态那句"haoai set expertFeed=…"就等于
+      // 把不想敲命令的人挡在门外。空串是合法值（= 关掉这个页签），所以清空也要能清空。
+      '<div class="xm-url"><input type="text" id="xmUrl" spellcheck="false" '+
+      'placeholder="http://127.0.0.1:8791/experts.json" value="'+esc(mktFrom)+'">'+
+      '<button class="ab" data-x="mktsave">保存并拉取</button></div>'+
+      (mktBusy?'<div class="ds">正在拉清单…</div>':
+        (mktErr?('<div class="ds" style="color:var(--warn)">'+esc(mktErr)+'</div>'):''))+'</div>'+
+      (rows.length?rows.map(x=>
+        `<div class="xcard"><div class="hd"><b><span>${esc(x[0].name||'（没名字）')}</span></b></div>`+
+        `<div class="ds">${esc(x[0].desc||'（清单没给说明）')}</div>`+
+        // 原文摊开给人看：装不进来的时候（缺 id、形状不对）用户得能看出差在哪，
+        // 而不是只收到一句"这不是一张能读的角色卡"
+        `<details class="card"><summary><b>看它到底带了什么</b></summary>`+
+        `<pre class="body">${esc(x[0].card||'')}</pre></details>`+
+        `<div class="ft"><button class="ab pri" data-x="mktimp" data-id="${x[1]}">导入这张</button></div></div>`
+        ).join('')
+        :`<div class="kv">${mktBusy?'（拉取中）':(mktErr?'（清单没拉回来）':'没有匹配的卡')}</div>`);
   }else{
     const cards=teams.filter(matchQ).map(teamCard).join('');
     grid.innerHTML=(cards||'<div class="kv">还没有团队 —— 一支团队 = 几张专家卡 + 一位负责调度的主持人。</div>')+
@@ -5071,7 +5119,7 @@ function openAt(t){
   loadAgents();
   loadAll().then(paint).catch(()=>toast('读不到专家与团队','err'));
 }
-function setTab(t){tab=t;paint()}
+function setTab(t){tab=t;if(t==='mkt'&&!mkt.length&&!mktBusy)loadMarket();paint()}
 /* ---- 专家表单：新建 / 编辑 / 从内置库启用（预填）共用这一份 ---- */
 function pForm(p,fromLib){
   const v=p||{};
@@ -5170,6 +5218,39 @@ function act(x,b){
       my=d.items||[];refreshBadge();paint();
       toast(p.enabled===false?'这张卡已打开，能选来开会话了':'这张卡已关掉：不进候选、不能被点名、定时任务会拒跑');
     }).catch(()=>toast('改不动','err'));return;
+  }
+  if(x==='mktsave'){
+    /*
+     * 存地址并立刻用它拉一次：这一格的存在是为了让不敲 CLI 的人也能开这个功能，
+     * 所以"保存"必须当场看得出效果 —— 存完了才刷新页面才见清单，等于还是在考用户记不记得重开。
+     * 空串是合法值（清空 = 关掉这一页），不能像模型名那样拿 isNotBlank 挡掉。
+     */
+    const v=(($('#xmUrl')&&$('#xmUrl').value)||'').trim();
+    post('/api/settings',{expertFeed:v}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'地址没存下来','err');return}
+      mktFrom=v;mkt=[];mktErr='';
+      toast(v?'地址存好了':'市场地址已清空');
+      /*
+       * 清空之后也走一次 loadMarket：空地址时服务端会回"还没配市场地址（…怎么用起来）"
+       * 并且**根本不发请求**（ExpertFeed.fetch 第一件事就是判空）。
+       * 这里自己编一句空态文案的话，界面上那句和服务端那句迟早不是同一句，
+       * 而像素剧本判的是服务端那句。
+       */
+      loadMarket();
+    }).catch(()=>toast('保存请求没走通','err'));return;
+  }
+  if(x==='mktimp'){
+    /*
+     * 装一张市场的卡：只走现成的 `op:'import'`（换新 id、拒掉形状不对的），
+     * 市场这一层不另开一条写库的路 —— 两条路迟早行为不一样，而表现是"从市场装的卡怪"。
+     * 装完了回「我的专家」：那张卡从此就是用户自己的，想改想删都在那里。
+     */
+    const c=mkt[Number(id)];
+    if(!c){toast('这张卡不在清单里了，刷新一下再看','err');return}
+    post('/api/presets',{op:'import',text:c.card}).then(d=>{
+      if(!d||!d.ok){toast((d&&d.error)||'这张卡装不进来','err');return}
+      toast('已装进「我的专家」');loadAll();setTab('my');
+    }).catch(()=>toast('导入请求没走通','err'));return;
   }
   if(x==='pdef'){
     /*

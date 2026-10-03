@@ -59,6 +59,13 @@ data class PcSettings(
      */
     val embedUrl: String = "",
     /**
+     * 「专家市场」的清单地址（对标 Octop 的第四个页签）。
+     *
+     * **默认空 = 这个功能等于不存在**：不预置任何官方源，那等于替用户决定信任谁。
+     * 页面上空态会写清楚怎么开。拉回来的只是角色卡 JSON，导入是用户的下一次明确动作。
+     */
+    val expertFeed: String = "",
+    /**
      * 这个模型的上下文窗口（字/符口径，用来画界面上那圈"用了多少"）。
      *
      * 网关不会主动告诉我们窗口多大，而移动端是靠"模型能力自动检测"拿到的；
@@ -111,6 +118,7 @@ data class PcSettings(
                     fallback = o.str("fallback") ?: "",
                     searchProvider = o.str("searchProvider") ?: "auto",
                     embedUrl = o.str("embedUrl") ?: "",
+                    expertFeed = o.str("expertFeed") ?: "",
                     contextChars = o.int("contextChars") ?: 128_000,
                     storedCap = o.int("storedCap") ?: 16_000,
                     reqCap = o.int("reqCap") ?: 4_000,
@@ -144,6 +152,7 @@ data class PcSettings(
                         put("fallback", s.fallback)
                         put("searchProvider", s.searchProvider)
                         put("embedUrl", s.embedUrl)
+                        put("expertFeed", s.expertFeed)
                         put("contextChars", s.contextChars)
                         put("storedCap", s.storedCap)
                         put("reqCap", s.reqCap)

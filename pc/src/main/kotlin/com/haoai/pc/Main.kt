@@ -124,52 +124,20 @@ private fun init(s: PcSettings, rest: List<String>) {
 }
 
 private fun set(s: PcSettings, rest: List<String>) {
-    var n = s
-    // 数字项统一走这个：写错格式要**保持原值并说一声**，不能静默变成 0
-    fun int(k: String, v: String, cur: Int): Int =
-        v.toIntOrNull() ?: run { println("「$k」要的是整数，给的是「$v」—— 这项没改"); cur }
-    rest.forEach { kv ->
-        val parts = kv.split("=", limit = 2)
-        if (parts.size != 2) return@forEach
-        val (k, v) = parts[0] to parts[1]
-        n = when (k) {
-            "model" -> n.copy(model = v)
-            "base", "baseUrl" -> n.copy(baseUrl = v)
-            "provider" -> n.copy(providerName = v)
-            "mode" -> n.copy(permissionMode = v)
-            "workspace" -> n.copy(workspace = v)
-            /*
-             * 这些都得能改：以前只认 maxTurns，于是新加的设置项在 CLI 上是只读的 ——
-             * 用户照着 README 敲 `haoai set maxTokens=150` 只会得到一句"不认识的设置项"，
-             * 而界面上没有的字段（压缩阈值、截断上限）就没有第二条路。
-             */
-            "maxTurns" -> n.copy(maxTurns = int(k, v, n.maxTurns))
-            "maxTokens" -> n.copy(maxTokens = int(k, v, n.maxTokens))
-            "contextChars" -> n.copy(contextChars = int(k, v, n.contextChars))
-            "reasoningEffort", "effort" -> n.copy(reasoningEffort = v.trim())
-            "searchProvider" -> n.copy(searchProvider = v.trim().lowercase())
-            // 语义检索端点（#6）：`haoai set embedUrl=http://127.0.0.1:8199/embeddings`，空串=关闭
-            "embedUrl" -> n.copy(embedUrl = v.trim())
-            // 降级链：`haoai set fallback=glm-4-flash,small@http://127.0.0.1:8080/v1`
-            "fallback", "fallbackChain" -> n.copy(fallback = v.trim())
-            "storedCap" -> n.copy(storedCap = int(k, v, n.storedCap))
-            "reqCap" -> n.copy(reqCap = int(k, v, n.reqCap))
-            "compactTriggerChars" -> n.copy(compactTriggerChars = int(k, v, n.compactTriggerChars))
-            "compactKeepTail" -> n.copy(compactKeepTail = int(k, v, n.compactKeepTail))
-            "temperature" -> n.copy(
-                temperature = v.toDoubleOrNull()
-                    ?: run { println("「temperature」要的是小数，给的是「$v」—— 这项没改"); n.temperature }
-            )
-            else -> {
-                println("不认识的设置项：$k（可用：model base mode workspace maxTurns maxTokens " +
-                    "searchProvider storedCap reqCap compactTriggerChars compactKeepTail temperature provider）")
-                n
-            }
-        }
-    }
+    /*
+     * 键表与写值都在 SettingsCli 里（那张表以前藏在这个 private 函数里，测试碰不到，
+     * 于是"CLI 不认某个新键"这件事一直没人知道）。
+     *
+     * 退出码这一条是这批新加的：**有问题就 exitProcess(1)**，但仍先 save —— 能存的项该留下。
+     * 不这么做的话，像素剧本里 `"$BIN" set "$kv" || exit 1` 那道闸门等于没有：
+     * 设置没写进去、脚本照走、然后一屏判据全红，看着像功能坏了。
+     */
+    val (n, problems) = SettingsCli.apply(s, rest)
     PcSettings.save(n)
+    problems.forEach { println(it) }
     println("已保存：model=${n.model} base=${n.baseUrl} mode=${n.permissionMode} " +
         "workspace=${n.workspace} maxTokens=${n.maxTokens}")
+    if (problems.isNotEmpty()) exitProcess(1)
 }
 
 private fun flags(s: PcSettings, rest: List<String>) {

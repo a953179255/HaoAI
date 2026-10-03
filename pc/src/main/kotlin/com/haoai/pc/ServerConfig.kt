@@ -108,6 +108,13 @@ import com.haoai.pc.WebServer.Body
             """"reasoningEffort":${quote(st.reasoningEffort)},""" +
             """"searchProvider":${quote(st.searchProvider)},""" +
             """"fallback":${quote(st.fallback)},""" +
+            /*
+             * 市场地址要回得来：前端与像素剧本判"这个功能开了没"读的就是这份对象。
+             * 第一次踩的时候 GET /api/settings 里没这个键，于是剧本里
+             * `settings.expertFeed` 永远是 undefined —— 就算 CLI 真的写进去了，
+             * 判据也还是红的，而症状看着像"市场整个坏了"。
+             */
+            """"expertFeed":${quote(st.expertFeed)},""" +
             // 只报"有没有 key"，不报 key 本身：这份对象会整体发给浏览器
             """"hasSearchKey":${Search.key().isNotBlank()},""" +
             // 上下文窗口必须回得去：抽屉里那一格原来永远是空的，用户以为没配，
@@ -143,6 +150,12 @@ import com.haoai.pc.WebServer.Body
         }
         // 降级链同理：留空就是"不要降级"，得让人能清掉
         body["fallback"]?.jsonPrimitive?.contentOrNull?.let { n = n.copy(fallback = it.trim()) }
+        /*
+         * 专家市场清单地址（#136）：**空串是合法值**（空 = 这个功能等于不存在），
+         * 所以这里也不判空 —— 界面上"清空地址"必须真能清掉，否则那个页签永远卡在旧源上。
+         * 只存地址，不存任何密钥：这份设置会被 GET /api/settings 整体发回前端。
+         */
+        body["expertFeed"]?.jsonPrimitive?.contentOrNull?.let { n = n.copy(expertFeed = it.trim()) }
         body["mode"]?.jsonPrimitive?.contentOrNull?.takeIf { it in listOf("plan", "ask", "auto") }?.let {
             n = n.copy(permissionMode = it)
             // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话引擎上，
