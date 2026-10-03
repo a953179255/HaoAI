@@ -429,26 +429,35 @@ object Knowledge {
         var note: String? = null
         for (id in kbIds) {
             val b = find(id) ?: continue
+            val mine = ArrayList<Found>()
             if (embedUrl.isNotBlank()) {
                 val r = SemanticIndex.query(txtDir(id), question, embedUrl, top)
                 r.hits.forEach { h ->
-                    hits += Found(id, b.name, h.path.removeSuffix(".md"), h.score, h.snippet, "语义")
+                    mine += Found(id, b.name, h.path.removeSuffix(".md"), h.score, h.snippet, "语义")
                 }
                 if (r.note != null) note = r.note
             }
-            if (hits.isEmpty() || embedUrl.isBlank()) {
+            /*
+             * 字面兜底**按库判**，不是看全局：上一版写的是 `hits.isEmpty() || embedUrl.isBlank()`，
+             * 而 `hits` 是跨库累计的 —— 一张卡绑两个库时，第一个库语义命中就把第二个库的字面兜底
+             * 饿掉了，于是"第二个库里有一模一样的词"却查不到（而模型只会说"知识库里没查到"）。
+             * 关键词这条本来就是给"查一个确切的术语/表名"用的，跟语义谁强谁弱无关，
+             * 所以判据只该问一句：**这个库自己命中了吗**。
+             */
+            if (mine.isEmpty()) {
                 // 关键词：字面命中在"查一个确切的术语/表名"时常常比向量更准，不是凑数的降级
                 b.docs.filter { it.status == READY }.forEach { d ->
                     val t = textOf(id, d.name) ?: return@forEach
                     val i = t.lowercase().indexOf(question.lowercase())
                     if (i >= 0) {
                         val from = (i - 60).coerceAtLeast(0)
-                        hits += Found(id, b.name, d.name, 1.0,
+                        mine += Found(id, b.name, d.name, 1.0,
                             t.substring(from, (i + question.length + 120).coerceAtMost(t.length))
                                 .replace('\n', ' '), "字面")
                     }
                 }
             }
+            hits += mine
         }
         return hits.sortedByDescending { it.score }.take(top) to note
     }

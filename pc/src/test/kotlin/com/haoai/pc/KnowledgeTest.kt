@@ -236,6 +236,52 @@ class KnowledgeTest {
         assertTrue(h.snippet.contains("液态玻璃"))
     }
 
+    /**
+     * 绑两个库时的字面兜底（真缺陷），顺带给语义那条路第一次上判据。
+     *
+     * 假 embed 端点按**大小写敏感**分向量：含 "alpha" → [1,0]，否则 → [0,1]。
+     * A 库正文里有 "alpha"，B 库里只有 "AlphaCorp"（大写 A）—— 向量算它是另一类，语义查不到；
+     * 但字面那条不区分大小写，B 里明明命中。上一版的兜底条件看的是"全局有没有命中"，
+     * 于是 A 一命中，B 的字面就被饿掉 —— 症状是模型老实回答"知识库里没查到"。
+     */
+    @Test
+    fun `a second bound kb still gets its literal fallback`() {
+        val server = com.sun.net.httpserver.HttpServer.create(
+            java.net.InetSocketAddress("127.0.0.1", 0), 0
+        )
+        server.createContext("/embeddings") { ex ->
+            val body = String(ex.requestBody.readBytes(), Charsets.UTF_8)
+            val inner = Regex("\"input\"\\s*:\\s*\\[(.*)\\]", RegexOption.DOT_MATCHES_ALL)
+                .find(body)?.groupValues?.get(1) ?: "[]"
+            val inputs = Json.parseToJsonElement("[$inner]").jsonArray.map { it.jsonPrimitive.content }
+            val data = inputs.joinToString(",") {
+                val v = if (it.contains("alpha")) "1,0" else "0,1"
+                """{"object":"embedding","index":0,"embedding":[$v]}"""
+            }
+            val out = """{"data":[$data]}""".toByteArray(Charsets.UTF_8)
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, out.size.toLong())
+            ex.responseBody.use { it.write(out) }
+            ex.close()
+        }
+        server.start()
+        try {
+            val embedUrl = "http://127.0.0.1:${server.address.port}/embeddings"
+            val a = Knowledge.create("A 总纲")!!.first!!
+            val b = Knowledge.create("B 数据表")!!.first!!
+            Knowledge.addDoc(a.id, "a.md", "alpha 总纲：先看这一页，别的都无关。".toByteArray())
+            Knowledge.addDoc(b.id, "b.md", "AlphaCorp 的订单表 orders_daily 每天凌晨生成。".toByteArray())
+            val (hits, _) = Knowledge.search(listOf(a.id, b.id), "alpha", embedUrl = embedUrl, top = 6)
+            assertEquals("两个库都该有命中：A 靠语义、B 靠字面（上一版 B 被饿掉）",
+                listOf("A 总纲", "B 数据表"), hits.map { it.kbName }.distinct().sorted())
+            assertEquals("每条命中都得说自己是怎么来的，人才知道该不该信",
+                setOf("语义", "字面"), hits.map { it.how }.toSet())
+            assertTrue("每条还要带自己那个库的文档名", hits.all { it.doc.isNotBlank() && it.kb.isNotBlank() })
+        } finally {
+            server.stop(0)
+        }
+    }
+
     @Test
     fun `search says so when nothing matches instead of inventing one`() {
         val b = Knowledge.create("空查")!!.first!!
