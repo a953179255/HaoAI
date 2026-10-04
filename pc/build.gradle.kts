@@ -138,9 +138,12 @@ val packageExe by tasks.registering(Exec::class) {
             "--main-jar", "haoai-pc.jar",
             "--main-class", "com.haoai.pc.MainKt",
             "--dest", out.absolutePath,
-            "--java-options", "-Dfile.encoding=UTF-8",
-            "--java-options", "-Dstdout.encoding=UTF-8",
-            "--java-options", "-Dstderr.encoding=UTF-8"
+            // 只钉 file.encoding：被重定向/管道时 stdout.encoding 回落到它（UTF-8），
+            // packageExe 自检按 UTF-8 读输出照样对。
+            // **不要**强制 stdout/stderr.encoding=UTF-8：接到真控制台时 JVM 会按控制台
+            // 代码页自动选（JEP 400），中文 Windows 的 conhost 是 GBK——强制 UTF-8 就是
+            // 往 GBK 控制台灌 UTF-8，双击 exe 满屏「铍¢铍€」（2026-10-05 用户实测）。
+            "--java-options", "-Dfile.encoding=UTF-8"
         )
     }
     /*

@@ -1541,6 +1541,10 @@ class WebServer(settings: PcSettings, port: Int,
     internal fun send(ex: HttpExchange, code: Int, body: String, type: String) {
         val b = body.toByteArray(StandardCharsets.UTF_8)
         ex.responseHeaders.add("Content-Type", type)
+        // UI 必须跟服务端同版本。没有这行浏览器会按启发式缓存旧 index.html：
+        // exe 更新后用户点开的还是旧页面，"修了没用/技能打不开"其实是缓存里的旧接线在响应
+        // （2026-10-05 实测事故——同一个 exe，无头浏览器里是新的，用户浏览器里是旧的）。
+        ex.responseHeaders.add("Cache-Control", "no-store")
         ex.sendResponseHeaders(code, b.size.toLong())
         ex.responseBody.use { it.write(b) }
     }
