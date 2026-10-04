@@ -1248,14 +1248,14 @@
     <div class="navrow on" data-view="chat" title="会话与任务"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg>会话<span class="nb2" id="navSessCnt"></span></div>
     <div class="navrow" data-view="experts" id="expertsBtn" title="专家卡与团队：人设+模型+工作区一次带上；团队由主持人调度成员"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>专家<span class="nb2" id="expertsCount"></span></div>
     <div class="navrow" data-view="kb" id="kbBtn" title="知识库：跨项目的资料，能绑到具体专家身上；docx/xlsx/pptx 也能收"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 3v18M12 8h5M12 12h5"/></svg>知识库<span class="nb2" id="kbCount"></span></div>
-    <div class="navrow" data-act="skills" title="自定义命令（技能）与技能订阅源在设置里"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4L15 12l-3-3z"/></svg>技能</div>
+    <div class="navrow" data-act="skills" title="自定义命令（技能）、导入 SKILL.md 与订阅源 —— 右栏「技能」页签"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4L15 12l-3-3z"/></svg>技能</div>
     <div class="grp">助理</div>
     <div class="navrow" data-view="sched" title="定时任务的时间线与近期结果"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>日程</div>
     <div class="navrow" data-view="tokens" id="tokensBtn" title="Token 统计：汇总 / 按天 / 按专家 / 按模型，能选日期区间并导出 Excel"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 5-8 4 5"/><path d="M3 21h18"/></svg>Token 统计</div>
     <div class="navrow" data-act="mem" title="长期记忆条目"><svg viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 1 7 7c0 3-2 5-4 6v3h-6v-3c-2-1-4-3-4-6a7 7 0 0 1 7-7z"/></svg>记忆</div>
     <div class="grp">设置</div>
     <div class="navrow" data-act="theme" title="切换明暗主题"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>外观</div>
-    <div class="navrow" data-act="cfg" id="cfgBtn" title="模型 / 工作区 / 密钥 / 技能 / 降级链"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12"/></svg>设置</div>
+    <div class="navrow" data-act="cfg" id="cfgBtn" title="模型 / 工作区 / 密钥 / 降级链 / MCP / 备份"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12"/></svg>设置</div>
     <div class="navrow" data-act="help" title="快捷键与用法"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M7 14h10"/></svg>快捷键</div>
     <div class="spring"></div>
     <div class="ucard" data-act="help" title="点开「怎么用」">
@@ -1460,7 +1460,7 @@
       <button data-t="git">Git</button>
       <button data-t="term">终端</button>
       <button data-t="pv">预览</button>
-      <button data-t="mem">记忆</button>
+      <button data-t="mem">记忆</button><button data-t="skills">技能</button>
       <button data-t="cron">定时</button>
       <button data-t="role">自动化</button>
       <button data-t="tools">工具</button>
@@ -1583,7 +1583,11 @@
       <textarea id="gBox" class="mem" rows="6" placeholder="例：回答一律用中文；改代码前先给方案等我确认"></textarea>
       <div class="acts2 pinned"><button class="ab" id="gSave">保存全局</button>
         <span class="fp" id="gState"></span></div>
-      <div class="grp" style="margin-top:12px">自定义命令（技能）</div>
+    </div>
+    <!-- 技能是从「记忆」页签尾部拆出来的独立页签：导航「技能」落在这一页
+         （旧接线弹的是设置弹窗，而设置里根本没有技能编辑区，三方对不上） -->
+    <div class="tabp" id="tab-skills">
+      <div class="grp">自定义命令（技能）</div>
       <div class="skills" id="skillList">（还没有）</div>
       <div class="addrow"><input type="text" id="skName" placeholder="名字，如 review"><input type="text" id="skDesc" placeholder="一句话说明"></div>
       <textarea id="skText" class="mem" rows="4" placeholder="这个命令要让模型做什么；选中后这段会填进输入框，你还能接着补两句"></textarea>
@@ -2154,6 +2158,7 @@ const PALSET=[
   ['专家与团队（卡片 / 内置库 / 团队）','#expertsBtn'],
   ['Token 统计（按天 / 按专家 / 按模型 / 导出 Excel）','#tokensBtn'],
   ['右栏：知识库（导入参考文档）','#tabs button[data-t=kb]'],
+  ['右栏：技能（/命令 · SKILL.md · 订阅源）','#tabs button[data-t=skills]'],
   ['动作：把刚才看的那条并排到左边（分屏）','#duoBtn','动作'],
   ['动作：整理条目记忆（先给预览再点头）',()=>palTabBtn('mem','#memTidy')],
   ['动作：手动压缩一次上下文（把早期消息折进摘要）',()=>palTabBtn('usage','#cmpBtn')],
@@ -2887,6 +2892,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.t=='term')Term.render(); else Term.dispose();
   if(b.dataset.t=='pv')Pv.render(); else Pv.dispose();
   if(b.dataset.t=='mem'){Mem.render()}
+  if(b.dataset.t=='skills')Skills.render();
   if(b.dataset.t=='cron'){Cron.render()}
   if(b.dataset.t=='role'){Presets.render();Hooks.render()}
   if(b.dataset.t=='kb'){Kb.render()}
@@ -3602,6 +3608,7 @@ function installEntry(ev){
     loadSkills();
     },
     all(){ return SKILLS },
+    render(){ loadSkills() },   // 页签点开时刷一遍：CLI 侧或另一端改过也能看到最新
   };
 })();
 Skills.init();
@@ -5540,7 +5547,8 @@ document.querySelectorAll('.navrow').forEach(r=>r.onclick=()=>{
   if(a==='kb'){setView('chat');document.querySelector('#tabs button[data-t=kb]').click()}
   else if(a==='cron'){setView('chat');document.querySelector('#tabs button[data-t=cron]').click()}
   else if(a==='mem'){setView('chat');document.querySelector('#tabs button[data-t=mem]').click()}
-  else if(a==='skills'||a==='cfg'){Cfg.open()}
+  else if(a==='skills'){setView('chat');document.querySelector('#tabs button[data-t=skills]').click()}
+  else if(a==='cfg'){Cfg.open()}
   else if(a==='theme'){$('#themeBtn').click()}
   else if(a==='help'){showHelp()}
 });

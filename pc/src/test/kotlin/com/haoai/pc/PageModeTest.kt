@@ -75,6 +75,12 @@ class PageModeTest {
             Regex("""function rerunGoal\(g\)\{\s*setView\('chat'\);""").containsMatchIn(src))
         assertTrue("newTask 成功后要把新会话切到眼前（Ctrl N 从任何页都能按）",
             Regex("""setView\('chat'\);\s*show\(d\.id\);paintUsage""").containsMatchIn(src))
+        // 导航「技能」落在右栏页签上（和记忆/定时同一族）：旧接线是弹设置弹窗，
+        // 而设置弹窗里没有技能编辑区——技能块自己住在右栏 tab-skills 里。
+        assertTrue("导航「技能」要先回会话页再点右栏技能页签，而不是弹设置",
+            Regex("""a==='skills'\)\{setView\('chat'\);""").containsMatchIn(src))
+        assertTrue("导航「技能」的落点页签必须真实存在（tab-skills）",
+            src.contains("""<div class="tabp" id="tab-skills">""") && src.contains("""<button data-t="skills">技能</button>"""))
     }
 
     @Test

@@ -275,6 +275,20 @@
   ]
  },
  {
+  "click": ".navrow[data-act=skills]",
+  "note": "导航「技能」：应落到右栏「技能」页签（曾错误地弹设置弹窗，而设置里没有技能编辑区）"
+ },
+ {
+  "eval": "(()=>{const t=document.querySelector('#tab-skills');\nconst r=t?t.getBoundingClientRect():null;\nconst m=document.querySelector('#mask');\nreturn {tabOn:!!t&&t.classList.contains('on')&&!!r&&r.width>0&&r.height>0,\n noCfg:!(m&&m.classList.contains('on')),\n chatPage:document.querySelector('.main').dataset.page==='',\n listThere:!!document.querySelector('#skillList')}})()",
+  "must": [
+   "tabOn",
+   "noCfg",
+   "chatPage",
+   "listThere"
+  ],
+  "note": "技能落位判据：tab-skills 选中且有尺寸、设置弹窗没开、回在会话页、技能清单节点在"
+ },
+ {
   "click": "#cfgBtn"
  },
  {
