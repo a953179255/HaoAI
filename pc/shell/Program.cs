@@ -49,6 +49,8 @@ internal sealed class MainShell : Form
     //      和 ZCode/Octop 同构——顶栏就是功能栏，不另画一条 Windows caption。
     private bool _maximized;
     private Rectangle _restoreBounds;
+    private Label _status;                // 启动全程可见的状态层：冷启动那几秒不能是一块哑黑
+    private bool _pageReady;
 
     public MainShell()
     {
@@ -62,8 +64,36 @@ internal sealed class MainShell : Form
         var wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(Math.Max(0, (wa.Width - 1440) / 2), Math.Max(0, (wa.Height - 900) / 2));
 
+        // 启动状态层：从窗体出现的第一帧就有字，"深色空窗=坏了"的误会不能再有
+        _status = new Label
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(14, 21, 17),
+            ForeColor = Color.FromArgb(159, 176, 168),
+            Font = new Font("Microsoft YaHei UI", 12f),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Text = "正在启动 HaoAI…"
+        };
+        Controls.Add(_status);
+        _status.BringToFront();
+
         BuildTray();
         BuildWeb().ConfigureAwait(false);
+    }
+
+    private void SetStatus(string text)
+    {
+        if (_status == null || _status.IsDisposed) return;
+        _status.Text = text;
+        _status.Visible = true;
+        _status.BringToFront();
+    }
+
+    private void HideStatus()
+    {
+        if (_status == null || _status.IsDisposed) return;
+        _status.Visible = false;
+        _web?.BringToFront();
     }
 
     private void ToggleMax()
@@ -208,6 +238,7 @@ internal sealed class MainShell : Form
         _web.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top | AnchorStyles.Bottom;
         Controls.Add(_web);
         _web.BringToFront();
+        SetStatus("正在初始化渲染引擎…");
         try
         {
             var dataDir = Path.Combine(ShellPaths.StateRoot, "Client", "WebView2");
@@ -247,30 +278,25 @@ internal sealed class MainShell : Form
                     case "win:close": Close(); break;   // 走 OnFormClosing：缩托盘
                 }
             };
+            SetStatus("正在连接 HaoAI 引擎…");
             _url = await ResolveEngineAsync();
+            SetStatus("正在打开界面…");
+            _web.CoreWebView2.NavigationCompleted += (_, _) => { if (_url != null) HideStatus(); };
             _web.CoreWebView2.Navigate(_url);
         }
         catch (Exception ex)
         {
-            // 引擎起不来不能白屏：WebView2 起来了就画网页错误页；
-            // 没起来（连它都是失败原因时）就用窗体自己的深色标签——否则又是一张白屏
-            var reason = ex.Message + "\n日志：" + ShellPaths.EngineLog;
+            // 启动失败必须说出原因：WebView2 起来了画网页错误页，没起来就打在状态层上
+            var reason = ex.Message;
             if (_web.CoreWebView2 != null)
                 NavigateToString(_web, "<html><meta charset=\"utf-8\"><body style=\"background:#0e1511;color:#f27d72;"
                     + "font-family:system-ui,'Microsoft YaHei';padding:40px\"><h3>HaoAI 启动失败</h3><pre style=\"white-space:pre-wrap\">"
-                    + System.Net.WebUtility.HtmlEncode(reason) + "</pre></body></html>");
+                    + System.Net.WebUtility.HtmlEncode(reason) + "</pre><p style=\"color:#9fb0a8\">日志：" + System.Net.WebUtility.HtmlEncode(ShellPaths.EngineLog) + "</p></body></html>");
             else
             {
                 _web.Visible = false;
-                Controls.Add(new Label
-                {
-                    Dock = DockStyle.Fill,
-                    BackColor = Color.FromArgb(14, 21, 17),
-                    ForeColor = Color.FromArgb(242, 125, 114),
-                    Font = new Font("Microsoft YaHei UI", 11f),
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Text = "HaoAI 启动失败\n\n" + reason
-                });
+                SetStatus("HaoAI 启动失败：" + reason + "（日志：" + ShellPaths.EngineLog + "）");
+                _status.ForeColor = Color.FromArgb(242, 125, 114);
             }
         }
     }
@@ -309,7 +335,9 @@ internal sealed class MainShell : Form
             if (await Alive(port)) return $"http://127.0.0.1:{port}/";
         }
         NavigateToString(_web, StartingPage());
+        SetStatus("正在启动 HaoAI 引擎（首次约需几秒）…");
         var spawned = await SpawnEngine();
+        SetStatus("等待引擎就绪…");
         var deadline = Environment.TickCount64 + 20_000;
         while (Environment.TickCount64 < deadline)
         {
