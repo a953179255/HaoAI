@@ -1,0 +1,317 @@
+[
+ {
+  "url": "http://127.0.0.1:@WEB@/",
+  "note": "端口每轮现挑，ui-shot.sh 替换 @WEB@"
+ },
+ {
+  "eval": "(()=>{window.__errs=[];window.addEventListener('error',function(e){window.__errs.push(String(e.message||e))});return {hook:window.__errs.length===0}})()",
+  "must": [
+   "hook"
+  ],
+  "note": "装页面错误钩子：交互期任何未捕获异常记进来收尾盘点（启动期抓不到——钩子是起来之后才装的）"
+ },
+ {
+  "goto": ".sesscol .newchat",
+  "visible": true,
+  "timeout": 15000,
+  "note": "应用起来了且会话栏有尺寸——后面所有'让位'判据的基准"
+ },
+ {
+  "eval": "(()=>{const q=function(s){return document.querySelector(s)};\nconst w=function(s){const e=q(s);return e?Math.round(e.getBoundingClientRect().width):-1};\nconst d=function(s){const e=q(s);return e?getComputedStyle(e).display:'absent'};\nwindow.__chatMain=w('.main');\nwindow.__pg=function(name){return {pm:q('#app').classList.contains('page-mode'),\n sessGone:d('.sesscol')==='none',railGone:d('.rail.r')==='none',\n sessW:w('.sesscol')===0,railW:w('.rail.r')===0,\n mainGrow:w('.main')-window.__chatMain>500,\n pageFlex:d('#page-'+name)==='flex',\n navOn:q('.navrow[data-view='+name+']').classList.contains('on')}};\nreturn {navOK:w('.navcol')>120,sessOK:w('.sesscol')>200,mainOK:window.__chatMain>300,railOK:w('.rail.r')>250,\n sessFlex:d('.sesscol')==='flex',railFlex:d('.rail.r')==='flex',\n noPm:!q('#app').classList.contains('page-mode'),chatPage:(q('.main').dataset.page||'')==='',\n navRows:document.querySelectorAll('.navrow[data-view]').length>=5}})()",
+  "must": [
+   "navOK",
+   "sessOK",
+   "mainOK",
+   "railOK",
+   "sessFlex",
+   "railFlex",
+   "noPm",
+   "chatPage",
+   "navRows"
+  ],
+  "note": "会话页基线：四栏都在、无页面态；顺手存 __chatMain（主区宽度基准）与 __pg（页面态检查器）"
+ },
+ {
+  "type": {
+   "sel": "#box",
+   "text": "冒烟样题：把这句话记成会话标题"
+  },
+  "note": "真输入框发一条 mock 任务：全链路=输入框→/api/task→SSE→工具回合→最终回答；标题=首句前24字（Engine 首条消息自动落题），供后面命令面板按'冒烟'搜"
+ },
+ {
+  "click": ".navrow[data-view=experts]"
+ },
+ {
+  "goto": "#page-experts",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "__pg('experts')",
+  "must": [
+   "pm",
+   "sessGone",
+   "railGone",
+   "sessW",
+   "railW",
+   "mainGrow",
+   "pageFlex",
+   "navOn"
+  ],
+  "note": "页面态不变量（a755250 的事故判据）：会话栏/右栏 display:none 且 0 宽，主区多出两列宽（>500px）"
+ },
+ {
+  "click": ".navrow[data-view=kb]"
+ },
+ {
+  "goto": "#page-kb",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "__pg('kb')",
+  "must": [
+   "pm",
+   "sessGone",
+   "railGone",
+   "sessW",
+   "railW",
+   "mainGrow",
+   "pageFlex",
+   "navOn"
+  ]
+ },
+ {
+  "click": ".navrow[data-view=sched]"
+ },
+ {
+  "goto": "#page-sched",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "__pg('sched')",
+  "must": [
+   "pm",
+   "sessGone",
+   "railGone",
+   "sessW",
+   "railW",
+   "mainGrow",
+   "pageFlex",
+   "navOn"
+  ]
+ },
+ {
+  "click": ".navrow[data-view=tokens]"
+ },
+ {
+  "goto": "#page-tokens",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "__pg('tokens')",
+  "must": [
+   "pm",
+   "sessGone",
+   "railGone",
+   "sessW",
+   "railW",
+   "mainGrow",
+   "pageFlex",
+   "navOn"
+  ]
+ },
+ {
+  "click": ".navrow[data-view=chat]"
+ },
+ {
+  "goto": ".sesscol",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "(()=>{const q=function(s){return document.querySelector(s)};\nconst w=function(s){const e=q(s);return e?Math.round(e.getBoundingClientRect().width):-1};\nconst d=function(s){const e=q(s);return e?getComputedStyle(e).display:'absent'};\nreturn {navOK:w('.navcol')>120,sessOK:w('.sesscol')>200,railOK:w('.rail.r')>250,\n sessFlex:d('.sesscol')==='flex',railFlex:d('.rail.r')==='flex',\n noPm:!q('#app').classList.contains('page-mode'),chatPage:(q('.main').dataset.page||'')===''}})()",
+  "must": [
+   "navOK",
+   "sessOK",
+   "railOK",
+   "sessFlex",
+   "railFlex",
+   "noPm",
+   "chatPage"
+  ],
+  "note": "回会话页：两栏原样恢复"
+ },
+ {
+  "click": ".navrow[data-view=experts]"
+ },
+ {
+  "key": "p",
+  "mods": [
+   "ctrl",
+   "shift"
+  ],
+  "note": "命令面板——页面态下唯一的会话/页签入口"
+ },
+ {
+  "type": {
+   "sel": "#palQ",
+   "text": "右栏：任务"
+  },
+  "note": "跳转落位①：#入口 通用分支（右栏页签）。不先 setView('chat') 就是点在 display:none 的页签上——选中态翻了、人什么都看不见"
+ },
+ {
+  "goto": ".sesscol",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "(()=>{const q=function(s){return document.querySelector(s)};\nconst w=function(s){const e=q(s);return e?Math.round(e.getBoundingClientRect().width):-1};\nreturn {chatPage:(q('.main').dataset.page||'')==='',noPm:!q('#app').classList.contains('page-mode'),\n railOK:w('.rail.r')>250,tasksOn:q('#tabs button[data-t=tasks]').classList.contains('on'),\n palClosed:!q('#pal').classList.contains('on')}})()",
+  "must": [
+   "chatPage",
+   "noPm",
+   "railOK",
+   "tasksOn",
+   "palClosed"
+  ]
+ },
+ {
+  "click": ".navrow[data-view=experts]"
+ },
+ {
+  "key": "p",
+  "mods": [
+   "ctrl",
+   "shift"
+  ]
+ },
+ {
+  "type": {
+   "sel": "#palQ",
+   "text": "冒烟"
+  },
+  "note": "跳转落位②：会话项分支（CMDS/PALSET 里没有'冒烟'，唯一命中的就是那条会话）"
+ },
+ {
+  "goto": ".sesscol",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "(()=>{const q=function(s){return document.querySelector(s)};\nreturn {chatPage:(q('.main').dataset.page||'')==='',noPm:!q('#app').classList.contains('page-mode'),\n titleHit:(q('#title').textContent||'').indexOf('冒烟')>=0}})()",
+  "must": [
+   "chatPage",
+   "noPm",
+   "titleHit"
+  ]
+ },
+ {
+  "click": ".navrow[data-view=experts]"
+ },
+ {
+  "key": "k",
+  "mods": [
+   "ctrl"
+  ],
+  "note": "Ctrl K 兜底：会话栏藏着时落点应是命令面板而不是聚进藏起来的搜索框"
+ },
+ {
+  "eval": "(()=>({palOn:document.querySelector('#pal').classList.contains('on')}))()",
+  "must": [
+   "palOn"
+  ]
+ },
+ {
+  "key": "Escape"
+ },
+ {
+  "eval": "(()=>({palOff:!document.querySelector('#pal').classList.contains('on')}))()",
+  "must": [
+   "palOff"
+  ]
+ },
+ {
+  "click": ".navrow[data-view=chat]"
+ },
+ {
+  "goto": ".sesscol",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "key": "b",
+  "mods": [
+   "ctrl"
+  ]
+ },
+ {
+  "eval": "(()=>{const q=function(s){return document.querySelector(s)};\nconst w=function(s){const e=q(s);return e?Math.round(e.getBoundingClientRect().width):-1};\nconst d=function(s){const e=q(s);return e?getComputedStyle(e).display:'absent'};\nreturn {navGone:d('.navcol')==='none',sessGone:d('.sesscol')==='none',railOK:w('.rail.r')>250,mainBig:w('.main')>1000}})()",
+  "must": [
+   "navGone",
+   "sessGone",
+   "railOK",
+   "mainBig"
+  ],
+  "note": "Ctrl B 收栏（钉轨回归）：导航+会话栏藏掉，主区必须原地站满——没有显式 grid-column 时这里整窗空白"
+ },
+ {
+  "key": "b",
+  "mods": [
+   "ctrl"
+  ]
+ },
+ {
+  "eval": "(()=>{const q=function(s){return document.querySelector(s)};\nconst w=function(s){const e=q(s);return e?Math.round(e.getBoundingClientRect().width):-1};\nconst d=function(s){const e=q(s);return e?getComputedStyle(e).display:'absent'};\nreturn {navOK:w('.navcol')>120,sessOK:w('.sesscol')>200,railOK:w('.rail.r')>250,\n sessFlex:d('.sesscol')==='flex',railFlex:d('.rail.r')==='flex',\n noPm:!q('#app').classList.contains('page-mode'),chatPage:(q('.main').dataset.page||'')===''}})()",
+  "must": [
+   "navOK",
+   "sessOK",
+   "railOK",
+   "sessFlex",
+   "railFlex",
+   "noPm",
+   "chatPage"
+  ]
+ },
+ {
+  "click": "#cfgBtn"
+ },
+ {
+  "goto": "#mask.on",
+  "visible": true,
+  "timeout": 9000
+ },
+ {
+  "eval": "(()=>{const h=document.querySelector('#dialog h3');\nreturn {cfgTitle:!!h&&h.textContent==='设置'}})()",
+  "must": [
+   "cfgTitle"
+  ],
+  "note": "设置弹窗开合：横跨 CSS 类切换与 fetch 渲染的最短回路"
+ },
+ {
+  "key": "Escape"
+ },
+ {
+  "eval": "(()=>({maskOff:!document.querySelector('#mask').classList.contains('on')}))()",
+  "must": [
+   "maskOff"
+  ]
+ },
+ {
+  "eval": "(async()=>{const t0=Date.now();\nwhile(Date.now()-t0<25000){const l=document.querySelectorAll('.msg.ans');const a=l[l.length-1];\n if(a&&(a.innerText||'').indexOf('做完了')>=0){const sc=document.querySelector('.sesscol');\n  return {done:true,chatPage:(document.querySelector('.main').dataset.page||'')==='',\n   sessOK:!!sc&&sc.getBoundingClientRect().width>200}}\n await new Promise(function(r){setTimeout(r,300)})}\nreturn {done:false}})()",
+  "must": [
+   "done",
+   "chatPage",
+   "sessOK"
+  ],
+  "note": "mock 的最终回答里才有'做完了'——它排在 todo/write/edit/read 四个工具回合之后，工具链断在哪儿这句都不来"
+ },
+ {
+  "eval": "(()=>({noErrs:window.__errs.length===0,errList:window.__errs.join(' | ')}))()",
+  "must": [
+   "noErrs"
+  ],
+  "note": "收尾盘点交互期页面错误；errList 会把每条打出来"
+ }
+]
