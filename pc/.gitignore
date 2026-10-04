@@ -12,3 +12,7 @@ local.properties
 
 # ESLint 装在 pc/tools（lint.js 的运行时依赖），永不入库
 tools/node_modules/
+
+# 客户端壳的 .NET 产物（bin/obj）；app.ico 与源码一起入库
+shell/bin/
+shell/obj/
