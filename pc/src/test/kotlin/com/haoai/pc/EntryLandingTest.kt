@@ -115,6 +115,30 @@ class EntryLandingTest {
         }
     }
 
+    @Test
+    fun `the bottom-left more-menu owns appearance settings and help`() {
+        val src = read()
+        assertTrue("侧栏不应再挂「设置」组：外观/设置/快捷键三行导航要撤掉（收进左下角 ⋮）",
+            !src.contains("""data-act="theme"""") && !Regex("""class="navrow" data-act="cfg"""").containsMatchIn(src))
+        assertTrue("左下角系统簇要齐：⋮ 钮、菜单、外观三段（system/light/dark）",
+            src.contains("""<button class="sysbtn" id="sysBtn"""") &&
+                src.contains("""id="sysMenu"""") &&
+                Regex("""<div class="seg" id="themeSeg">[\s\S]*?data-m="system"[\s\S]*?data-m="light"[\s\S]*?data-m="dark""").containsMatchIn(src))
+        assertTrue("主题要存「模式」并跟随系统（matchMedia + applyTheme），不是只存明暗结果；旧存档 dark/light 当显式模式沿用",
+            src.contains("matchMedia('(prefers-color-scheme: dark)')") &&
+                Regex("""localStorage\.getItem\('haoai-theme'\)\|\|'system'""").containsMatchIn(src) &&
+                Regex("""function applyTheme\(\)\{""").containsMatchIn(src))
+        assertTrue("菜单里的设置/快捷键行要真接到 Cfg.open / showHelp——入口不落点就是技能弹设置那种事故",
+            Regex("""\$\('#cfgBtn'\)\.onclick=\(\)=>\{sysMenuToggle\(false\);Cfg\.open\(\)\}""").containsMatchIn(src) &&
+                Regex("""\$\('#helpRow'\)\.onclick=\(\)=>\{sysMenuToggle\(false\);showHelp\(\)\}""").containsMatchIn(src))
+        assertTrue("ucard 挂着「点开怎么用」却从没接过线（存量死入口）——要接到 showHelp",
+            Regex("""document\.querySelector\('\.ucard'\)\.onclick=\(\)=>showHelp\(\)""").containsMatchIn(src))
+        // Esc 收菜单：只认 keydown 的 Escape 分支里那一句（cfg/helpRow 行内也各有一句，别数错对象）
+        val keyAt = src.indexOf("document.addEventListener('keydown'")
+        val key = src.substring(keyAt, src.indexOf("});", keyAt))
+        assertTrue("Esc 要连系统菜单一起收掉", key.contains("sysMenuToggle(false)"))
+    }
+
     /** assertTrue(消息, 条件) 的变体：条件里已经带上下文时复用消息文本。 */
     private fun assertTrue2(msg: String, src: String, needle: String): Int {
         val at = src.indexOf(needle)

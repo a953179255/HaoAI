@@ -289,6 +289,19 @@
   "note": "技能落位判据：tab-skills 选中且有尺寸、设置弹窗没开、回在会话页、技能清单节点在"
  },
  {
+  "click": "#sysBtn",
+  "note": "左下角 ⋮ 开系统菜单——设置/外观/快捷键都挪进来了，点设置前必须先开菜单"
+ },
+ {
+  "eval": "(()=>{const m=document.querySelector('#sysMenu').getBoundingClientRect();\nconst segs=document.querySelectorAll('#themeSeg button');\nreturn {menuOn:document.querySelector('#sysMenu').classList.contains('on')&&m.width>0,\n seg3:segs.length===3&&segs[0].dataset.m==='system',\n inView:m.left>=0&&m.right<=innerWidth}})()",
+  "must": [
+   "menuOn",
+   "seg3",
+   "inView"
+  ],
+  "note": "菜单开着、外观三态齐（system/light/dark）、整体在视口内不裁边"
+ },
+ {
   "click": "#cfgBtn"
  },
  {
@@ -311,6 +324,44 @@
   "must": [
    "maskOff"
   ]
+ },
+ {
+  "click": "#sysBtn",
+  "note": "再开 ⋮：验证外观三态"
+ },
+ {
+  "click": "#themeSeg button[data-m=light]"
+ },
+ {
+  "eval": "(()=>({light:document.documentElement.getAttribute('data-theme')==='light',\n pill:document.querySelector('#themePill').textContent==='浅色',\n segOn:document.querySelector('#themeSeg button[data-m=light]').classList.contains('on')}))()",
+  "must": [
+   "light",
+   "pill",
+   "segOn"
+  ],
+  "note": "选浅色：html 立刻翻浅、pill 跟着说浅色、选中态对"
+ },
+ {
+  "click": "#themeSeg button[data-m=dark]"
+ },
+ {
+  "eval": "(()=>({dark:document.documentElement.getAttribute('data-theme')==='dark',\n stored:localStorage.getItem('haoai-theme')==='dark'}))()",
+  "must": [
+   "dark",
+   "stored"
+  ],
+  "note": "选深色：html 翻深、localStorage 存的是模式不是结果"
+ },
+ {
+  "key": "Escape"
+ },
+ {
+  "eval": "(()=>({menuOff:!document.querySelector('#sysMenu').classList.contains('on'),\n btnOff:!document.querySelector('#sysBtn').classList.contains('on')}))()",
+  "must": [
+   "menuOff",
+   "btnOff"
+  ],
+  "note": "Esc 要连系统菜单一起收（按钮选中态也回）"
  },
  {
   "eval": "(async()=>{const t0=Date.now();\nwhile(Date.now()-t0<25000){const l=document.querySelectorAll('.msg.ans');const a=l[l.length-1];\n if(a&&(a.innerText||'').indexOf('做完了')>=0){const sc=document.querySelector('.sesscol');\n  return {done:true,chatPage:(document.querySelector('.main').dataset.page||'')==='',\n   sessOK:!!sc&&sc.getBoundingClientRect().width>200}}\n await new Promise(function(r){setTimeout(r,300)})}\nreturn {done:false}})()",
