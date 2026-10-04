@@ -17,7 +17,9 @@ Sweep 'headless-edge' 'msedge.exe' { param($p) $p.CommandLine -like '*haoai-shot
 Sweep 'harness-server' 'java.exe' {
   param($p)
   ($p.CommandLine -like '*haoai-pc*' -or $p.CommandLine -like '*haoai-pc.bat*') -and
-  $p.CommandLine -match '--port 8[78][0-9][0-9]'
+  # 只许清 87[3-9]x 这个 harness 段（free_port 从 8737 挑到 8790）。曾经写的是 8[78]xx ——
+  # 那个区间把 8712 也罩进去了：谁用 installDist 方式跑自己的实例，一次冒烟就被拔了电。
+  $p.CommandLine -match '--port 87[3-9][0-9]'
 }
 
 # The preview panel drives a browser under haoai-browser-profile-<port>.

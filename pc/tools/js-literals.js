@@ -35,18 +35,25 @@ function regexCanFollow(src, i) {
   return false;
 }
 
-/** 逐下标标记：1 = 这个字符在一个跨行模板串的字面文字段里（${ … } 里面是代码，标 0）。 */
-function templateFlags(src) {
+/**
+ * 一次遍历同时标两类"看起来像标识符的文字"：
+ *   tpl —— 跨行模板串的字面文字段（${ … } 里面是代码，标 0）；
+ *   com —— 注释（// 与  块注释，含不以 * 开头的续行）。
+ * 为什么合在一次遍历里：两类都依赖"字符串/正则要先认出来才不会被带偏"的同一套扫描，
+ * 分写两份迟早各自烂掉。ui-check 的"私有名不许裸用"两条都要用。
+ */
+function scanFlags(src) {
   const flags = new Uint8Array(src.length);
+  const com = new Uint8Array(src.length);
   const len = src.length;
   let i = 0;
   while (i < len) {
     const c = src[i], n = src[i + 1];
-    if (c === '/' && n === '/') { while (i < len && src[i] !== '\n') i++; continue }
+    if (c === '/' && n === '/') { const s = i; while (i < len && src[i] !== '\n') i++; for (let k = s; k < i; k++) com[k] = 1; continue }
     if (c === '/' && n === '*') {
-      i += 2;
+      const s = i; i += 2;
       while (i < len && !(src[i] === '*' && src[i + 1] === '/')) i++;
-      i += 2; continue;
+      i = Math.min(i + 2, len); for (let k = s; k < i; k++) com[k] = 1; continue;
     }
     if (c === "'" || c === '"') {          // 普通字符串里的反引号不算模板串开始
       const q = c; i++;
@@ -78,6 +85,12 @@ function templateFlags(src) {
             const e = src[j];
             if (e === '{') bal++;
             else if (e === '}') bal--;
+            else if (e === '/' && src[j + 1] === '/') { const s = j; while (j < len && src[j] !== '\n') j++; for (let k = s; k < j; k++) com[k] = 1; continue }
+            else if (e === '/' && src[j + 1] === '*') {
+              const s = j; j += 2;
+              while (j < len && !(src[j] === '*' && src[j + 1] === '/')) j++;
+              j = Math.min(j + 2, len); for (let k = s; k < j; k++) com[k] = 1; continue
+            }
             else if (e === "'" || e === '"' || e === '`') {
               const s = e; j++;
               while (j < len && src[j] !== s && src[j] !== '\n') j++;
@@ -102,8 +115,10 @@ function templateFlags(src) {
     }
     i++;
   }
-  return flags;
+  return {tpl: flags, com};
 }
+function templateFlags(src) { return scanFlags(src).tpl }
+function commentFlags(src) { return scanFlags(src).com }
 
 /* ---- 自测：这些断言就是"扫描器自己没坏"的证据 ---- */
 if (require.main === module) {
@@ -136,8 +151,21 @@ if (require.main === module) {
   const h = 'if (x) return /a"b/.test(s);\nconst t = `<b>table</b>`;';
   yes('return 之后的正则认出来（模板串照样标）', templateFlags(h)[h.indexOf('<b>table')] === 1);
 
+  // ---- commentFlags：块注释续行不以 * 开头也要标全（真误报：判断里写的"判 types 里有 Files。 */"）----
+  const k = 'let a = 1;   /* 选中文字不该弹这层，\n所以判 types 里有 Files。 */\nconst b = types;';
+  const fk = commentFlags(k);
+  yes('块注释首行标出', fk[k.indexOf('选中文字')] === 1);
+  yes('块注释的续行（无 * 开头）也标出', fk[k.indexOf('判 types')] === 1);
+  yes('注释结束后的真引用不标', fk[k.indexOf('const b')] === 0);
+  const l = '// 行注释提一下 tools\nconst c = tools;';
+  yes('行注释标出且不越界', commentFlags(l)[l.indexOf('提一下')] === 1 && commentFlags(l)[l.indexOf('const c')] === 0);
+  const m2 = 'const re = /\\/\\*/; /* 真注释 */ const d = 1;';
+  yes('正则里的 /* 不当注释开头', commentFlags(m2)[m2.indexOf('\\*')] === 0 && commentFlags(m2)[m2.indexOf('真注释')] === 1);
+  const n2 = 'const t = `x${ /* 注释 */ 1 }y`;';
+  yes('插值里的注释标 com 且不占模板文字', commentFlags(n2)[n2.indexOf('注释')] === 1 && templateFlags(n2)[n2.indexOf('注释')] === 0);
+
   console.log(bad ? 'js-literals 自测失败 ' + bad + ' 项' : 'js-literals 自测全部通过');
   process.exit(bad ? 1 : 0);
 }
 
-module.exports = { templateFlags, regexCanFollow };
+module.exports = { templateFlags, commentFlags, regexCanFollow };

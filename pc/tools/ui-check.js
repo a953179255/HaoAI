@@ -208,8 +208,9 @@ const server = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'main', 'kot
  * 页面上表现为按钮点了没反应）。所以直接去 Server.kt 的路由表里抓。
  */
 const apiPaths = new Set();
-// 允许多段（/api/shell/open 这种）：只吃一段会把嵌套路由报成"陌生接口"
-for (const m of allSrc.matchAll(/[/'"`](\/api\/[\w/]+)/g)) apiPaths.add(m[1].slice(1).replace(/\/+$/, ''));
+// 允许多段（/api/shell/open 这种）与连字符（/api/agent-config 这种）：只吃一段会把嵌套路由
+// 报成"陌生接口"；不认 - 会把 agent-config 截成 agent —— 凭空多出一个不存在的接口
+for (const m of allSrc.matchAll(/[/'"`](\/api\/[\w/-]+)/g)) apiPaths.add(m[1].slice(1).replace(/\/+$/, ''));
 check(apiPaths.size >= 6, '抓到前端调用的接口清单', [...apiPaths].join(', '));
 const routes = new Set();
 for (const m of server.matchAll(/"(\/[\w./-]+)"\s*->/g)) routes.add(m[1].slice(1));
@@ -326,7 +327,7 @@ const panelBad = [];
 if (PANELS.length < 18) panelBad.push('面板只剩 ' + PANELS.length + ' 个（棘轮：18 个），有面板被拆回了顶层散函数');
 for (const p of PANELS) {
   const wired = new RegExp('^' + p + '\\.init\\(\\);', 'm').test(scriptSrc) ||
-    new RegExp('\\b' + p + '\\.open\\(\\)').test(scriptSrc);
+    new RegExp('\\b' + p + '\\.open\\(').test(scriptSrc);   // open 带参也算接线（Hub.open(id)）
   if (!wired) panelBad.push(p + ' 的接线没被调（init/open 都找不到，按钮点了没反应）');
 }
 check(panelBad.length === 0, PANELS.length + ' 个面板都成了对象且静态接线被调', panelBad.join('、'));
@@ -360,8 +361,10 @@ function shadowedAt(name, idx) {
   return declaredHere(name, idx);
 }
 const panelLeaks = [];
-// 跨行模板串的文字段（自测：node tools/js-literals.js）
-const inTemplate = require('./js-literals').templateFlags(scriptSrc);
+// 跨行模板串的文字段与注释段（自测：node tools/js-literals.js）
+const lit = require('./js-literals');
+const inTemplate = lit.templateFlags(scriptSrc);
+const inComment = lit.commentFlags(scriptSrc);
 /*
  * 判断某个下标落在不在**字符串字面量**里。
  *
@@ -395,6 +398,17 @@ function insideString(src, idx) {
 const declCount = new Map();
 for (const m of scriptSrc.matchAll(/^[ \t]*(?:async\s+)?(?:function|let|const|var)\s+([A-Za-z_$][\w$]*)/gm))
   declCount.set(m[1], (declCount.get(m[1]) || 0) + 1);
+/*
+ * 函数参数也算一份声明：permTags(tools) 的参数与某个面板私有的 let tools=[]
+ * 静态分不出"这一处引用的是哪一份"——参数是合法的独立绑定（遮蔽），不是泄漏。
+ * 不数的话，拿 tools/types/card 当参数名的工具函数会把面板私有名顶成假泄漏。
+ * 只认单行参数表：折行的参数头罕见，漏数只会让判据更严，不会放走真泄漏。
+ */
+for (const m of scriptSrc.matchAll(/\bfunction\s+[\w$]*\s*\(([^)\n]*)/g))
+  for (const raw of m[1].split(',')) {
+    const n = (raw.trim().replace(/^\.\.\./, '').match(/^[{[]?\s*([A-Za-z_$][\w$]*)/) || [])[1];
+    if (n) declCount.set(n, (declCount.get(n) || 0) + 1);
+  }
 const ambiguous = [];
 for (const p of PANELS) {
   const sp = spanOf(p);
@@ -408,6 +422,7 @@ for (const p of PANELS) {
     for (const m of scriptSrc.matchAll(re)) {
       if (m.index >= sp.start && m.index < sp.end) continue;
       if (insideString(scriptSrc, m.index)) continue;   // 字符串里的一段文字，不是标识符引用
+      if (inComment[m.index]) continue;   // 注释里提名字不算用（块注释续行不以 * 开头的也算）
       if (shadowedAt(name, m.index)) continue;          // 本作用域自己声明的同名，用的是它自己的
       // `{kb: sel}` 这种**对象属性位**不是标识符引用：冒号前面是名字，后面是值
       {
