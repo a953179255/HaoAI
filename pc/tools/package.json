@@ -1,0 +1,8 @@
+{
+  "name": "haoai-pc-tools",
+  "private": true,
+  "description": "HaoAI PC 界面量具。eslint 只在这里装：lint.js 用进程内 Linter API 审从 index.html 抽出的整段脚本，运行时零文件落地。",
+  "devDependencies": {
+    "eslint": "8.57.1"
+  }
+}

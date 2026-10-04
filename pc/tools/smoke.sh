@@ -27,4 +27,10 @@ if ! UI_OUT=$(node tools/ui-check.js 2>&1); then
 fi
 echo "  通过"
 
+echo "== ESLint 门（真作用域分析：no-undef / 重复键 / 不可达…）=="
+if ! LINT_OUT=$(node tools/lint.js 2>&1); then
+  echo "$LINT_OUT"; exit 1
+fi
+echo "  $LINT_OUT"
+
 exec bash tools/ui-shot.sh tools/steps/ui-pages.json "${1:-${TEMP:-/tmp}/haoai-smoke}"
