@@ -19,6 +19,8 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
     <!-- 引擎日志按本机码页（中文 Windows=GBK/936）解码用；.NET 10 默认不带码页编码器 -->
     <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
+    <!-- 僵尸 webview 清扫要读进程命令行（Win32_Process） -->
+    <PackageReference Include="System.Management" Version="9.0.0" />
   </ItemGroup>
 
   <!-- ApplicationIcon 只把图标嵌进 exe 资源；壳是按路径读 app.ico 的（托盘/窗口共用），必须随发布拷出 -->

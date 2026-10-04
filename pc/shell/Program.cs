@@ -56,6 +56,7 @@ internal sealed class MainShell : Form
         Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "app.ico"));
         StartPosition = FormStartPosition.Manual;
         FormBorderStyle = FormBorderStyle.None;   // 边框自绘；命中测试在 WndProc 里还给系统
+        BackColor = Color.FromArgb(14, 21, 17);   // 深色底：WebView2 就绪前不该有任何白
         ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
         var wa = Screen.PrimaryScreen.WorkingArea;
@@ -211,7 +212,20 @@ internal sealed class MainShell : Form
         {
             var dataDir = Path.Combine(ShellPaths.StateRoot, "Client", "WebView2");
             Directory.CreateDirectory(dataDir);
-            var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
+            // 僵尸 webview 清扫：壳被强杀时它的 msedgewebview2 子进程会活着占住
+            // 用户数据目录，下一次启动 CreateAsync 就「目录已在使用」→ 白屏
+            // （2026-10-05 实测 18 只僵尸）。只认命令行里带我们数据目录的，不误伤别人。
+            CoreWebView2Environment env = null;
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                KillStrayWebviews(dataDir);
+                try { env = await CoreWebView2Environment.CreateAsync(null, dataDir); break; }
+                catch (Exception ex) when (attempt < 3)
+                {
+                    AppendLog($"WebView2 环境第 {attempt}/3 次创建失败：{ex.Message}");
+                    await Task.Delay(800);
+                }
+            }
             await _web.EnsureCoreWebView2Async(env);
             // NC 区域支持：网页里的 app-region:drag（index.html #titlebar）就是窗口拖动区，
             // 双击/拖到屏幕边由系统接管——与 Electron 的 -webkit-app-region 同机制
@@ -238,12 +252,51 @@ internal sealed class MainShell : Form
         }
         catch (Exception ex)
         {
-            // 引擎起不来不能白屏：把原因与日志位置画进窗口里
-            NavigateToString(_web, "<html><meta charset=\"utf-8\"><body style=\"background:#0e1511;color:#f27d72;"
-                + "font-family:system-ui,'Microsoft YaHei';padding:40px\"><h3>HaoAI 引擎启动失败</h3><pre style=\"white-space:pre-wrap\">"
-                + System.Net.WebUtility.HtmlEncode(ex.Message)
-                + "</pre><p style=\"color:#9fb0a8\">日志：" + System.Net.WebUtility.HtmlEncode(ShellPaths.EngineLog) + "</p></body></html>");
+            // 引擎起不来不能白屏：WebView2 起来了就画网页错误页；
+            // 没起来（连它都是失败原因时）就用窗体自己的深色标签——否则又是一张白屏
+            var reason = ex.Message + "\n日志：" + ShellPaths.EngineLog;
+            if (_web.CoreWebView2 != null)
+                NavigateToString(_web, "<html><meta charset=\"utf-8\"><body style=\"background:#0e1511;color:#f27d72;"
+                    + "font-family:system-ui,'Microsoft YaHei';padding:40px\"><h3>HaoAI 启动失败</h3><pre style=\"white-space:pre-wrap\">"
+                    + System.Net.WebUtility.HtmlEncode(reason) + "</pre></body></html>");
+            else
+            {
+                _web.Visible = false;
+                Controls.Add(new Label
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(14, 21, 17),
+                    ForeColor = Color.FromArgb(242, 125, 114),
+                    Font = new Font("Microsoft YaHei UI", 11f),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Text = "HaoAI 启动失败\n\n" + reason
+                });
+            }
         }
+    }
+
+    /** 杀掉命令行里带着**我们**用户数据目录的 msedgewebview2 残留——
+     *  只按数据目录路径认领，别的应用（包括 ZCode 自己）的 webview 一个不碰。 */
+    private static void KillStrayWebviews(string dataDir)
+    {
+        try
+        {
+            var marker = dataDir.TrimEnd('\\').ToLowerInvariant();
+            foreach (var p in Process.GetProcessesByName("msedgewebview2"))
+            {
+                try
+                {
+                    using var q = new System.Management.ManagementObjectSearcher(
+                        $"SELECT CommandLine FROM Win32_Process WHERE ProcessId={p.Id}");
+                    var cmd = (q.Get().OfType<System.Management.ManagementObject>()
+                        .FirstOrDefault()?["CommandLine"] as string) ?? "";
+                    if (cmd.ToLowerInvariant().Contains(marker)) p.Kill();
+                }
+                catch { /* 查不到命令行的（权限/已退出）跳过 */ }
+                finally { p.Dispose(); }
+            }
+        }
+        catch { /* 清扫失败不拦启动——下一轮重试还会再扫 */ }
     }
 
     // ---- 引擎发现与拉起 ----
