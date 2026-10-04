@@ -20,7 +20,8 @@ Octop 与 HaoAI PC 的差距不在"有没有功能"，而在**三层深度**：
 ## 1. 工程约定（执行 Agent 必读）
 
 - 代码位置：`G:\工作台\HaoAI\pc\`（**独立 gradle 工程**，构建/测试都要在 pc/ 目录下跑；根工程不含 :pc 模块）。构建：`gradle jar installDist`；测试：`gradle test`（全量，含 UiContractTest/ApiDocTest 等结构测试）。
-- **冒烟（前端改动提交前必跑）**：`bash pc/tools/smoke.sh`——先 installDist 装新 + ui-check 静态自检，再起"假网关+新鲜状态根+无头 Edge"走 `tools/steps/ui-pages.json`：四页布局不变量/回会话恢复/Ctrl N 与命令面板两条跳转落位/Ctrl B 网格钉轨/设置弹窗/mock 消息全链路/页面错误盘点（48 步 76 判据，约 1 分钟，退出码即结论）。像素级专项验收仍走 `bash pc/tools/ui-shot.sh <剧本>`。
+- **冒烟（前端改动提交前必跑）**：`bash pc/tools/smoke.sh`——先 installDist 装新 + ui-check 静态自检 + ESLint 门（`tools/lint.js`：no-undef/重复键/不可达等 17 条"可能错误"类规则，真作用域分析，专拦正则近似挡不住的歧义名裸用），再起"假网关+新鲜状态根+无头 Edge"走 `tools/steps/ui-pages.json`：四页布局不变量/回会话恢复/Ctrl N 与命令面板两条跳转落位/Ctrl B 网格钉轨/设置弹窗/mock 消息全链路/页面错误盘点（48 步 76 判据，约 1 分钟，退出码即结论）。像素级专项验收仍走 `bash pc/tools/ui-shot.sh <剧本>`。
+- `/api/state` 的字段对齐有契约测试钉着（StateContractTest）：前端 applyState 读的每个字段服务端都必须发——加字段时两侧一起动，测试会替你盯另一侧。
 - 前端是**单文件** `pc/src/main/resources/ui/index.html`（约 4700 行）：CSS 在 `<style>`、HTML 骨架、JS 面板对象遵循 **S6 模式**（`const X = (() => { let 状态; function paint(){}; return {init, render}; })(); X.init();`）。
 - 后端新端点模式：`pc/src/main/kotlin/com/haoai/pc/Server*.kt` 里的 `internal fun WebServer.xxx(ex: HttpExchange)` 扩展函数 + `Server.kt` route 表登记；**新路由必须同步登记 `pc/docs/api.md`**（ApiDocTest 双向核对，漏了构建红）。
 - 存储惯例：状态文件放 `Env.home`（HAOAI_HOME），`load()/save()/update()/remove()/find()/json()` 五件套（参考 `Presets.kt`、`Teams.kt`）；JSON 手写拼接时用 `js()/quote()` 转义。
