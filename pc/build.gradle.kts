@@ -128,7 +128,10 @@ val packageExe by tasks.registering(Exec::class) {
         // "可能 HaoAI-PC.exe 正在运行"——今天被这句误导了一次，进程列表里根本没有它。
         val prev = File(out, "HaoAI-PC")
         if (prev.exists()) {
-            // **删之前先探锁**：HaoAI-PC.exe 被占用（用户正开着）就整单拒绝，一个文件都不动。
+            // 先清只读位（只改属性不删文件）：jpackage 产出的 exe 是 r-xr-xr-x，
+            // 不清掉的话下一步的占用探针会把「只读」误判成「被占用」，永远重打不了
+            prev.walkBottomUp().forEach { runCatching { it.setWritable(true, false) } }
+            // **删之前再探占用**：HaoAI-PC.exe 被抓着（实例还开着）就整单拒绝，一个文件都不动。
             // 2026-10-05 的事故：deleteRecursively 边删边撞锁——cfg 和 runtime/bin/java.exe
             // 删掉了（没锁），exe 和被 JVM 抓着的 modules 留下——残缺包让用户双击就闪退。
             val prevExe = File(prev, "HaoAI-PC.exe")
@@ -138,7 +141,6 @@ val packageExe by tasks.registering(Exec::class) {
                     error("HaoAI-PC.exe 正被占用（实例还开着）——先关掉它再打包，这次一个文件都没删")
                 }
             }
-            prev.walkBottomUp().forEach { runCatching { it.setWritable(true, false) } }
             if (!prev.deleteRecursively() || prev.exists()) {
                 error("删不掉旧的 ${prev.absolutePath}（只读位已清还删不掉，那就是真被占用了）——先关掉 HaoAI-PC.exe")
             }

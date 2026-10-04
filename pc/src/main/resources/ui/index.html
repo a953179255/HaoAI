@@ -54,6 +54,17 @@
      --nw 收起的是导航，--sw 收起的是会话栏 —— Ctrl B 一起收（no-l 同时置零两个变量）。 */
   .app{display:grid;grid-template-columns:var(--nw,198px) var(--sw,252px) minmax(0,1fr) var(--rw,292px);height:100%;
     position:relative;z-index:1;backdrop-filter:blur(22px) saturate(1.35)}
+  /* 客户端壳的标题栏：整个 .app 的第一行、跨四列，顶栏即标题栏（ZCode/Octop 同构）。
+     浏览器里永不渲染（.haoshell 由壳注入脚本加上）——浏览器有系统标题栏，画了是噪声。 */
+  #titlebar{display:none}
+  .app.haoshell{height:100%;margin:0;border:0;border-radius:0;box-shadow:none;
+    grid-template-rows:38px minmax(0,1fr)}   /* 行高必须显式：自动行会把 1012px 按内容乱分（实测 224/786） */
+  .app.haoshell #titlebar{display:flex;align-items:center;gap:8px;grid-column:1/-1;height:38px;padding-left:12px;
+    background:var(--panel);border-bottom:1px solid var(--line);app-region:drag;user-select:none}
+  .app.haoshell #titlebar .bd{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg2)}
+  .app.haoshell #titlebar .tb{app-region:no-drag;width:42px;height:38px;display:grid;place-items:center;cursor:pointer;color:var(--dim)}
+  .app.haoshell #titlebar .tb:hover{background:var(--glass2);color:var(--fg)}
+  .app.haoshell #titlebar .tb.x:hover{background:#c42b1c;color:#fff}
   /* 四列各自钉死轨道位。网格自动布位是"按可见元素顺序填格子"——display:none 掉中间列后，
      后面的列会整体前移（实测：藏掉会话栏，主区掉进 252px 轨道、右栏掉进 1fr），
      Ctrl+B 收栏（no-l）整窗空白就是这么来的。钉死后，藏掉的列只留一条由 --sw/--rw 控宽的轨道，
@@ -1266,6 +1277,15 @@
 </head>
 <body>
 <div class="app" id="app">
+  <!-- 壳时代的标题栏：条带整行跨四列、app-region:drag 即窗口拖动区；
+       浏览器里 display:none。窗口钮经 chrome.webview.postMessage 交给壳执行。 -->
+  <div id="titlebar">
+    <span class="bd"><svg viewBox="0 0 24 24" width="16" height="16"><rect x="2" y="2" width="20" height="20" rx="6" fill="#2fbd7f"/><path d="M9 7v10M15 7v10M9 12h6" stroke="#fff" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>HaoAI PC</span>
+    <span style="flex:1"></span>
+    <span class="tb" data-win="min" title="最小化"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M5 12h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+    <span class="tb" data-win="max" title="最大化 / 还原"><svg viewBox="0 0 24 24" width="13" height="13"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></span>
+    <span class="tb x" data-win="close" title="关闭（缩到托盘）"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+  </div>
   <!-- 导航栏：只回答"去哪"（效果图/Octop 的左一根） -->
   <aside class="rail l navcol">
     <div class="corner-art" aria-hidden="true"><i class="cw"></i><i class="ca"></i><i class="cb b1"></i><i class="cb b2"></i><i class="cb b3"></i></div>
@@ -1767,6 +1787,16 @@
 <script src="/shared.js"></script>
 <script>
 const $=s=>document.querySelector(s), stream=$('#stream'), box=$('#box'), app=$('#app');
+
+/* 客户端壳注入 __haoaiShell：亮出标题栏，窗口钮经 postMessage 交给壳执行
+   （最小化/最大化/关托盘都在壳那边——无边框窗体的这些动作 C# 侧才做得对）。
+   浏览器里没有这个标记，#titlebar 靠 CSS 保持 display:none，一行不渲染。 */
+if (window.__haoaiShell) {
+  app.classList.add('haoshell');
+  document.querySelectorAll('#titlebar .tb').forEach(b=>b.onclick=()=>{
+    try { chrome.webview.postMessage('win:' + b.dataset.win); } catch (e) {}
+  });
+}
 let mode='ask', stopping=false, curId='', duoId='', lastId='';
 
 /* ---- 主题：存的是「模式」而不是结果 —— system 跟着 prefers-color-scheme 走

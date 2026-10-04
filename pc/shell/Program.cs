@@ -16,6 +16,9 @@ internal static class Program
     [STAThread]
     private static int Main()
     {
+        // 码页编码器（GBK 等）在 .NET Core+ 是可选件：不注册，Encoding.GetEncoding(936)
+        // 直接抛 NotSupportedException——引擎日志解码就死在这（无声秒退排障半天）
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         using var mutex = new Mutex(true, "HaoAI-PC.Shell.SingleInstance", out var isNew);
         if (!isNew) { Native.ActivateExisting(); return 0; }
         Application.EnableVisualStyles();
@@ -42,19 +45,10 @@ internal sealed class MainShell : Form
     private bool _balloonShown;
     private string _url;
 
-    // ---- 自绘标题栏（v6 效果图形态）：应用深色一体延伸到窗口顶，系统原生拖/贴边/圆角保留 ----
-    private const int TitleBarH = 38;
-    private Panel _tb;
-    private Button _btnMin, _btnMax, _btnClose;
+    // ---- 无边框：标题栏由**网页自己**画（index.html #titlebar + app-region:drag），
+    //      和 ZCode/Octop 同构——顶栏就是功能栏，不另画一条 Windows caption。
     private bool _maximized;
     private Rectangle _restoreBounds;
-    private bool _dark = true;
-
-    private static readonly Color TbDark = Color.FromArgb(16, 22, 19);
-    private static readonly Color TbDarkHover = Color.FromArgb(34, 42, 38);
-    private static readonly Color TbLight = Color.FromArgb(246, 244, 237);
-    private static readonly Color TbLightHover = Color.FromArgb(224, 222, 213);
-    private static readonly Color CloseHover = Color.FromArgb(196, 43, 28);
 
     public MainShell()
     {
@@ -67,84 +61,8 @@ internal sealed class MainShell : Form
         var wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(Math.Max(0, (wa.Width - 1440) / 2), Math.Max(0, (wa.Height - 900) / 2));
 
-        BuildTitlebar();
         BuildTray();
         BuildWeb().ConfigureAwait(false);
-    }
-
-    private void BuildTitlebar()
-    {
-        _tb = new Panel { Dock = DockStyle.Top, Height = TitleBarH };
-        ApplyTitlebarTheme();
-        // 品牌：小图标 + 名字（对着 v6 效果图；中段留白以后可以放功能件）
-        var icon = new PictureBox
-        {
-            Image = new Icon(Path.Combine(AppContext.BaseDirectory, "app.ico")).ToBitmap(),
-            Size = new Size(18, 18),
-            Location = new Point(12, (TitleBarH - 18) / 2)
-        };
-        _tb.Controls.Add(icon);
-        _tb.Controls.Add(new Label
-        {
-            Text = "HaoAI PC",
-            ForeColor = _dark ? Color.FromArgb(207, 216, 211) : Color.FromArgb(45, 61, 53),
-            Font = new Font("Microsoft YaHei UI", 9.5f),
-            Location = new Point(38, (TitleBarH - 22) / 2),
-            Size = new Size(120, 22)
-        });
-        _btnClose = TbButton("✕", (_, _) => Close());
-        _btnMax = TbButton("▢", (_, _) => ToggleMax());
-        _btnMin = TbButton("―", (_, _) => WindowState = FormWindowState.Minimized);
-        _btnClose.Location = new Point(ClientSize.Width - 40, 0);
-        _btnMax.Location = new Point(ClientSize.Width - 80, 0);
-        _btnMin.Location = new Point(ClientSize.Width - 120, 0);
-        _tb.Controls.Add(_btnClose);
-        _tb.Controls.Add(_btnMax);
-        _tb.Controls.Add(_btnMin);
-        _tb.Resize += (_, _) =>
-        {
-            if (_btnClose.Width == 0) return;
-            _btnClose.Left = _tb.Width - 40;
-            _btnMax.Left = _tb.Width - 80;
-            _btnMin.Left = _tb.Width - 120;
-        };
-        Controls.Add(_tb);
-    }
-
-    private Button TbButton(string glyph, EventHandler onClick)
-    {
-        var b = new Button
-        {
-            Text = glyph,
-            Size = new Size(40, TitleBarH),
-            FlatStyle = FlatStyle.Flat,
-            ForeColor = _dark ? Color.FromArgb(159, 176, 168) : Color.FromArgb(93, 111, 102),
-            BackgroundImageLayout = ImageLayout.Center,
-            TabStop = false
-        };
-        b.FlatAppearance.BorderSize = 0;
-        b.FlatAppearance.MouseOverBackColor = _dark ? TbDarkHover : TbLightHover;
-        b.FlatAppearance.MouseDownBackColor = _dark ? TbDarkHover : TbLightHover;
-        b.Click += onClick;
-        if (b == _btnClose)
-        {
-            b.FlatAppearance.MouseOverBackColor = CloseHover;
-            b.FlatAppearance.MouseDownBackColor = Color.FromArgb(160, 33, 20);
-            b.ForeColor = Color.White;
-        }
-        return b;
-    }
-
-    private void ApplyTitlebarTheme()
-    {
-        _tb.BackColor = _dark ? TbDark : TbLight;
-        foreach (Control c in _tb.Controls)
-            if (c is Button { } b && b != _btnClose)
-            {
-                b.ForeColor = _dark ? Color.FromArgb(159, 176, 168) : Color.FromArgb(93, 111, 102);
-                b.FlatAppearance.MouseOverBackColor = _dark ? TbDarkHover : TbLightHover;
-                b.FlatAppearance.MouseDownBackColor = _dark ? TbDarkHover : TbLightHover;
-            }
     }
 
     private void ToggleMax()
@@ -153,7 +71,6 @@ internal sealed class MainShell : Form
         {
             Bounds = _restoreBounds;
             _maximized = false;
-            _btnMax.Text = "▢";
         }
         else
         {
@@ -162,7 +79,6 @@ internal sealed class MainShell : Form
             var wa = Screen.FromControl(this).WorkingArea;
             SetBounds(wa.X, wa.Y, wa.Width, wa.Height);
             _maximized = true;
-            _btnMax.Text = "❐";
         }
     }
 
@@ -176,6 +92,15 @@ internal sealed class MainShell : Form
     protected override void WndProc(ref Message m)
     {
         const int WM_NCHITTEST = 0x84;
+        // 系统要最大化无边框窗体（网页 app-region 的双击/贴边走这里）：改道 ToggleMax，
+        // 否则直接 Maximized 会盖住任务栏
+        const int WM_SYSCOMMAND = 0x112;
+        const int SC_MAXIMIZE = 0xF030;
+        if (m.Msg == WM_SYSCOMMAND && (m.WParam.ToInt64() & 0xFFF0) == SC_MAXIMIZE)
+        {
+            ToggleMax();
+            return;
+        }
         if (m.Msg == WM_NCHITTEST)
         {
             base.WndProc(ref m);
@@ -183,7 +108,8 @@ internal sealed class MainShell : Form
             var lp = m.LParam.ToInt64();
             var scr = new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
             var p = PointToClient(scr);
-            // 边缘 6px = 缩放热区（最大化时不给，系统自己有贴边分屏）
+            // 边缘 6px = 缩放热区（最大化时不给，系统自己有贴边分屏）。
+            // 拖动区不在这管：网页 #titlebar 的 app-region:drag 由 WebView2 NC 支持内部处理。
             if (!_maximized)
             {
                 const int G = 6;
@@ -196,15 +122,6 @@ internal sealed class MainShell : Form
                 if (b) { m.Result = (IntPtr)15; return; }        // HTBOTTOM
                 if (l) { m.Result = (IntPtr)10; return; }        // HTLEFT
                 if (r) { m.Result = (IntPtr)11; return; }        // HTRIGHT
-            }
-            // 标题栏条带 → 拖动/双击最大化/贴边全归系统。**按钮矩形必须还回 HTCLIENT**：
-            // 父窗口的 WM_NCHITTEST 先于子控件被问，这里吞了按钮就永远点不到（实测撞过）
-            if (p.Y < TitleBarH)
-            {
-                if (_btnMin.Bounds.Contains(p) || _btnMax.Bounds.Contains(p) || _btnClose.Bounds.Contains(p))
-                    m.Result = (IntPtr)1;
-                else
-                    m.Result = (IntPtr)2;                        // HTCAPTION
             }
             return;
         }
@@ -286,37 +203,34 @@ internal sealed class MainShell : Form
 
     private async Task BuildWeb()
     {
-        _web = new Wv2 { Dock = DockStyle.None, Bounds = new Rectangle(0, TitleBarH, ClientSize.Width, ClientSize.Height - TitleBarH) };
+        _web = new Wv2 { Dock = DockStyle.Top, Height = ClientSize.Height };
         _web.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top | AnchorStyles.Bottom;
         Controls.Add(_web);
+        _web.BringToFront();
         try
         {
             var dataDir = Path.Combine(ShellPaths.StateRoot, "Client", "WebView2");
             Directory.CreateDirectory(dataDir);
             var env = await CoreWebView2Environment.CreateAsync(null, dataDir);
             await _web.EnsureCoreWebView2Async(env);
+            // NC 区域支持：网页里的 app-region:drag（index.html #titlebar）就是窗口拖动区，
+            // 双击/拖到屏幕边由系统接管——与 Electron 的 -webkit-app-region 同机制
+            _web.CoreWebView2.Settings.IsNonClientRegionSupportEnabled = true;
             _web.CoreWebView2.NewWindowRequested += (_, e) =>
             {
                 // 站内不开新窗；外部链接交给系统默认浏览器
                 e.Handled = true;
                 try { Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true }); } catch { }
             };
-            // 每个文档创建时就位：把主题色上报给壳（DOM 一加载报一次，之后 data-theme 变化再报）
-            await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("""
-                (function(){
-                  var f=function(){try{chrome.webview.postMessage('theme:'+document.documentElement.getAttribute('data-theme'))}catch(e){}};
-                  if(document.readyState!=='loading')f();
-                  document.addEventListener('DOMContentLoaded',f);
-                  new MutationObserver(f).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
-                })();
-                """);
+            // 每个文档创建前注入：亮出网页标题栏（浏览器里没有这个标记，标题栏保持隐藏）
+            await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("window.__haoaiShell=true;");
             _web.CoreWebView2.WebMessageReceived += (_, e) =>
             {
-                var msg = e.TryGetWebMessageAsString();
-                if (msg.StartsWith("theme:"))
+                switch (e.TryGetWebMessageAsString())
                 {
-                    _dark = !msg.EndsWith("light");
-                    ApplyTitlebarTheme();
+                    case "win:min": WindowState = FormWindowState.Minimized; break;
+                    case "win:max": ToggleMax(); break;
+                    case "win:close": Close(); break;   // 走 OnFormClosing：缩托盘
                 }
             };
             _url = await ResolveEngineAsync();
@@ -342,14 +256,15 @@ internal sealed class MainShell : Form
             if (await Alive(port)) return $"http://127.0.0.1:{port}/";
         }
         NavigateToString(_web, StartingPage());
-        var spawned = SpawnEngine();
+        var spawned = await SpawnEngine();
         var deadline = Environment.TickCount64 + 20_000;
         while (Environment.TickCount64 < deadline)
         {
             await Task.Delay(350);
             if (await Alive(spawned)) return $"http://127.0.0.1:{spawned}/";
             if (_engine is { HasExited: true })
-                throw new InvalidOperationException("引擎进程退出了，日志见 " + ShellPaths.EngineLog);
+                throw new InvalidOperationException(
+                    $"引擎进程退出了（ExitCode={_engine.ExitCode}），日志见 " + ShellPaths.EngineLog);
         }
         throw new InvalidOperationException("引擎 20 秒内没有就绪，日志见 " + ShellPaths.EngineLog);
     }
@@ -372,7 +287,7 @@ internal sealed class MainShell : Form
         catch { return false; }
     }
 
-    private int SpawnEngine()
+    private async Task<int> SpawnEngine()
     {
         // 端口要真空闲：先占住一个再还回去，中间有竞态也只是极小概率撞上重试一次的事
         var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
@@ -383,31 +298,54 @@ internal sealed class MainShell : Form
         var exe = Path.Combine(AppContext.BaseDirectory, "engine", "HaoAI-PC.exe");
         if (!File.Exists(exe))
             throw new InvalidOperationException("找不到引擎 " + exe + "（客户端目录里要有 engine\\ 子目录）");
-        var psi = new ProcessStartInfo
-        {
-            FileName = exe,
-            Arguments = $"serve --port {port}",
-            UseShellExecute = false,
-            CreateNoWindow = true,                 // 不再弹那个 CMD 黑窗
-            WorkingDirectory = Path.GetDirectoryName(exe)!
-        };
         Directory.CreateDirectory(ShellPaths.LogDir);
         // 日志单文件超 5MB 就截断重写：排障要最近的，不要无限膨胀
         if (File.Exists(ShellPaths.EngineLog) && new FileInfo(ShellPaths.EngineLog).Length > 5_000_000)
             File.Delete(ShellPaths.EngineLog);
         using (var sw = new StreamWriter(File.Open(ShellPaths.EngineLog, FileMode.Append, FileAccess.Write)))
             sw.WriteLine($"---- {DateTime.Now:yyyy-MM-dd HH:mm:ss} 壳拉起引擎 :{port} ----");
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
-        psi.StandardOutputEncoding = Encoding.UTF8;
-        psi.StandardErrorEncoding = Encoding.UTF8;
-        var p = Process.Start(psi)!;
-        p.OutputDataReceived += (_, e) => AppendLog(e.Data);
-        p.ErrorDataReceived += (_, e) => AppendLog(e.Data);
-        p.BeginOutputReadLine();
-        p.BeginErrorReadLine();
-        _engine = p;
-        return port;
+
+        // **拉起要重试**：装配刚拷完 60MB 引擎，Defender 常锁着新 exe 扫描，
+        // Process.Start 会撞分享冲突——2026-10-05 三连秒死全是它（手动跑又都正常，
+        // 因为那时扫描早结束了）。800ms × 4 次基本覆盖扫描窗口。
+        Exception last = null;
+        for (var attempt = 1; attempt <= 4; attempt++)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = $"serve --port {port}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,                 // 不再弹那个 CMD 黑窗
+                    WorkingDirectory = Path.GetDirectoryName(exe)!
+                };
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                // 引擎被管道接管时按 JEP 400 走**本机编码**（中文 Windows = GBK，不是 UTF-8——
+                // 实测按 UTF-8 读全是 U+FFFD）。按 936 解码后再落 UTF-8 日志文件。
+                psi.StandardOutputEncoding = Encoding.GetEncoding(936);
+                psi.StandardErrorEncoding = Encoding.GetEncoding(936);
+                var p = Process.Start(psi)!;
+                p.OutputDataReceived += (_, e) => AppendLog(e.Data);
+                p.ErrorDataReceived += (_, e) => AppendLog(e.Data);
+                // 引擎要是悄悄退了，把退出码钉在日志上——0=代码路径自己退，负数=被系统/人杀
+                p.Exited += (_, _) => AppendLog($"!!!! 引擎退出 HasExited={p.HasExited} ExitCode={p.ExitCode}");
+                p.EnableRaisingEvents = true;
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+                _engine = p;
+                return port;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                AppendLog($"第 {attempt}/4 次拉起失败：{ex.Message}");
+                await Task.Delay(800);
+            }
+        }
+        throw new InvalidOperationException("引擎连续 4 次拉起失败：" + last?.Message, last);
     }
 
     private static void AppendLog(string line)
@@ -420,8 +358,11 @@ internal sealed class MainShell : Form
     private static string StartingPage() => """
 <!doctype html><meta charset="utf-8">
 <title>HaoAI PC</title>
-<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0e1511;color:#9fb0a8;font-family:system-ui,'Microsoft YaHei',sans-serif">
-<div style="text-align:center"><div style="font-size:34px;margin-bottom:14px">🦞</div>正在启动 HaoAI 引擎…</div></body>
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0e1511;color:#9fb0a8;font-family:system-ui,'Microsoft YaHei',sans-serif;app-region:drag">
+<div style="text-align:center">
+<div style="margin:0 auto 14px;width:44px;height:44px;border-radius:12px;background:#2fbd7f;display:grid;place-items:center">
+<svg viewBox="0 0 24 24" width="26" height="26"><path d="M9 6v12M15 6v12M9 12h6" stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></div>
+正在启动 HaoAI 引擎…</div></body>
 """;
 
     private static void NavigateToString(Wv2 w, string html)
