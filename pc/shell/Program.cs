@@ -42,18 +42,183 @@ internal sealed class MainShell : Form
     private bool _balloonShown;
     private string _url;
 
+    // ---- 自绘标题栏（v6 效果图形态）：应用深色一体延伸到窗口顶，系统原生拖/贴边/圆角保留 ----
+    private const int TitleBarH = 38;
+    private Panel _tb;
+    private Button _btnMin, _btnMax, _btnClose;
+    private bool _maximized;
+    private Rectangle _restoreBounds;
+    private bool _dark = true;
+
+    private static readonly Color TbDark = Color.FromArgb(16, 22, 19);
+    private static readonly Color TbDarkHover = Color.FromArgb(34, 42, 38);
+    private static readonly Color TbLight = Color.FromArgb(246, 244, 237);
+    private static readonly Color TbLightHover = Color.FromArgb(224, 222, 213);
+    private static readonly Color CloseHover = Color.FromArgb(196, 43, 28);
+
     public MainShell()
     {
         Text = "HaoAI PC";
         Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "app.ico"));
         StartPosition = FormStartPosition.Manual;
+        FormBorderStyle = FormBorderStyle.None;   // 边框自绘；命中测试在 WndProc 里还给系统
         ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
         var wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(Math.Max(0, (wa.Width - 1440) / 2), Math.Max(0, (wa.Height - 900) / 2));
 
+        BuildTitlebar();
         BuildTray();
         BuildWeb().ConfigureAwait(false);
+    }
+
+    private void BuildTitlebar()
+    {
+        _tb = new Panel { Dock = DockStyle.Top, Height = TitleBarH };
+        ApplyTitlebarTheme();
+        // 品牌：小图标 + 名字（对着 v6 效果图；中段留白以后可以放功能件）
+        var icon = new PictureBox
+        {
+            Image = new Icon(Path.Combine(AppContext.BaseDirectory, "app.ico")).ToBitmap(),
+            Size = new Size(18, 18),
+            Location = new Point(12, (TitleBarH - 18) / 2)
+        };
+        _tb.Controls.Add(icon);
+        _tb.Controls.Add(new Label
+        {
+            Text = "HaoAI PC",
+            ForeColor = _dark ? Color.FromArgb(207, 216, 211) : Color.FromArgb(45, 61, 53),
+            Font = new Font("Microsoft YaHei UI", 9.5f),
+            Location = new Point(38, (TitleBarH - 22) / 2),
+            Size = new Size(120, 22)
+        });
+        _btnClose = TbButton("✕", (_, _) => Close());
+        _btnMax = TbButton("▢", (_, _) => ToggleMax());
+        _btnMin = TbButton("―", (_, _) => WindowState = FormWindowState.Minimized);
+        _btnClose.Location = new Point(ClientSize.Width - 40, 0);
+        _btnMax.Location = new Point(ClientSize.Width - 80, 0);
+        _btnMin.Location = new Point(ClientSize.Width - 120, 0);
+        _tb.Controls.Add(_btnClose);
+        _tb.Controls.Add(_btnMax);
+        _tb.Controls.Add(_btnMin);
+        _tb.Resize += (_, _) =>
+        {
+            if (_btnClose.Width == 0) return;
+            _btnClose.Left = _tb.Width - 40;
+            _btnMax.Left = _tb.Width - 80;
+            _btnMin.Left = _tb.Width - 120;
+        };
+        Controls.Add(_tb);
+    }
+
+    private Button TbButton(string glyph, EventHandler onClick)
+    {
+        var b = new Button
+        {
+            Text = glyph,
+            Size = new Size(40, TitleBarH),
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = _dark ? Color.FromArgb(159, 176, 168) : Color.FromArgb(93, 111, 102),
+            BackgroundImageLayout = ImageLayout.Center,
+            TabStop = false
+        };
+        b.FlatAppearance.BorderSize = 0;
+        b.FlatAppearance.MouseOverBackColor = _dark ? TbDarkHover : TbLightHover;
+        b.FlatAppearance.MouseDownBackColor = _dark ? TbDarkHover : TbLightHover;
+        b.Click += onClick;
+        if (b == _btnClose)
+        {
+            b.FlatAppearance.MouseOverBackColor = CloseHover;
+            b.FlatAppearance.MouseDownBackColor = Color.FromArgb(160, 33, 20);
+            b.ForeColor = Color.White;
+        }
+        return b;
+    }
+
+    private void ApplyTitlebarTheme()
+    {
+        _tb.BackColor = _dark ? TbDark : TbLight;
+        foreach (Control c in _tb.Controls)
+            if (c is Button { } b && b != _btnClose)
+            {
+                b.ForeColor = _dark ? Color.FromArgb(159, 176, 168) : Color.FromArgb(93, 111, 102);
+                b.FlatAppearance.MouseOverBackColor = _dark ? TbDarkHover : TbLightHover;
+                b.FlatAppearance.MouseDownBackColor = _dark ? TbDarkHover : TbLightHover;
+            }
+    }
+
+    private void ToggleMax()
+    {
+        if (_maximized)
+        {
+            Bounds = _restoreBounds;
+            _maximized = false;
+            _btnMax.Text = "▢";
+        }
+        else
+        {
+            // 无边框窗体直接 Maximized 会盖住任务栏：手动贴工作区
+            _restoreBounds = Bounds;
+            var wa = Screen.FromControl(this).WorkingArea;
+            SetBounds(wa.X, wa.Y, wa.Width, wa.Height);
+            _maximized = true;
+            _btnMax.Text = "❐";
+        }
+    }
+
+    protected override void OnResizeEnd(EventArgs e)
+    {
+        // 用户手动拉尺寸后，恢复态基准跟着走
+        if (!_maximized) _restoreBounds = Bounds;
+        base.OnResizeEnd(e);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_NCHITTEST = 0x84;
+        if (m.Msg == WM_NCHITTEST)
+        {
+            base.WndProc(ref m);
+            if ((int)m.Result != 1 /*HTCLIENT*/ && (int)m.Result != 0) return;
+            var lp = m.LParam.ToInt64();
+            var scr = new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+            var p = PointToClient(scr);
+            // 边缘 6px = 缩放热区（最大化时不给，系统自己有贴边分屏）
+            if (!_maximized)
+            {
+                const int G = 6;
+                bool l = p.X < G, r = p.X > ClientSize.Width - G, t = p.Y < G, b = p.Y > ClientSize.Height - G;
+                if (t && l) { m.Result = (IntPtr)13; return; }   // HTTOPLEFT
+                if (t && r) { m.Result = (IntPtr)14; return; }   // HTTOPRIGHT
+                if (b && l) { m.Result = (IntPtr)16; return; }   // HTBOTTOMLEFT
+                if (b && r) { m.Result = (IntPtr)17; return; }   // HTBOTTOMRIGHT
+                if (t) { m.Result = (IntPtr)12; return; }        // HTTOP
+                if (b) { m.Result = (IntPtr)15; return; }        // HTBOTTOM
+                if (l) { m.Result = (IntPtr)10; return; }        // HTLEFT
+                if (r) { m.Result = (IntPtr)11; return; }        // HTRIGHT
+            }
+            // 标题栏条带 → 拖动/双击最大化/贴边全归系统。**按钮矩形必须还回 HTCLIENT**：
+            // 父窗口的 WM_NCHITTEST 先于子控件被问，这里吞了按钮就永远点不到（实测撞过）
+            if (p.Y < TitleBarH)
+            {
+                if (_btnMin.Bounds.Contains(p) || _btnMax.Bounds.Contains(p) || _btnClose.Bounds.Contains(p))
+                    m.Result = (IntPtr)1;
+                else
+                    m.Result = (IntPtr)2;                        // HTCAPTION
+            }
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // 边框没了之后，DWM 给回投影与 Win11 圆角
+        var margins = new Native.MARGINS { left = 1, right = 1, top = 1, bottom = 1 };
+        Native.DwmExtendFrameIntoClientArea(Handle, ref margins);
+        int round = 2;   // DWMWCP_ROUND
+        Native.DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
     }
 
     // ---- 托盘 ----
@@ -121,7 +286,7 @@ internal sealed class MainShell : Form
 
     private async Task BuildWeb()
     {
-        _web = new Wv2 { Dock = DockStyle.None, Bounds = ClientRectangle };
+        _web = new Wv2 { Dock = DockStyle.None, Bounds = new Rectangle(0, TitleBarH, ClientSize.Width, ClientSize.Height - TitleBarH) };
         _web.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top | AnchorStyles.Bottom;
         Controls.Add(_web);
         try
@@ -135,6 +300,24 @@ internal sealed class MainShell : Form
                 // 站内不开新窗；外部链接交给系统默认浏览器
                 e.Handled = true;
                 try { Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true }); } catch { }
+            };
+            // 每个文档创建时就位：把主题色上报给壳（DOM 一加载报一次，之后 data-theme 变化再报）
+            await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("""
+                (function(){
+                  var f=function(){try{chrome.webview.postMessage('theme:'+document.documentElement.getAttribute('data-theme'))}catch(e){}};
+                  if(document.readyState!=='loading')f();
+                  document.addEventListener('DOMContentLoaded',f);
+                  new MutationObserver(f).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+                })();
+                """);
+            _web.CoreWebView2.WebMessageReceived += (_, e) =>
+            {
+                var msg = e.TryGetWebMessageAsString();
+                if (msg.StartsWith("theme:"))
+                {
+                    _dark = !msg.EndsWith("light");
+                    ApplyTitlebarTheme();
+                }
             };
             _url = await ResolveEngineAsync();
             _web.CoreWebView2.Navigate(_url);
@@ -294,6 +477,10 @@ internal static class Native
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr lp);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS m);
+    [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attr, ref int val, int size);
+
+    public struct MARGINS { public int left, right, top, bottom; }
     private delegate bool EnumProc(IntPtr hWnd, IntPtr lp);
 
     /** 二次启动：把已存在的壳窗口拽到前台，而不是再开一个。 */

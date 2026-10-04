@@ -18,7 +18,7 @@ OUT="$ROOT/build/client/HaoAI-PC"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 cp -r "$ROOT/pc/build/package/HaoAI-PC" "$OUT/engine"
-# publish 的**全部**顶层文件都要带：少一个 runtimeconfig.json 壳就秒退（实测事故）
-cp "$ROOT/pc/shell/bin/Release/net10.0-windows/win-x64/publish/"* "$OUT/"
+# publish 的**全部**内容都要带（含 runtimes/ 与语言子目录，-r）：少一个 runtimeconfig.json 壳就秒退（实测事故）
+cp -r "$ROOT/pc/shell/bin/Release/net10.0-windows/win-x64/publish/"* "$OUT/"
 echo "客户端装配完成：$OUT"
 echo "双击 $OUT/HaoAI-PC.exe 即用（窗口化界面，托盘常驻）。"
