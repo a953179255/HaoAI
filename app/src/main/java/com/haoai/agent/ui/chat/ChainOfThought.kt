@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -91,6 +92,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haoai.agent.agent.engine.ToolRunState
 import com.haoai.agent.ui.UiTool
+import com.haoai.agent.ui.ChainStep
+import com.haoai.agent.ui.common.Favicon
+import com.haoai.agent.ui.common.FaviconRow
+import com.haoai.agent.ui.common.domainFromUrl
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight as FwSpan
+import androidx.compose.ui.text.withStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -152,48 +162,44 @@ private fun Modifier.chainPressable(enabled: Boolean = true, onClick: () -> Unit
 
 @Composable
 fun ChainCard(
-    reasoning: String?,
-    thinkingMs: Long?,
-    /** 思考是否仍在流（true → Preview 态渐隐下滚） */
+    /** 合并后的步骤链：Think 段与 Tool 步按到达顺序混排（B 方案，见 ChatViewModel.rebuildRows）。 */
+    steps: List<ChainStep>,
+    /** 思考是否仍在流（true → 末段 Preview 态渐隐下滚） */
     reasoningLive: Boolean,
-    tools: List<UiTool>,
     /** 工具行是否处于活动会话流式期（历史 = false：不转圈、不 shimmer） */
     toolsLive: Boolean,
-    /** 回合是否结束（历史/结束态 → 整卡默认折叠为控制条一行） */
+    /** 回合是否结束（历史/结束态 → 整卡默认折叠为控制条 + 尾部毛边） */
     finished: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val hasReasoning = !reasoning.isNullOrBlank()
-    if (!hasReasoning && tools.isEmpty()) return
-
+    if (steps.isEmpty()) return
+    val hasReasoning = steps.any { it is ChainStep.Think }
     // 整卡展开态（用户点控制条切换）。rememberSaveable key 带步骤数签名。
-    // 2026-09-16 对齐 rikkahub：**默认收起（含流式期）**——rikkahub 的 expanded 初值恒为
-    // false，折叠态只渲染尾部 2 步，卡片高度稳定（控制条 + 2 行）。
-    // 旧默认（流式期整卡展开）会导致：步骤越加越多、卡片越长越高，而"显示 N 个步骤"
-    // 控制条要到第 3 步才出现 → 观感是"正在思考时上面突然插进来一张卡"（用户实测反馈）。
-    // 想看全部步骤点控制条展开。
-    var chainOpen by rememberSaveable(finished, tools.size, hasReasoning) {
+    // 对齐 rikkahub：默认收起（含流式期），折叠态只渲染尾部 COLLAPSED_VISIBLE 步 + 渐隐毛边，
+    // 卡片高度稳定（控制条 + 尾部行）。想看全部点控制条展开。
+    var chainOpen by rememberSaveable(finished, steps.size, hasReasoning) {
         mutableStateOf(false)
     }
-    // 思考步独立展开态（收起行点击展开全文；仅 finished 态可手动展开）
-    var reasoningOpen by rememberSaveable(hasReasoning, finished) { mutableStateOf(false) }
-
-    val allSteps: List<Pair<Boolean, Any>> = buildList {
-        if (hasReasoning) add(true to reasoning!!)
-        tools.forEach { add(false to it) }
+    // 各思考段独立展开态（收起行点击展开全文；仅 finished 态可手动展开）。
+    // key=段在链中的下标：合并后一段链里可能有多段思考，各自独立开关。
+    val reasoningOpen = remember(steps.size, finished) {
+        androidx.compose.runtime.mutableStateMapOf<Int, Boolean>()
     }
-    val totalSteps = allSteps.size
+
+    val totalSteps = steps.size
     val canCollapse = totalSteps > COLLAPSED_VISIBLE
-    // 折叠态只显示尾部 COLLAPSED_VISIBLE 步。
-    // 2026-09-16 对齐 rikkahub + 修"折叠没有过渡动画"（用户实测反馈）：
-    // **不再用 takeLast 删项**——被删掉的项会被瞬间从组合里移除，没有任何过渡，
-    // 表现为"思考一结束，卡片唰地变成显示 3 个步骤"。
-    // 改为始终组合全部步骤，只把折叠掉的前段用 AnimatedVisibility 收起（见 StepToggle），
-    // 于是收起/展开都有 220ms 纵向过渡，配合本卡的 animateContentSize 是连贯的。
+    // 折叠态只显示尾部 COLLAPSED_VISIBLE 步（不 takeLast 删项——被删项会瞬间移除无过渡；
+    // 改为始终组合全部、折叠掉的前段用 AnimatedVisibility 收起，见 StepToggle）。
     val firstShownIndex = if (!canCollapse || chainOpen) 0 else (totalSteps - COLLAPSED_VISIBLE)
+    // 纯思考卡（无任何工具步）→ 收起时宽度自适应内容（rikkahub collapsedAdaptiveWidth 同款）
+    val thinkingOnly = steps.none { it is ChainStep.Tool }
+
+    // 纯思考卡（无任何工具步）且处于收起态 → 宽度自适应内容（rikkahub collapsedAdaptiveWidth 同款）；
+    // 含工具步的卡时间轴要左对齐、必须撑满，不收窄。
+    val slim = thinkingOnly && !chainOpen
     Column(
         modifier
-            .fillMaxWidth()
+            .then(if (slim) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
             .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
             .border(
@@ -205,66 +211,94 @@ fun ChainCard(
                 animationSpec = tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
             )
     ) {
-        // ── 控制条：仅当步骤数超过阈值才出现 ──
-        // 只有 1~2 步时不折叠（否则"显示 1 个步骤"还要点一下才看到内容，反而累赘）；
-        // 超过 2 步：流式期折叠保留尾部 2 步，finished 期整卡收成此行
+        // ── 控制条：仅当步骤数超过阈值才出现（≤2 步直接显示，不折叠，rikkahub 同款）──
         if (canCollapse) {
             ChainControlRow(
                 text = if (chainOpen) "收起" else buildString {
                     append("显示 $totalSteps 个步骤")
-                    if (hasReasoning && thinkingMs != null) {
-                        append(" · 已思考 ")
-                        append(String.format(Locale.US, "%.1f", thinkingMs / 1000.0))
-                        append(" 秒")
-                    }
                 },
                 opened = chainOpen,
                 onClick = { chainOpen = !chainOpen }
             )
         }
-        if (totalSteps > 0) {
-            val lineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
-            Box(
-                Modifier.drawBehind {
-                    // 行通栏后内容自缩 12dp：竖线 x = 12(行内缩)+12(图标半宽)=24dp
-                    val x = 24.dp.toPx()
-                    drawLine(
-                        color = lineColor,
-                        start = Offset(x, 18.dp.toPx()),
-                        end = Offset(x, size.height - 18.dp.toPx()),
-                        strokeWidth = 1.dp.toPx()
-                    )
-                }
-            ) {
-                Column {
-                    allSteps.forEachIndexed { index, pair ->
-                        val isReasoningStep = pair.first
-                        val payload = pair.second
-                        val stepKey: Any =
-                            if (isReasoningStep) "reason" else (payload as UiTool).callId
-                        StepToggle(
-                            visible = index >= firstShownIndex,
-                            // 新步骤入场只在流式期播（历史/静态渲染直出）
-                            animateIn = (reasoningLive || toolsLive) && !finished,
-                            stepKey = stepKey
-                        ) {
-                            if (isReasoningStep) {
-                                ReasoningStep(
-                                    text = payload as String,
-                                    thinkingMs = thinkingMs,
-                                    live = reasoningLive,
-                                    expanded = reasoningOpen && !reasoningLive,
-                                    onToggle = { if (!reasoningLive) reasoningOpen = !reasoningOpen }
-                                )
-                            } else {
-                                ToolStep(
-                                    tool = payload as UiTool,
-                                    live = toolsLive
-                                )
+        val lineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
+        Box(
+            Modifier.drawBehind {
+                // 行通栏后内容自缩 12dp：竖线 x = 12(行内缩)+12(图标半宽)=24dp
+                val x = 24.dp.toPx()
+                drawLine(
+                    color = lineColor,
+                    start = Offset(x, 18.dp.toPx()),
+                    end = Offset(x, size.height - 18.dp.toPx()),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+        ) {
+            Column {
+                steps.forEachIndexed { index, step ->
+                    val stepKey: Any = when (step) {
+                        is ChainStep.Think -> "reason_$index"
+                        is ChainStep.Tool -> step.tool.callId
+                    }
+                    StepToggle(
+                        visible = index >= firstShownIndex,
+                        // 新步骤入场只在流式期播（历史/静态渲染直出）
+                        animateIn = (reasoningLive || toolsLive) && !finished,
+                        stepKey = stepKey
+                    ) {
+                        when (step) {
+                            is ChainStep.Think -> ReasoningStep(
+                                text = step.text,
+                                thinkingMs = step.ms,
+                                live = reasoningLive && index == totalSteps - 1,
+                                expanded = (reasoningOpen[index] == true) && !(reasoningLive && index == totalSteps - 1),
+                                onToggle = {
+                                    if (!(reasoningLive && index == totalSteps - 1))
+                                        reasoningOpen[index] = !(reasoningOpen[index] == true)
+                                }
+                            )
+                            is ChainStep.Tool -> Column {
+                                ToolStep(tool = step.tool, live = toolsLive)
+                                // 搜索步：行下 favicon 叠排 + 结果数（对齐 rikkahub FaviconRow）
+                                if (step.tool.hits.isNotEmpty()) {
+                                    Row(
+                                        Modifier.padding(start = 44.dp, bottom = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        FaviconRow(
+                                            domains = step.tool.hits.map { it.domain },
+                                            size = 18.dp
+                                        )
+                                        Text(
+                                            "共 ${step.tool.hits.size} 条结果",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+            }
+            // 收起态"毛边"：尾部渐隐遮罩（与思考 Preview 同一套渐隐语言），盖住最后一步下沿，
+            // 提示"下面还有内容，点控制条展开"。展开态不画。
+            if (canCollapse && !chainOpen) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(30.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.Transparent,
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+                                )
+                            )
+                        )
+                )
             }
         }
     }
@@ -555,8 +589,23 @@ private fun ToolStep(
                 }
             }
         }
+        // 抓取步（web_fetch）：obj 是裸 URL → 渲染成「加粗域名 + 灰路径」，比整串 URL 好读；
+        // 左侧时间轴已是地球图标，省掉"抓取网页 ·"前缀。其余工具维持"动词 对象"。
+        val isFetch = tool.name.contains("fetch") && obj.startsWith("http")
+        val label: AnnotatedString = if (isFetch) {
+            val dom = domainFromUrl(obj)
+            val rest = obj.substringAfter("://", obj).removePrefix("www.").removePrefix(dom)
+            buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FwSpan.SemiBold)) { append(dom) }
+                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))) {
+                    append(rest)
+                }
+            }
+        } else {
+            AnnotatedString(verb + if (obj.isNotBlank()) " $obj" else "")
+        }
         Text(
-            verb + if (obj.isNotBlank()) " $obj" else "",
+            label,
             style = MaterialTheme.typography.labelLarge.copy(
                 fontWeight = FontWeight.SemiBold,
                 brush = shimmerBrush(running)
@@ -1056,6 +1105,70 @@ fun ToolDetailSheet(
                     )
                 }
                 val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
+                // 搜索结果卡列表（对齐 rikkahub SearchWebPreview）：图标+标题+摘要+域名，点击开浏览器
+                if (tool.hits.isNotEmpty()) {
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        "共 ${tool.hits.size} 条结果",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    val ctx = LocalContext.current
+                    tool.hits.forEach { hit ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
+                                .clickable {
+                                    runCatching {
+                                        ctx.startActivity(
+                                            android.content.Intent(
+                                                android.content.Intent.ACTION_VIEW,
+                                                android.net.Uri.parse(hit.url)
+                                            )
+                                        )
+                                    }
+                                }
+                                .padding(12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Favicon(domain = hit.domain, size = 22.dp, circle = false)
+                                Spacer(Modifier.size(10.dp))
+                                Text(
+                                    hit.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            if (hit.snippet.isNotBlank()) {
+                                Text(
+                                    hit.snippet,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    lineHeight = 17.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                            Text(
+                                hit.url,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 3.dp)
+                            )
+                        }
+                    }
+                }
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)

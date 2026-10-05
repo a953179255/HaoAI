@@ -3603,19 +3603,23 @@ private fun StreamingItem(
         val hasContent = !streamingText.isNullOrBlank()
         // v8 思维链重构（参考 RikkaHub ChainOfThought，2026-09-14 定稿）：
         // 思考 + 工具混排进一张玻璃链卡（时间轴/流式折叠），正文气泡独立在卡外。
-        if (!streamingReasoning.isNullOrBlank() || liveTools.isNotEmpty()) {
+        // B 方案：流式期 liveTools 已由 landedCallIds 过滤掉"已落进合并行"的工具，
+        // 这里只画"当前回合尚未落库"的思考+工具，与下方已落行不重复。
+        val liveSteps = buildList<com.haoai.agent.ui.ChainStep> {
+            streamingReasoning?.takeIf { it.isNotBlank() }?.let { add(com.haoai.agent.ui.ChainStep.Think(it, thinkingMs)) }
+            liveTools.forEach { add(com.haoai.agent.ui.ChainStep.Tool(it)) }
+        }
+        if (liveSteps.isNotEmpty()) {
             ChainCard(
-                reasoning = streamingReasoning,
-                thinkingMs = thinkingMs,
+                steps = liveSteps,
                 reasoningLive = !hasContent,
-                tools = liveTools,
                 toolsLive = true,
                 finished = false
             )
         }
         // 分组节奏：链卡与正文气泡之间 6dp 呼吸
         if (hasContent) {
-            if (liveTools.isNotEmpty() || !streamingReasoning.isNullOrBlank()) Spacer(Modifier.size(6.dp))
+            if (liveSteps.isNotEmpty()) Spacer(Modifier.size(6.dp))
             Surface(
                 color = MaterialTheme.colorScheme.surface.copy(alpha = chatBubbleAlphas().second),
                 shape = RoundedCornerShape(18.dp),
@@ -4333,14 +4337,11 @@ private fun AssistantBlock(
     ) {
         // v8 思维链重构：历史消息与流式同构——思考 + 工具混排进一张链卡（finished=true
         // → 默认折叠为控制条，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
-        val hasTools = row.tools.isNotEmpty()
-        val hasReasoning = row.reasoning?.takeIf { it.isNotBlank() } != null
-        if (hasTools || hasReasoning) {
+        // → 默认折叠为控制条 + 尾部毛边，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
+        if (row.chainSteps.isNotEmpty()) {
             ChainCard(
-                reasoning = row.reasoning?.takeIf { it.isNotBlank() },
-                thinkingMs = null,
+                steps = row.chainSteps,
                 reasoningLive = false,
-                tools = row.tools,
                 toolsLive = false,
                 finished = true
             )

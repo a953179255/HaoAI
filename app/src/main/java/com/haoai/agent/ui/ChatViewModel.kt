@@ -27,6 +27,7 @@ import com.haoai.agent.agent.policy.ApprovalRequest
 import com.haoai.agent.agent.policy.PolicyEngine
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.SessionStartup
+import com.haoai.agent.data.StoredMessage
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.toModel
 import com.haoai.agent.data.toStored
@@ -55,8 +56,28 @@ data class UiTool(
     /** ask_user 问答数据：非空时 ChainCard 把该步骤渲染成"问题+所选答案"卡（ask_user 专用）。 */
     val ask: UiAskData? = null,
     /** ask_user_batch 问答数据：非空时渲染成"题组+逐题作答"批量卡。 */
-    val askBatch: UiBatchAskData? = null
+    val askBatch: UiBatchAskData? = null,
+    /**
+     * 搜索步骤（web_search）的结果摘要：title/url/domain 轻量列表，供链卡步骤下方
+     * 渲染 FaviconRow + 结果数、详情弹层渲染结果卡列表。由 rebuildRows 从工具结果
+     * 文本解析（运行中为空，结果落库后填充）。不存 snippet——详情弹层需要时再取。
+     */
+    val hits: List<SearchHitLite> = emptyList()
 )
+
+/** web_search 单条结果的展示摘要（对齐效果图"图标+标题+域名"；snippet 供详情弹层结果卡）。 */
+data class SearchHitLite(val title: String, val url: String, val domain: String, val snippet: String = "")
+
+/**
+ * 链卡里的一个步骤：思考段 or 工具步。合并回合后一张链卡按到达顺序混排这两类，
+ * 对齐 rikkahub 的 groupMessageParts（连续 thinking/tool 聚合成一条链，text 打断）。
+ */
+sealed interface ChainStep {
+    /** 一段模型思考（reasoning）。ms=该段思考用时（历史消息无独立用时则 null）。 */
+    data class Think(val text: String, val ms: Long? = null) : ChainStep
+    /** 一次工具调用。 */
+    data class Tool(val tool: UiTool) : ChainStep
+}
 
 /** ask_user_batch 步骤的题组数据：标题 + 逐题（题干/选项/作答）；历史回看用，运行中为 null。 */
 data class UiBatchAskData(
@@ -101,6 +122,11 @@ data class ChatRow(
     val error: Boolean = false,
     val tools: List<UiTool> = emptyList(),
     val reasoning: String? = null,
+    /**
+     * 链卡步骤（B 方案：连续"纯工具轮"合并成一条链，模型一说话就断链）。
+     * 显示层真源：AssistantBlock 用它渲染 ChainCard；tools/reasoning 保留作截图配对与兼容。
+     */
+    val chainSteps: List<ChainStep> = emptyList(),
     /** 消息时间戳（操作面板元信息行）。 */
     val ts: Long = 0L,
     /** 整轮用量统计（assistant 最终回复才有；旧消息为 null → 统计行不显示）。 */
@@ -207,9 +233,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 引擎事件在切走后仍持续更新 liveTools（切回时时间轴无缝续上）；
         // 无运行任务（owner=null）时也透空，防止上一轮残留（与 selectSession 的 clear 对齐）。
         val owner = _runSessionId.value
+        // B 方案：已落进"合并行"的工具不再出现在流式卡里（否则内容轮 flush 成行后，
+        // 同一批工具会在"已落行 + 流式卡"各画一遍）。landedCallIds 由 rebuildRows 维护。
         _liveToolsSnapshot.value =
-            if (owner != null && _session.value?.id == owner) liveTools.values.toList() else emptyList()
+            if (owner != null && _session.value?.id == owner)
+                liveTools.values.filter { it.callId !in landedCallIds }
+            else emptyList()
     }
+
+    /** 已落进合并行的工具 callId 集合（rebuildRows 每次重算，供流式卡去重）。 */
+    private var landedCallIds: Set<String> = emptySet()
 
     private val _session = MutableStateFlow<StoredSession?>(null)
     val session = _session.asStateFlow()
@@ -1721,62 +1754,111 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
 
         val rows = ArrayList<ChatRow>()
+        // ── B 方案合并（对齐 rikkahub groupMessageParts）────────────────────
+        // 引擎把 Agent 循环的每一"轮"落成一条独立 assistant 消息，旧实现"每条一张链卡"
+        // → 一个回合碎成好几张卡。这里在**显示层**重切：连续的"纯工具轮"（content 为空）
+        // 把 reasoning+tools 累加进 pending 链；一旦某轮带正文（模型说话/最终答案），
+        // 先落一条带该链的行（正文=气泡），链随之清空。存储层 messages 一字不动，
+        // regenerate/delete/edit 仍按真实消息 id 定位（合并行 id 取该链首条消息 id）。
+        val pending = ArrayList<ChainStep>()
+        var pendingId = ""          // 链首条消息 id（合并行的 id/key）
+        var pendingTs = 0L
+
+        // 把一条 assistant 消息的 reasoning + tools 追加进 pending 链
+        fun appendToChain(m: StoredMessage) {
+            m.reasoning?.takeIf { it.isNotBlank() }?.let { pending.add(ChainStep.Think(it)) }
+            m.toolCalls.forEach { call ->
+                val live = liveTools[call.id]
+                val stored = resultByCall[call.id]
+                val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
+                val askBatch = if (call.name == "ask_user_batch")
+                    askDataOfBatch(call.argumentsJson, stored?.first) else null
+                val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
+                val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson),
+                    ask = ask, askBatch = askBatch, hits = hits)
+                val tool = when {
+                    live != null && live.state == ToolRunState.RUNNING -> live
+                    stored != null -> base.copy(
+                        state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
+                        preview = previewLine(stored.first),
+                        subagents = live?.subagents ?: emptyList(),
+                        imageData = live?.imageData
+                    )
+                    live != null -> live
+                    else -> base
+                }
+                pending.add(ChainStep.Tool(tool))
+            }
+        }
+        // 落一条"带链"的行（正文可为空：回合被停止时链尾无正文也要显示）
+        fun flushChain(text: String, error: Boolean, m: StoredMessage?) {
+            val tools = pending.filterIsInstance<ChainStep.Tool>().map { it.tool }
+            val reasoning = pending.filterIsInstance<ChainStep.Think>()
+                .map { it.text }.joinToString("\n\n").ifBlank { null }
+            rows.add(
+                ChatRow(
+                    key = pendingId.ifBlank { m?.id ?: "" }.ifBlank { "chain_fall" },
+                    id = pendingId.ifBlank { m?.id ?: "" },
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    text = text, error = error,
+                    tools = tools, reasoning = reasoning,
+                    chainSteps = pending.toList(),
+                    ts = pendingTs,
+                    promptTokens = m?.promptTokens,
+                    completionTokens = m?.completionTokens,
+                    durationMs = m?.durationMs,
+                    model = m?.model
+                )
+            )
+            pending.clear(); pendingId = ""; pendingTs = 0L
+        }
+
         // 截图配对的宿主：最近一条 assistant 行（引擎把截图作为独立 user 图像消息追加，
         // 位置紧跟产出它的工具结果之后）——2026-09-15 方案 A
         var lastAssistantIdx = -1
         s.messages.forEachIndexed { i, m ->
             when (m.role) {
                 ChatMessage.ROLE_ASSISTANT -> {
-                    val tools = m.toolCalls.map { call ->
-                        val live = liveTools[call.id]
-                        val stored = resultByCall[call.id]
-                        // ask_user 步骤：参数+存储结果解析成问答卡数据；运行中 live 步骤无 ask，
-                        // 回答落库后 stored 分支接管 → 链卡里立即变成"问题+所选答案"
-                        val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
-                        // ask_user_batch 步骤：题库+逐题作答解析（见 askDataOfBatch）
-                        val askBatch = if (call.name == "ask_user_batch")
-                            askDataOfBatch(call.argumentsJson, stored?.first) else null
-                        val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson), ask = ask, askBatch = askBatch)
-                        when {
-                            live != null && live.state == ToolRunState.RUNNING -> live
-                            stored != null -> base.copy(
-                                state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
-                                preview = previewLine(stored.first),
-                                subagents = live?.subagents ?: emptyList(),
-                                imageData = live?.imageData
-                            )
-                            live != null -> live
-                            else -> base
-                        }
+                    if (pendingId.isEmpty()) { pendingId = m.id; pendingTs = m.ts }
+                    appendToChain(m)
+                    if (m.content.isNotBlank()) {
+                        // 这一轮有正文 = 模型说话/最终答案 → 断链，落一条带链行
+                        flushChain(m.content, m.error, m)
+                        lastAssistantIdx = rows.lastIndex
                     }
-                    // key 用消息 id：下标 key 在删除/截断/重新生成后会整体平移，列表状态错乱
-                    rows.add(
-                        ChatRow(
-                            m.id.ifBlank { "m$i" }, m.id, m.role, m.content, m.error, tools, m.reasoning,
-                            ts = m.ts,
-                            promptTokens = m.promptTokens,
-                            completionTokens = m.completionTokens,
-                            durationMs = m.durationMs,
-                            model = m.model
-                        )
-                    )
-                    lastAssistantIdx = rows.lastIndex
+                    // 无正文：纯工具轮，继续累加进 pending，不出行
                 }
                 ChatMessage.ROLE_USER -> {
                     // 引擎注入的截图消息（"[工具名] 页面截图（当前视觉状态，供图像分析）"）：
                     // 配对回上一条 assistant 行里同名工具的步骤 → 不再单独成一条气泡，
                     // 图片改挂在工具步骤（缩略图 + 详情弹层大图）
                     val shotName = screenshotToolName(m.content, m.imageData)
+                    // 宿主优先是"最近一条已落行"，若截图针对的是仍在 pending 里的工具，
+                    // 直接在 pending 链上配对（合并链未断时工具还在这里）
                     val host = rows.getOrNull(lastAssistantIdx)
-                    val attachAt = if (shotName != null && host != null) {
-                        host.tools.indexOfLast { it.name == shotName && it.imageData.isNullOrBlank() }
-                    } else -1
-                    if (shotName != null && attachAt >= 0 && host != null) {
-                        val newTools = host.tools.toMutableList()
-                        newTools[attachAt] = newTools[attachAt].copy(imageData = m.imageData)
-                        rows[lastAssistantIdx] = host.copy(tools = newTools)
-                    } else {
-                        rows.add(
+                    val attachAtHost = if (shotName != null && host != null)
+                        host.tools.indexOfLast { it.name == shotName && it.imageData.isNullOrBlank() } else -1
+                    val pendingToolAt = if (shotName != null && attachAtHost < 0)
+                        pending.indexOfLast {
+                            it is ChainStep.Tool && it.tool.name == shotName && it.tool.imageData.isNullOrBlank()
+                        } else -1
+                    when {
+                        shotName != null && attachAtHost >= 0 && host != null -> {
+                            val newTools = host.tools.toMutableList()
+                            newTools[attachAtHost] = newTools[attachAtHost].copy(imageData = m.imageData)
+                            val newSteps = host.chainSteps.toMutableList()
+                            // chainSteps 与 tools 顺序一致（tools 由 chainSteps 过滤而来），
+                            // 用 callId 精确回写，避免下标错位
+                            val cid = newTools[attachAtHost].callId
+                            val si = newSteps.indexOfFirst { it is ChainStep.Tool && it.tool.callId == cid }
+                            if (si >= 0) newSteps[si] = ChainStep.Tool(newTools[attachAtHost])
+                            rows[lastAssistantIdx] = host.copy(tools = newTools, chainSteps = newSteps)
+                        }
+                        shotName != null && pendingToolAt >= 0 -> {
+                            val cur = pending[pendingToolAt] as ChainStep.Tool
+                            pending[pendingToolAt] = cur.copy(tool = cur.tool.copy(imageData = m.imageData))
+                        }
+                        else -> rows.add(
                             ChatRow(
                                 m.id.ifBlank { "m$i" }, m.id, m.role, m.content,
                                 imageData = m.imageData, ts = m.ts
@@ -1787,13 +1869,51 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 else -> Unit
             }
         }
+        // 回合收尾但链未落（被停止/异常，末轮无正文）：兜底把残留链落成一行
+        if (pending.isNotEmpty()) {
+            flushChain("", false, s.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT })
+        }
         _rows.value = rows
+        // 已落进合并行的工具 callId：供流式卡去重（内容轮 flush 成行后，这批工具不能再在
+        // 流式卡里画一遍）。放在 _rows 赋值后、publishLiveTools 前，保证过滤用的是本次结果。
+        landedCallIds = rows.flatMap { r -> r.tools.map { it.callId } }.toSet()
+        publishLiveTools()
         prewarmMarkdownAst(rows)
         recalcContextUsage()
     }
 
     private fun previewLine(content: String): String =
         content.lineSequence().firstOrNull()?.takeSafe(160) ?: ""
+
+    /**
+     * web_search 结果文本 → 展示摘要（title/url/domain）。
+     * 结果由 WebSearchTool 生成为「N. 标题\nURL\n摘要」逐块 joinToString("\n\n")，
+     * 末尾附「（来源：engine）」。解析失败/空返回 emptyList（步骤退回普通行，不崩）。
+     * 只存 title/url/domain 三字段（snippet 留给详情弹层现取，行内不占内存）。
+     */
+    private fun searchHitsOf(result: String?): List<SearchHitLite> {
+        if (result.isNullOrBlank() || result.startsWith("没有") || result.startsWith("这批链接")) return emptyList()
+        val out = ArrayList<SearchHitLite>()
+        // 按空行切块；每块首行 "N. 标题"、次行 URL、第三行起摘要
+        result.split("\n\n").forEach { block ->
+            val lines = block.trim().lines()
+            if (lines.size >= 2) {
+                val title = lines[0].replace(Regex("^\\d+\\.\\s*"), "").trim()
+                val url = lines[1].trim()
+                if (title.isNotBlank() && url.startsWith("http")) {
+                    out.add(SearchHitLite(
+                        title.take(120), url, domainOf(url),
+                        snippet = lines.drop(2).joinToString(" ").trim().take(220)
+                    ))
+                }
+            }
+        }
+        return out.take(8)
+    }
+
+    /** URL → 展示域名（去 www.、去协议、截断超长）。 */
+    internal fun domainOf(url: String): String =
+        url.substringAfter("://", url).substringBefore('/').removePrefix("www.").take(40)
 
     /**
      * ask_user 调用参数 + 存储结果 → 问答卡数据。
