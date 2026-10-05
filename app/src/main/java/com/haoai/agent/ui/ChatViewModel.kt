@@ -1795,6 +1795,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             val tools = pending.filterIsInstance<ChainStep.Tool>().map { it.tool }
             val reasoning = pending.filterIsInstance<ChainStep.Think>()
                 .map { it.text }.joinToString("\n\n").ifBlank { null }
+            // 中间轮（模型说话但仍带工具调用）落库时统计字段是 0（buildAssistant 无 stats），
+            // 只有最终回复轮才带真实 tokens/耗时。这里把 0 归一成 null → 下游"复制/重发/更多"
+            // 按钮行与统计行（判据 completionTokens!=null||durationMs!=null）只在最终回复显示，
+            // 不再每个中间气泡下面都挂一排按钮（用户实测反馈）。
             rows.add(
                 ChatRow(
                     key = pendingId.ifBlank { m?.id ?: "" }.ifBlank { "chain_fall" },
@@ -1804,9 +1808,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     tools = tools, reasoning = reasoning,
                     chainSteps = pending.toList(),
                     ts = pendingTs,
-                    promptTokens = m?.promptTokens,
-                    completionTokens = m?.completionTokens,
-                    durationMs = m?.durationMs,
+                    promptTokens = m?.promptTokens?.takeIf { it > 0 },
+                    completionTokens = m?.completionTokens?.takeIf { it > 0 },
+                    durationMs = m?.durationMs?.takeIf { it > 0 },
                     model = m?.model
                 )
             )
@@ -1902,8 +1906,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val url = lines[1].trim()
                 if (title.isNotBlank() && url.startsWith("http")) {
                     out.add(SearchHitLite(
-                        title.take(120), url, domainOf(url),
-                        snippet = lines.drop(2).joinToString(" ").trim().take(220)
+                        unescapeEntities(title.take(120)), url, domainOf(url),
+                        snippet = unescapeEntities(lines.drop(2).joinToString(" ").trim()).take(220)
                     ))
                 }
             }
@@ -1914,6 +1918,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** URL → 展示域名（去 www.、去协议、截断超长）。 */
     internal fun domainOf(url: String): String =
         url.substringAfter("://", url).substringBefore('/').removePrefix("www.").take(40)
+
+    /** 搜索引擎结果常带 HTML 实体（&ensp; &#183; &amp;）与 <b> 高亮标签 → 转纯文本。 */
+    private fun unescapeEntities(s: String): String =
+        if (s.indexOf('&') < 0 && s.indexOf('<') < 0) s
+        else android.text.Html.fromHtml(s, android.text.Html.FROM_HTML_MODE_LEGACY)
+            .toString().replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
 
     /**
      * ask_user 调用参数 + 存储结果 → 问答卡数据。

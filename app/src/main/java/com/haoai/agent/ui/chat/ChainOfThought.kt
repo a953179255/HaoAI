@@ -1150,7 +1150,7 @@ fun ToolDetailSheet(
                                 .padding(12.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Favicon(domain = hit.domain, size = 22.dp, circle = false)
+                                Favicon(domain = hit.domain, size = 18.dp, circle = false)
                                 Spacer(Modifier.size(10.dp))
                                 Text(
                                     hit.title,
