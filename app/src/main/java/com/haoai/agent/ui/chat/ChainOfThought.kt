@@ -604,17 +604,32 @@ private fun ToolStep(
         } else {
             AnnotatedString(verb + if (obj.isNotBlank()) " $obj" else "")
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge.copy(
-                fontWeight = FontWeight.SemiBold,
-                brush = shimmerBrush(running)
-                    ?: SolidColor(MaterialTheme.colorScheme.onSurfaceVariant)
-            ),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
+        val labelStyle = MaterialTheme.typography.labelLarge.copy(
+            fontWeight = FontWeight.SemiBold,
+            brush = shimmerBrush(running)
+                ?: SolidColor(MaterialTheme.colorScheme.onSurfaceVariant)
         )
+        if (isFetch) {
+            // 效果图定稿：抓取步行内 14dp 圆角小 favicon + 域名（时间轴地球图标保留表意）
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Favicon(domain = domainFromUrl(obj), size = 14.dp, circle = false)
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    label, style = labelStyle,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+        } else {
+            Text(
+                label, style = labelStyle,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
         // 子代理进度并入状态列（嵌套链走弹层）
         val subRunning = tool.subagents.count { it.state == "RUNNING" }
         if (tool.subagents.isNotEmpty()) {
