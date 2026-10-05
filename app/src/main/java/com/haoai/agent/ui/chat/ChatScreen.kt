@@ -120,7 +120,7 @@ import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -169,6 +169,7 @@ import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
+import com.haoai.agent.ui.common.SlowSpinner
 import com.haoai.agent.ui.theme.wallpaperAdaptiveGray
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -3469,8 +3470,9 @@ private fun ReasoningPanel(
             ) {
                 Spacer(Modifier.size(12.dp))
                 if (live) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
+                    // 方案A：低频自绘转圈（30Hz），不再用库内全帧率无限动画逼整屏重磨
+                    SlowSpinner(
+                        size = 12.dp,
                         strokeWidth = 1.6.dp,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -3767,13 +3769,14 @@ private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
         }
     }
     // shimmer：渐变高光横扫标题（live 时）。by 委托=读取发生在 if(live) 内：
-    // live=false 的历史行零订阅零帧；live 时全帧率跟随系统刷新率（用户裁决：
-    // 涩感远比发热难受，不牺牲流畅）
+    // live=false 的历史行零订阅零帧；live 时由 rememberPulse 驱动（方案A：内部
+    // 节流 30Hz，慢速扫动观感不变，出帧减半）
     val shim by com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
         if (live) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(11.dp),
+            // 方案A：低频自绘转圈，替换库内全帧率无限动画（逼帧+整屏重磨双源头）
+            SlowSpinner(
+                size = 11.dp,
                 strokeWidth = 1.5.dp,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -4605,8 +4608,9 @@ private fun ToolChip(
                                     .padding(vertical = 2.dp)
                             ) {
                                 if (sub.state == "RUNNING") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(11.dp),
+                                    // 方案A：低频自绘转圈（同 ThinkingHeader 处，防库动画逼帧）
+                                    SlowSpinner(
+                                        size = 11.dp,
                                         strokeWidth = 1.5.dp,
                                         color = subColor
                                     )

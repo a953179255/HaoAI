@@ -30,11 +30,11 @@ fun CircularContextIndicator(
     expanded: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val animatedProgress by animateFloatAsState(
-        targetValue = usage.percentage.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
-        label = "ctxProgress"
-    )
+    // 方案A：去掉 300ms 补间。流式输出期 percentage 每 40ms 就涨一次新目标，
+    // animateFloatAsState 的补间永远在追赶、永不停歇 → 整屏被拖到满帧（实测
+    // 正文流式期 60fps 的元凶）。占用本身涨得平缓（25Hz 步进零点几个百分点），
+    // 直读当前值肉眼无跳变，省掉常驻动画。
+    val animatedProgress = usage.percentage.coerceIn(0f, 1f)
     val color = when {
         usage.percentage > 0.9f -> MaterialTheme.colorScheme.error
         usage.percentage > 0.75f -> Color(0xFFFF6D00)
