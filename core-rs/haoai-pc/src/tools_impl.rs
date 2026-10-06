@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+use crate::checkpoints;
 use crate::utf16::{utf16_len, utf16_take};
 
 /// `Tools.kt` 的 SKIP_DIRS。`Env.TOOL_OUTPUT_DIR` 是 `.haoai-output`。
@@ -16,12 +17,31 @@ const SKIP_DIRS: [&str; 12] = [
     ".haoai-output", "__pycache__", ".venv", "dist",
 ];
 
+/// `Env.TOOL_OUTPUT_DIR`：工具产物与溢出输出都落这个目录，且要被 git 忽略。
+#[allow(dead_code)] // M2e-4 的溢出落文件接上后用
+pub const TOOL_OUTPUT_DIR: &str = ".haoai-output";
+
+/// `Hunks.MAX_BYTES`：基线或目标超过这个长度就不切块（卡片放不下，而切块是 quadratic 的）。
+/// 同时它也是"要不要整个读进来当 diff 基线"的闸门 —— 没有这道闸，读一个 2GB 的日志
+/// 当基线会把引擎撑死。
+#[allow(dead_code)] // M2e-4 的 write/edit 接上 diff_base 后用
+const HUNKS_MAX_BYTES: u64 = 400_000;
+
 /// `Tools.kt` 的 REGEX_META。
 const REGEX_META: [char; 12] =
     ['.', '+', '(', ')', '|', '^', '$', '{', '}', '[', ']', '\\'];
 
 pub struct Ctx {
+    /// 状态根：`checkpoints.jsonl` 落这里。测试各自给临时目录，绝不往真实 `%LOCALAPPDATA%` 写。
+    pub home: PathBuf,
     pub workspace: PathBuf,
+    /// 实验特性开关的覆盖表（快照、往外写那两条要看它）。
+    pub flags: Vec<(String, bool)>,
+    /// 这条会话的档位。plan 的只读闸与"auto 不许往外写"都读它。
+    pub mode: String,
+    pub sid: String,
+    /// 这一轮的名字。空 = 不在任何一轮里（CLI 单发、测试）⇒ 不给检查点记账。
+    pub run_id: String,
     pub todos: std::sync::Mutex<Vec<(String, String)>>,
 }
 
@@ -40,8 +60,93 @@ impl Outcome {
 }
 
 impl Ctx {
+    /// 测试/单发入口：只有工作区，其余取空 —— 空 `run_id` 的语义就是"不记账"。
+    #[allow(dead_code)] // 现在只有本文件的测试在调；M2e-4 的 write/edit 也走它建基线
     pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace, todos: std::sync::Mutex::new(vec![]) }
+        Self {
+            flags: Vec::new(),
+            home: workspace.clone(),
+            workspace,
+            mode: String::new(),
+            sid: String::new(),
+            run_id: String::new(),
+            todos: std::sync::Mutex::new(vec![]),
+        }
+    }
+
+    /// 生产入口：一轮一个 ctx，档位/旗标/轮次都在建它的时候交齐。
+    pub fn for_run(
+        home: &Path,
+        workspace: PathBuf,
+        flags: Vec<(String, bool)>,
+        mode: &str,
+        sid: &str,
+        run_id: &str,
+    ) -> Self {
+        Self {
+            home: home.to_path_buf(),
+            workspace,
+            flags,
+            mode: mode.to_string(),
+            sid: sid.to_string(),
+            run_id: run_id.to_string(),
+            todos: std::sync::Mutex::new(vec![]),
+        }
+    }
+
+    /**
+     * 逐块切分的基线 = 这个文件**现在**的内容。拿不到（计划模式、太大、读不动）就返回 None，
+     * 意思是"这次不摆勾选框，按整条审批"；`Some("")` 表示新文件。
+     *
+     * 为什么要在弹卡**之前**读：勾掉的那几块要落回原样，就得先有原样可比。
+     * `plan` 档先挡掉：只读档根本不会弹卡，白读一遍大文件。
+     */
+    #[allow(dead_code)] // M2e-4 的 write/edit 会调它
+    pub fn diff_base(&self, target: &Path) -> Option<String> {
+        if self.mode == "plan" {
+            return None;
+        }
+        if !target.is_file() {
+            return Some(String::new());
+        }
+        if target.metadata().map(|m| m.len() > HUNKS_MAX_BYTES).unwrap_or(true) {
+            return None;
+        }
+        fs::read_to_string(target).ok()
+    }
+
+    /**
+     * 改之前留一份，并**回给检查点账本**。
+     *
+     * 返回快照文件（没快照就返回 None）不是为了好看：`/rewind` 要区分
+     * "这轮改坏了它"（有快照 ⇒ 还原）与"这轮新建了它"（没快照 ⇒ 删掉）。
+     * 开关关着时不留快照，也就没法回滚 —— 这时候如实返回 None，
+     * 界面上那句"这一轮没登记改动"才是真话。
+     */
+    #[allow(dead_code)] // M2e-4 的 write/edit 接上它；开关关着时如实返回 None
+    pub fn snapshot_before(&self, target: &Path) -> Option<PathBuf> {
+        if !target.is_file() {
+            checkpoints::note(&self.home, &self.run_id, &self.sid, &self.rel(target), None);
+            return None;
+        }
+        if !crate::flags::enabled(crate::flags::Flag::SnapshotBeforeWrite, &self.flags) {
+            checkpoints::note(&self.home, &self.run_id, &self.sid, &self.rel(target), None);
+            return None;
+        }
+        let dir = checkpoints::snap_dir(&self.workspace);
+        let _ = fs::create_dir_all(&dir);
+        checkpoints::exclude_from_git(&self.workspace, &[".haoai-snap", TOOL_OUTPUT_DIR]);
+        // 同一毫秒里改同一个文件两次是真会发生的（一轮里连续两个 edit）。
+        // 名字撞车会把**最早**那份盖掉，而回滚要的恰好就是最早那份，所以找第一个空位。
+        let key = format!("{}-{}", crate::engine::now_ms(), checkpoints::key_of(&self.workspace, target));
+        let snap = checkpoints::free_name(&dir, &key);
+        match fs::copy(&target, &snap) {
+            Ok(_bytes) => {
+                checkpoints::note(&self.home, &self.run_id, &self.sid, &self.rel(target), Some(&snap));
+                Some(snap)
+            }
+            Err(_) => None,
+        }
     }
 
     /// `ToolCtx.resolve`：反斜杠归一成正斜杠，相对路径挂到工作区，再取 canonical。
@@ -434,6 +539,99 @@ mod tests {
             &json!({"items": [{"text": "第一步", "status": "done"}, {"title": "第二步"}]}),
         );
         assert_eq!(r.text, "1. [x] 第一步\n2. [ ] 第二步");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 带旗标与轮次名字的 ctx：快照与检查点两件事都要看它。
+    fn run_ctx(tag: &str, flags: Vec<(String, bool)>, mode: &str) -> (PathBuf, Ctx) {
+        let root = sandbox(tag);
+        let ctx = Ctx::for_run(
+            &root.join("home"),
+            root.clone(),
+            flags,
+            mode,
+            "sx",
+            "r123",
+        );
+        (root, ctx)
+    }
+
+    fn on(k: &str) -> (String, bool) {
+        (k.to_string(), true)
+    }
+    fn off(k: &str) -> (String, bool) {
+        (k.to_string(), false)
+    }
+
+    #[test]
+    fn snapshot_before_keeps_a_copy_and_registers_it() {
+        let (root, ctx) = run_ctx("snap", vec![], "ask");
+        let target = ctx.resolve("src/a.rs");
+        let snap = ctx.snapshot_before(&target).expect("默认开着快照，应留下一份");
+        assert!(snap.is_file());
+        assert_eq!(fs::read_to_string(&snap).unwrap(), "line1\nline2\nline3\n");
+        // 键里带相对路径：src/a.rs → src__a.rs，否则 docs/a.rs 会和它撞成同一份
+        assert!(snap.file_name().unwrap().to_string_lossy().contains("src__a.rs"), "{snap:?}");
+        // 账本里那一行要说清"动了哪个文件、快照在哪"
+        let ledger = fs::read_to_string(root.join("home/checkpoints.jsonl")).unwrap();
+        assert!(ledger.contains(r#""path":"src/a.rs""#), "{ledger}");
+        assert!(ledger.contains("snap"), "{ledger}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 连改两次同一个文件，**两份快照都得活着**（撞名分支本身在 `checkpoints::free_name`
+    /// 那边用固定 key 测，这里不能依赖"两次调用撞在同一毫秒"）。
+    #[test]
+    fn two_snapshots_of_the_same_file_do_not_overwrite_each_other() {
+        let (root, ctx) = run_ctx("snap2", vec![], "ask");
+        let target = ctx.resolve("src/a.rs");
+        let a = ctx.snapshot_before(&target).expect("第一份");
+        fs::write(&target, "已经改过了\n").unwrap();
+        let b = ctx.snapshot_before(&target).expect("第二份");
+        assert_ne!(a, b, "两份快照撞成了同一个文件");
+        assert_eq!(fs::read_to_string(&a).unwrap(), "line1\nline2\nline3\n", "最早那份必须还在");
+        let ledger = fs::read_to_string(root.join("home/checkpoints.jsonl")).unwrap();
+        assert_eq!(ledger.lines().filter(|l| !l.trim().is_empty()).count(), 2, "{ledger}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 开关关着 = 不留快照，也就没法回滚。这时候**如实返回 None**，
+    /// 界面上那句"这一轮没登记改动"才是真话，而不是假装有一份其实没有。
+    #[test]
+    fn snapshot_is_skipped_and_still_registered_when_the_flag_is_off() {
+        let (root, ctx) = run_ctx("snapoff", vec![off("snapshot_before_write")], "ask");
+        let target = ctx.resolve("src/a.rs");
+        assert!(ctx.snapshot_before(&target).is_none());
+        assert!(!root.join(".haoai-snap").exists() || root.join(".haoai-snap").read_dir().unwrap().next().is_none());
+        let ledger = fs::read_to_string(root.join("home/checkpoints.jsonl")).unwrap();
+        assert!(ledger.contains(r#""snap":""#), "没快照也要记一笔（空 snap=这轮之前不存在/没留）：{ledger}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_brand_new_file_gets_no_snapshot_but_is_still_noted() {
+        let (root, ctx) = run_ctx("newfile", vec![on("snapshot_before_write")], "ask");
+        let target = ctx.resolve("src/fresh.md");
+        assert!(ctx.snapshot_before(&target).is_none(), "新建的文件没有「上一版」可留");
+        let ledger = fs::read_to_string(root.join("home/checkpoints.jsonl")).unwrap();
+        assert!(ledger.contains(r#""snap":""#), "{ledger}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diff_base_refuses_in_plan_mode_and_for_huge_files() {
+        // plan 是只读档，根本不会弹卡 → 读基线是白读一遍大文件
+        let (root1, ctx) = run_ctx("base", vec![], "plan");
+        assert_eq!(ctx.diff_base(&ctx.resolve("src/a.rs")), None);
+        drop(ctx);
+        let _ = fs::remove_dir_all(&root1);
+
+        let (root, ctx) = run_ctx("base2", vec![], "ask");
+        assert_eq!(ctx.diff_base(&ctx.resolve("src/nope.rs")), Some(String::new()), "新文件=空基线");
+        let big = ctx.resolve("src/big.txt");
+        fs::write(&big, "x".repeat(500_000)).unwrap();
+        assert_eq!(ctx.diff_base(&big), None, "超过 HUNKS_MAX_BYTES 不读进来");
+        assert_eq!(ctx.diff_base(&ctx.resolve("src/a.rs")).unwrap(), "line1\nline2\nline3\n");
         let _ = fs::remove_dir_all(&root);
     }
 }

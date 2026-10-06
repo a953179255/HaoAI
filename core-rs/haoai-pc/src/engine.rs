@@ -23,7 +23,7 @@ use crate::store::Msg;
 use crate::tools_impl::{self, Ctx};
 use crate::App;
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -56,9 +56,18 @@ fn run(app: Arc<App>, sid: String, text: String) {
 /// 而这条恰恰是最不能靠运气的不变量（每个 tool_call_id 恰好一条回复）。
 pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
     let sf = app.store.restore(sid).ok_or_else(|| format!("没有这条会话：{sid}"))?;
-    let ctx = Ctx::new(Path::new(&sf.meta.workspace).to_path_buf());
+    let workspace = Path::new(&sf.meta.workspace).to_path_buf();
     // 档位从会话文件读一次、整轮都用它（Kotlin 看的是 session.mode，也不是每轮重读磁盘）。
     let plan = sf.meta.mode == "plan";
+    let run_id = format!("r{}", now_ms());
+    let ctx = Ctx::for_run(
+        &app.store.home,
+        workspace,
+        app.settings.flags.clone(),
+        &sf.meta.mode,
+        sid,
+        &run_id,
+    );
     let pctx = prompt::ctx_for(
         &app.store,
         &sf.meta.workspace,
@@ -73,6 +82,9 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
         hist = sf.msgs.clone();
     }
     hist.push(Msg { role: "user".into(), content: text.to_string(), ..Default::default() });
+    // 头行：这一轮动了哪些文件要往这本账上记，而"回到这次任务之前"得先知道任务是什么。
+    // `at` 是这句在历史里的下标 —— 按时间猜会退错：定时任务、手机派活都往同一条会话里追加消息。
+    crate::checkpoints::begin(&app.store.home, sid, &run_id, text, hist.len() as i64 - 1);
 
     let key_raw = fs::read_to_string(app.store.home.join("apikey")).unwrap_or_default();
     let max_turns = app.settings.max_turns.max(1) as usize;

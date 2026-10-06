@@ -23,6 +23,9 @@ pub struct Settings {
     pub context_chars: i64,
     pub compact_trigger_chars: i64,
     pub tools_off: Vec<String>,
+    /// `settings.json` 里 `flags` 对象的**覆盖值**（键是 `HaoFlag.key`）。
+    /// 用 Vec 而不是 map：只需要按键查，且要保住文件里的书写顺序，不引进一套哈希。
+    pub flags: Vec<(String, bool)>,
 }
 
 /// **不能 derive(Default)**：settings.json 整个缺失时，Kotlin 回落的是 `PcSettings`
@@ -43,6 +46,7 @@ impl Default for Settings {
             context_chars: 128_000,
             compact_trigger_chars: 60_000,
             tools_off: Vec::new(),
+            flags: Vec::new(),
         }
     }
 }
@@ -179,6 +183,23 @@ impl Store {
                 .get("toolsOff")
                 .and_then(|x| x.as_array())
                 .map(|a| a.iter().filter_map(|x| x.as_str()).map(String::from).collect())
+                .unwrap_or_default(),
+            // Kotlin 那边是 `v.jsonPrimitive.content == "true"`，比的是**字符串形态**：
+            // 所以布尔 true 与字符串 "true" 都算开，而数字 1 不算。照这个口径来，
+            // 不然同一份 settings.json 在两端会拨出不同的开关（手机端写的是哪种不好说）。
+            flags: v
+                .get("flags")
+                .and_then(|x| x.as_object())
+                .map(|o| {
+                    o.iter()
+                        .map(|(k, x)| {
+                            (
+                                k.clone(),
+                                x.as_bool().unwrap_or_else(|| x.as_str() == Some("true")),
+                            )
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }

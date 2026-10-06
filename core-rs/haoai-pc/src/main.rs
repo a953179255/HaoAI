@@ -1,11 +1,18 @@
 mod engine;
 #[cfg(test)]
 mod e2e;
+// M2e 分四步落：判定层（risk/policies）→ 支撑层（checkpoints/diff/flags）→
+// 审批状态机与闸口（M2e-3）→ write/edit 接上（M2e-4）。前两步里这些函数只有测试在用，
+// 二进制侧会报 dead_code。**接上之后把这几行 allow 删掉** —— 留着不删就是新债。
+#[allow(dead_code)]
+mod checkpoints;
+#[allow(dead_code)]
+mod diff;
+#[allow(dead_code)]
+mod flags;
 mod http;
 #[cfg(test)]
 mod golden;
-// M2e 分三步落：判定层（这两个模块）先到，闸口在 M2e-3 才接进 guard。
-// 中间这段只有测试在用它们，二进制侧会报 dead_code —— 接上之后把这两行 allow 删掉。
 #[allow(dead_code)]
 mod policies;
 mod prompt;
