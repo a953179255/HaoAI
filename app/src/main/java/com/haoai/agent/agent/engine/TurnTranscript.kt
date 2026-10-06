@@ -37,6 +37,9 @@ class TurnTranscript(
 
     private val text = StringBuilder()
     private val reasoning = StringBuilder()
+    /** 思考段首/尾 delta 的墙钟（摘要行「X.X秒」用；reset/discard 清零重计）。 */
+    private var reasoningStartMs = 0L
+    private var reasoningEndMs = 0L
 
     /** 本轮是否已产出可见正文（纯空白按"没有"处理）。 */
     val hasContent: Boolean get() = text.isNotBlank()
@@ -47,14 +50,24 @@ class TurnTranscript(
     }
 
     fun reasoningDelta(frag: String) {
+        val now = System.currentTimeMillis()
+        if (reasoning.isEmpty()) reasoningStartMs = now
+        reasoningEndMs = now
         reasoning.append(frag)
         onReasoning(frag)
     }
+
+    /** 本轮思考耗时（首字→尾字），无思考返回 null。 */
+    fun reasoningMsOrNull(): Long? =
+        if (reasoning.isNotEmpty() && reasoningEndMs > reasoningStartMs)
+            reasoningEndMs - reasoningStartMs else null
 
     /** 重发前清残句：正文与思考一起丢，别留下"新答案 + 旧思考"的混拼。 */
     fun reset() {
         text.setLength(0)
         reasoning.setLength(0)
+        reasoningStartMs = 0L
+        reasoningEndMs = 0L
     }
 
     /** 同上，但额外要求 UI 撤掉已经画出去的残句（失败重试路径用这个）。 */
@@ -82,7 +95,8 @@ class TurnTranscript(
             pt = stats?.promptTokens ?: 0,            // AssistantStats 源字段名不动
             ct = stats?.completionTokens ?: 0,
             ms = stats?.durationMs ?: 0L,             // pt/ct/ms 非空（PC 侧锁）：null 落 0
-            model = stats?.model
+            model = stats?.model,
+            reasoningMs = reasoningMsOrNull()
         )
     }
 }

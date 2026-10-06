@@ -717,7 +717,8 @@ class AgentEngine(
                         pt = st.promptTokens.toInt().takeIf { it > 0 } ?: 0,
                         ct = st.completionTokens.toInt().takeIf { it > 0 } ?: 0,
                         ms = System.currentTimeMillis() - turnStartMs,
-                        model = provider.model
+                        model = provider.model,
+                        reasoningMs = transcript.reasoningMsOrNull()
                     ),
                     onEvent
                 )

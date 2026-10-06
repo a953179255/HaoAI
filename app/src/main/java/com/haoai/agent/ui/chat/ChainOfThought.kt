@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -180,13 +181,18 @@ fun ChainCard(
     var chainOpen by rememberSaveable(finished, steps.size, hasReasoning) {
         mutableStateOf(false)
     }
-    // 各思考段独立展开态（收起行点击展开全文；仅 finished 态可手动展开）。
+    // 各思考段独立展开态（收起行点击展开全文；live 段也可点开阅读区）。
     // key=段在链中的下标：合并后一段链里可能有多段思考，各自独立开关。
-    val reasoningOpen = remember(steps.size, finished) {
+    // 不能以 steps.size 为键——新段/新工具步到达会重建 map，把用户手动展开的
+    // 阅读区无声收起（v8 定稿：手动打开要钉住，直到用户自己收起）。
+    val reasoningOpen = remember(finished) {
         androidx.compose.runtime.mutableStateMapOf<Int, Boolean>()
     }
 
     val totalSteps = steps.size
+    // 思考段序号（1 基，按到达顺序）：完成态摘要「深度思考 N」用
+    val segNos = HashMap<Int, Int>()
+    run { var n = 0; steps.forEachIndexed { i, s -> if (s is ChainStep.Think) segNos[i] = ++n } }
     val canCollapse = totalSteps > COLLAPSED_VISIBLE
     // 折叠态只显示尾部 COLLAPSED_VISIBLE 步（不 takeLast 删项——被删项会瞬间移除无过渡；
     // 改为始终组合全部、折叠掉的前段用 AnimatedVisibility 收起，见 StepToggle）。
@@ -221,16 +227,28 @@ fun ChainCard(
                 onClick = { chainOpen = !chainOpen }
             )
         }
-        val lineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
+        val lineColor = MaterialTheme.colorScheme.onSurfaceVariant
         Box(
             Modifier.drawBehind {
                 // 行通栏后内容自缩 12dp：竖线 x = 12(行内缩)+12(图标半宽)=24dp
                 val x = 24.dp.toPx()
+                val top = 18.dp.toPx()
+                val bottom = size.height - 18.dp.toPx()
+                // v2 导轨（效果图定稿 2026-10-06）：1dp 硬线 → 2dp 圆头 + 两端渐变淡出，
+                // 线像从首枚图标生长、到末枚收回，不再是被剪断的实线
                 drawLine(
-                    color = lineColor,
-                    start = Offset(x, 18.dp.toPx()),
-                    end = Offset(x, size.height - 18.dp.toPx()),
-                    strokeWidth = 1.dp.toPx()
+                    brush = Brush.verticalGradient(
+                        0f to lineColor.copy(alpha = 0f),
+                        0.14f to lineColor.copy(alpha = 0.30f),
+                        0.86f to lineColor.copy(alpha = 0.30f),
+                        1f to lineColor.copy(alpha = 0f),
+                        startY = top,
+                        endY = bottom
+                    ),
+                    start = Offset(x, top),
+                    end = Offset(x, bottom),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
                 )
             }
         ) {
@@ -250,12 +268,10 @@ fun ChainCard(
                             is ChainStep.Think -> ReasoningStep(
                                 text = step.text,
                                 thinkingMs = step.ms,
+                                segNo = segNos[index] ?: (index + 1),
                                 live = reasoningLive && index == totalSteps - 1,
-                                expanded = (reasoningOpen[index] == true) && !(reasoningLive && index == totalSteps - 1),
-                                onToggle = {
-                                    if (!(reasoningLive && index == totalSteps - 1))
-                                        reasoningOpen[index] = !(reasoningOpen[index] == true)
-                                }
+                                expanded = reasoningOpen[index] == true,
+                                onToggle = { reasoningOpen[index] = !(reasoningOpen[index] == true) }
                             )
                             is ChainStep.Tool -> Column {
                                 ToolStep(tool = step.tool, live = toolsLive)
@@ -417,20 +433,33 @@ private fun shimmerBrush(active: Boolean): Brush? {
     )
 }
 
-/** 思考步骤：live=Preview 渐隐下滚；完成=「深度思考 X.X 秒」行（点击展开全文） */
+/** 思考段中文序号（效果图定稿「深度思考 一/二/三…」，超过十回退阿拉伯数字） */
+private fun segCn(n: Int): String = when (n) {
+    1 -> "一"; 2 -> "二"; 3 -> "三"; 4 -> "四"; 5 -> "五"
+    6 -> "六"; 7 -> "七"; 8 -> "八"; 9 -> "九"; 10 -> "十"
+    else -> n.toString()
+}
+
+/** 思考步骤（方案 v8 效果图定稿，2026-10-06）：
+ *  live=行内单行 ticker（行高恒定零跳动；点行展开下方阅读区，展开时 ticker 让位、
+ *  行尾靠右「▴ 收起」与阅读区右缘对齐）；完成=同一行原位变摘要
+ *  「深度思考 N · X.X秒 · N字」，点击展开全文。手动展开会钉住：新段/新步骤到达不收，
+ *  直到用户自己收起。 */
 @Composable
 private fun ReasoningStep(
     text: String,
     thinkingMs: Long?,
+    segNo: Int,
     live: Boolean,
     expanded: Boolean,
     onToggle: () -> Unit
 ) {
+    val surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
     Column {
         Row(
             Modifier
                 .fillMaxWidth()
-                .chainPressable(enabled = !live, onClick = onToggle)
+                .chainPressable(onClick = onToggle)
                 // 高亮通栏，内容自缩 12dp（图标中心落 24dp，与竖线对齐）
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -445,28 +474,84 @@ private fun ReasoningStep(
                     modifier = Modifier.size(15.dp)
                 )
             }
-            Text(
-                if (live) "深度思考中" else {
-                    thinkingMs?.let { "深度思考 ${String.format(Locale.US, "%.1f", it / 1000.0)} 秒" }
-                        ?: "深度思考"
-                },
-                style = MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    brush = shimmerBrush(live)
-                        ?: SolidColor(MaterialTheme.colorScheme.onSurfaceVariant)
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            if (live && thinkingMs != null) {
+            if (live && !expanded) {
                 Text(
-                    String.format(Locale.US, "%.1fs", thinkingMs / 1000.0),
+                    "深度思考中",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        brush = shimmerBrush(true)
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                // 行内单行 ticker：窗口宽度恒定，文本随流右移露出最新尾；右缘渐隐收口
+                val hScroll = rememberScrollState()
+                LaunchedEffect(text) { hScroll.scrollTo(hScroll.maxValue) }
+                Box(Modifier.weight(1f)) {
+                    Text(
+                        text.replace('\n', ' ').trim(),
+                        fontSize = 11.5.sp,
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                        modifier = Modifier.horizontalScroll(hScroll)
+                    )
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(12.dp)
+                            .height(16.dp)
+                            .background(
+                                Brush.horizontalGradient(listOf(Color.Transparent, surface))
+                            )
+                    )
+                }
+            } else if (live) {
+                Text(
+                    "深度思考中",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        brush = shimmerBrush(true)
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                // v8 定稿：收起提示靠右（与阅读区右缘对齐），不贴着标签
+                Text(
+                    "▴ 收起",
                     style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
-            }
-            if (!live) {
+            } else {
+                Text(
+                    buildAnnotatedString {
+                        append("深度思考 ${segCn(segNo)}")
+                        thinkingMs?.let {
+                            append(" · ")
+                            withStyle(
+                                SpanStyle(
+                                    fontSize = 10.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            ) {
+                                append(
+                                    String.format(
+                                        Locale.US, "%.1f秒 · %d字",
+                                        it / 1000.0, text.length
+                                    )
+                                )
+                            }
+                        }
+                    },
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        brush = SolidColor(MaterialTheme.colorScheme.onSurfaceVariant)
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
                 Icon(
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = if (expanded) "收起思考过程" else "展开思考过程",
@@ -475,56 +560,30 @@ private fun ReasoningStep(
                 )
             }
         }
-        // Preview：live 且未手动展开 → 限高渐隐 + 自动滚尾
-        if (live) {
+        // 阅读区：live 展开=跟尾滚动（用户上滚即让位细读），frozen 展开=自由回看全文
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(tween(220)) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(180))
+        ) {
             val scroll = rememberScrollState()
-            LaunchedEffect(text) { scroll.scrollTo(scroll.maxValue) }
-            Box(Modifier.padding(start = 44.dp, end = 12.dp, bottom = 8.dp)) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    lineHeight = 17.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                    modifier = Modifier
-                        .heightIn(max = 88.dp)
-                        .verticalScroll(scroll)
-                )
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(28.dp)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-                                )
-                            )
-                        )
-                )
+            LaunchedEffect(text) {
+                if (live && scroll.value >= scroll.maxValue - 40) scroll.scrollTo(scroll.maxValue)
             }
-        } else {
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically(tween(220)) + fadeIn(tween(220)),
-                exit = shrinkVertically(tween(180)) + fadeOut(tween(180))
-            ) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    lineHeight = 17.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                    modifier = Modifier
-                        .padding(start = 44.dp, end = 12.dp, bottom = 8.dp)
-                        .fillMaxWidth()
-                        .heightIn(max = 240.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 11.dp, vertical = 9.dp)
-                )
-            }
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 17.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
+                modifier = Modifier
+                    .padding(start = 44.dp, end = 12.dp, bottom = 8.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    .verticalScroll(scroll)
+                    .padding(horizontal = 11.dp, vertical = 9.dp)
+            )
         }
     }
 }

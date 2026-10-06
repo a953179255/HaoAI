@@ -27,6 +27,8 @@ data class StoredMessage(
     val audioPath: String? = null,
     val videoPath: String? = null,
     val reasoning: String? = null,
+    /** 思考段耗时（摘要行「X.X秒」用）；旧 JSON 缺省 null。 */
+    val reasoningMs: Long? = null,
     /** 本轮（含工具循环）累计输入/输出 tokens 与整轮耗时、模型名；旧 JSON 缺省 null。 */
     val promptTokens: Int? = null,
     val completionTokens: Int? = null,
@@ -230,6 +232,7 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
     audioPath = audioPath,
     videoPath = videoPath,
     reasoning = reasoning,
+    reasoningMs = reasoningMs,
     pt = promptTokens ?: 0,
     ct = completionTokens ?: 0,
     ms = durationMs ?: 0L,
@@ -249,6 +252,7 @@ fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     audioPath = audioPath,
     videoPath = videoPath,
     reasoning = reasoning,
+    reasoningMs = reasoningMs,
     promptTokens = pt,
     completionTokens = ct,
     durationMs = ms,

@@ -80,6 +80,9 @@ data class Msg(
     val videoPath: String? = null,
     /** 生成该回复的模型名（统计行/操作面板元信息展示）。 */
     val model: String? = null,
+    /** 这条消息思考段的耗时（reasoning 首字→尾字 delta 的墙钟差）。
+     *  PC 不写不读；移动端思考摘要行「深度思考 N · X.X秒 · N字」用。null=未知。 */
+    val reasoningMs: Long? = null,
     /** 消息时间戳（移动端列表展示）。 */
     val ts: Long = System.currentTimeMillis()
 ) {

@@ -1889,7 +1889,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     // 比它晚说的话上面（用户报的"顺序不对/上方突然插入"）。
                     m.reasoning?.takeIf { it.isNotBlank() }?.let {
                         if (pendingId.isEmpty()) { pendingId = m.id; pendingTs = m.ts }
-                        pending.add(ChainStep.Think(it))
+                        pending.add(ChainStep.Think(it, m.reasoningMs))
                     }
                     if (m.content.isNotBlank()) {
                         // 这一轮有正文 = 模型说话/最终答案 → 断链，落一条带链行
