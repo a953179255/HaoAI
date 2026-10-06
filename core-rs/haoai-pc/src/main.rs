@@ -236,14 +236,21 @@ fn main() {
 }
 
 /// 状态根。顺序与 `Env.home` 一致：`HAOAI_HOME` 覆盖 → `%LOCALAPPDATA%\HaoAI`。
+///
+/// 出口按 Java 的 `File` 归一分隔符：Kotlin 侧 `Env.home` 是个 `File`，构造时就把
+/// `/` 换成 `\`。不归一的话，HAOAI_HOME 用正斜杠（bash 这么写最顺手）时，
+/// 系统提示里那 15 条技能路径会一边是 `G:\x\skills\…`、一边是 `G:/x\skills\…` ——
+/// 两边**长度一样**，所以逐字节的金标准抓不到，但文本确实分叉了。
 pub fn home() -> PathBuf {
-    if let Some(p) = env::var("HAOAI_HOME").ok().filter(|s| !s.trim().is_empty()) {
-        return PathBuf::from(p);
-    }
-    match env::var("LOCALAPPDATA") {
-        Ok(d) => PathBuf::from(d).join("HaoAI"),
-        Err(_) => PathBuf::from("HaoAI"),
-    }
+    let raw = if let Some(p) = env::var("HAOAI_HOME").ok().filter(|s| !s.trim().is_empty()) {
+        p
+    } else {
+        match env::var("LOCALAPPDATA") {
+            Ok(d) => PathBuf::from(d).join("HaoAI").to_string_lossy().to_string(),
+            Err(_) => "HaoAI".to_string(),
+        }
+    };
+    PathBuf::from(raw.replace('/', "\\"))
 }
 
 fn port_of(rest: &[String]) -> u16 {

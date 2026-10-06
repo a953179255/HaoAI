@@ -59,6 +59,20 @@ pub struct View<'a> {
 /// - 依赖引擎运行态的：tools（32 条工具注册表）/runState/subs/context.parts（要跑提示构造器）
 ///   /usage（引擎回合内实时计数器，restore 后从 0 起）→ 仍按"未驻留"给安全值，
 ///   差异由 tests/diff_golden.rs 逐条列账，不假装已经会。
+/// `Images.wireChars`：这张图大概要占多少"字"（上下文占用那圈要用它来算）。
+/// 按路径的 40 个字符算就是骗人 —— 一张截图的真实成本是 base64 之后的那几 MB。
+/// 读不到文件就 0（那张图压根发不出去，不算成本）。
+const WIRE_MAX_BYTES: u64 = 6_000_000;
+fn wire_chars(path: &str) -> usize {
+    let Ok(m) = std::fs::metadata(path) else { return 0 };
+    if !m.is_file() {
+        return 0;
+    }
+    let n = m.len().min(WIRE_MAX_BYTES);
+    // base64 长度 = ceil(n/3)*4，再加 24 个字符的 `data:…;base64,` 前缀
+    (((n + 2) / 3) * 4 + 24) as usize
+}
+
 pub fn state_json(v: &View) -> String {
     let meta = v.session.map(|s| &s.meta);
     let mode = meta.map(|m| m.mode.as_str()).unwrap_or(&v.settings.permission_mode);
@@ -133,9 +147,27 @@ pub fn state_json(v: &View) -> String {
     // `mem = Memory.read(...).length.coerceAtMost(sys)`，且 sys 那一行报的是**减掉 mem 之后**的数
     let mem_chars = utf16_len(pctx.extra.trim()).min(sys_chars);
     let tools_chars = crate::tools::schemas_chars(&off);
+    /*
+     * Kotlin 那边是三段加起来（`contextBreakdown`）：
+     *   content.length + Σ calls.args.length + Σ Images.wireChars(images)
+     *
+     * **只算 content 是错的**：一条 agent 回合必然带 tool_calls，那 23 字的 args
+     * 不算，界面上"历史占多少"就一直偏低 —— 而这一行正是"上下文快满了"的判据。
+     * 金标准抓不到它是因为那批会话没有一条带 tool_calls 的消息，是跨端对跑才暴露的。
+     */
     let hist_chars: usize = v
         .session
-        .map(|sf| sf.msgs.iter().map(|m| utf16_len(&m.content)).sum())
+        .map(|sf| {
+            sf.msgs
+                .iter()
+                .filter(|m| m.role != "system")
+                .map(|m| {
+                    let args: usize = m.calls.iter().map(|(_, _, a)| utf16_len(a)).sum();
+                    let images: usize = m.images.iter().map(|p| wire_chars(p)).sum();
+                    utf16_len(&m.content) + args + images
+                })
+                .sum()
+        })
         .unwrap_or(0);
     let mut parts: Vec<String> = vec![];
     if sys_chars > mem_chars {
@@ -256,6 +288,64 @@ mod tests {
         assert_eq!(esc("l1\nl2"), "l1\\nl2");
         assert_eq!(esc("a\rb"), "ab");
         assert_eq!(esc("a\tb"), "a    b");
+    }
+
+    /// `contextBreakdown` 的「对话历史」= `content + Σ calls.args + Σ wireChars(images)`。
+    /// **只算 content 是错的**：一轮 agent 必带 tool_calls，那串 args 不算，界面上
+    /// "历史占多少"就一直偏低 —— 而这行正是"上下文快满了"的判据。
+    /// 金标准抓不到它是因为那批会话没有一条带 tool_calls 的消息；是跨端对跑才暴露的。
+    #[test]
+    fn history_chars_count_tool_call_args_and_image_wires() {
+        use crate::store::Msg;
+        let st = Settings::default();
+        let store = crate::store::Store::new(std::env::temp_dir());
+        let img = std::env::temp_dir().join(format!("haoai-wire-{}.png", std::process::id()));
+        std::fs::write(&img, vec![0u8; 100]).unwrap();
+        let args = r#"{"path":"a.rs"}"#;
+        let sf = crate::store::SessionFile {
+            meta: crate::store::Meta::default(),
+            msgs: vec![
+                Msg { role: "user".into(), content: "abc".into(), ..Default::default() },
+                Msg {
+                    role: "assistant".into(),
+                    content: "读一下".into(),
+                    calls: vec![("c1".into(), "read".into(), args.to_string())],
+                    ..Default::default()
+                },
+                // 系统提示**不进**历史（Kotlin 是 filter { role != "system" }）
+                Msg { role: "system".into(), content: "这一段不该被算进去".into(), ..Default::default() },
+                Msg {
+                    role: "user".into(),
+                    content: "看图".into(),
+                    images: vec![img.to_string_lossy().to_string()],
+                    ..Default::default()
+                },
+            ],
+            todos: vec![],
+            summary: None,
+            compacted_through: 0,
+        };
+        let s = state_json(&View {
+            settings: &st,
+            session: Some(&sf),
+            session_id: "",
+            store: &store,
+            running: false,
+            usage: (0, 0),
+            pending: &[],
+        });
+        let j: serde_json::Value = serde_json::from_str(&s).unwrap();
+        let parts = j["context"]["parts"].as_array().unwrap();
+        let hist = parts
+            .iter()
+            .find(|p| p[0] == "对话历史")
+            .expect("历史那行该有");
+        let expected = utf16_len("abc") + utf16_len("读一下") + utf16_len(args)
+            + utf16_len("看图")
+            // 图片按**编码后**的真实成本算，不是路径那 40 个字符：100 字节 → ceil(100/3)*4 + 24
+            + (((100 + 2) / 3) * 4 + 24);
+        assert_eq!(hist[1], expected, "content+args+wire 才是 Kotlin 那个数：{hist}");
+        let _ = std::fs::remove_file(&img);
     }
 
     #[test]

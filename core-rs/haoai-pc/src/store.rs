@@ -51,6 +51,14 @@ impl Default for Settings {
     }
 }
 
+/// Java 的 `File(String)` 在 Windows 上会把 `/` 归一成 `\`（反斜杠是系统分隔符，
+/// 两个分隔符都接受、都存成 `\`）。Kotlin 侧 `Session.workspace` 是 `File`，
+/// 所以这条归一发生在**读进来那一刻**，落盘时写的又是 `absolutePath` —— 两端都不归一的话，
+/// 同一个正斜杠的 workspace 会分叉成"Rust 一直存正斜杠 / JVM 落盘后变反斜杠"。
+pub fn norm_ws(s: &str) -> String {
+    s.replace('/', "\\")
+}
+
 #[derive(Clone, Default)]
 pub struct Meta {
     pub id: String,
@@ -278,6 +286,11 @@ impl Store {
         let raw = fs::read_to_string(&path).ok()?;
         let v = serde_json::from_str::<Value>(&raw).ok()?;
         let mut sf = SessionFile { meta: self.meta(id)?, msgs: vec![], todos: vec![], summary: None, compacted_through: 0 };
+        // `Session.workspace` 在 Kotlin 那边是 `File(String)` —— Java 的 File 构造器
+        // 在 Windows 上就把 `/` 归一成 `\`，于是 `/api/state`、系统提示的「工作区」行、
+        // 以及落盘时写的 `absolutePath` 三处都是反斜杠。不归一就与 JVM 分叉：
+        // 正斜杠进、正斜杠出，而那边是正斜杠进、反斜杠出。
+        sf.meta.workspace = norm_ws(&sf.meta.workspace);
         if let Some(arr) = v.get("messages").and_then(|x| x.as_array()) {
             for m in arr {
                 // Kotlin: `m["content"]?.jsonPrimitive?.contentOrNull ?: return@forEachIndexed`
@@ -340,4 +353,46 @@ fn file_mtime_ms(p: &Path) -> i64 {
             t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
         })
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// workspace 的分隔符必须**照 Java 的 `File` 归一**：
+    /// `Session.workspace` 在 Kotlin 是 `File`，构造时就把 `/` 换成 `\`，
+    /// 落盘写的又是 `absolutePath`。不归一就会出现"Rust 一直存正斜杠 / JVM 落一次盘
+    /// 变反斜杠"——同一个文件在两端读出不同的 workspace。
+    ///
+    /// 同时**会话列表**（`meta()`）得保持原样：`SessionIndex.kt` 那边把 workspace
+    /// 当纯字符串解析，JVM 落盘之前列表里就是原始写法。这一处不对称是照着两端抄的。
+    #[test]
+    fn restore_normalizes_the_workspace_but_the_session_list_does_not() {
+        let root = std::env::temp_dir().join(format!("haoai-ws-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        let path = root.join("sessions/pc-wsfix.json");
+        fs::write(
+            &path,
+            r#"{"id":"wsfix","title":"t","workspace":"G:/x/y","mode":"ask","messages":[]}"#,
+        )
+        .unwrap();
+
+        let store = Store::new(root.clone());
+        let listed = store.meta("wsfix").expect("meta 该读得到");
+        assert_eq!(listed.workspace, "G:/x/y", "会话列表读的是原始字符串（SessionIndex 就是纯 String）");
+        let restored = store.restore("wsfix").expect("restore 该读得到");
+        assert_eq!(restored.meta.workspace, r"G:\x\y", "活的会话按 File 的规矩归一");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn norm_ws_only_swaps_separators_and_never_touches_a_path_that_is_already_windows_ish() {
+        assert_eq!(norm_ws("G:/x/y"), r"G:\x\y");
+        assert_eq!(norm_ws(r"G:\x\y"), r"G:\x\y");
+        assert_eq!(norm_ws(""), "");
+        assert_eq!(norm_ws("//server/share"), r"\\server\share");
+    }
 }

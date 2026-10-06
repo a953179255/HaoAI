@@ -117,9 +117,29 @@ pub struct Run {
  * 做法是把两个句柄都指向同一个临时文件，退出后整份读回来 —— 顺带还拿到了
  * "超时被杀之前已经输出到哪"这半段，那正是超时那条分支要回给模型的东西。
  */
-pub fn run(l: &Launcher, command: &str, cwd: &Path, workspace: &Path, timeout_sec: i64) -> Result<Run, String> {
+pub fn run(
+    l: &Launcher,
+    command: &str,
+    cwd: &Path,
+    workspace: &Path,
+    timeout_sec: i64,
+) -> Result<Run, String> {
+    run_in(&std::env::temp_dir(), l, command, cwd, workspace, timeout_sec)
+}
+
+/// 脚本与输出文件放在哪 —— 生产用系统临时目录，**测试传自己的私有目录**：
+/// 共享目录里数 `haoai-cmd-*` 会被别人（同期跑的 JVM 引擎也往同一个 TEMP 写）带偏，
+/// 那会得到一条时好时坏的清理断言。
+fn run_in(
+    scratch: &Path,
+    l: &Launcher,
+    command: &str,
+    cwd: &Path,
+    workspace: &Path,
+    timeout_sec: i64,
+) -> Result<Run, String> {
     let kind = script_kind(&l.exe);
-    let dir = std::env::temp_dir();
+    let dir = scratch.to_path_buf();
     let stem = format!("haoai-cmd-{}-{}", std::process::id(), now_nanos());
     let ext = if kind == "pwsh" { ".ps1" } else if kind == "cmd" { ".bat" } else { ".sh" };
     let script = dir.join(format!("{stem}{ext}"));
@@ -237,18 +257,8 @@ mod tests {
 
     /// 真的起一个进程跑一条命令，看三件事：退出码进不进内容、输出怎么归一行尾、
     /// 以及 stderr 是不是真的并到了同一条流里。
-    /// 这三条都要动共享的系统临时目录，而清理那条数的是目录里的文件个数 ——
-    /// 并行跑时别的线程正在建/删自己的 `haoai-cmd-*`，计数就不确定了。
-    /// 用一把测试内的串行锁把它们排开（**不是**给 run() 加锁：生产环境并发跑多条
-    /// 命令是合法的，文件名里带 pid+纳秒本来就是为这个）。
-    static SHELL_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    fn shell_guard() -> std::sync::MutexGuard<'static, ()> {
-        SHELL_SERIAL.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     #[test]
     fn a_real_command_reports_exit_code_and_merged_output() {
-        let _ser = shell_guard();
         let Some(l) = launcher_for("cmd") else { return };
         let ws = std::env::temp_dir().join(format!("haoai-shell-{}", std::process::id()));
         let _ = fs::remove_dir_all(&ws);
@@ -265,7 +275,6 @@ mod tests {
     /// 模型接着判断时靠的就是这半段。
     #[test]
     fn a_timeout_kills_the_process_and_keeps_what_it_already_printed() {
-        let _ser = shell_guard();
         let Some(l) = launcher_for("cmd") else { return };
         let ws = std::env::temp_dir().join(format!("haoai-shell-to-{}", std::process::id()));
         let _ = fs::remove_dir_all(&ws);
@@ -276,26 +285,33 @@ mod tests {
         let _ = fs::remove_dir_all(&ws);
     }
 
+    /// 这条要验证"跑完不留垃圾"，所以临时目录必须**这一条自己说了算** ——
+    /// 数共享的系统临时目录会被同期跑的别的进程带偏（JVM 引擎的 ShellTool
+    /// 也往同一个 TEMP 写 `haoai-cmd-*`），那得到的是一条时好时坏的断言。
     #[test]
     fn the_temp_script_is_deleted_whether_it_ran_or_not() {
-        let _ser = shell_guard();
         let Some(l) = launcher_for("cmd") else { return };
         let ws = std::env::temp_dir().join(format!("haoai-shell-clean-{}", std::process::id()));
+        let scratch = std::env::temp_dir().join(format!("haoai-scratch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&scratch);
         fs::create_dir_all(&ws).unwrap();
-        let before = temp_haoai_count();
-        let _ = run(&l, "echo x", &ws, &ws, 30).unwrap();
-        let after = temp_haoai_count();
-        assert_eq!(before, after, "haoai-cmd-* 的临时文件必须跑完就删：{before} → {after}");
-        // 失败的那条路也要删：脚本写不成/找不到 shell 时不留垃圾
+        fs::create_dir_all(&scratch).unwrap();
+
+        let _ = run_in(&scratch, &l, "echo x", &ws, &ws, 30).unwrap();
+        assert_eq!(files_in(&scratch), 0, "成功的那次跑完必须把脚本与输出文件都删掉");
+
+        // 失败的那次也不能留：超时被杀这条最容易半途撂下东西
+        let _ = run_in(&scratch, &l, "ping -n 30 127.0.0.1 > nul", &ws, &ws, 1).unwrap();
+        assert_eq!(files_in(&scratch), 0, "超时被杀这条路也要清干净");
+
         let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&scratch);
     }
 
-    fn temp_haoai_count() -> usize {
-        fs::read_dir(std::env::temp_dir())
-            .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| {
-                e.file_name().to_string_lossy().starts_with("haoai-cmd-")
-            }).count())
+    fn files_in(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .map(|rd| rd.filter_map(|e| e.ok()).count())
             .unwrap_or(0)
     }
 }

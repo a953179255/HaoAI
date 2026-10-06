@@ -383,6 +383,12 @@ fn persist(app: &App, sid: &str, hist: &[Msg], ctx: &Ctx) {
     if let Some(obj) = v.as_object_mut() {
         obj.insert("messages".into(), Value::Array(hist.iter().map(msg_json).collect()));
         obj.insert("updated".into(), Value::Number(now_ms().into()));
+        // Kotlin 落盘时写的是 `session.workspace.absolutePath`（`File` 的路径）——
+        // 这就是正斜杠的 workspace 会在 JVM 侧"落一次盘就变成反斜杠"的原因。
+        obj.insert(
+            "workspace".into(),
+            Value::String(crate::store::norm_ws(&ctx.workspace.to_string_lossy())),
+        );
         // 写的是**活值**（`put("promptTokens", totalPrompt)`），不是从文件累加。
         // 于是重启后第一次保存会把文件里的总数改小 —— Kotlin 就这么行为，照抄。
         obj.insert("promptTokens".into(), Value::Number(pt.into()));
