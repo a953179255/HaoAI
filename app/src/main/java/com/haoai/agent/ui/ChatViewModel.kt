@@ -29,6 +29,7 @@ import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.SessionStartup
 import com.haoai.agent.data.StoredMessage
 import com.haoai.agent.data.StoredSession
+import com.haoai.agent.data.StoredToolCall
 import com.haoai.agent.data.toModel
 import com.haoai.agent.data.toStored
 import kotlinx.coroutines.CompletableDeferred
@@ -250,12 +251,39 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _rows = MutableStateFlow<List<ChatRow>>(emptyList())
     val rows = _rows.asStateFlow()
 
+    /**
+     * ❶ 晋升行标记：这些 key 的行是"刚从流式区晋升"的——引擎 MessageAdded 落库时，
+     * 同一份内容此刻还在流式气泡里上屏着；行若再从透明度 0 播 220ms 入场淡入，
+     * 就是用户看到的「回复完毕闪一下 / 上方突然插入」。UI 侧对这些 key 跳过入场淡入。
+     * 只在运行会话内追加（发送方是 MessageAdded 处理器），切会话/新建会话时清空。
+     */
+    private val promotedKeys = HashSet<String>()
+    private val _promotedKeys = MutableStateFlow<Set<String>>(emptySet())
+    val promotedRowKeysFlow = _promotedKeys.asStateFlow()
+
+    private fun publishPromotedKeys() { _promotedKeys.value = promotedKeys.toSet() }
+
+    private fun clearPromotedKeys() {
+        if (promotedKeys.isNotEmpty()) {
+            promotedKeys.clear()
+            publishPromotedKeys()
+        }
+    }
+
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText = _streamingText.asStateFlow()
 
     /** 流式思考过程（reasoning_content / <think>），与 streamingText 同生命周期。 */
     private val _streamingReasoning = MutableStateFlow<String?>(null)
     val streamingReasoning = _streamingReasoning.asStateFlow()
+
+    /**
+     * 本轮是否产出过任何内容（正文/思考 token）。收尾阶段（最终消息已落行、流式已清、
+     * 工具已结算）的短暂空档靠它区分「回合刚开始还没连上」和「在整理回答」——
+     * 两者在派生文案里都落到空档分支，旧实现一律显示"正在连接模型"（收尾瞬间闪错文案）。
+     */
+    private val _turnHadOutput = MutableStateFlow(false)
+    val turnHadOutput = _turnHadOutput.asStateFlow()
 
     // ── ② token 批处理（60ms 节拍批刷）──
     // 引擎回调线程直接逐 token 写 StateFlow 会让 MarkdownText 每帧重组+重解析；
@@ -295,9 +323,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (_thinkingMs.value == null && _turnStartAt.value != 0L) {
             _thinkingMs.value = System.currentTimeMillis() - _turnStartAt.value
         }
+        _turnHadOutput.value = true
         synchronized(textBuf) { textBuf.append(frag); Unit }
     }
-    private fun appendReasoning(frag: String) = synchronized(reasoningBuf) { reasoningBuf.append(frag); Unit }
+    private fun appendReasoning(frag: String) = synchronized(reasoningBuf) {
+        _turnHadOutput.value = true
+        reasoningBuf.append(frag); Unit
+    }
 
     /** 结束/中断收尾：停 flusher、把残余缓冲一次性落屏。 */
     private fun endStreaming() {
@@ -339,6 +371,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             _running.value = true
             _thinkingMs.value = null
             _turnStartAt.value = t0
+            _turnHadOutput.value = false
             liveTools.clear()
             publishLiveTools()
             _streamingReasoning.value = ""
@@ -632,6 +665,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentSession = s
         c.sessionStore.save(s)
         c.sessionStore.rememberOpened(s.id) // 新建也算"上次看的"：下次冷启动回到这条，而不是回到置顶那条
+        clearPromotedKeys()
         // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定
         publishLiveTools()
         sessionIn = 0
@@ -654,6 +688,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         currentSession = s
         c.sessionStore.rememberOpened(id) // 记下"用户现在看的是这条"，冷启动回到这里（见 SessionStartup）
+        // 晋升行标记按会话清空：key 虽是全局唯一消息 id，但新会话的首帧行不应继承旧会话的豁免
+        clearPromotedKeys()
         // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定：
         // 切到其他会话透空，切回运行会话时间轴无缝续上
         publishLiveTools()
@@ -845,6 +881,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingReasoning.value = null
         _thinkingMs.value = null
         _turnStartAt.value = System.currentTimeMillis()
+        _turnHadOutput.value = false
         startStreamFlusher()
         // D16: 登记到进程级注册表——其他实例据此显示停止键、路由停止、豁免「死亡」误判
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
@@ -1290,6 +1327,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingReasoning.value = null
         _thinkingMs.value = null
         _turnStartAt.value = System.currentTimeMillis()
+        _turnHadOutput.value = false
         startStreamFlusher()
         publishLiveTools()
         com.haoai.agent.platform.TaskVisibility.apply(c.appContext, c.settingsFlow.value.vscreenHideTask)
@@ -1620,8 +1658,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 最终消息接管显示后又闪回流式区（内容已入 rows，不丢数据，纯观感）
                 flushStreamBuf()
                 _streamingText.value = null
+                // 本条消息的推理已落进合并行的链卡；live 卡的 Think 段只代表"当前轮"，
+                // 不清掉的话落行后 live 卡继续显示全程推理，和已落行重复各画一遍
+                synchronized(reasoningBuf) { reasoningBuf.setLength(0) }
+                _streamingReasoning.value = null
                 ev.message.calls.forEach { call ->
-                    liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.args))
+                    // ❶ 状态回跳修复：ToolChanged 先到（快工具/子代理上报）时已有已知状态，
+                    // 不得覆盖回 RUNNING 默认态；只登记还没见过的调用
+                    if (!liveTools.containsKey(call.id)) {
+                        liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.args))
+                    }
                 }
                 // 截图消息（方案 A）：流式期就把它挂到对应工具的步骤上，卡片即刻出缩略图
                 screenshotToolName(ev.message.content ?: "", ev.message.imageData)?.let { shotName ->
@@ -1633,7 +1679,17 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     }
                 }
                 publishLiveTools()
+                // ❷ 晋升行标记：本次 rebuild 新增的 assistant 行 = 刚从流式区晋升的内容，
+                // UI 对它跳过入场淡入（同帧旧流式内容消失、新行再从 0 淡入 = 收尾闪一下）
+                val keysBefore = _rows.value.mapTo(HashSet()) { it.key }
                 rebuildRows()
+                var promotedAdded = false
+                for (row in _rows.value) {
+                    if (row.key !in keysBefore && row.role != ChatMessage.ROLE_USER) {
+                        promotedKeys.add(row.key); promotedAdded = true
+                    }
+                }
+                if (promotedAdded) publishPromotedKeys()
             }
             is ToolChanged -> {
                 liveTools[ev.update.callId] = UiTool(
@@ -1764,31 +1820,28 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         var pendingId = ""          // 链首条消息 id（合并行的 id/key）
         var pendingTs = 0L
 
-        // 把一条 assistant 消息的 reasoning + tools 追加进 pending 链
-        fun appendToChain(m: StoredMessage) {
-            m.reasoning?.takeIf { it.isNotBlank() }?.let { pending.add(ChainStep.Think(it)) }
-            m.toolCalls.forEach { call ->
-                val live = liveTools[call.id]
-                val stored = resultByCall[call.id]
-                val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
-                val askBatch = if (call.name == "ask_user_batch")
-                    askDataOfBatch(call.argumentsJson, stored?.first) else null
-                val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
-                val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson),
-                    ask = ask, askBatch = askBatch, hits = hits)
-                val tool = when {
-                    live != null && live.state == ToolRunState.RUNNING -> live
-                    stored != null -> base.copy(
-                        state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
-                        preview = previewLine(stored.first),
-                        subagents = live?.subagents ?: emptyList(),
-                        imageData = live?.imageData
-                    )
-                    live != null -> live
-                    else -> base
-                }
-                pending.add(ChainStep.Tool(tool))
+        // 把一次工具调用解析成链卡步骤（ask_user/web_search 的增强数据在这里挂上）
+        fun toolStepOf(call: StoredToolCall): ChainStep.Tool {
+            val live = liveTools[call.id]
+            val stored = resultByCall[call.id]
+            val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
+            val askBatch = if (call.name == "ask_user_batch")
+                askDataOfBatch(call.argumentsJson, stored?.first) else null
+            val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
+            val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson),
+                ask = ask, askBatch = askBatch, hits = hits)
+            val tool = when {
+                live != null && live.state == ToolRunState.RUNNING -> live
+                stored != null -> base.copy(
+                    state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
+                    preview = previewLine(stored.first),
+                    subagents = live?.subagents ?: emptyList(),
+                    imageData = live?.imageData
+                )
+                live != null -> live
+                else -> base
             }
+            return ChainStep.Tool(tool)
         }
         // 落一条"带链"的行（正文可为空：回合被停止时链尾无正文也要显示）
         fun flushChain(text: String, error: Boolean, m: StoredMessage?) {
@@ -1799,10 +1852,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             // 只有最终回复轮才带真实 tokens/耗时。这里把 0 归一成 null → 下游"复制/重发/更多"
             // 按钮行与统计行（判据 completionTokens!=null||durationMs!=null）只在最终回复显示，
             // 不再每个中间气泡下面都挂一排按钮（用户实测反馈）。
+            val headId = pendingId.ifBlank { m?.id ?: "" }.ifBlank { "chain_fall" }
             rows.add(
                 ChatRow(
-                    key = pendingId.ifBlank { m?.id ?: "" }.ifBlank { "chain_fall" },
-                    id = pendingId.ifBlank { m?.id ?: "" },
+                    // 时序化后同一条消息可能落两行：纯文本行 + 本消息调用的尾行。
+                    // 文本行（pending 为空时 flush）的 key 加 "#t" 后缀，避免与尾行链头 key 撞车；
+                    // 链行 key 仍 = 链首消息 id（跨 rebuild 稳定 → 尾行原地生长不换 key）。
+                    key = if (pending.isEmpty()) "$headId#t" else headId,
+                    id = headId,
                     role = ChatMessage.ROLE_ASSISTANT,
                     text = text, error = error,
                     tools = tools, reasoning = reasoning,
@@ -1823,14 +1880,27 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         s.messages.forEachIndexed { i, m ->
             when (m.role) {
                 ChatMessage.ROLE_ASSISTANT -> {
-                    if (pendingId.isEmpty()) { pendingId = m.id; pendingTs = m.ts }
-                    appendToChain(m)
+                    // 时序化落行（2026-10-06 效果图定稿）：一条消息内的事件顺序是
+                    // 推理 → 正文 → 本消息的工具调用。正文切断链卡——
+                    //   · 此前累积的步（先于发言发生）随正文落成"卡在上、文在下"；
+                    //   · 本消息自己的调用在发言之后才执行 → 进新的 pending，由尾行
+                    //     画在正文下方，不再在落行瞬间"插到刚输出的正文上方"。
+                    // 旧行为把本消息调用 append 进 pending 后才 flush，工具卡永远压在
+                    // 比它晚说的话上面（用户报的"顺序不对/上方突然插入"）。
+                    m.reasoning?.takeIf { it.isNotBlank() }?.let {
+                        if (pendingId.isEmpty()) { pendingId = m.id; pendingTs = m.ts }
+                        pending.add(ChainStep.Think(it))
+                    }
                     if (m.content.isNotBlank()) {
                         // 这一轮有正文 = 模型说话/最终答案 → 断链，落一条带链行
                         flushChain(m.content, m.error, m)
                         lastAssistantIdx = rows.lastIndex
                     }
-                    // 无正文：纯工具轮，继续累加进 pending，不出行
+                    m.toolCalls.forEach { call ->
+                        if (pendingId.isEmpty()) { pendingId = m.id; pendingTs = m.ts }
+                        pending.add(toolStepOf(call))
+                    }
+                    // 无正文无调用：不出行（空消息）
                 }
                 ChatMessage.ROLE_USER -> {
                     // 引擎注入的截图消息（"[工具名] 页面截图（当前视觉状态，供图像分析）"）：

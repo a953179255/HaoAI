@@ -375,6 +375,10 @@ fun ChatScreen(
     val turnStartAt by vm.turnStartAt.collectAsState()
     val running by vm.running.collectAsState()
     val liveToolsSnapshot by vm.liveToolsSnapshotFlow.collectAsState()
+    // ❶ 晋升行：从流式区落成行的 key——跳过入场淡入（内容同帧已在上屏，再淡入=闪一下）
+    val promotedRowKeys by vm.promotedRowKeysFlow.collectAsState()
+    // 本轮是否产出过内容：收尾空档的胶囊文案分支（「整理回答」vs「连接模型」）
+    val turnHadOutput by vm.turnHadOutput.collectAsState()
     val error by vm.error.collectAsState()
     val sessions by vm.sessions.collectAsState()
     val deletedSessions by vm.deletedSessions.collectAsState()
@@ -903,6 +907,7 @@ fun ChatScreen(
                 thinkingHint = if (running && vm.isLocalProviderActive())
                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
                 liveToolsSnapshot = liveToolsSnapshot,
+                promotedRowKeys = promotedRowKeys,
                 scrollState = scrollState,
                 userScrolledAway = userScrolledAway,
                 sessionId = vm.session.collectAsState().value?.id,
@@ -1216,9 +1221,15 @@ fun ChatScreen(
                                 // 无工具在跑、也无流 → 才说"已完成几步、在等模型"
                                 liveToolsSnapshot.isNotEmpty() ->
                                     "已完成 ${liveToolsSnapshot.count { it.state == ToolRunState.DONE }} 步 · 等待模型"
-                                else -> if (vm.isLocalProviderActive())
-                                    "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
-                                else "正在连接模型"
+                                // 收尾空档：最终消息已落行、流式已清、工具已结算，running 还没翻 false。
+                                // 本轮产出过内容 → 是"在整理回答"（真机实拍：这里曾闪"正在连接模型"）；
+                                // 本轮还没产出过 → 才是真的"正在连接模型"（回合刚起跑）
+                                else -> when {
+                                    turnHadOutput -> "正在整理回答"
+                                    vm.isLocalProviderActive() ->
+                                        "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）"
+                                    else -> "正在连接模型"
+                                }
                             }
                             ThinkingIndicator(phaseText, turnStartAt)
                         }
@@ -2309,6 +2320,8 @@ private fun MessageList(
     thinkingHint: String? = null,
     thinkingMs: Long? = null,
     liveToolsSnapshot: List<com.haoai.agent.ui.UiTool> = emptyList(),
+    /** 从流式区晋升落行的 key：这些行跳过入场淡入（同帧内容已在上屏，淡入=闪一下）。 */
+    promotedRowKeys: Set<String> = emptySet(),
     scrollState: androidx.compose.foundation.ScrollState,
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
     sessionId: String? = null,
@@ -2637,9 +2650,13 @@ private fun MessageList(
                 // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
                 // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
                 // ——不能无条件给每行套淡入，否则首屏组合时所有行都会被判成新行而集体淡入。
+                // 【晋升豁免】运行中由 MessageAdded 落成行的 assistant 内容（正文/工具链），
+                // 同一帧里流式区的那份同内容正在消失——新行若再从透明度 0 淡入，就是
+                // 用户报的「回复完毕闪一下 / 上方突然插入」。晋升行直接以不透明度 1 出现。
                 // 动画结束把 fadingIn 置 false 撤掉 graphicsLayer，不给已定稿的行长期留图层。
                 val isNewRow = remember(row.key) { seenRowKeys.add(row.key) }
-                var fadingIn by remember(row.key) { mutableStateOf(isNewRow) }
+                val promoted = row.key in promotedRowKeys
+                var fadingIn by remember(row.key) { mutableStateOf(isNewRow && !promoted) }
                 val appearAlpha = remember(row.key) {
                     androidx.compose.animation.core.Animatable(if (isNewRow) 0f else 1f)
                 }
@@ -3369,13 +3386,13 @@ private fun ThinkingIndicator(hint: String? = null, turnStartAt: Long = 0L) {
     val base = MaterialTheme.colorScheme.onSurfaceVariant
     val hi = MaterialTheme.colorScheme.primary
     Row(verticalAlignment = Alignment.CenterVertically) {
-        // 连接状态点（呼吸）
-        val breathe by com.haoai.agent.ui.common.rememberPulse(0.4f, 1f, 900)
-        Box(
-            Modifier
-                .size(7.dp)
-                .graphicsLayer { alpha = breathe }
-                .background(MaterialTheme.colorScheme.primary, CircleShape)
+        // 连接状态指示（2026-10-06 用户定稿）：呼吸灯→转圈。
+        // 呼吸灯只有透明度变化，分不清「在等模型」还是「卡住了」；转圈持续传达"进行中"，
+        // 且与链卡步骤行的 spinner 视觉语言统一（同为 SlowSpinner，30Hz 节流不新增逼帧源）。
+        com.haoai.agent.ui.common.SlowSpinner(
+            size = 10.dp,
+            strokeWidth = 1.5.dp,
+            color = MaterialTheme.colorScheme.primary
         )
         Spacer(Modifier.size(9.dp))
         Text(
