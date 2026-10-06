@@ -74,7 +74,7 @@ impl Ctx {
     }
 }
 
-fn canon_str(p: &Path) -> String {
+pub(crate) fn canon_str(p: &Path) -> String {
     let c = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     // Windows 的 canonicalize 会加 \\?\ 前缀，Kotlin 的 canonicalPath 没有
     c.display().to_string().trim_start_matches(r"\\?\").to_string()
@@ -116,8 +116,15 @@ fn walk_rec(d: &Path, depth: usize, cap: usize, out: &mut Vec<PathBuf>) {
 
 /// `globToRegex`：`**` → `.*`（并吃掉紧跟的一个 `/`）、`*` → `[^/]*`、`?` → `[^/]`、
 /// 元字符转义、首尾加 `^`/`$`、整体忽略大小写。
+///
+/// **不**把 `\` 归一成 `/`（这里曾经归一过，是对齐 Kotlin 时改掉的一处）：
+/// `globToRegex` 的 `REGEX_META` 里就有反斜杠，Kotlin 会把它转义成"字面反斜杠"，
+/// 而匹配对象 `ctx.rel(f)` 永远是正斜杠 —— 于是 Windows 写法的 pattern 在 Kotlin 侧
+/// 就是匹配不上。看着像 bug，但**两端必须一样错**：悄悄让 Rust 更宽容，同一个 pattern
+/// 就会在一边给出文件列表、另一边"无匹配"，那种差异比一致的难用更危险。
+/// 权限规则（`Policies.matchesSubject`）用的也是这一个函数，不能被两种口径共用。
 pub fn glob_to_regex(glob: &str) -> Result<Regex, String> {
-    let g = glob.replace('\\', "/");
+    let g = glob.to_string();
     let mut sb = String::from("^");
     let cs: Vec<char> = g.chars().collect();
     let mut i = 0usize;
