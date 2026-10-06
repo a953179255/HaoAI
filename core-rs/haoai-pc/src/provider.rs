@@ -272,12 +272,13 @@ pub fn request_body(s: &Settings, sys: &str, history: &[crate::store::Msg], plan
 /// 32 把工具的 function-calling 形状。与 `schemas()` 同源（同一张生成表），
 /// 但这里要的是 OpenAI 的 `{type:function, function:{…}}` 包装。
 ///
-/// 过滤链照 `Engine.schemas()`：这条会话的开关 → 档位收窄。
+/// 过滤链照 `Engine.schemas()`：实验特性开关（关着=不存在）→ 这条会话的开关 → 档位收窄。
 /// 计划模式必须在这里就把写类工具**从模型眼前拿走**，只留执行侧那道闸是不够的 ——
 /// 闸只挡住调得动的，挡不住模型调了之后被拒、再试一遍那种白跑。
 fn tool_values(s: &Settings, plan: bool) -> Vec<Value> {
     crate::tools::TOOLS
         .iter()
+        .filter(|t| crate::guard::visible(t.name, &s.flags))
         .filter(|t| !s.tools_off.iter().any(|o| o == t.name))
         .filter(|t| !plan || crate::tools::read_only(t))
         .map(|t| {

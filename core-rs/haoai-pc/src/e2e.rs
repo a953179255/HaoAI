@@ -8,7 +8,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -203,19 +202,8 @@ fn app_with_session(tag: &str, port: u16, sid: &str, mode: &str) -> (PathBuf, Ar
         ),
     )
     .unwrap();
-    let store = crate::store::Store::new(root.clone());
-    let settings = store.settings();
-    let app = Arc::new(App {
-        settings,
-        store,
-        current: Mutex::new(sid.into()),
-        resident: Mutex::new([sid.to_string()].into_iter().collect()),
-        bus: Mutex::new(Vec::<Sender<String>>::new()),
-        histories: Mutex::new(std::collections::HashMap::new()),
-        running: Mutex::new(std::collections::HashSet::new()),
-        stops: Mutex::new(std::collections::HashSet::new()),
-        usage: Mutex::new(std::collections::HashMap::new()),
-    });
+    let app = App::at(root.clone());
+    app.open_for_test(sid);
     (root, app)
 }
 
@@ -224,19 +212,8 @@ fn task_roundtrip_streams_and_persists() {
     let (port, seen) = fake_gateway(vec!["你好".into(), "，我在".into()]);
     let root = temp_root("rt", port);
 
-    let store = crate::store::Store::new(root.clone());
-    let settings = store.settings();
-    let app = Arc::new(App {
-        settings,
-        store,
-        current: Mutex::new("e2e".into()),
-        resident: Mutex::new([String::from("e2e")].into_iter().collect()),
-        bus: Mutex::new(Vec::<Sender<String>>::new()),
-        histories: Mutex::new(std::collections::HashMap::new()),
-        running: Mutex::new(std::collections::HashSet::new()),
-        stops: Mutex::new(std::collections::HashSet::new()),
-        usage: Mutex::new(std::collections::HashMap::new()),
-    });
+    let app = App::at(root.clone());
+    app.open_for_test("e2e");
 
     // 挂一个订阅者，把服务端推的事件全收下来
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -312,6 +289,7 @@ fn task_roundtrip_streams_and_persists() {
         store: &std_root,
         running: false,
         usage: app.usage_of("e2e"),
+        pending: &[],
     };
     let st: Value = serde_json::from_str(&crate::state::state_json(&v)).unwrap();
     assert_eq!(st["messages"].as_array().unwrap().len(), 3);
@@ -351,19 +329,8 @@ fn tool_loop_runs_read_then_answers() {
     )
     .unwrap();
 
-    let store = crate::store::Store::new(root.clone());
-    let settings = store.settings();
-    let app = Arc::new(App {
-        settings,
-        store,
-        current: Mutex::new("tt".into()),
-        resident: Mutex::new([String::from("tt")].into_iter().collect()),
-        bus: Mutex::new(Vec::<Sender<String>>::new()),
-        histories: Mutex::new(std::collections::HashMap::new()),
-        running: Mutex::new(std::collections::HashSet::new()),
-        stops: Mutex::new(std::collections::HashSet::new()),
-        usage: Mutex::new(std::collections::HashMap::new()),
-    });
+    let app = App::at(root.clone());
+    app.open_for_test("tt");
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     app.bus.lock().unwrap().push(tx);
 
@@ -408,19 +375,8 @@ fn tool_loop_runs_read_then_answers() {
 fn same_session_cannot_run_twice() {
     let (port, _) = fake_gateway(vec!["x".into()]);
     let root = temp_root("busy", port);
-    let store = crate::store::Store::new(root.clone());
-    let settings = store.settings();
-    let app = Arc::new(App {
-        settings,
-        store,
-        current: Mutex::new("e2e".into()),
-        resident: Mutex::new([String::from("e2e")].into_iter().collect()),
-        bus: Mutex::new(Vec::<Sender<String>>::new()),
-        histories: Mutex::new(std::collections::HashMap::new()),
-        running: Mutex::new(std::collections::HashSet::new()),
-        stops: Mutex::new(std::collections::HashSet::new()),
-        usage: Mutex::new(std::collections::HashMap::new()),
-    });
+    let app = App::at(root.clone());
+    app.open_for_test("e2e");
     assert!(app.try_begin("e2e"), "第一次占坑应成功");
     assert!(!app.try_begin("e2e"), "同一条会话不允许并行两个任务");
     app.end_run("e2e");
@@ -515,19 +471,8 @@ fn stop_mid_tool_round_replies_every_call_id() {
 fn stop_flag_survives_begin_and_is_cleared_on_next_run() {
     let (port, _) = fake_gateway(vec!["x".into()]);
     let root = temp_root("flag", port);
-    let store = crate::store::Store::new(root.clone());
-    let settings = store.settings();
-    let app = Arc::new(App {
-        settings,
-        store,
-        current: Mutex::new("e2e".into()),
-        resident: Mutex::new([String::from("e2e")].into_iter().collect()),
-        bus: Mutex::new(Vec::<Sender<String>>::new()),
-        histories: Mutex::new(std::collections::HashMap::new()),
-        running: Mutex::new(std::collections::HashSet::new()),
-        stops: Mutex::new(std::collections::HashSet::new()),
-        usage: Mutex::new(std::collections::HashMap::new()),
-    });
+    let app = App::at(root.clone());
+    app.open_for_test("e2e");
     app.request_stop("e2e");
     assert!(app.try_begin("e2e"), "占坑要成功");
     assert!(!app.stopped("e2e"), "新一轮开始时清掉上一轮的停止旗");
@@ -535,5 +480,171 @@ fn stop_flag_survives_begin_and_is_cleared_on_next_run() {
     assert!(app.stopped("e2e"));
     app.end_run("e2e");
     assert!(app.stopped("e2e"), "结束不清旗：Kotlin 把它留给 RunLedger 记账，下一轮 beginRun 才清");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// auto 档写一个**新建**的文件：低危 ⇒ 不打扰人，但文件、diff、检查点三样都得留下。
+#[test]
+fn auto_mode_write_lands_the_file_the_diff_and_the_checkpoint() {
+    use serde_json::json;
+    let rsp1 = tool_calls_frame(&[("call_w", "write", json!({"path": "src/new.md", "content": "# 新\n"}))]);
+    let (port, seen) = scripted_gateway(vec![rsp1, final_frame("写好了")]);
+    let (root, app) = app_with_session("wr", port, "w", "auto");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.bus.lock().unwrap().push(tx);
+    engine::turn(&app, "w", "建个文件").expect("回合应跑完");
+
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-w.json")).unwrap()).unwrap();
+    let tm = saved["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .expect("write 之后必须有一条 tool 回复");
+    let f = root.join("ws/src/new.md");
+    assert!(f.is_file(), "低危的新建文件在 auto 档就该直接写成；工具回的是 {}", tm["content"]);
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "# 新\n");
+    assert_eq!(app.approvals.size(), 0, "不该留下没收摊的等待");
+
+    let frames: Vec<String> = {
+        let mut v = Vec::new();
+        while let Ok(x) = rx.try_recv() {
+            v.push(x);
+        }
+        v
+    };
+    let done = frames.iter().find(|f| f.contains(r##""card":"diff""##)).expect("写改类要按 diff 卡片渲染");
+    assert!(done.contains("+1 行"), "{done}");
+
+    // 会话文件里：给模型的那句只有"已写入 …"，diff 单独一个键 —— 几百行 diff 塞进上下文是纯浪费
+    assert!(tm["content"].as_str().unwrap().starts_with("已写入 src/new.md"), "{tm}");
+    // diff 的头用的是 U+2212 那个减号，不是 ASCII 的 `-`：抄错一个字符界面对不上
+    assert!(tm["diff"].as_str().unwrap().contains("−1 行 / +1 行"), "{tm}");
+    let reqs = seen.lock().unwrap().clone();
+    assert!(!reqs[1].contains("−1 行 / +1 行"), "diff 不该混进发给模型的 tool 内容");
+
+    // 检查点账本：这轮动了哪个文件、改之前有没有快照（账本在状态根，不在工作区）
+    let ledger = std::fs::read_to_string(root.join("checkpoints.jsonl")).unwrap();
+    assert!(ledger.contains(r#""path":"src/new.md""#), "{ledger}");
+    // 新建的文件没有"上一版"，所以 snap 是空的 —— 回滚据此该删而不是还原
+    assert!(ledger.contains(r##""snap":""##), "新建的文件不该假装有一份快照：{ledger}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// ask 档改一个**已存在**的文件：必须弹卡、必须能在刷新后还看得见这张卡、
+/// 而人拒了就必须一个字都不写。
+#[test]
+fn ask_mode_blocks_the_write_until_the_card_is_answered() {
+    use serde_json::json;
+    let rsp1 = tool_calls_frame(&[(
+        "call_e",
+        "edit",
+        json!({"path": "src/a.rs", "old_string": "line2", "new_string": "LINE-2"}),
+    )]);
+    let (port, _seen) = scripted_gateway(vec![rsp1, final_frame("改好了")]);
+    let (root, app) = app_with_session("ask", port, "k", "ask");
+
+    let h = {
+        let app = Arc::clone(&app);
+        thread::spawn(move || engine::turn(&app, "k", "把第二行改掉"))
+    };
+
+    // 卡出生 → 先看 /api/state 的投影。这条断言钉的是那个真出过的事故：
+    // 卡只随 SSE 流一次，页面一刷新引擎还卡在等人点一个不会再出现的按钮，
+    // 表现是"agent 莫名卡死"，最后超时自动拒掉。
+    let mut id = String::new();
+    for _ in 0..400 {
+        if let Some((i, w)) = app.approvals.rows().first() {
+            id = i.clone();
+            assert_eq!(w.sid, "k");
+            let json = serde_json::from_str::<Value>(&w.payload).unwrap();
+            assert_eq!(json["risk"], "mid", "覆盖已有文件是中危，不是高危也不是低危：{json}");
+            assert_eq!(json["kind"], "write");
+            assert_eq!(json["tool"], "write");
+            assert_eq!(json["pattern"], "src/a.rs");
+            assert!(json["riskWhy"].as_str().unwrap().contains("已存在"), "{json}");
+
+            let sf = app.store.restore("k");
+            let pending = app.approvals.pending_for("k");
+            let view = crate::state::View {
+                settings: &app.settings,
+                session: sf.as_ref(),
+                session_id: "k",
+                store: &app.store,
+                running: true,
+                usage: (0, 0),
+                pending: &pending,
+            };
+            let st: Value = serde_json::from_str(&crate::state::state_json(&view)).unwrap();
+            let rows = st["pending"].as_array().unwrap();
+            assert_eq!(rows.len(), 1, "挂着没答的卡要交出去，不然刷新就看不见它了：{rows:?}");
+            assert_eq!(rows[0]["ev"], "approval");
+            assert_eq!(rows[0]["data"]["id"], id, "投影里的载荷要带 id，前端才知道答哪一张");
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!id.is_empty(), "ask 档没弹卡");
+    let before = std::fs::read_to_string(root.join("ws/src/a.rs")).unwrap();
+
+    // 拒绝：一个字都不许写
+    app.approvals.complete(&id, "deny");
+    h.join().unwrap().expect("回合应跑完");
+    assert_eq!(std::fs::read_to_string(root.join("ws/src/a.rs")).unwrap(), before, "拒了还写就是越权");
+
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-k.json")).unwrap()).unwrap();
+    let tm = saved["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .expect("被拒也要有一条 tool 回复");
+    assert!(tm["content"].as_str().unwrap().contains("用户拒绝了这次"), "{tm}");
+    assert_eq!(tm["note"], "已拒绝", "结论要挂在紧接着那条工具消息上，刷新后还查得到");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 同一张卡的第二次答复必须无效，而引擎拿到的必须是第一个 —— 两条矛盾的结论都不能接受。
+#[test]
+fn allow_once_answer_lets_the_edit_through_and_remembers_the_verdict() {
+    use serde_json::json;
+    let rsp1 = tool_calls_frame(&[(
+        "call_e",
+        "edit",
+        json!({"path": "src/a.rs", "old_string": "line2", "new_string": "LINE-2"}),
+    )]);
+    let (port, _seen) = scripted_gateway(vec![rsp1, final_frame("改好了")]);
+    let (root, app) = app_with_session("ok", port, "y", "ask");
+    let h = {
+        let app = Arc::clone(&app);
+        thread::spawn(move || engine::turn(&app, "y", "把第二行改掉"))
+    };
+    let mut id = String::new();
+    for _ in 0..400 {
+        if let Some((i, _)) = app.approvals.rows().first() {
+            id = i.clone();
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    app.approvals.complete(&id, "allow_once");
+    app.approvals.complete(&id, "deny"); // 手慢的人再点一次
+    h.join().unwrap().expect("回合应跑完");
+    let now = std::fs::read_to_string(root.join("ws/src/a.rs")).unwrap();
+    assert!(now.contains("LINE-2"), "第一个答复是允许，就该写下去：{now}");
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-y.json")).unwrap()).unwrap();
+    let tm = saved["messages"].as_array().unwrap().iter().find(|m| m["role"] == "tool").unwrap();
+    assert_eq!(tm["note"], "允许一次");
+    // 改坏了要能回滚：快照必须在写之前留下，且是**改之前**那份内容
+    let snaps: Vec<_> = std::fs::read_dir(root.join("ws/.haoai-snap"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(snaps.len(), 1, "应留下一份快照：{snaps:?}");
+    assert_eq!(std::fs::read_to_string(snaps[0].path()).unwrap(), "line1\nline2\nline3\n");
     let _ = std::fs::remove_dir_all(&root);
 }

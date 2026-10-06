@@ -20,7 +20,8 @@ use crate::prompt;
 use crate::provider;
 use crate::state::quote;
 use crate::store::Msg;
-use crate::tools_impl::{self, Ctx};
+use crate::tools_impl::{self, Ctx, Outcome};
+use crate::utf16::utf16_take;
 use crate::App;
 
 pub(crate) fn now_ms() -> u64 {
@@ -58,23 +59,20 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
     let sf = app.store.restore(sid).ok_or_else(|| format!("没有这条会话：{sid}"))?;
     let workspace = Path::new(&sf.meta.workspace).to_path_buf();
     // 档位从会话文件读一次、整轮都用它（Kotlin 看的是 session.mode，也不是每轮重读磁盘）。
-    let plan = sf.meta.mode == "plan";
+    // 走 `mode_of` 是因为"本任务都允许"会在回合中途把这条会话切成 auto ——
+    // 下一轮就该真的不再挡它，否则那颗按钮等于没按。
+    let mode = app.mode_of(sid, &sf.meta.mode);
+    let plan = mode == "plan";
     let run_id = format!("r{}", now_ms());
     let ctx = Ctx::for_run(
         &app.store.home,
         workspace,
         app.settings.flags.clone(),
-        &sf.meta.mode,
+        &mode,
         sid,
         &run_id,
     );
-    let pctx = prompt::ctx_for(
-        &app.store,
-        &sf.meta.workspace,
-        &app.settings.model,
-        &sf.meta.mode,
-        &[],
-    );
+    let pctx = prompt::ctx_for(&app.store, &sf.meta.workspace, &app.settings.model, &mode, &[]);
     let sys = prompt::system(&pctx);
 
     let mut hist = app.history(sid);
@@ -192,28 +190,34 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
                     ..Default::default()
                 });
                 app.set_history(sid, hist.clone());
-                app.publish(sid, "tool", &tool_end(id, name, false, "已中断，未执行", "generic"));
+                app.publish(sid, "tool", &tool_end_frame(id, name, false, "已中断，未执行", "generic", "", ""));
                 continue;
             }
             // 闸口在 ToolStart **之前**（照 Kotlin 的顺序）：被拒的调用没真的动过，
             // 就不该在界面上先转一张"正在执行"的圈再变红。
-            let (text, ok) = match refuse(app, name, plan) {
-                Some(why) => (why, false),
+            let out = match refuse(app, name, plan, &ctx.flags) {
+                Some(why) => Outcome { text: why, ok: false, card: "generic", diff: String::new() },
                 None => {
                     app.publish(sid, "tool", &tool_start(id, name, raw_args));
-                    exec(name, raw_args, &ctx)
+                    exec(app, name, raw_args, &ctx)
                 }
             };
+            // 审批结论挂到紧接着落的那条工具消息上：只随 SSE 流一次的话，
+            // 刷新之后卡没了，"这文件是用户点头写的还是自动写的"就查不出来。
+            let note = app.take_note(sid);
+            let text = out.text.clone();
             // 每个 tool_call_id 恰好一条回复，缺一条下一次请求就被网关判 400
             hist.push(Msg {
                 role: "tool".into(),
                 content: text.clone(),
                 call_id: id.clone(),
                 name: name.clone(),
+                note: note.clone(),
+                diff: out.diff.clone(),
                 ..Default::default()
             });
             app.set_history(sid, hist.clone());
-            app.publish(sid, "tool", &tool_end(id, name, ok, &text, "generic"));
+            app.publish(sid, "tool", &tool_end_frame(id, name, out.ok, &text, out.card, &note, &out.diff));
         }
         // 带着 tool 回复进下一轮
     }
@@ -235,32 +239,43 @@ fn tool_start(id: &str, name: &str, raw_args: &str) -> String {
         "{{\"id\":{},\"name\":{},\"brief\":{},\"state\":\"run\",\"subject\":{}}}",
         quote(id),
         quote(name),
-        quote(&brief(name, raw_args)),
-        quote(&subject_of(name, raw_args))
+        quote(&brief(raw_args)),
+        quote(&subject_of(raw_args))
     )
 }
 
 /// `Ev.ToolEnd` → SSE 帧。键序照 `Server.forward`，且 **card 是渲染意图**
 /// （generic|terminal|diff），不是工具名 —— 界面按 `d.card=='diff'` 决定要不要挂 diff 统计。
-fn tool_end(id: &str, name: &str, ok: bool, out: &str, card: &str) -> String {
+/// `note` 是用户对这一步的审批结论，画在卡头。
+fn tool_end_frame(id: &str, name: &str, ok: bool, out: &str, card: &str, note: &str, diff: &str) -> String {
     format!(
-        "{{\"id\":{},\"name\":{},\"ok\":{},\"card\":{},\"out\":{},\"diff\":\"\",\"note\":\"\",\
+        "{{\"id\":{},\"name\":{},\"ok\":{},\"card\":{},\"out\":{},\"diff\":{},\"note\":{},\
          \"sub\":\"\",\"media\":[],\"cites\":[]}}",
         quote(id),
         quote(name),
         ok,
         quote(card),
-        quote(out)
+        quote(out),
+        quote(diff),
+        quote(note)
     )
 }
 
-/// 执行侧的可见性闸口，顺序与 `Engine` 里 `Ev.ToolStart` 之前那三段一致：
-/// 未知 → 计划模式 → 这条会话的开关。谁先拒就用谁的措辞。
+/// 执行侧的可见性闸口，顺序与 `Engine` 里 `Ev.ToolStart` 之前那四段一致：
+/// 未知 → 实验开关 → 计划模式 → 这条会话的开关。谁先拒就用谁的措辞。
 /// 返回 Some(理由) 表示这一步**不做**，理由同时是回给模型的 tool 内容。
-fn refuse(app: &App, name: &str, plan: bool) -> Option<String> {
+fn refuse(app: &App, name: &str, plan: bool, flags: &[(String, bool)]) -> Option<String> {
     if !crate::tools::TOOLS.iter().any(|t| t.name == name) {
         let avail = crate::tools::TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(",");
         return Some(format!("未知工具：{name}。可用的是 {avail}"));
+    }
+    // 实验特性开关：**关着就等于这把工具没注册**，回"未知工具"会把人引偏，
+    // 所以要指出去哪儿开（这是用户自己能在设置里拨的那一格）。
+    if !crate::guard::visible(name, flags) {
+        let key = crate::guard::flag_for(name).map(|f| f.key()).unwrap_or("");
+        return Some(format!(
+            "工具 {name} 没启用（实验特性 {key} 是关的）。要用户执行 haoai flags on {key} 才行；现在换个能用的方案。"
+        ));
     }
     if plan && !tool_is_read_only(name) {
         return Some(format!(
@@ -274,16 +289,18 @@ fn refuse(app: &App, name: &str, plan: bool) -> Option<String> {
 }
 
 /// 过闸之后才轮到真执行。
-fn exec(name: &str, raw_args: &str, ctx: &Ctx) -> (String, bool) {
+fn exec(app: &App, name: &str, raw_args: &str, ctx: &Ctx) -> Outcome {
     let args: Value = serde_json::from_str(raw_args).unwrap_or(Value::Object(Map::new()));
-    match tools_impl::dispatch(ctx, name, &args) {
-        Some(o) => (o.text, o.ok),
-        None => (
-            format!(
-                "工具 {name} 尚未移植到 Rust 引擎（M2d 目前只装了 read/glob/grep/todo）。请换个能用的方案，或改用 Kotlin 引擎跑这类操作。"
+    match tools_impl::dispatch(app, ctx, name, &args) {
+        Some(o) => o,
+        None => Outcome {
+            text: format!(
+                "工具 {name} 尚未移植到 Rust 引擎（M2e 目前只装了 read/glob/grep/todo/write/edit）。请换个能用的方案，或改用 Kotlin 引擎跑这类操作。"
             ),
-            false,
-        ),
+            ok: false,
+            card: "generic",
+            diff: String::new(),
+        },
     }
 }
 
@@ -297,30 +314,64 @@ fn tool_is_read_only(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `ToolBrief` 的极简版：卡片标题取主参数。
-fn brief(name: &str, args: &str) -> String {
-    let v: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-    let key = match name {
-        "read" => "path",
-        "glob" | "grep" => "pattern",
-        "todo" => "items",
-        _ => "",
-    };
-    if key == "items" {
-        let n = v.get("items").and_then(|x| x.as_array()).map(|a| a.len()).unwrap_or(0);
-        return format!("更新清单 · {n} 项");
+/// `Engine.brief(args)`：**不是**按工具名查键，而是按 `command → path → url → pattern → question`
+/// 的顺序取第一个**存在的**参数，取 180 个 UTF-16 单元；一个都没有就用整份参数的字符串形态取 140。
+///
+/// （这里原来写成"按工具名查一个键 + 40 字 + 前缀 `名字 · `"，是我在 M2d-1 自己编的形状：
+/// 界面上那张卡的副标题两端不一样长、还多带了个前缀。工具名本来就是卡片标题的一部分，
+/// 副标题要放的是**这一刀动的是哪个对象**。）
+fn brief(args_raw: &str) -> String {
+    let v: Value = serde_json::from_str(args_raw).unwrap_or(Value::Null);
+    for k in ["command", "path", "url", "pattern", "question"] {
+        match v.get(k) {
+            None | Some(Value::Null) => continue,
+            // 数字/布尔在 Kotlin 那边 `jsonPrimitive.contentOrNull` 拿得到字符串，这里同口径
+            Some(Value::String(s)) => return utf16_take(s, 180).to_string(),
+            Some(Value::Number(n)) => return n.to_string(),
+            Some(Value::Bool(b)) => return b.to_string(),
+            /*
+             * 数组/对象：Kotlin 的 `jsonPrimitive` 在这里会抛 —— 那是"一行卡片副标题"
+             * 把整个回合打崩的抛法。不学它，退到后面那个整串兜底（与它 args 为 null 时
+             * 走的是同一条路），并在测试里把这个差异钉住。
+             */
+            Some(_) => continue,
+        }
     }
-    let got = v.get(key).and_then(|x| x.as_str()).unwrap_or("");
-    let cut: String = got.chars().take(40).collect();
-    format!("{name} · {cut}")
+    utf16_take(&compact_args(&v), 140).to_string()
 }
 
-fn subject_of(name: &str, args: &str) -> String {
-    let v: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-    match name {
-        "read" | "write" | "edit" => v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        _ => String::new(),
+/// kotlinx 的 `JsonObject.toString()` 形态：紧凑、键按声明序、字符串带引号。
+fn compact_args(v: &Value) -> String {
+    match v {
+        Value::Object(o) => {
+            let inner = o
+                .iter()
+                .map(|(k, x)| format!("\"{k}\":{}", compact_args(x)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{inner}}}")
+        }
+        Value::Array(a) => {
+            format!("[{}]", a.iter().map(compact_args).collect::<Vec<_>>().join(","))
+        }
+        Value::String(s) => quote(s),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
     }
+}
+
+/// `Engine.subjectOf`：`path → file → url → command` 里第一个**非空白**的原始值。
+/// 它是"回滚这次修改"和"退回上一版"要找的对象，所以空白不算数（`"path": ""` 要往下找）。
+fn subject_of(args_raw: &str) -> String {
+    let v: Value = serde_json::from_str(args_raw).unwrap_or(Value::Null);
+    for k in ["path", "file", "url", "command"] {
+        if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
+            if !s.trim().is_empty() {
+                return s.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 /// 读回原文件、只改自己负责的键、再原子写回。保留未知键与键序（`preserve_order`）。
@@ -439,4 +490,58 @@ pub fn wait_idle(app: &App, sid: &str, secs: u64) -> bool {
         thread::sleep(Duration::from_millis(50));
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 卡片副标题取的是"**第一个存在的参数**"，与工具名无关 —— 这条是照 Kotlin 的
+    /// `command → path → url → pattern → question` 顺序来的，改回"按工具名查"两端就会分叉。
+    #[test]
+    fn brief_picks_the_first_present_object_not_the_tool_name() {
+        assert_eq!(brief(r#"{"path":"src/a.rs"}"#), "src/a.rs");
+        assert_eq!(brief(r#"{"command":"git status"}"#), "git status");
+        // command 优先于 path：`git -C` 这类两个都给的写法，副标题讲的是命令
+        assert_eq!(brief(r#"{"path":"a","command":"ls"}"#), "ls");
+        assert_eq!(brief(r#"{"url":"https://x.dev/a"}"#), "https://x.dev/a");
+        assert_eq!(brief(r#"{"pattern":"**/*.kt"}"#), "**/*.kt");
+        // 一个都不认识就用整串兜底，取 140 个 UTF-16 单元
+        assert_eq!(brief(r#"{"items":[{"text":"第一步","status":"pending"}]}"#),
+            "{\"items\":[{\"text\":\"第一步\",\"status\":\"pending\"}]}");
+    }
+
+    #[test]
+    fn brief_cuts_by_utf16_units_not_chars_or_bytes() {
+        // 😀 占两个 UTF-16 单元：`x` + 90 个 emoji + `y` = 182 单元，取 180 落在代理对中间
+        let long = format!("x{}y", "😀".repeat(90));
+        let b = brief(&format!(r#"{{"path":"{long}"}}"#));
+        // 这里与 Kotlin **故意不同**：`substring(0,180)` 会切出一个落单的半个代理码元，
+        // 那串东西发进 JSON 流里前端解不出来；`utf16_take` 宁可少一个单元也不切开。
+        assert_eq!(crate::utf16::utf16_len(&b), 179, "少一个单元，但不留半个字");
+        assert!(!b.ends_with('y'), "截在 180 之前，最后的 y 不该在里面");
+        // 计数口径必须是 UTF-16：按 `chars().take(180)` 数会取到 90 个 emoji 之后还有余量，
+        // 短一大截 vs 长一大截，差的就是这个
+        let by_chars: String = long.chars().take(180).collect::<String>();
+        assert!(by_chars.chars().count() > b.chars().count(), "按 char 数会多取");
+    }
+
+    /// 数组/对象参数：Kotlin 那句 `jsonPrimitive` 会**抛**，也就是为一行副标题把整轮打崩。
+    /// 这里不学那个抛法，退到整串兜底 —— 这是一处**故意不同**，写下来免得被当 bug"修回去"。
+    #[test]
+    fn a_non_string_first_key_falls_back_instead_of_crashing_the_round() {
+        assert_eq!(
+            brief(r#"{"path":["a","b"]}"#),
+            "{\"path\":[\"a\",\"b\"]}"
+        );
+    }
+
+    #[test]
+    fn subject_is_the_object_the_rollback_button_needs() {
+        assert_eq!(subject_of(r#"{"path":"src/a.rs"}"#), "src/a.rs");
+        assert_eq!(subject_of(r#"{"command":"rm a"}"#), "rm a");
+        // 空白不算：`"path": ""` 要往下找别的键，回滚按钮不能指着"空路径"
+        assert_eq!(subject_of(r#"{"path":"  ","file":"b.md"}"#), "b.md");
+        assert_eq!(subject_of(r#"{"limit":5}"#), "");
+    }
 }

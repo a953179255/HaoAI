@@ -43,6 +43,14 @@ pub struct View<'a> {
     pub running: bool,
     /// 进程内累计的 token 活计数（`Engine.totalPrompt/totalCompletion`）
     pub usage: (i64, i64),
+    /**
+     * 挂着没答的审批/提问（`approvals.pendingFor(id)`）。
+     *
+     * 它们本来只通过 SSE 推一次：页面一刷新引擎还卡在等一个不会再出现的按钮，
+     * 表现是"agent 莫名卡死"，最后超时自动拒掉。审批是消息流里的内联卡，
+     * 一条会话摆一张，所以"只回第一条"就变成了**另一条没人管** —— 这里全交。
+     */
+    pub pending: &'a [crate::approval::Waiter],
 }
 
 /// `Server.stateJson` 的移植。**键的顺序与写法逐字对齐**（含 role/status 那两处
@@ -83,7 +91,7 @@ pub fn state_json(v: &View) -> String {
         }
     }
     s.push_str("\"tools\":[");
-    s.push_str(&crate::tools::tools_json(&off));
+    s.push_str(&crate::tools::tools_json(&off, &v.settings.flags));
     s.push_str("],");
     s.push_str("\"runState\":null,");
     s.push_str("\"subs\":[],");
@@ -150,7 +158,15 @@ pub fn state_json(v: &View) -> String {
         ctx_total, v.settings.context_chars, v.settings.compact_trigger_chars, ctx_parts
     ));
 
-    s.push_str("\"pending\":[],");
+    s.push_str("\"pending\":[");
+    for (i, w) in v.pending.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        // payload 是**已成型的一段 JSON**，按原样拼进去（Kotlin 那边同样不 quote）
+        s.push_str(&format!("{{\"ev\":{},\"data\":{}}}", quote(w.ev), w.payload));
+    }
+    s.push_str("],");
 
     s.push_str("\"messages\":[");
     if let Some(sf) = v.session {
@@ -246,7 +262,7 @@ mod tests {
     fn key_order_matches_statejson_source() {
         let st = Settings::default();
         let store = crate::store::Store::new(std::env::temp_dir());
-        let s = state_json(&View { settings: &st, session: None, session_id: "", store: &store, running: false, usage: (0, 0) });
+        let s = state_json(&View { settings: &st, session: None, session_id: "", store: &store, running: false, usage: (0, 0), pending: &[] });
         assert!(s.starts_with("{\"mode\":\"ask\""));
         assert!(s.ends_with("\"messages\":[],\"cites\":[]}"));
         let want = [

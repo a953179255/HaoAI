@@ -79,21 +79,6 @@ pub fn unified(path: &str, old: &str, new: &str, max_lines: usize) -> String {
     format!("−{} 行 / +{} 行   {path}\n{body}", removed.len(), added.len())
 }
 
-/// 旧接口：只给模型看的那一行摘要（工具结果会进历史，越短越好）。
-pub fn stat(old: &str, new: &str) -> String {
-    let a = kotlin_lines(old);
-    let b = kotlin_lines(new);
-    let mut p = 0;
-    while p < a.len() && p < b.len() && a[p] == b[p] {
-        p += 1;
-    }
-    let mut s = 0;
-    while s < a.len() - p && s < b.len() - p && a[a.len() - 1 - s] == b[b.len() - 1 - s] {
-        s += 1;
-    }
-    format!("−{} 行 / +{} 行", a.len() - p - s, b.len() - p - s)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,7 +103,6 @@ mod tests {
             "−1 行 / +1 行   a.txt\n 1\n 2\n 3\n-4\n+X\n 5\n 6\n 7\n",
             "整份形状都要对上 Kotlin：{d:?}"
         );
-        assert_eq!(stat(old, new), "−1 行 / +1 行");
     }
 
     #[test]

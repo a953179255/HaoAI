@@ -41,7 +41,7 @@ fn state_matches_jvm_golden() {
             .unwrap_or_default();
 
         let sf = store.restore(&sid);
-        let view = View { settings: &settings, session: sf.as_ref(), session_id: &sid, store: &store, running: false, usage: (0, 0) };
+        let view = View { settings: &settings, session: sf.as_ref(), session_id: &sid, store: &store, running: false, usage: (0, 0), pending: &[] };
         let mine = state::state_json(&view);
 
         if mine == raw {
@@ -95,7 +95,7 @@ fn context_parts_match_jvm() {
     let sid = jvm["sessionId"].as_str().unwrap_or("").to_string();
     let sf = store.restore(&sid);
     let mine: serde_json::Value =
-        serde_json::from_str(&state::state_json(&View { settings: &settings, session: sf.as_ref(), session_id: &sid, store: &store, running: false, usage: (0, 0) }))
+        serde_json::from_str(&state::state_json(&View { settings: &settings, session: sf.as_ref(), session_id: &sid, store: &store, running: false, usage: (0, 0), pending: &[] }))
             .unwrap();
 
     let rows = |v: &serde_json::Value| -> Vec<(String, i64)> {

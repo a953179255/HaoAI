@@ -83,8 +83,12 @@ pub fn handle(stream: TcpStream, app: Arc<App>) {
             send(stream, code, "application/json; charset=utf-8", &b)
         }
         "/api/stop" => {
-            stop_task(&app, &body);
-            send(stream, 200, "application/json; charset=utf-8", r#"{"ok":true,"pending":0}"#)
+            let b = stop_task(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/decide" => {
+            decide(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", r#"{"ok":true}"#)
         }
         "/api/events" => sse(stream, app),
         _ => send(stream, 404, "text/plain; charset=utf-8", "not found"),
@@ -118,8 +122,21 @@ fn state_body(app: &App, sid: &str) -> (u16, &'static str, String) {
         }
     };
     let resident = app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&id);
-    let sf: Option<SessionFile> = if resident { app.store.restore(&id) } else { None };
-    let view = View { settings: &app.settings, session: sf.as_ref(), session_id: &id, store: &app.store, running: app.is_running(&id), usage: app.usage_of(&id) };
+    let mut sf: Option<SessionFile> = if resident { app.store.restore(&id) } else { None };
+    // 档位报的是**活值**：按过"本任务都允许"之后界面该显示 auto，而不是文件里那个 ask。
+    if let Some(s) = sf.as_mut() {
+        s.meta.mode = app.mode_of(&id, &s.meta.mode);
+    }
+    let pending = app.approvals.pending_for(&id);
+    let view = View {
+        settings: &app.settings,
+        session: sf.as_ref(),
+        session_id: &id,
+        store: &app.store,
+        running: app.is_running(&id),
+        usage: app.usage_of(&id),
+        pending: &pending,
+    };
     (200, "application/json; charset=utf-8", state::state_json(&view))
 }
 
@@ -179,28 +196,67 @@ fn start_task(app: &Arc<App>, body: &str) -> (u16, String) {
 
 /// `POST /api/stop` {sid} —— 停止**指定会话**（默认当前那条）的任务。
 ///
-/// 置的是旗子，不是掐断：引擎只在回合边界与工具边界看它，所以是**收尾式**停止。
-/// 好处是那一轮已经写到一半的文件、已经跑完的命令都不会被拦腰截断，
-/// 而每个 tool_call_id 仍会拿到自己的 tool 回复（见 `engine::turn` 的停止分支）。
-///
-/// Kotlin 在这里还会顺手判掉挂着的审批与提问（`approvals.abort`）。Rust 侧还没有
-/// 审批闸口，所以 `pending` 恒为 0 —— 等 write/edit 上来的时候这个数才有内容。
-fn stop_task(app: &App, body: &str) {
-    let want = body_str(body, "sid");
-    let sid = if want.is_empty() {
-        app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
-    } else {
-        want
-    };
-    let running = !sid.is_empty() && app.is_running(&sid);
+/// 两件必须一起做的事：
+/// 1. 置旗（引擎只在回合边界与工具边界看它，所以是**收尾式**停止，不是掐断 HTTP 流）；
+/// 2. **把挂着的审批与提问一次性判掉**。漏了这条，按了停止引擎还卡在等一个不会来的点击，
+///    "停止"按钮就成了它自己要中止的那件事的受害者。
+/// 这里刻意**不去抢**跑任务的那把锁：抢了就等于"要停止必须先等本轮跑完"。
+fn stop_task(app: &App, body: &str) -> String {
+    let sid = pick_sid(app, body);
+    // 审批给 deny（fail-closed），提问给空串（"用户没回答"）；收摊在等待方自己那里
+    let aborted = if sid.is_empty() { Default::default() } else { app.approvals.abort(&sid) };
     if !sid.is_empty() {
         app.request_stop(&sid);
     }
-    app.publish(
-        &sid,
-        "notice",
-        &state::quote(if running { "已请求停止，正在收尾…" } else { "这条会话现在没有正在跑的任务。" }),
-    );
+    let running = !sid.is_empty() && app.is_running(&sid);
+    let text = if running || aborted.total() > 0 {
+        // Kotlin 那句是拼出来的：拒了 N 个就把它写进括号里，别说空话
+        let tail = if aborted.approvals > 0 {
+            format!("（顺手拒掉 {} 个待确认）", aborted.approvals)
+        } else {
+            String::new()
+        };
+        format!("已请求停止{tail}，正在收尾…")
+    } else {
+        "这条会话现在没有正在跑的任务。".to_string()
+    };
+    app.publish(&sid, "notice", &state::quote(&text));
+    format!(r#"{{"ok":true,"pending":{}}}"#, aborted.total())
+}
+
+/**
+ * `POST /api/decide` {id, decision, answer} —— 回答一张挂着的卡（网页与手机同一个口）。
+ *
+ * `answer` 非空时优先（提问的自由输入），否则用 `decision`
+ * （审批那几个按钮：allow_once / allow_session / allow_rule / deny）。
+ * `allow_session` 会把**发起这条审批的那条会话**切成 auto —— 按等待里记的 sid 找，
+ * 找不到才退回当前会话： stale 的答复不该静默无效，也不该把别的会话一起放开了。
+ */
+fn decide(app: &App, body: &str) {
+    let id = body_str(body, "id");
+    let decision = body_str(body, "decision");
+    let answer = body_str(body, "answer");
+    // isAsk/sid 都在答复**之前**由状态机取好（之后它可能已销号，就读不到了）
+    let done = app.approvals.complete(&id, if answer.is_empty() { &decision } else { &answer });
+    if decision == "allow_session" {
+        let sid = if done.sid.is_empty() {
+            app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        } else {
+            done.sid.clone()
+        };
+        app.set_mode(&sid, "auto");
+        app.publish(&sid, "mode", r#"{"mode":"auto"}"#);
+    }
+}
+
+/// `pick(sid)`：给了就用它，否则用当前会话。
+fn pick_sid(app: &App, body: &str) -> String {
+    let want = body_str(body, "sid");
+    if want.is_empty() {
+        app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    } else {
+        want
+    }
 }
 
 /// no-store 不是可选项——2026-10-05 实测过没有它时浏览器启发式缓存旧 index.html，
@@ -272,27 +328,12 @@ fn chunk(stream: &mut TcpStream, body: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::Store;
-    use std::collections::HashSet;
     use std::fs;
     use std::net::TcpListener;
-    use std::sync::Mutex;
     use std::thread;
 
     fn test_app(dir: &std::path::Path) -> Arc<App> {
-        let store = Store::new(dir.to_path_buf());
-        let settings = store.settings();
-        Arc::new(App {
-            bus: Mutex::new(vec![]),
-            current: Mutex::new(String::new()),
-            resident: Mutex::new(HashSet::new()),
-            histories: Mutex::new(std::collections::HashMap::new()),
-            running: Mutex::new(HashSet::new()),
-            stops: Mutex::new(HashSet::new()),
-            usage: Mutex::new(std::collections::HashMap::new()),
-            store,
-            settings,
-        })
+        App::at(dir.to_path_buf())
     }
 
     /// 钉住那个 BufReader 坑：**带请求体的 POST 必须能拿到 body**。

@@ -18,13 +18,11 @@ const SKIP_DIRS: [&str; 12] = [
 ];
 
 /// `Env.TOOL_OUTPUT_DIR`：工具产物与溢出输出都落这个目录，且要被 git 忽略。
-#[allow(dead_code)] // M2e-4 的溢出落文件接上后用
 pub const TOOL_OUTPUT_DIR: &str = ".haoai-output";
 
 /// `Hunks.MAX_BYTES`：基线或目标超过这个长度就不切块（卡片放不下，而切块是 quadratic 的）。
 /// 同时它也是"要不要整个读进来当 diff 基线"的闸门 —— 没有这道闸，读一个 2GB 的日志
 /// 当基线会把引擎撑死。
-#[allow(dead_code)] // M2e-4 的 write/edit 接上 diff_base 后用
 const HUNKS_MAX_BYTES: u64 = 400_000;
 
 /// `Tools.kt` 的 REGEX_META。
@@ -48,14 +46,23 @@ pub struct Ctx {
 pub struct Outcome {
     pub text: String,
     pub ok: bool,
+    /// 渲染意图 `generic|terminal|diff`（`core/ToolResult.kt`），**不是工具名**。
+    /// 前端按它挑卡；只有 `diff` 那一档会挂上 `−N 行 / +M 行` 的统计。
+    pub card: &'static str,
+    /// 行级 diff：只给界面与落盘，**不进发给模型的那段内容**（几百行 token 的浪费）。
+    pub diff: String,
 }
 
 impl Outcome {
     fn ok(text: String) -> Self {
-        Self { text, ok: true }
+        Self { text, ok: true, card: "generic", diff: String::new() }
     }
     fn fail(text: String) -> Self {
-        Self { text, ok: false }
+        Self { text, ok: false, card: "generic", diff: String::new() }
+    }
+    /// 写改类工具的成功结果：卡片按 diff 渲染。
+    fn edited(text: String, diff: String) -> Self {
+        Self { text, ok: true, card: "diff", diff }
     }
 }
 
@@ -101,7 +108,6 @@ impl Ctx {
      * 为什么要在弹卡**之前**读：勾掉的那几块要落回原样，就得先有原样可比。
      * `plan` 档先挡掉：只读档根本不会弹卡，白读一遍大文件。
      */
-    #[allow(dead_code)] // M2e-4 的 write/edit 会调它
     pub fn diff_base(&self, target: &Path) -> Option<String> {
         if self.mode == "plan" {
             return None;
@@ -123,7 +129,6 @@ impl Ctx {
      * 开关关着时不留快照，也就没法回滚 —— 这时候如实返回 None，
      * 界面上那句"这一轮没登记改动"才是真话。
      */
-    #[allow(dead_code)] // M2e-4 的 write/edit 接上它；开关关着时如实返回 None
     pub fn snapshot_before(&self, target: &Path) -> Option<PathBuf> {
         if !target.is_file() {
             checkpoints::note(&self.home, &self.run_id, &self.sid, &self.rel(target), None);
@@ -177,12 +182,99 @@ impl Ctx {
             abs
         }
     }
+
+    /// `ToolCtx.outside`：路径撞在工作区外面没有。
+    /// 判据是 `canonicalPath.startsWith(workspace.canonicalPath + separator)` ——
+    /// 少了那个分隔符，`G:\ws2` 会被算成 `G:\ws` 里面，那种误判正好是"往外面写"能漏过去的方式。
+    pub fn outside(&self, f: &Path) -> bool {
+        let ws = canon_str(&self.workspace);
+        let abs = canon_str(f);
+        !(abs.starts_with(&format!("{ws}\\")) || abs.starts_with(&format!("{ws}/")))
+    }
 }
 
 pub(crate) fn canon_str(p: &Path) -> String {
-    let c = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    // Windows 的 canonicalize 会加 \\?\ 前缀，Kotlin 的 canonicalPath 没有
-    c.display().to_string().trim_start_matches(r"\\?\").to_string()
+    match fs::canonicalize(p) {
+        // Windows 的 canonicalize 会加 \\?\ 前缀，Kotlin 的 canonicalPath 没有
+        Ok(c) => c.display().to_string().trim_start_matches(r"\\?\").to_string(),
+        Err(_) => lexical(p),
+    }
+}
+
+/*
+ * 路径**还不存在**时按字面规范化。这不是可选的优化：Rust 的 `canonicalize` 要求文件已存在，
+ * 而 Java 的 `File.getCanonicalPath` 不要求 —— 它把已存在的最近祖先规范化，剩下的按字面接上
+ * （并消掉 `.`/`..`）。
+ *
+ * 少了这一半，`rel()` 会拿"正斜杠的原始路径"去比"反斜杠的已存在工作区"，前缀对不上，
+ * 于是 `outside()` 把**工作区里新建的文件**判成"在工作区之外"：auto 档当场拒掉一次完全
+ * 合法的写，ask 档的审批卡上多一句"（在工作区之外）"的谎。
+ * 而"写一个还不存在的文件"恰恰是 agent 最常做的事。（这条是被 e2e 的
+ * `auto_mode_write_lands_…` 抓出来的，不是想出来的。）
+ */
+fn lexical(p: &Path) -> String {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(p)
+    };
+    // 往上走到第一个真实存在的祖先，用系统给的答案（顺带解掉符号链接与盘符大小写），
+    // 中间那些还不存在的段按字面接回去
+    let mut tail: Vec<String> = Vec::new();
+    let mut cur: &Path = abs.as_path();
+    loop {
+        if let Ok(c) = fs::canonicalize(cur) {
+            let base = c
+                .display()
+                .to_string()
+                .trim_start_matches(r"\\?\")
+                .trim_end_matches(['\\', '/'])
+                .to_string();
+            let mut out = base;
+            for seg in tail.iter().rev() {
+                out.push('\\');
+                out.push_str(seg);
+            }
+            return out;
+        }
+        match cur.parent() {
+            Some(parent) => {
+                if let Some(n) = cur.file_name() {
+                    tail.push(n.to_string_lossy().to_string());
+                }
+                cur = parent;
+            }
+            // 一个祖先都不存在（盘没挂载）：整条按字面走
+            None => return lexical_abs(&abs),
+        }
+    }
+}
+
+/// 纯字面的绝对路径规范化：消 `.`、按 `..` 退段、分隔符统一成 `\`。
+fn lexical_abs(p: &Path) -> String {
+    use std::path::Component;
+    let mut head = String::new();
+    let mut segs: Vec<String> = Vec::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                segs.pop();
+            }
+            Component::Prefix(x) => head.push_str(&x.as_os_str().to_string_lossy()),
+            Component::RootDir => head.push('\\'),
+            Component::Normal(n) => segs.push(n.to_string_lossy().to_string()),
+        }
+    }
+    if head.is_empty() {
+        head.push('\\');
+    }
+    let body = segs.join("\\");
+    if head.ends_with('\\') || body.is_empty() {
+        format!("{head}{body}")
+    } else {
+        format!("{head}\\{body}")
+    }
 }
 
 /// `walkFiles`：手写递归（Kotlin 那边也是，注释说 FileTreeWalk 在 Kotlin 2.x 里类型推断不稳）。
@@ -307,6 +399,103 @@ fn arg_int(args: &serde_json::Value, key: &str) -> Option<i64> {
         Some(serde_json::Value::String(s)) => s.parse().ok(),
         _ => None,
     }
+}
+
+/// `Tool.bool`：比的是 primitive 的**字符串形态** == "true"。
+/// 所以布尔 true 算真、字符串 "true" 也算真、数字 1 不算 —— 与 Kotlin 同一口径，
+/// 否则模型给 `"all":"true"` 这种写法时两端行为不一样。
+fn arg_bool(args: &serde_json::Value, key: &str) -> bool {
+    match args.get(key) {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::String(s)) => s == "true",
+        _ => false,
+    }
+}
+
+/// `WriteTool`：新建或整篇覆盖。
+///
+/// 两处顺序是有理由的：**基线要在弹卡之前拿到**（勾掉的那几块要落回原样就得先有原样可比，
+/// 代价是自动档也白读一次文件 —— 换回来的是"夜里那条高危卡也能逐块挑"）；
+/// **快照要在写之前留**，写坏了才有东西可回。
+fn write_tool(app: &crate::App, ctx: &Ctx, args: &serde_json::Value) -> Outcome {
+    let Some(path) = arg_str(args, "path") else { return Outcome::fail("write 缺少 path".into()) };
+    let Some(content) = arg_str(args, "content") else { return Outcome::fail("write 缺少 content".into()) };
+    let f = ctx.resolve(&path);
+    let rel = ctx.rel(&f);
+    let base = ctx.diff_base(&f);
+    let detail = || format!("新建或覆盖，共 {} 字符", utf16_len(&content));
+    if let Some(why) = crate::guard::guard(app, ctx, "write", &rel, &format!("写入文件 {rel}"), &detail, true) {
+        return Outcome::fail(why);
+    }
+    let before = match &base {
+        Some(b) => b.clone(),
+        None => fs::read_to_string(&f).unwrap_or_default(),
+    };
+    // 逐块勾选（HunkPlan）还没搬：plan 恒为 None ⇒ 整条批准 ⇒ 写的就是模型给的内容
+    let to_write = content.clone();
+    let _ = ctx.snapshot_before(&f);
+    if let Some(p) = f.parent() {
+        let _ = fs::create_dir_all(p);
+    }
+    if let Err(e) = fs::write(&f, to_write.as_bytes()) {
+        return Outcome::fail(format!("写入失败：{e}"));
+    }
+    let n = crate::diff::kotlin_lines(&to_write).len();
+    Outcome::edited(
+        format!("已写入 {rel}（{} 字符 / {n} 行）", utf16_len(&to_write)),
+        crate::diff::unified(&rel, &before, &to_write, 80),
+    )
+}
+
+/// `EditTool`：精确替换。
+///
+/// **匹配检查挪到审批之前**：原来是人批完五分钟、写到一半才发现 `old_string` 根本没找到 ——
+/// 那张卡白等了。先问"能不能做"再问"让不让做"才是省人的顺序。
+fn edit_tool(app: &crate::App, ctx: &Ctx, args: &serde_json::Value) -> Outcome {
+    let Some(path) = arg_str(args, "path") else { return Outcome::fail("edit 缺少 path".into()) };
+    let Some(old) = arg_str(args, "old_string") else { return Outcome::fail("edit 缺少 old_string".into()) };
+    let Some(new) = arg_str(args, "new_string") else { return Outcome::fail("edit 缺少 new_string".into()) };
+    let all = arg_bool(args, "all");
+    let f = ctx.resolve(&path);
+    let rel = ctx.rel(&f);
+    if !f.is_file() {
+        return Outcome::fail(format!("文件不存在：{rel}"));
+    }
+    let Some(text) = fs::read_to_string(&f).ok() else {
+        return Outcome::fail(format!("读不到 {rel}，没改任何东西"));
+    };
+    let hits = text.split(old.as_str()).count() - 1;
+    if hits == 0 {
+        return Outcome::fail(
+            "没找到要替换的内容。先用 read 看清当前文本（注意缩进与换行是否一致）。".to_string(),
+        );
+    }
+    if hits > 1 && !all {
+        return Outcome::fail(format!("匹配到 {hits} 处，不唯一。扩大 old_string 的上下文，或传 all=true。"));
+    }
+    let updated = if hits == 1 {
+        text.replacen(&old, &new, 1)
+    } else {
+        text.replace(&old, &new)
+    };
+    let detail = || {
+        format!(
+            "{} → {} 字符（匹配 {hits} 处）",
+            utf16_len(&old),
+            utf16_len(&new)
+        )
+    };
+    if let Some(why) = crate::guard::guard(app, ctx, "write", &rel, &format!("编辑 {rel}"), &detail, true) {
+        return Outcome::fail(why);
+    }
+    let _ = ctx.snapshot_before(&f);
+    if let Err(e) = fs::write(&f, updated.as_bytes()) {
+        return Outcome::fail(format!("编辑失败：{e}"));
+    }
+    Outcome::edited(
+        format!("已编辑 {rel}（替换 {} 处）", if all { hits } else { 1 }),
+        crate::diff::unified(&rel, &text, &updated, 80),
+    )
 }
 
 fn read_tool(ctx: &Ctx, args: &serde_json::Value) -> Outcome {
@@ -461,12 +650,19 @@ fn todo_tool(ctx: &Ctx, args: &serde_json::Value) -> Outcome {
     Outcome::ok(out.join("\n"))
 }
 
-pub fn dispatch(ctx: &Ctx, name: &str, args: &serde_json::Value) -> Option<Outcome> {
+pub fn dispatch(
+    app: &crate::App,
+    ctx: &Ctx,
+    name: &str,
+    args: &serde_json::Value,
+) -> Option<Outcome> {
     match name {
         "read" => Some(read_tool(ctx, args)),
         "glob" => Some(glob_tool(ctx, args)),
         "grep" => Some(grep_tool(ctx, args)),
         "todo" => Some(todo_tool(ctx, args)),
+        "write" => Some(write_tool(app, ctx, args)),
+        "edit" => Some(edit_tool(app, ctx, args)),
         _ => None,
     }
 }
@@ -561,6 +757,22 @@ mod tests {
     }
     fn off(k: &str) -> (String, bool) {
         (k.to_string(), false)
+    }
+
+    /// 写一个**还不存在**的文件是 agent 最常做的事，这时候 `rel`/`outside` 必须已经正确：
+    /// Rust 的 canonicalize 对不存在的路径直接返回 Err，早先没兜这一步，于是工作区里的
+    /// 新建文件被判成"在工作区之外"，auto 档当场拒掉一次合法的新建。
+    #[test]
+    fn a_file_that_does_not_exist_yet_is_still_inside_the_workspace() {
+        let root = sandbox("notin");
+        let ctx = Ctx::new(root.clone());
+        let fresh = ctx.resolve("src/deep/new.md");
+        assert!(!fresh.exists(), "这条测的就是「还没生出来」那一段");
+        assert_eq!(ctx.rel(&fresh), "src/deep/new.md", "新文件也要给出相对路径");
+        assert!(!ctx.outside(&fresh), "工作区里的新建文件不算在外面");
+        // 外面的还是算外面，不能被这次修复带松
+        assert!(ctx.outside(&Path::new("Q:\\somewhere\\a.md")));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -167,7 +167,9 @@ pub fn read_only(t: &ToolMeta) -> bool {
 /// 32 条里有 17 条会被截，所以必须走 utf16_take 而不是 chars().take()。
 /// 注意与 \`schemas_string\` 的分工：\`toolInfos()\` 是 **map 全部工具并标 off**（界面要能
 /// 看见被关掉的那几把好再打开），只有喂给模型的 \`schemas()\` 才把 off 过滤掉。
-pub fn tools_json(off: &[&str]) -> String {
+/// \`gated\` 与 \`off\` 是两件事：前者是"实验开关挡着的、界面上根本没有那个开关"，
+/// 后者才是用户在「工具」页签里自己关掉的。混成一个就会让人去翻一个不存在的开关。
+pub fn tools_json(off: &[&str], flags: &[(String, bool)]) -> String {
     TOOLS.iter().map(|t| {
         format!(
             "{{\\"name\\":{},\\"kind\\":{},\\"desc\\":{},\\"off\\":{},\\"gated\\":{},\\"category\\":{},\\"critical\\":{}}}",
@@ -175,7 +177,7 @@ pub fn tools_json(off: &[&str]) -> String {
             crate::state::quote(t.kind),
             crate::state::quote(utf16_take(t.desc, 90)),
             off.contains(&t.name),
-            false,
+            crate::guard::gated(t.name, flags),
             crate::state::quote(t.category),
             t.critical
         )

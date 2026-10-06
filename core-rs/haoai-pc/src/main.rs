@@ -1,23 +1,17 @@
+mod approval;
 mod engine;
 #[cfg(test)]
 mod e2e;
-// M2e 分四步落：判定层（risk/policies）→ 支撑层（checkpoints/diff/flags）→
-// 审批状态机与闸口（M2e-3）→ write/edit 接上（M2e-4）。前两步里这些函数只有测试在用，
-// 二进制侧会报 dead_code。**接上之后把这几行 allow 删掉** —— 留着不删就是新债。
-#[allow(dead_code)]
 mod checkpoints;
-#[allow(dead_code)]
 mod diff;
-#[allow(dead_code)]
 mod flags;
+mod guard;
 mod http;
 #[cfg(test)]
 mod golden;
-#[allow(dead_code)]
 mod policies;
 mod prompt;
 mod provider;
-#[allow(dead_code)]
 mod risk;
 mod state;
 mod store;
@@ -59,6 +53,17 @@ pub struct App {
     /// **restore 时不从文件读回**，所以重启后从 0 重新累计 —— 这是 Kotlin 侧的既有行为，
     /// 连"落盘写的是活值、于是文件里的总数重启后会变小"也一起照抄，不顺手"修好"它。
     pub usage: Mutex<HashMap<String, (i64, i64)>>,
+    /// S2 权限规则表（`rules.json`）。进程内一份：表很小，不该每次工具调用都读盘。
+    pub policies: policies::Policies,
+    /// 审批/提问的等待状态机。每个进程一份，**不是全局**：状态挂在一个会话上。
+    pub approvals: approval::ApprovalBroker,
+    /// 待挂到下一条工具消息上的审批结论（`Engine.markApproval`/`takeNote`）。
+    /// 之前它只随 SSE 流一次：刷新之后卡没了，"这文件到底是谁点头写的"就查不出来。
+    pub notes: Mutex<HashMap<String, String>>,
+    /// 会话的**活档位**（`allow_session` 与 `/api/mode` 改的是它）。
+    /// 查的时候 `mode_of(sid, 文件里的 mode)`：没有覆盖就用会话文件那条。
+    /// "本任务都允许"绝不能把别的会话也切成 auto。
+    pub modes: Mutex<HashMap<String, String>>,
 }
 
 impl App {
@@ -116,6 +121,50 @@ impl App {
             .unwrap_or_else(|p| p.into_inner())
             .insert(sid.to_string(), h);
     }
+
+    /// 规则表要么整份读、要么不改：给闭包一把锁，别把 store 漏在外面。
+    pub fn policies_with<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&mut policies::PolicyStore) -> T,
+    {
+        self.policies.with(f)
+    }
+
+    /// 活档位优先，回落到会话文件里的那个。
+    pub fn mode_of(&self, sid: &str, fallback: &str) -> String {
+        self.modes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(sid)
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    pub fn set_mode(&self, sid: &str, mode: &str) {
+        if sid.is_empty() {
+            return;
+        }
+        self.modes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(sid.to_string(), mode.to_string());
+    }
+
+    pub fn mark_approval(&self, sid: &str, note: &str) {
+        self.notes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(sid.to_string(), note.to_string());
+    }
+
+    /// 取走（并清空）：一句结论只属于紧接着的那一条工具消息，留着会挂到下一次调用上。
+    pub fn take_note(&self, sid: &str) -> String {
+        self.notes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(sid)
+            .unwrap_or_default()
+    }
 }
 
 impl App {
@@ -135,6 +184,39 @@ impl App {
                 subs.remove(i);
             }
         }
+    }
+}
+
+impl App {
+    /// 测试专用装配：状态根给一个临时目录，其余全空。
+    /// 六个测试各写一遍字段清单是错的 —— 加一个字段就要漏改一处，
+    /// 而漏改的表现是"编译不过"而不是"测错了"，至少这条还站在我们这边。
+    #[cfg(test)]
+    pub fn at(home: std::path::PathBuf) -> Arc<App> {
+        let store = store::Store::new(home);
+        let settings = store.settings();
+        Arc::new(App {
+            policies: policies::Policies::new(&store.home),
+            approvals: approval::ApprovalBroker::with_timeouts(2, 2),
+            notes: Mutex::new(HashMap::new()),
+            modes: Mutex::new(HashMap::new()),
+            current: Mutex::new(String::new()),
+            resident: Mutex::new(HashSet::new()),
+            bus: Mutex::new(vec![]),
+            histories: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashSet::new()),
+            stops: Mutex::new(HashSet::new()),
+            usage: Mutex::new(HashMap::new()),
+            store,
+            settings,
+        })
+    }
+
+    /// 让一条会话驻留并切成当前会话（等价于前端先打过 `/api/open`）。
+    #[cfg(test)]
+    pub fn open_for_test(&self, sid: &str) {
+        self.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(sid.to_string());
+        *self.current.lock().unwrap_or_else(|p| p.into_inner()) = sid.to_string();
     }
 }
 
@@ -213,6 +295,10 @@ fn serve(rest: &[String]) {
         running: Mutex::new(HashSet::new()),
         stops: Mutex::new(HashSet::new()),
         usage: Mutex::new(HashMap::new()),
+        policies: policies::Policies::new(&h),
+        approvals: approval::ApprovalBroker::new(),
+        notes: Mutex::new(HashMap::new()),
+        modes: Mutex::new(HashMap::new()),
     });
 
     // stdout 一律英文：壳按 GBK(936) 解码 engine.log，中文 UTF-8 进去就是乱码。

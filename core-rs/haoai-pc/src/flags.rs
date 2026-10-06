@@ -6,10 +6,13 @@
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Flag {
     /// 工具输出超过落库上限时把全文写进工作区 `.haoai-output/`，会话里只留头尾摘要 + 路径。
+    #[allow(dead_code)] // 溢出落文件那条路还没搬（`Engine.kt:999` 那侧）
     ToolResultSpill,
     /// 允许 agent 往**工作区之外**写文件。默认关。
     OutsideWrite,
-    /// 计划模式：只给只读工具集，写与命令一律拒绝，先出方案。
+    /// 计划模式。**Kotlin 侧也没有消费方**（只读是靠档位判的，不是靠这个开关），
+    /// 列在这里是为了让两端的注册表是同一张表。
+    #[allow(dead_code)]
     PlanMode,
     /// 破坏性操作前留快照（git 仓库里靠 git 自己，非 git 目录用影子副本）。
     SnapshotBeforeWrite,
@@ -18,6 +21,7 @@ pub enum Flag {
     /// 屏幕理解 + 点击级自动化。
     DesktopControl,
     /// 外部 MCP 工具。
+    #[allow(dead_code)] // MCP 客户端整个还没搬
     McpClient,
 }
 
@@ -45,6 +49,9 @@ impl Flag {
         }
     }
 
+    /// 全量注册表：给"把 7 个开关列出来"的那一类消费方用（设置页、`haoai flags list`）。
+    /// 那两条路由还在 Kotlin 那边，所以这个 const 暂时只有测试在读 —— **搬过来时删掉 allow**。
+    #[allow(dead_code)]
     pub const ALL: [Flag; 7] = [
         Flag::ToolResultSpill,
         Flag::OutsideWrite,
