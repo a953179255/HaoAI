@@ -1,0 +1,21 @@
+[package]
+name = "haoai-pc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# M0 的 HTTP 与 JSON 序列化仍是手写（为了和 Server.stateJson 的字节逐位对齐）；
+# serde_json 只用来**读**盘上的 JSON，且只用 Value 手工取值——不引 derive，
+# 因此不会拉进 proc-macro，避开本机缺 Windows SDK 导入库的风险。
+
+[dependencies]
+# preserve_order 不是可选项：serde_json 默认用 BTreeMap，会把对象键排成字母序，
+# 而 Kotlin 的 buildJsonObject 按**声明序**输出。请求体键序、会话文件键序都依赖它。
+serde_json = { version = "1", features = ["preserve_order"] }
+ureq = "3"
+# grep/glob 的匹配引擎。不带 proc-macro（regex/regex-syntax/aho-corasick/memchr 都是普通 crate）
+regex = "1"
+
+[[bin]]
+name = "HaoAI-PC"
+path = "src/main.rs"

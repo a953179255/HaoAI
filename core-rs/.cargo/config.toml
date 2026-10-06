@@ -1,0 +1,4 @@
+# 静态链接 MSVC CRT：产物必须是能拷进 engine/ 目录就跑的单文件 exe，
+# 不能依赖用户机器上装没装 VC++ 运行库。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,11 @@
+[workspace]
+members = ["haoai-pc"]
+resolver = "2"
+
+# profile 只能写在 workspace 根，写在子包会被 cargo 忽略并告警。
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
