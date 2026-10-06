@@ -74,6 +74,14 @@ pub fn handle(stream: TcpStream, app: Arc<App>) {
             send(stream, code, ctype, &b)
         }
         "/api/sessions" => send(stream, 200, "application/json; charset=utf-8", &sessions_body(&app)),
+        "/api/new" => {
+            let b = new_session(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/mode" => {
+            let b = mode_route(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
         "/api/open" => {
             let (code, ctype, b) = open_session(&app, &body);
             send(stream, code, ctype, &b)
@@ -162,6 +170,153 @@ fn open_session(app: &App, body: &str) -> (u16, &'static str, String) {
     }
     app.publish(&m.id, "opened", &format!("{{\"id\":{},\"title\":{},\"mode\":{}}}", state::quote(&m.id), state::quote(&m.title), state::quote(&m.mode)));
     (200, "application/json; charset=utf-8", format!("{{\"ok\":true,\"id\":{}}}", state::quote(&id)))
+}
+
+/**
+ * `POST /api/new` {ws?, preset?, team?} —— 开一条新会话（或复用眼前那条空的）。
+ *
+ * 两条判据照 Kotlin 抄，各自都是踩过的坑：
+ * 1. **眼前那条还一条没说过就复用它**：一路点"新任务"会在磁盘上留一堆空 `pc-*.json`，
+ *    侧栏被自己几分钟前的手滑刷屏。
+ * 2. **点了目录就一定新建**：复用手边那条空的会把它悄悄挪到别的目录，用户下一句话
+ *    就落到了他没选的地方；目录打不开要明确报错，**不退回默认工作区** ——
+ *    那等于把人送进一个他没选的仓库里写文件。
+ *
+ * 档位必须回给前端：新会话的档位**继承全局默认**，不是上一条会话的档位。
+ * 只回 id 的话前端会沿用界面上那份旧档位显示（Kotlin 那条注释的原话：全局是 ask，
+ * 新建的会话顶上却亮着"自动"，用户以为自己在问模式下让它自动写了文件）。
+ */
+fn new_session(app: &App, body: &str) -> String {
+    let want_ws = body_str(body, "ws");
+    let preset = body_str(body, "preset");
+    let team = body_str(body, "team");
+
+    // 角色卡与团队的数据层还没搬。**不能静默建一条没有角色的会话**然后让"我选的卡
+    // 没生效"藏起来 —— Kotlin 那边 `Presets.usable` 挡的就是这件事。
+    if !team.is_empty() {
+        return err_json("团队会话还没搬过来（/api/teams 尚未实现），先建一条普通会话");
+    }
+    if !preset.is_empty() {
+        return err_json("角色卡还没搬过来（/api/presets 尚未实现），先建一条没有角色的会话");
+    }
+
+    if want_ws.is_empty() {
+        if let Some((id, title, mode)) = idle_current(app) {
+            return created(app, &id, &title, &mode, true, false);
+        }
+    }
+    let ws = if want_ws.is_empty() { app.settings.workspace.clone() } else { want_ws.clone() };
+    if !want_ws.is_empty() && !std::path::Path::new(&ws).is_dir() {
+        return err_json(&format!("这个目录打不开：{ws}"));
+    }
+    let id = app.store.create(&ws, &app.settings.permission_mode, &app.settings);
+    // 指定了目录那一支带 role 键、没指定那一支不带 —— 两边形状不一样是 Kotlin 原样，
+    // 前端读的是 `d.role||''`，少一个键不报错，但要对齐就对齐到底
+    created(app, &id, "新会话", &app.settings.permission_mode, false, !want_ws.is_empty())
+}
+
+/// 眼前那条是空的就复用它：**已驻留**（不驻留的那条在 Kotlin 里压根没有引擎可问）、
+/// 没在跑、没消息、没待办。
+fn idle_current(app: &App) -> Option<(String, String, String)> {
+    let cur = app.current.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    if cur.is_empty() || app.is_running(&cur) {
+        return None;
+    }
+    if !app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&cur) {
+        return None;
+    }
+    let sf = app.store.restore(&cur)?;
+    if !sf.msgs.is_empty() || !sf.todos.is_empty() {
+        return None;
+    }
+    Some((cur.clone(), sf.meta.title.clone(), app.mode_of(&cur, &sf.meta.mode)))
+}
+
+/// 驻留 + 切成当前 + 两条广播。Kotlin 的 `touch(id)` 就是这个效果：
+/// `currentId()` = **最近 touch 过的那条**，所以新建完它自动就是当前。
+fn created(app: &App, id: &str, title: &str, mode: &str, reused: bool, with_role: bool) -> String {
+    app.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(id.to_string());
+    *app.current.lock().unwrap_or_else(|p| p.into_inner()) = id.to_string();
+    let opened = if with_role {
+        format!(
+            "{{\"id\":{},\"title\":{},\"mode\":{},\"role\":\"\"}}",
+            state::quote(id),
+            state::quote(title),
+            state::quote(mode)
+        )
+    } else {
+        format!(
+            "{{\"id\":{},\"title\":{},\"mode\":{}}}",
+            state::quote(id),
+            state::quote(title),
+            state::quote(mode)
+        )
+    };
+    app.publish(id, "opened", &opened);
+    app.publish(id, "sessions", "{}");
+    if with_role {
+        format!(
+            "{{\"ok\":true,\"id\":{},\"mode\":{},\"role\":\"\",\"reused\":{}}}",
+            state::quote(id),
+            state::quote(mode),
+            reused
+        )
+    } else {
+        format!(
+            "{{\"ok\":true,\"id\":{},\"mode\":{},\"reused\":{}}}",
+            state::quote(id),
+            state::quote(mode),
+            reused
+        )
+    }
+}
+
+fn err_json(msg: &str) -> String {
+    format!("{{\"ok\":false,\"error\":{}}}", state::quote(msg))
+}
+
+/**
+ * `POST /api/mode` {mode, sid} —— 切档位。
+ *
+ * 这条是**安全相关**的：界面把「计划」点亮而引擎没跟着换，用户看到的是只读、
+ * 跑的却是自动 —— 静默失效的计划模式比没有计划模式更糟（真浏览器点过一次才看出来）。
+ *
+ * `now` 的取法照 Kotlin：驻留的会话取它引擎里的**活档位**，没驻留的取**全局默认**
+ * （不是会话文件里那个）—— 两端"当前档位"的语义必须一致。
+ */
+fn mode_route(app: &App, body: &str) -> String {
+    let m = body_str(body, "mode");
+    let sid = pick_sid(app, body);
+    let resident =
+        !sid.is_empty() && app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&sid);
+    let now = if resident {
+        let file_mode = app
+            .store
+            .meta(&sid)
+            .map(|mt| mt.mode)
+            .unwrap_or_else(|| app.settings.permission_mode.clone());
+        app.mode_of(&sid, &file_mode)
+    } else {
+        app.settings.permission_mode.clone()
+    };
+
+    if !matches!(m.as_str(), "plan" | "ask" | "auto") {
+        return format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&now));
+    }
+    // sid 空就用当前；连当前都没有（全新状态根）就不动 —— 造会话是 `/api/new` 的活
+    let target = if sid.is_empty() {
+        app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    } else {
+        sid.clone()
+    };
+    if target.is_empty() {
+        return format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&now));
+    }
+    app.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(target.clone());
+    *app.current.lock().unwrap_or_else(|p| p.into_inner()) = target.clone();
+    app.set_mode(&target, &m);
+    app.publish(&target, "mode", &format!("{{\"mode\":{}}}", state::quote(&m)));
+    format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&m))
 }
 
 /// `POST /api/task` {text, sid}。受理即回 `{"ok":true,"sid":…}`，
@@ -382,6 +537,115 @@ mod tests {
         c2.read_to_string(&mut b2).unwrap();
         assert!(b2.contains(r#""title":"测试会话""#), "open 之后 state 没实值：{b2}");
         assert!(b2.contains(r#""content":"你好""#));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn new_json(app: &Arc<App>, body: &str) -> (String, String) {
+        let out = new_session(app, body);
+        let id = serde_json::from_str::<serde_json::Value>(&out)
+            .ok()
+            .and_then(|v| v.get("id").and_then(|x| x.as_str()).map(String::from))
+            .unwrap_or_default();
+        (id, out)
+    }
+
+    /// `/api/new` 的两条判据：**空的当前会话要复用**（否则侧栏被自己的手滑刷屏）、
+    /// **点了目录必须新建**（否则会话被悄悄挪到别的目录），以及**目录打不开要明确报错**
+    /// （退回默认工作区 = 把人送进一个他没选的仓库里写文件）。
+    #[test]
+    fn new_session_reuses_empty_and_never_swallows_a_bad_directory() {
+        let dir = std::env::temp_dir().join(format!("haoai-new-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"baseUrl":"http://x/v1","model":"m","permissionMode":"ask","workspace":"G:/HaoAI"}"#,
+        )
+        .unwrap();
+        let app = test_app(&dir);
+
+        // 全新状态根 → 新建一条，档位必须回给前端（前端只拿 id 就会沿用旧档位显示）
+        let (id1, body) = new_json(&app, "{}");
+        assert!(id1.starts_with("pc") && id1.len() >= 10, "id 形状该是 pc+8 位十六进制：{id1}");
+        assert!(body.contains("\"mode\":\"ask\""), "{body}");
+        assert!(body.contains("\"reused\":false"), "{body}");
+
+        // 键序照 Engine.persist —— 会话文件是两端共读的，多一个键少一个都会被下一个人看见
+        let f = dir.join(format!("sessions/pc-{id1}.json"));
+        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "id", "title", "workspace", "mode", "persona", "role", "model", "toolsOff",
+                "updated", "promptTokens", "completionTokens", "todos", "messages",
+            ],
+            "{keys:?}"
+        );
+        assert_eq!(v["title"], "新会话");
+        assert_eq!(v["mode"], "ask", "新会话继承的是**全局默认**，不是上一条会话的档位");
+
+        // 还一条没说过 → 复用同一个 id
+        let (id2, body2) = new_json(&app, "{}");
+        assert_eq!(id1, id2, "空的当前会话要复用，不然每点一次就多一个空文件");
+        assert!(body2.contains("\"reused\":true"), "{body2}");
+
+        // 写进一条消息 → 这次必须新建
+        let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+        v["messages"] = serde_json::json!([{ "role": "user", "content": "说过话了" }]);
+        fs::write(&f, v.to_string()).unwrap();
+        let (id3, body3) = new_json(&app, "{}");
+        assert_ne!(id1, id3, "说过话的会话不能再被当成空的复用");
+        assert!(body3.contains("\"reused\":false"), "{body3}");
+
+        // 指定目录打不开 → 明确报错，**不退回默认工作区**
+        let (_, bad) = new_json(&app, r#"{"ws":"G:/definitely-missing-dir-x"}"#);
+        assert!(bad.contains("\"ok\":false"), "{bad}");
+        assert!(bad.contains("这个目录打不开"), "{bad}");
+
+        // 角色卡/团队还没搬，但要**说出来**，不能静默建一条没有角色的会话
+        let (_, no_preset) = new_json(&app, r#"{"preset":"someone"}"#);
+        assert!(no_preset.contains("\"ok\":false") && no_preset.contains("/api/presets"), "{no_preset}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `/api/mode` 的要害是**界面显示与引擎档位不能分家**：点「计划」之后
+    /// `/api/state.mode` 必须真的变成 plan，否则用户看到只读、跑的却是自动。
+    #[test]
+    fn mode_route_switches_the_live_mode_and_state_shows_it() {
+        let dir = std::env::temp_dir().join(format!("haoai-mode-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        fs::write(
+            dir.join("settings.json"),
+            r#"{"baseUrl":"http://x/v1","model":"m","permissionMode":"ask","workspace":"G:/HaoAI"}"#,
+        )
+        .unwrap();
+        let app = test_app(&dir);
+        let (id, _) = new_json(&app, "{}");
+
+        // 切到 plan：回应、活档位、state 三处都要一起变
+        let r = mode_route(&app, r#"{"mode":"plan"}"#);
+        assert_eq!(r, format!(r#"{{"ok":true,"mode":"plan"}}"#), "{r}");
+        assert_eq!(app.mode_of(&id, "ask"), "plan");
+        let (.., state) = state_body(&app, "");
+        let v: serde_json::Value = serde_json::from_str(&state).unwrap();
+        assert_eq!(v["mode"], "plan", "界面读的是 state.mode，它分家就是那个静默失效");
+
+        // 垃圾值：回当前档位，不动（Kotlin 是 `m in listOf("plan","ask","auto")`）
+        let r2 = mode_route(&app, r#"{"mode":"yolo"}"#);
+        assert!(r2.contains("\"mode\":\"plan\""), "报的应该是当前档位：{r2}");
+        assert_eq!(app.mode_of(&id, "ask"), "plan", "无效值不许把档位改成别的");
+
+        // 切回 auto 也一样通
+        assert!(mode_route(&app, r#"{"mode":"auto"}"#).contains("\"mode\":\"auto\""));
+        let (.., state2) = state_body(&app, "");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&state2).unwrap()["mode"] == "auto",
+            "state 要跟着变回来"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

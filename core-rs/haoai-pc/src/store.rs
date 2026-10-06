@@ -59,6 +59,17 @@ pub fn norm_ws(s: &str) -> String {
     s.replace('/', "\\")
 }
 
+/// `Server.newSessionId` 的 id 形状：`pc` + nanoTime 的 16 进制前 8 位。
+/// 低 32 位 4.3 秒就轮一圈，所以撞车要靠下面那层重试兜住 —— **不重试的后果是
+/// 把另一条会话整份覆盖掉**，那是不可逆的。
+fn fresh_id() -> String {
+    let ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_else(|_| crate::engine::now_ms());
+    format!("pc{:08x}", ns & 0xFFFF_FFFF)
+}
+
 #[derive(Clone, Default)]
 pub struct Meta {
     pub id: String,
@@ -281,6 +292,46 @@ impl Store {
     }
 
     /// 等价于 `SessionIndex.restore` 里读历史那一段：引擎未跑时，历史就是文件里的原样。
+    /**
+     * 造一条新会话并**立刻落盘**（对应 `Server.newSessionId` 末尾那句 `e.persistNow()`）。
+     *
+     * 键序照 `Engine.persist()` 抄：id → title → workspace → mode → persona → role →
+     * [preset] → model → toolsOff → [runState] → updated → [cites] → promptTokens →
+     * completionTokens → [summary] → [compactedThrough] → todos → messages。
+     * 空的那些（preset / cites / summary / runState）Kotlin 是**不写键**的，
+     * 这里同样不写 —— 会话文件是两端共读的，键多一个少一个都会被下一个读的人看见。
+     */
+    pub fn create(&self, workspace: &str, mode: &str, settings: &Settings) -> String {
+        let mut id = fresh_id();
+        // id 是 nanoTime 派生的，撞上就要换一个；**不换的后果是把别人的会话整份盖掉**。
+        let mut guard = 0;
+        while self.file_for(&id).exists() && guard < 8 {
+            id = format!("{id}-{guard}");
+            guard += 1;
+        }
+        let now = crate::engine::now_ms();
+        let mut o = serde_json::Map::new();
+        o.insert("id".into(), Value::String(id.clone()));
+        o.insert("title".into(), Value::String("新会话".to_string()));
+        o.insert("workspace".into(), Value::String(norm_ws(workspace)));
+        o.insert("mode".into(), Value::String(mode.to_string()));
+        o.insert("persona".into(), Value::String(String::new()));
+        o.insert("role".into(), Value::String(String::new()));
+        o.insert("model".into(), Value::String(settings.model.clone()));
+        o.insert(
+            "toolsOff".into(),
+            Value::Array(settings.tools_off.iter().map(|t| Value::String(t.clone())).collect()),
+        );
+        o.insert("updated".into(), Value::Number(now.into()));
+        o.insert("promptTokens".into(), Value::Number(0.into()));
+        o.insert("completionTokens".into(), Value::Number(0.into()));
+        o.insert("todos".into(), Value::Array(vec![]));
+        o.insert("messages".into(), Value::Array(vec![]));
+        let _ = fs::create_dir_all(self.sessions_dir());
+        let _ = fs::write(self.file_for(&id), Value::Object(o).to_string());
+        id
+    }
+
     pub fn restore(&self, id: &str) -> Option<SessionFile> {
         let path = self.file_for(id);
         let raw = fs::read_to_string(&path).ok()?;
