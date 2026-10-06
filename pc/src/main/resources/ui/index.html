@@ -58,13 +58,10 @@
      浏览器里永不渲染（.haoshell 由壳注入脚本加上）——浏览器有系统标题栏，画了是噪声。 */
   #titlebar{display:none}
   .app.haoshell{height:100%;margin:0;border:0;border-radius:0;box-shadow:none;
-    grid-template-rows:38px minmax(0,1fr)}   /* 行高必须显式：自动行会把 1012px 按内容乱分（实测 224/786） */
-  .app.haoshell #titlebar{display:flex;align-items:center;gap:8px;grid-column:1/-1;height:38px;padding-left:12px;
-    background:var(--panel);border-bottom:1px solid var(--line);app-region:drag;user-select:none}
-  .app.haoshell #titlebar .bd{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--fg2)}
-  .app.haoshell #titlebar .tb{app-region:no-drag;width:42px;height:38px;display:grid;place-items:center;cursor:pointer;color:var(--dim)}
-  .app.haoshell #titlebar .tb:hover{background:var(--glass2);color:var(--fg)}
-  .app.haoshell #titlebar .tb.x:hover{background:#c42b1c;color:#fff}
+    grid-template-rows:minmax(0,1fr)}   /* 单行：#titlebar 已让位给系统深色标题栏（无边框黑屏案定案） */
+  /* .app.haoshell #titlebar 规则已撤：无边框窗体在本机 WebView2 下合成必黑（二分矩阵见
+     pc/shell/Program.cs 与 pc/docs/client-shell-handoff.md），改用原生深色 caption，
+     网页品牌条隐藏、窗口钮由系统接管（页面里的 win: 消息通道保留着，随时可切回） */
   /* 四列各自钉死轨道位。网格自动布位是"按可见元素顺序填格子"——display:none 掉中间列后，
      后面的列会整体前移（实测：藏掉会话栏，主区掉进 252px 轨道、右栏掉进 1fr），
      Ctrl+B 收栏（no-l）整窗空白就是这么来的。钉死后，藏掉的列只留一条由 --sw/--rw 控宽的轨道，

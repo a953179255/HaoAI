@@ -45,19 +45,19 @@ internal sealed class MainShell : Form
     private bool _balloonShown;
     private string _url;
 
-    // ---- 无边框：标题栏由**网页自己**画（index.html #titlebar + app-region:drag），
-    //      和 ZCode/Octop 同构——顶栏就是功能栏，不另画一条 Windows caption。
-    private bool _maximized;
-    private Rectangle _restoreBounds;
     private Label _status;                // 启动全程可见的状态层：冷启动那几秒不能是一块哑黑
-    private bool _pageReady;
 
     public MainShell()
     {
         Text = "HaoAI PC";
         Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "app.ico"));
         StartPosition = FormStartPosition.Manual;
-        FormBorderStyle = FormBorderStyle.None;   // 边框自绘；命中测试在 WndProc 里还给系统
+        // 二分矩阵定案（2026-10-05，全部实测）：
+        //   原生边框 + NC + WndProc 全开 → 渲染正常
+        //   无边框 + 任意组合（NC 开/关、WndProc 关、DWM 关、--disable-gpu、剥 backdrop-filter）→ 全黑
+        // 本机 WebView2 的无边框合成就是坏的 → 用原生窗口 + 沉浸式深色标题栏（attr 20），
+        // 白色割裂感由深色 caption 解决；拖动/贴边/缩放/双击全部交还系统（不再自管 WndProc）。
+        FormBorderStyle = FormBorderStyle.Sizable;
         BackColor = Color.FromArgb(14, 21, 17);   // 深色底：WebView2 就绪前不该有任何白
         ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
@@ -98,75 +98,17 @@ internal sealed class MainShell : Form
 
     private void ToggleMax()
     {
-        if (_maximized)
-        {
-            Bounds = _restoreBounds;
-            _maximized = false;
-        }
-        else
-        {
-            // 无边框窗体直接 Maximized 会盖住任务栏：手动贴工作区
-            _restoreBounds = Bounds;
-            var wa = Screen.FromControl(this).WorkingArea;
-            SetBounds(wa.X, wa.Y, wa.Width, wa.Height);
-            _maximized = true;
-        }
-    }
-
-    protected override void OnResizeEnd(EventArgs e)
-    {
-        // 用户手动拉尺寸后，恢复态基准跟着走
-        if (!_maximized) _restoreBounds = Bounds;
-        base.OnResizeEnd(e);
-    }
-
-    protected override void WndProc(ref Message m)
-    {
-        const int WM_NCHITTEST = 0x84;
-        // 系统要最大化无边框窗体（网页 app-region 的双击/贴边走这里）：改道 ToggleMax，
-        // 否则直接 Maximized 会盖住任务栏
-        const int WM_SYSCOMMAND = 0x112;
-        const int SC_MAXIMIZE = 0xF030;
-        if (m.Msg == WM_SYSCOMMAND && (m.WParam.ToInt64() & 0xFFF0) == SC_MAXIMIZE)
-        {
-            ToggleMax();
-            return;
-        }
-        if (m.Msg == WM_NCHITTEST)
-        {
-            base.WndProc(ref m);
-            if ((int)m.Result != 1 /*HTCLIENT*/ && (int)m.Result != 0) return;
-            var lp = m.LParam.ToInt64();
-            var scr = new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
-            var p = PointToClient(scr);
-            // 边缘 6px = 缩放热区（最大化时不给，系统自己有贴边分屏）。
-            // 拖动区不在这管：网页 #titlebar 的 app-region:drag 由 WebView2 NC 支持内部处理。
-            if (!_maximized)
-            {
-                const int G = 6;
-                bool l = p.X < G, r = p.X > ClientSize.Width - G, t = p.Y < G, b = p.Y > ClientSize.Height - G;
-                if (t && l) { m.Result = (IntPtr)13; return; }   // HTTOPLEFT
-                if (t && r) { m.Result = (IntPtr)14; return; }   // HTTOPRIGHT
-                if (b && l) { m.Result = (IntPtr)16; return; }   // HTBOTTOMLEFT
-                if (b && r) { m.Result = (IntPtr)17; return; }   // HTBOTTOMRIGHT
-                if (t) { m.Result = (IntPtr)12; return; }        // HTTOP
-                if (b) { m.Result = (IntPtr)15; return; }        // HTBOTTOM
-                if (l) { m.Result = (IntPtr)10; return; }        // HTLEFT
-                if (r) { m.Result = (IntPtr)11; return; }        // HTRIGHT
-            }
-            return;
-        }
-        base.WndProc(ref m);
+        // 原生窗口：最大化交给系统（自动贴工作区、不盖任务栏、Win11 自带圆角投影）
+        WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        // 边框没了之后，DWM 给回投影与 Win11 圆角
-        var margins = new Native.MARGINS { left = 1, right = 1, top = 1, bottom = 1 };
-        Native.DwmExtendFrameIntoClientArea(Handle, ref margins);
-        int round = 2;   // DWMWCP_ROUND
-        Native.DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
+        // 沉浸式深色标题栏（attr 20，Win10 1809+/Win11）：白色系统 caption 的割裂感就靠它；
+        // 圆角与投影是原生窗口自带的，不需要当年那两行 DWM hack（无边框黑屏案的二分对象）
+        int dark = 1;
+        Native.DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int));
     }
 
     // ---- 托盘 ----
@@ -234,8 +176,11 @@ internal sealed class MainShell : Form
 
     private async Task BuildWeb()
     {
-        _web = new Wv2 { Dock = DockStyle.Top, Height = ClientSize.Height };
-        _web.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top | AnchorStyles.Bottom;
+        // 只能设 Dock，**不能再设 Anchor**：WinForms 里两者互斥，后设的 Anchor 会把 Dock 顶掉，
+        // 控件退回"按当前 Bounds 定位"，而此刻它的 Width 还是 0 —— 于是整条 WebView2 宿主链
+        // （WinForms 容器 / Chrome_WidgetWin_0 / _1）实测宽度 0，页面照常渲染、CDP 截图正常，
+        // 但上屏是一整块窗体底色，看起来就是"黑屏"。
+        _web = new Wv2 { Dock = DockStyle.Fill };
         Controls.Add(_web);
         _web.BringToFront();
         SetStatus("正在初始化渲染引擎…");
@@ -258,9 +203,9 @@ internal sealed class MainShell : Form
                 }
             }
             await _web.EnsureCoreWebView2Async(env);
-            // NC 区域支持：网页里的 app-region:drag（index.html #titlebar）就是窗口拖动区，
-            // 双击/拖到屏幕边由系统接管——与 Electron 的 -webkit-app-region 同机制
-            _web.CoreWebView2.Settings.IsNonClientRegionSupportEnabled = true;
+            // 不再开 IsNonClientRegionSupportEnabled：它是给网页自绘标题栏的 app-region:drag 用的，
+            // 那套已撤（#titlebar 现在 display:none，全库再无活的 app-region 声明）。
+            // 拖动/贴边/缩放归系统标题栏，NC 支持留着只会改命中测试行为，没有收益。
             _web.CoreWebView2.NewWindowRequested += (_, e) =>
             {
                 // 站内不开新窗；外部链接交给系统默认浏览器
@@ -499,10 +444,8 @@ internal static class Native
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr lp);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS m);
     [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hWnd, int attr, ref int val, int size);
 
-    public struct MARGINS { public int left, right, top, bottom; }
     private delegate bool EnumProc(IntPtr hWnd, IntPtr lp);
 
     /** 二次启动：把已存在的壳窗口拽到前台，而不是再开一个。 */

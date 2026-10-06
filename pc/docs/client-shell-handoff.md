@@ -1,40 +1,43 @@
-# 交接文档：PC 客户端壳（WebView2）——黑屏未解 + 后续任务队列
+# 交接文档：PC 客户端壳（WebView2）——黑屏已解（Dock/Anchor）+ 后续任务队列
 
 > 交接时间：2026-10-05。前一个 Agent 排障到「用户肉眼全黑」为止，以下是其全部已知事实、
 > 主嫌疑与建议排查顺序。**接手前先读完本文再动码**，坑清单里每一条都是实测踩出来的。
 
-## 一、未解决的主问题（2026-10-05 深查后更新：**系统级问题，非 HaoAI 代码**）
+## 一、黑屏已定案并修复（2026-10-05 23:00）：WinForms `Dock`/`Anchor` 互斥 → WebView2 宿主链 0 宽
 
-**症状**：客户端窗口打开后是一块空的黑/深色表面。用户随后证实 **Octop、Clash Verge 同样白屏**——三款无关应用同病。
+**真因**：`pc/shell/Program.cs` 的 `BuildWeb()` 里原来是
 
-**⚠ 旧结论作废**：本文早期版本称“无边框窗口（FormBorderStyle.None）是毒源”——已被证伪：
-二分中途原生窗口渲染过一次，随后**原生窗口也黑了**（用户屏幕实拍），窗口样式不是根因。
-排查方向改为系统级。
+```csharp
+_web = new Wv2 { Dock = DockStyle.Top, Height = ClientSize.Height };
+_web.Anchor = Left|Right|Top|Bottom;   // ← 毒在这一行
+```
 
-### 深查后的事实清单（全部实测 2026-10-05 06:00 前后）
+WinForms 中 `Dock` 与 `Anchor` **互斥**：后设的 `Anchor` 会把 `Dock` 顶掉，控件退回"按当前 Bounds 定位"，而此刻它的 `Width` 还是 0（只有 `Height` 被显式设成 900）。于是**整条 WebView2 宿主链宽度为 0**——页面正常渲染、CDP 正常截到完整画面，但**没有任何面积可以上屏**，露出来的是窗体底色 `Color.FromArgb(14,21,17)`，看起来就是"黑屏"。
 
-| 项 | 结果 |
+**修法**：只留 `_web = new Wv2 { Dock = DockStyle.Fill };`，删掉 `Anchor` 那行。修后整条链从 `0×900` 变成 `1440×900`。
+
+### 决定性证据的读法（下次照这个顺序查，别再绕）
+
+`CDP 截图有完整画面 + 上屏无画面` 这条组合**本身就指向"内容画在了没有面积的地方"**。第一件该做的事是**枚举宿主子窗口链量尺寸**，而不是去换 GPU 开关：
+
+```
+WindowsForms10.Window…      0×900    ← 控件本体
+Chrome_WidgetWin_0          0×900
+Chrome_WidgetWin_1          0×900
+Chrome_RenderWidgetHostHWND 961×1032 ← 残留旧尺寸，右边界已超出窗体底边
+```
+
+### 本文旧版本里**作废**的结论（别再引用）
+
+| 旧结论 | 现状 |
 |---|---|
-| 三应用形态 | HaoAI=WebView2 进程树齐全、渲染器正常（CDP 截图有完整画面）、**上屏黑**；Octop=只有 python 后端、**UI 无任何 webview/renderer 子进程**；Clash Verge=主逻辑全正常（日志三连“窗口激活成功”）、**无 msedgewebview2 子进程** |
-| Electron 应用 | bilibili/WorkBuddy/QQ/ZCode 全部正常渲染（自带 Chromium 路径 OK） |
-| Edge 无头渲染 | RENDER-OK（chromium 核心管线完好） |
-| 显卡事件 | 近 7 天零 TDR/驱动复位；近 5 天零系统更新；Defender 近 7 天零隔离 |
-| DPI/拓扑 | 两屏均 100%；双真屏；虚拟屏适配器在装但**未进桌面拓扑**；dwm 无 GameViewer 注入模块 |
-| **WebView2 运行时** | **10/2 19:45 静默更新 .48→.53**（两版并存） |
-| **UU远程(GameViewer)** | **全套进程 10/4 17:41 启动**（报障前夜），虚拟显示驱动+常驻服务+与云端有活动连接；Clash 自家服务 10/4 17:49 崩溃重启（8 分钟后） |
+| 「系统级问题，非 HaoAI 代码」 | **错**。用户重启后 Octop / Clash Verge 恢复正常，**只有 HaoAI 仍黑** → 应用本地成因。那两个应用是另一回事（瞬时系统状态） |
+| 「无边框窗口（`FormBorderStyle.None`）是毒源」 | 错，且**错的原因值得记**：0 宽的宿主链在任何窗口样式下都必然全黑 |
+| 上表那份二分矩阵（原生边框 / NC / WndProc / DWM / `--disable-gpu` / 剥 backdrop-filter） | **全部作废**。它测的是错误坐标系里的组合；矩阵里"原生边框+NC+WndProc 全开→渲染正常"取决于当时 `Anchor` 那行在不在，与样式无关 |
+| 「UU远程(GameViewer) 显示层干扰」主嫌疑 | 不成立（解释不了只有 HaoAI 还黑、且穿过重启） |
+| 「WebView2 运行时 .53 兼容性」次嫌疑 | 不成立。`--disable-gpu`、`--disable-direct-composition` 两个探针均无效（因为压根不是合成问题） |
 
-### 主嫌疑（按时间线）
-1. **UU远程(GameViewer) 的显示层干扰**——远程控制类工具带虚拟显示+抓取/呈现钩子，是“部分内容应用空白”的经典成因；启动时间（10/4 17:41）先于所有报障。
-2. WebView2 运行时 .53（10/2 更新）与第三方宿主的兼容——但我们的宿主能正常 spawn 且渲染器正常，此假说较弱。
-
-### 只有用户能回答的两个时间点（决定 H1/H2）
-- Clash/Octop **最后一次正常显示**是何时？晚于 10/4 17:41 → 指向 H2；早于 → 指向 H1。
-- 10/4 傍晚是否**主动用 UU远程连过这台机器**（现在它的云端连接还活着）？
-
-### 待用户点头的排除实验（未执行，遵守“只查不改”）
-1. 退出 UU远程全家（含服务）→ 重开三应用看内容（最快、最可能一击定案）。
-2. 重装/回退 WebView2 运行时。
-3. 都无效 → 显卡驱动干净重装。
+**保留有效的方法论**：CDP 截图 / `PrintWindow` 这类绕过合成路径的抓法**不能当"用户可见正常"的证据**，只有用户肉眼 + `CopyFromScreen` 全屏实拍算数。这条当时把方向推向"合成层"是错的，但它对"什么算证据"的判断是对的。
 
 ### 已确认无关/已修掉的（不要重复排查）
 
@@ -60,6 +63,13 @@ powershell "$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=
 curl -s http://127.0.0.1:9224/json/list   # 看目标 URL
 # 僵尸 webview 盘点（我们目录的）
 powershell "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | ? { $_.CommandLine -like '*HaoAI*Client*WebView2*' } | measure"
+# ★ 上屏黑但 CDP 有画面时，第一件事是量 WebView2 宿主链的宽度（本次真因就是这么找到的）：
+#   正常应≈客户区尺寸；若 Chrome_WidgetWin_0/1 宽为 0，就是布局塌了，不是合成问题。
+powershell -File <枚举子窗口的脚本>   # EnumChildWindows + GetClassName + GetWindowRect
+#   配套自证截图（必须 SetProcessDPIAware，否则坐标被虚拟化会截到隔壁窗口）：
+#   SetProcessDPIAware → SetWindowPos(HWND_TOPMOST, NOSIZE|NOACTIVATE) → CopyFromScreen → 数亮像素占比
+#   实测判据：黑屏时 lit≈0.9%，正常时 18~27%。
+#   ⚠ 探针脚本里不要 MoveWindow 改窗口尺寸，会自己造出"子窗口比父窗口大"的假象。
 ```
 
 ## 二、已完成并提交的部分（全部可复用，勿重写）
