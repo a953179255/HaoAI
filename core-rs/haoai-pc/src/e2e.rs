@@ -648,3 +648,85 @@ fn allow_once_answer_lets_the_edit_through_and_remembers_the_verdict() {
     assert_eq!(std::fs::read_to_string(snaps[0].path()).unwrap(), "line1\nline2\nline3\n");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// auto 档跑一条只读命令：低危 ⇒ 不弹卡，`exit=` 和输出都要回给模型，卡片按 terminal 渲染。
+#[test]
+fn shell_in_auto_mode_runs_a_read_only_command() {
+    use serde_json::json;
+    if crate::shell::launcher_for("cmd").is_none() {
+        return; // 这台机器没有 SystemRoot\cmd.exe，不假装测过
+    }
+    let rsp1 = tool_calls_frame(&[("call_s", "shell", json!({"command": "echo hi", "shell": "cmd"}))]);
+    let (port, _seen) = scripted_gateway(vec![rsp1, final_frame("看到了")]);
+    let (root, app) = app_with_session("sh", port, "s", "auto");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.bus.lock().unwrap().push(tx);
+    engine::turn(&app, "s", "打一句 hi").expect("回合应跑完");
+
+    assert_eq!(app.approvals.size(), 0, "只读命令不该弹卡");
+    let frames: Vec<String> = {
+        let mut v = Vec::new();
+        while let Ok(x) = rx.try_recv() {
+            v.push(x);
+        }
+        v
+    };
+    let done = frames
+        .iter()
+        .find(|f| f.contains(r##""card":"terminal""##))
+        .expect("命令输出要按 terminal 卡片渲染");
+    assert!(done.contains("exit=0"), "{done}");
+    assert!(done.contains("hi"), "{done}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 这一条是整个安全层的意义所在：**拒了就必须没跑**。
+/// 界面上那句"用户拒绝了"如果背后命令其实执行了，比不弹卡更糟。
+#[test]
+fn denying_a_high_risk_command_means_it_never_ran() {
+    use serde_json::json;
+    if crate::shell::launcher_for("cmd").is_none() {
+        return;
+    }
+    // `del /q /s` 命中的是 HIGH_SHAPES（按 token 集合判，不看样板字面量）
+    let rsp1 = tool_calls_frame(&[(
+        "call_d",
+        "shell",
+        json!({"command": "del /q /s marker.txt", "shell": "cmd"}),
+    )]);
+    let (port, _seen) = scripted_gateway(vec![rsp1, final_frame("那我先不动它")]);
+    let (root, app) = app_with_session("shdeny", port, "d", "ask");
+    std::fs::write(root.join("ws/src/marker.txt"), "别删我\n").unwrap();
+
+    let h = {
+        let app = Arc::clone(&app);
+        thread::spawn(move || engine::turn(&app, "d", "把 marker 删了"))
+    };
+    let mut id = String::new();
+    for _ in 0..400 {
+        if let Some((i, w)) = app.approvals.rows().first() {
+            id = i.clone();
+            let j = serde_json::from_str::<Value>(&w.payload).unwrap();
+            assert_eq!(j["risk"], "high", "递归删除必须判高危：{j}");
+            assert_eq!(j["kind"], "exec", "shell 走的是 exec 那一档卡片");
+            assert_eq!(j["tool"], "shell");
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!id.is_empty(), "高危命令在 ask 档没弹卡");
+    app.approvals.complete(&id, "deny");
+    h.join().unwrap().expect("回合应跑完");
+
+    assert!(
+        root.join("ws/src/marker.txt").is_file(),
+        "拒绝了却还是删掉了 —— 这是最坏的一种"
+    );
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-d.json")).unwrap()).unwrap();
+    let tm = saved["messages"].as_array().unwrap().iter().find(|m| m["role"] == "tool").unwrap();
+    assert!(tm["content"].as_str().unwrap().contains("用户拒绝了这次"), "{tm}");
+    assert_eq!(tm["note"], "已拒绝");
+    let _ = std::fs::remove_dir_all(&root);
+}

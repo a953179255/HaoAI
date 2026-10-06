@@ -23,6 +23,31 @@ pub fn utf16_take(s: &str, n: usize) -> &str {
     s
 }
 
+/// 等价于 Kotlin 的 `takeLastSafe(n)` / `takeLast(n)`：按 UTF-16 单元数取**后缀**。
+///
+/// 截点落进代理对中间时，Kotlin 的规则是"丢掉开头那半个低代理"（也就是从下一个字符开始），
+/// 这里同一口径 —— 半截 emoji 发进 JSON 流前端解不出来，宁少勿残。
+pub fn utf16_take_last(s: &str, n: usize) -> String {
+    let total = utf16_len(s);
+    if total <= n {
+        return s.to_string();
+    }
+    let skip = total - n;
+    let mut units = 0usize;
+    for (i, c) in s.char_indices() {
+        if units == skip {
+            return s[i..].to_string();
+        }
+        let w = if c as u32 > 0xFFFF { 2 } else { 1 };
+        if units + w > skip {
+            // skip 落在这个宽字符内部 → 半个代理丢掉，从这个字符**之后**开始
+            return s[i + c.len_utf8()..].to_string();
+        }
+        units += w;
+    }
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,5 +75,20 @@ mod tests {
     #[test]
     fn take_beyond_length_returns_whole() {
         assert_eq!(utf16_take("短", 90), "短");
+    }
+
+    #[test]
+    fn tail_counts_units_and_never_leaves_half_an_emoji() {
+        assert_eq!(utf16_take_last("abc", 2), "bc");
+        assert_eq!(utf16_take_last("中文abc", 3), "abc");
+        assert_eq!(utf16_take_last("a😀b", 1), "b");
+        assert_eq!(utf16_take_last("短", 90), "短");
+        // Kotlin 的口径（逐单元推过一遍）：
+        // "a😀b" = [a,D83D,DE00,b]，takeLast(2) 起点 2 是**低**代理 → 丢掉半个 → "b"
+        assert_eq!(utf16_take_last("a😀b", 2), "b");
+        // "ab😀c" = [a,b,D83D,DE00,c]，takeLast(3) 起点 2 是高代理 → 不是孤儿，整对留着 → "😀c"
+        assert_eq!(utf16_take_last("ab😀c", 3), "😀c");
+        // takeLast(2) 起点 3 是低代理 → 丢掉 → "c"
+        assert_eq!(utf16_take_last("ab😀c", 2), "c");
     }
 }

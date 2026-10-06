@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 use crate::checkpoints;
-use crate::utf16::{utf16_len, utf16_take};
+use crate::utf16::{utf16_len, utf16_take, utf16_take_last};
 
 /// `Tools.kt` 的 SKIP_DIRS。`Env.TOOL_OUTPUT_DIR` 是 `.haoai-output`。
 const SKIP_DIRS: [&str; 12] = [
@@ -68,7 +68,8 @@ impl Outcome {
 
 impl Ctx {
     /// 测试/单发入口：只有工作区，其余取空 —— 空 `run_id` 的语义就是"不记账"。
-    #[allow(dead_code)] // 现在只有本文件的测试在调；M2e-4 的 write/edit 也走它建基线
+    /// 生产路径一律走 `for_run`（档位、旗标、轮次都得给齐），所以它只存在于测试里。
+    #[cfg(test)]
     pub fn new(workspace: PathBuf) -> Self {
         Self {
             flags: Vec::new(),
@@ -650,6 +651,66 @@ fn todo_tool(ctx: &Ctx, args: &serde_json::Value) -> Outcome {
     Outcome::ok(out.join("\n"))
 }
 
+/// `ShellTool`：跑一条命令，回 `exit=N` + 合并的输出。
+///
+/// `card="terminal"` —— 界面按它选那张等宽、可展开的卡；写类才是 `diff`。
+/// **注意退出码非零不算 error**：命令自己失败是模型要看的事实，不是工具坏了。
+/// 只有"跑不起来/被拒/超时"才回 error=true。
+fn shell_tool(app: &crate::App, ctx: &Ctx, args: &serde_json::Value) -> Outcome {
+    let Some(command) = arg_str(args, "command") else {
+        return Outcome::fail("shell 缺少 command".into());
+    };
+    let shell = arg_str(args, "shell").unwrap_or_else(|| "pwsh".to_string()).to_lowercase();
+    let timeout = arg_int(args, "timeout").unwrap_or(180).clamp(1, 1800);
+    let cwd = match arg_str(args, "cwd") {
+        Some(p) => ctx.resolve(&p),
+        None => ctx.workspace.clone(),
+    };
+    // 先确认这台机器上有这把 shell，再问用户要不要跑 —— 找不到根本不该弹卡
+    let Some(l) = crate::shell::launcher_for(&shell) else {
+        return Outcome::fail(format!("这台机器上找不到 {shell}，换一种 shell 或给绝对路径"));
+    };
+    let title = format!("执行命令（{shell}）");
+    let detail = || command.clone();
+    if let Some(why) = crate::guard::guard(app, ctx, "shell", &command, &title, &detail, true) {
+        return Outcome::fail(why);
+    }
+    match crate::shell::run(&l, &command, &cwd, &ctx.workspace, timeout) {
+        Err(e) => Outcome::fail(e),
+        Ok(r) => match r.exit {
+            None => Outcome {
+                text: format!("超时 {timeout}s 已终止。已输出：\n{}", text_middle(&r.out, 4000)),
+                ok: false,
+                card: "terminal",
+                diff: String::new(),
+            },
+            Some(code) => Outcome {
+                text: format!("exit={code}\n---\n{}", r.out),
+                ok: true,
+                card: "terminal",
+                diff: String::new(),
+            },
+        },
+    }
+}
+
+/// `TextCap.middle`：超长的输出留头 65%、留尾 25%，中间报一句省略了多少**字符**。
+/// 头部给的多是因为命令失败的原因通常在最前面，尾部给一点是因为最终状态在最后一行。
+fn text_middle(text: &str, max: usize) -> String {
+    let len = utf16_len(text);
+    if len <= max {
+        return text.to_string();
+    }
+    let head = (max as f64 * 0.65) as usize;
+    let tail = (max as f64 * 0.25) as usize;
+    let omitted = len.saturating_sub(head + tail);
+    format!(
+        "{}\n…［中间省略约 {omitted} 字符］…\n{}",
+        utf16_take(text, head),
+        utf16_take_last(text, tail)
+    )
+}
+
 pub fn dispatch(
     app: &crate::App,
     ctx: &Ctx,
@@ -663,6 +724,7 @@ pub fn dispatch(
         "todo" => Some(todo_tool(ctx, args)),
         "write" => Some(write_tool(app, ctx, args)),
         "edit" => Some(edit_tool(app, ctx, args)),
+        "shell" => Some(shell_tool(app, ctx, args)),
         _ => None,
     }
 }

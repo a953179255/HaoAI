@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::{Map, Value};
 
@@ -480,8 +480,9 @@ fn atomic_write(path: &Path, content: &str) {
 }
 
 /// 供测试用的等待：轮询到该会话不再在跑。
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn wait_idle(app: &App, sid: &str, secs: u64) -> bool {
+    use std::time::Duration;
     let deadline = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < deadline {
         if !app.is_running(sid) {

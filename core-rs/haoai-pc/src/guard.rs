@@ -3,6 +3,8 @@
 //!
 //! **顺序很要紧 —— 规则先于档位**，否则 `auto` 会把用户专门写下的"这条要问我"给跳过。
 //! 反过来 `plan` 是最高优先级：计划模式就是只读，规则表也放行不了写。
+use std::path::PathBuf;
+
 use crate::approval::approval_payload;
 use crate::flags::{self, Flag};
 use crate::policies::{Decision, Rule};
@@ -44,9 +46,12 @@ pub(crate) fn guard(
     }
     // browser/screen 传的是 URL、坐标、控件名，`subject_is_path` 必须给 false ——
     // 否则下面那句"在工作区之外"会把一个 URL 当路径判出来，在审批卡上写一句驴唇不对马嘴的话。
-    let resolved = ctx.resolve(subject);
-    let out = subject_is_path && kind == "write" && ctx.outside(&resolved);
-    let exists = subject_is_path && kind == "write" && resolved.is_file();
+    // 而且**只有写类才去 resolve**：shell 的 subject 是整条命令，拿它 canonicalize 一遍
+    // 既不产生结果也不该有副作用（Kotlin 那边靠 `&&` 的短路做到同一件事）。
+    let writeish = subject_is_path && kind == "write";
+    let resolved = if writeish { ctx.resolve(subject) } else { PathBuf::new() };
+    let out = writeish && ctx.outside(&resolved);
+    let exists = writeish && resolved.is_file();
     let rating = risk::of(tool, subject, &detail(), out, exists);
     // 用户显式开了"允许写到工作区外"之后，"在外面"这一项不再计入风险；
     // 但**只摘掉这一项**：强推、删文件、覆盖已有文件那些照样拦。

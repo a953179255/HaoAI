@@ -13,6 +13,7 @@ mod policies;
 mod prompt;
 mod provider;
 mod risk;
+mod shell;
 mod state;
 mod store;
 mod tools;
