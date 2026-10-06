@@ -3,6 +3,7 @@ mod engine;
 #[cfg(test)]
 mod e2e;
 mod checkpoints;
+mod catalog;
 mod diff;
 mod flags;
 mod guard;

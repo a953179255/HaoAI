@@ -74,6 +74,18 @@ pub fn handle(stream: TcpStream, app: Arc<App>) {
             send(stream, code, ctype, &b)
         }
         "/api/sessions" => send(stream, 200, "application/json; charset=utf-8", &sessions_body(&app)),
+        "/api/presets" => {
+            let b = crate::catalog::presets_json(&app.store.home);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/skills" => {
+            let b = crate::catalog::skills_json(&app.store.home);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/teams" => {
+            let b = crate::catalog::teams_json(&app.store.home);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
         "/api/new" => {
             let b = new_session(&app, &body);
             send(stream, 200, "application/json; charset=utf-8", &b)
