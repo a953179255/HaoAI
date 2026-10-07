@@ -175,6 +175,13 @@ pub fn gated(tool: &str, flags: &[(String, bool)]) -> bool {
     flag_for(tool).map(|f| !flags::enabled(f, flags)).unwrap_or(false)
 }
 
+/// `AgentConfigs.CRITICAL`：关掉这五把等于砍掉引擎，所以关闭请求**不认**、
+/// 界面上也不许亮成"关着"。名单本身在生成的 `tools.rs` 里（`critical` 字段），
+/// 这里只是按键查一次的薄封装 —— 表只有一份，两端不会各写一套。
+pub fn is_critical(tool: &str) -> bool {
+    crate::tools::TOOLS.iter().any(|t| t.name == tool && t.critical)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

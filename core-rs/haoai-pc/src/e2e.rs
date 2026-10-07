@@ -282,8 +282,9 @@ fn task_roundtrip_streams_and_persists() {
     assert!(!app.is_running("e2e"));
     let std_root = crate::store::Store::new(root.clone());
     let sf = std_root.restore("e2e").unwrap();
+    let st = app.settings_of("e2e");
     let v = crate::state::View {
-        settings: &app.settings,
+        settings: &st,
         session: Some(&sf),
         session_id: "e2e",
         store: &std_root,
@@ -568,8 +569,9 @@ fn ask_mode_blocks_the_write_until_the_card_is_answered() {
 
             let sf = app.store.restore("k");
             let pending = app.approvals.pending_for("k");
+            let st = app.settings_of("k");
             let view = crate::state::View {
-                settings: &app.settings,
+                settings: &st,
                 session: sf.as_ref(),
                 session_id: "k",
                 store: &app.store,

@@ -41,7 +41,13 @@ fn state_matches_jvm_golden() {
             .unwrap_or_default();
 
         let sf = store.restore(&sid);
-        let view = View { settings: &settings, session: sf.as_ref(), session_id: &sid, store: &store, running: false, usage: (0, 0), pending: &[] };
+        // 与 `/api/state` 一样：驻留的那条读的是**它自己那份**设置（会话文件里的
+        // model/toolsOff 覆盖过全局），不是全局那份
+        let eff = match sf.as_ref() {
+            Some(x) => crate::store::overlay(&settings, &x.meta),
+            None => settings.clone(),
+        };
+        let view = View { settings: &eff, session: sf.as_ref(), session_id: &sid, store: &store, running: false, usage: (0, 0), pending: &[] };
         let mine = state::state_json(&view);
 
         if mine == raw {

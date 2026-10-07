@@ -49,9 +49,44 @@ impl Flag {
         }
     }
 
-    /// 全量注册表：给"把 7 个开关列出来"的那一类消费方用（设置页、`haoai flags list`）。
-    /// 那两条路由还在 Kotlin 那边，所以这个 const 暂时只有测试在读 —— **搬过来时删掉 allow**。
-    #[allow(dead_code)]
+    /// 设置页上那一行的名字与说明。**逐字照抄 `HaoFlag` 的构造参数** ——
+    /// 这两列是用户判断"要不要拨它"的唯一依据，改一个字都是在改产品文案。
+    pub fn title(self) -> &'static str {
+        match self {
+            Flag::ToolResultSpill => "工具完整输出落文件",
+            Flag::OutsideWrite => "允许写到工作区外",
+            Flag::PlanMode => "计划模式",
+            Flag::SnapshotBeforeWrite => "改文件前留快照",
+            Flag::BrowserControl => "浏览器控制（CDP）",
+            Flag::DesktopControl => "屏幕与点击控制",
+            Flag::McpClient => "外部 MCP 工具",
+        }
+    }
+
+    pub fn what(self) -> &'static str {
+        match self {
+            Flag::ToolResultSpill => {
+                "命令/读取输出过长时，完整内容存进工作区 .haoai-output/，对话里只留头尾摘要和路径。"
+            }
+            Flag::OutsideWrite => {
+                "关掉时，自动档碰到工作区之外的写路径会当场拒绝（问人那一档仍然弹卡）。要往仓库外落文件再打开它。"
+            }
+            Flag::PlanMode => "先只读调研并产出方案，经你确认后才允许改文件与执行命令。",
+            Flag::SnapshotBeforeWrite => "覆盖/删除已有文件前先存一份到 .haoai-snap/，改坏了能回滚。",
+            Flag::BrowserControl => {
+                "让 agent 打开本机浏览器看网页、点按钮、截图。用独立的临时配置目录，不碰你自己的 Edge 登录态。默认关：关着时这个工具对模型不存在。"
+            }
+            Flag::DesktopControl => {
+                "让 agent 截屏、列窗口、读控件树，并模拟点击与键盘输入。它能看见屏幕上所有内容，默认关；打开后每次点击/输入仍逐条问你。"
+            }
+            Flag::McpClient => {
+                "连接你在 HAOAI_HOME/mcp.json 里配置的 MCP 服务器，把它们报的工具交给模型用。默认关：外部进程的行为不可预知，打开后每次调用仍逐条问你。"
+            }
+        }
+    }
+
+    /// 全量注册表：给"把 7 个开关列出来"的那一类消费方用（设置页 `GET /api/settings`、
+    /// `haoai flags list`）。顺序就是 enum 的声明顺序 —— 设置页按这个顺序画行。
     pub const ALL: [Flag; 7] = [
         Flag::ToolResultSpill,
         Flag::OutsideWrite,

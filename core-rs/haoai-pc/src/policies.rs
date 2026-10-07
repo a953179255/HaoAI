@@ -101,6 +101,12 @@ impl Rule {
         })
     }
 
+    /// `"$tool($pattern) $decision"` —— 设置页与规则表读的都是这一串，
+    /// 所以它必须和 `parse` 互为逆运算（能 parse 回来才算没跑偏，见测试）。
+    pub fn render(&self) -> String {
+        format!("{}({}) {}", self.tool, self.pattern, self.decision.name())
+    }
+
     /// 命令拿**三种形态**去比：归约前缀（`git checkout`）、前两个 token（`git commit`）、
     /// 整条命令。只用归约前缀会出这种事：arity 词典里没有 `git commit`（它不算危险命令），
     /// 于是用户写的 `shell(git commit*)` 永远匹配不上，规则形同虚设。三种都比一遍，

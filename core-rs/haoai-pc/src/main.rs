@@ -39,7 +39,8 @@ const MAX_RESIDENT: usize = 12;
 
 pub struct App {
     pub store: store::Store,
-    pub settings: store::Settings,
+    /// 全局设置（`WebServer.settings` 是个 var，POST /api/settings 会换掉它）。
+    pub settings: Mutex<store::Settings>,
     /// 最近使用顺序（**新的在前**），等价于 `Server.order`。
     ///
     /// 为什么不是"一个当前会话 id"：`currentId()` 取的是这份表里**第一个还驻留的**，
@@ -81,6 +82,20 @@ pub struct App {
     /// 写回文件。只改文件的话，改名之后下一回合会被旧标题盖回去；
     /// 只改内存的话，重启就丢了。Kotlin 两边都改，这里也两边都改。
     pub titles: Mutex<HashMap<String, String>>,
+    /// 按会话的设置覆盖（`/api/model` 与 `/api/tool` 写的那一层）。
+    ///
+    /// Kotlin 那边它活在 `engine.settings` 里，而**没落盘**：`modelSet` 走的是
+    /// `useSettings(copy(model=…))`，后面没有 `persistNow()`。所以改了模型之后
+    /// `/api/state` 立刻看得见，会话文件里却还是旧的 —— 重启就退回旧值，
+    /// 除非中间跑过一回合（persist 会把引擎那份写回去）。这个不对称是它的行为，照抄。
+    pub overlays: Mutex<HashMap<String, SessionOverlay>>,
+}
+
+/// 一条会话的活覆盖。`None` = 这一层没动过，用文件里那一份。
+#[derive(Clone, Default)]
+pub struct SessionOverlay {
+    pub model: Option<String>,
+    pub tools_off: Option<Vec<String>>,
 }
 
 impl App {
@@ -189,13 +204,78 @@ impl App {
             .insert(sid.to_string(), title.to_string());
     }
 
-    /// 会话被删掉之后要清的一切：最近表、驻留、活档位、活标题、活历史。
+    /// 全局设置的一份快照（`WebServer.settings` 是个 var：改设置、按会话换模型都读活值）。
+    pub fn global(&self) -> store::Settings {
+        self.settings.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub fn set_global(&self, s: store::Settings) {
+        *self.settings.lock().unwrap_or_else(|p| p.into_inner()) = s;
+    }
+
+    /**
+     * **这条会话**该用哪份设置 = 全局 + 会话文件那层覆盖 + `/api/model`、`/api/tool`
+     * 的活覆盖（对应 `EngineFactory.applySessionOverlay` 与 `engine.useSettings`）。
+     *
+     * 覆盖的口径有两处容易想错，都照 Kotlin 抄死：
+     * 1. `model` 与 `toolsOff` 是**替换**而不是合并。会话文件里 `model` 一直有值
+     *    （persist 每回合都写），所以这层覆盖基本总在经济上生效 —— 于是"全局关掉 shell"
+     *    对一条已在跑的会话**并不成立**，它用的是自己那张表。界面上"全局"那半边亮着、
+     *    这条会话却照旧能用 shell，就是这么来的。Rust 之前拿的是"全局 ∪ 会话"，
+     *    比那边严一档，两边会在"全局关了某把工具"时给出不同的工具清单。
+     * 2. 只有 `model` 非空**或** `toolsOff` 非空才走覆盖；两者都空时用的就是全局那份。
+     */
+    pub fn settings_of(&self, sid: &str) -> store::Settings {
+        let mut st = self.global();
+        if sid.is_empty() {
+            return st;
+        }
+        if let Some(m) = self.store.meta(sid) {
+            st = store::overlay(&st, &m);
+        }
+        let o = self.overlays.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(ov) = o.get(sid) {
+            if let Some(md) = &ov.model {
+                st.model = md.clone();
+            }
+            if let Some(off) = &ov.tools_off {
+                st.tools_off = off.clone();
+            }
+        }
+        st
+    }
+
+    /// 这条会话该按"关着"显示/过滤的工具集合：自己那份，再剔掉 critical
+    /// （`AgentConfigs.effectiveToolsOff` —— 关掉 read/glob/grep/task/todo 等于砍掉引擎，
+    /// 所以那五把**不认**关闭请求，界面上也不许亮成关着）。
+    pub fn tools_off_of(&self, sid: &str) -> Vec<String> {
+        self.settings_of(sid)
+            .tools_off
+            .iter()
+            .filter(|t| !crate::guard::is_critical(t))
+            .cloned()
+            .collect()
+    }
+
+    /// 按会话换模型：只改这条会话的活覆盖，不碰全局（全局那条走 `/api/settings`）。
+    pub fn set_session_model(&self, sid: &str, model: &str) {
+        let mut m = self.overlays.lock().unwrap_or_else(|p| p.into_inner());
+        m.entry(sid.to_string()).or_default().model = Some(model.to_string());
+    }
+
+    pub fn set_session_tools_off(&self, sid: &str, off: &[String]) {
+        let mut m = self.overlays.lock().unwrap_or_else(|p| p.into_inner());
+        m.entry(sid.to_string()).or_default().tools_off = Some(off.to_vec());
+    }
+
+    /// 会话被删掉之后要清的一切：最近表、驻留、活档位、活标题、活历史、按会话的覆盖。
     /// 留着不清的后果是"删了的会话还在侧栏"——`/api/state` 还能把它拼出来。
     pub fn forget(&self, sid: &str) {
         self.order.lock().unwrap_or_else(|p| p.into_inner()).retain(|x| x != sid);
         self.resident.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
         self.titles.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
         self.modes.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
+        self.overlays.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
         self.histories.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
     }
 
@@ -267,13 +347,14 @@ impl App {
     #[cfg(test)]
     pub fn at(home: std::path::PathBuf) -> Arc<App> {
         let store = store::Store::new(home);
-        let settings = store.settings();
+        let settings = Mutex::new(store.settings());
         Arc::new(App {
             policies: policies::Policies::new(&store.home),
             approvals: approval::ApprovalBroker::with_timeouts(2, 2),
             notes: Mutex::new(HashMap::new()),
             modes: Mutex::new(HashMap::new()),
             titles: Mutex::new(HashMap::new()),
+            overlays: Mutex::new(HashMap::new()),
             order: Mutex::new(vec![]),
             resident: Mutex::new(HashSet::new()),
             bus: Mutex::new(vec![]),
@@ -360,7 +441,7 @@ fn serve(rest: &[String]) {
     let _ = fs::write(h.join("webport"), actual.to_string());
 
     let store = store::Store::new(h.clone());
-    let settings = store.settings();
+    let settings = Mutex::new(store.settings());
     // 等价于 `start()` 里那句 `SessionIndex.list(5).firstOrNull()?.let { touch(it.id) }`：
     // 重启后要接上上次用的那条，而不是每次开一个空白新会话。
     let first = store.list(5).first().map(|m| m.id.clone()).unwrap_or_default();
@@ -379,6 +460,7 @@ fn serve(rest: &[String]) {
         notes: Mutex::new(HashMap::new()),
         modes: Mutex::new(HashMap::new()),
         titles: Mutex::new(HashMap::new()),
+        overlays: Mutex::new(HashMap::new()),
     });
     // 重启后接上的那条会话在 Kotlin 那边是 `touch(id)` → 建引擎 → `title.set(meta.title)`，
     // 于是 `/api/state` 报的是**引擎内存里那份**标题。这里同样先 touch 再种活标题，

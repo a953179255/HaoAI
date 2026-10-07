@@ -260,6 +260,41 @@ pub fn chat(
     Ok(t)
 }
 
+/// `OpenAiProvider.models()`：`GET {baseUrl}/models`，给顶栏的模型切换器列一下网关有什么。
+///
+/// OpenAI 兼容网关的返回形状**不止一种**（`{"data":[{"id":…}]}` 与 llama-server 的
+/// `{"models":[{"name":…}]}`），两种都认；再不行回空表，让界面上退化成手输。
+/// 连不上也回空表（Kotlin 那边整条包在 runCatching 里）—— 列不出模型不该让页面报错。
+pub fn list_models(base_url: &str, api_key_raw: &str) -> Vec<String> {
+    if base_url.trim().is_empty() {
+        return vec![];
+    }
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let key = header_key(api_key_raw).unwrap_or_default();
+    let body = match ureq::get(&url).header("Authorization", &format!("Bearer {key}")).call() {
+        Ok(mut r) => r.body_mut().read_to_string().unwrap_or_default(),
+        Err(_) => return vec![],
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&body) else { return vec![] };
+    let arr = match v.get("data").or_else(|| v.get("models")).and_then(|x| x.as_array()) {
+        Some(a) => a,
+        None => return vec![],
+    };
+    let mut out: Vec<String> = vec![];
+    for e in arr {
+        let name = e
+            .get("id")
+            .and_then(|x| x.as_str())
+            .or_else(|| e.get("name").and_then(|x| x.as_str()));
+        if let Some(n) = name {
+            if !out.iter().any(|x| x == n) {
+                out.push(n.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// 供 engine 拼请求用：系统提示 + 会话历史（含工具调用与 tool 回复）。
 pub fn request_body(s: &Settings, sys: &str, history: &[crate::store::Msg], plan: bool) -> String {
     let mut msgs = vec![msg_json("system", sys, &[], "")];

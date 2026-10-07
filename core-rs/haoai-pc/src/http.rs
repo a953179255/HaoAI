@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::channel;
@@ -40,7 +41,7 @@ pub fn handle(stream: TcpStream, app: Arc<App>) {
 
     let text = String::from_utf8_lossy(&head).to_string();
     let mut lines = text.split_whitespace();
-    let _method = lines.next().unwrap_or("GET").to_string();
+    let method = lines.next().unwrap_or("GET").to_string();
     let target = lines.next().unwrap_or("/").to_string();
     let content_length = text
         .lines()
@@ -122,6 +123,28 @@ pub fn handle(stream: TcpStream, app: Arc<App>) {
             let ok = app.store.purge(&body_str(&body, "name"));
             send(stream, 200, "application/json; charset=utf-8", &format!("{{\"ok\":{ok}}}"))
         }
+        // 与 Kotlin 一样按 **method** 分流这一条：GET 是读，POST 是存
+        "/api/settings" => {
+            if method == "POST" {
+                let (code, b) = save_settings(&app, &body);
+                send(stream, code, "application/json; charset=utf-8", &b)
+            } else {
+                let b = settings_json(&app);
+                send(stream, 200, "application/json; charset=utf-8", &b)
+            }
+        }
+        "/api/models" => {
+            let b = models_body(&app, &query_of(&query, "sid"));
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/model" => {
+            let b = model_set(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/tool" => {
+            let b = tool_toggle(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
         "/api/task" => {
             let (code, b) = start_task(&app, &body);
             send(stream, code, "application/json; charset=utf-8", &b)
@@ -182,8 +205,11 @@ fn state_body(app: &App, sid: &str) -> (u16, &'static str, String) {
         }
     }
     let pending = app.approvals.pending_for(&id);
+    // 驻留的那条用**它自己那份**设置（Kotlin 读的是 `e.settings`：会话文件的 model/toolsOff
+    // 覆盖过全局的）；没驻留的用全局那份（`e` 是 null，`?:` 全部落到 settings.*）。
+    let st = if resident { app.settings_of(&id) } else { app.global() };
     let view = View {
-        settings: &app.settings,
+        settings: &st,
         session: sf.as_ref(),
         session_id: &id,
         store: &app.store,
@@ -256,14 +282,15 @@ fn new_session(app: &App, body: &str) -> String {
             return created(app, &id, &title, &mode, true, false);
         }
     }
-    let ws = if want_ws.is_empty() { app.settings.workspace_file() } else { want_ws.clone() };
+    let g = app.global();
+    let ws = if want_ws.is_empty() { g.workspace_file() } else { want_ws.clone() };
     if !want_ws.is_empty() && !std::path::Path::new(&ws).is_dir() {
         return err_json(&format!("这个目录打不开：{ws}"));
     }
-    let id = app.store.create(&ws, &app.settings.permission_mode, &app.settings);
+    let id = app.store.create(&ws, &g.permission_mode, &g);
     // 指定了目录那一支带 role 键、没指定那一支不带 —— 两边形状不一样是 Kotlin 原样，
     // 前端读的是 `d.role||''`，少一个键不报错，但要对齐就对齐到底
-    created(app, &id, "新会话", &app.settings.permission_mode, false, !want_ws.is_empty())
+    created(app, &id, "新会话", &g.permission_mode, false, !want_ws.is_empty())
 }
 
 /// 眼前那条是空的就复用它：**已驻留**（不驻留的那条在 Kotlin 里压根没有引擎可问）、
@@ -434,10 +461,10 @@ fn mode_route(app: &App, body: &str) -> String {
             .store
             .meta(&sid)
             .map(|mt| mt.mode)
-            .unwrap_or_else(|| app.settings.permission_mode.clone());
+            .unwrap_or_else(|| app.global().permission_mode);
         app.mode_of(&sid, &file_mode)
     } else {
-        app.settings.permission_mode.clone()
+        app.global().permission_mode
     };
 
     if !matches!(m.as_str(), "plan" | "ask" | "auto") {
@@ -452,6 +479,289 @@ fn mode_route(app: &App, body: &str) -> String {
     app.set_mode(&target, &m);
     app.publish(&target, "mode", &format!("{{\"mode\":{}}}", state::quote(&m)));
     format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&m))
+}
+
+/// 环境变量里的凭据：只有**非空白**才算设过（Kotlin 那边是 `takeIf { it.isNotBlank() }`）。
+fn env_nonblank(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// `GET /api/settings` —— 整份设置对象原样发给前端。
+///
+/// **密钥永远不进它**：只报 `hasKey`/`hasSearchKey` 两个布尔（v0.61 之前连 key 的前 6 位
+/// 都发，那次一并收掉了）。键的顺序照 `settingsJson` 抄 —— 前端不按键序读，但像素剧本
+/// 比的是文本，而且这份对象两端要能对照。
+fn settings_json(app: &App) -> String {
+    let st = app.global();
+    let key = env_nonblank("HAOAI_API_KEY").or_else(|| {
+        let p = app.store.home.join("apikey");
+        if p.is_file() { fs::read_to_string(&p).ok().map(|t| t.trim().to_string()) } else { None }
+    });
+    let search_key = env_nonblank("HAOAI_SEARCH_KEY").unwrap_or_else(|| {
+        let p = app.store.home.join("searchkey");
+        p.is_file().then(|| fs::read_to_string(&p).ok().map(|t| t.trim().to_string())).flatten().unwrap_or_default()
+    });
+    let flags: Vec<String> = crate::flags::Flag::ALL
+        .iter()
+        .map(|f| {
+            format!(
+                "{{\"key\":{},\"title\":{},\"what\":{},\"on\":{}}}",
+                state::quote(f.key()),
+                state::quote(f.title()),
+                state::quote(f.what()),
+                crate::flags::enabled(*f, &st.flags)
+            )
+        })
+        .collect();
+    let ws = st.workspace_file();
+    let rules: Vec<String> = app
+        .policies_with(|p| p.rules(std::path::Path::new(&ws)))
+        .iter()
+        .map(|r| format!("{{\"text\":{}}}", state::quote(&r.render())))
+        .collect();
+    let off: Vec<String> = st.tools_off.iter().map(|t| state::quote(t)).collect();
+    let mut s = String::new();
+    s.push('{');
+    s.push_str(&format!("\"provider\":{},", state::quote(&st.provider_name)));
+    s.push_str(&format!("\"baseUrl\":{},", state::quote(&st.base_url)));
+    s.push_str(&format!("\"model\":{},", state::quote(&st.model)));
+    s.push_str(&format!("\"mode\":{},", state::quote(&st.permission_mode)));
+    s.push_str(&format!("\"maxTokens\":{},", st.max_tokens));
+    s.push_str(&format!("\"reasoningEffort\":{},", state::quote(&st.reasoning_effort)));
+    s.push_str(&format!("\"searchProvider\":{},", state::quote(&st.search_provider)));
+    s.push_str(&format!("\"fallback\":{},", state::quote(&st.fallback)));
+    // 市场地址必须回得来：前端与像素剧本判"这个功能开了没"读的就是这份对象。
+    // 第一次踩的时候这里没有这个键，于是 `settings.expertFeed` 永远 undefined ——
+    // 就算 CLI 真写进去了，判据也还是红的，而症状看着像"市场整个坏了"。
+    s.push_str(&format!("\"expertFeed\":{},", state::quote(&st.expert_feed)));
+    s.push_str(&format!("\"hasSearchKey\":{},", !search_key.trim().is_empty()));
+    // 上下文窗口必须回得去：抽屉里那一格原来永远是空的，而保存时 `num()` 把空读成 0 ——
+    // 于是"打开设置再保存"就把窗口清零了
+    s.push_str(&format!("\"contextChars\":{},", st.context_chars));
+    s.push_str(&format!("\"workspace\":{},", state::quote(&ws)));
+    s.push_str(&format!("\"toolsOff\":[{}],", off.join(",")));
+    // 只报"有没有 key"，不报 key 本身：这份对象会整体发给浏览器
+    s.push_str(&format!("\"hasKey\":{},", key.is_some()));
+    s.push_str(&format!("\"flags\":[{}],\"rules\":[{}]}}", flags.join(","), rules.join(",")));
+    s
+}
+
+/// `POST /api/settings` —— 逐键判"有没有给值"，给了才改，其余原样留着。
+///
+/// 三处口径是踩过坑写死的：`contextChars` **只认正数**（读成 0 会让界面上那圈占用
+/// 永远 0%，比留空更骗人）；`reasoningEffort` 与 `fallback`、`expertFeed` **允许清空**
+/// （空串是合法值，"关掉这一页"就靠它）；`mode` 只认 plan/ask/auto 三个词。
+/// 密钥不在这里写：一把 key 只留 `/api/secrets` 一个入口。
+fn save_settings(app: &App, body: &str) -> (u16, String) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return (400, r#"{"ok":false}"#.to_string());
+    };
+    let mut n = app.global();
+    let field = |k: &str| -> Option<String> {
+        v.get(k).and_then(|x| match x {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Some(x.to_string()),
+            _ => None,
+        })
+    };
+    if let Some(t) = field("model").filter(|t| !t.is_empty()) {
+        n.model = t;
+    }
+    if let Some(t) = field("baseUrl").filter(|t| !t.is_empty()) {
+        n.base_url = t;
+    }
+    if let Some(t) = field("maxTokens").and_then(|t| t.parse::<i64>().ok()) {
+        n.max_tokens = t.max(0);
+    }
+    if let Some(t) = field("searchProvider").filter(|t| !t.is_empty()) {
+        n.search_provider = t.trim().to_lowercase();
+    }
+    if let Some(t) = field("contextChars").and_then(|t| t.parse::<i64>().ok()) {
+        if t > 0 {
+            n.context_chars = t;
+        }
+    }
+    if let Some(t) = field("reasoningEffort") {
+        n.reasoning_effort = t.trim().to_lowercase();
+    }
+    if let Some(t) = field("fallback") {
+        n.fallback = t.trim().to_string();
+    }
+    if let Some(t) = field("expertFeed") {
+        n.expert_feed = t.trim().to_string();
+    }
+    if let Some(t) = field("mode").filter(|t| matches!(t.as_str(), "plan" | "ask" | "auto")) {
+        n.permission_mode = t.clone();
+        // 权限模式是全局设置，但要立刻反映到**每一个**活着的会话上，
+        // 否则切回后台那条时它会继续用旧模式跑
+        let resident: Vec<String> = app
+            .resident
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .cloned()
+            .collect();
+        for sid in resident {
+            app.set_mode(&sid, &t);
+        }
+    }
+    if let Some(t) = field("workspace").filter(|t| !t.is_empty()) {
+        n.workspace = t;
+    }
+    // 全局工具开关：**显式数组才动**，critical 写入即剔 ——
+    // 不带这个键的其它保存路径（设置抽屉）完全不受影响
+    if let Some(arr) = v.get("toolsOff").and_then(|x| x.as_array()) {
+        n.tools_off = arr
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .filter(|t| !crate::guard::is_critical(t))
+            .collect();
+    }
+    if let Some(obj) = v.get("flags").and_then(|x| x.as_object()) {
+        let mut merged = n.flags.clone();
+        for (k, x) in obj {
+            // Kotlin 是 `v.jsonPrimitive.content == "true"`：布尔 true 与字符串 "true" 都算开，
+            // 数字 1 不算 —— 手机端往这个文件里写的可能是其中任意一种
+            let on = crate::store::kstr(Some(x)).map(|t| t == "true").unwrap_or(false);
+            match merged.iter_mut().find(|(mk, _)| mk == k) {
+                Some(e) => e.1 = on,
+                None => merged.push((k.clone(), on)),
+            }
+        }
+        // `HaoFlag.compactOverrides`：只留**与默认值不同**的那几项，而且只认注册表里的 7 个键
+        // —— 手改进去的一个陌生键不会被存下来，它谁也不代表。顺序照注册表。
+        n.flags = crate::flags::Flag::ALL
+            .iter()
+            .filter_map(|f| {
+                let on = merged.iter().find(|(k, _)| k == f.key()).map(|(_, v)| *v)?;
+                if on == f.default_on() {
+                    None
+                } else {
+                    Some((f.key().to_string(), on))
+                }
+            })
+            .collect();
+    }
+    app.store.save_settings(&n);
+    app.set_global(n.clone());
+    // 全局设置变了，**每条活着的会话都要跟上**：引擎各自握着构造时那份设置
+    // （模型、baseUrl、压缩阈值都在里面），不换的话界面上显示新模型、发请求用旧的。
+    let live: Vec<String> = app.resident.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
+    for sid in live {
+        // Kotlin 那边是 `useSettings(n)`：整份换成全局，**这条会话自己的 model/toolsOff 一起被抹掉**
+        // （直到下一次 persist 才把新值写回文件）。跑着的那条不改档位。
+        app.set_session_model(&sid, &n.model);
+        app.set_session_tools_off(&sid, &n.tools_off);
+        if !app.is_running(&sid) {
+            app.set_mode(&sid, &n.permission_mode);
+        }
+    }
+    app.publish("", "settings", &format!("{{\"mode\":{}}}", state::quote(&n.permission_mode)));
+    (200, r#"{"ok":true}"#.to_string())
+}
+
+/// `GET /api/models?sid=` —— 列网关上的模型，给顶栏的模型切换器用。
+fn models_body(app: &App, want: &str) -> String {
+    let sid = if want.is_empty() { app.current_id() } else { want.to_string() };
+    let resident = !sid.is_empty()
+        && app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&sid);
+    let rows: Vec<String> = if resident {
+        let st = app.settings_of(&sid);
+        let key_raw = fs::read_to_string(app.store.home.join("apikey")).unwrap_or_default();
+        crate::provider::list_models(&st.base_url, &key_raw)
+            .iter()
+            .map(|m| format!("{{\"id\":{},\"current\":{}}}", state::quote(m), *m == st.model))
+            .collect()
+    } else {
+        vec![]
+    };
+    format!("[{}]", rows.join(","))
+}
+
+/// `POST /api/model` {sid, model, scope} —— 换模型。
+///
+/// `scope` 缺省是 `session`：只改这一条引擎那份。以前全局只有一个模型，
+/// 于是"这条会话拿本地小模型试个简单问题、别影响另外三条"做不到。
+/// `scope=all` 才是全局路径：存盘 + 所有活着的会话一起跟上。
+fn model_set(app: &App, body: &str) -> String {
+    let m = ktrim_body(&body_str(body, "model")).to_string();
+    if m.is_empty() {
+        return err_json("模型名是空的");
+    }
+    let sid = pick_sid(app, body);
+    let all = body_str(body, "scope") == "all";
+    let scope = if all { "all" } else { "session" };
+    if all {
+        let mut n = app.global();
+        n.model = m.clone();
+        app.store.save_settings(&n);
+        app.set_global(n.clone());
+        let live: Vec<String> = app.resident.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
+        for id in live {
+            app.set_session_model(&id, &n.model);
+            app.set_session_tools_off(&id, &n.tools_off);
+        }
+    } else {
+        let resident =
+            !sid.is_empty() && app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&sid);
+        if !resident {
+            return err_json("没有这条会话，改不了模型");
+        }
+        app.set_session_model(&sid, &m);
+    }
+    app.publish(
+        &sid,
+        "model",
+        &format!("{{\"model\":{},\"scope\":{}}}", state::quote(&m), state::quote(scope)),
+    );
+    if all {
+        app.publish("", "settings", &format!("{{\"mode\":{}}}", state::quote(&app.global().permission_mode)));
+    }
+    format!(
+        "{{\"ok\":true,\"model\":{},\"sid\":{},\"scope\":{}}}",
+        state::quote(&m),
+        state::quote(&sid),
+        state::quote(scope)
+    )
+}
+
+/**
+ * `POST /api/tool` {sid,name,on} —— 这条会话开/关一把工具。
+ *
+ * 按会话而不是全局：让 agent 只做只读调研的那条，不该手里还握着 shell；
+ * 而"全局关掉 shell"太狠，另开一条正经干活的任务就没法用了。
+ * 与换模型不同：这一条 Kotlin 后面跟了一句 `persistNow()`，所以**会落盘**。
+ */
+fn tool_toggle(app: &App, body: &str) -> String {
+    let sid = pick_sid(app, body);
+    let name = body_str(body, "name");
+    let on = {
+        let o = body_str(body, "on");
+        o == "1" || o == "true"
+    };
+    let resident =
+        !sid.is_empty() && app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&sid);
+    if !resident || name.is_empty() {
+        return err_json("没有这条会话或工具名是空的");
+    }
+    let mut off: Vec<String> = app.settings_of(&sid).tools_off;
+    if on {
+        off.retain(|t| t != &name);
+    } else if !off.iter().any(|t| t == &name) {
+        off.push(name.clone());
+    }
+    app.set_session_tools_off(&sid, &off);
+    // 与 Kotlin 一样立刻落一次盘（`e.persistNow()`）：写的是**引擎当下那份** model 与 toolsOff
+    engine::persist_now(app, &sid);
+    let arr: Vec<String> = off.iter().map(|t| state::quote(t)).collect();
+    app.publish(&sid, "tools", &format!("{{\"sid\":{}}}", state::quote(&sid)));
+    format!("{{\"ok\":true,\"off\":{},\"toolsOff\":[{}]}}", !on, arr.join(","))
+}
+
+/// Kotlin 的 `String.trim()`（同一个口径，别用 Rust 的）
+fn ktrim_body(s: &str) -> &str {
+    crate::store::ktrim(s)
 }
 
 /// `POST /api/task` {text, sid}。受理即回 `{"ok":true,"sid":…}`，
@@ -890,4 +1200,232 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+
+    /// GET /api/settings 的形状：整份设置原样发回浏览器，**但密钥永远不在里面**。
+    #[test]
+    fn settings_get_sends_the_whole_object_but_never_the_key() {
+        let root = session_home("s-get");
+        fs::write(
+            root.join("settings.json"),
+            r#"{"providerName":"本地llama","baseUrl":"http://127.0.0.1:8131/v1","model":"m1","workspace":"G:/Rust/verify/ws","permissionMode":"ask","maxTurns":60,"temperature":0.3,"maxTokens":4096,"reasoningEffort":"","fallback":"","searchProvider":"auto","embedUrl":"","expertFeed":"","contextChars":128000,"storedCap":16000,"reqCap":4000,"compactTriggerChars":60000,"compactKeepTail":14,"toolsOff":"[]","flags":{"browser_control":true}}"#,
+        )
+        .unwrap();
+        fs::write(root.join("apikey"), "sk-abcdefghijklmnopqrstuvwxyz").unwrap();
+        let app = test_app(&root);
+        let body = settings_json(&app);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["provider"], "本地llama", "键名是 provider 而不是 providerName：{v}");
+        assert_eq!(v["model"], "m1");
+        assert_eq!(v["maxTokens"], 4096);
+        assert_eq!(v["contextChars"], 128000, "这一格不发回去，保存一次就把窗口清零了");
+        assert_eq!(v["hasKey"], true);
+        assert_eq!(v["hasSearchKey"], false);
+        assert!(!body.contains("sk-abcd"), "明文 key 漏进 /api/settings：{body}");
+        assert!(!body.contains("keyHint"), "连前 6 位都不许发：{body}");
+        // 反斜杠归一 + canonical：workspace 报的是 File.absolutePath 那一形
+        assert_eq!(v["workspace"], r"G:\Rust\verify\ws", "{v}");
+        assert!(!v["workspace"].as_str().unwrap().starts_with(r"\\?\"), "canonicalize 的前缀没剥掉：{v}");
+        assert_eq!(v["flags"].as_array().unwrap().len(), 7, "HaoFlag 一共 7 条：{v}");
+        let bc = v["flags"].as_array().unwrap().iter().find(|f| f["key"] == "browser_control").unwrap();
+        assert_eq!(bc["on"], true, "文件里写了布尔 true 要认：{bc}");
+        assert_eq!(bc["title"], "浏览器控制（CDP）");
+        assert!(bc["what"].as_str().unwrap().contains("默认关"), "{bc}");
+        let ow = v["flags"].as_array().unwrap().iter().find(|f| f["key"] == "outside_write").unwrap();
+        assert_eq!(ow["on"], false, "没写的键回落默认（往外写默认关）");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// POST 是"逐键判给没给"，不是整份替换；落盘形状（含那个手写 .indent()）要两端一样。
+    #[test]
+    fn settings_post_changes_only_the_keys_given_and_writes_the_jvm_shape() {
+        let root = session_home("s-post");
+        fs::write(
+            root.join("settings.json"),
+            r#"{"providerName":"p","baseUrl":"http://x/v1","model":"m1","workspace":"","permissionMode":"ask","maxTurns":60,"temperature":0.3,"maxTokens":4096,"reasoningEffort":"","fallback":"","searchProvider":"auto","embedUrl":"","expertFeed":"","contextChars":128000,"storedCap":16000,"reqCap":4000,"compactTriggerChars":60000,"compactKeepTail":14,"toolsOff":"[]","flags":{}}"#,
+        )
+        .unwrap();
+        let app = test_app(&root);
+        let (code, body) = save_settings(
+            &app,
+            r#"{"model":"m2","contextChars":0,"maxTokens":-5,"expertFeed":"","reasoningEffort":"HIGH"}"#,
+        );
+        assert_eq!(code, 200, "{body}");
+        let st = app.global();
+        assert_eq!(st.model, "m2");
+        assert_eq!(st.context_chars, 128_000, "窗口只认正数：读成 0 那圈占用就永远 0%");
+        assert_eq!(st.max_tokens, 0, "maxTokens 允许清 0（0 = 不发这个字段，交给网关）");
+        assert_eq!(st.expert_feed, "", "空串是合法值：清空 = 关掉这一页");
+        assert_eq!(st.reasoning_effort, "high", "存的是小写");
+
+        let on_disk = fs::read_to_string(root.join("settings.json")).unwrap();
+        // 数字后面那个键边界**不会**换行：.indent() 只认 `","`、`{"`、`"}` 三种字面
+        assert!(on_disk.contains("\"maxTurns\":60,\"temperature\":0.3,\"maxTokens\":0"), "{on_disk}");
+        assert!(on_disk.starts_with("{\n\"providerName\":\"p\","), "{on_disk}");
+        // toolsOff 是**字符串**形态：Kotlin 那边 put 的是 joinToString 的结果，
+        // 于是它写进去就读不回来（全局工具开关活不过重启）—— 这是那边的既有行为，照抄
+        assert!(on_disk.contains(r#""toolsOff":"[]""#), "{on_disk}");
+
+        // 显式数组才动全局工具开关，而且 critical 写入即剔
+        save_settings(&app, r#"{"toolsOff":["shell","grep","read"]}"#);
+        assert_eq!(app.global().tools_off, vec!["shell".to_string()], "critical 那五把关不掉");
+        // 不带这个键的保存路径完全不受影响
+        save_settings(&app, r#"{"model":"m3"}"#);
+        assert_eq!(app.global().tools_off, vec!["shell".to_string()]);
+
+        // flags：与默认相同的项不写盘（compactOverrides），而且只认注册表里那 7 个键
+        save_settings(&app, r#"{"flags":{"outside_write":false,"plan_mode":false,"made_up":true}}"#);
+        assert_eq!(
+            app.global().flags,
+            vec![("plan_mode".to_string(), false)],
+            "outside_write 关着就是默认值，不留痕；陌生键不收"
+        );
+        // 解析不出来的体 → 400
+        let (code, _) = save_settings(&app, "not json");
+        assert_eq!(code, 400);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 全局模式一改，**每条活着的会话**都要跟上（否则切回后台那条还按旧模式跑）。
+    #[test]
+    fn a_global_mode_save_reaches_every_live_session() {
+        let root = session_home("s-mode");
+        let app = test_app(&root);
+        app.open_for_test("b");
+        app.open_for_test("a");
+        assert!(app.try_begin("b"), "让 b 处在跑着的状态");
+        save_settings(&app, r#"{"mode":"plan"}"#);
+        assert_eq!(app.global().permission_mode, "plan");
+        assert_eq!(app.mode_of("a", "ask"), "plan", "没在跑的那条要跟上");
+        // 模式那一段的两个 forEach 都会改档位；紧接着的"跑着的不改"补一遍，所以跑着的那条回到新默认值
+        assert_eq!(app.mode_of("b", "ask"), "plan");
+        app.end_run("b");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 按会话换模型只改这条；scope=all 才存盘并让所有活着的会话跟上。
+    #[test]
+    fn switching_the_model_per_session_leaves_the_global_one_alone() {
+        let root = session_home("m-route");
+        fs::write(
+            root.join("settings.json"),
+            r#"{"providerName":"p","baseUrl":"http://x/v1","model":"全局模型","workspace":"G:/x","permissionMode":"ask","maxTokens":4096,"contextChars":128000,"compactTriggerChars":60000,"toolsOff":[],"flags":{}}"#,
+        )
+        .unwrap();
+        let app = test_app(&root);
+        assert!(model_set(&app, r#"{"model":"   "}"#).contains("模型名是空的"));
+        let r = model_set(&app, r#"{"model":"只这条","sid":"nope-not-here"}"#);
+        assert!(r.contains("没有这条会话，改不了模型"), "{r}");
+        assert_eq!(app.global().model, "全局模型");
+
+        app.open_for_test("a");
+        let r = model_set(&app, r#"{"model":"本地 7B","sid":"a"}"#);
+        assert!(r.contains(r#""scope":"session""#) && r.contains("本地 7B"), "{r}");
+        assert_eq!(app.settings_of("a").model, "本地 7B", "这条会话自己要用的那份");
+        assert_eq!(app.global().model, "全局模型", "全局没动");
+        assert_eq!(app.settings_of("b").model, "全局模型", "别条会话不受影响");
+        let (.., st) = state_body(&app, "a");
+        let v: Value = serde_json::from_str(&st).unwrap();
+        assert_eq!(v["model"], "本地 7B", "顶栏那个标签报的是这条会话自己的模型：{v}");
+        // 按会话改的那一条**不落盘**（Kotlin 后面没有 persistNow）
+        let on_disk: Value =
+            serde_json::from_str(&fs::read_to_string(root.join("sessions/pc-a.json")).unwrap()).unwrap();
+        assert_ne!(on_disk["model"].as_str().unwrap_or(""), "本地 7B", "这条不该已经写进文件");
+
+        // scope=all：存盘 + 活着的每条都整份换成全局那份
+        let r = model_set(&app, r#"{"model":"云端大模型","scope":"all"}"#);
+        assert!(r.contains(r#""scope":"all""#), "{r}");
+        assert_eq!(app.global().model, "云端大模型");
+        assert!(fs::read_to_string(root.join("settings.json")).unwrap().contains("云端大模型"));
+        assert_eq!(app.settings_of("a").model, "云端大模型", "全局一改，活着的会话都要跟上");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_tool_toggle_is_per_session_and_persists() {
+        let root = session_home("t-route");
+        fs::write(
+            root.join("settings.json"),
+            r#"{"baseUrl":"http://x/v1","model":"m","workspace":"G:/x","permissionMode":"ask","toolsOff":[],"flags":{}}"#,
+        )
+        .unwrap();
+        let app = test_app(&root);
+        app.open_for_test("a");
+        app.open_for_test("b");
+        let r = tool_toggle(&app, r#"{"sid":"a","name":"shell","on":"0"}"#);
+        assert!(r.contains(r#""off":true"#) && r.contains("\"shell\""), "{r}");
+        assert_eq!(app.tools_off_of("a"), vec!["shell".to_string()]);
+        assert!(app.tools_off_of("b").is_empty(), "别条会话不受影响");
+        // 这一条**会落盘**（Kotlin 后面跟了 persistNow）
+        let on_disk: Value =
+            serde_json::from_str(&fs::read_to_string(root.join("sessions/pc-a.json")).unwrap()).unwrap();
+        assert_eq!(on_disk["toolsOff"], serde_json::json!(["shell"]), "{on_disk}");
+        tool_toggle(&app, r#"{"sid":"a","name":"shell","on":"1"}"#);
+        assert!(app.tools_off_of("a").is_empty());
+        // critical 那五把：写进表里也不算关（`effectiveToolsOff` 两层都剔）
+        tool_toggle(&app, r#"{"sid":"a","name":"read","on":"0"}"#);
+        assert!(app.tools_off_of("a").is_empty(), "read 是 critical，关掉等于砍掉引擎");
+        assert!(tool_toggle(&app, r#"{"sid":"a","name":"","on":"0"}"#).contains("没有这条会话或工具名是空的"));
+        assert!(tool_toggle(&app, r#"{"sid":"ghost","name":"shell","on":"0"}"#).contains("没有这条会话或工具名是空的"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `/api/models` 走的是网关：两种形状都要认，"使用中"按**这条会话**的模型标。
+    #[test]
+    fn models_route_reads_both_gateway_shapes_and_marks_the_live_model() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            for s in l.incoming() {
+                let mut s = s.unwrap();
+                let mut buf = [0u8; 512];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                let body = if head.contains("/llama/") {
+                    r#"{"models":[{"name":"本地 7B"},{"name":"本地 13B"}]}"#.to_string()
+                } else {
+                    // 重复 id 要去掉：网关有时会回两条同名的
+                    r#"{"data":[{"id":"云端 A"},{"id":"云端 B"},{"id":"云端 A"}]}"#.to_string()
+                };
+                let _ = s.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        let root = session_home("md-route");
+        fs::write(
+            root.join("settings.json"),
+            format!(r#"{{"baseUrl":"http://127.0.0.1:{port}/v1","model":"云端 B","workspace":"G:/x","permissionMode":"ask","toolsOff":[],"flags":{{}}}}"#),
+        )
+        .unwrap();
+        fs::write(root.join("apikey"), "sk-ascii").unwrap();
+        let app = test_app(&root);
+        // 没驻留的会话压根没有引擎可问 → 空表，不是"猜一个"
+        assert_eq!(models_body(&app, "a"), "[]");
+        app.open_for_test("a");
+        let v: Value = serde_json::from_str(&models_body(&app, "a")).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 2, "重复的 id 要去重：{v}");
+        assert_eq!(v[0]["id"], "云端 A");
+        assert_eq!(v[1]["current"], true, "使用中要按**这条会话**的模型标：{v}");
+        // 按会话换模型之后，打勾的那一行跟着挪
+        model_set(&app, r#"{"model":"云端 A","sid":"a"}"#);
+        let v: Value = serde_json::from_str(&models_body(&app, "a")).unwrap();
+        assert_eq!(v[0]["current"], true, "{v}");
+        assert_eq!(v[1]["current"], false, "{v}");
+        // llama-server 那种形状
+        fs::write(
+            root.join("settings.json"),
+            format!(r#"{{"baseUrl":"http://127.0.0.1:{port}/llama/v1","model":"本地 13B","workspace":"G:/x","permissionMode":"ask","toolsOff":[],"flags":{{}}}}"#),
+        )
+        .unwrap();
+        app.set_global(app.store.settings());
+        let v: Value = serde_json::from_str(&models_body(&app, "a")).unwrap();
+        assert_eq!(v[0]["id"], "本地 7B", "name 那个键也要认：{v}");
+        let _ = fs::remove_dir_all(&root);
+        drop(handle);
+    }
 }

@@ -20,8 +20,22 @@ pub struct Settings {
     pub max_tokens: i64,
     pub max_turns: i64,
     pub reasoning_effort: String,
+    /// 降级链：逗号或换行分隔，每项 `模型名` 或 `模型名@https://别处/v1`。
+    pub fallback: String,
+    /// 搜索提供方：auto = 有 key 走博查、没 key 走 DuckDuckGo。
+    pub search_provider: String,
+    /// 语义检索的向量端点（空 = 关掉语义检索，grep 保持纯文本）。
+    pub embed_url: String,
+    /// 「专家市场」的清单地址（空 = 这个功能等于不存在）。
+    pub expert_feed: String,
     pub context_chars: i64,
+    /// 工具结果**落库**上限（与手机端 STORED_CAP 同源同值）。
+    pub stored_cap: i64,
+    /// 工具结果**发请求**上限（与手机端 REQ_CAP 同源同值）。
+    pub req_cap: i64,
     pub compact_trigger_chars: i64,
+    /// 压缩时原样保留的最近条数。
+    pub compact_keep_tail: i64,
     pub tools_off: Vec<String>,
     /// `settings.json` 里 `flags` 对象的**覆盖值**（键是 `HaoFlag.key`）。
     /// 用 Vec 而不是 map：只需要按键查，且要保住文件里的书写顺序，不引进一套哈希。
@@ -29,22 +43,31 @@ pub struct Settings {
 }
 
 /// **不能 derive(Default)**：settings.json 整个缺失时，Kotlin 回落的是 `PcSettings`
-/// 数据类的默认值（`permissionMode="ask"`、`contextChars=128_000`、
-/// `compactTriggerChars=60_000`），不是空串和 0。
+/// 数据类的默认值（`providerName="sensenova"`、`baseUrl=https://token.sensenova.cn/v1`、
+/// `model="glm-5.2"`、`permissionMode="ask"`、`contextChars=128_000`…），
+/// 不是空串和 0。逐个键的缺省也一样：`o.str("model") ?: "glm-5.2"`，
+/// 所以**写了空串就是空串**，只有键缺失或为 null 才落到默认值。
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            provider_name: String::new(),
-            base_url: String::new(),
-            model: String::new(),
+            provider_name: "sensenova".to_string(),
+            base_url: "https://token.sensenova.cn/v1".to_string(),
+            model: "glm-5.2".to_string(),
             workspace: String::new(),
             permission_mode: "ask".to_string(),
             temperature: 0.3,
             max_tokens: 4096,
             max_turns: 60,
             reasoning_effort: String::new(),
+            fallback: String::new(),
+            search_provider: "auto".to_string(),
+            embed_url: String::new(),
+            expert_feed: String::new(),
             context_chars: 128_000,
+            stored_cap: 16_000,
+            req_cap: 4_000,
             compact_trigger_chars: 60_000,
+            compact_keep_tail: 14,
             tools_off: Vec::new(),
             flags: Vec::new(),
         }
@@ -59,6 +82,22 @@ pub fn norm_ws(s: &str) -> String {
     s.replace('/', "\\")
 }
 
+/// Java 的 `File(String).absolutePath`：把 `/` 归一成 `\`，相对路径按当前目录补全，
+/// **不做 canonical**（不解析符号链接、不化简 `.`/`..`）。
+/// 会话文件里那个 `workspace` 键写的就是这一形（`Engine.persist` 用 `session.workspace.absolutePath`）。
+pub fn abs_path(raw: &str) -> String {
+    let mut p = PathBuf::from(norm_ws(raw));
+    if p.as_os_str().is_empty() {
+        p = PathBuf::from(".");
+    }
+    if !p.is_absolute() {
+        if let Ok(cwd) = std::env::current_dir() {
+            p = cwd.join(p);
+        }
+    }
+    p.to_string_lossy().to_string()
+}
+
 /// `PcSettings.workspaceFile()` 的等价物：**空或 `.` 用当前目录**，并且要 canonical。
 ///
 /// 不是"顺手规范一下路径"：`/api/state` 在没有驻留引擎时回的是这一个值，
@@ -67,23 +106,32 @@ pub fn norm_ws(s: &str) -> String {
 /// canonical 失败（目录不存在）时退到 absolute —— Kotlin 的 `getOrElse` 同样退。
 pub fn workspace_file(workspace: &str) -> String {
     let t = ktrim(workspace);
-    let mut p = if t.is_empty() || t == "." {
+    let p = if t.is_empty() || t == "." {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     } else {
         PathBuf::from(norm_ws(t))
     };
-    // Java 的 `getAbsoluteFile()`：相对路径按当前目录补全，不做别的
-    if !p.is_absolute() {
-        if let Ok(cwd) = std::env::current_dir() {
-            p = cwd.join(p);
-        }
-    }
     match p.canonicalize() {
         // Kotlin 的 `canonicalFile.absolutePath` 没有 `\\?\` 前缀，这里必须抹掉：
         // 它会被写进 `/api/state` 的 workspace，也是新建会话落到会话文件里的那个值
         Ok(c) => strip_verbatim(&c.to_string_lossy()),
-        Err(_) => p.to_string_lossy().to_string(),
+        // canonical 失败（目录不存在）时退到 absolute —— Kotlin 的 `getOrElse` 同样退
+        Err(_) => abs_path(t),
     }
+}
+
+/// `EngineFactory.applySessionOverlay` 的那层覆盖：**替换**而不是合并，
+/// 且只在 model 或 toolsOff 有一个非空时才覆盖（两者都空 = 这条会话没自己的主张）。
+pub fn overlay(global: &Settings, meta: &Meta) -> Settings {
+    let mut st = global.clone();
+    if meta.model.is_empty() && meta.tools_off.is_empty() {
+        return st;
+    }
+    if !meta.model.is_empty() {
+        st.model = meta.model.clone();
+    }
+    st.tools_off = meta.tools_off.clone();
+    st
 }
 
 impl Settings {
@@ -205,6 +253,30 @@ fn s(v: Option<&Value>) -> String {
     v.and_then(|x| x.as_str()).unwrap_or("").to_string()
 }
 
+/// `JsonObject.str(k)`：缺失与 null 都是 None（这时才落到字段的默认值）；
+/// 数字与布尔取的是 `jsonPrimitive.content` 那个**字面文本**。
+pub fn kstr(v: Option<&Value>) -> Option<String> {
+    match v {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) => Some(t.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(Value::Bool(b)) => Some(b.to_string()),
+        // 对象/数组：Kotlin 那边 `.jsonPrimitive` 直接抛，整份读失败退回全默认值。
+        // 这里按"这个键没值"处理 —— 差别只在"人手工把 settings.json 改坏了"时
+        // 是全部丢默认还是只丢这一个键，两端都不会写坏用户的其它设置。
+        Some(_) => None,
+    }
+}
+
+/// `JsonObject.int(k)` = `content.toIntOrNull()`：`"60.5"` 这种**算读不出**，不是四舍五入。
+fn ki(v: Option<&Value>) -> Option<i64> {
+    match v {
+        Some(Value::Number(n)) => n.as_i64(),
+        Some(Value::String(t)) => t.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
 fn i(v: Option<&Value>) -> i64 {
     // Kotlin 侧写的是 `?.jsonPrimitive?.content?.toLongOrNull()`：字符串和数字都当数读，
     // 读不到就回落默认值。这里同样两种都接。
@@ -233,6 +305,9 @@ impl Store {
         self.home.join("sessions")
     }
 
+    /// `JsonObject.str(k) ?: 默认值` 的口径：只有**键缺失或为 null**才落到默认值 ——
+    /// 写了空串就是空串（`reasoningEffort:""`、`expertFeed:""` 这些"清空"的语义全靠它）。
+    /// 数字取的是它的字面文本（Kotlin 的 `jsonPrimitive.content`），不是"只有字符串才有值"。
     pub fn settings(&self) -> Settings {
         let raw = match fs::read_to_string(self.home.join("settings.json")) {
             Ok(t) => t,
@@ -242,37 +317,36 @@ impl Store {
         let Ok(v) = serde_json::from_str::<Value>(&raw) else {
             return Settings::default();
         };
+        let d = Settings::default();
+        let str_or = |k: &str, def: &str| kstr(v.get(k)).unwrap_or_else(|| def.to_string());
+        let int_or = |k: &str, def: i64| ki(v.get(k)).unwrap_or(def);
         Settings {
-            provider_name: s(v.get("providerName")),
-            base_url: s(v.get("baseUrl")),
-            model: s(v.get("model")),
-            workspace: s(v.get("workspace")),
-            permission_mode: v
-                .get("permissionMode")
-                .and_then(|x| x.as_str())
-                .unwrap_or("ask")
-                .to_string(),
-            temperature: match v.get("temperature") {
-                Some(x) => x.as_f64().unwrap_or(0.3),
-                None => 0.3,
-            },
-            max_tokens: match v.get("maxTokens") {
-                Some(x) => i(Some(x)),
-                None => 4096,
-            },
-            max_turns: match v.get("maxTurns") {
-                Some(x) => i(Some(x)),
-                None => 60,
-            },
-            reasoning_effort: s(v.get("reasoningEffort")),
-            context_chars: match v.get("contextChars") {
-                Some(x) => i(Some(x)),
-                None => 128_000,
-            },
-            compact_trigger_chars: match v.get("compactTriggerChars") {
-                Some(x) => i(Some(x)),
-                None => 60_000,
-            },
+            provider_name: str_or("providerName", &d.provider_name),
+            base_url: str_or("baseUrl", &d.base_url),
+            model: str_or("model", &d.model),
+            workspace: str_or("workspace", ""),
+            permission_mode: str_or("permissionMode", &d.permission_mode),
+            // `o.dbl("temperature")` = `content.toDoubleOrNull()`：读不出就回落默认值
+            temperature: v
+                .get("temperature")
+                .and_then(|x| x.as_f64().or_else(|| kstr(Some(x)).and_then(|t| t.parse::<f64>().ok())))
+                .unwrap_or(d.temperature),
+            max_tokens: int_or("maxTokens", d.max_tokens),
+            max_turns: int_or("maxTurns", d.max_turns),
+            reasoning_effort: str_or("reasoningEffort", ""),
+            fallback: str_or("fallback", ""),
+            search_provider: str_or("searchProvider", &d.search_provider),
+            embed_url: str_or("embedUrl", ""),
+            expert_feed: str_or("expertFeed", ""),
+            context_chars: int_or("contextChars", d.context_chars),
+            stored_cap: int_or("storedCap", d.stored_cap),
+            req_cap: int_or("reqCap", d.req_cap),
+            compact_trigger_chars: int_or("compactTriggerChars", d.compact_trigger_chars),
+            compact_keep_tail: int_or("compactKeepTail", d.compact_keep_tail),
+            // 注意这份文件里 `toolsOff` 是**字符串形态**（`"[\"a\",\"b\"]"`）：
+            // `PcSettings.save` 用 `put(key, joinToString(...))` 塞了一个 String 进去，
+            // 而 load 用 `jsonArray` 读 —— 于是全局工具开关**存进去就读不回来**（重启就没了）。
+            // Kotlin 是这个行为，这里逐字照抄：只有写真数组（CLI 或人手工改的）才认。
             tools_off: v
                 .get("toolsOff")
                 .and_then(|x| x.as_array())
@@ -296,6 +370,50 @@ impl Store {
                 })
                 .unwrap_or_default(),
         }
+    }
+
+    /// `PcSettings.save`：整份重写 `settings.json`。
+    ///
+    /// 键序、`toolsOff` 的**字符串形态**、以及那个手写 `.indent()` 都要照抄 ——
+    /// 这个文件是两端共读的（用户的、CLI 的、引擎的），形状一变下一个读的人就困惑。
+    /// `.indent()` 是三个连续的字面替换，不是 pretty-print：
+    /// 数字后面的键边界（`60,"temperature"`）**不会**换行，所以文件里会出现
+    /// `"permissionMode":"auto",\n"maxTurns":60,"temperature":0.3,...` 这种一长串 ——
+    /// 那是 Kotlin 的原样，不是没格式化好。
+    pub fn save_settings(&self, s: &Settings) {
+        let mut o = serde_json::Map::new();
+        o.insert("providerName".into(), Value::String(s.provider_name.clone()));
+        o.insert("baseUrl".into(), Value::String(s.base_url.clone()));
+        o.insert("model".into(), Value::String(s.model.clone()));
+        o.insert("workspace".into(), Value::String(s.workspace.clone()));
+        o.insert("permissionMode".into(), Value::String(s.permission_mode.clone()));
+        o.insert("maxTurns".into(), Value::Number(s.max_turns.into()));
+        o.insert("temperature".into(), Value::Number(serde_json::Number::from_f64(s.temperature).unwrap_or_else(|| 0.into())));
+        o.insert("maxTokens".into(), Value::Number(s.max_tokens.into()));
+        o.insert("reasoningEffort".into(), Value::String(s.reasoning_effort.clone()));
+        o.insert("fallback".into(), Value::String(s.fallback.clone()));
+        o.insert("searchProvider".into(), Value::String(s.search_provider.clone()));
+        o.insert("embedUrl".into(), Value::String(s.embed_url.clone()));
+        o.insert("expertFeed".into(), Value::String(s.expert_feed.clone()));
+        o.insert("contextChars".into(), Value::Number(s.context_chars.into()));
+        o.insert("storedCap".into(), Value::Number(s.stored_cap.into()));
+        o.insert("reqCap".into(), Value::Number(s.req_cap.into()));
+        o.insert("compactTriggerChars".into(), Value::Number(s.compact_trigger_chars.into()));
+        o.insert("compactKeepTail".into(), Value::Number(s.compact_keep_tail.into()));
+        // `put("toolsOff", list.joinToString(",", "[", "]") { "\"" + it + "\"" })`：
+        // 塞进去的是一个**字符串**而不是数组，于是 load 那边 `jsonArray` 读不出来 ——
+        // 全局工具开关存了也活不过重启。这是 Kotlin 现有的行为，照抄不改（改了反而分叉），
+        // 差分台架里对照过真实状态根：`"toolsOff":"[]"`。
+        let joined: Vec<String> = s.tools_off.iter().map(|t| format!("\"{t}\"")).collect();
+        o.insert("toolsOff".into(), Value::String(format!("[{}]", joined.join(","))));
+        let mut fo = serde_json::Map::new();
+        for (k, v) in &s.flags {
+            fo.insert(k.clone(), Value::Bool(*v));
+        }
+        o.insert("flags".into(), Value::Object(fo));
+        let compact = Value::Object(o).to_string();
+        let text = compact.replace("\",\"", "\",\n\"").replace("{\"", "{\n\"").replace("\"}", "\",\n}");
+        let _ = fs::write(self.home.join("settings.json"), text);
     }
 
     /// 等价于 `SessionIndex.list`：`pinned` 优先、其后按 `updated` 倒序。

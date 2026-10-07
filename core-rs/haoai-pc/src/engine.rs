@@ -64,15 +64,17 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
     let mode = app.mode_of(sid, &sf.meta.mode);
     let plan = mode == "plan";
     let run_id = format!("r{}", now_ms());
+    let st0 = app.settings_of(sid);
     let ctx = Ctx::for_run(
         &app.store.home,
         workspace,
-        app.settings.flags.clone(),
+        // 这条会话该用哪份设置（全局 + 会话文件覆盖 + 按会话的活覆盖）
+        st0.flags.clone(),
         &mode,
         sid,
         &run_id,
     );
-    let pctx = prompt::ctx_for(&app.store, &sf.meta.workspace, &app.settings.model, &mode, &[]);
+    let pctx = prompt::ctx_for(&app.store, &sf.meta.workspace, &st0.model, &mode, &[]);
     let sys = prompt::system(&pctx);
 
     let mut hist = app.history(sid);
@@ -112,7 +114,7 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
     }
 
     let key_raw = fs::read_to_string(app.store.home.join("apikey")).unwrap_or_default();
-    let max_turns = app.settings.max_turns.max(1) as usize;
+    let max_turns = st0.max_turns.max(1) as usize;
     let mut last_text = String::new();
     let mut turn_no = 0usize;
 
@@ -130,12 +132,15 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
             break;
         }
         turn_no += 1;
-        let body = provider::request_body(&app.settings, &sys, &hist, plan);
+        // **每一轮**重取一次：中途改了全局设置或按会话换了模型，下一轮的请求就要跟上
+        // （Kotlin 那边读的是 `engine.settings`，`useSettings` 一调它就变）
+        let st = app.settings_of(sid);
+        let body = provider::request_body(&st, &sys, &hist, plan);
         let mut on_delta = |s: &str| app.publish(sid, "delta", &quote(s));
         let mut on_reason = |s: &str| app.publish(sid, "reason", &quote(s));
         let started = Instant::now();
 
-        let t = match provider::chat(&app.settings, &key_raw, &body, &mut on_delta, &mut on_reason)
+        let t = match provider::chat(&st, &key_raw, &body, &mut on_delta, &mut on_reason)
         {
             Ok(t) => t,
             Err(e) => return Err(format!("模型调用失败：{e}")),
@@ -156,7 +161,7 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
                 "notice",
                 &quote(&format!(
                     "这一轮说到一半被 max_tokens={} 截断了，下面这段可能不完整。要放宽就在设置里改 maxTokens（0 = 交给网关），或把这一步拆小一点。",
-                    app.settings.max_tokens
+                    st.max_tokens
                 )),
             );
         }
@@ -222,7 +227,7 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
             }
             // 闸口在 ToolStart **之前**（照 Kotlin 的顺序）：被拒的调用没真的动过，
             // 就不该在界面上先转一张"正在执行"的圈再变红。
-            let out = match refuse(app, name, plan, &ctx.flags) {
+            let out = match refuse(app, sid, name, plan, &ctx.flags) {
                 Some(why) => Outcome { text: why, ok: false, card: "generic", diff: String::new() },
                 None => {
                     app.publish(sid, "tool", &tool_start(id, name, raw_args));
@@ -291,7 +296,7 @@ fn tool_end_frame(id: &str, name: &str, ok: bool, out: &str, card: &str, note: &
 /// 执行侧的可见性闸口，顺序与 `Engine` 里 `Ev.ToolStart` 之前那四段一致：
 /// 未知 → 实验开关 → 计划模式 → 这条会话的开关。谁先拒就用谁的措辞。
 /// 返回 Some(理由) 表示这一步**不做**，理由同时是回给模型的 tool 内容。
-fn refuse(app: &App, name: &str, plan: bool, flags: &[(String, bool)]) -> Option<String> {
+fn refuse(app: &App, sid: &str, name: &str, plan: bool, flags: &[(String, bool)]) -> Option<String> {
     if !crate::tools::TOOLS.iter().any(|t| t.name == name) {
         let avail = crate::tools::TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(",");
         return Some(format!("未知工具：{name}。可用的是 {avail}"));
@@ -309,7 +314,7 @@ fn refuse(app: &App, name: &str, plan: bool, flags: &[(String, bool)]) -> Option
             "计划模式是只读的，{name} 不能用。把要做的事写进计划，或用 ask_user 确认切档。"
         ));
     }
-    if app.settings.tools_off.iter().any(|o| o == name) {
+    if app.tools_off_of(sid).iter().any(|o| o == name) {
         return Some(format!("工具 {name} 在这条会话里被关掉了：右栏「工具」页签可以重新打开。"));
     }
     None
@@ -407,6 +412,7 @@ fn persist(app: &App, sid: &str, hist: &[Msg], ctx: &Ctx) {
     let raw = fs::read_to_string(&path).unwrap_or_default();
     let mut v: Value = serde_json::from_str(&raw).unwrap_or_else(|_| Value::Object(Map::new()));
     let (pt, ct) = app.usage_of(sid);
+    let st = app.settings_of(sid);
     if let Some(obj) = v.as_object_mut() {
         obj.insert("messages".into(), Value::Array(hist.iter().map(msg_json).collect()));
         obj.insert("updated".into(), Value::Number(now_ms().into()));
@@ -415,6 +421,13 @@ fn persist(app: &App, sid: &str, hist: &[Msg], ctx: &Ctx) {
         if let Some(t) = app.title_of(sid) {
             obj.insert("title".into(), Value::String(t));
         }
+        // 模型与工具开关写的也是**引擎当下那一份**（`put("model", settings.model)`）：
+        // 按会话换过模型之后，第一回合的落盘才把新值带进文件
+        obj.insert("model".into(), Value::String(st.model));
+        obj.insert(
+            "toolsOff".into(),
+            Value::Array(st.tools_off.iter().map(|t| Value::String(t.clone())).collect()),
+        );
         // Kotlin 落盘时写的是 `session.workspace.absolutePath`（`File` 的路径）——
         // 这就是正斜杠的 workspace 会在 JVM 侧"落一次盘就变成反斜杠"的原因。
         obj.insert(
@@ -438,6 +451,47 @@ fn persist(app: &App, sid: &str, hist: &[Msg], ctx: &Ctx) {
             })
             .collect();
         obj.insert("todos".into(), Value::Array(todos));
+    }
+    atomic_write(&path, &v.to_string());
+}
+
+/// `Engine.persistNow()`：回合**之外**也要落一次盘。
+///
+/// 现在只有一个调用方：`/api/tool` 关掉一把工具之后 Kotlin 立刻存盘，所以那条会话文件里
+/// 的 `model`/`toolsOff` 都是引擎当下那一份（而按会话换模型那条**没有**这一句，
+/// 于是改了只在内存里，重启就退回文件里的旧值 —— 两半的差别是原样，不是漏写）。
+/// 没跑过回合的会话在本进程里没有活历史，那一份 `messages` 就**不动文件**：
+/// Kotlin 那边引擎的历史与文件同源，写回去是同一个内容；这里历史是空的，
+/// 照着写一次就等于把用户的旧消息抹掉。
+pub(crate) fn persist_now(app: &App, sid: &str) {
+    let path = app.store.file_for(sid);
+    let Ok(raw) = fs::read_to_string(&path) else { return };
+    let Ok(mut v) = serde_json::from_str::<Value>(&raw) else { return };
+    let st = app.settings_of(sid);
+    let (pt, ct) = app.usage_of(sid);
+    let hist = app.history(sid);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("updated".into(), Value::Number(now_ms().into()));
+        // 与 `persist` 同一件事：工作区写的是 `File.absolutePath` 那一形（反斜杠）。
+        // 种子文件里可能是正斜杠进来的，落一次盘就要归一一次，两端才会留下同一个文件。
+        obj.insert(
+            "workspace".into(),
+            Value::String(crate::store::abs_path(&app.store.meta(sid).map(|m| m.workspace).unwrap_or_default())),
+        );
+        obj.insert("model".into(), Value::String(st.model));
+        obj.insert(
+            "toolsOff".into(),
+            Value::Array(st.tools_off.iter().map(|t| Value::String(t.clone())).collect()),
+        );
+        // 活计数器是"重启后从 0 重新累计"那份 —— 连"把文件里的总数改小"也一起照抄
+        obj.insert("promptTokens".into(), Value::Number(pt.into()));
+        obj.insert("completionTokens".into(), Value::Number(ct.into()));
+        if let Some(t) = app.title_of(sid) {
+            obj.insert("title".into(), Value::String(t));
+        }
+        if !hist.is_empty() {
+            obj.insert("messages".into(), Value::Array(hist.iter().map(msg_json).collect()));
+        }
     }
     atomic_write(&path, &v.to_string());
 }

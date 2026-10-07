@@ -81,10 +81,12 @@ pub fn state_json(v: &View) -> String {
         .map(|m| m.workspace.as_str())
         .filter(|t| !t.is_empty())
         .unwrap_or(&ws_fallback);
-    let model = meta
-        .map(|m| m.model.as_str())
-        .filter(|t| !t.is_empty())
-        .unwrap_or(&v.settings.model);
+    // 模型报的是**这条会话自己的那一份**：Kotlin 读的是 `e?.settings?.model`，
+    // 那是"全局 + 会话文件 + 按会话的活覆盖"合成之后的那一个 —— 而 `v.settings`
+    // 正是调用方按这个口径算好交进来的（`App::settings_of`）。
+    // 之前这里是"文件里的 model 优先"，于是按会话换了模型之后
+    // 顶栏还写着旧的那个（引擎实际用的和显示的不一样），而落盘的会话文件也还留着旧的。
+    let model = v.settings.model.as_str();
     let preset = meta.map(|m| m.preset.as_str()).unwrap_or("");
     let title = meta.map(|m| m.title.as_str()).unwrap_or("新会话");
     let role = meta.map(|m| m.role.as_str()).unwrap_or("");
@@ -96,15 +98,17 @@ pub fn state_json(v: &View) -> String {
     s.push_str(&format!("\"model\":{},", quote(model)));
     s.push_str(&format!("\"preset\":{},", quote(preset)));
     s.push_str("\"queue\":[],");
-    // off = 全局 toolsOff ∪ 该会话 toolsOff（`AgentConfigs.effectiveToolsOff` 的两层合成）
-    let mut off: Vec<&str> = v.settings.tools_off.iter().map(|x| x.as_str()).collect();
-    if let Some(m) = meta {
-        for t in &m.tools_off {
-            if !off.contains(&t.as_str()) {
-                off.push(t.as_str());
-            }
-        }
-    }
+    // `AgentConfigs.effectiveToolsOff`：这条会话自己那份，再剔掉 critical ——
+    // v.settings 已经是"全局 + 会话覆盖"之后的那一份（`App::settings_of`），
+    // 所以这里**不再**和全局并集：并集会比 Kotlin 严一档，
+    // 于是"全局关了 shell"时两端给出不同的工具清单。
+    let off: Vec<&str> = v
+        .settings
+        .tools_off
+        .iter()
+        .map(|x| x.as_str())
+        .filter(|t| !crate::guard::is_critical(t))
+        .collect();
     // 没有驻留引擎（`sessions[sid]` 是 null）时 Kotlin 发的是**空清单**：
     // 工具表读的是 `e?.toolInfos()`，没有引擎就没有工具可报。
     // 这条分支在刚删掉当前会话之后一定会走到（`currentId()` 空 → 没有引擎），
