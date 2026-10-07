@@ -2751,8 +2751,14 @@ private fun MessageList(
                     onStopRun = onStopRun,
                     onViewDiff = onToolViewDiff,
                     onStopSubagent = onStopSubagent,
-                    // 流式气泡=Agent 正在说话：上一条已落行不是 assistant（本回合首条）才画名字行
-                    showHead = rows.lastOrNull()?.role != "assistant",
+                    // 流式气泡=Agent 正在说话：上一条已落行不是 assistant（本回合首条）才画名字行。
+                    // 连接中（还没有思考/工具/正文任何产出）先不画——光秃秃的名字行挂在消息流里，
+                    // 与底部的状态胶囊两头不着（真机反馈 2026-10-07）；等首段内容出现再一同现身。
+                    showHead = rows.lastOrNull()?.role != "assistant" && (
+                        !streamingText.isNullOrBlank() ||
+                            !streamingReasoning.isNullOrBlank() ||
+                            liveToolsSnapshot.isNotEmpty()
+                        ),
                     // 流式区=「我发言 → Agent 回复」方向：问答衔接，恢复紧凑 1dp
                     headTopGap = false
                 )
@@ -5609,14 +5615,24 @@ internal fun ProfileAvatar(
                     .clip(CircleShape)
             )
         } else if (emoji.isNotEmpty()) {
-            Text(emoji, fontSize = (size.value * 0.45f).sp)
+            // emoji 位图字形约占 0.85em：0.72f → 视觉≈0.6 直径（0.45 真机实测偏小，
+            // 2026-10-07）。includeFontPadding=false 必须同样加——否则 emoji 字体的
+            // 传统顶边距把位图往下压（实测偏下 4px/52px 圆）
+            Text(
+                emoji,
+                fontSize = (size.value * 0.72f).sp,
+                style = androidx.compose.ui.text.TextStyle(
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                )
+            )
         } else {
-            // 首字兜底「几乎占满」（真机反馈 2026-10-07）。分档：方块类 CJK 字形宽高
-            // 都接近 1em，圆内内接方上限≈0.71 直径，0.78f(×0.87em) 已是几何极限，
-            // 再大必裁角（0.9f 实测「我」上下出圆）；拉丁字母高度主体是大写帽(~0.7em)
-            // 且窄，0.9f 恰好接近占满。includeFontPadding=false 收紧行盒，Box 居中=字形居中
+            // 首字兜底「几乎占满」。分档：方块类 CJK 字形宽高都接近 1em，圆内内接方
+            // 上限≈0.71 直径；Flyme 字体的字形在行盒里比模拟器字体坐得低约 1px，
+            // 0.78f 时「我」底钩已贴圆边（真机实测）→ 收到 0.73f 留出下缘余量。
+            // 拉丁字母高度主体是大写帽(~0.7em)且窄，0.9f 恰好接近占满。
+            // includeFontPadding=false 收紧行盒，Box 居中=字形居中
             val c = fallback.take(1).ifEmpty { "A" }.first()
-            val fill = if (c.code > 0x2E7F) 0.78f else 0.9f   // 0x2E80 起 = CJK 部首/汉字区
+            val fill = if (c.code > 0x2E7F) 0.73f else 0.9f   // 0x2E80 起 = CJK 部首/汉字区
             Text(
                 c.toString(),
                 fontSize = (size.value * fill).sp,
