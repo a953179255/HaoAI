@@ -5080,6 +5080,11 @@ private fun ComposerBar(
         backdrop = backdrop,
         exportedBackdrop = exportedBackdrop,
         radius = 26.dp,
+        // 输入框折射接玻璃实验室调参（2026-10-08）：历史上不传 lensRadius 继承
+        // radius=26dp、倍数默认 2 → 位移 52dp 全 App 最重，滚动内容穿过时被扭曲
+        // 出"卡顿感"（用户实测）。现默认 16×1.5=24dp，可在实验室里滑杆实时试。
+        lensRadius = com.haoai.agent.ui.theme.GlassTuning.inputLensHeight.dp,
+        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.inputLensAmountMul,
         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         // 键盘抬升值作重绘键：位置变化后强制重绘折射，采样对齐新布局位置，
         // 保持完整液态效果且背景正确（matte 方案观感差已弃）

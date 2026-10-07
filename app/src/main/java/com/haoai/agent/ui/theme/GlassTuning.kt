@@ -56,6 +56,19 @@ object GlassTuning {
     /** 顶栏白雾 */
     var barVeil by mutableFloatStateOf(DEFAULT_BAR_VEIL)
 
+    // ── 输入框玻璃（聊天页底部输入栏）──────────────────────────────────
+    // 历史：输入框曾硬编码 lensRadius=radius=26dp、强度倍数默认 2 → 折射位移 52dp，
+    // 是全 App 最重的玻璃。用户实测滚动内容穿过输入框时被扭曲出"卡顿感"（2026-10-08），
+    // 降档并接入实验室单独调：默认高度 16 × 倍数 1.5 = 位移 24dp（比卡片 32 更轻）。
+    const val DEFAULT_INPUT_LENS_HEIGHT = 16f
+    const val DEFAULT_INPUT_LENS_AMOUNT_MUL = 1.5f
+
+    /** 输入框折射高度 dp（环带宽度） */
+    var inputLensHeight by mutableFloatStateOf(DEFAULT_INPUT_LENS_HEIGHT)
+
+    /** 输入框折射强度倍数（位移 = 高度 × 此值） */
+    var inputLensAmountMul by mutableFloatStateOf(DEFAULT_INPUT_LENS_AMOUNT_MUL)
+
     /** 一键还原出厂默认（玻璃实验室的"还原默认"按钮） */
     fun reset() {
         blur = DEFAULT_BLUR
@@ -67,5 +80,7 @@ object GlassTuning {
         ca = DEFAULT_CA
         barBlur = DEFAULT_BAR_BLUR
         barVeil = DEFAULT_BAR_VEIL
+        inputLensHeight = DEFAULT_INPUT_LENS_HEIGHT
+        inputLensAmountMul = DEFAULT_INPUT_LENS_AMOUNT_MUL
     }
 }

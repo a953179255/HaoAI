@@ -190,6 +190,37 @@ private fun GlassLab() {
                     )
                 }
 
+                // ── 输入框预览（折射参数独立一组，对应聊天页底部输入栏）──
+                Text(
+                    "③ 输入框玻璃（聊天页底部输入栏同款，滚过文字看扭曲程度）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(64.dp)
+                ) {
+                    // 背后放一条会动的文字带模拟"内容穿过玻璃"：静态壁纸上折射
+                    // 环带不明显，滚动文字才看得见扭曲
+                    Text(
+                        "滚动内容穿过输入框 → 折射环带把字边掰弯",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 8.dp)
+                    )
+                    GlassPanel(
+                        backdrop = backdrop,
+                        modifier = Modifier.fillMaxSize(),
+                        radius = 26.dp,
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                        lensRadius = GlassTuning.inputLensHeight.dp,
+                        lensAmountMul = GlassTuning.inputLensAmountMul
+                    ) { }
+                }
+
                 LabControls()
 
                 Text(
@@ -212,6 +243,14 @@ private fun LabControls() {
         SliderRow("强度倍数", GlassTuning.lensAmountMul, 0.5f, 8f) { GlassTuning.lensAmountMul = it }
         SliderRow("白雾 alpha", GlassTuning.veil, 0f, 0.9f) { GlassTuning.veil = it }
         SliderRow("圆角 dp", GlassTuning.corner, 8f, 40f) { GlassTuning.corner = it }
+        Text(
+            "输入框玻璃（聊天页底部，单独一组；倍数=0 即关折射）",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp)
+        )
+        SliderRow("输入框折射高度 dp", GlassTuning.inputLensHeight, 0f, 40f) { GlassTuning.inputLensHeight = it }
+        SliderRow("输入框强度倍数", GlassTuning.inputLensAmountMul, 0f, 4f) { GlassTuning.inputLensAmountMul = it }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -230,7 +269,8 @@ private fun LabControls() {
                 onClick = {
                     val text = "blur=${GlassTuning.blur} lensHeight=${GlassTuning.lensHeight} " +
                         "amountMul=${GlassTuning.lensAmountMul} veil=${GlassTuning.veil} " +
-                        "corner=${GlassTuning.corner} lensFull=${GlassTuning.lensFull} ca=${GlassTuning.ca}"
+                        "corner=${GlassTuning.corner} lensFull=${GlassTuning.lensFull} ca=${GlassTuning.ca} " +
+                        "inputLensHeight=${GlassTuning.inputLensHeight} inputAmountMul=${GlassTuning.inputLensAmountMul}"
                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     cm.setPrimaryClip(ClipData.newPlainText("玻璃参数", text))
                 },
