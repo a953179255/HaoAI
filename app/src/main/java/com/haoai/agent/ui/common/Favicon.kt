@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -64,14 +65,16 @@ private fun loadFavicon(domain: String): ImageBitmap? = runCatching {
         "https://favicone.com/$domain?s=64"
     )
     for (url in sources) {
-        val bytes = faviconClient.newCall(
-            okhttp3.Request.Builder().url(url)
-                // 浏览器 UA：默认 okhttp/* 被 nikkei(403)/reuters(401) 等反爬直接拦死
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
-                .build()
-        ).execute().use { r ->
-            if (!r.isSuccessful) null else r.body?.bytes()
-        } ?: continue
+        // 每源独立捕获：单源异常（apex SSL 握手超时/chinanews 实测）绝不能短路
+        // 整个降级链——真机反馈"有救却显示字母"的真凶，www 变体与兜底源根本没跑
+        val bytes = runCatching {
+            faviconClient.newCall(
+                okhttp3.Request.Builder().url(url)
+                    // 浏览器 UA：默认 okhttp/* 被 nikkei(403)/reuters(401) 等反爬直接拦死
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
+                    .build()
+            ).execute().use { r -> if (!r.isSuccessful) null else r.body?.bytes() }
+        }.getOrNull() ?: continue
         decodeFaviconBytes(bytes)?.let { return@runCatching it }   // 非图片/解不开 → 下一源
     }
     null
@@ -176,6 +179,7 @@ private fun faviconFallbackColor(domain: String): Color {
 private fun faviconLetter(domain: String): String =
     domain.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?"
 
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
 @Composable
 fun Favicon(
     domain: String,
@@ -209,9 +213,16 @@ fun Favicon(
             )
         } else {
             // 字号单位坑（真机反馈 2026-10-07）：旧写法 size.toPx()*0.52 把**像素值**当 sp 用，
-            // 14dp 图标在 2.625 密度屏上算出 37sp 巨型字母溢出方块；toSp 才是"dp 当文字尺寸"的正解
+            // 14dp 图标在 2.625 密度屏上算出 37sp 巨型字母溢出方块；toSp 才是"dp 当文字尺寸"的正解。
+            // platformIncludeFontPadding=false：Android 字体默认上下 padding 让字形视觉偏下
+            // （真机反馈"位置不居中"），关掉后字形在方块里真正居中
             val fs = with(LocalDensity.current) { size.toSp() * 0.52f }
-            Text(faviconLetter(domain), color = Color.White, fontSize = fs, fontWeight = FontWeight.Bold)
+            Text(
+                faviconLetter(domain), color = Color.White, fontSize = fs, fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                )
+            )
         }
     }
 }
