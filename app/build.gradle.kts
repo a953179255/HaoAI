@@ -55,6 +55,15 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+        // 调试版与正式版必须同签名：AndroidKeyStore 密钥不可导出且绑定签名，
+        // 换签名会让已存密文永久解不开。同签名才能用 adb install -r 覆盖安装而不动数据。
+        debug {
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
     }
     packaging {
         jniLibs {

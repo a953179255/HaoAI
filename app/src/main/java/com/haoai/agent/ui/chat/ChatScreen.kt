@@ -2663,6 +2663,7 @@ private fun MessageList(
     val outerSwitch = androidx.compose.runtime.rememberUpdatedState(LocalSwitchVersion.current)
     val versionSwitch: (String, Int) -> Unit = { uid, idx ->
         pagerDeltaArmed = true
+        if (FollowTrace.enabled) FollowTrace.addSlow("PAGER_ARM")
         outerSwitch.value(uid, idx)
     }
 
@@ -2695,15 +2696,22 @@ private fun MessageList(
             }
         }
             .padding(top = topPadding, bottom = bottomPadding)
-            // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）
+            // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）。
+            // 不再看 userScrolledThisRun：能点到翻页器=该行必然在视口内（页脚可见），
+            // 此前的守卫在「用户滚动过会话」时会跳过补偿——真机用户必滚 → 闪帧复现（2026-10-07）
             .onSizeChanged { sz ->
                 val prev = prevContentH.intValue
                 prevContentH.intValue = sz.height
                 if (pagerDeltaArmed && prev > 0) {
                     pagerDeltaArmed = false
                     val delta = (sz.height - prev).toFloat()
-                    if (delta != 0f && !userScrolledThisRun.value) {
+                    var dispatched = false
+                    if (delta != 0f) {
                         scrollState.dispatchRawDelta(delta)
+                        dispatched = true
+                    }
+                    if (FollowTrace.enabled) {
+                        FollowTrace.addSlow("SIZE h=${sz.height} prev=$prev delta=${delta.toInt()} dispatched=$dispatched pos=${scrollState.value}/${scrollState.maxValue}")
                     }
                 }
             }
@@ -4667,8 +4675,26 @@ private fun AssistantBlock(
                 onFooterReveal()
             }
         }
+        // FOOTER 诊断（FollowTrace，followdump 深链开）：真机反馈「回复过程中仍出现
+        // 操作行」但模拟器复现干净——记录每次页脚转为可见时的 running/统计字段，
+        // 拿地面真相定位走的是哪条可见路径
+        // 硬闸（用户原话「回复过程中不用显示，只在最终回复下面显示」，2026-10-07）：
+        // running=true 期间任何 Agent 页脚（含历史最终行的统计/按钮）一律隐藏，
+        // 回合结束统一回归——把「回复过程中出现按钮」的所有路径（含 stats 判据）
+        // 一次性关死
+        val footerVisible = footerShown && !running &&
+            (showActions || row.completionTokens != null || row.durationMs != null)
+        LaunchedEffect(footerVisible) {
+            if (footerVisible && FollowTrace.enabled) {
+                FollowTrace.addSlow(
+                    "FOOTER_SHOW run=$running showA=$showActions " +
+                        "pt=${row.promptTokens} ct=${row.completionTokens} dur=${row.durationMs} " +
+                        "err=${row.error} tail=${row.text.takeLast(18)}"
+                )
+            }
+        }
         AnimatedVisibility(
-            visible = footerShown && (showActions || row.completionTokens != null || row.durationMs != null),
+            visible = footerVisible,
             enter = expandVertically(tween(200)) + fadeIn(tween(200))
         ) {
             Column {
