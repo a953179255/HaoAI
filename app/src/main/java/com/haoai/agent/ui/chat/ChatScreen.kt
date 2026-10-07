@@ -2842,19 +2842,40 @@ private fun RowItem(
 @Composable
 private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: String?, right: Boolean) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 1.dp),
+        // 顶部 6dp：名字行只在角色切换（=新一轮）出现，这里就是轮次呼吸位——
+        // 不加的话上一轮的操作行和下一轮的昵称几乎贴死（真机反馈 2026-10-07）
+        Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 6.dp, bottom = 2.dp),
         horizontalArrangement = if (right) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ProfileAvatar(emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp, imagePath = imagePath)
-        Spacer(Modifier.size(6.dp))
-        Text(
-            name,
-            style = MaterialTheme.typography.labelSmall,
-            color = wallpaperAdaptiveGray(),
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-        )
+        // 用户侧镜像：消息靠右，名字行也「名字左·头像右」，与 Agent（头像左）方向相反
+        if (right) {
+            Text(
+                name,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                ),
+                color = wallpaperAdaptiveGray(),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.size(6.dp))
+            ProfileAvatar(emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp, imagePath = imagePath)
+        } else {
+            ProfileAvatar(emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp, imagePath = imagePath)
+            Spacer(Modifier.size(6.dp))
+            Text(
+                name,
+                // includeFontPadding=false：labelSmall 的行盒带传统字体下坠，按盒居中会让
+                // 头像视觉上偏下（真机反馈 2026-10-07）；收紧到字形后盒中心≈字形中心
+                style = MaterialTheme.typography.labelSmall.copy(
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                ),
+                color = wallpaperAdaptiveGray(),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
