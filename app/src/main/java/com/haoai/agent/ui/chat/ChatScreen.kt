@@ -2690,6 +2690,9 @@ private fun MessageList(
             // 与上一条同角色=同组→不画名字行。系统事件条不参与（RowItem 内自行早退）。
             val prevRole = windowedRows.getOrNull(rowIdx - 1)?.role
             val showHead = prevRole != row.role
+            // 名字行顶部的 6dp 轮次呼吸位对「会话第一条」豁免：它上面没有上一条，
+            // 顶格即可（否则空会话首条被推低）；带隐藏历史时首行上面其实有消息，不豁免
+            val headTopGap = rowIdx > 0 || hiddenRowCount > 0
             androidx.compose.runtime.key(row.key) {
                 // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
                 // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
@@ -2725,6 +2728,7 @@ private fun MessageList(
                     onStopRun = onStopRun,
                     showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
                     showHead = showHead,
+                    headTopGap = headTopGap,
                     growIn = row.key == growInKey,
                     onFooterReveal = { footerRevealTick++ }
                 )
@@ -2744,7 +2748,8 @@ private fun MessageList(
                     onViewDiff = onToolViewDiff,
                     onStopSubagent = onStopSubagent,
                     // 流式气泡=Agent 正在说话：上一条已落行不是 assistant（本回合首条）才画名字行
-                    showHead = rows.lastOrNull()?.role != "assistant"
+                    showHead = rows.lastOrNull()?.role != "assistant",
+                    headTopGap = windowedRows.isNotEmpty() || hiddenRowCount > 0
                 )
             }
         }
@@ -2819,6 +2824,8 @@ private fun RowItem(
     showActions: Boolean = true,
     /** 社交化分组：本行是否画「头像+昵称」名字行（每组第一条=true）。 */
     showHead: Boolean = true,
+    /** 名字行顶部的 6dp 轮次呼吸位（会话首条豁免=false）。 */
+    headTopGap: Boolean = true,
     growIn: Boolean = false,
     onFooterReveal: () -> Unit = {}
 ) {
@@ -2830,8 +2837,8 @@ private fun RowItem(
         return
     }
     when (row.role) {
-        "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, showHead, growIn, onFooterReveal)
+        "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead, headTopGap)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, showHead, headTopGap, growIn, onFooterReveal)
     }
 }
 
@@ -2840,11 +2847,15 @@ private fun RowItem(
  * 头像不再单独成列——气泡通栏，宽度零浪费。用户侧镜像右对齐。
  */
 @Composable
-private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: String?, right: Boolean) {
+private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: String?, right: Boolean, topGap: Boolean = true) {
     Row(
         // 顶部 6dp：名字行只在角色切换（=新一轮）出现，这里就是轮次呼吸位——
-        // 不加的话上一轮的操作行和下一轮的昵称几乎贴死（真机反馈 2026-10-07）
-        Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 6.dp, bottom = 2.dp),
+        // 不加的话上一轮的操作行和下一轮的昵称几乎贴死（真机反馈 2026-10-07）；
+        // 会话第一条（topGap=false）顶格，不参与轮次间距
+        Modifier.fillMaxWidth().padding(
+            start = 2.dp, end = 2.dp,
+            top = if (topGap) 6.dp else 0.dp, bottom = 2.dp
+        ),
         horizontalArrangement = if (right) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -3705,7 +3716,9 @@ private fun StreamingItem(
     /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
     onStopSubagent: (String) -> Unit = {},
     /** 社交化分组：流式区是否画「头像+昵称」名字行（本回合首条=true）。 */
-    showHead: Boolean = true
+    showHead: Boolean = true,
+    /** 名字行顶部的 6dp 轮次呼吸位（会话首条豁免=false）。 */
+    headTopGap: Boolean = true
 ) {
     Column(
         Modifier
@@ -3713,7 +3726,7 @@ private fun StreamingItem(
             .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
         if (showHead) LocalChatProfiles.current?.let { p ->
-            SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false)
+            SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false, topGap = headTopGap)
         }
         val hasContent = !streamingText.isNullOrBlank()
         // v8 思维链重构（参考 RikkaHub ChainOfThought，2026-09-14 定稿）：
@@ -4390,7 +4403,8 @@ private fun UserBubble(
     onCopyRow: (ChatRow) -> Unit,
     onQuickEdit: (ChatRow) -> Unit,
     running: Boolean,
-    showHead: Boolean = true
+    showHead: Boolean = true,
+    headTopGap: Boolean = true
 ) {
     Column(
         Modifier
@@ -4400,7 +4414,7 @@ private fun UserBubble(
     ) {
         // 社交化名字行（效果图 C）：每组第一条右对齐显示「我的头像+昵称」
         if (showHead) LocalChatProfiles.current?.let { p ->
-            SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true)
+            SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true, topGap = headTopGap)
         }
         // 用户发的图片附件：气泡上方原比例展示（此前只存不显）
         row.imageData?.let { dataUrl ->
@@ -4413,34 +4427,61 @@ private fun UserBubble(
                 contentScale = ContentScale.Fit
             )
         }
-        Surface(
-            color = MaterialTheme.colorScheme.primary.copy(alpha = chatBubbleAlphas().first),
-            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
-            modifier = Modifier.widthIn(max = 320.dp)
-        ) {
-            // 长按正文 = 系统文本选择，不再弹操作菜单
-            SelectionContainer {
-                Text(
-                    row.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
-                )
+        // 快捷操作行（与 Agent 同款排版：复制·编辑重发靠左，时间戳在「更多」左）。
+        // 操作行宽度=气泡宽度：按钮左缘与气泡左缘平齐（气泡右对齐，操作行跟着右对齐，
+        // 不再甩到屏幕最左脱离气泡——真机反馈 2026-10-07）
+        BubbleWithActions(
+            bubble = {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = chatBubbleAlphas().first),
+                    shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
+                    modifier = Modifier.widthIn(max = 320.dp)
+                ) {
+                    // 长按正文 = 系统文本选择，不再弹操作菜单
+                    SelectionContainer {
+                        Text(
+                            row.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                        )
+                    }
+                }
+            },
+            actions = {
+                Row(
+                    Modifier.padding(top = 1.dp, end = 2.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
+                    QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
+                    Spacer(Modifier.weight(1f))
+                    val tsText = fmtMsgTs(row.ts)
+                    if (tsText.isNotEmpty()) {
+                        Text(tsText, style = MaterialTheme.typography.labelSmall,
+                            color = wallpaperAdaptiveGray(), modifier = Modifier.padding(end = 4.dp))
+                    }
+                    QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+                }
             }
-        }
-        // 快捷操作行（与 Agent 同款排版：复制·编辑重发靠左，时间戳在「更多」左）
-        Row(
-            Modifier.fillMaxWidth().padding(top = 1.dp, end = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
-            QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
-            Spacer(Modifier.weight(1f))
-            val tsText = fmtMsgTs(row.ts)
-            if (tsText.isNotEmpty()) {
-                Text(tsText, style = MaterialTheme.typography.labelSmall,
-                    color = wallpaperAdaptiveGray(), modifier = Modifier.padding(end = 4.dp))
-            }
-            QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+        )
+    }
+}
+
+/**
+ * 气泡 + 操作行同宽容器：操作行宽度取「气泡宽度与操作行最小宽度的较大者」，
+ * 气泡在容器内右对齐。气泡 ≥ 操作行时按钮左缘与气泡左缘严格平齐；
+ * 气泡极窄时操作行可超出气泡左缘（操作行自身内容宽度下限），仍紧贴气泡群组。
+ */
+@Composable
+private fun BubbleWithActions(bubble: @Composable () -> Unit, actions: @Composable () -> Unit) {
+    androidx.compose.ui.layout.Layout(content = { bubble(); actions() }) { m, c ->
+        val b = m[0].measure(c)
+        val aMin = m[1].minIntrinsicWidth(c.maxWidth)
+        val w = maxOf(b.width, aMin)
+        val a = m[1].measure(androidx.compose.ui.unit.Constraints(minWidth = w, maxWidth = w))
+        layout(w, b.height + a.height) {
+            b.place(w - b.width, 0)
+            a.place(0, b.height)
         }
     }
 }
@@ -4458,6 +4499,8 @@ private fun AssistantBlock(
     showActions: Boolean = true,
     /** 社交化分组：本行是否画「头像+昵称」名字行。 */
     showHead: Boolean = true,
+    /** 名字行顶部的 6dp 轮次呼吸位（会话首条豁免=false）。 */
+    headTopGap: Boolean = true,
     growIn: Boolean = false,
     onFooterReveal: () -> Unit = {}
 ) {
@@ -4468,7 +4511,7 @@ private fun AssistantBlock(
     ) {
         // 社交化名字行（效果图 C）：每组第一条左对齐显示「Agent 头像+昵称」
         if (showHead) LocalChatProfiles.current?.let { p ->
-            SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false)
+            SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false, topGap = headTopGap)
         }
         // v8 思维链重构：历史消息与流式同构——思考 + 工具混排进一张链卡（finished=true
         // → 默认折叠为控制条，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
@@ -5537,12 +5580,17 @@ internal fun ProfileAvatar(
         } else if (emoji.isNotEmpty()) {
             Text(emoji, fontSize = (size.value * 0.45f).sp)
         } else {
-            // 首字兜底字号随 size 缩放：名字行 20dp 小头像下 titleMedium(16sp) 会溢出圆
+            // 首字兜底：字号占直径 52%（0.42 太小——真机反馈 2026-10-07）；
+            // includeFontPadding=false 收紧行盒到字形，Box 居中才等于字形居中
+            //（CJK 字形在带 padding 的行盒里会偏下）
             Text(
                 fallback.take(1).ifEmpty { "AI" },
-                fontSize = (size.value * 0.42f).sp,
+                fontSize = (size.value * 0.52f).sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = Color.White,
+                style = androidx.compose.ui.text.TextStyle(
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                )
             )
         }
     }
