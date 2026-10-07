@@ -76,10 +76,11 @@ fn wire_chars(path: &str) -> usize {
 pub fn state_json(v: &View) -> String {
     let meta = v.session.map(|s| &s.meta);
     let mode = meta.map(|m| m.mode.as_str()).unwrap_or(&v.settings.permission_mode);
+    let ws_fallback = v.settings.workspace_file();
     let workspace = meta
         .map(|m| m.workspace.as_str())
         .filter(|t| !t.is_empty())
-        .unwrap_or(&v.settings.workspace);
+        .unwrap_or(&ws_fallback);
     let model = meta
         .map(|m| m.model.as_str())
         .filter(|t| !t.is_empty())
@@ -104,8 +105,14 @@ pub fn state_json(v: &View) -> String {
             }
         }
     }
+    // 没有驻留引擎（`sessions[sid]` 是 null）时 Kotlin 发的是**空清单**：
+    // 工具表读的是 `e?.toolInfos()`，没有引擎就没有工具可报。
+    // 这条分支在刚删掉当前会话之后一定会走到（`currentId()` 空 → 没有引擎），
+    // 那里回满 32 把工具，前端"工具"区就会显示一个根本没在跑的会话全开着工具。
     s.push_str("\"tools\":[");
-    s.push_str(&crate::tools::tools_json(&off, &v.settings.flags));
+    if v.session.is_some() {
+        s.push_str(&crate::tools::tools_json(&off, &v.settings.flags));
+    }
     s.push_str("],");
     s.push_str("\"runState\":null,");
     s.push_str("\"subs\":[],");
@@ -135,41 +142,48 @@ pub fn state_json(v: &View) -> String {
     // 系统提示 → 项目说明 → 工具说明 → 对话历史 → 前情摘要。
     // 系统提示要等提示构造器（M2b）才算得出，现在为 0 就**不建行**——这恰好复用 Kotlin
     // 对 sys/mem 为 0 时的同一套规则，所以形状仍然合法，只是少一行。
-    let pctx = crate::prompt::ctx_for(
-        v.store,
-        workspace,
-        model,
-        mode,
-        &[],
-    );
-    let sys_full = crate::prompt::system(&pctx);
-    let sys_chars = utf16_len(&sys_full);
-    // `mem = Memory.read(...).length.coerceAtMost(sys)`，且 sys 那一行报的是**减掉 mem 之后**的数
-    let mem_chars = utf16_len(pctx.extra.trim()).min(sys_chars);
-    let tools_chars = crate::tools::schemas_chars(&off);
-    /*
-     * Kotlin 那边是三段加起来（`contextBreakdown`）：
-     *   content.length + Σ calls.args.length + Σ Images.wireChars(images)
-     *
-     * **只算 content 是错的**：一条 agent 回合必然带 tool_calls，那 23 字的 args
-     * 不算，界面上"历史占多少"就一直偏低 —— 而这一行正是"上下文快满了"的判据。
-     * 金标准抓不到它是因为那批会话没有一条带 tool_calls 的消息，是跨端对跑才暴露的。
-     */
-    let hist_chars: usize = v
-        .session
-        .map(|sf| {
-            sf.msgs
-                .iter()
-                .filter(|m| m.role != "system")
-                .map(|m| {
-                    let args: usize = m.calls.iter().map(|(_, _, a)| utf16_len(a)).sum();
-                    let images: usize = m.images.iter().map(|p| wire_chars(p)).sum();
-                    utf16_len(&m.content) + args + images
-                })
-                .sum()
-        })
-        .unwrap_or(0);
+    // 没有引擎时这一整块在 Kotlin 那边都是 0/空（`e?.contextChars() ?: 0`、
+    // `e?.contextBreakdown()` 根本不建行）。窗口与触发线照旧来自设置，那两个是全局的。
     let mut parts: Vec<String> = vec![];
+    let (sys_chars, mem_chars, tools_chars, hist_chars) = if v.session.is_none() {
+        (0usize, 0usize, 0usize, 0usize)
+    } else {
+        let pctx = crate::prompt::ctx_for(
+            v.store,
+            workspace,
+            model,
+            mode,
+            &[],
+        );
+        let sys_full = crate::prompt::system(&pctx);
+        let sys = utf16_len(&sys_full);
+        // `mem = Memory.read(...).length.coerceAtMost(sys)`，且 sys 那一行报的是**减掉 mem 之后**的数
+        let mem = utf16_len(pctx.extra.trim()).min(sys);
+        let tools = crate::tools::schemas_chars(&off);
+        /*
+         * Kotlin 那边是三段加起来（`contextBreakdown`）：
+         *   content.length + Σ calls.args.length + Σ Images.wireChars(images)
+         *
+         * **只算 content 是错的**：一条 agent 回合必然带 tool_calls，那 23 字的 args
+         * 不算，界面上"历史占多少"就一直偏低 —— 而这一行正是"上下文快满了"的判据。
+         * 金标准抓不到它是因为那批会话没有一条带 tool_calls 的消息，是跨端对跑才暴露的。
+         */
+        let hist = v
+            .session
+            .map(|sf| {
+                sf.msgs
+                    .iter()
+                    .filter(|m| m.role != "system")
+                    .map(|m| {
+                        let args: usize = m.calls.iter().map(|(_, _, a)| utf16_len(a)).sum();
+                        let images: usize = m.images.iter().map(|p| wire_chars(p)).sum();
+                        utf16_len(&m.content) + args + images
+                    })
+                    .sum()
+            })
+            .unwrap_or(0);
+        (sys, mem, tools, hist)
+    };
     if sys_chars > mem_chars {
         parts.push(format!("[{},{}]", quote("系统提示"), sys_chars - mem_chars));
     }

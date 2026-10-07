@@ -79,10 +79,37 @@ pub(crate) fn turn(app: &App, sid: &str, text: &str) -> Result<(), String> {
     if hist.is_empty() {
         hist = sf.msgs.clone();
     }
+    /*
+     * 自动取名：标题还是"新会话"时，用这一句的前 24 个 UTF-16 单元当标题。
+     * 只在"还是默认名"时改一次，所以第二条消息不会把标题又换回去。
+     * `trim` 是 Java 口径（不换行空格不算空白），`take` 是 UTF-16 口径 ——
+     * 两端算出同一个标题，侧栏才不会一条叫"新会话"一条叫别的。
+     */
+    let cur_title = app.title_of(sid).unwrap_or_else(|| sf.meta.title.clone());
+    app.set_title(sid, &cur_title);
+    let titled = cur_title == "新会话";
+    if titled {
+        let t = crate::store::ktrim(text).replace('\n', " ");
+        let t: String = crate::utf16::utf16_take(&t, 24).to_string();
+        let t = if t.is_empty() || t.chars().all(crate::store::kotlin_ws) { "新会话".to_string() } else { t };
+        app.set_title(sid, &t);
+    }
     hist.push(Msg { role: "user".into(), content: text.to_string(), ..Default::default() });
+    app.set_history(sid, hist.clone());
     // 头行：这一轮动了哪些文件要往这本账上记，而"回到这次任务之前"得先知道任务是什么。
     // `at` 是这句在历史里的下标 —— 按时间猜会退错：定时任务、手机派活都往同一条会话里追加消息。
     crate::checkpoints::begin(&app.store.home, sid, &run_id, text, hist.len() as i64 - 1);
+    /*
+     * 一开口就先落一次盘（`Engine.submit` 的原话）：之前只在回合结束时 persist，
+     * 于是"正在跑的任务"在会话列表里根本不存在；顺带把手机端"落库止血"的规矩接上 ——
+     * 进程被杀 / 断电时，至少用户问了什么还在。
+     */
+    persist(app, sid, &hist, &ctx);
+    // 标题一落地就要说出去：侧栏与顶栏靠它区分并行的几条会话，
+    // 等回合结束才刷新的话，一条跑十分钟的任务十分钟都还叫"新会话"。
+    if titled {
+        app.publish(sid, "title", &format!("{{\"title\":{}}}", quote(&app.title_of(sid).unwrap_or_default())));
+    }
 
     let key_raw = fs::read_to_string(app.store.home.join("apikey")).unwrap_or_default();
     let max_turns = app.settings.max_turns.max(1) as usize;
@@ -383,6 +410,11 @@ fn persist(app: &App, sid: &str, hist: &[Msg], ctx: &Ctx) {
     if let Some(obj) = v.as_object_mut() {
         obj.insert("messages".into(), Value::Array(hist.iter().map(msg_json).collect()));
         obj.insert("updated".into(), Value::Number(now_ms().into()));
+        // 标题写的是**内存里那份**（`put("title", session.title.get())`）：
+        // 改名走的是内存 + 文件两处，自动取名只改内存，落盘要在这一步补上。
+        if let Some(t) = app.title_of(sid) {
+            obj.insert("title".into(), Value::String(t));
+        }
         // Kotlin 落盘时写的是 `session.workspace.absolutePath`（`File` 的路径）——
         // 这就是正斜杠的 workspace 会在 JVM 侧"落一次盘就变成反斜杠"的原因。
         obj.insert(

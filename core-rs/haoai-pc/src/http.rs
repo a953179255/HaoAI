@@ -98,6 +98,30 @@ pub fn handle(stream: TcpStream, app: Arc<App>) {
             let (code, ctype, b) = open_session(&app, &body);
             send(stream, code, ctype, &b)
         }
+        "/api/rename" => {
+            let (code, b) = rename_session(&app, &body);
+            send(stream, code, "application/json; charset=utf-8", &b)
+        }
+        "/api/delete" => {
+            let (code, b) = delete_session(&app, &body);
+            send(stream, code, "application/json; charset=utf-8", &b)
+        }
+        "/api/pin" => {
+            let b = pin_session(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/trash" => {
+            let b = trash_body(&app);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/untrash" => {
+            let b = untrash(&app, &body);
+            send(stream, 200, "application/json; charset=utf-8", &b)
+        }
+        "/api/purge" => {
+            let ok = app.store.purge(&body_str(&body, "name"));
+            send(stream, 200, "application/json; charset=utf-8", &format!("{{\"ok\":{ok}}}"))
+        }
         "/api/task" => {
             let (code, b) = start_task(&app, &body);
             send(stream, code, "application/json; charset=utf-8", &b)
@@ -126,26 +150,36 @@ fn query_of(query: &str, key: &str) -> String {
 fn body_str(body: &str, key: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.get(key).and_then(|x| x.as_str()).map(String::from))
+        .and_then(|v| v.get(key).map(primitive_content))
         .unwrap_or_default()
+}
+
+/// `Body.str(key) = obj[key]?.jsonPrimitive?.contentOrNull ?: ""` 的口径：
+/// 数字与布尔取的是**字面文本**（`5`、`true`），不是"只有字符串才有值"。
+/// 前端把 `index` 当数字发（`{"index":5}`）时，按 as_str 取就成了空串，
+/// "删到第几条"会静默变成"删不掉"。null 与非原始类型都算空。
+fn primitive_content(x: &serde_json::Value) -> String {
+    match x {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        _ => String::new(),
+    }
 }
 
 /// 复刻 `pick(sid)` + `sessions[id]`：给了 sid 就用它，否则用当前会话；
 /// 只有**已驻留**的会话才拿得出完整状态（`stateJson` 不懒加载）。
 fn state_body(app: &App, sid: &str) -> (u16, &'static str, String) {
-    let id = {
-        let cur = app.current.lock().unwrap_or_else(|p| p.into_inner());
-        if sid.is_empty() {
-            cur.clone()
-        } else {
-            sid.to_string()
-        }
-    };
+    let id = if sid.is_empty() { app.current_id() } else { sid.to_string() };
     let resident = app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&id);
     let mut sf: Option<SessionFile> = if resident { app.store.restore(&id) } else { None };
     // 档位报的是**活值**：按过"本任务都允许"之后界面该显示 auto，而不是文件里那个 ask。
+    // 标题同理 —— Kotlin 那边读的是 `engine.session.title`，改名与自动取名都先动内存再落盘。
     if let Some(s) = sf.as_mut() {
         s.meta.mode = app.mode_of(&id, &s.meta.mode);
+        if let Some(t) = app.title_of(&id) {
+            s.meta.title = t;
+        }
     }
     let pending = app.approvals.pending_for(&id);
     let view = View {
@@ -161,7 +195,7 @@ fn state_body(app: &App, sid: &str) -> (u16, &'static str, String) {
 }
 
 fn sessions_body(app: &App) -> String {
-    let cur = app.current.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let cur = app.current_id();
     // ?q= 搜索依赖 SessionIndex.match（要读引擎内历史），M1 先不接，返回全量列表
     state::sessions_json(&app.store.list(200), &cur)
 }
@@ -172,15 +206,20 @@ fn open_session(app: &App, body: &str) -> (u16, &'static str, String) {
     let Some(m) = meta else {
         return (404, "application/json; charset=utf-8", r#"{"ok":false,"error":"没有这个会话"}"#.to_string());
     };
-    {
-        let mut res = app.resident.lock().unwrap_or_else(|p| p.into_inner());
-        res.insert(id.clone());
-    }
-    {
-        let mut cur = app.current.lock().unwrap_or_else(|p| p.into_inner());
-        *cur = id.clone();
-    }
-    app.publish(&m.id, "opened", &format!("{{\"id\":{},\"title\":{},\"mode\":{}}}", state::quote(&m.id), state::quote(&m.title), state::quote(&m.mode)));
+    app.touch(&id);
+    // 等价于 `touch(id)` 里建引擎那一步：`SessionIndex.restore` 会把标题、档位从文件搬进内存
+    app.set_title(&id, &m.title);
+    let live_mode = app.mode_of(&id, &m.mode);
+    app.publish(
+        &m.id,
+        "opened",
+        &format!(
+            "{{\"id\":{},\"title\":{},\"mode\":{}}}",
+            state::quote(&m.id),
+            state::quote(&m.title),
+            state::quote(&live_mode)
+        ),
+    );
     (200, "application/json; charset=utf-8", format!("{{\"ok\":true,\"id\":{}}}", state::quote(&id)))
 }
 
@@ -217,7 +256,7 @@ fn new_session(app: &App, body: &str) -> String {
             return created(app, &id, &title, &mode, true, false);
         }
     }
-    let ws = if want_ws.is_empty() { app.settings.workspace.clone() } else { want_ws.clone() };
+    let ws = if want_ws.is_empty() { app.settings.workspace_file() } else { want_ws.clone() };
     if !want_ws.is_empty() && !std::path::Path::new(&ws).is_dir() {
         return err_json(&format!("这个目录打不开：{ws}"));
     }
@@ -230,7 +269,7 @@ fn new_session(app: &App, body: &str) -> String {
 /// 眼前那条是空的就复用它：**已驻留**（不驻留的那条在 Kotlin 里压根没有引擎可问）、
 /// 没在跑、没消息、没待办。
 fn idle_current(app: &App) -> Option<(String, String, String)> {
-    let cur = app.current.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let cur = app.current_id();
     if cur.is_empty() || app.is_running(&cur) {
         return None;
     }
@@ -247,8 +286,10 @@ fn idle_current(app: &App) -> Option<(String, String, String)> {
 /// 驻留 + 切成当前 + 两条广播。Kotlin 的 `touch(id)` 就是这个效果：
 /// `currentId()` = **最近 touch 过的那条**，所以新建完它自动就是当前。
 fn created(app: &App, id: &str, title: &str, mode: &str, reused: bool, with_role: bool) -> String {
-    app.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(id.to_string());
-    *app.current.lock().unwrap_or_else(|p| p.into_inner()) = id.to_string();
+    app.touch(id);
+    // 新建的那条在 Kotlin 那边是 `Session(...)` 的默认标题"新会话"，复用那条就是文件里那份；
+    // 两种都要种进活标题表，否则第一次 persist 会把内存里没有的那份当成不动。
+    app.set_title(id, title);
     let opened = if with_role {
         format!(
             "{{\"id\":{},\"title\":{},\"mode\":{},\"role\":\"\"}}",
@@ -288,6 +329,93 @@ fn err_json(msg: &str) -> String {
 }
 
 /**
+ * `POST /api/rename` {id,title} —— 改会话标题。
+ *
+ * **内存里那份也要改**，否则下一回合结束 `persist()` 会把新标题又写回旧的。
+ * 两边清得还不一样：文件里换行被换成空格，内存里只 trim 不换行（Kotlin 原文如此），
+ * 于是带换行的标题在下一回合落盘时会把空格又变回换行 —— 照抄，不顺手"修好"。
+ */
+/// （`pub(crate)` 是为了让 e2e 能演"改名之后还能不能被下一回合盖回去"——
+/// 直接调 `store.rename` 会绕过活标题那一步，而那条恰恰是这个路由存在的理由。）
+pub(crate) fn rename_session(app: &App, body: &str) -> (u16, String) {
+    let id = body_str(body, "id");
+    let title = body_str(body, "title");
+    let ok = app.store.rename(&id, &title);
+    if ok {
+        let live = crate::utf16::utf16_take(&crate::store::ktrim(&title).to_string(), 60).to_string();
+        app.set_title(&id, &live);
+        app.publish(&id, "sessions", "{}");
+    }
+    (if ok { 200 } else { 404 }, format!("{{\"ok\":{ok}}}"))
+}
+
+/**
+ * `POST /api/delete` {id} —— 删会话（实为移进 `sessions/.trash`）。
+ *
+ * 一条硬约束：**跑着的会话不许删**。否则线程会在一个已经被移走的文件上
+ * 继续 `persist()`，把文件又写回来，表现为"删了又出现"。
+ */
+fn delete_session(app: &App, body: &str) -> (u16, String) {
+    let id = body_str(body, "id");
+    if !id.is_empty() && app.is_running(&id) {
+        return (409, err_json("这个会话正在跑，先停止再删"));
+    }
+    let ok = app.store.delete(&id);
+    if ok {
+        app.forget(&id);
+        app.publish("", "sessions", "{}");
+    }
+    (if ok { 200 } else { 404 }, format!("{{\"ok\":{ok}}}"))
+}
+
+/// `POST /api/pin` {id,pinned} —— 置顶 / 取消置顶。
+fn pin_session(app: &App, body: &str) -> String {
+    let id = body_str(body, "id");
+    let p = body_str(body, "pinned");
+    let on = p == "true" || p == "1";
+    let ok = app.store.pin(&id, on);
+    if ok {
+        app.publish(&id, "sessions", "{}");
+        return r#"{"ok":true}"#.to_string();
+    }
+    err_json("没有这条会话")
+}
+
+/// `GET /api/trash` —— 回收站列表（删除其实是移进去的，所以必须给一个入口，
+/// 否则"可恢复"等于没有：用户删错一条只能自己去开文件管理器）。
+fn trash_body(app: &App) -> String {
+    let rows: Vec<String> = app
+        .store
+        .list_trash(60)
+        .iter()
+        .map(|r| {
+            format!(
+                "{{\"name\":{},\"id\":{},\"title\":{},\"messages\":{},\"updated\":{},\"bytes\":{}}}",
+                state::quote(&r.name),
+                state::quote(&r.meta.id),
+                state::quote(&r.meta.title),
+                r.meta.messages,
+                r.meta.updated,
+                r.bytes
+            )
+        })
+        .collect();
+    format!("[{}]", rows.join(","))
+}
+
+/// `POST /api/untrash` {name} —— 把一条会话放回历史列表。
+fn untrash(app: &App, body: &str) -> String {
+    let name = body_str(body, "name");
+    match app.store.untrash(&name) {
+        Ok(id) => {
+            app.publish("", "sessions", "{}");
+            format!("{{\"ok\":true,\"id\":{}}}", state::quote(&id))
+        }
+        Err(e) => err_json(&e),
+    }
+}
+
+/**
  * `POST /api/mode` {mode, sid} —— 切档位。
  *
  * 这条是**安全相关**的：界面把「计划」点亮而引擎没跟着换，用户看到的是只读、
@@ -316,16 +444,11 @@ fn mode_route(app: &App, body: &str) -> String {
         return format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&now));
     }
     // sid 空就用当前；连当前都没有（全新状态根）就不动 —— 造会话是 `/api/new` 的活
-    let target = if sid.is_empty() {
-        app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
-    } else {
-        sid.clone()
-    };
+    let target = if sid.is_empty() { app.current_id() } else { sid.clone() };
     if target.is_empty() {
         return format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&now));
     }
-    app.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(target.clone());
-    *app.current.lock().unwrap_or_else(|p| p.into_inner()) = target.clone();
+    app.touch(&target);
     app.set_mode(&target, &m);
     app.publish(&target, "mode", &format!("{{\"mode\":{}}}", state::quote(&m)));
     format!("{{\"ok\":true,\"mode\":{}}}", state::quote(&m))
@@ -340,21 +463,19 @@ fn start_task(app: &Arc<App>, body: &str) -> (u16, String) {
         return (200, r#"{"ok":false}"#.to_string());
     }
     let want = body_str(body, "sid");
-    let sid = if want.is_empty() {
-        app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
-    } else {
-        want
-    };
+    let sid = if want.is_empty() { app.current_id() } else { want };
     if sid.is_empty() {
         return (409, format!(r#"{{"ok":false,"error":{}}}"#, state::quote("还没有会话，先新建一条")));
     }
     // 未驻留的先按 /api/open 的语义拉起来，否则回合找不到历史
-    if !app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&sid) {
-        if app.store.meta(&sid).is_none() {
-            return (409, format!(r#"{{"ok":false,"error":{}}}"#, state::quote("没有这个会话")));
-        }
-        app.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(sid.clone());
+    if !app.resident.lock().unwrap_or_else(|p| p.into_inner()).contains(&sid)
+        && app.store.meta(&sid).is_none()
+    {
+        return (409, format!(r#"{{"ok":false,"error":{}}}"#, state::quote("没有这个会话")));
     }
+    // 开跑就把这条挪到最近表最前（`startRun` 里的 `touch(target)`）：
+    // 并行几条时"没给 sid 的下一句"该落在刚刚说过话的那条上
+    app.touch(&sid);
     match engine::begin(Arc::clone(app), sid.clone(), text) {
         Ok(()) => (200, format!(r#"{{"ok":true,"sid":{}}}"#, state::quote(&sid))),
         Err(e) => (409, format!(r#"{{"ok":false,"error":{}}}"#, state::quote(&e))),
@@ -406,11 +527,7 @@ fn decide(app: &App, body: &str) {
     // isAsk/sid 都在答复**之前**由状态机取好（之后它可能已销号，就读不到了）
     let done = app.approvals.complete(&id, if answer.is_empty() { &decision } else { &answer });
     if decision == "allow_session" {
-        let sid = if done.sid.is_empty() {
-            app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
-        } else {
-            done.sid.clone()
-        };
+        let sid = if done.sid.is_empty() { app.current_id() } else { done.sid.clone() };
         app.set_mode(&sid, "auto");
         app.publish(&sid, "mode", r#"{"mode":"auto"}"#);
     }
@@ -419,11 +536,7 @@ fn decide(app: &App, body: &str) {
 /// `pick(sid)`：给了就用它，否则用当前会话。
 fn pick_sid(app: &App, body: &str) -> String {
     let want = body_str(body, "sid");
-    if want.is_empty() {
-        app.current.lock().unwrap_or_else(|p| p.into_inner()).clone()
-    } else {
-        want
-    }
+    if want.is_empty() { app.current_id() } else { want }
 }
 
 /// no-store 不是可选项——2026-10-05 实测过没有它时浏览器启发式缓存旧 index.html，
@@ -495,6 +608,7 @@ fn chunk(stream: &mut TcpStream, body: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::fs;
     use std::net::TcpListener;
     use std::thread;
@@ -661,4 +775,119 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// 给会话路由用的一个干净状态根：一条会话 + 一条空会话。
+    fn session_home(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("haoai-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        fs::write(
+            root.join("sessions/pc-a.json"),
+            r#"{"id":"a","title":"第一条","workspace":"G:/x","mode":"ask","updated":7,"messages":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("sessions/pc-b.json"),
+            r#"{"id":"b","title":"第二条","workspace":"G:/x","mode":"ask","updated":5,"messages":[]}"#,
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn rename_reports_200_only_when_the_file_actually_changed() {
+        let root = session_home("r-route");
+        let app = test_app(&root);
+        // 成功：200 + {"ok":true}，文件与 state 一起变
+        let (code, body) = rename_session(&app, r#"{"id":"a","title":"改好的名字"}"#);
+        assert_eq!(code, 200, "{body}");
+        assert_eq!(body, r#"{"ok":true}"#);
+        app.open_for_test("a");
+        let (.., state) = state_body(&app, "a");
+        assert!(state.contains(r#""title":"改好的名字""#), "{state}");
+        // 全空白标题 → 404（不是"改成空"，也不是静默成功）
+        let (code, body) = rename_session(&app, r#"{"id":"a","title":"   "}"#);
+        assert_eq!(code, 404, "{body}");
+        assert_eq!(body, r#"{"ok":false}"#);
+        // 没有这条会话 → 404
+        let (code, _) = rename_session(&app, r#"{"id":"nope","title":"x"}"#);
+        assert_eq!(code, 404);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 数字形态的字段也要认：`Body.str` 取的是 `jsonPrimitive.content`，
+    /// 前端把 index 当数字发时，只认字符串的取值会静默变成"什么都没删"。
+    #[test]
+    fn a_number_in_the_body_reads_as_its_literal_text() {
+        assert_eq!(body_str(r#"{"index":5}"#, "index"), "5");
+        assert_eq!(body_str(r#"{"on":true}"#, "on"), "true");
+        assert_eq!(body_str(r#"{"x":null}"#, "x"), "");
+        assert_eq!(body_str(r#"{"x":{"y":1}}"#, "x"), "");
+        assert_eq!(body_str(r#"{"x":"真字符串"}"#, "x"), "真字符串");
+    }
+
+    #[test]
+    fn delete_pinned_and_the_trash_routes_agree_on_every_response_shape() {
+        let root = session_home("d-route");
+        let app = test_app(&root);
+
+        // 置顶：成功回 {"ok":true}，失败回的是**带 error 的 200**（Kotlin 就是这么分的）
+        assert_eq!(pin_session(&app, r#"{"id":"a","pinned":"true"}"#), r#"{"ok":true}"#);
+        assert_eq!(
+            pin_session(&app, r#"{"id":"ghost","pinned":"1"}"#),
+            r#"{"ok":false,"error":"没有这条会话"}"#
+        );
+        let listed = state::sessions_json(&app.store.list(50), "");
+        assert!(listed.contains(r#""pinned":true"#), "置顶的必须排最前：{listed}");
+
+        // 跑着的会话不许删：409 + 那句原话，文件必须还在原地
+        assert!(app.try_begin("b"));
+        let (code, body) = delete_session(&app, r#"{"id":"b"}"#);
+        assert_eq!(code, 409, "{body}");
+        assert_eq!(body, r#"{"ok":false,"error":"这个会话正在跑，先停止再删"}"#);
+        assert!(root.join("sessions/pc-b.json").is_file(), "被拒的删除不能真的动过文件");
+        app.end_run("b");
+
+        // 停下来的那条：200 + 移进回收站，列表里不再出现
+        // 先看一眼 b 再看 a —— 最近表就成了 [a, b]，删掉 a 之后"当前"该落到 b
+        app.open_for_test("b");
+        app.open_for_test("a");
+        let (code, body) = delete_session(&app, r#"{"id":"a"}"#);
+        assert_eq!(code, 200, "{body}");
+        assert_eq!(body, r#"{"ok":true}"#);
+        assert!(!root.join("sessions/pc-a.json").exists());
+        let trash: Value = serde_json::from_str(&trash_body(&app)).unwrap();
+        assert_eq!(trash.as_array().unwrap().len(), 1, "{trash}");
+        let row = &trash[0];
+        assert_eq!(row["id"], "a", "id 从文件内容读：{row}");
+        assert_eq!(row["title"], "第一条");
+        assert!(row["name"].as_str().unwrap().ends_with("-pc-a.json"), "{row}");
+        assert!(row["bytes"].as_i64().unwrap() > 0);
+        // 删掉的那条不能再驻留；"当前"要落到**次新的那条**上（不是变成没有当前）
+        assert!(!app.resident.lock().unwrap().contains("a"), "删掉的会话还驻留着");
+        assert_eq!(app.current_id(), "b", "currentId() = 最近表里第一个还驻留的");
+        // 没有引擎那一条分支：工具清单与上下文构成都必须是空的
+        // （`e?.toolInfos()` / `e?.contextBreakdown()` 在 Kotlin 那边整块不成立）
+        let (.., ghost) = state_body(&app, "ghost");
+        let g: Value = serde_json::from_str(&ghost).unwrap();
+        assert_eq!(g["tools"].as_array().unwrap().len(), 0, "没有会话还报 32 把工具：{ghost}");
+        assert_eq!(g["context"]["chars"], 0);
+        assert_eq!(g["context"]["parts"].as_array().unwrap().len(), 0);
+        assert_eq!(g["title"], "新会话", "没有引擎时标题回默认值，不是猜一个");
+
+        // 放回原位 → 再彻底删掉
+        let out = untrash(&app, &format!(r#"{{"name":"{}"}}"#, row["name"].as_str().unwrap()));
+        assert!(out.contains(r#""ok":true"#) && out.contains(r#""id":"a""#), "{out}");
+        assert!(root.join("sessions/pc-a.json").is_file());
+        let gone = delete_session(&app, r#"{"id":"a"}"#);
+        assert_eq!(gone.0, 200);
+        let name: String = serde_json::from_str::<Value>(&trash_body(&app)).unwrap()[0]["name"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.store.purge(&name);
+        assert_eq!(trash_body(&app), "[]", "清空之后必须是空数组");
+        let _ = fs::remove_dir_all(&root);
+    }
+
 }

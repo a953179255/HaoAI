@@ -34,11 +34,19 @@ use std::thread;
 
 pub const PC_VERSION: &str = "0.80.0-pc";
 
+/// 常驻内存的会话条数上限（`Server.maxResident`）。
+const MAX_RESIDENT: usize = 12;
+
 pub struct App {
     pub store: store::Store,
     pub settings: store::Settings,
-    /// 当前会话 = 最近使用列表的头一个（`Server.currentId`）
-    pub current: Mutex<String>,
+    /// 最近使用顺序（**新的在前**），等价于 `Server.order`。
+    ///
+    /// 为什么不是"一个当前会话 id"：`currentId()` 取的是这份表里**第一个还驻留的**，
+    /// 于是删掉当前那条会话之后，当前会自动落到次新的那条上；只存一个 id 的话
+    /// 删完就变成"没有当前会话"，界面上次新那条不该是空的。
+    /// 它同时是驻留上限的账本（见 `touch`）。
+    pub order: Mutex<Vec<String>>,
     /// 已驻留的会话 id。`stateJson` 用 `sessions[it]` 纯 map 读、**不懒加载**，
     /// 所以"驻留与否"直接决定 `/api/state` 返回完整状态还是空态，必须照搬。
     pub resident: Mutex<HashSet<String>>,
@@ -66,6 +74,13 @@ pub struct App {
     /// 查的时候 `mode_of(sid, 文件里的 mode)`：没有覆盖就用会话文件那条。
     /// "本任务都允许"绝不能把别的会话也切成 auto。
     pub modes: Mutex<HashMap<String, String>>,
+    /// 活着的那条会话的标题（`engine.session.title` 的等价物）。
+    ///
+    /// 为什么要单独一份而不是只改文件：`stateJson` 的标题读的是**引擎内存**
+    /// （`e?.session?.title?.get() ?: "新会话"`），而每回合结束的 `persist()` 又把这份
+    /// 写回文件。只改文件的话，改名之后下一回合会被旧标题盖回去；
+    /// 只改内存的话，重启就丢了。Kotlin 两边都改，这里也两边都改。
+    pub titles: Mutex<HashMap<String, String>>,
 }
 
 impl App {
@@ -159,6 +174,62 @@ impl App {
             .insert(sid.to_string(), note.to_string());
     }
 
+    /// 活标题。`None` = 这条会话在本进程里没被打开过（Kotlin 那边就是"没有引擎"）。
+    pub fn title_of(&self, sid: &str) -> Option<String> {
+        self.titles.lock().unwrap_or_else(|p| p.into_inner()).get(sid).cloned()
+    }
+
+    pub fn set_title(&self, sid: &str, title: &str) {
+        if sid.is_empty() {
+            return;
+        }
+        self.titles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(sid.to_string(), title.to_string());
+    }
+
+    /// 会话被删掉之后要清的一切：最近表、驻留、活档位、活标题、活历史。
+    /// 留着不清的后果是"删了的会话还在侧栏"——`/api/state` 还能把它拼出来。
+    pub fn forget(&self, sid: &str) {
+        self.order.lock().unwrap_or_else(|p| p.into_inner()).retain(|x| x != sid);
+        self.resident.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
+        self.titles.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
+        self.modes.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
+        self.histories.lock().unwrap_or_else(|p| p.into_inner()).remove(sid);
+    }
+
+    /// `Server.touch`：把它挪到最前面，并**把超出上限、又没在跑的最久没碰的那条请出去**。
+    /// 每条会话在内存里是一整段历史，开二十条不去管就是几百 MB；
+    /// 历史本来就落盘在 `sessions/pc-<id>.json`，下次 `/api/open` 按原 id 重建，用户看不出差别。
+    pub fn touch(&self, sid: &str) {
+        if sid.is_empty() {
+            return;
+        }
+        {
+            let mut res = self.resident.lock().unwrap_or_else(|p| p.into_inner());
+            res.insert(sid.to_string());
+        }
+        let mut order = self.order.lock().unwrap_or_else(|p| p.into_inner());
+        order.retain(|x| x != sid);
+        order.insert(0, sid.to_string());
+        while order.len() > MAX_RESIDENT {
+            let victim = match order.iter().rev().find(|id| !self.is_running(id)) {
+                Some(v) => v.clone(),
+                None => break,
+            };
+            self.resident.lock().unwrap_or_else(|p| p.into_inner()).remove(&victim);
+            order.retain(|x| x != &victim);
+        }
+    }
+
+    /// `Server.currentId()`：最近表里**第一个还驻留的**。全都没驻留就是空串。
+    pub fn current_id(&self) -> String {
+        let order = self.order.lock().unwrap_or_else(|p| p.into_inner());
+        let res = self.resident.lock().unwrap_or_else(|p| p.into_inner());
+        order.iter().find(|id| res.contains(id.as_str())).cloned().unwrap_or_default()
+    }
+
     /// 取走（并清空）：一句结论只属于紧接着的那一条工具消息，留着会挂到下一次调用上。
     pub fn take_note(&self, sid: &str) -> String {
         self.notes
@@ -202,7 +273,8 @@ impl App {
             approvals: approval::ApprovalBroker::with_timeouts(2, 2),
             notes: Mutex::new(HashMap::new()),
             modes: Mutex::new(HashMap::new()),
-            current: Mutex::new(String::new()),
+            titles: Mutex::new(HashMap::new()),
+            order: Mutex::new(vec![]),
             resident: Mutex::new(HashSet::new()),
             bus: Mutex::new(vec![]),
             histories: Mutex::new(HashMap::new()),
@@ -217,8 +289,7 @@ impl App {
     /// 让一条会话驻留并切成当前会话（等价于前端先打过 `/api/open`）。
     #[cfg(test)]
     pub fn open_for_test(&self, sid: &str) {
-        self.resident.lock().unwrap_or_else(|p| p.into_inner()).insert(sid.to_string());
-        *self.current.lock().unwrap_or_else(|p| p.into_inner()) = sid.to_string();
+        self.touch(sid);
     }
 }
 
@@ -293,12 +364,11 @@ fn serve(rest: &[String]) {
     // 等价于 `start()` 里那句 `SessionIndex.list(5).firstOrNull()?.let { touch(it.id) }`：
     // 重启后要接上上次用的那条，而不是每次开一个空白新会话。
     let first = store.list(5).first().map(|m| m.id.clone()).unwrap_or_default();
-    let resident = first.clone();
     let app = Arc::new(App {
         store,
         settings,
-        current: Mutex::new(first),
-        resident: Mutex::new([resident].into_iter().filter(|s| !s.is_empty()).collect()),
+        order: Mutex::new(vec![]),
+        resident: Mutex::new(HashSet::new()),
         bus: Mutex::new(vec![]),
         histories: Mutex::new(HashMap::new()),
         running: Mutex::new(HashSet::new()),
@@ -308,7 +378,17 @@ fn serve(rest: &[String]) {
         approvals: approval::ApprovalBroker::new(),
         notes: Mutex::new(HashMap::new()),
         modes: Mutex::new(HashMap::new()),
+        titles: Mutex::new(HashMap::new()),
     });
+    // 重启后接上的那条会话在 Kotlin 那边是 `touch(id)` → 建引擎 → `title.set(meta.title)`，
+    // 于是 `/api/state` 报的是**引擎内存里那份**标题。这里同样先 touch 再种活标题，
+    // 否则下一次 `persist()` 会把文件里的旧标题当"活标题"再写一遍。
+    if !first.is_empty() {
+        app.touch(&first);
+        if let Some(m) = app.store.meta(&first) {
+            app.set_title(&first, &m.title);
+        }
+    }
 
     // stdout 一律英文：壳按 GBK(936) 解码 engine.log，中文 UTF-8 进去就是乱码。
     println!("HaoAI PC {PC_VERSION} (rust m1) http://127.0.0.1:{actual}/");

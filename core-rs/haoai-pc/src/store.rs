@@ -59,6 +59,40 @@ pub fn norm_ws(s: &str) -> String {
     s.replace('/', "\\")
 }
 
+/// `PcSettings.workspaceFile()` 的等价物：**空或 `.` 用当前目录**，并且要 canonical。
+///
+/// 不是"顺手规范一下路径"：`/api/state` 在没有驻留引擎时回的是这一个值，
+/// 而新建会话的工作区也取自这里。按原始字符串回的话，工作区没配过的状态根
+/// 一端回空串、另一端回 `C:\Users\…`，界面上那个目录标签就是白的。
+/// canonical 失败（目录不存在）时退到 absolute —— Kotlin 的 `getOrElse` 同样退。
+pub fn workspace_file(workspace: &str) -> String {
+    let t = ktrim(workspace);
+    let mut p = if t.is_empty() || t == "." {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    } else {
+        PathBuf::from(norm_ws(t))
+    };
+    // Java 的 `getAbsoluteFile()`：相对路径按当前目录补全，不做别的
+    if !p.is_absolute() {
+        if let Ok(cwd) = std::env::current_dir() {
+            p = cwd.join(p);
+        }
+    }
+    match p.canonicalize() {
+        // Kotlin 的 `canonicalFile.absolutePath` 没有 `\\?\` 前缀，这里必须抹掉：
+        // 它会被写进 `/api/state` 的 workspace，也是新建会话落到会话文件里的那个值
+        Ok(c) => strip_verbatim(&c.to_string_lossy()),
+        Err(_) => p.to_string_lossy().to_string(),
+    }
+}
+
+impl Settings {
+    /// `PcSettings.workspaceFile()`：界面上与新建会话都取这一个值。
+    pub fn workspace_file(&self) -> String {
+        workspace_file(&self.workspace)
+    }
+}
+
 /// `Server.newSessionId` 的 id 形状：`pc` + nanoTime 的 16 进制前 8 位。
 /// 低 32 位 4.3 秒就轮一圈，所以撞车要靠下面那层重试兜住 —— **不重试的后果是
 /// 把另一条会话整份覆盖掉**，那是不可逆的。
@@ -124,6 +158,47 @@ pub struct SessionFile {
     pub todos: Vec<Todo>,
     pub summary: Option<String>,
     pub compacted_through: i64,
+}
+
+/// Kotlin 的 `Char.isWhitespace()` / `String.trim()` 口径。
+///
+/// 实测表（`jshell --class-path <引擎 app 目录>/kotlin-stdlib-2.4.10.jar`，逐个码点比
+/// `Character.isWhitespace` 与 `kotlin.text.CharsKt.isWhitespace`）。Kotlin 认的这些：
+/// `09-0D  1C-20  A0  1680  2000-200A  2028  2029  202F  205F  3000`
+/// 唯独**不认 U+0085（NEL）**；Java 那份则把 A0/2007/202F 三个不换行空格排除在外。
+/// 换成 Rust 的话就是：Unicode 空白（`char::is_whitespace`）**加上** 0x1C–0x1F（那是 Cc，
+/// Unicode 不当空白、Java/Kotlin 当）、**去掉** U+0085。
+///
+/// 这不是纸面上的讲究：改名那条路由上，标题开头是一个不换行空格
+/// （从网页复制下来的一句提问常常就是这样）时 JVM 会削掉，而我最初按 Java 口径写的那版不削 ——
+/// 于是两端落盘的是两个不同的标题。差分台架里那条用例就是这么抓出来的。
+pub fn kotlin_ws(c: char) -> bool {
+    if matches!(c, '\u{1c}'..='\u{1f}') {
+        return true;
+    }
+    c != '\u{85}' && c.is_whitespace()
+}
+
+pub fn ktrim(s: &str) -> &str {
+    let start = s.find(|c: char| !kotlin_ws(c)).unwrap_or(s.len());
+    let end = s
+        .rfind(|c: char| !kotlin_ws(c))
+        .map(|i| i + s[i..].chars().next().map_or(0, |c| c.len_utf8()))
+        .unwrap_or(start);
+    &s[start..end]
+}
+
+/// 抹平 Windows 上 `fs::canonicalize` 多出来的 `\\?\` 前缀：Kotlin 的 `canonicalPath` 没有它。
+/// 这个前缀会一路走进 `/api/state` 的 workspace、`rules.json` 的键（**两端共读的一份表**，
+/// 键对不上就等于用户写的规则莫名其妙不再生效）以及边界判定的报错文案里。
+pub fn strip_verbatim(p: &str) -> String {
+    if let Some(t) = p.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{t}");
+    }
+    if let Some(t) = p.strip_prefix(r"\\?\") {
+        return t.to_string();
+    }
+    p.to_string()
 }
 
 fn s(v: Option<&Value>) -> String {
@@ -250,45 +325,181 @@ impl Store {
         ids
     }
 
-    fn file_for(&self, id: &str) -> PathBuf {
+    pub fn file_for(&self, id: &str) -> PathBuf {
         self.sessions_dir().join(format!("pc-{id}.json"))
+    }
+
+    /// 等价于 `SessionIndex.read(f)`：**读不出就退避着重试五次**。
+    /// 会话文件每回合都在重写，而 Windows 上"替换一个正被读的文件"未必成功
+    /// （move 要对目标开 DELETE 访问，失败时只能退到 copy，那一瞬就读到半截 JSON）。
+    /// 一次就放弃的代价是"那条会话从列表里凭空消失"——刚建的那条最容易中。
+    fn read_meta(&self, path: &Path, fallback_id: &str) -> Option<Meta> {
+        for attempt in 1..=5u64 {
+            if let Some(m) = meta_of_file(path, fallback_id) {
+                return Some(m);
+            }
+            if attempt < 5 {
+                std::thread::sleep(std::time::Duration::from_millis(20 * attempt));
+            }
+        }
+        None
     }
 
     /// 只读索引需要的那几个字段（`/api/sessions` 用），不解析消息体。
     pub fn meta(&self, id: &str) -> Option<Meta> {
+        self.read_meta(&self.file_for(id), id)
+    }
+
+    // ---- 会话文件级的增删改（`SessionIndex` 那一页） ----
+
+    /// 读整份、只动一个键、再整体写回。`runCatching{…}.getOrDefault(false)`：
+    /// 读不出、解析不出、写不进去都算失败，由调用方给前端 404。
+    ///
+    /// 写回用的是 serde 的紧凑序列化，与 JVM 那边 `JsonObject.toString()` **实测同一条字节**
+    /// （把一串含 `"` `\` `/` `<` `>` `&`、0x01/0x02/0x07/0x08/0x0B/0x0C/0x1B/0x1C/0x1F、
+    /// 0x7F/0x80/NBSP/U+2028/U+2029/U+205F/U+3000、emoji 与汉字的串喂进
+    /// `jshell --class-path <引擎 app 目录>/kotlinx-serialization-json-jvm-1.9.0.jar`
+    /// 再 `parseToJsonElement(...).toString()`，输出与标准序列化逐字节相同：
+    /// 短转义只用 `\b \t \n \f \r`，其余控制字符是小写 `\u00XX`，非 ASCII 一律原样）。
+    /// 唯一的口径差是**浮点字面量**：kotlinx 保留源文（`1.0E7` 原样写回），serde 会重排。
+    /// 会话文件里只有整数（updated / pt / ct / ms / tokens），所以这条路碰不到；
+    /// 真要引入浮点字段，就得在这里换成一保留原文字面量的渲染器。
+    fn patch<F: FnOnce(&mut serde_json::Map<String, Value>)>(&self, path: &Path, edit: F) -> bool {
+        let Ok(raw) = fs::read_to_string(path) else { return false };
+        let Ok(Value::Object(mut o)) = serde_json::from_str::<Value>(&raw) else { return false };
+        edit(&mut o);
+        fs::write(path, Value::Object(o).to_string()).is_ok()
+    }
+
+    /// `SessionIndex.rename`：先 trim（Java 口径）→ 换行变空格 → 取 60 个 UTF-16 单元。
+    /// 空标题是**非法输入**，返回 false 让路由给 404，而不是把会话改成空白。
+    pub fn rename(&self, id: &str, new_title: &str) -> bool {
         let path = self.file_for(id);
-        let raw = fs::read_to_string(&path).ok()?;
-        let v = serde_json::from_str::<Value>(&raw).ok()?;
-        let updated = match v.get("updated") {
-            Some(x) if x.is_number() || x.is_string() => i(Some(x)),
-            _ => file_mtime_ms(&path),
-        };
-        Some(Meta {
-            id: match v.get("id").and_then(|x| x.as_str()) {
-                Some(t) if !t.is_empty() => t.to_string(),
-                _ => id.to_string(),
-            },
-            title: match v.get("title").and_then(|x| x.as_str()) {
-                Some(t) => t.to_string(),
-                None => "（无标题）".to_string(),
-            },
-            workspace: s(v.get("workspace")),
-            mode: v.get("mode").and_then(|x| x.as_str()).unwrap_or("ask").to_string(),
-            updated,
-            messages: v.get("messages").and_then(|x| x.as_array()).map(|a| a.len()).unwrap_or(0),
-            pinned: bool_strict(v.get("pinned")),
-            model: s(v.get("model")),
-            persona: s(v.get("persona")),
-            role: s(v.get("role")),
-            preset: s(v.get("preset")),
-            prompt: i(v.get("promptTokens")),
-            completion: i(v.get("completionTokens")),
-            tools_off: v
-                .get("toolsOff")
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .unwrap_or_default(),
+        if !path.is_file() {
+            return false;
+        }
+        let clean: String = crate::utf16::utf16_take(&ktrim(new_title).replace('\n', " "), 60).to_string();
+        if clean.is_empty() {
+            return false;
+        }
+        self.patch(&path, |o| {
+            o.insert("title".into(), Value::String(clean));
         })
+    }
+
+    /// `SessionIndex.pin`：和改名一样只动一个字段，其余原样写回。
+    pub fn pin(&self, id: &str, on: bool) -> bool {
+        let path = self.file_for(id);
+        if !path.is_file() {
+            return false;
+        }
+        self.patch(&path, |o| {
+            o.insert("pinned".into(), Value::Bool(on));
+        })
+    }
+
+    pub fn trash_dir(&self) -> PathBuf {
+        self.sessions_dir().join(".trash")
+    }
+
+    /// 删会话 —— 其实是**移进回收目录**，不是就地抹掉。理由照 `SessionIndex.delete`：
+    /// 会话文件里是用户与 agent 的全部过程记录，误删一次的成本远高于多留一份垃圾；
+    /// 而 `.trash/` 在 `sessions/` 下面，`list()` 的前缀过滤看不到它，界面上就是"删掉了"。
+    pub fn delete(&self, id: &str) -> bool {
+        let f = self.file_for(id);
+        if !f.is_file() {
+            return false;
+        }
+        let _ = fs::create_dir_all(self.trash_dir());
+        let name = match f.file_name() {
+            Some(n) => n.to_string_lossy().to_string(),
+            None => return false,
+        };
+        let dest = self.trash_dir().join(format!("{}-{}", crate::engine::now_ms(), name));
+        if fs::rename(&f, &dest).is_ok() {
+            return true;
+        }
+        // 搬不动就退回"复制一份再删原件"（跨卷、目标被占用时 Java 那边也是这个次序）
+        if fs::copy(&f, &dest).is_err() {
+            return false;
+        }
+        fs::remove_file(&f).is_ok()
+    }
+
+    /// 回收站里有什么。文件名是 `<删除时间>-pc-<id>.json`，标题/条数从文件内容里读。
+    ///
+    /// 为什么界面上要看得见：删除是移进 `.trash` 而不是抹掉，但**没有入口的"可恢复"
+    /// 等于没有** —— 用户删错一条就只能去开文件管理器。
+    pub fn list_trash(&self, limit: usize) -> Vec<TrashRow> {
+        let files: Vec<PathBuf> = match fs::read_dir(self.trash_dir()) {
+            Ok(rd) => rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.is_file() && p.file_name().unwrap_or_default().to_string_lossy().ends_with(".json")
+                })
+                .collect(),
+            Err(_) => return vec![],
+        };
+        let mut rows: Vec<TrashRow> = files
+            .iter()
+            .filter_map(|p| {
+                let name = p.file_name()?.to_string_lossy().to_string();
+                let meta = self.read_meta(p, "")?;
+                Some(TrashRow { name, bytes: file_len(p), meta })
+            })
+            .collect();
+        rows.sort_by(|a, b| b.meta.updated.cmp(&a.meta.updated));
+        rows.truncate(limit);
+        rows
+    }
+
+    /// 把一条会话从回收站放回原位，返回它的 id；放不回去说明原因。
+    ///
+    /// `name` 是**客户端给的**，所以只认回收站里真实存在的那个文件名：
+    /// 先按 canonical 判还在不在 `.trash` 目录内，否则 `../../settings.json` 这种
+    /// 名字能把任意文件搬进 sessions/ 目录。
+    pub fn untrash(&self, name: &str) -> Result<String, String> {
+        let dir = self.trash_dir();
+        let src = dir.join(name);
+        let inside = src.is_file()
+            && match (src.canonicalize(), dir.canonicalize()) {
+                (Ok(s), Ok(d)) => s.starts_with(&d),
+                _ => false,
+            };
+        if !inside {
+            return Err("回收站里没有这个文件".to_string());
+        }
+        let meta = self.read_meta(&src, "").ok_or("这个文件读不出会话内容")?;
+        let dest = self.file_for(&meta.id);
+        if dest.exists() {
+            return Err("已经有一条同 id 的会话在外面，放回会覆盖它".to_string());
+        }
+        if fs::rename(&src, &dest).is_ok() {
+            return Ok(meta.id);
+        }
+        // Kotlin 那边的退路是 copy(overwrite=false) + delete，搬不动就报"搬不动"
+        if fs::copy(&src, &dest).is_err() {
+            return Err("搬不动".to_string());
+        }
+        let _ = fs::remove_file(&src);
+        Ok(meta.id)
+    }
+
+    /// 彻底删掉回收站里的某一条（用户点了"清空"才走到这）。
+    pub fn purge(&self, name: &str) -> bool {
+        let dir = match self.trash_dir().canonicalize() {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        let f = dir.join(name);
+        if !f.is_file() {
+            return false;
+        }
+        match f.canonicalize() {
+            Ok(c) if c.starts_with(&dir) => fs::remove_file(&c).is_ok(),
+            _ => false,
+        }
     }
 
     /// 等价于 `SessionIndex.restore` 里读历史那一段：引擎未跑时，历史就是文件里的原样。
@@ -391,6 +602,64 @@ impl Store {
     }
 }
 
+/// 回收站里的一条（`name` 是文件名，标题/条数从内容里读，`bytes` 给界面上报大小）。
+pub struct TrashRow {
+    pub name: String,
+    pub bytes: u64,
+    pub meta: Meta,
+}
+
+fn file_len(p: &Path) -> u64 {
+    fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// 从**任意路径**读会话头（`SessionIndex.metaOf` 的等价物）。每个字段缺省时都有一个兜底值，
+/// 因为会话文件是两端共读的，缺字段是常态而不是错误。
+fn meta_of_file(path: &Path, fallback_id: &str) -> Option<Meta> {
+    let raw = fs::read_to_string(path).ok()?;
+    let v = serde_json::from_str::<Value>(&raw).ok()?;
+    let stem = path.file_name()?.to_string_lossy().to_string();
+    // 文件里没有 id 时按文件名补（`removePrefix("pc-").removeSuffix(".json")`）
+    let fallback = if fallback_id.is_empty() {
+        stem.strip_prefix("pc-").unwrap_or(&stem).strip_suffix(".json").unwrap_or("").to_string()
+    } else {
+        fallback_id.to_string()
+    };
+    // `content?.toLongOrNull() ?: f.lastModified()`：字符串形态的数字与真数都当数读，
+    // **读不出数的（"abc"、null、对象）一律回落文件时间**，不是当 0 处理。
+    let updated = match v.get("updated") {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or_else(|| file_mtime_ms(path)),
+        Some(Value::String(t)) => t.parse::<i64>().unwrap_or_else(|_| file_mtime_ms(path)),
+        _ => file_mtime_ms(path),
+    };
+    Some(Meta {
+        id: match v.get("id").and_then(|x| x.as_str()) {
+            Some(t) if !t.is_empty() => t.to_string(),
+            _ => fallback,
+        },
+        title: match v.get("title").and_then(|x| x.as_str()) {
+            Some(t) => t.to_string(),
+            None => "（无标题）".to_string(),
+        },
+        workspace: s(v.get("workspace")),
+        mode: v.get("mode").and_then(|x| x.as_str()).unwrap_or("ask").to_string(),
+        updated,
+        messages: v.get("messages").and_then(|x| x.as_array()).map(|a| a.len()).unwrap_or(0),
+        pinned: bool_strict(v.get("pinned")),
+        model: s(v.get("model")),
+        persona: s(v.get("persona")),
+        role: s(v.get("role")),
+        preset: s(v.get("preset")),
+        prompt: i(v.get("promptTokens")),
+        completion: i(v.get("completionTokens")),
+        tools_off: v
+            .get("toolsOff")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+    })
+}
+
 fn str_list(v: Option<&Value>) -> Vec<String> {
     v.and_then(|x| x.as_array())
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
@@ -445,5 +714,186 @@ mod tests {
         assert_eq!(norm_ws(r"G:\x\y"), r"G:\x\y");
         assert_eq!(norm_ws(""), "");
         assert_eq!(norm_ws("//server/share"), r"\\server\share");
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("haoai-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        root
+    }
+
+    fn seed_session(root: &Path, id: &str, body: &str) -> PathBuf {
+        let p = root.join("sessions").join(format!("pc-{id}.json"));
+        fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// 改名/置顶是"读整份、换一个键、整份写回"，所以**序列化器本身就是契约的一部分**。
+    /// 期望值不是推出来的：把这一串（短转义家族 + 0x01/0x02/0x07/0x0B/0x1B/0x1C/0x1F +
+    /// 0x7F/0x80/NBSP/U+2028/U+2029/U+205F/U+3000 + emoji + 汉字 + 数字与嵌套）
+    /// 喂进引擎 app 目录里那份 kotlinx-serialization-json 1.9.0
+    /// （`jshell --class-path …` 跑 `Json.Default.parseToJsonElement(s).toString()`），
+    /// 落回文件再与这里逐字节对照 —— 实测两端同一条字节。
+    #[test]
+    fn re_serializing_a_session_file_matches_the_jvm_renderer_byte_for_byte() {
+        let s = format!(
+            "A\"B\\C/D<E>&F\u{1}\u{2}\u{7}\u{8}\t\n\u{b}\u{c}\r\u{1b}\u{1c}\u{1f}\u{7f}\u{80}\u{a0}\u{2028}\u{2029}\u{205f}　😀中文"
+        );
+        let mut o = serde_json::Map::new();
+        o.insert("t".into(), Value::String(s));
+        o.insert("n".into(), Value::Number(60.into()));
+        o.insert("big".into(), Value::Number(1_759_000_000_000i64.into()));
+        o.insert("arr".into(), Value::Array(vec![Value::Number(1.into()), Value::String("x".into())]));
+        let mut inner = serde_json::Map::new();
+        inner.insert("k".into(), Value::String("v".into()));
+        o.insert("o".into(), Value::Object(inner));
+        let got = Value::Object(o).to_string();
+
+        // 短转义只有 \b \t \n \f \r 五个；其余控制字符是**小写** \u00XX；
+        // 0x7F 及以上（含 NBSP 与两个行分隔符）一律原样；斜杠、尖号、与号都不转义。
+        let exp = format!(
+            concat!(
+                "{{\"t\":\"A\\\"B\\\\C/D<E>&F",
+                "\\u0001\\u0002\\u0007\\b\\t\\n\\u000b\\f\\r\\u001b\\u001c\\u001f",
+                "{}{}{}{}{}{}　😀中文\",",
+                "\"n\":60,\"big\":1759000000000,\"arr\":[1,\"x\"],\"o\":{{\"k\":\"v\"}}}}"
+            ),
+            '\u{7f}',
+            '\u{80}',
+            '\u{a0}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{205f}'
+        );
+        assert_eq!(got, exp, "写回会话文件的字节必须与 JVM 那份一致");
+    }
+
+    /// 空白集合是**量出来的**（jshell + 引擎自带的 kotlin-stdlib 2.4.10，逐个码点比
+    /// `Character.isWhitespace` 与 `kotlin.text.CharsKt.isWhitespace`）：
+    /// Kotlin 与 Rust 的 `char::is_whitespace` 只差 U+0085 一个字符，
+    /// 而 Java 那份把三个不换行空格排除在外 —— 按 Java 口径写就会与 JVM 的改名分叉
+    /// （差分台架里那条"标题开头是不换行空格"就是这么抓出来的）。
+    #[test]
+    fn trim_follows_kotlin_not_java_or_rust() {
+        assert_eq!(ktrim("\u{a0}标题\u{a0}"), "标题", "NBSP 在 Kotlin 里是空白");
+        assert_eq!(ktrim("\u{2007}q\u{202f}"), "q", "两个不换行空格也算");
+        assert_eq!(ktrim("  \t标题\n "), "标题");
+        assert_eq!(ktrim("\u{1c}\u{1f}x\u{1e}"), "x", "0x1C–0x1F 算");
+        assert_eq!(ktrim("\u{85}x\u{85}"), "\u{85}x\u{85}", "唯独 U+0085 不算 —— Rust 会削掉它");
+        assert_eq!(ktrim("\u{2028}w\u{2029}"), "w");
+        assert_eq!(ktrim("   "), "");
+        assert_eq!(ktrim(""), "");
+        assert_eq!(ktrim("中文"), "中文");
+        // 对照：Rust 自带的 trim 会削掉 U+0085，所以这里不能直接用它
+        assert_eq!("  \u{85}x".trim(), "x", "Rust 把 NEL 当空白，Kotlin 不这么认为");
+    }
+
+    #[test]
+    fn the_verbatim_prefix_that_windows_canonicalize_adds_is_stripped() {
+        assert_eq!(strip_verbatim(r"\\?\G:\hbt\pc-demo"), r"G:\hbt\pc-demo");
+        assert_eq!(strip_verbatim(r"\\?\UNC\server\share"), r"\\server\share");
+        assert_eq!(strip_verbatim(r"G:\已存在"), r"G:\已存在", "没有前缀的原样返回");
+        // 真实路径必须剥干净：`/api/state` 的 workspace 与 rules.json 的键都走这一条
+        let s = workspace_file(env!("CARGO_MANIFEST_DIR"));
+        assert!(!s.starts_with(r"\\?\"), "canonicalize 的前缀没剥掉：{s}");
+        assert!(s.contains("core-rs"), "{s}");
+    }
+
+    #[test]
+    fn rename_trims_then_flattens_newlines_then_takes_sixty_utf16_units() {
+        let root = scratch("rename");
+        let p = seed_session(&root, "r1", r#"{"id":"r1","title":"旧","workspace":"w","mode":"ask","updated":7,"messages":[]}"#);
+        let store = Store::new(root.clone());
+        // 只动 title，其余与键序原样
+        assert!(store.rename("r1", "  新标题\n第二行  "));
+        let after = fs::read_to_string(&p).unwrap();
+        assert!(after.contains(r#""title":"新标题 第二行""#), "{after}");
+        assert!(after.starts_with(r#"{"id":"r1","title":"#), "键序必须原样：{after}");
+        assert!(after.contains(r#""updated":7"#), "{after}");
+
+        // 60 个 UTF-16 单元：😀 占两个，所以第 30 个 emoji 之后就砍
+        let mut long = String::new();
+        for _ in 0..40 {
+            long.push_str("😀");
+        }
+        assert!(store.rename("r1", &long));
+        let got = store.meta("r1").unwrap().title;
+        assert_eq!(got.chars().count(), 30, "60 单元 = 30 个 emoji：{got}");
+
+        // 空标题是非法输入，不是"把标题改成空"
+        assert!(!store.rename("r1", "   \n  "));
+        assert_eq!(store.meta("r1").unwrap().title.chars().count(), 30);
+        // 没有这条会话 → false（路由据此给 404）
+        assert!(!store.rename("nope", "x"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pin_writes_a_real_boolean_and_leaves_everything_else_alone() {
+        let root = scratch("pin");
+        let p = seed_session(&root, "p1", r#"{"id":"p1","title":"t","updated":7,"messages":[]}"#);
+        let store = Store::new(root.clone());
+        assert!(store.pin("p1", true));
+        let after = fs::read_to_string(&p).unwrap();
+        // Kotlin 那边 `put("pinned", JsonPrimitive(true))` 是**真布尔**，不是 "true" 字符串；
+        // 而 `read()` 的口径是 `contentOrNull?.toBooleanStrictOrNull() == true`，两种都认。
+        assert!(after.ends_with(r#""pinned":true}"#), "新键追加在末尾、真布尔：{after}");
+        assert!(store.meta("p1").unwrap().pinned);
+        assert!(store.pin("p1", false));
+        assert!(!store.meta("p1").unwrap().pinned);
+        assert!(!store.pin("nope", true));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 删除是移进 `sessions/.trash`，界面上必须有一个放回与清空的入口 ——
+    /// 没有入口的"可恢复"等于没有。
+    #[test]
+    fn delete_moves_to_trash_and_untrash_puts_it_back() {
+        let root = scratch("trash");
+        let store = Store::new(root.clone());
+        let p = seed_session(&root, "d1", r#"{"id":"d1","title":"要被删的","updated":9,"messages":[]}"#);
+        assert!(store.delete("d1"));
+        assert!(!p.exists(), "原件必须不在原位了");
+        let rows = store.list_trash(60);
+        assert_eq!(rows.len(), 1, "{:?}", rows.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert_eq!(rows[0].meta.id, "d1", "id 从文件内容读，不是从文件名猜");
+        assert!(rows[0].name.ends_with("-pc-d1.json"), "文件名是 <删除时间>-<原名>：{}", rows[0].name);
+        assert!(rows[0].bytes > 0);
+        // 列表（sessions/）里看不见 .trash 里的那一份
+        assert!(store.list(50).is_empty(), "回收站里的会话不该出现在历史列表");
+
+        let id = store.untrash(&rows[0].name).unwrap();
+        assert_eq!(id, "d1");
+        assert!(p.exists(), "放回原位");
+        assert_eq!(store.meta("d1").unwrap().title, "要被删的");
+
+        // 客户端给的名字必须真的在回收站里：`../../x` 想把任意文件搬进 sessions/
+        assert!(store.delete("d1"));
+        assert_eq!(store.untrash(r"..\..\settings.json"), Err("回收站里没有这个文件".to_string()));
+        assert!(!root.join("sessions").join("settings.json").exists());
+        assert_eq!(store.untrash("nope.json"), Err("回收站里没有这个文件".to_string()));
+        // 同 id 已经在外面时不能覆盖
+        let row = store.list_trash(60).remove(0);
+        seed_session(&root, "d1", r#"{"id":"d1","title":"外面的","updated":1,"messages":[]}"#);
+        assert_eq!(
+            store.untrash(&row.name),
+            Err("已经有一条同 id 的会话在外面，放回会覆盖它".to_string())
+        );
+
+        // 彻底删掉：只认回收站里的那个文件
+        assert!(store.purge(&row.name));
+        assert!(store.list_trash(60).is_empty());
+        assert!(!store.purge("nope.json"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unparseable_updated_falls_back_to_the_file_time_not_zero() {
+        let root = scratch("upd");
+        seed_session(&root, "u1", r#"{"id":"u1","title":"t","updated":"abc","messages":[]}"#);
+        let m = Store::new(root.clone()).meta("u1").unwrap();
+        assert!(m.updated > 1_700_000_000_000, "读不出数就该用文件时间，不是 0：{}", m.updated);
+        let _ = fs::remove_dir_all(&root);
     }
 }

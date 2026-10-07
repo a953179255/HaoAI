@@ -730,3 +730,52 @@ fn denying_a_high_risk_command_means_it_never_ran() {
     assert_eq!(tm["note"], "已拒绝");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// 标题必须是**跑得动的那一份**：`persist()` 写回的是内存里那个标题，
+/// 所以"自动取名"和"改名"都要先落进内存再落进文件。
+/// 只改文件的话，下一回合结束就被旧标题盖回去（Kotlin 那条注释专门警告过这件事）；
+/// 只改内存的话，重启就丢了。
+#[test]
+fn the_first_sentence_becomes_the_title_and_a_rename_survives_the_next_run() {
+    let (port, _seen) = fake_gateway(vec!["好的".into()]);
+    let (root, app) = app_with_session("ttl", port, "ttl", "auto");
+    // 回到"还没起过名字"的状态
+    std::fs::write(
+        root.join("sessions/pc-ttl.json"),
+        r#"{"id":"ttl","title":"新会话","workspace":"G:/x","mode":"auto","persona":"","role":"","model":"fake-model","updated":1,"promptTokens":0,"completionTokens":0,"todos":[],"messages":[]}"#,
+    )
+    .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.bus.lock().unwrap().push(tx);
+
+    // 带换行的一句：trim（Java 口径）→ 换行变空格 → 取 24 个 UTF-16 单元
+    engine::turn(&app, "ttl", "  把这件事做完\n然后告诉我结果  ").expect("回合应跑完");
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-ttl.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["title"], "把这件事做完 然后告诉我结果", "自动取名没落盘：{saved}");
+    let frames: Vec<String> = rx.try_iter().collect();
+    assert!(
+        frames.iter().any(|f| f.contains("event: title") && f.contains("把这件事做完")),
+        "标题一落地就要说出去，等回合结束才刷新的话跑十分钟的任务十分钟还叫新会话：{frames:?}"
+    );
+
+    // 第二条消息不该把标题又换回去（只在"还是新会话"时取一次名）
+    engine::turn(&app, "ttl", "换个话题").expect("第二回合应跑完");
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-ttl.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["title"], "把这件事做完 然后告诉我结果", "标题被第二句改掉了");
+
+    // 手动改名之后再跑一轮：不能被旧标题盖回去（走的是路由，不是裸 store ——
+    // 路由还要负责把新标题同步进内存）
+    let (code, resp) = crate::http::rename_session(&app, r#"{"id":"ttl","title":"我自己起的名"}"#);
+    assert_eq!(code, 200, "改名没成：{resp}");
+    engine::turn(&app, "ttl", "第三句").expect("第三回合应跑完");
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("sessions/pc-ttl.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["title"], "我自己起的名", "改名被下一回合的落盘盖回去了");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
