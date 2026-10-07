@@ -5580,12 +5580,15 @@ internal fun ProfileAvatar(
         } else if (emoji.isNotEmpty()) {
             Text(emoji, fontSize = (size.value * 0.45f).sp)
         } else {
-            // 首字兜底：字号占直径 52%（0.42 太小——真机反馈 2026-10-07）；
-            // includeFontPadding=false 收紧行盒到字形，Box 居中才等于字形居中
-            //（CJK 字形在带 padding 的行盒里会偏下）
+            // 首字兜底「几乎占满」（真机反馈 2026-10-07）。分档：方块类 CJK 字形宽高
+            // 都接近 1em，圆内内接方上限≈0.71 直径，0.78f(×0.87em) 已是几何极限，
+            // 再大必裁角（0.9f 实测「我」上下出圆）；拉丁字母高度主体是大写帽(~0.7em)
+            // 且窄，0.9f 恰好接近占满。includeFontPadding=false 收紧行盒，Box 居中=字形居中
+            val c = fallback.take(1).ifEmpty { "A" }.first()
+            val fill = if (c.code > 0x2E7F) 0.78f else 0.9f   // 0x2E80 起 = CJK 部首/汉字区
             Text(
-                fallback.take(1).ifEmpty { "AI" },
-                fontSize = (size.value * 0.52f).sp,
+                c.toString(),
+                fontSize = (size.value * fill).sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 style = androidx.compose.ui.text.TextStyle(
