@@ -176,6 +176,18 @@ data class AppSettings(
     val avatarImagePath: String? = null,
     /** 档案签名：一句话介绍，侧边栏头像旁展示。 */
     val bio: String = "",
+    // ── 用户档案（聊天社交化 2026-10-07）：消息区右侧「我的名片」，与 Agent 档案对称。
+    //    全部留空走默认（昵称「我」+ 蓝色渐变），引导第 3 步与设置→通用→我的档案可改 ──
+    /** 我的昵称（空=「我」）。 */
+    val myName: String = "",
+    /** 我的头像 emoji（空则回退昵称首字）。 */
+    val myEmoji: String = "",
+    /** 我的头像底色渐变索引（0-5，默认 1=蓝，与 Agent 默认绿区分）。 */
+    val myGradient: Int = 1,
+    /** 我的头像图片路径（非空时优先于 emoji）。 */
+    val myAvatarPath: String? = null,
+    /** 我的签名（预留，抽屉副标题等处可展示）。 */
+    val myBio: String = "",
     val onboarded: Boolean = false,
     val tokenInTotal: Long = 0,
     val tokenOutTotal: Long = 0,

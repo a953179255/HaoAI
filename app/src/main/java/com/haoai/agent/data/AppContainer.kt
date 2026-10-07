@@ -284,6 +284,34 @@ class AppContainer(app: Application) {
         applicationScope.launch { runCatching { WorkspaceDocs.syncAll(this@AppContainer) } }
     }
 
+    /**
+     * 从相册导入档案头像：降采样压缩后拷入应用私有目录，返回新文件路径（失败 null）。
+     * 可在任意协程上下文调用（内部自行切 IO）。[mine]=true 导入「我的档案」头像，
+     * 旧文件清理各槽独立（聊天社交化 2026-10-07）。
+     */
+    suspend fun importAvatarImage(uri: android.net.Uri, mine: Boolean): String? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val resolver = appContext.contentResolver
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+                    ?: return@runCatching null
+                val dir = java.io.File(appFilesDir, "avatar").apply { mkdirs() }
+                // 旧头像文件一并删除，避免私有目录堆积
+                val old = if (mine) settingsFlow.value.myAvatarPath else settingsFlow.value.avatarImagePath
+                old?.let { f -> if (f.startsWith(dir.absolutePath)) java.io.File(f).delete() }
+                val prefix = if (mine) "myavatar_" else "avatar_"
+                val out = java.io.File(dir, prefix + System.currentTimeMillis() + ".jpg")
+                out.outputStream().use { fos -> bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, fos) }
+                bmp.recycle()
+                out.absolutePath
+            }.getOrNull()
+        }
+
     /** C5：工作区切换后同步技能落点（默认工作区 = 工作区 skills/；SAF 无本地路径回退状态目录）。 */
     fun onWorkspaceSwitched() {
         val ws = (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()

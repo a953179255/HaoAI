@@ -249,6 +249,29 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun searchFallback(): Boolean = settings.value.searchFallback
     fun setSearchFallback(v: Boolean) = c.updateSettings { it.copy(searchFallback = v) }
 
+    // ── 我的档案（聊天社交化 2026-10-07）：与 ChatViewModel.updateMyProfile 同语义 ──
+
+    fun updateMyProfile(
+        name: String,
+        emoji: String,
+        gradient: Int,
+        bio: String,
+        avatarPath: String?
+    ) = c.updateSettings {
+        it.copy(
+            myName = name.trim().take(20),
+            myEmoji = emoji,
+            myGradient = gradient.coerceIn(0, 5),
+            myBio = bio.trim().take(60),
+            myAvatarPath = avatarPath
+        )
+    }
+
+    /** 导入「我的」头像图片（IO 在容器里切），完成后主线程回传路径（失败 null）。 */
+    fun importMyAvatar(uri: android.net.Uri, onDone: (String?) -> Unit) {
+        viewModelScope.launch { onDone(c.importAvatarImage(uri, mine = true)) }
+    }
+
     /**
      * S6 特性开关写回。只存"与默认值不同"的覆盖（[com.haoai.agent.agent.flags.HaoFlag.compactOverrides]），
      * 所以把实验项拨回默认等于从设置文件里删掉它 —— 不留一堆将来会误导人的陈旧 true/false。

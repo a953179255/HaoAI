@@ -191,6 +191,21 @@ import androidx.compose.ui.focus.onFocusChanged
  */
 val LocalSwitchVersion = androidx.compose.runtime.staticCompositionLocalOf<(String, Int) -> Unit> { { _, _ -> } }
 
+/** 聊天社交化（2026-10-07 效果图 C 定稿）：消息区名字行用的双方档案快照。 */
+data class ChatProfiles(
+    val agentName: String,
+    val agentEmoji: String,
+    val agentGradient: Int,
+    val agentImage: String?,
+    val myName: String,
+    val myEmoji: String,
+    val myGradient: Int,
+    val myImage: String?
+)
+
+/** 头像进名字行后深层组件（AssistantBlock/UserBubble/StreamingItem）取档案，免逐层透传。 */
+val LocalChatProfiles = androidx.compose.runtime.staticCompositionLocalOf<ChatProfiles?> { null }
+
 /** 时间戳三档：今天=HH:mm；昨天=昨天 HH:mm；更早=MM月d日 HH:mm。 */
 internal fun fmtMsgTs(ts: Long): String {
     if (ts <= 0L) return ""
@@ -905,7 +920,17 @@ fun ChatScreen(
             // 渲染 ToolDetailSheet+GlassPanel 真玻璃——独立 Popup/Dialog 窗口采样不到 backdrop
             androidx.compose.runtime.CompositionLocalProvider(
                 com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t },
-                LocalSwitchVersion provides { uid, idx -> vm.switchVersion(uid, idx) }
+                LocalSwitchVersion provides { uid, idx -> vm.switchVersion(uid, idx) },
+                LocalChatProfiles provides ChatProfiles(
+                    agentName = vm.agentName(),
+                    agentEmoji = settings.avatarEmoji,
+                    agentGradient = settings.avatarGradient,
+                    agentImage = settings.avatarImagePath,
+                    myName = vm.myName(),
+                    myEmoji = settings.myEmoji,
+                    myGradient = settings.myGradient,
+                    myImage = settings.myAvatarPath
+                )
             ) {
             MessageList(
                 rows = rows,
@@ -2026,15 +2051,13 @@ fun ChatScreen(
     }
 
     // 档案编辑弹窗：名字 / emoji 头像 / 渐变底色 / 签名（放在抽屉之外，避免被抽屉层盖住）
+    // 字段区抽成 ProfileEditFields 与设置「我的档案」共用（聊天社交化 2026-10-07）
     if (showProfileEdit) {
         var editName by remember { mutableStateOf(settings.agentName.ifBlank { "HaoAI" }) }
         var editEmoji by remember { mutableStateOf(settings.avatarEmoji) }
         var editGradient by remember { mutableStateOf(settings.avatarGradient) }
         var editBio by remember { mutableStateOf(settings.bio) }
         var editImagePath by remember { mutableStateOf(settings.avatarImagePath) }
-        val emojiChoices = remember {
-            listOf("😀", "😊", "😎", "🤖", "🐱", "🐶", "🦊", "🐰", "🌸", "🌟", "🔥", "🌙", "⚡", "🍀", "🎧", "🚀")
-        }
         val avatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.GetContent()
         ) { uri ->
@@ -2059,126 +2082,15 @@ fun ChatScreen(
             },
             dismissLabel = "取消"
         ) {
-            CompactGlassField(
-        value = editName,
-        onValueChange = { editName = it.take(20) },
-        label = "名字",
-        modifier = Modifier.fillMaxWidth()
-    )
-            Text(
-                "头像",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                modifier = Modifier.padding(top = 10.dp)
+            ProfileEditFields(
+                backdrop = backdrop,
+                name = editName, onName = { editName = it },
+                emoji = editEmoji, onEmoji = { editEmoji = it },
+                gradient = editGradient, onGradient = { editGradient = it },
+                bio = editBio, onBio = { editBio = it },
+                imagePath = editImagePath, onRemoveImage = { editImagePath = null },
+                onPickImage = { avatarPicker.launch("image/*") }
             )
-            Row(
-                Modifier.padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ProfileAvatar(
-                    emoji = editEmoji,
-                    gradientIndex = editGradient,
-                    fallback = editName,
-                    size = 52.dp,
-                    imagePath = editImagePath
-                )
-                Spacer(Modifier.size(14.dp))
-                com.haoai.agent.ui.common.LiquidGlassButton(
-                    onClick = { avatarPicker.launch("image/*") },
-                    backdrop = backdrop,
-                    shape = RoundedCornerShape(percent = 50),
-                    // 按钮铁律：实底 + 白字（此前 0.65 主色玻璃，用户反馈配色不对）
-                    surfaceColor = com.haoai.agent.ui.theme.haoButtonColors(
-                        com.haoai.agent.ui.theme.HaoButtonLevel.Primary
-                    ).first
-                ) {
-                    Text(
-                        "从相册选择",
-                        color = com.haoai.agent.ui.theme.haoButtonColors(
-                            com.haoai.agent.ui.theme.HaoButtonLevel.Primary
-                        ).second,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
-                    )
-                }
-                if (editImagePath != null) {
-                    com.haoai.agent.ui.common.GlassTextButton(
-                        text = "移除",
-                        onClick = { editImagePath = null }
-                    )
-                }
-            }
-            emojiChoices.chunked(6).forEach { rowEmojis ->
-                Row(
-                    Modifier.padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    rowEmojis.forEach { e ->
-                        val selected = e == editEmoji
-                        Box(
-                            Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                                    else Color.Transparent
-                                )
-                                .then(
-                                    if (selected) Modifier.border(
-                                        2.dp,
-                                        MaterialTheme.colorScheme.primary,
-                                        RoundedCornerShape(10.dp)
-                                    ) else Modifier
-                                )
-                                .clickable {
-                                    editEmoji = if (selected) "" else e
-                                    // 选 emoji 即回到 emoji 头像，图片模式退出
-                                    editImagePath = null
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(e, fontSize = 20.sp)
-                        }
-                    }
-                }
-            }
-            Text(
-                "底色",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                modifier = Modifier.padding(top = 10.dp)
-            )
-            Row(
-                Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                AVATAR_GRADIENTS.forEachIndexed { i, colors ->
-                    val selected = i == editGradient
-                    Box(
-                        Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Brush.linearGradient(colors))
-                            .then(
-                                if (selected) Modifier.border(
-                                    2.dp,
-                                    MaterialTheme.colorScheme.primary,
-                                    CircleShape
-                                ) else Modifier
-                            )
-                            .clickable { editGradient = i }
-                    )
-                }
-            }
-            CompactGlassField(
-        value = editBio,
-        onValueChange = { editBio = it.take(60) },
-        label = "签名（一句话介绍）",
-        modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp)
-    )
         }
     }
 
@@ -2773,7 +2685,11 @@ private fun MessageList(
         }
         // B′：逐行直出。LazyColumn 的 animateItem（入场淡入/位移补间）是 lazy 专属能力，
         // 这里先只保功能正确、去掉入场动画；要恢复可用 alpha 动画补。
-        windowedRows.forEach { row ->
+        windowedRows.forEachIndexed { rowIdx, row ->
+            // 社交化分组（效果图 C 定稿）：头像+昵称并入「名字行」，只在每组第一条显示；
+            // 与上一条同角色=同组→不画名字行。系统事件条不参与（RowItem 内自行早退）。
+            val prevRole = windowedRows.getOrNull(rowIdx - 1)?.role
+            val showHead = prevRole != row.role
             androidx.compose.runtime.key(row.key) {
                 // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
                 // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
@@ -2808,6 +2724,7 @@ private fun MessageList(
                     onRollback = onToolRollback,
                     onStopRun = onStopRun,
                     showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
+                    showHead = showHead,
                     growIn = row.key == growInKey,
                     onFooterReveal = { footerRevealTick++ }
                 )
@@ -2825,7 +2742,9 @@ private fun MessageList(
                     running = running,
                     onStopRun = onStopRun,
                     onViewDiff = onToolViewDiff,
-                    onStopSubagent = onStopSubagent
+                    onStopSubagent = onStopSubagent,
+                    // 流式气泡=Agent 正在说话：上一条已落行不是 assistant（本回合首条）才画名字行
+                    showHead = rows.lastOrNull()?.role != "assistant"
                 )
             }
         }
@@ -2898,6 +2817,8 @@ private fun RowItem(
     onRollback: (String) -> Unit = {},
     onStopRun: () -> Unit = {},
     showActions: Boolean = true,
+    /** 社交化分组：本行是否画「头像+昵称」名字行（每组第一条=true）。 */
+    showHead: Boolean = true,
     growIn: Boolean = false,
     onFooterReveal: () -> Unit = {}
 ) {
@@ -2909,8 +2830,31 @@ private fun RowItem(
         return
     }
     when (row.role) {
-        "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, growIn, onFooterReveal)
+        "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, showHead, growIn, onFooterReveal)
+    }
+}
+
+/**
+ * 社交化「名字行」（效果图 C 定稿）：20dp 小头像 + 昵称，每组第一条消息上方显示。
+ * 头像不再单独成列——气泡通栏，宽度零浪费。用户侧镜像右对齐。
+ */
+@Composable
+private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: String?, right: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 1.dp),
+        horizontalArrangement = if (right) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ProfileAvatar(emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp, imagePath = imagePath)
+        Spacer(Modifier.size(6.dp))
+        Text(
+            name,
+            style = MaterialTheme.typography.labelSmall,
+            color = wallpaperAdaptiveGray(),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -3738,13 +3682,18 @@ private fun StreamingItem(
     onStopRun: () -> Unit = {},
     onViewDiff: (String) -> Unit = {},
     /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
-    onStopSubagent: (String) -> Unit = {}
+    onStopSubagent: (String) -> Unit = {},
+    /** 社交化分组：流式区是否画「头像+昵称」名字行（本回合首条=true）。 */
+    showHead: Boolean = true
 ) {
     Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
+        if (showHead) LocalChatProfiles.current?.let { p ->
+            SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false)
+        }
         val hasContent = !streamingText.isNullOrBlank()
         // v8 思维链重构（参考 RikkaHub ChainOfThought，2026-09-14 定稿）：
         // 思考 + 工具混排进一张玻璃链卡（时间轴/流式折叠），正文气泡独立在卡外。
@@ -4419,7 +4368,8 @@ private fun UserBubble(
     onOpenMenu: (ChatRow) -> Unit,
     onCopyRow: (ChatRow) -> Unit,
     onQuickEdit: (ChatRow) -> Unit,
-    running: Boolean
+    running: Boolean,
+    showHead: Boolean = true
 ) {
     Column(
         Modifier
@@ -4427,6 +4377,10 @@ private fun UserBubble(
             .padding(horizontal = 14.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.End
     ) {
+        // 社交化名字行（效果图 C）：每组第一条右对齐显示「我的头像+昵称」
+        if (showHead) LocalChatProfiles.current?.let { p ->
+            SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true)
+        }
         // 用户发的图片附件：气泡上方原比例展示（此前只存不显）
         row.imageData?.let { dataUrl ->
             DataUrlThumb(
@@ -4452,19 +4406,19 @@ private fun UserBubble(
                 )
             }
         }
-        // 快捷操作行（user：时间戳左 / 复制 · 编辑重发 · 更多 右）
+        // 快捷操作行（与 Agent 同款排版：复制·编辑重发靠左，时间戳在「更多」左）
         Row(
             Modifier.fillMaxWidth().padding(top = 1.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
+            QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
+            Spacer(Modifier.weight(1f))
             val tsText = fmtMsgTs(row.ts)
             if (tsText.isNotEmpty()) {
                 Text(tsText, style = MaterialTheme.typography.labelSmall,
-                    color = wallpaperAdaptiveGray(), modifier = Modifier.padding(start = 2.dp))
+                    color = wallpaperAdaptiveGray(), modifier = Modifier.padding(end = 4.dp))
             }
-            Spacer(Modifier.weight(1f))
-            QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
-            QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
             QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
         }
     }
@@ -4481,6 +4435,8 @@ private fun AssistantBlock(
     onRollback: (String) -> Unit = {},
     onStopRun: () -> Unit = {},
     showActions: Boolean = true,
+    /** 社交化分组：本行是否画「头像+昵称」名字行。 */
+    showHead: Boolean = true,
     growIn: Boolean = false,
     onFooterReveal: () -> Unit = {}
 ) {
@@ -4489,6 +4445,10 @@ private fun AssistantBlock(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 2.dp)
     ) {
+        // 社交化名字行（效果图 C）：每组第一条左对齐显示「Agent 头像+昵称」
+        if (showHead) LocalChatProfiles.current?.let { p ->
+            SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false)
+        }
         // v8 思维链重构：历史消息与流式同构——思考 + 工具混排进一张链卡（finished=true
         // → 默认折叠为控制条，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
         // → 默认折叠为控制条 + 尾部毛边，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
@@ -5506,8 +5466,8 @@ private fun StatusRow(label: String, value: String) {
     }
 }
 
-// 档案头像 6 色渐变表（索引对应 SettingsStore.avatarGradient）
-private val AVATAR_GRADIENTS = listOf(
+// 档案头像 6 色渐变表（索引对应 SettingsStore.avatarGradient / myGradient）
+internal val AVATAR_GRADIENTS = listOf(
     listOf(Color(0xFF7BC6A5), Color(0xFF4E9F7D)),
     listOf(Color(0xFF8FB8F0), Color(0xFF5B8DEF)),
     listOf(Color(0xFFF0B37E), Color(0xFFE88D5B)),
@@ -5518,7 +5478,7 @@ private val AVATAR_GRADIENTS = listOf(
 
 /** 档案头像：图片 > emoji > 名字首字，渐变底色兜底。 */
 @Composable
-private fun ProfileAvatar(
+internal fun ProfileAvatar(
     emoji: String,
     gradientIndex: Int,
     fallback: String,
@@ -5556,9 +5516,10 @@ private fun ProfileAvatar(
         } else if (emoji.isNotEmpty()) {
             Text(emoji, fontSize = (size.value * 0.45f).sp)
         } else {
+            // 首字兜底字号随 size 缩放：名字行 20dp 小头像下 titleMedium(16sp) 会溢出圆
             Text(
                 fallback.take(1).ifEmpty { "AI" },
-                style = MaterialTheme.typography.titleMedium,
+                fontSize = (size.value * 0.42f).sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
@@ -5566,6 +5527,146 @@ private fun ProfileAvatar(
     }
 }
 
+
+/** 档案 emoji 候选（Agent/我的档案编辑共用，聊天社交化 2026-10-07）。 */
+internal val PROFILE_EMOJIS = listOf(
+    "😀", "😊", "😎", "🤖", "🐱", "🐶", "🦊", "🐰", "🌸", "🌟", "🔥", "🌙", "⚡", "🍀", "🎧", "🚀"
+)
+
+/**
+ * 档案编辑共享字段（效果图③定稿）：名字 / 头像（52dp 预览+相册+emoji 网格+底色）/ 签名。
+ * Agent「编辑档案」与设置「我的档案」两处弹窗复用，状态全部由调用方持有。
+ * [onPickImage] 点「从相册选择」（调用方负责 launcher + 回写 imagePath）。
+ */
+@Composable
+internal fun ProfileEditFields(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    name: String, onName: (String) -> Unit,
+    emoji: String, onEmoji: (String) -> Unit,
+    gradient: Int, onGradient: (Int) -> Unit,
+    bio: String, onBio: (String) -> Unit,
+    imagePath: String?, onRemoveImage: () -> Unit,
+    onPickImage: () -> Unit,
+    nameLabel: String = "名字"
+) {
+    CompactGlassField(
+        value = name,
+        onValueChange = { onName(it.take(20)) },
+        label = nameLabel,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text(
+        "头像",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        modifier = Modifier.padding(top = 10.dp)
+    )
+    Row(
+        Modifier.padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ProfileAvatar(
+            emoji = emoji,
+            gradientIndex = gradient,
+            fallback = name,
+            size = 52.dp,
+            imagePath = imagePath
+        )
+        Spacer(Modifier.size(14.dp))
+        com.haoai.agent.ui.common.LiquidGlassButton(
+            onClick = onPickImage,
+            backdrop = backdrop,
+            shape = RoundedCornerShape(percent = 50),
+            // 按钮铁律：实底 + 白字（此前 0.65 主色玻璃，用户反馈配色不对）
+            surfaceColor = com.haoai.agent.ui.theme.haoButtonColors(
+                com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+            ).first
+        ) {
+            Text(
+                "从相册选择",
+                color = com.haoai.agent.ui.theme.haoButtonColors(
+                    com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+                ).second,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+            )
+        }
+        if (imagePath != null) {
+            com.haoai.agent.ui.common.GlassTextButton(text = "移除", onClick = onRemoveImage)
+        }
+    }
+    PROFILE_EMOJIS.chunked(6).forEach { rowEmojis ->
+        Row(
+            Modifier.padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            rowEmojis.forEach { e ->
+                val selected = e == emoji
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                            else Color.Transparent
+                        )
+                        .then(
+                            if (selected) Modifier.border(
+                                2.dp,
+                                MaterialTheme.colorScheme.primary,
+                                RoundedCornerShape(10.dp)
+                            ) else Modifier
+                        )
+                        .clickable {
+                            // 选 emoji 即回到 emoji 头像，图片模式退出（与图片互斥）
+                            onEmoji(if (selected) "" else e)
+                            onRemoveImage()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(e, fontSize = 20.sp)
+                }
+            }
+        }
+    }
+    Text(
+        "底色",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        modifier = Modifier.padding(top = 10.dp)
+    )
+    Row(
+        Modifier.padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        AVATAR_GRADIENTS.forEachIndexed { i, colors ->
+            val selected = i == gradient
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(colors))
+                    .then(
+                        if (selected) Modifier.border(
+                            2.dp,
+                            MaterialTheme.colorScheme.primary,
+                            CircleShape
+                        ) else Modifier
+                    )
+                    .clickable { onGradient(i) }
+            )
+        }
+    }
+    CompactGlassField(
+        value = bio,
+        onValueChange = { onBio(it.take(60)) },
+        label = "签名（一句话介绍）",
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+    )
+}
 
 /**
  * 消息长按操作面板（1.2）：Glass 底部弹层。操作项按消息角色动态出现，

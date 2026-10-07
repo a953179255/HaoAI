@@ -1276,6 +1276,21 @@ private fun SectionPage(
     var pickerSeed by remember { mutableStateOf<String?>(null) }
     var pickerSlot by remember { mutableIntStateOf(-1) }
     var keyExportConfirm by remember { mutableStateOf(false) }
+    // 我的档案（聊天社交化 2026-10-07）：编辑弹窗状态提在根级（同色盘教训，
+    // LazyColumn item 内 fillMaxSize 遮罩会被约束）
+    var showMyProfile by remember { mutableStateOf(false) }
+    var myEditName by remember { mutableStateOf("") }
+    var myEditEmoji by remember { mutableStateOf("") }
+    var myEditGradient by remember { mutableIntStateOf(1) }
+    var myEditBio by remember { mutableStateOf("") }
+    var myEditImagePath by remember { mutableStateOf<String?>(null) }
+    val myAvatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) vm.importMyAvatar(uri) { path ->
+            if (path != null) { myEditImagePath = path; myEditEmoji = "" }
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -1372,7 +1387,15 @@ private fun SectionPage(
                         onRequestClearWallpaper = onConfirmWpClear,
                         onWpChanged = { },
                         onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex },
-                        onRequestKeyExportConfirm = { keyExportConfirm = true }
+                        onRequestKeyExportConfirm = { keyExportConfirm = true },
+                        onEditMyProfile = {
+                            myEditName = settings.myName.ifBlank { "我" }
+                            myEditEmoji = settings.myEmoji
+                            myEditGradient = settings.myGradient
+                            myEditBio = settings.myBio
+                            myEditImagePath = settings.myAvatarPath
+                            showMyProfile = true
+                        }
                     )
                     "about" -> aboutItems(vm, settings, backdrop)
                     "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = onConfirmClearLedger)
@@ -1425,6 +1448,31 @@ private fun SectionPage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+        }
+        // 我的档案编辑弹窗（聊天社交化 2026-10-07）：字段区与聊天页 Agent 档案共用
+        if (showMyProfile) {
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = localBackdrop,
+                title = "编辑我的档案",
+                onDismiss = { showMyProfile = false },
+                confirmLabel = "保存",
+                onConfirm = {
+                    vm.updateMyProfile(myEditName, myEditEmoji, myEditGradient, myEditBio, myEditImagePath)
+                    showMyProfile = false
+                },
+                dismissLabel = "取消"
+            ) {
+                com.haoai.agent.ui.chat.ProfileEditFields(
+                    backdrop = localBackdrop,
+                    name = myEditName, onName = { myEditName = it },
+                    emoji = myEditEmoji, onEmoji = { myEditEmoji = it },
+                    gradient = myEditGradient, onGradient = { myEditGradient = it },
+                    bio = myEditBio, onBio = { myEditBio = it },
+                    imagePath = myEditImagePath, onRemoveImage = { myEditImagePath = null },
+                    onPickImage = { myAvatarPicker.launch("image/*") },
+                    nameLabel = "昵称"
+                )
             }
         }
     }
@@ -2487,8 +2535,51 @@ private fun LazyListScope.generalItems(
     onRequestClearWallpaper: () -> Unit,
     onWpChanged: () -> Unit = {},
     onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> },
-    onRequestKeyExportConfirm: () -> Unit = {}
+    onRequestKeyExportConfirm: () -> Unit = {},
+    onEditMyProfile: () -> Unit = {}
 ) {
+    item { SectionTitle("我的档案") }
+    item {
+        // 聊天社交化（2026-10-07）：与 Agent 档案对称——头像+昵称+签名，点开编辑弹窗
+        GlassGroup(backdrop) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onEditMyProfile() }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                com.haoai.agent.ui.chat.ProfileAvatar(
+                    emoji = settings.myEmoji,
+                    gradientIndex = settings.myGradient,
+                    fallback = settings.myName.ifBlank { "我" },
+                    size = 40.dp,
+                    imagePath = settings.myAvatarPath
+                )
+                Spacer(Modifier.size(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        settings.myName.ifBlank { "我" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                    )
+                    Text(
+                        settings.myBio.ifBlank { "昵称 · 头像 · 签名" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    Icons.Filled.ChevronRight, null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
     item { SectionTitle("外观") }
     item {
         GlassGroup(backdrop) {

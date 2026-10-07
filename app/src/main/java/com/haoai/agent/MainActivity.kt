@@ -57,6 +57,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -1317,9 +1318,22 @@ private fun OnboardingGlass(
     // 🎲 随机人格（12 款风格池，不重复上一款；chip 只显风格不显代号）
     var rolledTag by remember { mutableStateOf<String?>(null) }
     var lastRollIdx by remember { mutableIntStateOf(-1) }
-    // ── 步 2：权限模式（推荐全自动）──
+    // ── 步 2：你的名片（用户档案，聊天社交化 2026-10-07；默认「我」+蓝渐变，可跳过）──
+    var myName by remember { mutableStateOf("我") }
+    var myEmoji by remember { mutableStateOf("") }
+    var myGradient by remember { mutableIntStateOf(1) }
+    var myBio by remember { mutableStateOf("") }
+    var myImagePath by remember { mutableStateOf<String?>(null) }
+    val myAvatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) settingsVm.importMyAvatar(uri) { path ->
+            if (path != null) { myImagePath = path; myEmoji = "" }
+        }
+    }
+    // ── 步 3：权限模式（推荐全自动）──
     var perm by remember { mutableStateOf(com.haoai.agent.agent.policy.PermissionMode.YOLO) }
-    // ── 步 3：接大脑（内嵌迷你供应商向导，复用 SettingsViewModel 的 draft 管线）──
+    // ── 步 4：接大脑（内嵌迷你供应商向导，复用 SettingsViewModel 的 draft 管线）──
     var brainStage by remember { mutableIntStateOf(0) }
     var brainPicked by remember { mutableStateOf<com.haoai.agent.ui.ProviderPreset?>(null) }
     var brainSkipped by remember { mutableStateOf(false) }
@@ -1372,7 +1386,7 @@ private fun OnboardingGlass(
         // 不再随各步内容高度上下浮动（原整体垂直居中是跳动根因）
         contentAlignment = Alignment.TopCenter
     ) {
-        // 首启引导 v2：5 步（欢迎 → 性格 → 权限 → 大脑 → 完成），液态玻璃卡悬浮在壁纸之上
+        // 首启引导 v2：6 步（欢迎 → 性格 → 名片 → 权限 → 大脑 → 完成），液态玻璃卡悬浮在壁纸之上
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
@@ -1384,7 +1398,7 @@ private fun OnboardingGlass(
             Column(Modifier.padding(horizontal = 22.dp, vertical = 22.dp)) {
                 // ── 时间线：纯进度点（无文字标签——起名步的「欢迎」痕迹不再出现，
                 //    名字已在步 0 定过，界面只呈现当前步内容）──
-                val tlLabels = listOf("欢迎", "性格", "权限", "大脑", "完成")
+                val tlLabels = listOf("欢迎", "性格", "名片", "权限", "大脑", "完成")
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1697,8 +1711,191 @@ private fun OnboardingGlass(
                         }
                     }
 
-                    // ═════════ 步 2：权限模式 ═════════
+                    // ═════════ 步 2：你的名片（用户档案）═════════
                     2 -> {
+                        Text(
+                            "这张名片是你的",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            "聊天时你的名字和头像会显示在消息旁边——挑个顺眼的，之后随时能在「设置 → 我的档案」里改。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        com.haoai.agent.ui.common.CompactGlassField(
+                            value = myName,
+                            onValueChange = { myName = it.take(20) },
+                            label = "昵称",
+                            placeholder = "如：阿明、Momo、铲屎官",
+                            modifier = Modifier.padding(top = 14.dp)
+                        )
+                        Text(
+                            "头像",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                        Row(
+                            Modifier.padding(top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            com.haoai.agent.ui.chat.ProfileAvatar(
+                                emoji = myEmoji,
+                                gradientIndex = myGradient,
+                                fallback = myName.ifBlank { "我" },
+                                size = 52.dp,
+                                imagePath = myImagePath
+                            )
+                            Spacer(Modifier.size(14.dp))
+                            com.haoai.agent.ui.common.LiquidGlassButton(
+                                onClick = { myAvatarPicker.launch("image/*") },
+                                backdrop = backdrop,
+                                shape = RoundedCornerShape(percent = 50),
+                                surfaceColor = com.haoai.agent.ui.theme.haoButtonColors(
+                                    com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+                                ).first
+                            ) {
+                                Text(
+                                    "从相册选择",
+                                    color = com.haoai.agent.ui.theme.haoButtonColors(
+                                        com.haoai.agent.ui.theme.HaoButtonLevel.Primary
+                                    ).second,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                                )
+                            }
+                            if (myImagePath != null) {
+                                com.haoai.agent.ui.common.GlassTextButton(
+                                    text = "移除",
+                                    onClick = { myImagePath = null }
+                                )
+                            }
+                        }
+                        com.haoai.agent.ui.chat.PROFILE_EMOJIS.chunked(6).forEach { rowEmojis ->
+                            Row(
+                                Modifier.padding(top = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                rowEmojis.forEach { e ->
+                                    val selected = e == myEmoji
+                                    Box(
+                                        Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                                else Color.Transparent
+                                            )
+                                            .then(
+                                                if (selected) Modifier.border(
+                                                    2.dp,
+                                                    MaterialTheme.colorScheme.primary,
+                                                    RoundedCornerShape(10.dp)
+                                                ) else Modifier
+                                            )
+                                            .clickable {
+                                                myEmoji = if (selected) "" else e
+                                                // 选 emoji 即回到 emoji 头像，图片模式退出
+                                                myImagePath = null
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(e, fontSize = 20.sp)
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            "底色",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
+                        Row(
+                            Modifier.padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            com.haoai.agent.ui.chat.AVATAR_GRADIENTS.forEachIndexed { i, colors ->
+                                val selected = i == myGradient
+                                Box(
+                                    Modifier
+                                        .size(34.dp)
+                                        .clip(androidx.compose.foundation.shape.CircleShape)
+                                        .background(
+                                            androidx.compose.ui.graphics.Brush.linearGradient(colors)
+                                        )
+                                        .then(
+                                            if (selected) Modifier.border(
+                                                2.dp,
+                                                MaterialTheme.colorScheme.primary,
+                                                androidx.compose.foundation.shape.CircleShape
+                                            ) else Modifier
+                                        )
+                                        .clickable { myGradient = i }
+                                )
+                            }
+                        }
+                        // 效果预览：名片在聊天里的样子（效果图④定稿）
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f))
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                "效果预览",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            )
+                            Row(
+                                Modifier.padding(top = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                com.haoai.agent.ui.chat.ProfileAvatar(
+                                    emoji = myEmoji,
+                                    gradientIndex = myGradient,
+                                    fallback = myName.ifBlank { "我" },
+                                    size = 20.dp,
+                                    imagePath = myImagePath
+                                )
+                                Text(
+                                    myName.ifBlank { "我" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                                )
+                            }
+                            Box(
+                                Modifier
+                                    .padding(top = 4.dp)
+                                    .align(Alignment.End)
+                                    .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp, bottomStart = 14.dp, bottomEnd = 4.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.59f))
+                                    .padding(horizontal = 12.dp, vertical = 7.dp)
+                            ) {
+                                Text(
+                                    "这样出现在聊天里",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                        Text(
+                            "不满意可跳过——默认昵称「我」+ 蓝色渐变，之后在 设置 → 我的档案 随时改",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+
+                    // ═════════ 步 3：权限模式 ═════════
+                    3 -> {
                         Text(
                             "权限怎么管？",
                             style = MaterialTheme.typography.headlineSmall,
@@ -1793,8 +1990,8 @@ private fun OnboardingGlass(
                         )
                     }
 
-                    // ═════════ 步 3：接大脑（迷你供应商向导，可跳过）═════════
-                    3 -> {
+                    // ═════════ 步 4：接大脑（迷你供应商向导，可跳过）═════════
+                    4 -> {
                         LaunchedEffect(Unit) {
                             if (settingsVm.draft == null) settingsVm.startNewDraft()
                         }
@@ -1990,7 +2187,7 @@ private fun OnboardingGlass(
                         }
                     }
 
-                    // ═════════ 步 4：完成清单 ═════════
+                    // ═════════ 步 5：完成清单 ═════════
                     else -> {
                         Text(
                             "一切就绪 🎉",
@@ -2007,6 +2204,13 @@ private fun OnboardingGlass(
                         Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                             onboardingDoneRow("✓", "名字：${name.ifBlank { "小七" }}", "设置 → 通用 里可改")
                             onboardingDoneRow("✓", "性格：${soulEcho()}", "设置 → 通用 可换人设")
+                            onboardingDoneRow(
+                                "✓",
+                                "名片：" + if (myImagePath != null) myName.ifBlank { "我" } + " · 自定义头像"
+                                else if (myEmoji.isNotBlank()) myName.ifBlank { "我" } + " · $myEmoji"
+                                else myName.ifBlank { "我" },
+                                "设置 → 我的档案 可改昵称/头像"
+                            )
                             onboardingDoneRow(
                                 "✓", "权限：" + when (perm) {
                                     com.haoai.agent.agent.policy.PermissionMode.YOLO -> "全自动"
@@ -2044,10 +2248,10 @@ private fun OnboardingGlass(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(999.dp))
                                 .clickable {
-                                    if (step == 3 && brainStage > 0) brainStage--
-                                    else if (step == 3) {
+                                    if (step == 4 && brainStage > 0) brainStage--
+                                    else if (step == 4) {
                                         settingsVm.cancelDraft()
-                                        step = 2
+                                        step = 3
                                     } else step--
                                 }
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
@@ -2062,7 +2266,8 @@ private fun OnboardingGlass(
                         )
                         1 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 2 }
                         2 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 3 }
-                        3 -> {
+                        3 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 4 }
+                        4 -> {
                             if (brainStage == 0) {
                                 Text(
                                     "稍后再配 →",
@@ -2073,7 +2278,7 @@ private fun OnboardingGlass(
                                         .clickable {
                                             brainSkipped = true
                                             settingsVm.cancelDraft()
-                                            step = 4
+                                            step = 5
                                         }
                                         .padding(horizontal = 10.dp, vertical = 8.dp)
                                 )
@@ -2103,7 +2308,7 @@ private fun OnboardingGlass(
                                         brainEcho = (brainPicked?.name ?: draft?.name ?: "") +
                                             " · " + (draft?.model ?: "")
                                         settingsVm.saveDraft()
-                                        step = 4
+                                        step = 5
                                     }
                                 )
                             }
@@ -2112,7 +2317,11 @@ private fun OnboardingGlass(
                             backdrop = backdrop,
                             text = "开始使用",
                             enabled = true,
-                            onClick = { onSave(name, soulText(), perm) }
+                            onClick = {
+                                // 名片步的档案落盘（可跳过——默认「我」+蓝渐变也已显式写入）
+                                settingsVm.updateMyProfile(myName, myEmoji, myGradient, myBio, myImagePath)
+                                onSave(name, soulText(), perm)
+                            }
                         )
                     }
                 }
