@@ -2664,8 +2664,11 @@ private fun MessageList(
             .padding(top = topPadding, bottom = bottomPadding)
     ) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
-        // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示
-        val finalRowKey = if (!running) windowedRows.lastOrNull()?.key else null
+        // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示。
+        // 「收尾」判定（2026-10-07 真机修复）只看 running 不够：中间叙述落行后
+        // vm.running 可能已翻 false 而链卡工具/流式正文还在继续，最后落地的行会被
+        // 误判成最终回复、挂上复制/重发/更多并一直留存——流式区还有产出时同样不算收尾
+        val finalRowKey = if (!running && !showStreaming) windowedRows.lastOrNull()?.key else null
         val growInKey = if (justFinished) finalRowKey else null
         // 窗口外还有更早的消息时给一行提示（向上滚即自动加载，不截断内容）
         if (hiddenRowCount > 0) {
