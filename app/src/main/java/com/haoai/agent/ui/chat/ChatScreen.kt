@@ -108,6 +108,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -172,6 +174,7 @@ import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.common.SlowSpinner
 import com.haoai.agent.ui.theme.wallpaperAdaptiveGray
 import java.text.SimpleDateFormat
+import androidx.compose.ui.text.style.TextOverflow
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
@@ -180,6 +183,30 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.focus.onFocusChanged
+
+/**
+ * 重新生成版本翻页回调（宿主 user 消息 id, 目标版本索引；-1=最新）。
+ * ChatScreen 顶层 provide vm::switchVersion，深层最终回复行经此上抛——
+ * 与 LocalOpenToolSheet 同一模式，省掉 RowItem/MessageList 多层签名透传。
+ */
+val LocalSwitchVersion = androidx.compose.runtime.staticCompositionLocalOf<(String, Int) -> Unit> { { _, _ -> } }
+
+/** 时间戳三档：今天=HH:mm；昨天=昨天 HH:mm；更早=MM月d日 HH:mm。 */
+internal fun fmtMsgTs(ts: Long): String {
+    if (ts <= 0L) return ""
+    val d = Date(ts)
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = ts }
+    val sameDay = now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
+        now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR)
+    val yest = now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
+        now.get(java.util.Calendar.DAY_OF_YEAR) - then.get(java.util.Calendar.DAY_OF_YEAR) == 1
+    return when {
+        sameDay -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(d)
+        yest -> "昨天 " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(d)
+        else -> SimpleDateFormat("MM月d日 HH:mm", Locale.getDefault()).format(d)
+    }
+}
 
 /**
  * 轻量抽屉控制器：0..1 fraction 驱动布局期平移（Modifier.offset，不创建离屏层）。
@@ -435,6 +462,9 @@ fun ChatScreen(
     var pendingDocumentContent by remember { mutableStateOf<String?>(null) }
     // 消息长按操作组（1.2）：目标消息 / 编辑重发草稿 / 删除确认
     var msgAction by remember { mutableStateOf<ChatRow?>(null) }
+    // 引用片段卡（效果图定稿 2026-10-07）：不再把整段灌进输入框，改挂输入框上方，
+    // 发送时才拼进正文——输入框保持干净，✕ 一键移除
+    var quoteDraft by remember { mutableStateOf<ChatRow?>(null) }
     // 网页渲染预览目标（⋮ 菜单进入）
     var previewTarget by remember { mutableStateOf<ChatRow?>(null) }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
@@ -874,7 +904,8 @@ fun ChatScreen(
             // LocalOpenToolSheet 上抛要开哪个工具，由 ChatScreen 顶层（appLayer 外）
             // 渲染 ToolDetailSheet+GlassPanel 真玻璃——独立 Popup/Dialog 窗口采样不到 backdrop
             androidx.compose.runtime.CompositionLocalProvider(
-                com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t }
+                com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t },
+                LocalSwitchVersion provides { uid, idx -> vm.switchVersion(uid, idx) }
             ) {
             MessageList(
                 rows = rows,
@@ -1239,6 +1270,61 @@ fun ChatScreen(
             // 顶栏/输入框的导出层：它们自身 drawBackdrop 时把最终表面 record 进来
             val topBarExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
             val composerExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+            // 引用片段卡（微信同款）：左绿线+来源+两行摘要+✕，挂在输入框上方
+            androidx.compose.animation.AnimatedVisibility(
+                visible = quoteDraft != null,
+                enter = androidx.compose.animation.expandVertically(tween(160)) +
+                    androidx.compose.animation.fadeIn(tween(160)),
+                exit = androidx.compose.animation.shrinkVertically(tween(140)) +
+                    androidx.compose.animation.fadeOut(tween(120)),
+                modifier = Modifier.padding(horizontal = 14.dp)
+            ) {
+                quoteDraft?.let { q ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        // 左绿线
+                        Box(
+                            Modifier
+                                .width(3.dp)
+                                .height(34.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MaterialTheme.colorScheme.primary)
+                        )
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                (if (q.role == "user") "引用你的消息" else "引用回复") +
+                                    " · " + fmtMsgTs(q.ts),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                q.text,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Icon(
+                            Icons.Filled.Close, "移除引用",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .clickable { quoteDraft = null }
+                        )
+                    }
+                }
+            }
             ComposerBar(
                 backdrop = backdrop,
                 exportedBackdrop = composerExportBackdrop,
@@ -1331,10 +1417,15 @@ fun ChatScreen(
                     val docPrefix = if (pendingDocumentContent != null && pendingDocumentName != null) {
                         "[附件: $pendingDocumentName]\n```\n$pendingDocumentContent\n```\n"
                     } else ""
-                    val fullText = docPrefix + trimmed
+                    // 引用片段卡：发送时才拼成 Markdown 引用块进正文（输入框期间保持干净）
+                    val quotePrefix = quoteDraft?.let { q ->
+                        "> " + q.text.trim().replace("\n", "\n> ") + "\n\n"
+                    } ?: ""
+                    val fullText = quotePrefix + docPrefix + trimmed
                     if (fullText.isNotBlank() || pendingImage != null || pendingAudioPath != null || pendingVideoPath != null) {
                         vm.send(fullText, pendingImage, pendingAudioPath, pendingVideoPath)
                         input = ""
+                        quoteDraft = null
                         pendingImage = null
                         pendingAudioPath = null
                         pendingAudioName = null
@@ -1668,7 +1759,7 @@ fun ChatScreen(
                 msgAction = null
             },
             onQuote = {
-                input = "> " + target.text.take(200).replace("\n", "\n> ") + "\n\n"
+                quoteDraft = target
                 msgAction = null
             },
             onPreview = {
@@ -1694,18 +1785,55 @@ fun ChatScreen(
             },
             confirmEnabled = editText.isNotBlank()
         ) {
-            CompactGlassField(
-        value = editText,
-        onValueChange = { editText = it },
-        label = "",
-        modifier = Modifier.fillMaxWidth()
-    )
-            Text(
-                "发送后将替换这条消息并重新生成回复",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp)
+            // 多行文本域（真机反馈：旧 CompactGlassField 是 40dp 单行框，多行文字压边框）。
+            // 自适应高度、限高内滚动、聚焦绿框、右下角实时字数
+            var focused by remember { mutableStateOf(false) }
+            val shape = RoundedCornerShape(11.dp)
+            androidx.compose.foundation.text.BasicTextField(
+                value = editText,
+                onValueChange = { editText = it },
+                maxLines = 8,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.onBackground, lineHeight = 22.sp
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 88.dp, max = 220.dp)
+                    .clip(shape)
+                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = if (focused) 0.08f else 0.05f), shape)
+                    .border(if (focused) 1.5.dp else 1.dp,
+                        if (focused) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f), shape)
+                    .padding(12.dp)
+                    .verticalScroll(rememberScrollState())
+                    .onFocusChanged { focused = it.isFocused },
+                decorationBox = { inner ->
+                    Box {
+                        if (editText.isEmpty()) {
+                            Text("编辑消息内容…", style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f))
+                        }
+                        inner()
+                    }
+                }
             )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "发送后生成新版本，旧版可用 ‹ › 回看",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "${editText.length} 字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
         }
     }
     deleteTarget?.let { target ->
@@ -4324,8 +4452,17 @@ private fun UserBubble(
                 )
             }
         }
-        // 快捷操作行（user：复制 / 编辑重发 / 更多）
-        Row(Modifier.padding(top = 1.dp, end = 2.dp)) {
+        // 快捷操作行（user：时间戳左 / 复制 · 编辑重发 · 更多 右）
+        Row(
+            Modifier.fillMaxWidth().padding(top = 1.dp, end = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val tsText = fmtMsgTs(row.ts)
+            if (tsText.isNotEmpty()) {
+                Text(tsText, style = MaterialTheme.typography.labelSmall,
+                    color = wallpaperAdaptiveGray(), modifier = Modifier.padding(start = 2.dp))
+            }
+            Spacer(Modifier.weight(1f))
             QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
             QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
             QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
@@ -4426,6 +4563,8 @@ private fun AssistantBlock(
                         QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
                         QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
                         Spacer(Modifier.weight(1f))
+                        // 版本翻页器（效果图定稿）：多版时出现，靠右、永远在「更多」左边
+                        VersionPager(row)
                         QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
                     }
                 }
@@ -4456,6 +4595,36 @@ private fun QuickActionButton(
 }
 
 /**
+ * 版本翻页器（重新生成可回看，效果图定稿 2026-10-07）：仅当本行宿主 user 消息有历史版时出现。
+ * ‹ 2/3 › —— 左箭头看旧版、右箭头看新版；当前版=regenIndex（-1=最新，显示 total+1/total+1）。
+ * 引擎上下文永远用最新版，这里只切气泡显示文字（纯 UI 显示态）。
+ */
+@Composable
+private fun VersionPager(row: ChatRow) {
+    if (row.regenVersions.isEmpty()) return
+    val switch = LocalSwitchVersion.current
+    val total = row.regenVersions.size + 1   // +1：最新版（content 本身）
+    val cur = if (row.regenIndex < 0) total else row.regenIndex + 1
+    val tint = wallpaperAdaptiveGray(alpha = 0.75f)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        QuickActionButton(
+            Icons.Filled.KeyboardArrowLeft, "上一版",
+            enabled = cur > 1
+        ) { switch(row.regenUserId, cur - 2) }
+        Text(
+            "$cur/$total",
+            style = MaterialTheme.typography.labelSmall,
+            color = tint,
+            modifier = Modifier.padding(horizontal = 1.dp)
+        )
+        QuickActionButton(
+            Icons.Filled.KeyboardArrowRight, "下一版",
+            enabled = cur < total
+        ) { switch(row.regenUserId, if (cur >= total - 1) -1 else cur) }
+    }
+}
+
+/**
  * 统计行：细小灰字展示整轮 token 用量 / 速度 / 耗时。
  * 旧消息或无数据（usage 缺省）时不渲染；口径 = 整轮累计（含工具循环全部 LLM 调用）。
  */
@@ -4464,10 +4633,13 @@ private fun NerdLine(row: ChatRow) {
     val pt = row.promptTokens
     val ct = row.completionTokens
     val dur = row.durationMs
-    if (pt == null && ct == null && dur == null) return
+    val hasStats = pt != null || ct != null || dur != null
+    // 时间戳（效果图定稿）：并入统计行最右端；无统计时仍单独渲染这一行放时间戳
+    val tsText = fmtMsgTs(row.ts)
+    if (!hasStats && tsText.isEmpty()) return
     val tint = wallpaperAdaptiveGray()
     Row(
-        Modifier.padding(start = 8.dp, top = 0.dp, bottom = 2.dp),
+        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 0.dp, bottom = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -4477,6 +4649,10 @@ private fun NerdLine(row: ChatRow) {
             NerdStat(Icons.Filled.Bolt, String.format(Locale.US, "%.1f tok/s", ct / (dur / 1000.0)), tint)
         }
         dur?.takeIf { it > 0 }?.let { NerdStat(Icons.Filled.Schedule, String.format(Locale.US, "%.1fs", it / 1000.0), tint) }
+        if (tsText.isNotEmpty()) {
+            Spacer(Modifier.weight(1f))
+            Text(tsText, style = MaterialTheme.typography.labelSmall, color = tint)
+        }
     }
 }
 
@@ -5427,82 +5603,78 @@ private fun MessageActionPanel(
             surfaceAlpha = 0.92f,
             blurRadius = 24.dp
         ) {
-            Column(Modifier.padding(horizontal = 8.dp, vertical = 10.dp)) {
-                Text(
-                    "消息操作",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                    modifier = Modifier.padding(start = 14.dp, bottom = 4.dp)
-                )
-                MessageActionItem(
-                    icon = Icons.Filled.ContentCopy,
-                    label = "复制全文",
-                    enabled = true,
-                    onClick = { onCopy(row.text) }
-                )
-                // 含代码块时追加逐块复制（Markdown 源码里的围栏）
-                val blocks = codeBlocks(row.text)
-                blocks.forEachIndexed { i, (lang, code) ->
-                    val suffix = if (lang.isNotBlank()) "（" + lang + "）" else ""
-                    val label = if (blocks.size > 1) "复制代码 " + (i + 1) + suffix else "复制代码" + suffix
-                    MessageActionItem(
-                        icon = Icons.Filled.Code,
-                        label = label,
-                        enabled = true,
-                        onClick = { onCopy(code) }
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                // 标题行：左「消息操作」，右元信息（时间 · 模型）——原面板底部的孤行上移
+                Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp)) {
+                    Text(
+                        "消息操作",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                    )
+                    Spacer(Modifier.weight(1f))
+                    val meta = buildString {
+                        append(fmtMsgTs(row.ts))
+                        row.model?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+                    }
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
                     )
                 }
-                // 网页渲染预览：有文本即可用
-                if (row.text.isNotBlank()) {
-                    MessageActionItem(
-                        icon = Icons.Filled.Web,
-                        label = "网页渲染预览",
-                        enabled = true,
-                        onClick = onPreview
-                    )
+                Spacer(Modifier.height(10.dp))
+                // 宫格（效果图定稿 2026-10-07）：只放快捷行没有的动作——
+                // 复制全文/重新生成/编辑重发已固定在气泡下方操作行，不再重复列。
+                val cells = buildList {
+                    add(Triple(Icons.Filled.FormatQuote, "引用", onQuote))
+                    if (row.text.isNotBlank()) add(Triple(Icons.Filled.Web, "网页预览", onPreview))
+                    add(Triple(Icons.Filled.ContentCopy, "复制全文", { onCopy(row.text) }))
+                    codeBlocks(row.text).firstOrNull()?.let { (lang, code) ->
+                        val label = if (lang.isNotBlank()) "复制代码·$lang" else "复制代码"
+                        add(Triple(Icons.Filled.Code, label, { onCopy(code) }))
+                    }
+                    add(Triple(Icons.Filled.Delete, "删除", onDelete))
                 }
-                if (row.role != "user") {
-                    MessageActionItem(
-                        icon = Icons.Filled.Refresh,
-                        label = "重新生成",
-                        enabled = !running,
-                        onClick = onRegenerate
-                    )
-                } else {
-                    MessageActionItem(
-                        icon = Icons.Filled.Edit,
-                        label = "编辑重发",
-                        enabled = !running,
-                        onClick = onEdit
-                    )
+                cells.chunked(4).forEach { line ->
+                    Row(Modifier.fillMaxWidth().height(74.dp)) {
+                        line.forEach { (icon, label, click) ->
+                            Box(Modifier.weight(1f).fillMaxHeight().padding(3.dp)) {
+                                ActionCell(icon, label, click)
+                            }
+                        }
+                        // 不足 4 格补空权重，保持每格等宽
+                        repeat(4 - line.size) { Spacer(Modifier.weight(1f)) }
+                    }
                 }
-                MessageActionItem(
-                    icon = Icons.Filled.Delete,
-                    label = "删除该消息",
-                    enabled = !running,
-                    danger = true,
-                    onClick = onDelete
-                )
-                MessageActionItem(
-                    icon = Icons.Filled.FormatQuote,
-                    label = "引用到输入框",
-                    enabled = !running,
-                    onClick = onQuote
-                )
-                // 元信息行：时间 + 模型名
-                val meta = buildString {
-                    append(SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(row.ts)))
-                    row.model?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
-                }
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(start = 14.dp, top = 4.dp)
-                )
             }
         }
+    }
+}
+
+/** 面板宫格单元：图标上、文字下，整格可点。 */
+@Composable
+private fun ActionCell(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f))
+            .clickable { onClick() }
+            .padding(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(icon, contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.height(5.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

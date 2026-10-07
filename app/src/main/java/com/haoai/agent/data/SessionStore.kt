@@ -17,7 +17,7 @@ data class StoredMessage(
     /** 消息唯一 id（旧 JSON 缺省时补新生成，与 ChatMessage.id 对应）。 */
     val id: String = UUID.randomUUID().toString(),
     val role: String,
-    val content: String = "",
+    var content: String = "",
     val toolCalls: List<StoredToolCall> = emptyList(),
     val toolCallId: String? = null,
     val toolName: String? = null,
@@ -29,6 +29,16 @@ data class StoredMessage(
     val reasoning: String? = null,
     /** 思考段耗时（摘要行「X.X秒」用）；旧 JSON 缺省 null。 */
     val reasoningMs: Long? = null,
+    /**
+     * 重新生成的历史版本正文栈（仅挂在**用户消息**上；旧 JSON 缺省空=无版本）。
+     *
+     * 为什么存用户消息而非 assistant：regenerateFrom 会删掉 user 之后的 assistant 消息、
+     * 重发产生新 assistant，只有 user 消息稳定存活。regenVersions 按旧→新存历史版正文，
+     * 当前显示版 = regenVersions.getOrNull(regenIndex) ?: content（content 恒为最新版，
+     * 引擎上下文永远用 content，版本切换纯 UI 显示态）。regenIndex 越界=显示最新。
+     */
+    var regenVersions: List<String> = emptyList(),
+    var regenIndex: Int = -1,
     /** 本轮（含工具循环）累计输入/输出 tokens 与整轮耗时、模型名；旧 JSON 缺省 null。 */
     val promptTokens: Int? = null,
     val completionTokens: Int? = null,

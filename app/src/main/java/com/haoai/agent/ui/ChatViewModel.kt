@@ -137,6 +137,11 @@ data class ChatRow(
     val completionTokens: Int? = null,
     val durationMs: Long? = null,
     val model: String? = null,
+    /** 重新生成版本翻页（仅最终回复行）：历史版正文栈 + 当前查看索引（-1=最新）。 */
+    val regenVersions: List<String> = emptyList(),
+    val regenIndex: Int = -1,
+    /** 版本栈宿主（user 消息 id）；翻页回写用。 */
+    val regenUserId: String = "",
     /** 引擎注入的截图消息携带的图像（未能配对到工具步骤时的兜底；正常已挂到 UiTool.imageData）。 */
     val imageData: String? = null
 )
@@ -768,7 +773,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /**
      * 长按：重新生成——删除 [messageId]（assistant）及其后全部消息，
-     * 以它之前最近的用户消息重跑（用户消息一并截掉，由 send 重新落库，内容等价）。
+     * 以它之前最近的用户消息重跑。
+     *
+     * 与 editResend 同款结构：user 消息留在原地不删、只截它之后的 assistant，
+     * send 走 alreadyInHistory——重发删掉 assistant 再走引擎补落 user 的话，
+     * 新消息是全新 id 空版栈，刚压进去的历史版永远追不上显示行（翻页器不出现）。
      */
     fun regenerateFrom(messageId: String) {
         if (_running.value || busyElsewhere()) return
@@ -785,10 +794,41 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         if (userIdx < 0) return
         val userMsg = s.messages[userIdx]
-        while (s.messages.size > userIdx) s.messages.removeAt(s.messages.size - 1)
+        // 版本快照（效果图定稿 2026-10-07）：删历史前把当前最终回答正文压进宿主
+        // user 消息的 regenVersions（旧→新，封顶 8 版）；工具链不快照（旧版=纯文字回看）。
+        // 正在查看历史版时重新生成 = 基于最新版重跑，旧版栈照收不误。
+        val finalAnswer = s.messages.drop(userIdx + 1).lastOrNull {
+            it.role == ChatMessage.ROLE_ASSISTANT && !it.content.isNullOrBlank()
+        }?.content
+        if (!finalAnswer.isNullOrBlank()) {
+            userMsg.regenVersions = (userMsg.regenVersions + finalAnswer).takeLast(8)
+            userMsg.regenIndex = -1
+        }
+        // 只截 user 之后的 assistant，宿主 user 留在原地（含刚压入的版栈），
+        // send 走 alreadyInHistory 让引擎不再补落新 user——见函数注释。
+        while (s.messages.size > userIdx + 1) s.messages.removeAt(s.messages.size - 1)
         c.sessionStore.save(s)
         rebuildRows()
-        send(userMsg.content, userMsg.imageData)
+        send(userMsg.content, userMsg.imageData, userMsg.audioPath, userMsg.videoPath,
+            alreadyInHistory = true)
+    }
+
+    /**
+     * 版本翻页：把宿主 user 消息的查看指针切到第 [index] 版（-1=最新）。
+     * 纯显示态——引擎上下文永远用最新消息，历史版只换气泡文字。
+     */
+    fun switchVersion(userId: String, index: Int) {
+        val s = currentSession ?: return
+        val u = s.messages.firstOrNull { it.id == userId } ?: return
+        if (u.regenVersions.isEmpty()) return
+        u.regenIndex = index.coerceIn(-1, u.regenVersions.size - 1)
+        runCatching { c.sessionStore.save(s) }
+        if (_session.value?.id == s.id) {
+            val view = s.copy()
+            currentSession = view
+            _session.value = view
+            rebuildRows()
+        }
     }
 
     /** 长按：编辑重发（仅用户消息）——截掉该条及其后，以编辑后文本重新发送。 */
@@ -804,10 +844,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val imageData = m.imageData
         val audioPath = m.audioPath
         val videoPath = m.videoPath
-        while (s.messages.size > idx) s.messages.removeAt(s.messages.size - 1)
+        // 编辑重发同样留版本：截掉旧回复前把当前最终回答压进版栈（与 regenerateFrom 一致）。
+        // 关键：user 消息原地改文字、只截它之后的 assistant——消息不删，版栈才留得住；
+        // 旧回答仍可用 ‹ › 回看。send 走 alreadyInHistory，引擎不再补落重复 user 消息。
+        val finalAnswer = s.messages.drop(idx + 1).lastOrNull {
+            it.role == ChatMessage.ROLE_ASSISTANT && !it.content.isNullOrBlank()
+        }?.content
+        if (!finalAnswer.isNullOrBlank()) {
+            m.regenVersions = (m.regenVersions + finalAnswer).takeLast(8)
+            m.regenIndex = -1
+        }
+        m.content = text
+        while (s.messages.size > idx + 1) s.messages.removeAt(s.messages.size - 1)
         c.sessionStore.save(s)
         rebuildRows()
-        send(text, imageData, audioPath, videoPath)
+        send(text, imageData, audioPath, videoPath, alreadyInHistory = true)
     }
 
     fun send(
@@ -1955,6 +2006,35 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 回合收尾但链未落（被停止/异常，末轮无正文）：兜底把残留链落成一行
         if (pending.isNotEmpty()) {
             flushChain("", false, s.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT })
+        }
+        // 版本翻页接线（效果图定稿 2026-10-07）：user 消息的版栈挂到「该回合最终回复行」。
+        // 每回合最后一条有正文的 assistant 行=最终回复；regenIndex>=0 时把显示文字换成历史版
+        // （引擎上下文仍用最新 content，纯显示态）。
+        run {
+            val byId = s.messages.associateBy { it.id }
+            var curUserId = ""
+            var finalIdx = -1
+            fun commit() {
+                if (finalIdx < 0) return
+                val u = byId[curUserId] ?: return
+                if (u.regenVersions.isEmpty()) return
+                val r = rows[finalIdx]
+                val disp = u.regenVersions.getOrNull(u.regenIndex) ?: r.text
+                rows[finalIdx] = r.copy(
+                    text = disp,
+                    regenVersions = u.regenVersions,
+                    regenIndex = u.regenIndex,
+                    regenUserId = curUserId
+                )
+            }
+            rows.forEachIndexed { i, r ->
+                if (r.role == ChatMessage.ROLE_USER) {
+                    commit(); finalIdx = -1; curUserId = r.id
+                } else if (r.role == ChatMessage.ROLE_ASSISTANT && r.text.isNotBlank()) {
+                    finalIdx = i   // 持续覆盖 → 留下的是本回合最后一条有正文行
+                }
+            }
+            commit()
         }
         _rows.value = rows
         // 已落进合并行的工具 callId：供流式卡去重（内容轮 flush 成行后，这批工具不能再在
