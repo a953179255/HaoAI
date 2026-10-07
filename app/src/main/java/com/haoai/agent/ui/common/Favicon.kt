@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -53,10 +54,12 @@ private val faviconClient by lazy {
 private fun loadFavicon(domain: String): ImageBitmap? = runCatching {
     // 多源降级（真机反馈 2026-10-07）：单源 Google s2 在直连设备（不走代理的真机）被墙，
     // 全部域名只剩字母色块；模拟器走 PC 代理才正常。按序尝试：
-    // ① 站点自身 /favicon.ico（国内站直连可达，logo 最准）② Google s2（代理环境）
-    // ③ favicone.com。全失败 → 字母色块兜底（调用方处理）。
+    // ① 站点自身 /favicon.ico（apex 与 www 双变体，国内站直连可达，logo 最准）
+    // ② api.iowen.cn（国内聚合，直连快）③ Google s2（代理环境）④ favicone.com
     val sources = listOf(
         "https://$domain/favicon.ico",
+        "https://www.$domain/favicon.ico",
+        "https://api.iowen.cn/favicon/$domain.png",
         "https://www.google.com/s2/favicons?domain=$domain&sz=64",
         "https://favicone.com/$domain?s=64"
     )
@@ -64,12 +67,65 @@ private fun loadFavicon(domain: String): ImageBitmap? = runCatching {
         val bytes = faviconClient.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r ->
             if (!r.isSuccessful) null else r.body?.bytes()
         } ?: continue
-        val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            ?: continue   // 200 但不是图片（错误页/防爬响应）→ 下一源
-        return@runCatching bmp.asImageBitmap()
+        decodeFaviconBytes(bytes)?.let { return@runCatching it }   // 非图片/解不开 → 下一源
     }
     null
 }.getOrNull()
+
+/**
+ * favicon 字节 → 位图。BitmapFactory 直接能解（PNG/JPEG/WebP 响应，多数站点实际
+ * 返回的 .ico URL 里装的是 PNG）就用；**ICO 容器 BitmapFactory 不支持**（真机反馈
+ * "不少网站识别不到图标"的大头：zaobao/nikkei 等老牌媒体 favicon.ico 是真 ICO），
+ * 手工解包目录取最大图像项，内嵌 PNG 直接解码（老式 BMP-in-ICO 解码高度翻倍，放弃落字母）。
+ */
+private fun decodeFaviconBytes(bytes: ByteArray): ImageBitmap? {
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { return it.asImageBitmap() }
+    if (bytes.size < 6 + 16 || bytes[2].toInt() != 1 || bytes[3].toInt() != 0) return null
+    val count = (bytes[4].toInt() and 0xFF) or ((bytes[5].toInt() and 0xFF) shl 8)
+    var bestOff = -1; var bestSize = 0
+    for (i in 0 until count) {
+        val off = 6 + 16 * i
+        if (off + 16 > bytes.size) break
+        val sz = (bytes[off + 8].toInt() and 0xFF) or
+            ((bytes[off + 9].toInt() and 0xFF) shl 8) or
+            ((bytes[off + 10].toInt() and 0xFF) shl 16) or
+            ((bytes[off + 11].toInt() and 0xFF) shl 24)
+        val dataOff = (bytes[off + 12].toInt() and 0xFF) or
+            ((bytes[off + 13].toInt() and 0xFF) shl 8) or
+            ((bytes[off + 14].toInt() and 0xFF) shl 16) or
+            ((bytes[off + 15].toInt() and 0xFF) shl 24)
+        if (sz > bestSize && dataOff in 1 until bytes.size && dataOff + sz <= bytes.size) {
+            bestOff = dataOff; bestSize = sz
+        }
+    }
+    if (bestOff < 0) return null
+    val img = bytes.copyOfRange(bestOff, bestOff + bestSize)
+    // PNG 签名（89 50 4E 47）才解：BMP-in-ICO 的 height 字段双倍，直接解会变形
+    if (img.size >= 4 && img[0] == 0x89.toByte() && img[1] == 0x50.toByte() &&
+        img[2] == 0x4E.toByte() && img[3] == 0x47.toByte()
+    ) {
+        return android.graphics.BitmapFactory.decodeByteArray(img, 0, img.size)?.asImageBitmap()
+    }
+    return null
+}
+
+/** favicon 专用 IO 协程域：预加载不占用调用方上下文。 */
+private val faviconScope = kotlinx.coroutines.CoroutineScope(
+    kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+)
+private val prefetchRequested = java.util.Collections.newSetFromMap(
+    java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+)
+
+/**
+ * 会话打开/流式到达时预热缓存（真机反馈：等展开步骤才拉 logo，看得见加载过程）。
+ * 重复调用幂等：已缓存/已发起的域名直接跳过；失败也按已处理记（与 Favicon 的
+ * 不重试语义一致，进程内不再抖动）。
+ */
+fun prefetchFavicons(domains: List<String>) {
+    domains.filter { it.isNotBlank() && faviconCache.get(it) == null && prefetchRequested.add(it) }
+        .forEach { d -> faviconScope.launch { faviconCache.put(d, FaviconResult(loadFavicon(d))) } }
+}
 
 /** URL → 展示域名（去协议、去 www.、截断）。抓取步行文案与 favicon 都取它。 */
 fun domainFromUrl(url: String): String =

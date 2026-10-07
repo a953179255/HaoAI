@@ -23,6 +23,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -68,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -106,6 +108,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight as FwSpan
 import androidx.compose.ui.text.withStyle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -581,8 +584,22 @@ private fun ReasoningStep(
                     ): Offset = if (scroll.maxValue > 0) available else Offset.Zero
                 }
             }
+            // 跟尾滞回（真机反馈 2026-10-07，与聊天流式同一套思路）：
+            // 手指按下拖动=暂停跟随（上滚细读）；停止滚动且贴着底（80px 内）=恢复跟随，
+            // 之后新思考内容到达自动滚到底——拖到中间则保持暂停，不被拽走
+            var follow by remember { mutableStateOf(true) }
+            LaunchedEffect(scroll) {
+                launch {
+                    scroll.interactionSource.interactions.collect { i ->
+                        if (i is DragInteraction.Start) follow = false
+                    }
+                }
+                snapshotFlow { !scroll.isScrollInProgress to scroll.value }.collect { (idle, v) ->
+                    if (idle && v >= scroll.maxValue - 80) follow = true
+                }
+            }
             LaunchedEffect(text) {
-                if (live && scroll.value >= scroll.maxValue - 40) scroll.scrollTo(scroll.maxValue)
+                if (live && follow) scroll.scrollTo(scroll.maxValue)
             }
             Text(
                 text,
@@ -629,22 +646,19 @@ private fun ToolStep(
     // CompositionLocal 读取须在组合期（onClick 是普通 lambda，不能现场 .current）
     val openTool = LocalOpenToolSheet.current
     val ctx = LocalContext.current
+    fun openUrl() {
+        runCatching {
+            ctx.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(obj))
+            )
+        }
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            // 抓取完成 → 整行点击直达网页（真机反馈：点网址要能快捷跳转）；
-            // 其余工具/未完成/失败/被拒维持开详情弹层
-            .chainPressable(enabled = !running) {
-                if (isFetch && tool.state == ToolRunState.DONE) {
-                    runCatching {
-                        ctx.startActivity(
-                            android.content.Intent(
-                                android.content.Intent.ACTION_VIEW, android.net.Uri.parse(obj)
-                            )
-                        )
-                    }
-                } else openTool(tool)
-            }
+            // 整行点击=详情弹层（2026-10-07 用户回访：整行直达网页太激进，恢复原交互）；
+            // 快捷跳转收进域名文本本身（见下方 isFetch 分支）与弹层「打开网页」按钮
+            .chainPressable(enabled = !running) { openTool(tool) }
             // 高亮通栏，内容自缩 12dp
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -697,7 +711,8 @@ private fun ToolStep(
                 ?: SolidColor(MaterialTheme.colorScheme.onSurfaceVariant)
         )
         if (isFetch) {
-            // 效果图定稿：抓取步行内 14dp 圆角小 favicon + 域名（时间轴地球图标保留表意）
+            // 效果图定稿：抓取步行内 14dp 圆角小 favicon + 域名（时间轴地球图标保留表意）；
+            // 域名文本本身可点直达网页（2026-10-07 定稿：点域名=跳转，点行其他=详情）
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
@@ -707,7 +722,10 @@ private fun ToolStep(
                 Text(
                     label, style = labelStyle,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(enabled = tool.state == ToolRunState.DONE) { openUrl() }
                 )
             }
         } else {

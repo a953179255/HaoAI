@@ -15,6 +15,8 @@ import com.haoai.agent.agent.engine.stopSubagent
 import com.haoai.agent.agent.tools.TodoItem
 import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
+import com.haoai.agent.ui.common.domainFromUrl
+import com.haoai.agent.ui.common.prefetchFavicons
 import com.haoai.agent.agent.engine.Finished
 import com.haoai.agent.agent.engine.MessageAdded
 import com.haoai.agent.agent.engine.StreamReset
@@ -1840,6 +1842,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 )
                 live != null -> live
                 else -> base
+            }
+            // favicon 预热（幂等，见 prefetchFavicons）：会话打开/流式到达即后台拉取，
+            // 等用户展开步骤或滚到搜索行时 logo 已在缓存，不再看见加载过程（真机反馈）
+            if (hits.isNotEmpty()) prefetchFavicons(hits.map { it.domain })
+            if (call.name.contains("fetch")) {
+                val u = base.brief.substringAfter('·', "").trim()
+                if (u.startsWith("http")) prefetchFavicons(listOf(domainFromUrl(u)))
             }
             return ChainStep.Tool(tool)
         }
