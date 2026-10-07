@@ -994,8 +994,10 @@ fun ChatScreen(
     exportedBackdrop = topBarExportBackdrop,
     contentExportLayer = topBarContentLayer,
     contentExportCoords = topBarContentCoords,
-                    title = vm.agentName(),
-                    subtitle = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
+                    // 社交化定稿（效果图 C 默认态）：顶栏只显会话标题，Agent 名字已在
+                    // 每组消息的名字行里，顶栏不再重复
+                    title = activeSession?.title?.takeIf { it.isNotBlank() } ?: "新对话",
+                    subtitle = "",
                     contextUsage = contextUsage,
                     backdrop = backdrop,
                     onDrawer = { toggleDrawer() },
@@ -2285,13 +2287,24 @@ private fun TopBar(
                         )
                     }
                 }
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    // 效果图 t1 规范：单行省略——长会话名换行会把顶栏撑高两行
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
+                // 社交化定稿：副标题（Agent 名）已移除；空串不渲染避免占一行高度，
+                // 重命名入口随标题区整列点击保留
+                if (subtitle.isNotBlank()) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
             }
             Spacer(Modifier.size(2.dp))
             // 右侧按钮组统一 4dp 间距（IconButton 自带 12dp 视觉边距，叠加后实际
@@ -2633,6 +2646,26 @@ private fun MessageList(
     // 取消"滚动时首次测量巨型 item"这个动作：Column 下所有行在进入组合时一次测完，
     // 滚动只是纯位移，因此不再出现"滚到长消息卡一下"。
     // 代价：失去虚拟化（Phase 3 用显示窗口分页兜）与 animateItem 入场动画（先只保功能正确）。
+    // ── 版本翻页同步补偿（2026-10-07 闪帧修复）────────────────────────
+    // 翻页一次性改写最终行正文 → 内容总高单帧跳变；逐帧贴底循环的补偿在下一帧
+    // 才跑，中间这一帧视口停在旧滚动位置上——切到更长的版本时满屏文字闪现一帧
+    // （真机录屏逐帧实锤：f92 整屏正文、f93 才回到贴底位）。
+    // 做法：翻页时武装一次同步补偿，onSizeChanged 在 layout 阶段量到高度差立即
+    // dispatchRawDelta，视口无错位帧。150ms 保险丝防「武装后高度恰好没变」的残留。
+    var pagerDeltaArmed by remember { mutableStateOf(false) }
+    val prevContentH = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(pagerDeltaArmed) {
+        if (pagerDeltaArmed) {
+            kotlinx.coroutines.delay(150)
+            pagerDeltaArmed = false
+        }
+    }
+    val outerSwitch = androidx.compose.runtime.rememberUpdatedState(LocalSwitchVersion.current)
+    val versionSwitch: (String, Int) -> Unit = { uid, idx ->
+        pagerDeltaArmed = true
+        outerSwitch.value(uid, idx)
+    }
+
     androidx.compose.foundation.layout.Column(
         modifier = modifier
             .verticalScroll(scrollState)
@@ -2662,6 +2695,18 @@ private fun MessageList(
             }
         }
             .padding(top = topPadding, bottom = bottomPadding)
+            // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）
+            .onSizeChanged { sz ->
+                val prev = prevContentH.intValue
+                prevContentH.intValue = sz.height
+                if (pagerDeltaArmed && prev > 0) {
+                    pagerDeltaArmed = false
+                    val delta = (sz.height - prev).toFloat()
+                    if (delta != 0f && !userScrolledThisRun.value) {
+                        scrollState.dispatchRawDelta(delta)
+                    }
+                }
+            }
     ) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示。
@@ -2700,6 +2745,10 @@ private fun MessageList(
             val enhancedBoundary = showHead && row.role == "user" &&
                 (rowIdx > 0 || hiddenRowCount > 0)
             androidx.compose.runtime.key(row.key) {
+                // 重提供包装版翻页回调：先武装同步补偿再走原切版逻辑（见 MessageList 顶部注释）
+                androidx.compose.runtime.CompositionLocalProvider(
+                    LocalSwitchVersion provides versionSwitch
+                ) {
                 // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
                 // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
                 // ——不能无条件给每行套淡入，否则首屏组合时所有行都会被判成新行而集体淡入。
@@ -2739,6 +2788,7 @@ private fun MessageList(
                     growIn = row.key == growInKey,
                     onFooterReveal = { footerRevealTick++ }
                 )
+                }
                 }
             }
         }
