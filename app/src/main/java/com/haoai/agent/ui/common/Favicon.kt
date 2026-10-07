@@ -32,8 +32,8 @@ import kotlinx.coroutines.withContext
 /**
  * 网站图标（favicon）组件 —— 链卡搜索/抓取步骤行用，对齐 rikkahub 的 Favicon/FaviconRow。
  *
- * 图标源：Google s2 favicon 服务（sz=64，走系统代理，Android OkHttp 默认跟随）。
- * 失败/超时 → 域名首字母色块兜底（色相按域名 hash，稳定不闪）。
+ * 图标源：站点自身 /favicon.ico → Google s2 → favicone 多源降级（OkHttp 走系统代理，
+ * Android 默认跟随）。全失败/超时 → 域名首字母色块兜底（色相按域名 hash，稳定不闪）。
  * **固定槽位**：兜底色块先占满 size，加载成功后叠在上头替换——不会"先空后跳版"。
  *
  * 刻意不引 Coil：项目无该依赖，favicon 是小尺寸静态图，OkHttp + BitmapFactory +
@@ -44,18 +44,31 @@ private class FaviconResult(val bmp: ImageBitmap?)
 private val faviconCache = android.util.LruCache<String, FaviconResult>(80)
 private val faviconClient by lazy {
     okhttp3.OkHttpClient.Builder()
-        .connectTimeout(java.time.Duration.ofSeconds(6))
-        .readTimeout(java.time.Duration.ofSeconds(8))
+        // 多源串行降级：单源超时要紧，否则全失败时字母色块要等 ~40s 才出现
+        .connectTimeout(java.time.Duration.ofSeconds(4))
+        .readTimeout(java.time.Duration.ofSeconds(5))
         .build()
 }
 
 private fun loadFavicon(domain: String): ImageBitmap? = runCatching {
-    val url = "https://www.google.com/s2/favicons?domain=$domain&sz=64"
-    val bytes = faviconClient.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r ->
-        if (!r.isSuccessful) return@runCatching null
-        r.body?.bytes()
-    } ?: return@runCatching null
-    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+    // 多源降级（真机反馈 2026-10-07）：单源 Google s2 在直连设备（不走代理的真机）被墙，
+    // 全部域名只剩字母色块；模拟器走 PC 代理才正常。按序尝试：
+    // ① 站点自身 /favicon.ico（国内站直连可达，logo 最准）② Google s2（代理环境）
+    // ③ favicone.com。全失败 → 字母色块兜底（调用方处理）。
+    val sources = listOf(
+        "https://$domain/favicon.ico",
+        "https://www.google.com/s2/favicons?domain=$domain&sz=64",
+        "https://favicone.com/$domain?s=64"
+    )
+    for (url in sources) {
+        val bytes = faviconClient.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r ->
+            if (!r.isSuccessful) null else r.body?.bytes()
+        } ?: continue
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: continue   // 200 但不是图片（错误页/防爬响应）→ 下一源
+        return@runCatching bmp.asImageBitmap()
+    }
+    null
 }.getOrNull()
 
 /** URL → 展示域名（去协议、去 www.、截断）。抓取步行文案与 favicon 都取它。 */

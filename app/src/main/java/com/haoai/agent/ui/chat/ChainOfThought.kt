@@ -83,6 +83,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -567,6 +570,17 @@ private fun ReasoningStep(
             exit = shrinkVertically(tween(180)) + fadeOut(tween(180))
         ) {
             val scroll = rememberScrollState()
+            // 边界钳制（真机反馈 2026-10-07）：读到顶/底后继续拖，剩余滚动就地吃掉，
+            // 不再透传给外层会话流（内容本身不可滚时放行，短文本上拖动仍滚对话）
+            val clamp = remember(scroll) {
+                object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+                    override fun onPostScroll(
+                        consumed: Offset,
+                        available: Offset,
+                        source: androidx.compose.ui.input.nestedscroll.NestedScrollSource
+                    ): Offset = if (scroll.maxValue > 0) available else Offset.Zero
+                }
+            }
             LaunchedEffect(text) {
                 if (live && scroll.value >= scroll.maxValue - 40) scroll.scrollTo(scroll.maxValue)
             }
@@ -581,6 +595,7 @@ private fun ReasoningStep(
                     .heightIn(max = 240.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    .nestedScroll(clamp)
                     .verticalScroll(scroll)
                     .padding(horizontal = 11.dp, vertical = 9.dp)
             )
@@ -609,12 +624,27 @@ private fun ToolStep(
     }
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
+    // 抓取步（web_fetch）：obj 是裸 URL → 渲染成「加粗域名 + 灰路径」，比整串 URL 好读
+    val isFetch = tool.name.contains("fetch") && obj.startsWith("http")
     // CompositionLocal 读取须在组合期（onClick 是普通 lambda，不能现场 .current）
     val openTool = LocalOpenToolSheet.current
+    val ctx = LocalContext.current
     Row(
         Modifier
             .fillMaxWidth()
-            .chainPressable(enabled = !running) { openTool(tool) }
+            // 抓取完成 → 整行点击直达网页（真机反馈：点网址要能快捷跳转）；
+            // 其余工具/未完成/失败/被拒维持开详情弹层
+            .chainPressable(enabled = !running) {
+                if (isFetch && tool.state == ToolRunState.DONE) {
+                    runCatching {
+                        ctx.startActivity(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_VIEW, android.net.Uri.parse(obj)
+                            )
+                        )
+                    }
+                } else openTool(tool)
+            }
             // 高亮通栏，内容自缩 12dp
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -648,9 +678,7 @@ private fun ToolStep(
                 }
             }
         }
-        // 抓取步（web_fetch）：obj 是裸 URL → 渲染成「加粗域名 + 灰路径」，比整串 URL 好读；
         // 左侧时间轴已是地球图标，省掉"抓取网页 ·"前缀。其余工具维持"动词 对象"。
-        val isFetch = tool.name.contains("fetch") && obj.startsWith("http")
         val label: AnnotatedString = if (isFetch) {
             val dom = domainFromUrl(obj)
             val rest = obj.substringAfter("://", obj).removePrefix("www.").removePrefix(dom)
@@ -1247,6 +1275,30 @@ fun ToolDetailSheet(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
                 ) {
+                    // 抓取步：直达网页（行点击之外的第二入口， DENIED/ERROR 时行不可达这里仍可开）
+                    if (tool.name.contains("fetch") && obj.startsWith("http")) {
+                        val sheetCtx = LocalContext.current
+                        Text(
+                            "打开网页",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                .clickable {
+                                    runCatching {
+                                        sheetCtx.startActivity(
+                                            android.content.Intent(
+                                                android.content.Intent.ACTION_VIEW,
+                                                android.net.Uri.parse(obj)
+                                            )
+                                        )
+                                    }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
                     tool.imageData?.let { shot ->
                         val ctx = LocalContext.current
                         Text(
