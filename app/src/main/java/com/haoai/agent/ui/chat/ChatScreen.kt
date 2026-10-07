@@ -2646,23 +2646,25 @@ private fun MessageList(
     // 取消"滚动时首次测量巨型 item"这个动作：Column 下所有行在进入组合时一次测完，
     // 滚动只是纯位移，因此不再出现"滚到长消息卡一下"。
     // 代价：失去虚拟化（Phase 3 用显示窗口分页兜）与 animateItem 入场动画（先只保功能正确）。
-    // ── 版本翻页同步补偿（2026-10-07 闪帧修复）────────────────────────
-    // 翻页一次性改写最终行正文 → 内容总高单帧跳变；逐帧贴底循环的补偿在下一帧
-    // 才跑，中间这一帧视口停在旧滚动位置上——切到更长的版本时满屏文字闪现一帧
-    // （真机录屏逐帧实锤：f92 整屏正文、f93 才回到贴底位）。
-    // 做法：翻页时武装一次同步补偿，onSizeChanged 在 layout 阶段量到高度差立即
-    // dispatchRawDelta，视口无错位帧。150ms 保险丝防「武装后高度恰好没变」的残留。
-    var pagerDeltaArmed by remember { mutableStateOf(false) }
+    // ── 版本翻页同步补偿（2026-10-07 一修；2026-10-08 二修：窗口化+只补变高）──
+    // 翻页一次性改写最终行正文 → 内容总高跳变；且 markdown 后台重解析完成后还会
+    // **再跳一次**（真机轨迹：4529→4597→4688 三段漂移，一修的 150ms 一次性保险丝
+    // 只吃到第一段，第二段错位帧就是残余闪帧）。
+    // 二修①：补偿从「一次性武装」改成「500ms 窗口」——窗口内每一次变高都在 layout
+    // 阶段立即 dispatchRawDelta，异步解析的后续跳变同样被吃掉。
+    // 二修②：**变高才补，变矮不补**——内容缩小时 verticalScroll 把 value 自动夹回
+    // 新 maxValue（贴底自洽），此时再 dispatch 负值反而把视口从底部多推开一截：
+    // 真机轨迹切短版后 pos=2212/2280，底部悬空 68px 正是用户看到的
+    // 「输入框上方闪一条」（2026-10-08 反馈）。
+    // 二修③：只在「翻页瞬间贴底」时补——用户滚到半路回看时翻页，正文在末行，
+    // 上方内容不动，视口本就不该被推；无差别补偿会把他推离阅读位置。
+    var pagerCompensateUntil by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    var pagerWasAtBottom by remember { mutableStateOf(false) }
     val prevContentH = remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    LaunchedEffect(pagerDeltaArmed) {
-        if (pagerDeltaArmed) {
-            kotlinx.coroutines.delay(150)
-            pagerDeltaArmed = false
-        }
-    }
     val outerSwitch = androidx.compose.runtime.rememberUpdatedState(LocalSwitchVersion.current)
     val versionSwitch: (String, Int) -> Unit = { uid, idx ->
-        pagerDeltaArmed = true
+        pagerCompensateUntil = System.currentTimeMillis() + 500
+        pagerWasAtBottom = scrollState.isAtBottom(bottomSlackPx)
         if (FollowTrace.enabled) FollowTrace.addSlow("PAGER_ARM")
         outerSwitch.value(uid, idx)
     }
@@ -2697,21 +2699,25 @@ private fun MessageList(
         }
             .padding(top = topPadding, bottom = bottomPadding)
             // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）。
+            // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）。
             // 不再看 userScrolledThisRun：能点到翻页器=该行必然在视口内（页脚可见），
             // 此前的守卫在「用户滚动过会话」时会跳过补偿——真机用户必滚 → 闪帧复现（2026-10-07）
             .onSizeChanged { sz ->
                 val prev = prevContentH.intValue
                 prevContentH.intValue = sz.height
-                if (pagerDeltaArmed && prev > 0) {
-                    pagerDeltaArmed = false
-                    val delta = (sz.height - prev).toFloat()
+                val inWindow = System.currentTimeMillis() <= pagerCompensateUntil
+                // 用户手指/惯性正在滚动时让位：补偿会与手势打架（同 pinToBottom 的
+                // busyFrames 让位逻辑），且手势结束后跟随循环自会贴回
+                if (inWindow && pagerWasAtBottom && prev > 0 && !scrollState.isScrollInProgress) {
+                    val delta = sz.height - prev
                     var dispatched = false
-                    if (delta != 0f) {
-                        scrollState.dispatchRawDelta(delta)
+                    // 只补变高：变矮时 verticalScroll 自动夹回新底部，多推反而制造空隙
+                    if (delta > 0) {
+                        scrollState.dispatchRawDelta(delta.toFloat())
                         dispatched = true
                     }
                     if (FollowTrace.enabled) {
-                        FollowTrace.addSlow("SIZE h=${sz.height} prev=$prev delta=${delta.toInt()} dispatched=$dispatched pos=${scrollState.value}/${scrollState.maxValue}")
+                        FollowTrace.addSlow("SIZE h=${sz.height} prev=$prev delta=$delta dispatched=$dispatched pos=${scrollState.value}/${scrollState.maxValue}")
                     }
                 }
             }
