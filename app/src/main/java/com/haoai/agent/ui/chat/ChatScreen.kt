@@ -3,6 +3,7 @@ package com.haoai.agent.ui.chat
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Size
@@ -2690,9 +2691,11 @@ private fun MessageList(
             // 与上一条同角色=同组→不画名字行。系统事件条不参与（RowItem 内自行早退）。
             val prevRole = windowedRows.getOrNull(rowIdx - 1)?.role
             val showHead = prevRole != row.role
-            // 名字行顶部的 6dp 轮次呼吸位对「会话第一条」豁免：它上面没有上一条，
-            // 顶格即可（否则空会话首条被推低）；带隐藏历史时首行上面其实有消息，不豁免
-            val headTopGap = rowIdx > 0 || hiddenRowCount > 0
+            // 轮次边界方向性（用户定稿方案 B，2026-10-07）：只有「Agent 回复完毕 → 我发言」
+            // 是增强方向——虚线分隔 + 名字行 6dp 呼吸位；「我发言 → Agent 回复」问答衔接，
+            // 恢复原始 1dp 紧凑间距。会话首条（上面无消息且无隐藏历史）两样都豁免。
+            val enhancedBoundary = showHead && row.role == "user" &&
+                (rowIdx > 0 || hiddenRowCount > 0)
             androidx.compose.runtime.key(row.key) {
                 // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
                 // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
@@ -2713,9 +2716,10 @@ private fun MessageList(
                         fadingIn = false
                     }
                 }
-                Box(
+                Column(
                     if (fadingIn) Modifier.graphicsLayer { alpha = appearAlpha.value } else Modifier
                 ) {
+                if (enhancedBoundary) TurnDivider()
                 RowItem(
                     row,
                     onOpenMenu = onOpenMenu,
@@ -2728,7 +2732,7 @@ private fun MessageList(
                     onStopRun = onStopRun,
                     showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
                     showHead = showHead,
-                    headTopGap = headTopGap,
+                    headTopGap = enhancedBoundary,
                     growIn = row.key == growInKey,
                     onFooterReveal = { footerRevealTick++ }
                 )
@@ -2749,7 +2753,8 @@ private fun MessageList(
                     onStopSubagent = onStopSubagent,
                     // 流式气泡=Agent 正在说话：上一条已落行不是 assistant（本回合首条）才画名字行
                     showHead = rows.lastOrNull()?.role != "assistant",
-                    headTopGap = windowedRows.isNotEmpty() || hiddenRowCount > 0
+                    // 流式区=「我发言 → Agent 回复」方向：问答衔接，恢复紧凑 1dp
+                    headTopGap = false
                 )
             }
         }
@@ -2843,18 +2848,44 @@ private fun RowItem(
 }
 
 /**
+ * 轮次分隔虚线（用户定稿方案 B，2026-10-07）：只出现在「Agent 回复完毕 → 我发言」
+ * 的边界，问答衔接方向不插。1.5dp 居中虚线（4/4dp 段），左右 24dp 留白，
+ * 上下 9/8dp 呼吸位——视觉锚点明确又不抢戏。
+ */
+@Composable
+private fun TurnDivider() {
+    val lineColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.16f)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, top = 9.dp, bottom = 8.dp)
+            .height(1.5.dp)
+            .drawBehind {
+                drawLine(
+                    color = lineColor,
+                    start = Offset(0f, size.height / 2f),
+                    end = Offset(size.width, size.height / 2f),
+                    strokeWidth = size.height,
+                    pathEffect = PathEffect.dashPathEffect(
+                        floatArrayOf(4.dp.toPx(), 4.dp.toPx()), 0f
+                    )
+                )
+            }
+    )
+}
+
+/**
  * 社交化「名字行」（效果图 C 定稿）：20dp 小头像 + 昵称，每组第一条消息上方显示。
  * 头像不再单独成列——气泡通栏，宽度零浪费。用户侧镜像右对齐。
  */
 @Composable
 private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: String?, right: Boolean, topGap: Boolean = true) {
     Row(
-        // 顶部 6dp：名字行只在角色切换（=新一轮）出现，这里就是轮次呼吸位——
-        // 不加的话上一轮的操作行和下一轮的昵称几乎贴死（真机反馈 2026-10-07）；
-        // 会话第一条（topGap=false）顶格，不参与轮次间距
+        // topGap=true：增强方向（Agent 回复完毕 → 我发言）的 6dp 呼吸位，配合 TurnDivider；
+        // topGap=false：问答衔接方向/会话首条，恢复改动前的 1dp 紧凑间距
         Modifier.fillMaxWidth().padding(
             start = 2.dp, end = 2.dp,
-            top = if (topGap) 6.dp else 0.dp, bottom = 2.dp
+            top = if (topGap) 6.dp else 1.dp, bottom = 2.dp
         ),
         horizontalArrangement = if (right) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
