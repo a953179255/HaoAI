@@ -2448,6 +2448,38 @@ private fun MessageList(
         }
     }
 
+    // ── 版本翻页闪帧补偿（三修，2026-10-08）：变高帧 draw 偏移 ──────────────
+    // 用户实测方向不对称（1→2 闪、2→1 不闪）+ 真机轨迹终局定位：
+    // onSizeChanged 是 layout 回调，触发时 verticalScroll 还没把新内容高写进
+    // maxValue —— dispatchRawDelta 被**旧上限夹扁**（轨迹铁证：delta=68
+    // dispatched=true 而 pos=2121/2121 纹丝不动），一修二修的「改值」路从未真正
+    // 落地，贴底靠下一帧跟随循环——中间隔的那帧（巨型列重测 ~66ms 慢帧）=闪帧。
+    // 变矮方向不闪：value>新max 时夹钳发生在同一次 placement，跳变与文字替换融进
+    // 同一帧，肉眼不可分——与用户观察完全吻合。
+    // 三修：变高帧不改滚动值（改了也被夹），改**画**。graphicsLayer 的 translationY
+    // 在 draw 阶段读取，draw 晚于 layout 回调 → 同帧生效零延迟；下一帧跟随循环把
+    // value 贴回新底部时归零（见下方 pinned 分支），两帧画面像素级无缝。
+    // 门：500ms 窗口 + 翻页瞬间贴底（用户滚半路回看不该被动画）+ 手势让位。
+    var pagerShift by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    var pagerCompensateUntil by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    var pagerWasAtBottom by remember { mutableStateOf(false) }
+    val prevContentH = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val outerSwitch = androidx.compose.runtime.rememberUpdatedState(LocalSwitchVersion.current)
+    val versionSwitch: (String, Int) -> Unit = { uid, idx ->
+        pagerCompensateUntil = System.currentTimeMillis() + 500
+        pagerWasAtBottom = scrollState.isAtBottom(bottomSlackPx)
+        if (FollowTrace.enabled) FollowTrace.addSlow("PAGER_ARM")
+        outerSwitch.value(uid, idx)
+    }
+    // 安全阀：偏移只该活到跟随循环贴回那一帧；若用户中途甩动让循环让位（busy），
+    // 200ms 后强制归零，宁可回弹一帧也不留长期画面悬空
+    LaunchedEffect(pagerShift) {
+        if (pagerShift != 0f) {
+            kotlinx.coroutines.delay(200)
+            pagerShift = 0f
+        }
+    }
+
     // ── 跟随判定（2026-09-16 第五版）──────────────────────────────────
     // 允许贴底的条件（三选一）：
     //   ① 本帧贴着底                 —— 正常跟随
@@ -2491,6 +2523,10 @@ private fun MessageList(
                 val follow = atBottom || prevAtBottom || !userScrolledThisRun.value
                 var pinned = false
                 if (busyFrames < 1 && follow) pinned = scrollState.pinToBottom()
+                // 三修归零点：本帧把 value 贴回新 maxValue 的同时撤掉 draw 偏移。
+                // 循环跑在帧首（layout/draw 之前），同帧生效：上一帧画面=value旧+shift
+                // 上移，本帧画面=value新+0 偏移，两者逐像素一致，衔接无缝。
+                if (pinned && pagerShift != 0f) pagerShift = 0f
                 // 诊断走**内存**（不落盘：滚动路径上做主线程 IO 会卡顿），
                 // 需要时用 haoai://debug/followdump 一次性导出。
                 // P0-2：这条字符串每渲染帧拼一条，探针关着时连拼都不拼
@@ -2646,28 +2682,6 @@ private fun MessageList(
     // 取消"滚动时首次测量巨型 item"这个动作：Column 下所有行在进入组合时一次测完，
     // 滚动只是纯位移，因此不再出现"滚到长消息卡一下"。
     // 代价：失去虚拟化（Phase 3 用显示窗口分页兜）与 animateItem 入场动画（先只保功能正确）。
-    // ── 版本翻页同步补偿（2026-10-07 一修；2026-10-08 二修：窗口化+只补变高）──
-    // 翻页一次性改写最终行正文 → 内容总高跳变；且 markdown 后台重解析完成后还会
-    // **再跳一次**（真机轨迹：4529→4597→4688 三段漂移，一修的 150ms 一次性保险丝
-    // 只吃到第一段，第二段错位帧就是残余闪帧）。
-    // 二修①：补偿从「一次性武装」改成「500ms 窗口」——窗口内每一次变高都在 layout
-    // 阶段立即 dispatchRawDelta，异步解析的后续跳变同样被吃掉。
-    // 二修②：**变高才补，变矮不补**——内容缩小时 verticalScroll 把 value 自动夹回
-    // 新 maxValue（贴底自洽），此时再 dispatch 负值反而把视口从底部多推开一截：
-    // 真机轨迹切短版后 pos=2212/2280，底部悬空 68px 正是用户看到的
-    // 「输入框上方闪一条」（2026-10-08 反馈）。
-    // 二修③：只在「翻页瞬间贴底」时补——用户滚到半路回看时翻页，正文在末行，
-    // 上方内容不动，视口本就不该被推；无差别补偿会把他推离阅读位置。
-    var pagerCompensateUntil by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
-    var pagerWasAtBottom by remember { mutableStateOf(false) }
-    val prevContentH = remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    val outerSwitch = androidx.compose.runtime.rememberUpdatedState(LocalSwitchVersion.current)
-    val versionSwitch: (String, Int) -> Unit = { uid, idx ->
-        pagerCompensateUntil = System.currentTimeMillis() + 500
-        pagerWasAtBottom = scrollState.isAtBottom(bottomSlackPx)
-        if (FollowTrace.enabled) FollowTrace.addSlow("PAGER_ARM")
-        outerSwitch.value(uid, idx)
-    }
 
     androidx.compose.foundation.layout.Column(
         modifier = modifier
@@ -2699,9 +2713,12 @@ private fun MessageList(
         }
             .padding(top = topPadding, bottom = bottomPadding)
             // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）。
-            // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）。
-            // 不再看 userScrolledThisRun：能点到翻页器=该行必然在视口内（页脚可见），
-            // 此前的守卫在「用户滚动过会话」时会跳过补偿——真机用户必滚 → 闪帧复现（2026-10-07）
+            // 翻页补偿的量测点：内容总高在 layout 阶段变化时记账（见上方三修注释）。
+            // 变高：不改滚动值（onSizeChanged 时 maxValue 还是旧值，dispatchRawDelta
+            // 被旧上限夹扁＝从未落地），改累加 pagerShift，由 graphicsLayer 在 draw
+            // 阶段把内容上移——同帧生效，视觉上等价于已贴底；下一帧跟随循环贴回真
+            // maxValue 后归零，两帧无缝。变矮：value>新max 由 verticalScroll 同帧夹回，
+            // 无需补偿，此时若还挂着旧的向上偏移要一并清零以免过冲。
             .onSizeChanged { sz ->
                 val prev = prevContentH.intValue
                 prevContentH.intValue = sz.height
@@ -2710,17 +2727,20 @@ private fun MessageList(
                 // busyFrames 让位逻辑），且手势结束后跟随循环自会贴回
                 if (inWindow && pagerWasAtBottom && prev > 0 && !scrollState.isScrollInProgress) {
                     val delta = sz.height - prev
-                    var dispatched = false
-                    // 只补变高：变矮时 verticalScroll 自动夹回新底部，多推反而制造空隙
                     if (delta > 0) {
-                        scrollState.dispatchRawDelta(delta.toFloat())
-                        dispatched = true
+                        pagerShift += delta.toFloat()
+                    } else if (delta < 0 && pagerShift != 0f) {
+                        pagerShift = 0f
                     }
                     if (FollowTrace.enabled) {
-                        FollowTrace.addSlow("SIZE h=${sz.height} prev=$prev delta=$delta dispatched=$dispatched pos=${scrollState.value}/${scrollState.maxValue}")
+                        FollowTrace.addSlow("SIZE h=${sz.height} prev=$prev delta=$delta shift=${pagerShift.toInt()} pos=${scrollState.value}/${scrollState.maxValue}")
                     }
                 }
             }
+            // draw 阶段偏移：translationY 在 graphicsLayer 里读取，graphicsLayer 是
+            // DrawModifier 不参与测量，且该 Column 节点是内容高（父级裁剪），上移
+            // 即在父裁剪框内把新长出的底部推到视口底——与"已贴底"逐像素一致。
+            .graphicsLayer { translationY = -pagerShift }
     ) {
         // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
         // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示。
