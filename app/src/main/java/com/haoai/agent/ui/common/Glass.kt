@@ -76,6 +76,8 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -201,6 +203,32 @@ fun rememberAppBackdrop(
 
 fun Modifier.appLayer(backdrop: LayerBackdrop): Modifier = this.layerBackdrop(backdrop)
 
+/**
+ * 圆角滑杆实时生效订阅（2026-10-09）。
+ *
+ * 根因（库源码实锤）：`drawBackdrop` 的形状裁剪走 measure/place 通道——库节点在
+ * measure 里 `placeWithLayer(layerBlock = { clip = true; shape = shapeProvider.shape })`
+ * 把圆角烘进独立 GraphicsLayer；而滑杆改值后 modifier 链只走节点 `update()` =
+ * 重算 renderEffect（draw 通道），**不重新摆放** → 裁剪停在旧值，新画的面/采样
+ * 与旧裁剪错位 = 四角白色残影（用户实测：调完必须重进页面才恢复）。
+ * 试过无效的路：remember(key){Modifier.layout{...}} 换 Modifier 实例（元素更新
+ * 不标脏测量）；requestRemeasure（internal API 不可用）。
+ *
+ * 正解：**measure 期读 State = Compose 的原生订阅机制**（offset{}/size{} lambda
+ * 重载同理）——在透传 layout 节点的 measure 块里读 GlassTuning.corner，值变化
+ * 即自动把本布局标脏 → 重新 measure/place → 库节点重跑 layerBlock，裁剪取新值。
+ * 圆角拖动时全 App GlassPanel 各重测一次，代价与既有重组同阶，可忽略。
+ */
+private fun Modifier.shapeLiveTrack(): Modifier =
+    Modifier.layout { measurable, constraints ->
+        com.haoai.agent.ui.theme.GlassTuning.corner
+        val placeable = measurable.measure(constraints)
+        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+
+
+
+
 @Composable
 fun GlassPanel(
     // 放宽为 Backdrop 接口：支持 CombinedBackdrop（玻璃导出合成采样，见抽屉）
@@ -312,6 +340,7 @@ fun GlassPanel(
     val drawBorder = border && !floating
     val panelModifier = if (r) {
         modifier
+            .shapeLiveTrack()
             // v7.1 硬裁剪：drawBackdrop 的 blur/lens 与表面填充会溢出圆角外的方形区域
             // （平色背景上呈四角灰块，GlassCard 同款修复——小尺寸圆角面板上最明显）
             //
@@ -405,6 +434,7 @@ fun GlassPanel(
         // 实现手法：外包一个离屏 Box 画 backdrop 的内容色近似（用 surface 深色版），
         // 内容层加 blur——这里用「背景模糊层+表面」两层组合
         modifier
+            .shapeLiveTrack()
             .then(fallbackShadowMod)
             .clip(shape ?: RoundedCornerShape(radius))
             .background(surface)

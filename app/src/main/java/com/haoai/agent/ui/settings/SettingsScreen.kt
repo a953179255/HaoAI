@@ -3446,7 +3446,7 @@ private fun LazyListScope.themeItems(
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("折射强度倍数", "×${"%.1f".format(t.lensAmountMul)}", "影响：所有玻璃表面（0 = 关折射）", t.lensAmountMul, 0f..4f, backdrop, step = 0.1f, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("玻璃圆角", dpText(t.corner), "影响：卡片、弹层（顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..32f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.corner = it }
+            GlassSliderRow("玻璃圆角", dpText(t.corner), "影响：页面卡片、弹层顶角（聊天卡片圆角固定 / 顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..32f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.corner = it }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
@@ -3498,7 +3498,7 @@ private fun LazyListScope.themeItems(
         GlassGroup(backdrop) {
             val t = com.haoai.agent.ui.theme.GlassTuning
             t.barBlur; t.barVeil
-            GlassSliderRow("顶栏模糊", dpText(t.barBlur), "影响：顶栏（标题文字需要更实的底）", t.barBlur, 0f..24f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.barBlur = it }
+            GlassSliderRow("顶栏模糊", dpText(t.barBlur), "影响：顶栏（仅壁纸模式；素色底走固定规范）", t.barBlur, 0f..24f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.barBlur = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("顶栏白雾", "${Math.round(t.barVeil * 100)}%", "影响：顶栏", t.barVeil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.barVeil = it }
         }

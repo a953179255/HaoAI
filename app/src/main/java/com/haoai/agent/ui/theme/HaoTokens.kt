@@ -271,22 +271,15 @@ fun haoButtonColors(level: HaoButtonLevel): Pair<Color, Color> {
 // 低不透明度 + 加厚模糊，折射露出来的同时依然可读
 const val HAO_LIQUID_ON_WALLPAPER = true
 
-/** 内容卡实际使用的表面不透明度：素色底 [HaoDimens.cardSurfaceAlpha] / 壁纸上更实。
- *  2026-10-09 起只管**聊天表面**（气泡旁胶囊/任务卡/收尾行）；设置/管理/抽屉的
- *  页面卡片走 [haoPageCardSurfaceAlpha]（独立档，用户要求拆开调）。 */
+/** 内容卡实际使用的表面不透明度：素色底 [HaoDimens.cardSurfaceAlpha]。
+ *  2026-10-09 只管**聊天表面**（气泡旁胶囊/任务卡/收尾行）；设置/管理/抽屉的
+ *  页面卡片走 [haoPageCardSurfaceAlpha]（独立档，用户要求拆开调）。
+ *  ⚠️ 壁纸上恒=滑杆 veil：删掉了旧的"壁纸深浅≠主题深浅时写死 0.34/0.50"分支
+ *  ——它与页面卡同款问题（深壁纸+浅主题时聊天白雾滑杆同样失灵）。 */
 @Composable
 fun haoCardSurfaceAlpha(): Float = when {
     !LocalOnWallpaper.current -> HaoDimens.cardSurfaceAlpha
-    HAO_LIQUID_ON_WALLPAPER -> {
-        val wpDark = LocalWallpaperDark.current
-        val themeDark = haoIsDark()
-        when {
-            wpDark == null -> HaoDimens.cardSurfaceAlphaOnWallpaperLiquid
-            wpDark != themeDark -> if (themeDark) 0.34f else 0.50f
-            else -> GlassTuning.veil          // 主题外观页实时调
-        }
-    }
-    else -> HaoDimens.cardSurfaceAlphaOnWallpaper
+    else -> GlassTuning.veil
 }
 
 /**
