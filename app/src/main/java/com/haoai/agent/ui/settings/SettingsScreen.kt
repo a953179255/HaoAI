@@ -556,27 +556,6 @@ fun SettingsScreen(
                             divider = true,
                             onClick = { onOpenSection(15) }
                         )
-                        // 玻璃实验室是调参工具：只在 debug 构建露入口；release 留 adb 启动通道给调试
-                        if (context.applicationInfo.flags and
-                            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
-                        ) {
-                            HaoRow(
-                                icon = Icons.Filled.Tune,
-                                tintIndex = 5,
-                                tone = HaoTone.Neutral,
-                                title = "玻璃实验室",
-                                subtitle = "实时调节玻璃的模糊 / 折射 / 白雾",
-                                divider = true,
-                                onClick = {
-                                    context.startActivity(
-                                        android.content.Intent(
-                                            context,
-                                            com.haoai.agent.glasslab.GlassLabActivity::class.java
-                                        )
-                                    )
-                                }
-                            )
-                        }
                     }
                 }
 
@@ -3161,7 +3140,8 @@ private fun LazyListScope.generalItems(
 /**
  * 「设置 → 主题外观」：主题模式/主题色/AMOLED/气泡/壁纸/动画风格（从通用页迁入），
  * 外加**玻璃质感**实时调参——预览卡压在折射测试图案上，拖滑杆所见即所得
- * （与玻璃实验室同一数据源 GlassTuning；这里松手即落盘，实验室退出才落盘）。
+ * （数据源 GlassTuning 单例，全 App 玻璃在绘制期读取；这里松手即落盘。
+ * 原「玻璃实验室」调试页 2026-10-08 已删，本页是唯一调参入口）。
  */
 private fun LazyListScope.themeItems(
     vm: SettingsViewModel,

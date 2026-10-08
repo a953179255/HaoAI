@@ -40,6 +40,7 @@ import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
+import com.haoai.agent.ui.theme.GlassTuning
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -195,9 +196,11 @@ fun LiquidSlider(
                     effects = {
                         val progress = dampedDragAnimation.pressProgress
                         blur(8f.dp.toPx() * (1f - progress))
+                        // 折射 2026-10-08 接全局调参（observeReads 通道，绘制期读单例）；
+                        // ×progress 保留"按下才起折射"的动效系数
                         lens(
-                            10f.dp.toPx() * progress,
-                            14f.dp.toPx() * progress,
+                            GlassTuning.lensHeight.dp.toPx() * progress,
+                            (GlassTuning.lensHeight * GlassTuning.lensAmountMul).dp.toPx() * progress,
                             chromaticAberration = true
                         )
                     },

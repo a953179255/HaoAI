@@ -76,7 +76,7 @@ fun HaoGroup(
 ) {
     val onWp = com.haoai.agent.ui.theme.LocalOnWallpaper.current
     val tuning = com.haoai.agent.ui.theme.GlassTuning
-    // 壁纸模式下圆角/折射/模糊/白雾全部走实时调参（玻璃实验室写入）
+    // 壁纸模式下圆角/折射/模糊/白雾全部走实时调参（主题外观页写入）
     val r = if (onWp) tuning.corner.dp else HaoDimens.groupRadius
     GlassPanel(
         backdrop = backdrop,

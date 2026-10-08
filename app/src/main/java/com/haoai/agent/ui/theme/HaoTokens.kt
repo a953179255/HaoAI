@@ -281,13 +281,13 @@ fun haoCardSurfaceAlpha(): Float = when {
         when {
             wpDark == null -> HaoDimens.cardSurfaceAlphaOnWallpaperLiquid
             wpDark != themeDark -> if (themeDark) 0.34f else 0.50f
-            else -> GlassTuning.veil          // 玻璃实验室实时调
+            else -> GlassTuning.veil          // 主题外观页实时调
         }
     }
     else -> HaoDimens.cardSurfaceAlphaOnWallpaper
 }
 
-/** 分组玻璃的背景模糊半径：素色底 radius/3；壁纸上走玻璃实验室实时调参。 */
+/** 分组玻璃的背景模糊半径：素色底 radius/3；壁纸上走主题外观页实时调参。 */
 @Composable
 fun haoGroupBlurRadius(): androidx.compose.ui.unit.Dp =
     if (LocalOnWallpaper.current && HAO_LIQUID_ON_WALLPAPER) GlassTuning.blur.dp

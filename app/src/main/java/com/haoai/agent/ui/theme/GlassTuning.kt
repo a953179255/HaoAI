@@ -6,10 +6,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * 玻璃质感**实时调参**：主题外观设置页 / 玻璃实验室写入，全项目读取。
+ * 玻璃质感**实时调参**：设置页「主题外观」写入，全项目读取。
  *
- * 为什么做成单例 State：滑杆拖动 → 这里变化 → 所有读它的玻璃（卡片/顶栏/输入框/
- * 抽屉/面板）当帧重组，效果即时可见；不用改代码重新编译。
+ * 为什么做成单例 State：滑杆拖动 → 这里变化 → 全 App 玻璃即时更新。
+ * ⚠️ 读取通道（2026-10-08 冻结修复定案）：玻璃组件的 blur/lens 必须在
+ * `drawBackdrop(effects = {...})` lambda **内部**直接读本单例——effects 跑在
+ * 库节点的 observeReads 里，值变化 → onObservedReadsChanged → 重算 renderEffect，
+ * 不依赖重组（组合期读值传给参数只对能重组到的 GlassPanel 调用点有效，
+ * LazyColumn 离屏缓存/跨页场景会滞留旧值——实测 pixel diff = 0）。
  *
  * 持久化：单例只是运行态镜像，真源在 AppSettings.glass（GlassParams）；
  * 启动时 [loadFrom] 灌入，调参页防抖 [snapshot] 落盘。

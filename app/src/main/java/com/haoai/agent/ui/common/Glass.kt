@@ -521,10 +521,17 @@ fun LiquidGlassButton(
             shape = { shape },
             effects = {
                 vibrancy()
-                // Catalog LiquidButton 同款：blur(2.dp) + lens(12.dp, 24.dp) —
-                // 适中折射强度，按压时 liquid 感最强
+                // Catalog LiquidButton 同款弱磨砂 blur(2.dp)：小控件磨砂过重会糊掉折射，
+                // 刻意保留写死（磨砂滑杆的"影响"范围 = 卡片/弹层/抽屉，不含按钮）。
+                // 折射 2026-10-08 接全局调参（滑杆"影响：所有玻璃表面"）：绘制期读单例
+                // 走 observeReads 通道，不依赖重组；原 12×24 写死改了滑杆没反应。
+                val t = com.haoai.agent.ui.theme.GlassTuning
                 blur(2.dp.toPx())
-                lens(12.dp.toPx(), 24.dp.toPx())
+                lens(
+                    refractionHeight = t.lensHeight.dp.toPx(),
+                    refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                    chromaticAberration = t.ca
+                )
             },
             layerBlock = {
                 val progress = highlight.pressProgress
@@ -601,10 +608,31 @@ fun GlassCard(
                 backdrop = backdrop,
                 shape = { shape },
                 effects = {
+                    // ⚠️ 2026-10-08 全站玻璃冻结修复：调参值在**绘制期**直接读 GlassTuning
+                    // 单例（effects 在节点 observeReads 里跑，值变化 → onObservedReadsChanged
+                    // → 重算 renderEffect，不依赖重组）；原硬编码 blur 4dp 时磨砂滑杆改了
+                    // 全站卡片没反应（实测 pixel diff = 0）。lensRadius 参数降级为开关
+                    // （>0 = 开折射），数值统一走全局配方。
+                    val t = com.haoai.agent.ui.theme.GlassTuning
                     vibrancy()
-                    blur(4.dp.toPx())
+                    blur(t.blur.dp.toPx())
                     if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 1.1f, (lensRadius * 1.2f).coerceIn(12.dp, 20.dp).toPx())
+                        if (t.lensFull) {
+                            val md = size.minDimension
+                            lens(
+                                refractionHeight = md * 0.5f,
+                                refractionAmount = md * 0.5f * t.lensAmountMul,
+                                depthEffect = true,
+                                chromaticAberration = t.ca
+                            )
+                        } else {
+                            lens(
+                                refractionHeight = t.lensHeight.dp.toPx(),
+                                refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                                depthEffect = true,
+                                chromaticAberration = t.ca
+                            )
+                        }
                     }
                 },
             layerBlock = {
@@ -767,8 +795,14 @@ fun LiquidToggle(
             shape = { CircleShape },
             effects = {
                 vibrancy()
+                // 弱磨砂保留写死（同按钮理由）；折射 2026-10-08 接全局调参（observeReads 通道）
+                val t = com.haoai.agent.ui.theme.GlassTuning
                 blur(2.dp.toPx())
-                lens(8.dp.toPx(), 16.dp.toPx())
+                lens(
+                    refractionHeight = t.lensHeight.dp.toPx(),
+                    refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                    chromaticAberration = t.ca
+                )
             },
             layerBlock = {
                 // 折射层随进度轻微位移：内芯像液体一样滚向目标侧
@@ -1504,8 +1538,14 @@ fun LiquidTabRow(
                     shape = { RoundedCornerShape(50) },
                     effects = {
                         vibrancy()
+                        // Tab 容器弱磨砂保留写死（小控件理由同按钮）；折射接全局调参
+                        val t = com.haoai.agent.ui.theme.GlassTuning
                         blur(6.dp.toPx())
-                        lens(12.dp.toPx(), 12.dp.toPx())
+                        lens(
+                            refractionHeight = t.lensHeight.dp.toPx(),
+                            refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                            chromaticAberration = t.ca
+                        )
                     },
                     onDrawSurface = {
                         drawRect(containerSurface)
@@ -1525,8 +1565,14 @@ fun LiquidTabRow(
                     shape = { RoundedCornerShape(50) },
                     effects = {
                         vibrancy()
+                        // 指示器弱磨砂保留写死（小控件理由同按钮）；折射接全局调参
+                        val t = com.haoai.agent.ui.theme.GlassTuning
                         blur(4.dp.toPx())
-                        lens(10.dp.toPx(), 12.dp.toPx())
+                        lens(
+                            refractionHeight = t.lensHeight.dp.toPx(),
+                            refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                            chromaticAberration = t.ca
+                        )
                     },
                     onDrawSurface = {
                         drawRect(tint, blendMode = BlendMode.Hue)
