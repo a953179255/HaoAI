@@ -258,7 +258,7 @@ fun SettingsScreen(
     if (lockedSection != null) {
         SectionPage(
             section = lockedSection,
-            vm = vm, settings = settings, backdrop = backdrop, wallpaper = wallpaper,
+            vm = vm, settings = settings, wallpaper = wallpaper,
             context = context, a11yOn = a11yOn, a11yTick = a11yTick,
             wpVersion = wpVersion, linuxState = linuxState,
             showScan = showScan, onShowScan = { showScan = true },
@@ -625,7 +625,7 @@ fun SettingsScreen(
     } else {
         SectionPage(
             section = section,
-            vm = vm, settings = settings, backdrop = backdrop, wallpaper = wallpaper,
+            vm = vm, settings = settings, wallpaper = wallpaper,
             context = context, a11yOn = a11yOn, a11yTick = a11yTick,
             wpVersion = wpVersion, linuxState = linuxState,
             showScan = showScan, onShowScan = { showScan = true },
@@ -1238,7 +1238,10 @@ private fun SectionPage(
     section: String,
     vm: SettingsViewModel,
     settings: AppSettings,
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    // ⚠️ 2026-10-08 修复：本参数（MainActivity 的 settingsBackdrop/plainBackdrop
+    // 共享画布）从未被 appLayer 挂载录制，玻璃采样到空图层 = 磨砂/折射滑杆
+    // 对各子页卡片全无效果（实测 blur 0↔16 diff=0；主页正常因为用的本页画布）。
+    // 现 SectionPage 内所有玻璃统一用下方自建的 localBackdrop，此参数已移除。
     wallpaper: android.graphics.Bitmap?,
     context: android.content.Context,
     a11yOn: Boolean,
@@ -1358,27 +1361,27 @@ private fun SectionPage(
             ) {
                 when (section) {
                     "brain" -> {
-                        brainItems(vm, settings, backdrop, onDeleteRequest = { onPendingDelete(it) }, onPickPurposeModel = { onPickPurposeModel(it) }, onEditCaps = onEditCaps)
-                        localItems(vm, backdrop, onOpenScan = onShowScan)
+                        brainItems(vm, settings, localBackdrop, onDeleteRequest = { onPendingDelete(it) }, onPickPurposeModel = { onPickPurposeModel(it) }, onEditCaps = onEditCaps)
+                        localItems(vm, localBackdrop, onOpenScan = onShowScan)
                     }
-                    "privacy" -> privacyItems(vm, settings, context, a11yOn, backdrop)
+                    "privacy" -> privacyItems(vm, settings, context, a11yOn, localBackdrop)
                     "search" -> searchItems(
-                        vm, settings, context, backdrop,
+                        vm, settings, context, localBackdrop,
                         onOpenCatalog = onOpenSearchCatalog
                     )
                     "searchcat" -> item {
                         SearchCatalogPage(
                             vm = vm,
                             settings = settings,
-                            backdrop = backdrop,
+                            backdrop = localBackdrop,
                             onBack = onBack
                         )
                     }
-                    "memory" -> memoryItems(vm, settings, onOpenMemories, backdrop, onPickDreamModel = onPickDreamModel)
-                    "workspace" -> workspaceItems(vm, backdrop) { treePickerLaunch() }
-                    "linux" -> linuxItems(vm, backdrop, linuxState)
+                    "memory" -> memoryItems(vm, settings, onOpenMemories, localBackdrop, onPickDreamModel = onPickDreamModel)
+                    "workspace" -> workspaceItems(vm, localBackdrop) { treePickerLaunch() }
+                    "linux" -> linuxItems(vm, localBackdrop, linuxState)
                     "general" -> generalItems(
-                        vm, settings, context, backdrop,
+                        vm, settings, context, localBackdrop,
                         wpVersion, onWpVersionChange = { },
                         onRequestClearWallpaper = onConfirmWpClear,
                         onWpChanged = { },
@@ -1394,14 +1397,14 @@ private fun SectionPage(
                         }
                     )
                     "theme" -> themeItems(
-                        vm, settings, context, backdrop,
+                        vm, settings, context, localBackdrop,
                         barBottomPx,
                         wpVersion, onWpVersionChange = { },
                         onRequestClearWallpaper = onConfirmWpClear,
                         onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex }
                     )
-                    "about" -> aboutItems(vm, settings, backdrop)
-                    "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = onConfirmClearLedger)
+                    "about" -> aboutItems(vm, settings, localBackdrop)
+                    "usage" -> usageItems(vm, settings, localBackdrop, onRequestClearLedger = onConfirmClearLedger)
                 }
             }
         }

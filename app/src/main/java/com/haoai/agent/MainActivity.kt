@@ -68,6 +68,8 @@ import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.chat.ChatScreen
 import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.LiquidGlassButton
+import com.haoai.agent.ui.common.appLayer
+import androidx.compose.ui.graphics.luminance
 import com.haoai.agent.ui.settings.SettingsScreen
 import com.haoai.agent.ui.theme.HaoTheme
 import kotlinx.coroutines.launch
@@ -868,7 +870,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // 首启引导也走横屏内容列（s=-1：不命中浏览器豁免），5 步卡片不会被 873dp 拉开
             LandscapeWrap(s = -1) {
                 OnboardingGlass(
-                    backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     settingsVm = settingsVm,
                     onSave = { name, soul, perm -> chatVm.completeOnboarding(name, soul, perm) }
                 )
@@ -1304,7 +1306,7 @@ private fun TransitionScrim(level: Float, color: Color, modifier: Modifier = Mod
 
 @Composable
 private fun OnboardingGlass(
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    wallpaper: android.graphics.Bitmap?,
     settingsVm: SettingsViewModel,
     onSave: (String, String, com.haoai.agent.agent.policy.PermissionMode) -> Unit
 ) {
@@ -1384,24 +1386,52 @@ private fun OnboardingGlass(
         else -> "跳过了，之后可配"
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .imePadding(),
-        // v3③：顶对齐 + 固定边距——进度条/「第 N 步」在任何一步都停在同一像素，
-        // 不再随各步内容高度上下浮动（原整体垂直居中是跳动根因）
-        contentAlignment = Alignment.TopCenter
-    ) {
-        // 首启引导 v2：6 步（欢迎 → 性格 → 名片 → 权限 → 大脑 → 完成），液态玻璃卡悬浮在壁纸之上
-        GlassPanel(
-            backdrop = backdrop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 22.dp, vertical = 18.dp),
-            radius = 30.dp,
-            surfaceAlpha = 0.36f
+    // 本页专属采样画布（2026-10-08 全站玻璃修复）：原来传的 settingsBackdrop
+    // 从未被 appLayer 挂载，玻璃采到空图层；与 SectionPage 同款改为自建+自挂。
+    val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+        wallpaper,
+        dark = androidx.compose.material3.MaterialTheme.colorScheme.background.luminance() < 0.5f,
+        baseTop = androidx.compose.material3.MaterialTheme.colorScheme.background,
+        baseBottom = androidx.compose.material3.MaterialTheme.colorScheme.background
+    )
+    Box(Modifier.fillMaxSize()) {
+        // 采样宿主：全屏铺壁纸底（与 RootApp 背后的壁纸同位；玻璃采样按全局坐标
+        // 对位，宿主必须全屏不偏移）。宿主子树内**绝不放玻璃**——渲染成环（各页铁律）
+        Box(Modifier.matchParentSize().appLayer(localBackdrop)) {
+            if (wallpaper != null) {
+                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+                androidx.compose.foundation.Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+            }
+        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .imePadding(),
+            // v3③：顶对齐 + 固定边距——进度条/「第 N 步」在任何一步都停在同一像素，
+            // 不再随各步内容高度上下浮动（原整体垂直居中是跳动根因）
+            contentAlignment = Alignment.TopCenter
         ) {
+            // 首启引导 v2：6 步（欢迎 → 性格 → 名片 → 权限 → 大脑 → 完成），液态玻璃卡悬浮在壁纸之上
+            GlassPanel(
+                backdrop = localBackdrop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 22.dp, vertical = 18.dp),
+                radius = 30.dp,
+                // 统一玻璃配方（2026-10-08）：原 radius30 继承 lens/blur 写死，
+                // 现折射/模糊/色差走全局调参，磨砂滑杆即时生效
+                blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
+                lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+                chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
+                surfaceAlpha = 0.36f
+            ) {
             Column(Modifier.padding(horizontal = 22.dp, vertical = 22.dp)) {
                 // ── 时间线：纯进度点（无文字标签——起名步的「欢迎」痕迹不再出现，
                 //    名字已在步 0 定过，界面只呈现当前步内容）──
@@ -1759,7 +1789,7 @@ private fun OnboardingGlass(
                             Spacer(Modifier.size(14.dp))
                             com.haoai.agent.ui.common.LiquidGlassButton(
                                 onClick = { myAvatarPicker.launch("image/*") },
-                                backdrop = backdrop,
+                                backdrop = localBackdrop,
                                 shape = RoundedCornerShape(percent = 50),
                                 surfaceColor = com.haoai.agent.ui.theme.haoButtonColors(
                                     com.haoai.agent.ui.theme.HaoButtonLevel.Primary
@@ -2266,14 +2296,14 @@ private fun OnboardingGlass(
                     }
                     when (step) {
                         0 -> onboardingPrimaryButton(
-                            backdrop = backdrop,
+                            backdrop = localBackdrop,
                             text = "下一步",
                             enabled = name.isNotBlank(),
                             onClick = { if (name.isNotBlank()) step = 1 }
                         )
-                        1 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 2 }
-                        2 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 3 }
-                        3 -> onboardingPrimaryButton(backdrop, "下一步", true) { step = 4 }
+                        1 -> onboardingPrimaryButton(localBackdrop, "下一步", true) { step = 2 }
+                        2 -> onboardingPrimaryButton(localBackdrop, "下一步", true) { step = 3 }
+                        3 -> onboardingPrimaryButton(localBackdrop, "下一步", true) { step = 4 }
                         4 -> {
                             if (brainStage == 0) {
                                 Text(
@@ -2292,14 +2322,14 @@ private fun OnboardingGlass(
                             }
                             if (brainStage == 0) {
                                 onboardingPrimaryButton(
-                                    backdrop = backdrop,
+                                    backdrop = localBackdrop,
                                     text = "下一步",
                                     enabled = brainPicked != null,
                                     onClick = { }
                                 )
                             } else if (brainStage == 1) {
                                 onboardingPrimaryButton(
-                                    backdrop = backdrop,
+                                    backdrop = localBackdrop,
                                     text = "下一步",
                                     enabled = draft != null && draft.baseUrl.isNotBlank(),
                                     onClick = {
@@ -2308,7 +2338,7 @@ private fun OnboardingGlass(
                                 )
                             } else {
                                 onboardingPrimaryButton(
-                                    backdrop = backdrop,
+                                    backdrop = localBackdrop,
                                     text = "完成",
                                     enabled = draft != null && draft.model.isNotBlank(),
                                     onClick = {
@@ -2321,7 +2351,7 @@ private fun OnboardingGlass(
                             }
                         }
                         else -> onboardingPrimaryButton(
-                            backdrop = backdrop,
+                            backdrop = localBackdrop,
                             text = "开始使用",
                             enabled = true,
                             onClick = {
@@ -2335,6 +2365,7 @@ private fun OnboardingGlass(
             }
         }
     }
+}
 }
 
 /** 完成清单行。 */
