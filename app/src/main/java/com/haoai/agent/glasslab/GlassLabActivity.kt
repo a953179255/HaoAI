@@ -329,21 +329,21 @@ private fun GlassLab() {
 private fun LabControls() {
     val context = LocalContext.current
     Column(Modifier.padding(horizontal = 16.dp)) {
-        SliderRow("模糊 dp（全 App 玻璃统一）", GlassTuning.blur, 0f, 30f) { GlassTuning.blur = it }
-        SliderRow("折射高度 dp（环带宽，统一）", GlassTuning.lensHeight, 0f, 80f) { GlassTuning.lensHeight = it }
-        SliderRow("强度倍数（统一；0=关折射）", GlassTuning.lensAmountMul, 0f, 8f) { GlassTuning.lensAmountMul = it }
-        SliderRow("白雾 alpha", GlassTuning.veil, 0f, 0.9f) { GlassTuning.veil = it }
-        SliderRow("圆角 dp", GlassTuning.corner, 8f, 40f) { GlassTuning.corner = it }
+        SliderRow("模糊 dp（全 App 玻璃统一）", GlassTuning.blur, 0f, 16f, 0.5f) { GlassTuning.blur = it }
+        SliderRow("折射高度 dp（环带宽，统一）", GlassTuning.lensHeight, 0f, 40f, 0.5f) { GlassTuning.lensHeight = it }
+        SliderRow("强度倍数（统一；0=关折射）", GlassTuning.lensAmountMul, 0f, 4f, 0.1f) { GlassTuning.lensAmountMul = it }
+        SliderRow("白雾 alpha", GlassTuning.veil, 0f, 0.9f, 0.01f) { GlassTuning.veil = it }
+        SliderRow("圆角 dp", GlassTuning.corner, 0f, 32f, 0.5f) { GlassTuning.corner = it }
         Text(
             "顶栏 / 输入框专属档（折射与全局一致，只有磨砂和白雾单独）",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp)
         )
-        SliderRow("顶栏模糊 dp", GlassTuning.barBlur, 0f, 30f) { GlassTuning.barBlur = it }
-        SliderRow("顶栏白雾 alpha", GlassTuning.barVeil, 0f, 0.9f) { GlassTuning.barVeil = it }
-        SliderRow("输入框模糊 dp", GlassTuning.inputBlur, 0f, 30f) { GlassTuning.inputBlur = it }
-        SliderRow("输入框白雾 alpha", GlassTuning.inputVeil, 0f, 0.9f) { GlassTuning.inputVeil = it }
+        SliderRow("顶栏模糊 dp", GlassTuning.barBlur, 0f, 24f, 0.5f) { GlassTuning.barBlur = it }
+        SliderRow("顶栏白雾 alpha", GlassTuning.barVeil, 0f, 0.9f, 0.01f) { GlassTuning.barVeil = it }
+        SliderRow("输入框模糊 dp", GlassTuning.inputBlur, 0f, 16f, 0.5f) { GlassTuning.inputBlur = it }
+        SliderRow("输入框白雾 alpha", GlassTuning.inputVeil, 0f, 0.9f, 0.01f) { GlassTuning.inputVeil = it }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -378,14 +378,23 @@ private fun LabControls() {
 }
 
 @Composable
-private fun SliderRow(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
+private fun SliderRow(
+    label: String,
+    value: Float,
+    min: Float,
+    max: Float,
+    /** 步进（0=连续）：设置页定稿 0.5dp/0.1×/0.01α 后实验室同步，两边手感一致 */
+    step: Float = 0f,
+    onChange: (Float) -> Unit
+) {
     Column(Modifier.padding(vertical = 2.dp)) {
         Text(
             "$label   ${"%.2f".format(value)}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Slider(value = value, onValueChange = onChange, valueRange = min..max)
+        val steps = if (step > 0f) ((max - min) / step).toInt() - 1 else 0
+        Slider(value = value, onValueChange = onChange, valueRange = min..max, steps = steps)
     }
 }
 

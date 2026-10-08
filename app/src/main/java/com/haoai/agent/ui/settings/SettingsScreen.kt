@@ -135,6 +135,8 @@ import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import com.haoai.agent.ui.theme.MotionStyle
 import com.haoai.agent.ui.theme.MotionTheme
 import androidx.compose.ui.graphics.luminance
@@ -1353,6 +1355,10 @@ private fun SectionPage(
                 )
             }
         }
+        // 标题栏底边（窗口坐标）：主题外观「玻璃质感」预览的吸顶停靠线——
+        // 停到栏底 = 无缝不露缝、预览顶不被栏压住（状态栏 43dp + 栏体压到 ~83dp，
+        // 固定 54dp 会把预览顶压进栏里，2026-10-08 真机实测）
+        var barBottomPx by remember { mutableStateOf(Float.MAX_VALUE) }
         Column(
             Modifier
                 .fillMaxSize()
@@ -1410,6 +1416,7 @@ private fun SectionPage(
                     )
                     "theme" -> themeItems(
                         vm, settings, context, backdrop,
+                        barBottomPx,
                         wpVersion, onWpVersionChange = { },
                         onRequestClearWallpaper = onConfirmWpClear,
                         onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex }
@@ -1425,6 +1432,7 @@ private fun SectionPage(
             onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .onGloballyPositioned { barBottomPx = it.boundsInWindow().bottom }
         )
         if (pickerSeed != null) {
             ColorPickerDialog(
@@ -3160,6 +3168,8 @@ private fun LazyListScope.themeItems(
     settings: AppSettings,
     context: android.content.Context,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    /** 标题栏底边（窗口坐标，未测得时为 MAX_VALUE）：预览吸顶的停靠线 */
+    barBottomPx: Float,
     wpVersion: Boolean,
     onWpVersionChange: (Boolean) -> Unit,
     onRequestClearWallpaper: () -> Unit,
@@ -3404,63 +3414,54 @@ private fun LazyListScope.themeItems(
         }
     }
 
-    // ── 玻璃质感：预览吸顶（stickyHeader），往下滚调参时预览始终在眼前 ──
-    // 顶部垫 54dp：sticky 钉的是视口顶边，而页面标题栏（GlassPageBar，高≈52dp）
-    // 悬浮在视口上方——不垫开的话吸顶后预览顶部会被标题栏盖住（2026-10-08 实测
-    // 顶栏表面被裁一半）。
-    // 2026-10-08 用户实测后从实底改玻璃：原来 background(colorScheme.background)
-    // 在壁纸模式下是一块不跟壁纸的死白直角块，且调磨砂/白雾毫无反应。现与
-    // 其他选项卡同一套配方（haoCardSurfaceAlpha/haoGroupBlurRadius 吃调参滑杆，
-    // 折射吃全局），吸顶时下方滑杆从玻璃后面滑过 = 磨砂效果的活演示。
-    // 四角全圆（首版只圆底部两角——未吸顶时卡片在页面中部，顶边直角露馅，
-    // 用户实测"有两个角是直角的，和其他的并不一样"）
+    // ── 玻璃质感（方案定稿 2026-10-08 效果图确认）──
+    // · 标题与其他段落一致：裸标题（HaoSectionTitle 无背板）随内容滚走，不吸顶；
+    // · 吸顶只剩预览卡，卡顶用「动态停靠区」把 54dp 让位做在卡外——静止时高度为 0
+    //   （标题紧贴预览、无空隙），上滑逼近标题栏时长到 54dp 把卡"停"在栏下，之后
+    //   该区始终藏在 GlassPageBar 后面 = 裸背景，不面板不磨砂；
+    // · 预览卡不透明实底（surfaceAlpha=1）——用户确认：透底干扰演示判读。
+    item { SectionTitle("玻璃质感") }
     stickyHeader {
         val t = com.haoai.agent.ui.theme.GlassTuning
-        com.haoai.agent.ui.common.GlassPanel(
-            backdrop = backdrop,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(t.corner.dp),
-            surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
-            blurRadius = com.haoai.agent.ui.theme.haoGroupBlurRadius(),
-            lensRadius = t.lensHeight.dp,
-            lensAmountMul = t.lensAmountMul,
-            chromaticAberration = t.ca,
-            lensFull = t.lensFull
+        var topPx by remember { mutableStateOf(Float.MAX_VALUE) }
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        Column(
+            Modifier.onGloballyPositioned { topPx = it.boundsInWindow().top }
         ) {
-            Column(Modifier.padding(top = 54.dp)) {
-                SectionTitle("玻璃质感")
-                // 预览文案用真实档案（用户反馈：写死"小豪/柠瑶"不对，别的用户名字不同）
-                GlassPreviewScene(
-                    agentName = settings.agentName.ifBlank { "HaoAI" },
-                    agentEmoji = settings.avatarEmoji,
-                    pageBackdrop = backdrop
-                )
+            // 停靠区：h = clamp(标题栏底边 - 卡顶现高, 0, 54dp)。卡顶由内容流/吸顶
+            // 决定，本区只向下撑开，不反作用于卡顶——无反馈回路。停到栏底 = 无缝、
+            // 预览顶不被栏压住；静止时（卡顶远低于栏底）h=0，标题紧贴预览无空隙
+            val zoneH = with(density) {
+                val maxZone = 54.dp.toPx()
+                if (barBottomPx == Float.MAX_VALUE) 0.dp
+                else (barBottomPx - topPx).coerceIn(0f, maxZone).toDp()
             }
+            Spacer(Modifier.height(zoneH))
+            // 预览文案用真实档案（用户反馈：写死"小豪/柠瑶"不对，别的用户名字不同）
+            GlassPreviewCard(
+                agentName = settings.agentName.ifBlank { "HaoAI" },
+                agentEmoji = settings.avatarEmoji,
+                backdrop = backdrop
+            )
         }
     }
+
+    // ── 调参分三组：裸标题在卡外（与其他段落一致），按档位归类 ──
+    item { SectionTitle("全局玻璃") }
     item {
         GlassGroup(backdrop) {
             val t = com.haoai.agent.ui.theme.GlassTuning
             // 观察单例 State：滑杆标签即时回显（玻璃组件在 draw 期读，另路重组）
             t.blur; t.lensHeight; t.lensAmountMul; t.veil; t.corner
-            t.barBlur; t.barVeil; t.inputBlur; t.inputVeil
-            GlassSliderRow("磨砂模糊（卡片/弹层/抽屉）", "${t.blur.toInt()}dp", "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.blur = it }
+            GlassSliderRow("磨砂模糊（卡片/弹层/抽屉）", dpText(t.blur), "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.blur = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("折射环带宽度", "${t.lensHeight.toInt()}dp", "影响：所有玻璃表面", t.lensHeight, 0f..80f, backdrop, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
+            GlassSliderRow("折射环带宽度", dpText(t.lensHeight), "影响：所有玻璃表面", t.lensHeight, 0f..40f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("折射强度倍数", "×${"%.1f".format(t.lensAmountMul)}", "影响：所有玻璃表面（0 = 关折射）", t.lensAmountMul, 0f..8f, backdrop, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
+            GlassSliderRow("折射强度倍数", "×${"%.1f".format(t.lensAmountMul)}", "影响：所有玻璃表面（0 = 关折射）", t.lensAmountMul, 0f..4f, backdrop, step = 0.1f, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("玻璃圆角", "${t.corner.toInt()}dp", "影响：卡片、弹层（顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..40f, backdrop, onEnd = { vm.persistGlass() }) { t.corner = it }
+            GlassSliderRow("玻璃圆角", dpText(t.corner), "影响：卡片、弹层（顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..32f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.corner = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("卡片白雾", "${(t.veil * 100).toInt()}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.veil = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("顶栏模糊", "${t.barBlur.toInt()}dp", "影响：顶栏（标题文字需要更实的底）", t.barBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.barBlur = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("顶栏白雾", "${(t.barVeil * 100).toInt()}%", "影响：顶栏", t.barVeil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.barVeil = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("输入框模糊", "${t.inputBlur.toInt()}dp", "影响：底部输入框（常年压在正文上）", t.inputBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.inputBlur = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("输入框白雾", "${(t.inputVeil * 100).toInt()}%", "影响：输入框（独立于卡片）", t.inputVeil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.inputVeil = it }
+            GlassSliderRow("卡片白雾", "${Math.round(t.veil * 100)}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.veil = it }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
@@ -3495,6 +3496,26 @@ private fun LazyListScope.themeItems(
                 )
                 TextButton(onClick = { vm.resetGlass() }) { Text("还原默认") }
             }
+        }
+    }
+    item { SectionTitle("顶栏专属") }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            t.barBlur; t.barVeil
+            GlassSliderRow("顶栏模糊", dpText(t.barBlur), "影响：顶栏（标题文字需要更实的底）", t.barBlur, 0f..24f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.barBlur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("顶栏白雾", "${Math.round(t.barVeil * 100)}%", "影响：顶栏", t.barVeil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.barVeil = it }
+        }
+    }
+    item { SectionTitle("输入框专属") }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            t.inputBlur; t.inputVeil
+            GlassSliderRow("输入框模糊", dpText(t.inputBlur), "影响：底部输入框（常年压在正文上）", t.inputBlur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.inputBlur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("输入框白雾", "${Math.round(t.inputVeil * 100)}%", "影响：输入框（独立于卡片）", t.inputVeil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.inputVeil = it }
         }
     }
 
@@ -3538,7 +3559,8 @@ private fun LazyListScope.themeItems(
     }
 }
 
-/** 玻璃调参滑杆行：标题+数值同行，下面一行"影响范围"说明；拖动直改单例（实时预览），松手落盘。 */
+/** 玻璃调参滑杆行：标题+数值同行，下面一行"影响范围"说明；拖动直改单例（实时预览），松手落盘。
+ *  [step] > 0 时按步进吸附（0.5dp 精调 / 0.01=1%），值变化仍逐帧回调、标签即显。 */
 @Composable
 private fun GlassSliderRow(
     title: String,
@@ -3547,6 +3569,7 @@ private fun GlassSliderRow(
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    step: Float = 0f,
     onEnd: () -> Unit,
     onChange: (Float) -> Unit
 ) {
@@ -3567,7 +3590,9 @@ private fun GlassSliderRow(
         )
         LiquidSlider(
             value = { value },
-            onValueChange = onChange,
+            onValueChange = { v ->
+                onChange(if (step > 0f) Math.round(v / step).toFloat() * step else v)
+            },
             onValueChangeFinished = onEnd,
             valueRange = range,
             visibilityThreshold = 0.01f,
@@ -3577,52 +3602,50 @@ private fun GlassSliderRow(
     }
 }
 
+/** dp 文案：整数不带小数；0.5 步进值带一位（4dp / 4.5dp）。 */
+private fun dpText(v: Float): String =
+    if (v % 1f == 0f) "${v.toInt()}dp" else "%.1f".format(v) + "dp"
+
 /**
- * 玻璃质感预览场景（吸顶）：高对比测试图案打底（纯色上折射隐形），四种真实
- * 表面紧凑叠放——顶栏 / 两张卡片 / 输入框，各自绑自己的模糊与白雾档，
- * 折射/倍数/圆角/色差全局共享。滑杆改 GlassTuning 即时可见，与聊天页同配方
- * 同渲染路径。自带局部采样层（不依赖页面 backdrop，避开共享画布成环的坑）。
- *
- * 布局紧凑原则（2026-10-08 用户反馈）：预览占屏越少越好，把空间留给滑杆——
- * 表面之间不留空带，输入框直接贴卡片下方（真机聊天页也正是这样叠的）。
+ * 玻璃质感预览卡（方案定稿 2026-10-08 效果图确认）：
+ * - **不透明实底**（surfaceAlpha=1：浅色纯白 / 深色板岩，glassSurfaceColor 规范）——
+ *   用户确认透底会干扰演示判读；blur/lens 置 0（表面已不透明，采样无从呈现）；
+ * - 圆角吃玻璃圆角滑杆；fillMaxWidth 走列表同一内边距 ⇒ 与选项卡**同宽**；
+ * - 纹理与三行演示照旧：图案层只画网格线（opaqueBase=false），三行各吃各档，
+ *   磨砂压在网格上变化可见（顶栏/卡片/输入框档）。
+ * 自带局部采样层（不依赖页面 backdrop，避开共享画布成环的坑）。
  */
 @Composable
-private fun GlassPreviewScene(
+private fun GlassPreviewCard(
     agentName: String,
     agentEmoji: String,
-    pageBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     val t = com.haoai.agent.ui.theme.GlassTuning
-    val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+    val patternBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
             .height(140.dp)
     ) {
-        // 实底玻璃底板（2026-10-08 用户反馈：预览不能跟着外层吸顶卡一起透明，
-        // 透成一片就看不出演示效果了）：采样页面壁纸（不是死白）、配方与选项卡
-        // 同源（磨砂/白雾/圆角全吃滑杆，白雾在卡片档上再垫 0.30 保证演示可读），
-        // 圆角吃玻璃圆角滑杆
+        // 实底面板（悬浮三件套与选项卡同款分层）
         com.haoai.agent.ui.common.GlassPanel(
-            backdrop = pageBackdrop,
+            backdrop = backdrop,
             modifier = Modifier.matchParentSize(),
             radius = t.corner.dp,
-            surfaceAlpha = (com.haoai.agent.ui.theme.haoCardSurfaceAlpha() + 0.30f).coerceAtMost(0.92f),
-            blurRadius = com.haoai.agent.ui.theme.haoGroupBlurRadius(),
-            lensRadius = t.lensHeight.dp,
-            lensAmountMul = t.lensAmountMul,
-            chromaticAberration = t.ca,
-            lensFull = t.lensFull
+            surfaceAlpha = 1f,
+            blurRadius = 0.dp,
+            lensRadius = 0.dp,
+            lensAmountMul = 0f,
+            chromaticAberration = false,
+            floating = true
         ) {}
-        // 采样宿主：测试图案挂进 backdrop（玻璃采样的就是这一层）
-        // 圆角吃玻璃圆角滑杆；图案不画实底（opaqueBase=false）——纹理直接画在
-        // 下面的实底玻璃上，白底直角块 + 白底上调磨砂看不出变化的问题一起修
+        // 纹理层：网格画在实底之上；圆角吃玻璃圆角滑杆
         Box(
             Modifier
                 .matchParentSize()
                 .clip(RoundedCornerShape(t.corner.dp))
-                .layerBackdrop(backdrop)
+                .layerBackdrop(patternBackdrop)
         ) {
             com.haoai.agent.ui.common.RefractionTestPattern(
                 dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
@@ -3637,7 +3660,7 @@ private fun GlassPreviewScene(
         ) {
             // 顶栏（方角，全宽，绑顶栏档）
             GlassPanel(
-                backdrop = backdrop,
+                backdrop = patternBackdrop,
                 modifier = Modifier.fillMaxWidth().height(30.dp),
                 radius = 0.dp,
                 lensRadius = t.lensHeight.dp,
@@ -3657,7 +3680,7 @@ private fun GlassPreviewScene(
             }
             // 卡片（圆角可调，绑卡片档）——文案用真实 Agent 名（用户反馈：写死名字不对）
             GlassPanel(
-                backdrop = backdrop,
+                backdrop = patternBackdrop,
                 modifier = Modifier.fillMaxWidth().height(44.dp),
                 radius = t.corner.dp,
                 lensRadius = t.lensHeight.dp,
@@ -3678,7 +3701,7 @@ private fun GlassPreviewScene(
             }
             // 输入框（胶囊形固定，绑输入框档）——placeholder 与聊天页同规则
             GlassPanel(
-                backdrop = backdrop,
+                backdrop = patternBackdrop,
                 modifier = Modifier.fillMaxWidth().height(38.dp),
                 radius = 19.dp,
                 lensRadius = t.lensHeight.dp,
