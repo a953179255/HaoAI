@@ -1137,7 +1137,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
                 // 4.2 内置浏览器：与工具共用 BrowserController WebView 池
                 7 -> com.haoai.agent.ui.browser.BrowserScreen(
-                    backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { enterChat(); screen = 0 }
                 )
                 else -> ChatScreen(

@@ -391,6 +391,11 @@ object BrowserController {
         return WebView(ctx).apply {
             // 实战加固：OEM GPU 合成在弹层/换挂场景下白屏，强制硬件层
             setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+            // 未加载/空白文档的 WebView 默认刷白，整屏白底盖住页面壁纸；
+            // 用户实测「新建标签再删旧标签才变透明」= 两种 WebView 态的差异。
+            // 统一透明底：空白态透出壁纸（内置浏览器页自带对齐壁纸 Image），
+            // 真实网页自带白底不受影响（2026-10-08）
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             // target=_blank 就地打开：自动化里 onCreateWindow 是死路

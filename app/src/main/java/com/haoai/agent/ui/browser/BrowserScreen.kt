@@ -48,8 +48,13 @@ import com.haoai.agent.agent.browser.BrowserController
 import com.haoai.agent.ui.common.GlassPanel
 import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.appLayer
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import com.haoai.agent.ui.common.CompactGlassField
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 
 /**
  * 4.2 内置浏览器界面：WebView 容器（多标签条 + 地址栏 + 后退/刷新）。
@@ -60,8 +65,10 @@ import com.haoai.agent.ui.common.CompactGlassField
  */
 @Composable
 fun BrowserScreen(
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** 全局壁纸开时传入：页面自带对齐的壁纸底（与其他子页同款；原实现漏了这个，
+     *  壁纸模式下整页只有顶栏玻璃透出壁纸、页面主体还是主题实底，2026-10-08 用户实测） */
+    wallpaper: android.graphics.Bitmap? = null
 ) {
     val scope = rememberCoroutineScope()
     val revision by BrowserController.revision.collectAsState()
@@ -97,12 +104,54 @@ fun BrowserScreen(
             // 平移转场页面必须有实底：否则转场中本页滑入时透出下层页面
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // ★ 采样宿主（2026-09-22 挂载铁律）：本页底色纯色，宿主录 onDraw 渐变即可，
+        // ★ 页面专属采样画布（与其他子页同款，2026-10-08 接壁纸）：每页自建
+        // rememberAppBackdrop，挂载与采样都在本页，避免共用画布转场时互相 record 覆盖
+        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
+            wallpaper,
+            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+            baseTop = MaterialTheme.colorScheme.background,
+            baseBottom = MaterialTheme.colorScheme.background
+        )
+        // ★ 首帧预热采样层：新页首帧采样层为空，转场动画中玻璃会消失几帧；
+        // 组合提交时先 record 壁纸打底，首帧即磨砂（只做一次，防止与宿主 record 交替抽搐）
+        var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+        var glassPreheated by remember { mutableStateOf(false) }
+        val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
+        val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
+        androidx.compose.runtime.SideEffect {
+            if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
+                val img = wallpaper.asImageBitmap()
+                glassPreheated = true
+                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                    drawImage(
+                        img,
+                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
+                    )
+                }
+            }
+        }
+        // ★ 采样宿主（2026-09-22 挂载铁律）：只录背景层（壁纸；无壁纸时录主题底）。
         // 玻璃顶栏在宿主外采样（宿主内含玻璃 = RenderNode 成环 = SIGSEGV）
-        Box(Modifier.matchParentSize().appLayer(backdrop))
+        Box(
+            Modifier
+                .matchParentSize()
+                .appLayer(localBackdrop)
+                .onSizeChanged { glassHostSize = it }
+        ) {
+            if (wallpaper != null) {
+                val wpImage = remember(wallpaper) { wallpaper.asImageBitmap() }
+                Image(
+                    bitmap = wpImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+            }
+        }
         Column(Modifier.fillMaxSize()) {
         GlassPanel(
-            backdrop = backdrop,
+            backdrop = localBackdrop,
             modifier = Modifier
                 .fillMaxWidth()
                 // 用户实测反馈：不垫状态栏高度时标签条与系统状态栏重叠

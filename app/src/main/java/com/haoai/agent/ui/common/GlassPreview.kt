@@ -18,9 +18,13 @@ import android.graphics.Paint
  * - **密集文字行**：模拟聊天正文穿玻璃的真实场景
  *
  * 玻璃实验室与设置页「主题外观」共用（2026-10-08 从 GlassLabActivity 提取）。
+ *
+ * @param opaqueBase true = 画实色底（实验室"测试图案"模式，图案自带背景）；
+ *   false = 只画纹理不画底（设置页预览框：底下透出壁纸/吸顶玻璃——原先实色底
+ *   在壁纸模式下是一块死白直角块，且白底上磨砂调了也看不出变化，2026-10-08 用户实测）
  */
 @Composable
-fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier) {
+fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier, opaqueBase: Boolean = true) {
     // clipToBounds：同心圆半径按 h 递增（r=140,400,660…），预览框只有 140dp 高时
     // 大圆会溢出画布（Canvas 默认不裁剪）——实验室整屏背景靠窗口裁掉看不出来，
     // 设置页预览框没窗口边界，圆圈就爬到标题和滑杆上了（2026-10-08 用户实测）
@@ -29,7 +33,7 @@ fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier) {
         val h = size.height
         val base = if (dark) Color(0xFF14171C) else Color(0xFFF4F5F7)
         val line = if (dark) Color(0xFF8E97A5) else Color(0xFF2A2F38)
-        drawRect(base)
+        if (opaqueBase) drawRect(base)
         // 对角彩条带（低饱和，垫在网格下）：边界错位可见折射作用域
         val stripes = listOf(
             Color(0x33FF5C5C), Color(0x33FFB45C), Color(0x3359C77A),

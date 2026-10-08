@@ -952,7 +952,10 @@ fun GlassPopup(
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
             },
             radius = radius,
-            surfaceAlpha = surfaceAlpha,
+            // 白雾/模糊 2026-10-08 接入全局调参（滑杆标了"影响：弹层"却一直没接，
+            // 用户实测发现）：白雾按档位锚点等比映射，停默认值时外观零变化
+            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(surfaceAlpha),
+            blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             // 统一玻璃配方（2026-10-08）：原继承 lensRadius=radius（圆角越大折射越重），
             // 现折射/模糊/色差走全局调参
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
@@ -980,7 +983,8 @@ fun GlassBottomSheet(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     surfaceAlpha: Float = 0.72f,
-    blurRadius: Dp = 24.dp,
+    /** 默认吃全局磨砂滑杆（2026-10-08 接入，原硬编码 24dp 调参页改了没反应） */
+    blurRadius: Dp = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -1025,8 +1029,13 @@ fun GlassBottomSheet(
                 .fillMaxWidth()
                 .graphicsLayer { translationY = eff }
                 .clickable(interactionSource = null, indication = null) {},
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            surfaceAlpha = surfaceAlpha,
+            // 顶角圆角吃全局玻璃圆角滑杆（2026-10-08，原硬编码 24dp）
+            shape = RoundedCornerShape(
+                topStart = com.haoai.agent.ui.theme.GlassTuning.corner.dp,
+                topEnd = com.haoai.agent.ui.theme.GlassTuning.corner.dp
+            ),
+            // 白雾按弹层锚点等比映射（滑杆停默认值时外观零变化，见 popupVeil 注释）
+            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(surfaceAlpha),
             blurRadius = blurRadius,
             // 统一玻璃配方（2026-10-08）：折射/倍数/色差走全局调参
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
@@ -1117,8 +1126,10 @@ fun GlassAlertDialog(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
             radius = 28.dp,
-            surfaceAlpha = 0.92f,
-            blurRadius = 28.dp,
+            // 白雾/模糊 2026-10-08 接入全局调参（映射见 popupVeil 注释；圆角 28 是
+            // 对话框的版式，不吃滑杆——滑杆标签的"弹层"指 popup/底部弹层/消息操作）
+            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(0.92f),
+            blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             // 统一玻璃配方（2026-10-08）：原继承 lensRadius=28×默认2=位移56 全 App
             // 最重；折射/倍数走全局调参，色差改走开关
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
@@ -1290,7 +1301,10 @@ fun CompactGlassField(
             .height(40.dp)
             .background(container, shape)
             .border(if (focused) 1.5.dp else 1.dp, borderColor, shape)
-            .padding(end = 4.dp),
+            // 起始内边距放 Row 级：label 为空时（如浏览器地址栏）内容原来从 0 起，
+            // 占位字/输入字直接压在左边框上（2026-10-08 用户实测重叠）。
+            // label 非空时位置不变（原 label 自带 12dp，现改由 Row 出）
+            .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 固定标签：始终在内容左侧，与已填值并排；label 为空 = 无标签（纯占位框）
@@ -1299,8 +1313,7 @@ fun CompactGlassField(
                 label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (focused) 0.95f else 0.8f),
-                maxLines = 1,
-                modifier = Modifier.padding(start = 12.dp)
+                maxLines = 1
             )
             Spacer(Modifier.width(8.dp))
         }

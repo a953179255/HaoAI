@@ -3407,19 +3407,35 @@ private fun LazyListScope.themeItems(
     // ── 玻璃质感：预览吸顶（stickyHeader），往下滚调参时预览始终在眼前 ──
     // 顶部垫 54dp：sticky 钉的是视口顶边，而页面标题栏（GlassPageBar，高≈52dp）
     // 悬浮在视口上方——不垫开的话吸顶后预览顶部会被标题栏盖住（2026-10-08 实测
-    // 顶栏表面被裁一半）。背景画在 padding 之外，钉住时标题栏底下也是实底不穿帮
+    // 顶栏表面被裁一半）。
+    // 2026-10-08 用户实测后从实底改玻璃：原来 background(colorScheme.background)
+    // 在壁纸模式下是一块不跟壁纸的死白直角块，且调磨砂/白雾毫无反应。现与
+    // 其他选项卡同一套配方（haoCardSurfaceAlpha/haoGroupBlurRadius 吃调参滑杆，
+    // 折射吃全局），吸顶时下方滑杆从玻璃后面滑过 = 磨砂效果的活演示。
+    // 四角全圆（首版只圆底部两角——未吸顶时卡片在页面中部，顶边直角露馅，
+    // 用户实测"有两个角是直角的，和其他的并不一样"）
     stickyHeader {
-        Column(
-            Modifier
-                .background(MaterialTheme.colorScheme.background)
-                .padding(top = 54.dp)
+        val t = com.haoai.agent.ui.theme.GlassTuning
+        com.haoai.agent.ui.common.GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(t.corner.dp),
+            surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+            blurRadius = com.haoai.agent.ui.theme.haoGroupBlurRadius(),
+            lensRadius = t.lensHeight.dp,
+            lensAmountMul = t.lensAmountMul,
+            chromaticAberration = t.ca,
+            lensFull = t.lensFull
         ) {
-            SectionTitle("玻璃质感")
-            // 预览文案用真实档案（用户反馈：写死"小豪/柠瑶"不对，别的用户名字不同）
-            GlassPreviewScene(
-                agentName = settings.agentName.ifBlank { "HaoAI" },
-                agentEmoji = settings.avatarEmoji
-            )
+            Column(Modifier.padding(top = 54.dp)) {
+                SectionTitle("玻璃质感")
+                // 预览文案用真实档案（用户反馈：写死"小豪/柠瑶"不对，别的用户名字不同）
+                GlassPreviewScene(
+                    agentName = settings.agentName.ifBlank { "HaoAI" },
+                    agentEmoji = settings.avatarEmoji,
+                    pageBackdrop = backdrop
+                )
+            }
         }
     }
     item {
@@ -3571,7 +3587,11 @@ private fun GlassSliderRow(
  * 表面之间不留空带，输入框直接贴卡片下方（真机聊天页也正是这样叠的）。
  */
 @Composable
-private fun GlassPreviewScene(agentName: String, agentEmoji: String) {
+private fun GlassPreviewScene(
+    agentName: String,
+    agentEmoji: String,
+    pageBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop
+) {
     val t = com.haoai.agent.ui.theme.GlassTuning
     val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
     Box(
@@ -3580,11 +3600,34 @@ private fun GlassPreviewScene(agentName: String, agentEmoji: String) {
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .height(140.dp)
     ) {
+        // 实底玻璃底板（2026-10-08 用户反馈：预览不能跟着外层吸顶卡一起透明，
+        // 透成一片就看不出演示效果了）：采样页面壁纸（不是死白）、配方与选项卡
+        // 同源（磨砂/白雾/圆角全吃滑杆，白雾在卡片档上再垫 0.30 保证演示可读），
+        // 圆角吃玻璃圆角滑杆
+        com.haoai.agent.ui.common.GlassPanel(
+            backdrop = pageBackdrop,
+            modifier = Modifier.matchParentSize(),
+            radius = t.corner.dp,
+            surfaceAlpha = (com.haoai.agent.ui.theme.haoCardSurfaceAlpha() + 0.30f).coerceAtMost(0.92f),
+            blurRadius = com.haoai.agent.ui.theme.haoGroupBlurRadius(),
+            lensRadius = t.lensHeight.dp,
+            lensAmountMul = t.lensAmountMul,
+            chromaticAberration = t.ca,
+            lensFull = t.lensFull
+        ) {}
         // 采样宿主：测试图案挂进 backdrop（玻璃采样的就是这一层）
-        Box(Modifier.matchParentSize().layerBackdrop(backdrop)) {
+        // 圆角吃玻璃圆角滑杆；图案不画实底（opaqueBase=false）——纹理直接画在
+        // 下面的实底玻璃上，白底直角块 + 白底上调磨砂看不出变化的问题一起修
+        Box(
+            Modifier
+                .matchParentSize()
+                .clip(RoundedCornerShape(t.corner.dp))
+                .layerBackdrop(backdrop)
+        ) {
             com.haoai.agent.ui.common.RefractionTestPattern(
                 dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-                modifier = Modifier.matchParentSize()
+                modifier = Modifier.matchParentSize(),
+                opaqueBase = false
             )
         }
         // 三表面纵向叠放（6dp 间距）：尺寸按"文字一行放得下"定，不追求极限压缩

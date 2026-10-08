@@ -5938,12 +5938,15 @@ private fun MessageActionPanel(
                 .padding(horizontal = 14.dp)
                 .padding(bottom = 24.dp)
                 .clickable(interactionSource = null, indication = null) {},
-            radius = 24.dp,
-            surfaceAlpha = 0.92f,
-            blurRadius = 24.dp,
+            // 2026-10-08：圆角/白雾/模糊全部接入全局调参（滑杆标着"影响：弹层"，
+            // 这块面板一直没接，用户实测发现）。白雾按弹层锚点 0.92 等比映射——
+            // 滑杆停默认值时仍是原来的 0.92 不透明（压在消息流上可读性优先），
+            // 调低才有穿透变化（下限 0.552 防正文穿字）
+            radius = com.haoai.agent.ui.theme.GlassTuning.corner.dp,
+            surfaceAlpha = com.haoai.agent.ui.theme.GlassTuning.popupVeil(0.92f),
+            blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius24×默认倍数2=位移48
-            // （比输入框原状还重）。白雾/模糊保留弹窗档（0.92 不透明压在消息流上，
-            // 可读性优先），只把折射并入全局
+            // （比输入框原状还重），折射早已并入全局
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
             lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
