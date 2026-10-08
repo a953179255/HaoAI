@@ -12,9 +12,27 @@ import kotlinx.coroutines.launch
  * 两条都遵守同一条红线：**写失败绝不影响对话主流程**（全部 runCatching 包裹）。
  */
 internal fun AgentEngine.maybeExtractMemory() {
+    if (depth != 0) return
+    val bgScope = backgroundScope ?: return
+    // 近期日志落笔（2026-10-09 补产品缺口）：memoryEnabled 门控、**不受 autoLearn 门控**
+    // ——autoLearn 管的是"辅助 LLM 提取"（贵、可关），日志只是本地写一行文件；
+    // 也不受端侧跳过影响（下面提取段的 return 是给提取的，日志端侧模型同样要落笔）。
+    if (memoryEnabled) {
+        journal?.let { j ->
+            val lastUser = runCatching {
+                session.messages.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content
+            }.getOrNull().orEmpty()
+            val lastAssistant = runCatching {
+                session.messages.lastOrNull { it.role == ChatMessage.ROLE_ASSISTANT }?.content
+            }.getOrNull().orEmpty()
+            if (lastUser.isNotBlank()) {
+                bgScope.launch { runCatching { j.recordTurn(lastUser, lastAssistant) } }
+            }
+        }
+    }
     val bank = memoryBank ?: return
-    val scope = backgroundScope ?: return
-    if (!memoryEnabled || !autoLearn || depth != 0) return
+    val scope = bgScope
+    if (!autoLearn) return
     // 端侧模型跳过自动记忆提取：辅助请求会冲掉 llama-server 单 slot 前缀缓存，
     // 让 Agent 工具循环的每轮请求全量重算 prefill（手机上每轮多花几十秒）
     if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) return

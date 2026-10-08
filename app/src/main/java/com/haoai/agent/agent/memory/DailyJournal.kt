@@ -143,6 +143,26 @@ class DailyJournal(
     }
 
     /**
+     * 回合落笔（2026-10-09 补的产品缺口）：每完成一个主聊天回合，记一条
+     * "今天聊了什么/办成了什么"。此前日志只有 handoff 收尾与模型显式
+     * memory(journal) 两个入口，日常聊天一条都不写——设置页"今日日志"
+     * 与「记忆与梦境」的"近期动态"对普通用户永远是 0（用户实锤"日志没了"，
+     * 实为从来没有写入通道）。
+     *
+     * 护栏：imp=2 低于晋升线 4，永不进长期库；每日 50 条配额 + 注入侧
+     * takeLast(15) 截断，长聊不炸提示词；append() 自带同文去重与 sanitize。
+     * 纯本地文件写（无辅助 LLM 请求），端侧模型同样可写。
+     */
+    fun recordTurn(userText: String, assistantText: String): JournalEntry? {
+        val u = userText.trim()
+        if (u.isEmpty()) return null
+        val outcome = assistantText.trim()
+        val summary = if (outcome.isEmpty()) u.take(60)
+            else "${u.take(60)} → ${outcome.take(40)}"
+        return append(summary, importance = 2, source = "chat")
+    }
+
+    /**
      * 每日配额（保留最新的）：普通记录 MAX_PER_DAY 条；handoff 交接独立配额 MAX_HANDOFF_PER_DAY，
      * 互不挤占——长任务多的用户，主动记录的事件不会被自动交接日志顶掉。
      */
