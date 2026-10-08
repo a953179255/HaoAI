@@ -261,7 +261,8 @@ fun PcLinkScreen(
                                         onCheckedChange = { on ->
                                             if (on) { PcWatchdog.init(ctx); PcWatchdog.start() }
                                             else PcWatchdog.stop()
-                                        }
+                                        },
+                                        backdrop = localBackdrop
                                     )
                                 }
                                 Spacer(Modifier.height(2.dp))

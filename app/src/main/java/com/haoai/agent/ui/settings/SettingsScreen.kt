@@ -2473,7 +2473,8 @@ private fun ToggleRow(
         }
         com.haoai.agent.ui.common.HaoSwitch(
             checked = checked,
-            onCheckedChange = onChange
+            onCheckedChange = onChange,
+            backdrop = backdrop
         )
     }
 }
@@ -5934,7 +5935,8 @@ private fun ProviderDialog(
                                 Text("余额查询", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
                                 com.haoai.agent.ui.common.HaoSwitch(
                                     checked = draft.balanceEnabled,
-                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) }
+                                    onCheckedChange = { onChange(draft.copy(balanceEnabled = it)) },
+                                    backdrop = backdrop
                                 )
                             }
                             if (draft.balanceEnabled) {
@@ -7231,7 +7233,8 @@ private fun SwitchParamField(    label: String,
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         com.haoai.agent.ui.common.HaoSwitch(
             checked = enabled,
-            onCheckedChange = onToggle
+            onCheckedChange = onToggle,
+            backdrop = backdrop
         )
         Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
         if (enabled) {

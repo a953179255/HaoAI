@@ -664,15 +664,24 @@ fun GlassCard(
  * 渲染一个液态玻璃开关胶囊；无背景采样时退化为纯绘制磨砂胶囊。
  * 仅当开关自身处于 glass 采样层内（drawBackdrop 会自引用导致渲染递归崩溃）时，
  * 应传 refract=false，用本地绘制代替背景采样。
+ *
+ * 关闭态雾色由调用方传入 [offColor]（onSurface 雾）：原先写死白 18%，白玻璃
+ * 开关压在白 58% 玻璃卡上等于白压白——真机实测开关几乎看不见，这正是当年
+ * 全 App 弃用 LiquidToggle 换平面 HaoSwitch 的根因（2026-10-08 随配色规范修正）。
  */
-private fun DrawScope.drawCapsule(fraction: Float, press: Float, accent: Color) {
+private fun DrawScope.drawCapsule(
+    fraction: Float,
+    press: Float,
+    accent: Color,
+    offColor: Color
+) {
     val pad = 2.dp.toPx()
     // 胶囊圆角：磨砂回退路径（对话框内 refract=false）与折射路径同形，杜绝直角矩形开关
     val corner = CornerRadius(size.height / 2f, size.height / 2f)
 
-    // 轨道：关=雾白磨砂，开=主题色浸染（近实心，与按钮主绿饱和度一致）
+    // 轨道：关=onSurface 雾（深浅主题各按规范 alpha），开=主题色浸染（近实心，与按钮主绿饱和度一致）
     drawRoundRect(
-        color = lerp(Color.White.copy(alpha = 0.18f), accent.copy(alpha = 0.95f), fraction),
+        color = lerp(offColor, accent.copy(alpha = 0.95f), fraction),
         cornerRadius = corner
     )
     drawRoundRect(
@@ -712,14 +721,15 @@ private fun DrawScope.drawCapsule(fraction: Float, press: Float, accent: Color) 
  * - 玻璃胶囊轨道 + 镜面滑块，整体折射壁纸背景
  * - 点击即切换；横向拖动滑块实时跟随，过半提交，spring 回弹归位
  * - 切换与拖动提交时 CLOCK_TICK 触感反馈
- * - refract=true 时用 drawBackdrop 采样背景（玻璃元素必须位于采样层之外，否则渲染自引用崩溃）；
- *   若被放在 layerBackdrop / appLayer 采样子树内，必须传 refract=false，改用本地磨砂绘制。
+ * - refract=true 且给了 backdrop 时用 drawBackdrop 采样背景（玻璃元素必须位于采样层之外，
+ *   否则渲染自引用崩溃）；放在 layerBackdrop / appLayer 采样子树内传 refract=false，
+ *   没有采样源则传 backdrop=null——两者都走本地磨砂绘制。
  */
 @Composable
 fun LiquidToggle(
     checked: Boolean,
     onCheckedChange: ((Boolean) -> Unit)?,
-    backdrop: LayerBackdrop,
+    backdrop: LayerBackdrop? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     checkedColor: Color? = null,
@@ -734,6 +744,9 @@ fun LiquidToggle(
     val height = 32.dp
     val travelPx = with(LocalDensity.current) { (width - height).toPx() }
     val accent = checkedColor ?: androidx.compose.material3.MaterialTheme.colorScheme.primary
+    // 关闭态轨道雾：onSurface（浅 18% / 深 22%，与平面开关同规范）；白雾在白卡上不可见（见 drawCapsule 注释）
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val offColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.22f else 0.18f)
 
     // 开关进度 0..1；拖动中用 dragFraction 覆盖显示，松手交还弹簧
     val progressAnim = remember { Animatable(if (checked) 1f else 0f) }
@@ -748,7 +761,7 @@ fun LiquidToggle(
     fun fraction(): Float =
         if (dragFraction.isNaN()) progressAnim.value else dragFraction
 
-    val trackModifier = if (r) {
+    val trackModifier = if (r && backdrop != null) {
         Modifier.drawBackdrop(
             backdrop = backdrop,
             shape = { CircleShape },
@@ -762,13 +775,13 @@ fun LiquidToggle(
                 translationX = lerp(-2.dp.toPx(), 2.dp.toPx(), fraction())
             },
             onDrawSurface = {
-                drawCapsule(fraction(), highlight.pressProgress, accent)
+                drawCapsule(fraction(), highlight.pressProgress, accent, offColor)
             }
         )
     } else {
-        // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
+        // 位于玻璃采样层内（或无采样源）时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂绘制
         Modifier.drawWithContent {
-            drawCapsule(fraction(), highlight.pressProgress, accent)
+            drawCapsule(fraction(), highlight.pressProgress, accent, offColor)
             drawContent()
         }
     }

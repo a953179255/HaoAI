@@ -204,7 +204,8 @@ private fun TaskCard(
             }
             com.haoai.agent.ui.common.HaoSwitch(
                 checked = t.enabled,
-                onCheckedChange = { onToggle() }
+                onCheckedChange = { onToggle() },
+                backdrop = backdrop
             )
             IconButton(onClick = onDelete) {
                 Icon(

@@ -320,66 +320,32 @@ fun HaoGap(width: androidx.compose.ui.unit.Dp = HaoDimens.rowGap) {
 // ────────────────────────────── 开关 ──────────────────────────────
 
 /**
- * 设置项开关（**扁平规范件**，不用液态玻璃开关）。
+ * 设置项开关（2026-10-08 起 = [LiquidToggle] 的门面，全项目统一液态玻璃）。
  *
- * 为什么不用 `LiquidToggle`：白玻璃开关压在"白 58% 玻璃卡"上等于白压白 ——
- * 真机实测开关几乎看不见（改前正是这个问题）。而且列表里每个开关都要采一次
- * backdrop，几十行就是几十次采样，纯属白增开销。
+ * 历史：曾是扁平规范件，因 LiquidToggle 关闭态白雾压白卡看不见而弃用；
+ * 现在关闭态雾色已改 onSurface 规范（见 Glass.kt drawCapsule 注释），白压白根因
+ * 已修，全 App 开关统一换回液态款：52×32、镜面球拇指、拖拽跟手过半提交、
+ * 按压鼓起 + 指尖光斑、CLOCK_TICK 触感。
  *
- * 规范（与"目标 A"组件表一致）：开 = primary；关 = onSurface 18%；轨道 44×26；
- * 触摸区域 44dp 高（视觉 26dp 不变）。**全项目设置项统一用它**。
+ * [backdrop] 给页面采样源则轨道折射壁纸；null（或内容层 LocalGlassRefract=false）
+ * 自动退化本地磨砂，不会自引用崩溃。原 44×26 平面规范的"开=primary、关=onSurface
+ * 18%/22%"配色由 LiquidToggle 内部保持一致。
  */
 @Composable
 fun HaoSwitch(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop? = null
 ) {
-    val dark = com.haoai.agent.ui.theme.haoIsDark()
-    val rawProgress by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (checked) 1f else 0f,
-        // dampingRatio 0.55 欠阻尼会 undershoot/overshoot 出 [0,1]；
-        // 下游 padding/颜色插值必须收进区间，否则关闭方向 progress<0 时
-        // "Padding must be non-negative" 直接闪退（logcat 已确认 5 次同栈）
-        animationSpec = androidx.compose.animation.core.spring(0.55f, 380f),
-        label = "haoSwitch"
+    LiquidToggle(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        backdrop = backdrop,
+        modifier = modifier,
+        enabled = enabled
     )
-    val progress = rawProgress.coerceIn(0f, 1f)
-    val trackW = 44.dp
-    val trackH = 26.dp
-    val knob = 20.dp
-    val offTrack = MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.22f else 0.18f)
-    val track = androidx.compose.ui.graphics.lerp(
-        offTrack, MaterialTheme.colorScheme.primary, progress
-    )
-    val interaction = remember { MutableInteractionSource() }
-
-    Box(
-        modifier
-            .height(44.dp)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                enabled = enabled
-            ) { onCheckedChange(!checked) },
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            Modifier
-                .size(trackW, trackH)
-                .clip(CircleShape)
-                .background(track.copy(alpha = if (enabled) track.alpha else track.alpha * 0.5f)),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Box(
-                Modifier
-                    .padding(start = 2.dp + (trackW - knob - 4.dp) * progress)
-                    .size(knob)
-                    .background(Color.White, CircleShape)
-            )
-        }
-    }
 }
 
 // ────────────────────────────── 空状态 ──────────────────────────────
