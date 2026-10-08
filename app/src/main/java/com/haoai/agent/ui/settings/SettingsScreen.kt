@@ -3404,10 +3404,21 @@ private fun LazyListScope.themeItems(
     }
 
     // ── 玻璃质感：预览吸顶（stickyHeader），往下滚调参时预览始终在眼前 ──
+    // 顶部垫 54dp：sticky 钉的是视口顶边，而页面标题栏（GlassPageBar，高≈52dp）
+    // 悬浮在视口上方——不垫开的话吸顶后预览顶部会被标题栏盖住（2026-10-08 实测
+    // 顶栏表面被裁一半）。背景画在 padding 之外，钉住时标题栏底下也是实底不穿帮
     stickyHeader {
-        Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+        Column(
+            Modifier
+                .background(MaterialTheme.colorScheme.background)
+                .padding(top = 54.dp)
+        ) {
             SectionTitle("玻璃质感")
-            GlassPreviewScene()
+            // 预览文案用真实档案（用户反馈：写死"小豪/柠瑶"不对，别的用户名字不同）
+            GlassPreviewScene(
+                agentName = settings.agentName.ifBlank { "HaoAI" },
+                agentEmoji = settings.avatarEmoji
+            )
         }
     }
     item {
@@ -3559,14 +3570,14 @@ private fun GlassSliderRow(
  * 表面之间不留空带，输入框直接贴卡片下方（真机聊天页也正是这样叠的）。
  */
 @Composable
-private fun GlassPreviewScene() {
+private fun GlassPreviewScene(agentName: String, agentEmoji: String) {
     val t = com.haoai.agent.ui.theme.GlassTuning
     val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .height(104.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .height(140.dp)
     ) {
         // 采样宿主：测试图案挂进 backdrop（玻璃采样的就是这一层）
         Box(Modifier.matchParentSize().layerBackdrop(backdrop)) {
@@ -3575,15 +3586,15 @@ private fun GlassPreviewScene() {
                 modifier = Modifier.matchParentSize()
             )
         }
-        // 四表面纵向紧凑叠放（4dp 间距），不留空带——真机聊天页也正是这样叠的
+        // 三表面纵向叠放（6dp 间距）：尺寸按"文字一行放得下"定，不追求极限压缩
         Column(
-            Modifier.matchParentSize().padding(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            Modifier.matchParentSize().padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             // 顶栏（方角，全宽，绑顶栏档）
             GlassPanel(
                 backdrop = backdrop,
-                modifier = Modifier.fillMaxWidth().height(26.dp),
+                modifier = Modifier.fillMaxWidth().height(30.dp),
                 radius = 0.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -3597,13 +3608,13 @@ private fun GlassPreviewScene() {
                     "顶栏",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 8.dp, top = 5.dp)
+                    modifier = Modifier.padding(start = 8.dp, top = 7.dp)
                 )
             }
-            // 卡片（圆角可调，绑卡片档）
+            // 卡片（圆角可调，绑卡片档）——文案用真实 Agent 名（用户反馈：写死名字不对）
             GlassPanel(
                 backdrop = backdrop,
-                modifier = Modifier.fillMaxWidth().height(34.dp),
+                modifier = Modifier.fillMaxWidth().height(44.dp),
                 radius = t.corner.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -3613,19 +3624,19 @@ private fun GlassPreviewScene() {
                 surfaceAlpha = t.veil
             ) {
                 Text(
-                    "卡片 · 好嘞小豪，这就去抓今天的国际新闻呀～",
-                    style = MaterialTheme.typography.labelSmall,
+                    "$agentEmoji $agentName · 这就帮你查呀～",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
                 )
             }
-            // 输入框（胶囊形固定，绑输入框档）
+            // 输入框（胶囊形固定，绑输入框档）——placeholder 与聊天页同规则
             GlassPanel(
                 backdrop = backdrop,
-                modifier = Modifier.fillMaxWidth().height(28.dp),
-                radius = 14.dp,
+                modifier = Modifier.fillMaxWidth().height(38.dp),
+                radius = 19.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
                 blurRadius = t.inputBlur.dp,
@@ -3634,11 +3645,12 @@ private fun GlassPreviewScene() {
                 surfaceAlpha = t.inputVeil
             ) {
                 Text(
-                    "＋ 给 柠瑶🍋 派个活…",
-                    style = MaterialTheme.typography.labelSmall,
+                    "＋ 给 $agentName 派个活…",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
                 )
             }
         }
