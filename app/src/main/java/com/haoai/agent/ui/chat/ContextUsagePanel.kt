@@ -44,6 +44,12 @@ fun ContextUsagePanel(
         backdrop = backdrop,
         modifier = modifier.width(300.dp),
         radius = 16.dp,
+        // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius16×默认倍数2=位移32，
+        // 现走全局调参（默认 16×1）
+        lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+        blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
+        chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
         // 0.72 → 0.58：与任务面板统一材质（0.72 几乎是不透明的白，实测与背景仅 1.03:1）
         surfaceAlpha = 0.58f,
         // 浮层强化：与任务面板同一层级语言（库原生三件套）

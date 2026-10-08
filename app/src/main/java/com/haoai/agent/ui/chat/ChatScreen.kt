@@ -1649,13 +1649,14 @@ fun ChatScreen(
                                     style = Stroke(width = 1.5f.dp.toPx())
                                 )
                             },
-                        // 对齐设置页子菜单玻璃配方（用户：抽屉和子菜单效果差很多）：
-                        // blur 16 + 折射环带 16dp（强度 2×=32dp）+ 色差 + 白雾 0.62。
-                        // 磨砂重叠已由"内容层采样"根治（抽屉只磨一层），此处按观感取值
+                        // 统一玻璃配方（2026-10-08 用户裁决：折射/模糊全局一致）：
+                        // 原 blur16+lens16×2+色差写死，现折射/模糊/色差走调参，
+                        // 白雾 0.62 保留（抽屉常年压在正文上，比卡片更实一档是刻意的）
                         surfaceAlpha = 0.62f,
-                        blurRadius = 16.dp,
-                        lensRadius = 16.dp,
-                        chromaticAberration = true,
+                        blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
+                        lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+                        chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
                             topStart = 0.dp,
@@ -2117,7 +2118,11 @@ fun ChatScreen(
                 radius = 28.dp,
                 surfaceAlpha = 0.82f,
                 blurRadius = 20.dp,
-                chromaticAberration = true
+                // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius28×默认2=位移56
+                // 全 App 最重；折射并入全局，色差走开关
+                lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+                chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
             ) {
                 Column(
                     Modifier
@@ -2219,6 +2224,7 @@ private fun TopBar(
             .animateContentSize(),
         radius = 0.dp,
         lensRadius = com.haoai.agent.ui.theme.haoPageBarLensRadius(),
+        lensAmountMul = com.haoai.agent.ui.theme.haoPageBarLensAmountMul(),
         // blurRadius 默认=radius/3，方角顶栏 radius=0 会得到 blur(0)——显式给模糊量
         blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
         surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
@@ -5080,11 +5086,14 @@ private fun ComposerBar(
         backdrop = backdrop,
         exportedBackdrop = exportedBackdrop,
         radius = 26.dp,
-        // 输入框折射接玻璃实验室调参（2026-10-08）：历史上不传 lensRadius 继承
+        // 输入框玻璃接统一调参（2026-10-08 定稿）：历史上不传 lensRadius 继承
         // radius=26dp、倍数默认 2 → 位移 52dp 全 App 最重，滚动内容穿过时被扭曲
-        // 出"卡顿感"（用户实测）。现默认 16×1.5=24dp，可在实验室里滑杆实时试。
-        lensRadius = com.haoai.agent.ui.theme.GlassTuning.inputLensHeight.dp,
-        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.inputLensAmountMul,
+        // 出"卡顿感"（用户实测）。现折射环带/倍数/色差与全 App 一致（默认 16×1），
+        // 模糊单独一档（常年压在正文上，默认 4）
+        lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+        blurRadius = com.haoai.agent.ui.theme.GlassTuning.inputBlur.dp,
+        chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
         // 键盘抬升值作重绘键：位置变化后强制重绘折射，采样对齐新布局位置，
         // 保持完整液态效果且背景正确（matte 方案观感差已弃）
@@ -5931,7 +5940,13 @@ private fun MessageActionPanel(
                 .clickable(interactionSource = null, indication = null) {},
             radius = 24.dp,
             surfaceAlpha = 0.92f,
-            blurRadius = 24.dp
+            blurRadius = 24.dp,
+            // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius24×默认倍数2=位移48
+            // （比输入框原状还重）。白雾/模糊保留弹窗档（0.92 不透明压在消息流上，
+            // 可读性优先），只把折射并入全局
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
                 // 标题行：左「消息操作」，右元信息（时间 · 模型）——原面板底部的孤行上移

@@ -204,7 +204,13 @@ fun TaskFloat(
         GlassPanel(
             backdrop = backdrop,
             radius = corner,
-            lensRadius = 13.dp,
+            // 统一玻璃配方（2026-10-08）：原 lens13 写死+blur=radius/3 继承，
+            // 现折射/模糊/色差走全局调参（环带 16≈圆角 15~17，不越界）；
+            // 白雾 0.58 保留（与上下文面板统一材质）
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
             // 0.50 → 0.58：与上下文面板统一材质（浅色主题下视觉差极小，价值在一致性）
             surfaceAlpha = 0.58f,
             // 浮层强化：分层交给库原生 highlight + shadow + innerShadow

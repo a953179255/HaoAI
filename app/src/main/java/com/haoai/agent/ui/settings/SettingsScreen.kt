@@ -121,6 +121,7 @@ import com.haoai.agent.ui.SettingsViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
+import com.kyant.backdrop.backdrops.layerBackdrop
 import com.haoai.agent.ui.common.HaoChip
 import com.haoai.agent.ui.common.HaoGroup
 import com.haoai.agent.ui.common.HaoRow
@@ -507,6 +508,15 @@ fun SettingsScreen(
                             subtitle = vm.workspaceName(),
                             showChevron = true,
                             onClick = { onOpenSection(13) }
+                        )
+                        HaoRow(
+                            icon = Icons.Filled.AutoFixHigh,
+                            tintIndex = 1,
+                            title = "主题外观",
+                            subtitle = "配色 · 壁纸 · 玻璃质感 · 动画风格",
+                            showChevron = true,
+                            divider = true,
+                            onClick = { onOpenSection(20) }
                         )
                         HaoRow(
                             icon = Icons.Filled.Tune,
@@ -1232,6 +1242,7 @@ private fun sectionTitle(section: String): String = when (section) {
     "workspace" -> "工作空间"
     "linux" -> "Linux 环境"
     "general" -> "通用"
+    "theme" -> "主题外观"
     "about" -> "关于"
     "usage" -> "用量"
     else -> ""
@@ -1396,6 +1407,12 @@ private fun SectionPage(
                             myEditImagePath = settings.myAvatarPath
                             showMyProfile = true
                         }
+                    )
+                    "theme" -> themeItems(
+                        vm, settings, context, backdrop,
+                        wpVersion, onWpVersionChange = { },
+                        onRequestClearWallpaper = onConfirmWpClear,
+                        onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex }
                     )
                     "about" -> aboutItems(vm, settings, backdrop)
                     "usage" -> usageItems(vm, settings, backdrop, onRequestClearLedger = onConfirmClearLedger)
@@ -2580,284 +2597,6 @@ private fun LazyListScope.generalItems(
             }
         }
     }
-    item { SectionTitle("外观") }
-    item {
-        GlassGroup(backdrop) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                Text("主题模式", style = MaterialTheme.typography.bodyMedium)
-                val themeOptions = listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")
-                com.haoai.agent.ui.common.LiquidTabRow(
-                    tabs = themeOptions.map { it.second },
-                    selectedIndex = themeOptions.indexOfFirst { it.first == settings.themeMode }.coerceAtLeast(0),
-                    onSelected = { i -> vm.setThemeMode(themeOptions[i].first) },
-                    backdrop = backdrop,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
-            // —— 主题色 / 动态颜色 / AMOLED / 气泡不透明度 ——
-            val darkNow = when (settings.themeMode) {
-                "dark" -> true
-                "light" -> false
-                else -> androidx.compose.foundation.isSystemInDarkTheme()
-            }
-            val dynamicAvailable = android.os.Build.VERSION.SDK_INT >= 31
-            HorizontalDivider(
-                Modifier.padding(horizontal = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-            )
-            ToggleRow(
-                title = "动态颜色（Material You）",
-                subtitle = if (dynamicAvailable) "跟随聊天壁纸动态生成配色（无壁纸时按系统壁纸取色）"
-                else "需要 Android 12 及以上",
-                checked = settings.dynamicColor && dynamicAvailable,
-                onChange = { if (dynamicAvailable) vm.setDynamicColor(it) },
-                backdrop = backdrop
-            )
-            if (!settings.dynamicColor || !dynamicAvailable) {
-                HorizontalDivider(
-                    Modifier.padding(horizontal = 14.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-                )
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text("主题色", style = MaterialTheme.typography.bodyMedium)
-                    val activeCustom = settings.customSeedActive
-                    // 色盘初始色：当前生效主题色（自定义色或预设 primary），所见即所选
-                    val currentSeedHex = if (activeCustom.isNotBlank()) activeCustom
-                    else {
-                        val cur = com.haoai.agent.ui.theme.THEME_SEEDS
-                            .getOrElse(settings.themeSeed) { com.haoai.agent.ui.theme.THEME_SEEDS[0] }
-                        (cur.display ?: (if (darkNow) cur.darkPrimary else cur.lightPrimary)).toHex()
-                    }
-                    Row(
-                        // 内容 9×26dp 在窄屏会超出可用宽，固定 spacedBy 下尾元素溢出被玻璃容器
-                        // 采样变形（模拟器 411dp 实测色轮成竖条）——改 SpaceBetween 自适应分布
-                        Modifier.fillMaxWidth().padding(top = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 5 颗固定种子：绿/蓝保留原版，橙/黄/粉为年轻活力色
-                        com.haoai.agent.ui.theme.THEME_SEEDS.forEachIndexed { i, seed ->
-                            val color = seed.display
-                                ?: (if (darkNow) seed.darkPrimary else seed.lightPrimary)
-                            val selected = activeCustom.isBlank() && settings.themeSeed == i
-                            Box(
-                                Modifier
-                                    .size(26.dp)
-                                    .clip(CircleShape)
-                                    .background(color, CircleShape)
-                                    .border(
-                                        if (selected) 2.5.dp else 1.dp,
-                                        if (selected) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
-                                        CircleShape
-                                    )
-                                    .clickable { vm.setThemeSeed(i) }
-                            )
-                        }
-                        // 3 个自定义槽：空=加号圈（点击开色盘），已存=点击应用、长按重挑
-                        repeat(3) { slot ->
-                            val hex = settings.customSeedColors.getOrNull(slot).orEmpty()
-                            val parsed = com.haoai.agent.ui.theme.parseHexColor(hex)
-                            if (parsed == null) {
-                                Box(
-                                    Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f), CircleShape)
-                                        .combinedClickable(
-                                            onClick = { onOpenColorPicker(currentSeedHex, slot) },
-                                            onLongClick = { onOpenColorPicker(currentSeedHex, slot) }
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Add, null,
-                                        Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f)
-                                    )
-                                }
-                            } else {
-                                val selected = activeCustom == hex
-                                Box(
-                                    Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .background(parsed, CircleShape)
-                                        .border(
-                                            if (selected) 2.5.dp else 1.dp,
-                                            if (selected) parsed
-                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
-                                            CircleShape
-                                        )
-                                        .combinedClickable(
-                                            onClick = { vm.applyCustomSeed(hex) },
-                                            onLongClick = { onOpenColorPicker(hex, slot) }
-                                        )
-                                )
-                            }
-                        }
-                        // 彩色色轮入口：打开色盘挑新颜色
-                        // 彩色色轮入口：打开色盘挑新颜色
-                        Box(
-                            Modifier
-                                .size(26.dp)
-                                .clip(CircleShape)
-                                .background(Brush.sweepGradient(PickerHueColors), CircleShape)
-                                .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f), CircleShape)
-                                .clickable { onOpenColorPicker(currentSeedHex, -1) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(9.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.background)
-                            )
-                        }
-                    }
-                }
-            }
-            HorizontalDivider(
-                Modifier.padding(horizontal = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-            )
-            ToggleRow(
-                title = "AMOLED 纯黑模式",
-                subtitle = "深色主题下使用纯黑背景（OLED 省电、息屏边框无光晕）",
-                checked = settings.amoledMode,
-                onChange = { vm.setAmoledMode(it) },
-                backdrop = backdrop
-            )
-            HorizontalDivider(
-                Modifier.padding(horizontal = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-            )
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                // 拖动走本地状态（逐帧只重组本区块），松手才落盘——
-                // updateSettings 每帧全量 JSON 序列化 + 配置桥镜像双文件写 + 整页重组，是滑块掉帧根因
-                var bubbleLocal by remember { mutableStateOf(settings.bubbleOpacity.coerceIn(0.3f, 1f)) }
-                LaunchedEffect(settings.bubbleOpacity) {
-                    bubbleLocal = settings.bubbleOpacity.coerceIn(0.3f, 1f)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("气泡 / 卡片不透明度", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "${(bubbleLocal * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                LiquidSlider(
-                    value = { bubbleLocal },
-                    onValueChange = { v -> bubbleLocal = v },
-                    onValueChangeFinished = { vm.setBubbleOpacity(bubbleLocal) },
-                    valueRange = 0.3f..1f,
-                    visibilityThreshold = 0.01f,
-                    backdrop = backdrop,
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-                )
-            }
-            HorizontalDivider(
-                Modifier.padding(horizontal = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-            )
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("聊天背景壁纸", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        if (wpVersion) "已设置 · 玻璃效果将以壁纸为折射背景" else "未设置（使用默认深色渐变）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                // ACTION_PICK 分发给默认图库（Flyme 图库等），与聊天「图片」入口一致；
-                // 兜底：图库 intent 无人处理时（极少数无图库的设备）回退 SAF 文档选择器
-                val wpApply: (android.net.Uri?) -> Unit = { uri ->
-                    uri?.let {
-                        vm.setWallpaper(context, it.toString())
-                        onWpVersionChange(vm.wallpaperSet(context))
-                    }
-                }
-                val wpPick = rememberLauncherForActivityResult(
-                    ActivityResultContracts.StartActivityForResult()
-                ) { result -> wpApply(result.data?.data) }
-                val wpFallback = rememberLauncherForActivityResult(
-                    ActivityResultContracts.GetContent()
-                ) { uri -> wpApply(uri) }
-                TextButton(onClick = {
-                    val intent = android.content.Intent(
-                        android.content.Intent.ACTION_PICK,
-                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                    )
-                    if (intent.resolveActivity(context.packageManager) != null) {
-                        wpPick.launch(intent)
-                    } else {
-                        wpFallback.launch("image/*")
-                    }
-                }) { Text("选择图片") }
-                if (wpVersion) {
-                    TextButton(onClick = onRequestClearWallpaper) { Text("清除") }
-                }
-            }
-            HorizontalDivider(
-                Modifier.padding(horizontal = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-            )
-            ToggleRow(
-                title = "壁纸应用于所有页面",
-                subtitle = "关闭时壁纸只作为聊天界面背景，其他页面用主题底色",
-                checked = settings.wallpaperGlobal,
-                onChange = { vm.setWallpaperGlobal(it) },
-                backdrop = backdrop
-            )
-            // 配置文件桥状态整块搬进「数据与备份」（它管的是同一份 haoai.config.json），
-            // 通用页少一屏；绝对路径默认折叠——正式包里那目录用户根本打不开。
-        }
-    }
-
-                    // ── 动画风格：三套全局动画语言（Motion.kt），真机即切即看 ──
-                item {
-                    HaoGroup(backdrop = backdrop) {
-                        HaoRow(
-                            title = "动画风格 · 液态玻璃",
-                            subtitle = MotionStyle.Liquid.label + " · spring 回弹，弹层上浮，底部弹窗越界",
-                            tintIndex = 2,
-                            onClick = { MotionTheme.style = MotionStyle.Liquid },
-                            trailing = {
-                                if (MotionTheme.style == MotionStyle.Liquid) HaoChip("使用中", HaoTone.Accent)
-                            },
-                            showChevron = false
-                        )
-                        HaoRow(
-                            title = "动画风格 · 丝滑响应",
-                            subtitle = MotionStyle.Snappy.label + " · 无回弹，120-170ms，跟手优先",
-                            tintIndex = 4,
-                            onClick = { MotionTheme.style = MotionStyle.Snappy },
-                            trailing = {
-                                if (MotionTheme.style == MotionStyle.Snappy) HaoChip("使用中", HaoTone.Accent)
-                            },
-                            divider = true,
-                            showChevron = false
-                        )
-                        HaoRow(
-                            title = "动画风格 · 柔和渐显",
-                            subtitle = MotionStyle.Gentle.label + " · 强缓动淡入，安静不抢戏",
-                            tintIndex = 5,
-                            onClick = { MotionTheme.style = MotionStyle.Gentle },
-                            trailing = {
-                                if (MotionTheme.style == MotionStyle.Gentle) HaoChip("使用中", HaoTone.Accent)
-                            },
-                            divider = true,
-                            showChevron = false
-                        )
-                    }
-                }
 
     item { SectionTitle("数据与备份") }
     item {
@@ -3402,6 +3141,473 @@ private fun LazyListScope.generalItems(
                     checked = com.haoai.agent.agent.flags.HaoFlag.enabled(flag, settings.enabledFlags),
                     onChange = { vm.setFlag(flag.key, it) },
                     backdrop = backdrop
+                )
+            }
+        }
+    }
+}
+
+// ---------- 主题外观（2026-10-08：通用页外观块+动画风格迁入，玻璃质感并入） ----------
+
+/**
+ * 「设置 → 主题外观」：主题模式/主题色/AMOLED/气泡/壁纸/动画风格（从通用页迁入），
+ * 外加**玻璃质感**实时调参——预览卡压在折射测试图案上，拖滑杆所见即所得
+ * （与玻璃实验室同一数据源 GlassTuning；这里松手即落盘，实验室退出才落盘）。
+ */
+private fun LazyListScope.themeItems(
+    vm: SettingsViewModel,
+    settings: AppSettings,
+    context: android.content.Context,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    wpVersion: Boolean,
+    onWpVersionChange: (Boolean) -> Unit,
+    onRequestClearWallpaper: () -> Unit,
+    onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> }
+) {
+    item { SectionTitle("主题模式与配色") }
+    item {
+        GlassGroup(backdrop) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Text("主题模式", style = MaterialTheme.typography.bodyMedium)
+                val themeOptions = listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = themeOptions.map { it.second },
+                    selectedIndex = themeOptions.indexOfFirst { it.first == settings.themeMode }.coerceAtLeast(0),
+                    onSelected = { i -> vm.setThemeMode(themeOptions[i].first) },
+                    backdrop = backdrop,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            val darkNow = when (settings.themeMode) {
+                "dark" -> true
+                "light" -> false
+                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            }
+            val dynamicAvailable = android.os.Build.VERSION.SDK_INT >= 31
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "动态颜色（Material You）",
+                subtitle = if (dynamicAvailable) "跟随聊天壁纸动态生成配色（无壁纸时按系统壁纸取色）"
+                else "需要 Android 12 及以上",
+                checked = settings.dynamicColor && dynamicAvailable,
+                onChange = { if (dynamicAvailable) vm.setDynamicColor(it) },
+                backdrop = backdrop
+            )
+            if (!settings.dynamicColor || !dynamicAvailable) {
+                HorizontalDivider(
+                    Modifier.padding(horizontal = 14.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                )
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text("主题色", style = MaterialTheme.typography.bodyMedium)
+                    val activeCustom = settings.customSeedActive
+                    // 色盘初始色：当前生效主题色（自定义色或预设 primary），所见即所选
+                    val currentSeedHex = if (activeCustom.isNotBlank()) activeCustom
+                    else {
+                        val cur = com.haoai.agent.ui.theme.THEME_SEEDS
+                            .getOrElse(settings.themeSeed) { com.haoai.agent.ui.theme.THEME_SEEDS[0] }
+                        (cur.display ?: (if (darkNow) cur.darkPrimary else cur.lightPrimary)).toHex()
+                    }
+                    Row(
+                        // 内容 9×26dp 在窄屏会超出可用宽，固定 spacedBy 下尾元素溢出被玻璃容器
+                        // 采样变形（模拟器 411dp 实测色轮成竖条）——改 SpaceBetween 自适应分布
+                        Modifier.fillMaxWidth().padding(top = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 5 颗固定种子：绿/蓝保留原版，橙/黄/粉为年轻活力色
+                        com.haoai.agent.ui.theme.THEME_SEEDS.forEachIndexed { i, seed ->
+                            val color = seed.display
+                                ?: (if (darkNow) seed.darkPrimary else seed.lightPrimary)
+                            val selected = activeCustom.isBlank() && settings.themeSeed == i
+                            Box(
+                                Modifier
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(color, CircleShape)
+                                    .border(
+                                        if (selected) 2.5.dp else 1.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                                        CircleShape
+                                    )
+                                    .clickable { vm.setThemeSeed(i) }
+                            )
+                        }
+                        // 3 个自定义槽：空=加号圈（点击开色盘），已存=点击应用、长按重挑
+                        repeat(3) { slot ->
+                            val hex = settings.customSeedColors.getOrNull(slot).orEmpty()
+                            val parsed = com.haoai.agent.ui.theme.parseHexColor(hex)
+                            if (parsed == null) {
+                                Box(
+                                    Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .border(1.5.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f), CircleShape)
+                                        .combinedClickable(
+                                            onClick = { onOpenColorPicker(currentSeedHex, slot) },
+                                            onLongClick = { onOpenColorPicker(currentSeedHex, slot) }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Add, null,
+                                        Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f)
+                                    )
+                                }
+                            } else {
+                                val selected = activeCustom == hex
+                                Box(
+                                    Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .background(parsed, CircleShape)
+                                        .border(
+                                            if (selected) 2.5.dp else 1.dp,
+                                            if (selected) parsed
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                                            CircleShape
+                                        )
+                                        .combinedClickable(
+                                            onClick = { vm.applyCustomSeed(hex) },
+                                            onLongClick = { onOpenColorPicker(hex, slot) }
+                                        )
+                                )
+                            }
+                        }
+                        // 彩色色轮入口：打开色盘挑新颜色
+                        Box(
+                            Modifier
+                                .size(26.dp)
+                                .clip(CircleShape)
+                                .background(Brush.sweepGradient(PickerHueColors), CircleShape)
+                                .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f), CircleShape)
+                                .clickable { onOpenColorPicker(currentSeedHex, -1) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(9.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.background)
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "AMOLED 纯黑模式",
+                subtitle = "深色主题下使用纯黑背景（OLED 省电、息屏边框无光晕）",
+                checked = settings.amoledMode,
+                onChange = { vm.setAmoledMode(it) },
+                backdrop = backdrop
+            )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                // 拖动走本地状态（逐帧只重组本区块），松手才落盘——
+                // updateSettings 每帧全量 JSON 序列化 + 配置桥镜像双文件写 + 整页重组，是滑块掉帧根因
+                var bubbleLocal by remember { mutableStateOf(settings.bubbleOpacity.coerceIn(0.3f, 1f)) }
+                LaunchedEffect(settings.bubbleOpacity) {
+                    bubbleLocal = settings.bubbleOpacity.coerceIn(0.3f, 1f)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("气泡 / 卡片不透明度", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${(bubbleLocal * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                LiquidSlider(
+                    value = { bubbleLocal },
+                    onValueChange = { v -> bubbleLocal = v },
+                    onValueChangeFinished = { vm.setBubbleOpacity(bubbleLocal) },
+                    valueRange = 0.3f..1f,
+                    visibilityThreshold = 0.01f,
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                )
+            }
+        }
+    }
+
+    item { SectionTitle("聊天背景壁纸") }
+    item {
+        GlassGroup(backdrop) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("壁纸", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (wpVersion) "已设置 · 玻璃效果将以壁纸为折射背景" else "未设置（使用默认渐变背景）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // ACTION_PICK 分发给默认图库（Flyme 图库等），与聊天「图片」入口一致；
+                // 兜底：图库 intent 无人处理时（极少数无图库的设备）回退 SAF 文档选择器
+                val wpApply: (android.net.Uri?) -> Unit = { uri ->
+                    uri?.let {
+                        vm.setWallpaper(context, it.toString())
+                        onWpVersionChange(vm.wallpaperSet(context))
+                    }
+                }
+                val wpPick = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult()
+                ) { result -> wpApply(result.data?.data) }
+                val wpFallback = rememberLauncherForActivityResult(
+                    ActivityResultContracts.GetContent()
+                ) { uri -> wpApply(uri) }
+                TextButton(onClick = {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_PICK,
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    )
+                    if (intent.resolveActivity(context.packageManager) != null) {
+                        wpPick.launch(intent)
+                    } else {
+                        wpFallback.launch("image/*")
+                    }
+                }) { Text("选择图片") }
+                if (wpVersion) {
+                    TextButton(onClick = onRequestClearWallpaper) { Text("清除") }
+                }
+            }
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "壁纸应用于所有页面",
+                subtitle = "关闭时壁纸只作为聊天界面背景，其他页面用主题底色",
+                checked = settings.wallpaperGlobal,
+                onChange = { vm.setWallpaperGlobal(it) },
+                backdrop = backdrop
+            )
+        }
+    }
+
+    item { SectionTitle("玻璃质感") }
+    item {
+        GlassPreviewCard()
+    }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            // 观察单例 State：滑杆标签即时回显（玻璃组件在 draw 期读，另路重组）
+            t.blur; t.lensHeight; t.lensAmountMul; t.veil; t.barBlur; t.inputBlur
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("磨砂模糊 dp（全 App 统一）", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text("${t.blur.toInt()}dp", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                GlassTuneSlider(t.blur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.blur = it }
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("折射环带宽度 dp", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text("${t.lensHeight.toInt()}dp", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                GlassTuneSlider(t.lensHeight, 0f..80f, backdrop, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("折射强度倍数（0 = 关折射）", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text("×${"%.1f".format(t.lensAmountMul)}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                GlassTuneSlider(t.lensAmountMul, 0f..8f, backdrop, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("卡片白雾（表面不透明度）", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text("${(t.veil * 100).toInt()}%", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                GlassTuneSlider(t.veil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.veil = it }
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("顶栏模糊 dp（标题文字底，单独一档）", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text("${t.barBlur.toInt()}dp", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                GlassTuneSlider(t.barBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.barBlur = it }
+            }
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("输入框模糊 dp（常年压在正文上，单独一档）", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text("${t.inputBlur.toInt()}dp", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                GlassTuneSlider(t.inputBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.inputBlur = it }
+            }
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "整面折射",
+                subtitle = "折射覆盖整个表面（默认只在边缘一圈）",
+                checked = t.lensFull,
+                onChange = { t.lensFull = it; vm.persistGlass() },
+                backdrop = backdrop
+            )
+            ToggleRow(
+                title = "色差",
+                subtitle = "玻璃边缘红蓝分离（更真实的厚玻璃感）",
+                checked = t.ca,
+                onChange = { t.ca = it; vm.persistGlass() },
+                backdrop = backdrop
+            )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "折射/模糊全 App 统一生效：输入框、顶栏、抽屉、卡片、弹层",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { vm.resetGlass() }) { Text("还原默认") }
+            }
+        }
+    }
+
+    // ── 动画风格：三套全局动画语言（Motion.kt），真机即切即看 ──
+    item { SectionTitle("动画风格") }
+    item {
+        HaoGroup(backdrop = backdrop) {
+            HaoRow(
+                title = "液态玻璃",
+                subtitle = MotionStyle.Liquid.label + " · spring 回弹，弹层上浮，底部弹窗越界",
+                tintIndex = 2,
+                onClick = { MotionTheme.style = MotionStyle.Liquid },
+                trailing = {
+                    if (MotionTheme.style == MotionStyle.Liquid) HaoChip("使用中", HaoTone.Accent)
+                },
+                showChevron = false
+            )
+            HaoRow(
+                title = "丝滑响应",
+                subtitle = MotionStyle.Snappy.label + " · 无回弹，120-170ms，跟手优先",
+                tintIndex = 4,
+                onClick = { MotionTheme.style = MotionStyle.Snappy },
+                trailing = {
+                    if (MotionTheme.style == MotionStyle.Snappy) HaoChip("使用中", HaoTone.Accent)
+                },
+                divider = true,
+                showChevron = false
+            )
+            HaoRow(
+                title = "柔和渐显",
+                subtitle = MotionStyle.Gentle.label + " · 强缓动淡入，安静不抢戏",
+                tintIndex = 5,
+                onClick = { MotionTheme.style = MotionStyle.Gentle },
+                trailing = {
+                    if (MotionTheme.style == MotionStyle.Gentle) HaoChip("使用中", HaoTone.Accent)
+                },
+                divider = true,
+                showChevron = false
+            )
+        }
+    }
+}
+
+/** 玻璃调参滑杆：onValueChange 直改单例（实时预览），松手 onEnd 落盘（写盘是重操作）。 */
+@Composable
+private fun GlassTuneSlider(
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onEnd: () -> Unit,
+    onChange: (Float) -> Unit
+) {
+    LiquidSlider(
+        value = { value },
+        onValueChange = onChange,
+        onValueChangeFinished = onEnd,
+        valueRange = range,
+        visibilityThreshold = 0.01f,
+        backdrop = backdrop,
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
+    )
+}
+
+/**
+ * 玻璃质感预览卡：高对比测试图案打底（纯色上折射隐形），一张真·GlassPanel
+ * 压在图案上——滑杆改 GlassTuning 即时可见，与聊天页同配方同渲染路径。
+ * 自带局部采样层（不依赖页面 backdrop，避开 LazyColumn item 内共享画布成环的坑）。
+ */
+@Composable
+private fun GlassPreviewCard() {
+    val t = com.haoai.agent.ui.theme.GlassTuning
+    val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .height(150.dp)
+    ) {
+        // 采样宿主：测试图案挂进 backdrop（玻璃采样的就是这一层）
+        Box(Modifier.matchParentSize().layerBackdrop(backdrop)) {
+            com.haoai.agent.ui.common.RefractionTestPattern(
+                dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+                modifier = Modifier.matchParentSize()
+            )
+        }
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier
+                .matchParentSize()
+                .padding(12.dp),
+            radius = 26.dp,
+            surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+            lensRadius = t.lensHeight.dp,
+            lensAmountMul = t.lensAmountMul,
+            blurRadius = t.inputBlur.dp,
+            chromaticAberration = t.ca,
+            lensFull = t.lensFull
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text(
+                    "预览 · 输入框同款",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "折射 ${t.lensHeight.toInt()}×${"%.1f".format(t.lensAmountMul)} · 模糊 ${t.inputBlur.toInt()}dp",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

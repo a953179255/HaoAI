@@ -49,16 +49,11 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.haoai.agent.ui.common.appLayer
-import androidx.compose.foundation.Canvas
+import com.haoai.agent.ui.common.RefractionTestPattern
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.drawscope.Stroke
 import android.graphics.BitmapFactory
-import android.graphics.Paint
 
 /**
  * 玻璃实验室：**拖滑杆 = 直接改全 App 的玻璃质感**（GlassTuning 单例，实时生效）。
@@ -66,6 +61,16 @@ import android.graphics.Paint
  * 入口：设置首页 → 玻璃实验室；或 adb am start -n com.haoai.agent/.glasslab.GlassLabActivity
  */
 class GlassLabActivity : ComponentActivity() {
+    // 退出实验室 = 把当前调参快照落盘（与主题外观页同一条 persistGlass 路径）；
+    // 逐帧写盘是禁区（updateSettings=双文件写固定成本），只在离开时写一次
+    override fun onPause() {
+        super.onPause()
+        runCatching {
+            (applicationContext as com.haoai.agent.HaoApplication).container
+                .updateSettings { it.copy(glass = com.haoai.agent.ui.theme.GlassTuning.snapshot()) }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -300,8 +305,10 @@ private fun GlassLab() {
                         modifier = Modifier.fillMaxSize(),
                         radius = 26.dp,
                         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
-                        lensRadius = GlassTuning.inputLensHeight.dp,
-                        lensAmountMul = GlassTuning.inputLensAmountMul
+                        // 与真输入框同配方：折射走全局统一值，模糊走输入框专属档
+                        lensRadius = GlassTuning.lensHeight.dp,
+                        lensAmountMul = GlassTuning.lensAmountMul,
+                        blurRadius = GlassTuning.inputBlur.dp
                     ) { }
                 }
 
@@ -322,19 +329,20 @@ private fun GlassLab() {
 private fun LabControls() {
     val context = LocalContext.current
     Column(Modifier.padding(horizontal = 16.dp)) {
-        SliderRow("模糊 dp", GlassTuning.blur, 0f, 30f) { GlassTuning.blur = it }
-        SliderRow("折射高度 dp（环带宽）", GlassTuning.lensHeight, 4f, 80f) { GlassTuning.lensHeight = it }
-        SliderRow("强度倍数", GlassTuning.lensAmountMul, 0.5f, 8f) { GlassTuning.lensAmountMul = it }
+        SliderRow("模糊 dp（全 App 玻璃统一）", GlassTuning.blur, 0f, 30f) { GlassTuning.blur = it }
+        SliderRow("折射高度 dp（环带宽，统一）", GlassTuning.lensHeight, 0f, 80f) { GlassTuning.lensHeight = it }
+        SliderRow("强度倍数（统一；0=关折射）", GlassTuning.lensAmountMul, 0f, 8f) { GlassTuning.lensAmountMul = it }
         SliderRow("白雾 alpha", GlassTuning.veil, 0f, 0.9f) { GlassTuning.veil = it }
         SliderRow("圆角 dp", GlassTuning.corner, 8f, 40f) { GlassTuning.corner = it }
         Text(
-            "输入框玻璃（聊天页底部，单独一组；倍数=0 即关折射）",
+            "顶栏 / 输入框专属档（折射与全局一致，只有磨砂和白雾单独）",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp)
         )
-        SliderRow("输入框折射高度 dp", GlassTuning.inputLensHeight, 0f, 40f) { GlassTuning.inputLensHeight = it }
-        SliderRow("输入框强度倍数", GlassTuning.inputLensAmountMul, 0f, 4f) { GlassTuning.inputLensAmountMul = it }
+        SliderRow("顶栏模糊 dp", GlassTuning.barBlur, 0f, 30f) { GlassTuning.barBlur = it }
+        SliderRow("顶栏白雾 alpha", GlassTuning.barVeil, 0f, 0.9f) { GlassTuning.barVeil = it }
+        SliderRow("输入框模糊 dp", GlassTuning.inputBlur, 0f, 30f) { GlassTuning.inputBlur = it }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -354,7 +362,7 @@ private fun LabControls() {
                     val text = "blur=${GlassTuning.blur} lensHeight=${GlassTuning.lensHeight} " +
                         "amountMul=${GlassTuning.lensAmountMul} veil=${GlassTuning.veil} " +
                         "corner=${GlassTuning.corner} lensFull=${GlassTuning.lensFull} ca=${GlassTuning.ca} " +
-                        "inputLensHeight=${GlassTuning.inputLensHeight} inputAmountMul=${GlassTuning.inputLensAmountMul}"
+                        "barBlur=${GlassTuning.barBlur} barVeil=${GlassTuning.barVeil} inputBlur=${GlassTuning.inputBlur}"
                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     cm.setPrimaryClip(ClipData.newPlainText("玻璃参数", text))
                 },
@@ -381,71 +389,5 @@ private fun SliderRow(label: String, value: Float, min: Float, max: Float, onCha
 }
 
 /**
- * 折射测试背景：纯色底上折射=隐形（没有可弯的东西），这块高对比图案专治
- * "看不出扭曲"。三层纹理各司其职：
- * - **直网格线**：折射环带会把穿过它的直线掰弯/挤出位移，是强度判读的主标尺
- * - **对角彩条**：色块边界错位，看折射影响范围（环带宽度）
- * - **密集文字行**：模拟聊天正文穿玻璃的真实场景
+ * 折射测试背景已提取到 ui/common/GlassPreview.kt（与设置页「主题外观」共用）。
  */
-@Composable
-private fun RefractionTestPattern(dark: Boolean) {
-    Canvas(Modifier.fillMaxSize()) {
-        val w = size.width
-        val h = size.height
-        val base = if (dark) Color(0xFF14171C) else Color(0xFFF4F5F7)
-        val line = if (dark) Color(0xFF8E97A5) else Color(0xFF2A2F38)
-        drawRect(base)
-        // 对角彩条带（低饱和，垫在网格下）：边界错位可见折射作用域
-        val stripes = listOf(
-            Color(0x33FF5C5C), Color(0x33FFB45C), Color(0x3359C77A),
-            Color(0x335C9DFF), Color(0x33A85CFF)
-        )
-        val band = 180f
-        var x = -h
-        var i = 0
-        while (x < w) {
-            val path = androidx.compose.ui.graphics.Path().apply {
-                moveTo(x, 0f); lineTo(x + band, 0f)
-                lineTo(x + band - h, h); lineTo(x - h, h); close()
-            }
-            drawPath(path, stripes[i % stripes.size])
-            x += band * 2; i++
-        }
-        // 直网格：主标尺
-        val grid = 96f
-        var gx = grid
-        while (gx < w) {
-            drawLine(line, Offset(gx, 0f), Offset(gx, h), 2f)
-            gx += grid
-        }
-        var gy = grid
-        while (gy < h) {
-            drawLine(line, Offset(0f, gy), Offset(w, gy), 2f)
-            gy += grid
-        }
-        // 中心十字粗线 + 同心圆：任何位移/缩放都逃不过眼睛
-        drawLine(line, Offset(w / 2f, 0f), Offset(w / 2f, h), 5f)
-        drawLine(line, Offset(0f, h / 2f), Offset(w, h / 2f), 5f)
-        val circleColor = if (dark) Color(0xFF6FA8FF) else Color(0xFF2F6BD7)
-        var r = 140f
-        while (r < h) {
-            drawCircle(circleColor, radius = r, center = Offset(w / 2f, h / 2f), style = Stroke(width = 3f))
-            r += 260f
-        }
-        // 文字带：模拟正文穿玻璃（nativeCanvas.drawText，项目内验证过的路径）
-        val paint = Paint().apply {
-            color = if (dark) android.graphics.Color.parseColor("#D7DEE8")
-                    else android.graphics.Color.parseColor("#22262E")
-            textSize = 46f
-            isAntiAlias = true
-        }
-        val sample = "折射测试 Refraction 120Hz 玻璃 Glass 扭曲 0.5×1.5 输入框"
-        var ty = 220f
-        var n = 0
-        while (ty < h - 40f) {
-            // 逐行错位排布，避免与网格线平行造成视觉摩尔纹
-            drawContext.canvas.nativeCanvas.drawText(sample, if (n % 2 == 0) 24f else 64f, ty, paint)
-            ty += 150f; n++
-        }
-    }
-}

@@ -138,7 +138,10 @@ class AppContainer(app: Application) {
 
     val llama = LlamaServerController(app, okHttpClient)
 
-    val settingsFlow = MutableStateFlow(settingsStore.load())
+    val settingsFlow = MutableStateFlow(settingsStore.load()).also {
+        // 玻璃质感：持久化参数灌入运行态镜像（GlassTuning 单例，玻璃组件逐帧读）
+        com.haoai.agent.ui.theme.GlassTuning.loadFrom(it.value.glass)
+    }
 
     /**
      * C6 配置源迁状态目录（app 私有，config 归状态目录）：

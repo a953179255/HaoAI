@@ -1052,6 +1052,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     onBack = { screen = 1 },
                     lockedSection = "general", onSectionBack = { screen = 1 }
                 )
+                // 主题外观（2026-10-08）：配色/壁纸/玻璃质感/动画风格，从通用页拆出
+                20 -> com.haoai.agent.ui.settings.SettingsScreen(
+                    vm = settingsVm, backdrop = backdrop,
+                    wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
+                    onBack = { screen = 1 },
+                    lockedSection = "theme", onSectionBack = { screen = 1 }
+                )
                 15 -> com.haoai.agent.ui.settings.SettingsScreen(
                     vm = settingsVm, backdrop = backdrop,
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,

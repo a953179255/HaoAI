@@ -287,7 +287,38 @@ data class AppSettings(
     /** B3 智能审批：命中需审批的操作先用辅助模型评审（APPROVE/DENY/ESCALATE）；失败一律升级人工。 */
     val smartApproval: Boolean = false,
     /** B6 会话工具组预设：null=按会话 activeGroups；"minimal"/"coding"/"full"。 */
-    val toolProfile: String = ""
+    val toolProfile: String = "",
+    /** 玻璃质感参数（主题外观设置页调，全 App 共享一套；默认=实验室定稿 16×1+blur4）。 */
+    val glass: GlassParams = GlassParams()
+)
+
+/**
+ * 玻璃质感持久化参数（2026-10-08）：真源在这里，运行态镜像是
+ * [com.haoai.agent.ui.theme.GlassTuning]（单例 State，玻璃组件逐帧读）。
+ * 字段与默认值和 GlassTuning 的 DEFAULT_* 一一对应。
+ */
+@Serializable
+data class GlassParams(
+    /** 背景模糊 dp（全 App 玻璃统一） */
+    val blur: Float = 4f,
+    /** 折射环带宽度 dp */
+    val lensHeight: Float = 16f,
+    /** 折射强度倍数（位移=高度×倍数） */
+    val lensAmountMul: Float = 1f,
+    /** 卡片白雾（表面不透明度） */
+    val veil: Float = 0.48f,
+    /** 卡片圆角 dp */
+    val corner: Float = 16f,
+    /** 整面折射 */
+    val lensFull: Boolean = false,
+    /** 色差 */
+    val ca: Boolean = true,
+    /** 顶栏背景模糊 dp（顶栏有标题文字，磨砂比卡片厚一档） */
+    val barBlur: Float = 15f,
+    /** 顶栏白雾 */
+    val barVeil: Float = 0.55f,
+    /** 输入框背景模糊 dp */
+    val inputBlur: Float = 4f
 )
 
 class SettingsStore(context: Context) {

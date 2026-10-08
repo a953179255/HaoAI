@@ -856,6 +856,7 @@ fun GlassPageBar(
         radius = 0.dp,
         // 顶栏加折射环（之前 0 = 完全没折射，是"只是磨砂"最重的地方）
         lensRadius = com.haoai.agent.ui.theme.haoPageBarLensRadius(),
+        lensAmountMul = com.haoai.agent.ui.theme.haoPageBarLensAmountMul(),
         blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
         surfaceAlpha = surfaceAlpha ?: com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
         border = false,
@@ -938,7 +939,12 @@ fun GlassPopup(
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
             },
             radius = radius,
-            surfaceAlpha = surfaceAlpha
+            surfaceAlpha = surfaceAlpha,
+            // 统一玻璃配方（2026-10-08）：原继承 lensRadius=radius（圆角越大折射越重），
+            // 现折射/模糊/色差走全局调参
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             content { leaving = true }
         }
@@ -1008,7 +1014,11 @@ fun GlassBottomSheet(
                 .clickable(interactionSource = null, indication = null) {},
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
             surfaceAlpha = surfaceAlpha,
-            blurRadius = blurRadius
+            blurRadius = blurRadius,
+            // 统一玻璃配方（2026-10-08）：折射/倍数/色差走全局调参
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(Modifier.onSizeChanged { panelH = it.height.toFloat() }) {
                 // 拖拽横杠（跟手下滑；超 120px 或甩速 > 900 收起，否则回弹）
@@ -1096,7 +1106,11 @@ fun GlassAlertDialog(
             radius = 28.dp,
             surfaceAlpha = 0.92f,
             blurRadius = 28.dp,
-            chromaticAberration = true,
+            // 统一玻璃配方（2026-10-08）：原继承 lensRadius=28×默认2=位移56 全 App
+            // 最重；折射/倍数走全局调参，色差改走开关
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
             refract = refract
         ) {
             Column(

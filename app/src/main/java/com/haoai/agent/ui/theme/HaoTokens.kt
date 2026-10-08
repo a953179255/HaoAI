@@ -316,6 +316,30 @@ fun haoPageBarBlurRadius(): androidx.compose.ui.unit.Dp =
 fun haoPageBarLensRadius(): androidx.compose.ui.unit.Dp =
     if (LocalOnWallpaper.current) GlassTuning.lensHeight.dp else 0.dp
 
+/** 页面顶栏的折射强度倍数（统一值；此前 GlassPanel 默认 2 写死，2026-10-08 接入）。 */
+@Composable
+fun haoPageBarLensAmountMul(): Float = GlassTuning.lensAmountMul
+
+// ── 全 App 统一玻璃配方访问器（2026-10-08 用户裁决：折射/模糊全局一致）──
+// 素色底（非壁纸）上折射无物可弯，一律关；壁纸上走调参值。
+
+/** 统一折射环带宽度（非壁纸=0 关闭）。 */
+@Composable
+fun haoGlassLensRadius(): androidx.compose.ui.unit.Dp =
+    if (LocalOnWallpaper.current) GlassTuning.lensHeight.dp else 0.dp
+
+/** 统一折射强度倍数。 */
+@Composable
+fun haoGlassLensAmountMul(): Float = GlassTuning.lensAmountMul
+
+/** 统一背景模糊（非壁纸回退 radius/3 的既有约定由调用方处理）。 */
+@Composable
+fun haoGlassBlurRadius(): androidx.compose.ui.unit.Dp = GlassTuning.blur.dp
+
+/** 统一色差开关。 */
+@Composable
+fun haoGlassCa(): Boolean = GlassTuning.ca
+
 // ────────────────────────────── 图标徽标的彩色色板 ──────────────────────────────
 
 /**

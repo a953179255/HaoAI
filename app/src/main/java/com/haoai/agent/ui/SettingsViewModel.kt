@@ -1273,6 +1273,22 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(bubbleOpacity = value.coerceIn(0.3f, 1f)) }
     }
 
+    /**
+     * 玻璃质感落盘（主题外观页滑杆松手/开关切换时调）：运行态镜像 GlassTuning
+     * 已由 UI 即时改过，这里只把快照写进设置；updateSettings 触发 settingsFlow
+     * → 全 App 玻璃重组（值相同，零视觉跳变）。逐帧写盘是禁区（双文件写固定成本）。
+     */
+    fun persistGlass() {
+        val snap = com.haoai.agent.ui.theme.GlassTuning.snapshot()
+        c.updateSettings { it.copy(glass = snap) }
+    }
+
+    /** 还原玻璃出厂默认（单例+落盘同步） */
+    fun resetGlass() {
+        com.haoai.agent.ui.theme.GlassTuning.reset()
+        persistGlass()
+    }
+
     fun setWallpaperGlobal(enabled: Boolean) {
         c.updateSettings { it.copy(wallpaperGlobal = enabled) }
     }
