@@ -3403,69 +3403,36 @@ private fun LazyListScope.themeItems(
         }
     }
 
-    item { SectionTitle("玻璃质感") }
-    item {
-        GlassPreviewCard()
+    // ── 玻璃质感：预览吸顶（stickyHeader），往下滚调参时预览始终在眼前 ──
+    stickyHeader {
+        Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+            SectionTitle("玻璃质感")
+            GlassPreviewScene()
+        }
     }
     item {
         GlassGroup(backdrop) {
             val t = com.haoai.agent.ui.theme.GlassTuning
             // 观察单例 State：滑杆标签即时回显（玻璃组件在 draw 期读，另路重组）
-            t.blur; t.lensHeight; t.lensAmountMul; t.veil; t.barBlur; t.inputBlur
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("磨砂模糊 dp（全 App 统一）", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("${t.blur.toInt()}dp", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                GlassTuneSlider(t.blur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.blur = it }
-            }
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("折射环带宽度 dp", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("${t.lensHeight.toInt()}dp", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                GlassTuneSlider(t.lensHeight, 0f..80f, backdrop, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
-            }
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("折射强度倍数（0 = 关折射）", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("×${"%.1f".format(t.lensAmountMul)}", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                GlassTuneSlider(t.lensAmountMul, 0f..8f, backdrop, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
-            }
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("卡片白雾（表面不透明度）", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("${(t.veil * 100).toInt()}%", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                GlassTuneSlider(t.veil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.veil = it }
-            }
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("顶栏模糊 dp（标题文字底，单独一档）", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("${t.barBlur.toInt()}dp", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                GlassTuneSlider(t.barBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.barBlur = it }
-            }
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("输入框模糊 dp（常年压在正文上，单独一档）", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("${t.inputBlur.toInt()}dp", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                GlassTuneSlider(t.inputBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.inputBlur = it }
-            }
+            t.blur; t.lensHeight; t.lensAmountMul; t.veil; t.corner
+            t.barBlur; t.barVeil; t.inputBlur; t.inputVeil
+            GlassSliderRow("磨砂模糊（卡片/弹层/抽屉）", "${t.blur.toInt()}dp", "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.blur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("折射环带宽度", "${t.lensHeight.toInt()}dp", "影响：所有玻璃表面", t.lensHeight, 0f..80f, backdrop, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("折射强度倍数", "×${"%.1f".format(t.lensAmountMul)}", "影响：所有玻璃表面（0 = 关折射）", t.lensAmountMul, 0f..8f, backdrop, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("玻璃圆角", "${t.corner.toInt()}dp", "影响：卡片、弹层（顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..40f, backdrop, onEnd = { vm.persistGlass() }) { t.corner = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("卡片白雾", "${(t.veil * 100).toInt()}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.veil = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("顶栏模糊", "${t.barBlur.toInt()}dp", "影响：顶栏（标题文字需要更实的底）", t.barBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.barBlur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("顶栏白雾", "${(t.barVeil * 100).toInt()}%", "影响：顶栏", t.barVeil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.barVeil = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("输入框模糊", "${t.inputBlur.toInt()}dp", "影响：底部输入框（常年压在正文上）", t.inputBlur, 0f..30f, backdrop, onEnd = { vm.persistGlass() }) { t.inputBlur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("输入框白雾", "${(t.inputVeil * 100).toInt()}%", "影响：输入框（独立于卡片）", t.inputVeil, 0f..0.9f, backdrop, onEnd = { vm.persistGlass() }) { t.inputVeil = it }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
@@ -3478,7 +3445,7 @@ private fun LazyListScope.themeItems(
                 backdrop = backdrop
             )
             ToggleRow(
-                title = "色差",
+                title = "边缘色差",
                 subtitle = "玻璃边缘红蓝分离（更真实的厚玻璃感）",
                 checked = t.ca,
                 onChange = { t.ca = it; vm.persistGlass() },
@@ -3493,7 +3460,7 @@ private fun LazyListScope.themeItems(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "折射/模糊全 App 统一生效：输入框、顶栏、抽屉、卡片、弹层",
+                    "折射/模糊全 App 统一生效",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -3543,40 +3510,63 @@ private fun LazyListScope.themeItems(
     }
 }
 
-/** 玻璃调参滑杆：onValueChange 直改单例（实时预览），松手 onEnd 落盘（写盘是重操作）。 */
+/** 玻璃调参滑杆行：标题+数值同行，下面一行"影响范围"说明；拖动直改单例（实时预览），松手落盘。 */
 @Composable
-private fun GlassTuneSlider(
+private fun GlassSliderRow(
+    title: String,
+    valueText: String,
+    affect: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onEnd: () -> Unit,
     onChange: (Float) -> Unit
 ) {
-    LiquidSlider(
-        value = { value },
-        onValueChange = onChange,
-        onValueChangeFinished = onEnd,
-        valueRange = range,
-        visibilityThreshold = 0.01f,
-        backdrop = backdrop,
-        modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
-    )
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.weight(1f))
+            Text(
+                valueText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            affect,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+        LiquidSlider(
+            value = { value },
+            onValueChange = onChange,
+            onValueChangeFinished = onEnd,
+            valueRange = range,
+            visibilityThreshold = 0.01f,
+            backdrop = backdrop,
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
+        )
+    }
 }
 
 /**
- * 玻璃质感预览卡：高对比测试图案打底（纯色上折射隐形），一张真·GlassPanel
- * 压在图案上——滑杆改 GlassTuning 即时可见，与聊天页同配方同渲染路径。
- * 自带局部采样层（不依赖页面 backdrop，避开 LazyColumn item 内共享画布成环的坑）。
+ * 玻璃质感预览场景（吸顶）：高对比测试图案打底（纯色上折射隐形），四种真实
+ * 表面紧凑叠放——顶栏 / 两张卡片 / 输入框，各自绑自己的模糊与白雾档，
+ * 折射/倍数/圆角/色差全局共享。滑杆改 GlassTuning 即时可见，与聊天页同配方
+ * 同渲染路径。自带局部采样层（不依赖页面 backdrop，避开共享画布成环的坑）。
+ *
+ * 布局紧凑原则（2026-10-08 用户反馈）：预览占屏越少越好，把空间留给滑杆——
+ * 表面之间不留空带，输入框直接贴卡片下方（真机聊天页也正是这样叠的）。
  */
 @Composable
-private fun GlassPreviewCard() {
+private fun GlassPreviewScene() {
     val t = com.haoai.agent.ui.theme.GlassTuning
     val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .height(150.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .height(104.dp)
     ) {
         // 采样宿主：测试图案挂进 backdrop（玻璃采样的就是这一层）
         Box(Modifier.matchParentSize().layerBackdrop(backdrop)) {
@@ -3585,29 +3575,70 @@ private fun GlassPreviewCard() {
                 modifier = Modifier.matchParentSize()
             )
         }
-        GlassPanel(
-            backdrop = backdrop,
-            modifier = Modifier
-                .matchParentSize()
-                .padding(12.dp),
-            radius = 26.dp,
-            surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
-            lensRadius = t.lensHeight.dp,
-            lensAmountMul = t.lensAmountMul,
-            blurRadius = t.inputBlur.dp,
-            chromaticAberration = t.ca,
-            lensFull = t.lensFull
+        // 四表面纵向紧凑叠放（4dp 间距），不留空带——真机聊天页也正是这样叠的
+        Column(
+            Modifier.matchParentSize().padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Column(Modifier.padding(14.dp)) {
+            // 顶栏（方角，全宽，绑顶栏档）
+            GlassPanel(
+                backdrop = backdrop,
+                modifier = Modifier.fillMaxWidth().height(26.dp),
+                radius = 0.dp,
+                lensRadius = t.lensHeight.dp,
+                lensAmountMul = t.lensAmountMul,
+                blurRadius = t.barBlur.dp,
+                chromaticAberration = t.ca,
+                lensFull = t.lensFull,
+                surfaceAlpha = t.barVeil,
+                border = false
+            ) {
                 Text(
-                    "预览 · 输入框同款",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    "折射 ${t.lensHeight.toInt()}×${"%.1f".format(t.lensAmountMul)} · 模糊 ${t.inputBlur.toInt()}dp",
+                    "顶栏",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 8.dp, top = 5.dp)
+                )
+            }
+            // 卡片（圆角可调，绑卡片档）
+            GlassPanel(
+                backdrop = backdrop,
+                modifier = Modifier.fillMaxWidth().height(34.dp),
+                radius = t.corner.dp,
+                lensRadius = t.lensHeight.dp,
+                lensAmountMul = t.lensAmountMul,
+                blurRadius = t.blur.dp,
+                chromaticAberration = t.ca,
+                lensFull = t.lensFull,
+                surfaceAlpha = t.veil
+            ) {
+                Text(
+                    "卡片 · 好嘞小豪，这就去抓今天的国际新闻呀～",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                )
+            }
+            // 输入框（胶囊形固定，绑输入框档）
+            GlassPanel(
+                backdrop = backdrop,
+                modifier = Modifier.fillMaxWidth().height(28.dp),
+                radius = 14.dp,
+                lensRadius = t.lensHeight.dp,
+                lensAmountMul = t.lensAmountMul,
+                blurRadius = t.inputBlur.dp,
+                chromaticAberration = t.ca,
+                lensFull = t.lensFull,
+                surfaceAlpha = t.inputVeil
+            ) {
+                Text(
+                    "＋ 给 柠瑶🍋 派个活…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
         }

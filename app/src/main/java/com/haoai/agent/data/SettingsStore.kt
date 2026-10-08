@@ -318,7 +318,9 @@ data class GlassParams(
     /** 顶栏白雾 */
     val barVeil: Float = 0.55f,
     /** 输入框背景模糊 dp */
-    val inputBlur: Float = 4f
+    val inputBlur: Float = 4f,
+    /** 输入框白雾（2026-10-08 独立于卡片：输入框常年压在正文上，用户要单独调） */
+    val inputVeil: Float = 0.48f
 )
 
 class SettingsStore(context: Context) {

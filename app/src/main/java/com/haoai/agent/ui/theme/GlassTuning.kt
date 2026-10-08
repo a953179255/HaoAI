@@ -37,6 +37,7 @@ object GlassTuning {
     const val DEFAULT_BAR_BLUR = 15f
     const val DEFAULT_BAR_VEIL = 0.55f
     const val DEFAULT_INPUT_BLUR = 4f
+    const val DEFAULT_INPUT_VEIL = 0.48f
 
     /** 背景模糊 dp（磨砂感的主要来源）——全 App 玻璃统一 */
     var blur by mutableFloatStateOf(DEFAULT_BLUR)
@@ -68,6 +69,9 @@ object GlassTuning {
     /** 输入框背景模糊 dp（折射/倍数走统一值，模糊单独一档：输入框常年压在正文上） */
     var inputBlur by mutableFloatStateOf(DEFAULT_INPUT_BLUR)
 
+    /** 输入框白雾（2026-10-08 起独立于卡片，用户单独调） */
+    var inputVeil by mutableFloatStateOf(DEFAULT_INPUT_VEIL)
+
     /** 从持久化参数灌入（App 启动时调用） */
     fun loadFrom(p: com.haoai.agent.data.GlassParams) {
         blur = p.blur
@@ -80,6 +84,7 @@ object GlassTuning {
         barBlur = p.barBlur
         barVeil = p.barVeil
         inputBlur = p.inputBlur
+        inputVeil = p.inputVeil
     }
 
     /** 当前值快照为持久化参数（调参页防抖落盘用） */
@@ -93,7 +98,8 @@ object GlassTuning {
         ca = ca,
         barBlur = barBlur,
         barVeil = barVeil,
-        inputBlur = inputBlur
+        inputBlur = inputBlur,
+        inputVeil = inputVeil
     )
 
     /** 一键还原出厂默认（"还原默认"按钮） */
@@ -108,5 +114,6 @@ object GlassTuning {
         barBlur = DEFAULT_BAR_BLUR
         barVeil = DEFAULT_BAR_VEIL
         inputBlur = DEFAULT_INPUT_BLUR
+        inputVeil = DEFAULT_INPUT_VEIL
     }
 }

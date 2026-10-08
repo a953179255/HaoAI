@@ -336,6 +336,22 @@ fun haoGlassLensAmountMul(): Float = GlassTuning.lensAmountMul
 @Composable
 fun haoGlassBlurRadius(): androidx.compose.ui.unit.Dp = GlassTuning.blur.dp
 
+/** 输入框表面不透明度：与卡片同构，但壁纸上调参分支走 inputVeil（2026-10-08 独立）。 */
+@Composable
+fun haoInputSurfaceAlpha(): Float = when {
+    !LocalOnWallpaper.current -> HaoDimens.cardSurfaceAlpha
+    HAO_LIQUID_ON_WALLPAPER -> {
+        val wpDark = LocalWallpaperDark.current
+        val themeDark = haoIsDark()
+        when {
+            wpDark == null -> HaoDimens.cardSurfaceAlphaOnWallpaperLiquid
+            wpDark != themeDark -> if (themeDark) 0.34f else 0.50f
+            else -> GlassTuning.inputVeil
+        }
+    }
+    else -> HaoDimens.cardSurfaceAlphaOnWallpaper
+}
+
 /** 统一色差开关。 */
 @Composable
 fun haoGlassCa(): Boolean = GlassTuning.ca

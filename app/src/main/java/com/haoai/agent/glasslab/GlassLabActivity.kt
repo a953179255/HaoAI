@@ -304,7 +304,7 @@ private fun GlassLab() {
                         backdrop = backdrop,
                         modifier = Modifier.fillMaxSize(),
                         radius = 26.dp,
-                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoInputSurfaceAlpha(),
                         // 与真输入框同配方：折射走全局统一值，模糊走输入框专属档
                         lensRadius = GlassTuning.lensHeight.dp,
                         lensAmountMul = GlassTuning.lensAmountMul,
@@ -343,6 +343,7 @@ private fun LabControls() {
         SliderRow("顶栏模糊 dp", GlassTuning.barBlur, 0f, 30f) { GlassTuning.barBlur = it }
         SliderRow("顶栏白雾 alpha", GlassTuning.barVeil, 0f, 0.9f) { GlassTuning.barVeil = it }
         SliderRow("输入框模糊 dp", GlassTuning.inputBlur, 0f, 30f) { GlassTuning.inputBlur = it }
+        SliderRow("输入框白雾 alpha", GlassTuning.inputVeil, 0f, 0.9f) { GlassTuning.inputVeil = it }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -362,7 +363,7 @@ private fun LabControls() {
                     val text = "blur=${GlassTuning.blur} lensHeight=${GlassTuning.lensHeight} " +
                         "amountMul=${GlassTuning.lensAmountMul} veil=${GlassTuning.veil} " +
                         "corner=${GlassTuning.corner} lensFull=${GlassTuning.lensFull} ca=${GlassTuning.ca} " +
-                        "barBlur=${GlassTuning.barBlur} barVeil=${GlassTuning.barVeil} inputBlur=${GlassTuning.inputBlur}"
+                        "barBlur=${GlassTuning.barBlur} barVeil=${GlassTuning.barVeil} inputBlur=${GlassTuning.inputBlur} inputVeil=${GlassTuning.inputVeil}"
                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     cm.setPrimaryClip(ClipData.newPlainText("玻璃参数", text))
                 },

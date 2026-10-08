@@ -5094,7 +5094,7 @@ private fun ComposerBar(
         lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
         blurRadius = com.haoai.agent.ui.theme.GlassTuning.inputBlur.dp,
         chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
-        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+        surfaceAlpha = com.haoai.agent.ui.theme.haoInputSurfaceAlpha(),
         // 键盘抬升值作重绘键：位置变化后强制重绘折射，采样对齐新布局位置，
         // 保持完整液态效果且背景正确（matte 方案观感差已弃）
         redrawKey = redrawKey,
