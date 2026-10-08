@@ -2190,8 +2190,10 @@ private fun LazyListScope.memoryItems(
                 onClick = onOpenMemories,
                 backdrop = backdrop,
                 shape = RoundedCornerShape(18.dp),
-                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
                 lensRadius = 14.dp,
+                // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                pageTier = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp)
@@ -3429,22 +3431,22 @@ private fun LazyListScope.themeItems(
         }
     }
 
-    // ── 调参分三组：裸标题在卡外（与其他段落一致），按档位归类 ──
+    // ── 调参分四组：裸标题在卡外（与其他段落一致），按档位归类 ──
     item { SectionTitle("全局玻璃") }
     item {
         GlassGroup(backdrop) {
             val t = com.haoai.agent.ui.theme.GlassTuning
             // 观察单例 State：滑杆标签即时回显（玻璃组件在 draw 期读，另路重组）
             t.blur; t.lensHeight; t.lensAmountMul; t.veil; t.corner
-            GlassSliderRow("磨砂模糊（卡片/弹层/抽屉）", dpText(t.blur), "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.blur = it }
+            GlassSliderRow("磨砂模糊（聊天卡片/弹层）", dpText(t.blur), "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.blur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("聊天卡片白雾", "${Math.round(t.veil * 100)}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.veil = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("折射环带宽度", dpText(t.lensHeight), "影响：所有玻璃表面", t.lensHeight, 0f..40f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("折射强度倍数", "×${"%.1f".format(t.lensAmountMul)}", "影响：所有玻璃表面（0 = 关折射）", t.lensAmountMul, 0f..4f, backdrop, step = 0.1f, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("玻璃圆角", dpText(t.corner), "影响：卡片、弹层（顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..32f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.corner = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("卡片白雾", "${Math.round(t.veil * 100)}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.veil = it }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
@@ -3472,13 +3474,23 @@ private fun LazyListScope.themeItems(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "折射/模糊全 App 统一生效",
+                    "折射/模糊全局统一生效；白雾分聊天/页面两档",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = { vm.resetGlass() }) { Text("还原默认") }
             }
+        }
+    }
+    item { SectionTitle("页面玻璃卡") }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            t.pageBlur; t.pageVeil
+            GlassSliderRow("页面卡磨砂", dpText(t.pageBlur), "影响：设置主页、各子页、记忆/技能等管理页卡片", t.pageBlur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.pageBlur = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("页面卡白雾", "${Math.round(t.pageVeil * 100)}%", "影响：同上（独立于聊天卡片；任何壁纸深浅下都生效）", t.pageVeil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.pageVeil = it }
         }
     }
     item { SectionTitle("顶栏专属") }
@@ -3594,8 +3606,8 @@ private fun dpText(v: Float): String =
  * - **不透明实底**（surfaceAlpha=1：浅色纯白 / 深色板岩，glassSurfaceColor 规范）——
  *   用户确认透底会干扰演示判读；blur/lens 置 0（表面已不透明，采样无从呈现）；
  * - 圆角吃玻璃圆角滑杆；fillMaxWidth 走列表同一内边距 ⇒ 与选项卡**同宽**；
- * - 纹理与三行演示照旧：图案层只画网格线（opaqueBase=false），三行各吃各档，
- *   磨砂压在网格上变化可见（顶栏/卡片/输入框档）。
+ * - 纹理与四行演示（2026-10-09 加页面卡行）：图案层只画网格线（opaqueBase=false），
+ *   四行各吃各档（顶栏/聊天卡/页面卡/输入框），磨砂压在网格上变化可见。
  * 自带局部采样层（不依赖页面 backdrop，避开共享画布成环的坑）。
  */
 @Composable
@@ -3609,7 +3621,8 @@ private fun GlassPreviewCard(
     Box(
         Modifier
             .fillMaxWidth()
-            .height(140.dp)
+            // 四行各 28+36+36+34 + 间距 15 + 上下内衬 16 ≈ 165dp
+            .height(165.dp)
     ) {
         // 实底面板（悬浮三件套与选项卡同款分层）
         com.haoai.agent.ui.common.GlassPanel(
@@ -3636,15 +3649,15 @@ private fun GlassPreviewCard(
                 opaqueBase = false
             )
         }
-        // 三表面纵向叠放（6dp 间距）：尺寸按"文字一行放得下"定，不追求极限压缩
+        // 四表面纵向叠放：顶栏/聊天卡/页面卡/输入框各绑各档
         Column(
             Modifier.matchParentSize().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             // 顶栏（方角，全宽，绑顶栏档）
             GlassPanel(
                 backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(30.dp),
+                modifier = Modifier.fillMaxWidth().height(28.dp),
                 radius = 0.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -3658,13 +3671,13 @@ private fun GlassPreviewCard(
                     "顶栏",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 8.dp, top = 7.dp)
+                    modifier = Modifier.padding(start = 8.dp, top = 6.dp)
                 )
             }
-            // 卡片（圆角可调，绑卡片档）——文案用真实 Agent 名（用户反馈：写死名字不对）
+            // 聊天卡（圆角可调，绑聊天档）——文案用真实 Agent 名（用户反馈：写死名字不对）
             GlassPanel(
                 backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(44.dp),
+                modifier = Modifier.fillMaxWidth().height(36.dp),
                 radius = t.corner.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -3679,13 +3692,34 @@ private fun GlassPreviewCard(
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                )
+            }
+            // 页面卡（2026-10-09 方案A新增演示：绑页面档 pageBlur/pageVeil）
+            GlassPanel(
+                backdrop = patternBackdrop,
+                modifier = Modifier.fillMaxWidth().height(36.dp),
+                radius = t.corner.dp,
+                lensRadius = t.lensHeight.dp,
+                lensAmountMul = t.lensAmountMul,
+                blurRadius = t.pageBlur.dp,
+                chromaticAberration = t.ca,
+                lensFull = t.lensFull,
+                surfaceAlpha = t.pageVeil
+            ) {
+                Text(
+                    "设置 · 页面玻璃卡（独立档）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = com.haoai.agent.ui.theme.adaptiveOnSurface(),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
                 )
             }
             // 输入框（胶囊形固定，绑输入框档）——placeholder 与聊天页同规则
             GlassPanel(
                 backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(38.dp),
+                modifier = Modifier.fillMaxWidth().height(34.dp),
                 radius = 19.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -4843,6 +4877,8 @@ private fun DashboardMetric(
         surfaceAlpha = com.haoai.agent.ui.theme.haoTileSurfaceAlpha(),
         tint = tint.copy(alpha = 0.10f),
         lensRadius = 12.dp,
+        // 2026-10-09 方案A：瓦片=页面玻璃卡档
+        pageTier = true,
         modifier = modifier
     ) {
         Column(Modifier.padding(horizontal = 8.dp, vertical = 9.dp)) {
@@ -5366,6 +5402,8 @@ private fun GlassStatTile(
         tint = tint.copy(alpha = 0.10f),
         lensRadius = 12.dp,
         refract = refract,
+        // 2026-10-09 方案A：瓦片=页面玻璃卡档
+        pageTier = true,
         modifier = modifier
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {

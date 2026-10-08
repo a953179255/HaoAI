@@ -165,7 +165,9 @@ fun WorkflowScreen(
                     onClick = { editTarget = w },
                     backdrop = localBackdrop,
                     shape = RoundedCornerShape(14.dp),
-                    surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                    surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
+                    // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                    pageTier = true,
                     modifier = Modifier
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 ) {
@@ -280,7 +282,9 @@ fun WorkflowScreen(
                         onClick = { newDraft = true },
                         backdrop = localBackdrop,
                         shape = RoundedCornerShape(14.dp),
-                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha()
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
+                        // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                        pageTier = true
                     ) {
                         Row(
                             Modifier.padding(horizontal = 18.dp, vertical = 10.dp),

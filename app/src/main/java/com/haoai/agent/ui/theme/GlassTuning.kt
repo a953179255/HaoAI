@@ -42,6 +42,8 @@ object GlassTuning {
     const val DEFAULT_BAR_VEIL = 0.55f
     const val DEFAULT_INPUT_BLUR = 4f
     const val DEFAULT_INPUT_VEIL = 0.48f
+    const val DEFAULT_PAGE_BLUR = 4f
+    const val DEFAULT_PAGE_VEIL = 0.48f
 
     /** 背景模糊 dp（磨砂感的主要来源）——全 App 玻璃统一 */
     var blur by mutableFloatStateOf(DEFAULT_BLUR)
@@ -76,6 +78,14 @@ object GlassTuning {
     /** 输入框白雾（2026-10-08 起独立于卡片，用户单独调） */
     var inputVeil by mutableFloatStateOf(DEFAULT_INPUT_VEIL)
 
+    /** 页面玻璃卡磨砂 dp（2026-10-09 方案A拆分：设置/管理/抽屉页卡片独立档；
+     *  [blur] 继续管聊天卡片/弹层/任务面板——用户反馈两类表面观感诉求不同） */
+    var pageBlur by mutableFloatStateOf(DEFAULT_PAGE_BLUR)
+
+    /** 页面玻璃卡白雾（独立档；取代旧的"壁纸深浅≠主题深浅时写死 0.50"分支，
+     *  滑杆在任何壁纸/主题组合下恒生效） */
+    var pageVeil by mutableFloatStateOf(DEFAULT_PAGE_VEIL)
+
     /**
      * 弹层白雾映射：滑杆 veil（默认 0.48）按 [anchor]/0.48 等比放大到各弹层
      * 原有的档位锚点（对话框/消息操作 0.92、底部弹层 0.72、Popup 0.52）——
@@ -98,6 +108,8 @@ object GlassTuning {
         barVeil = p.barVeil
         inputBlur = p.inputBlur
         inputVeil = p.inputVeil
+        pageBlur = p.pageBlur
+        pageVeil = p.pageVeil
     }
 
     /** 当前值快照为持久化参数（调参页防抖落盘用） */
@@ -112,7 +124,9 @@ object GlassTuning {
         barBlur = barBlur,
         barVeil = barVeil,
         inputBlur = inputBlur,
-        inputVeil = inputVeil
+        inputVeil = inputVeil,
+        pageBlur = pageBlur,
+        pageVeil = pageVeil
     )
 
     /** 一键还原出厂默认（"还原默认"按钮） */
@@ -128,5 +142,7 @@ object GlassTuning {
         barVeil = DEFAULT_BAR_VEIL
         inputBlur = DEFAULT_INPUT_BLUR
         inputVeil = DEFAULT_INPUT_VEIL
+        pageBlur = DEFAULT_PAGE_BLUR
+        pageVeil = DEFAULT_PAGE_VEIL
     }
 }

@@ -271,7 +271,9 @@ fun haoButtonColors(level: HaoButtonLevel): Pair<Color, Color> {
 // 低不透明度 + 加厚模糊，折射露出来的同时依然可读
 const val HAO_LIQUID_ON_WALLPAPER = true
 
-/** 内容卡实际使用的表面不透明度：素色底 [HaoDimens.cardSurfaceAlpha] / 壁纸上更实。 */
+/** 内容卡实际使用的表面不透明度：素色底 [HaoDimens.cardSurfaceAlpha] / 壁纸上更实。
+ *  2026-10-09 起只管**聊天表面**（气泡旁胶囊/任务卡/收尾行）；设置/管理/抽屉的
+ *  页面卡片走 [haoPageCardSurfaceAlpha]（独立档，用户要求拆开调）。 */
 @Composable
 fun haoCardSurfaceAlpha(): Float = when {
     !LocalOnWallpaper.current -> HaoDimens.cardSurfaceAlpha
@@ -287,17 +289,30 @@ fun haoCardSurfaceAlpha(): Float = when {
     else -> HaoDimens.cardSurfaceAlphaOnWallpaper
 }
 
-/** 分组玻璃的背景模糊半径：素色底 radius/3；壁纸上走主题外观页实时调参。 */
+/**
+ * **页面玻璃卡**（设置/管理/抽屉卡片、统计瓦片、备注条）的表面不透明度
+ * （2026-10-09 方案A拆分）：壁纸上恒等于滑杆 pageVeil——不再藏"壁纸深浅≠
+ * 主题深浅时写死 0.34/0.50"的分支（那条分支正是用户反馈"卡片白雾滑杆控制
+ * 不了设置卡片"的直接原因：深壁纸+浅主题恰好命中写死值，滑杆整个失灵）。
+ * 素色底沿用原卡片常数。
+ */
+@Composable
+fun haoPageCardSurfaceAlpha(): Float = when {
+    !LocalOnWallpaper.current -> HaoDimens.cardSurfaceAlpha
+    else -> GlassTuning.pageVeil
+}
+
+/** 分组玻璃的背景模糊半径（页面组档，2026-10-09 拆分：原 GlassTuning.blur
+ *  继续管聊天卡片/弹层，pageBlur 管设置/管理页卡片）。 */
 @Composable
 fun haoGroupBlurRadius(): androidx.compose.ui.unit.Dp =
-    if (LocalOnWallpaper.current && HAO_LIQUID_ON_WALLPAPER) GlassTuning.blur.dp
+    if (LocalOnWallpaper.current && HAO_LIQUID_ON_WALLPAPER) GlassTuning.pageBlur.dp
     else HaoDimens.groupRadius / 3f
 
-/** 统计瓦片实际使用的表面不透明度。 */
+/** 统计瓦片实际使用的表面不透明度（2026-10-09 并入页面档：瓦片都在页面组里，
+ *  原先 0.64/0.34 两个写死值不吃任何滑杆）。 */
 @Composable
-fun haoTileSurfaceAlpha(): Float =
-    if (LocalOnWallpaper.current) HaoDimens.tileSurfaceAlphaOnWallpaper
-    else HaoDimens.tileSurfaceAlpha
+fun haoTileSurfaceAlpha(): Float = haoPageCardSurfaceAlpha()
 
 /** 页面顶栏实际使用的表面不透明度。 */
 @Composable

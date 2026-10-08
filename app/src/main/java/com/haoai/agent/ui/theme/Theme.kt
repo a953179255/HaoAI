@@ -213,6 +213,21 @@ fun wallpaperAdaptiveGray(alpha: Float = 0.8f): Color {
 }
 
 /**
+ * 壁纸自适应**主墨色**（2026-10-09 方案A：分组小标题的可读性钥匙）：
+ * 小标题是裸字直接压在壁纸/卡片间隙上，主题色在这里会翻车——浅色主题
+ * 的黑字压深色壁纸几乎不可见（用户实测），深色主题的白字压浅壁纸同理。
+ * 判定口径与 [wallpaperAdaptiveGray] 一致（壁纸深浅优先，无壁纸回退
+ * 主题底色亮度），但取 onSurface 满墨而非弱化灰——小标题是段落的锚点，
+ * 需要足够分量。
+ */
+@Composable
+fun adaptiveOnSurface(alpha: Float = 1f): Color {
+    val onDark = LocalWallpaperDark.current
+        ?: (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+    return (if (onDark) HaoDarkColors.onSurface else HaoLightColors.onSurface).copy(alpha = alpha)
+}
+
+/**
  * 从聊天壁纸提取主色（轻量 Palette）：降采样后按 16 级/通道量化计数，
  * 取「饱和度 × 出现次数」加权重高的色桶，排除近灰白黑。
  */

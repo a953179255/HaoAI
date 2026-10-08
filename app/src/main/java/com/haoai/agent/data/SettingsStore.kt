@@ -320,7 +320,13 @@ data class GlassParams(
     /** 输入框背景模糊 dp */
     val inputBlur: Float = 4f,
     /** 输入框白雾（2026-10-08 独立于卡片：输入框常年压在正文上，用户要单独调） */
-    val inputVeil: Float = 0.48f
+    val inputVeil: Float = 0.48f,
+    /** 页面玻璃卡磨砂 dp（设置/管理/抽屉页卡片独立档，2026-10-09 方案A拆分；
+     *  blur 继续管聊天卡片/弹层/任务面板） */
+    val pageBlur: Float = 4f,
+    /** 页面玻璃卡白雾（独立档；取代旧"壁纸深浅≠主题深浅时写死 0.50"分支——
+     *  滑杆在任何壁纸/主题组合下恒生效） */
+    val pageVeil: Float = 0.48f
 )
 
 class SettingsStore(context: Context) {

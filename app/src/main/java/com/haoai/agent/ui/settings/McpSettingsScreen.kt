@@ -250,7 +250,9 @@ fun McpSettingsScreen(
                             onClick = { editing = srv.id },
                             backdrop = localBackdrop,
                             shape = RoundedCornerShape(16.dp),
-                            surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                            surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
+                            // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                            pageTier = true,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.fillMaxWidth().padding(14.dp)) {
@@ -471,7 +473,7 @@ private fun McpEditView(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
-                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(), pressScale = false) {
+                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(), pressScale = false, pageTier = true) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Column {
                             Text(
@@ -597,7 +599,7 @@ private fun McpEditView(
                 }
             }
             item {
-                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(), pressScale = false) {
+                GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(), pressScale = false, pageTier = true) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
                             "审批级别",
@@ -701,7 +703,7 @@ private fun McpEditView(
             }
             if (initial != null && initial.toolCache.isNotEmpty()) {
                 item {
-                    GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(), pressScale = false) {
+                    GlassCard(onClick = {}, backdrop = backdrop, shape = RoundedCornerShape(16.dp), surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(), pressScale = false, pageTier = true) {
                         Column(Modifier.fillMaxWidth().padding(14.dp)) {
                             Text(
                                 "工具清单（${initial.toolCache.size}）",

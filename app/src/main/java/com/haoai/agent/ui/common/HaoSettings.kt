@@ -82,7 +82,9 @@ fun HaoGroup(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
         radius = r,
-        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+        // 页面组独立档（2026-10-09 方案A拆分）：白雾/磨砂走 pageVeil/pageBlur，
+        // 聊天卡片不再被这里牵动
+        surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
         lensRadius = if (lens) tuning.lensHeight.dp else 0.dp,
         lensAmountMul = tuning.lensAmountMul,
         lensFull = tuning.lensFull && lens,
@@ -273,6 +275,10 @@ fun HaoChip(text: String, tone: HaoTone = HaoTone.Neutral) {
 /**
  * 子页内的段落标题（如"云端服务 / 端侧模型 / 采样参数"）。
  * 左对齐到分组卡边缘（[HaoDimens.pagePaddingH] 之外的 0），带一根 3dp 强调竖条。
+ *
+ * ⚠️ 2026-10-09 方案A：墨色走 [adaptiveOnSurface]（壁纸深浅优先），不再用
+ * 主题 onSurface——浅色主题的黑字压深色壁纸几乎不可见（用户实测"看不清"）；
+ * 首页分组标签 [HaoGroupLabel] 也统一进这套"竖条+裸字自适应"语言。
  */
 @Composable
 fun HaoSectionTitle(text: String) {
@@ -290,7 +296,7 @@ fun HaoSectionTitle(text: String) {
             text,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
+            color = com.haoai.agent.ui.theme.adaptiveOnSurface()
         )
     }
 }
@@ -430,20 +436,31 @@ fun HaoNote(
     }
 }
 
-/** 组间小标题（设置首页的分块标签，Rikkahub/Minis 风格：小号灰字，不抢戏）。 */
+/**
+ * 组间小标题（设置首页的分块标签）。
+ *
+ * ⚠️ 2026-10-09 方案A：与 [HaoSectionTitle] 统一成"竖条 + 裸字自适应"一种
+ * 语言——原先垫一块 60% 玻璃底（用户实测"背景框太丑"），且首页带框、子页裸字
+ * 是同一层级的两套表达。字色 [adaptiveOnSurface] 跟壁纸走，深壁纸也读得了，
+ * 不再需要玻璃底垫可读性。字号保持 labelSmall（首页标签比子页段标题轻一档）。
+ */
 @Composable
 fun HaoGroupLabel(text: String, modifier: Modifier = Modifier) {
-    // 小玻璃底：压在花壁纸上，裸文字（即使加晕）也读不了 —— 文字进玻璃
-    Box(
-        modifier
-            .padding(bottom = 2.dp)
-            .background(glassSurfaceColor(0.6f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+    Row(
+        modifier.padding(bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Box(
+            Modifier
+                .size(width = 3.dp, height = 13.dp)
+                .background(MaterialTheme.colorScheme.primary, CircleShape)
+        )
         Text(
             text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = com.haoai.agent.ui.theme.adaptiveOnSurface()
         )
     }
 }

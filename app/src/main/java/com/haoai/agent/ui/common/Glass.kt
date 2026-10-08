@@ -591,6 +591,9 @@ fun GlassCard(
     lensRadius: Dp = 18.dp,
     refract: Boolean? = null,
     pressScale: Boolean = true,
+    /** 页面档（2026-10-09 方案A拆分）：true = 磨砂吃 GlassTuning.pageBlur
+     *  （设置/管理/抽屉卡片）；false = 吃 GlassTuning.blur（消息卡/弹层/任务面板） */
+    pageTier: Boolean = false,
     contentAlignment: Alignment = Alignment.TopStart,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -615,7 +618,8 @@ fun GlassCard(
                     // （>0 = 开折射），数值统一走全局配方。
                     val t = com.haoai.agent.ui.theme.GlassTuning
                     vibrancy()
-                    blur(t.blur.dp.toPx())
+                    // 页面档/聊天档各吃各的磨砂滑杆（2026-10-09 方案A拆分）
+                    blur(if (pageTier) t.pageBlur.dp.toPx() else t.blur.dp.toPx())
                     if (lensRadius > 0.dp) {
                         if (t.lensFull) {
                             val md = size.minDimension

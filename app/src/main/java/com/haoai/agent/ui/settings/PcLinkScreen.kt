@@ -43,7 +43,7 @@ import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.HaoChip
 import com.haoai.agent.ui.common.HaoGroupLabel
 import com.haoai.agent.ui.theme.HaoTone
-import com.haoai.agent.ui.theme.haoCardSurfaceAlpha
+import com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha
 import kotlinx.coroutines.launch
 
 /**
@@ -143,7 +143,9 @@ fun PcLinkScreen(
                     item {
                         GlassCard(
                             onClick = {}, backdrop = localBackdrop, shape = RoundedCornerShape(16.dp),
-                            surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
+                            surfaceAlpha = haoPageCardSurfaceAlpha(), pressScale = false,
+                            // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                            pageTier = true
                         ) {
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -182,7 +184,9 @@ fun PcLinkScreen(
                     item {
                         GlassCard(
                             onClick = {}, backdrop = localBackdrop, shape = RoundedCornerShape(16.dp),
-                            surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
+                            surfaceAlpha = haoPageCardSurfaceAlpha(), pressScale = false,
+                            // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                            pageTier = true
                         ) {
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedTextField(
@@ -240,7 +244,9 @@ fun PcLinkScreen(
                     item {
                         GlassCard(
                             onClick = {}, backdrop = localBackdrop, shape = RoundedCornerShape(16.dp),
-                            surfaceAlpha = haoCardSurfaceAlpha(), pressScale = false
+                            surfaceAlpha = haoPageCardSurfaceAlpha(), pressScale = false,
+                            // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+                            pageTier = true
                         ) {
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(

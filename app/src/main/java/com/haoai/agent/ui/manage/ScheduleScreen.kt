@@ -169,8 +169,10 @@ private fun TaskCard(
         onClick = onToggle,
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
-        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+        surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
         lensRadius = 16.dp,
+        // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+        pageTier = true,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(Modifier.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp)) {
