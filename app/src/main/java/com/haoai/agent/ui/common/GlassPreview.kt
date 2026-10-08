@@ -3,6 +3,7 @@ package com.haoai.agent.ui.common
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -20,7 +21,10 @@ import android.graphics.Paint
  */
 @Composable
 fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
+    // clipToBounds：同心圆半径按 h 递增（r=140,400,660…），预览框只有 140dp 高时
+    // 大圆会溢出画布（Canvas 默认不裁剪）——实验室整屏背景靠窗口裁掉看不出来，
+    // 设置页预览框没窗口边界，圆圈就爬到标题和滑杆上了（2026-10-08 用户实测）
+    Canvas(modifier.clipToBounds()) {
         val w = size.width
         val h = size.height
         val base = if (dark) Color(0xFF14171C) else Color(0xFFF4F5F7)
