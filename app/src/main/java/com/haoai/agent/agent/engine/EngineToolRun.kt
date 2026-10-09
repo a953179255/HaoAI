@@ -354,9 +354,32 @@ internal suspend fun AgentEngine.finishCall(
     }
     onEvent(
         ToolChanged(
-            ToolUpdate(call.id, finalState, briefOf(call), previewOf(result.content))
+            ToolUpdate(
+                call.id, finalState, briefOf(call),
+                preview = previewOf(finalResult.content),
+                // 批1e：正文内联——编码向工具的完整结果截断后交 UI 结果卡。
+                // 此前只上 preview（首行 160 字），构建成败/读到的内容聊天里全不可见。
+                body = inlineBodyOf(call.name, finalResult.content),
+                elapsedMs = if (toolStartMs > 0) System.currentTimeMillis() - toolStartMs else 0L
+            )
         )
     )
+}
+
+/**
+ * 批1e：哪些工具的结果值得在链卡步骤下方内联展示正文。编码向六件套 + job_output 是
+ * vibe coding 刚需（构建结果/文件内容/搜索结果看不见就没法协作）；web_fetch/browser_read
+ * 动辄几万字符正文，塞消息流会冲垮对话，维持 preview 一行不内联。
+ */
+private val INLINE_BODY_TOOLS = setOf(
+    "bash", "job_output", "read", "write", "edit", "glob", "grep"
+)
+
+/** 正文卡长度口径：中间截断保头尾（TextCap.middle 65/25），~2400 字符；空/非内联工具返回 null。 */
+internal fun inlineBodyOf(toolName: String, content: String): String? {
+    if (toolName !in INLINE_BODY_TOOLS) return null
+    if (content.isBlank()) return null
+    return com.haoai.core.TextCap.middle(content.trim(), 2400)
 }
 
 /** B2：成功返回网络/页面正文的工具名（污染本回合记忆提取的溯源）。 */

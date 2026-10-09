@@ -111,6 +111,27 @@ PLAN = {
          None,
          "先确认要答什么：这是一次验收，不需要动文件。\n然后想清楚证据从哪来 —— 只看代码不算，得真跑一次。"),
     ],
+    # 批1e 结果正文卡的验收剧本：真跑 shell，让 stdout 进 bash 工具结果。
+    # 三个 bash 连着排（中间不插终答），一轮里就把成功/失败/短输出三种卡都跑出来；
+    # 成功那条仿 gradle 的 "BUILD SUCCESSFUL"（绿）、失败那条仿编译错误（红）。
+    "build": [
+        ("先编译一遍", [{"id": "b1", "name": "bash", "arguments": json.dumps(
+            {"command": "printf '> Task :app:compileDebugKotlin\\n"
+                        "w: LoginScreen.kt:118:8 Parameter 'enabled' is never used\\n"
+                        "> Task :app:processDebugResources (up-to-date)\\n"
+                        "BUILD SUCCESSFUL in 1.8s\\n"
+                        "14 actionable tasks: 14 executed\\n'"})}]),
+        ("编译过了，但有一条警告。再跑个会失败的看看", [{"id": "b2", "name": "bash", "arguments": json.dumps(
+            {"command": "printf '> Task :app:compileDebugKotlin\\n"
+                        "e: file:///app/src/main/java/com/haoai/Broken.kt:42:9 "
+                        "error: unresolved reference: colour\\n"
+                        "FAILURE: Build failed with an exception.\\n'; exit 1"})}]),
+        ("失败了，退出码非零。最后看个短输出", [{"id": "b3", "name": "bash", "arguments": json.dumps(
+            {"command": "printf 'line one\\nline two\\nline three\\n'"})}]),
+        ("三张卡都出来了：第一张绿色那行是构建成功，第二张退出码非零带红色报错，"
+         "第三张是短输出默认展开。构建成败、警告、报错，现在聊天里一眼能看完，"
+         "不用再点进工具详情弹层。", None),
+    ],
     "tools": [
         ("我先建文件", [{"id": "call_1", "name": "todo",
                         "arguments": json.dumps({"items": [{"text": "建 hello.txt", "status": "doing"},

@@ -65,7 +65,15 @@ data class UiTool(
      * 渲染 FaviconRow + 结果数、详情弹层渲染结果卡列表。由 rebuildRows 从工具结果
      * 文本解析（运行中为空，结果落库后填充）。不存 snippet——详情弹层需要时再取。
      */
-    val hits: List<SearchHitLite> = emptyList()
+    val hits: List<SearchHitLite> = emptyList(),
+    /**
+     * 批1e：工具结果正文（截断后的完整输出，~2400 字符内）。bash/read/write/edit/glob/grep
+     * 等编码向步骤下方据此长出可折叠结果卡——此前引擎只把 preview（首行 160 字）带上屏，
+     * "构建成功还是失败""读到哪几行"聊天里一个字都看不到。历史消息从落库全文现截。
+     */
+    val body: String? = null,
+    /** 批1e：工具耗时 ms（结果卡头部「exit 0 · 1.8s」）；历史消息不落库，重进为 0。 */
+    val elapsedMs: Long = 0
 )
 
 /** web_search 单条结果的展示摘要（对齐效果图"图标+标题+域名"；snippet 供详情弹层结果卡）。 */
@@ -1752,7 +1760,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     ev.update.state,
                     ev.update.preview,
                     liveTools[ev.update.callId]?.subagents ?: emptyList(),
-                    liveTools[ev.update.callId]?.imageData
+                    liveTools[ev.update.callId]?.imageData,
+                    body = ev.update.body,
+                    elapsedMs = ev.update.elapsedMs
                 )
                 publishLiveTools()
                 rebuildRows()
@@ -1889,7 +1899,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
                     preview = previewLine(stored.first),
                     subagents = live?.subagents ?: emptyList(),
-                    imageData = live?.imageData
+                    imageData = live?.imageData,
+                    // 批1e：历史消息的结果正文从落库全文现截（口径与引擎 inlineBodyOf 同函数）
+                    body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first)
                 )
                 live != null -> live
                 else -> base

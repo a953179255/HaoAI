@@ -83,6 +83,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -281,6 +282,13 @@ fun ChainCard(
                             )
                             is ChainStep.Tool -> Column {
                                 ToolStep(tool = step.tool, live = toolsLive)
+                                // 批1e：编码向步骤行下长出结果正文卡（exit/耗时 + 可折叠 stdout）
+// 显隐跟随该步自身的可见性（index >= firstShownIndex），不能只判 chainOpen：
+// 步骤数 ≤ COLLAPSED_VISIBLE 时卡根本不提供展开入口（canCollapse=false），
+// chainOpen 恒为 false，只看它会把正文卡一起藏掉。
+if (step.tool.body != null && index >= firstShownIndex) {
+                                    ToolBodyCard(step.tool)
+                                }
                                 // 搜索步：行下 favicon 叠排 + 结果数（对齐 rikkahub FaviconRow）
                                 if (step.tool.hits.isNotEmpty()) {
                                     Row(
@@ -787,6 +795,170 @@ private fun ToolStep(
                 )
             }
         }
+    }
+}
+
+/**
+ * 批1e：工具结果正文卡（编码向六件套 + job_output）。
+ *
+ * 存在的理由是「一句话简报答不了协作的问题」：构建成功还是失败、读到了哪几行、
+ * grep 命中了什么，此前在聊天流里一个字都看不到（引擎只送首行 160 字的 preview）。
+ * 卡挂在步骤行下方、缩进与 label 对齐（44dp），形态对齐效果图 `.term`：
+ * 头部 = 退出码 + 耗时 + 折叠钮；正文 = 等宽软换行，行按语义分色。
+ *
+ * 折叠策略：短输出直接展开（结果短到一眼看完，折叠反而是多余的点击）；
+ * 超过 [AUTO_EXPAND_MAX_LINES] 行才默认收起，用户点头部「展开」再开。
+ */
+@Composable
+private fun ToolBodyCard(tool: UiTool) {
+    val body = tool.body?.takeIf { it.isNotBlank() } ?: return
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val bg = if (dark) Color(0xFF06080D).copy(alpha = 0.88f) else Color(0xFFF7F8FA)
+    val fg = if (dark) Color(0xFFD7DEE9) else Color(0xFF23272F)
+    val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+
+    // bash 结果头是 "exit=N\n---\n<正文>"（BashTool.kt:164）；拆出退出码，
+    // 正文里那个头部行就不重复显示了——头部已经用退出码徽标表达过。
+    val parsed = remember(body, tool.name) { parseToolBody(tool.name, body) }
+    val lines = remember(parsed.text) { parsed.text.lines() }
+    val isError = tool.state == ToolRunState.ERROR || (parsed.exitCode ?: 0) != 0
+
+    var expanded by rememberSaveable(tool.callId) {
+        mutableStateOf(lines.size <= AUTO_EXPAND_MAX_LINES)
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 44.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
+        color = Color.Transparent,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, border)
+    ) {
+        Column {
+            // 头部：点整行折叠/展开（不用小字按钮——手机上目标太小）
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .chainPressable { expanded = !expanded }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val code = parsed.exitCode
+                if (code != null) {
+                    Text(
+                        (if (code == 0) "✓ exit $code" else "✗ exit $code"),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isError) MaterialTheme.colorScheme.error
+                        else Color(0xFF1E9E4A)
+                    )
+                } else {
+                    Text(
+                        "结果",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+                if (tool.elapsedMs > 0) {
+                    Text(
+                        formatElapsed(tool.elapsedMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (expanded) "收起" else "展开 ${lines.size} 行",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (expanded) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = BODY_MAX_HEIGHT)
+                        .background(bg)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Column {
+                        lines.forEach { line ->
+                            Text(
+                                text = line.ifEmpty { " " },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 17.sp
+                                ),
+                                color = toneColorOf(line, fg, dark),
+                                softWrap = true
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 默认展开的行数上限：短结果直接摊开，长结果收起免得把对话冲垮。 */
+private const val AUTO_EXPAND_MAX_LINES = 12
+
+/** 展开态正文最大高度（超出内部滚动）——不让一条长输出占满整屏。 */
+private val BODY_MAX_HEIGHT = 320.dp
+
+/** 批1e：结果正文拆解结果。exitCode 只有 bash/job_output 这类有退出码的工具才非空。 */
+internal data class ParsedToolBody(val exitCode: Int?, val text: String)
+
+/**
+ * 批1e：从落库结果文本里剥出 bash 的 `exit=N` 头。
+ * BashTool 把结果拼成 `exit=N\n---\n<正文>`（BashTool.kt:164），头部行若留在正文里
+ * 就是「exit 0」和卡片头部的退出码徽标重复一遍。其它工具（read/grep/glob/write/edit）
+ * 原样返回——它们的正文没有这种前缀。
+ */
+internal fun parseToolBody(toolName: String, body: String): ParsedToolBody {
+    if (toolName != "bash" && toolName != "job_output") return ParsedToolBody(null, body)
+    val first = body.lineSequence().firstOrNull() ?: return ParsedToolBody(null, body)
+    val head = first.trim().removePrefix("exit=")
+    // 退出码后面可能跟着后端标注（BashTool.kt:152 的 note，如 "（linux 沙箱）"），
+    // 所以只取开头那段数字，不能整行 toIntOrNull。
+    val code = head.takeWhile { it.isDigit() }.toIntOrNull()
+        ?: return ParsedToolBody(null, body)
+    // 正文从分隔线之后开始；没有 `---` 行时保留原样（不猜格式，宁可多显示一行）
+    val afterSep = body.substringAfter("---", "").trimStart('\n')
+    return ParsedToolBody(code, afterSep.ifEmpty { body })
+}
+
+/** 毫秒 → 人类可读（对齐效果图「1.8s」；过长的构建用分钟计）。 */
+internal fun formatElapsed(ms: Long): String = when {
+    ms < 1000 -> "${ms}ms"
+    ms < 60_000 -> String.format("%.1fs", ms / 1000.0)
+    else -> "${ms / 60_000}m${(ms % 60_000) / 1000}s"
+}
+
+/**
+ * 批1e：输出行语义分色。构建日志的关键信息全在这几类行上——
+ * 成功标记、失败/报错、警告、进度噪声各自一个色，一屏里"成没成"不用逐行读。
+ * 未命中任何规则的行走普通前景色（保持中性，不制造噪音）。
+ */
+private fun toneColorOf(line: String, fg: Color, dark: Boolean): Color {
+    val t = line.trimStart()
+    val good = if (dark) Color(0xFF6BD68C) else Color(0xFF1A7F37)
+    val warn = if (dark) Color(0xFFE6C07B) else Color(0xFFA15C00)
+    val bad = if (dark) Color(0xFFE06C75) else Color(0xFFB3261E)
+    val dim = fg.copy(alpha = 0.55f)
+    return when {
+        t.startsWith("BUILD SUCCESSFUL") || t.contains("SUCCESS") -> good
+        t.startsWith("BUILD FAILED") || t.startsWith("FAILURE:") -> bad
+        t.startsWith("e: ") || t.startsWith("error:") || t.contains("Exception") -> bad
+        t.startsWith("w: ") || t.startsWith("warning:") || t.contains("deprecated") -> warn
+        // gradle/npm 这类进度行："> Task :app:xxx"、"[1/14] ..."，纯信息量噪音，压暗
+        t.startsWith("> Task ") || t.startsWith("> ") || t.matches(Regex("^\\[\\d+/\\d+\\].*")) -> dim
+        else -> fg
     }
 }
 

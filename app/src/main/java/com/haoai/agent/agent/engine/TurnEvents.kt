@@ -8,7 +8,11 @@ data class ToolUpdate(
     val callId: String,
     val state: ToolRunState,
     val brief: String? = null,
-    val preview: String? = null
+    val preview: String? = null,
+    /** 批1e：结果正文（截断后的完整输出），供链卡步骤下方内联展示；preview 只是首行。 */
+    val body: String? = null,
+    /** 批1e：工具执行耗时 ms（结果卡头部展示「exit 0 · 1.8s」用）。 */
+    val elapsedMs: Long = 0
 )
 
 sealed interface TurnEvent
