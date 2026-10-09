@@ -192,6 +192,28 @@ fun settledBoundary(src: String): Int {
     return if (inFence || inMath) 0 else settled
 }
 
+/**
+ * 独立成段图片块的可放大宿主：
+ * ① LocalMessageImages —— 当前消息的图集（url,alt 序对，Quote/List 嵌套块已递归收进来）；
+ *    ImageBlockView 点击时以此建 lightbox 的横滑页集，找不到宿主提供时退化为单图。
+ * ② LocalImageLightboxLauncher —— 宿主（ChatScreen）注入的全屏查看器启动器；
+ *    为 null（设置子页等裸用 MarkdownText 的场合）时 ImageBlockView 自挂查看器。
+ */
+val LocalMessageImages = androidx.compose.runtime.compositionLocalOf<List<Pair<String, String>>> { emptyList() }
+val LocalImageLightboxLauncher =
+    androidx.compose.runtime.compositionLocalOf<((List<Pair<String, String>>, String) -> Unit)?> { null }
+
+/** 递归收集消息内独立成段的图片块（引用/列表嵌套里的也算），供 lightbox 多图滑动。 */
+private fun collectMessageImages(blocks: List<MdBlock>): List<Pair<String, String>> =
+    blocks.flatMap { b ->
+        when (b) {
+            is MdBlock.Image -> listOf(b.url to b.alt)
+            is MdBlock.Quote -> collectMessageImages(b.children)
+            is MdBlock.ListBlock -> b.items.flatMap { collectMessageImages(it.children) }
+            else -> emptyList()
+        }
+    }
+
 /** Markdown 渲染入口（v2 AST 管线）：ChatScreen 两处调用点的唯一门面。 */
 @Composable
 fun MarkdownText(
@@ -232,17 +254,21 @@ fun MarkdownText(
     }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val baseColor = MaterialTheme.colorScheme.onBackground
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        blocks.forEachIndexed { blockIndex, block ->
-            MdBlockView(
-                block = block,
-                dark = dark,
-                streaming = streaming,
-                listLevel = 0,
-                // 打字机渐显只挂在整个消息最后一个段落上
-                isLastParagraph = block is MdBlock.Paragraph && blockIndex == blocks.lastIndex,
-                textColor = baseColor
-            )
+    // 本消息的图集（多图 lightbox 横滑用）；流式期 blocks 每次刷新重算，代价 O(块数) 可忽略
+    val gallery = androidx.compose.runtime.remember(blocks) { collectMessageImages(blocks) }
+    androidx.compose.runtime.CompositionLocalProvider(LocalMessageImages provides gallery) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            blocks.forEachIndexed { blockIndex, block ->
+                MdBlockView(
+                    block = block,
+                    dark = dark,
+                    streaming = streaming,
+                    listLevel = 0,
+                    // 打字机渐显只挂在整个消息最后一个段落上
+                    isLastParagraph = block is MdBlock.Paragraph && blockIndex == blocks.lastIndex,
+                    textColor = baseColor
+                )
+            }
         }
     }
 }
@@ -1152,9 +1178,10 @@ private fun FormulaBlock(latex: String, dark: Boolean) {
 }
 
 // ===== Markdown 图片块（![](url)：http(s)/本地文件异步解码，LruCache；失败回落 alt 占位）=====
+// internal：ImageLightbox（全屏查看器）复用同一套解码，气泡缩略与全屏共享位图不重解码
 
-private val mdImageCache = android.util.LruCache<String, ImageBitmap>(12)
-private val mdImageClient by lazy {
+internal val mdImageCache = android.util.LruCache<String, ImageBitmap>(24)
+internal val mdImageClient by lazy {
     okhttp3.OkHttpClient.Builder()
         .connectTimeout(java.time.Duration.ofSeconds(10))
         .readTimeout(java.time.Duration.ofSeconds(15))
@@ -1162,7 +1189,7 @@ private val mdImageClient by lazy {
 }
 
 /** http(s) 下载或本地文件读取 → 采样解码（长边 ≤1080）。任何一步失败返回 null。 */
-private fun decodeMarkdownImage(url: String): ImageBitmap? =
+internal fun decodeMarkdownImage(url: String): ImageBitmap? =
     runCatching {
         val bytes = when {
             url.startsWith("http://") || url.startsWith("https://") ->
@@ -1170,6 +1197,8 @@ private fun decodeMarkdownImage(url: String): ImageBitmap? =
                     if (!resp.isSuccessful) return@runCatching null
                     resp.body?.bytes()
                 }
+            url.startsWith("data:") ->
+                android.util.Base64.decode(url.substringAfter("base64,", ""), android.util.Base64.DEFAULT)
             url.startsWith("/") -> java.io.File(url).takeIf { it.canRead() }?.readBytes()
             else -> null
         } ?: return@runCatching null
@@ -1188,6 +1217,9 @@ private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
     val key = remember(block.url) { block.url.hashCode().toString() }
     var bmp by remember(block.url) { mutableStateOf(mdImageCache.get(key)) }
     var failed by remember(block.url) { mutableStateOf(false) }
+    var zoomed by remember(block.url) { mutableStateOf(false) }
+    val gallery = LocalMessageImages.current
+    val launcher = LocalImageLightboxLauncher.current
     LaunchedEffect(block.url) {
         if (bmp != null) return@LaunchedEffect
         val loaded = withContext(Dispatchers.IO) { decodeMarkdownImage(block.url) }
@@ -1197,6 +1229,14 @@ private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
         } else {
             failed = true
         }
+    }
+    // 点击打开：图集里找不到本 url（解析时序边角）就退化为单图；宿主有启动器交宿主
+    fun openFullscreen() {
+        val list = if (gallery.any { it.first == block.url }) gallery else listOf(block.url to block.alt)
+        launcher?.invoke(list, block.url) ?: run { zoomed = true }
+    }
+    if (zoomed && launcher == null) {
+        ImageLightbox(listOf(block.url to block.alt), block.url) { zoomed = false }
     }
     if (bmp != null) {
         Surface(
@@ -1208,14 +1248,27 @@ private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 80.dp, max = 320.dp),
+                        .heightIn(min = 80.dp, max = 320.dp)
+                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                        .clickable { openFullscreen() },
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
                         bmp!!,
-                        contentDescription = block.alt.ifBlank { "图片" },
+                        contentDescription = block.alt.ifBlank { "图片（点开放大）" },
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Fit
+                    )
+                    // 右下角放大角标：图片可点开的 affordance（点图主体同样触发）
+                    Text(
+                        "⤢",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                            .background(Color(0x66000000), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
                     )
                 }
                 if (block.alt.isNotBlank()) {

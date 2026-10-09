@@ -483,6 +483,12 @@ fun ChatScreen(
     var quoteDraft by remember { mutableStateOf<ChatRow?>(null) }
     // 网页渲染预览目标（⋮ 菜单进入）
     var previewTarget by remember { mutableStateOf<ChatRow?>(null) }
+    // 图片全屏查看器宿主（批1d）：Markdown 图片块与用户附件缩略图点击上抛图集；
+    // 挂在本级（而非各 ImageBlockView 自挂）——消息滚出屏再滚回，查看器不被销毁，
+    // 且图集来自整条消息可左右横滑
+    var imageLightbox by remember {
+        mutableStateOf<Pair<List<Pair<String, String>>, String>?>(null)
+    }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
     // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
@@ -921,6 +927,9 @@ fun ChatScreen(
             // 渲染 ToolDetailSheet+GlassPanel 真玻璃——独立 Popup/Dialog 窗口采样不到 backdrop
             androidx.compose.runtime.CompositionLocalProvider(
                 com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t },
+                com.haoai.agent.ui.common.LocalImageLightboxLauncher provides { list, url ->
+                    imageLightbox = list to url
+                },
                 LocalSwitchVersion provides { uid, idx -> vm.switchVersion(uid, idx) },
                 LocalChatProfiles provides ChatProfiles(
                     agentName = vm.agentName(),
@@ -1800,6 +1809,12 @@ fun ChatScreen(
     }
     previewTarget?.let { target ->
         HtmlPreviewModal(row = target, onDismiss = { previewTarget = null })
+    }
+    // 图片全屏查看器宿主（批1d）：图集由 LocalImageLightboxLauncher 上抛
+    imageLightbox?.let { (list, url) ->
+        com.haoai.agent.ui.common.ImageLightbox(
+            images = list, currentUrl = url, onDismiss = { imageLightbox = null }
+        )
     }
     editTarget?.let { target ->
         var editText by remember(target.id) { mutableStateOf(target.text) }
@@ -4483,7 +4498,8 @@ private fun DataUrlThumb(
     dataUrl: String,
     modifier: Modifier = Modifier,
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(10.dp),
-    contentScale: ContentScale = ContentScale.Crop
+    contentScale: ContentScale = ContentScale.Crop,
+    onClick: (() -> Unit)? = null
 ) {
     val key = remember(dataUrl) { dataUrl.hashCode().toString() }
     var bmp by remember(dataUrl) { mutableStateOf(dataUrlBmpCache.get(key)) }
@@ -4502,13 +4518,25 @@ private fun DataUrlThumb(
             bmp = decoded
         }
     }
+    // 点击打开全屏查看的缩略图带放大角标（用户附件/Agent 图统一 affordance）
+    val clickMod = onClick?.let { m -> Modifier.clip(shape).clickable { m() } } ?: Modifier
     if (bmp != null) {
-        Image(
-            bmp!!,
-            contentDescription = "图片",
-            modifier = modifier.clip(shape),
-            contentScale = contentScale
-        )
+        Box(modifier.clip(shape)) {
+            Image(
+                bmp!!,
+                contentDescription = if (onClick != null) "图片（点开放大）" else "图片",
+                modifier = Modifier.fillMaxSize().then(clickMod),
+                contentScale = contentScale
+            )
+            if (onClick != null) {
+                Text(
+                    "⤢", color = Color.White, fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                        .background(Color(0x66000000), RoundedCornerShape(5.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
+        }
     } else {
         Box(
             modifier
@@ -4546,15 +4574,24 @@ private fun UserBubble(
         if (showHead) LocalChatProfiles.current?.let { p ->
             SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true, topGap = headTopGap)
         }
-        // 用户发的图片附件：气泡上方原比例展示（此前只存不显）
+        // 用户发的图片附件：气泡上方原比例展示（此前只存不显）；点击进全屏查看器（批1d）
         row.imageData?.let { dataUrl ->
+            val lb = com.haoai.agent.ui.common.LocalImageLightboxLauncher.current
+            // 图集 = 附件在前 + 正文 markdown 图片在后（一行消息多图可横滑）
+            val gallery = buildList {
+                add(dataUrl to "我的附件")
+                Regex("!\\[[^\\]]*\\]\\(([^)\\s]+)\\)").findAll(row.text).forEach { m ->
+                    add(m.groupValues[1] to "")
+                }
+            }
             DataUrlThumb(
                 dataUrl,
                 Modifier
                     .widthIn(max = 260.dp)
                     .heightIn(max = 280.dp),
                 shape = RoundedCornerShape(14.dp),
-                contentScale = ContentScale.Fit
+                contentScale = ContentScale.Fit,
+                onClick = { lb?.invoke(gallery, dataUrl) }
             )
         }
         // 快捷操作行（与 Agent 同款排版：复制·编辑重发靠左，时间戳在「更多」左）。

@@ -7,4 +7,8 @@
     <files-path
         name="camera_shot"
         path="camera/" />
+    <!-- 图片全屏查看器"分享"写出的临时文件（cache/shared） -->
+    <cache-path
+        name="shared"
+        path="shared/" />
 </paths>
