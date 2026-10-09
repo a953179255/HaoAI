@@ -137,6 +137,15 @@ PLAN = {
     # 让 write 步骤长出产物卡（[预览] 统一壳 file:// 直载 / [在浏览器打开]）。
     # 页面写法避开模拟器 WebView 两个平台坑：body 渐变不绘（用 fixed div 承载）、
     # vh 固化 0（用 html/body height:100% 链）——真机同款观感。
+    # 批2b 代码块三件套的验收剧本：30 行 kotlin 围栏（>24 行折叠阈值）——
+    # 验行号槽、"展开全部"折叠条、全屏查看器（字号/换行开关）。
+    # 键名避开了已有的 run_code 剧本 "code"。
+    "codeline": [
+        ("下面是完整的 Button 组件，跑一遍构建前先看这个：\n\n"
+         "```kotlin\npackage com.haoai.demo\n\n"
+         + "\n".join(f"fun component{i}() {{ /* 第 {i} 行 */ }}" for i in range(1, 28))
+         + "\n```\n", None),
+    ],
     "html": [
         ("我先写一个单页", [{"id": "h1", "name": "write", "arguments": json.dumps(
             {"path": "site/landing.html",

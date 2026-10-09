@@ -145,14 +145,19 @@ private fun heading(node: ASTNode, src: String, level: Int): MdBlock =
     )
 
 private fun codeFence(node: ASTNode, src: String): MdBlock {
-    val raw = src.substring(node.startOffset, node.endOffset)
+    val raw = src.substring(node.startOffset, node.endOffset).trimEnd('\n')
     val lang = raw.lineSequence().firstOrNull()?.removePrefix("```")?.trim()?.lowercase().orEmpty()
     val closed = node.children.any { it.type == MarkdownTokenTypes.CODE_FENCE_END }
-    // CODE_FENCE_CONTENT 叶子是"单行内容不含换行符"——必须以 \n 连接，
-    // 否则多行代码挤成一行（fork AST 的既有行为）
-    val code = node.children
-        .filter { it.type == MarkdownTokenTypes.CODE_FENCE_CONTENT }
-        .joinToString("\n") { src.substring(it.startOffset, it.endOffset) }
+    // 批2b 修：旧法把 CODE_FENCE_CONTENT 叶子 joinToString("\n")——叶子是"单行、
+    // 不含换行"，而**空行根本没有叶子**，拼接时空行静默消失（代码块少行、行号与
+    // 内容错位——行号槽把这个 fork AST 的既有缺陷逼出来的）。改为按文本切除
+    // 首行（围栏信息行）与闭合行：内容原样保留，边缘/中间空行都在。
+    val firstNl = raw.indexOf('\n')
+    val body = if (firstNl < 0) "" else raw.substring(firstNl + 1)
+    val code = if (closed) {
+        val lastNl = body.lastIndexOf('\n')
+        if (lastNl < 0) "" else body.substring(0, lastNl)
+    } else body
     return if (lang == "mermaid") MdBlock.Mermaid(code, closed)
     else MdBlock.Code(lang, code, closed)
 }

@@ -33,7 +33,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -53,7 +56,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -601,6 +606,14 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
         if (closed) CodeHighlight.highlightCached(code.trimEnd('\n'), lang, colors)
         else CodeHighlight.highlight(code.trimEnd('\n'), lang, colors)
     }
+    // 批2b：闭合块逐行渲染（行号槽 + 折叠 + 全屏的载体）；流式未闭合保持整块
+    // 单 Text——内容每帧都在长，逐行 Row 每帧重排整块不值当，行号也未定型。
+    val lines = remember(highlighted) { if (closed) splitAnnotatedPerLine(highlighted) else emptyList() }
+    val collapseAt = CODE_COLLAPSE_AT
+    var expanded by remember(code) { mutableStateOf(false) }
+    val collapsed = closed && lines.size > collapseAt && !expanded
+    var fullscreen by remember(code) { mutableStateOf(false) }
+    val gutterPad = if (closed && lines.size > 1) gutterWidthOf(lines.size) else 0
 
     Surface(
         color = bg,
@@ -620,6 +633,13 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                     fontFamily = FontFamily.Monospace,
                     color = plain.copy(alpha = 0.6f)
                 )
+                if (closed && lines.size > 1) {
+                    Text(
+                        text = "  ${lines.size} 行",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = plain.copy(alpha = 0.45f)
+                    )
+                }
                 if (!closed) {
                     Text(
                         text = "  生成中…",
@@ -642,19 +662,271 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                             android.widget.Toast.makeText(context, "已复制代码", android.widget.Toast.LENGTH_SHORT).show()
                         }
                 )
+                // 批2b：全屏查看器（定稿：长代码不用在气泡里滚，字号/换行可调）
+                if (closed) {
+                    Text(
+                        text = "⤢ 全屏",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { fullscreen = true }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    )
+                }
             }
             SelectionContainer {
+                if (closed) {
+                    val shown = if (collapsed) lines.take(collapseAt) else lines
+                    Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 4.dp)) {
+                        shown.forEachIndexed { i, line ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                                if (gutterPad > 0) {
+                                    // 行号槽：右对齐、压暗——参照 diff 卡同款口径
+                                    Text(
+                                        text = (i + 1).toString().padStart(gutterPad),
+                                        fontFamily = CodeFontFamily,
+                                        fontSize = 12.5.sp,
+                                        lineHeight = 18.sp,
+                                        color = plain.copy(alpha = 0.32f),
+                                        modifier = Modifier.padding(end = 10.dp)
+                                    )
+                                }
+                                Text(
+                                    // 空行必须占高：Text("") 是零高度，行号会错位
+                                    text = if (line.text.isEmpty()) AnnotatedString(" ") else line,
+                                    fontFamily = CodeFontFamily,
+                                    fontSize = 12.5.sp,
+                                    lineHeight = 18.sp,
+                                    softWrap = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                    if (lines.size > collapseAt) {
+                        // 尾部折叠条（定稿：默认只露 24 行，长代码不撑爆消息流）
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
+                                .clickable { expanded = !expanded }
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (collapsed) "展开全部 ${lines.size} 行 ▾" else "收起 ▴",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        text = highlighted,
+                        fontFamily = CodeFontFamily,
+                        fontSize = 12.5.sp,
+                        lineHeight = 18.sp,
+                        // 软换行：长行折行不横滚，手机上不用双向找内容
+                        softWrap = true,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = 10.dp)
+                            .fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+    if (fullscreen) {
+        FullscreenCodeDialog(
+            title = "${lang.ifBlank { "text" }} · ${lines.size} 行",
+            lines = lines,
+            dark = dark,
+            onDismiss = { fullscreen = false }
+        )
+    }
+}
+
+/** 批2b：代码块折叠阈值（约 2/3 屏，超过就该折叠/全屏而不是在气泡里滚）。 */
+private const val CODE_COLLAPSE_AT = 24
+
+/**
+ * 批2b：整块高亮结果按行切分，样式与链接标注随区间保留（subSequence 语义）。
+ * 行号槽逐行渲染的前提；internal 进单测钉死口径。
+ */
+internal fun splitAnnotatedPerLine(ann: AnnotatedString): List<AnnotatedString> {
+    val out = ArrayList<AnnotatedString>()
+    var start = 0
+    for (i in ann.text.indices) {
+        if (ann.text[i] == '\n') {
+            out.add(ann.subSequence(start, i))
+            start = i + 1
+        }
+    }
+    out.add(ann.subSequence(start, ann.text.length))
+    return out
+}
+
+/** 行号槽宽度 = 最大行号位数（1..9→1, 10..99→2, ≥100→3）。 */
+internal fun gutterWidthOf(lineCount: Int): Int = when {
+    lineCount < 10 -> 1
+    lineCount < 100 -> 2
+    else -> 3
+}
+
+/**
+ * 批2b：代码全屏查看器（效果图定稿 ovCode）——深色壳 + 行号 + 底部控件条：
+ * 字号步进（A− / A+，12.5 起，10..20 夹住）与软换行开关。关换行后长行横向
+ * 共滚（整块一条 HorizontalScrollState，行与行同步移动，接近代码编辑器手感），
+ * 此时行号槽隐藏——横滚态下行号已失去对齐意义。
+ */
+@Composable
+private fun FullscreenCodeDialog(
+    title: String,
+    lines: List<AnnotatedString>,
+    dark: Boolean,
+    onDismiss: () -> Unit
+) {
+    val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
+    var fontSp by androidx.compose.runtime.saveable.rememberSaveable { mutableFloatStateOf(12.5f) }
+    var wrap by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
+    val vScroll = rememberScrollState()
+    val hScroll = rememberScrollState()
+    val gutterPad = if (wrap && lines.size > 1) gutterWidthOf(lines.size) else 0
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xFF10151A))
+                .statusBarsPadding()
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = highlighted,
-                    fontFamily = CodeFontFamily,
-                    fontSize = 12.5.sp,
-                    lineHeight = 18.sp,
-                    // 软换行：长行折行不横滚，手机上不用双向找内容
-                    softWrap = true,
+                    title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE8EEEA),
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "关闭",
+                    fontSize = 12.sp,
+                    color = Color(0xFF9AA8A0),
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 10.dp)
-                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { onDismiss() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(vScroll)
+            ) {
+                if (wrap) {
+                    Column(Modifier.padding(horizontal = 14.dp)) {
+                        lines.forEachIndexed { i, line ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                                if (gutterPad > 0) {
+                                    Text(
+                                        text = (i + 1).toString().padStart(gutterPad),
+                                        fontFamily = CodeFontFamily,
+                                        fontSize = fontSp.sp,
+                                        lineHeight = (fontSp * 1.45f).sp,
+                                        color = plain.copy(alpha = 0.32f),
+                                        modifier = Modifier.padding(end = 10.dp)
+                                    )
+                                }
+                                Text(
+                                    text = if (line.text.isEmpty()) AnnotatedString(" ") else line,
+                                    fontFamily = CodeFontFamily,
+                                    fontSize = fontSp.sp,
+                                    lineHeight = (fontSp * 1.45f).sp,
+                                    softWrap = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .horizontalScroll(hScroll)
+                            .padding(horizontal = 14.dp)
+                    ) {
+                        lines.forEach { line ->
+                            Text(
+                                text = if (line.text.isEmpty()) AnnotatedString(" ") else line,
+                                fontFamily = CodeFontFamily,
+                                fontSize = fontSp.sp,
+                                lineHeight = (fontSp * 1.45f).sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+            }
+            // 底部控件条：字号步进 + 换行开关（效果图定稿 .ctlbar）
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF161D26))
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    "A−",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = plain.copy(alpha = if (fontSp <= 10f) 0.3f else 0.85f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = fontSp > 10f) { fontSp -= 1f }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                Text(
+                    "${fontSp.toInt()}sp",
+                    fontSize = 12.sp,
+                    color = plain.copy(alpha = 0.6f),
+                    modifier = Modifier.width(40.dp)
+                )
+                Text(
+                    "A+",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = plain.copy(alpha = if (fontSp >= 20f) 0.3f else 0.85f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = fontSp < 20f) { fontSp += 1f }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (wrap) "↩ 换行：开" else "↩ 换行：关",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (wrap) MaterialTheme.colorScheme.primary
+                    else plain.copy(alpha = 0.6f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { wrap = !wrap }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
         }
