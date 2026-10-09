@@ -503,6 +503,10 @@ fun ChatScreen(
     // timelineFile=直入某文件的时间轴（查看器传来），null=先列文件
     var timelineOpen by remember { mutableStateOf(false) }
     var timelineFile by remember { mutableStateOf<String?>(null) }
+    // 批3e：内联运行能力（shell 恒可、python/js 需沙箱；装完发行版换会话/重进即重探）
+    var runEnv by remember { mutableStateOf(com.haoai.agent.ui.common.RunEnv()) }
+    val runEnvSessionId = vm.session.collectAsState().value?.id
+    androidx.compose.runtime.LaunchedEffect(runEnvSessionId) { runEnv = vm.runEnv() }
     // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
     // 在 appLayer 外渲染 ToolDetailSheet+GlassPanel 真玻璃（独立窗口采样不到 backdrop）
     var toolSheet by remember { mutableStateOf<com.haoai.agent.ui.UiTool?>(null) }
@@ -953,6 +957,11 @@ fun ChatScreen(
                 LocalOpenTimeline provides { rel ->
                     timelineFile = rel
                     timelineOpen = true
+                },
+                // 批3e：代码块运行通道 + 能力快照（CodeBlock 据此决定出不出运行钮）
+                com.haoai.agent.ui.common.LocalRunEnv provides runEnv,
+                com.haoai.agent.ui.common.LocalRunCode provides { lang, code ->
+                    vm.runCode(lang, code)
                 },
                 com.haoai.agent.ui.common.LocalImageLightboxLauncher provides { list, url ->
                     imageLightbox = list to url

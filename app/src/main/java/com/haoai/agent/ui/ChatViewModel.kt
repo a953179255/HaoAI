@@ -827,6 +827,68 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
 
     /**
+     * 批3e：内联运行能力快照（IO 线程调）。shell 通道只要有文件系统工作区；
+     * python/js 需 Linux 沙箱就绪——与 BashTool 的 auto 路由同一判定函数。
+     */
+    suspend fun runEnv(): com.haoai.agent.ui.common.RunEnv =
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val root = shellRoot()
+            val sandbox = root?.let {
+                com.haoai.agent.platform.sandbox.SandboxEnv.resolve(
+                    c.appFilesDir, c.appContext.applicationInfo.nativeLibraryDir, it
+                )
+            }
+            com.haoai.agent.ui.common.RunEnv(shellReady = root != null, sandboxReady = sandbox != null)
+        }
+
+    /**
+     * 批3e：就地运行代码块。脚本体写工作区一次性临时文件（.haoai_run_ 前缀，
+     * 跑完命令内 rm + finally 兜底），命令只负责执行——与 bash 工具同后端同工作区，
+     * 但这是 UI 直调、不走引擎审批管线（代码是模型刚写的、用户主动点的、只读文件
+     * 区的临时脚本；风险面与 job_output/查看器一致）。失败/不可用返回 null，
+     * UI 保持钮可再点。
+     */
+    suspend fun runCode(lang: String, code: String): com.haoai.agent.ui.common.RunOutcome? {
+        val channel = com.haoai.agent.ui.common.CodeRun.channelOf(lang) ?: return null
+        val root = shellRoot() ?: return null
+        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val backend: com.haoai.agent.agent.tools.shell.ShellBackend = when (channel) {
+                com.haoai.agent.ui.common.CodeRun.Channel.SHELL ->
+                    com.haoai.agent.agent.tools.shell.ToyboxBackend(root)
+                else -> {
+                    val sb = com.haoai.agent.platform.sandbox.SandboxEnv.resolve(
+                        c.appFilesDir, c.appContext.applicationInfo.nativeLibraryDir, root
+                    ) ?: return@withContext null
+                    com.haoai.agent.agent.tools.shell.ProotBackend.forSandbox(sb)
+                }
+            }
+            val file = com.haoai.agent.ui.common.CodeRun.tempFileName(channel)
+            val tmp = java.io.File(root, file)
+            try {
+                tmp.writeText(code)
+                val r = backend.exec(
+                    com.haoai.agent.ui.common.CodeRun.cmdFor(channel, file), 30_000
+                )
+                com.haoai.agent.ui.common.RunOutcome(
+                    exitCode = r.exitCode,
+                    output = com.haoai.agent.ui.common.CodeRun.capOutput(r.output),
+                    backend = backend.id,
+                    durationMs = r.durationMs
+                )
+            } catch (e: Exception) {
+                com.haoai.agent.ui.common.RunOutcome(
+                    exitCode = -1,
+                    output = com.haoai.agent.ui.common.CodeRun.capOutput("运行失败：${e.message}"),
+                    backend = backend.id,
+                    durationMs = 0
+                )
+            } finally {
+                runCatching { if (tmp.isFile) tmp.delete() }
+            }
+        }
+    }
+
+    /**
      * 批3a：文件树三件套——后端可达性（null=未绑定，树出空态提示）、
      * 单层懒加载、搜索用全量 walk（8000 上限与工具层同口径）。
      * listDir/walk 的异常吞成空表：树对读不了的目录保持沉默，不打断浏览。

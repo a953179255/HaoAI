@@ -103,6 +103,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** 解析后的 Markdown 块：类型化区分，渲染端按类型分发。 */
@@ -614,6 +615,14 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
     val collapsed = closed && lines.size > collapseAt && !expanded
     var fullscreen by remember(code) { mutableStateOf(false) }
     val gutterPad = if (closed && lines.size > 1) gutterWidthOf(lines.size) else 0
+    // 批3e：内联运行。env 由宿主 provide（未绑定/无沙箱的通道 supports()=false，
+    // 运行钮不出现）；结果就地存本块组合态，重进消息重算（与折叠态同寿命）。
+    val runEnv = LocalRunEnv.current
+    val runCodeFn = LocalRunCode.current
+    val runScope = androidx.compose.runtime.rememberCoroutineScope()
+    var running by remember(code) { mutableStateOf(false) }
+    var outcome by remember(code) { mutableStateOf<RunOutcome?>(null) }
+    val runnable = closed && runEnv.supports(lang)
 
     Surface(
         color = bg,
@@ -676,6 +685,33 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                             .padding(horizontal = 6.dp, vertical = 3.dp)
                     )
                 }
+                // 批3e：运行钮（仅闭合 + 当前后端可跑该语言）。再点 = 重跑。
+                if (runnable) {
+                    Text(
+                        text = when {
+                            running -> "运行中…"
+                            outcome != null -> "↻ 重跑"
+                            else -> "▶ 运行"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (running) plain.copy(alpha = 0.5f)
+                        else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(enabled = !running) {
+                                running = true
+                                outcome = null
+                                runScope.launch {
+                                    val r = runCodeFn(lang, code)
+                                    outcome = r
+                                    running = false
+                                }
+                            }
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    )
+                }
             }
             SelectionContainer {
                 if (closed) {
@@ -735,6 +771,62 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                             .padding(horizontal = 12.dp)
                             .padding(bottom = 10.dp)
                             .fillMaxWidth()
+                    )
+                }
+            }
+            // 批3e：运行输出就地展开（效果图定稿：结果贴回原地，不回聊天翻）。
+            // 退出码着色：0 绿 / 非 0 红；超时/取消由 VM 层兜错误文本。
+            if (running) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "运行中…（30 秒上限）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            outcome?.let { r ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "exit ${r.exitCode}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = if (r.exitCode == 0) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            "${r.durationMs / 1000.0}s · ${r.backend}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    Spacer(Modifier.size(5.dp))
+                    Text(
+                        text = r.output.ifBlank { "(无输出)" },
+                        fontFamily = CodeFontFamily,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp,
+                        softWrap = true,
+                        color = plain
                     )
                 }
             }
