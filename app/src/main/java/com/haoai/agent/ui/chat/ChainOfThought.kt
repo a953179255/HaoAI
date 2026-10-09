@@ -758,6 +758,39 @@ private fun ToolStep(
                         .clickable(enabled = tool.state == ToolRunState.DONE) { openUrl() }
                 )
             }
+        } else if (tool.fileRef != null && obj.isNotBlank()) {
+            // 批2c 路径芯片（效果图定稿 .chip）：动词留文本，对象（文件名）做成
+            // 绿底等宽芯片 + ↗；点芯片 = 只读查看器，点行其余 = 详情弹层（行点击不吞，
+            // 与抓取步"域名文本可点"同交互分型）。
+            val ref = tool.fileRef
+            var viewing by rememberSaveable(ref.absPath) { mutableStateOf(false) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = verb, style = labelStyle,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.size(7.dp))
+                Text(
+                    text = "$obj ↗",
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .clickable { viewing = true }
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                )
+            }
+            if (viewing) {
+                FileViewerDialog(ref = ref, onDismiss = { viewing = false })
+            }
         } else {
             Text(
                 label, style = labelStyle,

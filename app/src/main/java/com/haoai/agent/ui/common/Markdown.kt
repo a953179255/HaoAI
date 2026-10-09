@@ -782,9 +782,11 @@ internal fun gutterWidthOf(lineCount: Int): Int = when {
  * 字号步进（A− / A+，12.5 起，10..20 夹住）与软换行开关。关换行后长行横向
  * 共滚（整块一条 HorizontalScrollState，行与行同步移动，接近代码编辑器手感），
  * 此时行号槽隐藏——横滚态下行号已失去对齐意义。
+ * 批2c 起 internal：只读文件查看器（FileViewerDialog）复用这个全屏壳——
+ * 同一形态（行号槽/换行开关/字号步进）在聊天内和查看器里表现一致。
  */
 @Composable
-private fun FullscreenCodeDialog(
+internal fun FullscreenCodeDialog(
     title: String,
     lines: List<AnnotatedString>,
     dark: Boolean,

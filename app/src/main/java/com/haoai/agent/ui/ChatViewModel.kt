@@ -82,26 +82,36 @@ data class UiTool(
      * [预览]（统一壳 file:// 直载）/[在浏览器打开]（内置浏览器 file:// 直达）双按钮。
      * 仅原始文件后端可得绝对路径；SAF 模式为 null（降级不出卡）。
      */
-    val htmlFile: UiHtmlFile? = null
+    val htmlFile: UiHtmlFile? = null,
+    /**
+     * 批2c：read/write/edit 步骤的工作区文件定位——非空时步骤行对象渲染成绿色路径芯片，
+     * 点开只读查看器（不筛扩展名；SAF 后端无根或越界路径为 null，简报保持纯文本）。
+     */
+    val fileRef: UiFilePath? = null
 )
 
 /** 批2a：HTML 产物定位。relPath 展示用（工作区相对），absPath 供 file:// 加载。 */
 data class UiHtmlFile(val relPath: String, val absPath: String)
 
+/** 批2c：步骤行路径芯片的定位结果（工作区内文件）。 */
+data class UiFilePath(val relPath: String, val absPath: String)
+
 /**
- * 批2a：write/edit 参数里的 path → HTML 产物定位（顶层 internal：安全口径进单测）。
- * 非 .html/.htm 返回 null；[root] 为 null（SAF 后端没有文件系统根）降级不出卡。
+ * 批2c：read/write/edit 参数里的 path → 工作区文件定位（路径芯片的安全边界，
+ * 口径与 [locateHtmlFile] 同源，只是不筛扩展名——芯片点开的是只读查看器，
+ * 任何工作区内的文本文件都有查看语义）。
  * 越界校验复刻 RawFileBackend.resolve（其为 private）：PathSafety.normalize 分段
- * 拼接后 canonical 必须落在工作区根内——模型传 ../ 外路径不得产出可点开的卡
- * （产物卡能开 file://，放行越界 = 内容可读面扩大到整个应用可见域）。
+ * 拼接后 canonical 必须落在工作区根内——模型传 ../ 外路径不得产出可点开的芯片
+ * （芯片能把任意路径送进查看器，放行越界 = 内容可读面扩大到整个应用可见域）。
+ * [root] 为 null（SAF 后端没有文件系统根）返回 null，降级不出芯片。
  */
-internal fun locateHtmlFile(argsJson: String, root: java.io.File?): UiHtmlFile? {
+internal fun locateWorkspaceFile(argsJson: String, root: java.io.File?): UiFilePath? {
     if (argsJson.isBlank() || root == null) return null
     val obj = runCatching {
         com.haoai.agent.data.HaoJson.json.parseToJsonElement(argsJson)
     }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
     val rel = (obj["path"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return null
-    if (!rel.endsWith(".html", true) && !rel.endsWith(".htm", true)) return null
+    if (rel.isBlank()) return null
     val abs = runCatching {
         var f = root
         for (s in com.haoai.agent.platform.PathSafety.normalize(rel)) {
@@ -113,7 +123,17 @@ internal fun locateHtmlFile(argsJson: String, root: java.io.File?): UiHtmlFile? 
             canon.path.startsWith(canonRoot.path + java.io.File.separator)
         ) canon.absolutePath else null
     }.getOrNull() ?: return null
-    return UiHtmlFile(relPath = rel, absPath = abs)
+    return UiFilePath(relPath = rel, absPath = abs)
+}
+
+/**
+ * 批2a：write/edit 参数里的 path → HTML 产物定位（顶层 internal：安全口径进单测）。
+ * 非 .html/.htm 返回 null；定位与安全校验复用 [locateWorkspaceFile]。
+ */
+internal fun locateHtmlFile(argsJson: String, root: java.io.File?): UiHtmlFile? {
+    val f = locateWorkspaceFile(argsJson, root) ?: return null
+    if (!f.relPath.endsWith(".html", true) && !f.relPath.endsWith(".htm", true)) return null
+    return UiHtmlFile(relPath = f.relPath, absPath = f.absPath)
 }
 
 /**
@@ -741,6 +761,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      */
     private fun htmlFileOf(argsJson: String): UiHtmlFile? =
         locateHtmlFile(
+            argsJson,
+            (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+        )
+
+    /**
+     * 批2c：read/write/edit 的路径芯片定位——同一口径（逻辑在顶层 locateWorkspaceFile，
+     * 可单测），这里取工作区根；SAF 后端无根 → null → 简报保持纯文本不可点。
+     */
+    private fun fileRefOf(argsJson: String): UiFilePath? =
+        locateWorkspaceFile(
             argsJson,
             (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
         )
@@ -1870,7 +1900,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     // ❶ 状态回跳修复：ToolChanged 先到（快工具/子代理上报）时已有已知状态，
                     // 不得覆盖回 RUNNING 默认态；只登记还没见过的调用
                     if (!liveTools.containsKey(call.id)) {
-                        liveTools[call.id] = UiTool(call.id, call.name, briefFor(call.name, call.args))
+                        // 批2c：登记时就把路径芯片定位挂上（tool_use 消息先于执行到达，
+                        // 这里带原始 args；后续 ToolChanged 重建时透传）
+                        liveTools[call.id] = UiTool(
+                            call.id, call.name, briefFor(call.name, call.args),
+                            fileRef = if (call.name == "read" || call.name == "write" || call.name == "edit")
+                                fileRefOf(call.args) else null
+                        )
                     }
                 }
                 // 截图消息（方案 A）：流式期就把它挂到对应工具的步骤上，卡片即刻出缩略图
@@ -1905,7 +1941,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     liveTools[ev.update.callId]?.subagents ?: emptyList(),
                     liveTools[ev.update.callId]?.imageData,
                     body = ev.update.body,
-                    elapsedMs = ev.update.elapsedMs
+                    elapsedMs = ev.update.elapsedMs,
+                    // 批2c：登记时挂上的路径芯片定位透传（事件里没有 args，不能现算）
+                    fileRef = liveTools[ev.update.callId]?.fileRef
                 )
                 publishLiveTools()
                 rebuildRows()
@@ -2039,7 +2077,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 批2a：write/edit 的 HTML 产物定位（运行中走 live 分支天然不带——
                 // 落盘完成前打开是半截文件；stored 分支才挂卡）
                 htmlFile = if (call.name == "write" || call.name == "edit")
-                    htmlFileOf(call.argumentsJson) else null)
+                    htmlFileOf(call.argumentsJson) else null,
+                // 批2c：路径芯片——read/write/edit 都挂（glob/grep 的 pattern 不是路径）。
+                // 与 htmlFile 不同：不筛扩展名、运行中也给（read 的入参就是现成路径，
+                // 点开看盘上当下内容，天然只读、无半截问题）
+                fileRef = if (call.name == "read" || call.name == "write" || call.name == "edit")
+                    fileRefOf(call.argumentsJson) else null)
             // 批1f：write/edit 完成后从写前快照取变更量（异步，首次只是触发加载）。
             // 运行中的步不取——快照的 after 是参数预测值，中途展示等于显示一个还没落盘的结果。
             val diff = if (call.name == "write" || call.name == "edit") {
