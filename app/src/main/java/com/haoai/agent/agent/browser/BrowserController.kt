@@ -347,17 +347,20 @@ object BrowserController {
 
     /** 地址栏输入：含 . 无空格（或带协议）按 URL，否则当搜索词走 Bing。 */
     suspend fun navigateOrSearch(text: String): String {
-        val isUrl = text.startsWith("http") || (text.contains(".") && !text.contains(" "))
+        val isUrl = text.startsWith("http") || text.startsWith("file:") ||
+            (text.contains(".") && !text.contains(" "))
         return if (isUrl) navigate(text)
         else navigate("https://www.bing.com/search?q=" + android.net.Uri.encode(text))
     }
 
     /**
-     * 补协议：有 scheme 原样；host 是私有段/localhost 时补 http://（内网多为明文
-     * 服务，强补 https 会撞 SSL 协议错）；其余补 https://。
+     * 补协议：有 scheme 原样；file:// 原样（批2a：工作区产物直达——不放行会被
+     * 拼成 https://file:///… 必然坏）；host 是私有段/localhost 时补 http://
+     * （内网多为明文服务，强补 https 会撞 SSL 协议错）；其余补 https://。
      */
     private fun withScheme(url: String): String {
         if (url.startsWith("http://") || url.startsWith("https://")) return url
+        if (url.startsWith("file://")) return url
         val host = url.substringBefore('/').substringBefore(':')
         return if (com.haoai.agent.platform.NetGuard.isPrivateHost(host)) "http://$url" else "https://$url"
     }
@@ -398,6 +401,9 @@ object BrowserController {
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            // 批2a：file:// 直达工作区产物（targetSdk 36 默认关文件访问，不开=白屏）。
+            // 页面 JS 读本地文件仍被 allowFileAccessFromFileURLs（默认 false）拦住。
+            settings.allowFileAccess = true
             // target=_blank 就地打开：自动化里 onCreateWindow 是死路
             settings.setSupportMultipleWindows(false)
             settings.mediaPlaybackRequiresUserGesture = false
@@ -445,10 +451,10 @@ object BrowserController {
                     bump()
                     return true
                 }
-                // http(s)/相对地址就地加载；intent:/mailto:/tel: 等拦截掉（WebView 加载会变错误页）
+                // http(s)/file/相对地址就地加载；intent:/mailto:/tel: 等拦截掉（WebView 加载会变错误页）
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val scheme = request.url.scheme?.lowercase()
-                    return !(scheme == "http" || scheme == "https" || scheme.isNullOrBlank())
+                    return !(scheme == "http" || scheme == "https" || scheme == "file" || scheme.isNullOrBlank())
                 }
             }
             webChromeClient = object : WebChromeClient() {

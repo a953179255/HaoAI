@@ -927,6 +927,11 @@ fun ChatScreen(
             // 渲染 ToolDetailSheet+GlassPanel 真玻璃——独立 Popup/Dialog 窗口采样不到 backdrop
             androidx.compose.runtime.CompositionLocalProvider(
                 com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t },
+                // 批2a：产物卡 [在浏览器打开]——navigate 自带 uiOpener（未开界面时
+                // 自动弹内置浏览器预览面板），这里只负责起协程
+                com.haoai.agent.ui.chat.LocalOpenHtmlFile provides { url ->
+                    scope.launch { com.haoai.agent.agent.browser.BrowserController.navigate(url) }
+                },
                 com.haoai.agent.ui.common.LocalImageLightboxLauncher provides { list, url ->
                     imageLightbox = list to url
                 },

@@ -1,51 +1,18 @@
 package com.haoai.agent.ui.chat
 
-import android.annotation.SuppressLint
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Web
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.haoai.agent.ui.ChatRow
 
 /**
- * 网页渲染预览：
+ * 网页渲染预览（更多 → 网页预览）：
  * - 消息含 ```html 代码块 → 直接渲染代码块内容（可运行的 artifact 预览）
  * - 无代码块 → markdown → HTML（fork HtmlGenerator，结构正确：嵌套列表/表格/
  *   标题层级）+ KaTeX 公式渲染（assets/katex 本地）+ highlight.js 代码高亮
  *   （assets/hljs 本地，MIT）。资产经 file:///android_asset baseURL 相对引用。
- * WebView 开 JS（渲染需要）、禁文件访问；离开即销毁防泄漏。
+ * 批2a 起 UI 收编进统一壳 HtmlPreviewDialog（与效果稿全屏/产物卡预览同源），
+ * 本文件只负责「消息文本 → 可预览 HTML」的内容构建；自建 WebView 已删。
  */
 @Composable
 fun HtmlPreviewModal(
@@ -53,131 +20,19 @@ fun HtmlPreviewModal(
     onDismiss: () -> Unit
 ) {
     val dark = isSystemInDarkTheme()
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
-    val context = LocalContext.current
     // 内容只与消息文本有关，recomposition 不重建/不重载 WebView
     val html = remember(row.text, dark) { buildPreviewHtml(row.text, dark) }
-    // 加载进度（LinearProgressIndicator）：有反馈就不像卡死
-    var progress by remember { mutableFloatStateOf(0f) }
-    val webView = remember {
-        WebView(context).apply {
-            @SuppressLint("SetJavaScriptEnabled")
-            settings.javaScriptEnabled = true
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            settings.domStorageEnabled = true
-            // 标准浏览器视口行为（无 viewport meta 的
-            // artifact 按宽布局缩放适配，避免 ICB 失常导致的裁切/白屏）
-            settings.useWideViewPort = true
-            settings.loadWithOverviewMode = true
-            settings.builtInZoomControls = true
-            settings.displayZoomControls = false
-            // 首绘前 WebView 默认底色是黑/白闪：预置成页面同款底色
-            setBackgroundColor(if (dark) 0xFF0D1117.toInt() else 0xFFFFFFFF.toInt())
-            // 网页 console 打进 logcat，排查渲染问题不再盲猜
-            webChromeClient = object : android.webkit.WebChromeClient() {
-                override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    progress = newProgress / 100f
-                }
-                override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
-                    android.util.Log.d(
-                        "HtmlPreview",
-                        "console: ${message.message()} @${message.sourceId()}:${message.lineNumber()}"
-                    )
-                    return true
-                }
-            }
-            webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String) {
-                    progress = 0f
-                    android.util.Log.d("HtmlPreview", "onPageFinished url=$url")
-                }
-            }
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose { webView.destroy() }
-    }
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Filled.Web,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        "网页渲染预览",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = "关闭",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onDismiss)
-                    )
-                }
-            }
-            // 加载进度条：WebView 初始化/加载期间给反馈，不再"黑一下"
-            if (progress in 0.01f..0.99f) {
-                androidx.compose.material3.LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp)
-                )
-            }
-            AndroidView(
-                factory = { webView },
-                update = { wv ->
-                    // 加载方式：明文 data + 虚拟 https 域名提供 origin
-                    // （loadDataWithBaseURL 不做任何解码，此前白屏真因是模拟器 vh 固化
-                    // bug，已由 fixVhUnits 解决，与加载方式无关）。
-                    // update 先于布局执行，vh shim 依赖 innerHeight，故推迟到首次布局
-                    // 完成后加载；tag 记录已加载内容避免重组重复加载（
-                    // lastLoadedData 守卫）
-                    if (wv.tag != html) {
-                        wv.tag = html
-                        androidx.core.view.OneShotPreDrawListener.add(wv) {
-                            // baseURL 指向 assets：模板相对引用 katex/hljs 本地资产
-                            wv.loadDataWithBaseURL(
-                                "file:///android_asset/", html, "text/html", "utf-8", null
-                            )
-                        }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
-        }
-    }
+    com.haoai.agent.ui.common.HtmlPreviewDialog(
+        title = "网页渲染预览",
+        source = com.haoai.agent.ui.common.HtmlPreviewSource.Content(
+            html = html,
+            baseUrl = "file:///android_asset/",
+            dedupKey = html
+        ),
+        // 深色模板底色传给壳，首绘不白闪
+        pageBackgroundColor = if (dark) 0xFF0D1117.toInt() else 0xFFFFFFFF.toInt(),
+        onDismiss = onDismiss
+    )
 }
 
 private fun buildPreviewHtml(text: String, dark: Boolean): String {

@@ -76,8 +76,45 @@ data class UiTool(
     /** 批1e：工具耗时 ms（结果卡头部「exit 0 · 1.8s」）；历史消息不落库，重进为 0。 */
     val elapsedMs: Long = 0,
     /** 批1f：write/edit 的变更摘要（从写前快照现算），非空时步骤行顶常驻 +N−M。 */
-    val diff: UiDiff? = null
+    val diff: UiDiff? = null,
+    /**
+     * 批2a：write/edit 写出的 HTML 产物（.html/.htm）——非空时步骤行下长产物卡，
+     * [预览]（统一壳 file:// 直载）/[在浏览器打开]（内置浏览器 file:// 直达）双按钮。
+     * 仅原始文件后端可得绝对路径；SAF 模式为 null（降级不出卡）。
+     */
+    val htmlFile: UiHtmlFile? = null
 )
+
+/** 批2a：HTML 产物定位。relPath 展示用（工作区相对），absPath 供 file:// 加载。 */
+data class UiHtmlFile(val relPath: String, val absPath: String)
+
+/**
+ * 批2a：write/edit 参数里的 path → HTML 产物定位（顶层 internal：安全口径进单测）。
+ * 非 .html/.htm 返回 null；[root] 为 null（SAF 后端没有文件系统根）降级不出卡。
+ * 越界校验复刻 RawFileBackend.resolve（其为 private）：PathSafety.normalize 分段
+ * 拼接后 canonical 必须落在工作区根内——模型传 ../ 外路径不得产出可点开的卡
+ * （产物卡能开 file://，放行越界 = 内容可读面扩大到整个应用可见域）。
+ */
+internal fun locateHtmlFile(argsJson: String, root: java.io.File?): UiHtmlFile? {
+    if (argsJson.isBlank() || root == null) return null
+    val obj = runCatching {
+        com.haoai.agent.data.HaoJson.json.parseToJsonElement(argsJson)
+    }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
+    val rel = (obj["path"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return null
+    if (!rel.endsWith(".html", true) && !rel.endsWith(".htm", true)) return null
+    val abs = runCatching {
+        var f = root
+        for (s in com.haoai.agent.platform.PathSafety.normalize(rel)) {
+            f = java.io.File(f, s)
+        }
+        val canon = f.canonicalFile
+        val canonRoot = root.canonicalFile
+        if (canon.path == canonRoot.path ||
+            canon.path.startsWith(canonRoot.path + java.io.File.separator)
+        ) canon.absolutePath else null
+    }.getOrNull() ?: return null
+    return UiHtmlFile(relPath = rel, absPath = abs)
+}
 
 /**
  * 批1f：一次文件改动的展示摘要。
@@ -697,6 +734,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         diffCache.clear()
         diffLoading.clear()
     }
+
+    /**
+     * 批2a：write/edit 的 HTML 产物定位——逻辑在顶层 locateHtmlFile（可单测），
+     * 这里只负责取工作区根（SAF 后端无根 → null → 降级不出卡）。
+     */
+    private fun htmlFileOf(argsJson: String): UiHtmlFile? =
+        locateHtmlFile(
+            argsJson,
+            (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+        )
 
     private val _contextUsage = MutableStateFlow(
         ContextUsage(usedTokens = 0, totalTokens = 32768, systemTokens = 0, toolsTokens = 0, historyTokens = 0)
@@ -1988,7 +2035,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 askDataOfBatch(call.argumentsJson, stored?.first) else null
             val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
             val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson),
-                ask = ask, askBatch = askBatch, hits = hits)
+                ask = ask, askBatch = askBatch, hits = hits,
+                // 批2a：write/edit 的 HTML 产物定位（运行中走 live 分支天然不带——
+                // 落盘完成前打开是半截文件；stored 分支才挂卡）
+                htmlFile = if (call.name == "write" || call.name == "edit")
+                    htmlFileOf(call.argumentsJson) else null)
             // 批1f：write/edit 完成后从写前快照取变更量（异步，首次只是触发加载）。
             // 运行中的步不取——快照的 after 是参数预测值，中途展示等于显示一个还没落盘的结果。
             val diff = if (call.name == "write" || call.name == "edit") {

@@ -1396,8 +1396,9 @@ private fun HtmlArtifactBlock(block: MdBlock.Code, dark: Boolean) {
 }
 
 /**
- * 全屏 HTML 查看层：整页完整展示、WebView 原生滚动（无嵌套滚动打架），
- * 效果稿白底；html 效果稿与 mermaid 大图共用。
+ * 全屏 HTML 查看层：批2a 起收敛为 [HtmlPreviewDialog] 的薄封装——
+ * 效果稿（消息正文 html 围栏）与 mermaid 全屏仍从这里进，壳/进度条/加载逻辑
+ * 统一在 ui/common/HtmlPreviewDialog.kt（与更多面板预览、产物卡预览同源）。
  */
 @Composable
 private fun FullscreenHtmlDialog(
@@ -1406,56 +1407,11 @@ private fun FullscreenHtmlDialog(
     baseUrl: String?,
     onDismiss: () -> Unit
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Column(Modifier.fillMaxSize().background(Color(0xFF10151A))) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    title,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFE8EEEA),
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    "关闭",
-                    fontSize = 12.sp,
-                    color = Color(0xFF9AA8A0),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .clickable { onDismiss() }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    WebViewPool.acquire(ctx).apply {
-                        // 效果稿假定浅色页面，白底防深色底透出
-                        setBackgroundColor(android.graphics.Color.WHITE)
-                    }
-                },
-                update = { wv ->
-                    if (wv.tag != html) {
-                        wv.tag = html
-                        wv.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
-                    }
-                },
-                onRelease = { wv ->
-                    // 归还前恢复透明底，避免污染池内后续 KaTeX/Mermaid 用途
-                    wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    WebViewPool.release(wv)
-                }
-            )
-        }
-    }
+    HtmlPreviewDialog(
+        title = title,
+        source = HtmlPreviewSource.Content(html = html, baseUrl = baseUrl, dedupKey = html),
+        onDismiss = onDismiss
+    )
 }
 
 
@@ -1522,7 +1478,9 @@ private fun MermaidBlock(code: String, dark: Boolean) {
 
 // ===== WebView 渲染（KaTeX / Mermaid 离线引擎，复用池上限 3 个实例）=====
 
-private object WebViewPool {
+// 批2a：提为 internal——HtmlPreviewDialog（统一预览壳）与本文件的
+// 效果稿/mermaid 全屏共用同一池，不给第二个池第二个内存上限的机会。
+internal object WebViewPool {
     private const val MAX_ACTIVE = 3
     private val idle = ArrayDeque<WebView>()
     private val active = mutableListOf<WebView>()
@@ -1546,7 +1504,10 @@ private object WebViewPool {
 
     private fun create(context: Context): WebView = WebView(context).apply {
         settings.javaScriptEnabled = true
-        settings.allowFileAccess = false
+        // 批2a：产物卡预览要 loadUrl(file:// 工作区)，且 file:// baseUrl 的
+        // 相对资源引用同样受本开关辖制——不开就是白屏。页面 JS 读文件仍被
+        // allowFileAccessFromFileURLs（默认 false）拦住，扩的只是标签/资源加载。
+        settings.allowFileAccess = true
         settings.allowContentAccess = false
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
         webViewClient = WebViewClient()

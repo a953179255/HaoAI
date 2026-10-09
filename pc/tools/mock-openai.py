@@ -133,6 +133,32 @@ PLAN = {
          "编辑那步写 +4 −3，点开能看到带行号的逐行差异——不用再点进工具详情、"
          "再点一次「查看变更」才能知道改了哪几行。", None),
     ],
+    # 批2a HTML 产物卡的验收剧本：真写一个自包含单页到工作区，
+    # 让 write 步骤长出产物卡（[预览] 统一壳 file:// 直载 / [在浏览器打开]）。
+    # 页面写法避开模拟器 WebView 两个平台坑：body 渐变不绘（用 fixed div 承载）、
+    # vh 固化 0（用 html/body height:100% 链）——真机同款观感。
+    "html": [
+        ("我先写一个单页", [{"id": "h1", "name": "write", "arguments": json.dumps(
+            {"path": "site/landing.html",
+             "content": "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\n"
+                        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
+                        "<title>HaoAI 落地页</title>\n"
+                        "<style>html,body{height:100%;margin:0}\n"
+                        "#bg{position:fixed;inset:0;background:linear-gradient(135deg,#0f2027,#2c5364)}\n"
+                        ".wrap{position:fixed;inset:0;display:grid;place-items:center;"
+                        "font-family:system-ui;color:#fff}\n"
+                        ".card{background:rgba(255,255,255,.12);padding:32px 40px;border-radius:16px;"
+                        "text-align:center}\n"
+                        "h1{margin:0 0 8px}button{margin-top:16px;padding:10px 22px;border:0;"
+                        "border-radius:999px;background:#7BD88F;color:#062;font-weight:700;font-size:15px}\n"
+                        "#n{font-size:28px;font-weight:800;margin-top:10px}</style></head>\n"
+                        "<body><div id=\"bg\"></div><div class=\"wrap\"><div class=\"card\">\n"
+                        "<h1>HaoAI 落地页</h1><p>工作区产物 · file:// 直载</p>\n"
+                        "<button onclick=\"document.getElementById('n').textContent=(++window.c||1)\">"
+                        "点我计数</button><div id=\"n\">0</div></div></div></body></html>\n"})}]),
+        ("写好了。产物卡就挂在上面那步下面：「预览」就地打开看效果，"
+         "「在浏览器打开」进内置浏览器——要交互测试就点它。", None),
+    ],
     "build": [
         ("先编译一遍", [{"id": "b1", "name": "bash", "arguments": json.dumps(
             {"command": "printf '> Task :app:compileDebugKotlin\\n"

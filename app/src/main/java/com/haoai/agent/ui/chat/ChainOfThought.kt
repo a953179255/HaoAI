@@ -143,6 +143,13 @@ private const val COLLAPSED_VISIBLE = 2
 val LocalOpenToolSheet = androidx.compose.runtime.staticCompositionLocalOf<(UiTool) -> Unit> { {} }
 
 /**
+ * 批2a：产物卡 [在浏览器打开] 的回调。ChatScreen 顶层提供——BrowserController.
+ * navigate(file://…) 自带 uiOpener（没开界面时自动弹内置浏览器预览面板），
+ * 无需经 ChainCard 参数层层下传。
+ */
+val LocalOpenHtmlFile = androidx.compose.runtime.staticCompositionLocalOf<(String) -> Unit> { {} }
+
+/**
  * 链卡行按压反馈（替代裸 ripple，2026-09-15 v4 定稿）：
  * 默认 ripple 8dp 圆角与链卡 18dp 不匹配；v1-v3 给行自设圆角都错——
  * 两套几何必打架。定稿（规格图 chain-press-target）：**行通栏**（卡片不留
@@ -297,6 +304,12 @@ fun ChainCard(
                                 // 批1f：write/edit 步骤行下长出变更卡（+N−M + 带行号的可折叠 diff）
                                 if (step.tool.diff != null && index >= firstShownIndex) {
                                     ToolDiffCard(step.tool.diff)
+                                }
+                                // 批2a：HTML 产物卡（[预览]/[在浏览器打开] 双按钮）。
+                                // 与变更卡并存不重复：变更卡回答"改了哪几行"，
+                                // 产物卡回答"东西在哪、怎么看"。
+                                if (step.tool.htmlFile != null && index >= firstShownIndex) {
+                                    HtmlFileCard(step.tool.htmlFile)
                                 }
                                 // 搜索步：行下 favicon 叠排 + 结果数（对齐 rikkahub FaviconRow）
                                 if (step.tool.hits.isNotEmpty()) {
@@ -1142,6 +1155,124 @@ internal fun contextOf(
         out.add(DiffRow(kind, l.text, if (isOld) oldNo else null))
     }
     return out
+}
+
+// ===== 批2a：HTML 产物卡（write/edit 写出 .html → 双按钮两条出路） =====
+
+/**
+ * HTML 产物卡（效果图定稿 .art）：vibe coding 最常问的「东西写出来了，怎么看」——
+ * 此前 write 出来的 .html 在聊天里只有简报 + diff，三条预览链路一条都够不着文件。
+ * [预览] → 统一壳 HtmlPreviewDialog file:// 直开（就地看产物）；
+ * [在浏览器打开] → 内置浏览器（交互测试，和 agent browser_* 同一视野）。
+ */
+@Composable
+private fun HtmlFileCard(file: com.haoai.agent.ui.UiHtmlFile) {
+    var preview by rememberSaveable(file.absPath) { mutableStateOf(false) }
+    val openInBrowser = LocalOpenHtmlFile.current
+    val fileUrl = remember(file.absPath) {
+        android.net.Uri.fromFile(java.io.File(file.absPath)).toString()
+    }
+    val name = file.relPath.substringAfterLast('/')
+    Surface(
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 44.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
+    ) {
+        Row(
+            Modifier.padding(11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 66dp 绿渐变缩略 + </>（效果图定稿；点缩略同样开预览）
+            Box(
+                Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(Color(0xFF123B2A), Color(0xFF1EA84F), Color(0xFF7BD88F))
+                        )
+                    )
+                    .clickable { preview = true },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "</>",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(start = 11.dp)
+            ) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    file.relPath,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                Row(
+                    Modifier.padding(top = 7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "预览",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .clickable { preview = true }
+                            .padding(horizontal = 13.dp, vertical = 6.dp)
+                    )
+                    Text(
+                        "在浏览器打开",
+                        fontSize = 11.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .border(
+                                1.dp,
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f),
+                                RoundedCornerShape(9.dp)
+                            )
+                            .clickable { openInBrowser(fileUrl) }
+                            .padding(horizontal = 13.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+    }
+    if (preview) {
+        com.haoai.agent.ui.common.HtmlPreviewDialog(
+            title = name,
+            source = com.haoai.agent.ui.common.HtmlPreviewSource.FilePage(fileUrl),
+            onDismiss = { preview = false },
+            // 预览起手、要交互测试 → 换乘内置浏览器（壳底栏的 ↗ 钮）
+            onOpenInBrowser = {
+                preview = false
+                openInBrowser(fileUrl)
+            }
+        )
+    }
 }
 
 /** 批1e：结果正文拆解结果。exitCode 只有 bash/job_output 这类有退出码的工具才非空。 */
