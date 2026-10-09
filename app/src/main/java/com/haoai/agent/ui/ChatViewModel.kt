@@ -97,21 +97,28 @@ data class UiHtmlFile(val relPath: String, val absPath: String)
 data class UiFilePath(val relPath: String, val absPath: String)
 
 /**
- * 批2c：read/write/edit 参数里的 path → 工作区文件定位（路径芯片的安全边界，
+ * 批2c：read/write/edit 参数里的 path → 工作区文件定位（顶层 internal：安全口径进单测）。
  * 口径与 [locateHtmlFile] 同源，只是不筛扩展名——芯片点开的是只读查看器，
- * 任何工作区内的文本文件都有查看语义）。
- * 越界校验复刻 RawFileBackend.resolve（其为 private）：PathSafety.normalize 分段
- * 拼接后 canonical 必须落在工作区根内——模型传 ../ 外路径不得产出可点开的芯片
- * （芯片能把任意路径送进查看器，放行越界 = 内容可读面扩大到整个应用可见域）。
- * [root] 为 null（SAF 后端没有文件系统根）返回 null，降级不出芯片。
+ * 任何工作区内的文本文件都有查看语义。[root] 为 null（SAF 后端没有文件系统根）
+ * 返回 null，降级不出芯片。JSON 解析失败/无 path 字段 → null。
  */
 internal fun locateWorkspaceFile(argsJson: String, root: java.io.File?): UiFilePath? {
-    if (argsJson.isBlank() || root == null) return null
+    if (argsJson.isBlank()) return null
     val obj = runCatching {
         com.haoai.agent.data.HaoJson.json.parseToJsonElement(argsJson)
     }.getOrNull() as? kotlinx.serialization.json.JsonObject ?: return null
     val rel = (obj["path"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return null
-    if (rel.isBlank()) return null
+    return locateWorkspaceRel(rel, root)
+}
+
+/**
+ * 批3a：相对路径（工具参数或文件树行）→ 工作区文件定位。越界校验复刻
+ * RawFileBackend.resolve（其为 private）：PathSafety.normalize 分段拼接后
+ * canonical 必须落在工作区根内——模型/树给的越界路径不得产出可点开的芯片
+ * （芯片能把任意路径送进查看器，放行越界 = 内容可读面扩大到整个应用可见域）。
+ */
+internal fun locateWorkspaceRel(rel: String, root: java.io.File?): UiFilePath? {
+    if (rel.isBlank() || root == null) return null
     val abs = runCatching {
         var f = root
         for (s in com.haoai.agent.platform.PathSafety.normalize(rel)) {
@@ -772,6 +779,31 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private fun fileRefOf(argsJson: String): UiFilePath? =
         locateWorkspaceFile(
             argsJson,
+            (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+        )
+
+    /**
+     * 批3a：文件树三件套——后端可达性（null=未绑定，树出空态提示）、
+     * 单层懒加载、搜索用全量 walk（8000 上限与工具层同口径）。
+     * listDir/walk 的异常吞成空表：树对读不了的目录保持沉默，不打断浏览。
+     */
+    fun treeBackend(): com.haoai.agent.platform.FileBackend? = c.workspace.current
+
+    suspend fun treeListDir(rel: String): List<String> =
+        runCatching { c.workspace.current?.listDir(rel) ?: emptyList() }
+            .getOrDefault(emptyList())
+
+    suspend fun treeWalk(): List<com.haoai.agent.platform.FileEntry> =
+        runCatching { c.workspace.current?.walk() ?: emptyList() }
+            .getOrDefault(emptyList())
+
+    /**
+     * 批3a：树行 relPath → 查看器定位（复用批2c 安全口径）。
+     * 查看器按本地路径读文件，SAF 后端没有文件系统根 → null → 点文件降级提示。
+     */
+    fun fileRefOfRel(rel: String): UiFilePath? =
+        locateWorkspaceRel(
+            rel,
             (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
         )
 

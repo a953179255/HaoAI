@@ -84,6 +84,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Public
@@ -491,6 +492,10 @@ fun ChatScreen(
     }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
+    // 批3a：工作区文件树。open=抽屉入口/查看器定位都能呼出；
+    // locate=查看器「在文件树中定位」递来的目标 rel（树消费后置回 null）
+    var fileTreeOpen by remember { mutableStateOf(false) }
+    var fileTreeLocate by remember { mutableStateOf<String?>(null) }
     // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
     // 在 appLayer 外渲染 ToolDetailSheet+GlassPanel 真玻璃（独立窗口采样不到 backdrop）
     var toolSheet by remember { mutableStateOf<com.haoai.agent.ui.UiTool?>(null) }
@@ -931,6 +936,11 @@ fun ChatScreen(
                 // 自动弹内置浏览器预览面板），这里只负责起协程
                 com.haoai.agent.ui.chat.LocalOpenHtmlFile provides { url ->
                     scope.launch { com.haoai.agent.agent.browser.BrowserController.navigate(url) }
+                },
+                // 批3a：查看器「在文件树中定位」上抛——呼出树并传目标 rel
+                LocalLocateInTree provides { rel ->
+                    fileTreeLocate = rel
+                    fileTreeOpen = true
                 },
                 com.haoai.agent.ui.common.LocalImageLightboxLauncher provides { list, url ->
                     imageLightbox = list to url
@@ -1705,6 +1715,11 @@ fun ChatScreen(
                             onPinSession = { id -> vm.pinSession(id) },
                             onRenameSession = { id, title -> vm.renameSession(id, title) },
                             onDeleteSession = { id -> vm.deleteSession(id) },
+                            // 批3a：树是全屏壳，抽屉让位（竖屏收起；横屏两栏分区不动）
+                            onOpenFileTree = {
+                                fileTreeOpen = true
+                                if (!landscapeTwoPane) scope.launch { drawer.close() }
+                            },
                             onEditProfile = { showProfileEdit = true },
                             onSettings = {
                                 onOpenSettings()
@@ -1713,6 +1728,20 @@ fun ChatScreen(
                     }
         }
         }
+
+    // 批3a：工作区文件树（全屏壳；入口=抽屉「文件树」，查看器「在文件树中定位」也呼出它）
+    if (fileTreeOpen) {
+        FileTreeDialog(
+            workspaceName = vm.workspaceName(),
+            backendReady = vm.treeBackend() != null,
+            listDir = { vm.treeListDir(it) },
+            walk = { vm.treeWalk() },
+            resolve = { vm.fileRefOfRel(it) },
+            locateRel = fileTreeLocate,
+            onLocateConsumed = { fileTreeLocate = null },
+            onDismiss = { fileTreeOpen = false }
+        )
+    }
 
     // 工具详情弹层（v8 思维链）：appLayer 外渲染 → GlassPanel 真玻璃折射消息流
     toolSheet?.let { t ->
@@ -5428,6 +5457,7 @@ private fun SessionsDrawer(
     onPinSession: (String) -> Unit,
     onRenameSession: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
+    onOpenFileTree: () -> Unit,
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -5636,6 +5666,9 @@ private fun SessionsDrawer(
         }
 
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        DrawerEntry(Icons.Filled.Folder, "文件树", onClick = {
+            if (openCardId != null) openCardId = null else onOpenFileTree()
+        })
         DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = {
             if (openCardId != null) openCardId = null else onOpenSessions()
         })

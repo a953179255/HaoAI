@@ -790,7 +790,9 @@ internal fun FullscreenCodeDialog(
     title: String,
     lines: List<AnnotatedString>,
     dark: Boolean,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // 批3a：头部尾部插槽（查看器挂「在文件树中定位」；代码块不传=零变化）
+    trailing: @Composable (() -> Unit)? = null
 ) {
     val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
     var fontSp by androidx.compose.runtime.saveable.rememberSaveable { mutableFloatStateOf(12.5f) }
@@ -822,6 +824,7 @@ internal fun FullscreenCodeDialog(
                     maxLines = 1,
                     modifier = Modifier.weight(1f)
                 )
+                trailing?.invoke()
                 Text(
                     "关闭",
                     fontSize = 12.sp,

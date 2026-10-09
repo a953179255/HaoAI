@@ -1,15 +1,25 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.sp
 import com.haoai.agent.ui.UiFilePath
 import com.haoai.agent.ui.common.CodeHighlight
 import com.haoai.agent.ui.common.FullscreenCodeDialog
@@ -35,6 +45,7 @@ private const val VIEWER_MAX_LINES = 2000
 @Composable
 internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val locateInTree = LocalLocateInTree.current
     var result by remember(ref.absPath) {
         mutableStateOf<Pair<List<AnnotatedString>, String>?>(null)
     }
@@ -47,7 +58,23 @@ internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
         title = if (note.isEmpty()) ref.relPath else "${ref.relPath} · $note",
         lines = lines,
         dark = dark,
-        onDismiss = onDismiss
+        onDismiss = onDismiss,
+        // 批3a 闭环（效果图 .ovft 定稿按钮）：关查看器 → 开文件树并定位高亮此文件
+        trailing = {
+            Text(
+                "在文件树中定位",
+                fontSize = 11.5.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = Color(0xFF7BD88F),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable {
+                        locateInTree(normalizeRel(ref.relPath))
+                        onDismiss()
+                    }
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            )
+        }
     )
 }
 
