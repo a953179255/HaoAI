@@ -1,13 +1,11 @@
 package com.haoai.agent.ui.common
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.dp
 import android.graphics.Paint
 
 /**
@@ -15,20 +13,26 @@ import android.graphics.Paint
  * "看不出扭曲"。三层纹理各司其职：
  * - **直网格线**：折射环带会把穿过它的直线掰弯/挤出位移，是强度判读的主标尺
  * - **对角彩条**：色块边界错位，看折射影响范围（环带宽度）
- * - **密集文字行**：模拟聊天正文穿玻璃的真实场景
+ * - **文字行**：模拟聊天正文穿玻璃的真实场景
  *
- * 设置页「主题外观」预览专用（2026-10-08 从已删除的 GlassLabActivity 提取保留）。
+ * ⚠️ 2026-10-09 重构为**纯绘制体**（供 `CanvasBackdrop { }` 直用）：此前图案以
+ * `Box.layerBackdrop` 挂载、玻璃采样它——实测玻璃行的 blur/采样整条失效
+ * （只画白雾，测试字清晰裸露；连 15dp 档的顶栏行都不糊）。改走 CanvasBackdrop：
+ * 玻璃采样时**在玻璃坐标系里直接执行本函数**，无挂载依赖（库 demo 同款路线），
+ * 且每行玻璃各自得到完整图案 + 垂直居中一行字 = "每栏背景都有一行字"。
  *
- * @param opaqueBase true = 画实色底（实验室"测试图案"模式，图案自带背景）；
- *   false = 只画纹理不画底（设置页预览框：底下透出壁纸/吸顶玻璃——原先实色底
- *   在壁纸模式下是一块死白直角块，且白底上磨砂调了也看不出变化，2026-10-08 用户实测）
+ * @param opaqueBase true = 画实色底（全屏模式，图案自带背景）；
+ *   false = 只画纹理不画底（预览框：底下透出实底面板的表面色）
+ * @param gridDp 网格间距。实验室全屏 96px 在 2200px 高的屏上显密；140dp 预览框
+ *   用同参数只剩 4 条横线（用户实测"没以前密集"），预览框传 20dp。
  */
-@Composable
-fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier, opaqueBase: Boolean = true) {
-    // clipToBounds：同心圆半径按 h 递增（r=140,400,660…），预览框只有 140dp 高时
-    // 大圆会溢出画布（Canvas 默认不裁剪）——实验室整屏背景靠窗口裁掉看不出来，
-    // 设置页预览框没窗口边界，圆圈就爬到标题和滑杆上了（2026-10-08 用户实测）
-    Canvas(modifier.clipToBounds()) {
+fun drawRefractionTestPattern(
+    scope: DrawScope,
+    dark: Boolean,
+    opaqueBase: Boolean = true,
+    gridDp: Float = 32f
+) {
+    with(scope) {
         val w = size.width
         val h = size.height
         val base = if (dark) Color(0xFF14171C) else Color(0xFFF4F5F7)
@@ -39,7 +43,7 @@ fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier, opaqueBa
             Color(0x33FF5C5C), Color(0x33FFB45C), Color(0x3359C77A),
             Color(0x335C9DFF), Color(0x33A85CFF)
         )
-        val band = 180f
+        val band = 60f.dp.toPx()
         var x = -h
         var i = 0
         while (x < w) {
@@ -51,7 +55,7 @@ fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier, opaqueBa
             x += band * 2; i++
         }
         // 直网格：主标尺
-        val grid = 96f
+        val grid = gridDp.dp.toPx()
         var gx = grid
         while (gx < w) {
             drawLine(line, Offset(gx, 0f), Offset(gx, h), 2f)
@@ -71,7 +75,8 @@ fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier, opaqueBa
             drawCircle(circleColor, radius = r, center = Offset(w / 2f, h / 2f), style = Stroke(width = 3f))
             r += 260f
         }
-        // 文字带：模拟正文穿玻璃（nativeCanvas.drawText，项目内验证过的路径）
+        // 文字行：模拟正文穿玻璃。预览框（行高 30~44dp）每行玻璃只容一行字——
+        // 垂直居中画一行；全屏模式（h 高）按 150px 节奏铺多行。
         val paint = Paint().apply {
             color = if (dark) android.graphics.Color.parseColor("#D7DEE8")
                     else android.graphics.Color.parseColor("#22262E")
@@ -79,12 +84,19 @@ fun RefractionTestPattern(dark: Boolean, modifier: Modifier = Modifier, opaqueBa
             isAntiAlias = true
         }
         val sample = "折射测试 Refraction 120Hz 玻璃 Glass 扭曲 输入框"
-        var ty = 220f
-        var n = 0
-        while (ty < h - 40f) {
-            // 逐行错位排布，避免与网格线平行造成视觉摩尔纹
-            drawContext.canvas.nativeCanvas.drawText(sample, if (n % 2 == 0) 24f else 64f, ty, paint)
-            ty += 150f; n++
+        if (h < 500f) {
+            // 预览框：单行垂直居中（baseline = 中心 + 0.35×字高）
+            drawContext.canvas.nativeCanvas.drawText(
+                sample, 24f, h / 2f + 46f * 0.35f, paint
+            )
+        } else {
+            var ty = 220f
+            var n = 0
+            while (ty < h - 40f) {
+                // 逐行错位排布，避免与网格线平行造成视觉摩尔纹
+                drawContext.canvas.nativeCanvas.drawText(sample, if (n % 2 == 0) 24f else 64f, ty, paint)
+                ty += 150f; n++
+            }
         }
     }
 }

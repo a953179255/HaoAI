@@ -85,6 +85,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -3618,17 +3619,30 @@ private fun GlassPreviewCard(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     val t = com.haoai.agent.ui.theme.GlassTuning
-    val patternBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val darkState = rememberUpdatedState(dark)
+    // ⚠️ 测试图案走 CanvasBackdrop（采样时在玻璃坐标系直接执行绘制，库 demo 同款）：
+    // 此前用 Box.layerBackdrop 挂载 + 玻璃采样它，实测三行玻璃的 blur/采样整条失效
+    //（只画白雾、测试字清晰裸露，连 15dp 档顶栏都不糊）——挂载路径在预览卡不工作。
+    // CanvasBackdrop 无挂载依赖，每行玻璃各自得到完整图案 + 居中一行测试字，
+    // blur/白雾正常作用（"每栏背景都有一行字"，2026-10-09 用户诉求）。
+    // 深浅主题经 darkState（绘制期读 State 注册订阅，翻主题即重画）。
+    val patternBackdrop = com.kyant.backdrop.backdrops.rememberCanvasBackdrop {
+        com.haoai.agent.ui.common.drawRefractionTestPattern(
+            scope = this, dark = darkState.value, opaqueBase = false, gridDp = 20f
+        )
+    }
     Box(
         Modifier
             .fillMaxWidth()
             .height(140.dp)
     ) {
-        // 实底面板（悬浮三件套与选项卡同款分层）
+        // 实底面板（悬浮三件套与选项卡同款分层）；活形状防圆角滑杆同类残影
         com.haoai.agent.ui.common.GlassPanel(
             backdrop = backdrop,
             modifier = Modifier.matchParentSize(),
             radius = t.corner.dp,
+            shapeProvider = { androidx.compose.foundation.shape.RoundedCornerShape(t.corner.dp) },
             surfaceAlpha = 1f,
             blurRadius = 0.dp,
             lensRadius = 0.dp,
@@ -3636,19 +3650,6 @@ private fun GlassPreviewCard(
             chromaticAberration = false,
             floating = true
         ) {}
-        // 纹理层：网格画在实底之上；圆角吃玻璃圆角滑杆
-        Box(
-            Modifier
-                .matchParentSize()
-                .clip(RoundedCornerShape(t.corner.dp))
-                .layerBackdrop(patternBackdrop)
-        ) {
-            com.haoai.agent.ui.common.RefractionTestPattern(
-                dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-                modifier = Modifier.matchParentSize(),
-                opaqueBase = false
-            )
-        }
         // 三表面纵向叠放（6dp 间距）：尺寸按"文字一行放得下"定，不追求极限压缩
         Column(
             Modifier.matchParentSize().padding(8.dp),
