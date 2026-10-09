@@ -2003,6 +2003,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     imageData = live?.imageData,
                     // 批1e：历史消息的结果正文从落库全文现截（口径与引擎 inlineBodyOf 同函数）
                     body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first),
+                    // 批1e 补：耗时不落库，但 liveTools 的收尾事件带着（UiTool.elapsedMs）——
+                    // 不从 live 接过来的话卡头「exit 0 · 1.8s」永远出不来；liveTools 被
+                    // 新回合清空后回落 0（卡头隐藏耗时），与「重进为 0」口径一致。
+                    elapsedMs = live?.elapsedMs ?: 0,
                     diff = diff
                 )
                 live != null -> live
