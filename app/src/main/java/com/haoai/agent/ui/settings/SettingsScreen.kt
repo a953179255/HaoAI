@@ -3606,8 +3606,9 @@ private fun dpText(v: Float): String =
  * - **不透明实底**（surfaceAlpha=1：浅色纯白 / 深色板岩，glassSurfaceColor 规范）——
  *   用户确认透底会干扰演示判读；blur/lens 置 0（表面已不透明，采样无从呈现）；
  * - 圆角吃玻璃圆角滑杆；fillMaxWidth 走列表同一内边距 ⇒ 与选项卡**同宽**；
- * - 纹理与四行演示（2026-10-09 加页面卡行）：图案层只画网格线（opaqueBase=false），
- *   四行各吃各档（顶栏/聊天卡/页面卡/输入框），磨砂压在网格上变化可见。
+ * - 纹理与三行演示照旧：图案层只画网格线（opaqueBase=false），三行各吃各档，
+ *   磨砂压在网格上变化可见（顶栏/卡片/输入框档）。2026-10-09 曾加第四行"页面卡"
+ *   把全部行高挤压变形（用户实锤"预览修坏了"），已回滚到定稿版式。
  * 自带局部采样层（不依赖页面 backdrop，避开共享画布成环的坑）。
  */
 @Composable
@@ -3621,8 +3622,7 @@ private fun GlassPreviewCard(
     Box(
         Modifier
             .fillMaxWidth()
-            // 四行各 28+36+36+34 + 间距 15 + 上下内衬 16 ≈ 165dp
-            .height(165.dp)
+            .height(140.dp)
     ) {
         // 实底面板（悬浮三件套与选项卡同款分层）
         com.haoai.agent.ui.common.GlassPanel(
@@ -3649,15 +3649,15 @@ private fun GlassPreviewCard(
                 opaqueBase = false
             )
         }
-        // 四表面纵向叠放：顶栏/聊天卡/页面卡/输入框各绑各档
+        // 三表面纵向叠放（6dp 间距）：尺寸按"文字一行放得下"定，不追求极限压缩
         Column(
             Modifier.matchParentSize().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             // 顶栏（方角，全宽，绑顶栏档）
             GlassPanel(
                 backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(28.dp),
+                modifier = Modifier.fillMaxWidth().height(30.dp),
                 radius = 0.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -3671,13 +3671,14 @@ private fun GlassPreviewCard(
                     "顶栏",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 8.dp, top = 6.dp)
+                    modifier = Modifier.padding(start = 8.dp, top = 7.dp)
                 )
             }
-            // 聊天卡（圆角可调，绑聊天档）——文案用真实 Agent 名（用户反馈：写死名字不对）
+            // 卡片（圆角可调，绑聊天档 t.blur/t.veil；页面档演示不放这里——
+            // 预览卡版式是用户三轮效果图定稿的，2026-10-09 曾加第四行挤压全部尺寸，已恢复）
             GlassPanel(
                 backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(36.dp),
+                modifier = Modifier.fillMaxWidth().height(44.dp),
                 radius = t.corner.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
@@ -3692,34 +3693,13 @@ private fun GlassPreviewCard(
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
-                )
-            }
-            // 页面卡（2026-10-09 方案A新增演示：绑页面档 pageBlur/pageVeil）
-            GlassPanel(
-                backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(36.dp),
-                radius = t.corner.dp,
-                lensRadius = t.lensHeight.dp,
-                lensAmountMul = t.lensAmountMul,
-                blurRadius = t.pageBlur.dp,
-                chromaticAberration = t.ca,
-                lensFull = t.lensFull,
-                surfaceAlpha = t.pageVeil
-            ) {
-                Text(
-                    "设置 · 页面玻璃卡（独立档）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = com.haoai.agent.ui.theme.adaptiveOnSurface(),
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
                 )
             }
             // 输入框（胶囊形固定，绑输入框档）——placeholder 与聊天页同规则
             GlassPanel(
                 backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(34.dp),
+                modifier = Modifier.fillMaxWidth().height(38.dp),
                 radius = 19.dp,
                 lensRadius = t.lensHeight.dp,
                 lensAmountMul = t.lensAmountMul,
