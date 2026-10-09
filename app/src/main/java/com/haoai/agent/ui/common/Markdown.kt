@@ -64,6 +64,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
@@ -659,12 +660,17 @@ private fun TableBlock(table: MdBlock.Table) {
     val context = LocalContext.current
 
     // 头部动作：复制原始 markdown；下载走 SAF 存 CSV
-    fun cellText(cells: List<MdInline>): String = cells.joinToString("") { text ->
-        when (text) {
-            is MdInline.Run -> text.text
-            is MdInline.CodeSpan -> text.code
-            is MdInline.MathSpan -> "$${text.latex}$"
-            else -> ""
+    // v3：递归取文本——旧版 else->"" 把加粗/链接/删除线/图片单元格导出成空字段
+    fun cellText(cells: List<MdInline>): String = cells.joinToString("") { inline ->
+        when (inline) {
+            is MdInline.Run -> inline.text
+            is MdInline.CodeSpan -> inline.code
+            is MdInline.MathSpan -> "$${inline.latex}$"
+            is MdInline.Strong -> cellText(inline.children)
+            is MdInline.Emph -> cellText(inline.children)
+            is MdInline.Del -> cellText(inline.children)
+            is MdInline.Link -> cellText(inline.children)
+            is MdInline.Image -> inline.alt
         }
     }
     val tableCsv = remember(table) {
@@ -790,13 +796,24 @@ private fun TableBlock(table: MdBlock.Table) {
             // 网格观感：中等浅灰（比底色明显、比文字淡得多）
             val gridLine = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f)
             val linePx = with(density) { 0.75.dp.toPx() }.coerceAtLeast(1f)
+            // v3 隔行底色：altBg 早已定值（643 行）但一直没接线——绘制期按 rowHeights
+            // 给偶数数据行铺条带（row0=表头不铺；表头下的第 2、4… 条数据行铺）
+            val zebra = altBg
             androidx.compose.ui.layout.SubcomposeLayout(
                 modifier = Modifier.drawBehind {
                     gridRef.get()?.let { g ->
                         val w = g.contentW.toFloat()
                         val h = g.totalH.toFloat()
-                        // 外缘已由 Surface border 提供（含头部栏整体圆角），这里只画内部行/列分隔
+                        // 条带先铺，行/列线后画压在上面
                         var yy = 0f
+                        g.rowHeights.forEachIndexed { ri, rowH ->
+                            if (ri > 0 && ri % 2 == 0) {
+                                drawRect(zebra, Offset(0f, yy), Size(w, rowH.toFloat()))
+                            }
+                            yy += rowH
+                        }
+                        // 外缘已由 Surface border 提供（含头部栏整体圆角），这里只画内部行/列分隔
+                        yy = 0f
                         for (rowH in g.rowHeights.dropLast(1)) {
                             yy += rowH
                             drawLine(gridLine, Offset(0f, yy), Offset(w, yy), linePx)
