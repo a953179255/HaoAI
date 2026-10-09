@@ -68,7 +68,28 @@ object TextDiff {
         while (j < m) { out.add(DiffLine(DiffType.ADDED, b[j])); j++ }
         return out
     }
-}
 
-/** DiffView 用的折叠视图参数：超 300 行折叠为"展开查看完整 diff"。 */
-private const val DIFF_COLLAPSE_LINES = 300
+    /**
+     * 解析 unified diff 文本（```diff 代码块 / git diff 输出）成行视图。
+     * +/- 前缀成 ADDED/REMOVED；@@ 与 ----/+++/diff/index/---/+++ 等元信息行忽略；
+     * 其余行（含前导空格）是上下文。全无可 ± 行时返回 null——让调用方回落普通代码块
+     * （"diff" 围栏经常被模型拿去贴非 diff 内容，宁可不染也别错染）。
+     */
+    fun parseUnifiedDiff(text: String): List<DiffLine>? {
+        var sawChange = false
+        val lines = buildList {
+            for (raw in text.split('\n')) {
+                when {
+                    raw.startsWith("@@") -> Unit
+                    raw.startsWith("---") || raw.startsWith("+++") -> Unit
+                    raw.startsWith("diff ") || raw.startsWith("index ") ||
+                        raw.startsWith("new file") || raw.startsWith("deleted file") -> Unit
+                    raw.startsWith("+") -> { sawChange = true; add(DiffLine(DiffType.ADDED, raw.substring(1))) }
+                    raw.startsWith("-") -> { sawChange = true; add(DiffLine(DiffType.REMOVED, raw.substring(1))) }
+                    else -> add(DiffLine(DiffType.SAME, raw.removePrefix(" ")))
+                }
+            }
+        }
+        return if (sawChange) lines else null
+    }
+}

@@ -277,8 +277,12 @@ private fun MdBlockView(
     when (block) {
         is MdBlock.Code ->
             // html/svg 代码块 = 可渲染的视觉效果稿：自动内联渲染（效果/代码可切换）
-            if (block.lang.lowercase() in setOf("html", "htm", "svg")) HtmlArtifactBlock(block, dark)
-            else CodeBlock(block.lang, block.code, block.closed, dark)
+            when {
+                block.lang.lowercase() in setOf("html", "htm", "svg") -> HtmlArtifactBlock(block, dark)
+                // diff/patch 围栏 → 着色差异视图（+N −M 常驻）；解析失败自动回落代码块
+                block.lang.lowercase() in setOf("diff", "patch", "udiff") -> DiffBlockView(block, dark)
+                else -> CodeBlock(block.lang, block.code, block.closed, dark)
+            }
         is MdBlock.Mermaid -> MermaidBlock(block.code, dark)
         is MdBlock.Image -> ImageBlockView(block, dark)
         is MdBlock.Math -> FormulaBlock(block.latex, dark)
@@ -625,6 +629,125 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
                         .padding(horizontal = 12.dp)
                         .padding(bottom = 10.dp)
                         .fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+/**
+ * ```diff 代码块 → 差异视图（v3 新增）：解析 unified diff 的 ± 行着色，
+ * 头部常驻 +N −M 统计；超 120 行折叠可展开。解析不出任何 ± 行（模型拿
+ * diff 围栏贴了别的东西）→ 回落普通代码块——宁可不染也别错染。
+ */
+@Composable
+private fun DiffBlockView(block: MdBlock.Code, dark: Boolean) {
+    val parsed = remember(block.code) { TextDiff.parseUnifiedDiff(block.code.trimEnd('\n')) }
+    if (parsed == null) {
+        CodeBlock(block.lang, block.code, block.closed, dark)
+        return
+    }
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
+    val bg = if (dark) Color(0xFF06080D).copy(alpha = 0.88f) else Color(0xFFF7F8FA)
+    val addBg = if (dark) Color(0x2E3F9E5C) else Color(0x142E7D32)
+    val addFg = if (dark) Color(0xFF9FD8AE) else Color(0xFF0F6B33)
+    val delBg = if (dark) Color(0x33C25549) else Color(0x14C62828)
+    val delFg = if (dark) Color(0xFFF3B3AC) else Color(0xFF8C1D18)
+    val ctxFg = plain.copy(alpha = 0.75f)
+    val added = parsed.count { it.type == DiffType.ADDED }
+    val removed = parsed.count { it.type == DiffType.REMOVED }
+    var expanded by remember(block.code) { mutableStateOf(false) }
+    val collapseAt = 120
+    val shown = if (!expanded && parsed.size > collapseAt) parsed.take(collapseAt) else parsed
+
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "diff",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = plain.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = "  +$added",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = addFg
+                )
+                Text(
+                    text = " −$removed",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = delFg
+                )
+                if (!block.closed) {
+                    Text(
+                        text = "  生成中…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = plain.copy(alpha = 0.45f)
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    imageVector = Icons.Filled.ContentCopy,
+                    contentDescription = "复制 diff",
+                    tint = plain.copy(alpha = 0.65f),
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            clipboard.setText(AnnotatedString(block.code))
+                            android.widget.Toast.makeText(context, "已复制 diff", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                )
+            }
+            SelectionContainer {
+                Column(Modifier.fillMaxWidth()) {
+                    shown.forEach { l ->
+                        val (rowBg, fg, prefix) = when (l.type) {
+                            DiffType.ADDED -> Triple(addBg, addFg, "+")
+                            DiffType.REMOVED -> Triple(delBg, delFg, "−")
+                            DiffType.SAME -> Triple(Color.Transparent, ctxFg, " ")
+                        }
+                        Text(
+                            text = prefix + l.text,
+                            fontFamily = CodeFontFamily,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            color = fg,
+                            softWrap = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(rowBg)
+                                .padding(horizontal = 12.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            if (!expanded && parsed.size > collapseAt) {
+                Text(
+                    text = "展开全部 ${parsed.size} 行",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { expanded = true }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
         }
