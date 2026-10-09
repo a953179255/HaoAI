@@ -114,6 +114,25 @@ PLAN = {
     # 批1e 结果正文卡的验收剧本：真跑 shell，让 stdout 进 bash 工具结果。
     # 三个 bash 连着排（中间不插终答），一轮里就把成功/失败/短输出三种卡都跑出来；
     # 成功那条仿 gradle 的 "BUILD SUCCESSFUL"（绿）、失败那条仿编译错误（红）。
+    # 批1f 内联 diff 的验收剧本：先新建一个文件，再改其中几行。
+    # 两条连着排（中间不插终答），一轮里把「新建文件」和「+N−M 改动」两种卡都跑出来。
+    # 文件写在工作区相对路径 diff-demo/Notes.kt —— 真实落盘，SnapshotHook 会拍到写前快照。
+    "edit": [
+        ("先建一个文件", [{"id": "e1", "name": "write", "arguments": json.dumps(
+            {"path": "diff-demo/Notes.kt",
+             "content": "package demo\n\nclass Notes {\n"
+                       "    val title = \"草稿\"\n"
+                       "    val author = \"me\"\n"
+                       "    val version = 1\n}\n"})}]),
+        ("现在改三行：标题、作者、版本号", [{"id": "e2", "name": "edit", "arguments": json.dumps(
+            {"path": "diff-demo/Notes.kt",
+             "old_string": "    val title = \"草稿\"\n    val author = \"me\"\n    val version = 1",
+             "new_string": "    val title = \"正式稿\"\n    val author = \"HaoAI\"\n"
+                           "    val version = 2\n    val reviewed = true"})}]),
+        ("改完了。上面两步的变更量现在直接挂在步骤行上：新建那步写「新建 N 行」，"
+         "编辑那步写 +4 −3，点开能看到带行号的逐行差异——不用再点进工具详情、"
+         "再点一次「查看变更」才能知道改了哪几行。", None),
+    ],
     "build": [
         ("先编译一遍", [{"id": "b1", "name": "bash", "arguments": json.dumps(
             {"command": "printf '> Task :app:compileDebugKotlin\\n"

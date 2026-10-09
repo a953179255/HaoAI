@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -95,6 +96,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haoai.agent.agent.engine.ToolRunState
@@ -282,12 +284,19 @@ fun ChainCard(
                             )
                             is ChainStep.Tool -> Column {
                                 ToolStep(tool = step.tool, live = toolsLive)
-                                // 批1e：编码向步骤行下长出结果正文卡（exit/耗时 + 可折叠 stdout）
+// 批1e：编码向步骤行下长出结果正文卡（exit/耗时 + 可折叠 stdout）
 // 显隐跟随该步自身的可见性（index >= firstShownIndex），不能只判 chainOpen：
 // 步骤数 ≤ COLLAPSED_VISIBLE 时卡根本不提供展开入口（canCollapse=false），
 // chainOpen 恒为 false，只看它会把正文卡一起藏掉。
-if (step.tool.body != null && index >= firstShownIndex) {
+// write/edit 例外：正文只有"已替换 N 处"一行，变更卡信息量全包含它，两张并排是噪音。
+                                if (step.tool.body != null && step.tool.diff == null &&
+                                    index >= firstShownIndex
+                                ) {
                                     ToolBodyCard(step.tool)
+                                }
+                                // 批1f：write/edit 步骤行下长出变更卡（+N−M + 带行号的可折叠 diff）
+                                if (step.tool.diff != null && index >= firstShownIndex) {
+                                    ToolDiffCard(step.tool.diff)
                                 }
                                 // 搜索步：行下 favicon 叠排 + 结果数（对齐 rikkahub FaviconRow）
                                 if (step.tool.hits.isNotEmpty()) {
@@ -753,6 +762,29 @@ private fun ToolStep(
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
         }
+        // 批1f：write/edit 行尾常驻变更量。此前要点头行进详情弹层、再点「查看变更」才看得到，
+        // 而"这次到底改了哪几行"恰恰是协作时最常问的一句话——提到行首标签右侧，一眼可见。
+        val diff = tool.diff
+        if (diff != null) {
+            if (diff.isNewFile) {
+                Text(
+                    "新建 ${diff.added} 行",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FwSpan.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Text(
+                    "+${diff.added} −${diff.removed}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FwSpan.SemiBold,
+                    color = if (diff.added > 0 || diff.removed > 0) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
+        }
         // 状态列：运行（无文字）↔ 完成/失败/拒绝 交叉淡入（此前是"啪"地冒出 ✓）
         AnimatedContent(
             targetState = when {
@@ -910,6 +942,207 @@ private const val AUTO_EXPAND_MAX_LINES = 12
 
 /** 展开态正文最大高度（超出内部滚动）——不让一条长输出占满整屏。 */
 private val BODY_MAX_HEIGHT = 320.dp
+
+/**
+ * 批1f：write/edit 的内联变更卡（挂在步骤行下方，缩进与 ToolBodyCard 一致）。
+ *
+ * 与批1c 的 ```diff 围栏视图是同一套语言（行号槽 + ± 符号 + 增删底色），但数据源不同：
+ * 那条路解析模型吐的 unified diff 文本，这条路拿写前快照现算（UiDiff），所以对
+ * "模型压根没把 diff 吐出来"的真实改动同样有效——这正是移动端此前的状态。
+ *
+ * 折叠策略与结果卡一致：短 diff 直接摊开，长 diff 收起（头部常驻 +N−M 已够回答"改了多少"）。
+ */
+@Composable
+private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+    val addBg = if (dark) Color(0xFF16301F) else Color(0xFFE8F6EC)
+    val delBg = if (dark) Color(0xFF3A1D1F) else Color(0xFFFDECEA)
+    val addFg = if (dark) Color(0xFF8FD9A6) else Color(0xFF146C2E)
+    val delFg = if (dark) Color(0xFFE79A9A) else Color(0xFFA1281F)
+    val numFg = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    val bodyFg = if (dark) Color(0xFFD7DEE9) else Color(0xFF23272F)
+
+    // 只渲染变更行 + 少量上下文：整份文件铺开会把对话冲垮，而用户要看的是"哪几行动了"。
+    // 上下文取前后各 CONTEXT_LINES 行，让改动不至于悬空看不出位置。
+    val shown = remember(diff.lines) { contextOf(diff.lines) }
+    var expanded by rememberSaveable(diff.path) {
+        mutableStateOf(shown.size <= AUTO_EXPAND_MAX_LINES)
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 44.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
+        color = Color.Transparent,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, border)
+    ) {
+        Column {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .chainPressable { expanded = !expanded }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    if (diff.isNewFile) "新建文件 · ${diff.added} 行"
+                    else "+${diff.added} −${diff.removed}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    diff.path.substringAfterLast('/'),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (expanded) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = BODY_MAX_HEIGHT)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (diff.truncatedHead > 0) {
+                        Text(
+                            "…（文件前 ${diff.truncatedHead} 行未变更）",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = numFg,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                        )
+                    }
+                    shown.forEach { row ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    when (row.kind) {
+                                        DiffRowKind.ADDED -> addBg
+                                        DiffRowKind.REMOVED -> delBg
+                                        else -> Color.Transparent
+                                    }
+                                )
+                                .height(IntrinsicSize.Min),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Text(
+                                // 新增行在旧文件里不存在，没有行号——渲染成空白而不是 "null"
+                                row.oldNo?.toString().orEmpty(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 17.sp
+                                ),
+                                color = numFg,
+                                maxLines = 1,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier
+                                    .width(34.dp)
+                                    .padding(end = 6.dp)
+                            )
+                            Text(
+                                when (row.kind) {
+                                    DiffRowKind.ADDED -> "+"
+                                    DiffRowKind.REMOVED -> "−"
+                                    else -> " "
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = 17.sp
+                                ),
+                                color = when (row.kind) {
+                                    DiffRowKind.ADDED -> addFg
+                                    DiffRowKind.REMOVED -> delFg
+                                    else -> Color.Transparent
+                                },
+                                modifier = Modifier.width(14.dp)
+                            )
+                            Text(
+                                row.text,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 17.sp
+                                ),
+                                color = if (row.kind == DiffRowKind.SAME) bodyFg
+                                else if (row.kind == DiffRowKind.ADDED) addFg else delFg,
+                                softWrap = true,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 一行变更视图的行类型。internal：contextOf() 要被 JVM 单测直接断言。 */
+internal enum class DiffRowKind { SAME, ADDED, REMOVED }
+
+/** 带行号的一行。oldNo = 旧文件行号（新增行为 null）。 */
+internal data class DiffRow(val kind: DiffRowKind, val text: String, val oldNo: Int?)
+
+/** 变更行前后各带的上下文行数——够看出"改在哪一段"，又不至于把整份文件铺出来。 */
+private const val CONTEXT_LINES = 3
+
+/**
+ * 批1f：从 diff 结果里挑出「变更行 + 上下文」，并编出行号。
+ * 纯函数（无 Compose 依赖），可直接单测。
+ *
+ * 行号口径：SAME/REMOVED 走旧文件行号，ADDED 无旧行号（旧文件里不存在）——和
+ * 主流 diff 工具一致。变更块之间用一行 `⋯` 断开，避免读者以为上下是连续的。
+ */
+internal fun contextOf(
+    lines: List<com.haoai.agent.ui.common.DiffLine>
+): List<DiffRow> {
+    val keep = BooleanArray(lines.size)
+    lines.forEachIndexed { i, l ->
+        if (l.type == com.haoai.agent.ui.common.DiffType.SAME) return@forEachIndexed
+        for (j in (i - CONTEXT_LINES).coerceAtLeast(0)..(i + CONTEXT_LINES).coerceAtMost(lines.size - 1)) {
+            keep[j] = true
+        }
+    }
+    val out = ArrayList<DiffRow>()
+    var oldNo = 0
+    var skipping = false
+    lines.forEachIndexed { i, l ->
+        val kind = when (l.type) {
+            com.haoai.agent.ui.common.DiffType.ADDED -> DiffRowKind.ADDED
+            com.haoai.agent.ui.common.DiffType.REMOVED -> DiffRowKind.REMOVED
+            else -> DiffRowKind.SAME
+        }
+        val isOld = kind != DiffRowKind.ADDED
+        if (isOld) oldNo++
+        if (!keep[i]) {
+            skipping = true
+            return@forEachIndexed
+        }
+        // 被跳过的区间只在前后都还有内容时补一条分隔标记（首尾不补，避免顶上多一行噪音）
+        if (skipping && out.isNotEmpty()) {
+            out.add(DiffRow(DiffRowKind.SAME, "⋯", null))
+        }
+        skipping = false
+        out.add(DiffRow(kind, l.text, if (isOld) oldNo else null))
+    }
+    return out
+}
 
 /** 批1e：结果正文拆解结果。exitCode 只有 bash/job_output 这类有退出码的工具才非空。 */
 internal data class ParsedToolBody(val exitCode: Int?, val text: String)

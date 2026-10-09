@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.contentOrNull
 
 data class UiTool(
@@ -73,7 +74,29 @@ data class UiTool(
      */
     val body: String? = null,
     /** 批1e：工具耗时 ms（结果卡头部「exit 0 · 1.8s」）；历史消息不落库，重进为 0。 */
-    val elapsedMs: Long = 0
+    val elapsedMs: Long = 0,
+    /** 批1f：write/edit 的变更摘要（从写前快照现算），非空时步骤行顶常驻 +N−M。 */
+    val diff: UiDiff? = null
+)
+
+/**
+ * 批1f：一次文件改动的展示摘要。
+ *
+ * 数据源是写前快照（FileSnapshot），不是 ToolResult.diff —— 后者在移动端从来没被赋值过
+ * （PC 端才有），走它等于新写一条全链路。快照是既有能力：SnapshotHook 在 write/edit 的
+ * before 阶段拍盘，after 由参数预测，所以任何时候都能把这次改动重算出来。
+ */
+data class UiDiff(
+    /** 被改的文件路径（快照 manifest 里带）。 */
+    val path: String,
+    /** 变更行（旧文件不存在 = 新建文件时为 true，走"新建 N 行"而不是 +N）。 */
+    val isNewFile: Boolean,
+    val added: Int,
+    val removed: Int,
+    /** 行级 diff（含未变更上下文），供步骤行下方展开。 */
+    val lines: List<com.haoai.agent.ui.common.DiffLine>,
+    /** 大文件折叠掉的头部行数（TextDiff 只对尾部 2000 行做 diff）。 */
+    val truncatedHead: Int = 0
 )
 
 /** web_search 单条结果的展示摘要（对齐效果图"图标+标题+域名"；snippet 供详情弹层结果卡）。 */
@@ -606,6 +629,75 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return meta.path to com.haoai.agent.ui.common.TextDiff.diffText(before ?: "", after ?: "").lines
     }
 
+    /**
+     * 批1f：write/edit 的变更摘要缓存，callId → UiDiff。
+     *
+     * 必须缓存而不是每次重组现算：TextDiff 是 O(n×m) 的 LCS，一屏里几个改动步、
+     * 每帧重组都重算，长文件会直接把滚动拖死。命中即返回，算过一次不再算。
+     */
+    private val diffCache = HashMap<String, UiDiff>()
+
+    /** 正在加载中的 callId，避免同一次改动被并发触发多次磁盘读 + LCS。 */
+    private val diffLoading = HashSet<String>()
+
+    /**
+     * 批1f：按需加载某次文件改动的 diff，拿到后重排行让 UI 长出 +N−M。
+     * 幂等且可重复调（rebuildRows 每次都会对未命中的 write/edit 步调它）。
+     */
+    private fun ensureDiff(callId: String) {
+        if (callId in diffCache || callId in diffLoading) return
+        val sid = _session.value?.id ?: return
+        diffLoading.add(callId)
+        viewModelScope.launch {
+            val loaded = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val snap = com.haoai.agent.agent.tools.snapshot.FileSnapshot.read(
+                    c.appFilesDir, sid, callId
+                ) ?: return@withContext null
+                val (meta, before, after) = snap
+                // 新建文件（before 为 null）不能喂空串给 diffText：`"".split('\n')` 得 [""]，
+                // 空串会先匹配上，产出 "−(空行) + 新增N行" 的假删除行。直接全部记为新增。
+                if (before == null) {
+                    val addedLines = (after ?: "").split('\n')
+                    return@withContext UiDiff(
+                        path = meta.path,
+                        isNewFile = true,
+                        added = addedLines.size,
+                        removed = 0,
+                        lines = addedLines.map {
+                            com.haoai.agent.ui.common.DiffLine(
+                                com.haoai.agent.ui.common.DiffType.ADDED, it
+                            )
+                        },
+                        truncatedHead = 0
+                    )
+                }
+                val r = com.haoai.agent.ui.common.TextDiff.diffText(before, after ?: "")
+                // 空改动不占位：写了个一模一样的内容不该长出 "+0 −0" 的变更卡
+                if (r.added == 0 && r.removed == 0) return@withContext null
+                UiDiff(
+                    path = meta.path,
+                    isNewFile = false,
+                    added = r.added,
+                    removed = r.removed,
+                    lines = r.lines,
+                    truncatedHead = r.truncatedHead
+                )
+            }
+            diffLoading.remove(callId)
+            // 代际栅栏：算 diff 期间切走了会话 → 不落地（否则会显示在别的会话界面上）
+            if (loaded != null && isCurrentSession(sid)) {
+                diffCache[callId] = loaded
+                rebuildRows()
+            }
+        }
+    }
+
+    /** 批1f：切会话时清缓存——快照按会话分目录，旧会话的 diff 不能带过来。 */
+    private fun clearDiffCache() {
+        diffCache.clear()
+        diffLoading.clear()
+    }
+
     private val _contextUsage = MutableStateFlow(
         ContextUsage(usedTokens = 0, totalTokens = 32768, systemTokens = 0, toolsTokens = 0, historyTokens = 0)
     )
@@ -681,6 +773,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.sessionStore.save(s)
         c.sessionStore.rememberOpened(s.id) // 新建也算"上次看的"：下次冷启动回到这条，而不是回到置顶那条
         clearPromotedKeys()
+        // 批1f：换会话同样清 diff 缓存
+        clearDiffCache()
         // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定
         publishLiveTools()
         sessionIn = 0
@@ -705,6 +799,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.sessionStore.rememberOpened(id) // 记下"用户现在看的是这条"，冷启动回到这里（见 SessionStartup）
         // 晋升行标记按会话清空：key 虽是全局唯一消息 id，但新会话的首帧行不应继承旧会话的豁免
         clearPromotedKeys()
+        // 批1f：快照按会话分目录，diff 缓存同样必须按会话清——否则 A 会话的改动量会显示到 B 会话
+        clearDiffCache()
         // liveTools 保留（运行中任务的归属数据），可见性由 publishLiveTools 的会话门控决定：
         // 切到其他会话透空，切回运行会话时间轴无缝续上
         publishLiveTools()
@@ -1893,6 +1989,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
             val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson),
                 ask = ask, askBatch = askBatch, hits = hits)
+            // 批1f：write/edit 完成后从写前快照取变更量（异步，首次只是触发加载）。
+            // 运行中的步不取——快照的 after 是参数预测值，中途展示等于显示一个还没落盘的结果。
+            val diff = if (call.name == "write" || call.name == "edit") {
+                diffCache[call.id] ?: run { ensureDiff(call.id); null }
+            } else null
             val tool = when {
                 live != null && live.state == ToolRunState.RUNNING -> live
                 stored != null -> base.copy(
@@ -1901,7 +2002,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     subagents = live?.subagents ?: emptyList(),
                     imageData = live?.imageData,
                     // 批1e：历史消息的结果正文从落库全文现截（口径与引擎 inlineBodyOf 同函数）
-                    body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first)
+                    body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first),
+                    diff = diff
                 )
                 live != null -> live
                 else -> base
