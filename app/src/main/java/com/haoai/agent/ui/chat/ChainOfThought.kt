@@ -791,6 +791,38 @@ private fun ToolStep(
             if (viewing) {
                 FileViewerDialog(ref = ref, onDismiss = { viewing = false })
             }
+        } else if (tool.jobLog != null) {
+            // 批3c：bash 后台投递成功（结果文本带 job_xxx）→ 「日志」芯片。
+            // 与路径芯片同交互分型：点芯片=实时尾随查看器，点行其余=详情弹层。
+            val log = tool.jobLog
+            var showLog by rememberSaveable(log.absPath) { mutableStateOf(false) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = verb, style = labelStyle,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(Modifier.size(7.dp))
+                Text(
+                    text = "日志 ↗",
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .clickable { showLog = true }
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                )
+            }
+            if (showLog) {
+                JobLogViewerDialog(ref = log, onDismiss = { showLog = false })
+            }
         } else {
             Text(
                 label, style = labelStyle,

@@ -87,7 +87,13 @@ data class UiTool(
      * 批2c：read/write/edit 步骤的工作区文件定位——非空时步骤行对象渲染成绿色路径芯片，
      * 点开只读查看器（不筛扩展名；SAF 后端无根或越界路径为 null，简报保持纯文本）。
      */
-    val fileRef: UiFilePath? = null
+    val fileRef: UiFilePath? = null,
+    /**
+     * 批3c：bash(background=true) 投递成功后的日志定位——非空时步骤行挂「日志」芯片，
+     * 点开实时尾随查看器（读工作区 .haoai-jobs/<id>.log，末行 __JOB_DONE_<rc> 判状态）。
+     * 仅原始文件后端可得（SAF 无文件系统根为 null）。
+     */
+    val jobLog: UiFilePath? = null
 )
 
 /** 批2a：HTML 产物定位。relPath 展示用（工作区相对），absPath 供 file:// 加载。 */
@@ -777,10 +783,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * 可单测），这里取工作区根；SAF 后端无根 → null → 简报保持纯文本不可点。
      */
     private fun fileRefOf(argsJson: String): UiFilePath? =
-        locateWorkspaceFile(
-            argsJson,
-            (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-        )
+        locateWorkspaceFile(argsJson, shellRoot())
+
+    /** 工作区文件系统根（仅原始文件后端有；SAF 为 null）。 */
+    private fun shellRoot(): java.io.File? =
+        (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
 
     /**
      * 批3a：文件树三件套——后端可达性（null=未绑定，树出空态提示）、
@@ -1975,7 +1982,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     body = ev.update.body,
                     elapsedMs = ev.update.elapsedMs,
                     // 批2c：登记时挂上的路径芯片定位透传（事件里没有 args，不能现算）
-                    fileRef = liveTools[ev.update.callId]?.fileRef
+                    fileRef = liveTools[ev.update.callId]?.fileRef,
+                    // 批3c：后台投递成功（body 带 job_xxx）→ 日志芯片；重投/失败文本
+                    // 不匹配则自动摘掉，芯片始终跟最新状态一致
+                    jobLog = if ((liveTools[ev.update.callId]?.name ?: "") == "bash")
+                        com.haoai.agent.ui.chat.parseJobDispatch(ev.update.body, shellRoot())
+                    else null
                 )
                 publishLiveTools()
                 rebuildRows()
@@ -2131,9 +2143,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first),
                     // 批1e 补：耗时不落库，但 liveTools 的收尾事件带着（UiTool.elapsedMs）——
                     // 不从 live 接过来的话卡头「exit 0 · 1.8s」永远出不来；liveTools 被
-                    // 新回合清空后回落 0（卡头隐藏耗时），与「重进为 0」口径一致。
+                    // 新回合清空后回落 0（卡头隐藏耗时），与「重进为 0」口径同。
                     elapsedMs = live?.elapsedMs ?: 0,
-                    diff = diff
+                    diff = diff,
+                    // 批3c：历史回看同样重算（落库全文含"后台任务已投递：job_xxx"→芯片；
+                    // live 已挂上也以 stored 重算为准，两者同函数同口径）
+                    jobLog = if (call.name == "bash")
+                        com.haoai.agent.ui.chat.parseJobDispatch(stored.first, shellRoot())
+                    else null
                 )
                 live != null -> live
                 else -> base
