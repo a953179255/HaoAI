@@ -76,6 +76,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -498,6 +499,10 @@ fun ChatScreen(
     var fileTreeLocate by remember { mutableStateOf<String?>(null) }
     // 批3b：产出汇总（全屏壳；入口=抽屉「产出汇总」+ 链卡底部「本回合产出 N 个文件」）
     var outputSummaryOpen by remember { mutableStateOf(false) }
+    // 批3d：版本时间轴（全屏壳；入口=抽屉「版本历史」+ 查看器「版本历史」）。
+    // timelineFile=直入某文件的时间轴（查看器传来），null=先列文件
+    var timelineOpen by remember { mutableStateOf(false) }
+    var timelineFile by remember { mutableStateOf<String?>(null) }
     // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
     // 在 appLayer 外渲染 ToolDetailSheet+GlassPanel 真玻璃（独立窗口采样不到 backdrop）
     var toolSheet by remember { mutableStateOf<com.haoai.agent.ui.UiTool?>(null) }
@@ -943,6 +948,11 @@ fun ChatScreen(
                 LocalLocateInTree provides { rel ->
                     fileTreeLocate = rel
                     fileTreeOpen = true
+                },
+                // 批3d：查看器「版本历史」上抛——呼出时间轴并预选该文件
+                LocalOpenTimeline provides { rel ->
+                    timelineFile = rel
+                    timelineOpen = true
                 },
                 com.haoai.agent.ui.common.LocalImageLightboxLauncher provides { list, url ->
                     imageLightbox = list to url
@@ -1727,6 +1737,11 @@ fun ChatScreen(
                                 outputSummaryOpen = true
                                 if (!landscapeTwoPane) scope.launch { drawer.close() }
                             },
+                            // 批3d：版本历史同为全屏壳，抽屉让位
+                            onOpenTimeline = {
+                                timelineOpen = true
+                                if (!landscapeTwoPane) scope.launch { drawer.close() }
+                            },
                             onEditProfile = { showProfileEdit = true },
                             onSettings = {
                                 onOpenSettings()
@@ -1765,6 +1780,17 @@ fun ChatScreen(
                 }
             },
             onDismiss = { outputSummaryOpen = false }
+        )
+    }
+
+    // 批3d：文件版本时间轴（全屏壳；入口=抽屉「版本历史」+ 查看器「版本历史」直达）
+    if (timelineOpen) {
+        FileTimelineDialog(
+            loadMetas = { vm.snapshotMetas() },
+            readVersion = { callId, which -> vm.snapshotVersion(callId, which) },
+            hasBefore = { callId -> vm.snapshotHasBefore(callId) },
+            preselect = timelineFile,
+            onDismiss = { timelineOpen = false; timelineFile = null }
         )
     }
 
@@ -5484,6 +5510,7 @@ private fun SessionsDrawer(
     onDeleteSession: (String) -> Unit,
     onOpenFileTree: () -> Unit,
     onOpenOutputs: () -> Unit,
+    onOpenTimeline: () -> Unit,
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -5697,6 +5724,9 @@ private fun SessionsDrawer(
         })
         DrawerEntry(Icons.Filled.Checklist, "产出汇总", onClick = {
             if (openCardId != null) openCardId = null else onOpenOutputs()
+        })
+        DrawerEntry(Icons.Filled.History, "版本历史", onClick = {
+            if (openCardId != null) openCardId = null else onOpenTimeline()
         })
         DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = {
             if (openCardId != null) openCardId = null else onOpenSessions()

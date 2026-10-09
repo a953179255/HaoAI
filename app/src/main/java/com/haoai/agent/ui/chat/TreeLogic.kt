@@ -7,6 +7,11 @@ package com.haoai.agent.ui.chat
 val LocalLocateInTree = androidx.compose.runtime.staticCompositionLocalOf<(String) -> Unit> { {} }
 
 /**
+ * 批3d：查看器 → 版本时间轴的直达通道（ChatScreen 顶层 provide：开时间轴 + 预选文件）。
+ */
+val LocalOpenTimeline = androidx.compose.runtime.staticCompositionLocalOf<(String) -> Unit> { {} }
+
+/**
  * 批3a：工作区文件树的纯逻辑（与 Compose/后端解耦，进 JVM 单测）。
  *
  * 树的懒加载模型：children 是「目录 rel → listDir 结果」的已加载缓存，

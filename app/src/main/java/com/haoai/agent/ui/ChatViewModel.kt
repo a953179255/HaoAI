@@ -700,6 +700,43 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     /**
+     * 批3d：某次变更是否存有"变更前"全文（文件在会话里非新建）——时间轴
+     * 是否前置"初始版"的依据。IO 判文件存在性。
+     */
+    suspend fun snapshotHasBefore(callId: String): Boolean {
+        val sid = _session.value?.id ?: return false
+        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+            java.io.File(c.appFilesDir, "snapshots/$sid/$callId.before").isFile
+        }
+    }
+
+    /**
+     * 批3d：本会话全部快照元数据（时间正序）——版本时间轴左栏数据源。
+     * 盘读走 IO；manifest 不存在（会话从没写过文件）返回空表。
+     */
+    suspend fun snapshotMetas(): List<com.haoai.agent.agent.tools.snapshot.FileSnapshot.Meta> {
+        val sid = _session.value?.id ?: return emptyList()
+        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.haoai.agent.agent.tools.snapshot.FileSnapshot.listSession(c.appFilesDir, sid)
+        }
+    }
+
+    /**
+     * 批3d：读某版本快照全文（which: "before"/"after"）供两版对比；
+     * 代际栅栏同 [snapshotDiff]。文件对不存在（被淘汰/新建文件无 before）→ null，
+     * 调用方按"该版本已不可用"处理。
+     */
+    suspend fun snapshotVersion(callId: String, which: String): String? {
+        val sid = _session.value?.id ?: return null
+        val text = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val f = java.io.File(c.appFilesDir, "snapshots/$sid/$callId.$which")
+            if (f.isFile) runCatching { f.readText() }.getOrNull() else null
+        }
+        if (!isCurrentSession(sid)) return null
+        return text
+    }
+
+    /**
      * 批1f：write/edit 的变更摘要缓存，callId → UiDiff。
      *
      * 必须缓存而不是每次重组现算：TextDiff 是 O(n×m) 的 LCS，一屏里几个改动步、

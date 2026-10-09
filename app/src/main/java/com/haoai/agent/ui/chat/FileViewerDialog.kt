@@ -19,7 +19,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.sp
 import com.haoai.agent.ui.UiFilePath
 import com.haoai.agent.ui.common.CodeHighlight
 import com.haoai.agent.ui.common.FullscreenCodeDialog
@@ -46,6 +45,7 @@ private const val VIEWER_MAX_LINES = 2000
 internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val locateInTree = LocalLocateInTree.current
+    val openTimeline = LocalOpenTimeline.current
     var result by remember(ref.absPath) {
         mutableStateOf<Pair<List<AnnotatedString>, String>?>(null)
     }
@@ -59,21 +59,38 @@ internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
         lines = lines,
         dark = dark,
         onDismiss = onDismiss,
-        // 批3a 闭环（效果图 .ovft 定稿按钮）：关查看器 → 开文件树并定位高亮此文件
+        // 批3a 闭环（效果图 .ovft 定稿按钮）+ 批3d 版本直达：查看器头部两枚换乘钮
         trailing = {
-            Text(
-                "在文件树中定位",
-                fontSize = 11.5.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = Color(0xFF7BD88F),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .clickable {
-                        locateInTree(normalizeRel(ref.relPath))
-                        onDismiss()
-                    }
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
-            )
+            androidx.compose.foundation.layout.Row(
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "版本历史",
+                    fontSize = 11.5.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = Color(0xFF8AB4F8),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable {
+                            openTimeline(normalizeRel(ref.relPath))
+                            onDismiss()
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                )
+                Text(
+                    "在文件树中定位",
+                    fontSize = 11.5.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = Color(0xFF7BD88F),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable {
+                            locateInTree(normalizeRel(ref.relPath))
+                            onDismiss()
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                )
+            }
         }
     )
 }
