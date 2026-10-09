@@ -496,6 +496,8 @@ fun ChatScreen(
     // locate=查看器「在文件树中定位」递来的目标 rel（树消费后置回 null）
     var fileTreeOpen by remember { mutableStateOf(false) }
     var fileTreeLocate by remember { mutableStateOf<String?>(null) }
+    // 批3b：产出汇总（全屏壳；入口=抽屉「产出汇总」+ 链卡底部「本回合产出 N 个文件」）
+    var outputSummaryOpen by remember { mutableStateOf(false) }
     // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
     // 在 appLayer 外渲染 ToolDetailSheet+GlassPanel 真玻璃（独立窗口采样不到 backdrop）
     var toolSheet by remember { mutableStateOf<com.haoai.agent.ui.UiTool?>(null) }
@@ -1720,6 +1722,11 @@ fun ChatScreen(
                                 fileTreeOpen = true
                                 if (!landscapeTwoPane) scope.launch { drawer.close() }
                             },
+                            // 批3b：产出汇总同为全屏壳，抽屉让位
+                            onOpenOutputs = {
+                                outputSummaryOpen = true
+                                if (!landscapeTwoPane) scope.launch { drawer.close() }
+                            },
                             onEditProfile = { showProfileEdit = true },
                             onSettings = {
                                 onOpenSettings()
@@ -1740,6 +1747,24 @@ fun ChatScreen(
             locateRel = fileTreeLocate,
             onLocateConsumed = { fileTreeLocate = null },
             onDismiss = { fileTreeOpen = false }
+        )
+    }
+
+    // 批3b：产出汇总（数据现算自 rows，无新后端调用；查看变更复用 1.3 callId 快照通道）
+    if (outputSummaryOpen) {
+        OutputSummaryDialog(
+            rows = rows,
+            resolve = { vm.fileRefOfRel(it) },
+            onViewDiff = { callId ->
+                snapshotScope.launch {
+                    val sidAtRequest = vm.session.value?.id
+                    val diff = vm.snapshotDiff(callId)
+                    if (diff != null && sidAtRequest != null && vm.isCurrentSession(sidAtRequest)) {
+                        diffViewer = diff
+                    }
+                }
+            },
+            onDismiss = { outputSummaryOpen = false }
         )
     }
 
@@ -5458,6 +5483,7 @@ private fun SessionsDrawer(
     onRenameSession: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
     onOpenFileTree: () -> Unit,
+    onOpenOutputs: () -> Unit,
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -5668,6 +5694,9 @@ private fun SessionsDrawer(
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
         DrawerEntry(Icons.Filled.Folder, "文件树", onClick = {
             if (openCardId != null) openCardId = null else onOpenFileTree()
+        })
+        DrawerEntry(Icons.Filled.Checklist, "产出汇总", onClick = {
+            if (openCardId != null) openCardId = null else onOpenOutputs()
         })
         DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = {
             if (openCardId != null) openCardId = null else onOpenSessions()
