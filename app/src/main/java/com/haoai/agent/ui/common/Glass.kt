@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.LayerBackdrop
+
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
@@ -203,32 +204,6 @@ fun rememberAppBackdrop(
 
 fun Modifier.appLayer(backdrop: LayerBackdrop): Modifier = this.layerBackdrop(backdrop)
 
-/**
- * 圆角滑杆实时生效订阅（2026-10-09）。
- *
- * 根因（库源码实锤）：`drawBackdrop` 的形状裁剪走 measure/place 通道——库节点在
- * measure 里 `placeWithLayer(layerBlock = { clip = true; shape = shapeProvider.shape })`
- * 把圆角烘进独立 GraphicsLayer；而滑杆改值后 modifier 链只走节点 `update()` =
- * 重算 renderEffect（draw 通道），**不重新摆放** → 裁剪停在旧值，新画的面/采样
- * 与旧裁剪错位 = 四角白色残影（用户实测：调完必须重进页面才恢复）。
- * 试过无效的路：remember(key){Modifier.layout{...}} 换 Modifier 实例（元素更新
- * 不标脏测量）；requestRemeasure（internal API 不可用）。
- *
- * 正解：**measure 期读 State = Compose 的原生订阅机制**（offset{}/size{} lambda
- * 重载同理）——在透传 layout 节点的 measure 块里读 GlassTuning.corner，值变化
- * 即自动把本布局标脏 → 重新 measure/place → 库节点重跑 layerBlock，裁剪取新值。
- * 圆角拖动时全 App GlassPanel 各重测一次，代价与既有重组同阶，可忽略。
- */
-private fun Modifier.shapeLiveTrack(): Modifier =
-    Modifier.layout { measurable, constraints ->
-        com.haoai.agent.ui.theme.GlassTuning.corner
-        val placeable = measurable.measure(constraints)
-        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
-    }
-
-
-
-
 @Composable
 fun GlassPanel(
     // 放宽为 Backdrop 接口：支持 CombinedBackdrop（玻璃导出合成采样，见抽屉）
@@ -248,6 +223,26 @@ fun GlassPanel(
     lensAmountMul: Float = 2f,
     refract: Boolean? = null,
     redrawKey: (() -> Any?)? = null,
+    /**
+     * 活形状提供者（2026-10-09 圆角残影四修，最终解）。
+     *
+     * 背景：滑杆实时调圆角后四角残留直角"壁纸原色块"。根因链（三层实锤）：
+     * ① 库 `DrawBackdropElement.update()` 只换参数引用、**零失效调用**（反编译）；
+     * ② place 通道重摆时，`NodeCoordinator.updateLayerBlock` 有短路——
+     *    `layerBlock 引用相同 && density/direction 没变 ⇒ needsUpdate=false`，
+     *    **layer 属性（setClip+setShape）不重新应用**（反编译字节码 43-80 行）。
+     *    库的 layoutLayerBlock 是构造时绑定 node 的同一实例 ⇒ 重摆 120 次也白跑
+     *    （GLASSDBG liveTrack-PLACE 实测），新 shapeProvider 永远没被执行。
+     *    切页面能恢复 = 整链重建、OwnedLayer 重建、layer 属性首次应用。
+     * ③ 一修 invalidatePlacement（=requestRelayout）无效、二修 remeasureSync
+     *    （forceRemeasure）place 确实重跑但同样被 ② 短路。
+     *
+     * 正解：GraphicsLayerScope block 的执行在**快照观察**下（=graphicsLayer{} 读
+     * State 自动生效的官方机制）。本 lambda 内读 GlassTuning State：corner 变化 →
+     * Compose 自动失效层属性并**重新执行 layerBlock**（不走 ② 的短路路径）→
+     * setClip/setShape 取新圆角。lambda 需在首次 place 时应用一次以注册订阅。
+     */
+    shapeProvider: (() -> androidx.compose.ui.graphics.Shape)? = null,
     /** 把本玻璃的最终表面（磨砂+折射+表面色）导出成一层，供其它玻璃
      *  （如抽屉）经 CombinedBackdrop 合成采样 —— 解决"玻璃磨砂不到玻璃"：
      *  玻璃不能进采样宿主（RenderNode 成环），但可以导出自己。 */
@@ -340,7 +335,6 @@ fun GlassPanel(
     val drawBorder = border && !floating
     val panelModifier = if (r) {
         modifier
-            .shapeLiveTrack()
             // v7.1 硬裁剪：drawBackdrop 的 blur/lens 与表面填充会溢出圆角外的方形区域
             // （平色背景上呈四角灰块，GlassCard 同款修复——小尺寸圆角面板上最明显）
             //
@@ -352,7 +346,9 @@ fun GlassPanel(
             .then(if (floating) Modifier else Modifier.clip(shape ?: RoundedCornerShape(radius)))
             .drawBackdrop(
                 backdrop = backdrop,
-                shape = { shape ?: RoundedCornerShape(radius) },
+                // shapeProvider（读 State 的活形状）优先；place 期 layerBlock 应用时
+                // 调它 → State 读取注册快照订阅 → corner 变化自动失效层属性（见上注）
+                shape = { shapeProvider?.invoke() ?: shape ?: RoundedCornerShape(radius) },
                 effects = {
                     // 绘制期调用 redrawKey lambda 读取其中的 State：值变化 →
                     // ObserverModifierNode 回调失效重绘 → 采样 offset 用最新布局
@@ -409,7 +405,7 @@ fun GlassPanel(
                         // 浮层跳过了外层 Modifier.clip（否则库的外阴影被整圈裁光，见下），
                         // 因此表面填充改为**按 shape 画路径**，方角不再溢出色块。
                         val densityScope: androidx.compose.ui.unit.Density = this
-                        val outline = (shape ?: RoundedCornerShape(radius))
+                        val outline = (shapeProvider?.invoke() ?: shape ?: RoundedCornerShape(radius))
                             .createOutline(size, layoutDirection, densityScope)
                         val p = Path()
                         when (outline) {
@@ -434,7 +430,6 @@ fun GlassPanel(
         // 实现手法：外包一个离屏 Box 画 backdrop 的内容色近似（用 surface 深色版），
         // 内容层加 blur——这里用「背景模糊层+表面」两层组合
         modifier
-            .shapeLiveTrack()
             .then(fallbackShadowMod)
             .clip(shape ?: RoundedCornerShape(radius))
             .background(surface)

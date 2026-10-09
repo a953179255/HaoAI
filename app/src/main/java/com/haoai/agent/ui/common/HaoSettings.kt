@@ -78,10 +78,17 @@ fun HaoGroup(
     val tuning = com.haoai.agent.ui.theme.GlassTuning
     // 壁纸模式下圆角/折射/模糊/白雾全部走实时调参（主题外观页写入）
     val r = if (onWp) tuning.corner.dp else HaoDimens.groupRadius
+    // 活形状提供者（2026-10-09 圆角残影四修）：lambda 内读 corner State，
+    // 库 placeWithLayer 的 layerBlock 应用期调它 → 注册快照订阅 → 滑杆拖动
+    // Compose 自动失效层属性取新圆角（绕开 updateLayerBlock 的引用相同短路）。
+    val liveShape: (() -> androidx.compose.ui.graphics.Shape)? = if (onWp) {
+        { androidx.compose.foundation.shape.RoundedCornerShape(tuning.corner.dp) }
+    } else null
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier.fillMaxWidth(),
         radius = r,
+        shapeProvider = liveShape,
         // 页面组独立档（2026-10-09 方案A拆分）：白雾/磨砂走 pageVeil/pageBlur，
         // 聊天卡片不再被这里牵动
         surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
