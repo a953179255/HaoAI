@@ -308,10 +308,26 @@ fun SettingsScreen(
                 if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
                     val img = wallpaper.asImageBitmap()
                     glassPreheated = true
-                    glassPreheated = true
-                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
+                    // ⚠️ 必须与宿主 Image 的 ContentScale.Crop **逐像素一致**：
+                    // 此前用 FillBounds（强行拉伸）——预热层与宿主层内容缩放不一致。
+                    // 首次拖玻璃圆角 → 玻璃层失效重录 → 采样层内容跳到预热（拉伸）版，
+                    // 透过玻璃的壁纸瞬间"错位/变大"（猫腿错位，用户实锤）；重进页面才恢复。
+                    // 改为按 Crop 语义计算源裁剪窗口：任何时刻采样读到哪层都一致。
+                    val iw = img.width.toFloat()
+                    val ih = img.height.toFloat()
+                    val dw = glassHostSize.width.toFloat()
+                    val dh = glassHostSize.height.toFloat()
+                    val scale = maxOf(dw / iw, dh / ih)
+                    val cw = (dw / scale).toInt().coerceAtMost(img.width)
+                    val ch = (dh / scale).toInt().coerceAtMost(img.height)
+                    localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
                         drawImage(
                             img,
+                            srcOffset = androidx.compose.ui.unit.IntOffset(
+                                ((img.width - cw) / 2).coerceAtLeast(0),
+                                ((img.height - ch) / 2).coerceAtLeast(0)
+                            ),
+                            srcSize = androidx.compose.ui.unit.IntSize(cw, ch),
                             dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
                             dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
                         )

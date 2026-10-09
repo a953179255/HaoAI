@@ -356,6 +356,12 @@ fun GlassPanel(
                     // 「读取 State 的 lambda」
                     redrawKey?.invoke()
                     surfaceState.value
+                    // ⚠️ 必须在此观察圆角（2026-10-09 壁纸错位实锤）：corner 变化会经
+                    // shapeProvider 触发 layer 属性失效重建，若效果链不重算，lens 的
+                    // renderEffect 丢失 → 折射（尤其整面档）内容"弹回"未扭曲位置 =
+                    // 透过玻璃的壁纸与卡外真实壁纸错位（用户实测猫腿/尾巴错位，
+                    // 重进页面才恢复）。这里读 corner 注册订阅 → 圆角变化即重算效果链。
+                    com.haoai.agent.ui.theme.GlassTuning.corner
                     // ⚠️ 深色下跳过 vibrancy（2026-10-01 任务胶囊实测）：效果链作用在
                     // 整层输出上（含 onDrawSurface 的表面色），vibrancy 的亮度提拉会把
                     // 接近黑的表面抬成灰（0.94 近黑实测渲染 139-144 亮度），高饱和色
