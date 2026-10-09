@@ -296,45 +296,13 @@ fun SettingsScreen(
                 baseTop = MaterialTheme.colorScheme.background,
                 baseBottom = MaterialTheme.colorScheme.background
             )
-            // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
-            // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
-            var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
-        // 预热只做一次：切换/动画期页面每帧重组，若每次都 record 壁纸，会与宿主节点的
-        // record 交替覆盖采样层 → 背景壁纸抽搐（用户实锤）
-        var glassPreheated by remember { mutableStateOf(false) }
-            val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
-            val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
-            androidx.compose.runtime.SideEffect {
-                if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
-                    val img = wallpaper.asImageBitmap()
-                    glassPreheated = true
-                    // ⚠️ 必须与宿主 Image 的 ContentScale.Crop **逐像素一致**：
-                    // 此前用 FillBounds（强行拉伸）——预热层与宿主层内容缩放不一致。
-                    // 首次拖玻璃圆角 → 玻璃层失效重录 → 采样层内容跳到预热（拉伸）版，
-                    // 透过玻璃的壁纸瞬间"错位/变大"（猫腿错位，用户实锤）；重进页面才恢复。
-                    // 改为按 Crop 语义计算源裁剪窗口：任何时刻采样读到哪层都一致。
-                    val iw = img.width.toFloat()
-                    val ih = img.height.toFloat()
-                    val dw = glassHostSize.width.toFloat()
-                    val dh = glassHostSize.height.toFloat()
-                    val scale = maxOf(dw / iw, dh / ih)
-                    val cw = (dw / scale).toInt().coerceAtMost(img.width)
-                    val ch = (dh / scale).toInt().coerceAtMost(img.height)
-                    localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
-                        drawImage(
-                            img,
-                            srcOffset = androidx.compose.ui.unit.IntOffset(
-                                ((img.width - cw) / 2).coerceAtLeast(0),
-                                ((img.height - ch) / 2).coerceAtLeast(0)
-                            ),
-                            srcSize = androidx.compose.ui.unit.IntSize(cw, ch),
-                            dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                            dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
-                        )
-                    }
-                }
-            }
-            Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
+            // ⚠️ 首帧预热 record 已删除（2026-10-09 壁纸错位根治）：
+            // rememberLayerBackdrop 的 onDraw（壁纸底图）在**每次玻璃采样时都会执行**，
+            // 采样层不存在"空窗"——预热 record 是旧架构遗留，反而在页面重进时往采样层
+            // 写入一份与挂载节点内容几何不同的副本：首次改任何玻璃参数 → 玻璃层重录
+            // → 采样读到预热副本 → 透过玻璃的壁纸整体错位（猫腿/尾巴错位，用户实锤），
+            // 重进页面（重新预热+宿主覆盖）才恢复。删掉后采样层只来自挂载节点单一来源。
+            Box(Modifier.matchParentSize().appLayer(localBackdrop)) {
                 if (wallpaper != null) {
                     // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘
                     val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
@@ -1322,28 +1290,11 @@ private fun SectionPage(
             baseTop = MaterialTheme.colorScheme.background,
             baseBottom = MaterialTheme.colorScheme.background
         )
-        // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
-        // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
-        var glassHostSize2 by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
-        // 预热只做一次：切换/动画期页面每帧重组，若每次都 record 壁纸，会与宿主节点的
-        // record 交替覆盖采样层 → 背景壁纸抽搐（用户实锤）
-        var glassPreheated2 by remember { mutableStateOf(false) }
-        val glassHostSize2Density = androidx.compose.ui.platform.LocalDensity.current
-        val glassHostSize2LayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
-        androidx.compose.runtime.SideEffect {
-            if (!glassPreheated2 && wallpaper != null && glassHostSize2.width > 0 && glassHostSize2.height > 0) {
-                val img = wallpaper.asImageBitmap()
-                glassPreheated2 = true
-                localBackdrop.graphicsLayer.record(glassHostSize2Density, glassHostSize2LayoutDir, glassHostSize2) {
-                    drawImage(
-                        img,
-                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        dstSize = androidx.compose.ui.unit.IntSize(glassHostSize2.width, glassHostSize2.height)
-                    )
-                }
-            }
-        }
-        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize2 = it }) {
+        // ⚠️ 首帧预热 record 已删除（2026-10-09 壁纸错位根治，同页面根宿主）：
+        // rememberLayerBackdrop 的 onDraw 每次采样都会执行，采样层无空窗；
+        // 预热 record 在页面重进时往采样层写入几何不同的副本，首次改玻璃参数
+        // → 玻璃层重录 → 采样读到预热副本 → 透过玻璃的壁纸整体错位（用户实锤）。
+        Box(Modifier.matchParentSize().appLayer(localBackdrop)) {
             if (wallpaper != null) {
                 val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
                 Image(
