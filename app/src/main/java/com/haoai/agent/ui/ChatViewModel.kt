@@ -2070,24 +2070,28 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 if (promotedAdded) publishPromotedKeys()
             }
             is ToolChanged -> {
-                liveTools[ev.update.callId] = UiTool(
-                    ev.update.callId,
-                    liveTools[ev.update.callId]?.name ?: "",
-                    ev.update.brief ?: "",
-                    ev.update.state,
-                    ev.update.preview,
-                    liveTools[ev.update.callId]?.subagents ?: emptyList(),
-                    liveTools[ev.update.callId]?.imageData,
-                    body = ev.update.body,
-                    elapsedMs = ev.update.elapsedMs,
-                    // 批2c：登记时挂上的路径芯片定位透传（事件里没有 args，不能现算）
-                    fileRef = liveTools[ev.update.callId]?.fileRef,
-                    // 批3c：后台投递成功（body 带 job_xxx）→ 日志芯片；重投/失败文本
-                    // 不匹配则自动摘掉，芯片始终跟最新状态一致
-                    jobLog = if ((liveTools[ev.update.callId]?.name ?: "") == "bash")
-                        com.haoai.agent.ui.chat.parseJobDispatch(ev.update.body, shellRoot())
-                    else null
-                )
+                val prevTool = liveTools[ev.update.callId]
+                // m5 同源问题：这里也是逐个重列字段，漏传 diff / htmlFile / ask / askBatch / hits，
+                // 一次 ToolChanged 就把已挂上的搜索结果卡、问答卡、产物卡、变更量清空。
+                // 改用 copy()，未提及的字段一律继承（与 SubagentUpdate 分支同款修法）。
+                liveTools[ev.update.callId] = (prevTool ?: UiTool(ev.update.callId, "", ""))
+                    .copy(
+                        name = prevTool?.name ?: "",
+                        brief = ev.update.brief ?: "",
+                        state = ev.update.state,
+                        preview = ev.update.preview,
+                        subagents = prevTool?.subagents ?: emptyList(),
+                        imageData = prevTool?.imageData,
+                        body = ev.update.body,
+                        elapsedMs = ev.update.elapsedMs,
+                        // 批2c：登记时挂上的路径芯片定位透传（事件里没有 args，不能现算）
+                        fileRef = prevTool?.fileRef,
+                        // 批3c：后台投递成功（body 带 job_xxx）→ 日志芯片；重投/失败文本
+                        // 不匹配则自动摘掉，芯片始终跟最新状态一致
+                        jobLog = if ((prevTool?.name ?: "") == "bash")
+                            com.haoai.agent.ui.chat.parseJobDispatch(ev.update.body, shellRoot())
+                        else null
+                    )
                 publishLiveTools()
                 rebuildRows()
                 publishSteps()
@@ -2099,14 +2103,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val at = lines.indexOfFirst { it.index == ev.index }
                 val line = SubagentLine(ev.id, ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief)
                 if (at >= 0) lines[at] = line else lines.add(line)
-                liveTools[ev.callId] = UiTool(
-                    ev.callId,
-                    prev?.name ?: "",
-                    prev?.brief ?: "",
-                    prev?.state ?: ToolRunState.RUNNING,
-                    prev?.preview,
-                    lines.sortedBy { it.index }
-                )
+                // m5：原先用构造参数逐个重列，只带了 7 个字段，把已填好的
+                // body / elapsedMs / diff / htmlFile / fileRef / jobLog / hits / ask / askBatch
+                // 全部清成默认值 —— 子代理运行期间卡片的输出正文、文件芯片、耗时标签集体消失，
+                // 且UiTool 每加一个字段就会再踩一次（构造点已散落多处）。
+                // 修法：改用 copy()，新增字段默认继承，构造点不再需要同步维护。
+                liveTools[ev.callId] = (prev ?: UiTool(ev.callId, "", ""))
+                    .copy(
+                        name = prev?.name ?: "",
+                        brief = prev?.brief ?: "",
+                        state = prev?.state ?: ToolRunState.RUNNING,
+                        preview = prev?.preview,
+                        subagents = lines.sortedBy { it.index }
+                    )
                 publishLiveTools()
                 rebuildRows()
                 publishSteps()

@@ -154,6 +154,9 @@ internal suspend fun AgentEngine.handleOverflow(
     // 强制压缩（点6：链式降级）
     val result = compactWithChain(chatMsgs, chain)
     session.compactionSummary = result.summary
+    // M12：与 maybeCompact 同源——记账必须取"压缩前的真实规模"，压缩后水位未推进时
+    // estimateContextTokens() 恰好还是压缩前的值，但语义上属于"事后重算"，
+    // 一旦将来压缩动作改成会先改水位，这里就会记错。统一在压缩前取一次。
     session.compactedTokensBefore = estimateContextTokens()
     markCompactedThrough()
     persist()
@@ -195,10 +198,26 @@ internal fun AgentEngine.prospectiveWatermark(): String? {
         if (acc > keep) break
         keepFrom = i
     }
-    // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰切开
+    // 对齐到用户消息边界：不能把 assistant(toolCalls)/tool 序列拦腰切开。
+    // start 落在 msgs[start] 这条**用户**消息上；水位语义是「这条及其之前已被摘要覆盖」
+    // （见 SessionStore.compactedThroughId 与 uncompactedMessages 的 drop(idx+1)），
+    // 所以锚点取 msgs[start - 1] —— 少一条就会把 start 这条用户消息也压掉。
     var start = keepFrom
     while (start < msgs.size && msgs[start].role != ChatMessage.ROLE_USER) start++
-    if (start <= 0 || start >= msgs.size) return null
+    // m4 修复：原判断 `start <= 0 || start >= msgs.size` 在"整段历史都还没超预算"时
+    // （keepFrom=0，循环立刻找到首条 user 消息 ⇒ start=0）也返回 null。返回值语义是
+    // "有没有可丢的旧段"，start==0 恰恰说明**一条都不能丢**，两者被混在一起：
+    // 调用方无法区分"没得压"与"压不了"，于是反复判定需要压缩并空转烧 LLM 调用
+    //（冷却只在成功路径更新，失败路径会一直重试）。
+    // 拆开：start<=0 = 无可丢段（返回 null）；start>=msgs.size = 尾部无 user 消息，
+    // 此时退到 msgs.size-1（至少有可丢段），不再返回 null 让上层空转。
+    if (start >= msgs.size) {
+        // 尾部没有 user 边界可对齐：退到「保留最后一条」，水位取它前一条。
+        val fallback = msgs.size - 1
+        if (fallback <= 0) return null
+        return msgs[fallback - 1].id
+    }
+    if (start <= 0) return null
     return msgs[start - 1].id
 }
 

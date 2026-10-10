@@ -21,8 +21,10 @@ object ToolRegistry {
         "browser_search", "browser_open", "browser_navigate", "browser_read", "browser_click",
         "browser_input", "browser_scroll", "browser_find", "browser_back", "browser_screenshot",
         // 虚拟屏后台自动化
-        "vscreen_launch", "vscreen_screen", "vscreen_tap", "vscreen_text",
-        "vscreen_scroll", "vscreen_back", "vscreen_home", "vscreen_close",
+        // vscreen_tap_xy / vscreen_swipe_xy 曾漏登记 → groupOf 判成 GROUP_CORE（恒开、免 tools_enable），
+// 带 root 能力的触摸注入在 minimal 档位也会被注入。补齐。
+        "vscreen_launch", "vscreen_screen", "vscreen_tap", "vscreen_tap_xy", "vscreen_swipe_xy",
+        "vscreen_text", "vscreen_scroll", "vscreen_back", "vscreen_home", "vscreen_close",
         // 相机/定位
         "camera", "location",
         // 设备工具包
@@ -38,6 +40,44 @@ object ToolRegistry {
         name in EXTENDED_TOOLS -> GROUP_EXTENDED
         else -> GROUP_CORE
     }
+
+    /**
+     * **全部无条件注册的工具名**（不含按开关/上下文条件注册的 vscreen_*、
+     * ask_user* / subagent_* / web_search / session_search / MCP 工具）。
+     *
+     * 用途：让 `PolicyEngine.TOOL_RISK` 的穷尽性可被单测断言。风险表漏登记的工具会落到
+     * fail-safe 兜底（WRITE），代价是"多问一次批准"；但漏登也意味着风险等级**未被人reviewed**，
+     * 而 `AgentEngineLoopTest` 那类测试普遍跑 YOLO 档（`requiresApproval` 恒 false），
+     * 根本查不出等级错配。所以需要一份不依赖 Android Context 的名字清单做静态对账。
+     *
+     * 条件注册的工具在 [CONDITIONAL_TOOL_NAMES] 里，两者并起来才是完整期望集。
+     */
+    internal val CORE_TOOL_NAMES: List<String> = listOf(
+        "read", "write", "edit", "grep", "glob", "web_fetch", "bash", "job_output",
+        "todo", "memory", "screen", "tap", "swipe", "scroll", "find", "wait",
+        "type_text", "key", "launch_app", "open_uri", "list_apps",
+        "browser_search", "browser_open", "browser_navigate", "browser_read",
+        "browser_click", "browser_input", "browser_scroll", "browser_find",
+        "browser_back", "browser_screenshot",
+        "schedule", "workflow_save", "skill", "app_status", "config_get", "config_set",
+        "camera", "location", "clipboard_read", "calendar_query", "calendar_create",
+        "contacts_search", "alarm_set", "ocr_image", "notifications_read"
+    )
+
+    /** 条件注册的工具名（开关/深度/上下文决定是否注入），同样必须登记风险等级。 */
+    internal val CONDITIONAL_TOOL_NAMES: List<String> = listOf(
+        "ask_user", "ask_user_batch",
+        "vscreen_launch", "vscreen_screen", "vscreen_tap", "vscreen_tap_xy",
+        "vscreen_swipe_xy", "vscreen_text", "vscreen_scroll", "vscreen_back",
+        "vscreen_home", "vscreen_close",
+        "web_search", "session_search",
+        "spawn_agent", "spawn_agents", "stop_agent", "steer_agent", "collect_agent",
+        "handoff", "tools_enable",
+        "delegate_to_vision", "transcribe_audio"
+    )
+
+    /** 期望在 `PolicyEngine.TOOL_RISK` 里出现的全部工具名（去重）。 */
+    internal val ALL_TOOL_NAMES: Set<String> = (CORE_TOOL_NAMES + CONDITIONAL_TOOL_NAMES).toSet()
 
     fun build(
         ctx: ToolContext,

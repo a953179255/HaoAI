@@ -348,13 +348,19 @@ class LaunchAppTool : Tool {
 
 class OpenUriTool : Tool {
 
-    override val name = "open_uri"
+override val name = "open_uri"
     override val desc =
-        "直达打开目标页面（打开系统设置/网页/应用子页优先用它，一步到位，代替 screen→tap 视觉循环）。uri 三种写法：" +
+  "直达打开目标页面（打开系统设置/网页/应用子页优先用它，一步到位，代替 screen→tap 视觉循环）。uri 四种写法：" +
             "① 系统设置 action，如 android.settings.APPLICATION_DEVELOPMENT_SETTINGS（开发者选项）、" +
             "android.settings.WIRELESS_DEBUGGING_SETTINGS（无线调试，Android13+）、BLUETOOTH_SETTINGS、WIFI_SETTINGS、SETTINGS（设置首页）；" +
-            "② 包名/类名 指定应用内页面，如 com.android.settings/.Settings\$WirelessDebuggingActivity；" +
-            "③ 普通协议 https://网页、geo:经度,纬度、market://应用详情、tel: 等。失败会返回原因，可换写法重试。"
+         "② 包名/类名 指定应用内页面，如 com.android.settings/.Settings\$WirelessDebuggingActivity；" +
+    "③ 普通协议 https://网页、geo:经度,纬度、market://应用详情、tel: 等；" +
+     // M4：原先支持 intent: 但说明里没写，属于「隐藏能力」——审批框显示原文时
+            // 用户需要自己从 intent:#Intent;component=… 里读出真实目标。现在明示支持，
+      // 且审批弹窗会把动作/目标组件/数据解析成可读形式（见 openUriApprovalDetail）。
+ "④ intent: 开头为标准 Android Intent URI，可精确指定组件与参数，" +
+            "如 intent:#Intent;component=com.android.settings/.Settings\$WirelessDebuggingActivity;end。" +
+            "失败会返回原因，可换写法重试。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {

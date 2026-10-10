@@ -148,13 +148,37 @@ class CompactionManager(
         }
     }
 
+    /**
+     * 估算这次压缩实际释放的 token 数。
+     *
+     * ## M12 修复（2026-10-10）：原来系统性高估约 keepRecentTokens
+     *
+     * 原实现 `currentTokens - summaryBudget`，只减了摘要预算。但压缩**不是**
+     * "把整段历史换成摘要"—— 压缩后仍然**保留** [settings.keepRecentTokens]
+     * 的近期消息（见 `EngineEngine.prospectiveWatermark`：从尾部累加到超预算
+     * 才停，那段原样留着）。
+     *
+     * 所以压缩后的真实规模 ≈ 保留窗口 + 摘要，减数里必须把保留窗口也算进去：
+     * ```
+     * before = currentTokens
+     * after  = keepRecentTokens + summaryBudget
+     * saved  = before - after
+     * ```
+     * 原式等于把保留窗口也当成"省下来了"，恒定多报约 18000 tokens。
+     * 用户看到的「释放约 N tokens」因此长期虚高 —— 而这个数字的用途正是
+     * 让用户判断"这次压缩值不值"，虚高等于这个功能没有参考价值。
+     *
+     * 两个边界：
+     * · 保留窗口可能大于压缩前的规模（历史本来就短），`coerceAtLeast(0)` 兜底；
+     * · 估算口径必须与真实请求一致（tool 结果按 REQ_CAP 截断），
+     *   否则工具密集会话误差可达一个数量级 —— 这是构造参数传进来的原因。
+     */
     private fun estimateSavedTokens(messages: List<ChatMessage>, contextWindow: Int, summaryBudget: Int): Int {
-        // 只按真实请求口径估算，否则「释放约 N tokens」这条系统消息会把高估的全量历史
-        // 当成节省量报给用户，数字没有意义。
         val currentTokens = com.haoai.agent.ui.chat.ContextUsage.estimateRequestHistoryTokens(
             messages, maxHistory, toolContentCap
         )
-        return (currentTokens - summaryBudget).coerceAtLeast(0)
+        val after = settings.keepRecentTokens + summaryBudget
+        return (currentTokens - after).coerceAtLeast(0)
     }
 }
 

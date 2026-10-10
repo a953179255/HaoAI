@@ -251,7 +251,8 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
             converted: Converted,
             tools: List<ApiTool>,
             stream: Boolean,
-            maxTokensOverride: Int? = null
+            maxTokensOverride: Int? = null,
+            reasoningEffort: String? = null
         ): JsonObject = buildJsonObject {
             put("model", provider.model)
             // Anthropic 必填 max_tokens：云端未配置时 4096 兜底
@@ -261,6 +262,14 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
             if (provider.sendTopP) put("top_p", provider.topP.toDouble())
             if (converted.system.isNotBlank()) put("system", converted.system)
             put("stream", stream)
+            // M13：思考等级。此前 reasoningEffort 形参被接收后**全函数体无引用**——
+            // 用户在设置里配了等级、界面显示已配置、实际请求里没有，静默丢弃。
+            //
+            // 关键：Anthropic 的字段是 `output_config.effort`，**不是** OpenAI 的
+            // `reasoning_effort`，写错会直接 400。且并非所有 Claude 模型都支持
+            // （老模型只有 thinking.budget_tokens 形态）⇒ 必须门控，不能无条件发。
+            // 不支持的场景显式记日志，不再静默吞掉。
+            anthropicEffort(provider.model, reasoningEffort)?.let { put("output_config", buildJsonObject { put("effort", it) }) }
             putJsonArray("messages") {
                 converted.messages.forEach { (role, blocks) ->
                     addJsonObject {
@@ -281,6 +290,72 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
                 }
             }
         }
+
+        /**
+         * M13：把内部统一的思考等级映射成 Anthropic 的 `output_config.effort`。
+         *
+         * 返回 null 表示"这次不发"。三种情况：
+         * ① 上游没给等级（null / 空 / `off`）—— 本来就不该发；
+         * ② 用户在模型能力里显式标了不支持（`caps().reasoning == false`）—— 尊重设置；
+         * ③ 模型型号不在支持列表里—— 发了会 400，比不发更糟。
+         *
+         * [provider] 只用来看能力开关，型号取`provider.model`。
+         */
+        private fun anthropicEffort(model: String, effort: String?): String? {
+            val e = effort?.trim()?.lowercase()?.takeIf { it.isNotEmpty() && it != "off" } ?: return null
+            if (!supportsEffort(model)) {
+                android.util.Log.w(
+                    "HaoProvider",
+                    "模型 $model 不支持 Anthropic output_config.effort，已忽略思考等级 $e" +
+                        "（该型号只有 thinking.budget_tokens 形态，需要的话得另做映射）"
+                )
+                return null
+            }
+            // 官方枚举：low / medium / high / xhigh / max。未知值一律不发，
+            // 宁可少发也不要发一个会被服务端拒的枚举。
+            return e.takeIf { it in setOf("low", "medium", "high", "xhigh", "max") }
+        }
+
+        /**
+         * 哪些 Claude 型号支持 `output_config.effort`（2026-10-10 查官方 Effort 页核定）。
+         *
+         * 官方列出的支持型号：Opus 5 全系（含 5.5）、Opus 4.8 / 4.7 / 4.6、Opus 4.5、
+         * Sonnet 5、Sonnet 4.6、Fable 5 / 5.1、Mythos 5 / 5.1、Mythos Preview。
+         * 更老的型号（Opus 4 / 4.1、Sonnet 4 / 4.5、Haiku 全系、3.x 系）**只有
+         * `thinking.budget_tokens` 形态**，发 effort 会 400。
+         *
+         * ## 踩过的坑：别让正则把日期当成版本号
+         *
+         * 最初写成 `(family)[-_.]?(\d+)`，结果 `claude-3-5-sonnet-20241022` 里
+         * 引擎会**跳过** `3-5` 去匹配 `sonnet-20241022`，把日期 `20241022`
+         * 当成 major（≥5 ⇒ 放行）—— 于是一个明确不支持的老型号被判定为支持，
+         * 真发出去就是 400。离线用 26 个用例扫才抓到，光看代码看不出来。
+         *
+         * 所以判据必须**先剥掉日期/版本后缀，再要求版本号紧跟 family 名**：
+         * ① 先循环剥尾（`-20241022` / `@20260101` / `-v1` / `:1`，有的型号日期后又跟 -v1）；
+         * ② 版本号限定 1 位（family 后的第一段永远是 1 位数：4 / 5），
+         *    次段才是真正的 minor，允许 `.5` 和 `-5` 两种写法。
+         */
+        internal fun supportsEffort(model: String): Boolean {
+            var m = model.lowercase()
+            var prev = ""
+            while (prev != m) {
+                prev = m
+                m = m.replace(Regex("""[-_.@]?(?:\d{8}|\d{6}|v\d+(?::\d+)?)$"""), "")
+            }
+            val vm = Regex("""(opus|sonnet|haiku|fable|mythos)[-_.](\d)(?:\.(\d)|[-_.](\d))?""")
+                .find(m) ?: return false
+            val major = vm.groupValues[2].toInt()
+            val minor = (vm.groupValues[3].ifEmpty { vm.groupValues[4] }).takeIf { it.isNotEmpty() }?.toInt() ?: 0
+            return when (vm.groupValues[1]) {
+                "opus" -> major > 4 || (major == 4 && minor >= 5)
+                // sonnet 5 / 4.6 支持；4.5 及更早不支持
+                "sonnet" -> major >= 5 || (major == 4 && minor >= 6)
+                // fable / mythos 仅 5 系
+                "fable", "mythos" -> major >= 5
+                else -> false
+            }
+        }
     }
 
     override suspend fun chatStream(
@@ -294,7 +369,7 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
         val converted = convertMessages(messages)
         val requestJson = HaoJson.json.encodeToString(
             JsonObject.serializer(),
-            buildRequestJson(provider, converted, tools, stream = true)
+            buildRequestJson(provider, converted, tools, stream = true, reasoningEffort = reasoningEffort)
         )
         val builder = Request.Builder()
             .url(url)

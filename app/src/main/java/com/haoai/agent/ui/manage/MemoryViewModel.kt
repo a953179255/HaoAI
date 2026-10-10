@@ -93,6 +93,9 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
         consolidating = true
         viewModelScope.launch {
             var deep = false
+            // m11：CancellationException 被 runCatching 吞掉 ⇒ ViewModel 销毁（用户离开页面）
+            // 后协程仍继续跑完整轮 LLM 固化，中途不可中断、还会往 MEMORY.md 写结果。
+            // 修法：取消异常先行重抛，让协程按结构化并发正常取消；其余异常仍走回退。
             val report = runCatching {
                 val st = c.settingsFlow.value
                 if (st.deepDream && st.memoryEnabled) {
@@ -123,13 +126,21 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
                         com.haoai.agent.platform.WorkspaceDocs.appendDreamReport(c, it, false)
                     }
                 }
-            }.getOrDefault(MemoryConsolidation.Report(0, 0, 0))
+            }.getOrElse { e ->
+                // m11：取消不是"失败"，必须继续往上抛，否则协程被取消后仍往下跑
+                //（写 MEMORY.md、刷 UI、回调 onDone），且这段 LLM 调用不可中断。
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                MemoryConsolidation.Report(0, 0, 0)
+            }
             consolidating = false
             c.syncWorkspaceDocs()
             // 先持久化再刷新：仪表盘的上次固化/备份时间要读到本次结果
             persistConsolidation(report)
             refresh()
             onDone(report.describe())
+        }.also { job ->
+            // m11 补：协程被取消时 consolidating 不会复位，UI 会永久卡在"固化中"再也点不动。
+            job.invokeOnCompletion { consolidating = false }
         }
     }
 

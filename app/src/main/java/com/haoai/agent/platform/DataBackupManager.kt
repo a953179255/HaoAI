@@ -72,6 +72,14 @@ object DataBackupManager {
     const val MANIFEST_NAME = "manifest.json"
     /** 明文 Key 映射里搜索后端的保留前缀（providerId 不可能是这个形状，不会撞）。 */
     internal const val SEARCH_KEY_PREFIX = "search:"
+    /** MCP header 明文映射的 key 形态：`serverId + 本前缀 + headerName`。 */
+    internal const val MCP_HEADER_KEY_PREFIX = "mcp-h:"
+    /** PC 配对 token 在明文映射里的固定 key。 */
+    internal const val PC_TOKEN_KEY = "pc:token"
+    /** MCP header 密文前缀，必须与 McpServerStore.ENC_PREFIX 一致，否则恢复后 load() 认不出。 */
+    private const val MCP_ENC_PREFIX = "enc:"
+    /** PC 配对 token 密文前缀，必须与 PcStore.encPrefix 一致。 */
+    private const val PC_ENC_PREFIX = "enc:v1:"
     private const val PAYLOAD = "payload/"
     private const val KEEP_SNAPSHOTS = 8
 
@@ -91,6 +99,12 @@ object DataBackupManager {
         scopes: Set<BackupScope>,
         includeKeys: Boolean
     ): Result<BackupSummary> = runCatching {
+        // 自检放在开流之前：openOutputStream 已经建好目标文件，中途抛错会留下一个
+        // 0 字节的 .zip 躺在用户选的位置上（用户以为导出成功、实际打不开）。
+        val gaps = auditBackupCoverage(c, scopes).filter { it.startsWith("落盘位置未纳入备份") }
+        if (gaps.isNotEmpty()) {
+            error("备份范围不完整，已中止导出：\n" + gaps.joinToString("\n"))
+        }
         c.appContext.contentResolver.openOutputStream(uri)?.use { out ->
             val s = writeZip(c, out, scopes, includeKeys)
             c.updateSettings { it.copy(lastDataExportAt = System.currentTimeMillis()) }
@@ -212,6 +226,87 @@ object DataBackupManager {
     private fun File.listByPrefix(prefix: String): List<File> =
         listFiles { f -> f.isFile && f.name.startsWith(prefix) }?.sorted().orEmpty()
 
+    /**
+     * **备份范围自检**（2026-10-10 方案 A 落地项）。
+     *
+     * 背景：MCP 服务器配置（`mcp/servers.json`，含鉴权头）与电脑联动配对（`pc-link.json`）
+     * 曾长期不在任何备份域内 —— 换机后要一个个重填。这类漏项的成因不是"忘了写"，
+     * 而是**没有任何机制在新增落盘位置时提醒要同步 backup**：初轮代码审查也是分区并行阅读，
+     * 恰好两边都没人做"落盘位置 × 备份范围"的完整对账。
+     *
+     * 现在把这份对账固化成代码：[expectedCoverage] 是人工维护的"落盘位置 → 应归哪个域"
+     * 清单，与 [fileSources] 的实际输出逐条比对，不一致就抛错 —— 让下次新增落盘位置时
+     * 在编译后第一次导出就炸，而不是等用户换机才发现丢东西。
+     *
+     * 判据刻意保守：清单里列出的路径要么已覆盖，要么**该域根本不会被选择**
+     * （未勾选）时不算漏；只有"这次真要打包、而清单里的文件没进包"才算不一致。
+     */
+    internal fun auditBackupCoverage(c: AppContainer, scopes: Set<BackupScope>): List<String> {
+        val problems = mutableListOf<String>()
+
+        // ① 人工清单里、但 fileSources 没覆盖到的落盘位置。
+        val covered = mutableSetOf<String>()
+        for (scope in BackupScope.entries) {
+            if (scope !in scopes) continue
+            val paths = fileSources(c, scope).map { it.first }.toMutableSet()
+            // SETTINGS 域另有四个走密钥改写、不在 fileSources 里的固定 payload
+            if (scope == BackupScope.SETTINGS) {
+                paths += listOf(
+                    "settings/settings.json",
+                    "settings/mcp/servers.json",
+                    "settings/pc-link.json",
+                    "state/haoai.config.json"
+                )
+            }
+            covered += paths
+        }
+        for ((label, rel) in expectedCoverage) {
+            val inPackage = rel in covered ||
+                rel.removePrefix("payload/") in covered ||
+                covered.any { it.endsWith("/" + rel) || it.endsWith(rel) }
+            if (!inPackage) problems += "落盘位置未纳入备份：$label（期望 $rel，当前所选范围未产出该文件）"
+        }
+
+        // ② 反向：包内出现了清单外的路径 = 有新落盘位置没登记进 expectedCoverage。
+        // 只提示不抛错（新增功能不该让老版本直接崩），但导出摘要会带出去。
+        val known = expectedCoverage.map { it.second }.toSet()
+        for (scope in BackupScope.entries) {
+            if (scope !in scopes) continue
+            for ((path, _) in fileSources(c, scope)) {
+                val bare = path.removePrefix("payload/")
+                if (bare.isEmpty()) continue
+                val registered = known.any { bare == it || bare.endsWith("/" + it) || it.endsWith("/" + bare) }
+                if (!registered) problems += "备份清单未登记的新增文件：$bare（$scope 域，请补进 expectedCoverage）"
+            }
+        }
+        return problems
+    }
+
+    /**
+     * 人工维护的「落盘位置 → 备份相对路径」对照表。
+     *
+     * 新增任何写盘位置（新的 Store / 新的 *.json）时，**必须**在这里登记一行，
+     * 否则 [auditBackupCoverage] 会在导出时报出来。这是有意设计的摩擦。
+     */
+    internal val expectedCoverage: List<Pair<String, String>> = listOf(
+        "模型/搜索 Key 与供应商配置" to "settings/settings.json",
+        "配置桥（config_set 落点）" to "state/haoai.config.json",
+        "工作区文档定位" to "workspace.json",
+        "MCP 服务器（含鉴权头）" to "settings/mcp/servers.json",
+        "电脑联动配对令牌" to "settings/pc-link.json",
+        "会话历史" to "sessions",
+        "长期记忆" to "memory/MEMORY.md",
+        "每日日志" to "memory/journal",
+        "用户档案" to "workspace/USER.md",
+        "梦境报告" to "workspace/DREAMS.md",
+        "技能包" to "skills",
+        "待办清单" to "todos",
+        "用量账本" to "usage",
+        "壁纸" to "extras/wallpaper.img",
+        "工作流" to "extras/workflows",
+        "定时任务" to "extras/schedules.json"
+    )
+
     fun scopeSize(c: AppContainer, scope: BackupScope): Long = when (scope) {
         BackupScope.SETTINGS -> fileSources(c, scope).sumOf { it.second.length() } +
             listOf("settings/settings.json", "state/haoai.config.json")
@@ -239,6 +334,18 @@ object DataBackupManager {
         scopes: Set<BackupScope>,
         includeKeys: Boolean
     ): BackupSummary {
+        // 方案 A 自检：勾选的范围内若存在"该备份却没进包"的落盘位置，直接抛错中止导出。
+        // 宁可不导出，也不能让用户拿着一份"看着成功、其实缺东西"的包去换机。
+        val gaps = auditBackupCoverage(c, scopes)
+        val gapsBlocking = gaps.filter { it.startsWith("落盘位置未纳入备份") }
+        if (gapsBlocking.isNotEmpty()) {
+            throw IllegalStateException(
+                "备份范围不完整，已中止导出：\n" + gapsBlocking.joinToString("\n")
+            )
+        }
+        if (gaps.isNotEmpty()) {
+            android.util.Log.w("HaoBackup", "备份清单待更新：\n" + gaps.joinToString("\n"))
+        }
         val payload = ArrayList<Payload>()
         if (BackupScope.SETTINGS in scopes) {
             val plain = if (includeKeys) plaintextKeys(c) else emptyMap()
@@ -252,6 +359,22 @@ object DataBackupManager {
             File(c.appFilesDir, "state/haoai.config.json").takeIf { it.isFile }?.let {
                 payload += Payload.OfBytes(
                     PAYLOAD + "state/haoai.config.json",
+                    transformSecrets(it.readText(), plain).toByteArray()
+                )
+            }
+            // MCP 服务器配置（2026-10-10 补入）：此前完全不在任何备份域内，换机后所有
+            // MCP 服务器（含鉴权头）要一个个重填。headers 的值在 McpServerStore 里是
+            // enc:密文，换机后旧 Keystore 密钥解不开 ⇒ 含 Key 时注入明文、恢复时重新加密。
+            File(c.appFilesDir, "mcp/servers.json").takeIf { it.isFile }?.let {
+                payload += Payload.OfBytes(
+                    PAYLOAD + "settings/mcp/servers.json",
+                    transformSecrets(it.readText(), plain).toByteArray()
+                )
+            }
+            // 电脑联动配对（2026-10-10 补入）：token 是enc:v1密文，同上。
+            File(c.appFilesDir, "pc-link.json").takeIf { it.isFile }?.let {
+                payload += Payload.OfBytes(
+                    PAYLOAD + "settings/pc-link.json",
                     transformSecrets(it.readText(), plain).toByteArray()
                 )
             }
@@ -361,21 +484,112 @@ object DataBackupManager {
         }
         // 勾选"含 Key"时搜索服务的 key 也要跟着出包——否则换机恢复后要重新逐家粘一遍，
         // 而界面上已经承诺了"包含密钥"
-        val bySearch = s.searchApiKeyCiphers.mapNotNull { (backend, cipher) ->
-            val plain = c.cipher.decrypt(cipher)
-            if (plain.isBlank()) null else SEARCH_KEY_PREFIX + backend to listOf(plain)
+val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (backend, cipher) ->
+      val plain = c.cipher.decrypt(cipher)
+    if (plain.isBlank()) null else SEARCH_KEY_PREFIX + backend to listOf(plain)
+    }.toMap()
+        val byProviderMap: Map<String, List<String>> = byProvider.toMap()
+   return LinkedHashMap<String, List<String>>().apply {
+            putAll(byProviderMap)
+            putAll(bySearch)
+    putAll(mcpAndPcPlaintexts(c))
         }
-        return (byProvider + bySearch).toMap()
+    }
+
+    /**
+     * MCP header 与 PC 配对 token 的明文收集（2026-10-10 随"纳入备份"一并加入）。
+     *
+     * 这两处密钥的存放形态与 provider 不同：MCP 走 `McpServerStore` 自己的 Keystore 盒子
+     * （值带 `enc:` 前缀），PC token 带 `enc:v1:` 前缀。**只有把它们一并解密出包，
+     * 换机恢复后才真的不用重填**——否则备份里躺的还是旧机密文，新机 Keystore 解不开，
+     * 等于没备份。
+     *
+     * 约定用带前缀的 key 传参，与 [SEARCH_KEY_PREFIX] 同风格：
+     * `McpServerConfig.id + MCP_HEADER_KEY_PREFIX + headerName` → 明文。
+     */
+    private fun mcpAndPcPlaintexts(c: AppContainer): Map<String, List<String>> {
+        val out = LinkedHashMap<String, List<String>>()
+        runCatching {
+            val cipher = com.haoai.agent.data.KeystoreCipher()
+            for (srv in com.haoai.agent.agent.mcp.McpServerStore.load()) {
+                for ((hName, hVal) in srv.headers) {
+                    val plain = if (hVal.startsWith("enc:")) cipher.decrypt(hVal.removePrefix("enc:")) else hVal
+                    if (plain.isNotBlank()) out[srv.id + MCP_HEADER_KEY_PREFIX + hName] = listOf(plain)
+                }
+            }
+            val pcFile = File(c.appFilesDir, "pc-link.json")
+            if (pcFile.isFile) {
+                val ep = runCatching {
+                    HaoJson.json.decodeFromString(
+                        com.haoai.agent.platform.PcEndpoint.serializer(), pcFile.readText()
+                    )
+                }.getOrNull()
+                val tok = ep?.token.orEmpty()
+                val plain = if (tok.startsWith("enc:v1:")) cipher.decrypt(tok.removePrefix("enc:v1:")) else tok
+                if (plain.isNotBlank()) out[PC_TOKEN_KEY] = listOf(plain)
+            }
+        }.onFailure {
+            android.util.Log.w("HaoBackup", "收集 MCP/PC 密钥失败，这两处将以密文原样出包：${it.message}")
+        }
+        return out
+    }
+
+    /** 把 MCP header / PC token 的明文写回 JSON（供 [inlineSecrets] 用）。 */
+    private fun inlineMcpSecrets(el: JsonElement, plain: Map<String, List<String>>): JsonElement = when (el) {
+        is JsonArray -> buildJsonArray {
+            el.forEach { item ->
+                if (item is JsonObject) {
+                    val id = (item["id"] as? JsonPrimitive)?.contentOrNull
+                    val headers = item["headers"] as? JsonObject
+                    if (id != null && headers != null && headers.isNotEmpty()) {
+                        add(buildJsonObject {
+                            item.forEach { (k, v) -> if (k != "headers") put(k, v) }
+                            put("headers", buildJsonObject {
+                                headers.forEach { (hName, _) ->
+                                    plain[id + MCP_HEADER_KEY_PREFIX + hName]?.firstOrNull()?.let { put(hName, it) }
+                                }
+                            })
+                        })
+                    } else add(item)
+                } else add(item)
+            }
+        }
+        else -> el
     }
 
     /**
      * 重写 JSON 里的密钥：[plain] 为空就把密钥字段全部剔除；非空则在每个 provider 上
      * 写 `apiKey`/`apiKeyPool` 明文并移除密文字段。递归处理，配置桥那份额外形状也吃得下。
+     *
+     * 2026-10-10 修复（C4）：原实现解析失败时 `?: return text` **整段放行原文**，
+     * 而调用点包含本身就可能躺明文 apiKey 的 `state/haoai.config.json` ⇒ JSON 一旦损坏，
+     * 未脱敏原文直接进备份包。
+     *
+     * 修复不能改成"中止导出"——那会砸掉用户明确勾选的「一键恢复含密钥」。
+     * 正确做法是**按 plain 是否为空分两种保守方向**：
+     * · [plain] 为空（用户要的是不含密钥）：解析失败绝不能放行原文，改用正则逐行兜底剔除。
+     * · [plain] 非空（用户已显式授权明文出包）：明文本就是这趟的目的，放行不构成新增泄露，
+     *   保持原有行为，但补一条日志让"这次导出未经脱敏结构化处理"可追溯。
      */
     internal fun transformSecrets(text: String, plain: Map<String, List<String>>): String {
         val root = runCatching {
             HaoJson.json.parseToJsonElement(text)
-        }.getOrNull() ?: return text      // 解析不动就整段原样带上（宁可多留一份也不静默丢数据）
+        }.getOrNull()
+        if (root == null) {
+            if (plain.isEmpty()) {
+                // 不含密钥路径：脱敏是硬边界，宁可这份文件不带也不能带原文
+                android.util.Log.w(
+                    "HaoBackup",
+                    "配置文件 JSON 损坏，无法结构化脱敏，已按保守策略整份剔除密钥字段"
+                )
+                return regexStripSecrets(text)
+            }
+            android.util.Log.w(
+                "HaoBackup",
+                "配置文件 JSON 损坏；本次导出已勾选含密钥，按原文写出（用户已显式授权）"
+            )
+            return text
+        }
         return HaoJson.json.encodeToString(
             JsonElement.serializer(), if (plain.isEmpty()) stripSecrets(root) else inlineSecrets(root, plain)
         )
@@ -389,6 +603,54 @@ object DataBackupManager {
         else -> el
     }
 
+    /**
+     * 结构化解析失败时的兜底脱敏（2026-10-10 随 C4 一同加入）。
+     *
+     * 用正则而非 JsonElement 是因为此刻 JSON 已经解析不了，唯一的目标是"别把原文带出去"。
+     * 宁可漏掉（极少见的转义形态）也不能像原来那样整段放行。
+     * 覆盖 [SECRET_KEYS] 里全部字段名 + MCP header 的 enc: 密文 + 配对 token。
+     *
+     * ## M1 修复（2026-10-10）
+     *
+     * 原实现只认 `enc:` / `enc:v1:` 前缀的密文，但 headers 里的凭据
+     * **并不保证带这个前缀**：用户可以自己填 `Authorization: Bearer sk-xxx`，
+     * 也可能是历史遗留的明文。这类值既不匹配 enc: 规则、键名也不在
+     * [SECRET_KEYS] 里 ⇒ **原样进备份包**。这是本函数唯一还在漏的路径，
+     * 而且恰恰是方案 A 里用户最在意的"一键恢复模型"配置。
+     *
+     * 修法：`headers` 对象里的每个 value 都是凭据（这是 MCP 协议本身决定的
+     * —— header 就是鉴权载体），整块打码，**保留键名**：用户 restore 后还能
+     * 从 `Authorization` / `X-Api-Key` 这些名字认出是哪个服务，
+     * 不至于对着一堆 `***` 不知道要填什么。
+     *
+     * 只匹配 `{...}` 内不含嵌套花括号的平坦块：真有嵌套时宁可不改
+     * （`enc:` 与 SECRET_KEYS 两条规则仍在生效），也不冒险截断。
+     */
+    private fun regexStripSecrets(text: String): String {
+        var out = text
+        for (key in SECRET_KEYS) {
+            out = Regex("\"$key\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|\\[[^\\]]*\\]|\\{[^}]*\\}|null|true|false|[0-9.]+)")
+                .replace(out, "\"$key\":\"***\"")
+        }
+        // MCP header 与配对 token 是 enc:/enc:v1: 前缀的密文，键名本身不敏感，值必须替换
+        out = Regex("(\"(?:[^\"\\\\]|\\\\.)*\"\\s*:\\s*)\"(?:enc:|enc:v1:)[^\"]*\"")
+            .replace(out) { m -> "${m.groupValues[1]}\"***\"" }
+        // M1：`headers` 里每个 value 都是凭据（含不带 enc: 前缀的明文）。保留键名，只打码值。
+        out = Regex("(\"headers\"\\s*:\\s*\\{)([^{}]*)(\\})")
+            .replace(out) { m ->
+                val masked = Regex("(:\\s*)(\"(?:[^\"\\\\]|\\\\.)*\"|[^,}\\s]+)")
+                    .replace(m.groupValues[2]) { v -> "${v.groupValues[1]}\"***\"" }
+                "${m.groupValues[1]}$masked${m.groupValues[3]}"
+            }
+        return out
+    }
+
+/**
+     * 三种密钥形态各走各的改写（递归处理，配置桥那份额外形状也吃得下）：
+     * 1. provider：`apiKey`/`apiKeyPool` 明文 ↔ `apiKeyCipher`/`apiKeyPoolCiphers`
+     * 2. 搜索后端：`searchApiKeys`(Map backend→明文) ↔ `searchApiKeyCiphers`
+     * 3. MCP servers.json（顶层是数组）：header 明文 ↔ `enc:`密文；PC 配对：`token` 明文 ↔ `enc:v1:`
+     */
     private fun inlineSecrets(el: JsonElement, plain: Map<String, List<String>>): JsonElement = when (el) {
         is JsonObject -> {
             val providers = el["providers"] as? JsonArray
@@ -415,7 +677,9 @@ object DataBackupManager {
                 }
             }
         }
-        is JsonArray -> buildJsonArray { el.forEach { add(inlineSecrets(it, plain)) } }
+        // MCP servers.json 的顶层是数组（List<McpServerConfig>），没有 providers/search 分支，
+        // 必须在这里整体做 header 明文回填，否则含 Key 导出时它仍是 enc: 密文
+        is JsonArray -> buildJsonArray { el.forEach { add(inlineMcpSecrets(it, plain)) } }
         else -> el
     }
 
@@ -489,6 +753,21 @@ object DataBackupManager {
     /**
      * 应用备份包：解包校验全部通过后才逐域落盘——校验不过就整包拒绝，绝不写一半。
      * 恢复完成后必须重启应用：会话/记忆/配置桥的内存缓存与定时器都要重载。
+     *
+     * ## M5 修复（2026-10-10）：多域之间补上回滚
+     *
+     * 原实现逐域顺序直写（SETTINGS → SESSIONS → MEMORY → SKILLS → TASKS → EXTRAS），
+     * 任何一域抛异常都被外层`runCatching` 兜成`Result.failure`，但**前面已落盘的域
+     * 一个都不会撤销**。用户看到的只是"恢复失败"，实际机器上却是半新半旧：
+     * 配置是备份包里的、记忆是备份包里的、会话还是上周的 —— 这种混合状态比
+     * 明确失败更难排查，且用户很可能在不知情的情况下继续用。
+     *
+     * 改成两阶段：[RestoreTx] 在每次覆盖前把目标文件原样备份到临时目录，
+     * 全部成功才commit（删备份）；任一域抛错则rollback（逐个还原，原本不存在的
+     * 文件删掉），把机器恢复到恢复前的样子。
+     *
+     * 成本可接受：恢复是用户手动触发的低频操作，且备份包解压本来就要全量落盘，
+     * 多一份同量级的临时拷贝不改变量级。
      */
     fun restore(c: AppContainer, uri: Uri, scopes: Set<BackupScope>): Result<RestoreSummary> = runCatching {
         val tmp = newRestoreTmp(c)
@@ -499,30 +778,89 @@ object DataBackupManager {
             val applied = scopes.filter { it.name in manifest.scopes }.toSet()
             require(applied.isNotEmpty()) { "所选范围在这份备份包里都不存在" }
             var keys = 0
-            if (BackupScope.SETTINGS in applied) keys += restoreSettings(c, tmp, manifest.keysIncluded)
-            if (BackupScope.SESSIONS in applied)
-                copyTree(File(tmp, "payload/sessions"), c.sessionStore.sessionsDir())
-            if (BackupScope.MEMORY in applied) restoreMemory(c, tmp)
-            if (BackupScope.SKILLS in applied) {
-                val root = runCatching { SkillStore.currentDir() }.getOrNull()
-                if (root != null && (root.isDirectory || root.mkdirs()))
-                    copyTree(File(tmp, "payload/skills"), root)
-            }
-            if (BackupScope.TASKS in applied) {
-                copyTree(File(tmp, "payload/todos"), File(c.appFilesDir, "todos"))
-                copyTree(File(tmp, "payload/usage"), File(c.appFilesDir, "usage"))
-            }
-            if (BackupScope.EXTRAS in applied) {
-                copyTree(File(tmp, "payload/extras/workflows"), File(c.appFilesDir, "workflows"))
-                copyFile(File(tmp, "payload/extras/schedules.json"), File(c.appFilesDir, "schedules.json"))
-                copyFile(
-                    File(tmp, "payload/extras/wallpaper.img"),
-                    WallpaperStore.storedFile(c.appContext)
-                )
+            val tx = RestoreTx(File(tmp, "_rollback"))
+            try {
+                if (BackupScope.SETTINGS in applied) keys += restoreSettings(c, tmp, manifest.keysIncluded, tx)
+                if (BackupScope.SESSIONS in applied)
+                    copyTree(File(tmp, "payload/sessions"), c.sessionStore.sessionsDir(), tx)
+                if (BackupScope.MEMORY in applied) restoreMemory(c, tmp, tx)
+                if (BackupScope.SKILLS in applied) {
+                    val root = runCatching { SkillStore.currentDir() }.getOrNull()
+                    if (root != null && (root.isDirectory || root.mkdirs()))
+                        copyTree(File(tmp, "payload/skills"), root, tx)
+                }
+                if (BackupScope.TASKS in applied) {
+                    copyTree(File(tmp, "payload/todos"), File(c.appFilesDir, "todos"), tx)
+                    copyTree(File(tmp, "payload/usage"), File(c.appFilesDir, "usage"), tx)
+                }
+                if (BackupScope.EXTRAS in applied) {
+                    copyTree(File(tmp, "payload/extras/workflows"), File(c.appFilesDir, "workflows"), tx)
+                    copyFile(File(tmp, "payload/extras/schedules.json"), File(c.appFilesDir, "schedules.json"), tx)
+                    copyFile(
+                        File(tmp, "payload/extras/wallpaper.img"),
+                        WallpaperStore.storedFile(c.appContext),
+                        tx
+                    )
+                }
+                tx.commit()
+            } catch (t: Throwable) {
+                tx.rollback(t)
+                throw t
             }
             RestoreSummary(applied, manifest.items.size, keys)
         } finally {
             tmp.deleteRecursively()
+        }
+    }
+
+    /**
+     * M5：恢复事务。所有覆盖写都在 [record] 留一份原样备份，
+     * [rollback] 逆序还原（目标原本不存在则删除该文件），[commit] 丢弃备份。
+     *
+     * 只记**文件**不记目录：目录本身没有内容，回滚后可能残留空目录，
+     * 但不会有错误的文件留在里面 —— 空目录无害，而记录目录会引入
+     * "本来就有别的文件在同目录"的判断歧义。
+     */
+    internal class RestoreTx(private val backupDir: File) {
+        /** dst绝对路径 -> 该文件在 backupDir 里的备份副本；value 为 null 表示"恢复前不存在"。 */
+        private val undo = LinkedHashMap<String, File?>()
+
+        fun record(dst: File) {
+            val key = dst.absolutePath
+            // 同一文件可能被多个域写（如 sessions 与 extras 交集），只记第一次
+            if (undo.containsKey(key)) return
+            undo[key] = if (dst.isFile) {
+                backupDir.resolve(undo.size.toString()).also { it.parentFile?.mkdirs() }
+                    .also { dst.copyTo(it, overwrite = true) }
+            } else null
+        }
+
+        fun commit() {
+            undo.clear()
+            backupDir.deleteRecursively()
+        }
+
+        fun rollback(cause: Throwable) {
+            var restored = 0
+            var failed = 0
+            // 逆序还原：后面的域先回滚，状态最接近出错时刻
+            for ((dst, backup) in undo.entries.reversed()) {
+                runCatching {
+                    val target = File(dst)
+                    if (backup == null) {
+                        if (target.exists()) target.delete()
+                    } else {
+                        target.parentFile?.mkdirs()
+                        backup.copyTo(target, overwrite = true)
+                    }
+                    restored++
+                }.onFailure { failed++ }
+            }
+            undo.clear()
+            backupDir.deleteRecursively()
+            val detail = if (failed == 0) "已全部还原（$restored 个文件）"
+            else "还原失败 $failed 个文件（其余 $restored 个已还原）"
+            android.util.Log.e("HaoBackup", "恢复失败已回滚：$detail；原始错误：${cause.message}", cause)
         }
     }
 
@@ -602,37 +940,57 @@ object DataBackupManager {
      * 做 JsonObject 手术而不是反序列化成 AppSettings：备份可能来自更新的版本，
      * 未知字段必须原样保留，交给下次启动的迁移逻辑处理。
      */
-    private fun restoreSettings(c: AppContainer, tmp: File, keysIncluded: Boolean): Int {
+    private fun restoreSettings(c: AppContainer, tmp: File, keysIncluded: Boolean, tx: RestoreTx): Int {
         var keys = 0
         val encrypt: (String) -> String? = { plain -> runCatching { c.cipher.encrypt(plain) }.getOrNull() }
-        val settingsSrc = File(tmp, "payload/settings/settings.json")
-        if (settingsSrc.isFile) {
-            val text = settingsSrc.readText()
+        // 三份配置真源：settings.json + haoai.config.json（必须成对）+ MCP/PC 联动（2026-10-10 补入）
+        listOf(
+            "payload/settings/settings.json" to File(c.appFilesDir, "settings/settings.json"),
+            "payload/state/haoai.config.json" to File(c.appFilesDir, "state/haoai.config.json"),
+            "payload/settings/mcp/servers.json" to File(c.appFilesDir, "mcp/servers.json"),
+            "payload/settings/pc-link.json" to File(c.appFilesDir, "pc-link.json")
+        ).forEach { (rel, dest) ->
+            val src = File(tmp, rel)
+            if (!src.isFile) return@forEach
+            val text = src.readText()
             val out = if (keysIncluded) {
-                val (t, n) = reEncryptConfigJson(text, encrypt); keys += n; t
+                val (t, n) = reEncryptConfigJson(text, encrypt)
+                if (t.isEmpty()) {
+                    // reEncryptConfigJson 解析失败会返回空串 = 该文件整体拒收，不落盘
+                    android.util.Log.w("HaoBackup", "跳过恢复损坏的配置：${dest.name}")
+                    return@forEach
+                }
+                keys += n; t
             } else text
-            HaoJson.writeAtomic(File(c.appFilesDir, "settings/settings.json"), out)
-        }
-        val bridgeSrc = File(tmp, "payload/state/haoai.config.json")
-        if (bridgeSrc.isFile) {
-            val text = bridgeSrc.readText()
-            val out = if (keysIncluded) {
-                val (t, n) = reEncryptConfigJson(text, encrypt); keys += n; t
-            } else text
-            HaoJson.writeAtomic(File(c.appFilesDir, "state/haoai.config.json"), out)
+            tx.record(dest)
+            HaoJson.writeAtomic(dest, out)
         }
         return keys
     }
 
     /**
-     * [inlineSecrets] 的逆操作：`apiKey`/`apiKeyPool`/`searchApiKeys` 明文 → 本机密文字段。
-     * [encrypt] 解不出来的 Key（Keystore 异常等）整条剔除——宁可让用户重贴，
-     * 也绝不把明文写进落盘文件。返回改写后的 JSON 与重新加密的 Key 数。
+     * [inlineSecrets] 的逆操作。备份包里的密钥是明文，落盘前必须重新加密；
+     * 同时把明文字段改名为密文字段，与各 Store 的读盘口径对齐：
+     *  - provider：`apiKey` / `apiKeyPool` → `apiKeyCipher` / `apiKeyPoolCiphers`
+     *  - MCP servers.json（顶层数组）：header 明文 → `enc:` 密文
+     *  - PC 配对（pc-link.json）：顶层 `token` 明文 → `enc:v1:` 密文
+     *
+     * 任一密钥加密失败即整条剔除（不落明文）。返回改写后的 JSON 与重新加密的条数。
+     *
+     * 2026-10-10 修复：原先 `?: return text to 0` 让**解析失败时静默跳过重新加密**，
+     * 于是备份包里的明文 Key 原样写进新机的 settings.json（正常路径是会加密的）。
+     * 修法：解析失败一律按最坏情况处理 —— 该文件整体拒收、不落盘，
+     * 宁可不恢复这份配置，也不能把明文落盘。
      */
     internal fun reEncryptConfigJson(text: String, encrypt: (String) -> String?): Pair<String, Int> {
         val root = runCatching { HaoJson.json.parseToJsonElement(text) }.getOrNull()
-            ?: return text to 0
+        if (root == null) {
+            android.util.Log.w("HaoBackup", "备份内配置 JSON 损坏，已整体拒收该文件（不落盘任何内容）")
+            return "" to 0
+        }
         var count = 0
+
+        // provider：apiKey / apiKeyPool 明文 → apiKeyCipher / apiKeyPoolCiphers
         fun providerRe(p: JsonElement): JsonElement {
             if (p !is JsonObject) return p
             val plain = (p["apiKey"] as? JsonPrimitive)?.contentOrNull
@@ -641,8 +999,7 @@ object DataBackupManager {
             if (plain == null && pool.isEmpty()) return p
             return buildJsonObject {
                 p.forEach { (k, v) -> if (k != "apiKey" && k != "apiKeyPool") put(k, v) }
-                val main = plain?.let(encrypt)
-                if (main != null) { put("apiKeyCipher", main); count++ }
+                plain?.let(encrypt)?.let { put("apiKeyCipher", it); count++ }
                 val poolCiphers = pool.mapNotNull(encrypt)
                 if (poolCiphers.isNotEmpty()) {
                     putJsonArray("apiKeyPoolCiphers") { poolCiphers.forEach { add(it) } }
@@ -650,58 +1007,110 @@ object DataBackupManager {
                 }
             }
         }
-        fun walk(el: JsonElement): JsonElement = when (el) {
-            is JsonObject -> buildJsonObject {
-                el.forEach { (k, v) ->
-                    when {
-                        k == "providers" && v is JsonArray ->
-                            putJsonArray("providers") { v.forEach { add(providerRe(it)) } }
-                        k == "searchApiKeys" && v is JsonObject -> {
-                            val out = buildJsonObject {
-                                v.forEach { (backend, key) ->
-                                    val plain = (key as? JsonPrimitive)?.contentOrNull ?: return@forEach
-                                    val cipherText = encrypt(plain) ?: return@forEach
-                                    put(backend, cipherText); count++
-                                }
-                            }
-                            if (out.isNotEmpty()) put("searchApiKeyCiphers", out)
-                        }
-                        else -> put(k, walk(v))
-                    }
+
+        // PC 配对（pc-link.json）：token 明文 → enc:v1: 密文。
+        // encrypt 失败就返回 null —— 调用方把 token 字段整条剔除（PcStore 解不开时
+        // 本来就当"没配对"），宁可不配，也绝不把明文 token 写进落盘文件。
+        fun pcTokenSealed(el: JsonObject): String? {
+            val plain = (el["token"] as? JsonPrimitive)?.contentOrNull
+            if (plain.isNullOrEmpty()) return null
+            val cipherText = encrypt(plain) ?: return null
+            count++
+            return PC_ENC_PREFIX + cipherText
+        }
+
+        // MCP servers.json 的元素形如 {id, headers:{...}}：header 明文 → enc: 密文。
+        // 前缀与 McpServerStore.ENC_PREFIX 一致，恢复后 load() 能直接识别并解密。
+        fun mcpServerRe(item: JsonElement): JsonElement {
+            if (item !is JsonObject) return item
+            val headers = item["headers"] as? JsonObject ?: return item
+            if (headers.isEmpty()) return item
+            val sealed = buildJsonObject {
+                headers.forEach { (hName, hVal) ->
+                    val plain = (hVal as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                    // 加密失败就不带这个 header，绝不落明文
+                    val ct = encrypt(plain) ?: return@forEach
+                    put(hName, MCP_ENC_PREFIX + ct); count++
                 }
             }
-            is JsonArray -> buildJsonArray { el.forEach { add(walk(it)) } }
+            if (sealed.isEmpty()) return item
+            return buildJsonObject {
+                item.forEach { (k, v) -> if (k != "headers") put(k, v) }
+                put("headers", sealed)
+            }
+        }
+
+        fun walk(el: JsonElement): JsonElement = when (el) {
+            // pc-link.json 的顶层就是那个对象本身（token 与 base 同时在场即可判定）。
+            // 它的 token 是顶层字段而非嵌套字段，且加密失败时要整条剔除而非留空，
+            // 所以单独走一支，不混进下面的 providers/searchApiKeys 通用分支。
+            is JsonObject ->
+                if (el["token"] != null && el["base"] != null) {
+                    buildJsonObject {
+                        el.forEach { (k, v) -> if (k != "token") put(k, v) }
+                        pcTokenSealed(el)?.let { put("token", it) }
+                    }
+                } else {
+                    buildJsonObject {
+                        el.forEach { (k, v) ->
+                            when {
+                                k == "providers" && v is JsonArray ->
+                                    putJsonArray("providers") { v.forEach { add(providerRe(it)) } }
+                                k == "searchApiKeys" && v is JsonObject -> {
+                                    val out = buildJsonObject {
+                                        v.forEach { (backend, key) ->
+                                            val plain = (key as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                                            val cipherText = encrypt(plain) ?: return@forEach
+                                            put(backend, cipherText); count++
+                                        }
+                                    }
+                                    if (out.isNotEmpty()) put("searchApiKeyCiphers", out)
+                                }
+                                else -> put(k, walk(v))
+                            }
+                        }
+                    }
+                }
+            // MCP servers.json 顶层是数组（List<McpServerConfig>），元素带 headers 才改写
+            is JsonArray -> buildJsonArray {
+                el.forEach { item ->
+                    if (item is JsonObject && item["headers"] is JsonObject) add(mcpServerRe(item))
+                    else add(walk(item))
+                }
+            }
             else -> el
         }
         return HaoJson.json.encodeToString(JsonElement.serializer(), walk(root)) to count
     }
 
-    private fun restoreMemory(c: AppContainer, tmp: File) {
-        copyFile(File(tmp, "payload/memory/MEMORY.md"), c.memoryBank.storageFile())
+    private fun restoreMemory(c: AppContainer, tmp: File, tx: RestoreTx) {
+        copyFile(File(tmp, "payload/memory/MEMORY.md"), c.memoryBank.storageFile(), tx)
         runCatching { c.journal.currentStorageDir() }.getOrNull()?.let {
-            copyTree(File(tmp, "payload/memory/journal"), it)
+            copyTree(File(tmp, "payload/memory/journal"), it, tx)
         }
         WorkspaceDocs.workspaceRoot(c)?.let { root ->
             listOf("USER.md", "DREAMS.md").forEach { n ->
-                copyFile(File(tmp, "payload/workspace/$n"), root.resolve(n))
+                copyFile(File(tmp, "payload/workspace/$n"), root.resolve(n), tx)
             }
-            copyTree(File(tmp, "payload/workspace/dreaming"), root.resolve("dreaming"))
+            copyTree(File(tmp, "payload/workspace/dreaming"), root.resolve("dreaming"), tx)
         }
     }
 
     /** 单文件还原：源不存在就跳过（一个范围在包里可能只有部分文件），目标父目录自动建。 */
-    private fun copyFile(src: File, dst: File) {
+    private fun copyFile(src: File, dst: File, tx: RestoreTx? = null) {
         if (!src.isFile) return
         dst.parentFile?.mkdirs()
+        tx?.record(dst)
         src.copyTo(dst, overwrite = true)
     }
 
     /** 目录级还原：src 不存在 = 该域在这份包里没有内容，静默跳过。 */
-    private fun copyTree(src: File, dst: File) {
+    private fun copyTree(src: File, dst: File, tx: RestoreTx? = null) {
         if (!src.isDirectory) return
         src.walkTopDown().filter { it.isFile }.forEach { f ->
             val target = dst.resolve(f.relativeTo(src).path)
             target.parentFile?.mkdirs()
+            tx?.record(target)
             f.copyTo(target, overwrite = true)
         }
     }

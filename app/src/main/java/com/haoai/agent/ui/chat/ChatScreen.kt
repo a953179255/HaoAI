@@ -692,23 +692,28 @@ fun ChatScreen(
         androidx.activity.result.contract.ActivityResultContracts.TakePicture()
     ) { ok ->
         if (ok) {
-            runCatching {
-                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                java.io.FileInputStream(cameraShotFile).use {
-                    android.graphics.BitmapFactory.decodeFileDescriptor(it.fd, null, bounds)
+            // 主线程 IO 修复：采样解码 + JPEG 压缩 + base64 都是 CPU 重活
+            //（一张 12MP 照片全流程 200-500ms），拍照回来看着界面冻一下就是这里。
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    java.io.FileInputStream(cameraShotFile).use {
+                        android.graphics.BitmapFactory.decodeFileDescriptor(it.fd, null, bounds)
+                    }
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                    val bmp = android.graphics.BitmapFactory.decodeFile(cameraShotFile.absolutePath, opts)
+                    if (bmp != null) {
+                        val bos = java.io.ByteArrayOutputStream()
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
+                        bmp.recycle()
+                        val dataUrl = "data:image/jpeg;base64," +
+                            android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+                        withContext(Dispatchers.Main.immediate) { pendingImage = dataUrl }
+                    }
+                    cameraShotFile.delete()
                 }
-                var sample = 1
-                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
-                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-                val bmp = android.graphics.BitmapFactory.decodeFile(cameraShotFile.absolutePath, opts)
-                if (bmp != null) {
-                    val bos = java.io.ByteArrayOutputStream()
-                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
-                    bmp.recycle()
-                    pendingImage = "data:image/jpeg;base64," +
-                        android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
-                }
-                cameraShotFile.delete()
             }
         }
     }
@@ -728,44 +733,53 @@ fun ChatScreen(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            runCatching {
-                val resolver = context.contentResolver
-                val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
-                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    c.moveToFirst()
-                    if (nameIndex >= 0) c.getString(nameIndex) else "document"
-                } ?: "document"
-                val mimeType = resolver.getType(uri) ?: "application/octet-stream"
-                val isTextLike = mimeType.startsWith("text/") ||
-                    mimeType == "application/json" ||
-                    mimeType == "application/xml" ||
-                    fileName.endsWith(".kt", true) ||
-                    fileName.endsWith(".java", true) ||
-                    fileName.endsWith(".py", true) ||
-                    fileName.endsWith(".js", true) ||
-                    fileName.endsWith(".ts", true) ||
-                    fileName.endsWith(".html", true) ||
-                    fileName.endsWith(".css", true) ||
-                    fileName.endsWith(".json", true) ||
-                    fileName.endsWith(".xml", true) ||
-                    fileName.endsWith(".md", true) ||
-                    fileName.endsWith(".txt", true) ||
-                    fileName.endsWith(".csv", true) ||
-                    fileName.endsWith(".log", true) ||
-                    fileName.endsWith(".gradle", true) ||
-                    fileName.endsWith(".yaml", true) ||
-                    fileName.endsWith(".yml", true) ||
-                    fileName.endsWith(".toml", true) ||
-                    fileName.endsWith(".properties", true)
-                if (isTextLike) {
-                    val content = resolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
-                    if (content != null) {
-                        pendingDocumentName = fileName
-                        pendingDocumentContent = content
+            // 主线程 IO 修复（2026-10-10）：picker 回调在主线程，原先 query/openInputStream/readText
+            // 全在主线程跑——大文档（几 MB 的 log/csv）会把输入阻塞几百毫秒。挪到 IO 线程，
+            // 状态写回主线程（Compose state 本身线程安全，但保持一致的写线程便于排查）。
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val resolver = context.contentResolver
+                    val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
+                        val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        c.moveToFirst()
+                        if (nameIndex >= 0) c.getString(nameIndex) else "document"
+                    } ?: "document"
+                    val mimeType = resolver.getType(uri) ?: "application/octet-stream"
+                    val isTextLike = mimeType.startsWith("text/") ||
+                        mimeType == "application/json" ||
+                        mimeType == "application/xml" ||
+                        fileName.endsWith(".kt", true) ||
+                        fileName.endsWith(".java", true) ||
+                        fileName.endsWith(".py", true) ||
+                        fileName.endsWith(".js", true) ||
+                        fileName.endsWith(".ts", true) ||
+                        fileName.endsWith(".html", true) ||
+                        fileName.endsWith(".css", true) ||
+                        fileName.endsWith(".json", true) ||
+                        fileName.endsWith(".xml", true) ||
+                        fileName.endsWith(".md", true) ||
+                        fileName.endsWith(".txt", true) ||
+                        fileName.endsWith(".csv", true) ||
+                        fileName.endsWith(".log", true) ||
+                        fileName.endsWith(".gradle", true) ||
+                        fileName.endsWith(".yaml", true) ||
+                        fileName.endsWith(".yml", true) ||
+                        fileName.endsWith(".toml", true) ||
+                        fileName.endsWith(".properties", true)
+                    if (isTextLike) {
+                        val content = resolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+                        if (content != null) {
+                            withContext(Dispatchers.Main.immediate) {
+                                pendingDocumentName = fileName
+                                pendingDocumentContent = content
+                            }
+                        }
+                    } else {
+                        withContext(Dispatchers.Main.immediate) {
+                            pendingDocumentName = fileName
+                            pendingDocumentContent = "[文件附件: $fileName ($mimeType)]"
+                        }
                     }
-                } else {
-                    pendingDocumentName = fileName
-                    pendingDocumentContent = "[文件附件: $fileName ($mimeType)]"
                 }
             }
         }
@@ -777,24 +791,31 @@ fun ChatScreen(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            runCatching {
-                val resolver = context.contentResolver
-                val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
-                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    c.moveToFirst()
-                    if (nameIndex >= 0) c.getString(nameIndex) else "audio.mp3"
-                } ?: "audio.mp3"
-                val dir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
-                val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + fileName.replace(Regex("[^A-Za-z0-9._-]"), "_"))
-                resolver.openInputStream(uri)?.use { ins -> dest.outputStream().use { ins.copyTo(it) } }
-                if (dest.exists() && dest.length() <= 8L * 1024 * 1024) {
-                    pendingAudioPath = dest.absolutePath
-                    pendingAudioName = fileName
-                } else {
-                    dest.delete()
-                    vm.showError("音频过大（>8MB），请先用 shell 工具压缩或截取片段")
+            // 主线程 IO 修复：音频文件可能 8MB，复制挪到 IO 线程
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val resolver = context.contentResolver
+                    val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
+                        val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        c.moveToFirst()
+                        if (nameIndex >= 0) c.getString(nameIndex) else "audio.mp3"
+                    } ?: "audio.mp3"
+                    val dir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
+                    val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + fileName.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+                    resolver.openInputStream(uri)?.use { ins -> dest.outputStream().use { ins.copyTo(it) } }
+                    withContext(Dispatchers.Main.immediate) {
+                        if (dest.exists() && dest.length() <= 8L * 1024 * 1024) {
+                            pendingAudioPath = dest.absolutePath
+                            pendingAudioName = fileName
+                        } else {
+                            dest.delete()
+                            vm.showError("音频过大（>8MB），请先用 shell 工具压缩或截取片段")
+                        }
+                    }
+                }.onFailure {
+                    withContext(Dispatchers.Main.immediate) { vm.showError("读取音频失败：${it.message}") }
                 }
-            }.onFailure { vm.showError("读取音频失败：${it.message}") }
+            }
         }
     }
 
@@ -804,21 +825,29 @@ fun ChatScreen(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            runCatching {
-                val resolver = context.contentResolver
-                val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
-                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    c.moveToFirst()
-                    if (nameIndex >= 0) c.getString(nameIndex) else "video.mp4"
-                } ?: "video.mp4"
-                val dir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
-                val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + fileName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_"))
-                resolver.openInputStream(uri)?.use { ins -> dest.outputStream().use { ins.copyTo(it) } }
-                if (dest.exists()) {
-                    pendingVideoPath = dest.absolutePath
-                    pendingVideoName = fileName
+            // 主线程 IO 修复：视频是三类附件里最大的（几百 MB 级），在主线程整文件复制
+            // 会把界面冻住好几秒甚至触发 ANR。复制挪到 IO 线程，结果回主线程。
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val resolver = context.contentResolver
+                    val fileName = resolver.query(uri, null, null, null, null)?.use { c ->
+                        val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        c.moveToFirst()
+                        if (nameIndex >= 0) c.getString(nameIndex) else "video.mp4"
+                    } ?: "video.mp4"
+                    val dir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
+                    val dest = java.io.File(dir, System.currentTimeMillis().toString() + "_" + fileName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_"))
+                    resolver.openInputStream(uri)?.use { ins -> dest.outputStream().use { ins.copyTo(it) } }
+                    if (dest.exists()) {
+                        withContext(Dispatchers.Main.immediate) {
+                            pendingVideoPath = dest.absolutePath
+                            pendingVideoName = fileName
+                        }
+                    }
+                }.onFailure {
+                    withContext(Dispatchers.Main.immediate) { vm.showError("读取视频失败：${it.message}") }
                 }
-            }.onFailure { vm.showError("读取视频失败：${it.message}") }
+            }
         }
     }
 
@@ -3763,185 +3792,6 @@ private fun ThinkingIndicator(hint: String? = null, turnStartAt: Long = 0L) {
     }
 }
 
-/**
- * ④ 思考过程面板：
- * - live（正文未出）：标题 shimmer「正在思考」，内容只显示约 66dp 的底部渐隐预览，
- *   不再全展开把正文顶出屏幕；
- * - 正文开始（autoCollapse）后自动收起为「💭 已思考 N 秒 ▸」，点击可展开看全文；
- * - 历史消息默认收起，点击展开。
- * v7.7 统一样式：白底 66% + onSurface 10% 描边（与气泡/胶囊同体系，弃灰蓝 surfaceVariant）。
- * v7.7 展开动画 = 方案 3 揭幕式（用户选型）：animateContentSize 撑开容器 +
- * 文字层 graphicsLayer scaleY 揭幕（内容零位移，遮罩自上而下揭开，Notion/Linear 质感）。
- */
-@Composable
-private fun ReasoningPanel(
-    text: String,
-    live: Boolean,
-    autoCollapse: Boolean = false,
-    thinkingMs: Long? = null
-) {
-    var userToggled by rememberSaveable { mutableStateOf(false) }
-    var expanded by rememberSaveable { mutableStateOf(live) }
-    // 正文开始输出时自动收起（除非用户手动展开过）
-    LaunchedEffect(autoCollapse, live) {
-        if (autoCollapse && !userToggled) expanded = false
-    }
-    // live 且未展开全文时：受限高度 + 底部渐隐预览
-    val previewMode = live && !userToggled
-    Surface(
-        // v7.8.9：底色对齐工具胶囊；2026-10-09 起随「气泡/卡片不透明度」滑杆联动
-        // （chatCardAlpha：滑杆 100% 时精确 1.0，低端保 0.80 地板）
-        color = MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()),
-        shape = RoundedCornerShape(16.dp),
-        // v7.7：与气泡/胶囊同体系描边；v7.7.1 统一 8%（原 10% 略深）
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            // v7.8：clickable 移除——只允许标题行响应收起（点按区拆分），
-            // 面板正文完全释放给文本选择/复制
-    ) {
-        Column(
-            // v7.8.8：原 vertical 8dp padding 挪进标题行（见下）——点击区=可见胶囊 1:1
-            Modifier.animateContentSize(
-                animationSpec = androidx.compose.animation.core.tween(300, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
-            )
-        ) {
-            // v7.8.8 标题行改用与 ToolChip 完全相同的链路：clip(胶囊形) + 普通
-            // clickable（默认 ripple）。此前手写高亮（indication=null + drawBehind
-            // 自绘矩形 + 90/380ms 调参）两个顽疾：①18% 灰太淡、快点一下肉眼无反馈；
-            // ②向外扩 8dp 的补偿画在 clip 之外被裁掉，高亮永远比标题栏小一圈。
-            // 改回原生 ripple 后触发时机/颜色/形状与工具胶囊同源天然一致，零调参。
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(
-                        if (expanded) RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
-                        else RoundedCornerShape(16.dp)
-                    )
-                    .clickable { userToggled = true; expanded = !expanded }
-                    // 上下 8dp 在 clip/clickable 内侧 → ripple 与点击区都覆盖到胶囊
-                    // 全缘（含原面板 padding 区），死区随之消失
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Spacer(Modifier.size(12.dp))
-                if (live) {
-                    // 方案A：低频自绘转圈（30Hz），不再用库内全帧率无限动画逼整屏重磨
-                    SlowSpinner(
-                        size = 12.dp,
-                        strokeWidth = 1.6.dp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.size(8.dp))
-                }
-                if (live) {
-                    // 标题 shimmer：渐变高光横扫
-                    val shim by com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
-                    Text(
-                        "正在思考",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.onSurfaceVariant,
-                                    MaterialTheme.colorScheme.primary,
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                ),
-                                start = androidx.compose.ui.geometry.Offset((shim * 2f - 0.5f) * 160f, 0f),
-                                end = androidx.compose.ui.geometry.Offset((shim * 2f + 0.5f) * 160f, 0f)
-                            )
-                        )
-                    )
-                } else {
-                    // 收起态：显示思考用时（有值时），否则「思考过程」
-                    Text(
-                        thinkingMs?.let { "已思考 ${String.format(Locale.US, "%.1f", it / 1000.0)} 秒" }
-                            ?: "思考过程",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Icon(
-                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.size(12.dp))
-            }
-            if (expanded || previewMode) {
-                if (previewMode) {
-                    // live 预览：限高 + 底部渐隐遮罩，内容自动滚到底跟随最新推理
-                    val previewScroll = rememberScrollState()
-                    LaunchedEffect(text) { previewScroll.scrollTo(previewScroll.maxValue) }
-                    // 底部 8dp 补回：原由面板 Column 的 vertical padding 提供（v7.8.8 挪进了标题行）
-                    Box(Modifier.padding(horizontal = 12.dp).padding(top = 5.dp, bottom = 8.dp)) {
-                        Text(
-                            text,
-                            style = MaterialTheme.typography.bodySmall,
-                            lineHeight = 17.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                            modifier = Modifier
-                                .heightIn(max = 66.dp)
-                                .verticalScroll(previewScroll)
-                        )
-                        // 底部渐隐（与面板底色一致）
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .height(28.dp)
-                                .background(
-                                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha())
-                                        )
-                                    )
-                                )
-                        )
-                    }
-                } else {
-                    // v7.8 方案 3（用户选型）：思考竖线 + 浅底——竖线用 colorScheme.primary
-                    // （随设置主题种子色/壁纸取色联动），引文式与正式回复分层
-                    val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                    Box(
-                        Modifier
-                            // bottom 2→10dp：补回原面板 Column 的底部 8dp（v7.8.8 挪进了标题行）
-                            .padding(horizontal = 10.dp)
-                            .padding(top = 6.dp, bottom = 10.dp)
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                            // v7.8.1：只画左侧竖线（border 无 shape 默认四边框——上一版四边
-                            // 全包的 bug）；竖线 = primary 45%，随主题种子/壁纸取色联动
-                            .drawBehind {
-                                drawRect(
-                                    brush = SolidColor(lineColor),
-                                    size = Size(2.5.dp.toPx(), size.height)
-                                )
-                            }
-                            .padding(start = 12.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
-                    ) {
-                        Text(
-                            text,
-                            style = MaterialTheme.typography.bodySmall,
-                            lineHeight = 17.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 private fun StreamingItem(
     streamingText: String?,
@@ -4026,552 +3876,6 @@ private fun StreamingItem(
 /** 工具中文动词行文本（简报已是中文动词层，直接用；空则回退原名）。 */
 private fun toolVerb(tool: com.haoai.agent.ui.UiTool): String =
     tool.brief.ifBlank { tool.name }
-
-/**
- * v7.4.3 胶囊专用动词：只取 brief 第一个「·」前的动词段——旧 toolVerb 返回整个
- * brief（动词+对象全在里），是胶囊里「动词后还拖着一长串对象」导致 ✓ 甩尾的元凶。
- */
-private fun toolVerbOnly(tool: com.haoai.agent.ui.UiTool): String {
-    val b = tool.brief.ifBlank { tool.name }
-    return b.substringBefore('·').trim()
-}
-
-
-/**
- * 思考行（v5 旋钮式 ticker）：spinner/shimmer「正在思考」+ 实时计时 + 旋钮滚动
- * （先从左往右填充，满后持续左滚、中央清晰两侧淡出至透明），点击展开全文。
- * 2 秒无新 token 视为"已思考"。历史消息 live=false 直接静态显示。
- */
-@Composable
-private fun ReasoningRow(
-    text: String,
-    thinkingMs: Long? = null,
-    /** 回合是否真的在跑（历史消息=false：不转圈、不计时、不滚动）。 */
-    live: Boolean = true,
-    /** 秒表起点＝回合起点（换屏回来不从 0 重跳；见 [ElapsedClock]）。 */
-    turnStartAt: Long = 0L
-) {
-    var open by rememberSaveable { mutableStateOf(false) }
-    // 2s 无新内容 → live 语气转"已思考"（仅运行中有意义；历史直接 false）
-    var recentUpdate by remember { mutableStateOf(live) }
-    LaunchedEffect(text) {
-        if (!live) return@LaunchedEffect
-        recentUpdate = true
-        kotlinx.coroutines.delay(2000)
-        recentUpdate = false
-    }
-    val isLive = live && recentUpdate
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-            // v7.7.1：与工具胶囊同体系底+描边（此前是无框裸文本行，与胶囊/气泡不统一）
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
-            .border(
-                1.dp,
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                RoundedCornerShape(16.dp)
-            )
-            .clickable { open = !open }
-            .padding(horizontal = 10.dp, vertical = 7.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // v6.2 形态 C：思考中滚动；思考完（live 转 false）立即停住定格（仍在旋钮形态内，
-            // 不切省略）——只在历史消息（showTicker=false）才走静态省略
-            ReasoningTickerInline(
-                text = text,
-                thinkingMs = thinkingMs,
-                live = isLive,
-                showTicker = true,
-                scrolling = live,
-                turnStartAt = turnStartAt
-            )
-        }
-        AnimatedVisibility(open) {
-            Column {
-                Spacer(Modifier.size(4.dp))
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    lineHeight = 17.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
-                    modifier = Modifier
-                        .heightIn(max = 220.dp)
-                        .verticalScroll(rememberScrollState())
-                )
-            }
-        }
-    }
-    Spacer(Modifier.size(2.dp))
-}
-
-/**
- * 思考 ticker v6.2「旋钮形态 C」（用户选型）：
- * - 文本从左侧开始往右显示（不满一行时静止）；
- * - 超过一行后持续向左滚动（最新内容从右侧进入）；
- * - 形态 C：中央最清晰、向两侧对称渐隐（SpanStyle alpha 曲线，无 draw 蒙版零黑块）；
- * - 思考结束（scrolling=false）滚动立即停住定格，保持渐隐形态；历史消息走静态省略。
- * 须在 RowScope 内调用。
- */
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.ReasoningTickerInline(
-    text: String,
-    thinkingMs: Long? = null,
-    live: Boolean = true,
-    /** 是否渲染 ticker（聚合卡收起态/思考行= true；历史消息=false 走纯省略）。 */
-    showTicker: Boolean = true,
-    /** 滚动跟随开关：思考中 true（跟随尾部）；已思考/历史 false（立即定格）。 */
-    scrolling: Boolean = live,
-    /** 秒表起点＝回合起点（0 时退回本次组合的起点）。别在组合里自己造起点，见 [ElapsedClock]。 */
-    turnStartAt: Long = 0L
-) {
-    // 实时计时（live 时每 100ms 刷新；结束态用定格的 thinkingMs）
-    // 起点同样取回合起点：这一组 composable 现在全仓没有调用点（链卡走 ChainOfThought），
-    // 但它里面藏着一根和 ThinkingIndicator 同款的自造秒表——留着不改，哪天接回去就是同一个缺陷重演。
-    var elapsed by remember { mutableLongStateOf(0L) }
-    if (live) {
-        val localT0 = remember(turnStartAt) { System.currentTimeMillis() }
-        LaunchedEffect(turnStartAt) {
-            while (true) {
-                elapsed = ElapsedClock.ms(turnStartAt, localT0, System.currentTimeMillis())
-                kotlinx.coroutines.delay(100)
-            }
-        }
-    }
-    // shimmer：渐变高光横扫标题（live 时）。by 委托=读取发生在 if(live) 内：
-    // live=false 的历史行零订阅零帧；live 时由 rememberPulse 驱动（方案A：内部
-    // 节流 30Hz，慢速扫动观感不变，出帧减半）
-    val shim by com.haoai.agent.ui.common.rememberPulse(0f, 1f, 1700)
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-        if (live) {
-            // 方案A：低频自绘转圈，替换库内全帧率无限动画（逼帧+整屏重磨双源头）
-            SlowSpinner(
-                size = 11.dp,
-                strokeWidth = 1.5.dp,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.size(6.dp))
-        }
-        if (live) {
-            Text(
-                "正在思考",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.onSurfaceVariant,
-                            MaterialTheme.colorScheme.primary,
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        start = androidx.compose.ui.geometry.Offset((shim * 2f - 0.5f) * 160f, 0f),
-                        end = androidx.compose.ui.geometry.Offset((shim * 2f + 0.5f) * 160f, 0f)
-                    )
-                )
-            )
-            Spacer(Modifier.size(5.dp))
-            Text(
-                String.format(Locale.US, "%.1fs", elapsed / 1000.0),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-            )
-        } else {
-            Text(
-                "已思考",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (thinkingMs != null) {
-                Spacer(Modifier.size(4.dp))
-                Text(
-                    String.format(Locale.US, "%.1fs", thinkingMs / 1000.0),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            }
-        }
-        Spacer(Modifier.size(8.dp))
-        // v6.2 旋钮形态 C（用户选型）：中央最清晰、向两侧对称渐隐。
-        // 实现：文字 SpanStyle alpha 逐字符上色（无 draw 蒙版——DstIn 黑带两轮教训），
-        // alpha 曲线中段最实、两端淡出；文字始终跟随尾部（新内容从右进入）。
-        // 思考结束（scrolling=false）滚动立即定格：文本不再移动，渐隐形态保留。
-        if (showTicker) {
-            val hscroll = rememberScrollState()
-            // 只在滚动期跟随尾部；定格后不再动（text 变化也不触发）
-            LaunchedEffect(text, scrolling) {
-                if (scrolling) hscroll.scrollTo(hscroll.maxValue)
-            }
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(16.dp)
-            ) {
-                // 尾部窗口：思考中取 120 字符；定格后取定格瞬间的尾部（text 不再变）
-                val tailText = text.takeLast(120)
-                val base = MaterialTheme.colorScheme.onSurfaceVariant
-                val primaryC = MaterialTheme.colorScheme.primary
-                // v9 方案S 同步（用户选型）：ticker 右端新进入的字符也走「主题色墨滴→
-                // 翻转正文色」双色两段（与正文流式同一动效语言）。右端 16 字符为动效区，
-                // 按字符索引哈希派生随机翻转延迟（重组稳定，不重掷）。
-                // 思考结束（scrolling=false）立即定格：不再做动效，直接静态 alpha 曲线。
-                var tickerAt by remember { mutableLongStateOf(0L) }
-                var tickerLen by remember { mutableStateOf(-1) }
-                if (scrolling && tailText.length != tickerLen) {
-                    tickerLen = tailText.length
-                    tickerAt = System.currentTimeMillis()
-                }
-                var tickerNow by remember { mutableLongStateOf(0L) }
-                if (scrolling) {
-                    LaunchedEffect(tailText.length) {
-                        val startAt = System.currentTimeMillis()
-                        while (true) {
-                            tickerNow = System.currentTimeMillis()
-                            if (tickerNow - startAt > 480) break
-                            kotlinx.coroutines.delay(32)
-                        }
-                    }
-                }
-                val ann = buildAnnotatedString {
-                    append(tailText)
-                    // 形态 C alpha 曲线：左端 28% 淡入（0→0.85），右端 18% 淡出
-                    // （0.85→0.12）——右侧是"正在离开"的方向，略保留可见度
-                    val n = tailText.length
-                    val effectStart = (n - 16).coerceAtLeast(0)
-                    val baseAlpha = { i: Int ->
-                        val t = if (n <= 1) 1f else i.toFloat() / (n - 1)
-                        when {
-                            t < 0.28f -> (t / 0.28f) * 0.85f
-                            t > 0.82f -> 0.85f - ((t - 0.82f) / 0.18f) * 0.73f
-                            else -> 0.85f
-                        }.coerceIn(0f, 0.85f)
-                    }
-                    if (scrolling) {
-                        for (i in 0 until n) {
-                            if (i < effectStart) {
-                                addStyle(SpanStyle(color = base.copy(alpha = baseAlpha(i))), i, i + 1)
-                            } else {
-                                // 动效区：随机延迟淡入 + 主题色→正文色翻转
-                                val seed = i * 2654435761L
-                                val d = ((seed ushr 16) % 121).toInt()          // 0..120ms 淡入延迟
-                                val f = 140 + ((seed ushr 8) % 121).toInt()      // 140..260ms 翻转延迟
-                                val age = tickerNow - tickerAt - d
-                                val aIn = if (age <= 0f) 0f else (age / 160f).coerceIn(0f, 1f)
-                                val alpha = 0.85f * aIn
-                                if (alpha <= 0.02f) {
-                                    addStyle(SpanStyle(color = base.copy(alpha = baseAlpha(i) * 0.1f)), i, i + 1)
-                                } else {
-                                    val flipAge = age - f
-                                    val col = if (flipAge <= 0f) primaryC.copy(alpha = 0.8f)
-                                    else androidx.compose.ui.graphics.lerp(primaryC, base, (flipAge / 200f).coerceIn(0f, 1f))
-                                    addStyle(SpanStyle(color = col.copy(alpha = alpha)), i, i + 1)
-                                }
-                            }
-                        }
-                    } else {
-                        // 定格/历史：纯 alpha 曲线（v6.2 形态 C 原样）
-                        for (i in 0 until n) {
-                            addStyle(SpanStyle(color = base.copy(alpha = baseAlpha(i))), i, i + 1)
-                        }
-                    }
-                }
-                Text(
-                    ann,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.horizontalScroll(hscroll)
-                )
-            }
-        } else {
-            // 历史/已思考：静态单行省略（无蒙版无滚动，与卡片同底无色差）
-            Text(
-                text,
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-/**
- * v7.5 方案 3：智能缩写对象——按工具类型做「可辨认的缩写」而非硬截断：
- * URL → 只留域名（lpl.qq.com）；命令 → 前段（curl -s --max-time 10）；
- * 查询词/其余 → 首尾保留 16 字符。比一律 take(12) 可读性高一个档次。
- */
-private fun smartObj(tool: com.haoai.agent.ui.UiTool): String {
-    val raw = toolObjPreview(tool)
-    val obj = raw.trim().removeSurrounding("「", "」").ifBlank { raw.trim() }
-    return when {
-        // URL：协议去掉，路径很长只留域名+首段路径
-        obj.startsWith("http://") || obj.startsWith("https://") -> {
-            val noProto = obj.substringAfter("://")
-            val host = noProto.substringBefore('/')
-            val path = noProto.substringAfter('/', "")
-            if (path.isBlank()) host
-            else host + "/" + path.substringBefore('?').take(14) + if (path.length > 14) "…" else ""
-        }
-        // 命令：前 24 字符（通常参数头都在前段）
-        tool.name == "bash" || tool.name == "shell" ->
-            obj.take(24) + if (obj.length > 24) "…" else ""
-        // 其余（查询词、文件路径等）：16 字符
-        else -> obj.take(16) + if (obj.length > 16) "…" else ""
-    }
-}
-
-/**
- * v7.3 方案 B（用户选型）：行内工具小胶囊——状态点 + 中文动词加粗 + 对象 + 状态标。
- * v7.5 方案 3：单行放宽到 ~92% 行宽，对象超长时胶囊内**横向滚动**查看全文
- * （点击即滚，不再狠截认不出）；点击展开参数/结果明细改为长按（避免与滚动冲突）。
- * 运行中蓝点呼吸，完成绿点+✓，失败红点+⚠。
- */
-@Composable
-private fun InlineToolPill(
-    tool: com.haoai.agent.ui.UiTool,
-    live: Boolean,
-    onViewDiff: (String) -> Unit = {},
-    onStopRun: () -> Unit = {},
-    /** P2：终止单个运行中的子代理（参数=句柄 id）。 */
-    onStopSubagent: (String) -> Unit = {}
-) {
-    var expanded by rememberSaveable(tool.callId) { mutableStateOf(false) }
-    val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
-    val isRunning = tool.state == ToolRunState.RUNNING && live
-    val isError = tool.state == ToolRunState.ERROR
-    Column(
-        Modifier
-            .fillMaxWidth()
-            // v7.4.1：调用方（AssistantBlock/StreamingItem 的 Column）已提供 14dp 水平
-            // padding——这里不能再加（双重 14dp = 胶囊比气泡缩进 14dp 的对齐 bug）。
-            // v7.6.1 间隔统一：胶囊 vertical=2dp → 胶囊-胶囊 4dp、气泡-胶囊 5+2=7dp
-            // 仍不等——气泡列顶部配 3dp 上间距（见调用处 spacing 修复），全局节奏 4dp。
-            .padding(vertical = 2.dp)
-    ) {
-        // 胶囊本体：宽度上限 92% 行宽（fillMaxWidth 上限比例用 BoxWithConstraints 处理）
-        BoxWithConstraints {
-            val maxW = maxWidth * 0.92f
-            Row(
-                Modifier
-                    .widthIn(max = maxW)
-                    .clip(RoundedCornerShape(16.dp))
-                    // 实底surface + 细描边——花壁纸上文字可读
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
-                        RoundedCornerShape(16.dp)
-                    )
-                    .combinedClickable(
-                        onClick = { if (!isRunning) expanded = !expanded },
-                        onLongClick = { if (!isRunning) expanded = true }
-                    )
-                    .padding(horizontal = 11.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 状态点：运行中蓝色呼吸 / 完成绿色 / 失败红色
-                when {
-                    isRunning -> {
-                        val pulse by com.haoai.agent.ui.common.rememberPulse(0.35f, 1f, 900)
-                        Box(
-                            Modifier
-                                .size(7.dp)
-                                .graphicsLayer { alpha = pulse }
-                                .background(MaterialTheme.colorScheme.primary, CircleShape)
-                        )
-                    }
-                    isError -> Box(
-                        Modifier
-                            .size(7.dp)
-                            .background(MaterialTheme.colorScheme.error, CircleShape)
-                    )
-                    else -> Box(
-                        Modifier
-                            .size(7.dp)
-                            .background(Color(0xFF7BD88F), CircleShape)
-                    )
-                }
-                Spacer(Modifier.size(7.dp))
-                // 动词：只取 brief 第一个 · 前的动词段
-                Text(
-                    toolVerbOnly(tool),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
-                // v7.5 方案 3：对象超长时胶囊内横向滚动（scrollTo 跟尾），✓ 固定在右
-                val fullObj = smartObj(tool)
-                val rawObj = toolObjPreview(tool).trim()
-                if (fullObj.isNotBlank()) {
-                    Spacer(Modifier.size(5.dp))
-                    val hscroll = rememberScrollState()
-                    var pillMax by remember { mutableIntStateOf(0) }
-                    LaunchedEffect(rawObj) {
-                        // 内容变化时滚到尾部（最新内容可见），停留 1.2s 后回头部
-                        hscroll.scrollTo(hscroll.maxValue)
-                        kotlinx.coroutines.delay(1200)
-                        hscroll.animateScrollTo(0)
-                    }
-                    Text(
-                        fullObj,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .horizontalScroll(hscroll)
-                    )
-                }
-                Spacer(Modifier.size(6.dp))
-                // 状态标：完成 ✓ / 失败 ⚠；运行中不显示（呼吸点即状态）
-                if (!isRunning) {
-                    Text(
-                        if (isError) "⚠" else "✓",
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isError) MaterialTheme.colorScheme.error
-                        else Color(0xFF3FAE5C).copy(alpha = 0.85f)
-                    )
-                }
-            }
-        }
-        // P1/P2：spawn 工具的逐路子代理状态——运行中常显（含当前工具与终止按钮），
-        // 结束后点胶囊展开仍可回看
-        val showSubs = tool.subagents.isNotEmpty() && (isRunning || expanded)
-        androidx.compose.animation.AnimatedVisibility(showSubs) {
-            Column(Modifier.padding(start = 14.dp, top = 2.dp)) {
-                tool.subagents.forEach { sub ->
-                    val subColor = when (sub.state) {
-                        "RUNNING" -> MaterialTheme.colorScheme.primary
-                        "DONE" -> Color(0xFF7BD88F)
-                        "STOPPED" -> Color(0xFFFFC46B)
-                        else -> MaterialTheme.colorScheme.error
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                    ) {
-                        if (sub.state == "RUNNING") {
-                            Box(
-                                Modifier
-                                    .size(7.dp)
-                                    .graphicsLayer {
-                                        alpha = 0.55f + 0.45f * (System.currentTimeMillis() % 900 / 900f)
-                                    }
-                                    .background(subColor, CircleShape)
-                            )
-                        } else {
-                            Box(
-                                Modifier
-                                    .size(7.dp)
-                                    .background(subColor, CircleShape)
-                            )
-                        }
-                        Spacer(Modifier.size(6.dp))
-                        Text(
-                            "子代理 ${sub.index}/${sub.total}" + if (sub.id.isNotEmpty()) " · ${sub.id}" else "",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.size(6.dp))
-                        Text(
-                            sub.brief,
-                            fontSize = 10.5.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (sub.tokensUsed > 0) {
-                            Spacer(Modifier.size(5.dp))
-                            Text(
-                                fmtTokens(sub.tokensUsed.toInt()) + " tok",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        }
-                        if (sub.state == "RUNNING" && sub.id.isNotEmpty()) {
-                            androidx.compose.material3.IconButton(
-                                onClick = { onStopSubagent(sub.id) },
-                                modifier = Modifier.size(22.dp)
-                            ) {
-                                androidx.compose.material3.Icon(
-                                    androidx.compose.material.icons.Icons.Filled.Close,
-                                    contentDescription = "终止子代理 ${sub.id}",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // 展开明细：参数/结果（运行中不展开——数据未定型）
-        AnimatedVisibility(expanded && !isRunning) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 14.dp, top = 4.dp, bottom = 4.dp)
-            ) {
-                if (canReview) {
-                    Text(
-                        "查看变更",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onViewDiff(tool.callId) }
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                    Spacer(Modifier.size(3.dp))
-                }
-                Text(
-                    toolBriefDetail(tool),
-                    fontSize = 10.5.sp,
-                    lineHeight = 15.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 140.dp)
-                        .verticalScroll(rememberScrollState())
-                )
-            }
-        }
-    }
-}
-
-/** 工具对象预览（胶囊内显示）：取 brief 第一个 · 后、下一个 · 前的第一段对象。 */
-private fun toolObjPreview(tool: com.haoai.agent.ui.UiTool): String {
-    val brief = tool.brief
-    if (!brief.contains("·")) return ""
-    val after = brief.substringAfter('·').trim()
-    // 多段简报（A · B · C）只取第一段
-    return after.substringBefore('·').trim()
-}
-
-/** 胶囊展开明细：完整简报 + 状态。 */
-private fun toolBriefDetail(tool: com.haoai.agent.ui.UiTool): String {
-    val st = when (tool.state) {
-        ToolRunState.RUNNING -> "执行中"
-        ToolRunState.ERROR -> "失败"
-        else -> "已完成"
-    }
-    return "[${tool.name}] $st\n${tool.brief.ifBlank { "（无详情）" }}"
-}
-
 
 // 批：气泡/卡片不透明度统一映射已抽至 BubbleOpacity.kt（chatBubbleAlphas / chatCardAlpha）。
 
@@ -6162,39 +5466,6 @@ private fun ActionCell(
     }
 }
 
-@Composable
-private fun MessageActionItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    enabled: Boolean,
-    danger: Boolean = false,
-    onClick: () -> Unit
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = (if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-                .copy(alpha = if (enabled) 1f else 0.35f),
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.size(14.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (danger) FontWeight.SemiBold else FontWeight.Normal,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (enabled) 0.88f else 0.35f),
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
 
 /** 提取 Markdown 源码中的围栏代码块（语言, 代码）。 */
 private fun codeBlocks(text: String): List<Pair<String, String>> {

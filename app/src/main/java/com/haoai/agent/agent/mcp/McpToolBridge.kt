@@ -25,7 +25,7 @@ class McpTool(
 ) : Tool {
 
     override val name: String =
-        "mcp_${manager.shortNameOf(cfg)}_${sanitize(info.name)}"
+        "mcp_${manager.shortNameOf(cfg)}_${manager.sanitizeToolName(info.name)}"
 
     override val desc: String = buildString {
         append("[MCP·${cfg.name}] ")
@@ -53,11 +53,6 @@ class McpTool(
 
     override suspend fun run(args: JsonObject, ctx: ToolContext): ToolResult =
         manager.callTool(cfg.id, info.name, args)
-
-    private fun sanitize(raw: String): String =
-        raw.map {
-            if ((it.isLetterOrDigit() && it.code < 128) || it == '_' || it == '-') it else '_'
-        }.joinToString("").ifBlank { "tool" }
 
     private companion object {
         val DEFAULT_PARAMS: JsonObject = buildJsonObject {

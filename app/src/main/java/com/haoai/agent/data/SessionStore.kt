@@ -130,11 +130,18 @@ data class StoredSession(
          * 尾部"已发起、无结果"的工具调用。
          *
          * 从末尾往回扫：遇到的 tool 结果先记账，遇到带调用的 assistant 就把没人应答的调用
-         * 报出来；碰到纯文本回答或用户消息就到此为止（更早的轮次已经闭合）。
+         * 报出来；碰到纯文本回答、用户消息，或**调用已全部应答的 assistant**就到此为止
+         * （更早的轮次已经闭合）。
          *
          * 为什么必须把它们揪出来：构建请求时 pairSanitized 会把"调用没有结果"的那条
-         * assistant 整条丢出去（供应商以 400 拒绝孤儿 tool 消息），于是中断前那一轮做了
+         * assistant 整条丢出去（供应商以 400 拒绝孤儿 tool消息），于是中断前那一轮做了
          * 什么对模型**完全不可见**；而那次调用的副作用可能已经发生（写文件、下命令）。
+         *
+         * m13：原先只在"open 非空"时返回，open 为空（该轮已被 [AgentEngine.closeDanglingCalls]
+         * 补过、或本来就正常闭合）时**继续往更早的历史扫**。多次续跑时会把远古轮次遗留的
+         * 悬空调用找出来，而closeDanglingCalls 是把补的消息 append 到**当前尾部**——
+         * 结果消息与它的 assistant 调用在历史里隔了十万八千里，配对关系反而被打乱。
+         * 修法：assistant 的调用全部有结果 = 这一轮闭合，立即终止扫描。
          */
         fun danglingCalls(messages: List<StoredMessage>): List<StoredToolCall> {
             val answered = HashSet<String>()
@@ -144,7 +151,8 @@ data class StoredSession(
                     m.role == ChatMessage.ROLE_TOOL -> m.toolCallId?.let { answered += it }
                     m.role == ChatMessage.ROLE_ASSISTANT && m.toolCalls.isNotEmpty() -> {
                         val open = m.toolCalls.filter { it.id !in answered }
-                        if (open.isNotEmpty()) return open
+                        // 这一轮闭合（有结果或已补过）⇒ 更早的轮次不在本次恢复范围内
+                        return open
                     }
                     else -> return emptyList()
                 }
@@ -401,7 +409,11 @@ class SessionStore(private val dir: File) {
         // 快照：引擎随时会向 session.messages 追加消息，后台序列化必须基于不可变快照
         val snapshot = session.copy(messages = session.messages.toMutableList())
         latest[session.id] = session
-        diskCache[session.id] = snapshot.updatedAt to snapshot
+// M9：写入侧不再用业务字段 updatedAt 做版本戳，统一用文件 mtime
+        // （读取侧 allStored/get 比对的就是它）。原先写 updatedAt、读 lastModified，
+        // 两者取值不同 ⇒ 缓存从未命中。详见 save() 里的注释。
+   // 注：save 后紧接着的读取走上面那行 latest[id] 短路，不依赖 diskCache，
+        // 所以"文件尚未落地"这个窗口本来就不经过这里，不会因此读到旧值。
         pending[session.id] = snapshot
         if (!drainScheduled) {
             drainScheduled = true
@@ -420,18 +432,22 @@ class SessionStore(private val dir: File) {
         return pending.remove(id)
     }
 
-    private fun drainPending() {
-        while (true) {
+private fun drainPending() {
+      while (true) {
             val snapshot = takePending() ?: return
-            if (snapshot.id in tombstones) continue
+          if (snapshot.id in tombstones) continue
             writes.incrementAndGet()
-            runCatching {
-                HaoJson.writeAtomic(
-                    fileOf(snapshot.id),
-                    HaoJson.json.encodeToString(StoredSession.serializer(), snapshot)
-                )
-                writtenRevision[snapshot.id] = snapshot.revision
-            }
+        runCatching {
+        HaoJson.writeAtomic(
+        fileOf(snapshot.id),
+       HaoJson.json.encodeToString(StoredSession.serializer(), snapshot)
+    )
+      writtenRevision[snapshot.id] = snapshot.revision
+                // M9：写盘落地后回填 diskCache，版本戳用**文件真实 mtime**（读取侧比对的也是它）。
+         // 不回填的话，save 之后磁盘缓存里没有对应条目，列表刷新会把每个会话重解析一遍
+            // —— 那正是这个缓存当初要消除的开销。
+     runCatching { diskCache[snapshot.id] = fileOf(snapshot.id).lastModified() to snapshot }
+     }
         }
     }
 

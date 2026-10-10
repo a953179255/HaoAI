@@ -109,8 +109,17 @@ object McpManager {
     /** 供 McpToolBridge 生成工具全名（与本地注册一致）。 */
     fun shortNameOf(cfg: McpServerConfig): String = shortName(cfg)
 
-    private fun sanitizeToolName(raw: String): String =
-        raw.map { if (it.isLetterOrDigit() || it == '_' || it == '-') it else '_' }
+    /**
+     * 远端工具名 → 本地安全的 ASCII 标识符片段。
+     *
+     * m10：这段逻辑原先在 [McpToolBridge] 与本文件各写了一份，且口径不同 ——
+     * Bridge 侧额外限制 `code < 128`，Manager 侧没有。遇到中文/重音工具名时两边会
+     * 算出**不同的全名**，于是 [readToolNames] 里那条免审批记录永远匹配不上
+     * 实际注册的工具，"read 级工具免批准"静默失效。
+     * 现统一到本函数（非 ASCII 一律替换），McpToolBridge 走同一入口。
+     */
+    fun sanitizeToolName(raw: String): String =
+        raw.map { if ((it.isLetterOrDigit() && it.code < 128) || it == '_' || it == '-') it else '_' }
             .joinToString("").ifBlank { "tool" }
 
     /** 服务器下应注册的本地工具全名（mcp_<短名>_<工具名>）。 */
@@ -293,6 +302,10 @@ object McpManager {
             servers = servers.map { if (it.id == serverId) edit(it) else it }
             McpServerStore.save(servers)
         }
+        // m9：toolCache 是 readToolNames 的数据源（经toolNamesFor），回写缓存后必须重算，
+        // 否则该服务器设为 read 级时，本轮 tools/list 刚拿到的工具要等到下次配置变化
+        // 才进免审批名单 —— 表现为"刚连上就被多问一次批准"。
+        refreshDerived()
     }
 
     // ---------- 工具桥 ----------

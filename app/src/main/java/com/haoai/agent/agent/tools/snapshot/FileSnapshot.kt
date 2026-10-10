@@ -49,7 +49,13 @@ object FileSnapshot {
         File(d, "$callId.after").writeText(after)
         val meta = Meta(callId, path, System.currentTimeMillis(), after.toByteArray(Charsets.UTF_8).size)
         manifest(d).appendText(json.encodeToString(Meta.serializer(), meta) + "\n")
-        enforceRetention(d)
+        // M8：filesDir 必须显式传，不能靠 d.parentFile 反推 ——
+        // d = filesDir/snapshots/<sessionId>，d.parentFile 是 filesDir/snapshots，
+        // 再进 listSession(filesDir=那个, sessionId=d.name) 就会去找
+        // filesDir/snapshots/snapshots/<sessionId>/manifest.jsonl —— 该路径永不存在，
+        // listSession 返回空列表 ⇒ enforceRetention 第一行就 return，
+        // MAX_PER_SESSION / MAX_TOTAL_BYTES 两条上限从未生效，快照目录无界增长。
+        enforceRetention(filesDir, sessionId, d)
     }
 
     /** 读某次变更的快照：返回 (元数据, before?, after)。 */
@@ -99,7 +105,8 @@ object FileSnapshot {
     }
 
     /** 保留策略：每会话 200 个或总量 50MB，超限淘汰最旧（含 manifest 行与文件）。 */
-    private fun enforceRetention(d: File) {        val metas = listSession(d.parentFile ?: return, d.name).toMutableList()
+    private fun enforceRetention(filesDir: File, sessionId: String, d: File) {
+        val metas = listSession(filesDir, sessionId).toMutableList()
         if (metas.isEmpty()) return
         val totalBytes = metas.sumOf { it.bytes.toLong() }
         var overflow = metas.size > MAX_PER_SESSION || totalBytes > MAX_TOTAL_BYTES
@@ -114,10 +121,11 @@ object FileSnapshot {
                 metas.sumOf { it.bytes.toLong() } > MAX_TOTAL_BYTES
         }
         if (removed.isNotEmpty()) {
-            m(d).writeText(metas.joinToString("\n") { json.encodeToString(Meta.serializer(), it) })
+   // 末尾必须补换行：manifest 是追加式（snapshot 里appendText(line + "\n")），
+    // 重写时若不留尾换行，下一条新记录会黏到最后一行末尾 → 整份 JSONL 解析失败 →
+      // listSession 返回空列表 → 淘汰逻辑与 read/rollback 全部失效（这正是 M8 修好
+      // 路径之后立刻暴露出来的第二个 bug：策略"终于开始执行"后，第一次淘汰就把自己写坏了）。
+  manifest(d).writeText(metas.joinToString(separator = "\n", postfix = "\n") { json.encodeToString(Meta.serializer(), it) })
         }
     }
-
-    // manifest() 返回 File，这里包一层避免表达式重排
-    private fun m(d: File) = manifest(d)
 }

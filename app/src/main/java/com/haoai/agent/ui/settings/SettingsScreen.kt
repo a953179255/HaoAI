@@ -2630,6 +2630,18 @@ private fun LazyListScope.generalItems(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
                     modifier = Modifier.padding(top = 4.dp)
                 )
+                // 2026-10-10：勾选含密钥时必须明示范围 —— 备份包里躺的是**可直接用的明文**，
+                // 用户以前只看到「包含」两个字，不知道模型 Key / 搜索 Key / MCP 鉴权头 /
+                // 电脑联动配对令牌全在包里（后两项是本次才纳入备份的）。
+                if (vm.backupIncludeKeys()) {
+                    Text(
+                        "包内含明文：模型 API Key、搜索服务 Key、MCP 服务器鉴权头、电脑联动配对令牌。" +
+                            "请存到只有你能打开的位置；恢复时会自动用本机密钥重新加密落盘。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
         }
     }
@@ -2833,8 +2845,20 @@ private fun LazyListScope.generalItems(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("配置桥状态", style = MaterialTheme.typography.bodyMedium)
+                        // 主线程 IO 修复（2026-10-10）：原先直接在 Composable body 里调
+                        // vm.configFileStatus()——它内部读 config-bridge.log，
+                        // 设置页每次重组（开关一个设置、键盘弹出等）都会同步读一次盘。
+                        // 改成异步加载一次；配置桥日志只在 config_set 时变，进页刷新足够。
+                        val cfgStatus = remember {
+                            androidx.compose.runtime.mutableStateOf("…")
+                        }
+                        androidx.compose.runtime.LaunchedEffect(Unit) {
+                            cfgStatus.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                vm.configFileStatus()
+                            }
+                        }
                         Text(
-                            "最近应用：${vm.configFileStatus()}",
+                            "最近应用：${cfgStatus.value}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             maxLines = 2

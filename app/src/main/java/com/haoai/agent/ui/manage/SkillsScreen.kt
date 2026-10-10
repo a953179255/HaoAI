@@ -421,19 +421,34 @@ fun SkillsScreen(
                                 com.haoai.agent.ui.common.GlassTextButton(
                                     text = "查看",
                                     backdrop = localBackdrop,
-                                    onClick = { viewBody = s.name to (store.view(s.name) ?: "") }
+                                    // 主线程 IO 修复（2026-10-10）：store.view 内部是
+                                    // 读 SKILL.md + 写使用统计 meta 两次盘操作，点一下卡一下。
+                                    onClick = {
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val body = store.view(s.name) ?: ""
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                                                viewBody = s.name to body
+                                            }
+                                        }
+                                    }
                                 )
                                 com.haoai.agent.ui.common.GlassTextButton(
                                     text = "导出",
                                     backdrop = localBackdrop,
+                                    // 主线程 IO 修复：读文件挪到 IO 线程；
+                                    // exportLauncher.launch 必须回主线程（Activity Result API 要求）。
                                     onClick = {
-                                        val text = runCatching {
-                                            java.io.File(
-                                                context.filesDir, "skills/${s.name}/SKILL.md"
-                                            ).readText()
-                                        }.getOrDefault("")
-                                        pendingExport = s.name to text
-                                        exportLauncher.launch("${s.name}.md")
+                                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val text = runCatching {
+                                                java.io.File(
+                                                    context.filesDir, "skills/${s.name}/SKILL.md"
+                                                ).readText()
+                                            }.getOrDefault("")
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                                                pendingExport = s.name to text
+                                                exportLauncher.launch("${s.name}.md")
+                                            }
+                                        }
                                     }
                                 )
                                 IconButton(onClick = { pendingDelete = s.name }) {

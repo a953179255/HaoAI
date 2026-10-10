@@ -426,14 +426,20 @@ class ConfigFileBridge(
         val unknownS = st.keys - SETTINGS_KEYS
         if (unknownS.isNotEmpty()) return fail("settings 未知键: ${unknownS.joinToString()}")
 
+        // C3.5 纵深修复：0 是「自动」的哨兵值，providers 段（:321-322）已用 if (v>0) 保留 0，
+        // settings 段曾漏了同样的分支 → 任何 config_set 都会把 active 的 0 静默写成下限。
+        // 三处口径必须一致，否则 render(0) → parse 又会被拉回下限。
         st["reply_max_tokens"]?.intOrNullOr()?.let { v ->
-            next = next.withActive(maxTokens = v.coerceIn(REPLY_MAX_TOKENS_MIN, REPLY_MAX_TOKENS_MAX))
+            if (v < 0) return fail("reply_max_tokens 不能为负")
+            next = next.withActive(maxTokens = if (v > 0) v.coerceIn(REPLY_MAX_TOKENS_MIN, REPLY_MAX_TOKENS_MAX) else 0)
         }
         st["context_length"]?.intOrNullOr()?.let { v ->
-            next = next.withActive(contextLength = v.coerceIn(CONTEXT_LENGTH_MIN, CONTEXT_LENGTH_MAX))
+            if (v < 0) return fail("context_length 不能为负")
+            next = next.withActive(contextLength = if (v > 0) v.coerceIn(CONTEXT_LENGTH_MIN, CONTEXT_LENGTH_MAX) else 0)
         }
         st["local_context_length"]?.intOrNullOr()?.let { v ->
-            next = next.copy(localContextLength = v.coerceIn(LOCAL_CONTEXT_MIN, LOCAL_CONTEXT_MAX))
+            if (v < 0) return fail("local_context_length 不能为负")
+            next = next.copy(localContextLength = if (v > 0) v.coerceIn(LOCAL_CONTEXT_MIN, LOCAL_CONTEXT_MAX) else 0)
         }
         st["memory_enabled"]?.booleanOrNullOr()?.let { next = next.copy(memoryEnabled = it) }
         st["auto_learn"]?.booleanOrNullOr()?.let { next = next.copy(autoLearn = it) }

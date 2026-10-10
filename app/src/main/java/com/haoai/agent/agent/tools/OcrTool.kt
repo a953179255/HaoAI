@@ -39,9 +39,19 @@ class OcrImageTool : Tool {
         withContext(Dispatchers.IO) {
             val rawPath = args.optString("path")
             if (rawPath.isBlank()) return@withContext ToolResult("path 不能为空", true)
+            // 读工作区外的共享存储前先引导「文件管理」权限（与 bash / job_output 同口径）。
+            com.haoai.agent.platform.PermissionCenter.ensureStorageIfOutside(
+                ctx.appContext, rawPath, ctx.shellDir?.absolutePath
+            )
             // 工作区相对路径 → 绝对路径（与 read 工具一致的解析方式）
             val file = resolveFile(ctx, rawPath)
-            if (file == null || !file.exists()) {
+            if (file == null) {
+                return@withContext ToolResult(
+                    "图片读不到：$rawPath（相对路径只允许工作区内，不接受 .. 越界；绝对路径需已授予「文件管理」权限）",
+                    true
+                )
+            }
+            if (!file.exists()) {
                 return@withContext ToolResult("图片不存在：$rawPath", true)
             }
             if (file.length() > 30L * 1024 * 1024) {
@@ -68,18 +78,30 @@ class OcrImageTool : Tool {
             }
         }
 
-    /** 工作区相对路径优先，其次按绝对路径直读（SAF 工作区不支持直读，需绝对路径）。 */
+    /**
+     * 工作区相对路径优先，其次按绝对路径直读（SAF 工作区不支持直读，需绝对路径）。
+     *
+     * M2：`read`/`write` 走 FileBackend → PathSafety.normalize（拒绝 `..`）+ canonical
+     * 前缀校验，只有 OCR 这一套没有 —— 路径完全来自 LLM 输出，`../../databases/x` 这类
+     * 相对越界、或设备上任意绝对路径都会被直读。现补齐同款校验：
+     *  ① 相对路径先过 normalize（`..` / 空段 / NUL 一律拒绝）再拼工作区，并做 canonical 前缀校验；
+     *  ② 绝对路径原样交给调用方前置的 PermissionCenter 存储门（与 bash / job_output 同口径）。
+     */
     private fun resolveFile(ctx: ToolContext, path: String): File? {
         val trimmed = path.trim().trim('"')
-        val abs = File(trimmed)
-        if (abs.isAbsolute && abs.exists()) return abs
-        val workdir = ctx.shellDir ?: return abs.takeIf { it.exists() }
-        val inWorkspace = File(workdir, trimmed)
-        return when {
-            inWorkspace.exists() -> inWorkspace
-            abs.exists() -> abs
-            else -> null
+        if (trimmed.isEmpty()) return null
+        if (File(trimmed).isAbsolute) {
+            return File(trimmed).takeIf { it.exists() }
         }
+        val workdir = ctx.shellDir ?: return null
+        val segs = runCatching { com.haoai.agent.platform.PathSafety.normalize(trimmed) }
+            .getOrElse { return null }
+        var f = workdir
+        for (s in segs) f = File(f, s)
+        val root = runCatching { workdir.canonicalFile }.getOrNull() ?: return null
+        val canon = runCatching { f.canonicalFile }.getOrNull() ?: return null
+        if (canon != root && !canon.path.startsWith(root.path + File.separator)) return null
+        return canon.takeIf { it.exists() }
     }
 
     /** 长边压到 2048 再识别：省内存且 ML Kit 对超大图会直接拒绝。 */

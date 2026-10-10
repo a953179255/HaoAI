@@ -33,6 +33,9 @@ class McpClient(private val transport: McpTransport) {
 
     companion object {
         const val PROTOCOL_VERSION = "2025-06-18"
+
+        /** tools/list 翻页上限：约 5000 个工具，远超任何真实 MCP 服务器；防服务端返回畸形 cursor 死循环。 */
+        private const val MAX_TOOL_LIST_PAGES = 50
     }
 
     private val mutex = Mutex()
@@ -106,6 +109,10 @@ class McpClient(private val transport: McpTransport) {
         try {
             val out = mutableListOf<McpToolInfo>()
             var cursor: String? = null
+            // m6：服务端若返回空串或恒定不变的 cursor，原循环会永不退出且把
+            // mutex 一直占着（同一 client 后续所有 tools/call 全部排队挂死）。
+            // 上限取 50 页（约 5000 个工具，远超任何真实 MCP 服务器）。
+            var pages = 0
             do {
                 val params = buildJsonObject {
                     cursor?.let { put("cursor", it) }
@@ -123,8 +130,18 @@ class McpClient(private val transport: McpTransport) {
                         ?: buildJsonObject { put("type", "object") }
                     out.add(McpToolInfo(name, desc, schema))
                 }
-                cursor = result["nextCursor"]?.jsonPrimitive?.contentOrNull
-            } while (cursor != null)
+                val next = result["nextCursor"]?.jsonPrimitive?.contentOrNull
+                // 空串视作"没有下一页"；cursor 与上一轮相同视作服务端在原地打转。
+                // 两种畸形返回都必须终止循环，否则 mutex 被永久占住，同一 client
+                // 后续所有 tools/call 全部排队挂死（m6）。
+                val stuck = next != null && (next.isBlank() || next == cursor)
+                cursor = next?.takeIf { !it.isBlank() && it != cursor }
+                if (stuck) android.util.Log.w("HaoMcp", "tools/list 翻页 cursor 异常（空串或重复），已提前结束")
+                pages++
+            } while (cursor != null && pages < MAX_TOOL_LIST_PAGES)
+            if (cursor != null) {
+                android.util.Log.w("HaoMcp", "tools/list 超过 $MAX_TOOL_LIST_PAGES 页上限，已截断（共 ${out.size} 个工具）")
+            }
             Result.success(out)
         } catch (e: Exception) {
             Result.failure(e)

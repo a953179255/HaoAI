@@ -530,10 +530,25 @@ class LlamaServerController(
                             }
                         }
                     }
-                if (tmp.length() < 1_000_000) throw IllegalStateException("下载的文件过小（${tmp.length()} 字节），链接可能无效")
-                tmp.renameTo(target)
-                _downloadProgress.value = null
-                target
+if (tmp.length() < 1_000_000) throw IllegalStateException("下载的文件过小（${tmp.length()} 字节），链接可能无效")
+  // M6：原先丢弃 renameTo 的返回值直接报成功。renameTo 返回 false 的常见原因
+                // （跨挂载点、SD 卡热插拔、目标已存在、空间不足）在这里全都会发生，
+                // 后果是调用方拿到"下载成功"的 File 但文件不存在，.tmp 还残留几个 GB，
+          // 端侧推理随后启动失败，用户看到的却是"模型已下载"。
+                if (!tmp.renameTo(target)) {
+    // 退路：跨挂载点/不支持 rename 的文件系统上 renameTo 会失败，
+      // 退化成"复制 + 删源"，语义等价但多一次 IO。
+                val copied = runCatching {
+            target.parentFile?.mkdirs()
+                    tmp.copyTo(target, overwrite = true)
+                }.isSuccess
+        tmp.delete()
+      if (!copied || !target.isFile) {
+        throw IllegalStateException("模型落盘失败（$target）：存储空间不足或目标目录不可写")
+      }
+    }
+      _downloadProgress.value = null
+     target
             }.also { if (it.isFailure) _downloadProgress.value = null }
         }
 

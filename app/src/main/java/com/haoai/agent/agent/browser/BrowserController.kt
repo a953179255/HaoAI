@@ -298,6 +298,12 @@ object BrowserController {
         if (tabs.size <= 1) {
             // 最后一个标签：就地销毁（不能调 suspend closeAll），空池由下次访问重建
             for (tab in tabs) {
+                // m12：销毁前先把 loadSignal 放行 —— 否则正在等加载的调用方
+                // （navigate/refresh 都 withTimeoutOrNull 20s）会白等到超时，
+                // 然后返回误导性的"网络不可达"，而真实原因是"标签被关了"。
+                // complete 对已完成的 deferred 是幂等的（返回 false），重复调用安全。
+                tab.loadSignal?.complete(Unit)
+                tab.loadSignal = null
                 (tab.webView.parent as? android.view.ViewGroup)?.removeView(tab.webView)
                 tab.webView.destroy()
             }
@@ -307,6 +313,8 @@ object BrowserController {
             return
         }
         val tab = tabs.removeAt(index)
+        tab.loadSignal?.complete(Unit)
+        tab.loadSignal = null
         (tab.webView.parent as? android.view.ViewGroup)?.removeView(tab.webView)
         tab.webView.destroy()
         if (activeIndex.value >= tabs.size) activeIndex.value = tabs.size - 1
@@ -315,6 +323,9 @@ object BrowserController {
 
     suspend fun closeAll(): Unit = withContext(Dispatchers.Main) {
         for (tab in tabs) {
+            // m12：同上，批量关闭也要放行等待方
+            tab.loadSignal?.complete(Unit)
+            tab.loadSignal = null
             (tab.webView.parent as? android.view.ViewGroup)?.removeView(tab.webView)
             tab.webView.destroy()
         }
@@ -444,6 +455,10 @@ object BrowserController {
                     val idx = tabs.indexOfFirst { it.webView === view }
                     if (idx >= 0) {
                         val dead = tabs.removeAt(idx)
+                        // m12：崩死时也要放行 loadSignal，否则等待方白等满 20s 后
+                        // 报"网络不可达"，而真实原因是渲染进程崩了。
+                        dead.loadSignal?.complete(Unit)
+                        dead.loadSignal = null
                         (dead.webView.parent as? ViewGroup)?.removeView(dead.webView)
                         runCatching { dead.webView.destroy() }
                         if (activeIndex.value >= tabs.size) activeIndex.value = (tabs.size - 1).coerceAtLeast(0)

@@ -216,7 +216,7 @@ class PcLink(
 
     /** 用电脑上生成的六位配对码换一份设备 token（成功后 token 存在这个实例上）。 */
     suspend fun pair(code: String, name: String): PcOut<PcPair> {
-        val (st, tx) = call("lan/pair", """{"code":"${esc(code)}","name":"${esc(name)}"}""")
+        val (st, tx) = call("lan/pair", jsonObj("code" to code, "name" to name))
         val out = decode<PcPair>(st, tx)
         if (out is PcOut.Ok && out.value.token.isNotBlank()) token = out.value.token
         return out
@@ -247,7 +247,7 @@ class PcLink(
     /** 替人点那一下：`decision` 只能是 allow_once / allow_session / deny。 */
     suspend fun decide(id: String, decision: String): PcOut<String> {
         if (decision !in DECISIONS) return PcOut.Fail("决定只能是 ${DECISIONS.joinToString("/")}")
-        val (st, tx) = call("lan/decide", """{"id":"${esc(id)}","decision":"${esc(decision)}"}""")
+        val (st, tx) = call("lan/decide", jsonObj("id" to id, "decision" to decision))
         return when (val out = decode<PcNote>(st, tx)) {
             is PcOut.Ok -> PcOut.Ok(out.value.note.ifBlank { "已送到电脑上" })
             is PcOut.Fail -> PcOut.Fail(out.message, out.unauthorized)
@@ -256,7 +256,7 @@ class PcLink(
 
     /** 从手机派一句活（电脑上「允许从手机派活」默认关；关着会拿到一句说明，不是异常）。 */
     suspend fun send(sid: String, text: String): PcOut<String> {
-        val (st, tx) = call("lan/send", """{"sid":"${esc(sid)}","text":"${esc(text)}"}""")
+        val (st, tx) = call("lan/send", jsonObj("sid" to sid, "text" to text))
         return when (val out = decode<PcNote>(st, tx)) {
             is PcOut.Ok -> PcOut.Ok(out.value.sid.ifBlank { out.value.note })
             is PcOut.Fail -> PcOut.Fail(out.message, out.unauthorized)
@@ -272,7 +272,7 @@ class PcLink(
      */
     suspend fun answer(id: String, text: String): PcOut<String> {
         if (text.isBlank()) return PcOut.Fail("回答是空的，没发出去")
-        val (st, tx) = call("lan/decide", """{"id":"${esc(id)}","answer":"${esc(text)}"}""")
+        val (st, tx) = call("lan/decide", jsonObj("id" to id, "answer" to text))
         return when (val out = decode<PcNote>(st, tx)) {
             is PcOut.Ok -> PcOut.Ok(out.value.note.ifBlank { "已把这句回答送到电脑上" })
             is PcOut.Fail -> PcOut.Fail(out.message, out.unauthorized)
@@ -286,6 +286,24 @@ class PcLink(
             is PcOut.Fail -> PcOut.Fail(out.message, out.unauthorized)
         }
     }
-
-    private fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
 }
+
+/**
+ * 构造 JSON 请求体。
+ *
+ * M7：原先是手拼字符串 + `esc()` 只处理 `\\` 与 `"`。JSON 字符串不允许裸
+ * `\n` / `\r` / `\t` / <0x20>控制字符 —— 而 [answer] 的 text 是用户对
+ * `ask_user` 提问的自由回答，**换行极常见**。一旦命中，含换行的回答让整个
+ * 请求体变成非法 JSON，电脑端解析失败，而接收侧只`Log.w` 一句 ⇒
+ * 用户视角是"点了没反应"。
+ *
+ * 改用 kotlinx.serialization 统一序列化，转义由库保证（同类问题在
+ * `VirtualScreenController.launch` 已踩过一次并做了百分号编码兜底，此处漏了）。
+ *
+ * 放在文件顶层而非 `PcLink` 成员：`PcLinkJsonTest` 需要直接验**真源**，而不是
+ * 在测试里抄一份副本 —— 抄副本等于给自己造一个"永远通过"的假断言。
+ */
+internal fun jsonObj(vararg pairs: Pair<String, String>): String =
+    kotlinx.serialization.json.buildJsonObject {
+        pairs.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+    }.toString()

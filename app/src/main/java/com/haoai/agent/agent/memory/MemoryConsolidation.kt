@@ -79,11 +79,16 @@ object MemoryConsolidation {
         val promotedByUse = promoteByUseCount(bank)
         val expired = journal.expire(KEEP_DAYS)
         var deepMerged = 0
+        var conflictResolved = 0
+        // m11：runCatching 会连CancellationException 一起吞掉 —— 调用方（手动固化按钮、
+        // 自动固化协程）一旦被取消/超时，这里仍会把整轮 LLM 去重跑完，且不可中断。
+        // 修法：取消异常先行重抛，其余异常保持"失败不影响固化主流程"的原语义。
         runCatching { llmDedup(bank, client, provider, apiKey, onUsage) }
             .onSuccess { deepMerged = it }
-        var conflictResolved = 0
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         runCatching { llmConflicts(bank, client, provider, apiKey, onUsage) }
             .onSuccess { conflictResolved = it }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         val tidied = bank.tidy()
         return Report(promoted, expired, tidied, deepMerged, promotedByUse, conflictResolved)
     }

@@ -32,9 +32,15 @@ class WorkflowTriggerReceiver : BroadcastReceiver() {
         if (def == null || !def.enabled || def.pendingConfirm) return
         if (WorkflowStore.externalToken(def) != token) return
 
+        // M3：BroadcastReceiver 每次被投递都由系统新建实例，实例字段 lastTriggerAt
+        // 恒为初始值 0 ⇒ `now - 0 < 3000` 恒不成立，防抖形同虚设，持有 token 的
+        // 第三方应用可无限高频拉起工作流（每次都是一个完整 Agent 回合）。
+        // 防抖状态必须放在 companion object（与 NotificationCapture 同款做法）。
         val now = System.currentTimeMillis()
-        if (now - lastTriggerAt < 3_000L) return
-        lastTriggerAt = now
+        synchronized(triggerLock) {
+            if (now - lastTriggerAt < 3_000L) return
+            lastTriggerAt = now
+        }
 
         val container = (context.applicationContext as? HaoApplication)?.container ?: return
         container.applicationScope.launch {
@@ -42,12 +48,15 @@ class WorkflowTriggerReceiver : BroadcastReceiver() {
         }
     }
 
-    private var lastTriggerAt = 0L
-
     companion object {
         const val ACTION_RUN = "com.haoai.agent.WORKFLOW_RUN"
         const val EXTRA_ID = "id"
         const val EXTRA_NAME = "name"
         const val EXTRA_TOKEN = "token"
+
+        private val triggerLock = Any()
+
+        /** 跨投递共享的防抖时间戳（毫秒），0 = 从未触发。 */
+        private var lastTriggerAt = 0L
     }
 }

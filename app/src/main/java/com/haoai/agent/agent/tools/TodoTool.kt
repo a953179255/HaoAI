@@ -33,13 +33,23 @@ class TodoStore(private val appFilesDir: File) {
         HaoJson.json.decodeFromString<List<TodoItem>>(raw)
     }.getOrDefault(emptyList())
 
+    /**
+     * M10：原先是裸 `file.writeText(...)`——无锁、非原子。两个问题都会导致**任务清单无声清空**：
+     *  ① 非原子：写到一半崩溃/被杀 → 半截 JSON → [load] 的 runCatching 静默返回空清单，
+     *     用户和模型都以为清单本来就是空的；
+     *  ② 无锁：模型同一轮发出两个 todo 调用时会并发写同一文件（并行工具路径）。
+     *
+     * 修法：[HaoJson.writeAtomic]（tmp + rename，崩溃时旧文件完好）+ 方法级锁串行化。
+     * 双保险：即使将来有人把 todo 加回并行白名单，也不会写坏文件。
+     */
+    @Synchronized
     fun save(sessionId: String, items: List<TodoItem>) {
         runCatching {
             val file = File(todosDir, "$sessionId.json")
             if (items.isEmpty()) {
                 file.delete()
             } else {
-                file.writeText(HaoJson.json.encodeToString<List<TodoItem>>(items))
+                HaoJson.writeAtomic(file, HaoJson.json.encodeToString<List<TodoItem>>(items))
             }
         }
     }

@@ -413,12 +413,60 @@ internal suspend fun AgentEngine.executeParallelCalls(
         executeCall(calls.first(), tools, ctx, onEvent)
         return
     }
-    val prepared = calls.map { call ->
-        PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.args), ctx)
+    // m14：并行路径原先直接进并发块，**完全不跑 E7b before hooks**（Plan 门、写前快照、
+    // 技能提示），只靠上游 `riskOf==READ && in PARALLEL_SAFE && !requiresApproval` 三重过滤兜底。
+    // 那是"隐式约定"：白名单与 riskOf 是两份独立分类，MCP 工具还能在运行时改写分类。
+    // 修法：before hooks 提到并发之前、在主协程按原序执行（与串行 executeCall 同构）：
+    // 被 hook 处理掉或 hook 失败的调用不进并发块，但仍要落库（模型必须看到结果）。
+    val order = HashMap<String, Int>()
+    calls.forEachIndexed { idx, c -> order[c.id] = idx }
+    val prepared = mutableListOf<PreparedCall>()
+    val hookBlocked = mutableListOf<Pair<PreparedCall, Triple<ToolResult, ToolRunState, String>>>()
+    for (call in calls) {
+        val p = PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.args), ctx)
+        var hookFailure: String? = null
+        var handled: Triple<ToolResult, ToolRunState, String>? = null
+        try {
+            for (h in hooks) {
+                if (h.names.isNotEmpty() && call.name !in h.names) continue
+                // callCtx 与串行 executeCall 同源（subagentBridge 会带上子代理上报回调）
+                val d = h.before(call, p.args ?: buildJsonObject {}, subagentBridge(ctx, call, onEvent))
+                if (d is ToolHook.HookDecision.Handled) {
+                    handled = Triple(
+                        d.result,
+                        if (d.result.error) ToolRunState.ERROR else ToolRunState.DONE,
+                        "hook"
+                    )
+                    break
+                }
+            }
+        } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            // fail-closed：与串行路径同语义，before hook 失败就不执行改动
+            hookFailure = e.message ?: e.javaClass.simpleName
+            android.util.Log.w("HaoEngine", "parallel hook before failed, change blocked: $hookFailure")
+        }
+        when {
+            hookFailure != null -> hookBlocked += p to Triple(
+                ToolResult(
+                    "已取消本次 ${call.name}：执行前检查（写前快照）失败（$hookFailure），" +
+                        "继续改动将无法回滚。请清理应用存储空间或检查权限后重试。",
+                    true
+                ),
+                ToolRunState.ERROR,
+                "hook-error"
+            )
+            handled != null -> hookBlocked += p to handled
+            else -> prepared += p
+        }
     }
-    prepared.forEach { p ->
-        onEvent(ToolChanged(ToolUpdate(p.call.id, ToolRunState.RUNNING, briefOf(p.call))))
-    }
+    if (prepared.isEmpty() && hookBlocked.isEmpty()) return
+    // RUNNING 事件仍按原 calls 顺序发，收尾在下面分两批但各自有序
+    (prepared + hookBlocked.map { it.first }).sortedBy { order[it.call.id] ?: 0 }
+        .forEach { p ->
+            onEvent(ToolChanged(ToolUpdate(p.call.id, ToolRunState.RUNNING, briefOf(p.call))))
+        }
     val gate = Semaphore(PARALLEL_MAX_CONCURRENCY)
     coroutineScope {
         val bodies = prepared.map { p ->
@@ -430,6 +478,12 @@ internal suspend fun AgentEngine.executeParallelCalls(
             val (result, state, elapsed) = body.await()
             // 参数损坏时 runParallelBody 已产出错误结果；args 传空对象仅为完成历史记录
             finishCall(p.call, p.args ?: buildJsonObject {}, p.ctx, result, state, elapsed, "direct", onEvent)
+        }
+        hookBlocked.sortedBy { order[it.first.call.id] ?: 0 }.forEach { (p, triple) ->
+            finishCall(
+                p.call, p.args ?: buildJsonObject {}, p.ctx,
+                triple.first, triple.second, 0L, triple.third, onEvent
+            )
         }
     }
 }
@@ -531,8 +585,42 @@ internal suspend fun AgentEngine.buildApprovalRequest(call: ToolCallData, args: 
         }
         // C1：config_set 审批展示语义 diff（preview 失败时不会走到这里——executeCall 先行拦截）
         "config_set" -> ApprovalRequest.ConfigChange(configChangeSummary(args))
+     // M4：open_uri 支持 intent: 通用 Intent 写法（能携带 component/flags/extras），
+     // 但审批框原先显示的是 uri 原文 —— 用户得自己从 `intent:#Intent;component=…`
+        // 里读出真实目标，审批信息透明度不足（工具描述也只宣传了三种简单写法）。
+     // 用户选择保留该能力，改为在这里把 intent: 解析成可读的"动作 + 目标组件 + 数据"。
+        "open_uri" -> ApprovalRequest.Generic(call.name, openUriApprovalDetail(args))
         else -> ApprovalRequest.Generic(call.name, args.toString().take(400))
     }
+
+/**
+     * open_uri 审批展示：把 `intent:` 串解析成人能读懂的目标（其余写法原样展示）。
+ *
+ * 不自己手写解析器 —— 用系统的 [android.content.Intent.parseUri]（URI_INTENT_SCHEME）
+ * 拿到与实际执行完全一致的动作/组件/数据，展示的就是真要发生的事，不会出现
+ * "审批显示 A、执行发生 B"。解析失败退回原文（不能因为展示失败而拦住正常调用）。
+ */
+internal fun openUriApprovalDetail(args: JsonObject): String {
+    val raw = args.optString("uri").trim()
+    if (!raw.startsWith("intent:")) return args.toString().take(400)
+    val intent = runCatching {
+        android.content.Intent.parseUri(raw, android.content.Intent.URI_INTENT_SCHEME)
+    }.getOrNull() ?: return args.toString().take(400)
+    val sb = StringBuilder()
+    sb.append("uri: ").append(raw.take(200)).append('\n')
+    val action = intent.action
+    if (!action.isNullOrEmpty()) sb.append("动作: ").append(action).append('\n')
+    intent.component?.let { sb.append("目标组件: ").append(it.packageName).append('/').append(it.className).append('\n') }
+    intent.data?.let { sb.append("数据: ").append(it.toString().take(200)).append('\n') }
+    if (intent.extras != null) {
+    // extras 可能带敏感值，只报键名
+      val keys = runCatching { intent.extras!!.keySet().toList() }.getOrDefault(emptyList())
+        if (keys.isNotEmpty()) sb.append("附带参数: ").append(keys.joinToString(", ")).append('\n')
+    }
+    val flags = intent.flags
+    if (flags != 0) sb.append("启动旗标: 0x").append(Integer.toHexString(flags)).append('\n')
+    return sb.toString().trim()
+}
 
 /** C1 语义 diff：合并补丁 → 同源解析 → 与当前配置对比生成人读变更清单（后台执行，失败给可读原因）。 */
 internal suspend fun AgentEngine.configChangeSummary(args: JsonObject): String =

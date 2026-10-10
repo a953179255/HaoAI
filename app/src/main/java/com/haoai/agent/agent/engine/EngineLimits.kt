@@ -56,10 +56,24 @@ const val MIN_HISTORY_BUDGET_TOKENS = 2048
 /** 会话存储条数上限保险：压缩不再删历史，靠这个数兜住会话文件无界增长（只裁水位之前）。 */
 const val SESSION_MAX_MESSAGES = 2000
 
-/** E6 并行安全白名单：纯读无全局状态副作用；新增成员必须逐个评审（a11y/相机/定位永不入列）。 */
+/**
+ * E6 并行安全白名单：纯读、无写盘；新增成员必须逐个评审
+ * （a11y/相机/定位/todo/memory 永不入列）。
+ *
+ * M10：两个成员被移出，都是"看起来像只读、实际会写盘"的混合语义工具：
+ *  - `todo`：全量替换语义，传完整清单覆盖 todos.json。同轮两个 todo 调用
+ *    并发写同一文件 ⇒ 后写覆盖前写；写中崩溃留半截 JSON，`load()` 的 runCatching
+ *    静默返回空清单 ⇒ **任务清单无声清空**。提示词恰恰要求"完成一项立刻更新"，
+ *    正好命中这个并发窗口。
+ *  - `memory`：`search`/`list` 纯读，但 `save`/`journal`/`merge`/`forget` 写 MEMORY.md，
+ *    同轮两个 memory 调用同样并发写。
+ *
+ * 双保险：`TodoStore.save` 已加 `@Synchronized` + 原子写，即便将来有人加回白名单
+ * 也不会写坏文件（但仍会丢更新，故不建议加回）。
+ */
 val PARALLEL_SAFE = setOf(
-    "read", "grep", "glob", "web_fetch", "web_search", "memory",
-    "list_apps", "app_status", "browser_read", "browser_find", "todo"
+    "read", "grep", "glob", "web_fetch", "web_search",
+    "list_apps", "app_status", "browser_read", "browser_find"
 )
 
 /** E6 并发上限：同时执行的并行工具体数量。 */
