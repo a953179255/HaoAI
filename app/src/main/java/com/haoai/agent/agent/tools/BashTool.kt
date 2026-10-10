@@ -39,9 +39,11 @@ class BashTool : Tool {
          * 返回该命令要求的最短执行预算 ms（0 = 非包管理命令）。
          */
         fun pkgMgmtTimeoutFloorMs(command: String): Long =
-            if (Regex("""\b(apt|apt-get|dpkg|apk)\b.*\b(install|update|add|remove|upgrade|configure)\b""")
-                    .containsMatchIn(command)
-            ) 300_000L else 0L
+            if (PKG_MGMT_CMD.containsMatchIn(command)) 300_000L else 0L
+
+        // 包管理命令特征（2026-10-10 归并：原在函数里每次调用 new Regex）
+        private val PKG_MGMT_CMD =
+            Regex("""\b(apt|apt-get|dpkg|apk)\b.*\b(install|update|add|remove|upgrade|configure)\b""")
     }
 
     override val name = "bash"

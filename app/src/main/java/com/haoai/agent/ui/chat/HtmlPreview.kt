@@ -5,6 +5,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.haoai.agent.ui.ChatRow
 
+// 解析正则（2026-10-10 归并：原散在 buildPreviewHtml/fixVhUnits/markdownToSimpleHtml/
+// inline 里每次调用 new Regex；Regex 无状态、线程安全，提为顶层常量）
+private val HTML_FENCE =
+    Regex("```\\s*html[ \\t]*\\r?\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+private val VH_UNIT = Regex("([0-9.]+)vh")
+private val HEAD_OPEN = Regex("(?i)<head[^>]*>")
+private val HTML_OPEN = Regex("(?i)<html[^>]*>")
+private val FENCE_LINE = Regex("^```\\w*[ \\t]*$")
+private val HEADING = Regex("^(#{1,6})\\s+(.*)$")
+private val UL_ITEM = Regex("^[-*+]\\s+(.*)$")
+private val OL_ITEM = Regex("^\\d+[.)]\\s+(.*)$")
+private val QUOTE_LINE = Regex("^&gt;\\s?(.*)$")
+private val CODE_SPAN = Regex("`([^`]+)`")
+private val BOLD_SPAN = Regex("\\*\\*([^*]+)\\*\\*")
+private val ITALIC_SPAN = Regex("(?<!\\*)\\*([^*]+)\\*(?!\\*)")
+private val LINK_SPAN = Regex("\\[([^\\]]+)]\\(([^)]+)\\)")
+
+// markdown 解析器单例（2026-10-10 归并：原 markdownToHtml 每次新建 flavour+parser，
+// 与同项目 ui/common/MdAst.kt 的 by lazy 单例解决的是同一问题，向它对齐）
+private val gfmFlavour by lazy { org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor(useSafeLinks = false) }
+private val gfmParser by lazy { org.intellij.markdown.parser.MarkdownParser(gfmFlavour) }
+
 /**
  * 网页渲染预览（更多 → 网页预览）：
  * - 消息含 ```html 代码块 → 直接渲染代码块内容（可运行的 artifact 预览）
@@ -36,7 +58,7 @@ fun HtmlPreviewModal(
 }
 
 private fun buildPreviewHtml(text: String, dark: Boolean): String {
-    val blocks = Regex("```\\s*html[ \\t]*\\r?\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+    val blocks = HTML_FENCE
         .findAll(text)
         .map { it.groupValues[1] }
         .toList()
@@ -59,9 +81,8 @@ private fun buildPreviewHtml(text: String, dark: Boolean): String {
  * （highlight.js 约定）；数学输出 <span class="math" inline="...">（KaTeX 处理）。
  */
 private fun markdownToHtml(md: String): String = runCatching {
-    val flavour = org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor(useSafeLinks = false)
-    val tree = org.intellij.markdown.parser.MarkdownParser(flavour).buildMarkdownTreeFromString(md)
-    org.intellij.markdown.html.HtmlGenerator(md, tree, flavour).generateHtml()
+    val tree = gfmParser.buildMarkdownTreeFromString(md)
+    org.intellij.markdown.html.HtmlGenerator(md, tree, gfmFlavour).generateHtml()
 }.getOrElse {
     // 兜底：解析失败退回极简转换，绝不空白
     markdownToSimpleHtml(md)
@@ -75,7 +96,7 @@ private fun markdownToHtml(md: String): String = runCatching {
  */
 private fun fixVhUnits(html: String): String {
     if (!html.contains("vh")) return html
-    val patched = html.replace(Regex("([0-9.]+)vh"), "calc($1 * var(--haoai-vh))")
+    val patched = html.replace(VH_UNIT, "calc($1 * var(--haoai-vh))")
     val shim = "<style>:root{--haoai-vh:1vh}</style>" +
         "<script>(function(){var d=document.documentElement,f=function(){" +
         "d.style.setProperty('--haoai-vh',(window.innerHeight/100)+'px')};f();" +
@@ -90,11 +111,11 @@ private fun fixVhUnits(html: String): String {
         "m.style.cssText='position:fixed;inset:0;z-index:-1;pointer-events:none;background:'+b.background" +
         "}catch(e){}}window.addEventListener('load',m);setTimeout(m,0)})();</script>"
     // 注入点：<head> 内最稳（vh shim 无 body 依赖）；无 head 则 <html> 之后；纯片段前插
-    val head = Regex("(?i)<head[^>]*>").find(patched)
+    val head = HEAD_OPEN.find(patched)
     return when {
         head != null -> patched.insert(head.range.last + 1, shim)
         else -> {
-            val htmlTag = Regex("(?i)<html[^>]*>").find(patched)
+            val htmlTag = HTML_OPEN.find(patched)
             if (htmlTag != null) patched.insert(htmlTag.range.last + 1, shim)
             else shim + patched
         }
@@ -183,17 +204,17 @@ private fun markdownToSimpleHtml(md: String): String {
         if (inList != null) { out.append("</").append(inList).append(">\n"); inList = null }
     }
     for (raw in esc.lines()) {
-        val fence = Regex("^```\\w*[ \\t]*$").matches(raw.trim())
+        val fence = FENCE_LINE.matches(raw.trim())
         if (fence) {
             if (inCode) { out.append("</code></pre>\n"); inCode = false } else { closeList(); out.append("<pre><code>"); inCode = true }
             continue
         }
         if (inCode) { out.append(raw).append('\n'); continue }
         val line = raw.trimEnd()
-        val heading = Regex("^(#{1,6})\\s+(.*)$").find(line)
-        val ul = Regex("^[-*+]\\s+(.*)$").find(line)
-        val ol = Regex("^\\d+[.)]\\s+(.*)$").find(line)
-        val quote = Regex("^&gt;\\s?(.*)$").find(line)
+        val heading = HEADING.find(line)
+        val ul = UL_ITEM.find(line)
+        val ol = OL_ITEM.find(line)
+        val quote = QUOTE_LINE.find(line)
         when {
             line.isBlank() -> { closeList(); out.append("<br>\n") }
             heading != null -> { closeList(); val h = heading.groupValues[1].length; out.append("<h$h>").append(inline(heading.groupValues[2])).append("</h$h>\n") }
@@ -217,9 +238,9 @@ private fun markdownToSimpleHtml(md: String): String {
 /** 行内样式：`code`、**粗**、*斜*、[文本](链接)。 */
 private fun inline(s: String): String {
     var t = s
-    t = Regex("`([^`]+)`").replace(t) { "<code>" + it.groupValues[1] + "</code>" }
-    t = Regex("\\*\\*([^*]+)\\*\\*").replace(t) { "<b>" + it.groupValues[1] + "</b>" }
-    t = Regex("(?<!\\*)\\*([^*]+)\\*(?!\\*)").replace(t) { "<i>" + it.groupValues[1] + "</i>" }
-    t = Regex("\\[([^\\]]+)]\\(([^)]+)\\)").replace(t) { "<a href=\"" + it.groupValues[2] + "\">" + it.groupValues[1] + "</a>" }
+    t = CODE_SPAN.replace(t) { "<code>" + it.groupValues[1] + "</code>" }
+    t = BOLD_SPAN.replace(t) { "<b>" + it.groupValues[1] + "</b>" }
+    t = ITALIC_SPAN.replace(t) { "<i>" + it.groupValues[1] + "</i>" }
+    t = LINK_SPAN.replace(t) { "<a href=\"" + it.groupValues[2] + "\">" + it.groupValues[1] + "</a>" }
     return t
 }

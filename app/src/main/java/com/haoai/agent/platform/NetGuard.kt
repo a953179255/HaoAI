@@ -48,8 +48,12 @@ object NetGuard {
                     (target.length == w.length || target[w.length] in "/?#")
             }
         ) return
-        val host = runCatching { java.net.URI(url.trim()).host }.getOrNull()
-            ?: throw IOException(MSG)
+        // 2026-10-10 Nit：原先用 java.net.URI 取 host——它对路径里的空格/未编码中文
+        // 直接抛异常，局域网自建服务挂个中文路径（http://192.168.1.5:8720/文档/x）
+        // 就被误杀，且报"公网请使用 https"把人往错方向带。改用 java.net.URL.host：
+        // URL 解析 authority 段时对空格/非 ASCII 宽容（不当非法处理），能正常取出 host。
+        val host = runCatching { java.net.URL(target).host }.getOrNull()
+            ?: throw IOException("地址解析失败，明文 http 不放行：$target")
         if (!isPrivateHost(host)) throw IOException(MSG)
     }
 

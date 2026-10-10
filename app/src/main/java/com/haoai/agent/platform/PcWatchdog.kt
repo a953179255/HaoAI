@@ -3,7 +3,6 @@ package com.haoai.agent.platform
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
@@ -394,34 +393,5 @@ object PcWatchdog {
         return PendingIntent.getActivity(
             a, 901, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-    }
-}
-
-/**
- * 通知上那三个决定按钮的落点。
- *
- * 刻意不复用 `RunActionReceiver`：那个路由的是"手机自己的任务"（停止 / 回答提问），
- * 这个是"替另一台机器点审批"。两条路的权限与后果不一样，混在一个 action 空间里，
- * 以后加一种决定就会互相误伤。
- */
-class PcActionReceiver : BroadcastReceiver() {
-
-    override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_PC_DECIDE) return
-        val id = intent.getStringExtra(EXTRA_ID) ?: return
-        val decision = intent.getStringExtra(EXTRA_DECISION) ?: return
-        // 同一个按钮口，两种语义：审批送的是那三个决定值，提问送的是回答文字
-        val isAnswer = intent.getBooleanExtra(EXTRA_IS_ANSWER, false)
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching { if (isAnswer) PcWatchdog.answer(id, decision) else PcWatchdog.decide(id, decision) }
-                .onFailure { android.util.Log.w("HaoPcLink", "点决定没送到：${it.message}") }
-        }
-    }
-
-    companion object {
-        const val ACTION_PC_DECIDE = "com.haoai.agent.action.PC_DECIDE"
-        const val EXTRA_ID = "pc_ask_id"
-        const val EXTRA_DECISION = "pc_decision"
-        const val EXTRA_IS_ANSWER = "pc_is_answer"
     }
 }

@@ -58,7 +58,11 @@ class WorkspaceManager(private val context: Context) {
 
     private fun persist(safUri: String?) {
         runCatching {
-            prefFile.writeText(HaoJson.json.encodeToString(WorkspacePref.serializer(), WorkspacePref(safUri)))
+            // 原子写（2026-10-10 Nit：工作区偏好，裸 writeText 截断会丢当前工作区绑定）
+            HaoJson.writeAtomic(
+                prefFile,
+                HaoJson.json.encodeToString(WorkspacePref.serializer(), WorkspacePref(safUri))
+            )
         }
     }
 

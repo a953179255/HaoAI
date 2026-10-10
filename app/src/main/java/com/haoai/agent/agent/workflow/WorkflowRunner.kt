@@ -227,35 +227,13 @@ object WorkflowRunner {
         WorkManager.getInstance(context).cancelUniqueWork("haoai-wf-$defId")
     }
 
-    /** Scheduler 同款 spec 文法的下次触发延迟。 */
-    fun nextDelayMs(spec: String): Long? {
-        val now = System.currentTimeMillis()
-        return when {
-            spec == "hourly" -> 3600_000L
-            spec.startsWith("every:") -> {
-                val m = Regex("every:(\\d+)([mhd])").find(spec) ?: return null
-                val n = m.groupValues[1].toLong()
-                when (m.groupValues[2]) {
-                    "m" -> n * 60_000L
-                    "h" -> n * 3_600_000L
-                    else -> n * 86_400_000L
-                }
-            }
-            spec.startsWith("daily:") -> {
-                val m = Regex("daily:(\\d{2}):(\\d{2})").find(spec) ?: return null
-                val cal = java.util.Calendar.getInstance().apply {
-                    set(java.util.Calendar.HOUR_OF_DAY, m.groupValues[1].toInt())
-                    set(java.util.Calendar.MINUTE, m.groupValues[2].toInt())
-                    set(java.util.Calendar.SECOND, 0)
-                    set(java.util.Calendar.MILLISECOND, 0)
-                }
-                var next = cal.timeInMillis
-                if (next <= now) next += 86_400_000L
-                next - now
-            }
-            else -> null
-        }
-    }
+    /**
+     * Scheduler 同款 spec 文法的下次触发延迟（2026-10-10 归并：原先两份实现，
+     * 文法一致但这份漏了 60s 下限——"every:0m" 在这里得 0 延迟 = Worker 紧循环，
+     * 在 Scheduler 那份得到 60s。统一走 Scheduler.nextDelayMs，只留一份文法真源）。
+     */
+    fun nextDelayMs(spec: String): Long? =
+        com.haoai.agent.agent.schedule.Scheduler.nextDelayMs(spec)
 
 }
 

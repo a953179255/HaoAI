@@ -26,19 +26,11 @@ object ToolBrief {
             "web_fetch" -> "抓取网页 · " + args.optString("url").take(40)
             "web_search" -> "搜索网络 · 「" + args.optString("query").take(24) + "」"
             "todo" -> {
+                // TodoTool 的真实 schema 只有 todos（传=全量替换，不传=查看当前清单）。
+                // 2026-10-10 Nit：原先还读 args["action"]/args["text"] 走一套 view/add/...
+                // 的旧文法，那两个参数在 schema 里根本不存在、恒为默认值，是死分支，删。
                 val todos = args["todos"] as? JsonArray
-                when {
-                    todos != null -> "更新任务清单（${todos.size} 项）"
-                    else -> {
-                        val action = args.optString("action", "view")
-                        val text = args.optString("text")
-                        when {
-                            text.isNotBlank() -> "清单 · $action $text"
-                            action == "view" -> "查看任务清单"
-                            else -> "清单 · $action"
-                        }
-                    }
-                }
+                if (todos != null) "更新任务清单（${todos.size} 项）" else "查看任务清单"
             }
             "memory" -> when (args.optString("action", "list")) {
                 "list" -> "查看记忆"

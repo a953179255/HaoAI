@@ -204,6 +204,83 @@ fun rememberAppBackdrop(
 
 fun Modifier.appLayer(backdrop: LayerBackdrop): Modifier = this.layerBackdrop(backdrop)
 
+/**
+ * 页面背景宿主 + 页面专属采样画布（2026-10-10 归并：原先在 9 个页面逐字复制，
+ * 注释改一漏九；崩溃级约束按铁律只在这里留一份）。
+ *
+ * 用法：在外层 Box（实底垫背）内调用，返回值喂给本页所有玻璃：
+ * `val localBackdrop = WallpaperBackdropHost(wallpaper)`
+ *
+ * - **宿主子树内绝不能放玻璃元素**——玻璃采样正在录制自己的层
+ *   = RenderNode 成环 = SIGSEGV 栈溢出（2026-09-22 实测；聊天页同款结论）。
+ *   玻璃一律放在宿主外、与本宿主平级。
+ * - 页面专属画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧互相
+ *   record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
+ * - preheat=true 时保留首帧预热 record（新页首帧采样层为空，转场中玻璃会空几帧）。
+ *   注意：SettingsScreen 两处 2026-10-09 实锤预热副本导致透过玻璃的壁纸整体错位
+ *   （采样读到与挂载节点几何不同的副本），已改 preheat=false——其余页面沿用
+ *   旧行为维持现状，若要全关需逐页实机验证。
+ */
+@Composable
+fun WallpaperBackdropHost(
+    wallpaper: android.graphics.Bitmap?,
+    preheat: Boolean = true,
+): LayerBackdrop {
+    val backdrop = rememberAppBackdrop(
+        wallpaper,
+        dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+        baseTop = MaterialTheme.colorScheme.background,
+        baseBottom = MaterialTheme.colorScheme.background
+    )
+    var hostSize by androidx.compose.runtime.remember {
+        mutableStateOf(androidx.compose.ui.unit.IntSize.Zero)
+    }
+    var preheated by androidx.compose.runtime.remember { mutableStateOf(false) }
+    if (preheat && wallpaper != null) {
+        val density = LocalDensity.current
+        val layoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
+        androidx.compose.runtime.SideEffect {
+            if (!preheated && hostSize.width > 0 && hostSize.height > 0) {
+                preheated = true
+                backdrop.graphicsLayer.record(density, layoutDir, hostSize) {
+                    drawImage(
+                        wallpaper.asImageBitmap(),
+                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        dstSize = hostSize
+                    )
+                }
+            }
+        }
+    }
+    Box(
+        androidx.compose.ui.Modifier
+            // 用 fillMaxSize 而非 matchParentSize：后者是 BoxScope 扩展，helper 内拿不到
+            // 外层 BoxScope 接收者；helper 恒在外层 Box 内容里调用，两种写法在此等价
+            .fillMaxSize()
+            .appLayer(backdrop)
+            .then(
+                // 宿主尺寸只有预热用得上：不预热就不必挂监听多触发一轮组合
+                if (preheat && wallpaper != null) {
+                    Modifier.onSizeChanged { hostSize = it }
+                } else {
+                    androidx.compose.ui.Modifier
+                }
+            )
+    ) {
+        if (wallpaper != null) {
+            // remember 包装：裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘（v0.18.1）
+            val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
+            androidx.compose.foundation.Image(
+                bitmap = wpImage,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = androidx.compose.ui.Modifier.matchParentSize()
+            )
+        }
+    }
+    return backdrop
+}
+
 @Composable
 fun GlassPanel(
     // 放宽为 Backdrop 接口：支持 CombinedBackdrop（玻璃导出合成采样，见抽屉）

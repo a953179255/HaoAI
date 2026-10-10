@@ -42,7 +42,7 @@ class JobOutputTool : Tool {
             }
             val id = args.optString("id").trim()
             // 路径安全：id 只允许真实投递格式（job_<base36>），杜绝 "../" 拼路径逃出 .haoai-jobs
-            if (id.isNotBlank() && !Regex("job_[0-9a-z]+").matches(id)) {
+            if (id.isNotBlank() && !JOB_ID.matches(id)) {
                 return@withContext ToolResult("非法任务 id：$id（应为 bash background=true 返回的 job_xxx）", true)
             }
             val logFile = if (id.isNotBlank()) {
@@ -88,5 +88,10 @@ class JobOutputTool : Tool {
             if (start > 0L) text = text.substringAfter('\n', "")
             return text.lines().let { if (it.lastOrNull()?.isEmpty() == true) it.dropLast(1) else it }
         }
+    }
+
+    // 路径安全判据：id 只允许真实投递格式（2026-10-10 归并：原每次调用 new Regex）
+    private companion object {
+        val JOB_ID = Regex("job_[0-9a-z]+")
     }
 }

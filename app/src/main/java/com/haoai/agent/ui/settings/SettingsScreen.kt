@@ -288,36 +288,9 @@ fun SettingsScreen(
                 // 真正生效且无错位）
                 .background(MaterialTheme.colorScheme.background)
         ) {
-        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
-        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
-        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
-            // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
-            // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
-            // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
-            val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
-                wallpaper,
-                dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-                baseTop = MaterialTheme.colorScheme.background,
-                baseBottom = MaterialTheme.colorScheme.background
-            )
-            // ⚠️ 首帧预热 record 已删除（2026-10-09 壁纸错位根治）：
-            // rememberLayerBackdrop 的 onDraw（壁纸底图）在**每次玻璃采样时都会执行**，
-            // 采样层不存在"空窗"——预热 record 是旧架构遗留，反而在页面重进时往采样层
-            // 写入一份与挂载节点内容几何不同的副本：首次改任何玻璃参数 → 玻璃层重录
-            // → 采样读到预热副本 → 透过玻璃的壁纸整体错位（猫腿/尾巴错位，用户实锤），
-            // 重进页面（重新预热+宿主覆盖）才恢复。删掉后采样层只来自挂载节点单一来源。
-            Box(Modifier.matchParentSize().appLayer(localBackdrop)) {
-                if (wallpaper != null) {
-                    // v0.18.1：包装 remember 化——裸调每次重组分配新 ImageBitmap，触发整屏壁纸重绘
-                    val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-                    Image(
-                        bitmap = wpImage,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.matchParentSize()
-                    )
-                }
-            }
+        // ★ 采样宿主（2026-10-10 归并进 WallpaperBackdropHost，preheat=false：预热副本曾致
+        // 透过玻璃的墙纸错位 2026-10-09 实锤，详见 Glass.kt 注释）
+        val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper, preheat = false)
             Column(
                 Modifier
                     .fillMaxSize()
@@ -1290,33 +1263,9 @@ private fun SectionPage(
             // 全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // ★ 采样宿主（2026-09-22 修复）：只录背景层（壁纸+压暗；无壁纸时录 onDraw
-        // 渐变底）。宿主子树内**绝不能含玻璃元素**——玻璃采样正在录制自己的层
-        // = RenderNode 成环 = SIGSEGV 栈溢出（实测；聊天页同款结论：玻璃留外面防递归）
-        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
-        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
-        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
-        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
-            wallpaper,
-            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-            baseTop = MaterialTheme.colorScheme.background,
-            baseBottom = MaterialTheme.colorScheme.background
-        )
-        // ⚠️ 首帧预热 record 已删除（2026-10-09 壁纸错位根治，同页面根宿主）：
-        // rememberLayerBackdrop 的 onDraw 每次采样都会执行，采样层无空窗；
-        // 预热 record 在页面重进时往采样层写入几何不同的副本，首次改玻璃参数
-        // → 玻璃层重录 → 采样读到预热副本 → 透过玻璃的壁纸整体错位（用户实锤）。
-        Box(Modifier.matchParentSize().appLayer(localBackdrop)) {
-            if (wallpaper != null) {
-                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-                Image(
-                    bitmap = wpImage,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-        }
+        // ★ 采样宿主（2026-10-10 归并进 WallpaperBackdropHost，preheat=false：预热副本曾致
+        // 透过玻璃的墙纸错位 2026-10-09 实锤，详见 Glass.kt 注释）
+        val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper, preheat = false)
         // 标题栏底边（窗口坐标）：主题外观「玻璃质感」预览的吸顶停靠线——
         // 停到栏底 = 无缝不露缝、预览顶不被栏压住（状态栏 43dp + 栏体压到 ~83dp，
         // 固定 54dp 会把预览顶压进栏里，2026-10-08 真机实测）
@@ -3027,16 +2976,16 @@ private fun LazyListScope.generalItems(
                 )
                 Spacer(Modifier.height(4.dp))
                 ToggleRow(
-                    title = "Smart approval",
-                    subtitle = "Aux LLM reviews shell before human prompt: safe auto-approve, dangerous deny, uncertain or failure escalate to you.",
+                    title = "智能审批",
+                    subtitle = "危险命令先交给辅助模型判一遍：安全的自动放行、危险的直接拒绝，只有拿不准或判失败才升级给你确认",
                     checked = settings.smartApproval,
                     onChange = { vm.setSmartApproval(it) },
                     backdrop = backdrop
                 )
                 Spacer(Modifier.height(4.dp))
-                Text("Tool profile", style = MaterialTheme.typography.bodyMedium)
+                Text("工具档位", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "Trim injected tools per task shape (token / noise). Session = follow tools_enable.",
+                    "按任务形态精简注入的工具（省 token、减噪声）。「会话」档＝跟随 tools_enable 逐会话开关。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -101,13 +101,13 @@ class WebFetchTool : Tool {
 
     /** 字符集解析：HTTP 头优先，其次 HTML 头部 meta 声明，默认 UTF-8。 */
     private fun charsetOf(contentType: String, bytes: ByteArray): java.nio.charset.Charset {
-        Regex("(?i)charset=\\s*[\"']?([\\w-]+)").find(contentType)?.groupValues?.get(1)?.let { name ->
+        HTTP_CHARSET.find(contentType)?.groupValues?.get(1)?.let { name ->
             runCatching { return java.nio.charset.Charset.forName(name) }
         }
         if (bytes.isNotEmpty()) {
             // meta 声明在文档前部；用 ISO-8859-1 无损读字节再找 charset 声明
             val head = String(bytes, 0, minOf(bytes.size, 2048), Charsets.ISO_8859_1)
-            Regex("(?i)charset\\s*=\\s*[\"']?([\\w-]+)").find(head)?.groupValues?.get(1)?.let { name ->
+            META_CHARSET.find(head)?.groupValues?.get(1)?.let { name ->
                 runCatching { return java.nio.charset.Charset.forName(name) }
             }
         }
@@ -148,6 +148,11 @@ class WebFetchTool : Tool {
 
         /** 失败即本轮拉黑的兜底引擎名（与 WebSearchTool 共用同一张失败表）。 */
         const val READER_ENGINE = "reader"
+
+        // charset 声明检测（2026-10-10 归并：原在 charsetOf 里每次调用 new Regex，
+        // 与同文件 HtmlText 的 private val 写法不一致；Regex 无状态，提为 val 安全）
+        val HTTP_CHARSET = Regex("(?i)charset=\\s*[\"']?([\\w-]+)")
+        val META_CHARSET = Regex("(?i)charset\\s*=\\s*[\"']?([\\w-]+)")
     }
 }
 

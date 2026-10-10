@@ -90,7 +90,11 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
             // WorkManager 停止/系统回收：向上传播，不把半途而废当作已完成
             throw ce
         } catch (e: Throwable) {
-            // 后台整理失败保持静默，下次触发会重试
+            // 后台整理失败保持静默（不打扰用户），但要留痕；返回 success 是有意的：
+            // WorkManager 不会自动重试，重试靠下一次触发事件（灭屏+充电/手动）重新
+            // enqueueOnce（REPLACE）。2026-10-10 Nit：原先连日志都没有，"失败静默"
+            // 实际等于"失败无从查证"。
+            android.util.Log.w("HaoMemoryTidy", "记忆固化失败，等下次触发重试：${e.message}", e)
         }
         return Result.success()
     }

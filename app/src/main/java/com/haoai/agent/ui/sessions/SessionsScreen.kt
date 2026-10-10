@@ -133,49 +133,8 @@ fun SessionsScreen(
             // （壁纸/抽屉）；全局壁纸开时铺对齐壁纸（与 backdrop 采样同源同位）
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // ★ 采样宿主（2026-09-22 挂载铁律）：只录背景层，玻璃元素在宿主外。
-        // 宿主子树内含玻璃 = RenderNode 成环 = SIGSEGV（详见 SettingsScreen 同款注释）
-        // ★ 页面专属采样画布：转场中主页/子页并存若共用共享画布，两壳挂载节点每帧
-        // 互相 record 覆盖 → 玻璃采样错乱 = 磨砂消失约 1 秒（转场结束恢复）。
-        // 每页自建 rememberAppBackdrop，挂载与采样都在本页，互不干扰
-        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
-            wallpaper,
-            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-            baseTop = MaterialTheme.colorScheme.background,
-            baseBottom = MaterialTheme.colorScheme.background
-        )
-        // ★ 首帧预热采样层：新页首帧采样层为空（挂载节点 draw 后才 record），
-        // 转场动画中玻璃会消失几帧；组合提交时先 record 壁纸打底，首帧即磨砂
-        var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
-        // 预热只做一次：切换/动画期页面每帧重组，若每次都 record 壁纸，会与宿主节点的
-        // record 交替覆盖采样层 → 背景壁纸抽搐（用户实锤）
-        var glassPreheated by remember { mutableStateOf(false) }
-        val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
-        val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
-        androidx.compose.runtime.SideEffect {
-            if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
-                val img = wallpaper.asImageBitmap()
-                glassPreheated = true
-                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
-                    drawImage(
-                        img,
-                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
-                    )
-                }
-            }
-        }
-        Box(Modifier.matchParentSize().appLayer(localBackdrop).onSizeChanged { glassHostSize = it }) {
-            if (wallpaper != null) {
-                val wpImage = androidx.compose.runtime.remember(wallpaper) { wallpaper.asImageBitmap() }
-                Image(
-                    bitmap = wpImage,
-                    contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-        }
+        // ★ 采样宿主 + 首帧预热（2026-10-10 归并进 WallpaperBackdropHost：宿主内绝不能含玻璃的 SIGSEGV 铁律注释现只在 Glass.kt 一份）
+        val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper)
     Column(
         Modifier
             .fillMaxSize()

@@ -213,7 +213,7 @@ class WebSearchTool : Tool {
                     java.net.URLEncoder.encode(query, "UTF-8"), null
             )
             if (looksLikeAntiBot(html)) throw IllegalStateException("反爬验证页")
-            Regex("<h3[^>]*>\\s*<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", RegexOption.DOT_MATCHES_ALL)
+            SOGOU_H3_LINK
                 .findAll(html).mapNotNull { m ->
                     val title = stripTags(m.groupValues[2])
                     var href = m.groupValues[1].replace("&amp;", "&")
@@ -245,7 +245,7 @@ class WebSearchTool : Tool {
         if (hits.isEmpty()) return "没有结果"
         val junk = junkCount(hits)
         if (junk * 2 >= hits.size) return "${hits.size} 条里有 $junk 条是日历/导航/词条/面试类聚合页"
-        val keys = query.lowercase().split(Regex("[\\s,，、/]+")).filter { it.length >= 2 }.take(5)
+        val keys = query.lowercase().split(QUERY_KEY_SPLIT).filter { it.length >= 2 }.take(5)
         if (keys.size >= 2) {
             val touched = hits.count { h ->
                 val s = (h.title + " " + h.snippet).lowercase()
@@ -278,7 +278,7 @@ class WebSearchTool : Tool {
     internal fun unwrapBingLink(href: String): String {
         if (!href.contains("/ck/a")) return href
         val raw = href.replace("&amp;", "&")
-        val u = Regex("[?&]u=([^&]+)").find(raw)?.groupValues?.get(1) ?: return href
+        val u = SOGOU_U_PARAM.find(raw)?.groupValues?.get(1) ?: return href
         val decoded = runCatching { java.net.URLDecoder.decode(u, "UTF-8") }.getOrDefault(u)
         val body = if (decoded.startsWith("a1")) decoded.substring(2) else decoded
         if (body.isEmpty()) return href
@@ -320,21 +320,15 @@ class WebSearchTool : Tool {
             val html = fetch(client, "https://www.bing.com/search?q=" +
                 java.net.URLEncoder.encode(query, "UTF-8"), null)
             if (looksLikeAntiBot(html)) throw IllegalStateException("反爬验证页")
-            val blockRe = Regex("<li class=\"b_algo\"[^>]*>(.*?)</li>", RegexOption.DOT_MATCHES_ALL)
             // Bing 结构：<a href="..."><h2>标题</h2></a>（a 在外层）；兼容旧结构
-            val linkRe = Regex(
-                "<a[^>]*href=\"(https?://[^\"]+)\"[^>]*>\\s*<h2[^>]*>(.*?)</h2>|<h2[^>]*><a[^>]*href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>",
-                RegexOption.DOT_MATCHES_ALL
-            )
-            val snipRe = Regex("<p[^>]*>(.*?)</p>", RegexOption.DOT_MATCHES_ALL)
-            blockRe.findAll(html).mapNotNull { m ->
+            BING_BLOCK.findAll(html).mapNotNull { m ->
                 val block = m.groupValues[1]
-                val link = linkRe.find(block) ?: return@mapNotNull null
+                val link = BING_H2_LINK.find(block) ?: return@mapNotNull null
                 val url = unwrapBingLink(link.groupValues[1].ifEmpty { link.groupValues[3] })
                 val title = stripTags(
                     (link.groupValues[2].ifEmpty { link.groupValues[4] })
                 )
-                val snippet = snipRe.find(block)?.let { stripTags(it.groupValues[1]) }.orEmpty()
+                val snippet = BING_SNIPPET.find(block)?.let { stripTags(it.groupValues[1]) }.orEmpty()
                 if (title.isBlank() || !url.startsWith("http")) null
                 else Hit(title, url, snippet)
             }.toList()
@@ -353,16 +347,8 @@ class WebSearchTool : Tool {
         }
 
     private fun parseResults(html: String): List<Hit> {
-        val linkRe = Regex(
-            "<a[^>]*class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        val snippetRe = Regex(
-            "<a[^>]*class=\"result__snippet\"[^>]*>(.*?)</a>",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        val titles = linkRe.findAll(html).toList()
-        val snippets = snippetRe.findAll(html).map { stripTags(it.groupValues[1]) }.toList()
+        val titles = DDG_LINK.findAll(html).toList()
+        val snippets = DDG_SNIPPET.findAll(html).map { stripTags(it.groupValues[1]) }.toList()
         return titles.mapIndexedNotNull { i, m ->
             var href = m.groupValues[1]
             // DDG 跳转链：//duckduckgo.com/l/?uddg=<encoded>&...
@@ -381,8 +367,32 @@ class WebSearchTool : Tool {
     }
 
     private fun stripTags(s: String): String =
-        s.replace(Regex("<[^>]+>"), "")
+        s.replace(ANY_TAG, "")
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&quot;", "\"").replace("&#x27;", "'").replace("&nbsp;", " ")
-            .replace(Regex("\\s+"), " ").trim()
+            .replace(WHITESPACE, " ").trim()
+
+    // 解析正则（2026-10-10 归并：原散在各解析函数里每次调用 new Regex；
+    // Regex 无状态、线程安全，提为常量与同分区 HtmlText 的写法对齐）
+    private companion object {
+        val SOGOU_H3_LINK = Regex("<h3[^>]*>\\s*<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", RegexOption.DOT_MATCHES_ALL)
+        val SOGOU_U_PARAM = Regex("[?&]u=([^&]+)")
+        val QUERY_KEY_SPLIT = Regex("[\\s,，、/]+")
+        val BING_BLOCK = Regex("<li class=\"b_algo\"[^>]*>(.*?)</li>", RegexOption.DOT_MATCHES_ALL)
+        val BING_H2_LINK = Regex(
+            "<a[^>]*href=\"(https?://[^\"]+)\"[^>]*>\\s*<h2[^>]*>(.*?)</h2>|<h2[^>]*><a[^>]*href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val BING_SNIPPET = Regex("<p[^>]*>(.*?)</p>", RegexOption.DOT_MATCHES_ALL)
+        val DDG_LINK = Regex(
+            "<a[^>]*class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val DDG_SNIPPET = Regex(
+            "<a[^>]*class=\"result__snippet\"[^>]*>(.*?)</a>",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val ANY_TAG = Regex("<[^>]+>")
+        val WHITESPACE = Regex("\\s+")
+    }
 }

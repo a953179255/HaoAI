@@ -89,50 +89,9 @@ fun PcLinkScreen(
             // 壁纸开着时由下面那层 Image 盖上它，这块实底只在没壁纸时兜底
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // ★ 页面专属采样画布（与 ScheduleScreen 同因）：转场中主/子页并存时若共用共享画布，
-        //   两壳挂载节点每帧互相 record 覆盖 → 磨砂消失约一秒。挂载与采样都留在本页。
-        val localBackdrop = com.haoai.agent.ui.common.rememberAppBackdrop(
-            wallpaper,
-            dark = MaterialTheme.colorScheme.background.luminance() < 0.5f,
-            baseTop = MaterialTheme.colorScheme.background,
-            baseBottom = MaterialTheme.colorScheme.background
-        )
-        // ★ 首帧预热：新页首帧采样层是空的（挂载节点 draw 之后才 record），转场中玻璃会空几帧；
-        //   先 record 一张壁纸打底，首帧即磨砂。只做一次——每帧都 record 会让壁纸抽搐。
-        var glassHostSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
-        var glassPreheated by remember { mutableStateOf(false) }
-        val glassHostSizeDensity = androidx.compose.ui.platform.LocalDensity.current
-        val glassHostSizeLayoutDir = androidx.compose.ui.platform.LocalLayoutDirection.current
-        androidx.compose.runtime.SideEffect {
-            if (!glassPreheated && wallpaper != null && glassHostSize.width > 0 && glassHostSize.height > 0) {
-                val img = wallpaper.asImageBitmap()
-                glassPreheated = true
-                localBackdrop.graphicsLayer.record(glassHostSizeDensity, glassHostSizeLayoutDir, glassHostSize) {
-                    drawImage(
-                        img,
-                        dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
-                        dstSize = androidx.compose.ui.unit.IntSize(glassHostSize.width, glassHostSize.height)
-                    )
-                }
-            }
-        }
-        // 壁纸层本身铺在采样宿主里：玻璃采的就是这一层，卡片磨砂才对得上背景
-        Box(
-            Modifier
-                .matchParentSize()
-                .appLayer(localBackdrop)
-                .onSizeChanged { glassHostSize = it }
-        ) {
-            if (wallpaper != null) {
-                val wpImage = remember(wallpaper) { wallpaper.asImageBitmap() }
-                Image(
-                    bitmap = wpImage,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-        }
+        // ★ 采样宿主 + 首帧预热（2026-10-10 归并进 WallpaperBackdropHost；宿主内绝不能含玻璃的
+        // SIGSEGV 铁律、页面专属画布、预热等约束注释只在 Glass.kt 一份）
+        val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper)
         Column(Modifier.fillMaxSize()) {
                 GlassPageBar(backdrop = localBackdrop, title = "电脑联动", onBack = onBack)
                 LazyColumn(

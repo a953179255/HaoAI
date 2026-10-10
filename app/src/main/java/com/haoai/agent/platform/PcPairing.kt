@@ -65,8 +65,9 @@ class PcStore(
             PcEndpoint.serializer(), PcEndpoint(base = normalized, device = device, token = sealed, pairedAt = System.currentTimeMillis())
         )
         return runCatching {
-            target.parentFile?.mkdirs()
-            target.writeText(json)
+            // 原子写（2026-10-10 Nit：配对的 token 凭据，裸 writeText 进程中途被杀
+            // 会留截断的 JSON，下次 load 直接解不出=配对丢失；writeAtomic 自带 mkdirs+.bak）
+            HaoJson.writeAtomic(target, json)
             PcOut.Ok("已记住那台电脑")
         }.getOrElse { PcOut.Fail("写盘失败：${it.message ?: it.javaClass.simpleName}") }
     }

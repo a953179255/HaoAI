@@ -42,14 +42,14 @@ class AgentWorker(context: Context, params: WorkerParameters) :
 
         val provider0 = container.activeProvider()
         if (provider0 == null) {
-            updateTask(task, "未配置模型服务，任务跳过")
+            updateTask(task.id, "未配置模型服务，任务跳过")
             Scheduler.enqueueNext(task)
             return Result.success()
         }
         // 5.1 每日预算：超预算时无人值守任务自动跳过（通知用户），调度链保持
         val budgetK = container.settingsFlow.value.dailyTokenBudgetK
         if (com.haoai.agent.data.UsageLedger.budgetExhausted(budgetK)) {
-            updateTask(task, "今日 token 预算已用完，任务跳过")
+            updateTask(task.id, "今日 token 预算已用完，任务跳过")
             notifyDone(applicationContext, "⏰ ${task.name}", "今日 token 预算已用完（${container.settingsFlow.value.dailyTokenBudgetK}K），任务已跳过；明天自动恢复。")
             Scheduler.enqueueNext(task)
             return Result.success()
@@ -57,7 +57,7 @@ class AgentWorker(context: Context, params: WorkerParameters) :
         val provider = if (provider0.baseUrl.startsWith("local")) {
             // 期望聊天模型：避免复用记忆固化留下的更小模型
             if (!container.llama.ensureStarted(container.llama.findModel()?.absolutePath)) {
-                updateTask(task, "端侧模型启动失败，任务跳过")
+                updateTask(task.id, "端侧模型启动失败，任务跳过")
                 Scheduler.enqueueNext(task)
                 return Result.success()
             }
@@ -104,7 +104,7 @@ class AgentWorker(context: Context, params: WorkerParameters) :
                     session.updatedAt = System.currentTimeMillis()
                     container.sessionStore.save(session)
                 }
-                runCatching { updateTask(task, resultText) }
+                runCatching { updateTask(task.id, resultText) }
                 notifyDone(applicationContext, task.name, resultText)
             }
             runCatching { Scheduler.enqueueNext(task) }
@@ -114,10 +114,10 @@ class AgentWorker(context: Context, params: WorkerParameters) :
 
     /** 读改写收敛到全局单例的原子 update 内，避免覆盖用户并发编辑。 */
     private fun updateTask(
-        task: ScheduleTask,
+        taskId: String,
         result: String
     ) {
-        ScheduleStore.update(task.id) {
+        ScheduleStore.update(taskId) {
             it.lastRunAt = System.currentTimeMillis()
             it.lastResult = TextCap.head(result.replace('\n', ' '), 200)
         }

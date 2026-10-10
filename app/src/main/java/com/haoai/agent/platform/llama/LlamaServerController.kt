@@ -96,6 +96,13 @@ class LlamaServerController(
 
     fun modelsDir(): File = File(context.getExternalFilesDir(null), "models").apply { mkdirs() }
 
+    /**
+     * server 启动日志落应用私有目录（2026-10-10 Nit：原先与 .gguf 同放外部
+     * models/，日志里的路径/参数会泄漏设备形态；模型放外部是合理诉求，日志不必）。
+     */
+    private fun serverLogFile(): File =
+        File(context.filesDir, "llama").apply { mkdirs() }.let { File(it, "server.log") }
+
     private fun internalModelsDir(): File = File(context.filesDir, "models")
 
     fun findModel(): File? {
@@ -331,7 +338,8 @@ class LlamaServerController(
                     env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
                 }
 
-                val logFile = File(modelsDir(), "server.log")
+                // 首次尝试（NPU）：截断重写，这是本轮启动日志的新起点
+                val logFile = serverLogFile()
                 val proc = pb.start()
                 process = proc
 
@@ -415,7 +423,10 @@ class LlamaServerController(
                     Thread {
                         runCatching {
                             proc2.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                                java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(File(modelsDir(), "server.log"), false))).use { w ->
+                                // CPU 兜底 = 追加写（2026-10-10 Nit：原先两条路径各自
+                                // FileWriter(false) 互相截断，NPU 为何失败的日志被兜底抹掉，
+                                // 而"启动失败详见 server.log"里恰恰只剩兜底这段）
+                                java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(serverLogFile(), true))).use { w ->
                                     var n = 0
                                     reader.forEachLine { line -> if (n++ < MAX_LOG_LINES) w.println(line) }
                                     w.flush()

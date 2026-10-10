@@ -71,10 +71,14 @@ object MemoryBackupManager {
             val src = c.memoryBank.storageFile()
             if (!src.exists()) return
             val dir = File(c.appFilesDir, "backups").apply { mkdirs() }
-            val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.CHINA).format(Date())
-            File(dir, "memories-$stamp.md").let { tmp ->
-                src.copyTo(tmp, overwrite = true)
-            }
+            // 时间戳到秒 + 同秒冲突加序号（2026-10-10 Nit：原先只到分钟且
+            // overwrite=true，同分钟重复固化会静默覆盖上一份，"最近 5 份"
+            // 退化成"最近 5 个不同分钟"）
+            val stamp = SimpleDateFormat("yyyy-MM-dd-HHmmss", Locale.CHINA).format(Date())
+            var dst = File(dir, "memories-$stamp.md")
+            var n = 1
+            while (dst.exists()) dst = File(dir, "memories-$stamp-${n++}.md")
+            src.copyTo(dst)
             // 按时间倒序保留最新 5 份
             dir.listFiles { f -> f.name.startsWith("memories-") && f.name.endsWith(".md") }
                 ?.sortedByDescending { it.name }
