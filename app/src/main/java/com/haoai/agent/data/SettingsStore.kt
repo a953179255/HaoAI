@@ -303,16 +303,21 @@ data class GlassParams(
     val blur: Float = 4f,
     /** 折射环带宽度 dp */
     val lensHeight: Float = 16f,
-    /** 折射强度倍数（位移=高度×倍数） */
-    val lensAmountMul: Float = 1f,
+    /** 折射位移量 dp（2026-10-10 解耦：旧 lensAmountMul 倍数制废弃，
+     *  旧存档该键被 ignoreUnknownKeys 丢弃、读默认 16 = 原「16×1」观感不变） */
+    val lensAmount: Float = 16f,
     /** 卡片白雾（表面不透明度） */
     val veil: Float = 0.48f,
     /** 卡片圆角 dp */
     val corner: Float = 16f,
-    /** 整面折射 */
-    val lensFull: Boolean = false,
-    /** 色差 */
+    /** 中心深度感（库 lens depthEffect，2026-10-10 补开关；默认开=原写死值） */
+    val depthEffect: Boolean = true,
+    /** 色差（库 shader 仅 0/1 两档） */
     val ca: Boolean = true,
+    /** 边缘高光强度 0..1（2026-10-10 补滑杆；默认 1=库 Plain 原生强度） */
+    val highlight: Float = 1f,
+    /** 外投影模糊半径 dp（2026-10-10 补滑杆；默认 24=库 Shadow.Default 现值） */
+    val shadow: Float = 24f,
     /** 顶栏背景模糊 dp（顶栏有标题文字，磨砂比卡片厚一档） */
     val barBlur: Float = 15f,
     /** 顶栏白雾 */

@@ -116,7 +116,11 @@ fun BrowserScreen(
                 .statusBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             radius = 22.dp,
-            surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha()
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
+            surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
                 // 标签条：标题 chip + 关闭 ×，尾部 + 新建

@@ -208,7 +208,8 @@ fun TaskFloat(
             // 现折射/模糊/色差走全局调参（环带 16≈圆角 15~17，不越界）；
             // 白雾 0.58 保留（与上下文面板统一材质）
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
             // 0.50 → 0.58：与上下文面板统一材质（浅色主题下视觉差极小，价值在一致性）

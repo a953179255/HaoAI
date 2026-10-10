@@ -207,7 +207,7 @@ fun LiquidSlider(
                         // ×progress 保留"按下才起折射"的动效系数
                         lens(
                             GlassTuning.lensHeight.dp.toPx() * progress,
-                            (GlassTuning.lensHeight * GlassTuning.lensAmountMul).dp.toPx() * progress,
+                            GlassTuning.lensAmount.dp.toPx() * progress,
                             chromaticAberration = true
                         )
                     },

@@ -1266,10 +1266,6 @@ private fun SectionPage(
         // ★ 采样宿主（2026-10-10 归并进 WallpaperBackdropHost，preheat=false：预热副本曾致
         // 透过玻璃的墙纸错位 2026-10-09 实锤，详见 Glass.kt 注释）
         val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper, preheat = false)
-        // 标题栏底边（窗口坐标）：主题外观「玻璃质感」预览的吸顶停靠线——
-        // 停到栏底 = 无缝不露缝、预览顶不被栏压住（状态栏 43dp + 栏体压到 ~83dp，
-        // 固定 54dp 会把预览顶压进栏里，2026-10-08 真机实测）
-        var barBottomPx by remember { mutableStateOf(Float.MAX_VALUE) }
         Column(
             Modifier
                 .fillMaxSize()
@@ -1325,7 +1321,6 @@ private fun SectionPage(
                     )
                     "theme" -> themeItems(
                         vm, settings, context, localBackdrop,
-                        barBottomPx,
                         wpVersion,
                         // m22（2026-10-10）：原来传空 lambda —— 选完壁纸后 wpVersion
                         // 永不更新，状态行一直显示"未设置"、清除按钮不出现，重启才对。
@@ -1345,7 +1340,6 @@ private fun SectionPage(
             onBack = onBack,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .onGloballyPositioned { barBottomPx = it.boundsInWindow().bottom }
         )
         if (pickerSeed != null) {
             ColorPickerDialog(
@@ -3105,8 +3099,6 @@ private fun LazyListScope.themeItems(
     settings: AppSettings,
     context: android.content.Context,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    /** 标题栏底边（窗口坐标，未测得时为 MAX_VALUE）：预览吸顶的停靠线 */
-    barBottomPx: Float,
     wpVersion: Boolean,
     onWpVersionChange: (Boolean) -> Unit,
     onRequestClearWallpaper: () -> Unit,
@@ -3358,65 +3350,76 @@ private fun LazyListScope.themeItems(
     //   该区始终藏在 GlassPageBar 后面 = 裸背景，不面板不磨砂；
     // · 预览卡不透明实底（surfaceAlpha=1）——用户确认：透底干扰演示判读。
     item { SectionTitle("玻璃质感") }
-    stickyHeader {
-        val t = com.haoai.agent.ui.theme.GlassTuning
-        var topPx by remember { mutableStateOf(Float.MAX_VALUE) }
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        Column(
-            Modifier.onGloballyPositioned { topPx = it.boundsInWindow().top }
-        ) {
-            // 停靠区：h = clamp(标题栏底边 - 卡顶现高, 0, 54dp)。卡顶由内容流/吸顶
-            // 决定，本区只向下撑开，不反作用于卡顶——无反馈回路。停到栏底 = 无缝、
-            // 预览顶不被栏压住；静止时（卡顶远低于栏底）h=0，标题紧贴预览无空隙
-            val zoneH = with(density) {
-                val maxZone = 54.dp.toPx()
-                if (barBottomPx == Float.MAX_VALUE) 0.dp
-                else (barBottomPx - topPx).coerceIn(0f, maxZone).toDp()
-            }
-            Spacer(Modifier.height(zoneH))
-            // 预览文案用真实档案（用户反馈：写死"小豪/柠瑶"不对，别的用户名字不同）
-            GlassPreviewCard(
-                agentName = settings.agentName.ifBlank { "HaoAI" },
-                agentEmoji = settings.avatarEmoji,
-                backdrop = backdrop
-            )
-        }
+    // 预览卡：2026-10-10 重做（迷你真机屏）+ **取消吸顶**。
+    //
+    // 取消吸顶的两个理由：① 原 stickyHeader 里的 onGloballyPositioned 每帧写 topPx，
+    // 吸顶内容（三块真玻璃）每帧重组重测量 —— 这是主题外观页滚动 17.34% jank 的元凶
+    // （2026-10-10 实测定性，主线程 CPU 为主）；② 不再需要"停靠线"去躲顶栏，
+    // barBottomPx 那条管道（声明 / 传参 / 顶栏 onGloballyPositioned）随之整条删除。
+    item {
+        GlassPreviewCard(
+            agentName = settings.agentName.ifBlank { "HaoAI" },
+            agentEmoji = settings.avatarEmoji,
+            backdrop = backdrop
+        )
     }
 
-    // ── 调参分四组：裸标题在卡外（与其他段落一致），按档位归类 ──
+    // ── 调参分三组（2026-10-10 对照 Kyant0 玻璃实验室重排）：
+    //    全局几何 / 折射 / 光泽。裸标题在卡外（与其他段落一致）。 ──
     item { SectionTitle("全局玻璃") }
     item {
         GlassGroup(backdrop) {
             val t = com.haoai.agent.ui.theme.GlassTuning
             // 观察单例 State：滑杆标签即时回显（玻璃组件在 draw 期读，另路重组）
-            t.blur; t.lensHeight; t.lensAmountMul; t.veil; t.corner
+            t.blur; t.veil; t.corner; t.highlight; t.shadow
             GlassSliderRow("磨砂模糊（聊天卡片/弹层）", dpText(t.blur), "影响：消息卡片、弹层、侧边抽屉、任务面板", t.blur, 0f..16f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.blur = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("聊天卡片白雾", "${Math.round(t.veil * 100)}%", "影响：消息卡片、弹层", t.veil, 0f..0.9f, backdrop, step = 0.01f, onEnd = { vm.persistGlass() }) { t.veil = it }
             HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("折射环带宽度", dpText(t.lensHeight), "影响：所有玻璃表面", t.lensHeight, 0f..40f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
-            GlassSliderRow("折射强度倍数", "×${"%.1f".format(t.lensAmountMul)}", "影响：所有玻璃表面（0 = 关折射）", t.lensAmountMul, 0f..4f, backdrop, step = 0.1f, onEnd = { vm.persistGlass() }) { t.lensAmountMul = it }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
             GlassSliderRow("玻璃圆角", dpText(t.corner), "影响：页面卡片、弹层顶角（聊天卡片圆角固定 / 顶栏方角 / 输入框胶囊形固定）", t.corner, 0f..32f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.corner = it }
+        }
+    }
+    item { SectionTitle("折射") }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            t.lensHeight; t.lensAmount; t.ca; t.depthEffect
+            GlassSliderRow("折射环带宽度", dpText(t.lensHeight), "边缘「透镜圈」有多宽", t.lensHeight, 0f..40f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.lensHeight = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            // 2026-10-10：原「折射强度倍数」与环带宽度耦合（位移 = 宽度 × 倍数），
+            // 对齐 Kyant0 实验室改成**独立位移量**，两个滑杆互不牵连（默认 16dp =
+            // 旧「16 × 1」，停默认档观感零变化）
+            GlassSliderRow("折射位移强度", dpText(t.lensAmount), "边缘把背景推开多远（0 = 关折射）", t.lensAmount, 0f..80f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.lensAmount = it }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
             )
             ToggleRow(
-                title = "整面折射",
-                subtitle = "折射覆盖整个表面（默认只在边缘一圈）",
-                checked = t.lensFull,
-                onChange = { t.lensFull = it; vm.persistGlass() },
+                title = "中心深度感",
+                subtitle = "边缘位移沿深度衰减，更像厚玻璃（库 depthEffect）",
+                checked = t.depthEffect,
+                onChange = { t.depthEffect = it; vm.persistGlass() },
                 backdrop = backdrop
             )
             ToggleRow(
                 title = "边缘色差",
+                // 诚实说明：库 shader 的 chromaticAberration 只有 0/1 两档，
+                // 做不了连续滑杆（2026-10-10 反编译确认），故仍是开关。
                 subtitle = "玻璃边缘红蓝分离（更真实的厚玻璃感）",
                 checked = t.ca,
                 onChange = { t.ca = it; vm.persistGlass() },
                 backdrop = backdrop
             )
+        }
+    }
+    item { SectionTitle("光泽") }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            t.highlight; t.shadow
+            GlassSliderRow("边缘高光", "${Math.round(t.highlight * 100)}%", "玻璃上沿那圈亮边的强度（0 = 无高光）", t.highlight, 0f..1f, backdrop, step = 0.05f, onEnd = { vm.persistGlass() }) { t.highlight = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            GlassSliderRow("外投影", dpText(t.shadow), "卡片浮起来的影子（0 = 完全无投影）", t.shadow, 0f..24f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.shadow = it }
             HorizontalDivider(
                 Modifier.padding(horizontal = 14.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
@@ -3554,14 +3557,19 @@ private fun dpText(v: Float): String =
     if (v % 1f == 0f) "${v.toInt()}dp" else "%.1f".format(v) + "dp"
 
 /**
- * 玻璃质感预览卡（方案定稿 2026-10-08 效果图确认）：
- * - **不透明实底**（surfaceAlpha=1：浅色纯白 / 深色板岩，glassSurfaceColor 规范）——
- *   用户确认透底会干扰演示判读；blur/lens 置 0（表面已不透明，采样无从呈现）；
- * - 圆角吃玻璃圆角滑杆；fillMaxWidth 走列表同一内边距 ⇒ 与选项卡**同宽**；
- * - 纹理与三行演示照旧：图案层只画网格线（opaqueBase=false），三行各吃各档，
- *   磨砂压在网格上变化可见（顶栏/卡片/输入框档）。2026-10-09 曾加第四行"页面卡"
- *   把全部行高挤压变形（用户实锤"预览修坏了"），已回滚到定稿版式。
- * 自带局部采样层（不依赖页面 backdrop，避开共享画布成环的坑）。
+ * 玻璃质感预览卡（2026-10-10 重做：迷你真机屏）。
+ *
+ * 上一版的两处失真，也是用户说"预览效果不太对"的来源：
+ * ① 采样的是**画出来的假网格**（CanvasBackdrop + drawRefractionTestPattern），
+ *    不是真壁纸 ⇒ 拖滑杆时"预览里的变化"和真实页面的样子对不上；
+ * ② 外底是一块 surfaceAlpha=1 的**不透明白板**，把玻璃感整个垫死。
+ *
+ * 本版：四条演示面与页面里其它玻璃卡走**同一条采样通道**（直接采页面 backdrop），
+ * 所见即真机所见；不再有白板外底。
+ *
+ * 版式（用户拍板）：四行**等宽等高**，分别绑顶栏档 / 聊天档 / 页面档 / 输入框档，
+ * 页面卡行右侧放一枚真开关 —— 顺带验证开关在当前壁纸上的可读性。
+ * ⚠️ 不要再往里加第五行：2026-10-09 加"页面卡"把全部行高挤压变形（用户实锤"预览修坏了"）。
  */
 @Composable
 private fun GlassPreviewCard(
@@ -3570,103 +3578,112 @@ private fun GlassPreviewCard(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop
 ) {
     val t = com.haoai.agent.ui.theme.GlassTuning
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val darkState = rememberUpdatedState(dark)
-    // ⚠️ 测试图案走 CanvasBackdrop（采样时在玻璃坐标系直接执行绘制，库 demo 同款）：
-    // 此前用 Box.layerBackdrop 挂载 + 玻璃采样它，实测三行玻璃的 blur/采样整条失效
-    //（只画白雾、测试字清晰裸露，连 15dp 档顶栏都不糊）——挂载路径在预览卡不工作。
-    // CanvasBackdrop 无挂载依赖，每行玻璃各自得到完整图案 + 居中一行测试字，
-    // blur/白雾正常作用（"每栏背景都有一行字"，2026-10-09 用户诉求）。
-    // 深浅主题经 darkState（绘制期读 State 注册订阅，翻主题即重画）。
-    val patternBackdrop = com.kyant.backdrop.backdrops.rememberCanvasBackdrop {
-        com.haoai.agent.ui.common.drawRefractionTestPattern(
-            scope = this, dark = darkState.value, opaqueBase = false, gridDp = 20f
-        )
-    }
-    Box(
+    // 演示开关：只驱动预览里的那一枚，不落盘
+    var demoChecked by remember { mutableStateOf(true) }
+    val rowH = 40.dp
+    Column(
         Modifier
             .fillMaxWidth()
-            .height(140.dp)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 实底面板（悬浮三件套与选项卡同款分层）；活形状防圆角滑杆同类残影
-        com.haoai.agent.ui.common.GlassPanel(
+        // ① 顶栏（方角，绑顶栏档 barBlur/barVeil）
+        GlassPanel(
             backdrop = backdrop,
-            modifier = Modifier.matchParentSize(),
-            radius = t.corner.dp,
-            shapeProvider = { androidx.compose.foundation.shape.RoundedCornerShape(t.corner.dp) },
-            surfaceAlpha = 1f,
-            blurRadius = 0.dp,
-            lensRadius = 0.dp,
-            lensAmountMul = 0f,
-            chromaticAberration = false,
-            floating = true
-        ) {}
-        // 三表面纵向叠放（6dp 间距）：尺寸按"文字一行放得下"定，不追求极限压缩
-        Column(
-            Modifier.matchParentSize().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.fillMaxWidth().height(rowH),
+            radius = 0.dp,
+            lensRadius = t.lensHeight.dp,
+            lensAmount = t.lensAmount.dp,
+            depthEffect = t.depthEffect,
+            blurRadius = t.barBlur.dp,
+            chromaticAberration = t.ca,
+            surfaceAlpha = t.barVeil,
+            border = false
         ) {
-            // 顶栏（方角，全宽，绑顶栏档）
-            GlassPanel(
-                backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(30.dp),
-                radius = 0.dp,
-                lensRadius = t.lensHeight.dp,
-                lensAmountMul = t.lensAmountMul,
-                blurRadius = t.barBlur.dp,
-                chromaticAberration = t.ca,
-                lensFull = t.lensFull,
-                surfaceAlpha = t.barVeil,
-                border = false
-            ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
                 Text(
-                    "顶栏",
-                    style = MaterialTheme.typography.labelSmall,
+                    "⚙ 主题外观",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 8.dp, top = 7.dp)
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 12.dp)
                 )
             }
-            // 卡片（圆角可调，绑聊天档 t.blur/t.veil；页面档演示不放这里——
-            // 预览卡版式是用户三轮效果图定稿的，2026-10-09 曾加第四行挤压全部尺寸，已恢复）
-            GlassPanel(
-                backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(44.dp),
-                radius = t.corner.dp,
-                lensRadius = t.lensHeight.dp,
-                lensAmountMul = t.lensAmountMul,
-                blurRadius = t.blur.dp,
-                chromaticAberration = t.ca,
-                lensFull = t.lensFull,
-                surfaceAlpha = t.veil
-            ) {
+        }
+        // ② 消息气泡（圆角吃滑杆，绑聊天档 blur/veil）
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier.fillMaxWidth().height(rowH),
+            radius = t.corner.dp,
+            lensRadius = t.lensHeight.dp,
+            lensAmount = t.lensAmount.dp,
+            depthEffect = t.depthEffect,
+            blurRadius = t.blur.dp,
+            chromaticAberration = t.ca,
+            surfaceAlpha = t.veil
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
                 Text(
                     "$agentEmoji $agentName · 这就帮你查呀～",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
+                    modifier = Modifier.padding(horizontal = 12.dp)
                 )
             }
-            // 输入框（胶囊形固定，绑输入框档）——placeholder 与聊天页同规则
-            GlassPanel(
-                backdrop = patternBackdrop,
-                modifier = Modifier.fillMaxWidth().height(38.dp),
-                radius = 19.dp,
-                lensRadius = t.lensHeight.dp,
-                lensAmountMul = t.lensAmountMul,
-                blurRadius = t.inputBlur.dp,
-                chromaticAberration = t.ca,
-                lensFull = t.lensFull,
-                surfaceAlpha = t.inputVeil
+        }
+        // ③ 页面卡（绑页面档 pageBlur/pageVeil；右侧开关 = 真机同款 LiquidToggle）
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier.fillMaxWidth().height(rowH),
+            radius = t.corner.dp,
+            lensRadius = t.lensHeight.dp,
+            lensAmount = t.lensAmount.dp,
+            depthEffect = t.depthEffect,
+            blurRadius = t.pageBlur.dp,
+            chromaticAberration = t.ca,
+            surfaceAlpha = t.pageVeil
+        ) {
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Text(
+                    "页面卡片",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                com.haoai.agent.ui.common.HaoSwitch(
+                    checked = demoChecked,
+                    onCheckedChange = { demoChecked = it },
+                    backdrop = backdrop
+                )
+            }
+        }
+        // ④ 输入框（胶囊形固定，绑输入框档）
+        GlassPanel(
+            backdrop = backdrop,
+            modifier = Modifier.fillMaxWidth().height(rowH),
+            radius = rowH / 2,
+            lensRadius = t.lensHeight.dp,
+            lensAmount = t.lensAmount.dp,
+            depthEffect = t.depthEffect,
+            blurRadius = t.inputBlur.dp,
+            chromaticAberration = t.ca,
+            surfaceAlpha = t.inputVeil
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
                 Text(
                     "＋ 给 $agentName 派个活…",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                    modifier = Modifier.padding(horizontal = 14.dp)
                 )
             }
         }
@@ -5406,9 +5423,12 @@ private fun ProviderDialog(
                 // 而是内部滚动区收缩，标题与底部操作栏始终可见
                 .heightIn(max = 560.dp),
             radius = 28.dp,
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             surfaceAlpha = 0.92f,
             blurRadius = 28.dp,
-            chromaticAberration = true
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(
                 Modifier
@@ -6096,9 +6116,12 @@ private fun ProviderWizardDialog(
                     .padding(horizontal = 20.dp)
                     .heightIn(max = 560.dp),
                 radius = 28.dp,
+                lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                 surfaceAlpha = 0.92f,
                 blurRadius = 28.dp,
-                chromaticAberration = true
+                chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     // 标题 + 进度点
@@ -7054,9 +7077,12 @@ private fun ModelCapsDialog(
                 .padding(horizontal = 20.dp)
                 .heightIn(max = 560.dp),
             radius = 28.dp,
+            lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             surfaceAlpha = 0.92f,
             blurRadius = 28.dp,
-            chromaticAberration = true
+            chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(
                 Modifier
@@ -7523,9 +7549,12 @@ private fun ColorPickerDialog(
                     .fillMaxWidth()
                     .padding(horizontal = 22.dp),
                 radius = 28.dp,
+                lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                 surfaceAlpha = 0.92f,
                 blurRadius = 28.dp,
-                chromaticAberration = true
+                chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
             ) {
                 Column(
                     Modifier

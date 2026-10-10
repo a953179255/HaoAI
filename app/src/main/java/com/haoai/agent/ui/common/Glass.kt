@@ -293,11 +293,13 @@ fun GlassPanel(
     lensRadius: Dp = radius,
     blurRadius: Dp = radius / 3f,
     chromaticAberration: Boolean = false,
-    /** 折射覆盖**整个表面**（折射高度=短边一半，四边环带在中心汇合）。
-     *  关闭时折射只在边缘一圈（宽度=lensRadius）——通栏大卡上那一条太窄，等于没有。 */
-    lensFull: Boolean = false,
-    /** 折射强度倍数：位移量 = 折射高度 × 此值（演示 App 的比例是 2） */
-    lensAmountMul: Float = 2f,
+    /** 折射位移量 dp（2026-10-10 解耦：独立于环带宽度，越大边缘弯折越狠，0=关）。
+     *  旧「环带宽度 × 倍数」耦合已废弃；整面折射（lensFull）删除——用户实测无感，
+     *  与"环带宽度拉满"语义重叠。 */
+    lensAmount: Dp = 16.dp,
+    /** 中心深度感（库 lens depthEffect）：边缘位移沿深度衰减，更像厚玻璃。
+     *  默认 true = 改造前此处写死的值，故默认档观感零变化。 */
+    depthEffect: Boolean = true,
     refract: Boolean? = null,
     redrawKey: (() -> Any?)? = null,
     /**
@@ -352,6 +354,15 @@ fun GlassPanel(
     // 翻转后任务胶囊滞留浅色表面（点一下交互才恢复）。绘制期读取这个 State：
     // 值变化经库的 ObserverModifierNode 强制层重绘（与 redrawKey 同机制）。
     val surfaceState = rememberUpdatedState(surface)
+    // 折射/模糊/色差同理（2026-10-10）：调用点把调参值当**参数**传进来，而库的
+    // DrawBackdropElement.update() 只换 lambda 引用、不失效绘制缓存 ⇒ 仅重组不足以
+    // 让新值生效。用 rememberUpdatedState 兜住参数，再在 effects 内读取，值变化即
+    // 经 observeReads 通道失效重算（与 surfaceState 同一套机制）。
+    val blurState = rememberUpdatedState(blurRadius)
+    val lensRadiusState = rememberUpdatedState(lensRadius)
+    val lensAmountState = rememberUpdatedState(lensAmount)
+    val depthState = rememberUpdatedState(depthEffect)
+    val caState = rememberUpdatedState(chromaticAberration)
     val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val border2 = glassBorderColor(0.45f)
 
@@ -359,23 +370,35 @@ fun GlassPanel(
     // 一律传非空实例（库的形参在不同版本间有 `(() -> X)?` 与 `() -> X` 两种写法，
     // 传非空可同时兼容）；"不画"用 alpha = 0 表达，而非传 null。
     // Highlight.Plain = 演示 App 同款的均匀边缘亮环（Default 是渐变式，玻璃上几乎看不见）
-    val highlightLambda: () -> Highlight = remember { { Highlight.Plain } }
+    //
+    // ⚠️ 2026-10-10「滑杆改了没反应」防复发：反编译 DrawBackdropNode 实锤
+    // `observeEffects()` 里的 observeReads **只包住 effects lambda**，
+    // highlight/shadow/innerShadow 的 lambda 是在 draw 阶段被调用的，改值不会触发
+    // 失效。因此这三件套接调参必须走两步：
+    //   ① 组合期读 State（本处）⇒ 值变 → GlassPanel 重组 → 新 lambda 交给节点；
+    //   ② 在 effects lambda 内**再读一次**（见下）⇒ 触发 onObservedReadsChanged
+    //      → invalidateDrawCache → 重绘时才会用新 lambda。
+    // 缺 ② 就是 2026-10-08 那类"滑杆标着影响全部玻璃却毫无变化"。
+    val hlAlpha = com.haoai.agent.ui.theme.GlassTuning.highlight
+    val shadowRadius = com.haoai.agent.ui.theme.GlassTuning.shadow.dp
+    val highlightLambda: () -> Highlight =
+        remember(hlAlpha) { { Highlight.Plain.copy(alpha = hlAlpha) } }
     val shadowLambda: () -> Shadow = if (floating) {
-        remember(darkTheme) {
+        remember(darkTheme, shadowRadius) {
             {
-                // 浅色：冷灰实投影，把浮层从近白背景上"抬起来"；深色：纯黑更浓
+                // 浮层专属加浓档 26/30dp 按滑杆等比缩放（默认 24 ⇒ 比值 1，零变化）
                 if (darkTheme) Shadow.Default.copy(
-                    radius = 30.dp,
+                    radius = shadowRadius * (30f / 24f),
                     offset = DpOffset(0.dp, 8.dp),
                     color = Color.Black.copy(alpha = 0.45f)
                 ) else Shadow.Default.copy(
-                    radius = 26.dp,
+                    radius = shadowRadius * (26f / 24f),
                     offset = DpOffset(0.dp, 7.dp),
                     color = Color(0xFF262E36).copy(alpha = 0.20f)
                 )
             }
         }
-    } else remember { { Shadow.Default } }
+    } else remember(shadowRadius) { { Shadow.Default.copy(radius = shadowRadius) } }
     val innerShadowLambda: () -> InnerShadow = if (floating) {
         remember(darkTheme) {
             {
@@ -439,37 +462,28 @@ fun GlassPanel(
                     // 透过玻璃的壁纸与卡外真实壁纸错位（用户实测猫腿/尾巴错位，
                     // 重进页面才恢复）。这里读 corner 注册订阅 → 圆角变化即重算效果链。
                     com.haoai.agent.ui.theme.GlassTuning.corner
+                    // 高光/投影：见上方「两步走」注释——这里读一次是为了失效绘制缓存，
+                    // 真正取值的 lambda 已在组合期按新值重建。
+                    com.haoai.agent.ui.theme.GlassTuning.highlight
+                    com.haoai.agent.ui.theme.GlassTuning.shadow
                     // ⚠️ 深色下跳过 vibrancy（2026-10-01 任务胶囊实测）：效果链作用在
                     // 整层输出上（含 onDrawSurface 的表面色），vibrancy 的亮度提拉会把
                     // 接近黑的表面抬成灰（0.94 近黑实测渲染 139-144 亮度），高饱和色
                     // （红/绿实验）不受影响。深色玻璃的质感由 blur+lens 承担。
                     if (!darkTheme) vibrancy()
-                    blur(blurRadius.toPx())
+                    blur(blurState.value.toPx())
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。
-                    if (lensRadius > 0.dp) {
-                        if (lensFull) {
-                            // 折射高度 = 短边一半 ⇒ 四边环带在中心汇合，整面都有折射。
-                            // 演示 App 里"折射高度"滑杆拉高就是这个效果；通栏大卡必须
-                            // 这样才看得见 —— 边缘一圈 24dp 只占卡面极小比例。
-                            val md = size.minDimension
-                            lens(
-                                refractionHeight = md * 0.5f,
-                                refractionAmount = md * 0.5f * lensAmountMul,
-                                depthEffect = true,
-                                chromaticAberration = chromaticAberration
-                            )
-                        } else {
-                            // 窄环带：强度 = 高度 × 倍数（位移大 ⇒ 边缘弯折锐利）
-                            // 对齐 Kyant0 演示 App（GlassPlayground/sheet）的配方：
-                            // 折射强度 = 2 × 折射高度（demo: 16/32 与 25.6/51.2），并开 depthEffect。
-                            lens(
-                                refractionHeight = lensRadius.toPx(),
-                                refractionAmount = (lensRadius * lensAmountMul).toPx(),
-                                depthEffect = true,
-                                chromaticAberration = chromaticAberration
-                            )
-                        }
+                    if (lensRadiusState.value > 0.dp) {
+                        // 边环带宽度 = lensRadius，位移量 = lensAmount（两者解耦：
+                        // 2026-10-10 对齐 Kyant0 玻璃实验室，位移不再由环带宽度乘倍数推出）。
+                        // 位移越大边缘弯折越狠；lensAmount = 0 ⇒ 有环带但零位移（等同关折射）。
+                        lens(
+                            refractionHeight = lensRadiusState.value.toPx(),
+                            refractionAmount = lensAmountState.value.toPx(),
+                            depthEffect = depthState.value,
+                            chromaticAberration = caState.value
+                        )
                     }
                 },
                 // 库原生分层三件套：边缘高光 + 外阴影（层级）+ 内阴影（厚度）
@@ -637,7 +651,7 @@ fun LiquidGlassButton(
                 blur(2.dp.toPx())
                 lens(
                     refractionHeight = t.lensHeight.dp.toPx(),
-                    refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                    refractionAmount = t.lensAmount.dp.toPx(),
                     chromaticAberration = t.ca
                 )
             },
@@ -710,6 +724,15 @@ fun GlassCard(
 
     val r = refract ?: LocalGlassRefract.current
     val cardSurface = glassSurfaceColor(surfaceAlpha)
+    // 高光/外投影接调参（2026-10-10）：库 drawBackdrop 的默认值就是
+    // Highlight.Default（alpha 1）与 Shadow.Default（24dp/黑10%），故在滑杆默认档
+    // 上"传与不传"渲染结果完全一致 ⇒ 守零变化铁律。
+    val hlAlpha = com.haoai.agent.ui.theme.GlassTuning.highlight
+    val shadowRadius = com.haoai.agent.ui.theme.GlassTuning.shadow.dp
+    val highlightLambda: () -> Highlight =
+        remember(hlAlpha) { { Highlight.Default.copy(alpha = hlAlpha) } }
+    val shadowLambda: () -> Shadow =
+        remember(shadowRadius) { { Shadow.Default.copy(radius = shadowRadius) } }
     val bgModifier = if (r) {
         Modifier
             // 硬裁剪到卡片形状：drawBackdrop 的 blur/lens 与表面填充会溢出圆角外的
@@ -725,28 +748,24 @@ fun GlassCard(
                     // 全站卡片没反应（实测 pixel diff = 0）。lensRadius 参数降级为开关
                     // （>0 = 开折射），数值统一走全局配方。
                     val t = com.haoai.agent.ui.theme.GlassTuning
+                    // 高光/投影两步走（见 GlassPanel 注释）：此处读 = 失效绘制缓存
+                    t.highlight
+                    t.shadow
                     vibrancy()
                     // 页面档/聊天档各吃各的磨砂滑杆（2026-10-09 方案A拆分）
                     blur(if (pageTier) t.pageBlur.dp.toPx() else t.blur.dp.toPx())
                     if (lensRadius > 0.dp) {
-                        if (t.lensFull) {
-                            val md = size.minDimension
-                            lens(
-                                refractionHeight = md * 0.5f,
-                                refractionAmount = md * 0.5f * t.lensAmountMul,
-                                depthEffect = true,
-                                chromaticAberration = t.ca
-                            )
-                        } else {
-                            lens(
-                                refractionHeight = t.lensHeight.dp.toPx(),
-                                refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
-                                depthEffect = true,
-                                chromaticAberration = t.ca
-                            )
-                        }
+                        // 位移量解耦（2026-10-10）：不再由环带宽度乘倍数推出
+                        lens(
+                            refractionHeight = t.lensHeight.dp.toPx(),
+                            refractionAmount = t.lensAmount.dp.toPx(),
+                            depthEffect = t.depthEffect,
+                            chromaticAberration = t.ca
+                        )
                     }
                 },
+                highlight = highlightLambda,
+                shadow = shadowLambda,
             layerBlock = {
                 // 与 LiquidGlassButton 同理：不做跟指平移——卡片被按住拖动会读作「可拖拽」。
                 // 折射静态呈现，按压缩放与指尖辉光由 highlight 提供
@@ -805,9 +824,9 @@ fun GlassCard(
  * 仅当开关自身处于 glass 采样层内（drawBackdrop 会自引用导致渲染递归崩溃）时，
  * 应传 refract=false，用本地绘制代替背景采样。
  *
- * 关闭态雾色由调用方传入 [offColor]（onSurface 雾）：原先写死白 18%，白玻璃
- * 开关压在白 58% 玻璃卡上等于白压白——真机实测开关几乎看不见，这正是当年
- * 全 App 弃用 LiquidToggle 换平面 HaoSwitch 的根因（2026-10-08 随配色规范修正）。
+ * 关闭态色由调用方传入 [offColor]。历史两坑：① 写死白 18% → 白卡上白压白看不见
+ * （2026-10-08 改 onSurface 半透明灰）；② 半透明灰在玻璃轨道上又透壁纸色——
+ * 绿壁纸时关闭态被染绿"关也像开"（2026-10-10 A 方案改不透底实灰，见调用点）。
  */
 private fun DrawScope.drawCapsule(
     fraction: Float,
@@ -885,8 +904,12 @@ fun LiquidToggle(
     val travelPx = with(LocalDensity.current) { (width - height).toPx() }
     val accent = checkedColor ?: androidx.compose.material3.MaterialTheme.colorScheme.primary
     // 关闭态轨道雾：onSurface（浅 18% / 深 22%，与平面开关同规范）；白雾在白卡上不可见（见 drawCapsule 注释）
+    // 关闭态轨道（2026-10-10 A 方案）：改**不透底**实色中性灰。
+    // 原 onSurface 18%/22% 半透明灰在玻璃轨道上会让壁纸颜色透上来——绿壁纸时
+    // 关闭态轨道被染绿，和"开=主题绿"撞色，用户实测"关着也像开着"。
+    // 实灰不透底后壁纸再绿也渗不进来；开/关的其余信号（滑块位置、白球）不变。
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val offColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.22f else 0.18f)
+    val offColor = if (dark) Color(0xFF3A4150) else Color(0xFFC3CAD4)
 
     // 开关进度 0..1；拖动中用 dragFraction 覆盖显示，松手交还弹簧
     val progressAnim = remember { Animatable(if (checked) 1f else 0f) }
@@ -912,7 +935,7 @@ fun LiquidToggle(
                 blur(2.dp.toPx())
                 lens(
                     refractionHeight = t.lensHeight.dp.toPx(),
-                    refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                    refractionAmount = t.lensAmount.dp.toPx(),
                     chromaticAberration = t.ca
                 )
             },
@@ -1015,7 +1038,8 @@ fun GlassPageBar(
         radius = 0.dp,
         // 顶栏加折射环（之前 0 = 完全没折射，是"只是磨砂"最重的地方）
         lensRadius = com.haoai.agent.ui.theme.haoPageBarLensRadius(),
-        lensAmountMul = com.haoai.agent.ui.theme.haoPageBarLensAmountMul(),
+        lensAmount = com.haoai.agent.ui.theme.haoPageBarLensAmount(),
+        depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
         blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
         surfaceAlpha = surfaceAlpha ?: com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
         border = false,
@@ -1105,7 +1129,8 @@ fun GlassPopup(
             // 统一玻璃配方（2026-10-08）：原继承 lensRadius=radius（圆角越大折射越重），
             // 现折射/模糊/色差走全局调参
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             content { leaving = true }
@@ -1188,7 +1213,8 @@ fun GlassBottomSheet(
             blurRadius = blurRadius,
             // 统一玻璃配方（2026-10-08）：折射/倍数/色差走全局调参
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(Modifier.onSizeChanged { panelH = it.height.toFloat() }) {
@@ -1282,7 +1308,8 @@ fun GlassAlertDialog(
             // 统一玻璃配方（2026-10-08）：原继承 lensRadius=28×默认2=位移56 全 App
             // 最重；折射/倍数走全局调参，色差改走开关
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
             refract = refract
         ) {
@@ -1658,7 +1685,7 @@ fun LiquidTabRow(
                         blur(6.dp.toPx())
                         lens(
                             refractionHeight = t.lensHeight.dp.toPx(),
-                            refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                            refractionAmount = t.lensAmount.dp.toPx(),
                             chromaticAberration = t.ca
                         )
                     },
@@ -1685,7 +1712,7 @@ fun LiquidTabRow(
                         blur(4.dp.toPx())
                         lens(
                             refractionHeight = t.lensHeight.dp.toPx(),
-                            refractionAmount = (t.lensHeight * t.lensAmountMul).dp.toPx(),
+                            refractionAmount = t.lensAmount.dp.toPx(),
                             chromaticAberration = t.ca
                         )
                     },

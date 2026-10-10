@@ -1309,11 +1309,15 @@ fun ChatScreen(
                     GlassPanel(
                         backdrop = backdrop,
                         radius = 14.dp,
+                        lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                        lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                        depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
                         // v7.2：文案长短切换时胶囊宽度平滑过渡（180ms 弹性），不再瞬跳
                         modifier = Modifier.animateContentSize(
                             animationSpec = tween(180, easing = LinearEasing)
-                        )
+                        ),
+                        chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
                     ) {
                         Row(
                             Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
@@ -1729,7 +1733,8 @@ fun ChatScreen(
                         surfaceAlpha = 0.62f,
                         blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
                         lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-                        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+                        lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                        depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                         chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
@@ -2259,7 +2264,8 @@ fun ChatScreen(
                 // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius28×默认2=位移56
                 // 全 App 最重；折射并入全局，色差走开关
                 lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-                lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+                lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                 chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
             ) {
                 Column(
@@ -2362,7 +2368,8 @@ private fun TopBar(
             .animateContentSize(),
         radius = 0.dp,
         lensRadius = com.haoai.agent.ui.theme.haoPageBarLensRadius(),
-        lensAmountMul = com.haoai.agent.ui.theme.haoPageBarLensAmountMul(),
+        lensAmount = com.haoai.agent.ui.theme.haoPageBarLensAmount(),
+        depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
         // blurRadius 默认=radius/3，方角顶栏 radius=0 会得到 blur(0)——显式给模糊量
         blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
         surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
@@ -4520,7 +4527,8 @@ private fun ComposerBar(
         // 出"卡顿感"（用户实测）。现折射环带/倍数/色差与全 App 一致（默认 16×1），
         // 模糊单独一档（常年压在正文上，默认 4）
         lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-        lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+        lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+        depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
         blurRadius = com.haoai.agent.ui.theme.GlassTuning.inputBlur.dp,
         chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
         surfaceAlpha = com.haoai.agent.ui.theme.haoInputSurfaceAlpha(),
@@ -5389,7 +5397,8 @@ private fun MessageActionPanel(
             // 统一玻璃配方（2026-10-08）：原不传 lens → 继承 radius24×默认倍数2=位移48
             // （比输入框原状还重），折射早已并入全局
             lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-            lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+            lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+            depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {

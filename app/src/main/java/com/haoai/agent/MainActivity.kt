@@ -1420,7 +1420,8 @@ private fun OnboardingGlass(
                 // 现折射/模糊/色差走全局调参，磨砂滑杆即时生效
                 blurRadius = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
                 lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
-                lensAmountMul = com.haoai.agent.ui.theme.GlassTuning.lensAmountMul,
+                lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                 chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
                 surfaceAlpha = 0.36f
             ) {

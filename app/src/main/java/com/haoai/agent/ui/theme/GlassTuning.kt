@@ -20,24 +20,35 @@ import androidx.compose.runtime.setValue
  *
  * 统一原则（2026-10-08 用户裁决）：**全 App 玻璃共享一套折射/模糊配方**——
  * 之前输入框 52dp、弹窗 56dp、卡片 32dp 各写各的，观感打架。定稿默认
- * 折射 16×1 + 模糊 4（用户在实验室实测选定）。顶栏保留独立白雾（标题文字
+ * 折射（环带 16dp / 位移 16dp）+ 模糊 4（用户在实验室实测选定）。顶栏保留独立白雾（标题文字
  * 需要更实的底，用户未抱怨过）；对话框/消息操作面板保留更不透明的表面
  * （可读性优先），但折射/模糊并入统一值。
+ *
+ * 2026-10-10 对照 Kyant0 玻璃实验室改造：
+ * - **折射位移解耦**：原「环带宽度 × 强度倍数」两滑杆耦合，改成独立
+ *   [lensAmount]（dp）。默认 16 = 旧「16 × 1」，停默认档观感零变化。
+ * - **删除整面折射**（lensFull）：用户实测无感，且语义与"环带宽度拉满"重叠。
+ * - **补中心深度感开关** [depthEffect]（库 lens 原生参数，默认开=原写死值）。
+ * - **补边缘高光 / 外投影**：库 drawBackdrop 三件套原本各写死一档，现暴露成
+ *   滑杆，默认值 = 原写死档，拖动才变。
+ * - 色差 [ca] 保留开关（库 shader 只有 0/1 两档，做不了连续滑杆——诚实修正）。
  */
 object GlassTuning {
 
-    /** 出厂默认（2026-10-08 实验室定稿）：blur 4 / lens(16, ×1) / 白雾 0.48；
-     *  顶栏白雾 0.55（文字底）；输入框模糊 4 */
+    /** 出厂默认（2026-10-08 实验室定稿 / 2026-10-10 解耦改造）：
+     *  blur 折射(环带16, 位移16) / 白雾 0.48 / 深度感开 / 色差开；
+     *  顶栏白雾 0.55（文字底）；输入框模糊 4。
+     *  ⚠️ 位移默认 16 = 旧「环带16 × 倍数1」，解耦后默认档观感零变化（用户铁律）。 */
     const val DEFAULT_BLUR = 4f
     const val DEFAULT_LENS_HEIGHT = 16f
-    const val DEFAULT_LENS_AMOUNT_MUL = 1f
+    const val DEFAULT_LENS_AMOUNT = 16f
     const val DEFAULT_VEIL = 0.48f
     const val DEFAULT_CORNER = 16f
-    const val DEFAULT_LENS_FULL = false
+    const val DEFAULT_DEPTH = true
     const val DEFAULT_CA = true
 
     /** 顶栏与卡片分开调：顶栏有标题文字，需要更实的磨砂（用户实测 blur≈15 合适；
-     *  折射/倍数与全局统一，只有模糊和白雾是顶栏专属档） */
+     *  折射与全局统一，只有模糊和白雾是顶栏专属档） */
     const val DEFAULT_BAR_BLUR = 15f
     const val DEFAULT_BAR_VEIL = 0.55f
     const val DEFAULT_INPUT_BLUR = 4f
@@ -45,14 +56,21 @@ object GlassTuning {
     const val DEFAULT_PAGE_BLUR = 4f
     const val DEFAULT_PAGE_VEIL = 0.48f
 
+    /** 边缘高光强度 0..1（默认 1 = 库 Highlight 原生强度，拖动可压暗） */
+    const val DEFAULT_HIGHLIGHT = 1f
+    /** 外投影模糊半径 dp（默认 24 = 库 Shadow.Default 现值，守"默认档零变化"铁律；
+     *  浮层的加浓档 26/30dp 不接滑杆，保持专属） */
+    const val DEFAULT_SHADOW = 24f
+
     /** 背景模糊 dp（磨砂感的主要来源）——全 App 玻璃统一 */
     var blur by mutableFloatStateOf(DEFAULT_BLUR)
 
     /** 折射高度 dp —— 即 lens 的边缘环带宽度；统一值 */
     var lensHeight by mutableFloatStateOf(DEFAULT_LENS_HEIGHT)
 
-    /** 折射强度倍数 —— 位移量 = 折射高度 × 此值；统一值 */
-    var lensAmountMul by mutableFloatStateOf(DEFAULT_LENS_AMOUNT_MUL)
+    /** 折射位移量 dp（2026-10-10 解耦：原「折射强度倍数 × 环带宽度」两滑杆耦合，
+     *  对齐 Kyant0 实验室改独立值；越大边缘弯折越狠，0 = 关折射） */
+    var lensAmount by mutableFloatStateOf(DEFAULT_LENS_AMOUNT)
 
     /** 白雾（卡片表面不透明度） */
     var veil by mutableFloatStateOf(DEFAULT_VEIL)
@@ -60,11 +78,17 @@ object GlassTuning {
     /** 圆角 dp */
     var corner by mutableFloatStateOf(DEFAULT_CORNER)
 
-    /** 整面折射：折射高度自动改为"短边一半"，四边环带在中心汇合 */
-    var lensFull by mutableStateOf(DEFAULT_LENS_FULL)
+    /** 中心深度感（库 lens depthEffect：边缘位移沿深度衰减，更像厚玻璃） */
+    var depthEffect by mutableStateOf(DEFAULT_DEPTH)
 
-    /** 色差（边缘红蓝分离） */
+    /** 色差（边缘红蓝分离）——库只有开/关两档，不做连续滑杆 */
     var ca by mutableStateOf(DEFAULT_CA)
+
+    /** 边缘高光强度 0..1（库 drawBackdrop highlight alpha） */
+    var highlight by mutableFloatStateOf(DEFAULT_HIGHLIGHT)
+
+    /** 外投影模糊半径 dp（库 drawBackdrop shadow radius） */
+    var shadow by mutableFloatStateOf(DEFAULT_SHADOW)
 
     /** 顶栏背景模糊 dp（与卡片分开调：顶栏有标题文字，需要更实的磨砂） */
     var barBlur by mutableFloatStateOf(DEFAULT_BAR_BLUR)
@@ -72,7 +96,7 @@ object GlassTuning {
     /** 顶栏白雾 */
     var barVeil by mutableFloatStateOf(DEFAULT_BAR_VEIL)
 
-    /** 输入框背景模糊 dp（折射/倍数走统一值，模糊单独一档：输入框常年压在正文上） */
+    /** 输入框背景模糊 dp（折射走统一值，模糊单独一档：输入框常年压在正文上） */
     var inputBlur by mutableFloatStateOf(DEFAULT_INPUT_BLUR)
 
     /** 输入框白雾（2026-10-08 起独立于卡片，用户单独调） */
@@ -99,11 +123,13 @@ object GlassTuning {
     fun loadFrom(p: com.haoai.agent.data.GlassParams) {
         blur = p.blur
         lensHeight = p.lensHeight
-        lensAmountMul = p.lensAmountMul
+        lensAmount = p.lensAmount
         veil = p.veil
         corner = p.corner
-        lensFull = p.lensFull
+        depthEffect = p.depthEffect
         ca = p.ca
+        highlight = p.highlight
+        shadow = p.shadow
         barBlur = p.barBlur
         barVeil = p.barVeil
         inputBlur = p.inputBlur
@@ -116,11 +142,13 @@ object GlassTuning {
     fun snapshot() = com.haoai.agent.data.GlassParams(
         blur = blur,
         lensHeight = lensHeight,
-        lensAmountMul = lensAmountMul,
+        lensAmount = lensAmount,
         veil = veil,
         corner = corner,
-        lensFull = lensFull,
+        depthEffect = depthEffect,
         ca = ca,
+        highlight = highlight,
+        shadow = shadow,
         barBlur = barBlur,
         barVeil = barVeil,
         inputBlur = inputBlur,
@@ -133,11 +161,13 @@ object GlassTuning {
     fun reset() {
         blur = DEFAULT_BLUR
         lensHeight = DEFAULT_LENS_HEIGHT
-        lensAmountMul = DEFAULT_LENS_AMOUNT_MUL
+        lensAmount = DEFAULT_LENS_AMOUNT
         veil = DEFAULT_VEIL
         corner = DEFAULT_CORNER
-        lensFull = DEFAULT_LENS_FULL
+        depthEffect = DEFAULT_DEPTH
         ca = DEFAULT_CA
+        highlight = DEFAULT_HIGHLIGHT
+        shadow = DEFAULT_SHADOW
         barBlur = DEFAULT_BAR_BLUR
         barVeil = DEFAULT_BAR_VEIL
         inputBlur = DEFAULT_INPUT_BLUR

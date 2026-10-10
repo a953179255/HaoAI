@@ -93,8 +93,8 @@ fun HaoGroup(
         // 聊天卡片不再被这里牵动
         surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
         lensRadius = if (lens) tuning.lensHeight.dp else 0.dp,
-        lensAmountMul = tuning.lensAmountMul,
-        lensFull = tuning.lensFull && lens,
+        lensAmount = tuning.lensAmount.dp,
+        depthEffect = tuning.depthEffect,
         chromaticAberration = lens,
         blurRadius = com.haoai.agent.ui.theme.haoGroupBlurRadius(),
         floating = true,
