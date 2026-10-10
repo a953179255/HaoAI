@@ -420,6 +420,7 @@ private fun McpEditView(
     val scope = rememberCoroutineScope()
 
     fun buildConfig(): McpServerConfig? {
+        errText = ""   // m24：每次校验先清旧错误，修正后红字即时消失
         val n = name.trim()
         if (n.isEmpty()) { errText = "名称不能为空"; return null }
         if (kind == "stdio") {
@@ -690,6 +691,18 @@ private fun McpEditView(
                             modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp)
                         )
                     }
+                }
+            }
+            // m24（2026-10-10）：errText 原来只写不读 —— 名称为空/命令为空/URL 非法时
+            // 点保存或测试连接毫无反馈（校验静默失败）。渲染在按钮下方。
+            if (errText.isNotBlank()) {
+                item {
+                    Text(
+                        "⚠ $errText",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = haoToneMain(HaoTone.Danger),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
                 }
             }
             testResult?.let { (ok, msg) ->

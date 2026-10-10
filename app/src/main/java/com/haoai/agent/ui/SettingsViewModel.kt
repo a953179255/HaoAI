@@ -144,9 +144,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun configFileStatus(): String {
         val f = java.io.File(c.configFile.parentFile, "config-bridge.log")
         if (!f.exists()) return "未配置"
+        // M20：useLines 流式读，只留最后一行非空 —— 不再把整个文件装成 List<String>
         return runCatching {
-            val lines = f.readLines().filter { it.isNotBlank() }
-            lines.lastOrNull()?.take(120) ?: "未配置"
+            f.useLines { lines -> lines.filter { it.isNotBlank() }.lastOrNull()?.take(120) ?: "未配置" }
         }.getOrDefault("未配置")
     }
 
@@ -207,6 +207,48 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 本机会话数（会话列表长度）。 */
     fun sessionCount(): Int = runCatching { c.sessionStore.list().size }.getOrDefault(0)
+
+    /**
+     * M20（2026-10-10）：设置首页统计块的统一快照。
+     * 原来同屏散着调 `sessionCount()`（每次 list() 全量解析）+ `scopeBytes()` ×4
+     * （每次全目录遍历）+ `snapshotLabel()`（快照目录遍历），一次重组就是 6+ 趟磁盘。
+     * 改为进页面时后台取一次打包进 [homeStorage]；[loadHomeStorage] 带 2 秒节流，
+     * 同屏两个块都触发也只跑一趟。
+     */
+    data class HomeStorage(
+        val sessions: Int = 0,
+        val sessionsBytes: Long = 0,
+        val memoryBytes: Long = 0,
+        val skillsBytes: Long = 0,
+        val tasksBytes: Long = 0,
+        val snapshotLabel: String = ""
+    )
+
+    var homeStorage by mutableStateOf(HomeStorage())
+        private set
+
+    private var lastHomeStorageLoadAt = 0L
+
+    fun loadHomeStorage() {
+        val now = System.currentTimeMillis()
+        if (now - lastHomeStorageLoadAt < 2_000L) return
+        lastHomeStorageLoadAt = now
+        viewModelScope.launch {
+            homeStorage = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val b = { s: com.haoai.agent.platform.BackupScope ->
+                    runCatching { com.haoai.agent.platform.DataBackupManager.scopeSize(c, s) }.getOrDefault(0L)
+                }
+                HomeStorage(
+                    sessions = sessionCount(),
+                    sessionsBytes = b(com.haoai.agent.platform.BackupScope.SESSIONS),
+                    memoryBytes = b(com.haoai.agent.platform.BackupScope.MEMORY),
+                    skillsBytes = b(com.haoai.agent.platform.BackupScope.SKILLS),
+                    tasksBytes = b(com.haoai.agent.platform.BackupScope.TASKS),
+                    snapshotLabel = runCatching { snapshotLabel() }.getOrDefault("")
+                )
+            }
+        }
+    }
 
     /** 应用数据目录绝对路径（关于页可点复制）。 */
     fun dataDirPath(): String = runCatching { c.appFilesDir.absolutePath }.getOrDefault("")

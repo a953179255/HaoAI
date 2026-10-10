@@ -1078,7 +1078,10 @@ fun GlassBottomSheet(
     }
     androidx.activity.compose.BackHandler(onBack = { requestClose() })
     LaunchedEffect(Unit) {
-        slide.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
+        // 转场接线（2026-10-10）：进场规格从写死 tween 改为读 MotionTheme.sheetSpec
+        // —— Liquid 档带轻微过冲 = 面板到顶越界回弹（档位设计的本意）；
+        // 退场（requestClose 里）保持快速 tween 滑出屏，不过冲。
+        slide.animateTo(0f, com.haoai.agent.ui.theme.MotionTheme.sheetSpec)
     }
     val eff = slide.value + dragY.floatValue
     Box(

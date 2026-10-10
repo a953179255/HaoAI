@@ -44,16 +44,28 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun refresh() {
-        items = c.memoryBank.all()
-        days = c.journal.allDays()
-        capacity = c.memoryBank.capacity()
+        // M21/M19（2026-10-10）：all()/allDays() 都是同步读盘（MEMORY.md 全量解析 +
+        // 日志目录全扫），原来直接跑在调用线程——init 时在主线程，delete/tidy 后也在
+        // 主线程再读一遍。挪到 IO，完成后回写 Compose state（snapshotState 可跨线程写）。
+        // 便宜的三个字段（settingsFlow 内存读）同步赋值，保持首帧不空。
         val st = c.settingsFlow.value
         lastConsolidationAt = st.lastConsolidationAt
         lastConsolidationReport = st.lastConsolidationReport
         lastBackupAt = st.lastMemoryBackupAt
-        val bankContents = items.mapTo(HashSet()) { it.content }
-        promotionCandidates = days.flatMap { it.items }
-            .count { it.importance >= MemoryConsolidation.PROMOTE_THRESHOLD && it.content !in bankContents }
+        capacity = c.memoryBank.capacity()
+        viewModelScope.launch {
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val its = c.memoryBank.all()
+                val d = c.journal.allDays()
+                val bankContents = its.mapTo(HashSet()) { it.content }
+                val promo = d.flatMap { it.items }
+                    .count { it.importance >= MemoryConsolidation.PROMOTE_THRESHOLD && it.content !in bankContents }
+                Triple(its, d, promo)
+            }
+            items = r.first
+            days = r.second
+            promotionCandidates = r.third
+        }
     }
 
     /** 最久未使用的记忆（健康度仪表盘的清理建议，最多 5 条）。 */
@@ -64,27 +76,37 @@ class MemoryViewModel(private val c: AppContainer) : ViewModel() {
     fun journalCount(): Int = days.sumOf { it.items.size }
 
     fun delete(id: String) {
-        c.memoryBank.forget(id)
-        refresh()
-        c.syncWorkspaceDocs()
+        // M21：forget 内部是"全量重写 MEMORY.md + .bak 拷贝"，主线程同步跑会卡
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { c.memoryBank.forget(id) }
+            refresh()
+            c.syncWorkspaceDocs()
+        }
     }
 
     fun clearAll() {
-        c.memoryBank.clear()
-        refresh()
-        c.syncWorkspaceDocs()
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { c.memoryBank.clear() }
+            refresh()
+            c.syncWorkspaceDocs()
+        }
     }
 
     fun clearJournal() {
-        c.journal.clear()
-        refresh()
-        c.syncWorkspaceDocs()
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { c.journal.clear() }
+            refresh()
+            c.syncWorkspaceDocs()
+        }
     }
 
-    fun tidy(): Int {
-        val n = c.memoryBank.tidy()
-        refresh()
-        return n
+    /** M21：整理改为后台执行，结果经 [onDone] 回调（调用方显示提示文案）。 */
+    fun tidy(onDone: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            val n = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { c.memoryBank.tidy() }
+            refresh()
+            onDone(n)
+        }
     }
 
     /** 手动固化：按「记忆管理模型」设置执行（端侧或云端），失败回退规则；完成后回调描述文本。 */

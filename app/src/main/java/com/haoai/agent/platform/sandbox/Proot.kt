@@ -39,7 +39,7 @@ object Proot {
         val expected = EXPECTED_SHA[abi] ?: return null
         val binary = File(nativeLibraryDir ?: return null, "libproot.so")
         if (!binary.exists() || !binary.canExecute()) return null
-        val actual = runCatching { sha256(binary) }.getOrNull() ?: return null
+        val actual = sha256Cached(appFilesDir, binary) ?: return null
         if (!actual.equals(expected, ignoreCase = true)) return null
         val loader = File(nativeLibraryDir, "libproot_loader.so")
         // libtalloc.so → libtalloc.so.2（DT_NEEDED 名称；每次启动刷新，随版本更新）
@@ -117,6 +117,34 @@ object Proot {
             }
         }
         return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * M18（2026-10-10）：带磁盘缓存的 sha256。
+     *
+     * libproot.so 是随 APK 装进 nativeLibraryDir 的只读库，内容不会自己变；
+     * 唯一变的时机是更新 APK（文件长度几乎必然变化）。所以"长度相同 → 沿用上次
+     * 算过的哈希"即可把每次冷启动的数 MB 哈希计算变成一次读 64 字节缓存文件。
+     * 长度不同/无缓存才真正重算并回写。
+     *
+     * 极端情况（文件被改坏但长度恰好相同）不会比原来更糟：坏库跑不起来，
+     * 3.3 后端本就按"不可用"回落 toybox。
+     */
+    private fun sha256Cached(appFilesDir: File, binary: File): String? {
+        val cacheFile = File(appFilesDir, "proot/sha.cache")
+        val len = runCatching { binary.length() }.getOrDefault(-1L)
+        if (len >= 0 && cacheFile.isFile) {
+            runCatching {
+                val parts = cacheFile.readText().trim().split(' ')
+                if (parts.size == 2 && parts[0].toLongOrNull() == len) return parts[1]
+            }
+        }
+        val actual = runCatching { sha256(binary) }.getOrNull() ?: return null
+        runCatching {
+            cacheFile.parentFile?.mkdirs()
+            cacheFile.writeText("$len $actual")
+        }
+        return actual
     }
 
     /**

@@ -1,8 +1,6 @@
 package com.haoai.agent.ui.theme
 
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -33,7 +31,6 @@ object MotionTheme {
     var style by mutableStateOf(MotionStyle.Liquid)
 
     private val gentleEasing = FastOutSlowInEasing
-    private val liquidEasing = CubicBezierEasing(0.3f, 1.2f, 0.4f, 1f)
 
     // ── 弹层（GlassPopup / GlassAlertDialog）：缩放起点 / 上浮距离 / 规格 ──
     val popupFromScale: Float
@@ -66,41 +63,68 @@ object MotionTheme {
         }
 
     // ── 底部弹窗（GlassBottomSheet）──
+    // 只接**进场**：Liquid 档轻微过冲 = 面板滑到顶后越界回弹，即文档说的
+    // "底部弹窗越界回弹"；退场目标是滑出屏幕，过冲会先冲过头再弹回来，
+    // 视觉错误 —— 退场保持组件内的快速 tween。
+    // stiffness=850：底弹窗进场位移 2200px，此刚度收敛 ≈240ms（与原 tween 一致），
+    // 接线不改变默认档手感，只补上原本就设计的轻微回弹。
     val sheetSpec: AnimationSpec<Float>
         get() = when (style) {
-            MotionStyle.Liquid -> spring(dampingRatio = 0.85f, stiffness = 300f)
-            MotionStyle.Snappy -> spring(dampingRatio = 1f, stiffness = 480f)
+            MotionStyle.Liquid -> spring(dampingRatio = 0.82f, stiffness = 850f)
+            MotionStyle.Snappy -> spring(dampingRatio = 1f, stiffness = 1200f)
             MotionStyle.Gentle -> tween(300, easing = gentleEasing)
         }
 
-    // ── 展开/收起（任务面板 / 思考链 / 上下文详情）──
-    val expandSpec: AnimationSpec<Float>
+    // （expandSpec 已删 2026-10-10：零引用的旧设计残留。尺寸展开/收起动画
+    // 不适合带过冲的 spring —— 高度过冲 = 内容溢出裁切再弹回，各展开点
+    // 的固定曲线（tween 180-260ms）是各自调好的，不做全局档位。）
+
+    // ── 页面转场（MainActivity AnimatedContent）──────────────────────
+    //
+    // 转场接线缺口修复（2026-10-10）：原 pageSlideFraction/pageMs/pageEasing 是
+    // **早期转场设计**（28% 部分位移 + 固定时长）的参数，而转场后来重做成了
+    // push/pop 双向全屏滑入 + 缩放沉底 —— 属性与实现语义对不上，一直没接，
+    // 结果是设置里切动效档位对页面转场完全无效（审查点名的"设置项部分失效"）。
+    //
+    // 修法：把**当前实测调好的参数**作为 Liquid（默认）档参数化进来，三档
+    // 各有可感知差异；过时的三个属性删除（留着就是"看起来有开关其实没接"）。
+    // 注意 Liquid 档值 = 重做转场时的实测值，接上后默认体验零变化。
+
+    /** 页面滑入/滑出位移规格（IntOffset）。 */
+    val pageSlideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset>
         get() = when (style) {
-            MotionStyle.Liquid -> spring(dampingRatio = 0.85f, stiffness = 380f)
-            MotionStyle.Snappy -> spring(dampingRatio = 1f, stiffness = 560f)
-            MotionStyle.Gentle -> tween(260, easing = gentleEasing)
+            MotionStyle.Liquid -> spring(
+                dampingRatio = 0.9f,
+                stiffness = Spring.StiffnessMedium,
+                visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
+            )
+            // 丝滑响应：临界阻尼 + 高刚度，快而不弹
+            MotionStyle.Snappy -> spring(
+                dampingRatio = 1f,
+                stiffness = 2500f,
+                visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
+            )
+            MotionStyle.Gentle -> tween(320, easing = gentleEasing)
         }
 
-    // ── 页面转场（MainActivity AnimatedContent）：位移比例 / 时长 / 缓动 ──
-    val pageSlideFraction: Float
+    /** 页面淡入/淡出规格。 */
+    val pageFadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float>
         get() = when (style) {
-            MotionStyle.Liquid -> 0.28f
-            MotionStyle.Snappy -> 0.12f
-            MotionStyle.Gentle -> 0.18f
+            MotionStyle.Liquid -> tween(300, easing = FastOutSlowInEasing)
+            MotionStyle.Snappy -> tween(160, easing = FastOutSlowInEasing)
+            MotionStyle.Gentle -> tween(280, easing = gentleEasing)
         }
 
-    val pageMs: Int
+    /** 页面缩放（旧页沉底/回位）规格。 */
+    val pageScaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float>
         get() = when (style) {
-            MotionStyle.Liquid -> 400
-            MotionStyle.Snappy -> 190
-            MotionStyle.Gentle -> 280
-        }
-
-    val pageEasing: Easing
-        get() = when (style) {
-            MotionStyle.Liquid -> liquidEasing
-            MotionStyle.Snappy -> CubicBezierEasing(0.2f, 0f, 0f, 1f)
-            MotionStyle.Gentle -> gentleEasing
+            MotionStyle.Liquid -> spring(
+                dampingRatio = 0.9f,
+                stiffness = Spring.StiffnessMedium,
+                visibilityThreshold = 0.001f
+            )
+            MotionStyle.Snappy -> spring(dampingRatio = 1f, stiffness = 2500f, visibilityThreshold = 0.001f)
+            MotionStyle.Gentle -> tween(280, easing = gentleEasing)
         }
 
     // ── 通用淡入淡出时长 ──

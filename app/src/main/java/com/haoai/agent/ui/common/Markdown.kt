@@ -1966,12 +1966,14 @@ private const val TYPE_IN_FLIP_MS = 220
 @Composable
 private fun typeInTail(ann: AnnotatedString): AnnotatedString {
     // 文本变化时刻：尾部字符同批到达（40ms flusher 批），共享同一到达时刻
+    //
+    // m18（2026-10-10）：原实现把 lastLen/batchAt 的更新写在组合体里（每次重组
+    // 都可能写 State），违反 Compose「组合无副作用」契约 —— 写状态会订阅当前
+    // 重组作用域，引入额外重组（侥幸没成死循环只因长度收敛）。检测天然以
+    // 「文本长度变化」为界，正好与下方 LaunchedEffect 的 key 重合：挪进 effect
+    // 首行，effect 只在长度变化时重启 = 每次新批恰好写一次，契约干净。
+    // lastLen 字段随之整个删除（effect 重启本身就是"变了"的信号）。
     var batchAt by remember { mutableLongStateOf(0L) }
-    var lastLen by remember { mutableStateOf(-1) }
-    if (ann.text.length != lastLen) {
-        lastLen = ann.text.length
-        batchAt = System.currentTimeMillis()
-    }
     // 随机时钟：按「批号」缓存每字符的淡入/翻转延迟（同批同延迟=星布错落来自批次差）
     // 用 length 哈希派生伪随机——重组稳定，不因重组重掷（避免字符来回跳变）
     val delayFor = { idx: Int ->
@@ -1986,6 +1988,7 @@ private fun typeInTail(ann: AnnotatedString): AnnotatedString {
     var now by remember { mutableLongStateOf(0L) }
     val totalWindow = 220L + TYPE_IN_FLIP_MS + 64
     LaunchedEffect(ann.text.length) {
+        batchAt = System.currentTimeMillis()
         while (isActive) {
             now = System.currentTimeMillis()
             kotlinx.coroutines.delay(32)

@@ -195,6 +195,9 @@ fun SettingsScreen(
     var showDreamPicker by androidx.compose.runtime.remember { mutableStateOf(false) }
     var wpVersion by androidx.compose.runtime.remember { mutableStateOf(vm.wallpaperSet(context)) }
     var confirmWpClear by androidx.compose.runtime.remember { mutableStateOf(false) }
+    // m23（2026-10-10）：账本清空信号 —— usageItems 的 dashboard() remember 以此为 key，
+    // 清空确认后自增，图表当场重算（原来必须退出设置页重进才刷新）
+    var ledgerVersion by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
 
     // section 状态由 MainActivity 提升（从记忆库等管理页返回时恢复原子页）。
     // lockedSection 非空（独立 screen 模式）时 section 恒为该值、不可变，
@@ -261,7 +264,8 @@ fun SettingsScreen(
             section = lockedSection,
             vm = vm, settings = settings, wallpaper = wallpaper,
             context = context, a11yOn = a11yOn, a11yTick = a11yTick,
-            wpVersion = wpVersion, linuxState = linuxState,
+            wpVersion = wpVersion, onWpVersionChange = { wpVersion = it },
+            ledgerVersion = ledgerVersion, linuxState = linuxState,
             showScan = showScan, onShowScan = { showScan = true },
             pendingDelete = pendingDelete, onPendingDelete = { pendingDelete = it },
             purposePicker = purposePicker, onPickPurposeModel = { purposePicker = it },
@@ -612,7 +616,8 @@ fun SettingsScreen(
             section = section,
             vm = vm, settings = settings, wallpaper = wallpaper,
             context = context, a11yOn = a11yOn, a11yTick = a11yTick,
-            wpVersion = wpVersion, linuxState = linuxState,
+            wpVersion = wpVersion, onWpVersionChange = { wpVersion = it },
+            ledgerVersion = ledgerVersion, linuxState = linuxState,
             showScan = showScan, onShowScan = { showScan = true },
             pendingDelete = pendingDelete, onPendingDelete = { pendingDelete = it },
             purposePicker = purposePicker, onPickPurposeModel = { purposePicker = it },
@@ -798,6 +803,7 @@ fun SettingsScreen(
             onConfirm = {
                 confirmClearLedger = false
                 com.haoai.agent.data.UsageLedger.clearAll()
+                ledgerVersion++
             },
             onDismiss = { confirmClearLedger = false }
         ) {
@@ -1232,6 +1238,10 @@ private fun SectionPage(
     a11yOn: Boolean,
     a11yTick: Int,
     wpVersion: Boolean,
+    // m22 参数链：themeItems 选/清壁纸后把 vm.wallpaperSet(context) 的新值传上来，
+    // 根级据它更新 wpVersion 状态驱动重组（原先只有只读 wpVersion 参数，
+    // 内部 lambda 想赋值 = 'val' cannot be reassigned）
+    onWpVersionChange: (Boolean) -> Unit,
     linuxState: LinuxEnvState,
     showScan: Boolean,
     onShowScan: () -> Unit,
@@ -1245,6 +1255,8 @@ private fun SectionPage(
     onConfirmWpClear: () -> Unit,
     confirmClearLedger: Boolean,
     onConfirmClearLedger: () -> Unit,
+    // m23 参数链：清空账本确认后根级自增的版本号，usageItems 的 remember 以此为 key 重算
+    ledgerVersion: Int,
     treePickerLaunch: () -> Unit,
     onOpenMemories: () -> Unit,
     onOpenSearchCatalog: () -> Unit,
@@ -1350,9 +1362,7 @@ private fun SectionPage(
                     "linux" -> linuxItems(vm, localBackdrop, linuxState)
                     "general" -> generalItems(
                         vm, settings, context, localBackdrop,
-                        wpVersion, onWpVersionChange = { },
                         onRequestClearWallpaper = onConfirmWpClear,
-                        onWpChanged = { },
                         onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex },
                         onRequestKeyExportConfirm = { keyExportConfirm = true },
                         onEditMyProfile = {
@@ -1367,12 +1377,16 @@ private fun SectionPage(
                     "theme" -> themeItems(
                         vm, settings, context, localBackdrop,
                         barBottomPx,
-                        wpVersion, onWpVersionChange = { },
+                        wpVersion,
+                        // m22（2026-10-10）：原来传空 lambda —— 选完壁纸后 wpVersion
+                        // 永不更新，状态行一直显示"未设置"、清除按钮不出现，重启才对。
+                        // 回调透传根级（themeItems 已把新值算好放进 Boolean 参数）
+                        onWpVersionChange = onWpVersionChange,
                         onRequestClearWallpaper = onConfirmWpClear,
                         onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex }
                     )
                     "about" -> aboutItems(vm, settings, localBackdrop)
-                    "usage" -> usageItems(vm, settings, localBackdrop, onRequestClearLedger = onConfirmClearLedger)
+                    "usage" -> usageItems(vm, settings, localBackdrop, onRequestClearLedger = onConfirmClearLedger, ledgerVersion = ledgerVersion)
                 }
             }
         }
@@ -2508,10 +2522,7 @@ private fun LazyListScope.generalItems(
     settings: AppSettings,
     context: android.content.Context,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    wpVersion: Boolean,
-    onWpVersionChange: (Boolean) -> Unit,
     onRequestClearWallpaper: () -> Unit,
-    onWpChanged: () -> Unit = {},
     onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> },
     onRequestKeyExportConfirm: () -> Unit = {},
     onEditMyProfile: () -> Unit = {}
@@ -4408,11 +4419,13 @@ private fun LazyListScope.usageItems(
     vm: SettingsViewModel,
     settings: AppSettings,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    onRequestClearLedger: () -> Unit = {}
+    onRequestClearLedger: () -> Unit = {},
+    /** m23：清空账本后由根级自增，remember 据此重算 dashboard（原来要退出重进）。 */
+    ledgerVersion: Int = 0
 ) {
     item {
-        // 读文件较重：进入页面时计算一次（清空后重进更新）
-        val periods = androidx.compose.runtime.remember {
+        // 读文件较重：进页面时计算一次；清空账本后按版本号当场重算
+        val periods = androidx.compose.runtime.remember(ledgerVersion) {
             com.haoai.agent.data.UsageLedger.dashboard()
         }
         var range by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(2) }
@@ -5091,11 +5104,14 @@ private fun LazyListScope.aboutItems(
     // ── 2. 能力概览 ─────────────────────────────────────────────
     item { SectionTitle("能力概览") }
     item {
+        // M20：会话数是 list() 全量解析，别在重组里现算 —— 进页面后台取一次
+        androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadHomeStorage() }
         val counts = vm.homeCounts
+        val storage = vm.homeStorage
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GlassStatTile(backdrop, "${counts.first}", "长期记忆", haoToneMain(HaoTone.Accent), Modifier.weight(1f))
             GlassStatTile(backdrop, "${counts.third}", "技能", haoToneMain(HaoTone.Accent), Modifier.weight(1f))
-            GlassStatTile(backdrop, "${vm.sessionCount()}", "会话", haoToneMain(HaoTone.Info), Modifier.weight(1f))
+            GlassStatTile(backdrop, "${storage.sessions}", "会话", haoToneMain(HaoTone.Info), Modifier.weight(1f))
             GlassStatTile(backdrop, "${counts.second}", "今日日志", haoToneMain(HaoTone.Info), Modifier.weight(1f))
         }
     }
@@ -5181,29 +5197,33 @@ private fun LazyListScope.aboutItems(
     // ── 4. 数据与存储 ───────────────────────────────────────────
     item { SectionTitle("数据与存储") }
     item {
+        // M20：原先 4 个 scopeBytes（各一次全目录遍历）+ sessionCount + snapshotLabel
+        // 全在重组里现算；统一走 homeStorage 快照，进页面后台取一次（VM 侧 2 秒节流）
+        androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadHomeStorage() }
+        val st = vm.homeStorage
         GlassGroup(backdrop) {
             HaoRow(
                 title = "会话记录",
-                subtitle = "${vm.sessionCount()} 个 · ${vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.SESSIONS))}"
+                subtitle = "${st.sessions} 个 · ${vm.sizeLabel(st.sessionsBytes)}"
             )
             HaoRow(
                 title = "记忆与日志",
-                subtitle = "${vm.homeCounts.first} 条记忆 · ${vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.MEMORY))}",
+                subtitle = "${vm.homeCounts.first} 条记忆 · ${vm.sizeLabel(st.memoryBytes)}",
                 divider = true
             )
             HaoRow(
                 title = "技能",
-                subtitle = "${vm.homeCounts.third} 个 · ${vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.SKILLS))}",
+                subtitle = "${vm.homeCounts.third} 个 · ${vm.sizeLabel(st.skillsBytes)}",
                 divider = true
             )
             HaoRow(
                 title = "待办与用量账本",
-                subtitle = vm.sizeLabel(vm.scopeBytes(com.haoai.agent.platform.BackupScope.TASKS)),
+                subtitle = vm.sizeLabel(st.tasksBytes),
                 divider = true
             )
             HaoRow(
                 title = "配置快照",
-                subtitle = vm.snapshotLabel(),
+                subtitle = st.snapshotLabel.ifEmpty { vm.snapshotLabel() },
                 divider = true
             )
             HaoRow(

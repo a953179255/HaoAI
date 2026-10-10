@@ -883,24 +883,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
             // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
             fun levelOf(s: Int) = com.haoai.agent.ui.ScreenNav.depth(s)
-            val ease = androidx.compose.animation.core.FastOutSlowInEasing
-            // spring 而非固定 tween：先快后缓的自然减速比匀速机械感更「丝滑」。
-            // 刚度用 Medium（原 MediumLow）：全宽 1080px 位移下 MediumLow 收敛
-            // 尾巴过长，后段每帧位移只剩亚像素级「蠕行」被读作不跟手/拖沓
+            // 转场接线缺口修复（2026-10-10）：原来这里写死 spring/tween，设置里的
+            // 动效档位对页面转场完全无效（设置项部分失效，审查 M 区点名）。
+            // 现从 MotionTheme 读三档规格 —— Liquid 档值 = 此前的实测值，
+            // 默认体验零变化；切 Snappy/Gentle 档页面转场真正跟随变化。
             val slideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                androidx.compose.animation.core.spring(
-                    dampingRatio = 0.9f,
-                    stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
-                    visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
-                )
+                com.haoai.agent.ui.theme.MotionTheme.pageSlideSpec
             val fadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
-                androidx.compose.animation.core.tween(durationMillis = 300, easing = ease)
+                com.haoai.agent.ui.theme.MotionTheme.pageFadeSpec
             val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
-                androidx.compose.animation.core.spring(
-                    dampingRatio = 0.9f,
-                    stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
-                    visibilityThreshold = 0.001f
-                )
+                com.haoai.agent.ui.theme.MotionTheme.pageScaleSpec
             // 系统返回键兜底（2026-09-30）：本 App 换屏是一个 `screen: Int`，不是 NavHost，
             // 返回键不会自己"退一屏"——每屏得自己装 BackHandler。电脑联动(19) 那屏没装，
             // 结果手势返回把 Activity finish 了，用户看到的是"不返回上一级，而是直接退出应用"。

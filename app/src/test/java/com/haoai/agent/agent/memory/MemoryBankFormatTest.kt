@@ -89,6 +89,9 @@ class MemoryBankFormatTest {
         val b = bank()
         val m = b.remember("构建用 gradle 9.6 加 Temurin 25", type = "fact", importance = 5)
         b.markInjected(listOf(m!!.id), "怎么构建")
+        // M16（2026-10-10）：markInjected 改为 5 秒延迟合并落盘；本用例验的是
+        // "落盘后的文件形状"，断言前先显式 flush（排定任务里的写入还没到点）
+        b.flushPendingPersist()
         val line = b.storageFile().lines().first { it.contains("gradle 9.6") }
         val meta = metaOf(line)
         assertEquals("注入过一次就该记一次", "1", meta["uses"])

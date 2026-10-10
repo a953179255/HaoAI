@@ -29,12 +29,21 @@ class AppContainer(app: Application) {
     val cipher = KeystoreCipher()
     val settingsStore = SettingsStore(app)
     val sessionStore = SessionStore(app)
+    // M18（2026-10-10）：applicationScope 声明上移到 init 之前——冷启动清扫要往里投协程。
+    // （原声明在 init 块之后；Kotlin init 按声明顺序执行，提前引用会 NPE。）
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         // 冷启动清扫：引擎只活在本进程，上个进程留下的 running 一律判成中断，
         // 否则那些会话既没有恢复入口也没有停止键，会永久卡住（放在 sessionStore
         // 之后声明，Kotlin 的 init 块按声明顺序执行）
-        sessionStore.markStaleRunsInterrupted()
+        //
+        // M18：改异步执行。原实现同步跑在主线程（AppContainer 在 Application 构造期
+        // 建出来），粗筛要对每个会话文件整份 readText 一遍——会话库一大，冷启动
+        // 白屏时间线性上涨。挪到后台后，清扫完成的先后只影响"恢复横幅晚一拍出现"
+        // （清扫把 running→interrupted 落盘并更新磁盘缓存，下一次列表刷新即正确），
+        // 用户在清扫完成的 1 秒内恰好点进那条会话的概率可以忽略。
+        applicationScope.launch { runCatching { sessionStore.markStaleRunsInterrupted() } }
     }
     val workspace = WorkspaceManager(app)
     // 长期记忆真源 = 工作区 MEMORY.md（"文件即记忆"）；SAF 工作区时回退内部目录
@@ -49,12 +58,16 @@ class AppContainer(app: Application) {
             ?.shellWorkdir()?.let { java.io.File(it, "memory").apply { mkdirs() } }
     )
 
-    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     /** Linux 沙箱 proot 安装（3.1）：null = 当前设备不可用（ABI 无包/sha 不符），3.3 后端据此回落 toybox。 */
-    val proot: com.haoai.agent.platform.sandbox.Proot.Install? = runCatching {
-        com.haoai.agent.platform.sandbox.Proot.ensureReady(appFilesDir, app.applicationInfo.nativeLibraryDir)
-    }.getOrNull()
+    // M18（2026-10-10）：proot 安装从构造期同步求值改为 lazy。
+    // ensureReady 里要对 libproot.so（数 MB）算 sha256，原来每次冷启动都在主线程算一遍；
+    // lazy 后首次真正用到沙箱时才算（工具执行/设置页检查都在后台），冷启动零开销。
+    // 配合 Proot.ensureReady 内部的 sha 结果磁盘缓存，热路径连哈希都不用重算。
+    val proot: com.haoai.agent.platform.sandbox.Proot.Install? by lazy {
+        runCatching {
+            com.haoai.agent.platform.sandbox.Proot.ensureReady(appFilesDir, app.applicationInfo.nativeLibraryDir)
+        }.getOrNull()
+    }
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)

@@ -177,8 +177,14 @@ data class SearchHitLite(val title: String, val url: String, val domain: String,
  * 对齐 rikkahub 的 groupMessageParts（连续 thinking/tool 聚合成一条链，text 打断）。
  */
 sealed interface ChainStep {
-    /** 一段模型思考（reasoning）。ms=该段思考用时（历史消息无独立用时则 null）。 */
-    data class Think(val text: String, val ms: Long? = null) : ChainStep
+    /**
+     * 一段模型思考（reasoning）。ms=该段思考用时（历史消息无独立用时则 null）。
+     *
+     * m2（2026-10-10）：[id] 是步骤的稳定标识 —— 历史态用所属消息 id，
+     * 直播态用固定键。链卡的 key 原来用 `reason_$index`，合并回合/新段插入时
+     * index 整体后移 ⇒ remember/展开状态全部失效重建（展开的步骤会莫名收起）。
+     */
+    data class Think(val text: String, val ms: Long? = null, val id: String? = null) : ChainStep
     /** 一次工具调用。 */
     data class Tool(val tool: UiTool) : ChainStep
 }
@@ -932,7 +938,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val todoStore = TodoStore(c.appFilesDir)
 
     init {
-        c.sessionStore.purgeExpiredTrash()
+        // M19（2026-10-10）：回收站过期清扫挪后台——它要扫回收站目录逐文件读时间，
+        // 结果不影响首帧（回收站列表有独立入口），没理由卡在冷启动关键路径上。
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { c.sessionStore.purgeExpiredTrash() }
+        }
         refreshSessions()
         refreshDeletedSessions()
         refreshTodos()
@@ -2318,7 +2328,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     // 比它晚说的话上面（用户报的"顺序不对/上方突然插入"）。
                     m.reasoning?.takeIf { it.isNotBlank() }?.let {
                         if (pendingId.isEmpty()) { pendingId = m.id; pendingTs = m.ts }
-                        pending.add(ChainStep.Think(it, m.reasoningMs))
+                        // m2：稳定 id = 所属消息 id。链卡合并/新段插入时 key 不再漂移，
+                        // remember（展开状态）不会因 index 后移而失效重建。
+                        pending.add(ChainStep.Think(it, m.reasoningMs, id = m.id))
                     }
                     if (m.content.isNotBlank()) {
                         // 这一轮有正文 = 模型说话/最终答案 → 断链，落一条带链行

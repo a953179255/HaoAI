@@ -270,8 +270,11 @@ fun ChainCard(
         ) {
             Column {
                 steps.forEachIndexed { index, step ->
+                    // m2：Think 步优先用上游给的稳定 id（历史=消息 id，直播=固定键），
+                    // index 兜底只是防御 —— 原来 "reason_$index" 在新段插入/链卡合并时
+                    // 会让后续步骤 index 整体后移，remember 展开状态全部失效重建。
                     val stepKey: Any = when (step) {
-                        is ChainStep.Think -> "reason_$index"
+                        is ChainStep.Think -> step.id ?: "reason_$index"
                         is ChainStep.Tool -> step.tool.callId
                     }
                     StepToggle(
@@ -375,7 +378,11 @@ private fun StepToggle(
     content: @Composable () -> Unit
 ) {
     var appeared by remember(stepKey) { mutableStateOf(!animateIn) }
-    LaunchedEffect(stepKey) { if (animateIn) appeared = true }
+    // m3（2026-10-10）：animateIn 加进 key。原来它只是启动快照——同一步骤从
+    // 历史态转直播态（会话恢复运行）时值翻转但 effect 不重跑。当前动画结构下
+    // 这个翻转不会产生可感知差异（appeared 已为 true，无法"重播"入场而不先播
+    // 退场），加进 key 是消除"捕获过期快照"隐患的最小正确写法；行为暂无变化。
+    LaunchedEffect(stepKey, animateIn) { if (animateIn) appeared = true }
     val ease = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
     AnimatedVisibility(
         visible = visible && appeared,

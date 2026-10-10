@@ -66,7 +66,13 @@ fun ImageLightbox(
     currentUrl: String,
     onDismiss: () -> Unit,
 ) {
-    if (images.isEmpty()) { onDismiss(); return }
+    // m20（2026-10-10）：空列表的退出改为在 LaunchedEffect 里调 onDismiss ——
+    // 原来直接在组合体里调用（改父级状态），违反「组合无副作用」契约。
+    // key 取 isEmpty：列表从非空变空（外部清掉图源）时恰好触发一次。
+    androidx.compose.runtime.LaunchedEffect(images.isEmpty()) {
+        if (images.isEmpty()) onDismiss()
+    }
+    if (images.isEmpty()) return
     val startIndex = images.indexOfFirst { it.first == currentUrl }
         .let { if (it < 0) 0 else it }
     val pagerState = rememberPagerState(initialPage = startIndex) { images.size }

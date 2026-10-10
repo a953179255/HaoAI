@@ -233,8 +233,10 @@ fun MemoryScreen(
                 }
                 if (vm.items.isNotEmpty()) {
                     IconButton(onClick = {
-                        val n = vm.tidy()
-                        msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
+                        // M21：tidy 改后台执行，结果回调更新提示（原同步返回会卡主线程）
+                        vm.tidy { n ->
+                            msg = if (n > 0) "已整理：合并/清理 $n 条冗余记忆" else "很干净，无需整理"
+                        }
                     }) {
                         Icon(Icons.Filled.Build, contentDescription = "整理冗余记忆")
                     }

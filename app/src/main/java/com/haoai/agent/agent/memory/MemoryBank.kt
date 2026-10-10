@@ -129,6 +129,39 @@ class MemoryBank(
         persistToDisk(state)
     }
 
+    // ── M16（2026-10-10）：使用记账的延迟合并落盘 ─────────────────────
+    //
+    // markInjected 每轮真实请求都会跑：新查询 = 新指纹 = changed=true =
+    // 立刻 save() 全量重写 MEMORY.md + .bak。一个跑 20 轮工具的长任务就是
+    // 20 次全量磁盘重写，且全部发生在主线程的 buildSystemText 路径上。
+    //
+    // 记账数据（useCount/uniqQueries/lastUsedAt）是遥测，不是记忆内容本身
+    // ——延迟几秒落盘没有实质损失，进程被杀丢最近一次计数可接受。
+    // 所以：markInjected 只改内存，5 秒内多次记账合并成一次写盘。
+    // 真正的记忆内容写入（remember/forget/tidy）仍走同步 save，不受影响。
+    private val persistExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "MemoryBank-persist").apply { isDaemon = true }
+    }
+
+    private val persistScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun schedulePersist() {
+        if (!persistScheduled.compareAndSet(false, true)) return
+        persistExecutor.schedule({
+            persistScheduled.set(false)
+            // load() 拿内存最新状态（5 秒窗口内可能又攒了几轮记账），合并语义更好
+            runCatching { save(load()) }
+        }, 5, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    /** 立即把挂起的记账落盘（测试用；进程正常退出场景将来可挂在生命周期上）。 */
+    @Synchronized
+    fun flushPendingPersist() {
+        if (persistScheduled.compareAndSet(true, false)) {
+            runCatching { save(load()) }
+        }
+    }
+
     /** 渲染 markdown 并原子写盘；写前保留单代 preimage（.bak）。 */
     private fun persistToDisk(state: MemoryState) {
         runCatching {
@@ -349,7 +382,7 @@ class MemoryBank(
                 }
             }
         }
-        if (changed) save(state)
+        if (changed) schedulePersist()
     }
 
     @Synchronized

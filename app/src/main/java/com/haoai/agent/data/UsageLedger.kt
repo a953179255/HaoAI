@@ -104,6 +104,16 @@ object UsageLedger {
         val d = dir ?: return
         synchronized(lock) {
             File(d, fileNameFor(entry.ts)).appendText(HaoJson.json.encodeToString(Entry.serializer(), entry) + "\n")
+            // M17（2026-10-10）：写成功后滚动累加"今日合计"缓存。
+            // entry 属于今天 → 直接累加，零磁盘；写入的不是今天（补记历史）→ 不动缓存；
+            // 缓存日期落后于真实今天（跨天）→ 置空，下次 todayTokens() 懒加载。
+            if (todayCacheDate == todayKey(entry.ts)) {
+                todayCacheSum += entry.promptTokens.toLong().coerceAtLeast(0) +
+                    entry.completionTokens.toLong().coerceAtLeast(0)
+            } else if (todayCacheDate != null && todayCacheDate != todayKey()) {
+                todayCacheDate = null
+                todayCacheSum = 0L
+            }
         }
     }
 
@@ -212,7 +222,12 @@ object UsageLedger {
     /** 清空全部账本文件（设置页按钮）。 */
     fun clearAll() {
         val d = dir ?: return
-        synchronized(lock) { d.listFiles()?.forEach { runCatching { it.delete() } } }
+        synchronized(lock) {
+            d.listFiles()?.forEach { runCatching { it.delete() } }
+            // M17：文件删了，今日缓存必须同步置空，否则预算提示会拿着旧累计继续算
+            todayCacheDate = null
+            todayCacheSum = 0L
+        }
     }
 
     // ---------- 方案B 时段仪表盘 ----------
@@ -398,8 +413,61 @@ object UsageLedger {
         }
     }
 
-    /** 今日（输入+输出）token 合计，供 5.1 预算判定。 */
-    fun todayTokens(): Long = summarize().let { it.todayIn + it.todayOut }
+    /**
+     * 今日（输入+输出）token 合计，供 5.1 预算判定。
+     *
+     * ## M17（2026-10-10）：滚动缓存，不再每轮全量解析
+     *
+     * 原实现 `summarize()` → `readAll()`：每次调用把**所有**月度账本文件
+     * `readLines` + 逐行反序列化一遍，只为算一个"今日合计"。而本函数挂在
+     * `budgetHint` → 系统提示构建路径上，**每轮请求都跑**——账本随使用线性
+     * 增长（单次可达数十 MB 文本 + 数十万次对象分配），全部发生在请求的
+     * 关键路径上。
+     *
+     * 改为与 [appendNow] 同锁的滚动缓存：
+     * · 缓存命中当天 → 直接返回内存值，零磁盘；
+     * · 未初始化/跨天 → 只解析**当月**文件（比全量小一个量级），一次性填缓存；
+     * · [clearAll] 删文件 → 置空缓存。
+     * 光按文件 mtime 做缓存是不够的：当天文件每轮都在追加、mtime 每轮都变，
+     * 缓存会恒失效——所以必须"写入侧增量累加"，这正是与 appendNow 同锁的原因。
+     */
+    fun todayTokens(): Long {
+        val d = dir ?: return 0L
+        val today = todayKey()
+        synchronized(lock) {
+            if (todayCacheDate == today) return todayCacheSum
+            val todayStart = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val monthFile = File(d, fileNameFor(System.currentTimeMillis()))
+            var sum = 0L
+            if (monthFile.isFile) {
+                runCatching {
+                    monthFile.readLines().forEach { line ->
+                        if (line.isBlank()) return@forEach
+                        runCatching { HaoJson.json.decodeFromString(Entry.serializer(), line) }
+                            .getOrNull()?.let { e ->
+                                if (e.ts >= todayStart) {
+                                    sum += e.promptTokens.toLong().coerceAtLeast(0) +
+                                        e.completionTokens.toLong().coerceAtLeast(0)
+                                }
+                            }
+                    }
+                }
+            }
+            todayCacheDate = today
+            todayCacheSum = sum
+            return sum
+        }
+    }
+
+    private fun todayKey(nowMs: Long = System.currentTimeMillis()): String =
+        SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(nowMs))
+
+    /** 今日合计缓存（日期键 + 金额），由 [appendNow] 增量维护、[todayTokens] 懒加载。 */
+    @Volatile private var todayCacheDate: String? = null
+    @Volatile private var todayCacheSum: Long = 0L
 
     /**
      * 5.1 每日预算提示文案（注入 SystemPrompt 尾部）：

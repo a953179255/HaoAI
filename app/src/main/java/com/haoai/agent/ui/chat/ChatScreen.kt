@@ -3823,7 +3823,8 @@ private fun StreamingItem(
         // B 方案：流式期 liveTools 已由 landedCallIds 过滤掉"已落进合并行"的工具，
         // 这里只画"当前回合尚未落库"的思考+工具，与下方已落行不重复。
         val liveSteps = buildList<com.haoai.agent.ui.ChainStep> {
-            streamingReasoning?.takeIf { it.isNotBlank() }?.let { add(com.haoai.agent.ui.ChainStep.Think(it, thinkingMs)) }
+            // m2：直播段用固定 id —— 流式增长时 key 恒定，remember 不重建
+            streamingReasoning?.takeIf { it.isNotBlank() }?.let { add(com.haoai.agent.ui.ChainStep.Think(it, thinkingMs, id = "live_reasoning")) }
             liveTools.forEach { add(com.haoai.agent.ui.ChainStep.Tool(it)) }
         }
         if (liveSteps.isNotEmpty()) {

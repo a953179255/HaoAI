@@ -95,13 +95,20 @@ fun LiquidSlider(
                 pressedScale = 1.5f
             )
         }
-        // 拖动基准：非拖动时每次重组同步当前值（pointerInput 闭包只捕获 state 引用，
+        // 拖动基准：非拖动时每次值变化同步当前值（pointerInput 闭包只捕获 state 引用，
         // 读取时取最新，杜绝首帧过期值）；拖动中不再同步，保证绝对映射起点稳定
-        if (!dragActive) {
-            dragStartValue = value()
-            // 非拖动的值变化（启动/返回页面/外部改值）也要驱动圆钮动画追上
-            if (dampedDragAnimation.targetValue != value()) {
-                dampedDragAnimation.updateValue(value())
+        //
+        // m19（2026-10-10）：原来这段写在组合体里 —— `dragStartValue = value()` 与
+        // `dampedDragAnimation.updateValue(...)` 都是组合期写 State（后者写动画内部
+        // mutableState），违反 Compose 契约、有额外重组风险。挪进以 (值, 拖动态) 为
+        // key 的 LaunchedEffect：值变化或拖动结束时恰好重启一次，语义与原同步点一致。
+        androidx.compose.runtime.LaunchedEffect(value(), dragActive) {
+            if (!dragActive) {
+                dragStartValue = value()
+                // 非拖动的值变化（启动/返回页面/外部改值）也要驱动圆钮动画追上
+                if (dampedDragAnimation.targetValue != value()) {
+                    dampedDragAnimation.updateValue(value())
+                }
             }
         }
         Box(Modifier.layerBackdrop(trackBackdrop)) {
