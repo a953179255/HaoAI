@@ -223,7 +223,7 @@ fun ChainCard(
         modifier
             .then(if (slim) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
             .clip(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
             .border(
                 1.dp,
                 MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
@@ -346,7 +346,7 @@ fun ChainCard(
                             Brush.verticalGradient(
                                 listOf(
                                     Color.Transparent,
-                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+                                    MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha())
                                 )
                             )
                         )
@@ -430,7 +430,7 @@ private fun StepIconBox(content: @Composable () -> Unit) {
         Box(
             Modifier
                 .size(20.dp)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), CircleShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()), CircleShape)
         )
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) { content() }
     }
@@ -490,7 +490,7 @@ private fun ReasoningStep(
     expanded: Boolean,
     onToggle: () -> Unit
 ) {
-    val surface = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+    val surface = MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha())
     Column {
         Row(
             Modifier

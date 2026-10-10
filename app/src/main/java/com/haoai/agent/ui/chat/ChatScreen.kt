@@ -3789,9 +3789,9 @@ private fun ReasoningPanel(
     // live 且未展开全文时：受限高度 + 底部渐隐预览
     val previewMode = live && !userToggled
     Surface(
-        // v7.8.9：底色对齐工具胶囊（surface 94% 实底）——原动态公式
-        // 0.66*气泡alpha+10% 在气泡透明度低时只有 ~56%，明显比工具胶囊透
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        // v7.8.9：底色对齐工具胶囊；2026-10-09 起随「气泡/卡片不透明度」滑杆联动
+        // （chatCardAlpha：滑杆 100% 时精确 1.0，低端保 0.80 地板）
+        color = MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()),
         shape = RoundedCornerShape(16.dp),
         // v7.7：与气泡/胶囊同体系描边；v7.7.1 统一 8%（原 10% 略深）
         border = androidx.compose.foundation.BorderStroke(
@@ -3901,7 +3901,7 @@ private fun ReasoningPanel(
                                     androidx.compose.ui.graphics.Brush.verticalGradient(
                                         colors = listOf(
                                             Color.Transparent,
-                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+                                            MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha())
                                         )
                                     )
                                 )
@@ -4067,7 +4067,7 @@ private fun ReasoningRow(
             .padding(horizontal = 4.dp, vertical = 2.dp)
             // v7.7.1：与工具胶囊同体系底+描边（此前是无框裸文本行，与胶囊/气泡不统一）
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
             .border(
                 1.dp,
                 MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
@@ -4362,7 +4362,7 @@ private fun InlineToolPill(
                     .widthIn(max = maxW)
                     .clip(RoundedCornerShape(16.dp))
                     // 实底surface + 细描边——花壁纸上文字可读
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
                     .border(
                         1.dp,
                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
@@ -4573,14 +4573,7 @@ private fun toolBriefDetail(tool: com.haoai.agent.ui.UiTool): String {
 }
 
 
-/** 气泡不透明度（设置 30%-100%）映射为 (用户气泡 alpha, 助手气泡 alpha)；100% 时几乎不透明。 */
-@Composable
-private fun chatBubbleAlphas(): Pair<Float, Float> {
-    val app = LocalContext.current.applicationContext as? com.haoai.agent.HaoApplication ?: return 0.20f to 0.62f
-    val settings by app.container.settingsFlow.collectAsState()
-    val t = (settings.bubbleOpacity.coerceIn(0.3f, 1f) - 0.3f) / 0.7f
-    return (0.14f + 0.79f * t) to (0.45f + 0.52f * t)
-}
+// 批：气泡/卡片不透明度统一映射已抽至 BubbleOpacity.kt（chatBubbleAlphas / chatCardAlpha）。
 
 // ── data URL 图片缩略图（composer 附件预览 / 用户已发气泡共用）──
 
