@@ -436,13 +436,13 @@ fun ChatScreen(
     // 与「玻璃顶栏不能进 appLayer 子树」同理）。用 MutableState 对象（非 by 委托）
     // 以便同时传给 MessageList 读写与浮钮读取
     val userScrolledAway = remember { mutableStateOf(false) }
-    // 松手停车（2026-10-11「拖把手/半程松手→往上弹」修复）：滚动会话结束帧上画面
-    // 停在底部上方=用户有意停车 → 撤下贴底跟随，直到下一次滚动会话启动/按回底钮/
-    // 发新消息/新一轮开始才重新接管。与 userScrolledAway 同级：回底浮钮在
-    // MessageList 之外，也要能撤停（否则停车态下手动画回底部后不再跟随流式=回归）。
-    // 轨迹实锤（2026-10-11 用户复现）：拖把手全程走滚动会话（busy 连涨 40+，按住
-    // 期间让位闸正常），弹发生在**松手 17ms 后的补钉底帧**（pos 7315→7422，
-    // 离底距离还在 48dp 宽限内=被当成「贴底」），一次松手一钉=用户连松几次手。
+    // 粘底订阅状态（2026-10-12 三修，替代「松手边沿停车」）：true=用户已接管画面
+    // （本帧 value 被非钉底的外力挪动过），跟随循环不钉底；false=贴底订阅中。
+    // 撤停=滚回真底（delta≤8px，rikkahub 同款严格触底）或显式动作（回底钮/发消息/
+    // 新一轮/切会话）。提在 ChatScreen 级：回底浮钮在 MessageList 之外也要能撤停。
+    // 演进：二修用「会话结束边沿+落点>63px」判停车，但拖把手路径多、把手向下拖时
+    // 画面朝下走（dV>0）方向判定也不成立 → 用户实测弹跳区间缩小但没消失；
+    // 三修改为逐帧位移归属（dV≠0 且非我们钉的=接管），一次覆盖全部路径。
     val parkedFollow = remember { mutableStateOf(false) }
     // v4-4 回底徽标：断开瞬间拍 baseline 快照（行数+流式长度），
     // 只统计之后的真增量——上滑动作本身不再被误计为「1 条新动态」。
@@ -1579,7 +1579,11 @@ fun ChatScreen(
         androidx.compose.animation.AnimatedVisibility(
             // rows 为空但正文正在流式时也要能出现（首条回复就上滑看历史的场景）——
             // 否则流式中途没有任何"回到底部"的入口，只能手动拖回去
-            visible = userScrolledAway.value && (rows.isNotEmpty() || streaming != null) &&
+            // 停车态（parkedFollow，2026-10-12 三修）同样要出：用户接管画面停在
+            // 8~126px 区间时 userScrolledAway（48dp 宽限）不置位，流式新内容既不
+            // 跟随也没有回底入口=死区。rikkahub 的 jumper 同样在任何滚动后都会出现。
+            visible = (userScrolledAway.value || parkedFollow.value) &&
+                (rows.isNotEmpty() || streaming != null) &&
                 drawerFraction < 0.01f,
             enter = androidx.compose.animation.fadeIn(tween(180)) +
                 androidx.compose.animation.expandVertically(tween(180)),
@@ -2557,11 +2561,8 @@ private fun MessageList(
     //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
     //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
     val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
-    // 「本轮用户是否主动滚动过」——发消息/新一轮生成/切会话时复位。
-    // 唯一目的：让"用户全程没碰屏幕"时**永远允许贴底**，于是任何结构跳变
-    // （收尾换位、长行落行）都只造成一帧偏差、下一帧自愈，不会再出现
-    // "我根本没打断它，它却停在半路不动"（用户实测）。
-    val userScrolledThisRun = remember { mutableStateOf(false) }
+    // 「本轮用户是否主动滚动过」userScrolledThisRun 已删除（2026-10-12 三修）：
+    // 它是旧「猜意图」方案的状态；粘底状态机只看位移原因（dV/dM），不需要跨帧意图标志。
 
     // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
@@ -2580,7 +2581,6 @@ private fun MessageList(
         if (sessionId != null && sessionId != lastSessionKey) {
             lastSessionKey = sessionId
             userScrolledAway.value = false
-            userScrolledThisRun.value = false
             parkedFollow.value = false
             scrollState.pinToBottom()
             return@LaunchedEffect
@@ -2588,7 +2588,6 @@ private fun MessageList(
         val isUserMessage = rows.lastOrNull()?.role == "user"
         if (isUserMessage) {
             userScrolledAway.value = false
-            userScrolledThisRun.value = false
             parkedFollow.value = false
             val k = rows.last().key
             if (k != lastSentUserKey) {
@@ -2661,10 +2660,11 @@ private fun MessageList(
         var lastEndPos = -1
         var prevMax = -1
         var prevPinnedByUs = false
-        var prevSession = false
-        var prevHeld = false
+        // 粘底状态机（2026-10-12 三修）：逐帧比对 value 变化量判「这一帧的位移是
+        // 谁造成的」。-1=首帧未知。
+        var prevFrameV = -1
         // 【自愈】2026-09-19：把跟随改成逐帧驱动后，这里再包一层 try/catch + 循环重连。
-        // 理由：跟随逻辑一旦中途失效，`userScrolledThisRun` 就再也置位不了、跟随判定瘫痪，
+        // 理由：跟随逻辑一旦中途失效，粘底状态机就再也不推进、钉底/停车全部瘫痪，
         // 而且**没有任何可见报错**（排查时极难定位）。重连保证任何单次异常都不会让它永久失效。
         // 【逐帧循环，不用 snapshotFlow】2026-09-19：改用逐帧后有两个硬好处——
         // ① 每帧必有记录，任何"谁改了 value / 谁在还原位置"都会现形（snapshotFlow 依赖
@@ -2703,35 +2703,34 @@ private fun MessageList(
                 if (awayNow && !prevAtBottom) userScrolledAway.value = true
                 else if (!awayNow) userScrolledAway.value = false
                 busyFrames = if (scrollState.isScrollInProgress) busyFrames + 1 else 0
-                if (busyFrames >= 2 && !atBottom) userScrolledThisRun.value = true
-                // 松手停车（2026-10-11）：拖把手后松手，画面停在底部上方 ~80-100px，
-                // 下一帧跟随循环把它猛钉到底=用户看到的「往上弹」（轨迹铁证：每次
-                // pinned=true 都在 busy/finger 同帧归零后 17ms 内）。修复=松手边沿
-                // 停在离底 >半宽限 处=有意停车，撤跟随直到重新接管（下一次按下滑动/
-                // 回底钮/发新消息/新一轮/滚回真底）。边沿取两路：滚动会话结束（真机
-                // 拖把手走会话）或 手指离开列表（合成拖把手/边缘滚动不走会话的路径）。
-                val sessionNow = scrollState.isScrollInProgress
-                val heldNow = fingerOnList.value
-                val retook = (sessionNow && !prevSession) || (heldNow && !prevHeld)
-                val released = (prevSession && !sessionNow) || (prevHeld && !heldNow)
-                if (retook) parkedFollow.value = false
-                if (released && !showStreaming && !retook && delta > bottomSlackPx / 2) {
-                    // 阈值=宽限一半（63px@420dpi）：实测拖把手松手停在 78~107px；
-                    // fling 停在 8~63px 窄带的概率极低，误停会留贴不住的小尾巴。
-                    // 只在**非流式**停车：流式中贴底跟随是功能（落新行必须可见）
-                    parkedFollow.value = true
-                }
-                prevSession = sessionNow
-                prevHeld = heldNow
-                // 撤停安全网：停车后用户自己滚回真底（delta==0）→ 恢复跟随
-                if (parkedFollow.value && delta == 0) parkedFollow.value = false
-                // 撤停安全网：停车后用户自己滚回真底（delta==0）→ 恢复跟随
-                if (parkedFollow.value && delta == 0) parkedFollow.value = false
-                val follow = !parkedFollow.value &&
-                    (atBottom || prevAtBottom || !userScrolledThisRun.value)
+                // ── 粘底状态机（2026-10-12 三修，语义对齐 rikkahub ChatList）──────
+                // 一修（按住让位）、二修（松手边沿停车+落点阈值）都在**猜手势边沿**：
+                // 拖把手的路径有好几条（走滚动会话/被选择层消费/边缘自动滚动），落点
+                // 方向也不唯一（把手向下=画面朝下走），边沿+方向判定永远漏一条带 =
+                // 用户实测「弹跳区间缩小但没消失」。
+                // 三修改看**位移归属**（rikkahub 不变量：跟随只对内容增高反应，从不
+                // 回拉用户移动过的位置；它的 isAtBottom 是 8px 严格触底，非 48dp 宽限）：
+                // · 停车：dV≠0 且上一帧不是我们钉的 = value 被别人挪过（上/下/甩/
+                //   把手边缘滚动，不分方向与手势类型）。我们自己的钉底只会 dV>0，
+                //   且由 prevPinnedByUs 归因排除；内容变矮的夹回 dV<0 会误停一帧，
+                //   但夹回终态 delta==0 被下一行同帧撤销，不误伤。
+                // · 撤停：delta ≤ 8px（rikkahub 同款严格触底）或显式动作（回底钮/
+                //   发消息/新一轮/切会话，各 effect 清 parked）。不用 48dp 宽限撤停：
+                //   把手松手常停离底 ~100px（宽限内），那样即撤停=流式增高帧立刻
+                //   钉回=缺陷复活；拖把手落点永远 >8px，不会命中。
+                // · 钉底：follow=!parked。间隙由**内容增高**产生（dV==0）时 parked
+                //   不置位 → footer 展开/版本切换/键盘顶起照常保持贴底；间隙由用户
+                //   挪出 → parked=恒不钉，流式与否一视同仁（rikkahub 行为：上滑即
+                //   停跟随，新内容转入徽标/浮钮，回到底部附近自动重新接管）。
+                val vNow2 = scrollState.value
+                val dV = if (prevFrameV >= 0) vNow2 - prevFrameV else 0
+                prevFrameV = vNow2
+                if (dV != 0 && !prevPinnedByUs) parkedFollow.value = true
+                if (delta <= 8) parkedFollow.value = false
+                val follow = !parkedFollow.value
                 var pinned = false
-                // fingerOnList=按住列表（含拖选把手）：此刻用户掌控画面，贴底一律让位，
-                // 否则与拖选边缘自动滚动打架（统计行拖到输入框附近时「往上弹」）
+                // fingerOnList/busyFrames 让位闸保留作belt：按住期间钉底会与拖选
+                // 边缘自动滚动逐帧打架；此刻的位移下一帧也会被 dV 归因接住。
                 if (busyFrames < 1 && follow && !fingerOnList.value) pinned = scrollState.pinToBottom()
                 // 三修归零点：本帧把 value 贴回新 maxValue 的同时撤掉 draw 偏移。
                 // 循环跑在帧首（layout/draw 之前），同帧生效：上一帧画面=value旧+shift
@@ -2744,7 +2743,7 @@ private fun MessageList(
                     FollowTrace.add(
                         "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
                             "follow=$follow pinned=$pinned finger=${fingerOnList.value} " +
-                            "parked=${parkedFollow.value} scrolled=${userScrolledThisRun.value} " +
+                            "dV=$dV parked=${parkedFollow.value} " +
                             "pos=${scrollState.value}/${scrollState.maxValue}"
                     )
                 }
@@ -2885,8 +2884,8 @@ private fun MessageList(
     LaunchedEffect(justStarted) {
         if (justStarted) {
             userScrolledAway.value = false
-            userScrolledThisRun.value = false
-            // 新一轮开始=用户要看新输出，撤停车恢复跟随
+            // 新一轮开始=用户要看新输出：撤停+重新起链（钉底自维持由本帧 pinToBottom
+            // 建立，循环里 prevPinnedByUs 在下一帧看到我们钉过即接管）
             parkedFollow.value = false
             scrollState.pinToBottom()
         }
@@ -2917,21 +2916,17 @@ private fun MessageList(
                         val ev = awaitPointerEvent()
                         val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
                         if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
-                            // 越过 slop=真实拖拽（普通滚动、拖选把手都算）：暂停贴底跟随。
-                            // 拖选把手的边缘自动滚动不走滚动会话（isScrollInProgress 全程
-                            // false），原先两条让位闸都漏掉它，与 pinToBottom 逐帧打架=
-                            // 「统计行拖到输入框附近往上弹」（2026-10-11 用户点名）。
+                            // 越过 slop=真实拖拽（普通滚动、拖选把手都算）：按住期间暂停
+                            // 贴底钉框。拖选把手的边缘自动滚动不走滚动会话（isScrollInProgress
+                            // 全程 false），原先两条让位闸都漏掉它，与 pinToBottom 逐帧打架。
                             // 放在 !isConsumed 判断**之外**：把手拖拽的 MOVE 被选择层消费，
                             // 但暂停意图恰是为这种被消费的手势服务的。
+                            // 抬手后的「不回拉」不再需要意图标志：粘底状态机直接看位移
+                            // 原因（用户把 value 滚上去的那一帧即停车，2026-10-12 三修）。
                             fingerOnList.value = true
                             if (!ch.isConsumed) {
                                 slopPassed = true
                                 focusManager.clearFocus()
-                            } else {
-                                // 被选择层消费的拖拽同样算「用户接管画面」：置位后抬手不再被
-                                // 「本轮没滚过→永远贴底」条件拉回底部（选区会滚出视野）。
-                                // 普通滚动由 busyFrames≥2 置位；拖把手 busy 恒 0，只能在这补。
-                                userScrolledThisRun.value = true
                             }
                         }
                         if (!ch.pressed) break
