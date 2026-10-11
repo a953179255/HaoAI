@@ -436,6 +436,14 @@ fun ChatScreen(
     // 与「玻璃顶栏不能进 appLayer 子树」同理）。用 MutableState 对象（非 by 委托）
     // 以便同时传给 MessageList 读写与浮钮读取
     val userScrolledAway = remember { mutableStateOf(false) }
+    // 松手停车（2026-10-11「拖把手/半程松手→往上弹」修复）：滚动会话结束帧上画面
+    // 停在底部上方=用户有意停车 → 撤下贴底跟随，直到下一次滚动会话启动/按回底钮/
+    // 发新消息/新一轮开始才重新接管。与 userScrolledAway 同级：回底浮钮在
+    // MessageList 之外，也要能撤停（否则停车态下手动画回底部后不再跟随流式=回归）。
+    // 轨迹实锤（2026-10-11 用户复现）：拖把手全程走滚动会话（busy 连涨 40+，按住
+    // 期间让位闸正常），弹发生在**松手 17ms 后的补钉底帧**（pos 7315→7422，
+    // 离底距离还在 48dp 宽限内=被当成「贴底」），一次松手一钉=用户连松几次手。
+    val parkedFollow = remember { mutableStateOf(false) }
     // v4-4 回底徽标：断开瞬间拍 baseline 快照（行数+流式长度），
     // 只统计之后的真增量——上滑动作本身不再被误计为「1 条新动态」。
     val newContentTicker = remember { mutableStateOf(0) }
@@ -1040,6 +1048,7 @@ fun ChatScreen(
                 promotedRowKeys = promotedRowKeys,
                 scrollState = scrollState,
                 userScrolledAway = userScrolledAway,
+                parkedFollow = parkedFollow,
                 sessionId = vm.session.collectAsState().value?.id,
                 planProposal = planProposal
                     ?.takeIf { it.first == vm.session.collectAsState().value?.id }?.second,
@@ -1587,6 +1596,8 @@ fun ChatScreen(
                 onClick = {
                     userScrolledAway.value = false
                     newContentTicker.value = 0
+                    // 用户主动回底=重新接管，撤停车（配合循环里 delta==0 安全网双保险）
+                    parkedFollow.value = false
                     scope.launch { scrollState.pinToBottom() }
                 },
                 backdrop = backdrop,
@@ -2518,6 +2529,8 @@ private fun MessageList(
     promotedRowKeys: Set<String> = emptySet(),
     scrollState: androidx.compose.foundation.ScrollState,
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
+    /** 松手停车（2026-10-11）：滚动会话结束帧停在底部上方=用户有意停车，撤贴底跟随。 */
+    parkedFollow: androidx.compose.runtime.MutableState<Boolean>,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -2568,6 +2581,7 @@ private fun MessageList(
             lastSessionKey = sessionId
             userScrolledAway.value = false
             userScrolledThisRun.value = false
+            parkedFollow.value = false
             scrollState.pinToBottom()
             return@LaunchedEffect
         }
@@ -2575,6 +2589,7 @@ private fun MessageList(
         if (isUserMessage) {
             userScrolledAway.value = false
             userScrolledThisRun.value = false
+            parkedFollow.value = false
             val k = rows.last().key
             if (k != lastSentUserKey) {
                 lastSentUserKey = k
@@ -2583,8 +2598,9 @@ private fun MessageList(
             }
             scrollState.pinToBottom()
         } else {
-            // 新行入列：是否跟随交给位置订阅判定，这里只在"仍贴着底"时补一次
-            if (scrollState.isAtBottom(bottomSlackPx)) scrollState.pinToBottom()
+            // 新行入列：是否跟随交给位置订阅判定，这里只在"仍贴着底"时补一次；
+            // 停车中（用户拖把手刚松手）不补——否则绕过 parkedFollow 又钉一次底
+            if (!parkedFollow.value && scrollState.isAtBottom(bottomSlackPx)) scrollState.pinToBottom()
         }
     }
 
@@ -2642,6 +2658,11 @@ private fun MessageList(
     LaunchedEffect(scrollState, bottomSlackPx) {
         var prevAtBottom = true
         var busyFrames = 0
+        var lastEndPos = -1
+        var prevMax = -1
+        var prevPinnedByUs = false
+        var prevSession = false
+        var prevHeld = false
         // 【自愈】2026-09-19：把跟随改成逐帧驱动后，这里再包一层 try/catch + 循环重连。
         // 理由：跟随逻辑一旦中途失效，`userScrolledThisRun` 就再也置位不了、跟随判定瘫痪，
         // 而且**没有任何可见报错**（排查时极难定位）。重连保证任何单次异常都不会让它永久失效。
@@ -2653,6 +2674,24 @@ private fun MessageList(
         try {
         androidx.compose.runtime.withFrameNanos { }
         run {
+                // 外部挪动/高度突变侦测（2026-10-11 排查「拖统计行上弹」）：
+                // 上一帧收尾值 ≠ 本帧开头值，而上一帧既没钉底也没滚动会话 = 别的东西
+                // 直接改了 value（嫌疑=文本选择边缘自动滚动）；maxValue 帧间突变=布局
+                // 在重测内容高度。两条都进慢帧通道（低频、只在异常帧拼串），
+                // 弹跳现场由探针自证，不依赖事后肉眼对录屏。
+                if (FollowTrace.enabled) {
+                    val vNow = scrollState.value
+                    val mNow = scrollState.maxValue
+                    if (lastEndPos >= 0 && vNow != lastEndPos && !prevPinnedByUs && busyFrames == 0 &&
+                        !scrollState.isScrollInProgress) {
+                        FollowTrace.addSlow("JUMP ${lastEndPos}→$vNow max=$mNow")
+                    }
+                    if (prevMax >= 0 && mNow != prevMax && mNow != Int.MAX_VALUE && prevMax != Int.MAX_VALUE) {
+                        FollowTrace.addSlow("MAXCHG $prevMax→$mNow v=$vNow")
+                    }
+                    lastEndPos = vNow
+                    prevMax = mNow
+                }
                 val delta = scrollState.maxValue - scrollState.value
                 val atBottom = scrollState.isAtBottom(bottomSlackPx)
                 // 粘滞标志：**仅**用于「回到底部」浮钮的显隐。连续两帧离开底部才置位，
@@ -2665,7 +2704,31 @@ private fun MessageList(
                 else if (!awayNow) userScrolledAway.value = false
                 busyFrames = if (scrollState.isScrollInProgress) busyFrames + 1 else 0
                 if (busyFrames >= 2 && !atBottom) userScrolledThisRun.value = true
-                val follow = atBottom || prevAtBottom || !userScrolledThisRun.value
+                // 松手停车（2026-10-11）：拖把手后松手，画面停在底部上方 ~80-100px，
+                // 下一帧跟随循环把它猛钉到底=用户看到的「往上弹」（轨迹铁证：每次
+                // pinned=true 都在 busy/finger 同帧归零后 17ms 内）。修复=松手边沿
+                // 停在离底 >半宽限 处=有意停车，撤跟随直到重新接管（下一次按下滑动/
+                // 回底钮/发新消息/新一轮/滚回真底）。边沿取两路：滚动会话结束（真机
+                // 拖把手走会话）或 手指离开列表（合成拖把手/边缘滚动不走会话的路径）。
+                val sessionNow = scrollState.isScrollInProgress
+                val heldNow = fingerOnList.value
+                val retook = (sessionNow && !prevSession) || (heldNow && !prevHeld)
+                val released = (prevSession && !sessionNow) || (prevHeld && !heldNow)
+                if (retook) parkedFollow.value = false
+                if (released && !showStreaming && !retook && delta > bottomSlackPx / 2) {
+                    // 阈值=宽限一半（63px@420dpi）：实测拖把手松手停在 78~107px；
+                    // fling 停在 8~63px 窄带的概率极低，误停会留贴不住的小尾巴。
+                    // 只在**非流式**停车：流式中贴底跟随是功能（落新行必须可见）
+                    parkedFollow.value = true
+                }
+                prevSession = sessionNow
+                prevHeld = heldNow
+                // 撤停安全网：停车后用户自己滚回真底（delta==0）→ 恢复跟随
+                if (parkedFollow.value && delta == 0) parkedFollow.value = false
+                // 撤停安全网：停车后用户自己滚回真底（delta==0）→ 恢复跟随
+                if (parkedFollow.value && delta == 0) parkedFollow.value = false
+                val follow = !parkedFollow.value &&
+                    (atBottom || prevAtBottom || !userScrolledThisRun.value)
                 var pinned = false
                 // fingerOnList=按住列表（含拖选把手）：此刻用户掌控画面，贴底一律让位，
                 // 否则与拖选边缘自动滚动打架（统计行拖到输入框附近时「往上弹」）
@@ -2680,10 +2743,12 @@ private fun MessageList(
                 if (FollowTrace.enabled) {
                     FollowTrace.add(
                         "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
-                            "follow=$follow pinned=$pinned finger=${fingerOnList.value} scrolled=${userScrolledThisRun.value} " +
+                            "follow=$follow pinned=$pinned finger=${fingerOnList.value} " +
+                            "parked=${parkedFollow.value} scrolled=${userScrolledThisRun.value} " +
                             "pos=${scrollState.value}/${scrollState.maxValue}"
                     )
                 }
+                prevPinnedByUs = pinned
                 prevAtBottom = atBottom
         }
         } catch (c: kotlinx.coroutines.CancellationException) {
@@ -2821,6 +2886,8 @@ private fun MessageList(
         if (justStarted) {
             userScrolledAway.value = false
             userScrolledThisRun.value = false
+            // 新一轮开始=用户要看新输出，撤停车恢复跟随
+            parkedFollow.value = false
             scrollState.pinToBottom()
         }
     }

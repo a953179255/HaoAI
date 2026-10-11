@@ -25,8 +25,8 @@ object FollowTrace {
         enabled = true
     }
 
-    private const val CAP = 240
-    private const val SLOW_CAP = 60
+    private const val CAP = 1500
+    private const val SLOW_CAP = 80
     private val buf = ArrayDeque<String>(CAP)
     private val slow = ArrayDeque<String>(SLOW_CAP)
     private var startedAt = 0L
