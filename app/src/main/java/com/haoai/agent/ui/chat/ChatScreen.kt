@@ -1032,6 +1032,7 @@ fun ChatScreen(
                 streamingText = streaming,
                 streamingReasoning = streamingReasoning,
                 running = running,
+                turnStartAt = turnStartAt,
                 thinkingMs = thinkingMs,
                 thinkingHint = if (running && vm.isLocalProviderActive())
                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
@@ -2508,6 +2509,8 @@ private fun MessageList(
     streamingText: String?,
     streamingReasoning: String?,
     running: Boolean,
+    /** 本轮起点（0=没在跑）：页脚硬闸只封本轮新行，历史行统计不受牵连（2026-10-11）。 */
+    turnStartAt: Long = 0L,
     thinkingHint: String? = null,
     thinkingMs: Long? = null,
     liveToolsSnapshot: List<com.haoai.agent.ui.UiTool> = emptyList(),
@@ -2617,7 +2620,12 @@ private fun MessageList(
         }
     }
 
-    // ── 跟随判定（2026-09-16 第五版）──────────────────────────────────
+    // 拖选把手守卫（2026-10-11）：长按拖选后把手拖到靠近视口底缘时，文本选择会自动
+    // 滚动容器把把手保持可见（内容上移=用户看到的「往上弹」）；跟随循环这时又把
+    // ≤48dp 的剩余距离 pin 到底，与拖选边缘滚动逐帧打架=反复弹跳。判据=「手指是否
+    // 按在列表上」（原始 down/up，不判消费：把手拖拽被选择层消费、不走滚动会话
+    // isScrollInProgress，两条常规让位闸都漏掉它）。按住期间暂停贴底，抬手即恢复。
+    val fingerOnList = remember { mutableStateOf(false) }
     // 允许贴底的条件（三选一）：
     //   ① 本帧贴着底                 —— 正常跟随
     //   ② 上一帧贴着底（单帧宽限）   —— 吸收结构跳变造成的千 px 位移
@@ -2659,7 +2667,9 @@ private fun MessageList(
                 if (busyFrames >= 2 && !atBottom) userScrolledThisRun.value = true
                 val follow = atBottom || prevAtBottom || !userScrolledThisRun.value
                 var pinned = false
-                if (busyFrames < 1 && follow) pinned = scrollState.pinToBottom()
+                // fingerOnList=按住列表（含拖选把手）：此刻用户掌控画面，贴底一律让位，
+                // 否则与拖选边缘自动滚动打架（统计行拖到输入框附近时「往上弹」）
+                if (busyFrames < 1 && follow && !fingerOnList.value) pinned = scrollState.pinToBottom()
                 // 三修归零点：本帧把 value 贴回新 maxValue 的同时撤掉 draw 偏移。
                 // 循环跑在帧首（layout/draw 之前），同帧生效：上一帧画面=value旧+shift
                 // 上移，本帧画面=value新+0 偏移，两者逐像素一致，衔接无缝。
@@ -2670,7 +2680,7 @@ private fun MessageList(
                 if (FollowTrace.enabled) {
                     FollowTrace.add(
                         "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
-                            "follow=$follow pinned=$pinned scrolled=${userScrolledThisRun.value} " +
+                            "follow=$follow pinned=$pinned finger=${fingerOnList.value} scrolled=${userScrolledThisRun.value} " +
                             "pos=${scrollState.value}/${scrollState.maxValue}"
                     )
                 }
@@ -2835,16 +2845,33 @@ private fun MessageList(
                 val start = awaitFirstDown(requireUnconsumed = false)
                 var slopPassed = false
                 val slop = 8.dp.toPx()
-                while (true) {
-                    val ev = awaitPointerEvent()
-                    val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
-                    if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
-                        if (!ch.isConsumed) {
-                            slopPassed = true
-                            focusManager.clearFocus()
+                try {
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
+                        if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
+                            // 越过 slop=真实拖拽（普通滚动、拖选把手都算）：暂停贴底跟随。
+                            // 拖选把手的边缘自动滚动不走滚动会话（isScrollInProgress 全程
+                            // false），原先两条让位闸都漏掉它，与 pinToBottom 逐帧打架=
+                            // 「统计行拖到输入框附近往上弹」（2026-10-11 用户点名）。
+                            // 放在 !isConsumed 判断**之外**：把手拖拽的 MOVE 被选择层消费，
+                            // 但暂停意图恰是为这种被消费的手势服务的。
+                            fingerOnList.value = true
+                            if (!ch.isConsumed) {
+                                slopPassed = true
+                                focusManager.clearFocus()
+                            } else {
+                                // 被选择层消费的拖拽同样算「用户接管画面」：置位后抬手不再被
+                                // 「本轮没滚过→永远贴底」条件拉回底部（选区会滚出视野）。
+                                // 普通滚动由 busyFrames≥2 置位；拖把手 busy 恒 0，只能在这补。
+                                userScrolledThisRun.value = true
+                            }
                         }
+                        if (!ch.pressed) break
                     }
-                    if (!ch.pressed) break
+                } finally {
+                    // 手势取消/事件丢失也必复位：宁可多跟一帧也不永久停手
+                    fingerOnList.value = false
                 }
             }
         }
@@ -2950,6 +2977,7 @@ private fun MessageList(
                     onQuickRegenerate = onQuickRegenerate,
                     onQuickEdit = onQuickEdit,
                     running = running,
+                    turnStartAt = turnStartAt,
                     onViewDiff = onToolViewDiff,
                     onRollback = onToolRollback,
                     onStopRun = onStopRun,
@@ -3053,6 +3081,8 @@ private fun RowItem(
     onQuickRegenerate: (ChatRow) -> Unit,
     onQuickEdit: (ChatRow) -> Unit,
     running: Boolean,
+    /** 本轮起点：页脚硬闸只封本轮行（2026-10-11）。 */
+    turnStartAt: Long = 0L,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
     onStopRun: () -> Unit = {},
@@ -3073,7 +3103,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead, headTopGap)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, onViewDiff, onRollback, onStopRun, showActions, showHead, headTopGap, growIn, onFooterReveal)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, turnStartAt, onViewDiff, onRollback, onStopRun, showActions, showHead, headTopGap, growIn, onFooterReveal)
     }
 }
 
@@ -4045,6 +4075,8 @@ private fun AssistantBlock(
     onCopyRow: (ChatRow) -> Unit,
     onQuickRegenerate: (ChatRow) -> Unit,
     running: Boolean,
+    /** 本轮起点：页脚硬闸只封本轮行，历史行统计不受牵连（2026-10-11）。 */
+    turnStartAt: Long = 0L,
     onViewDiff: (String) -> Unit,
     onRollback: (String) -> Unit = {},
     onStopRun: () -> Unit = {},
@@ -4133,10 +4165,13 @@ private fun AssistantBlock(
         // 操作行」但模拟器复现干净——记录每次页脚转为可见时的 running/统计字段，
         // 拿地面真相定位走的是哪条可见路径
         // 硬闸（用户原话「回复过程中不用显示，只在最终回复下面显示」，2026-10-07）：
-        // running=true 期间任何 Agent 页脚（含历史最终行的统计/按钮）一律隐藏，
-        // 回合结束统一回归——把「回复过程中出现按钮」的所有路径（含 stats 判据）
-        // 一次性关死
-        val footerVisible = footerShown && !running &&
+        // running=true 期间**本轮产出**的 Agent 页脚（正文落行前的按钮/统计闪现路径）
+        // 一律隐藏，回合结束统一回归。
+        // 二修（2026-10-11）：首版闸是全局 `!running`，把**历史轮**已定稿行的统计行也
+        // 连坐藏掉（用户点名：发新消息后上一条回复的 Token/耗时消失）。行 ts 早于本轮
+        // 起点=历史行，不受闸——历史行的页脚本来就该一直显示。
+        val isCurrentTurnRow = turnStartAt == 0L || row.ts >= turnStartAt
+        val footerVisible = footerShown && (!running || !isCurrentTurnRow) &&
             (showActions || row.completionTokens != null || row.durationMs != null)
         LaunchedEffect(footerVisible) {
             if (footerVisible && FollowTrace.enabled) {
