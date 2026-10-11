@@ -350,7 +350,9 @@ fun ChatScreen(
     vscreenFull: @Composable () -> Unit = {},
     /** 顶栏 🌐 长按：直接进全屏浏览器。 */
     onOpenBrowserFullscreen: () -> Unit = {},
-    onOpenVscreen: () -> Unit = {}
+    onOpenVscreen: () -> Unit = {},
+    /** 工作区壳自带画布垫底（全局壁纸开时铺对齐壁纸，与设置/会话页同源同位）。 */
+    wallpaper: android.graphics.Bitmap? = null
 ) {
     // 顶栏/输入框的导出层：它们 drawBackdrop 时把最终玻璃表面 record 进来，
     // 抽屉经 CombinedBackdrop 合成采样 —— 解决"玻璃磨砂不到玻璃"（宿主内含玻璃会成环
@@ -1782,8 +1784,10 @@ fun ChatScreen(
         }
 
     // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳；抽屉「工作区」呼出。
-    // 覆盖层形态（非 Dialog 窗口）——挂在 appLayer 外侧同级，顶栏 GlassPageBar 才能
-    // 折射消息流（ToolDetailSheet 同法）；首版做成 Dialog 实心底被用户点名"顶栏不一致"。
+    // 「全部会话」页同款架构：实底 + 本页自带采样画布（wallpaper 垫底），顶栏玻璃
+    // 磨砂的是本页——首版借聊天 backdrop 采到消息流、右上又塞了个同义"关闭"，
+    // 用户 2026-10-11 点名两处缺陷已修。返回语义=关壳+重开侧边栏（对照全部会话页
+    // onBack=enterChat+drawer.open()；横屏两栏抽屉是常驻分区不重开）。
     // 查看器两枚换乘钮也开它：壳在消息列作用域之外，这里包一层 provider 补闭包
     // （否则从壳里点开查看器后，「在目录中定位 / 版本历史」读到默认空实现=死按钮）。
     if (workspaceOpen) {
@@ -1792,7 +1796,7 @@ fun ChatScreen(
             LocalOpenTimeline provides { rel -> timelineFile = rel },
         ) {
             WorkspaceShellDialog(
-                backdrop = backdrop,
+                wallpaper = wallpaper,
                 workspaceName = vm.workspaceName(),
                 backendReady = vm.treeBackend() != null,
                 listDir = { vm.treeListDir(it) },
@@ -1815,7 +1819,11 @@ fun ChatScreen(
                         }
                     }
                 },
-                onDismiss = { workspaceOpen = false }
+                onDismiss = {
+                    workspaceOpen = false
+                    // 返回回侧边栏（全部会话页同法 drawer.open()）；横屏两栏分区常驻不动
+                    if (!landscapeTwoPane) scope.launch { drawer.open() }
+                }
             )
         }
     }

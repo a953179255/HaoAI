@@ -1140,6 +1140,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // 的 appLayer 写入不再触及设置系页面共享的 settingsBackdrop/
                     // plainBackdrop——修「设置页玻璃透出聊天画面」
                     backdrop = chatBackdrop,
+                    // 工作区壳自带画布的垫底壁纸：聊天页(s=0)壁纸恒可见（不受
+                    // wallpaperGlobal 门控，与本页背景同规则）——壳盖住聊天页时背景不能突变
+                    wallpaper = wallpaper,
                     drawer = drawer,
                     scrollState = chatListState,
                     // 侧边栏点设置：push 转场开始——先冻结聊天页（后续帧绘制

@@ -1415,7 +1415,7 @@ private fun SectionPage(
         // tabs=[Tree] 纯目录——空间作用域（无会话，故无产出/历史；查看器不显换乘钮）
         if (workspaceBrowseOpen) {
             com.haoai.agent.ui.chat.WorkspaceShellDialog(
-                backdrop = localBackdrop,
+                wallpaper = wallpaper,
                 workspaceName = vm.workspaceName(),
                 backendReady = vm.workspaceTreeReady(),
                 listDir = { vm.treeListDir(it) },

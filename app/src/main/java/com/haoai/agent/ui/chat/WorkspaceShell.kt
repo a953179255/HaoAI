@@ -41,10 +41,10 @@ import com.haoai.agent.ui.theme.haoIsDark
  * 命名定稿：抽屉入口一行「工作区」、Tab 短词 目录/产出/历史；底部信息条删除（手机手势条
  * 遮挡），统计进副标题行。
  *
- * ⚠️ 形态=**页面覆盖层**（Box，非 Dialog 独立窗口）：与 ToolDetailSheet 同一条教训——独立
- * 窗口采样不到页面 backdrop、玻璃是死的。调用方把它挂在 appLayer 采样层的外侧同级，
- * 于是顶栏 [GlassPageBar] 真玻璃折射底下消息/设置列表，且与设置页顶栏**同一权威组件**
- * （用户 2026-10-11 点名两处顶栏必须一致）。
+ * ⚠️ 形态=**实底覆盖层 + 本页自带采样画布**（照抄 SessionsScreen「全部会话」页架构，
+ * 用户 2026-10-11 点名对齐）：独立 Dialog 窗口采不到 backdrop；而借宿主页面（聊天页）
+ * 画布又会让顶栏玻璃透出聊天内容。正解=本页画布只录本页底/壁纸，顶栏 [GlassPageBar]
+ * 磨砂与设置页/全部会话页**同一权威组件、同一观感**。宿主子树内绝不放玻璃（SIGSEGV 环）。
  */
 enum class WorkspaceTab { Tree, Outputs, History }
 
@@ -95,12 +95,17 @@ fun workspaceShellTheme(): WorkspaceShellTheme {
  * locateRel / historyFile 会自动把 Tab 切过去（壳没开就先开壳）。
  * 点文件开只读查看器（[FileViewerDialog]）叠在壳上，关掉回壳——各 Tab 共用一枚 viewer。
  *
- * @param backdrop 页面采样层（聊天页 appLayer 的 LayerBackdrop / 设置页 localBackdrop），
- *   顶栏 GlassPageBar 靠它折射真实内容。
+ * 架构=照抄「全部会话」页（SessionsScreen 同款，用户 2026-10-11 点名对齐）：
+ * 实底 Box + **本页自带采样画布**（WallpaperBackdropHost）+ 页内玻璃全部采自己的画布。
+ * 首版借宿主页面（聊天）的 backdrop 采到了聊天消息流——顶栏玻璃"透到聊天界面"，
+ * 且右上关闭与左上返回同义重复。现：顶栏只有 ← 返回（关壳=回侧边栏，语义由
+ * 调用方 onDismiss 落地）；玻璃磨砂的是本页底/壁纸，与底下聊天页再无关系。
+ *
+ * @param wallpaper 全局壁纸（null=无壁纸，画布即纯色底）；与设置/会话页同源。
  */
 @Composable
 internal fun WorkspaceShellDialog(
-    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    wallpaper: android.graphics.Bitmap?,
     workspaceName: String,
     backendReady: Boolean,
     listDir: suspend (String) -> List<String>,
@@ -136,34 +141,27 @@ internal fun WorkspaceShellDialog(
         if (currentTab == WorkspaceTab.History && metas == null) metas = loadMetas()
     }
 
-    // 全屏覆盖层（非 Dialog 窗）：底色=页面背景色，顶栏 GlassPageBar 采页面 backdrop。
-    // 返回键关壳（Dialog 时代白捡的行为，覆盖层要自己接——BackHandler 注册在本组合，
-    // 比抽屉等外层 handler 优先）。不做"点黑纱关"：内容 Column fillMaxSize 全占，
-    // 根本没有露纱的边缘可点，且 enabled=false 的 clickable 不消费点击会误关。
+    // 「全部会话」页同款架构（SessionsScreen 逐参对照）：实底 Box + 本页自带采样画布
+    // （WallpaperBackdropHost，preheat 默认开：覆盖层首帧画布为空，预热防顶栏玻璃空帧）。
+    // 首版借聊天页 backdrop 采到了消息流——顶栏"透到聊天界面"就是这个；本页画布只含
+    // 本页底/壁纸，与聊天内容再无关系。⚠️ 铁律：宿主子树内绝不能放玻璃（SIGSEGV 环），
+    // GlassPageBar 必须挂在本宿主之外的 Column 里（宿主 helper 的 Box 只录它自己的底）。
     androidx.activity.compose.BackHandler(onBack = onDismiss)
-    Column(
+    Box(
         Modifier
             .fillMaxSize()
-            .background(theme.bg)
+            .background(MaterialTheme.colorScheme.background)
     ) {
-            // 权威顶栏=与设置页同一 GlassPageBar：← 返回 + 加粗标题 + actions 槽关闭，
-            // 玻璃折射底下内容；statusBarsPadding 由 GlassPageBar 内部处理（首版没有它、
-            // 用自造裸文本头+右侧关闭，被用户点名两处顶栏不一致）。
+        val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper)
+        Column(Modifier.fillMaxSize()) {
+            // 权威顶栏=与设置页/全部会话页同一 GlassPageBar：← 返回（关壳）。
+            // 右上"关闭"已删——与返回同义重复（用户 2026-10-11 点名功能冲突）。
+            // 返回语义由调用方 onDismiss 落地：聊天宿主=关壳+重开侧边栏（对照
+            // 全部会话页 onBack=enterChat+drawer.open()），设置宿主=关壳回设置页。
             GlassPageBar(
-                backdrop = backdrop,
+                backdrop = localBackdrop,
                 title = "工作区",
-                onBack = onDismiss,
-                actions = {
-                    Text(
-                        "关闭",
-                        fontSize = 12.sp,
-                        color = theme.sub,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .clickable { onDismiss() }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
+                onBack = onDismiss
             )
             // Tab 条（多于一个才画——设置页宿主=纯目录无条）。
             // 文字 textAlign=Center 居中：首版漏设被用户点名（bounds 实测偏差 36/22/8px）。
@@ -237,6 +235,7 @@ internal fun WorkspaceShellDialog(
                     onPreselectConsumed = onHistoryFileConsumed
                 )
             }
+        }
     }
 
     // 点文件 → 只读查看器（叠在壳之上，关掉回壳；各 Tab 共用）
