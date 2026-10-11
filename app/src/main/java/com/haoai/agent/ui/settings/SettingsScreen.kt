@@ -1241,6 +1241,8 @@ private fun SectionPage(
     var pickerSeed by remember { mutableStateOf<String?>(null) }
     var pickerSlot by remember { mutableIntStateOf(-1) }
     var keyExportConfirm by remember { mutableStateOf(false) }
+    // 工作区浏览壳（方案B 双入口之一）：设置·工作区页「浏览工作区文件」开纯目录单 Tab 壳
+    var workspaceBrowseOpen by remember { mutableStateOf(false) }
     // 我的档案（聊天社交化 2026-10-07）：编辑弹窗状态提在根级（同色盘教训，
     // LazyColumn item 内 fillMaxSize 遮罩会被约束）
     var showMyProfile by remember { mutableStateOf(false) }
@@ -1303,7 +1305,9 @@ private fun SectionPage(
                         )
                     }
                     "memory" -> memoryItems(vm, settings, onOpenMemories, localBackdrop, onPickDreamModel = onPickDreamModel)
-                    "workspace" -> workspaceItems(vm, localBackdrop) { treePickerLaunch() }
+                    "workspace" -> workspaceItems(vm, localBackdrop,
+                        pickFolder = { treePickerLaunch() },
+                        browseWorkspace = { workspaceBrowseOpen = true })
                     "linux" -> linuxItems(vm, localBackdrop, linuxState)
                     "general" -> generalItems(
                         vm, settings, context, localBackdrop,
@@ -1406,6 +1410,20 @@ private fun SectionPage(
                     nameLabel = "昵称"
                 )
             }
+        }
+        // 工作区浏览壳（方案B 双入口之一）：与聊天页同一 WorkspaceShellDialog，
+        // tabs=[Tree] 纯目录——空间作用域（无会话，故无产出/历史；查看器不显换乘钮）
+        if (workspaceBrowseOpen) {
+            com.haoai.agent.ui.chat.WorkspaceShellDialog(
+                workspaceName = vm.workspaceName(),
+                backendReady = vm.workspaceTreeReady(),
+                listDir = { vm.treeListDir(it) },
+                walk = { vm.treeWalk() },
+                resolve = { vm.fileRefOfRel(it) },
+                tabs = listOf(com.haoai.agent.ui.chat.WorkspaceTab.Tree),
+                sessionScoped = false,
+                onDismiss = { workspaceBrowseOpen = false }
+            )
         }
     }
 }
@@ -2399,9 +2417,15 @@ private fun ToggleRow(
 private fun LazyListScope.workspaceItems(
     vm: SettingsViewModel,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    pickFolder: () -> Unit
+    pickFolder: () -> Unit,
+    browseWorkspace: () -> Unit
 ) {
     item {
+        // 空间占用统计：进页现算一次（walk 全树，异常已在 VM 层吞成零值沉默）
+        var stats by androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf<com.haoai.agent.ui.chat.WorkspaceStats?>(null)
+        }
+        androidx.compose.runtime.LaunchedEffect(Unit) { stats = vm.workspaceStats() }
         Column {
             // 顶部说明卡片：工作空间是什么、两种目录的差异
             GlassGroup(backdrop) {
@@ -2455,6 +2479,52 @@ private fun LazyListScope.workspaceItems(
                     // 回退性操作：用警告级（和"选择文件夹"这种普通次要操作区分开）
                     level = com.haoai.agent.ui.theme.HaoButtonLevel.Warning
                 ) { vm.useDefaultWorkspace() }
+            }
+            // 方案B 双入口之一（2026-10-11 定稿）：把空转的「工作区」面板接上目录浏览——
+            // 点开与聊天抽屉共用同一 WorkspaceShellDialog（tabs=[Tree]），全局统计副行是
+            // 设置入口独有的存储视角；SAF 后端无文件系统根 → 行仍在但点文件降级提示（同聊天口径）。
+            Row(
+                Modifier
+                    .padding(top = 10.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(
+                        if (com.haoai.agent.ui.theme.haoIsDark())
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
+                        else Color.White.copy(alpha = 0.85f)
+                    )
+                    .clickable(enabled = vm.workspaceTreeReady()) { browseWorkspace() }
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Filled.Folder,
+                    contentDescription = null,
+                    tint = haoToneMain(HaoTone.Accent),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.size(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "浏览工作区文件",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        stats?.let { com.haoai.agent.ui.chat.formatWorkspaceStats(it) }
+                            ?: if (vm.workspaceTreeReady()) "统计中…" else "未绑定工作空间",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                Icon(
+                    Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }

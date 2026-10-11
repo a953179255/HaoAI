@@ -1562,4 +1562,32 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun workspaceName(): String = c.workspace.current?.displayName ?: "未绑定"
+
+    /**
+     * 工作区浏览（2026-10-11 方案B）：设置·工作区页「浏览工作区文件」行的数据面——
+     * 统计副标题（walk 现算，异常吞成空表保持沉默，与聊天侧 treeWalk 同一口径）
+     * 与壳的目录 Tab 管线。SAF 后端无文件系统根 → fileRefOfRel 恒 null →
+     * 查看器降级提示（聊天侧同一口径）。
+     */
+    suspend fun workspaceStats(): com.haoai.agent.ui.chat.WorkspaceStats =
+        runCatching {
+            com.haoai.agent.ui.chat.workspaceStatsOf(
+                c.workspace.current?.walk() ?: emptyList(),
+                System.currentTimeMillis()
+            )
+        }.getOrDefault(com.haoai.agent.ui.chat.WorkspaceStats(0, 0, 0))
+
+    fun workspaceTreeReady(): Boolean = c.workspace.current != null
+
+    suspend fun treeListDir(rel: String): List<String> =
+        runCatching { c.workspace.current?.listDir(rel) ?: emptyList() }
+            .getOrDefault(emptyList())
+
+    suspend fun treeWalk(): List<com.haoai.agent.platform.FileEntry> =
+        runCatching { c.workspace.current?.walk() ?: emptyList() }
+            .getOrDefault(emptyList())
+
+    /** 树行 rel → 查看器定位（与 ChatViewModel.fileRefOfRel 同一安全口径 locateWorkspaceRel）。 */
+    fun fileRefOfRel(rel: String): UiFilePath? =
+        locateWorkspaceRel(rel, (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir())
 }

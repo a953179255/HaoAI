@@ -112,6 +112,8 @@ internal fun WorkspaceShellDialog(
     onHistoryFileConsumed: () -> Unit = {},
     onViewDiff: (callId: String) -> Unit = {},
     tabs: List<WorkspaceTab> = WorkspaceTab.entries.toList(),
+    /** 换乘钮能力位（会话宿主=true）；设置纯目录宿主传 false，查看器隐藏两枚钮。 */
+    sessionScoped: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val theme = workspaceShellTheme()
@@ -238,7 +240,11 @@ internal fun WorkspaceShellDialog(
     // 点文件 → 只读查看器（叠在壳之上，关掉回壳；各 Tab 共用）
     viewerRel?.let { rel ->
         resolve(rel)?.let { ref ->
-            FileViewerDialog(ref = ref, onDismiss = { viewerRel = null })
+            FileViewerDialog(
+                ref = ref,
+                onDismiss = { viewerRel = null },
+                showTransferActions = sessionScoped
+            )
         }
     }
 }

@@ -42,7 +42,12 @@ private const val VIEWER_MAX_BYTES = 1L shl 20   // 1MB
 private const val VIEWER_MAX_LINES = 2000
 
 @Composable
-internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
+internal fun FileViewerDialog(
+    ref: UiFilePath,
+    onDismiss: () -> Unit,
+    /** 换乘钮开关：会话宿主=true（可跳目录/版本）；纯目录设置宿主=false（本就在树内、无会话快照）。 */
+    showTransferActions: Boolean = true,
+) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val locateInTree = LocalLocateInTree.current
     val openTimeline = LocalOpenTimeline.current
@@ -61,7 +66,7 @@ internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
         onDismiss = onDismiss,
         // 批3a 闭环（效果图 .ovft 定稿按钮）+ 批3d 版本直达：查看器头部两枚换乘钮
         trailing = {
-            androidx.compose.foundation.layout.Row(
+            if (showTransferActions) androidx.compose.foundation.layout.Row(
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
             ) {
                 Text(
