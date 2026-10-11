@@ -2,14 +2,11 @@ package com.haoai.agent.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -20,37 +17,42 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.haoai.agent.agent.tools.snapshot.FileSnapshot
 import com.haoai.agent.platform.FileEntry
 import com.haoai.agent.ui.ChatRow
 import com.haoai.agent.ui.UiFilePath
+import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.theme.haoIsDark
 
 /**
  * 工作区共享壳（方案 B 落地；设计稿 `.test-work/sidebar-redesign/index.html` 2026-10-11 定稿）。
  *
  * 此前「目录/产出/版本」是三个各写一份的独立全屏 Dialog，`0xFF10151A` 深壳硬编码抄了三遍
- * ——浅色 App 里全是黑底，被用户点名"像硬缝上去的"。本版：一个壳三个 Tab；壳色**跟随 App
- * 深浅模式**（[workspaceShellTheme]）；绿色强调走 `colorScheme.primary`（换主题种子联动）。
- * 命名定稿：抽屉入口一行「工作区」；Tab 短词 目录/产出/历史。底部信息条已删——
- * 手机手势条会遮挡，统计改壳头副标题。
+ * ——浅色 App 里全是黑底，被用户点名"像硬缝上去的"。本版：一个壳、三个 Tab；壳色由
+ * [workspaceShellTheme] **从 MaterialTheme 派生**，自动跟随 App 深浅模式与主题色种子。
+ * 命名定稿：抽屉入口一行「工作区」、Tab 短词 目录/产出/历史；底部信息条删除（手机手势条
+ * 遮挡），统计进副标题行。
  *
- * 两种宿主：聊天页（全三 Tab，session 作用域的产出/历史）与设置·工作区页（tabs=[Tree]，
- * 空间作用域只看目录）——共用同一视图与管线（批3a listDir/walk/定位）。
+ * ⚠️ 形态=**页面覆盖层**（Box，非 Dialog 独立窗口）：与 ToolDetailSheet 同一条教训——独立
+ * 窗口采样不到页面 backdrop、玻璃是死的。调用方把它挂在 appLayer 采样层的外侧同级，
+ * 于是顶栏 [GlassPageBar] 真玻璃折射底下消息/设置列表，且与设置页顶栏**同一权威组件**
+ * （用户 2026-10-11 点名两处顶栏必须一致）。
  */
 enum class WorkspaceTab { Tree, Outputs, History }
 
-/** 壳色双档（深档=原三个 Dialog 抄写值；浅档=HaoLightColors 口径，diff 色与 DiffBlockView 同档）。 */
+/**
+ * 壳色档：一律取 MaterialTheme.colorScheme（深浅随 App 主题自动翻），
+ * diff 增删走语义色（primary 系加 / error 系删）。folder/info 两枚是装饰性
+ * 类别色，深浅各一档常量，保证压在两种底上都有对比。
+ */
 class WorkspaceShellTheme(
     val bg: Color,
     val text: Color,
@@ -69,34 +71,36 @@ class WorkspaceShellTheme(
 
 @Composable
 fun workspaceShellTheme(): WorkspaceShellTheme {
+    val cs = MaterialTheme.colorScheme
     val dark = haoIsDark()
-    val primary = MaterialTheme.colorScheme.primary
-    return if (dark) {
-        WorkspaceShellTheme(
-            bg = Color(0xFF10151A), text = Color(0xFFE8EEEA), sub = Color(0xFF9AA8A0),
-            body = Color(0xFFC8D2CD), faint = Color(0xFF5C6A64), searchBg = Color(0xFF1B232C),
-            folder = Color(0xFF7BC6A5), accent = primary, accentSoft = primary.copy(alpha = 0.20f),
-            del = Color(0xFFE88A8A), delBg = Color(0x1FE88A8A),
-            info = Color(0xFF8AB4F8), ctx = Color(0xFF8A968F),
-        )
-    } else {
-        WorkspaceShellTheme(
-            bg = Color(0xFFFDFEFF), text = Color(0xFF171B26), sub = Color(0xFF49526A),
-            body = Color(0xFF3C445A), faint = Color(0xFF7A84A0), searchBg = Color(0xFFEDF1F7),
-            folder = Color(0xFF2F7D4F), accent = primary, accentSoft = primary.copy(alpha = 0.12f),
-            del = Color(0xFF8C1D18), delBg = Color(0x14C62828),
-            info = Color(0xFF1A63C9), ctx = Color(0xFF67708A),
-        )
-    }
+    return WorkspaceShellTheme(
+        bg = cs.background,
+        text = cs.onBackground,
+        sub = cs.onSurfaceVariant,
+        body = cs.onSurface,
+        faint = cs.outline,
+        searchBg = cs.surfaceVariant,
+        folder = if (dark) Color(0xFF7BC6A5) else Color(0xFF2F7D4F),
+        accent = cs.primary,
+        accentSoft = cs.primary.copy(alpha = if (dark) 0.20f else 0.12f),
+        del = if (dark) Color(0xFFE88A8A) else Color(0xFF8C1D18),
+        delBg = if (dark) Color(0x1FE88A8A) else Color(0x14C62828),
+        info = if (dark) Color(0xFF8AB4F8) else Color(0xFF1A63C9),
+        ctx = cs.onSurfaceVariant,
+    )
 }
 
 /**
  * 共享壳。Tab 态存活于打开期；查看器「在目录中定位」/「版本历史」上抛的
  * locateRel / historyFile 会自动把 Tab 切过去（壳没开就先开壳）。
  * 点文件开只读查看器（[FileViewerDialog]）叠在壳上，关掉回壳——各 Tab 共用一枚 viewer。
+ *
+ * @param backdrop 页面采样层（聊天页 appLayer 的 LayerBackdrop / 设置页 localBackdrop），
+ *   顶栏 GlassPageBar 靠它折射真实内容。
  */
 @Composable
 internal fun WorkspaceShellDialog(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     workspaceName: String,
     backendReady: Boolean,
     listDir: suspend (String) -> List<String>,
@@ -112,7 +116,7 @@ internal fun WorkspaceShellDialog(
     onHistoryFileConsumed: () -> Unit = {},
     onViewDiff: (callId: String) -> Unit = {},
     tabs: List<WorkspaceTab> = WorkspaceTab.entries.toList(),
-    /** 换乘钮能力位（会话宿主=true）；设置纯目录宿主传 false，查看器隐藏两枚钮。 */
+    /** 换乘钮能力位（会话宿主=true）；纯目录设置宿主传 false，查看器隐藏两枚钮。 */
     sessionScoped: Boolean = true,
     onDismiss: () -> Unit
 ) {
@@ -132,51 +136,39 @@ internal fun WorkspaceShellDialog(
         if (currentTab == WorkspaceTab.History && metas == null) metas = loadMetas()
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    // 全屏覆盖层（非 Dialog 窗）：底色=页面背景色，顶栏 GlassPageBar 采页面 backdrop。
+    // 返回键关壳（Dialog 时代白捡的行为，覆盖层要自己接——BackHandler 注册在本组合，
+    // 比抽屉等外层 handler 优先）。不做"点黑纱关"：内容 Column fillMaxSize 全占，
+    // 根本没有露纱的边缘可点，且 enabled=false 的 clickable 不消费点击会误关。
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(theme.bg)
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .background(theme.bg)
-                .statusBarsPadding()
-        ) {
-            // 壳头：标题 + 副标题（统计随 Tab 换口径；底部信息条已删，统计在此） + 关闭
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp)
-                    .padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "工作区",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = theme.text
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    subtitleOf(currentTab, workspaceName, backendReady, outputEntries),
-                    fontSize = 11.sp,
-                    color = theme.sub,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    "关闭",
-                    fontSize = 12.sp,
-                    color = theme.sub,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .clickable { onDismiss() }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
-            // Tab 条（多于一个 Tab 才画——设置页宿主=纯目录，无条）
+            // 权威顶栏=与设置页同一 GlassPageBar：← 返回 + 加粗标题 + actions 槽关闭，
+            // 玻璃折射底下内容；statusBarsPadding 由 GlassPageBar 内部处理（首版没有它、
+            // 用自造裸文本头+右侧关闭，被用户点名两处顶栏不一致）。
+            GlassPageBar(
+                backdrop = backdrop,
+                title = "工作区",
+                onBack = onDismiss,
+                actions = {
+                    Text(
+                        "关闭",
+                        fontSize = 12.sp,
+                        color = theme.sub,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { onDismiss() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            )
+            // Tab 条（多于一个才画——设置页宿主=纯目录无条）。
+            // 文字 textAlign=Center 居中：首版漏设被用户点名（bounds 实测偏差 36/22/8px）。
             if (tabs.size > 1) {
-                Row(
+                androidx.compose.foundation.layout.Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -195,18 +187,29 @@ internal fun WorkspaceShellDialog(
                             fontSize = 12.sp,
                             fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
                             color = if (on) theme.accent else theme.sub,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (on) theme.accentSoft else Color.Transparent)
                                 .clickable { tab = t.name }
-                                .padding(vertical = 6.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                                .padding(vertical = 7.dp),
                         )
                     }
                 }
             }
+            // 统计副行（原底部信息条的归宿，随 Tab 换口径）——放内容区顶部，不挤顶栏。
+            Text(
+                subtitleOf(currentTab, workspaceName, backendReady, outputEntries),
+                fontSize = 11.sp,
+                color = theme.sub,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
             when (currentTab) {
                 WorkspaceTab.Tree -> WorkspaceTreePane(
                     theme = theme,
@@ -234,7 +237,6 @@ internal fun WorkspaceShellDialog(
                     onPreselectConsumed = onHistoryFileConsumed
                 )
             }
-        }
     }
 
     // 点文件 → 只读查看器（叠在壳之上，关掉回壳；各 Tab 共用）

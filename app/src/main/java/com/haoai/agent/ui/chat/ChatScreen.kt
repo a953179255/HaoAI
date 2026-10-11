@@ -1782,14 +1782,17 @@ fun ChatScreen(
         }
 
     // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳；抽屉「工作区」呼出。
-    // 查看器两枚换乘钮也开它：壳挂在消息列作用域之外，这里再包一层 provider——
-    // 否则从壳里点开查看器后，「在目录中定位 / 版本历史」读到默认空实现（旧三壳的隐性坑）。
+    // 覆盖层形态（非 Dialog 窗口）——挂在 appLayer 外侧同级，顶栏 GlassPageBar 才能
+    // 折射消息流（ToolDetailSheet 同法）；首版做成 Dialog 实心底被用户点名"顶栏不一致"。
+    // 查看器两枚换乘钮也开它：壳在消息列作用域之外，这里包一层 provider 补闭包
+    // （否则从壳里点开查看器后，「在目录中定位 / 版本历史」读到默认空实现=死按钮）。
     if (workspaceOpen) {
         androidx.compose.runtime.CompositionLocalProvider(
             LocalLocateInTree provides { rel -> fileTreeLocate = rel },
             LocalOpenTimeline provides { rel -> timelineFile = rel },
         ) {
             WorkspaceShellDialog(
+                backdrop = backdrop,
                 workspaceName = vm.workspaceName(),
                 backendReady = vm.treeBackend() != null,
                 listDir = { vm.treeListDir(it) },
