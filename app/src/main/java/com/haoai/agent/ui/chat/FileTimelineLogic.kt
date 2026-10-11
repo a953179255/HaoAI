@@ -38,3 +38,32 @@ internal fun versionsOf(
 internal fun toggleSelect(sel: List<String>, callId: String): List<String> =
     if (callId in sel) sel - callId
     else (sel + callId).takeLast(2)
+
+/** 时间轴中的一个版本条目。（壳合并入工作区共享壳后，由壳文件归位到此纯逻辑层。） */
+data class SnapVersion(
+    /** callId:which 复合键（选择态用）。 */
+    val key: String,
+    val callId: String,
+    /** "before"（初始版）或 "after"（某次变更后）。 */
+    val which: String,
+    val label: String,
+    val ts: Long,
+    val bytes: Int
+)
+
+/** 某文件的版本序列：首条存有 before → 前置"初始版"；其余按时间正序 V1..Vn。 */
+internal fun buildVersions(
+    fileMetas: List<FileSnapshot.Meta>,
+    hasInitial: Boolean
+): List<SnapVersion> {
+    val out = ArrayList<SnapVersion>()
+    if (fileMetas.isEmpty()) return out
+    if (hasInitial) {
+        val f = fileMetas.first()
+        out += SnapVersion("${f.callId}:before", f.callId, "before", "初始版", f.ts, 0)
+    }
+    fileMetas.forEachIndexed { i, m ->
+        out += SnapVersion("${m.callId}:after", m.callId, "after", "V${i + 1}", m.ts, m.bytes)
+    }
+    return out
+}

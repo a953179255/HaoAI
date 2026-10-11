@@ -78,7 +78,7 @@ internal fun FileViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 )
                 Text(
-                    "在文件树中定位",
+                    "在目录中定位",
                     fontSize = 11.5.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                     color = Color(0xFF7BD88F),

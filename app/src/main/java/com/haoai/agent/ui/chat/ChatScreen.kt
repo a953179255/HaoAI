@@ -493,15 +493,11 @@ fun ChatScreen(
     }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
-    // 批3a：工作区文件树。open=抽屉入口/查看器定位都能呼出；
-    // locate=查看器「在文件树中定位」递来的目标 rel（树消费后置回 null）
-    var fileTreeOpen by remember { mutableStateOf(false) }
+    // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳。
+    // fileTreeLocate=查看器「在目录中定位」换乘请求；timelineFile=「版本历史」直达文件。
+    // 壳的 LaunchedEffect 按这两个信号自动切 Tab（壳没开就先开壳）。
+    var workspaceOpen by remember { mutableStateOf(false) }
     var fileTreeLocate by remember { mutableStateOf<String?>(null) }
-    // 批3b：产出汇总（全屏壳；入口=抽屉「产出汇总」+ 链卡底部「本回合产出 N 个文件」）
-    var outputSummaryOpen by remember { mutableStateOf(false) }
-    // 批3d：版本时间轴（全屏壳；入口=抽屉「版本历史」+ 查看器「版本历史」）。
-    // timelineFile=直入某文件的时间轴（查看器传来），null=先列文件
-    var timelineOpen by remember { mutableStateOf(false) }
     var timelineFile by remember { mutableStateOf<String?>(null) }
     // 批3e：内联运行能力（shell 恒可、python/js 需沙箱；装完发行版换会话/重进即重探）
     var runEnv by remember { mutableStateOf(com.haoai.agent.ui.common.RunEnv()) }
@@ -977,15 +973,15 @@ fun ChatScreen(
                 com.haoai.agent.ui.chat.LocalOpenHtmlFile provides { url ->
                     scope.launch { com.haoai.agent.agent.browser.BrowserController.navigate(url) }
                 },
-                // 批3a：查看器「在文件树中定位」上抛——呼出树并传目标 rel
+                // 工作区壳·目录 Tab：查看器「在目录中定位」上抛——开壳+换乘到目录并定位目标 rel
                 LocalLocateInTree provides { rel ->
                     fileTreeLocate = rel
-                    fileTreeOpen = true
+                    workspaceOpen = true
                 },
-                // 批3d：查看器「版本历史」上抛——呼出时间轴并预选该文件
+                // 工作区壳·历史 Tab：查看器「版本历史」上抛——开壳+换乘到历史并预选该文件
                 LocalOpenTimeline provides { rel ->
                     timelineFile = rel
-                    timelineOpen = true
+                    workspaceOpen = true
                 },
                 // 批3e：代码块运行通道 + 能力快照（CodeBlock 据此决定出不出运行钮）
                 com.haoai.agent.ui.common.LocalRunEnv provides runEnv,
@@ -1770,19 +1766,10 @@ fun ChatScreen(
                             onPinSession = { id -> vm.pinSession(id) },
                             onRenameSession = { id, title -> vm.renameSession(id, title) },
                             onDeleteSession = { id -> vm.deleteSession(id) },
-                            // 批3a：树是全屏壳，抽屉让位（竖屏收起；横屏两栏分区不动）
-                            onOpenFileTree = {
-                                fileTreeOpen = true
-                                if (!landscapeTwoPane) scope.launch { drawer.close() }
-                            },
-                            // 批3b：产出汇总同为全屏壳，抽屉让位
-                            onOpenOutputs = {
-                                outputSummaryOpen = true
-                                if (!landscapeTwoPane) scope.launch { drawer.close() }
-                            },
-                            // 批3d：版本历史同为全屏壳，抽屉让位
-                            onOpenTimeline = {
-                                timelineOpen = true
+                            // 工作区共享壳（方案 B）：抽屉只留一行「工作区」，三视图进壳内 Tab；
+                            // 壳是全屏层，抽屉让位（竖屏收起；横屏两栏分区不动）
+                            onOpenWorkspace = {
+                                workspaceOpen = true
                                 if (!landscapeTwoPane) scope.launch { drawer.close() }
                             },
                             onEditProfile = { showProfileEdit = true },
@@ -1794,47 +1781,40 @@ fun ChatScreen(
         }
         }
 
-    // 批3a：工作区文件树（全屏壳；入口=抽屉「文件树」，查看器「在文件树中定位」也呼出它）
-    if (fileTreeOpen) {
-        FileTreeDialog(
-            workspaceName = vm.workspaceName(),
-            backendReady = vm.treeBackend() != null,
-            listDir = { vm.treeListDir(it) },
-            walk = { vm.treeWalk() },
-            resolve = { vm.fileRefOfRel(it) },
-            locateRel = fileTreeLocate,
-            onLocateConsumed = { fileTreeLocate = null },
-            onDismiss = { fileTreeOpen = false }
-        )
-    }
-
-    // 批3b：产出汇总（数据现算自 rows，无新后端调用；查看变更复用 1.3 callId 快照通道）
-    if (outputSummaryOpen) {
-        OutputSummaryDialog(
-            rows = rows,
-            resolve = { vm.fileRefOfRel(it) },
-            onViewDiff = { callId ->
-                snapshotScope.launch {
-                    val sidAtRequest = vm.session.value?.id
-                    val diff = vm.snapshotDiff(callId)
-                    if (diff != null && sidAtRequest != null && vm.isCurrentSession(sidAtRequest)) {
-                        diffViewer = diff
+    // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳；抽屉「工作区」呼出。
+    // 查看器两枚换乘钮也开它：壳挂在消息列作用域之外，这里再包一层 provider——
+    // 否则从壳里点开查看器后，「在目录中定位 / 版本历史」读到默认空实现（旧三壳的隐性坑）。
+    if (workspaceOpen) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalLocateInTree provides { rel -> fileTreeLocate = rel },
+            LocalOpenTimeline provides { rel -> timelineFile = rel },
+        ) {
+            WorkspaceShellDialog(
+                workspaceName = vm.workspaceName(),
+                backendReady = vm.treeBackend() != null,
+                listDir = { vm.treeListDir(it) },
+                walk = { vm.treeWalk() },
+                resolve = { vm.fileRefOfRel(it) },
+                rows = rows,
+                loadMetas = { vm.snapshotMetas() },
+                readVersion = { callId, which -> vm.snapshotVersion(callId, which) },
+                hasBefore = { callId -> vm.snapshotHasBefore(callId) },
+                locateRel = fileTreeLocate,
+                onLocateConsumed = { fileTreeLocate = null },
+                historyFile = timelineFile,
+                onHistoryFileConsumed = { timelineFile = null },
+                onViewDiff = { callId ->
+                    snapshotScope.launch {
+                        val sidAtRequest = vm.session.value?.id
+                        val diff = vm.snapshotDiff(callId)
+                        if (diff != null && sidAtRequest != null && vm.isCurrentSession(sidAtRequest)) {
+                            diffViewer = diff
+                        }
                     }
-                }
-            },
-            onDismiss = { outputSummaryOpen = false }
-        )
-    }
-
-    // 批3d：文件版本时间轴（全屏壳；入口=抽屉「版本历史」+ 查看器「版本历史」直达）
-    if (timelineOpen) {
-        FileTimelineDialog(
-            loadMetas = { vm.snapshotMetas() },
-            readVersion = { callId, which -> vm.snapshotVersion(callId, which) },
-            hasBefore = { callId -> vm.snapshotHasBefore(callId) },
-            preselect = timelineFile,
-            onDismiss = { timelineOpen = false; timelineFile = null }
-        )
+                },
+                onDismiss = { workspaceOpen = false }
+            )
+        }
     }
 
     // 工具详情弹层（v8 思维链）：appLayer 外渲染 → GlassPanel 真玻璃折射消息流
@@ -4823,9 +4803,7 @@ private fun SessionsDrawer(
     onPinSession: (String) -> Unit,
     onRenameSession: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
-    onOpenFileTree: () -> Unit,
-    onOpenOutputs: () -> Unit,
-    onOpenTimeline: () -> Unit,
+    onOpenWorkspace: () -> Unit,
     onEditProfile: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -5034,14 +5012,9 @@ private fun SessionsDrawer(
         }
 
         HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-        DrawerEntry(Icons.Filled.Folder, "文件树", onClick = {
-            if (openCardId != null) openCardId = null else onOpenFileTree()
-        })
-        DrawerEntry(Icons.Filled.Checklist, "产出汇总", onClick = {
-            if (openCardId != null) openCardId = null else onOpenOutputs()
-        })
-        DrawerEntry(Icons.Filled.History, "版本历史", onClick = {
-            if (openCardId != null) openCardId = null else onOpenTimeline()
+        // 工作区共享壳（方案 B 定稿）：目录/产出/历史三视图收进一个「工作区」入口
+        DrawerEntry(Icons.Filled.Folder, "工作区", onClick = {
+            if (openCardId != null) openCardId = null else onOpenWorkspace()
         })
         DrawerEntry(Icons.AutoMirrored.Filled.Chat, "全部会话", badge = sessions.size, onClick = {
             if (openCardId != null) openCardId = null else onOpenSessions()
