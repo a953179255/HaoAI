@@ -92,12 +92,16 @@ internal fun WorkspaceTreePane(
         searchResults = searchPaths(entries, q)
     }
 
+    // 定位请求：展开祖先链（缺的层现拉）→ 滚动 → 高亮 2s 后熄
     LaunchedEffect(locateRel) {
         val rel = locateRel ?: return@LaunchedEffect
         if (backendReady) {
             val loaded = children.toMutableMap()
             val open = (expanded + "").toMutableSet()
-            for (dir in ancestorsOf(rel).dropLast(1)) {
+            // ancestorsOf 口径=文件的全部祖先目录含父级（单测钉死："/site/page.html"→["","site"]）。
+            // 批3a 旧代码 dropLast(1) 是把它当成"含文件自身"误读——恰好验收目标是根级文件
+            // （[""]→剪后为空、根本就展开）才没暴露；嵌套文件永远展不开父级。此处修口径。
+            for (dir in ancestorsOf(rel)) {
                 if (!loaded.containsKey(dir)) loaded[dir] = listDir(dir)
                 open.add(dir)
             }

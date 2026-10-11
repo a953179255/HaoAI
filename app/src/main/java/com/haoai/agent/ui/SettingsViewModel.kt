@@ -1561,7 +1561,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         return ok
     }
 
-    fun workspaceName(): String = c.workspace.current?.displayName ?: "未绑定"
+    /** 空间短名（壳副标题用）：与 ChatViewModel.workspaceName 同口径取末段，全路径太长撑爆副标题行。 */
+    fun workspaceName(): String =
+        c.workspace.current?.displayName?.substringAfterLast('/')?.ifBlank { "根目录" } ?: "未绑定工作空间"
 
     /**
      * 工作区浏览（2026-10-11 方案B）：设置·工作区页「浏览工作区文件」行的数据面——
