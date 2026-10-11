@@ -151,6 +151,9 @@ internal fun WorkspaceShellDialog(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            // 吃空白区点击：抽屉可以留在壳底下不收（返回即原样露出），若不吃，点壳的
+            // 空白区会穿透到下层 scrim/抽屉把盖着的抽屉悄悄关掉（抽屉 sheet 同法）
+            .clickable(interactionSource = null, indication = null) { }
     ) {
         val localBackdrop = com.haoai.agent.ui.common.WallpaperBackdropHost(wallpaper)
         Column(Modifier.fillMaxSize()) {

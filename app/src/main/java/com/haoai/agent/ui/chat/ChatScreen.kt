@@ -1768,12 +1768,10 @@ fun ChatScreen(
                             onPinSession = { id -> vm.pinSession(id) },
                             onRenameSession = { id, title -> vm.renameSession(id, title) },
                             onDeleteSession = { id -> vm.deleteSession(id) },
-                            // 工作区共享壳（方案 B）：抽屉只留一行「工作区」，三视图进壳内 Tab；
-                            // 壳是全屏层，抽屉让位（竖屏收起；横屏两栏分区不动）
-                            onOpenWorkspace = {
-                                workspaceOpen = true
-                                if (!landscapeTwoPane) scope.launch { drawer.close() }
-                            },
+                            // 工作区共享壳（方案 B）：抽屉只留一行「工作区」，三视图进壳内 Tab。
+                            // 抽屉不收：全屏实底壳盖在上面，返回即原样露出——首版"进壳收抽屉、
+                            // 退出再 drawer.open()"被用户点名（退出会重播一次开合动画）
+                            onOpenWorkspace = { workspaceOpen = true },
                             onEditProfile = { showProfileEdit = true },
                             onSettings = {
                                 onOpenSettings()
@@ -1786,8 +1784,9 @@ fun ChatScreen(
     // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳；抽屉「工作区」呼出。
     // 「全部会话」页同款架构：实底 + 本页自带采样画布（wallpaper 垫底），顶栏玻璃
     // 磨砂的是本页——首版借聊天 backdrop 采到消息流、右上又塞了个同义"关闭"，
-    // 用户 2026-10-11 点名两处缺陷已修。返回语义=关壳+重开侧边栏（对照全部会话页
-    // onBack=enterChat+drawer.open()；横屏两栏抽屉是常驻分区不重开）。
+    // 用户 2026-10-11 点名两处缺陷已修。返回语义=只关壳：抽屉进壳时不收，全屏实底
+    // 盖在其上，退出即原样露出（首版"收抽屉+退出 drawer.open() 重开"会重播一次开合
+    // 动画，用户 2026-10-11 点名）；从消息芯片开壳时抽屉本就关着，退出回聊天。
     // 查看器两枚换乘钮也开它：壳在消息列作用域之外，这里包一层 provider 补闭包
     // （否则从壳里点开查看器后，「在目录中定位 / 版本历史」读到默认空实现=死按钮）。
     if (workspaceOpen) {
@@ -1819,11 +1818,7 @@ fun ChatScreen(
                         }
                     }
                 },
-                onDismiss = {
-                    workspaceOpen = false
-                    // 返回回侧边栏（全部会话页同法 drawer.open()）；横屏两栏分区常驻不动
-                    if (!landscapeTwoPane) scope.launch { drawer.open() }
-                }
+                onDismiss = { workspaceOpen = false }
             )
         }
     }
