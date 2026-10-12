@@ -184,6 +184,8 @@ data class AppSettings(
     val myEmoji: String = "",
     /** 我的头像底色渐变索引（0-5，默认 1=蓝，与 Agent 默认绿区分）。 */
     val myGradient: Int = 1,
+    /** 我的头像自定义底色（HEX 如 "#FF7A45"，引导/档案编辑的色盘挑的）；空 = 用 myGradient 预设渐变。 */
+    val myGradientCustom: String = "",
     /** 我的头像图片路径（非空时优先于 emoji）。 */
     val myAvatarPath: String? = null,
     /** 我的签名（预留，抽屉副标题等处可展示）。 */

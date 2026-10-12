@@ -131,7 +131,10 @@ import com.haoai.agent.ui.theme.HaoTone
 import com.haoai.agent.ui.theme.haoToneInk
 import com.haoai.agent.ui.theme.haoToneMain
 import com.haoai.agent.ui.common.GlassTextButton
+import com.haoai.agent.ui.common.ColorWheel
 import com.haoai.agent.ui.common.LiquidSlider
+import com.haoai.agent.ui.common.PickerHueColors
+import com.haoai.agent.ui.common.SingleColorPickerDialog
 import com.haoai.agent.ui.common.glassFieldColors
 import kotlinx.coroutines.launch
 import com.haoai.agent.ui.common.appLayer
@@ -1249,6 +1252,9 @@ private fun SectionPage(
     var myEditName by remember { mutableStateOf("") }
     var myEditEmoji by remember { mutableStateOf("") }
     var myEditGradient by remember { mutableIntStateOf(1) }
+    // 我的头像自定义底色（色盘单槽；空=用渐变预设）——与引导名片步同源
+    var myEditCustom by remember { mutableStateOf("") }
+    var myProfileWheelOpen by remember { mutableStateOf(false) }
     var myEditBio by remember { mutableStateOf("") }
     var myEditImagePath by remember { mutableStateOf<String?>(null) }
     val myAvatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -1318,6 +1324,7 @@ private fun SectionPage(
                             myEditName = settings.myName.ifBlank { "我" }
                             myEditEmoji = settings.myEmoji
                             myEditGradient = settings.myGradient
+                            myEditCustom = settings.myGradientCustom
                             myEditBio = settings.myBio
                             myEditImagePath = settings.myAvatarPath
                             showMyProfile = true
@@ -1394,7 +1401,10 @@ private fun SectionPage(
                 onDismiss = { showMyProfile = false },
                 confirmLabel = "保存",
                 onConfirm = {
-                    vm.updateMyProfile(myEditName, myEditEmoji, myEditGradient, myEditBio, myEditImagePath)
+                    vm.updateMyProfile(
+                        myEditName, myEditEmoji, myEditGradient, myEditBio, myEditImagePath,
+                        customHex = myEditCustom
+                    )
                     showMyProfile = false
                 },
                 dismissLabel = "取消"
@@ -1403,13 +1413,33 @@ private fun SectionPage(
                     backdrop = localBackdrop,
                     name = myEditName, onName = { myEditName = it },
                     emoji = myEditEmoji, onEmoji = { myEditEmoji = it },
-                    gradient = myEditGradient, onGradient = { myEditGradient = it },
+                    gradient = myEditGradient, onGradient = {
+                        // 选预设渐变即退出自定义色（互斥，同引导名片步）
+                        myEditGradient = it; myEditCustom = ""
+                    },
+                    customHex = myEditCustom, onCustomHex = { myEditCustom = it },
+                    showCustomColor = true,
+                    onOpenColorWheel = { myProfileWheelOpen = true },
                     bio = myEditBio, onBio = { myEditBio = it },
                     imagePath = myEditImagePath, onRemoveImage = { myEditImagePath = null },
                     onPickImage = { myAvatarPicker.launch("image/*") },
                     nameLabel = "昵称"
                 )
             }
+        }
+        // 我的档案·头像自定义色盘（单槽，根级挂载防 LazyColumn item 约束——同主题色盘教训）
+        if (myProfileWheelOpen) {
+            val wheelInit = myEditCustom.ifBlank {
+                com.haoai.agent.ui.chat.AVATAR_GRADIENTS
+                    .getOrElse(myEditGradient) { com.haoai.agent.ui.chat.AVATAR_GRADIENTS[1] }[1]
+                    .toHex()
+            }
+            com.haoai.agent.ui.common.SingleColorPickerDialog(
+                backdrop = localBackdrop,
+                initialHex = wheelInit,
+                onDismiss = { myProfileWheelOpen = false },
+                onConfirm = { myEditCustom = it; myProfileWheelOpen = false }
+            )
         }
         // 工作区浏览壳（方案B 双入口之一）：与聊天页同一 WorkspaceShellDialog，
         // tabs=[Tree] 纯目录——空间作用域（无会话，故无产出/历史；查看器不显换乘钮）
@@ -2558,7 +2588,8 @@ private fun LazyListScope.generalItems(
                     gradientIndex = settings.myGradient,
                     fallback = settings.myName.ifBlank { "我" },
                     size = 40.dp,
-                    imagePath = settings.myAvatarPath
+                    imagePath = settings.myAvatarPath,
+                    customHex = settings.myGradientCustom
                 )
                 Spacer(Modifier.size(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -7547,18 +7578,12 @@ private fun purposeRow(
     }
 }
 
-/** 色相条 / 色轮共用彩虹色序（首尾同色，sweep 与 horizontal 均无缝衔接）。 */
-private val PickerHueColors = listOf(
-    Color(0xFFFF3B30), Color(0xFFFF9500), Color(0xFFFFCC00), Color(0xFF34C759),
-    Color(0xFF00C7BE), Color(0xFF007AFF), Color(0xFF5856D6), Color(0xFFAF52DE),
-    Color(0xFFFF2D55), Color(0xFFFF3B30)
-)
-
 /**
  * 自定义主题色盘弹层（液态玻璃材质，弹窗内降级磨砂——禁自引用折射防崩溃）。
  * 简化交互（三步）：拖色盘=纯预览（不写任何槽）→ 点槽位=仅选中（零写入）→
  * 「保存」=当前色写入选中槽+应用+关闭。全程无长按、无中途写入、无快照回滚。
  * 选中态用 primary 描边（稳定色，不随预览色变）；保存成功后槽圆点回弹动效确认。
+ * 色盘本体（SV 面板+色相条）抽到 ui/common/ColorWheel.kt，与引导/档案的单色弹层共用。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -7655,83 +7680,11 @@ private fun ColorPickerDialog(
                         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
                     )
 
-                    // SV 面板：横向=饱和度，纵向=明度；背景双层渐变（白→纯色 再叠 透明→黑）
-                    BoxWithConstraints(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(150.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .pointerInput(Unit) {
-                                detectTapGestures { pos ->
-                                    sat = (pos.x / size.width).coerceIn(0f, 1f)
-                                    vel = (1f - pos.y / size.height).coerceIn(0f, 1f)
-                                }
-                            }
-                            .pointerInput(Unit) {
-                                detectDragGestures { change, _ ->
-                                    change.consume()
-                                    sat = (change.position.x / size.width).coerceIn(0f, 1f)
-                                    vel = (1f - change.position.y / size.height).coerceIn(0f, 1f)
-                                }
-                            }
-                    ) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.horizontalGradient(listOf(Color.White, Color.hsv(hue, 1f, 1f)))
-                                )
-                        )
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
-                        )
-                        Box(
-                            Modifier
-                                .offset(x = maxWidth * sat - 9.dp, y = maxHeight * (1f - vel) - 9.dp)
-                                .size(18.dp)
-                                .clip(CircleShape)
-                                .background(cur.copy(alpha = 0.4f))
-                        )
-                        Box(
-                            Modifier
-                                .offset(x = maxWidth * sat - 9.dp, y = maxHeight * (1f - vel) - 9.dp)
-                                .size(18.dp)
-                                .border(2.5.dp, Color.White, CircleShape)
-                        )
-                    }
-
-                    // 色相条
-                    BoxWithConstraints(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp)
-                            .height(16.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Brush.horizontalGradient(PickerHueColors))
-                            .pointerInput(Unit) {
-                                detectTapGestures { pos ->
-                                    hue = (pos.x / size.width * 360f).coerceIn(0f, 359.9f)
-                                }
-                            }
-                            .pointerInput(Unit) {
-                                detectDragGestures { change, _ ->
-                                    change.consume()
-                                    hue = (change.position.x / size.width * 360f).coerceIn(0f, 359.9f)
-                                }
-                            }
-                    ) {
-                        Box(
-                            Modifier
-                                .align(Alignment.CenterStart)
-                                .offset(x = maxWidth * (hue / 360f) - 10.dp)
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(Color.hsv(hue, 1f, 1f))
-                                .border(2.5.dp, Color.White, CircleShape)
-                        )
-                    }
+                    // SV 面板 + 色相条：与引导/档案弹层共用（ui/common/ColorWheel.kt）
+                    ColorWheel(
+                        hue = hue, sat = sat, vel = vel,
+                        onChange = { h, s, v -> hue = h; sat = s; vel = v }
+                    )
 
                     // 预览 + 槽位选择：点槽位=当前色直接存入并应用；再点已选槽=取消选中
                     Row(

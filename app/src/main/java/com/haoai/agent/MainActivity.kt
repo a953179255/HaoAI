@@ -72,6 +72,7 @@ import com.haoai.agent.ui.common.appLayer
 import androidx.compose.ui.graphics.luminance
 import com.haoai.agent.ui.settings.SettingsScreen
 import com.haoai.agent.ui.theme.HaoTheme
+import com.haoai.agent.ui.theme.toHex
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -1326,6 +1327,9 @@ private fun OnboardingGlass(
     var myName by remember { mutableStateOf("我") }
     var myEmoji by remember { mutableStateOf("") }
     var myGradient by remember { mutableIntStateOf(1) }
+    // 自定义底色（色盘单槽，与设置主题色共用轮盘；空=用渐变预设）
+    var myCustomColor by remember { mutableStateOf("") }
+    var showAvatarWheel by remember { mutableStateOf(false) }
     var myBio by remember { mutableStateOf("") }
     var myImagePath by remember { mutableStateOf<String?>(null) }
     val myAvatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -1608,15 +1612,9 @@ private fun OnboardingGlass(
                                         .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f))
                                         .padding(horizontal = 12.dp, vertical = 10.dp)
                                 ) {
-                                    Text(
-                                        tunedText ?: p.fullText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                                        // v3④：去掉写死的 170dp 上限——随内容自然撑高（短人设
-                                        // 不再截断、空余位置全利用），整页占满由外层滚动接管
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
                                     if (tuning) {
+                                        // 微调态只显示可编辑字段（预填当前全文=在原基础上改）——
+                                        // 2026-10-13 用户反馈：静态全文与输入框曾叠着显示同一份内容
                                         androidx.compose.foundation.text.BasicTextField(
                                             value = tunedText ?: p.fullText,
                                             onValueChange = { tunedText = it },
@@ -1639,6 +1637,14 @@ private fun OnboardingGlass(
                                                 .padding(top = 6.dp)
                                         )
                                     } else {
+                                        Text(
+                                            tunedText ?: p.fullText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+                                            // v3④：去掉写死的 170dp 上限——随内容自然撑高（短人设
+                                            // 不再截断、空余位置全利用），整页占满由外层滚动接管
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
                                         Text(
                                             if (tunedText != null) "✓ 已微调 · ✏️ 再改改" else "✏️ 在此人设基础上微调",
                                             style = MaterialTheme.typography.labelSmall,
@@ -1780,7 +1786,8 @@ private fun OnboardingGlass(
                                 gradientIndex = myGradient,
                                 fallback = myName.ifBlank { "我" },
                                 size = 52.dp,
-                                imagePath = myImagePath
+                                imagePath = myImagePath,
+                                customHex = myCustomColor
                             )
                             Spacer(Modifier.size(14.dp))
                             com.haoai.agent.ui.common.LiquidGlassButton(
@@ -1853,7 +1860,7 @@ private fun OnboardingGlass(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             com.haoai.agent.ui.chat.AVATAR_GRADIENTS.forEachIndexed { i, colors ->
-                                val selected = i == myGradient
+                                val selected = i == myGradient && myCustomColor.isBlank()
                                 Box(
                                     Modifier
                                         .size(34.dp)
@@ -1868,8 +1875,48 @@ private fun OnboardingGlass(
                                                 androidx.compose.foundation.shape.CircleShape
                                             ) else Modifier
                                         )
-                                        .clickable { myGradient = i }
+                                        .clickable {
+                                            myGradient = i
+                                            // 选预设即退出自定义色（互斥）
+                                            myCustomColor = ""
+                                        }
                                 )
+                            }
+                            // 自定义色（色盘单槽）：已挑=实色+主色描边，未挑=sweep 色轮+中心孔，
+                            // 与设置→主题外观→主题色的色盘同款（这里只有一个槽，无保存到槽步骤）
+                            val customParsed = if (myCustomColor.isNotBlank()) {
+                                com.haoai.agent.ui.theme.parseHexColor(myCustomColor)
+                            } else {
+                                null
+                            }
+                            Box(
+                                Modifier
+                                    .size(34.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(
+                                        customParsed?.let {
+                                            androidx.compose.ui.graphics.SolidColor(it)
+                                        } ?: androidx.compose.ui.graphics.Brush.sweepGradient(
+                                            com.haoai.agent.ui.common.PickerHueColors
+                                        )
+                                    )
+                                    .border(
+                                        if (customParsed != null) 2.dp else 1.dp,
+                                        if (customParsed != null) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                                        androidx.compose.foundation.shape.CircleShape
+                                    )
+                                    .clickable { showAvatarWheel = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (customParsed == null) {
+                                    Box(
+                                        Modifier
+                                            .size(9.dp)
+                                            .clip(androidx.compose.foundation.shape.CircleShape)
+                                            .background(MaterialTheme.colorScheme.background)
+                                    )
+                                }
                             }
                         }
                         // 效果预览：名片在聊天里的样子（效果图④定稿）
@@ -1896,7 +1943,8 @@ private fun OnboardingGlass(
                                     gradientIndex = myGradient,
                                     fallback = myName.ifBlank { "我" },
                                     size = 20.dp,
-                                    imagePath = myImagePath
+                                    imagePath = myImagePath,
+                                    customHex = myCustomColor
                                 )
                                 Text(
                                     myName.ifBlank { "我" },
@@ -2352,7 +2400,10 @@ private fun OnboardingGlass(
                             enabled = true,
                             onClick = {
                                 // 名片步的档案落盘（可跳过——默认「我」+蓝渐变也已显式写入）
-                                settingsVm.updateMyProfile(myName, myEmoji, myGradient, myBio, myImagePath)
+                                settingsVm.updateMyProfile(
+                                    myName, myEmoji, myGradient, myBio, myImagePath,
+                                    customHex = myCustomColor
+                                )
                                 onSave(name, soulText(), perm)
                             }
                         )
@@ -2360,8 +2411,28 @@ private fun OnboardingGlass(
                 }
             }
         }
+        }
+        // 自定义底色色盘（单槽：与设置→主题外观→主题色的色盘共用轮盘，
+        // 引导场景只有一个底色要改，去掉「保存到槽 1/2/3」的中间步骤）
+        if (showAvatarWheel) {
+            // 所见即所选：已挑过=原色，没挑过=当前预设渐变的深端色
+            val wheelInit = myCustomColor.ifBlank {
+                com.haoai.agent.ui.chat.AVATAR_GRADIENTS
+                    .getOrElse(myGradient) { com.haoai.agent.ui.chat.AVATAR_GRADIENTS[1] }[1]
+                    .toHex()
+            }
+            com.haoai.agent.ui.common.SingleColorPickerDialog(
+                backdrop = localBackdrop,
+                initialHex = wheelInit,
+                hint = "拖动选色，确认后作为头像底色",
+                onDismiss = { showAvatarWheel = false },
+                onConfirm = {
+                    myCustomColor = it
+                    showAvatarWheel = false
+                }
+            )
+        }
     }
-}
 }
 
 /** 完成清单行。 */

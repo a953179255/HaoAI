@@ -298,12 +298,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         emoji: String,
         gradient: Int,
         bio: String,
-        avatarPath: String?
+        avatarPath: String?,
+        customHex: String = ""
     ) = c.updateSettings {
         it.copy(
             myName = name.trim().take(20),
             myEmoji = emoji,
             myGradient = gradient.coerceIn(0, 5),
+            myGradientCustom = customHex,
             myBio = bio.trim().take(60),
             myAvatarPath = avatarPath
         )

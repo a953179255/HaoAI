@@ -172,6 +172,7 @@ import com.haoai.agent.ui.common.GlassPanel
 import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
+import com.haoai.agent.ui.common.PickerHueColors
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
 import com.haoai.agent.ui.common.SlowSpinner
@@ -203,6 +204,8 @@ data class ChatProfiles(
     val myName: String,
     val myEmoji: String,
     val myGradient: Int,
+    /** 我的头像自定义底色（HEX）；空 = 用 myGradient 预设渐变。 */
+    val myGradientCustom: String = "",
     val myImage: String?
 )
 
@@ -1015,6 +1018,7 @@ fun ChatScreen(
                     myName = vm.myName(),
                     myEmoji = settings.myEmoji,
                     myGradient = settings.myGradient,
+                    myGradientCustom = settings.myGradientCustom,
                     myImage = settings.myAvatarPath
                 )
             ) {
@@ -3355,7 +3359,15 @@ private fun TurnDivider() {
  * 头像不再单独成列——气泡通栏，宽度零浪费。用户侧镜像右对齐。
  */
 @Composable
-private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: String?, right: Boolean, topGap: Boolean = true) {
+private fun SenderHead(
+    name: String,
+    emoji: String,
+    gradient: Int,
+    imagePath: String?,
+    right: Boolean,
+    topGap: Boolean = true,
+    customHex: String = ""
+) {
     Row(
         // topGap=true：增强方向（Agent 回复完毕 → 我发言）的 6dp 呼吸位，配合 TurnDivider；
         // topGap=false：问答衔接方向/会话首条，恢复改动前的 1dp 紧凑间距
@@ -3378,9 +3390,15 @@ private fun SenderHead(name: String, emoji: String, gradient: Int, imagePath: St
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
             Spacer(Modifier.size(6.dp))
-            ProfileAvatar(emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp, imagePath = imagePath)
+            ProfileAvatar(
+                emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp,
+                imagePath = imagePath, customHex = customHex
+            )
         } else {
-            ProfileAvatar(emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp, imagePath = imagePath)
+            ProfileAvatar(
+                emoji = emoji, gradientIndex = gradient, fallback = name, size = 20.dp,
+                imagePath = imagePath, customHex = customHex
+            )
             Spacer(Modifier.size(6.dp))
             Text(
                 name,
@@ -4203,7 +4221,7 @@ private fun UserBubble(
     ) {
         // 社交化名字行（效果图 C）：每组第一条右对齐显示「我的头像+昵称」
         if (showHead) LocalChatProfiles.current?.let { p ->
-            SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true, topGap = headTopGap)
+            SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true, topGap = headTopGap, customHex = p.myGradientCustom)
         }
         // 用户发的图片附件：气泡上方原比例展示（此前只存不显）；点击进全屏查看器（批1d）
         row.imageData?.let { dataUrl ->
@@ -5652,16 +5670,22 @@ internal val AVATAR_GRADIENTS = listOf(
     listOf(Color(0xFF9CD8C8), Color(0xFF5FB0C9))
 )
 
-/** 档案头像：图片 > emoji > 名字首字，渐变底色兜底。 */
+/** 档案头像：图片 > emoji > 名字首字，渐变底色兜底；[customHex] 非空时用色盘自定义纯色。 */
 @Composable
 internal fun ProfileAvatar(
     emoji: String,
     gradientIndex: Int,
     fallback: String,
     size: androidx.compose.ui.unit.Dp = 40.dp,
-    imagePath: String? = null
+    imagePath: String? = null,
+    customHex: String = ""
 ) {
     val colors = AVATAR_GRADIENTS[gradientIndex.coerceIn(0, AVATAR_GRADIENTS.lastIndex)]
+    val custom = if (customHex.isNotBlank()) {
+        com.haoai.agent.ui.theme.parseHexColor(customHex)
+    } else {
+        null
+    }
     val bmp = remember(imagePath) {
         imagePath?.let { p ->
             runCatching {
@@ -5677,7 +5701,11 @@ internal fun ProfileAvatar(
     Box(
         Modifier
             .size(size)
-            .background(Brush.linearGradient(colors), CircleShape),
+            .background(
+                custom?.let { androidx.compose.ui.graphics.SolidColor(it) }
+                    ?: Brush.linearGradient(colors),
+                CircleShape
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (bmp != null) {
@@ -5713,6 +5741,11 @@ internal fun ProfileAvatar(
                 fontSize = (size.value * fill).sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
+                // CJK 兜底：includeFontPadding=false 后行盒=[ascent,descent]（下衬比墨心占位
+                // 厚），盒居中时「我」字墨心仍低 ~4.8% 直径（2026-10-13 截图逐像素实测
+                // +2.33px/52dp 圆）→ 按直径比例上移补偿（0.062 含二测残差 +1.9px）；
+                // 拉丁帽高近墨心，不补
+                modifier = if (c.code > 0x2E7F) Modifier.offset(y = -size * 0.062f) else Modifier,
                 style = androidx.compose.ui.text.TextStyle(
                     platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
                 )
@@ -5722,15 +5755,19 @@ internal fun ProfileAvatar(
 }
 
 
-/** 档案 emoji 候选（Agent/我的档案编辑共用，聊天社交化 2026-10-07）。 */
+/** 档案 emoji 候选（Agent/我的档案编辑共用，聊天社交化 2026-10-07）。
+ * 18 个 = 6 列 3 整行（2026-10-13 用户反馈网格第三行只露 4 个，补 🐯🦄 收满）。 */
 internal val PROFILE_EMOJIS = listOf(
-    "😀", "😊", "😎", "🤖", "🐱", "🐶", "🦊", "🐰", "🌸", "🌟", "🔥", "🌙", "⚡", "🍀", "🎧", "🚀"
+    "😀", "😊", "😎", "🤖", "🐱", "🐶", "🦊", "🐰", "🌸", "🌟", "🔥", "🌙", "⚡", "🍀", "🎧", "🚀", "🐯", "🦄"
 )
 
 /**
  * 档案编辑共享字段（效果图③定稿）：名字 / 头像（52dp 预览+相册+emoji 网格+底色）/ 签名。
  * Agent「编辑档案」与设置「我的档案」两处弹窗复用，状态全部由调用方持有。
  * [onPickImage] 点「从相册选择」（调用方负责 launcher + 回写 imagePath）。
+ * [showCustomColor] 开时底色行尾多一颗色盘入口（自定义纯色，与设置主题色共用轮盘）——
+ * 仅「我的档案」有自定义槽；Agent 档案只有 6 预设渐变，不显示。
+ * [onOpenColorWheel] 由调用方负责在根级挂弹层（LazyColumn item 内会被约束）。
  */
 @Composable
 internal fun ProfileEditFields(
@@ -5741,7 +5778,11 @@ internal fun ProfileEditFields(
     bio: String, onBio: (String) -> Unit,
     imagePath: String?, onRemoveImage: () -> Unit,
     onPickImage: () -> Unit,
-    nameLabel: String = "名字"
+    nameLabel: String = "名字",
+    customHex: String = "",
+    onCustomHex: (String) -> Unit = {},
+    showCustomColor: Boolean = false,
+    onOpenColorWheel: (() -> Unit)? = null
 ) {
     CompactGlassField(
         value = name,
@@ -5835,7 +5876,7 @@ internal fun ProfileEditFields(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         AVATAR_GRADIENTS.forEachIndexed { i, colors ->
-            val selected = i == gradient
+            val selected = i == gradient && customHex.isBlank()
             Box(
                 Modifier
                     .size(34.dp)
@@ -5850,6 +5891,38 @@ internal fun ProfileEditFields(
                     )
                     .clickable { onGradient(i) }
             )
+        }
+        // 自定义色（色盘单槽）：已挑=实色+主色描边，未挑=sweep 色轮+中心孔
+        if (showCustomColor && onOpenColorWheel != null) {
+            val customParsed =
+                if (customHex.isNotBlank()) com.haoai.agent.ui.theme.parseHexColor(customHex) else null
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(
+                        customParsed?.let {
+                            androidx.compose.ui.graphics.SolidColor(it)
+                        } ?: Brush.sweepGradient(PickerHueColors)
+                    )
+                    .border(
+                        if (customParsed != null) 2.dp else 1.dp,
+                        if (customParsed != null) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                        CircleShape
+                    )
+                    .clickable { onOpenColorWheel() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (customParsed == null) {
+                    Box(
+                        Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.background)
+                    )
+                }
+            }
         }
     }
     CompactGlassField(
