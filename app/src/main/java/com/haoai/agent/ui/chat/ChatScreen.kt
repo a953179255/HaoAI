@@ -444,28 +444,39 @@ fun ChatScreen(
     // 画面朝下走（dV>0）方向判定也不成立 → 用户实测弹跳区间缩小但没消失；
     // 三修改为逐帧位移归属（dV≠0 且非我们钉的=接管），一次覆盖全部路径。
     val parkedFollow = remember { mutableStateOf(false) }
-    // v4-4 回底徽标：断开瞬间拍 baseline 快照（行数+流式长度），
-    // 只统计之后的真增量——上滑动作本身不再被误计为「1 条新动态」。
-    val newContentTicker = remember { mutableStateOf(0) }
-    var contentBaseline by remember { mutableStateOf(0L) }
-    // ① 断开/恢复跟随时重拍基线
-    LaunchedEffect(userScrolledAway.value) {
-        if (userScrolledAway.value) {
-            contentBaseline = rows.size.toLong() * 1_000_000L + (streaming?.length ?: 0)
-            newContentTicker.value = 0
+    // ⑧ 回底浮钮 v3（2026-10-12 方向感知定稿，用户效果图拍板）：不再计数
+    // （旧「↓ N 条新回复」徽标整条拆除：ticker 会把"上滑动作"以外的一切内容
+    // 变化都喊成动态，而且宽胶囊悬在流式落字区正中挡正文）。新语义 =
+    // 「你下面还有内容，且你正在找它」：向下翻且离底 >150dp 才浮现、向上翻
+    // （阅读意图）立即隐藏、停手 2.5 秒淡出、贴底不出。显隐由 MessageList 的
+    // 逐帧跟随循环按**位移方向**驱动（那里才有逐帧 dV），本层只持有状态。
+    val jumperVisible = remember { mutableStateOf(false) }
+    // 最近一次「用户归因滚动」时刻：每次更新都重启下面的闲置淡出计时器
+    val lastUserScrollAt = remember { mutableStateOf(0L) }
+    LaunchedEffect(jumperVisible.value, lastUserScrollAt.value) {
+        if (jumperVisible.value) {
+            kotlinx.coroutines.delay(2500)
+            jumperVisible.value = false
         }
     }
-    // ② 断开期间内容变化：与基线求差（行数变化记 1 条，流式增长 400 字记 1 条）
-    LaunchedEffect(rows.size, streaming?.length) {
-        if (!userScrolledAway.value) return@LaunchedEffect
-        val now = rows.size.toLong() * 1_000_000L + (streaming?.length ?: 0)
-        val deltaRows = rows.size - (contentBaseline / 1_000_000L).toInt()
-        if (deltaRows > 0) {
-            newContentTicker.value = deltaRows
-        } else {
-            // 行数没变但流式在长：按 400 字一条粗算
-            val deltaChars = now - contentBaseline
-            if (deltaChars > 0) newContentTicker.value = (deltaChars / 400).toInt().coerceAtLeast(1)
+    // v6.1 补档（2026-10-12 用户定稿）：running 真→假边沿把本轮耗时定格，
+    // 状态行显示「✓ 回复完毕 · N秒」4 秒后消失——旧版跑完直接消失，用户
+    // 在上方看消息时完全不知道下面已经出结果。门：本轮产出过内容才提示
+    //（空回合/秒失败不值得打扰；手动停止同样算"这轮结束了"，语义一致）。
+    var lastRunningForDone by remember { mutableStateOf(false) }
+    var turnDoneMs by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(running) {
+        if (running) {
+            turnDoneMs = null
+        } else if (lastRunningForDone && turnHadOutput) {
+            turnDoneMs = (System.currentTimeMillis() - turnStartAt).coerceAtLeast(0L)
+        }
+        lastRunningForDone = running
+    }
+    LaunchedEffect(turnDoneMs) {
+        if (turnDoneMs != null) {
+            kotlinx.coroutines.delay(4000)
+            turnDoneMs = null
         }
     }
     val approval by vm.approval.collectAsState()
@@ -1049,6 +1060,8 @@ fun ChatScreen(
                 scrollState = scrollState,
                 userScrolledAway = userScrolledAway,
                 parkedFollow = parkedFollow,
+                jumperVisible = jumperVisible,
+                lastUserScrollAt = lastUserScrollAt,
                 sessionId = vm.session.collectAsState().value?.id,
                 planProposal = planProposal
                     ?.takeIf { it.first == vm.session.collectAsState().value?.id }?.second,
@@ -1381,6 +1394,59 @@ fun ChatScreen(
                     }
                 }
             }
+            // v6.1 补档（2026-10-12 用户定稿）：running 真→假边沿定格本轮耗时后，
+            // 在与运行胶囊**同一位置**显示「✓ 回复完毕 · N秒」4 秒（由上方 effect 归零）。
+            // 旧版跑完状态行直接消失——用户在上方翻历史时完全不知道下面已经出结果。
+            // 与运行胶囊天然互斥（turnDoneMs 仅在 running=false 时非空），无需额外门。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = turnDoneMs != null,
+                enter = androidx.compose.animation.fadeIn(tween(160)) +
+                    androidx.compose.animation.expandVertically(tween(200)),
+                exit = androidx.compose.animation.fadeOut(tween(140)) +
+                    androidx.compose.animation.shrinkVertically(tween(160))
+            ) {
+                Row(Modifier.padding(start = 2.dp, bottom = 6.dp)) {
+                    GlassPanel(
+                        backdrop = backdrop,
+                        radius = 14.dp,
+                        lensRadius = com.haoai.agent.ui.theme.GlassTuning.lensHeight.dp,
+                        lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
+                        depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
+                        surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                        chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
+                    ) {
+                        Row(
+                            Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(Modifier.size(7.dp))
+                            Text(
+                                "回复完毕",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                String.format(
+                                    Locale.US, "%.1fs",
+                                    (turnDoneMs ?: 0L) / 1000.0
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            )
+                        }
+                    }
+                }
+            }
             // 顶栏/输入框的导出层：它们自身 drawBackdrop 时把最终表面 record 进来
             val topBarExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
             val composerExportBackdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
@@ -1572,62 +1638,70 @@ fun ChatScreen(
             ) { Text(msg, maxLines = 4) }
         }
 
-        // ⑧ 回到底部浮钮：用户上滑断开粘滞后浮现，点击回底并恢复跟随。
+        // ⑧ 回底浮钮 v3（方向感知，用户效果图定稿）：显隐由 MessageList 逐帧
+        // 循环按滚动方向驱动（向下翻+离底>150dp 浮现 / 向上翻即隐 / 停手 2.5s 淡出），
+        // 这里只负责画一个 40dp 居中小圆 + 点击回底。不再计数（正文居中，
+        // 旧宽胶囊横腰截断流式落字区=用户最初报怨的遮挡）。
         // 必须画在 appLayer 采样层之外（与玻璃顶栏同级）——放进 MessageList 的
         // Box 包裹会切断 drawBackdrop 采样链，整屏透出白色遮罩（实测踩坑）
-        // v2：加新动态计数徽标（ChatGPT/Claude 式「↓ N 条新回复」）
         androidx.compose.animation.AnimatedVisibility(
-            // rows 为空但正文正在流式时也要能出现（首条回复就上滑看历史的场景）——
-            // 否则流式中途没有任何"回到底部"的入口，只能手动拖回去
-            // 停车态（parkedFollow，2026-10-12 三修）同样要出：用户接管画面停在
-            // 8~126px 区间时 userScrolledAway（48dp 宽限）不置位，流式新内容既不
-            // 跟随也没有回底入口=死区。rikkahub 的 jumper 同样在任何滚动后都会出现。
-            visible = (userScrolledAway.value || parkedFollow.value) &&
-                (rows.isNotEmpty() || streaming != null) &&
-                drawerFraction < 0.01f,
+            visible = jumperVisible.value && drawerFraction < 0.01f,
             enter = androidx.compose.animation.fadeIn(tween(180)) +
-                androidx.compose.animation.expandVertically(tween(180)),
-            exit = androidx.compose.animation.fadeOut(tween(140)),
+                androidx.compose.animation.scaleIn(tween(180), initialScale = 0.8f),
+            exit = androidx.compose.animation.fadeOut(tween(140)) +
+                androidx.compose.animation.scaleOut(tween(140), targetScale = 0.8f),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = with(density) {
                     maxOf(132.dp, bottomBarHeightPx.toDp() + 8.dp) + keyboardLiftPx.toDp() + 10.dp
                 })
         ) {
-            // v5.1：AndroidLiquidGlass 胶囊（GlassCard 全 app 统一玻璃材质）——
-            // 「↓ N 条新动态」，无新动态时收窄成「↓ 最新」；按压折射缩放同发送钮
-            GlassCard(
-                onClick = {
-                    userScrolledAway.value = false
-                    newContentTicker.value = 0
-                    // 用户主动回底=重新接管，撤停车（配合循环里 delta==0 安全网双保险）
-                    parkedFollow.value = false
-                    scope.launch { scrollState.pinToBottom() }
-                },
-                backdrop = backdrop,
-                shape = RoundedCornerShape(percent = 50),
-                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
-                lensRadius = 14.dp
-            ) {
-                Row(
-                    Modifier.padding(start = 16.dp, end = 18.dp, top = 9.dp, bottom = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+            // 40dp 玻璃小圆（GlassCard 全 app 统一材质，按压折射缩放同发送钮）；
+            // Agent 正在产出且被钮浮现时，右上角挂一枚绿色呼吸点——只说
+            // 「下面有动静」，不计数。
+            Box {
+                GlassCard(
+                    onClick = {
+                        userScrolledAway.value = false
+                        // 用户主动回底=重新接管，撤停车（配合循环里 delta==0 安全网双保险）
+                        parkedFollow.value = false
+                        jumperVisible.value = false
+                        scope.launch { scrollState.pinToBottom() }
+                    },
+                    backdrop = backdrop,
+                    shape = CircleShape,
+                    surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                    lensRadius = 14.dp,
+                    modifier = Modifier.size(40.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         "↓",
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
+                        fontSize = 16.sp
                     )
-                    val n = newContentTicker.value
-                    Text(
-                        if (n > 0) "$n 条新动态" else "最新",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
+                }
+                if (running || streaming != null) {
+                    val pulse by com.haoai.agent.ui.common.rememberPulse(0.35f, 1f, 1200)
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(2.dp, (-2).dp)
+                            .size(11.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(2.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = pulse)
+                                )
+                        )
+                    }
                 }
             }
         }
@@ -2535,6 +2609,11 @@ private fun MessageList(
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
     /** 松手停车（2026-10-11）：滚动会话结束帧停在底部上方=用户有意停车，撤贴底跟随。 */
     parkedFollow: androidx.compose.runtime.MutableState<Boolean>,
+    /** 回底浮钮 v3 显隐（2026-10-12 方向感知定稿）：由逐帧循环按位移**方向**驱动——
+     *  向下翻且离底超门槛=浮现（dV>0 且非我方钉底帧），向上翻（阅读意图）=即隐。 */
+    jumperVisible: androidx.compose.runtime.MutableState<Boolean>,
+    /** 最近一次用户归因滚动时刻：浮钮层拿它重启「停手 2.5 秒淡出」计时器。 */
+    lastUserScrollAt: androidx.compose.runtime.MutableState<Long>,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -2561,6 +2640,9 @@ private fun MessageList(
     //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
     //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
     val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
+    // 回底浮钮 v3 门槛（2026-10-12 方向感知定稿）：离底不足 150dp 时不冒钮——
+    // 那点距离手指一划就到，弹出来纯属添乱（用户报怨旧版「没有距离门槛」）。
+    val jumperGapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 150.dp.roundToPx() }
     // 「本轮用户是否主动滚动过」userScrolledThisRun 已删除（2026-10-12 三修）：
     // 它是旧「猜意图」方案的状态；粘底状态机只看位移原因（dV/dM），不需要跨帧意图标志。
 
@@ -2582,6 +2664,7 @@ private fun MessageList(
             lastSessionKey = sessionId
             userScrolledAway.value = false
             parkedFollow.value = false
+            jumperVisible.value = false
             scrollState.pinToBottom()
             return@LaunchedEffect
         }
@@ -2589,6 +2672,7 @@ private fun MessageList(
         if (isUserMessage) {
             userScrolledAway.value = false
             parkedFollow.value = false
+            jumperVisible.value = false
             val k = rows.last().key
             if (k != lastSentUserKey) {
                 lastSentUserKey = k
@@ -2727,6 +2811,21 @@ private fun MessageList(
                 prevFrameV = vNow2
                 if (dV != 0 && !prevPinnedByUs) parkedFollow.value = true
                 if (delta <= 8) parkedFollow.value = false
+                // ── 回底浮钮 v3 方向驱动（2026-10-12 定稿）───────────────────
+                // 只看**用户归因**位移（我方钉底帧由 prevPinnedByUs 排除，语义同
+                // 上面的停车判定）。dV>0=画面朝下走=用户在向下找新内容 → 若离底
+                // 还超过 150dp 门槛就浮现；dV<0=向上翻=阅读意图 → 立即隐藏。
+                // 每帧刷新 lastUserScrollAt 让浮钮层的「停手 2.5 秒淡出」计时器
+                // 在拖动期间一直重置，松手后才起算淡出。已滚到底附近(delta≤门槛)
+                // 一并收钮（贴底不需要回底入口）。
+                if (dV != 0 && !prevPinnedByUs) {
+                    lastUserScrollAt.value = System.currentTimeMillis()
+                    when {
+                        delta <= jumperGapPx -> jumperVisible.value = false
+                        dV > 0 -> jumperVisible.value = true
+                        else /* dV < 0 */ -> jumperVisible.value = false
+                    }
+                }
                 val follow = !parkedFollow.value
                 var pinned = false
                 // fingerOnList/busyFrames 让位闸保留作belt：按住期间钉底会与拖选
@@ -2887,6 +2986,7 @@ private fun MessageList(
             // 新一轮开始=用户要看新输出：撤停+重新起链（钉底自维持由本帧 pinToBottom
             // 建立，循环里 prevPinnedByUs 在下一帧看到我们钉过即接管）
             parkedFollow.value = false
+            jumperVisible.value = false
             scrollState.pinToBottom()
         }
     }
