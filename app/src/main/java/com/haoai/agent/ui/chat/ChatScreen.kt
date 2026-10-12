@@ -4683,7 +4683,11 @@ private fun TurnGroupBar(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
-    Column(Modifier.fillMaxWidth()) {
+    // 水平内缩必须与消息流其他内容一致（AssistantBlock/StreamingItem 都是 14dp）——
+    // 折叠态曾漏了这条：头像贴屏幕左缘、汇总条通栏，与正文卡片宽度不一致
+    // （2026-10-13 用户实测反馈「太靠边、太长、左右间距不一致」）。
+    // 14dp 内缩后：头像起点=16dp（与组内头像同线）、汇总条与正文卡同宽。
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp)) {
     // 轮级折叠收起态整轮丢失头像（修回归②，2026-10-13 用户实测）：带头像的过程行被
     // 藏进汇总条后，角色变化判据（prevRole!=role）找不到可画头像的行。轮次首组
     // （组前一行是 user）在汇总条上方补画一次「头像+昵称」，展开/收起都稳定存在。
