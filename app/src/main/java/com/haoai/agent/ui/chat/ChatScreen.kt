@@ -3101,7 +3101,11 @@ private fun MessageList(
         // 默认收起；只有「已完成的一轮」（尾行=最终回复且非运行态）才享受折叠，
         // 正在进行的一轮强制全展开——尾行落库那一帧从「展开」翻成「收起」，
         // animateContentSize 把这一下高度差插值成 500ms 收拢动画（=用户要的"终答到达才折叠"）。
-        val slots = buildRenderSlots(windowedRows, running || showStreaming)
+        val slots = buildRenderSlots(
+            windowedRows,
+            active = running || showStreaming,
+            answerStreaming = showStreaming && !streamingText.isNullOrBlank(),
+        )
         val turnExpanded = remember(sessionId) {
             androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
         }
@@ -3135,13 +3139,15 @@ private fun MessageList(
                     // 收尾那一帧：同一 wrapper Column 里翻成「汇总条 + （默认）收起」，
                     // animateContentSize 把高度差插值成 500ms 收拢——「最终回答开始时才折叠全过程」。
                     val groupFinished = slot.tailRow != null
-                    // 缺省折叠：已完成轮默认收成汇总条（历史消息打开即"只看最终回复"）。
-                    // 「终答到达才折叠」的动画来自状态跳变——运行期 groupFinished=false
-                    // 恒展开全组，尾行落库那一帧 groupFinished 翻真、showProcess 翻假，
-                    // wrapper 高度从 N 行骤减到 1 条，animateContentSize 把这一下跳变
-                    // 插值成 500ms 收拢（=用户拍板的"最终回答开始时把过程折叠起来"）。
-                    val expanded = turnExpanded[group.headRow.key] == true
-                    val showProcess = !groupFinished || expanded
+                    // 汇总条出现 = 轮已收尾（tail 落行）或「回答已开始流式」（taillessBar）。
+                    // 缺省折叠：已完成轮默认收成汇总条（历史消息打开即"只看最终回复"）；
+                    // 无条的运行组强制展开（用户要看着它干活）。
+                    // 「终答到达才折叠」的动画来自状态跳变——正文流式首字那帧 taillessBar
+                    // 翻真，showProcess 翻假，wrapper 高度从 N 行骤减到 1 条，
+                    // animateContentSize 把这一下跳变插值成 500ms 收拢。
+                    val hasBar = groupFinished || group.taillessBar
+                    val expanded = turnExpanded[group.headRow.key] ?: !hasBar
+                    val showProcess = !hasBar || expanded
                     Column(
                         Modifier
                             .animateContentSize(
@@ -3150,7 +3156,7 @@ private fun MessageList(
                                 )
                             )
                     ) {
-                        if (groupFinished) {
+                        if (hasBar) {
                             TurnGroupBar(
                                 group = group,
                                 expanded = expanded,
@@ -3161,7 +3167,8 @@ private fun MessageList(
                             group.rows.forEach { grow ->
                                 RowSlotItem(
                                     row = grow,
-                                    showHead = headFlags[grow.key]?.first ?: true,
+                                    // 有汇总条时头像由条统一画（修回归②）；组内行不再双画
+                                    showHead = !(hasBar && group.headShow) && (headFlags[grow.key]?.first ?: true),
                                     // 展开回看组内行：过程行都是 assistant，showHead 本来就 false；
                                     // enhanced（虚线轮次分隔）只属于「我发言」方向，组内不会出现
                                     enhanced = headFlags[grow.key]?.second ?: false,
@@ -3175,21 +3182,25 @@ private fun MessageList(
                                 )
                             }
                         }
-                    }
-                    // 尾行=最终回复：正文与其 footer（操作行 + NerdLine 统计行）永远直出、不折叠
-                    slot.tailRow?.let { tr ->
-                        RowSlotItem(
-                            row = tr,
-                            showHead = headFlags[tr.key]?.first ?: true,
-                            enhanced = headFlags[tr.key]?.second ?: false,
-                            finalRowKey = finalRowKey, growInKey = growInKey,
-                            running = running, turnStartAt = turnStartAt,
-                            seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
-                            onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
-                            onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
-                            onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
-                            onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
-                        )
+                        // 尾行=最终回复：画在动画容器内。正文与其 footer（操作行 + NerdLine
+                        // 统计行）永远直出；「链+文」合并形态（mergedAnswer）收起时只藏它的
+                        // 链卡（hideChain=!expanded），链卡高度归零被 animateContentSize 平滑插值
+                        // ——这是单行合并轮（真实引擎最常见形态）唯一的收拢动画来源。
+                        slot.tailRow?.let { tr ->
+                            RowSlotItem(
+                                row = tr,
+                                hideChain = group.mergedAnswer != null && !expanded,
+                                showHead = !(hasBar && group.headShow) && (headFlags[tr.key]?.first ?: true),
+                                enhanced = headFlags[tr.key]?.second ?: false,
+                                finalRowKey = finalRowKey, growInKey = growInKey,
+                                running = running, turnStartAt = turnStartAt,
+                                seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
+                                onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
+                                onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
+                                onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
+                                onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
+                            )
+                        }
                     }
                 }
             }
@@ -3295,6 +3306,8 @@ private fun RowItem(
     /** 名字行顶部的 6dp 轮次呼吸位（会话首条豁免=false）。 */
     headTopGap: Boolean = true,
     growIn: Boolean = false,
+    /** 轮级折叠收起态：合并终答行只藏链卡（正文直出），见 AssistantBlock。 */
+    hideChain: Boolean = false,
     onFooterReveal: () -> Unit = {}
 ) {
     // 引擎注入的系统事件（handoff 催办 / 压缩结果）不冒充聊天气泡，渲染为居中事件条
@@ -3306,7 +3319,7 @@ private fun RowItem(
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead, headTopGap)
-        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, turnStartAt, onViewDiff, onRollback, onStopRun, showActions, showHead, headTopGap, growIn, onFooterReveal)
+        else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, turnStartAt, onViewDiff, onRollback, onStopRun, showActions, showHead, headTopGap, growIn, hideChain, onFooterReveal)
     }
 }
 
@@ -4289,6 +4302,8 @@ private fun AssistantBlock(
     /** 名字行顶部的 6dp 轮次呼吸位（会话首条豁免=false）。 */
     headTopGap: Boolean = true,
     growIn: Boolean = false,
+    /** 轮级折叠收起态（修回归①）：「链+文」合并终答行只藏链卡，正文与 footer 直出。 */
+    hideChain: Boolean = false,
     onFooterReveal: () -> Unit = {}
 ) {
     Column(
@@ -4303,7 +4318,7 @@ private fun AssistantBlock(
         // v8 思维链重构：历史消息与流式同构——思考 + 工具混排进一张链卡（finished=true
         // → 默认折叠为控制条，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
         // → 默认折叠为控制条 + 尾部毛边，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
-        if (row.chainSteps.isNotEmpty()) {
+        if (row.chainSteps.isNotEmpty() && !hideChain) {
             ChainCard(
                 steps = row.chainSteps,
                 reasoningLive = false,
@@ -4471,6 +4486,24 @@ private class ProcGroup(
     var removed: Int,
     /** 本轮耗时（最终回复行已落 statistics 时给值；流式中为 null 不显示） */
     var durMs: Long? = null,
+    /** 本组是「我发言 → Agent 回」的轮次首组：收起态需在汇总条上方画头像（修回归②）。 */
+    val headShow: Boolean = false,
+    /**
+     * 「回答已开始流式」标记（拍板语义=最终回答开始输出的那一刻折叠，不等落行）：
+     * 窗口末组 + running/showStreaming 活跃 + streamingText 已有正文 → true。
+     * 此时最终回答还没落成行（无 tail），汇总条先行出现把过程收起；
+     * 终答落行后自然切回 groupFinished 路径，hasBar 连续、无闪烁。
+     * 中间叙述流式完落行的瞬间 streamingText 清空 → false → 该组重新展开
+     *（叙述是新内容，该看见）；下一轮真正终答开始流式再折——每轮自动。
+     */
+    var taillessBar: Boolean = false,
+    /**
+     * 合并终答行（修回归①）：真实引擎把「链 + 正文」落在同一行（flushChain：模型说话
+     * 时把 pending 链随正文一起落行），旧判据要求终答行 chainSteps 为空——真实回合
+     * 永不满足 → 不折叠（用户实测反馈 2026-10-13）。现在承认合并形态：收起时该行只
+     * 藏链卡部分（hideChain 直通 AssistantBlock），正文照常直出。
+     */
+    val mergedAnswer: ChatRow? = null,
 )
 
 private sealed interface RenderSlot {
@@ -4490,6 +4523,8 @@ private sealed interface RenderSlot {
 private fun buildRenderSlots(
     rows: List<ChatRow>,
     active: Boolean,
+    /** 本轮最终正文已开始流式（streamingText 非空）：活跃末组即时折叠（拍板语义）。 */
+    answerStreaming: Boolean = false,
 ): List<RenderSlot> {
     val out = ArrayList<RenderSlot>()
     var i = 0
@@ -4502,6 +4537,7 @@ private fun buildRenderSlots(
             continue
         }
         val run = ArrayList<ChatRow>()
+        val startIdx = i
         while (i < rows.size) {
             val g = rows[i]
             val cont = g.role != "user" && !g.text.startsWith("[系统]") &&
@@ -4510,28 +4546,52 @@ private fun buildRenderSlots(
             run.add(g); i++
         }
         val runAtEnd = i >= rows.size
-        // 收尾=「不是活跃的末组」，且组尾是一条"无链卡的纯文本行"=最终回答。
-        // 活跃末组（还在跑的这一轮）不拆尾、不折叠；单行组不拆（拆了过程为空）。
+        // 收尾=「不是活跃的末组」，且组尾一行有正文=最终回答（**允许带链**——
+        // 真实引擎的 flushChain 把 pending 链随正文落同一行，旧判据 chainSteps.isEmpty()
+        // 对真实回合永不成立 → 用户实测"跑完不折叠"，2026-10-13 修正）。
+        // 活跃末组（还在跑的这一轮）不拆尾、不折叠——「运行期间全程展开」。
         val lastIdx = run.size - 1
-        val lastIsAnswer = run[lastIdx].chainSteps.isEmpty() && run[lastIdx].text.isNotBlank()
-        val splittable = lastIdx > 0 && lastIsAnswer && !(active && runAtEnd)
-        if (!splittable) {
-            // 没有可拆的最终回答（全链卡/被停在中途）：整组仍按过程渲染，
-            // 但无汇总条（groupFinished=false 路径），行为与折叠前逐行直出一致
-            val group = procGroupOf(run, null)
+        val lastIsAnswer = run[lastIdx].text.isNotBlank()
+        val finished = lastIsAnswer && !(active && runAtEnd)
+        // 轮次首组判据（修回归②）：组前一行是 user = 「我发言→Agent 回」的开头。
+        // 折叠后带头像的过程行被藏 → 头像必须在汇总条上方补画，否则整轮丢头像。
+        val prevRole = rows.getOrNull(startIdx - 1)?.role
+        val headShow = prevRole == "user"
+        if (!finished) {
+            // 运行中 / 停在无正文的链尾：整组按过程直出、无汇总条（行为同折叠前）
+            val group = procGroupOf(run, null, headShow, merged = null)
+            // 「回答开始折叠」早于落行：活跃末组且正文已在流式 → 汇总条先行收起过程。
+            group.taillessBar = answerStreaming && runAtEnd &&
+                run.any { it.chainSteps.isNotEmpty() }
             out.add(RenderSlot.Group(group, null))
+        } else if (run.none { it.chainSteps.isNotEmpty() }) {
+            // 纯问答轮（没有任何思考/工具链）：没东西可折，逐行直出，
+            // 避免普通一问一答也挂一条「本轮过程 · 0 步」的空汇总条
+            run.forEach { out.add(RenderSlot.Plain(it)) }
         } else {
-            val proc = run.subList(0, run.size - 1).toList()
-            val tail = run[run.size - 1]
-            out.add(RenderSlot.Group(procGroupOf(proc, tail), tail))
+            // 收尾：tail=最终回答行（可能是「链+文」合并形态，mergedAnswer 标记之）。
+            // proc=tail 之前的过程行；tail 永远直出正文，收起时合并链卡藏进汇总条。
+            val tail = run[lastIdx]
+            val proc = run.subList(0, lastIdx).toList()
+            val merged = tail.takeIf { it.chainSteps.isNotEmpty() }
+            out.add(RenderSlot.Group(procGroupOf(proc, tail, headShow, merged), tail))
         }
     }
     return out
 }
 
-private fun procGroupOf(proc: List<ChatRow>, tail: ChatRow?): ProcGroup {
-    val group = ProcGroup(headRow = proc.first(), rows = proc, steps = 0, added = 0, removed = 0)
-    proc.forEach { g ->
+private fun procGroupOf(
+    proc: List<ChatRow>,
+    tail: ChatRow?,
+    headShow: Boolean = false,
+    merged: ChatRow? = null,
+): ProcGroup {
+    // 单行合并形态 proc 为空：headRow 兜底用 tail（turnExpanded 的 key）
+    val group = ProcGroup(headRow = proc.firstOrNull() ?: tail ?: error("empty group"),
+        rows = proc, steps = 0, added = 0, removed = 0,
+        headShow = headShow, mergedAnswer = merged)
+    // 步数/±徽章：过程行 + 合并终答行自带的链（收起时那条链也进"本轮过程"）
+    (proc + listOfNotNull(merged)).forEach { g ->
         group.steps += g.chainSteps.size
         g.chainSteps.forEach { st ->
             if (st is com.haoai.agent.ui.ChainStep.Tool) {
@@ -4554,6 +4614,8 @@ private fun RowSlotItem(
     enhanced: Boolean,
     finalRowKey: String?,
     growInKey: String?,
+    /** 收起态且本行是「链+文」合并终答行：只藏链卡、正文与 footer 照常直出（修回归①）。 */
+    hideChain: Boolean = false,
     running: Boolean,
     turnStartAt: Long,
     seenRowKeys: MutableSet<String>,
@@ -4605,6 +4667,7 @@ private fun RowSlotItem(
                     showHead = showHead,
                     headTopGap = enhanced,
                     growIn = row.key == growInKey,
+                    hideChain = hideChain,
                     onFooterReveal = onFooterReveal
                 )
             }
@@ -4620,6 +4683,13 @@ private fun TurnGroupBar(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
+    Column(Modifier.fillMaxWidth()) {
+    // 轮级折叠收起态整轮丢失头像（修回归②，2026-10-13 用户实测）：带头像的过程行被
+    // 藏进汇总条后，角色变化判据（prevRole!=role）找不到可画头像的行。轮次首组
+    // （组前一行是 user）在汇总条上方补画一次「头像+昵称」，展开/收起都稳定存在。
+    if (group.headShow) LocalChatProfiles.current?.let { p ->
+        SenderHead(p.agentName, p.agentEmoji, p.agentGradient, p.agentImage, right = false, topGap = false)
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -4668,6 +4738,7 @@ private fun TurnGroupBar(
             Spacer(Modifier.size(8.dp))
             Text("⌄", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
     }
 }
 
