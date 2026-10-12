@@ -448,17 +448,11 @@ fun ChatScreen(
     // （旧「↓ N 条新回复」徽标整条拆除：ticker 会把"上滑动作"以外的一切内容
     // 变化都喊成动态，而且宽胶囊悬在流式落字区正中挡正文）。新语义 =
     // 「你下面还有内容，且你正在找它」：向下翻且离底 >150dp 才浮现、向上翻
-    // （阅读意图）立即隐藏、停手 2.5 秒淡出、贴底不出。显隐由 MessageList 的
-    // 逐帧跟随循环按**位移方向**驱动（那里才有逐帧 dV），本层只持有状态。
+    // （阅读意图）立即隐藏、停手 2.5 秒淡出、贴底不出。显隐与闲置淡出全部由
+    // MessageList 的逐帧跟随循环驱动（那里才有逐帧 dV；闲置计时用循环内本地
+    // 时间戳，**不逐帧写 State**——每帧写会让读取方作用域每帧重组，主题页
+    // 17.34% jank 就是同款教训），本层只持有显隐状态。
     val jumperVisible = remember { mutableStateOf(false) }
-    // 最近一次「用户归因滚动」时刻：每次更新都重启下面的闲置淡出计时器
-    val lastUserScrollAt = remember { mutableStateOf(0L) }
-    LaunchedEffect(jumperVisible.value, lastUserScrollAt.value) {
-        if (jumperVisible.value) {
-            kotlinx.coroutines.delay(2500)
-            jumperVisible.value = false
-        }
-    }
     // v6.1 补档（2026-10-12 用户定稿）：running 真→假边沿把本轮耗时定格，
     // 状态行显示「✓ 回复完毕 · N秒」4 秒后消失——旧版跑完直接消失，用户
     // 在上方看消息时完全不知道下面已经出结果。门：本轮产出过内容才提示
@@ -1061,7 +1055,6 @@ fun ChatScreen(
                 userScrolledAway = userScrolledAway,
                 parkedFollow = parkedFollow,
                 jumperVisible = jumperVisible,
-                lastUserScrollAt = lastUserScrollAt,
                 sessionId = vm.session.collectAsState().value?.id,
                 planProposal = planProposal
                     ?.takeIf { it.first == vm.session.collectAsState().value?.id }?.second,
@@ -2610,10 +2603,9 @@ private fun MessageList(
     /** 松手停车（2026-10-11）：滚动会话结束帧停在底部上方=用户有意停车，撤贴底跟随。 */
     parkedFollow: androidx.compose.runtime.MutableState<Boolean>,
     /** 回底浮钮 v3 显隐（2026-10-12 方向感知定稿）：由逐帧循环按位移**方向**驱动——
-     *  向下翻且离底超门槛=浮现（dV>0 且非我方钉底帧），向上翻（阅读意图）=即隐。 */
+     *  向下翻且离底超门槛=浮现（dV>0 且非我方钉底帧），向上翻（阅读意图）=即隐；
+     *  闲置 2.5 秒淡出的计时也在循环内（本地时间戳，不逐帧写 State）。 */
     jumperVisible: androidx.compose.runtime.MutableState<Boolean>,
-    /** 最近一次用户归因滚动时刻：浮钮层拿它重启「停手 2.5 秒淡出」计时器。 */
-    lastUserScrollAt: androidx.compose.runtime.MutableState<Long>,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -2747,6 +2739,10 @@ private fun MessageList(
         // 粘底状态机（2026-10-12 三修）：逐帧比对 value 变化量判「这一帧的位移是
         // 谁造成的」。-1=首帧未知。
         var prevFrameV = -1
+        // 回底浮钮 v3 闲置淡出计时基准（2026-10-12 方向感知定稿）：最近一次用户
+        // 归因滚动帧的时刻。是循环内**本地变量**——钮的「停手 2.5 秒淡出」用它
+        // 判闲置，绝不每帧写 State（每帧写=读取方每帧重组，主题页 jank 同款教训）。
+        var lastUserScrollFrameMs = 0L
         // 【自愈】2026-09-19：把跟随改成逐帧驱动后，这里再包一层 try/catch + 循环重连。
         // 理由：跟随逻辑一旦中途失效，粘底状态机就再也不推进、钉底/停车全部瘫痪，
         // 而且**没有任何可见报错**（排查时极难定位）。重连保证任何单次异常都不会让它永久失效。
@@ -2814,17 +2810,23 @@ private fun MessageList(
                 // ── 回底浮钮 v3 方向驱动（2026-10-12 定稿）───────────────────
                 // 只看**用户归因**位移（我方钉底帧由 prevPinnedByUs 排除，语义同
                 // 上面的停车判定）。dV>0=画面朝下走=用户在向下找新内容 → 若离底
-                // 还超过 150dp 门槛就浮现；dV<0=向上翻=阅读意图 → 立即隐藏。
-                // 每帧刷新 lastUserScrollAt 让浮钮层的「停手 2.5 秒淡出」计时器
-                // 在拖动期间一直重置，松手后才起算淡出。已滚到底附近(delta≤门槛)
-                // 一并收钮（贴底不需要回底入口）。
+                // 还超过 150dp 门槛就浮现；dV<0=向上翻=阅读意图 → 立即隐藏；
+                // 已滚到底附近(delta≤门槛)一并收钮（贴底不需要回底入口）。
+                // 闲置淡出：记下最近一次用户归因滚动帧（本地变量，**不逐帧写
+                // State**——每帧写会让读取方每帧重组，主题页 17.34% jank 同款
+                // 教训），钮亮着且 2.5 秒没有新归因位移即收。
                 if (dV != 0 && !prevPinnedByUs) {
-                    lastUserScrollAt.value = System.currentTimeMillis()
+                    lastUserScrollFrameMs = System.currentTimeMillis()
                     when {
                         delta <= jumperGapPx -> jumperVisible.value = false
                         dV > 0 -> jumperVisible.value = true
                         else /* dV < 0 */ -> jumperVisible.value = false
                     }
+                } else if (jumperVisible.value &&
+                    lastUserScrollFrameMs > 0 &&
+                    System.currentTimeMillis() - lastUserScrollFrameMs > 2500
+                ) {
+                    jumperVisible.value = false
                 }
                 val follow = !parkedFollow.value
                 var pinned = false
