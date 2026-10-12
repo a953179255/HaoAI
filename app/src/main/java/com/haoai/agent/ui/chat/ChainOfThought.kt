@@ -78,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -243,23 +244,10 @@ fun ChainCard(
                 onClick = { chainOpen = !chainOpen }
             )
         }
-        // 方案 F（2026-10-12 用户拍板）：v2 的 2dp 渐变圆头导轨太重（对照原型 rikkahub 是其 1dp 实线），
-        // 视觉上和提问选项"抢地盘"。改回 1dp 硬线、弱引导；线不再贯穿内容区——宽内容已统一缩进 44dp 让位。
-        val lineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f)
-        Box(
-            Modifier.drawBehind {
-                // 行通栏后内容自缩 12dp：竖线 x = 12(行内缩)+12(图标半宽)=24dp
-                val x = 24.dp.toPx()
-                val top = 18.dp.toPx()
-                val bottom = size.height - 18.dp.toPx()
-                drawLine(
-                    color = lineColor,
-                    start = Offset(x, top),
-                    end = Offset(x, bottom),
-                    strokeWidth = 1.dp.toPx()
-                )
-            }
-        ) {
+        // 轮级折叠改版（2026-10-13 用户拍板）：导轨线整条删除。
+        // 线虽已减淡到 1dp，但它仍是「44dp 走廊」存在的唯一理由——结果卡/diff 卡的右侧信息
+        // 被走廊顶到卡缘、左右不对称（用户截图点名）。线没了走廊一并回收：全部宽内容贴边 12dp。
+        Box {
             Column {
                 steps.forEachIndexed { index, step ->
                     // m2：Think 步优先用上游给的稳定 id（历史=消息 id，直播=固定键），
@@ -309,7 +297,7 @@ fun ChainCard(
                                 // 搜索步：行下 favicon 叠排 + 结果数（对齐 rikkahub FaviconRow）
                                 if (step.tool.hits.isNotEmpty()) {
                                     Row(
-                                        Modifier.padding(start = 44.dp, bottom = 8.dp),
+                                        Modifier.padding(start = 12.dp, bottom = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
@@ -416,7 +404,28 @@ private fun ChainControlRow(text: String, opened: Boolean, onClick: () -> Unit) 
     }
 }
 
-/** 步骤图标底座（遮住时间轴竖线） */
+/**
+ * 面板内滚动「边界钳制」共用修饰（2026-10-07 真机反馈首用于思考阅读区，
+ * 2026-10-13 轮级折叠改版抽成共用补到结果卡/diff卡/题组列表）：
+ * 内层滚到顶/底后继续拖，剩余滚动就地吃掉，不再透传给外层会话流——
+ * 用户点名症状「展开代码或 diff 面板后一拖把整屏信息流带走」。
+ * 内容本身不可滚（maxValue=0，短面板）时放行：拖动仍应滚外层对话。
+ */
+@Composable
+private fun Modifier.panelBoundaryClamp(scroll: androidx.compose.foundation.ScrollState): Modifier {
+    val clamp = remember(scroll) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource
+            ): Offset = if (scroll.maxValue > 0) available else Offset.Zero
+        }
+    }
+    return then(Modifier.nestedScroll(clamp))
+}
+
+/** 步骤图标列（导轨线删除后仅保留 24dp 窄列对齐图标；遮线底座随线退役） */
 @Composable
 private fun StepIconBox(content: @Composable () -> Unit) {
     Box(
@@ -425,12 +434,6 @@ private fun StepIconBox(content: @Composable () -> Unit) {
             .height(20.dp),
         contentAlignment = Alignment.Center
     ) {
-        // 底色与卡面一致 → 视觉上"图标压断竖线"
-        Box(
-            Modifier
-                .size(20.dp)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()), CircleShape)
-        )
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) { content() }
     }
 }
@@ -602,17 +605,7 @@ private fun ReasoningStep(
             exit = shrinkVertically(tween(180)) + fadeOut(tween(180))
         ) {
             val scroll = rememberScrollState()
-            // 边界钳制（真机反馈 2026-10-07）：读到顶/底后继续拖，剩余滚动就地吃掉，
-            // 不再透传给外层会话流（内容本身不可滚时放行，短文本上拖动仍滚对话）
-            val clamp = remember(scroll) {
-                object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
-                    override fun onPostScroll(
-                        consumed: Offset,
-                        available: Offset,
-                        source: androidx.compose.ui.input.nestedscroll.NestedScrollSource
-                    ): Offset = if (scroll.maxValue > 0) available else Offset.Zero
-                }
-            }
+            // 边界钳制抽成共用（见 panelBoundaryClamp）
             // 跟尾滞回（真机反馈 2026-10-07，与聊天流式同一套思路）：
             // 手指按下拖动=暂停跟随（上滚细读）；停止滚动且贴着底（80px 内）=恢复跟随，
             // 之后新思考内容到达自动滚到底——拖到中间则保持暂停，不被拽走
@@ -636,12 +629,12 @@ private fun ReasoningStep(
                 lineHeight = 17.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
                 modifier = Modifier
-                    .padding(start = 44.dp, end = 12.dp, bottom = 8.dp)
+                    .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
                     .fillMaxWidth()
                     .heightIn(max = 240.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                    .nestedScroll(clamp)
+                    .panelBoundaryClamp(scroll)
                     .verticalScroll(scroll)
                     .padding(horizontal = 11.dp, vertical = 9.dp)
             )
@@ -939,7 +932,7 @@ private fun ToolBodyCard(tool: UiTool) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 44.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
         color = Color.Transparent,
         shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, border)
@@ -987,12 +980,14 @@ private fun ToolBodyCard(tool: UiTool) {
                 )
             }
             if (expanded) {
+                val bodyScroll = rememberScrollState()
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(max = BODY_MAX_HEIGHT)
                         .background(bg)
-                        .verticalScroll(rememberScrollState())
+                        .panelBoundaryClamp(bodyScroll)
+                        .verticalScroll(bodyScroll)
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
                     Column {
@@ -1050,7 +1045,7 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 44.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp),
         color = Color.Transparent,
         shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, border)
@@ -1089,11 +1084,13 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
                 )
             }
             if (expanded) {
+                val diffScroll = rememberScrollState()
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .heightIn(max = BODY_MAX_HEIGHT)
-                        .verticalScroll(rememberScrollState())
+                        .panelBoundaryClamp(diffScroll)
+                        .verticalScroll(diffScroll)
                 ) {
                     if (diff.truncatedHead > 0) {
                         Text(
@@ -1114,6 +1111,16 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
                                         else -> Color.Transparent
                                     }
                                 )
+                                // 轮级折叠改版（ZCode 式轻量 diff）：增/删行加 3dp 左缘色条——
+                                // 底色 12% 透壁纸偏淡，色条让"哪几行动了"扫一眼即辨
+                                .drawBehind {
+                                    val barW = 3.dp.toPx()
+                                    when (row.kind) {
+                                        DiffRowKind.ADDED -> drawRect(addFg, size = Size(barW, size.height))
+                                        DiffRowKind.REMOVED -> drawRect(delFg, size = Size(barW, size.height))
+                                        else -> Unit
+                                    }
+                                }
                                 .height(IntrinsicSize.Min),
                             verticalAlignment = Alignment.Top
                         ) {
@@ -1245,7 +1252,7 @@ private fun HtmlFileCard(file: com.haoai.agent.ui.UiHtmlFile) {
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 44.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
     ) {
         Row(
             Modifier.padding(11.dp),
@@ -1431,9 +1438,7 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
                 border = if (isPicked) androidx.compose.foundation.BorderStroke(
                     1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 ) else null,
-                // 方案 F①：选项补 32dp（外层已 12 ⇒ 共 44dp），与 diff/产物卡同一条对齐线，
-                // 不再压 x=24 时间轴竖线（原型 rikkahub 的展开内容同样缩进对齐 label）
-                modifier = Modifier.fillMaxWidth().padding(start = 32.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     Modifier
@@ -1479,10 +1484,7 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 ),
-                // 方案 F①：同选项卡，补到 44dp 避让时间轴线
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 32.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     "你的回答：$ft",
@@ -1499,8 +1501,7 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
                 "未回答（运行中断或无效应答）",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                // 方案 F①：提示文字同样对齐 44dp 内容列，不与竖线穿插
-                modifier = Modifier.padding(start = 32.dp)
+                modifier = Modifier
             )
         }
     }
@@ -1548,9 +1549,8 @@ private fun BatchAskStepCard(data: com.haoai.agent.ui.UiBatchAskData, isError: B
         Column(
             Modifier
                 .fillMaxWidth()
-                // 方案 F①：题组逐题列表补到 44dp 避让时间轴线（同 AskStepCard）
-                .padding(start = 32.dp)
                 .heightIn(max = 300.dp)
+                .panelBoundaryClamp(scroll)
                 .verticalScroll(scroll),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {

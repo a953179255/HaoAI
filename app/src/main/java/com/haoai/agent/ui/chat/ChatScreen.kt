@@ -3096,62 +3096,101 @@ private fun MessageList(
         }
         // B′：逐行直出。LazyColumn 的 animateItem（入场淡入/位移补间）是 lazy 专属能力，
         // 这里先只保功能正确、去掉入场动画；要恢复可用 alpha 动画补。
-        windowedRows.forEachIndexed { rowIdx, row ->
-            // 社交化分组（效果图 C 定稿）：头像+昵称并入「名字行」，只在每组第一条显示；
-            // 与上一条同角色=同组→不画名字行。系统事件条不参与（RowItem 内自行早退）。
+        // 轮级折叠（2026-10-13 定稿）：把 windowedRows 预切成「普通行 / 过程组」槽位。
+        // 过程组 = 连续的过程行（链卡 + 中间叙述）。组内是否收起由 turnExpanded 控制，
+        // 默认收起；只有「已完成的一轮」（尾行=最终回复且非运行态）才享受折叠，
+        // 正在进行的一轮强制全展开——尾行落库那一帧从「展开」翻成「收起」，
+        // animateContentSize 把这一下高度差插值成 500ms 收拢动画（=用户要的"终答到达才折叠"）。
+        val slots = buildRenderSlots(windowedRows, running || showStreaming)
+        val turnExpanded = remember(sessionId) {
+            androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+        }
+        // 逐行的「画不画名字行 / 是否增强轮次边界」预计算（按 windowedRows 原始相邻关系，
+        // 折叠隐藏中间行不改变这个判定——最终回复行前面是同组 assistant，本就不重复画头像）。
+        val headFlags = windowedRows.mapIndexed { rowIdx, row ->
             val prevRole = windowedRows.getOrNull(rowIdx - 1)?.role
             val showHead = prevRole != row.role
-            // 轮次边界方向性（用户定稿方案 B，2026-10-07）：只有「Agent 回复完毕 → 我发言」
-            // 是增强方向——虚线分隔 + 名字行 6dp 呼吸位；「我发言 → Agent 回复」问答衔接，
-            // 恢复原始 1dp 紧凑间距。会话首条（上面无消息且无隐藏历史）两样都豁免。
-            val enhancedBoundary = showHead && row.role == "user" &&
-                (rowIdx > 0 || hiddenRowCount > 0)
-            androidx.compose.runtime.key(row.key) {
-                // 重提供包装版翻页回调：先武装同步补偿再走原切版逻辑（见 MessageList 顶部注释）
-                androidx.compose.runtime.CompositionLocalProvider(
-                    LocalSwitchVersion provides versionSwitch
-                ) {
-                // 【补回入场动画】LazyColumn 的 Modifier.animateItem 是 lazy 专属能力，
-                // B′ 换成 Column 后没有了。这里自己补：只为"首帧之后新出现的行"做 220ms 淡入
-                // ——不能无条件给每行套淡入，否则首屏组合时所有行都会被判成新行而集体淡入。
-                // 【晋升豁免】运行中由 MessageAdded 落成行的 assistant 内容（正文/工具链），
-                // 同一帧里流式区的那份同内容正在消失——新行若再从透明度 0 淡入，就是
-                // 用户报的「回复完毕闪一下 / 上方突然插入」。晋升行直接以不透明度 1 出现。
-                // 动画结束把 fadingIn 置 false 撤掉 graphicsLayer，不给已定稿的行长期留图层。
-                val isNewRow = remember(row.key) { seenRowKeys.add(row.key) }
-                val promoted = row.key in promotedRowKeys
-                var fadingIn by remember(row.key) { mutableStateOf(isNewRow && !promoted) }
-                val appearAlpha = remember(row.key) {
-                    androidx.compose.animation.core.Animatable(if (isNewRow) 0f else 1f)
-                }
-                LaunchedEffect(row.key) {
-                    if (isNewRow) {
-                        appearAlpha.animateTo(1f, tween(220))
-                        fadingIn = false
-                    }
-                }
-                Column(
-                    if (fadingIn) Modifier.graphicsLayer { alpha = appearAlpha.value } else Modifier
-                ) {
-                if (enhancedBoundary) TurnDivider()
-                RowItem(
-                    row,
-                    onOpenMenu = onOpenMenu,
-                    onCopyRow = onCopyRow,
-                    onQuickRegenerate = onQuickRegenerate,
-                    onQuickEdit = onQuickEdit,
-                    running = running,
-                    turnStartAt = turnStartAt,
-                    onViewDiff = onToolViewDiff,
-                    onRollback = onToolRollback,
-                    onStopRun = onStopRun,
-                    showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
-                    showHead = showHead,
-                    headTopGap = enhancedBoundary,
-                    growIn = row.key == growInKey,
-                    onFooterReveal = { footerRevealTick++ }
+            val enhanced = showHead && row.role == "user" && (rowIdx > 0 || hiddenRowCount > 0)
+            row.key to (showHead to enhanced)
+        }.toMap()
+
+        slots.forEach { slot ->
+            when (slot) {
+                is RenderSlot.Plain -> RowSlotItem(
+                    row = slot.row,
+                    showHead = headFlags[slot.row.key]?.first ?: true,
+                    enhanced = headFlags[slot.row.key]?.second ?: false,
+                    finalRowKey = finalRowKey, growInKey = growInKey,
+                    running = running, turnStartAt = turnStartAt,
+                    seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
+                    onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
+                    onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
+                    onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
+                    onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
                 )
-                }
+                is RenderSlot.Group -> {
+                    val group = slot.group
+                    // 收尾判定：尾行=本轮最终回复（finalRowKey 仅在非运行态非流式期非空）。
+                    // 未收尾（这一轮还在跑）→ 组内行全展开、不出现汇总条——「运行期什么都不收」。
+                    // 收尾那一帧：同一 wrapper Column 里翻成「汇总条 + （默认）收起」，
+                    // animateContentSize 把高度差插值成 500ms 收拢——「最终回答开始时才折叠全过程」。
+                    val groupFinished = slot.tailRow != null
+                    // 缺省折叠：已完成轮默认收成汇总条（历史消息打开即"只看最终回复"）。
+                    // 「终答到达才折叠」的动画来自状态跳变——运行期 groupFinished=false
+                    // 恒展开全组，尾行落库那一帧 groupFinished 翻真、showProcess 翻假，
+                    // wrapper 高度从 N 行骤减到 1 条，animateContentSize 把这一下跳变
+                    // 插值成 500ms 收拢（=用户拍板的"最终回答开始时把过程折叠起来"）。
+                    val expanded = turnExpanded[group.headRow.key] == true
+                    val showProcess = !groupFinished || expanded
+                    Column(
+                        Modifier
+                            .animateContentSize(
+                                animationSpec = tween(
+                                    500, easing = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)
+                                )
+                            )
+                    ) {
+                        if (groupFinished) {
+                            TurnGroupBar(
+                                group = group,
+                                expanded = expanded,
+                                onClick = { turnExpanded[group.headRow.key] = !expanded }
+                            )
+                        }
+                        if (showProcess) {
+                            group.rows.forEach { grow ->
+                                RowSlotItem(
+                                    row = grow,
+                                    showHead = headFlags[grow.key]?.first ?: true,
+                                    // 展开回看组内行：过程行都是 assistant，showHead 本来就 false；
+                                    // enhanced（虚线轮次分隔）只属于「我发言」方向，组内不会出现
+                                    enhanced = headFlags[grow.key]?.second ?: false,
+                                    finalRowKey = finalRowKey, growInKey = growInKey,
+                                    running = running, turnStartAt = turnStartAt,
+                                    seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
+                                    onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
+                                    onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
+                                    onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
+                                    onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
+                                )
+                            }
+                        }
+                    }
+                    // 尾行=最终回复：正文与其 footer（操作行 + NerdLine 统计行）永远直出、不折叠
+                    slot.tailRow?.let { tr ->
+                        RowSlotItem(
+                            row = tr,
+                            showHead = headFlags[tr.key]?.first ?: true,
+                            enhanced = headFlags[tr.key]?.second ?: false,
+                            finalRowKey = finalRowKey, growInKey = growInKey,
+                            running = running, turnStartAt = turnStartAt,
+                            seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
+                            onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
+                            onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
+                            onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
+                            onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
+                        )
+                    }
                 }
             }
         }
@@ -4414,6 +4453,221 @@ private fun VersionPager(row: ChatRow) {
             Icons.Filled.KeyboardArrowRight, "下一版",
             enabled = cur < total
         ) { switch(row.regenUserId, if (cur >= total - 1) -1 else cur) }
+    }
+}
+
+/**
+ * 轮级折叠（2026-10-13 用户拍板效果图定稿）：一轮回答 = 「过程段 + 最终回复」。
+ * 过程段 = 用户消息之后、最终回复之前的连续 assistant 行（链卡行 + 中间叙述行）；
+ * 折叠时整段收成一行汇总条「本轮过程 · N 步 · +X −Y」，点击原位展开回看；
+ * 最终回复行与其 footer（操作行 + 统计行）永远直出、不受影响。
+ * 折叠动画 = 容器 animateContentSize 500ms（行群 → 汇总条的高度变化被插值成收拢）。
+ */
+private class ProcGroup(
+    val headRow: ChatRow,
+    val rows: List<ChatRow>,
+    var steps: Int,
+    var added: Int,
+    var removed: Int,
+    /** 本轮耗时（最终回复行已落 statistics 时给值；流式中为 null 不显示） */
+    var durMs: Long? = null,
+)
+
+private sealed interface RenderSlot {
+    class Plain(val row: ChatRow) : RenderSlot
+    class Group(val group: ProcGroup, val tailRow: ChatRow?) : RenderSlot
+}
+
+/**
+ * 按「一轮」把行列表切成槽位：user 行/系统事件条=普通槽；
+ * 连续 assistant 行（链卡 + 中间叙述）=一个过程组。
+ * **仅当该组已收尾（本轮不再活跃，且组尾是一条"无链卡的纯文本行"=最终回答）
+ * 才把尾行从过程里拆出来**——组=过程（可折叠），尾行=最终回复（永远直出）。
+ * 活跃判定：running || showStreaming 时**窗口最末一组**还没跑完（最终回答还在
+ * 流式区/尚未落行），不能拆尾、不能折叠——正是「运行期间全程展开」。
+ * 组内 diff 增删数顺带累计（汇总条徽章用）。
+ */
+private fun buildRenderSlots(
+    rows: List<ChatRow>,
+    active: Boolean,
+): List<RenderSlot> {
+    val out = ArrayList<RenderSlot>()
+    var i = 0
+    while (i < rows.size) {
+        val r = rows[i]
+        val isProc = r.role != "user" && !r.text.startsWith("[系统]") &&
+            (r.chainSteps.isNotEmpty() || r.text.isNotBlank())
+        if (!isProc) {
+            out.add(RenderSlot.Plain(r)); i++
+            continue
+        }
+        val run = ArrayList<ChatRow>()
+        while (i < rows.size) {
+            val g = rows[i]
+            val cont = g.role != "user" && !g.text.startsWith("[系统]") &&
+                (g.chainSteps.isNotEmpty() || g.text.isNotBlank())
+            if (!cont) break
+            run.add(g); i++
+        }
+        val runAtEnd = i >= rows.size
+        // 收尾=「不是活跃的末组」，且组尾是一条"无链卡的纯文本行"=最终回答。
+        // 活跃末组（还在跑的这一轮）不拆尾、不折叠；单行组不拆（拆了过程为空）。
+        val lastIdx = run.size - 1
+        val lastIsAnswer = run[lastIdx].chainSteps.isEmpty() && run[lastIdx].text.isNotBlank()
+        val splittable = lastIdx > 0 && lastIsAnswer && !(active && runAtEnd)
+        if (!splittable) {
+            // 没有可拆的最终回答（全链卡/被停在中途）：整组仍按过程渲染，
+            // 但无汇总条（groupFinished=false 路径），行为与折叠前逐行直出一致
+            val group = procGroupOf(run, null)
+            out.add(RenderSlot.Group(group, null))
+        } else {
+            val proc = run.subList(0, run.size - 1).toList()
+            val tail = run[run.size - 1]
+            out.add(RenderSlot.Group(procGroupOf(proc, tail), tail))
+        }
+    }
+    return out
+}
+
+private fun procGroupOf(proc: List<ChatRow>, tail: ChatRow?): ProcGroup {
+    val group = ProcGroup(headRow = proc.first(), rows = proc, steps = 0, added = 0, removed = 0)
+    proc.forEach { g ->
+        group.steps += g.chainSteps.size
+        g.chainSteps.forEach { st ->
+            if (st is com.haoai.agent.ui.ChainStep.Tool) {
+                st.tool.diff?.let { d -> group.added += d.added; group.removed += d.removed }
+            }
+        }
+    }
+    tail?.durationMs?.let { group.durMs = it }
+    return group
+}
+
+/**
+ * 渲染单条消息行（原 windowedRows.forEach 循环体原样搬入，行为不变：
+ * key/重提供切版回调/入场淡入/晋升豁免/增强轮次边界 + RowItem）。
+ */
+@Composable
+private fun RowSlotItem(
+    row: ChatRow,
+    showHead: Boolean,
+    enhanced: Boolean,
+    finalRowKey: String?,
+    growInKey: String?,
+    running: Boolean,
+    turnStartAt: Long,
+    seenRowKeys: MutableSet<String>,
+    promotedRowKeys: Set<String>,
+    onFooterReveal: () -> Unit,
+    versionSwitch: (String, Int) -> Unit,
+    onOpenMenu: (ChatRow) -> Unit,
+    onCopyRow: (ChatRow) -> Unit,
+    onQuickRegenerate: (ChatRow) -> Unit,
+    onQuickEdit: (ChatRow) -> Unit,
+    onToolViewDiff: (String) -> Unit,
+    onToolRollback: (String) -> Unit,
+    onStopRun: () -> Unit,
+) {
+    androidx.compose.runtime.key(row.key) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalSwitchVersion provides versionSwitch
+        ) {
+            // 入场动画（替代 LazyColumn animateItem，原注释口径不变）：
+            // 只为"首帧之后新出现的行"做 220ms 淡入；晋升行（流式区让位给落行）直接不透明出现。
+            val isNewRow = remember(row.key) { seenRowKeys.add(row.key) }
+            val promoted = row.key in promotedRowKeys
+            var fadingIn by remember(row.key) { mutableStateOf(isNewRow && !promoted) }
+            val appearAlpha = remember(row.key) {
+                androidx.compose.animation.core.Animatable(if (isNewRow) 0f else 1f)
+            }
+            LaunchedEffect(row.key) {
+                if (isNewRow) {
+                    appearAlpha.animateTo(1f, tween(220))
+                    fadingIn = false
+                }
+            }
+            Column(
+                if (fadingIn) Modifier.graphicsLayer { alpha = appearAlpha.value } else Modifier
+            ) {
+                if (enhanced) TurnDivider()
+                RowItem(
+                    row,
+                    onOpenMenu = onOpenMenu,
+                    onCopyRow = onCopyRow,
+                    onQuickRegenerate = onQuickRegenerate,
+                    onQuickEdit = onQuickEdit,
+                    running = running,
+                    turnStartAt = turnStartAt,
+                    onViewDiff = onToolViewDiff,
+                    onRollback = onToolRollback,
+                    onStopRun = onStopRun,
+                    showActions = row.completionTokens != null || row.durationMs != null || row.key == finalRowKey,
+                    showHead = showHead,
+                    headTopGap = enhanced,
+                    growIn = row.key == growInKey,
+                    onFooterReveal = onFooterReveal
+                )
+            }
+        }
+    }
+}
+
+/** 轮级折叠的汇总条：收起态=「本轮过程 · N 步 · +X −Y · 耗时 ⌄」整行可点。 */
+@Composable
+private fun TurnGroupBar(
+    group: ProcGroup,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(shape)
+            .background(
+                MaterialTheme.colorScheme.surface.copy(alpha = com.haoai.agent.ui.chat.chatCardAlpha())
+            )
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), shape)
+            .clickable(interactionSource = null, indication = null, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (expanded) "▴" else "▤",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(
+            if (expanded) "收起本轮过程" else "本轮过程 · ${group.steps} 步",
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.weight(1f))
+        if (!expanded) {
+            if (group.added > 0 || group.removed > 0) {
+                Text(
+                    "+${group.added} −${group.removed}",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
+            }
+            group.durMs?.takeIf { it > 0 }?.let { d ->
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    if (d >= 60_000) String.format(Locale.US, "%dm%02ds", d / 60000, d / 1000 % 60)
+                    else String.format(Locale.US, "%.1fs", d / 1000.0),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            Text("⌄", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
