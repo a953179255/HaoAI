@@ -243,28 +243,20 @@ fun ChainCard(
                 onClick = { chainOpen = !chainOpen }
             )
         }
-        val lineColor = MaterialTheme.colorScheme.onSurfaceVariant
+        // 方案 F（2026-10-12 用户拍板）：v2 的 2dp 渐变圆头导轨太重（对照原型 rikkahub 是其 1dp 实线），
+        // 视觉上和提问选项"抢地盘"。改回 1dp 硬线、弱引导；线不再贯穿内容区——宽内容已统一缩进 44dp 让位。
+        val lineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f)
         Box(
             Modifier.drawBehind {
                 // 行通栏后内容自缩 12dp：竖线 x = 12(行内缩)+12(图标半宽)=24dp
                 val x = 24.dp.toPx()
                 val top = 18.dp.toPx()
                 val bottom = size.height - 18.dp.toPx()
-                // v2 导轨（效果图定稿 2026-10-06）：1dp 硬线 → 2dp 圆头 + 两端渐变淡出，
-                // 线像从首枚图标生长、到末枚收回，不再是被剪断的实线
                 drawLine(
-                    brush = Brush.verticalGradient(
-                        0f to lineColor.copy(alpha = 0f),
-                        0.14f to lineColor.copy(alpha = 0.30f),
-                        0.86f to lineColor.copy(alpha = 0.30f),
-                        1f to lineColor.copy(alpha = 0f),
-                        startY = top,
-                        endY = bottom
-                    ),
+                    color = lineColor,
                     start = Offset(x, top),
                     end = Offset(x, bottom),
-                    strokeWidth = 2.dp.toPx(),
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    strokeWidth = 1.dp.toPx()
                 )
             }
         ) {
@@ -1439,7 +1431,9 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
                 border = if (isPicked) androidx.compose.foundation.BorderStroke(
                     1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 ) else null,
-                modifier = Modifier.fillMaxWidth()
+                // 方案 F①：选项补 32dp（外层已 12 ⇒ 共 44dp），与 diff/产物卡同一条对齐线，
+                // 不再压 x=24 时间轴竖线（原型 rikkahub 的展开内容同样缩进对齐 label）
+                modifier = Modifier.fillMaxWidth().padding(start = 32.dp)
             ) {
                 Row(
                     Modifier
@@ -1485,7 +1479,10 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 ),
-                modifier = Modifier.fillMaxWidth()
+                // 方案 F①：同选项卡，补到 44dp 避让时间轴线
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 32.dp)
             ) {
                 Text(
                     "你的回答：$ft",
@@ -1501,7 +1498,9 @@ private fun AskStepCard(ask: com.haoai.agent.ui.UiAskData, isError: Boolean) {
             Text(
                 "未回答（运行中断或无效应答）",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                // 方案 F①：提示文字同样对齐 44dp 内容列，不与竖线穿插
+                modifier = Modifier.padding(start = 32.dp)
             )
         }
     }
@@ -1549,6 +1548,8 @@ private fun BatchAskStepCard(data: com.haoai.agent.ui.UiBatchAskData, isError: B
         Column(
             Modifier
                 .fillMaxWidth()
+                // 方案 F①：题组逐题列表补到 44dp 避让时间轴线（同 AskStepCard）
+                .padding(start = 32.dp)
                 .heightIn(max = 300.dp)
                 .verticalScroll(scroll),
             verticalArrangement = Arrangement.spacedBy(4.dp)
