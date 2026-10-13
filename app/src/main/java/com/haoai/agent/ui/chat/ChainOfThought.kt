@@ -10,6 +10,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -387,11 +388,19 @@ private fun ChainControlRow(text: String, opened: Boolean, onClick: () -> Unit) 
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
+            // 折叠动画 2026-10-13 新方案：同枚箭头旋转，不再两字符瞬切
+            val rot by animateFloatAsState(
+                targetValue = if (opened) 180f else 0f,
+                animationSpec = tween(240, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                label = "chainControlChevron"
+            )
             Icon(
-                if (opened) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                Icons.Filled.ExpandMore,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationX = rot }
             )
         }
         Text(
@@ -590,20 +599,51 @@ private fun ReasoningStep(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+                // 折叠动画 2026-10-13 新方案：同枚箭头旋转 240ms（不再 ExpandLess/More 瞬切）
+                val thinkRot by animateFloatAsState(
+                    targetValue = if (expanded) 180f else 0f,
+                    animationSpec = tween(240, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                    label = "thinkChevron"
+                )
                 Icon(
-                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    Icons.Filled.ExpandMore,
                     contentDescription = if (expanded) "收起思考过程" else "展开思考过程",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier
+                        .size(16.dp)
+                        .graphicsLayer { rotationX = thinkRot }
                 )
             }
         }
         // 阅读区：live 展开=跟尾滚动（用户上滚即让位细读），frozen 展开=自由回看全文
+        // 折叠动画 2026-10-13 新方案（效果图实验室拍板）：
+        // 旧=expandVertically 默认锚底（文字从下往上"飞进窗口"，方向拧）+ 淡入同起步（半遮整块发灰）。
+        // 新=从顶栏向下掀开（expandFrom=Top）+ 文字晚 60ms 上浮淡入（先开门后进光）；
+        //     收起时文字 110ms 快淡、容器 220ms 收尾，干脆不拖。
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(tween(220)) + fadeIn(tween(220)),
-            exit = shrinkVertically(tween(180)) + fadeOut(tween(180))
+            enter = expandVertically(
+                animationSpec = tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                expandFrom = Alignment.Top
+            ),
+            exit = shrinkVertically(
+                animationSpec = tween(220, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                shrinkTowards = Alignment.Top
+            ) + fadeOut(tween(160))
         ) {
+            // 文字"后进光"：入场首帧 alpha=0，等 60ms 再 200ms 淡入；
+            // 退场时内容仍在组合，110ms 快淡先走。
+            // （animateFloatAsState 首组合直接取目标值 1，播不出入场淡入——必须 Animatable）
+            val reveal = remember { androidx.compose.animation.core.Animatable(1f) }
+            LaunchedEffect(expanded) {
+                if (expanded) {
+                    reveal.snapTo(0f)
+                    kotlinx.coroutines.delay(60)
+                    reveal.animateTo(1f, tween(200))
+                } else {
+                    reveal.animateTo(0f, tween(110))
+                }
+            }
             val scroll = rememberScrollState()
             // 边界钳制抽成共用（见 panelBoundaryClamp）
             // 跟尾滞回（真机反馈 2026-10-07，与聊天流式同一套思路）：
@@ -630,6 +670,10 @@ private fun ReasoningStep(
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.92f),
                 modifier = Modifier
                     .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                    .graphicsLayer {
+                        alpha = reveal.value
+                        translationY = (1f - reveal.value) * 6.dp.toPx()
+                    }
                     .fillMaxWidth()
                     .heightIn(max = 240.dp)
                     .clip(RoundedCornerShape(10.dp))
@@ -979,7 +1023,19 @@ private fun ToolBodyCard(tool: UiTool) {
                     color = MaterialTheme.colorScheme.primary
                 )
             }
-            if (expanded) {
+            // 折叠动画 2026-10-13 新方案（与思考阅读区同规格）：向下掀开 + 内容后到，
+            // 不再是 if(expanded) 瞬删瞬现
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(
+                    animationSpec = tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                    expandFrom = Alignment.Top
+                ),
+                exit = shrinkVertically(
+                    animationSpec = tween(220, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                    shrinkTowards = Alignment.Top
+                ) + fadeOut(tween(160))
+            ) {
                 val bodyScroll = rememberScrollState()
                 Box(
                     Modifier
@@ -1083,7 +1139,18 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
                     color = MaterialTheme.colorScheme.primary
                 )
             }
-            if (expanded) {
+            // 折叠动画 2026-10-13 新方案（与思考阅读区/结果卡同规格）
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(
+                    animationSpec = tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                    expandFrom = Alignment.Top
+                ),
+                exit = shrinkVertically(
+                    animationSpec = tween(220, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+                    shrinkTowards = Alignment.Top
+                ) + fadeOut(tween(160))
+            ) {
                 val diffScroll = rememberScrollState()
                 Column(
                     Modifier

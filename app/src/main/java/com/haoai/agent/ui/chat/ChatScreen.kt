@@ -8,10 +8,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -3146,20 +3151,18 @@ private fun MessageList(
                     // 汇总条出现 = 轮已收尾（tail 落行）或「回答已开始流式」（taillessBar）。
                     // 缺省折叠：已完成轮默认收成汇总条（历史消息打开即"只看最终回复"）；
                     // 无条的运行组强制展开（用户要看着它干活）。
-                    // 「终答到达才折叠」的动画来自状态跳变——正文流式首字那帧 taillessBar
-                    // 翻真，showProcess 翻假，wrapper 高度从 N 行骤减到 1 条，
-                    // animateContentSize 把这一下跳变插值成 500ms 收拢。
+                    // 「终答到达才折叠」的动画来源：正文流式首字那帧 taillessBar 翻真，
+                    // showProcess 翻假，下方 AnimatedVisibility 播「先融后收」exit。
                     val hasBar = groupFinished || group.taillessBar
                     val expanded = turnExpanded[group.headRow.key] ?: !hasBar
                     val showProcess = !hasBar || expanded
-                    Column(
-                        Modifier
-                            .animateContentSize(
-                                animationSpec = tween(
-                                    500, easing = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)
-                                )
-                            )
-                    ) {
+                    // 折叠动画 2026-10-13 方案B 定稿（效果图实验室拍板）：
+                    // 旧法=if 瞬删内容 + 外层 animateContentSize 追高度——内容"唰"地消失只剩跳位。
+                    // 新法=高度动画与内容渐隐**并行**：收起=fadeOut(180) 同时 shrinkVertically 延 120ms 起
+                    // （先融后收）；展开=expandVertically 开门，逐条错峰上浮淡入（相隔 45ms，先展后现）。
+                    // 外层 wrapper 不再挂 animateContentSize——高度动画归 AnimatedVisibility 自理，
+                    // 双插值会互相追逐产生抖动感。
+                    Column {
                         if (hasBar) {
                             TurnGroupBar(
                                 group = group,
@@ -3167,29 +3170,62 @@ private fun MessageList(
                                 onClick = { turnExpanded[group.headRow.key] = !expanded }
                             )
                         }
-                        if (showProcess) {
-                            group.rows.forEach { grow ->
-                                RowSlotItem(
-                                    row = grow,
-                                    // 有汇总条时头像由条统一画（修回归②）；组内行不再双画
-                                    showHead = !(hasBar && group.headShow) && (headFlags[grow.key]?.first ?: true),
-                                    // 展开回看组内行：过程行都是 assistant，showHead 本来就 false；
-                                    // enhanced（虚线轮次分隔）只属于「我发言」方向，组内不会出现
-                                    enhanced = headFlags[grow.key]?.second ?: false,
-                                    finalRowKey = finalRowKey, growInKey = growInKey,
-                                    running = running, turnStartAt = turnStartAt,
-                                    seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
-                                    onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
-                                    onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
-                                    onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
-                                    onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
+                        val foldCurve = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = showProcess,
+                            enter = androidx.compose.animation.expandVertically(
+                                animationSpec = tween(520, easing = foldCurve)
+                            ),
+                            exit = androidx.compose.animation.fadeOut(tween(180, easing = foldCurve)) +
+                                androidx.compose.animation.shrinkVertically(
+                                    animationSpec = tween(460, delayMillis = 120, easing = foldCurve)
                                 )
+                        ) {
+                            group.rows.forEachIndexed { i, grow ->
+                                // 方案B 逐条错峰：展开时该条等 100+i*45ms 再上浮淡入。
+                                // Animatable 起点 1：直播运行组（无条常展开）首组合不被补间；
+                                // 收起方向不动作——整组渐隐由外层 exit 统一负责。
+                                val stagger = remember(grow.key) {
+                                    androidx.compose.animation.core.Animatable(1f)
+                                }
+                                LaunchedEffect(showProcess, hasBar) {
+                                    if (hasBar && showProcess) {
+                                        stagger.snapTo(0f)
+                                        kotlinx.coroutines.delay(100L + i * 45L)
+                                        stagger.animateTo(
+                                            1f,
+                                            tween(260, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f))
+                                        )
+                                    }
+                                }
+                                Box(
+                                    Modifier.graphicsLayer {
+                                        alpha = stagger.value
+                                        translationY = (1f - stagger.value) * 10.dp.toPx()
+                                    }
+                                ) {
+                                    RowSlotItem(
+                                        row = grow,
+                                        // 有汇总条时头像由条统一画（修回归②）；组内行不再双画
+                                        showHead = !(hasBar && group.headShow) && (headFlags[grow.key]?.first ?: true),
+                                        // 展开回看组内行：过程行都是 assistant，showHead 本来就 false；
+                                        // enhanced（虚线轮次分隔）只属于「我发言」方向，组内不会出现
+                                        enhanced = headFlags[grow.key]?.second ?: false,
+                                        finalRowKey = finalRowKey, growInKey = growInKey,
+                                        running = running, turnStartAt = turnStartAt,
+                                        seenRowKeys = seenRowKeys, promotedRowKeys = promotedRowKeys,
+                                        onFooterReveal = { footerRevealTick++ }, versionSwitch = versionSwitch,
+                                        onOpenMenu = onOpenMenu, onCopyRow = onCopyRow,
+                                        onQuickRegenerate = onQuickRegenerate, onQuickEdit = onQuickEdit,
+                                        onToolViewDiff = onToolViewDiff, onToolRollback = onToolRollback, onStopRun = onStopRun,
+                                    )
+                                }
                             }
                         }
-                        // 尾行=最终回复：画在动画容器内。正文与其 footer（操作行 + NerdLine
-                        // 统计行）永远直出；「链+文」合并形态（mergedAnswer）收起时只藏它的
-                        // 链卡（hideChain=!expanded），链卡高度归零被 animateContentSize 平滑插值
-                        // ——这是单行合并轮（真实引擎最常见形态）唯一的收拢动画来源。
+                        // 尾行=最终回复：画在动画容器外（正文与 footer 永不参与折叠动画、直出）；
+                        // 「链+文」合并形态（mergedAnswer）收起时只藏它的链卡（hideChain=!expanded），
+                        // 链卡由 AssistantBlock 内的同款 AnimatedVisibility 播「先融后收」——
+                        // 这是单行合并轮（真实引擎最常见形态）的收拢动画来源。
                         slot.tailRow?.let { tr ->
                             RowSlotItem(
                                 row = tr,
@@ -4335,15 +4371,26 @@ private fun AssistantBlock(
         }
         // v8 思维链重构：历史消息与流式同构——思考 + 工具混排进一张链卡（finished=true
         // → 默认折叠为控制条，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
-        // → 默认折叠为控制条 + 尾部毛边，点开回看全链，静态数据不回放动画）；正文气泡在卡外。
-        if (row.chainSteps.isNotEmpty() && !hideChain) {
-            ChainCard(
-                steps = row.chainSteps,
-                reasoningLive = false,
-                toolsLive = false,
-                finished = true
-            )
-            Spacer(Modifier.size(6.dp))
+        // 折叠动画 2026-10-13 方案B：合并终答行的链卡收起不再瞬删——与多行组同一套
+        // 「先融后收 / 先展后现」规格（正文与 footer 在Visibility外直出，不受影响）。
+        if (row.chainSteps.isNotEmpty()) {
+            val foldCurve = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)
+            AnimatedVisibility(
+                visible = !hideChain,
+                enter = expandVertically(tween(520, easing = foldCurve)),
+                exit = fadeOut(tween(180, easing = foldCurve)) +
+                    shrinkVertically(tween(460, delayMillis = 120, easing = foldCurve))
+            ) {
+                Column {
+                    ChainCard(
+                        steps = row.chainSteps,
+                        reasoningLive = false,
+                        toolsLive = false,
+                        finished = true
+                    )
+                    Spacer(Modifier.size(6.dp))
+                }
+            }
         }
         if (row.text.isNotBlank()) {
             if (row.error) {
@@ -4725,40 +4772,63 @@ private fun TurnGroupBar(
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            if (expanded) "▴" else "▤",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+        // 折叠动画 2026-10-13 方案B：箭头同枚旋转 180°（320ms 软曲线），不再「▤/▴」字符瞬切
+        val chevRot by animateFloatAsState(
+            targetValue = if (expanded) 180f else 0f,
+            animationSpec = tween(320, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
+            label = "turnBarChevron"
+        )
+        Icon(
+            Icons.Filled.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .size(16.dp)
+                .graphicsLayer { rotationX = chevRot }
         )
         Spacer(Modifier.size(8.dp))
-        Text(
-            if (expanded) "收起本轮过程" else "本轮过程 · ${group.steps} 步",
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.primary,
-        )
+        // 文案交叉淡化（旧字淡出 160ms · 新字淡入 200ms），不再硬切
+        AnimatedContent(
+            targetState = expanded,
+            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(160)) },
+            label = "turnBarLabel"
+        ) { exp ->
+            Text(
+                if (exp) "收起本轮过程" else "本轮过程 · ${group.steps} 步",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
         Spacer(Modifier.weight(1f))
-        if (!expanded) {
-            if (group.added > 0 || group.removed > 0) {
-                Text(
-                    "+${group.added} −${group.removed}",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                )
+        // 右侧统计：收起态才亮，交叉淡化进出（展开时腾出的宽度由左侧文案吸收）
+        AnimatedContent(
+            targetState = expanded,
+            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(160)) },
+            label = "turnBarMeta"
+        ) { exp ->
+            if (!exp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (group.added > 0 || group.removed > 0) {
+                        Text(
+                            "+${group.added} −${group.removed}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    }
+                    group.durMs?.takeIf { it > 0 }?.let { d ->
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            if (d >= 60_000) String.format(Locale.US, "%dm%02ds", d / 60_000, d / 1000 % 60)
+                            else String.format(Locale.US, "%.1fs", d / 1000.0),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        )
+                    }
+                }
             }
-            group.durMs?.takeIf { it > 0 }?.let { d ->
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    if (d >= 60_000) String.format(Locale.US, "%dm%02ds", d / 60000, d / 1000 % 60)
-                    else String.format(Locale.US, "%.1fs", d / 1000.0),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                )
-            }
-            Spacer(Modifier.size(8.dp))
-            Text("⌄", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     }
