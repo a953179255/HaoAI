@@ -3206,9 +3206,13 @@ private fun MessageList(
                             enter = androidx.compose.animation.expandVertically(
                                 animationSpec = tween(300, easing = foldCurve)
                             ) + androidx.compose.animation.fadeIn(tween(200, easing = foldCurve)),
-                            exit = androidx.compose.animation.fadeOut(tween(180, easing = foldCurve)) +
+                            // 收起脱节修复（2026-10-13 真机反馈）：旧=fadeOut(180) 与 shrink(延120起460)
+                            // 时序错开——内容 180ms 就淡没了，高度却要 580ms 才收完，中间 400ms 是
+                            // "看不见的空白在慢慢收"，回复气泡在这段时间被顶上去 → 观感"瞬间消失+气泡脱节"。
+                            // 改：淡出与收拢同步（去 delay、fade 拉满 shrink 时长），全程"边缩边淡没"一气呵成。
+                            exit = androidx.compose.animation.fadeOut(tween(440, easing = foldCurve)) +
                                 androidx.compose.animation.shrinkVertically(
-                                    animationSpec = tween(460, delayMillis = 120, easing = foldCurve)
+                                    animationSpec = tween(440, easing = foldCurve)
                                 )
                         ) {
                             // 真机抽搐模糊修复（2026-10-13）：AnimatedVisibility 的内容 lambda
@@ -4396,8 +4400,8 @@ private fun AssistantBlock(
                 visible = !hideChain,
                 enter = expandVertically(tween(300, easing = foldCurve)) +
                     fadeIn(tween(200, easing = foldCurve)),
-                exit = fadeOut(tween(180, easing = foldCurve)) +
-                    shrinkVertically(tween(460, delayMillis = 120, easing = foldCurve))
+                exit = fadeOut(tween(440, easing = foldCurve)) +
+                    shrinkVertically(tween(440, easing = foldCurve))
             ) {
                 Column {
                     ChainCard(
