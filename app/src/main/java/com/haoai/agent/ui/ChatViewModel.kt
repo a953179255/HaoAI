@@ -1037,10 +1037,25 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun deleteSession(id: String) {
+        val wasCurrent = _session.value?.id == id
+        // 删前记下被删卡片在列表里的位置：删后跳它下面那张（浏览器关标签页语义）。
+        // 为什么不再「一律新建空白会话」：
+        // ① 删空白会话时新空白会话顶上来看不出删过——用户实测"等于没有删除"；
+        // ② 每删一次当前会话就多留一个空会话文件，列表被 0 条空会话污染；
+        // ③ 用户正在看的上下文被清空，落到不相干的空白页。
+        val idx = _sessions.value.indexOfFirst { it.id == id }
         c.sessionStore.delete(id)
         refreshSessions()
         refreshDeletedSessions()
-        if (_session.value?.id == id) newSession()
+        if (wasCurrent) {
+            val rest = _sessions.value
+            val next = when {
+                idx in rest.indices -> rest[idx]      // 正下方那张（删后顶上来的）
+                rest.isNotEmpty() -> rest.first()    // 被删的是末张：兜底跳最近一张
+                else -> null                         // 仅此一张：只能新建空白
+            }
+            if (next != null) selectSession(next.id) else newSession()
+        }
     }
 
     /** 置顶/取消置顶（切换）。 */
