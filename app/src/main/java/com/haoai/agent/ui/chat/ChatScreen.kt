@@ -452,6 +452,10 @@ fun ChatScreen(
     // 画面朝下走（dV>0）方向判定也不成立 → 用户实测弹跳区间缩小但没消失；
     // 三修改为逐帧位移归属（dV≠0 且非我们钉的=接管），一次覆盖全部路径。
     val parkedFollow = remember { mutableStateOf(false) }
+    // 展开锚点豁免窗口（2026-10-13）：点展开时置 now+750ms，跟随循环在窗口内跳过吸底，
+    // 使视口锚在被点条上、内容向下掀（详见 ChainOfThought.LocalParkExpand）。
+    // 独立于 parkedFollow：不背滚动归因，且躲开「delta≤8 撤停」在同帧抹掉。
+    val expandParkUntil = remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     // ⑧ 回底浮钮 v3（2026-10-12 方向感知定稿，用户效果图拍板）：不再计数
     // （旧「↓ N 条新回复」徽标整条拆除：ticker 会把"上滑动作"以外的一切内容
     // 变化都喊成动态，而且宽胶囊悬在流式落字区正中挡正文）。新语义 =
@@ -1015,6 +1019,15 @@ fun ChatScreen(
                     imageLightbox = list to url
                 },
                 LocalSwitchVersion provides { uid, idx -> vm.switchVersion(uid, idx) },
+                // 展开锚点（2026-10-13）：点展开=置停车（不吸底，视口锚在被点条上、内容向下掀）
+                // + 起 750ms 豁免窗（窗口内「贴底自动撤停」不抹停车——展开首帧内容还没长高、
+                // delta 仍≤8，不保护会被当场撤掉）。窗口后停车持续，直到用户自己滚回底部
+                // （delta≤8 撤停）或显式动作（发消息/新一轮/回底钮，各 effect 清）。详见
+                // ChainOfThought.LocalParkExpand 注释。
+                LocalParkExpand provides {
+                    parkedFollow.value = true
+                    expandParkUntil.value = System.currentTimeMillis() + 750L
+                },
                 LocalChatProfiles provides ChatProfiles(
                     agentName = vm.agentName(),
                     agentEmoji = settings.avatarEmoji,
@@ -1063,6 +1076,7 @@ fun ChatScreen(
                 scrollState = scrollState,
                 userScrolledAway = userScrolledAway,
                 parkedFollow = parkedFollow,
+                expandParkUntil = expandParkUntil,
                 jumperVisible = jumperVisible,
                 sessionId = vm.session.collectAsState().value?.id,
                 planProposal = planProposal
@@ -2611,6 +2625,8 @@ private fun MessageList(
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
     /** 松手停车（2026-10-11）：滚动会话结束帧停在底部上方=用户有意停车，撤贴底跟随。 */
     parkedFollow: androidx.compose.runtime.MutableState<Boolean>,
+    /** 展开锚点豁免（2026-10-13）：点展开置 now+窗口，跟随循环窗口内跳过吸底=锚定条不被顶出。 */
+    expandParkUntil: androidx.compose.runtime.State<Long>,
     /** 回底浮钮 v3 显隐（2026-10-12 方向感知定稿）：由逐帧循环按位移**方向**驱动——
      *  向下翻且离底超门槛=浮现（dV>0 且非我方钉底帧），向上翻（阅读意图）=即隐；
      *  闲置 2.5 秒淡出的计时也在循环内（本地时间戳，不逐帧写 State）。 */
@@ -2815,7 +2831,10 @@ private fun MessageList(
                 val dV = if (prevFrameV >= 0) vNow2 - prevFrameV else 0
                 prevFrameV = vNow2
                 if (dV != 0 && !prevPinnedByUs) parkedFollow.value = true
-                if (delta <= 8) parkedFollow.value = false
+                // 展开豁免窗口内不撤停：点展开置的 parkedFollow 若被本行「仍贴底」当场抹掉，
+                // 窗口一过又吸底=锚定失效。窗口外撤停逻辑照常（用户滚回底部恢复跟随）。
+                if (delta <= 8 && expandParkUntil.value <= System.currentTimeMillis())
+                    parkedFollow.value = false
                 // ── 回底浮钮 v3 方向驱动（2026-10-12 定稿）───────────────────
                 // 只看**用户归因**位移（我方钉底帧由 prevPinnedByUs 排除，语义同
                 // 上面的停车判定）。dV>0=画面朝下走=用户在向下找新内容 → 若离底
@@ -2838,10 +2857,15 @@ private fun MessageList(
                     jumperVisible.value = false
                 }
                 val follow = !parkedFollow.value
+                // 展开锚点豁免（2026-10-13）：点展开后 750ms 窗口内跳过吸底——
+                // 视口 value 原地、被点的条纹丝不动、新内容把下方正文/footer 往下推=向下掀。
+                // 窗口外 follow 逻辑完全照常（流式增高照常吸底）。
+                val expandParked = expandParkUntil.value > System.currentTimeMillis()
                 var pinned = false
                 // fingerOnList/busyFrames 让位闸保留作belt：按住期间钉底会与拖选
                 // 边缘自动滚动逐帧打架；此刻的位移下一帧也会被 dV 归因接住。
-                if (busyFrames < 1 && follow && !fingerOnList.value) pinned = scrollState.pinToBottom()
+                if (busyFrames < 1 && follow && !fingerOnList.value && !expandParked)
+                    pinned = scrollState.pinToBottom()
                 // 三修归零点：本帧把 value 贴回新 maxValue 的同时撤掉 draw 偏移。
                 // 循环跑在帧首（layout/draw 之前），同帧生效：上一帧画面=value旧+shift
                 // 上移，本帧画面=value新+0 偏移，两者逐像素一致，衔接无缝。
@@ -3118,6 +3142,9 @@ private fun MessageList(
         val turnExpanded = remember(sessionId) {
             androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
         }
+        // 展开锚点（2026-10-13，效果图 fold-anchor-lab）：轮级条/链卡「由收→展」那一下置停车，
+        // 视口锚在被点条上、内容向下掀；收起方向不调用（保持吸底=footer 原地）
+        val parkOnExpand = rememberParkOnExpand()
         // 逐行的「画不画名字行 / 是否增强轮次边界」预计算（按 windowedRows 原始相邻关系，
         // 折叠隐藏中间行不改变这个判定——最终回复行前面是同组 assistant，本就不重复画头像）。
         val headFlags = windowedRows.mapIndexed { rowIdx, row ->
@@ -3167,7 +3194,10 @@ private fun MessageList(
                             TurnGroupBar(
                                 group = group,
                                 expanded = expanded,
-                                onClick = { turnExpanded[group.headRow.key] = !expanded }
+                                onClick = {
+                                    if (!expanded) parkOnExpand() // 收→展：锚定不吸底
+                                    turnExpanded[group.headRow.key] = !expanded
+                                }
                             )
                         }
                         val foldCurve = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)

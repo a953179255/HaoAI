@@ -122,20 +122,17 @@ import java.util.Locale
  * 思考步骤 + 工具步骤合成一张玻璃卡，左侧竖线时间轴，图标压线；
  * 正文永远在卡外独立气泡（取舍①）。
  *
- * 折叠三规则（对齐定稿规格图 chat-render-target-spec）：
+ * 折叠规则（2026-09-14 定稿 → 2026-10-13 修订）：
  * 1. 思考步骤三态：live → Preview（88dp 渐隐预览、自动滚尾）；正文出现/完成
  *    → 收起为「深度思考 X.X 秒」行，点击展开全文；
- * 2. 步骤数 > 2 → 顶部控制条，折叠态只渲染最后 [COLLAPSED_VISIBLE] 步；
- * 3. finished（回合结束/历史消息）→ 整卡默认收成一行控制条
- *    「显示 N 个步骤 · 已思考 X.X 秒」，点击展开全链。
+ * 2.（已退役）旧「步骤数 > 2 → 顶部控制条只渲染尾部 2 步」的链卡内折叠，与轮级
+ *    汇总条职责重复、反而在执行期遮挡进度，整层拆除：步骤常显、无控制条、无毛边。
+ *    收起整轮的职责上提到轮级「本轮过程」汇总条（见 ChatScreen.buildRenderSlots）。
  *
  * 工具详情走行尾点击 → ModalBottomSheet（取舍②），不再行内展开。
  * 注意：本组件在 appLayer 采样子树内渲染，禁用 GlassPanel/drawBackdrop
  * （层采样自引用崩溃），磨砂质感用高透 Surface 同正文气泡手法。
  */
-
-/** 折叠态保留的尾部步骤数（RikkaHub 同款阈值） */
-private const val COLLAPSED_VISIBLE = 2
 
 /**
  * 打开工具详情弹层的回调（ToolStep 点击 → ChatScreen 顶层在 appLayer 外渲染
@@ -150,6 +147,26 @@ val LocalOpenToolSheet = androidx.compose.runtime.staticCompositionLocalOf<(UiTo
  * 无需经 ChainCard 参数层层下传。
  */
 val LocalOpenHtmlFile = androidx.compose.runtime.staticCompositionLocalOf<(String) -> Unit> { {} }
+
+/**
+ * 展开锚点通道（2026-10-13 用户拍板，效果图 fold-anchor-lab）：
+ * 「往上顶」的根源=贴底跟随状态机对任何内容增高都吸底（follow 时逐帧 pinToBottom），
+ * 流式期这是对的；但它**误伤用户主动点展开**——新内容插在被点的条下方，吸底把刚点的条顶出屏幕，
+ * 观感方向反了（应向下掀）。
+ * 解法：展开那一下置一个「豁免到期时间戳」expandParkUntil=now+750ms，跟随循环在窗口内跳过吸底，
+ * 视口 value 原地、条及之前内容纹丝不动、新内容把后面正文/footer 往下推=锚定向下掀。
+ * 为何用**独立时间戳**而不复用 parkedFollow：①点展开那一帧内容还 0 高、仍贴底，
+ * parkedFollow 会被循环里「delta≤8 自动撤停」当场抹掉=锚定失效；②parkedFollow 还背着
+ * 「用户滚开才置位」的滚动归因语义，混用会互相污染。独立窗口只影响吸底、不动跟随归因。
+ * 收起方向**不调用**（吸底照常，footer 保持贴底不动，过程往上融）。窗口过后用户若仍贴底，
+ * 下一帧自然恢复吸底；想看下面自己往下滚。750ms 覆盖最长展开动画（链卡 520ms + 余量）。
+ * ChatScreen 顶层 provides 该 lambda；深层可折叠组件（思考阅读区/结果卡/diff 卡/轮级条）展开时调用。
+ */
+val LocalParkExpand = androidx.compose.runtime.staticCompositionLocalOf<() -> Unit> { {} }
+
+/** 展开动作统一入口：起吸底豁免窗口（详见 LocalParkExpand 注释）。仅在「由收起翻展开」时调用。 */
+@Composable
+fun rememberParkOnExpand(): () -> Unit = LocalParkExpand.current
 
 /**
  * 链卡行按压反馈（替代裸 ripple，2026-09-15 v4 定稿）：
@@ -187,18 +204,11 @@ fun ChainCard(
     reasoningLive: Boolean,
     /** 工具行是否处于活动会话流式期（历史 = false：不转圈、不 shimmer） */
     toolsLive: Boolean,
-    /** 回合是否结束（历史/结束态 → 整卡默认折叠为控制条 + 尾部毛边） */
+    /** 回合是否结束（历史/结束态 → 步骤不再播入场动画、思考收起为摘要行；链卡本体不折叠） */
     finished: Boolean,
     modifier: Modifier = Modifier
 ) {
     if (steps.isEmpty()) return
-    val hasReasoning = steps.any { it is ChainStep.Think }
-    // 整卡展开态（用户点控制条切换）。rememberSaveable key 带步骤数签名。
-    // 对齐 rikkahub：默认收起（含流式期），折叠态只渲染尾部 COLLAPSED_VISIBLE 步 + 渐隐毛边，
-    // 卡片高度稳定（控制条 + 尾部行）。想看全部点控制条展开。
-    var chainOpen by rememberSaveable(finished, steps.size, hasReasoning) {
-        mutableStateOf(false)
-    }
     // 各思考段独立展开态（收起行点击展开全文；live 段也可点开阅读区）。
     // key=段在链中的下标：合并后一段链里可能有多段思考，各自独立开关。
     // 不能以 steps.size 为键——新段/新工具步到达会重建 map，把用户手动展开的
@@ -211,19 +221,15 @@ fun ChainCard(
     // 思考段序号（1 基，按到达顺序）：完成态摘要「深度思考 N」用
     val segNos = HashMap<Int, Int>()
     run { var n = 0; steps.forEachIndexed { i, s -> if (s is ChainStep.Think) segNos[i] = ++n } }
-    val canCollapse = totalSteps > COLLAPSED_VISIBLE
-    // 折叠态只显示尾部 COLLAPSED_VISIBLE 步（不 takeLast 删项——被删项会瞬间移除无过渡；
-    // 改为始终组合全部、折叠掉的前段用 AnimatedVisibility 收起，见 StepToggle）。
-    val firstShownIndex = if (!canCollapse || chainOpen) 0 else (totalSteps - COLLAPSED_VISIBLE)
-    // 纯思考卡（无任何工具步）→ 收起时宽度自适应内容（rikkahub collapsedAdaptiveWidth 同款）
-    val thinkingOnly = steps.none { it is ChainStep.Tool }
-
-    // 纯思考卡（无任何工具步）且处于收起态 → 宽度自适应内容（rikkahub collapsedAdaptiveWidth 同款）；
-    // 含工具步的卡时间轴要左对齐、必须撑满，不收窄。
-    val slim = thinkingOnly && !chainOpen
+    // ── 链卡内步骤折叠整体退役（2026-10-13 用户拍板，效果图 fold-anchor-lab）──
+    // 旧：步骤 > COLLAPSED_VISIBLE(2) → 顶部「显示 N 个步骤」控制条 + 只渲染尾部 2 步 + 尾部毛边。
+    // 新：步骤常显、无控制条、无毛边。执行期用户要看得见 Agent 干了什么；"收起整轮"的职责
+    //     已上提到轮级汇总条（本轮过程），链卡这层折叠与之职责重复且反而遮挡进度，故拆除。
+    //     保留：新步骤到达的入场动画（StepToggle animateIn）、思考阅读区/结果卡/diff 卡这类
+    //     "内容级"折叠（收的是长正文，不是步骤数量，不受影响）。
     Column(
         modifier
-            .then(if (slim) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
+            .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
             .border(
@@ -231,20 +237,7 @@ fun ChainCard(
                 MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
                 RoundedCornerShape(18.dp)
             )
-            .animateContentSize(
-                animationSpec = tween(280, easing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
-            )
     ) {
-        // ── 控制条：仅当步骤数超过阈值才出现（≤2 步直接显示，不折叠，rikkahub 同款）──
-        if (canCollapse) {
-            ChainControlRow(
-                text = if (chainOpen) "收起" else buildString {
-                    append("显示 $totalSteps 个步骤")
-                },
-                opened = chainOpen,
-                onClick = { chainOpen = !chainOpen }
-            )
-        }
         // 轮级折叠改版（2026-10-13 用户拍板）：导轨线整条删除。
         // 线虽已减淡到 1dp，但它仍是「44dp 走廊」存在的唯一理由——结果卡/diff 卡的右侧信息
         // 被走廊顶到卡缘、左右不对称（用户截图点名）。线没了走廊一并回收：全部宽内容贴边 12dp。
@@ -259,7 +252,7 @@ fun ChainCard(
                         is ChainStep.Tool -> step.tool.callId
                     }
                     StepToggle(
-                        visible = index >= firstShownIndex,
+                        visible = true, // 步骤折叠退役（2026-10-13）：常显，StepToggle 只保留新步骤入场动画
                         // 新步骤入场只在流式期播（历史/静态渲染直出）
                         animateIn = (reasoningLive || toolsLive) && !finished,
                         stepKey = stepKey
@@ -276,23 +269,18 @@ fun ChainCard(
                             is ChainStep.Tool -> Column {
                                 ToolStep(tool = step.tool, live = toolsLive)
 // 批1e：编码向步骤行下长出结果正文卡（exit/耗时 + 可折叠 stdout）
-// 显隐跟随该步自身的可见性（index >= firstShownIndex），不能只判 chainOpen：
-// 步骤数 ≤ COLLAPSED_VISIBLE 时卡根本不提供展开入口（canCollapse=false），
-// chainOpen 恒为 false，只看它会把正文卡一起藏掉。
 // write/edit 例外：正文只有"已替换 N 处"一行，变更卡信息量全包含它，两张并排是噪音。
-                                if (step.tool.body != null && step.tool.diff == null &&
-                                    index >= firstShownIndex
-                                ) {
+                                if (step.tool.body != null && step.tool.diff == null) {
                                     ToolBodyCard(step.tool)
                                 }
                                 // 批1f：write/edit 步骤行下长出变更卡（+N−M + 带行号的可折叠 diff）
-                                if (step.tool.diff != null && index >= firstShownIndex) {
+                                if (step.tool.diff != null) {
                                     ToolDiffCard(step.tool.diff)
                                 }
                                 // 批2a：HTML 产物卡（[预览]/[在浏览器打开] 双按钮）。
                                 // 与变更卡并存不重复：变更卡回答"改了哪几行"，
                                 // 产物卡回答"东西在哪、怎么看"。
-                                if (step.tool.htmlFile != null && index >= firstShownIndex) {
+                                if (step.tool.htmlFile != null) {
                                     HtmlFileCard(step.tool.htmlFile)
                                 }
                                 // 搜索步：行下 favicon 叠排 + 结果数（对齐 rikkahub FaviconRow）
@@ -317,24 +305,6 @@ fun ChainCard(
                         }
                     }
                 }
-            }
-            // 收起态"毛边"：尾部渐隐遮罩（与思考 Preview 同一套渐隐语言），盖住最后一步下沿，
-            // 提示"下面还有内容，点控制条展开"。展开态不画。
-            if (canCollapse && !chainOpen) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(30.dp)
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color.Transparent,
-                                    MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha())
-                                )
-                            )
-                        )
-                )
             }
         }
     }
@@ -373,43 +343,6 @@ private fun StepToggle(
             fadeOut(tween(140))
     ) {
         content()
-    }
-}
-
-/** 链卡顶/底控制条：箭头 + 主色文案，全行可点 */
-@Composable
-private fun ChainControlRow(text: String, opened: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .chainPressable(onClick = onClick)
-            // 高亮通栏（形状由卡片 clip 成型），内容自缩 12dp
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
-            // 折叠动画 2026-10-13 新方案：同枚箭头旋转，不再两字符瞬切
-            val rot by animateFloatAsState(
-                targetValue = if (opened) 180f else 0f,
-                animationSpec = tween(240, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)),
-                label = "chainControlChevron"
-            )
-            Icon(
-                Icons.Filled.ExpandMore,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .size(16.dp)
-                    .graphicsLayer { rotationX = rot }
-            )
-        }
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 8.dp)
-        )
     }
 }
 
@@ -502,11 +435,13 @@ private fun ReasoningStep(
     onToggle: () -> Unit
 ) {
     val surface = MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha())
+    // 展开锚点：阅读区「由收→展」置停车，不吸底（详见 LocalParkFollow 注释）
+    val parkOnExpand = rememberParkOnExpand()
     Column {
         Row(
             Modifier
                 .fillMaxWidth()
-                .chainPressable(onClick = onToggle)
+                .chainPressable(onClick = { if (!expanded) parkOnExpand(); onToggle() })
                 // 高亮通栏，内容自缩 12dp（图标中心落 24dp，与竖线对齐）
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -972,6 +907,8 @@ private fun ToolBodyCard(tool: UiTool) {
     var expanded by rememberSaveable(tool.callId) {
         mutableStateOf(lines.size <= AUTO_EXPAND_MAX_LINES)
     }
+    // 展开锚点：正文卡「由收→展」置停车，不吸底
+    val parkOnExpand = rememberParkOnExpand()
 
     Surface(
         modifier = Modifier
@@ -986,7 +923,7 @@ private fun ToolBodyCard(tool: UiTool) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .chainPressable { expanded = !expanded }
+                    .chainPressable { if (!expanded) parkOnExpand(); expanded = !expanded }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1097,6 +1034,8 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
     var expanded by rememberSaveable(diff.path) {
         mutableStateOf(shown.size <= AUTO_EXPAND_MAX_LINES)
     }
+    // 展开锚点：diff 卡「由收→展」置停车，不吸底
+    val parkOnExpand = rememberParkOnExpand()
 
     Surface(
         modifier = Modifier
@@ -1110,7 +1049,7 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .chainPressable { expanded = !expanded }
+                    .chainPressable { if (!expanded) parkOnExpand(); expanded = !expanded }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
