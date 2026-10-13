@@ -3204,36 +3204,23 @@ private fun MessageList(
                         androidx.compose.animation.AnimatedVisibility(
                             visible = showProcess,
                             enter = androidx.compose.animation.expandVertically(
-                                animationSpec = tween(520, easing = foldCurve)
-                            ),
+                                animationSpec = tween(300, easing = foldCurve)
+                            ) + androidx.compose.animation.fadeIn(tween(200, easing = foldCurve)),
                             exit = androidx.compose.animation.fadeOut(tween(180, easing = foldCurve)) +
                                 androidx.compose.animation.shrinkVertically(
                                     animationSpec = tween(460, delayMillis = 120, easing = foldCurve)
                                 )
                         ) {
-                            group.rows.forEachIndexed { i, grow ->
-                                // 方案B 逐条错峰：展开时该条等 100+i*45ms 再上浮淡入。
-                                // Animatable 起点 1：直播运行组（无条常展开）首组合不被补间；
-                                // 收起方向不动作——整组渐隐由外层 exit 统一负责。
-                                val stagger = remember(grow.key) {
-                                    androidx.compose.animation.core.Animatable(1f)
-                                }
-                                LaunchedEffect(showProcess, hasBar) {
-                                    if (hasBar && showProcess) {
-                                        stagger.snapTo(0f)
-                                        kotlinx.coroutines.delay(100L + i * 45L)
-                                        stagger.animateTo(
-                                            1f,
-                                            tween(260, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f))
-                                        )
-                                    }
-                                }
-                                Box(
-                                    Modifier.graphicsLayer {
-                                        alpha = stagger.value
-                                        translationY = (1f - stagger.value) * 10.dp.toPx()
-                                    }
-                                ) {
+                            // 真机抽搐模糊修复（2026-10-13）：AnimatedVisibility 的内容 lambda
+                            // 包在内部 Box 里——多行组直接把 forEach 行当子节点=全部叠画在同一个
+                            // 顶部位置（玻璃卡半透明，5 张叠出白雾重影），再叠加逐条错峰的中间
+                            // 半透明态与 520ms 开门，观感=抽搐式模糊持续 1~2s。
+                            // ① 补 Column 包裹令多行纵向排列（根治重叠）；
+                            // ② 删逐条错峰上浮淡入——大内容多行时错峰与开门高度动画互相打架；
+                            //    整组统一淡入（alpha 挂在容器一层，不与逐卡采样打架）；
+                            // ③ 开门 520→300ms 压回"一气呵成"窗口。
+                            Column {
+                                group.rows.forEach { grow ->
                                     RowSlotItem(
                                         row = grow,
                                         // 有汇总条时头像由条统一画（修回归②）；组内行不再双画
@@ -4407,7 +4394,8 @@ private fun AssistantBlock(
             val foldCurve = androidx.compose.animation.core.CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)
             AnimatedVisibility(
                 visible = !hideChain,
-                enter = expandVertically(tween(520, easing = foldCurve)),
+                enter = expandVertically(tween(300, easing = foldCurve)) +
+                    fadeIn(tween(200, easing = foldCurve)),
                 exit = fadeOut(tween(180, easing = foldCurve)) +
                     shrinkVertically(tween(460, delayMillis = 120, easing = foldCurve))
             ) {
