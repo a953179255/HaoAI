@@ -1873,7 +1873,15 @@ fun ChatScreen(
                             },
                             onPinSession = { id -> vm.pinSession(id) },
                             onRenameSession = { id, title -> vm.renameSession(id, title) },
-                            onDeleteSession = { id -> vm.deleteSession(id) },
+                            onDeleteSession = { id ->
+                                val wasActive = vm.session.value?.id == id
+                                vm.deleteSession(id)
+                                // 删除的正是正在看的会话：VM 内部已自动 newSession() 跳转，
+                                // 但 72% 盖层抽屉不收起来的话，用户看不见跳转落地、以为
+                                // 「当前会话删不掉」（2026-10-13 真机反馈）。收起后直接
+                                // 露出新会话空页；非当前会话删除仍留在抽屉里方便连删。
+                                if (wasActive && !landscapeTwoPane) scope.launch { drawer.close() }
+                            },
                             // 工作区共享壳（方案 B）：抽屉只留一行「工作区」，三视图进壳内 Tab。
                             // 抽屉不收：全屏实底壳盖在上面，返回即原样露出——首版"进壳收抽屉、
                             // 退出再 drawer.open()"被用户点名（退出会重播一次开合动画）

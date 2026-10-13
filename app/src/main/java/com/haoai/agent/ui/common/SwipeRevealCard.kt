@@ -199,7 +199,17 @@ fun SwipeRevealCard(
                                 else MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
                                 RoundedCornerShape(14.dp)
                             )
-                            .clickable(enabled = deleteArmed) { onDeleteSwipe() },
+                            .clickable(enabled = deleteArmed) {
+                                // 删除带「点击」路径必须同步收起呼出（与拖拽松手确认路径一致：
+                                // 那边走 onOpenChange(false)+onDeleteSwipe，这边此前漏了 onOpenChange
+                                // → 删除后 openCardId 仍指向这条，其余卡片 anyOpen 恒真，
+                                // 首次点别的会话被「只收呼出、不跳转」逻辑吃掉=用户反馈的
+                                // 「点两下才跳转」（2026-10-13 模拟器实锤复现）。
+                                // 先关后删：onOpenChange(false) 让父层清 openCardId，
+                                // onDeleteSwipe() 触发实际删除。
+                                onOpenChange(false)
+                                onDeleteSwipe()
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Column(
