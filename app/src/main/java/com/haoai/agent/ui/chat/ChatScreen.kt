@@ -3141,11 +3141,13 @@ private fun MessageList(
         // 过程组 = 连续的过程行（链卡 + 中间叙述）。组内是否收起由 turnExpanded 控制，
         // 默认收起；只有「已完成的一轮」（尾行=最终回复且非运行态）才享受折叠，
         // 正在进行的一轮强制全展开——尾行落库那一帧从「展开」翻成「收起」，
-        // animateContentSize 把这一下高度差插值成 500ms 收拢动画（=用户要的"终答到达才折叠"）。
+        // AnimatedVisibility 把这一下高度差插值成收拢动画（=用户要的"终答到达才折叠"）。
+        // 2026-10-14 修复：折叠只认终答**落行且回合结束**——曾经的"流式首字提前折叠"
+        // （taillessBar）无法区分中间叙述与最终回复（同一条流式通道），已删，
+        // 任务中段说话不再误触收起（用户真机实锤的抽搐）。
         val slots = buildRenderSlots(
             windowedRows,
             active = running || showStreaming,
-            answerStreaming = showStreaming && !streamingText.isNullOrBlank(),
         )
         val turnExpanded = remember(sessionId) {
             androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
@@ -3178,17 +3180,15 @@ private fun MessageList(
                 )
                 is RenderSlot.Group -> {
                     val group = slot.group
-                    // 收尾判定：尾行=本轮最终回复（finalRowKey 仅在非运行态非流式期非空）。
-                    // 未收尾（这一轮还在跑）→ 组内行全展开、不出现汇总条——「运行期什么都不收」。
+                    // 收尾判定：尾行=本轮最终回复（终答落行 + 回合结束才有尾行）。
+                    // 未收尾（这一轮还在跑，或停在中间叙述/链尾）→ 组内行全展开、
+                    // 不出现汇总条——「运行期间全程展开，任务中段说话也不收」。
                     // 收尾那一帧：同一 wrapper Column 里翻成「汇总条 + （默认）收起」，
-                    // animateContentSize 把高度差插值成 500ms 收拢——「最终回答开始时才折叠全过程」。
+                    // AnimatedVisibility 播「先融后收」exit=「最终回答落位后才折叠全过程」。
                     val groupFinished = slot.tailRow != null
-                    // 汇总条出现 = 轮已收尾（tail 落行）或「回答已开始流式」（taillessBar）。
-                    // 缺省折叠：已完成轮默认收成汇总条（历史消息打开即"只看最终回复"）；
-                    // 无条的运行组强制展开（用户要看着它干活）。
-                    // 「终答到达才折叠」的动画来源：正文流式首字那帧 taillessBar 翻真，
-                    // showProcess 翻假，下方 AnimatedVisibility 播「先融后收」exit。
-                    val hasBar = groupFinished || group.taillessBar
+                    // 汇总条出现 = 轮已收尾（尾行落行）。缺省折叠：已完成轮默认收成
+                    // 汇总条（历史消息打开即"只看最终回复"）；无条的运行组强制展开。
+                    val hasBar = groupFinished
                     val expanded = turnExpanded[group.headRow.key] ?: !hasBar
                     val showProcess = !hasBar || expanded
                     // 折叠动画 2026-10-13 方案B 定稿（效果图实验室拍板）：
@@ -4573,7 +4573,7 @@ private fun VersionPager(row: ChatRow) {
  * 最终回复行与其 footer（操作行 + 统计行）永远直出、不受影响。
  * 折叠动画 = 容器 animateContentSize 500ms（行群 → 汇总条的高度变化被插值成收拢）。
  */
-private class ProcGroup(
+internal class ProcGroup(
     val headRow: ChatRow,
     val rows: List<ChatRow>,
     var steps: Int,
@@ -4584,15 +4584,6 @@ private class ProcGroup(
     /** 本组是「我发言 → Agent 回」的轮次首组：收起态需在汇总条上方画头像（修回归②）。 */
     val headShow: Boolean = false,
     /**
-     * 「回答已开始流式」标记（拍板语义=最终回答开始输出的那一刻折叠，不等落行）：
-     * 窗口末组 + running/showStreaming 活跃 + streamingText 已有正文 → true。
-     * 此时最终回答还没落成行（无 tail），汇总条先行出现把过程收起；
-     * 终答落行后自然切回 groupFinished 路径，hasBar 连续、无闪烁。
-     * 中间叙述流式完落行的瞬间 streamingText 清空 → false → 该组重新展开
-     *（叙述是新内容，该看见）；下一轮真正终答开始流式再折——每轮自动。
-     */
-    var taillessBar: Boolean = false,
-    /**
      * 合并终答行（修回归①）：真实引擎把「链 + 正文」落在同一行（flushChain：模型说话
      * 时把 pending 链随正文一起落行），旧判据要求终答行 chainSteps 为空——真实回合
      * 永不满足 → 不折叠（用户实测反馈 2026-10-13）。现在承认合并形态：收起时该行只
@@ -4601,7 +4592,7 @@ private class ProcGroup(
     val mergedAnswer: ChatRow? = null,
 )
 
-private sealed interface RenderSlot {
+internal sealed interface RenderSlot {
     class Plain(val row: ChatRow) : RenderSlot
     class Group(val group: ProcGroup, val tailRow: ChatRow?) : RenderSlot
 }
@@ -4614,12 +4605,17 @@ private sealed interface RenderSlot {
  * 活跃判定：running || showStreaming 时**窗口最末一组**还没跑完（最终回答还在
  * 流式区/尚未落行），不能拆尾、不能折叠——正是「运行期间全程展开」。
  * 组内 diff 增删数顺带累计（汇总条徽章用）。
+ *
+ * 折叠时机（2026-10-14 修复「任务中段说话误触发收起」）：只认**终答落行且回合结束**
+ * （!active）。曾经的「taillessBar 提前折叠」（streamingText 非空就折）已删除——
+ * 引擎把中间叙述与最终回复走同一条 onDelta 流式通道，流式期间 UI 无法区分二者
+ * （工具调用在内容之后才到达），导致模型每次任务中段发言都误触收起、说完又展开
+ * （用户真机实锤的抽搐）。终答行是唯一可确认的"最终回复"：引擎只给无工具调用的
+ * 那一轮挂统计字段（ AssistantStats ），且回合收尾后 running 才翻假。
  */
-private fun buildRenderSlots(
+internal fun buildRenderSlots(
     rows: List<ChatRow>,
-    active: Boolean,
-    /** 本轮最终正文已开始流式（streamingText 非空）：活跃末组即时折叠（拍板语义）。 */
-    answerStreaming: Boolean = false,
+    active: Boolean
 ): List<RenderSlot> {
     val out = ArrayList<RenderSlot>()
     var i = 0
@@ -4655,9 +4651,6 @@ private fun buildRenderSlots(
         if (!finished) {
             // 运行中 / 停在无正文的链尾：整组按过程直出、无汇总条（行为同折叠前）
             val group = procGroupOf(run, null, headShow, merged = null)
-            // 「回答开始折叠」早于落行：活跃末组且正文已在流式 → 汇总条先行收起过程。
-            group.taillessBar = answerStreaming && runAtEnd &&
-                run.any { it.chainSteps.isNotEmpty() }
             out.add(RenderSlot.Group(group, null))
         } else if (run.none { it.chainSteps.isNotEmpty() }) {
             // 纯问答轮（没有任何思考/工具链）：没东西可折，逐行直出，
