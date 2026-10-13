@@ -1257,6 +1257,25 @@ private fun SectionPage(
     var myProfileWheelOpen by remember { mutableStateOf(false) }
     var myEditBio by remember { mutableStateOf("") }
     var myEditImagePath by remember { mutableStateOf<String?>(null) }
+    // 恢复备份确认弹窗（2026-10-13 用户反馈修复）：原先整段写在 generalItems 的
+    // item{} 里，GlassAlertDialog 的 fillMaxSize 全屏遮罩被 item 高度约束塌缩——
+    // 弹窗看着像"从设置列表里延伸出来的一块"而不是全屏浮层。选包 launcher +
+    // restoreUri + 确认弹窗整体上提根级（同色盘/档案弹窗教训），item 内只留入口按钮。
+    var restoreUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val restoreLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        restoreUri = uri
+        if (uri != null) {
+            vm.inspectBackup(uri) { r ->
+                android.widget.Toast.makeText(
+                    context,
+                    r.getOrElse { "无法读取备份包：${it.message ?: it.javaClass.simpleName}" },
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
     val myAvatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetContent()
     ) { uri ->
@@ -1320,6 +1339,7 @@ private fun SectionPage(
                         onRequestClearWallpaper = onConfirmWpClear,
                         onOpenColorPicker = { hex, slot -> pickerSlot = slot; pickerSeed = hex },
                         onRequestKeyExportConfirm = { keyExportConfirm = true },
+                        onPickRestoreFile = { restoreLauncher.launch(arrayOf("application/zip")) },
                         onEditMyProfile = {
                             myEditName = settings.myName.ifBlank { "我" }
                             myEditEmoji = settings.myEmoji
@@ -1440,6 +1460,73 @@ private fun SectionPage(
                 onDismiss = { myProfileWheelOpen = false },
                 onConfirm = { myEditCustom = it; myProfileWheelOpen = false }
             )
+        }
+        // 恢复备份确认弹窗（根级挂载——见上 restoreLauncher 注释：fillMaxSize 遮罩
+        // 若留在 generalItems 的 item 内会被约束塌成内容流一块，不是全屏浮层）
+        vm.restoreManifest?.let { m ->
+            val packScopes = m.scopes.mapNotNull {
+                runCatching { com.haoai.agent.platform.BackupScope.valueOf(it) }.getOrNull()
+            }
+            var selected by remember(m) { mutableStateOf(packScopes.toSet()) }
+            val packedAt = remember(m) {
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA)
+                    .format(java.util.Date(m.createdAt))
+            }
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = localBackdrop,
+                title = "确认恢复数据",
+                onDismiss = { vm.closeRestoreManifest() },
+                confirmLabel = "开始恢复",
+                onConfirm = {
+                    val u = restoreUri ?: return@GlassAlertDialog
+                    vm.restoreBackup(u, selected) { r ->
+                        android.widget.Toast.makeText(
+                            context,
+                            r.getOrElse { "恢复失败：${it.message ?: it.javaClass.simpleName}" },
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                        // 成功即重启：会话/记忆/配置桥的内存缓存不重启不会看到恢复的数据
+                        r.onSuccess { vm.restartApp() }
+                    }
+                },
+                dismissLabel = "取消"
+            ) {
+                Column {
+                    Text(
+                        "备份自 v${m.appVersionName.ifBlank { "?" }} · $packedAt · ${m.items.size} 项\n" +
+                            if (m.keysIncluded)
+                                "含明文 Key：恢复时用本机新 Keystore 重新加密入库"
+                            else
+                                "不含 Key：恢复后需到供应商设置里重贴 API Key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    packScopes.forEach { sc ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    selected = if (sc in selected) selected - sc else selected + sc
+                                },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = sc in selected,
+                                onCheckedChange = {
+                                    selected = if (sc in selected) selected - sc else selected + sc
+                                }
+                            )
+                            Text(sc.label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "恢复会覆盖所选范围的当前数据；完成后应用将自动重启",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f)
+                    )
+                }
+            }
         }
         // 工作区浏览壳（方案B 双入口之一）：与聊天页同一 WorkspaceShellDialog，
         // tabs=[Tree] 纯目录——空间作用域（无会话，故无产出/历史；查看器不显换乘钮）
@@ -2569,7 +2656,8 @@ private fun LazyListScope.generalItems(
     onRequestClearWallpaper: () -> Unit,
     onOpenColorPicker: (initialHex: String, slot: Int) -> Unit = { _, _ -> },
     onRequestKeyExportConfirm: () -> Unit = {},
-    onEditMyProfile: () -> Unit = {}
+    onEditMyProfile: () -> Unit = {},
+    onPickRestoreFile: () -> Unit = {}
 ) {
     item { SectionTitle("我的档案") }
     item {
@@ -2785,21 +2873,9 @@ private fun LazyListScope.generalItems(
     item {
         // 恢复：SAF 选包 → inspect 整包校验并展示 → 勾选范围确认 → 落盘 → 自动重启
         // （导出侧只保证包是好的；这里补上"读回来"的另一半，换机/卸载重装才真正闭环）
-        var restoreUri by remember { mutableStateOf<android.net.Uri?>(null) }
-        val restoreLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.OpenDocument()
-        ) { uri ->
-            restoreUri = uri
-            if (uri != null) {
-                vm.inspectBackup(uri) { r ->
-                    android.widget.Toast.makeText(
-                        context,
-                        r.getOrElse { "无法读取备份包：${it.message ?: it.javaClass.simpleName}" },
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
+        // 注意：确认弹窗是全屏遮罩（fillMaxSize），必须渲染在 SectionPage 根 Box——
+        // 留在本 item 内会被 item 高度约束塌成"内容流里的一块"（同色盘/档案弹窗教训）。
+        // 选包 launcher + restoreUri + 确认弹窗均已上提根级，本 item 只留入口按钮。
         GlassGroup(backdrop, modifier = Modifier.padding(vertical = 6.dp)) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -2821,74 +2897,9 @@ private fun LazyListScope.generalItems(
                         color = MaterialTheme.colorScheme.primary
                     )
                 } else {
-                    TextButton(onClick = { restoreLauncher.launch(arrayOf("application/zip")) }) {
+                    TextButton(onClick = onPickRestoreFile) {
                         Text("选择备份包")
                     }
-                }
-            }
-        }
-        vm.restoreManifest?.let { m ->
-            val packScopes = m.scopes.mapNotNull {
-                runCatching { com.haoai.agent.platform.BackupScope.valueOf(it) }.getOrNull()
-            }
-            var selected by remember(m) { mutableStateOf(packScopes.toSet()) }
-            val packedAt = remember(m) {
-                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA)
-                    .format(java.util.Date(m.createdAt))
-            }
-            com.haoai.agent.ui.common.GlassAlertDialog(
-                backdrop = backdrop,
-                title = "确认恢复数据",
-                onDismiss = { vm.closeRestoreManifest() },
-                confirmLabel = "开始恢复",
-                onConfirm = {
-                    val u = restoreUri ?: return@GlassAlertDialog
-                    vm.restoreBackup(u, selected) { r ->
-                        android.widget.Toast.makeText(
-                            context,
-                            r.getOrElse { "恢复失败：${it.message ?: it.javaClass.simpleName}" },
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                        // 成功即重启：会话/记忆/配置桥的内存缓存不重启不会看到恢复的数据
-                        r.onSuccess { vm.restartApp() }
-                    }
-                },
-                dismissLabel = "取消"
-            ) {
-                Column {
-                    Text(
-                        "备份自 v${m.appVersionName.ifBlank { "?" }} · $packedAt · ${m.items.size} 项\n" +
-                            if (m.keysIncluded)
-                                "含明文 Key：恢复时用本机新 Keystore 重新加密入库"
-                            else
-                                "不含 Key：恢复后需到供应商设置里重贴 API Key",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    packScopes.forEach { sc ->
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clickable {
-                                    selected = if (sc in selected) selected - sc else selected + sc
-                                },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = sc in selected,
-                                onCheckedChange = {
-                                    selected = if (sc in selected) selected - sc else selected + sc
-                                }
-                            )
-                            Text(sc.label, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "恢复会覆盖所选范围的当前数据；完成后应用将自动重启",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f)
-                    )
                 }
             }
         }
