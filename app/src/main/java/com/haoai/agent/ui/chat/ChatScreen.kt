@@ -174,6 +174,7 @@ import com.haoai.agent.ui.ChatRow
 import com.haoai.agent.ui.ChatViewModel
 import com.haoai.agent.ui.common.GlassCard
 import com.haoai.agent.ui.common.GlassPanel
+import com.haoai.agent.ui.common.HaoIcons
 import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
@@ -493,7 +494,12 @@ fun ChatScreen(
     var input by rememberSaveable { mutableStateOf("") }
     // 大体积 base64 / 文档正文绝不能进 rememberSaveable：会被写入 savedInstanceState
     // Bundle，超过 ~1MB 直接 TransactionTooLargeException 崩溃；进程重建丢失待发附件可接受
-    var pendingImage by remember { mutableStateOf<String?>(null) }
+    // 多图时代（2026-10-14）：待发图片是列表，上限 9 张（再多 base64 撑内存、会话 JSON 也膨胀）
+    var pendingImages by remember { mutableStateOf<List<String>>(emptyList()) }
+    val addPendingImage: (String) -> Unit = { url ->
+        if (pendingImages.size < 9) pendingImages = pendingImages + url
+        else android.widget.Toast.makeText(context, "一次最多附 9 张图片", android.widget.Toast.LENGTH_SHORT).show()
+    }
     // 音频/视频附件本机路径（应用私有 attachments 目录）——base64 不进会话 JSON 防膨胀；
     // 引擎按当前模型能力决定直发（audio-in）或注记绕行（ffmpeg/ASR）
     var pendingAudioPath by remember { mutableStateOf<String?>(null) }
@@ -645,31 +651,75 @@ fun ChatScreen(
         scope.launch { drawer.close() }
     }
 
-    // ACTION_PICK 分发给默认图库（Flyme 图库等），结果 URI 自带临时读权限；
-    // 原 GetContent() 走 SAF 文档选择器，界面是文件管理器而非图库（用户反馈）
-    val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val uri = result.data?.data
-        if (uri != null) {
-            runCatching {
-                val resolver = context.contentResolver
-                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
-                var sample = 1
-                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
-                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-                val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
-                if (bmp != null) {
-                    val bos = java.io.ByteArrayOutputStream()
-                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
-                    bmp.recycle()
-                    pendingImage = "data:image/jpeg;base64," +
-                        android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
-                }
+    // 单张 Uri → data URL 解码管线（相册多选、系统分享、拍照共用；长边 1024 采样 + JPEG 85）
+    val decodeUriToDataUrl: (android.net.Uri) -> String? = dec@{ uri ->
+        runCatching {
+            val resolver = context.contentResolver
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+                ?: return@runCatching null
+            val bos = java.io.ByteArrayOutputStream()
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
+            bmp.recycle()
+            "data:image/jpeg;base64," + android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+        }.getOrNull()
+    }
+
+    // 多图时代（2026-10-14）：Android 13+ 走系统 PhotoPicker（多选、隐私友好、无需存储权限），
+    // 旧系统回退 ACTION_PICK_MULTIPLE 分发给默认图库（Flyme 图库等，结果 URI 自带临时读权限）。
+    val pickMultipleImages = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(9)
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        // 解码在 IO 线程跑（多张 12MP 全流程可达秒级，主线程逐张解码就是"选完图冻一下"）
+        scope.launch(Dispatchers.IO) {
+            val urls = uris.mapNotNull { decodeUriToDataUrl(it) }
+            if (urls.isNotEmpty()) withContext(Dispatchers.Main.immediate) {
+                pendingImages = (pendingImages + urls).take(9)
             }
         }
     }
+    val legacyMultiPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // 旧系统单图通路：ClipData 多选 + data 单选的兜底都收进同一个列表口径
+        val uris = mutableListOf<android.net.Uri>()
+        result.data?.clipData?.let { cd -> for (i in 0 until cd.itemCount) cd.getItemAt(i).uri?.let(uris::add) }
+        result.data?.data?.let(uris::add)
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch(Dispatchers.IO) {
+            val urls = uris.mapNotNull { decodeUriToDataUrl(it) }
+            if (urls.isNotEmpty()) withContext(Dispatchers.Main.immediate) {
+                pendingImages = (pendingImages + urls).take(9)
+            }
+        }
+    }
+    val launchImagePicker: () -> Unit = {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            pickMultipleImages.launch(
+                androidx.activity.result.PickVisualMediaRequest(
+                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                )
+            )
+        } else {
+            // API<33：PhotoPicker 不可用，回退默认图库（Flyme 图库等）单图通路；
+            // 部分图库认 EXTRA_ALLOW_MULTIPLE，带上一并尽力多选
+            runCatching {
+                legacyMultiPicker.launch(
+                    android.content.Intent(android.content.Intent.ACTION_PICK,
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI).apply {
+                        type = "image/*"
+                        putExtra("android.intent.extra.ALLOW_MULTIPLE", true)
+                    }
+                )
+            }
+        }
+    }
+
 
     // 系统分享接入（R2.2）：文本预填输入框；图片 Uri 走与相册选择相同的解码管线
     androidx.compose.runtime.LaunchedEffect(vm) {
@@ -690,21 +740,9 @@ fun ChatScreen(
                     resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 runCatching {
-                    val resolver = context.contentResolver
                     val uri = android.net.Uri.parse(uriStr)
-                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
-                    var sample = 1
-                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1024) sample *= 2
-                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-                    val bmp = resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
-                    if (bmp != null) {
-                        val bos = java.io.ByteArrayOutputStream()
-                        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos)
-                        bmp.recycle()
-                        pendingImage = "data:image/jpeg;base64," +
-                            android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
-                    }
+                    val url = decodeUriToDataUrl(uri)
+                    if (url != null) addPendingImage(url)
                 }
             }
         }
@@ -733,7 +771,7 @@ fun ChatScreen(
                         bmp.recycle()
                         val dataUrl = "data:image/jpeg;base64," +
                             android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
-                        withContext(Dispatchers.Main.immediate) { pendingImage = dataUrl }
+                        withContext(Dispatchers.Main.immediate) { addPendingImage(dataUrl) }
                     }
                     cameraShotFile.delete()
                 }
@@ -1511,7 +1549,7 @@ fun ChatScreen(
                             )
                         }
                         Icon(
-                            Icons.Filled.Close, "移除引用",
+                            HaoIcons.Close, "移除引用",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             modifier = Modifier
                                 .size(18.dp)
@@ -1538,15 +1576,8 @@ fun ChatScreen(
                     }
                 },
                 running = running,
-                pendingImage = pendingImage,
-                onPickImage = {
-                    imagePicker.launch(
-                        android.content.Intent(
-                            android.content.Intent.ACTION_PICK,
-                            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                        )
-                    )
-                },
+                pendingImages = pendingImages,
+                onPickImage = { launchImagePicker() },
                 onTakePhoto = {
                     if (androidx.core.content.ContextCompat.checkSelfPermission(
                             context, android.Manifest.permission.CAMERA
@@ -1555,7 +1586,7 @@ fun ChatScreen(
                         cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
                 },
                 onPickDocument = { documentPicker.launch(arrayOf("text/*", "application/pdf", "application/json", "application/xml")) },
-                onClearImage = { pendingImage = null },
+                onRemoveImage = { idx -> pendingImages = pendingImages.filterIndexed { i, _ -> i != idx } },
                 pendingAudio = pendingAudioPath,
                 pendingVideoName = pendingVideoName,
                 onPickAudio = { audioPicker.launch(arrayOf("audio/*")) },
@@ -1618,11 +1649,11 @@ fun ChatScreen(
                         "> " + q.text.trim().replace("\n", "\n> ") + "\n\n"
                     } ?: ""
                     val fullText = quotePrefix + docPrefix + trimmed
-                    if (fullText.isNotBlank() || pendingImage != null || pendingAudioPath != null || pendingVideoPath != null) {
-                        vm.send(fullText, pendingImage, pendingAudioPath, pendingVideoPath)
+                    if (fullText.isNotBlank() || pendingImages.isNotEmpty() || pendingAudioPath != null || pendingVideoPath != null) {
+                        vm.send(fullText, pendingImages, pendingAudioPath, pendingVideoPath)
                         input = ""
                         quoteDraft = null
-                        pendingImage = null
+                        pendingImages = emptyList()
                         pendingAudioPath = null
                         pendingAudioName = null
                         pendingVideoPath = null
@@ -2594,7 +2625,7 @@ private fun TopBar(
                 }
             }
             IconButton(onClick = onNewChat) {
-                Icon(Icons.Filled.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)
+                Icon(HaoIcons.Add, contentDescription = "新会话", tint = MaterialTheme.colorScheme.onBackground)
             }
             Spacer(Modifier.size(4.dp))
             CircularContextIndicator(
@@ -4278,6 +4309,11 @@ private fun UserBubble(
     showHead: Boolean = true,
     headTopGap: Boolean = true
 ) {
+    // 多图统一口径：新数据在 images，旧会话只有 imageData → 单元素回落
+    val attachImages = row.images.ifEmpty { listOfNotNull(row.imageData?.takeIf { it.isNotBlank() }) }
+    // 引擎给带图消息落的正文有"[图片N]"占位前缀（rebuildRows 已剥；此处双保险——
+    // 剥空 = 纯图消息，气泡只剩图，露出空文字行会很难看）
+    val displayText = row.text.replace(Regex("^(\\[图片\\d*\\]\\n?)+"), "")
     Column(
         Modifier
             .fillMaxWidth()
@@ -4288,43 +4324,60 @@ private fun UserBubble(
         if (showHead) LocalChatProfiles.current?.let { p ->
             SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true, topGap = headTopGap, customHex = p.myGradientCustom)
         }
-        // 用户发的图片附件：气泡上方原比例展示（此前只存不显）；点击进全屏查看器（批1d）
-        row.imageData?.let { dataUrl ->
-            val lb = com.haoai.agent.ui.common.LocalImageLightboxLauncher.current
-            // 图集 = 附件在前 + 正文 markdown 图片在后（一行消息多图可横滑）
-            val gallery = buildList {
-                add(dataUrl to "我的附件")
-                Regex("!\\[[^\\]]*\\]\\(([^)\\s]+)\\)").findAll(row.text).forEach { m ->
-                    add(m.groupValues[1] to "")
-                }
-            }
-            DataUrlThumb(
-                dataUrl,
-                Modifier
-                    .widthIn(max = 260.dp)
-                    .heightIn(max = 280.dp),
-                shape = RoundedCornerShape(14.dp),
-                contentScale = ContentScale.Fit,
-                onClick = { lb?.invoke(gallery, dataUrl) }
-            )
-        }
         // 快捷操作行（与 Agent 同款排版：复制·编辑重发靠左，时间戳在「更多」左）。
         // 操作行宽度=气泡宽度：按钮左缘与气泡左缘平齐（气泡右对齐，操作行跟着右对齐，
         // 不再甩到屏幕最左脱离气泡——真机反馈 2026-10-07）
         BubbleWithActions(
             bubble = {
+                // 图文合一（2026-10-14 图片排版改版）：图与文字共用一颗气泡的外框圆角，
+                // 一眼是"一条消息"而不是两块漂浮卡片。单图贴合原比例（Crop→Fit 会留灰边，
+                // 这里按解码位图比例给高），多图 2 列网格；点击进全屏图集（附件在前 +
+                // 正文 markdown 图片在后，可横滑）。
+                val lb = com.haoai.agent.ui.common.LocalImageLightboxLauncher.current
+                val gallery = buildList {
+                    attachImages.forEach { add(it to "我的附件") }
+                    Regex("!\\[[^\\]]*\\]\\(([^)\\s]+)\\)").findAll(row.text).forEach { m ->
+                        add(m.groupValues[1] to "")
+                    }
+                }
                 Surface(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = chatBubbleAlphas().first),
-                    shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
+                    shape = if (attachImages.isEmpty()) RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp)
+                    else if (displayText.isBlank()) RoundedCornerShape(18.dp)
+                    else RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
                     modifier = Modifier.widthIn(max = 320.dp)
                 ) {
-                    // 长按正文 = 系统文本选择，不再弹操作菜单
-                    SelectionContainer {
-                        Text(
-                            row.text,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
-                        )
+                    Column {
+                        if (attachImages.isNotEmpty()) {
+                            if (attachImages.size == 1) {
+                                com.haoai.agent.ui.common.HaoImageSingle(
+                                    key = attachImages.first().hashCode().toString(),
+                                    decode = { com.haoai.agent.ui.common.haoDecodeDataUrl(attachImages.first()) },
+                                    onClick = { lb?.invoke(gallery, attachImages.first()) },
+                                    modifier = Modifier.padding(3.dp)
+                                )
+                            } else {
+                                com.haoai.agent.ui.common.HaoImageGrid(
+                                    urls = attachImages,
+                                    decodeOf = { url -> { com.haoai.agent.ui.common.haoDecodeDataUrl(url) } },
+                                    onOpen = { list, cur -> lb?.invoke(list.map { it to "我的附件" }, cur) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(4.dp),
+                                    corner = RoundedCornerShape(12.dp)
+                                )
+                            }
+                        }
+                        if (displayText.isNotBlank()) {
+                            // 长按正文 = 系统文本选择，不再弹操作菜单
+                            SelectionContainer {
+                                Text(
+                                    displayText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                                )
+                            }
+                        }
                     }
                 }
             },
@@ -4333,15 +4386,15 @@ private fun UserBubble(
                     Modifier.padding(top = 1.dp, end = 2.dp).fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
-                    QuickActionButton(Icons.Filled.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
+                    QuickActionButton(HaoIcons.Copy, "复制") { onCopyRow(row) }
+                    QuickActionButton(HaoIcons.Edit, "编辑重发", enabled = !running) { onQuickEdit(row) }
                     Spacer(Modifier.weight(1f))
                     val tsText = fmtMsgTs(row.ts)
                     if (tsText.isNotEmpty()) {
                         Text(tsText, style = MaterialTheme.typography.labelSmall,
                             color = wallpaperAdaptiveGray(), modifier = Modifier.padding(end = 4.dp))
                     }
-                    QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+                    QuickActionButton(HaoIcons.More, "更多") { onOpenMenu(row) }
                 }
             }
         )
@@ -4502,12 +4555,12 @@ private fun AssistantBlock(
             Column {
                 if (showActions) {
                     Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 2.dp, top = 1.dp)) {
-                        QuickActionButton(Icons.Filled.ContentCopy, "复制") { onCopyRow(row) }
-                        QuickActionButton(Icons.Filled.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
+                        QuickActionButton(HaoIcons.Copy, "复制") { onCopyRow(row) }
+                        QuickActionButton(HaoIcons.Refresh, "重新生成", enabled = !running) { onQuickRegenerate(row) }
                         Spacer(Modifier.weight(1f))
                         // 版本翻页器（效果图定稿）：多版时出现，靠右、永远在「更多」左边
                         VersionPager(row)
-                        QuickActionButton(Icons.Filled.MoreVert, "更多") { onOpenMenu(row) }
+                        QuickActionButton(HaoIcons.More, "更多") { onOpenMenu(row) }
                     }
                 }
                 NerdLine(row)
@@ -4550,7 +4603,7 @@ private fun VersionPager(row: ChatRow) {
     val tint = wallpaperAdaptiveGray(alpha = 0.75f)
     Row(verticalAlignment = Alignment.CenterVertically) {
         QuickActionButton(
-            Icons.Filled.KeyboardArrowLeft, "上一版",
+            HaoIcons.Back, "上一版",
             enabled = cur > 1
         ) { switch(row.regenUserId, cur - 2) }
         Text(
@@ -4560,7 +4613,7 @@ private fun VersionPager(row: ChatRow) {
             modifier = Modifier.padding(horizontal = 1.dp)
         )
         QuickActionButton(
-            Icons.Filled.KeyboardArrowRight, "下一版",
+            HaoIcons.ChevronRight, "下一版",
             enabled = cur < total
         ) { switch(row.regenUserId, if (cur >= total - 1) -1 else cur) }
     }
@@ -4802,7 +4855,7 @@ private fun TurnGroupBar(
             label = "turnBarChevron"
         )
         Icon(
-            Icons.Filled.ExpandMore,
+            HaoIcons.ChevronDown,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier
@@ -5012,7 +5065,7 @@ private fun ToolChip(
                     Spacer(Modifier.size(6.dp))
                 }
                 Icon(
-                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    if (expanded) HaoIcons.ChevronUp else HaoIcons.ChevronDown,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
@@ -5080,7 +5133,7 @@ private fun ToolChip(
                                         modifier = Modifier.size(20.dp)
                                     ) {
                                         androidx.compose.material3.Icon(
-                                            androidx.compose.material.icons.Icons.Filled.Close,
+                                            HaoIcons.Close,
                                             contentDescription = "终止子代理 ${sub.id}",
                                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.size(13.dp)
@@ -5117,11 +5170,11 @@ private fun ComposerBar(
     /** 聊天输入框聚焦变化：键盘避让只服务于"聚焦的输入框"（见 ChatScreen keyboardLiftPx） */
     onFocusChange: (Boolean) -> Unit = {},
     running: Boolean,
-    pendingImage: String?,
+    pendingImages: List<String>,
     onPickImage: () -> Unit,
     onTakePhoto: () -> Unit = {},
     onPickDocument: () -> Unit,
-    onClearImage: () -> Unit,
+    onRemoveImage: (Int) -> Unit,
     pendingAudio: String? = null,
     pendingVideoName: String? = null,
     onPickAudio: () -> Unit = {},
@@ -5188,34 +5241,79 @@ private fun ComposerBar(
                     modifier = Modifier.padding(horizontal = 6.dp)
                 )
             }
-            if (pendingImage != null) {
+            if (pendingImages.isNotEmpty()) {
+                // 多图附件芯片行（2026-10-14）：横排缩略图，每张右上角单独移除；
+                // 尾部「＋」继续添加；不足上限时也可点加号补图。
                 Row(
-                    Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
                 ) {
-                    // 附件预览缩略图（此前只显示"已附加图片"文字，用户看不到选了什么）
-                    DataUrlThumb(
-                        pendingImage,
-                        Modifier.size(52.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    Text(
-                        "已附加图片",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(start = 10.dp),
-                        maxLines = 1
-                    )
-                    IconButton(onClick = onClearImage, modifier = Modifier.size(30.dp)) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "移除图片",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    pendingImages.forEachIndexed { idx, url ->
+                        Box(Modifier.size(54.dp)) {
+                            DataUrlThumb(
+                                url,
+                                Modifier.size(54.dp),
+                                shape = RoundedCornerShape(13.dp)
+                            )
+                            // 移除角标（用户拍板 X1 磨砂玻璃圆点）：半透白底板+细白描边+
+                            // 内高光线，压在图上看得到但不打架；× 用 HaoIcons 细线稿
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onRemoveImage(idx) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(19.dp)
+                                        .clip(CircleShape)
+                                        .background(androidx.compose.ui.graphics.Color(0x8C2B3242))
+                                        .border(
+                                            1.dp,
+                                            androidx.compose.ui.graphics.Color(0x73FFFFFF),
+                                            CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        com.haoai.agent.ui.common.HaoIcons.Close,
+                                        contentDescription = "移除第${idx + 1}张",
+                                        tint = androidx.compose.ui.graphics.Color.White,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
+                    if (pendingImages.size < 9) {
+                        // 继续添加（打开多选图库）
+                        Box(
+                            Modifier
+                                .size(54.dp)
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(androidx.compose.ui.graphics.Color(0x14FFFFFF))
+                                .border(1.dp, androidx.compose.ui.graphics.Color(0x33FFFFFF), RoundedCornerShape(13.dp))
+                                .clickable(onClick = onPickImage),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                HaoIcons.Add,
+                                contentDescription = "继续添加图片",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        "${pendingImages.size}/9",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             if (pendingAudio != null) {
@@ -5224,7 +5322,7 @@ private fun ComposerBar(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Filled.Mic,
+                        HaoIcons.Mic,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp)
@@ -5240,7 +5338,7 @@ private fun ComposerBar(
                     )
                     IconButton(onClick = onClearAudio, modifier = Modifier.size(30.dp)) {
                         Icon(
-                            Icons.Filled.Close,
+                            HaoIcons.Close,
                             contentDescription = "移除音频",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
@@ -5254,7 +5352,7 @@ private fun ComposerBar(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Filled.Movie,
+                        HaoIcons.Video,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp)
@@ -5270,7 +5368,7 @@ private fun ComposerBar(
                     )
                     IconButton(onClick = onClearVideo, modifier = Modifier.size(30.dp)) {
                         Icon(
-                            Icons.Filled.Close,
+                            HaoIcons.Close,
                             contentDescription = "移除视频",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
@@ -5285,7 +5383,7 @@ private fun ComposerBar(
                 // v7：运行中也允许展开工具栏（排队发消息时可能还要带图/音频等附件）
                 IconButton(onClick = { toolbarExpanded = !toolbarExpanded }) {
                     Icon(
-                        if (toolbarExpanded) Icons.Filled.ExpandMore else Icons.Filled.Add,
+                        if (toolbarExpanded) HaoIcons.ChevronDown else HaoIcons.Add,
                         contentDescription = "展开工具栏",
                         tint = if (toolbarExpanded) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant
@@ -5317,7 +5415,7 @@ private fun ComposerBar(
                         }
                     }
                 )
-                val actionable = running || text.isNotBlank() || pendingImage != null || pendingAudio != null || pendingVideoName != null
+                val actionable = running || text.isNotBlank() || pendingImages.isNotEmpty() || pendingAudio != null || pendingVideoName != null
                 LiquidGlassButton(
                     onClick = { if (running) onStop() else onSend() },
                     backdrop = backdrop,
@@ -5325,7 +5423,7 @@ private fun ComposerBar(
                     surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = if (actionable) 0.85f else 0.25f)
                 ) {
                     Icon(
-                        if (running) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
+                        if (running) HaoIcons.Stop else HaoIcons.Send,
                         contentDescription = if (running) "停止" else "发送",
                         tint = if (actionable) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
                     )
@@ -5339,23 +5437,23 @@ private fun ComposerBar(
                         .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    ToolbarButton(icon = Icons.Filled.PhotoCamera, label = "拍照", onClick = {
+                    ToolbarButton(icon = HaoIcons.Camera, label = "拍照", onClick = {
                         toolbarExpanded = false
                         onTakePhoto()
                     })
-                    ToolbarButton(icon = Icons.Filled.AddPhotoAlternate, label = "图片", onClick = {
+                    ToolbarButton(icon = HaoIcons.AttachImage, label = "图片", onClick = {
                         toolbarExpanded = false
                         onPickImage()
                     })
-                    ToolbarButton(icon = Icons.Filled.Mic, label = "音频", onClick = {
+                    ToolbarButton(icon = HaoIcons.Mic, label = "音频", onClick = {
                         toolbarExpanded = false
                         onPickAudio()
                     })
-                    ToolbarButton(icon = Icons.Filled.Movie, label = "视频", onClick = {
+                    ToolbarButton(icon = HaoIcons.Video, label = "视频", onClick = {
                         toolbarExpanded = false
                         onPickVideo()
                     })
-                    ToolbarButton(icon = Icons.Filled.Description, label = "文档", onClick = {
+                    ToolbarButton(icon = HaoIcons.Document, label = "文档", onClick = {
                         toolbarExpanded = false
                         onPickDocument()
                     })
@@ -6098,14 +6196,14 @@ private fun MessageActionPanel(
                 // 宫格（效果图定稿 2026-10-07）：只放快捷行没有的动作——
                 // 复制全文/重新生成/编辑重发已固定在气泡下方操作行，不再重复列。
                 val cells = buildList {
-                    add(Triple(Icons.Filled.FormatQuote, "引用", onQuote))
-                    if (row.text.isNotBlank()) add(Triple(Icons.Filled.Web, "网页预览", onPreview))
-                    add(Triple(Icons.Filled.ContentCopy, "复制全文", { onCopy(row.text) }))
+                    add(Triple(HaoIcons.Quote, "引用", onQuote))
+                    if (row.text.isNotBlank()) add(Triple(HaoIcons.Web, "网页预览", onPreview))
+                    add(Triple(HaoIcons.Copy, "复制全文", { onCopy(row.text) }))
                     codeBlocks(row.text).firstOrNull()?.let { (lang, code) ->
                         val label = if (lang.isNotBlank()) "复制代码·$lang" else "复制代码"
-                        add(Triple(Icons.Filled.Code, label, { onCopy(code) }))
+                        add(Triple(HaoIcons.Code, label, { onCopy(code) }))
                     }
-                    add(Triple(Icons.Filled.Delete, "删除", onDelete))
+                    add(Triple(HaoIcons.Delete, "删除", onDelete))
                 }
                 cells.chunked(4).forEach { line ->
                     Row(Modifier.fillMaxWidth().height(74.dp)) {

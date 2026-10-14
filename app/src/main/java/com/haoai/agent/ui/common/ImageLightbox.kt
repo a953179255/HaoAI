@@ -2,9 +2,11 @@ package com.haoai.agent.ui.common
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -37,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -81,14 +85,33 @@ fun ImageLightbox(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val current = images.getOrNull(pagerState.currentPage)
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val filmScroll = androidx.compose.foundation.rememberScrollState()
+
+    // 翻页时把胶片条滚到当前缩略格附近（避免高亮跑出可视区）；组合期取 density、协程里算 px
+    LaunchedEffect(pagerState.currentPage, images.size) {
+        if (images.size > 1) {
+            val cellPx = with(density) { 62.dp.toPx() }
+            val target = (pagerState.currentPage * cellPx - 120f).coerceAtLeast(0f).toInt()
+            filmScroll.animateScrollTo(target)
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Box(Modifier.fillMaxSize().background(Color(0xF0000000))) {
+        // 方案三「信息完整 · 胶片导航风」（2026-10-14 用户选定）：
+        // 纯黑底；顶部渐变压暗栏放 返回(兼关闭)+标题+页码（拇指党友好，左上即退）；
+        // 底部独立暗色工具带放 缩略图胶片条（一眼看清整组、点格跳页）+ 带文字标签的 保存/分享。
+        // 修掉旧版三宗病：关闭热区仅 28dp 贴边、存相册/分享是裸文字、计数与 alt 硬挤一行。
+        Box(Modifier.fillMaxSize().background(Color(0xF2000000))) {
             HorizontalPager(
                 state = pagerState,
+                // 上避开顶栏、下避开胶片条：图片居中在净空区内，不再被工具带盖住
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    top = 76.dp, bottom = 108.dp, start = 10.dp, end = 10.dp
+                ),
                 userScrollEnabled = (scales[pagerState.currentPage] ?: 1f) <= 1.01f,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
@@ -99,82 +122,187 @@ fun ImageLightbox(
                 )
             }
 
-            // 顶栏：计数 + alt + 关闭
+            // ── 顶栏：渐变压暗 + 返回圆钮 + 标题 + 页码 ──
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(110.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xB3000000), Color(0x0000))
+                        )
+                    )
+            )
             Row(
                 Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = if (images.size > 1) "${pagerState.currentPage + 1} / ${images.size}  " else "",
-                    color = Color.White, fontSize = 13.sp
-                )
-                Text(
-                    text = current?.second?.take(24) ?: "",
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    Icons.Filled.Close, contentDescription = "关闭", tint = Color.White,
-                    modifier = Modifier
-                        .size(24.dp)
+                // 返回 = 关闭：44dp 热区、离边 10dp，拇指可达；半透圆片承托（不再是裸 24dp 图标贴边）
+                Box(
+                    Modifier
+                        .size(44.dp)
                         .clip(CircleShape)
-                        .clickable { onDismiss() }
-                        .padding(2.dp)
-                )
+                        .background(Color.White.copy(alpha = 0.12f))
+                        .clickable { onDismiss() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        HaoIcons.Back, contentDescription = "关闭",
+                        tint = Color.White, modifier = Modifier.size(22.dp)
+                    )
+                }
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        "图片", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold
+                    )
+                    current?.second?.take(30)?.let { alt ->
+                        if (alt.isNotBlank()) {
+                            Text(
+                                alt, color = Color.White.copy(alpha = 0.62f), fontSize = 11.sp,
+                                maxLines = 1, modifier = Modifier.padding(top = 1.dp)
+                            )
+                        }
+                    }
+                }
+                // 页码独立右侧对齐（旧版把计数塞进标题行导致层级混乱）
+                if (images.size > 1) {
+                    Text(
+                        text = "${pagerState.currentPage + 1} / ${images.size}",
+                        color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp,
+                        modifier = Modifier.padding(end = 10.dp)
+                    )
+                }
             }
 
-            // 底栏：存相册 / 分享
+            // ── 底栏：独立暗色工具带 = 胶片条 + 动作组 ──
             Row(
                 Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .background(Color(0x141821))
+                    .navigationBarsPadding()
                     .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.End
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Spacer(Modifier.weight(1f))
+                // 胶片条：多图才有；点格跳页，当前格描边高亮
+                if (images.size > 1) {
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .horizontalScroll(filmScroll),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        images.forEachIndexed { i, (u, _) ->
+                            FilmThumb(
+                                url = u,
+                                active = i == pagerState.currentPage,
+                                onClick = { scope.launch { pagerState.animateScrollToPage(i) } }
+                            )
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
                 current?.let { (url, _) ->
                     var busy by remember(url) { mutableStateOf(false) }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        modifier = Modifier.padding(start = if (images.size > 1) 14.dp else 0.dp)
                     ) {
-                        Text(
-                            "存相册", color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(enabled = !busy) {
-                                    busy = true
-                                    scope.launch {
-                                        val msg = runCatching {
-                                            val bytes = loadImageBytes(url)
-                                                ?: error("图片未就绪")
-                                            saveImageToGallery(context, bytes, url)
-                                            "已保存到相册 Pictures/HaoAI"
-                                        }.getOrElse { "保存失败：${it.message}" }
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                        busy = false
-                                    }
+                        LbAction(
+                            icon = HaoIcons.Save, label = "保存", enabled = !busy,
+                            onClick = {
+                                busy = true
+                                scope.launch {
+                                    val msg = runCatching {
+                                        val bytes = loadImageBytes(url) ?: error("图片未就绪")
+                                        saveImageToGallery(context, bytes, url)
+                                        "已保存到相册 Pictures/HaoAI"
+                                    }.getOrElse { "保存失败：${it.message}" }
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    busy = false
                                 }
+                            }
                         )
-                        Text(
-                            "分享", color = Color.White.copy(alpha = 0.9f), fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(enabled = !busy) {
-                                    runCatching { shareImage(context, url) }
-                                        .onFailure { Toast.makeText(context, "分享失败：${it.message}", Toast.LENGTH_SHORT).show() }
-                                }
+                        LbAction(
+                            icon = HaoIcons.Share, label = "分享", enabled = !busy,
+                            onClick = {
+                                runCatching { shareImage(context, url) }
+                                    .onFailure {
+                                        Toast.makeText(context, "分享失败：${it.message}", Toast.LENGTH_SHORT)
+                                            .show()
+                                    }
+                            }
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/** 胶片条单格：Crop 缩略 + 当前页描边高亮（点击跳页）。 */
+@Composable
+private fun FilmThumb(url: String, active: Boolean, onClick: () -> Unit) {
+    val key = remember(url) { "film_${url.hashCode()}" }
+    var bmp by remember(url) { mutableStateOf(haoThumbCache.get(key)) }
+    LaunchedEffect(url) {
+        if (bmp == null) {
+            val d = withContext(Dispatchers.IO) {
+                runCatching { decodeMarkdownImage(url) }.getOrNull()
+            }
+            if (d != null) { haoThumbCache.put(key, d); bmp = d }
+        }
+    }
+    Box(
+        Modifier
+            .size(56.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = if (active) 0.0f else 0.06f))
+            .then(
+                Modifier.border(
+                    width = 2.dp,
+                    color = if (active) HaoAccentFilm else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp)
+                )
+            )
+            .clickable(onClick = onClick)
+    ) {
+        val b = bmp
+        if (b != null) {
+            androidx.compose.foundation.Image(
+                b, contentDescription = null,
+                modifier = Modifier.matchParentSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+    }
+}
+
+/** 胶片当前页描边色（蓝调，明暗底都压得住）。 */
+private val HaoAccentFilm = Color(0xFF4C8DFF)
+
+/** 底栏动作：图标 + 文字标签竖排（旧版裸文字 affordance 太弱，加矢量图标明确语义）。 */
+@Composable
+private fun LbAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = Color.White.copy(alpha = if (enabled) 0.92f else 0.4f), modifier = Modifier.size(21.dp))
+        Text(label, color = Color.White.copy(alpha = if (enabled) 0.85f else 0.4f), fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
     }
 }
 

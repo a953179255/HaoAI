@@ -23,6 +23,8 @@ data class StoredMessage(
     val toolName: String? = null,
     val error: Boolean = false,
     val imageData: String? = null,
+    /** 多图附件（data URL 列表）。空时回落到 [imageData] 单图——旧会话 JSON 无此字段，缺省空即兼容。 */
+    val images: List<String> = emptyList(),
     /** 音频/视频附件的本机文件路径（不存 base64，避免会话 JSON 膨胀）。 */
     val audioPath: String? = null,
     val videoPath: String? = null,
@@ -247,6 +249,7 @@ fun StoredMessage.toModel(): ChatMessage = ChatMessage(
     name = toolName ?: "",   // Msg.name 非空（PC 侧锁）：DTO 的可空落 ""
     error = error,
     imageData = imageData,
+    images = images,
     audioPath = audioPath,
     videoPath = videoPath,
     reasoning = reasoning,
@@ -267,6 +270,7 @@ fun ChatMessage.toStored(): StoredMessage = StoredMessage(
     toolName = name,
     error = error,
     imageData = imageData,
+    images = images,
     audioPath = audioPath,
     videoPath = videoPath,
     reasoning = reasoning,

@@ -264,16 +264,33 @@ fun MarkdownText(
     val gallery = androidx.compose.runtime.remember(blocks) { collectMessageImages(blocks) }
     androidx.compose.runtime.CompositionLocalProvider(LocalMessageImages provides gallery) {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            blocks.forEachIndexed { blockIndex, block ->
-                MdBlockView(
-                    block = block,
-                    dark = dark,
-                    streaming = streaming,
-                    listLevel = 0,
-                    // 打字机渐显只挂在整个消息最后一个段落上
-                    isLastParagraph = block is MdBlock.Paragraph && blockIndex == blocks.lastIndex,
-                    textColor = baseColor
-                )
+            // 图片排版改版（2026-10-14）：连续 Image 块归组渲染——单张走贴合原比例的
+            // HaoImageSingle，2 张以上进 2 列网格（超 4 折叠+N），多张堆满行留白的问题就此消解。
+            var bi = 0
+            while (bi < blocks.size) {
+                val block = blocks[bi]
+                if (block is MdBlock.Image) {
+                    var runEnd = bi
+                    while (runEnd + 1 < blocks.size && blocks[runEnd + 1] is MdBlock.Image) runEnd++
+                    val run = (bi..runEnd).map { blocks[it] as MdBlock.Image }
+                    if (run.size == 1) {
+                        ImageBlockView(run.first(), dark)
+                    } else {
+                        MdImageGroupView(run, dark)
+                    }
+                    bi = runEnd + 1
+                } else {
+                    MdBlockView(
+                        block = block,
+                        dark = dark,
+                        streaming = streaming,
+                        listLevel = 0,
+                        // 打字机渐显只挂在整个消息最后一个段落上
+                        isLastParagraph = block is MdBlock.Paragraph && bi == blocks.lastIndex,
+                        textColor = baseColor
+                    )
+                    bi++
+                }
             }
         }
     }
@@ -1584,21 +1601,9 @@ internal fun decodeMarkdownImage(url: String): ImageBitmap? =
 @Composable
 private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
     val key = remember(block.url) { block.url.hashCode().toString() }
-    var bmp by remember(block.url) { mutableStateOf(mdImageCache.get(key)) }
-    var failed by remember(block.url) { mutableStateOf(false) }
     var zoomed by remember(block.url) { mutableStateOf(false) }
     val gallery = LocalMessageImages.current
     val launcher = LocalImageLightboxLauncher.current
-    LaunchedEffect(block.url) {
-        if (bmp != null) return@LaunchedEffect
-        val loaded = withContext(Dispatchers.IO) { decodeMarkdownImage(block.url) }
-        if (loaded != null) {
-            mdImageCache.put(key, loaded)
-            bmp = loaded
-        } else {
-            failed = true
-        }
-    }
     // 点击打开：图集里找不到本 url（解析时序边角）就退化为单图；宿主有启动器交宿主
     fun openFullscreen() {
         val list = if (gallery.any { it.first == block.url }) gallery else listOf(block.url to block.alt)
@@ -1607,68 +1612,53 @@ private fun ImageBlockView(block: MdBlock.Image, dark: Boolean) {
     if (zoomed && launcher == null) {
         ImageLightbox(listOf(block.url to block.alt), block.url) { zoomed = false }
     }
-    if (bmp != null) {
-        Surface(
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 80.dp, max = 320.dp)
-                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                        .clickable { openFullscreen() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        bmp!!,
-                        contentDescription = block.alt.ifBlank { "图片（点开放大）" },
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
-                    // 右下角放大角标：图片可点开的 affordance（点图主体同样触发）
-                    Text(
-                        "⤢",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(6.dp)
-                            .background(Color(0x66000000), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                    )
-                }
-                if (block.alt.isNotBlank()) {
-                    Text(
-                        block.alt,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
-                    )
-                }
-            }
-        }
-    } else if (!failed) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 90.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp
+    Column {
+        HaoImageSingle(
+            key = key,
+            decode = { mdDecodeIntoHao(block.url) },
+            onClick = { openFullscreen() },
+            maxWidth = 300.dp,
+            maxHeight = 360.dp,
+            corner = RoundedCornerShape(12.dp),
+            contentDescription = block.alt.ifBlank { "图片（点开放大）" }
+        )
+        if (block.alt.isNotBlank()) {
+            Text(
+                block.alt,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                modifier = Modifier.padding(top = 4.dp, start = 2.dp)
             )
         }
-    } else {
-        Text(
-            "🖼 " + block.alt.ifBlank { "图片（加载失败）" },
-            fontStyle = FontStyle.Italic,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    }
+}
+
+/** Markdown 图片解码：复用 decodeMarkdownImage（http/data/文件），顺带灌进 haoThumbCache 供组件读取。 */
+private suspend fun mdDecodeIntoHao(url: String): ImageBitmap? = decodeMarkdownImage(url)
+
+/**
+ * 连续多张 Image 块：2 列网格（复用 HaoImageGrid）。点击任一格 → 全屏图集
+ * （图集 = 本消息全部图片，可横滑到网格外的图）。
+ */
+@Composable
+private fun MdImageGroupView(run: List<MdBlock.Image>, dark: Boolean) {
+    val gallery = LocalMessageImages.current
+    val launcher = LocalImageLightboxLauncher.current
+    var zoomUrl by remember { mutableStateOf<String?>(null) }
+    val urls = run.map { it.url }
+    HaoImageGrid(
+        urls = urls,
+        decodeOf = { url -> { mdDecodeIntoHao(url) } },
+        onOpen = { list, cur ->
+            val full = if (gallery.any { it.first == cur }) gallery
+            else list.map { u -> u to (run.firstOrNull { it.url == u }?.alt ?: "") }
+            launcher?.invoke(full, cur) ?: run { zoomUrl = cur }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        corner = RoundedCornerShape(12.dp)
+    )
+    if (zoomUrl != null && launcher == null) {
+        ImageLightbox(urls.map { u -> u to (run.firstOrNull { it.url == u }?.alt ?: "") }, zoomUrl!!) { zoomUrl = null }
     }
 }
 

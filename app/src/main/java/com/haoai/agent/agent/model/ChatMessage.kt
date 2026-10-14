@@ -16,6 +16,15 @@ import java.util.concurrent.atomic.AtomicLong
 typealias ChatMessage = com.haoai.core.Msg
 typealias ToolCallData = com.haoai.core.ToolCall
 
+/**
+ * 移动端用户附件图统一读取口（多图时代，2026-10-14）：
+ * 新数据走 core `Msg.images`（移动端语义 = data URL 列表，与 PC 的"工作区文件路径"
+ * 语义不同但互不读取——PC 历史不落移动端，移动端也不读 PC 的 images）。
+ * 旧会话 JSON 只有单字段 imageData → 回落成单元素列表，历史带图消息照常显示。
+ */
+val ChatMessage.attachmentImages: List<String>
+    get() = images.ifEmpty { imageData?.takeIf { it.isNotBlank() }?.let { listOf(it) } ?: emptyList() }
+
 /*
  * 兜底 tool_call id 的序号：**进程内单调**，绝不按轮/按响应重置。
  *

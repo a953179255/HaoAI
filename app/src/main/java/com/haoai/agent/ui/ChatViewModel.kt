@@ -278,7 +278,9 @@ data class ChatRow(
     /** 版本栈宿主（user 消息 id）；翻页回写用。 */
     val regenUserId: String = "",
     /** 引擎注入的截图消息携带的图像（未能配对到工具步骤时的兜底；正常已挂到 UiTool.imageData）。 */
-    val imageData: String? = null
+    val imageData: String? = null,
+    /** 用户消息的多图附件（data URL 列表，2026-10-14 多图时代）。单图兜底仍看 imageData。 */
+    val images: List<String> = emptyList()
 )
 
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
@@ -1181,7 +1183,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         while (s.messages.size > userIdx + 1) s.messages.removeAt(s.messages.size - 1)
         c.sessionStore.save(s)
         rebuildRows()
-        send(userMsg.content, userMsg.imageData, userMsg.audioPath, userMsg.videoPath,
+        send(userMsg.content, userMsg.images.ifEmpty { listOfNotNull(userMsg.imageData) },
+            userMsg.audioPath, userMsg.videoPath,
             alreadyInHistory = true)
     }
 
@@ -1213,7 +1216,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         if (m.role != ChatMessage.ROLE_USER) return
         val text = newText.trim()
         if (text.isEmpty()) return
-        val imageData = m.imageData
+        val images = m.images.ifEmpty { listOfNotNull(m.imageData) }
         val audioPath = m.audioPath
         val videoPath = m.videoPath
         // 编辑重发同样留版本：截掉旧回复前把当前最终回答压进版栈（与 regenerateFrom 一致）。
@@ -1230,25 +1233,25 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         while (s.messages.size > idx + 1) s.messages.removeAt(s.messages.size - 1)
         c.sessionStore.save(s)
         rebuildRows()
-        send(text, imageData, audioPath, videoPath, alreadyInHistory = true)
+        send(text, images, audioPath, videoPath, alreadyInHistory = true)
     }
 
     fun send(
         rawText: String,
-        imageData: String? = null,
+        images: List<String> = emptyList(),
         audioPath: String? = null,
         videoPath: String? = null,
         /** 排队消息提升为任务：入队时已落过这条用户消息，引擎不要再落一遍。 */
         alreadyInHistory: Boolean = false
     ) {
         val text = rawText.trim()
-        // 纯图片发送（无文字）也允许：否则 UI 已清掉 pendingImage，图片会静默丢失
-        if (text.isEmpty() && imageData == null && audioPath == null && videoPath == null) return
+        // 纯图片发送（无文字）也允许：否则 UI 已清掉附件，图片会静默丢失
+        if (text.isEmpty() && images.isEmpty() && audioPath == null && videoPath == null) return
         // E8/v7 循环内插话+排队：生成期间用户发送 → 入队（引擎间隙 A 注入当轮跟进；
         // 若任务结束仍未消费，作为新任务自动执行）。入队同时落一条可见用户消息，
         // 让用户看到自己的消息已排队（排队态反馈）
         if (_running.value) {
-            if (imageData != null || audioPath != null || videoPath != null) {
+            if (images.isNotEmpty() || audioPath != null || videoPath != null) {
                 // 排队通路只认纯文本。附件此前会被静默吞掉：UI 已清空输入框，
                 // 用户以为发出去了，历史里却只有文字（甚至整条都不在）。
                 runError("生成期间只能排队文字，附件未发送；文字已排队，本轮结束后自动执行")
@@ -1356,7 +1359,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     // 晚于本回合到达，落到新回合的 UI 上就是"凭空冒出的旧工具卡"
                     onDelta = gated(seq, s.id, ::appendDelta),
                     onEvent = gated(seq, s.id, ::handleEvent),
-                    imageData = imageData,
+                    imageData = images,
                     audioPath = audioPath,
                     videoPath = videoPath,
                     onReasoning = gated(seq, s.id, ::appendReasoning),
@@ -2415,8 +2418,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         }
                         else -> rows.add(
                             ChatRow(
-                                m.id.ifBlank { "m$i" }, m.id, m.role, m.content,
-                                imageData = m.imageData, ts = m.ts
+                                m.id.ifBlank { "m$i" }, m.id, m.role,
+                                // 引擎给带图消息落的正文有"[图片N]"占位前缀行——图片已由
+                                // 附件区真实渲染，剥掉占位行避免气泡里露出方括号文字
+                                (if (m.images.isNotEmpty() || !m.imageData.isNullOrBlank())
+                                    m.content.replace(Regex("^(\\[图片\\d*\\]\\n?)+"), "")
+                                else m.content),
+                                imageData = m.imageData, ts = m.ts,
+                                images = m.images
                             )
                         )
                     }
@@ -2912,7 +2921,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentSession = view
         c.sessionStore.save(view)
         _session.value = view
-        send(resumeText, null)
+        send(resumeText)
     }
 
     /** 恢复文本的包裹层（可嵌套）：剥掉全部恢复包装，还原最初的任务目标。 */
@@ -2966,8 +2975,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 appendLine("没有值得沉淀的就明确回答\"无\"，不要硬凑；每条技能正文按 When to Use / Procedure / Pitfalls 结构写。")
                 appendLine()
                 append(digest)
-            },
-            null
+            }
         )
     }
 

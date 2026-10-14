@@ -326,7 +326,7 @@ class AgentEngine(
         userText: String,
         onDelta: (String) -> Unit,
         onEvent: (TurnEvent) -> Unit,
-        imageData: String? = null,
+        imageData: List<String> = emptyList(),
         audioPath: String? = null,
         videoPath: String? = null,
         onReasoning: (String) -> Unit = {},
@@ -358,12 +358,15 @@ class AgentEngine(
                 ChatMessage(
                     role = ChatMessage.ROLE_USER,
                     content = when {
-                        imageData != null -> "[图片]\n$userText".trim()
+                        imageData.isNotEmpty() ->
+                            imageData.indices.joinToString("\n") { "[图片${it + 1}]" } +
+                                (if (userText.isNotBlank()) "\n$userText" else "")
                         audioPath != null -> "[音频]\n$userText".trim()
                         videoPath != null -> "[视频]\n$userText".trim()
                         else -> userText
                     },
-                    imageData = imageData,
+                    images = imageData,
+                    imageData = imageData.firstOrNull(),
                     audioPath = audioPath,
                     videoPath = videoPath
                 ),

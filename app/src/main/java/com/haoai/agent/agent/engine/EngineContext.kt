@@ -252,14 +252,17 @@ internal fun AgentEngine.buildApiMessages(): List<ApiMessage> {
                     val parts = mutableListOf<com.haoai.agent.agent.provider.ApiContentPart>()
                     val notes = StringBuilder()
                     var text = m.content
-                    // 图像：有 image-in 直发，否则注记降级
-                    if (!m.imageData.isNullOrBlank()) {
-                        if (caps.hasImage) parts.add(
-                            com.haoai.agent.agent.provider.ApiContentPart(
-                                type = "image_url",
-                                imageUrl = com.haoai.agent.agent.provider.ApiImageUrl(url = m.imageData)
+                    // 图像：有 image-in 直发（多图全部发出），否则注记降级
+                    val imgs = m.images.ifEmpty { listOfNotNull(m.imageData?.takeIf { it.isNotBlank() }) }
+                    if (imgs.isNotEmpty()) {
+                        if (caps.hasImage) imgs.forEach { url ->
+                            parts.add(
+                                com.haoai.agent.agent.provider.ApiContentPart(
+                                    type = "image_url",
+                                    imageUrl = com.haoai.agent.agent.provider.ApiImageUrl(url = url)
+                                )
                             )
-                        ) else notes.append("\n[系统] 用户附带了一张图片，但当前模型不支持图像输入，图片未发送。不要假装看到，按「模型能力声明」绕行（shell 转码/screen 读控件树），必要时提示换支持图像的模型。")
+                        } else notes.append("\n[系统] 用户附带了${if (imgs.size > 1) "${imgs.size}张" else "一张"}图片，但当前模型不支持图像输入，图片未发送。不要假装看到，按「模型能力声明」绕行（shell 转码/screen 读控件树），必要时提示换支持图像的模型。")
                     }
                     // 音频：有 audio-in 时读文件转 input_audio 直发（OpenAI 兼容），否则注记降级
                     if (!m.audioPath.isNullOrBlank()) {
