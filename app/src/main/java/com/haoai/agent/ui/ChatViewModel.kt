@@ -222,6 +222,34 @@ data class SubagentLine(
     val brief: String
 )
 
+/**
+ * flushChain 的行 key 决策（2026-10-14 修「执行期头像丢失」抽为纯函数）。
+ *
+ * 时序化落行后同一条消息可能落两行：**内容行**（说话+它前面的链）与**尾行**
+ * （本消息自己的工具调用，由下一内容消息或收尾兜底 flush）。两者的天然 key 都是 m.id
+ * 当且仅当本消息的 reasoning 起了链（headId=m.id）且本消息还带着工具调用——
+ * "思考+说话+调用"三合一消息（任务中段叙述的常见形态）。此时两行 key 撞车：
+ * ① headFlags.toMap() 后者（尾行 prev=assistant）覆盖前者（内容行 prev=user）
+ *    → 内容行 showHead 被覆盖成 false = 执行期头像+昵称丢失（真机实锤：任务中段每次
+ *    "说话"落行后头像消失，回合结束折叠成汇总条才恢复）；
+ * ② key(row.key) 组合身份撞车，两行共享 remember 状态（入场淡入互相打架）。
+ *
+ * 规则：纯文本行（pending 空）加 "#t"（旧有）；内容行会与自己的尾行撞键时加 "#c" 避让；
+ * 尾行仍 = m.id（跨 rebuild 稳定 → 原地生长不换 key）。text 为空（收尾兜底的尾行本身）
+ * 不加后缀——它没有内容行兄弟需要避让。
+ */
+internal fun chainRowKey(
+    headId: String,
+    pendingEmpty: Boolean,
+    hasText: Boolean,
+    msgId: String?,
+    msgHasToolCalls: Boolean
+): String = when {
+    pendingEmpty -> "$headId#t"
+    hasText && headId == msgId && msgHasToolCalls -> "$headId#c"
+    else -> headId
+}
+
 data class ChatRow(
     /** LazyColumn 稳定 key：用消息 id，勿回退为下标（删除/重发后会整体错位）。 */
     val key: String,
@@ -2309,10 +2337,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             val headId = pendingId.ifBlank { m?.id ?: "" }.ifBlank { "chain_fall" }
             rows.add(
                 ChatRow(
-                    // 时序化后同一条消息可能落两行：纯文本行 + 本消息调用的尾行。
-                    // 文本行（pending 为空时 flush）的 key 加 "#t" 后缀，避免与尾行链头 key 撞车；
-                    // 链行 key 仍 = 链首消息 id（跨 rebuild 稳定 → 尾行原地生长不换 key）。
-                    key = if (pending.isEmpty()) "$headId#t" else headId,
+                    key = chainRowKey(headId, pending.isEmpty(), text.isNotBlank(), m?.id, !m?.toolCalls.isNullOrEmpty()),
                     id = headId,
                     role = ChatMessage.ROLE_ASSISTANT,
                     text = text, error = error,
