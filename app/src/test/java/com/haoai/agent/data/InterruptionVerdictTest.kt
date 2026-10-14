@@ -72,4 +72,11 @@ class InterruptionVerdictTest {
             StoredSession.interruptionNote(StoredSession.RUN_TURNCAPPED, listOf(say("半截")))
         )
     }
+
+    @Test
+    fun `横幅主行轮数报数与注入文本同口径`() {
+        // runTurnsUsed 是"已完成轮数"，中断在那一轮**途中** ⇒ 报数 +1（第一轮被杀不能显示第 0 轮）
+        assertEquals("任务在第 1 轮中断", StoredSession.interruptionHeadline(0))
+        assertEquals("任务在第 3 轮中断", StoredSession.interruptionHeadline(2))
+    }
 }

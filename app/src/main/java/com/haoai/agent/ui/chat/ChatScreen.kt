@@ -139,7 +139,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1215,44 +1214,109 @@ fun ChatScreen(
                     exit = androidx.compose.animation.fadeOut() +
                         androidx.compose.animation.shrinkVertically()
                 ) {
+                    // 断点恢复横幅（2026-10-14 治理，用户拍板「磨砂胶囊+单继续」）：
+                    // 从全宽双行大卡瘦身成一行磨砂玻璃胶囊——左侧橙圆播放徽标、
+                    // 主行「任务在第 N 轮中断」(结构信息，不再把 runGoal 截断塞标题)、
+                    // 副行断点形态一句；右侧单个橙色「继续」胶囊 + 一个 × 收起。
+                    // 「忽略」按钮退役：它是语义陷阱（清了状态后这个中断任务在会话里
+                    // 再无专门入口）。× 只是收起提示——用户发新消息时引擎照常带持久化
+                    // 历史续跑（Aether 同思路），不需要专门恢复入口。
                     com.haoai.agent.ui.common.GlassCard(
                         onClick = {},
                         backdrop = backdrop,
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(
-                            topStart = 0.dp, topEnd = 0.dp, bottomStart = 14.dp, bottomEnd = 14.dp
-                        ),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(999.dp),
                         surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                        pressScale = false,
                         contentAlignment = androidx.compose.ui.Alignment.CenterStart,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
+                            .padding(horizontal = 12.dp, vertical = 2.dp)
                     ) {
+                        val amber = androidx.compose.ui.graphics.Color(0xFFF08A0C)
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                .padding(start = 8.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                         ) {
-                            Column(Modifier.weight(1f)) {
+                            // 橙圆播放徽标
+                            Box(
+                                Modifier
+                                    .size(26.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                            listOf(androidx.compose.ui.graphics.Color(0xFFFFB84D), amber)
+                                        )
+                                    ),
+                                contentAlignment = androidx.compose.ui.Alignment.Center
+                            ) {
+                                Icon(
+                                    HaoIcons.Play, contentDescription = null,
+                                    tint = androidx.compose.ui.graphics.Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .padding(start = 9.dp, end = 6.dp)
+                            ) {
                                 Text(
-                                    "上次任务中断：${runGoalNow?.take(60) ?: ""}",
+                                    com.haoai.agent.data.StoredSession.interruptionHeadline(
+                                        activeSession?.runTurnsUsed ?: 0
+                                    ),
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 2
+                                    maxLines = 1
                                 )
                                 Text(
                                     interruptionNote,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Spacer(Modifier.width(8.dp))
-                            androidx.compose.material3.TextButton(onClick = { vm.resumeRun() }) {
-                                Text("继续", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                            // 单「继续」橙色胶囊（resumeRun 逻辑不动）
+                            Row(
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(999.dp))
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                            listOf(androidx.compose.ui.graphics.Color(0xFFFFB84D), amber)
+                                        )
+                                    )
+                                    .clickable { vm.resumeRun() }
+                                    .padding(horizontal = 13.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    HaoIcons.Play, contentDescription = null,
+                                    tint = androidx.compose.ui.graphics.Color.White,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    "继续", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                    color = androidx.compose.ui.graphics.Color.White
+                                )
                             }
-                            androidx.compose.material3.TextButton(onClick = { vm.dismissResume() }) {
-                                Text("忽略", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            // × = 仅收起提示（发新消息仍会自然续上下文）
+                            Box(
+                                Modifier
+                                    .padding(start = 4.dp)
+                                    .size(24.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .clickable { vm.dismissResume() },
+                                contentAlignment = androidx.compose.ui.Alignment.Center
+                            ) {
+                                Icon(
+                                    HaoIcons.Close, contentDescription = "收起提示",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(13.dp)
+                                )
                             }
                         }
                     }
@@ -1674,15 +1738,64 @@ fun ChatScreen(
                 kotlinx.coroutines.delay(8000)
                 vm.dismissError()
             }
-            Snackbar(
+            // 顶部通知条玻璃化（2026-10-14 用户拍板）：Material 默认深灰 Snackbar
+            // 是全 App 最"一眼不是 HaoAI"的件。换同款磨砂玻璃胶囊 + 场景图标
+            // （余额/密钥/限流/断网各有专属图标，图标比"充值"二字先传达语义）；
+            // 位置下移到顶栏之下，不再遮挡 App 顶栏。判定文案（friendlyErrorText）不动。
+            val (errIcon, errTint) = errorScene(msg)
+            com.haoai.agent.ui.common.GlassCard(
+                onClick = {},
+                backdrop = backdrop,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                surfaceAlpha = com.haoai.agent.ui.theme.haoCardSurfaceAlpha(),
+                pressScale = false,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(12.dp),
-                action = {
-                    TextButton(onClick = { vm.dismissError() }) { Text("关闭") }
+                    .padding(top = topBarHeightDp + 14.dp, start = 12.dp, end = 12.dp)
+                    .fillMaxWidth()
+            ) {
+                Row(
+                    Modifier.padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.Top
+                ) {
+                    Box(
+                        Modifier
+                            .size(22.dp)
+                            .padding(top = 1.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(errTint.copy(alpha = 0.16f)),
+                        contentAlignment = androidx.compose.ui.Alignment.Center
+                    ) {
+                        Icon(
+                            errIcon, contentDescription = null,
+                            tint = errTint, modifier = Modifier.size(13.dp)
+                        )
+                    }
+                    Text(
+                        msg.removePrefix("⚠️ ").removePrefix("⏳ "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 4,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 8.dp)
+                    )
+                    Box(
+                        Modifier
+                            .padding(start = 4.dp)
+                            .size(24.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .clickable { vm.dismissError() },
+                        contentAlignment = androidx.compose.ui.Alignment.Center
+                    ) {
+                        Icon(
+                            HaoIcons.Close, contentDescription = "关闭",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
                 }
-            ) { Text(msg, maxLines = 4) }
+            }
         }
 
         // ⑧ 回底浮钮 v3（方向感知，用户效果图定稿）：显隐由 MessageList 逐帧
@@ -4960,6 +5073,23 @@ private fun NerdStat(
 /** token 数缩写：1234 → 1.2k（超过 1 万才缩，小数字原样）。 */
 private fun fmtTokens(n: Int): String =
     if (n >= 10000) String.format(Locale.US, "%.1fk", n / 1000.0) else n.toString()
+
+/**
+ * 顶部通知条场景分类（2026-10-14 玻璃化配套）：按 friendlyErrorText 的固定话术关键词
+ * 选图标与色调——余额(⚠红)/密钥(线稿紫)/限流(沙漏琥珀)/断网(斜杠蓝)/兜底(⚠红)。
+ * 与 friendlyErrorText 同源维护：改那边话术时这里跟着改。
+ */
+private fun errorScene(msg: String): Pair<androidx.compose.ui.graphics.vector.ImageVector, androidx.compose.ui.graphics.Color> = when {
+    "充值" in msg || "话费用完" in msg ->
+        HaoIcons.Alert to androidx.compose.ui.graphics.Color(0xFFC24A4A)
+    "密钥" in msg || "验证失败" in msg ->
+        HaoIcons.Key to androidx.compose.ui.graphics.Color(0xFF7C5CE0)
+    "限流" in msg || "太忙" in msg ->
+        HaoIcons.Hourglass to androidx.compose.ui.graphics.Color(0xFFE8930C)
+    "连不上" in msg || "网络" in msg ->
+        HaoIcons.WifiOff to androidx.compose.ui.graphics.Color(0xFF3D7BD9)
+    else -> HaoIcons.Alert to androidx.compose.ui.graphics.Color(0xFFC24A4A)
+}
 
 @Composable
 private fun ToolChip(

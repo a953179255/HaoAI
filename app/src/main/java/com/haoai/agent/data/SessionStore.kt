@@ -196,6 +196,12 @@ data class StoredSession(
         }
 
         /**
+         * 恢复横幅**主行**（2026-10-14 横幅治理）：「任务在第 N 轮中断」。
+         * 轮数口径与 resumeRun 注入文本一致（中断发生在那一轮途中，报数 +1）。
+         */
+        fun interruptionHeadline(runTurnsUsed: Int): String = "任务在第 ${runTurnsUsed + 1} 轮中断"
+
+        /**
          * 从消息尾部判定中断形态：最后一条实质消息是什么，任务就断在哪一步。
          * 用户消息没有回复=还没开始干；停在 tool=工具循环中断；assistant=回答生成到一半。
          * 纯函数、运行时判定不入库；判定与活性分离（是否在跑由调用方先行 gate，
