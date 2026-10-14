@@ -2187,7 +2187,13 @@ private fun LazyListScope.privacyItems(
                         )
                     }
                     if (granted) {
-                        Text("✓", color = haoToneInk(HaoTone.Accent), fontWeight = FontWeight.Bold)
+                        // 手绘线稿对勾（替代裸字符 ✓，字形居中问题同 WizardModelRow）
+                        Icon(
+                            com.haoai.agent.ui.common.HaoIcons.Check,
+                            contentDescription = "已授权",
+                            tint = haoToneInk(HaoTone.Accent),
+                            modifier = Modifier.size(16.dp)
+                        )
                     } else {
                         com.haoai.agent.ui.common.LiquidGlassButton(
                             onClick = { vm.requestPermission(spec, context) },
@@ -5821,11 +5827,11 @@ private fun ProviderDialog(
                                                                 ),
                                                             contentAlignment = Alignment.Center
                                                         ) {
-                                                            if (checked) Text(
-                                                                "✓",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                fontWeight = FontWeight.Black,
-                                                                color = MaterialTheme.colorScheme.primary
+                                                            if (checked) Icon(
+                                                                com.haoai.agent.ui.common.HaoIcons.Check,
+                                                                contentDescription = "已选",
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(11.dp)
                                                             )
                                                         }
                                                         Spacer(Modifier.size(9.dp))
@@ -6738,11 +6744,13 @@ private fun WizardModelRow(
             contentAlignment = Alignment.Center
         ) {
             if (included) {
-                Text(
-                    "✓",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                // 手绘线稿对勾（替代裸字符 ✓：字形基线/字面框偏移是小方块里
+                // 「勾不居中」的根因；Icon 走真实居中绘制）
+                Icon(
+                    com.haoai.agent.ui.common.HaoIcons.Check,
+                    contentDescription = "已选入清单",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(12.dp)
                 )
             }
         }
