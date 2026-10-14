@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -184,7 +185,12 @@ fun SkillsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
                     ) {
-                        Text("＋", color = addFg, fontWeight = FontWeight.Bold)
+                        Icon(
+                            com.haoai.agent.ui.common.HaoIcons.Add,
+                            contentDescription = null,
+                            tint = addFg,
+                            modifier = Modifier.size(15.dp)
+                        )
                         Spacer(Modifier.padding(2.dp))
                         Text(
                             "手动添加技能",

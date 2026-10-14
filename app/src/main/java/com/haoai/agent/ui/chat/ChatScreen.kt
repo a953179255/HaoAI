@@ -4376,7 +4376,7 @@ private fun DataUrlThumb(
             bmp = decoded
         }
     }
-    // 点击打开全屏查看的缩略图带放大角标（用户附件/Agent 图统一 affordance）
+    // 角标已退役（2026-10-14 用户拍板「G 无角标」，此为 DataUrlThumb 漏网处，10-15 补齐）
     val clickMod = onClick?.let { m -> Modifier.clip(shape).clickable { m() } } ?: Modifier
     if (bmp != null) {
         Box(modifier.clip(shape)) {
@@ -4386,14 +4386,6 @@ private fun DataUrlThumb(
                 modifier = Modifier.fillMaxSize().then(clickMod),
                 contentScale = contentScale
             )
-            if (onClick != null) {
-                Text(
-                    "⤢", color = Color.White, fontSize = 11.sp,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
-                        .background(Color(0x66000000), RoundedCornerShape(5.dp))
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                )
-            }
         }
     } else {
         Box(

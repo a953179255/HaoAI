@@ -177,7 +177,12 @@ fun McpSettingsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp)
                         ) {
-                            Text("＋", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
+                            Icon(
+                                com.haoai.agent.ui.common.HaoIcons.Add,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
                             Spacer(Modifier.width(4.dp))
                             Text(
                                 "添加服务器",
