@@ -289,26 +289,37 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** 思考阶段打断（无上屏内容）时置位；turn finally 里落一条"已停止"标记后清零。 */
     private var stopHintPending = false
 
-    /** E8 循环内插话队列（引擎间隙 A 消费；StateFlow 驱动 UI 排队提示）。 */
-    private val interjectQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    // ── D17 多会话并行：排队消息按会话各排各的队 ──
+    // 旧实现是一条全局队列装纯文本（不带 sid）：A 会话跑任务时去 B 派活，
+    // B 的消息会被排进 A 的队列串行等待——这正是"多会话排队"bug 的根源。
+    // 现在每条会话一个 FIFO，排队消息带 id，撤回/编辑/抢占都能精确命中。
+    // 主线程读写（send/finishRun/撤回都在主线程）。
+    data class QueuedMsg(val id: String, val text: String, val enqueuedAt: Long)
+    private val queues = HashMap<String, ArrayDeque<QueuedMsg>>()
     private val _interjectCount = kotlinx.coroutines.flow.MutableStateFlow(0)
     val interjectCount = _interjectCount.asStateFlow()
 
-    /** v7 撤回单条排队消息（最新一条）：出队并从历史移除对应的用户消息。 */
+    private fun queueOf(sid: String): ArrayDeque<QueuedMsg> = queues.getOrPut(sid) { ArrayDeque() }
+
+    /** 刷新"正在查看的会话"的排队条数（入队/撤回/切会话/续跑后调用）。 */
+    private fun refreshQueueCount() {
+        _interjectCount.value = viewedSid()?.let { queues[it]?.size } ?: 0
+    }
+
+    /** v7 撤回排队消息：撤当前会话队列的最新一条，并从历史移除对应的用户消息。 */
     fun withdrawInterjection() {
-        val text = interjectQueue.poll()
-        _interjectCount.value = interjectQueue.size
-        // 同步移除历史里最后一条内容匹配且未消费的用户消息（排队消息在入队时已可见）
-        if (text != null) {
-            val s = currentSession ?: return
-            for (i in s.messages.indices.reversed()) {
-                val m = s.messages[i]
-                if (m.role == ChatMessage.ROLE_USER && m.content == text) {
-                    s.messages.removeAt(i)
-                    runCatching { c.sessionStore.save(s) }
-                    rebuildRows()
-                    return
-                }
+        val sid = viewedSid() ?: return
+        val q = queues[sid] ?: return
+        val last = q.removeLastOrNull() ?: return
+        refreshQueueCount()
+        val s = currentSession ?: return
+        for (i in s.messages.indices.reversed()) {
+            val m = s.messages[i]
+            if (m.role == ChatMessage.ROLE_USER && m.content == last.text) {
+                s.messages.removeAt(i)
+                runCatching { c.sessionStore.save(s) }
+                rebuildRows()
+                return
             }
         }
     }
@@ -317,18 +328,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     val shareText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val shareImageUri = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 
-    /** E8 引擎结束（/stop 或 Finished）时清空队列。 */
-    private fun clearInterjections() {
-        interjectQueue.clear()
-        _interjectCount.value = 0
-    }
-
-    /** D16：当前会话是否被进程内其他实例的引擎持有（跨实例写保护，防截改运行中的历史）。 */
-    private fun busyElsewhere(): Boolean {
-        if (_running.value) return false // 自己在跑由各入口的 _running 守门
-        val s = currentSession ?: return false
-        return com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)
-    }
+    /** D17：该会话是否"忙"——本实例的引擎在跑，或被进程内其他实例的引擎持有（跨实例写保护）。 */
+    private fun isSessionBusy(sid: String): Boolean =
+        jobs[sid]?.isActive == true || com.haoai.agent.platform.AgentRunRegistry.isActive(sid)
 
     /**
      * 代际栅栏（OpenClaw isCurrent 模式）：异步回调把结果写入会话 UI 前，
@@ -338,7 +340,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun isCurrentSession(sessionId: String?): Boolean =
         sessionId != null && sessionId == _session.value?.id
 
-    private var job: Job? = null
+    // ── D17 多会话并行：每条会话一条运行轨道 ──
+    // 旧实现整个 VM 只有一个 job：A 在跑时去 B 派活只能排队（send 的 _running 分支不判会话）。
+    // 现在每条会话一个 Job，跨会话派活互不阻塞；同会话仍互斥（第二条进该会话的队列）。
+    // 主线程读写（send/stop/finishRun 都在主线程；viewModelScope 默认 Main）。
+    private val jobs = HashMap<String, Job>()
+
+    /** 活跃回合的代次集合：gated 用它判"这个回合还活着吗"。旧实现只认最新一代
+     *  （单轨道时代够用）；并行后 A、B 两代同时活着，各自的回调都要放行——
+     *  谁结束谁摘牌（finally），晚到的回调自然被丢弃。 */
+    private val activeSeqs = HashSet<Int>()
 
     /**
      * 运行代次（OpenClaw per-run seq 同款）：每次真正起跑一个回合 +1。
@@ -351,19 +362,20 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private var runSeq = 0
 
     /**
-     * 把回调绑到「某个回合」上：只有它仍是最新世代、或它仍是要写入那条会话的归属时才放行。
-     *
-     * 前者挡住被取代的旧回合往当前 UI 上写（后台子代理晚到的进度卡最典型：它会在新回合的
-     * 时间轴里凭空多出一张旧任务卡）；后者保住"切走再切回，时间轴无缝续上"这条既有设计
-     * ——切去别的会话起跑时本回合已不是最新世代，但它仍是自己会话的归属，事件得照常累积。
+     * 把回调绑到「某个回合」上：只有该回合还活着（未结束/未被取消）才放行。
+     * D17 起按 activeSeqs 判活：A、B 并行时两代回调各自放行、各写各的会话缓冲；
+     * 回合结束（finally 摘牌）后晚到的回调自然丢弃，不会污染新回合。
      */
-    private inline fun <T> gated(seq: Int, sessionId: String, crossinline f: (T) -> Unit): (T) -> Unit =
-        { if (seq == runSeq || _runSessionId.value == sessionId) f(it) }
+    private inline fun <T> gated(seq: Int, crossinline f: (T) -> Unit): (T) -> Unit =
+        { if (seq in activeSeqs) f(it) }
 
-    private val liveTools = mutableMapOf<String, UiTool>()
+    // ── D17：工具活动态按会话各一份（并行时 A、B 的工具卡不互串）──
+    private val liveToolsBySid = HashMap<String, MutableMap<String, UiTool>>()
+    private fun liveToolsOf(sid: String): MutableMap<String, UiTool> =
+        liveToolsBySid.getOrPut(sid) { mutableMapOf() }
 
     /**
-     * 时间轴卡快照：liveTools 普通可变 Map，直接读会有并发/重组一致性问题，
+     * 时间轴卡快照：底层 Map 直接读会有并发/重组一致性问题，
      * 也无法触发 Compose 重组。镜像一份到 StateFlow（ToolChanged 时同步）。
      */
     private val _liveToolsSnapshot =
@@ -374,15 +386,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun liveToolsSnapshot(): List<UiTool> = _liveToolsSnapshot.value
 
     private fun publishLiveTools() {
-        // 会话门控：仅当查看的正是本实例 job 的归属会话才透出工具时间轴。
-        // 引擎事件在切走后仍持续更新 liveTools（切回时时间轴无缝续上）；
-        // 无运行任务（owner=null）时也透空，防止上一轮残留（与 selectSession 的 clear 对齐）。
-        val owner = _runSessionId.value
+        // 会话门控：只透出"正在查看的会话"的工具时间轴；引擎事件在切走后仍持续
+        // 更新该会话自己的 liveTools（切回时时间轴无缝续上）；空闲会话透空防残留。
+        val sid = viewedSid()
         // B 方案：已落进"合并行"的工具不再出现在流式卡里（否则内容轮 flush 成行后，
         // 同一批工具会在"已落行 + 流式卡"各画一遍）。landedCallIds 由 rebuildRows 维护。
         _liveToolsSnapshot.value =
-            if (owner != null && _session.value?.id == owner)
-                liveTools.values.filter { it.callId !in landedCallIds }
+            if (sid != null && isSessionBusy(sid))
+                liveToolsOf(sid).values.filter { it.callId !in landedCallIds }
             else emptyList()
     }
 
@@ -414,12 +425,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    // ── ① 流式显示（D17：每会话一份）──
+    // 旧实现全局一份缓冲 + 一份流式 StateFlow：两个会话并行流式会把字串进同一个气泡。
+    // 现在每条会话一个 RunDisplay（本轮累计文本/思考、回合计时、首 token 标记），
+    // StateFlow 里只放"正在查看的会话"那份——切走后其他会话照常在各自缓冲里累积，
+    // 切回立即整体呈现（无缝续上）。
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText = _streamingText.asStateFlow()
 
     /** 流式思考过程（reasoning_content / <think>），与 streamingText 同生命周期。 */
     private val _streamingReasoning = MutableStateFlow<String?>(null)
     val streamingReasoning = _streamingReasoning.asStateFlow()
+
+    /** 会话门控别名在下方 flows 区统一声明（D17 起 _streamingText 只装查看中会话的流）。 */
 
     /**
      * 本轮是否产出过任何内容（正文/思考 token）。收尾阶段（最终消息已落行、流式已清、
@@ -429,71 +447,95 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _turnHadOutput = MutableStateFlow(false)
     val turnHadOutput = _turnHadOutput.asStateFlow()
 
-    // ── ② token 批处理（60ms 节拍批刷）──
+    /** 每会话的运行中显示态（主线程读写；回合结束即回收）。 */
+    private class RunDisplay {
+        val text = StringBuilder()
+        val reasoning = StringBuilder()
+        var thinkingMs: Long? = null
+        var turnStartAt: Long = 0L
+        var hadOutput: Boolean = false
+    }
+    private val runDisplays = HashMap<String, RunDisplay>()
+    private fun dispOf(sid: String): RunDisplay = runDisplays.getOrPut(sid) { RunDisplay() }
+    private fun viewedSid(): String? = _session.value?.id
+
+    // ── ② token 批处理（40ms 节拍批刷）──
     // 引擎回调线程直接逐 token 写 StateFlow 会让 MarkdownText 每帧重组+重解析；
-    // 改为 token 先进缓冲，flusher 每 40ms 合并一次上屏（肉眼仍是连续流，重组降 ~4 倍）。
-    private val textBuf = StringBuilder()
-    private val reasoningBuf = StringBuilder()
+    // 改为增量先进各会话缓冲，flusher 每 40ms 把"正在查看的会话"的累计文本推上屏。
     private var streamFlusher: kotlinx.coroutines.Job? = null
 
     private fun startStreamFlusher() {
-        streamFlusher?.cancel()
+        if (streamFlusher?.isActive == true) return
         streamFlusher = viewModelScope.launch {
-            while (true) {
+            while (jobs.isNotEmpty()) {
                 kotlinx.coroutines.delay(40)
-                flushStreamBuf()
+                flushStreamDisplay()
             }
         }
     }
 
-    /** 把缓冲增量并入流式 StateFlow；空缓冲零开销。flusher（Main）与收尾路径共用。 */
-    private fun flushStreamBuf() {
-        val t = synchronized(textBuf) {
-            if (textBuf.isEmpty()) null else { val s = textBuf.toString(); textBuf.setLength(0); s }
+    /** 把"正在查看的会话"的本轮累计文本推上屏；RunObserver 尾部镜像跟随被观察的运行。 */
+    private fun flushStreamDisplay() {
+        val sid = viewedSid() ?: return
+        runDisplays[sid]?.let { d ->
+            val t = synchronized(d.text) { d.text.toString() }
+            val r = synchronized(d.reasoning) { d.reasoning.toString() }
+            if (_streamingText.value != t) _streamingText.value = t
+            if (_streamingReasoning.value != r) _streamingReasoning.value = r
         }
-        val r = synchronized(reasoningBuf) {
-            if (reasoningBuf.isEmpty()) null else { val s = reasoningBuf.toString(); reasoningBuf.setLength(0); s }
+        observerSid?.let { oSid ->
+            runDisplays[oSid]?.let { od ->
+                val ot = synchronized(od.text) { od.text.toString() }
+                com.haoai.agent.platform.RunObserver.setStreamTail(ot.takeLast(400))
+            }
         }
-        if (t != null) _streamingText.value = (_streamingText.value ?: "") + t
-        if (r != null) _streamingReasoning.value = (_streamingReasoning.value ?: "") + r
-        // 悬浮窗展开态正文：同一 40ms 节拍顺带镜像尾部（RunObserver 内部再截 400 字）
-        if (t != null) com.haoai.agent.platform.RunObserver.setStreamTail(
-            (_streamingText.value ?: "").takeLast(400)
-        )
     }
 
-    private fun appendDelta(frag: String) {
+    private fun appendDelta(sid: String, frag: String) {
         // ④ 正文首 token 到达 → 定格思考用时（供「已思考 N 秒」显示）
-        if (_thinkingMs.value == null && _turnStartAt.value != 0L) {
-            _thinkingMs.value = System.currentTimeMillis() - _turnStartAt.value
+        val d = dispOf(sid)
+        if (d.thinkingMs == null && d.turnStartAt != 0L) {
+            d.thinkingMs = System.currentTimeMillis() - d.turnStartAt
+            if (sid == viewedSid()) _thinkingMs.value = d.thinkingMs
         }
-        _turnHadOutput.value = true
-        synchronized(textBuf) { textBuf.append(frag); Unit }
-    }
-    private fun appendReasoning(frag: String) = synchronized(reasoningBuf) {
-        _turnHadOutput.value = true
-        reasoningBuf.append(frag); Unit
+        d.hadOutput = true
+        if (sid == viewedSid()) _turnHadOutput.value = true
+        synchronized(d.text) { d.text.append(frag); Unit }
     }
 
-    /** 结束/中断收尾：停 flusher、把残余缓冲一次性落屏。 */
-    private fun endStreaming() {
-        streamFlusher?.cancel()
-        streamFlusher = null
-        flushStreamBuf()
-        _streamingText.value = null
-        _streamingReasoning.value = null
+    private fun appendReasoning(sid: String, frag: String) {
+        val d = dispOf(sid)
+        d.hadOutput = true
+        if (sid == viewedSid()) _turnHadOutput.value = true
+        synchronized(d.reasoning) { d.reasoning.append(frag); Unit }
+    }
+
+    /** 结束/中断收尾（按会话）：回收该会话的显示态；正在看它就摘流式气泡；没人跑了停 flusher。 */
+    private fun endStreaming(sid: String) {
+        runDisplays.remove(sid)
+        if (sid == viewedSid()) {
+            _streamingText.value = null
+            _streamingReasoning.value = null
+        }
+        if (jobs.isEmpty()) {
+            streamFlusher?.cancel()
+            streamFlusher = null
+        }
     }
 
     /**
-     * 引擎丢弃残句（失败重发）时同步撤掉 UI 侧的流式文本：缓冲和已上屏的一起清，
+     * 引擎丢弃残句（失败重发）时同步撤掉该会话的流式文本：缓冲和已上屏的一起清，
      * 回到「正在思考」占位。留着会让用户盯着一段永远不会成为最终答案的文字。
      */
-    private fun resetStreamView() {
-        synchronized(textBuf) { textBuf.setLength(0) }
-        synchronized(reasoningBuf) { reasoningBuf.setLength(0) }
-        _streamingText.value = ""
-        _streamingReasoning.value = ""
-        com.haoai.agent.platform.RunObserver.setStreamTail("")
+    private fun resetStreamView(sid: String) {
+        val d = dispOf(sid)
+        synchronized(d.text) { d.text.setLength(0) }
+        synchronized(d.reasoning) { d.reasoning.setLength(0) }
+        if (sid == viewedSid()) {
+            _streamingText.value = ""
+            _streamingReasoning.value = ""
+        }
+        if (sid == observerSid) com.haoai.agent.platform.RunObserver.setStreamTail("")
     }
 
     // ── 调试用：本地合成流式输出（不走模型）──────────────────────────────
@@ -511,12 +553,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             if (_session.value == null) { newSession(); kotlinx.coroutines.delay(300) }
             val sid = _session.value?.id ?: return@launch
             val t0 = System.currentTimeMillis()
-            _runSessionId.value = sid
             _running.value = true
+            dispOf(sid).let { d -> d.thinkingMs = null; d.turnStartAt = t0; d.hadOutput = false }
             _thinkingMs.value = null
             _turnStartAt.value = t0
             _turnHadOutput.value = false
-            liveTools.clear()
+            liveToolsOf(sid).clear()
             publishLiveTools()
             _streamingReasoning.value = ""
             _streamingText.value = ""
@@ -534,7 +576,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             )
             try {
                 // ① 思考逐字（验证 shimmer 与流式跟随同时进行）
-                reason.forEach { ch -> appendReasoning(ch.toString()); kotlinx.coroutines.delay(14) }
+                reason.forEach { ch -> appendReasoning(sid, ch.toString()); kotlinx.coroutines.delay(14) }
                 kotlinx.coroutines.delay(120)
 
                 // ② 工具步骤：运行 → 完成（新步骤入场 + 运行↔完成 crossfade）
@@ -542,10 +584,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     .forEachIndexed { i, brief ->
                         val id = "fake-t$i"
                         tools += UiTool(id, if (i == 1) "search" else "read", brief, ToolRunState.RUNNING)
-                        liveTools[id] = tools.last(); publishLiveTools()
+                        liveToolsOf(sid)[id] = tools.last(); publishLiveTools()
                         kotlinx.coroutines.delay(850)
                         tools[i] = tools[i].copy(state = ToolRunState.DONE)
-                        liveTools[id] = tools[i]; publishLiveTools()
+                        liveToolsOf(sid)[id] = tools[i]; publishLiveTools()
                         kotlinx.coroutines.delay(140)
                     }
 
@@ -560,7 +602,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         append("2. 预置要点二，用来制造足够的高度。\n")
                     }
                 }
-                appendDelta(seed)
+                appendDelta(sid, seed)
                 kotlinx.coroutines.delay(400)
 
                 val body = buildString {
@@ -581,18 +623,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 var i = 0
                 while (i < body.length) {
                     val step = minOf(2, body.length - i)
-                    appendDelta(body.substring(i, i + step))
+                    appendDelta(sid, body.substring(i, i + step))
                     i += step
                     kotlinx.coroutines.delay(perChar)
                 }
                 kotlinx.coroutines.delay(150)
             } finally {
-                val finalText = _streamingText.value.orEmpty()
+                val fd = runDisplays[sid]
+                val finalText = if (fd != null) synchronized(fd.text) { fd.text.toString() } else _streamingText.value.orEmpty()
                 val finalReason = _streamingReasoning.value
-                endStreaming()
-                liveTools.clear(); publishLiveTools()
+                endStreaming(sid)
+                liveToolsOf(sid).clear(); publishLiveTools()
                 _running.value = false
-                _runSessionId.value = null
                 if (finalText.isNotBlank()) {
                     val rid = "fakerow-$t0"
                     _rows.value = _rows.value + ChatRow(
@@ -626,42 +668,43 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private val _thinkingMs = MutableStateFlow<Long?>(null)
     val thinkingMs = _thinkingMs.asStateFlow()
 
+    /** 本 VM 是否还有任一任务在跑（通知/任务视图等全局设施的开关依据）。 */
     private val _running = MutableStateFlow(false)
 
-    /** 本实例 job 归属的会话：send/compact/btw 入口记入、finally 清空。
-     *  会话渗漏修复（切到别的会话不再显示后台任务的进度）的归属依据。 */
-    private val _runSessionId = MutableStateFlow<String?>(null)
+    /** 本实例正在跑任务的会话集合（send/compact/btw 起跑记入、finally 摘除）。 */
+    private val _activeRunSessions = MutableStateFlow<Set<String>>(emptySet())
+
+    private fun refreshActiveRuns() {
+        _activeRunSessions.value = jobs.filterValues { it.isActive }.keys.toSet()
+        _running.value = _activeRunSessions.value.isNotEmpty()
+    }
+
+    /** D17 起被观察的运行（通知任务卡/悬浮窗镜像它的步骤与流式尾部）；最近起跑者优先。 */
+    private var observerSid: String? = null
 
     /** D16 跨实例停止句柄：注册表按 identity 条件摘除，须全程同一实例。 */
     private val runStopHandle: () -> Unit = { stop() }
 
     /**
-     * D16 UI 运行态（会话门控版）：仅当「查看的正是本实例 job 的归属会话」，
-     * 或「该会话被进程内其他实例的引擎持有」（实例分裂场景）时为真。
+     * D16 UI 运行态（会话门控版）：查看的会话正在跑（本实例的轨道，
+     * 或被进程内其他实例的引擎持有——实例分裂场景）时为真。
      * 停止键在后者仍可用（D16 语义保留）；查看其他会话时进度不再渗漏，
      * 后台任务的停止入口在通知任务卡/悬浮窗（全局面，属设计）。
      */
     val running = kotlinx.coroutines.flow.combine(
-        _running, _runSessionId, _session, com.haoai.agent.platform.AgentRunRegistry.activeIds
-    ) { own, owner, s, ids ->
-        (own && owner != null && s?.id == owner) || (s != null && s.id in ids)
+        _activeRunSessions, _session, com.haoai.agent.platform.AgentRunRegistry.activeIds
+    ) { mine, s, ids ->
+        s != null && (s.id in mine || s.id in ids)
     }.stateIn(
         viewModelScope,
         kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
         false
     )
 
-    /** 会话门控的流式展示：切走后为 null（别的会话不再渲染本任务的流式气泡），
-     *  切回归属会话时带全量继续（_streamingText 后台照常累积，也是悬浮窗尾部的数据源）。 */
-    val visibleStreamingText = kotlinx.coroutines.flow.combine(
-        _streamingText, _runSessionId, _session
-    ) { t, owner, s -> if (owner != null && s?.id == owner) t else null }
-        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
+    /** 会话门控的流式展示：D17 起 _streamingText 本身只装"正在查看的会话"的流，直接透出。 */
+    val visibleStreamingText = _streamingText.asStateFlow()
 
-    val visibleStreamingReasoning = kotlinx.coroutines.flow.combine(
-        _streamingReasoning, _runSessionId, _session
-    ) { r, owner, s -> if (owner != null && s?.id == owner) r else null }
-        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
+    val visibleStreamingReasoning = _streamingReasoning.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
@@ -678,6 +721,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     )
 
     private val _pendingAsk = MutableStateFlow<PendingAsk?>(null)
+    /** 提问归属的会话（D17：并行时提问/题组卡只落在发起它的会话界面上）。 */
+    private val _pendingAskSid = MutableStateFlow<String?>(null)
 
     /**
      * ask_user_batch 挂起会话：题库本地循环的推进器。
@@ -704,16 +749,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     private val _pendingQuiz = MutableStateFlow<PendingQuiz?>(null)
+    /** 题组归属的会话（D17：并行时提问/题组卡只落在发起它的会话界面上）。 */
+    private val _pendingQuizSid = MutableStateFlow<String?>(null)
 
     /** 会话门控的题组卡（与 [visiblePendingAsk] 同规则：切走不渲染）。 */
     val visiblePendingQuiz = kotlinx.coroutines.flow.combine(
-        _pendingQuiz, _runSessionId, _session
+        _pendingQuiz, _pendingQuizSid, _session
     ) { p, owner, s -> if (p != null && owner != null && s?.id == owner) p else null }
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
 
     /** 会话门控的提问卡：切走后不渲染（与本会话无关的提问不落在当前界面上）。 */
     val visiblePendingAsk = kotlinx.coroutines.flow.combine(
-        _pendingAsk, _runSessionId, _session
+        _pendingAsk, _pendingAskSid, _session
     ) { p, owner, s -> if (p != null && owner != null && s?.id == owner) p else null }
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), null)
 
@@ -1022,7 +1069,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun newSession() {
-        detachStreaming() // 新建会话不中断进行中的任务（结果写回原会话），仅摘除流式展示
+        // D17：新会话没有运行中的显示态——直接摘流式气泡（后台任务不中断，写回原会话）
+        _streamingText.value = null
+        _streamingReasoning.value = null
         val s = StoredSession.create(c.workspace.workspaceUriForSession)
         currentSession = s
         c.sessionStore.save(s)
@@ -1042,7 +1091,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun selectSession(id: String) {
         if (_session.value?.id == id) return
-        detachStreaming() // 切换会话不中断进行中的任务（结果写回原会话），仅摘除流式展示
+        // D17：切换会话不中断进行中的任务（结果写回原会话）；
+        // 流式/思考/工具显示改为"接上目标会话自己的那份"，切回无缝续上
         val s = c.sessionStore.load(id) ?: return
         // E1 进程死亡检测：持久化 running 且登记表确认进程内已无引擎持有，才判中断。
         // D16：实例分裂/切走再切回时旧实例的引擎可能仍在跑，误标会弹假「任务中断」横幅
@@ -1062,8 +1112,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         sessionIn = 0
         sessionOut = 0
         _session.value = s
+        // D17：接上该会话自己的运行中显示（流式段/思考计时/工具活动），切回无缝续上；
+        // 空闲会话（无 RunDisplay）全部落空，防上一会话的流式渗漏过来
+        val d = runDisplays[s.id]
+        val busy = isSessionBusy(s.id)
+        _streamingText.value = if (d != null && busy) synchronized(d.text) { d.text.toString() } else null
+        _streamingReasoning.value = if (d != null && busy) synchronized(d.reasoning) { d.reasoning.toString() } else null
+        _thinkingMs.value = d?.thinkingMs
+        _turnStartAt.value = d?.turnStartAt ?: 0L
+        _turnHadOutput.value = d?.hadOutput ?: false
         rebuildRows()
         refreshTodos()
+        refreshQueueCount()
     }
 
     fun deleteSession(id: String) {
@@ -1137,8 +1197,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 长按：删除单条消息。 */
     fun deleteMessage(messageId: String) {
-        if (_running.value || busyElsewhere()) return
         val s = currentSession ?: return
+        if (isSessionBusy(s.id)) return // 本会话在跑（本实例或其他实例）才拦；别的会话跑任务不拦这里
         if (!c.sessionStore.deleteMessage(s.id, messageId)) return
         // 同步内存实例（引擎可能持有同引用追加消息）
         s.messages.removeAll { it.id == messageId }
@@ -1154,8 +1214,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * 新消息是全新 id 空版栈，刚压进去的历史版永远追不上显示行（翻页器不出现）。
      */
     fun regenerateFrom(messageId: String) {
-        if (_running.value || busyElsewhere()) return
         val s = currentSession ?: return
+        if (isSessionBusy(s.id)) return // 本会话在跑（本实例或其他实例）才拦；别的会话跑任务不拦这里
         val idx = s.messages.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         var userIdx = -1
@@ -1208,8 +1268,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 长按：编辑重发（仅用户消息）——截掉该条及其后，以编辑后文本重新发送。 */
     fun editResend(messageId: String, newText: String) {
-        if (_running.value || busyElsewhere()) return
         val s = currentSession ?: return
+        if (isSessionBusy(s.id)) return // 本会话在跑（本实例或其他实例）才拦；别的会话跑任务不拦这里
         val idx = s.messages.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         val m = s.messages[idx]
@@ -1247,24 +1307,25 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val text = rawText.trim()
         // 纯图片发送（无文字）也允许：否则 UI 已清掉附件，图片会静默丢失
         if (text.isEmpty() && images.isEmpty() && audioPath == null && videoPath == null) return
-        // E8/v7 循环内插话+排队：生成期间用户发送 → 入队（引擎间隙 A 注入当轮跟进；
-        // 若任务结束仍未消费，作为新任务自动执行）。入队同时落一条可见用户消息，
-        // 让用户看到自己的消息已排队（排队态反馈）
-        if (_running.value) {
+        // D17 同会话在跑 → 入队（该会话自己的队列，本轮结束自动接上）；
+        // 别的会话在跑不拦这里——继续往下走起跑，跨会话并行正是本次要的行为。
+        val s0 = currentSession
+        if (s0 != null && isSessionBusy(s0.id)) {
             if (images.isNotEmpty() || audioPath != null || videoPath != null) {
                 // 排队通路只认纯文本。附件此前会被静默吞掉：UI 已清空输入框，
                 // 用户以为发出去了，历史里却只有文字（甚至整条都不在）。
                 runError("生成期间只能排队文字，附件未发送；文字已排队，本轮结束后自动执行")
             }
             if (text.isNotEmpty()) {
-                interjectQueue.add(text)
-                _interjectCount.value = interjectQueue.size
+                queueOf(s0.id).addLast(
+                    QueuedMsg(java.util.UUID.randomUUID().toString(), text, System.currentTimeMillis())
+                )
+                refreshQueueCount()
                 // 落一条可见用户消息，让用户看到自己的消息已排队（排队态反馈）
                 appendLocalMessage(text)
             }
             return
         }
-        val s0 = currentSession
         // D16：同会话在进程内其他实例上仍被引擎持有 → 拒绝双跑（两路引擎并发会交叉写坏历史）
         if (s0 != null && com.haoai.agent.platform.AgentRunRegistry.isActive(s0.id)) {
             _error.value = "该会话的任务仍在后台运行，请先按停止键结束，或稍候再发送"
@@ -1301,10 +1362,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         // 新回合清空上一轮的工具活动态：liveTools 跨轮次保留会把旧工具当成
         // 「刚完成」灌进任务卡/悬浮窗（旧消息的完成态由落库结果兜底渲染，清掉无碍）
-        liveTools.clear()
+        liveToolsOf(s.id).clear()
         publishLiveTools()
-        _runSessionId.value = s.id
         _running.value = true
+        // 本会话新一轮的显示态清零（流式段/思考计时/首 token 标记）
+        dispOf(s.id).let { d -> d.thinkingMs = null; d.turnStartAt = System.currentTimeMillis(); d.hadOutput = false }
         _streamingText.value = null
         _streamingReasoning.value = null
         _thinkingMs.value = null
@@ -1321,6 +1383,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             s.id,
             (if (isResumeInject) s.runGoal else null)?.takeSafe(80) ?: text.takeSafe(80)
         )
+        observerSid = s.id
         if (c.settingsFlow.value.keepAlive) com.haoai.agent.platform.KeepAliveService.start(c.appContext)
         if (c.settingsFlow.value.runOverlay) {
             com.haoai.agent.platform.AgentOverlayService.start(c.appContext)
@@ -1338,8 +1401,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 位置必须在所有"可能中途 return"的门禁之后，否则一次被拒的发送就会把
         // 正在跑的回合判成过期，它的收尾被跳过 → running 标志/注册表泄漏。
         val seq = ++runSeq
+        activeSeqs.add(seq)
         stopHintPending = false  // 上一代的停止标记不该被新回合的收尾误落进历史
-        job = viewModelScope.launch {
+        jobs[s.id] = viewModelScope.launch {
             var turnEngine: AgentEngine? = null
             try {
                 val provider = resolveProvider(provider0)
@@ -1355,19 +1419,22 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider).also { turnEngine = it; activeEngine = it }
                 engine.runTurn(
                     userText = text,
-                    // 回调按世代过滤：后台子代理的进度事件、取消中还没跑完的协程都可能
-                    // 晚于本回合到达，落到新回合的 UI 上就是"凭空冒出的旧工具卡"
-                    onDelta = gated(seq, s.id, ::appendDelta),
-                    onEvent = gated(seq, s.id, ::handleEvent),
+                    // 回调按回合判活：回合结束后晚到的回调（后台子代理进度等）自然丢弃
+                    onDelta = gated(seq) { frag -> appendDelta(s.id, frag) },
+                    onEvent = gated(seq) { ev -> handleEvent(ev, s.id) },
                     imageData = images,
                     audioPath = audioPath,
                     videoPath = videoPath,
-                    onReasoning = gated(seq, s.id, ::appendReasoning),
+                    onReasoning = gated(seq) { frag -> appendReasoning(s.id, frag) },
                     // 续跑要连着上次算轮数：否则每中断一次，60 轮上限就重新给满，长任务可无限续
                     resuming = isResumeInject,
                     appendUser = !alreadyInHistory
                 )
             } finally {
+                // 先摘轨道/代次再收尾：finishRun 里"还有没有别的会话在跑"要按摘除后的状态算
+                activeSeqs.remove(seq)
+                jobs.remove(s.id)
+                refreshActiveRuns()
                 // 收尾必须跑完，所以放到 NonCancellable 里：本协程已被 cancel，finally 中
                 // 任何挂起点都会立刻抛 CancellationException —— flushUsage 的
                 // withContext(IO) 正是挂起点，它一抛，后面的"恢复任务视图可见性、
@@ -1394,22 +1461,22 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * 归属只在自己仍是归属时摘（B 起跑后 _runSessionId 已指向 B）。
      */
     private suspend fun finishRun(seq: Int, s: StoredSession, turnEngine: AgentEngine?) {
-        val ownsGlobal = seq == runSeq
-        if (ownsGlobal) {
-            endStreaming()
-            // running 必须先于 flushUsage 翻：flushUsage 挂 IO 会跨帧，期间
-            // showStreaming(=running) 仍真 → 最终行下方渲染空"正在思考"占位气泡，
-            // 消失时又触发一轮滚动修正，表现为结束瞬间先冲过头再弹回的抖动
-            _running.value = false
-            publishLiveTools() // 归属清空 → 门控立即透空，防上一轮工具卡残留
+        val sid = s.id
+        val viewed = viewedSid() == sid
+        // D17：本会话的流式显示先收（缓冲回收；正在看它才摘流式气泡）
+        endStreaming(sid)
+        if (viewed) publishLiveTools() // 门控立即透空，防上一轮工具卡残留
+        // 全局设施收尾：仅当没有任何会话还在跑（别的会话在跑时不许动它们正在用的东西）
+        if (!_running.value) {
             com.haoai.agent.platform.RunObserver.end()
+            com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
+        } else if (observerSid == sid) {
+            // 被观察的运行先结束了，但还有别的会话在跑 → 观察位让给还在跑的会话
+            observerSid = _activeRunSessions.value.firstOrNull()
         }
         flushUsage()
-        // 只在自己仍是本会话的归属时摘登记/归属，别替别的会话解绑
-        com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
-        if (_runSessionId.value == s.id) _runSessionId.value = null
-        publishLiveTools()
-        if (ownsGlobal) com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
+        // 只摘自己这条会话的登记，别替别的会话解绑
+        com.haoai.agent.platform.AgentRunRegistry.unregister(sid, runStopHandle)
         // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
         val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
         // 思考阶段被打断：历史里补可见的停止标记（P3-1），别让用户消息孤零零挂着
@@ -1426,7 +1493,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         s.runState = endState
         runCatching { c.sessionStore.save(s) }
         // 用户可能已切换会话：仅在仍看该会话时回写视图（copy 确保 StateFlow 重发射）
-        if (_session.value?.id == s.id) {
+        if (viewed) {
             val view = s.copy()
             currentSession = view
             _session.value = view
@@ -1434,29 +1501,25 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         refreshSessions()
         c.syncWorkspaceDocs()
         maybeGenerateTitle(s)
-        if (!ownsGlobal) return
-        // 5.6：Plan 模式下拦截过工具 → 本轮输出即计划，弹确认卡
+        // 5.6：Plan 模式下拦截过工具 → 本轮输出即计划，弹确认卡（planProposal 带会话归属）
         if (_planMode.value && turnEngine?.planIntercepted == true) {
             val plan = s.messages.lastOrNull {
                 it.role == ChatMessage.ROLE_ASSISTANT && it.content.isNotBlank()
             }?.content.orEmpty()
-            if (plan.isNotBlank()) _planProposal.value = s.id to plan
+            if (plan.isNotBlank()) _planProposal.value = sid to plan
         }
-        // v7 排队任务：回合正常结束且队列还有排队消息 → 自动作为新任务执行
-        // （运行中可继续派活，队列在任务完成后逐条落地）。
-        // 非正常结束（停止/失败）不清队列也不自动续跑——用户按停止即表态中止。
-        val autoNext = interjectQueue.poll()
-        if (autoNext != null && endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
-            _interjectCount.value = interjectQueue.size
-            // 这条消息在入队时已经落进历史（就是用户在气泡里看到的那条排队项），
-            // 提升为任务时引擎不得再落一遍：以前同一条指令会有 3 份，
-            // 模型看到重复指令会把上一个任务又答一遍。
-            send(autoNext, alreadyInHistory = true)
-        } else if (autoNext != null) {
-            // 停止/失败：放回队列头不丢消息，等用户手动重发
-            val q = java.util.concurrent.ConcurrentLinkedQueue<String>()
-            q.add(autoNext); q.addAll(interjectQueue)
-            interjectQueue.clear(); interjectQueue.addAll(q)
+        // v7/D17 排队续跑：本会话自己的队列，回合正常结束才自动接上；
+        // 非正常结束（停止/失败）保留队列不续跑——用户按停止即表态中止
+        //（批 2：此处置"已暂停"态 + 出「继续自动发送」pill）。
+        if (endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
+            val next = queues[sid]?.removeFirstOrNull()
+            refreshQueueCount()
+            if (next != null) {
+                // 这条消息在入队时已经落进历史（就是用户在气泡里看到的那条排队项），
+                // 提升为任务时引擎不得再落一遍：以前同一条指令会有 3 份，
+                // 模型看到重复指令会把上一个任务又答一遍。
+                send(next.text, alreadyInHistory = true)
+            }
         }
     }
 
@@ -1596,21 +1659,26 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     fun stop() {
         // D16：本实例没在跑但注册表里有当前会话的登记（其他实例的引擎）→ 路由过去停。
         // 句柄身份比较：登记方就是自己（宿主 finally 清理窗口内）时不路由，直接走本地取消。
-        val s = currentSession
-        if (!_running.value && s != null) {
+        val s = currentSession ?: return
+        if (!isSessionBusy(s.id)) {
             val owner = com.haoai.agent.platform.AgentRunRegistry.ownerOf(s.id)
             if (owner != null && owner !== runStopHandle) {
                 owner.invoke()
                 return
             }
+            return // 本会话本来就没在跑
         }
+        // D17：只停当前查看的这条会话的轨道——别的会话的并行任务不受影响。
+        // 队列保留不清（批 2：此置"已暂停"态 + 出「继续自动发送」pill）；
+        // 收尾（登记摘除/运行态落盘/队列处置）由该 job 的 finally finishRun 完成。
+        val sid = s.id
         // 思考阶段打断（尚无任何上屏内容）时补一条可见的停止标记——否则用户消息
         // 孤零零挂着，看不出是被打断还是没响应（e2e P3-1）
-        val noContentYet = synchronized(textBuf) { textBuf.isBlank() } &&
+        val d = dispOf(sid)
+        val noContentYet = synchronized(d.text) { d.text.isBlank() } &&
             _streamingText.value.isNullOrBlank()
-        if (_running.value && noContentYet) stopHintPending = true
-        job?.cancel()
-        job = null
+        if (noContentYet) stopHintPending = true
+        jobs[sid]?.cancel()
         _approval.value = null
     }
 
@@ -1641,9 +1709,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return when (command.name) {
             "compact" -> {
                 val s = currentSession ?: return false
-                if (_running.value) {
+                if (isSessionBusy(s.id)) {
                     // 压缩会改 session.compactionSummary + 水位：与在跑的引擎并发就是两路
                     // 写同一条历史，而且下面的 finally 会把新回合的流式状态一起清掉。
+                    // D17：只拦本会话——别的会话在跑不拦这里。
                     runError("本轮结束前不能压缩上下文，请先停止或等待本轮完成")
                     return true
                 }
@@ -1657,11 +1726,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     return true
                 }
                 val engine = buildEngine(s, provider)
-                _runSessionId.value = s.id
                 _running.value = true
                 val seq = ++runSeq
-                // 挂到 job 上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
-                job = viewModelScope.launch {
+                activeSeqs.add(seq)
+                // 挂到本会话的轨道上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
+                jobs[s.id] = viewModelScope.launch {
                     try {
                         // 压缩会推进水位并把老历史摘成摘要：先留一份那条会话的原样副本
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -1679,12 +1748,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             rebuildRows()
                         }
                     } finally {
-                        if (seq == runSeq) {
-                            _running.value = false
-                            _runSessionId.value = null
-                            _streamingText.value = null
-                            refreshSessions()
-                        }
+                        activeSeqs.remove(seq)
+                        jobs.remove(s.id)
+                        refreshActiveRuns()
+                        if (viewedSid() == s.id) _streamingText.value = null
+                        refreshSessions()
                     }
                 }
                 true
@@ -1743,13 +1811,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return
         }
         val s = currentSession ?: return
-        if (_running.value || com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) {
+        if (isSessionBusy(s.id)) {
             // /btw 借的是当前会话上下文，和正式回合并发跑就是两路引擎交叉写同一条历史
             // （此前无守卫：job 被直接覆盖，上一回合的 finally 还会把这一回合的状态改回结束态）
+            // D17：只拦本会话——别的会话在跑不拦这里。
             runError("本轮结束前无法发起附带问题：/btw 需要空闲的会话")
             return
         }
-        _runSessionId.value = s.id
         _running.value = true
         _streamingText.value = null
         _streamingReasoning.value = null
@@ -1762,11 +1830,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // D16: /btw 同样登记（与 send 共用同一停止句柄，finally 对称摘除）
         com.haoai.agent.platform.AgentRunRegistry.register(s.id, runStopHandle)
         com.haoai.agent.platform.RunObserver.start(s.id, "附带问题：${question.takeSafe(60)}")
+        observerSid = s.id
         if (c.settingsFlow.value.runOverlay) {
             com.haoai.agent.platform.AgentOverlayService.start(c.appContext)
         }
         val seq = ++runSeq
-        job = viewModelScope.launch {
+        activeSeqs.add(seq)
+        jobs[s.id] = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
                     _error.value = "端侧模型启动失败"
@@ -1775,15 +1845,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val engine = buildEngine(s, provider)
                 engine.runBtw(
                     question = question,
-                    onDelta = gated(seq, s.id, ::appendDelta),
-                    onReasoning = gated(seq, s.id, ::appendReasoning)
+                    onDelta = gated(seq) { frag -> appendDelta(s.id, frag) },
+                    onReasoning = gated(seq) { frag -> appendReasoning(s.id, frag) }
                 )
             } finally {
-                if (seq == runSeq) {
-                    _running.value = false
-                    _runSessionId.value = null
-                    endStreaming()
-                    com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+                activeSeqs.remove(seq)
+                jobs.remove(s.id)
+                refreshActiveRuns()
+                endStreaming(s.id)
+                com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+                if (!_running.value) {
                     com.haoai.agent.platform.RunObserver.end()
                     com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
                 }
@@ -1879,9 +1950,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * ask_user 提问门：AskUserTool 调用后在此挂起，弹提问卡等用户点选/输入。
      * 与审批同一套 CompletableDeferred 挂起骨架；用户按停止 → 协程取消 → finally 清态。
      */
-    private suspend fun requestAskUser(req: com.haoai.agent.agent.tools.AskUserRequest): com.haoai.agent.agent.tools.AskUserAnswer {
+    private suspend fun requestAskUser(sid: String, req: com.haoai.agent.agent.tools.AskUserRequest): com.haoai.agent.agent.tools.AskUserAnswer {
         val gate = CompletableDeferred<com.haoai.agent.agent.tools.AskUserAnswer>()
         val askId = java.util.UUID.randomUUID().toString()
+        _pendingAskSid.value = sid
         _pendingAsk.value = PendingAsk(askId, req, gate)
         // 后台可见性：置 RunObserver.ask（同时写 approval 状态位）→
         // 任务卡升级高优通知并挂选项快捷按钮，回答经 askAnswerSink 路由回本 VM
@@ -1894,12 +1966,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             return gate.await()
         } finally {
             _pendingAsk.value = null
+            if (_pendingAskSid.value == sid) _pendingAskSid.value = null
             com.haoai.agent.platform.RunObserver.setAsk(null)
         }
     }
 
     /** ask_user_batch 挂起：题组卡本地循环推进，整批答满才返回；中断与单题同路径。 */
     private suspend fun requestAskBatch(
+        sid: String,
         req: com.haoai.agent.agent.tools.AskUserBatchRequest
     ): List<String> {
         val quiz = PendingQuiz(
@@ -1907,12 +1981,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             req,
             CompletableDeferred()
         )
+        _pendingQuizSid.value = sid
         _pendingQuiz.value = quiz
         refreshQuizNotification(quiz)
         try {
             return quiz.gate.await()
         } finally {
             _pendingQuiz.value = null
+            if (_pendingQuizSid.value == sid) _pendingQuizSid.value = null
             com.haoai.agent.platform.RunObserver.setAsk(null)
         }
     }
@@ -2074,29 +2150,33 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /** 引擎事件统一切回主线程：子代理 report 在 IO 线程直达 handleEvent 会并发写 liveTools。 */
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    private fun handleEvent(ev: TurnEvent) {
+    private fun handleEvent(ev: TurnEvent, sid: String) {
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
-            mainHandler.post { handleEvent(ev) }
+            mainHandler.post { handleEvent(ev, sid) }
             return
         }
         when (ev) {
-            StreamReset -> resetStreamView()
+            StreamReset -> resetStreamView(sid)
             is MessageAdded -> {
-                // 先把缓冲残余落屏再摘流式气泡，避免最后 <40ms 的 token 在
-                // 最终消息接管显示后又闪回流式区（内容已入 rows，不丢数据，纯观感）
-                flushStreamBuf()
-                _streamingText.value = null
-                // 本条消息的推理已落进合并行的链卡；live 卡的 Think 段只代表"当前轮"，
-                // 不清掉的话落行后 live 卡继续显示全程推理，和已落行重复各画一遍
-                synchronized(reasoningBuf) { reasoningBuf.setLength(0) }
-                _streamingReasoning.value = null
+                // 先把该会话的流式段清零再摘流式气泡（内容已入 rows，不丢数据，纯观感）：
+                // 下一段流式（如有的话）从空重新累积。本条消息的推理已落进合并行的链卡；
+                // live 卡的 Think 段只代表"当前轮"，不清掉的话落行后 live 卡继续显示
+                // 全程推理，和已落行重复各画一遍
+                val d = dispOf(sid)
+                synchronized(d.text) { d.text.setLength(0) }
+                synchronized(d.reasoning) { d.reasoning.setLength(0) }
+                if (sid == viewedSid()) {
+                    _streamingText.value = null
+                    _streamingReasoning.value = null
+                }
+                val tools = liveToolsOf(sid)
                 ev.message.calls.forEach { call ->
                     // ❶ 状态回跳修复：ToolChanged 先到（快工具/子代理上报）时已有已知状态，
                     // 不得覆盖回 RUNNING 默认态；只登记还没见过的调用
-                    if (!liveTools.containsKey(call.id)) {
+                    if (!tools.containsKey(call.id)) {
                         // 批2c：登记时就把路径芯片定位挂上（tool_use 消息先于执行到达，
                         // 这里带原始 args；后续 ToolChanged 重建时透传）
-                        liveTools[call.id] = UiTool(
+                        tools[call.id] = UiTool(
                             call.id, call.name, briefFor(call.name, call.args),
                             fileRef = if (call.name == "read" || call.name == "write" || call.name == "edit")
                                 fileRefOf(call.args) else null
@@ -2105,32 +2185,35 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 }
                 // 截图消息（方案 A）：流式期就把它挂到对应工具的步骤上，卡片即刻出缩略图
                 screenshotToolName(ev.message.content ?: "", ev.message.imageData)?.let { shotName ->
-                    val target = liveTools.values.lastOrNull {
+                    val target = tools.values.lastOrNull {
                         it.name == shotName && it.imageData.isNullOrBlank()
                     }
                     if (target != null) {
-                        liveTools[target.callId] = target.copy(imageData = ev.message.imageData)
+                        tools[target.callId] = target.copy(imageData = ev.message.imageData)
                     }
                 }
                 publishLiveTools()
                 // ❷ 晋升行标记：本次 rebuild 新增的 assistant 行 = 刚从流式区晋升的内容，
                 // UI 对它跳过入场淡入（同帧旧流式内容消失、新行再从 0 淡入 = 收尾闪一下）
-                val keysBefore = _rows.value.mapTo(HashSet()) { it.key }
-                rebuildRows()
-                var promotedAdded = false
-                for (row in _rows.value) {
-                    if (row.key !in keysBefore && row.role != ChatMessage.ROLE_USER) {
-                        promotedKeys.add(row.key); promotedAdded = true
+                if (sid == viewedSid()) {
+                    val keysBefore = _rows.value.mapTo(HashSet()) { it.key }
+                    rebuildRows()
+                    var promotedAdded = false
+                    for (row in _rows.value) {
+                        if (row.key !in keysBefore && row.role != ChatMessage.ROLE_USER) {
+                            promotedKeys.add(row.key); promotedAdded = true
+                        }
                     }
+                    if (promotedAdded) publishPromotedKeys()
                 }
-                if (promotedAdded) publishPromotedKeys()
             }
             is ToolChanged -> {
-                val prevTool = liveTools[ev.update.callId]
+                val tools = liveToolsOf(sid)
+                val prevTool = tools[ev.update.callId]
                 // m5 同源问题：这里也是逐个重列字段，漏传 diff / htmlFile / ask / askBatch / hits，
                 // 一次 ToolChanged 就把已挂上的搜索结果卡、问答卡、产物卡、变更量清空。
                 // 改用 copy()，未提及的字段一律继承（与 SubagentUpdate 分支同款修法）。
-                liveTools[ev.update.callId] = (prevTool ?: UiTool(ev.update.callId, "", ""))
+                tools[ev.update.callId] = (prevTool ?: UiTool(ev.update.callId, "", ""))
                     .copy(
                         name = prevTool?.name ?: "",
                         brief = ev.update.brief ?: "",
@@ -2149,12 +2232,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         else null
                     )
                 publishLiveTools()
-                rebuildRows()
-                publishSteps()
+                if (sid == viewedSid()) rebuildRows()
+                publishSteps(sid)
             }
             is SubagentUpdate -> {
                 // E7a：按 callId 聚合各路子代理状态（并发到达，同 index 覆盖旧态）
-                val prev = liveTools[ev.callId]
+                val tools = liveToolsOf(sid)
+                val prev = tools[ev.callId]
                 val lines = prev?.subagents.orEmpty().toMutableList()
                 val at = lines.indexOfFirst { it.index == ev.index }
                 val line = SubagentLine(ev.id, ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief)
@@ -2164,7 +2248,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 // 全部清成默认值 —— 子代理运行期间卡片的输出正文、文件芯片、耗时标签集体消失，
                 // 且UiTool 每加一个字段就会再踩一次（构造点已散落多处）。
                 // 修法：改用 copy()，新增字段默认继承，构造点不再需要同步维护。
-                liveTools[ev.callId] = (prev ?: UiTool(ev.callId, "", ""))
+                tools[ev.callId] = (prev ?: UiTool(ev.callId, "", ""))
                     .copy(
                         name = prev?.name ?: "",
                         brief = prev?.brief ?: "",
@@ -2173,36 +2257,42 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         subagents = lines.sortedBy { it.index }
                     )
                 publishLiveTools()
-                rebuildRows()
-                publishSteps()
+                if (sid == viewedSid()) rebuildRows()
+                publishSteps(sid)
             }
             is Finished -> {
                 // 运行期错误走会话门控：仅当用户仍看着运行会话才弹 Snackbar——
                 // 切到别的会话时不再把 A 的失败提示弹进 B（归属会话的历史里有失败痕迹）
-                if (ev.error != null && ev.error != "已停止") runError(ev.error)
+                if (ev.error != null && ev.error != "已停止") runError(sid, ev.error)
                 // 5.2 降级提示：回合结束消费（SnackBar 显示「已降级到 X」）
                 c.lastFallbackNotice?.let { name ->
                     c.lastFallbackNotice = null
-                    runError("已降级到 $name（主服务请求失败）")
+                    runError(sid, "已降级到 $name（主服务请求失败）")
                 }
             }
         }
     }
 
-    /** 运行期错误的会话门控弹出：查看的正是运行会话（或无运行任务）才弹，否则留给历史/通知卡兜底。 */
-    private fun runError(msg: String) {
-        val owner = _runSessionId.value
-        if (owner == null || owner == _session.value?.id) _error.value = msg
+    /** 运行期错误的会话门控弹出：错误归属的会话正被查看才弹，否则留给历史/通知卡兜底。 */
+    private fun runError(sid: String?, msg: String) {
+        if (sid == null || sid == viewedSid()) _error.value = msg
     }
 
-    /** 把当前活动工具状态镜像给 RunObserver（通知/悬浮窗消费）。 */
-    private fun publishSteps() {
-        val running = liveTools.values.filter { it.state == ToolRunState.RUNNING }
+    /** 与运行无关的即时错误（发送门控/压缩守卫等）：调用时机用户必在看当前会话，直接弹。 */
+    private fun runError(msg: String) {
+        _error.value = msg
+    }
+
+    /** 把该会话的活动工具状态镜像给 RunObserver（通知/悬浮窗消费；仅被观察的运行镜像）。 */
+    private fun publishSteps(sid: String) {
+        if (sid != observerSid) return
+        val tools = liveToolsOf(sid).values
+        val running = tools.filter { it.state == ToolRunState.RUNNING }
         val steps = if (running.isNotEmpty()) {
             running.map { com.haoai.agent.platform.RunObserver.Step(it.callId, it.name, it.brief, "running") }
         } else {
             // 全部已结算：取最近完成的 1 条作为「刚完成」提示（含错误态）
-            liveTools.values.maxByOrNull { it.callId }?.let {
+            tools.maxByOrNull { it.callId }?.let {
                 listOf(com.haoai.agent.platform.RunObserver.Step(it.callId, it.name, it.brief, if (it.state == ToolRunState.ERROR) "error" else "done"))
             } ?: emptyList()
         }
@@ -2274,7 +2364,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
         // 把一次工具调用解析成链卡步骤（ask_user/web_search 的增强数据在这里挂上）
         fun toolStepOf(call: StoredToolCall): ChainStep.Tool {
-            val live = liveTools[call.id]
+            // D17：读“正在重建的这条会话”的 live 工具态（rebuildRows 只服务查看中的会话）
+            val live = currentSession?.id?.let { liveToolsOf(it)[call.id] }
             val stored = resultByCall[call.id]
             val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
             val askBatch = if (call.name == "ask_user_batch")
@@ -2615,8 +2706,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             interaction = com.haoai.agent.agent.engine.EngineFactory.Interaction(
                 policy = PolicyEngine(st.permissionMode),
                 approve = { req -> requestApproval(req) },
-                askUser = { req -> requestAskUser(req) },
-                askUserBatch = { req -> requestAskBatch(req) },
+                askUser = { req -> requestAskUser(s.id, req) },
+                askUserBatch = { req -> requestAskBatch(s.id, req) },
                 onUsage = { pin, pout -> addUsage(pin, pout) },
                 statusProvider = { buildStatusText() },
                 identity = com.haoai.agent.agent.engine.EngineFactory.identityOf(st.agentName, st.soul),
@@ -2908,9 +2999,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      */
     fun resumeRun() {
         val s = currentSession ?: return
-        if (_running.value) return
-        // D16：引擎还在其他实例上跑着同一会话，谈不上「恢复」
-        if (com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) return
+        // D17：本会话忙（本实例在跑/其他实例持有）都谈不上「恢复」；别的会话在跑不拦这里
+        if (isSessionBusy(s.id)) return
         // 剥掉历史恢复包装（点击继续后再次中断会嵌套），还原最初的任务目标
         val goal = (s.runGoal?.let { stripResumeNesting(it) } ?: "未记录目标").take(200)
         // runTurnsUsed 是"已完成轮数"，中断发生在那一轮的**途中**，报数要 +1，
@@ -2956,10 +3046,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * 手动触发不会打开任何"自动自学习"开关。
      */
     fun learnFromHistory() {
-        if (_running.value) {
-            _error.value = "当前有任务在跑，请先停止或等它结束再开始复盘"
-            return
-        }
+        // D17：复盘开的是新会话，与其他会话并行互不干扰——撤掉旧的全局拦截
         val digest = buildHistoryDigest()
         if (digest.isBlank()) {
             _error.value = "还没有可复盘的会话历史"
@@ -3009,21 +3096,4 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _streamingReasoning.value = null
     }
 
-    private fun stopInternal() {
-        job?.cancel()
-        job = null
-        _running.value = false
-        // 取消是异步的（send/compact/btw 的 finally 会迟到一拍），归属先摘，
-        // 防止停止瞬间门控流仍把该会话判为运行中
-        _runSessionId.value = null
-        publishLiveTools()
-        // 停 flusher 并丢弃缓冲残余（任务已取消，未上屏的尾部 token 不再有意义）
-        streamFlusher?.cancel()
-        streamFlusher = null
-        synchronized(textBuf) { textBuf.setLength(0) }
-        synchronized(reasoningBuf) { reasoningBuf.setLength(0) }
-        _streamingText.value = null
-        _streamingReasoning.value = null
-        clearInterjections()
-    }
 }
