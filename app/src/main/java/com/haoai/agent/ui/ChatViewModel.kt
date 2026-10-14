@@ -30,6 +30,7 @@ import com.haoai.agent.agent.policy.PolicyEngine
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.SessionStartup
 import com.haoai.agent.data.StoredMessage
+import com.haoai.agent.data.StoredQueuedMsg
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.StoredToolCall
 import com.haoai.agent.data.toModel
@@ -280,7 +281,11 @@ data class ChatRow(
     /** 引擎注入的截图消息携带的图像（未能配对到工具步骤时的兜底；正常已挂到 UiTool.imageData）。 */
     val imageData: String? = null,
     /** 用户消息的多图附件（data URL 列表，2026-10-14 多图时代）。单图兜底仍看 imageData。 */
-    val images: List<String> = emptyList()
+    val images: List<String> = emptyList(),
+    /** D17 批3：该用户消息在队列里（排队气泡渲染态：旗标+虚线圈+✎✕↑）；null=普通消息。 */
+    val queued: StoredQueuedMsg? = null,
+    /** 队列处于"已暂停"（停止后保留）：旗标文案切「已暂停」，配合琥珀继续 pill。 */
+    val queuePaused: Boolean = false
 )
 
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
@@ -292,36 +297,204 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     // ── D17 多会话并行：排队消息按会话各排各的队 ──
     // 旧实现是一条全局队列装纯文本（不带 sid）：A 会话跑任务时去 B 派活，
     // B 的消息会被排进 A 的队列串行等待——这正是"多会话排队"bug 的根源。
-    // 现在每条会话一个 FIFO，排队消息带 id，撤回/编辑/抢占都能精确命中。
+    // 现在每条会话一个 FIFO，条目 = 已落进历史的用户消息 id + 文本（撤回/编辑按 id 定位）。
     // 主线程读写（send/finishRun/撤回都在主线程）。
-    data class QueuedMsg(val id: String, val text: String, val enqueuedAt: Long)
-    private val queues = HashMap<String, ArrayDeque<QueuedMsg>>()
+    private val queues = HashMap<String, ArrayDeque<StoredQueuedMsg>>()
     private val _interjectCount = kotlinx.coroutines.flow.MutableStateFlow(0)
     val interjectCount = _interjectCount.asStateFlow()
 
-    private fun queueOf(sid: String): ArrayDeque<QueuedMsg> = queues.getOrPut(sid) { ArrayDeque() }
+    private fun queueOf(sid: String): ArrayDeque<StoredQueuedMsg> = queues.getOrPut(sid) { ArrayDeque() }
 
-    /** 刷新"正在查看的会话"的排队条数（入队/撤回/切会话/续跑后调用）。 */
+    /** 刷新"正在查看的会话"的排队条数（入队/撤回/切会话/续跑后调用）；同步重排显示行。 */
     private fun refreshQueueCount() {
         _interjectCount.value = viewedSid()?.let { queues[it]?.size } ?: 0
+        // 排队态/转正靠 rebuildRows 重算 ChatRow.queued：入队即变虚线气泡、出队即转正常气泡
+        if (viewedSid() != null) rebuildRows()
     }
 
-    /** v7 撤回排队消息：撤当前会话队列的最新一条，并从历史移除对应的用户消息。 */
-    fun withdrawInterjection() {
+    // ── D17 批2：队列暂停态（ZCode 式 stop → 队列保留 + 自动续发关闭）──
+    private val pausedQueues = HashSet<String>()               // main-thread
+    /** 本轮由用户按停止结束（finishRun 消费后移除）：正常结束自动续跑，停止结束暂停队列。 */
+    private val stopRequestedSids = HashSet<String>()          // main-thread
+    private val _queuePaused = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** 查看中的会话"已暂停且有积压"时为该 sid（UI 出琥珀「继续自动发送」pill）。 */
+    val queuePaused = _queuePaused.asStateFlow()
+
+    private fun refreshQueuePaused() {
+        val sid = viewedSid()
+        _queuePaused.value =
+            if (sid != null && sid in pausedQueues && queues[sid]?.isNotEmpty() == true) sid else null
+    }
+
+    /** 继续自动发送：解除暂停；会话空闲则立即接上下一条（ZCode 恢复 autoDrain 同款）。 */
+    fun resumeQueue() {
         val sid = viewedSid() ?: return
-        val q = queues[sid] ?: return
-        val last = q.removeLastOrNull() ?: return
+        if (pausedQueues.remove(sid)) {
+            refreshQueuePaused()
+            persistQueueState(sid)
+            if (!isSessionBusy(sid)) drainQueue(sid)
+        }
+    }
+
+    /** 会话队列正常接上下一条（调用方保证 sid 空闲且未暂停）。 */
+    private fun drainQueue(sid: String) {
+        val next = queueOf(sid).removeFirstOrNull()
         refreshQueueCount()
-        val s = currentSession ?: return
-        for (i in s.messages.indices.reversed()) {
-            val m = s.messages[i]
-            if (m.role == ChatMessage.ROLE_USER && m.content == last.text) {
-                s.messages.removeAt(i)
-                runCatching { c.sessionStore.save(s) }
-                rebuildRows()
-                return
+        persistQueueState(sid)
+        if (next != null) {
+            c.sessionStore.load(sid)?.let { startRun(it, next.text, alreadyInHistory = true) }
+        }
+    }
+
+    // ── D17 批2：held 队列时发新消息的选择弹窗（ZCode heldQueueInputRequiresChoice）──
+    data class QueueHold(
+        val sid: String, val text: String,
+        val images: List<String>, val audioPath: String?, val videoPath: String?,
+        val pendingCount: Int
+    )
+    private val _queueHold = kotlinx.coroutines.flow.MutableStateFlow<QueueHold?>(null)
+    val queueHold = _queueHold.asStateFlow()
+
+    /** 选择「清空队列后发送」：队列清空 + 解除暂停 + 发送新消息。 */
+    fun confirmQueueHoldClear() {
+        val h = _queueHold.value ?: return
+        _queueHold.value = null
+        queues.remove(h.sid)
+        pausedQueues.remove(h.sid)
+        refreshQueueCount(); refreshQueuePaused(); persistQueueState(h.sid)
+        c.sessionStore.load(h.sid)?.let { startRun(it, h.text, h.images, h.audioPath, h.videoPath) }
+    }
+
+    /** 选择「保留队列立即发送」：新消息照跑，队列继续暂停等「继续自动发送」。 */
+    fun confirmQueueHoldKeep() {
+        val h = _queueHold.value ?: return
+        _queueHold.value = null
+        c.sessionStore.load(h.sid)?.let { startRun(it, h.text, h.images, h.audioPath, h.videoPath) }
+    }
+
+    fun dismissQueueHold() { _queueHold.value = null }
+
+    // ── D17 批3：排队气泡的三个操作（撤回 / 编辑退回输入框 / 立即发送抢占）──
+    /** 气泡 ✕：出队 + 删掉历史里对应的用户消息。 */
+    fun withdrawQueued(messageId: String) {
+        val sid = viewedSid() ?: return
+        if (queues[sid]?.removeAll { it.id == messageId } != true) return
+        refreshQueueCount(); refreshQueuePaused(); persistQueueState(sid)
+        deleteQueuedMessage(sid, messageId)
+    }
+
+    /** 气泡 ✎：出队 + 删历史 + 文本退回输入框改完再发（ZCode/pi 同款）。 */
+    fun editQueued(messageId: String) {
+        val sid = viewedSid() ?: return
+        val item = queues[sid]?.firstOrNull { it.id == messageId } ?: return
+        queues[sid]?.removeAll { it.id == messageId }
+        refreshQueueCount(); refreshQueuePaused(); persistQueueState(sid)
+        deleteQueuedMessage(sid, messageId)
+        _composerPrefill.value = item.text
+    }
+
+    /** 气泡 ↑：ZCode 抢占语义——停当前轮，这条紧接着执行（其余排队保持暂停）。 */
+    fun promoteQueued(messageId: String) {
+        val sid = viewedSid() ?: return
+        val item = queues[sid]?.firstOrNull { it.id == messageId } ?: return
+        queues[sid]?.removeAll { it.id == messageId }
+        refreshQueueCount(); refreshQueuePaused(); persistQueueState(sid)
+        if (isSessionBusy(sid)) {
+            // 先停当前轮；旧回合 finishRun 收尾后紧接着执行它（避免与旧收尾竞争同一会话）
+            promoteAfterStop = sid to item
+            stop()
+        } else {
+            pausedQueues.remove(sid)
+            refreshQueuePaused(); persistQueueState(sid)
+            c.sessionStore.load(sid)?.let { startRun(it, item.text, alreadyInHistory = true) }
+        }
+    }
+    private var promoteAfterStop: Pair<String, StoredQueuedMsg>? = null
+
+    /** 删除排队消息在历史里的那条用户消息（内存副本 + 落盘都删）。 */
+    private fun deleteQueuedMessage(sid: String, messageId: String) {
+        runCatching {
+            val fresh = c.sessionStore.load(sid)
+            if (fresh != null && fresh.messages.removeAll { it.id == messageId }) {
+                c.sessionStore.save(fresh)
             }
         }
+        val cur = currentSession
+        if (cur != null && cur.id == sid) {
+            cur.messages.removeAll { it.id == messageId }
+            val view = cur.copy()
+            currentSession = view
+            _session.value = view
+        }
+        rebuildRows()
+    }
+
+    /** ✎ 编辑的输入框回填（ChatScreen 消费后清空）。 */
+    private val _composerPrefill = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val composerPrefill = _composerPrefill.asStateFlow()
+    fun consumeComposerPrefill() { _composerPrefill.value = null }
+
+    // ── D17 批4：队列随会话文件持久化（重启/杀进程不丢；pi 思路轻量版）──
+    private fun persistQueueState(sid: String) {
+        runCatching {
+            val fresh = c.sessionStore.load(sid) ?: return@runCatching
+            fresh.queue = queues[sid]?.toList() ?: emptyList()
+            fresh.queuePaused = sid in pausedQueues
+            c.sessionStore.save(fresh)
+        }
+    }
+
+    /** 打开会话时把持久化的队列/暂停态读进内存（selectSession 调用）。 */
+    private fun loadQueueState(sid: String) {
+        val s = runCatching { c.sessionStore.load(sid) }.getOrNull() ?: return
+        queues[sid] = ArrayDeque(s.queue)
+        if (s.queuePaused) pausedQueues.add(sid) else pausedQueues.remove(sid)
+        refreshQueueCount(); refreshQueuePaused()
+    }
+
+    // ── D17 批5：端侧本地模型串行（llama 单例：同时只跑一个本地任务，第二条自动排队）──
+    private var localRunningSid: String? = null
+
+    private fun isLocalProvider(p: com.haoai.agent.data.ProviderConfig): Boolean =
+        p.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
+            p.baseUrl.startsWith("local") || p.baseUrl.contains("127.0.0.1")
+
+    /** 本地槽空出后，把排在别条会话的本地任务按入队顺序接上（不限并行，唯本地串行）。 */
+    private fun startNextLocalQueued() {
+        if (localRunningSid != null) return
+        for ((sid, q) in queues) {
+            if (isSessionBusy(sid)) continue
+            val head = q.firstOrNull() ?: continue
+            if (!head.localModel) continue
+            q.removeFirstOrNull()
+            refreshQueueCount(); persistQueueState(sid)
+            c.sessionStore.load(sid)?.let { startRun(it, head.text, alreadyInHistory = true) }
+            return
+        }
+    }
+
+    /** 本 VM + 其他实例的在跑会话并集大小（顶栏「N 个任务进行中」胶囊）。
+     *  lazy：_activeRunSessions 在类后段声明，直接初始化会拿到 null。 */
+    /** 正在查看的会话是否忙（UserBubble 排队态渲染门）。lazy：被引用的两个 StateFlow 在类后段。 */
+    val viewedBusy by lazy {
+        kotlinx.coroutines.flow.combine(_activeRunSessions, _session) { mine, s ->
+            s != null && s.id in mine
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), false)
+    }
+
+    /** 本 VM + 其他实例所有在跑任务的会话 id（会话列表/抽屉的运行中转圈 + 顶栏计数）。lazy：同 activeRunCount。 */
+    val runningIds by lazy {
+        kotlinx.coroutines.flow.combine(
+            _activeRunSessions, com.haoai.agent.platform.AgentRunRegistry.activeIds
+        ) { mine, ids -> mine + ids }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptySet())
+    }
+
+    val activeRunCount by lazy {
+        kotlinx.coroutines.flow.combine(
+            _activeRunSessions, com.haoai.agent.platform.AgentRunRegistry.activeIds
+        ) { mine, ids -> (mine + ids).size }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), 0)
     }
 
     /** 系统分享接入（R2.2）：导航层把 ACTION_SEND 内容转存 here，ChatScreen 消费后清空。 */
@@ -1114,6 +1287,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _session.value = s
         // D17：接上该会话自己的运行中显示（流式段/思考计时/工具活动），切回无缝续上；
         // 空闲会话（无 RunDisplay）全部落空，防上一会话的流式渗漏过来
+        loadQueueState(s.id) // D17 批4：持久化队列/暂停态读回内存（重启不丢）
         val d = runDisplays[s.id]
         val busy = isSessionBusy(s.id)
         _streamingText.value = if (d != null && busy) synchronized(d.text) { d.text.toString() } else null
@@ -1302,35 +1476,60 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         audioPath: String? = null,
         videoPath: String? = null,
         /** 排队消息提升为任务：入队时已落过这条用户消息，引擎不要再落一遍。 */
-        alreadyInHistory: Boolean = false
+        alreadyInHistory: Boolean = false,
+        /** 程序化续跑（恢复/批准计划）跳过"已暂停队列"的选择弹窗（意图明确就是要发）。 */
+        bypassHold: Boolean = false
     ) {
         val text = rawText.trim()
         // 纯图片发送（无文字）也允许：否则 UI 已清掉附件，图片会静默丢失
         if (text.isEmpty() && images.isEmpty() && audioPath == null && videoPath == null) return
         // D17 同会话在跑 → 入队（该会话自己的队列，本轮结束自动接上）；
         // 别的会话在跑不拦这里——继续往下走起跑，跨会话并行正是本次要的行为。
-        val s0 = currentSession
-        if (s0 != null && isSessionBusy(s0.id)) {
+        val s0 = currentSession ?: return
+        if (isSessionBusy(s0.id)) {
             if (images.isNotEmpty() || audioPath != null || videoPath != null) {
                 // 排队通路只认纯文本。附件此前会被静默吞掉：UI 已清空输入框，
                 // 用户以为发出去了，历史里却只有文字（甚至整条都不在）。
                 runError("生成期间只能排队文字，附件未发送；文字已排队，本轮结束后自动执行")
             }
             if (text.isNotEmpty()) {
+                // 先落一条可见用户消息（排队气泡就是它），id 进队列——撤回/编辑按 id 精确回删
+                val mid = appendLocalMessage(text)
                 queueOf(s0.id).addLast(
-                    QueuedMsg(java.util.UUID.randomUUID().toString(), text, System.currentTimeMillis())
+                    com.haoai.agent.data.StoredQueuedMsg(mid, text, System.currentTimeMillis())
                 )
-                refreshQueueCount()
-                // 落一条可见用户消息，让用户看到自己的消息已排队（排队态反馈）
-                appendLocalMessage(text)
+                refreshQueueCount(); refreshQueuePaused(); persistQueueState(s0.id)
             }
             return
         }
         // D16：同会话在进程内其他实例上仍被引擎持有 → 拒绝双跑（两路引擎并发会交叉写坏历史）
-        if (s0 != null && com.haoai.agent.platform.AgentRunRegistry.isActive(s0.id)) {
+        if (com.haoai.agent.platform.AgentRunRegistry.isActive(s0.id)) {
             _error.value = "该会话的任务仍在后台运行，请先按停止键结束，或稍候再发送"
             return
         }
+        // D17 批2：队列已暂停且有积压 → 新消息不静默入队，弹选择（ZCode heldQueueInputRequiresChoice）
+        if (!bypassHold && !alreadyInHistory && text.isNotEmpty() &&
+            s0.id in pausedQueues && queues[s0.id]?.isNotEmpty() == true
+        ) {
+            _queueHold.value = QueueHold(s0.id, text, images, audioPath, videoPath, queues[s0.id]?.size ?: 0)
+            return
+        }
+        startRun(s0, text, images, audioPath, videoPath, alreadyInHistory)
+    }
+
+    /**
+     * 起跑道（send 的主体从旧函数体拆出）：provider 门禁 → 本地串行闸 → 世代起跑。
+     * [queuedMsgId] 是排队提升路径带进来的消息 id（再排队时保留原 id，不再重复落消息）。
+     */
+    private fun startRun(
+        s: StoredSession,
+        text: String,
+        images: List<String> = emptyList(),
+        audioPath: String? = null,
+        videoPath: String? = null,
+        alreadyInHistory: Boolean = false,
+        queuedMsgId: String? = null
+    ) {
         // 聊天会话模型路由：设置里「模型切换 → 聊天会话」优先（可精确到同供应商某模型），
         // 未配置回落激活供应商
         val provider0 = c.activeChatProvider() ?: c.activeProvider()
@@ -1343,18 +1542,35 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 发送门控：公网供应商未配 key 就地拦截（此前无 Authorization 照发、等供应商 401 才报错）
         if (c.resolveApiKey(provider0).isBlank() && c.needsApiKey(provider0.baseUrl)) {
             _error.value = "模型服务「${provider0.name}」未配置 API Key，请到「设置」填写后再发送"
-            appendLocalMessage(text)
+            appendLocalMessage(text, to = s)
             return
         }
-        val s = currentSession ?: return
+        // D17 批5：端侧本地模型串行闸——llama 是单例服务，两个本地任务并发会互踩。
+        // 本地槽被别的会话占着 → 这条进本会话队列排着（紫色旗标），槽空出自动接上。
+        val isLocal = isLocalProvider(provider0)
+        if (isLocal && localRunningSid != null && localRunningSid != s.id) {
+            val mid = queuedMsgId
+                ?: if (!alreadyInHistory) appendLocalMessage(text, to = s)
+                else s.messages.lastOrNull {
+                    it.role == ChatMessage.ROLE_USER && it.content == text
+                }?.id ?: ""
+            queueOf(s.id).addLast(
+                com.haoai.agent.data.StoredQueuedMsg(mid, text, System.currentTimeMillis(), localModel = true)
+            )
+            refreshQueueCount(); refreshQueuePaused(); persistQueueState(s.id)
+            _error.value = "端侧模型一次只能跑一个任务，这条已排队，前面本地任务跑完自动执行"
+            return
+        }
+        if (isLocal) localRunningSid = s.id
         if (alreadyInHistory) {
             // 排队消息是"上一轮还在跑"时入的历史，位置落在那轮回答**之前**。留在原位，
             // 模型读到的是「新指令 → 上一个回答」，会把新指令当成对上一轮的追问：
             // 实测要求"只回答两个字：收到"，它回完"收到"又把上一轮答案整段复述一遍。
             // 提升为任务时挪到末尾，顺序恢复成「上一个回答 → 新指令」。
-            val at = s.messages.indexOfLast {
-                it.role == ChatMessage.ROLE_USER && it.content == text
-            }
+            val at = if (queuedMsgId != null) s.messages.indexOfFirst { it.id == queuedMsgId }
+                     else s.messages.indexOfLast {
+                         it.role == ChatMessage.ROLE_USER && it.content == text
+                     }
             if (at >= 0 && at < s.messages.lastIndex) {
                 s.messages.add(s.messages.removeAt(at))
                 rebuildRows()
@@ -1508,18 +1724,35 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }?.content.orEmpty()
             if (plan.isNotBlank()) _planProposal.value = sid to plan
         }
-        // v7/D17 排队续跑：本会话自己的队列，回合正常结束才自动接上；
-        // 非正常结束（停止/失败）保留队列不续跑——用户按停止即表态中止
-        //（批 2：此处置"已暂停"态 + 出「继续自动发送」pill）。
-        if (endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
-            val next = queues[sid]?.removeFirstOrNull()
-            refreshQueueCount()
-            if (next != null) {
-                // 这条消息在入队时已经落进历史（就是用户在气泡里看到的那条排队项），
-                // 提升为任务时引擎不得再落一遍：以前同一条指令会有 3 份，
-                // 模型看到重复指令会把上一个任务又答一遍。
-                send(next.text, alreadyInHistory = true)
+        // D17 批5：本地槽让位——本回合占了端侧 llama 的，跑完清空并接上排队的本地任务
+        if (localRunningSid == sid) {
+            localRunningSid = null
+            startNextLocalQueued()
+        }
+        // D17 批2：停止旗处置——用户按停止 = "别再自己往下跑"。队列保留并置"已暂停"，
+        // 出琥珀「继续自动发送」pill（ZCode 式）；正常结束才自动续跑。
+        val stoppedByUser = stopRequestedSids.remove(sid)
+        if (stoppedByUser && queues[sid]?.isNotEmpty() == true) {
+            pausedQueues.add(sid)
+            persistQueueState(sid)
+        }
+        // D17 批3：抢占路径——"立即发送"先停了当前轮，收尾后紧接着执行这条
+        //（其余排队项保持原状/原暂停态，不受抢占影响）
+        promoteAfterStop?.let { (psid, item) ->
+            if (psid == sid) {
+                promoteAfterStop = null
+                pausedQueues.remove(sid)
+                refreshQueuePaused(); persistQueueState(sid)
+                // 这条在入队时已落进历史（提升为任务时引擎不得再落一遍），带原消息 id 起跑
+                startRun(s, item.text, emptyList(), null, null,
+                    alreadyInHistory = true, queuedMsgId = item.id)
+                return@let
             }
+        }
+        if (sid in pausedQueues) {
+            refreshQueuePaused() // 已暂停：等「继续自动发送」，不自动接
+        } else if (endState == com.haoai.agent.data.StoredSession.RUN_IDLE) {
+            drainQueue(sid)
         }
     }
 
@@ -1533,11 +1766,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         text: String,
         to: StoredSession? = currentSession,
         role: String = ChatMessage.ROLE_USER
-    ) {
-        val s = to ?: return
-        s.messages.add(ChatMessage(role = role, content = text).toStored())
+    ): String {
+        val s = to ?: return ""
+        val msg = ChatMessage(role = role, content = text).toStored()
+        s.messages.add(msg)
         runCatching { c.sessionStore.save(s) }
         if (currentSession?.id == s.id) rebuildRows()
+        return msg.id
     }
 
     private suspend fun resolveProvider(
@@ -1678,6 +1913,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val noContentYet = synchronized(d.text) { d.text.isBlank() } &&
             _streamingText.value.isNullOrBlank()
         if (noContentYet) stopHintPending = true
+        stopRequestedSids.add(sid) // D17 批2：finishRun 据此把该会话队列置"已暂停"
         jobs[sid]?.cancel()
         _approval.value = null
     }
@@ -1716,6 +1952,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     runError("本轮结束前不能压缩上下文，请先停止或等待本轮完成")
                     return true
                 }
+                // D17 批5：压缩同样要请求模型；端侧 llama 被别的任务占着时挡下
+                runCatching { c.activeProvider() }.getOrNull()?.let { p0 ->
+                    if (isLocalProvider(p0) && localRunningSid != null && localRunningSid != s.id) {
+                        runError("端侧模型正被其他任务占用，稍后再压缩")
+                        return true
+                    }
+                }
                 val provider0 = c.activeProvider() ?: return false
                 // 端侧供应商需要拉起/切回本地 server：直接用原始 provider 压缩会请求 local://llama 失败
                 val provider = resolveProvider(provider0) ?: run {
@@ -1727,6 +1970,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 }
                 val engine = buildEngine(s, provider)
                 _running.value = true
+                if (isLocalProvider(provider)) localRunningSid = s.id
                 val seq = ++runSeq
                 activeSeqs.add(seq)
                 // 挂到本会话的轨道上：/stop 能取消压缩（否则 UI 显示运行中但停止键无效）
@@ -1751,6 +1995,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         activeSeqs.remove(seq)
                         jobs.remove(s.id)
                         refreshActiveRuns()
+                        if (localRunningSid == s.id) {
+                            localRunningSid = null
+                            startNextLocalQueued()
+                        }
                         if (viewedSid() == s.id) _streamingText.value = null
                         refreshSessions()
                     }
@@ -1836,6 +2084,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         val seq = ++runSeq
         activeSeqs.add(seq)
+        if (isLocalProvider(provider0)) {
+            if (localRunningSid != null && localRunningSid != s.id) {
+                runError("端侧模型正被其他任务占用，稍后再问")
+                _running.value = false
+                _activeRunSessions.value = jobs.filterValues { it.isActive }.keys.toSet()
+                return
+            }
+            localRunningSid = s.id
+        }
         jobs[s.id] = viewModelScope.launch {
             try {
                 val provider = resolveProvider(provider0) ?: run {
@@ -1854,6 +2111,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 refreshActiveRuns()
                 endStreaming(s.id)
                 com.haoai.agent.platform.AgentRunRegistry.unregister(s.id, runStopHandle)
+                // D17 批5：/btw 用本地供应商时同样占 llama 单例，结束释放
+                if (localRunningSid == s.id) {
+                    localRunningSid = null
+                    startNextLocalQueued()
+                }
                 if (!_running.value) {
                     com.haoai.agent.platform.RunObserver.end()
                     com.haoai.agent.platform.TaskVisibility.apply(c.appContext, false)
@@ -2140,7 +2402,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         _planProposal.value = null
         if (currentSession?.id != sid) return
         _planMode.value = false
-        send("请按上述计划执行。")
+        send("请按上述计划执行。", bypassHold = true)
     }
 
     fun dismissPlan() {
@@ -2344,6 +2606,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun rebuildRows() {
         val s = _session.value ?: return
+        // D17 批3：查看中会话的排队映射（消息 id → 队列条目）+ 暂停标记
+        val qMap = queues[s.id]?.associateBy { it.id } ?: emptyMap()
+        val qPaused = s.id in pausedQueues
         val resultByCall = HashMap<String, Pair<String, Boolean>>()
         s.messages.forEach { m ->
             if (m.role == ChatMessage.ROLE_TOOL && m.toolCallId != null) {
@@ -2507,18 +2772,22 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                             val cur = pending[pendingToolAt] as ChainStep.Tool
                             pending[pendingToolAt] = cur.copy(tool = cur.tool.copy(imageData = m.imageData))
                         }
-                        else -> rows.add(
-                            ChatRow(
-                                m.id.ifBlank { "m$i" }, m.id, m.role,
-                                // 引擎给带图消息落的正文有"[图片N]"占位前缀行——图片已由
-                                // 附件区真实渲染，剥掉占位行避免气泡里露出方括号文字
-                                (if (m.images.isNotEmpty() || !m.imageData.isNullOrBlank())
-                                    m.content.replace(Regex("^(\\[图片\\d*\\]\\n?)+"), "")
-                                else m.content),
-                                imageData = m.imageData, ts = m.ts,
-                                images = m.images
+                        else -> {
+                            val q = qMap[m.id]
+                            rows.add(
+                                ChatRow(
+                                    m.id.ifBlank { "m$i" }, m.id, m.role,
+                                    // 引擎给带图消息落的正文有"[图片N]"占位前缀行——图片已由
+                                    // 附件区真实渲染，剥掉占位行避免气泡里露出方括号文字
+                                    (if (m.images.isNotEmpty() || !m.imageData.isNullOrBlank())
+                                        m.content.replace(Regex("^(\\[图片\\d*\\]\\n?)+"), "")
+                                    else m.content),
+                                    imageData = m.imageData, ts = m.ts,
+                                    images = m.images,
+                                    queued = q, queuePaused = qPaused
+                                )
                             )
-                        )
+                        }
                     }
                 }
                 else -> Unit
@@ -3011,7 +3280,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentSession = view
         c.sessionStore.save(view)
         _session.value = view
-        send(resumeText)
+        // D17 批2：点"继续"是明确续跑意图，不弹队列选择
+        send(resumeText, bypassHold = true)
     }
 
     /** 恢复文本的包裹层（可嵌套）：剥掉全部恢复包装，还原最初的任务目标。 */

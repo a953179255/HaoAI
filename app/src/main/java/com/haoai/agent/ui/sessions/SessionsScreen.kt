@@ -50,6 +50,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -89,6 +94,8 @@ fun SessionsScreen(
     val sessions by vm.sessions.collectAsState()
     val deletedSessions by vm.deletedSessions.collectAsState()
     val activeId = vm.session.collectAsState().value?.id
+    // D17 批5：并行跑任务的会话集合（卡片标题右侧转圈指示）
+    val runningIds by vm.runningIds.collectAsState()
 
     var query by rememberSaveable { mutableStateOf("") }
     var showTrash by rememberSaveable { mutableStateOf(false) }
@@ -444,8 +451,29 @@ fun SessionsScreen(
                                                         fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                                                         color = if (active) MaterialTheme.colorScheme.primary
                                                         else MaterialTheme.colorScheme.onBackground,
-                                                        maxLines = 1
+                                                        maxLines = 1,
+                                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f, fill = false)
                                                     )
+                                                    // D17 批5：该会话正在跑任务 → 标题右侧转圈
+                                                    if (s.id in runningIds) {
+                                                        val rot = androidx.compose.animation.core.rememberInfiniteTransition(s.id)
+                                                            .animateFloat(
+                                                                0f, 360f,
+                                                                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                                                                    tween(900)
+                                                                )
+                                                            ).value
+                                                        Spacer(Modifier.size(5.dp))
+                                                        Icon(
+                                                            com.haoai.agent.ui.common.HaoIcons.Refresh,
+                                                            contentDescription = "进行中",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .rotate(rot)
+                                                        )
+                                                    }
                                                 }
                                                 Text(
                                                     "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",

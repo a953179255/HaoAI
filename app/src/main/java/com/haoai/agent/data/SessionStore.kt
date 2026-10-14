@@ -12,6 +12,18 @@ import java.util.UUID
 @Serializable
 data class StoredToolCall(val id: String, val name: String, val argumentsJson: String)
 
+/**
+ * D17 排队消息（随会话持久化）：[id] 是已落进历史的那条用户消息 id（撤回/编辑按它定位），
+ * [localModel] = 端侧本地模型串行槽里排队的条目（旗标走紫色「本地模型 · 排队」）。
+ */
+@Serializable
+data class StoredQueuedMsg(
+    val id: String,
+    val text: String,
+    val enqueuedAt: Long = 0L,
+    val localModel: Boolean = false
+)
+
 @Serializable
 data class StoredMessage(
     /** 消息唯一 id（旧 JSON 缺省时补新生成，与 ChatMessage.id 对应）。 */
@@ -106,7 +118,14 @@ data class StoredSession(
      * B6 写盘围栏（对标 OC activeWriterRunId 的轻量版）：每次成功 save 单调 +1。
      * drain 丢弃 revision 低于已写盘值的陈旧快照，防过期副本覆盖新状态。
      */
-    var revision: Int = 0
+    var revision: Int = 0,
+    /**
+     * D17 排队队列（随会话持久化，重启不丢）：条目 = 已落进历史的用户消息 id + 文本。
+     * 同会话跑任务时补的话进这里；正常结束自动接上，停止则保留+暂停。
+     */
+    var queue: List<StoredQueuedMsg> = emptyList(),
+    /** D17 队列暂停（ZCode 式：按停止后队列保留但不自动续发，点「继续自动发送」恢复）。 */
+    var queuePaused: Boolean = false
 ) {
     companion object {
         const val RUN_IDLE = "idle"

@@ -27,6 +27,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -216,6 +217,18 @@ data class ChatProfiles(
 
 /** 头像进名字行后深层组件（AssistantBlock/UserBubble/StreamingItem）取档案，免逐层透传。 */
 val LocalChatProfiles = androidx.compose.runtime.staticCompositionLocalOf<ChatProfiles?> { null }
+
+/**
+ * D17 批3：排队气泡的三个动作回调（撤回/编辑退回输入框/立即发送）。
+ * 走 CompositionLocal 而不是逐层透传——这条链要穿 MessageList→itemsIndexed→MessageRow，
+ * 加三个参数会传染一大片；语义与 LocalChatProfiles 同款（渲染真源在 ChatScreen，VM 只出动作）。
+ */
+data class QueueActions(
+    val withdraw: (String) -> Unit,
+    val edit: (String) -> Unit,
+    val promote: (String) -> Unit
+)
+val LocalQueueActions = androidx.compose.runtime.staticCompositionLocalOf<QueueActions?> { null }
 
 /** 时间戳三档：今天=HH:mm；昨天=昨天 HH:mm；更早=MM月d日 HH:mm。 */
 internal fun fmtMsgTs(ts: Long): String {
@@ -491,6 +504,15 @@ fun ChatScreen(
     val planProposal by vm.planProposal.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
+    // D17 批3：排队气泡点 ✎ → 文本退回输入框（消费一次即清，防重放）
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        vm.composerPrefill.collect { pre ->
+            if (pre != null) {
+                input = pre
+                vm.consumeComposerPrefill()
+            }
+        }
+    }
     // 大体积 base64 / 文档正文绝不能进 rememberSaveable：会被写入 savedInstanceState
     // Bundle，超过 ~1MB 直接 TransactionTooLargeException 崩溃；进程重建丢失待发附件可接受
     // 多图时代（2026-10-14）：待发图片是列表，上限 9 张（再多 base64 撑内存、会话 JSON 也膨胀）
@@ -1075,6 +1097,11 @@ fun ChatScreen(
                     myGradient = settings.myGradient,
                     myGradientCustom = settings.myGradientCustom,
                     myImage = settings.myAvatarPath
+                ),
+                LocalQueueActions provides QueueActions(
+                    withdraw = { vm.withdrawQueued(it) },
+                    edit = { vm.editQueued(it) },
+                    promote = { vm.promoteQueued(it) }
                 )
             ) {
             MessageList(
@@ -1161,6 +1188,7 @@ fun ChatScreen(
                     onOpenBrowserFullscreen = onOpenBrowserFullscreen,
                     onOpenVscreen = onOpenVscreen,
                     planMode = planMode,
+                    runningCount = vm.runningIds.collectAsState().value.size,
                     contextDetailExpanded = showContextDetail,
                     onToggleContextDetail = { showContextDetail = !showContextDetail },
                     modifier = Modifier
@@ -1414,20 +1442,38 @@ fun ChatScreen(
                     )
                 }
             }
-            // E8 插话排队提示（生成期间用户发送的消息在队列中等待间隙注入）
-            val interjectCount by vm.interjectCount.collectAsState()
-            if (interjectCount > 0) {
+            // D17 批2：已暂停队列的恢复入口（ZCode 式——停止 ≠ 清队列，点继续自动接上）
+            val queuePausedSid by vm.queuePaused.collectAsState()
+            if (queuePausedSid != null) {
                 Row(
                     Modifier
                         .align(Alignment.CenterHorizontally)
                         .padding(bottom = 6.dp)
-                        .clickable { vm.withdrawInterjection() },
+                        .background(
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.10f),
+                            CircleShape
+                        )
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.30f),
+                            CircleShape
+                        )
+                        .clip(CircleShape)
+                        .clickable { vm.resumeQueue() }
+                        .padding(horizontal = 13.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Icon(
+                        HaoIcons.Play,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.size(5.dp))
                     Text(
-                        "已排队 $interjectCount 条 · 当前任务完成后自动执行（点此撤回最新一条）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        "队列已暂停 · 继续自动发送",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary
                     )
                 }
             }
@@ -2003,6 +2049,7 @@ fun ChatScreen(
                             avatarImagePath = settings.avatarImagePath,
                             sessions = sessions,
                             activeId = vm.session.collectAsState().value?.id,
+                            runningIds = vm.runningIds.collectAsState().value,
                             backdrop = backdrop,
                             drawerOpen = drawer.isOpen,
                             onOpenSessions = {
@@ -2190,6 +2237,59 @@ fun ChatScreen(
     }
     editTarget?.let { target ->
         var editText by remember(target.id) { mutableStateOf(target.text) }
+        // D17 批2：队列已暂停又有新消息 → 选择（ZCode heldQueueInputRequiresChoice）。
+        // 两个动作都放内容区（不放 footer dismiss 位）：onDismiss 同时挂在遮罩点击上，
+        // "清空队列"这种破坏性动作绝不能被误点遮罩触发——点外面只关窗、不选。
+        val queueHold by vm.queueHold.collectAsState()
+        queueHold?.let { h ->
+            com.haoai.agent.ui.common.GlassAlertDialog(
+                backdrop = backdrop,
+                title = "队列已暂停",
+                onDismiss = { vm.dismissQueueHold() },
+                confirmLabel = "取消",
+                onConfirm = { vm.dismissQueueHold() }
+            ) {
+                Text(
+                    "这条会话还排着 " + h.pendingCount + " 条消息（已暂停，不会自动发）。" +
+                        "这条新消息怎么处理？",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+                Spacer(Modifier.size(10.dp))
+                // 主操作：保留队列立即发送（绿实底）
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = { vm.confirmQueueHoldKeep() },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    modifier = Modifier.fillMaxWidth(),
+                    surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = 1f)
+                ) {
+                    Text(
+                        "保留队列，立即发送这条",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    )
+                }
+                Spacer(Modifier.size(8.dp))
+                // 破坏性：清空队列后发送（红底=破坏动作，语义色相铁律）
+                com.haoai.agent.ui.common.LiquidGlassButton(
+                    onClick = { vm.confirmQueueHoldClear() },
+                    backdrop = backdrop,
+                    shape = RoundedCornerShape(percent = 50),
+                    modifier = Modifier.fillMaxWidth(),
+                    surfaceColor = MaterialTheme.colorScheme.error.copy(alpha = 1f)
+                ) {
+                    Text(
+                        "清空队列，只发这条",
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    )
+                }
+            }
+        }
+
         com.haoai.agent.ui.common.GlassAlertDialog(
             backdrop = backdrop,
             title = "编辑并重发",
@@ -2592,6 +2692,8 @@ private fun TopBar(
     onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
     planMode: Boolean = false,
+    /** D17 批5：本进程在跑的任务数（>0 时顶栏标题右侧出「N 个进行中」小胶囊）。 */
+    runningCount: Int = 0,
     // 上下文详情面板：开关状态提升到 ChatScreen（面板在顶栏下方布局流里展开），
     // TopBar 只留触发点
     contextDetailExpanded: Boolean = false,
@@ -2702,6 +2804,33 @@ private fun TopBar(
                 }
             }
             Spacer(Modifier.size(2.dp))
+            // D17 批5：跨会话并行时的全局进行数小胶囊（并行跑 N 条任务时在标题右侧露出）
+            if (runningCount > 0) {
+                Row(
+                    Modifier
+                        .background(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                            CircleShape
+                        )
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        HaoIcons.Refresh,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp)
+                    )
+                    Spacer(Modifier.size(3.dp))
+                    Text(
+                        "$runningCount 个进行中",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(Modifier.size(4.dp))
+            }
             // 右侧按钮组统一 4dp 间距（IconButton 自带 12dp 视觉边距，叠加后实际
             // 图标间隙≈16dp，与左侧对称）；此前浏览器钮 2dp/虚拟屏 0dp/新会话 0dp
             // 间距不一致（用户反馈 2026-09-10）
@@ -4429,6 +4558,69 @@ private fun UserBubble(
         if (showHead) LocalChatProfiles.current?.let { p ->
             SenderHead(p.myName, p.myEmoji, p.myGradient, p.myImage, right = true, topGap = headTopGap, customHex = p.myGradientCustom)
         }
+        // ── D17 批3：排队态（v4 效果图定稿）──
+        // 同一颗绿泡降存在感 + 白虚线圈示意"暂存未发" + 琥珀旗标 +
+        // 图标动作行（✎ 编辑退回输入框 / ✕ 撤回 / ↑ 立即发送＝绿动作抢占）。
+        // 判定＝本会话忙 && 该消息在队列：续跑出队的瞬间自动落回普通气泡
+        // （"转正"由 rebuildRows 驱动，queued 标记消失），无需额外动画状态。
+        val qa = LocalQueueActions.current
+        if (running && row.queued != null && qa != null) {
+            val q = row.queued
+            // 旗标：Warn 语义色小胶囊（唯一一处排队文案，动作行不再重复）
+            Text(
+                when {
+                    row.queuePaused -> "排队中 · 已暂停"
+                    q.localModel -> "本地模型 · 排队"
+                    else -> "排队中 · 本轮后自动执行"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = com.haoai.agent.ui.theme.haoToneInk(com.haoai.agent.ui.theme.HaoTone.Warn),
+                modifier = Modifier
+                    .padding(end = 2.dp, bottom = 4.dp)
+                    .background(
+                        com.haoai.agent.ui.theme.haoToneBadgeBg(com.haoai.agent.ui.theme.HaoTone.Warn),
+                        CircleShape
+                    )
+                    .padding(horizontal = 9.dp, vertical = 2.dp)
+            )
+            Surface(
+                color = MaterialTheme.colorScheme.primary.copy(
+                    alpha = (chatBubbleAlphas().first * 0.62f).coerceIn(0.25f, 0.9f)
+                ),
+                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 5.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.5.dp, MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.55f)
+                ),
+                modifier = Modifier.widthIn(max = 320.dp)
+            ) {
+                Text(
+                    displayText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.92f),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                )
+            }
+            Row(
+                Modifier.padding(top = 3.dp, end = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                QuickActionButton(HaoIcons.Edit, "编辑（退回输入框）") { qa.edit(row.id) }
+                QuickActionButton(HaoIcons.Close, "撤回") { qa.withdraw(row.id) }
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    HaoIcons.ArrowUp,
+                    contentDescription = "立即发送（停当前轮优先发这条）",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { qa.promote(row.id) }
+                        .padding(6.dp)
+                        .size(16.dp)
+                )
+            }
+            return
+        }
         // 快捷操作行（与 Agent 同款排版：复制·编辑重发靠左，时间戳在「更多」左）。
         // 操作行宽度=气泡宽度：按钮左缘与气泡左缘平齐（气泡右对齐，操作行跟着右对齐，
         // 不再甩到屏幕最左脱离气泡——真机反馈 2026-10-07）
@@ -5661,6 +5853,7 @@ private fun SessionsDrawer(
     avatarImagePath: String?,
     sessions: List<StoredSession>,
     activeId: String?,
+    runningIds: Set<String> = emptySet(),
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     drawerOpen: Boolean,
     onOpenSessions: () -> Unit,
@@ -5855,14 +6048,36 @@ private fun SessionsDrawer(
                                 Spacer(Modifier.size(7.dp))
                             }
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    s.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (active) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onBackground,
-                                    maxLines = 1
-                                )
+                                // 标题 + 运行中指示（D17 批5：会话并行跑任务时列表也看得出来）
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        s.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (active) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onBackground,
+                                        maxLines = 1,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (s.id in runningIds) {
+                                        Spacer(Modifier.size(6.dp))
+                                        val rot = androidx.compose.animation.core.rememberInfiniteTransition(s.id)
+                                            .animateFloat(
+                                                0f, 360f,
+                                                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                                                    tween(900)
+                                                )
+                                            ).value
+                                        Icon(
+                                            HaoIcons.Refresh,
+                                            contentDescription = "进行中",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .rotate(rot)
+                                        )
+                                    }
+                                }
                                 Text(
                                     "${fmt.format(Date(s.updatedAt))} · ${s.messages.size} 条",
                                     style = MaterialTheme.typography.labelSmall,
