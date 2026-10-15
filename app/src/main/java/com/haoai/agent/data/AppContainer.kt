@@ -185,30 +185,6 @@ class AppContainer(app: Application) {
         return settingsReady
     }
 
-    init {
-        applicationScope.launch {
-            val loaded = settingsStore.load()
-            synchronized(settingsLock) { settingsFlow.value = loaded }
-            // 玻璃质感：持久化参数灌入运行态镜像（GlassTuning 单例，玻璃组件逐帧读）
-            com.haoai.agent.ui.theme.GlassTuning.loadFrom(loaded.glass)
-            // llama 参数补灌：原在构造期直读 settingsFlow.value（那时已是真值，异步后挪进来）
-            llama.preferredModel = loaded.localModelFile
-            llama.contextSize = loaded.localContextLength
-            // C6 迁移：legacy config apply 走 updateSettings，必须在 settingsFlow 真值就位后执行
-            runCatching {
-                (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
-                    val legacy = java.io.File(ws, "haoai.config.json")
-                    if (legacy.exists()) {
-                        runCatching { legacy.readText() }.getOrNull()?.let { configBridge.apply(it) }
-                        runCatching { legacy.delete() }
-                    }
-                }
-            }
-            settingsReady = true
-            settingsReadyFlow.value = true
-        }
-    }
-
     /**
      * C6 配置源迁状态目录（app 私有，config 归状态目录）：
      * 工作区不再出现 haoai.config.json，agent 的 read/write/edit 摸不到它——
@@ -324,6 +300,44 @@ class AppContainer(app: Application) {
         // 基于"默认设置"改写、随后异步 load 用磁盘值覆盖 = 用户改动丢失）。
         // 配置文件桥：启动渲染镜像 + 监听外部改动（兜底覆盖 adb/文件管理器手改状态目录文件）
         configBridge.startWatching(applicationScope)
+    }
+
+    init {
+        // A1 修复版（2026-10-15）：settings 异步读取。
+        // ⚠ 此 init 块必须位于其闭包引用的全部字段声明之后（settingsStore/settingsFlow/
+        //   settingsLock/llama/workspace/configBridge）——协程在 IO 线程与构造函数并发跑，
+        //   引用尚未初始化的字段会 NPE（初版放在 configBridge 之前，实测每次冷启动
+        //   "卡启动屏数秒→进程被杀"，即此竞态）。
+        // ⚠ 整体 try/finally 兜底：任何失败都置 ready（按默认设置继续），就绪门绝不
+        //   永久卡死 UI；失败详情进日志。
+        applicationScope.launch {
+            try {
+                val loaded = settingsStore.load()
+                synchronized(settingsLock) { settingsFlow.value = loaded }
+                // 玻璃质感：持久化参数灌入运行态镜像（GlassTuning 单例，玻璃组件逐帧读）
+                com.haoai.agent.ui.theme.GlassTuning.loadFrom(loaded.glass)
+                // llama 参数补灌：原在构造期直读 settingsFlow.value（那时已是真值，异步后挪进来）
+                llama.preferredModel = loaded.localModelFile
+                llama.contextSize = loaded.localContextLength
+                // C6 迁移：legacy config apply 走 updateSettings，必须在 settingsFlow 真值就位后执行
+                runCatching {
+                    (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
+                        val legacy = java.io.File(ws, "haoai.config.json")
+                        if (legacy.exists()) {
+                            runCatching { legacy.readText() }.getOrNull()?.let { configBridge.apply(it) }
+                            runCatching { legacy.delete() }
+                        }
+                    }
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                android.util.Log.e("HaoAppContainer", "settings 异步加载失败，按默认设置继续", t)
+            } finally {
+                settingsReady = true
+                settingsReadyFlow.value = true
+            }
+        }
     }
 
     fun updateSettings(edit: (AppSettings) -> AppSettings) {
