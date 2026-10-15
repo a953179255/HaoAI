@@ -24,7 +24,11 @@ fun interface SubAgentRunner {
 class SubAgentTool(
     private val runner: SubAgentRunner,
     /** P2：终止/纠偏/收取句柄（spawn 被终止时回收部分结果；后台派发预分配 id）。 */
-    private val controls: SubagentControl? = null
+    private val controls: SubagentControl? = null,
+    /** A5（2026-10-15）：子代理结论回传走溢出管道（与主循环工具结果同一开关同一落点）。
+     *  旧实现回传前 TextCap.middle(6000) 纯截断——子代理重跑成本是整个子任务，
+     *  截掉的结论永久丢失且无法回查。开关关着时行为与旧版逐字一致（S4 原则）。 */
+    private val resultSpillOn: Boolean = false
 ) : Tool {
 
     override val name = "spawn_agent"
@@ -69,7 +73,17 @@ class SubAgentTool(
 
         return try {
             val result = runner.run(task, ctx, 1, 1, mode, id)
-            ToolResult(TextCap.middle(result, 6000))
+            // A5：回传统一走 capForStore——开关开=超 6000 溢出落工作区文件、
+            // 会话里留头尾摘要+可 read 的路径；开关关=TextCap.middle(6000) 与旧版逐字相同
+            ToolResult(
+                com.haoai.agent.agent.engine.capForStore(
+                    content = result,
+                    cap = 6_000,
+                    backend = ctx.backend,
+                    callId = "subagent-$id",
+                    spillOn = resultSpillOn
+                )
+            )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // P2：被 stop_agent 终止 → 回收部分结果返回主代理；整轮取消（用户停止）则原样传播
             val h = controls?.byId(id)

@@ -22,6 +22,7 @@ package com.haoai.agent.agent.engine
  */
 import com.haoai.agent.agent.memory.DailyJournal
 import com.haoai.agent.agent.memory.MemoryBank
+import com.haoai.agent.agent.flags.HaoFlag
 import com.haoai.agent.agent.model.ChatMessage
 import com.haoai.agent.agent.model.ToolCallData
 import com.haoai.agent.agent.policy.ApprovalRequest
@@ -427,7 +428,8 @@ class AgentEngine(
         var tools = ToolRegistry.build(
             ctx, subAgentRunner,
             activeGroupsForProfile(session.activeGroups?.toSet()),
-            subagentControl
+            subagentControl,
+            subResultSpillOn = HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, flagOverrides)
         ) + handoffTool + toolsEnableTool + delegateTools
         var apiTools = gateTools(tools.map { it.toApi() })
 
@@ -664,7 +666,8 @@ class AgentEngine(
                     tools = ToolRegistry.build(
                         ctx, subAgentRunner,
                         activeGroupsForProfile(session.activeGroups?.toSet()),
-                        subagentControl
+                        subagentControl,
+                        subResultSpillOn = HaoFlag.enabled(HaoFlag.TOOL_RESULT_SPILL, flagOverrides)
                     ) + handoffTool + toolsEnableTool + delegateTools
                     apiTools = gateTools(tools.map { it.toApi() })
                     _toolsTokenCache = if (apiTools.isEmpty()) 0 else estimateToolsTokens(apiTools)

@@ -79,7 +79,9 @@ class AgentEngineLoopTest {
         contextLength: Int = 0,
         turnTokenCap: Int = 150_000,
         toolCallCap: Int = 80,
-        steeringDrain: (String) -> Int = { 0 }
+        steeringDrain: (String) -> Int = { 0 },
+        backend: com.haoai.agent.platform.FileBackend? = null,
+        flagOverrides: Map<String, Boolean> = emptyMap()
     ): AgentEngine =
         AgentEngine(
             httpClient = client,
@@ -93,13 +95,14 @@ class AgentEngineLoopTest {
             approve = { true },
             session = session,
             persist = {},
-            backend = null,
+            backend = backend,
             appFilesDir = dir,
             workspaceLabel = "test",
             toolFailCap = toolFailCap,
             turnTokenCap = turnTokenCap,
             toolCallCap = toolCallCap,
-            steeringDrain = steeringDrain
+            steeringDrain = steeringDrain,
+            flagOverrides = flagOverrides
         )
 
     /** 每轮换参数，避免撞 P2-5 重放保护（同名同参紧邻会被判为重放而不真正执行）。 */
@@ -316,6 +319,74 @@ class AgentEngineLoopTest {
         }
         assertTrue("第二个回合的 background 子代理必须真的启动过", researchRoundSeen())
     }
+
+    /**
+     * A5（2026-10-15）：子代理结果必须与主循环工具结果走**同一条溢出管道**。
+     * spawn_agent 的结果在父循环里就是一个普通工具结果（finishCall → capForStore）：
+     * 开 tool_result_spill 后，超长的子代理结论溢出落工作区文件、落库内容带可 read 的路径，
+     * 而不是被 16000 截断后永久丢失。防回归：未来若有人给子代理结果单独开截断旁路，
+     * 这条断言会失败。
+     */
+    @Test
+    fun subagentLongResultGoesThroughSpillPipeline() = runBlocking {
+        val longConclusion = "CONCLUSION-MARKER-" + "z".repeat(20_000)
+        val client = FakeClient(
+            listOf(
+                // 主循环轮1：同步 spawn_agent
+                callingTool("spawn_agent", "s1", "{\"task\":\"写一份超长报告\"}"),
+                // 子代理轮（无工具调用 → finalText = 超长结论）
+                saying(longConclusion),
+                // 主循环轮2：收尾
+                saying("收尾")
+            )
+        )
+        val backend = RecordingBackend()
+        val e = engine(
+            client, tmpDir(), backend = backend,
+            flagOverrides = mapOf("tool_result_spill" to true)
+        )
+        e.runTurn("开始", {}, {})
+        // 落库的 spawn_agent 工具结果必须带溢出路径提示（证明走了 capForStore）
+        val stored = sessionMessagesOf(e)
+        val toolMsg = stored.lastOrNull { it.role == ChatMessage.ROLE_TOOL && it.toolCallId == "s1" }
+        assertTrue("子代理结果的落库消息应存在", toolMsg != null)
+        assertTrue(
+            "超长子代理结果应溢出落文件并带回查路径（而非纯截断）",
+            toolMsg!!.content?.contains(".haoai-output/") == true
+        )
+        // 文件真的写进了工作区
+        assertTrue(
+            "溢出文件应已写入 backend",
+            backend.files.keys.any { it.startsWith(".haoai-output/") }
+        )
+    }
+
+    /** 记录型 FileBackend：捕获 writeText 的文件名，供断言。 */
+    private class RecordingBackend : com.haoai.agent.platform.FileBackend {
+        val files = LinkedHashMap<String, String>()
+        override val displayName: String = "recording-test"
+        override fun shellWorkdir(): java.io.File? = null
+        override suspend fun readText(rel: String, maxBytes: Int): String = files[rel] ?: ""
+        override suspend fun writeText(rel: String, content: String) { files[rel] = content }
+        override suspend fun delete(rel: String) { files.remove(rel) }
+        override suspend fun rename(fromRel: String, newName: String) {
+            val c = files.remove(fromRel) ?: return
+            files[fromRel.substringBeforeLast('/') + "/" + newName] = c
+        }
+        override suspend fun listDir(rel: String): List<String> =
+            files.keys.filter { it.startsWith(rel.trimEnd('/') + "/") }
+                .map { it.substringAfterLast('/') }
+        override suspend fun walk(maxEntries: Int): List<com.haoai.agent.platform.FileEntry> =
+            files.keys.take(maxEntries).map {
+                com.haoai.agent.platform.FileEntry(
+                    path = it,
+                    size = files[it]?.length?.toLong() ?: 0L,
+                    lastModified = 0L
+                )
+            }
+    }
+
+    private fun sessionMessagesOf(e: AgentEngine) = e.session.messages
 
     /** P3-B 检索硬预算：只夹检索类工具、用完不消耗额度、也不把它算成工具失败。 */
     @Test
