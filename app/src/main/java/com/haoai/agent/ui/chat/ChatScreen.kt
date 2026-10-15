@@ -626,6 +626,9 @@ fun ChatScreen(
     var showProfileEdit by remember { mutableStateOf(false) }
     // 聊天输入框聚焦态（由 ComposerBar 上报）：键盘避让的唯一判据
     var composerFocused by remember { mutableStateOf(false) }
+    // ask_user/题组卡自由输入框的聚焦态：键盘避让同样要服务它（2026-10-15 用户报：
+    // 点提问卡"自定义输入"时卡片不随键盘抬起，键盘盖住选项——旧逻辑只认主输入栏焦点）
+    var askCardInputFocused by remember { mutableStateOf(false) }
     // 顶栏会话名点击重命名
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
@@ -640,7 +643,8 @@ fun ChatScreen(
     // 判据是"聊天输入框自己聚焦"而非"键盘是否存在"：关闭弹窗时键盘要收 ~200ms，
     // 期间若按"无弹窗 + 有键盘"判定，聊天内容会被抬起再落下（用户实锤闪动）。
     // 以聚焦为准则窗口不存在：聊天输入框没聚焦 → 恒不抬。
-    val keyboardLiftPx = if (overlayDialogOpen || !composerFocused) 0
+    // 抬升服务任何"正在输入的框"：主输入栏 或 ask_user/题组卡的自定义输入框
+    val keyboardLiftPx = if (overlayDialogOpen || (!composerFocused && !askCardInputFocused)) 0
         else (imeHeightPx - navBarPx).coerceAtLeast(0)
     // 玻璃 effects 在「绘制期」读取这个 State 注册快照订阅：键盘动画每帧变更 →
     // backdrop 节点失效重绘 → 采样 offset 用最新布局坐标重算。effects 里读普通
@@ -1431,7 +1435,8 @@ fun ChatScreen(
                     PendingAskCard(
                         ask = ask,
                         onAnswer = { id, idx -> vm.answerAsk(id, idx) },
-                        onAnswerFree = { id, text -> vm.answerAskFree(id, text) }
+                        onAnswerFree = { id, text -> vm.answerAskFree(id, text) },
+                        onFreeInputFocus = { askCardInputFocused = it }
                     )
                 }
             }
@@ -1441,7 +1446,8 @@ fun ChatScreen(
                     PendingQuizCard(
                         quiz = quiz,
                         onAnswer = { id, qIndex, oIndex -> vm.answerQuiz(id, qIndex, oIndex) },
-                        onAnswerFree = { id, qIndex, text -> vm.answerQuizFree(id, qIndex, text) }
+                        onAnswerFree = { id, qIndex, text -> vm.answerQuizFree(id, qIndex, text) },
+                        onFreeInputFocus = { askCardInputFocused = it }
                     )
                 }
             }
@@ -3766,7 +3772,9 @@ private fun SenderHead(
 private fun PendingAskCard(
     ask: com.haoai.agent.ui.ChatViewModel.PendingAsk,
     onAnswer: (String, Int) -> Unit,
-    onAnswerFree: (String, String) -> Unit
+    onAnswerFree: (String, String) -> Unit,
+    /** 自由输入框聚焦变化：上抛给键盘避让（keyboardLiftPx 判定用）。 */
+    onFreeInputFocus: (Boolean) -> Unit = {}
 ) {
     val req = ask.req
     // 快速模式（模型声明 confirm=false）：点选项即提交，运行立刻继续；只保留自由输入的提交钮
@@ -3935,7 +3943,9 @@ private fun PendingAskCard(
                                     inner()
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { onFreeInputFocus(it.isFocused) }
                         )
                     }
                 }
@@ -3985,7 +3995,9 @@ private fun PendingAskCard(
 private fun PendingQuizCard(
     quiz: com.haoai.agent.ui.ChatViewModel.PendingQuiz,
     onAnswer: (askId: String, questionIndex: Int, optionIndex: Int) -> Unit,
-    onAnswerFree: (askId: String, questionIndex: Int, text: String) -> Unit
+    onAnswerFree: (askId: String, questionIndex: Int, text: String) -> Unit,
+    /** 自由输入框聚焦变化：上抛给键盘避让（keyboardLiftPx 判定用）。 */
+    onFreeInputFocus: (Boolean) -> Unit = {}
 ) {
     val qIndex = quiz.answered
     val total = quiz.req.questions.size
@@ -4141,7 +4153,9 @@ private fun PendingQuizCard(
                                     inner()
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { onFreeInputFocus(it.isFocused) }
                         )
                     }
                     val ready = freeText.isNotBlank()
