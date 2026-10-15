@@ -2710,6 +2710,35 @@ private fun TopBar(
     val density = LocalDensity.current
     val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
     val scrimColor = MaterialTheme.colorScheme.background
+    // 状态栏带防漏补强 v4（回退 v2/v3 的遮罩滥用，2026-10-16 用户实测纠偏）：
+    // 病根=blur 在玻璃顶缘采样天然衰减（顶行上方无像素可采）→ 顶部比其他位置透。
+    // v2/v3 用加浓背景色遮罩硬压，副作用是把大半条顶栏拍实——「顶栏模糊」滑杆
+    // 调到 0 本该全透，遮罩却还压着 0.85（滑杆语义被吞，用户点名）。v4：
+    // ① 与滑杆联动：barBlur=0 → 整层不画，透明就是透明；
+    // ② 浓度随 blur 线性（blur 越大边缘衰减越重，遮罩才越需要）：0.15+0.025×blur，
+    //    上限 0.6≈原 0.55 口径；
+    // ③ 只盖边缘衰减真影响的那条：平台段到状态栏底，20dp 淡出收尾，
+    //    不再延到标题行整高（v3 平台到 sb+40 ≈ 拍实大半条栏）。
+    // 滑杆改动即失效重算：绘制期读值走 observeReads（effects 重算），遮罩浓度
+    // 在组合期读——滑杆每挪一格重组必到（同 GlassTuning 接滑杆口径）。
+    val barBlurNow = com.haoai.agent.ui.theme.GlassTuning.barBlur
+    val veilA = (0.15f + 0.025f * barBlurNow).coerceIn(0f, 0.6f)
+    val veilFadeEnd = statusBarPx + with(density) { 20.dp.toPx() }
+    val veilPlateauStop = (statusBarPx / veilFadeEnd).coerceIn(0f, 1f)
+    val topBarVeil: ((androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit))? =
+        if (barBlurNow > 0f) {
+            {
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to scrimColor.copy(alpha = veilA),
+                        veilPlateauStop to scrimColor.copy(alpha = veilA),
+                        1f to scrimColor.copy(alpha = 0f),
+                        startY = 0f,
+                        endY = veilFadeEnd
+                    )
+                )
+            }
+        } else null
     // 通栏方角顶栏：无左右边距、无圆角、无四周描边（底缘发丝线由内容
     // Row 下方的 Box 画出）；任务面板在同一块玻璃内向下一体生长（animateContentSize）
     GlassPanel(
@@ -2726,26 +2755,7 @@ private fun TopBar(
         blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
         surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
         border = false,
-        // backdrop blur 在玻璃顶缘采样衰减，高对比文字滚入状态栏带会透出（真机
-        // 2026-10-16 两轮实测迭代）：叠背景色补强层。v1（0.55 线性淡出到
-        // statusBar+20dp）两头不够；v2（0.8 平台到状态栏底再 48dp 淡出）状态栏
-        // 带压住了，但真机逐行量化显示残留集中在标题行半区（y≈32–100px）——
-        // 48dp 淡出带起点太早，正文文字在标题行高度内仍可读。
-        // v3：平台段延长到 状态栏底+40dp（覆盖标题行大半场），再 36dp 收尾淡出；
-        // 浓度 0.85。观感=顶栏上半实、向标题行平滑转虚，无硬边。
-        surfaceOverlay = {
-            val plateauEnd = statusBarPx + with(density) { 40.dp.toPx() }
-            val fadeEnd = plateauEnd + with(density) { 36.dp.toPx() }
-            drawRect(
-                brush = Brush.verticalGradient(
-                    0f to scrimColor.copy(alpha = 0.85f),
-                    (plateauEnd / fadeEnd) to scrimColor.copy(alpha = 0.85f),
-                    1f to scrimColor.copy(alpha = 0f),
-                    startY = 0f,
-                    endY = fadeEnd
-                )
-            )
-        }
+        surfaceOverlay = topBarVeil
     ) {
         // GlassPanel 内容是 Box：顶栏行与任务区必须包在同一 Column 里，否则叠放
         Column(
