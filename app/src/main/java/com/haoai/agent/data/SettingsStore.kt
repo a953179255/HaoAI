@@ -164,6 +164,10 @@ data class AppSettings(
     val bubbleOpacity: Float = 0.7f,
     /** 聊天壁纸作用范围：false=仅聊天界面（默认），true=应用为全局壁纸。 */
     val wallpaperGlobal: Boolean = false,
+    /** 链卡「深度思考」段是否默认展开阅读区（false=收起为摘要行，点击展开）。 */
+    val chainThinkAutoExpand: Boolean = false,
+    /** 链卡变更卡/结果卡正文是否默认展开（false=一律收起；旧行为=短内容自动展开）。 */
+    val chainContentAutoExpand: Boolean = false,
     val reasoningEffort: String = "",
     val localModelFile: String? = null,
     val agentName: String = "",

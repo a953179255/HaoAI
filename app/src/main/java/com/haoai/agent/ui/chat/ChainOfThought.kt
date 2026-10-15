@@ -66,6 +66,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -169,6 +170,30 @@ val LocalParkExpand = androidx.compose.runtime.staticCompositionLocalOf<() -> Un
 fun rememberParkOnExpand(): () -> Unit = LocalParkExpand.current
 
 /**
+ * 链卡内容默认展开策略（2026-10-15 用户拍板）：
+ * ① 深度思考段默认**收起**为摘要行（旧=点开链卡只见大段思考墙）；
+ * ② 变更卡/结果卡正文默认**收起**（旧=≤12 行短内容自动摊开）。
+ * 两项各由设置开关控制（聊天显示区），默认关=收起；开关打开恢复旧行为。
+ * 非 HaoApplication 宿主（预览/测试）回退 false=收起。
+ */
+@Composable
+fun chainAutoExpand(): Pair<Boolean, Boolean> {
+    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext
+        as? com.haoai.agent.HaoApplication ?: return false to false
+    val s = app.container.settingsFlow.collectAsState().value
+    return s.chainThinkAutoExpand to s.chainContentAutoExpand
+}
+
+/** diff 语义色（行尾变更计数与变更卡共用；2026-10-15 提取统一）。 */
+@Composable
+private fun diffAddInk(): Color =
+    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF8FD9A6) else Color(0xFF146C2E)
+
+@Composable
+private fun diffDelInk(): Color =
+    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFFE79A9A) else Color(0xFFA1281F)
+
+/**
  * 链卡行按压反馈（替代裸 ripple，2026-09-15 v4 定稿）：
  * 默认 ripple 8dp 圆角与链卡 18dp 不匹配；v1-v3 给行自设圆角都错——
  * 两套几何必打架。定稿（规格图 chain-press-target）：**行通栏**（卡片不留
@@ -209,6 +234,7 @@ fun ChainCard(
     modifier: Modifier = Modifier
 ) {
     if (steps.isEmpty()) return
+    val thinkAuto = chainAutoExpand().first
     // 各思考段独立展开态（收起行点击展开全文；live 段也可点开阅读区）。
     // key=段在链中的下标：合并后一段链里可能有多段思考，各自独立开关。
     // 不能以 steps.size 为键——新段/新工具步到达会重建 map，把用户手动展开的
@@ -263,7 +289,7 @@ fun ChainCard(
                                 thinkingMs = step.ms,
                                 segNo = segNos[index] ?: (index + 1),
                                 live = reasoningLive && index == totalSteps - 1,
-                                expanded = reasoningOpen[index] == true,
+                                expanded = reasoningOpen[index] ?: thinkAuto,
                                 onToggle = { reasoningOpen[index] = !(reasoningOpen[index] == true) }
                             )
                             is ChainStep.Tool -> Column {
@@ -753,10 +779,11 @@ private fun ToolStep(
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
+                        // 2026-10-15 去实心药丸改裸文字链接：与抓取步"域名文本可点"同分型，
+                        // 行内两颗药丸（动词+文件）互相打架是"突兀"的根源；交互不变
                         .clip(RoundedCornerShape(7.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
                         .clickable { viewing = true }
-                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
                 )
             }
             if (viewing) {
@@ -785,10 +812,10 @@ private fun ToolStep(
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     modifier = Modifier
+                        // 与路径芯片同款改裸文字链接（同交互分型同步演进）
                         .clip(RoundedCornerShape(7.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
                         .clickable { showLog = true }
-                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
                 )
             }
             if (showLog) {
@@ -815,24 +842,25 @@ private fun ToolStep(
         // 而"这次到底改了哪几行"恰恰是协作时最常问的一句话——提到行首标签右侧，一眼可见。
         val diff = tool.diff
         if (diff != null) {
-            if (diff.isNewFile) {
-                Text(
-                    "新建 ${diff.added} 行",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FwSpan.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            } else {
-                Text(
-                    "+${diff.added} −${diff.removed}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FwSpan.SemiBold,
-                    color = if (diff.added > 0 || diff.removed > 0) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-            }
+            // 2026-10-15 配色改 diff 语义（绿增红删）：此前一律主题绿，
+            // "−删除"用动作色反而违和；纯删除文件也不再显示"+0"
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(fontWeight = FwSpan.SemiBold)) {
+                        if (diff.isNewFile) {
+                            append("新建 ")
+                            withStyle(SpanStyle(color = diffAddInk())) { append("${diff.added}") }
+                            append(" 行")
+                        } else {
+                            if (diff.added > 0) withStyle(SpanStyle(color = diffAddInk())) { append("+${diff.added}") }
+                            if (diff.added > 0 && diff.removed > 0) append(" ")
+                            if (diff.removed > 0) withStyle(SpanStyle(color = diffDelInk())) { append("−${diff.removed}") }
+                        }
+                    }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace
+            )
         }
         // 状态列：运行（无文字）↔ 完成/失败/拒绝 交叉淡入（此前是"啪"地冒出 ✓）
         AnimatedContent(
@@ -904,8 +932,9 @@ private fun ToolBodyCard(tool: UiTool) {
     val lines = remember(parsed.text) { parsed.text.lines() }
     val isError = tool.state == ToolRunState.ERROR || (parsed.exitCode ?: 0) != 0
 
+    val (_, contentAuto) = chainAutoExpand()
     var expanded by rememberSaveable(tool.callId) {
-        mutableStateOf(lines.size <= AUTO_EXPAND_MAX_LINES)
+        mutableStateOf(contentAuto && lines.size <= AUTO_EXPAND_MAX_LINES)
     }
     // 展开锚点：正文卡「由收→展」置停车，不吸底
     val parkOnExpand = rememberParkOnExpand()
@@ -1023,16 +1052,17 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
     val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
     val addBg = if (dark) Color(0xFF16301F) else Color(0xFFE8F6EC)
     val delBg = if (dark) Color(0xFF3A1D1F) else Color(0xFFFDECEA)
-    val addFg = if (dark) Color(0xFF8FD9A6) else Color(0xFF146C2E)
-    val delFg = if (dark) Color(0xFFE79A9A) else Color(0xFFA1281F)
+    val addFg = diffAddInk()
+    val delFg = diffDelInk()
     val numFg = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     val bodyFg = if (dark) Color(0xFFD7DEE9) else Color(0xFF23272F)
 
     // 只渲染变更行 + 少量上下文：整份文件铺开会把对话冲垮，而用户要看的是"哪几行动了"。
     // 上下文取前后各 CONTEXT_LINES 行，让改动不至于悬空看不出位置。
     val shown = remember(diff.lines) { contextOf(diff.lines) }
+    val (_, contentAuto) = chainAutoExpand()
     var expanded by rememberSaveable(diff.path) {
-        mutableStateOf(shown.size <= AUTO_EXPAND_MAX_LINES)
+        mutableStateOf(contentAuto && shown.size <= AUTO_EXPAND_MAX_LINES)
     }
     // 展开锚点：diff 卡「由收→展」置停车，不吸底
     val parkOnExpand = rememberParkOnExpand()

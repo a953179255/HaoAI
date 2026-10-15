@@ -1317,6 +1317,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(bubbleOpacity = value.coerceIn(0.3f, 1f)) }
     }
 
+    fun setChainThinkAutoExpand(enabled: Boolean) {
+        c.updateSettings { it.copy(chainThinkAutoExpand = enabled) }
+    }
+
+    fun setChainContentAutoExpand(enabled: Boolean) {
+        c.updateSettings { it.copy(chainContentAutoExpand = enabled) }
+    }
+
     /**
      * 玻璃质感落盘（主题外观页滑杆松手/开关切换时调）：运行态镜像 GlassTuning
      * 已由 UI 即时改过，这里只把快照写进设置；updateSettings 触发 settingsFlow

@@ -3402,6 +3402,34 @@ private fun LazyListScope.themeItems(
         }
     }
 
+    item { SectionTitle("任务过程展开") }
+    item {
+        // 链卡默认展开策略（2026-10-15 用户拍板）：默认收起——任务跑动时满屏
+        // 思考墙/代码块刷屏；收起后点行展开细看。开关只影响新出现的卡片。
+        GlassGroup(backdrop) {
+            ToggleRow(
+                title = "深度思考默认展开",
+                subtitle = if (settings.chainThinkAutoExpand) "已开：思考段一出现就摊开全文阅读"
+                else "关闭时思考段收起为一行摘要（思考中滚动尾随），点击展开",
+                checked = settings.chainThinkAutoExpand,
+                onChange = { vm.setChainThinkAutoExpand(it) },
+                backdrop = backdrop
+            )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            ToggleRow(
+                title = "工具内容默认展开",
+                subtitle = if (settings.chainContentAutoExpand) "已开：写入变更/命令结果等短内容（≤12 行）自动摊开"
+                else "关闭时变更卡/结果卡收起为一行，点「展开 N 行」细看",
+                checked = settings.chainContentAutoExpand,
+                onChange = { vm.setChainContentAutoExpand(it) },
+                backdrop = backdrop
+            )
+        }
+    }
+
     item { SectionTitle("聊天背景壁纸") }
     item {
         GlassGroup(backdrop) {
