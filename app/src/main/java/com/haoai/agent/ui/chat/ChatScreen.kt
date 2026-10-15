@@ -2726,14 +2726,23 @@ private fun TopBar(
         blurRadius = com.haoai.agent.ui.theme.haoPageBarBlurRadius(),
         surfaceAlpha = com.haoai.agent.ui.theme.haoPageBarSurfaceAlpha(),
         border = false,
-        // backdrop blur 在玻璃顶缘采样衰减，高对比文字滚入状态栏带会透出：
-        // 顶部叠一条背景色渐变补强，到状态栏底 +20dp（标题行上缘）淡出
+        // backdrop blur 在玻璃顶缘采样衰减，高对比文字滚入状态栏带会透出（真机
+        // 2026-10-16 两轮实测迭代）：叠背景色补强层。v1（0.55 线性淡出到
+        // statusBar+20dp）两头不够；v2（0.8 平台到状态栏底再 48dp 淡出）状态栏
+        // 带压住了，但真机逐行量化显示残留集中在标题行半区（y≈32–100px）——
+        // 48dp 淡出带起点太早，正文文字在标题行高度内仍可读。
+        // v3：平台段延长到 状态栏底+40dp（覆盖标题行大半场），再 36dp 收尾淡出；
+        // 浓度 0.85。观感=顶栏上半实、向标题行平滑转虚，无硬边。
         surfaceOverlay = {
+            val plateauEnd = statusBarPx + with(density) { 40.dp.toPx() }
+            val fadeEnd = plateauEnd + with(density) { 36.dp.toPx() }
             drawRect(
                 brush = Brush.verticalGradient(
-                    colors = listOf(scrimColor.copy(alpha = 0.55f), scrimColor.copy(alpha = 0f)),
+                    0f to scrimColor.copy(alpha = 0.85f),
+                    (plateauEnd / fadeEnd) to scrimColor.copy(alpha = 0.85f),
+                    1f to scrimColor.copy(alpha = 0f),
                     startY = 0f,
-                    endY = statusBarPx + with(density) { 20.dp.toPx() }
+                    endY = fadeEnd
                 )
             )
         }
