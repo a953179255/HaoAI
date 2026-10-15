@@ -1084,13 +1084,23 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // 2026-10-15 v2 配色改 diff 语义绿增红删（ZCode/GitHub 同款约定）：
+                // 上一版只分了步骤行尾计数，卡头 +N −M 仍整段主题绿——本处补齐。
                 Text(
-                    if (diff.isNewFile) "新建文件 · ${diff.added} 行"
-                    else "+${diff.added} −${diff.removed}",
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                            if (diff.isNewFile) {
+                                append("新建文件 · ")
+                                withStyle(SpanStyle(color = diffAddInk())) { append("${diff.added} 行") }
+                            } else {
+                                if (diff.added > 0) withStyle(SpanStyle(color = diffAddInk())) { append("+${diff.added}") }
+                                if (diff.added > 0 && diff.removed > 0) append(" ")
+                                if (diff.removed > 0) withStyle(SpanStyle(color = diffDelInk())) { append("−${diff.removed}") }
+                            }
+                        }
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+                    fontFamily = FontFamily.Monospace
                 )
                 Text(
                     diff.path.substringAfterLast('/'),
@@ -1098,8 +1108,10 @@ private fun ToolDiffCard(diff: com.haoai.agent.ui.UiDiff) {
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    overflow = TextOverflow.Ellipsis
+                    // 2026-10-15 v2 摘掉 weight(1f, fill=false)：它与后面的 Spacer(weight(1f))
+                    // 平分剩余权重，把「展开」从右缘挤到行中间（用户截图点名）。
+                    // 推右职责只归 Spacer——与结果卡头部同款写法。
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
