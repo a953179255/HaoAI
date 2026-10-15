@@ -40,6 +40,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.contentOrNull
@@ -560,6 +562,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      */
     private var runSeq = 0
 
+
+
     /**
      * 把回调绑到「某个回合」上：只有该回合还活着（未结束/未被取消）才放行。
      * D17 起按 activeSeqs 判活：A、B 并行时两代回调各自放行、各写各的会话缓冲；
@@ -666,9 +670,17 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private fun startStreamFlusher() {
         if (streamFlusher?.isActive == true) return
         streamFlusher = viewModelScope.launch {
-            while (jobs.isNotEmpty()) {
+            // ⚠ 循环条件不能用 while (jobs.isNotEmpty()) 前置检查：
+            // viewModelScope 是 Dispatchers.Main.immediate——launch 的协程体在
+            // startStreamFlusher() 调用点【立即执行】，而 jobs.put 在 startRun 尾部
+            // 才发生 → 首查 jobs 恒空 → flusher 出生即退 → 流式全程不上屏，
+            // 内容憋到回合收尾 rebuildRows 一次性出现（2026-10-15 真机实测复现）。
+            // 改为 isActive 主循环 + "无人跑且无显示态"保底退出；
+            // 正常退出路径仍是 endStreaming 的显式 cancel。
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
                 kotlinx.coroutines.delay(40)
                 flushStreamDisplay()
+                if (jobs.isEmpty() && runDisplays.isEmpty()) break
             }
         }
     }
