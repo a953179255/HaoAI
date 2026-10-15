@@ -1195,7 +1195,6 @@ fun ChatScreen(
                     onOpenBrowserFullscreen = onOpenBrowserFullscreen,
                     onOpenVscreen = onOpenVscreen,
                     planMode = planMode,
-                    runningCount = vm.runningIds.collectAsState().value.size,
                     contextDetailExpanded = showContextDetail,
                     onToggleContextDetail = { showContextDetail = !showContextDetail },
                     modifier = Modifier
@@ -2701,8 +2700,6 @@ private fun TopBar(
     onOpenBrowserFullscreen: () -> Unit = {},
     onOpenVscreen: () -> Unit = {},
     planMode: Boolean = false,
-    /** D17 批5：本进程在跑的任务数（>0 时顶栏标题右侧出「N 个进行中」小胶囊）。 */
-    runningCount: Int = 0,
     // 上下文详情面板：开关状态提升到 ChatScreen（面板在顶栏下方布局流里展开），
     // TopBar 只留触发点
     contextDetailExpanded: Boolean = false,
@@ -2813,33 +2810,6 @@ private fun TopBar(
                 }
             }
             Spacer(Modifier.size(2.dp))
-            // D17 批5：跨会话并行时的全局进行数小胶囊（并行跑 N 条任务时在标题右侧露出）
-            if (runningCount > 0) {
-                Row(
-                    Modifier
-                        .background(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                            CircleShape
-                        )
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        HaoIcons.Refresh,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(11.dp)
-                    )
-                    Spacer(Modifier.size(3.dp))
-                    Text(
-                        "$runningCount 个进行中",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Spacer(Modifier.size(4.dp))
-            }
             // 右侧按钮组统一 4dp 间距（IconButton 自带 12dp 视觉边距，叠加后实际
             // 图标间隙≈16dp，与左侧对称）；此前浏览器钮 2dp/虚拟屏 0dp/新会话 0dp
             // 间距不一致（用户反馈 2026-09-10）
@@ -5756,16 +5726,26 @@ private fun ComposerBar(
                         }
                     }
                 )
-                val actionable = running || text.isNotBlank() || pendingImages.isNotEmpty() || pendingAudio != null || pendingVideoName != null
+                // 方案A（2026-10-16 用户拍板，修 D17 排队的"看得见够不着"）：运行中按钮跟着
+                // 输入内容走——有文字/附件=发送键（点击由 VM 落进该会话队列，本轮结束自动
+                // 接上；带附件运行中发送会被 VM 明确提示"排队只认纯文本"，不是静默吞）；
+                // 输入框全空=停止键（旧行为）。此前运行中恒停止键，打字没有任何发送途径。
+                val hasOutbox = text.isNotBlank() || pendingImages.isNotEmpty() || pendingAudio != null || pendingVideoName != null
+                val showSend = !running || hasOutbox
+                val actionable = hasOutbox || !showSend
                 LiquidGlassButton(
-                    onClick = { if (running) onStop() else onSend() },
+                    onClick = { if (showSend) onSend() else onStop() },
                     backdrop = backdrop,
                     modifier = Modifier.size(46.dp),
                     surfaceColor = MaterialTheme.colorScheme.primary.copy(alpha = if (actionable) 0.85f else 0.25f)
                 ) {
                     Icon(
-                        if (running) HaoIcons.Stop else HaoIcons.Send,
-                        contentDescription = if (running) "停止" else "发送",
+                        if (showSend) HaoIcons.Send else HaoIcons.Stop,
+                        contentDescription = when {
+                            showSend && running -> "发送（排队，本轮结束后自动执行）"
+                            showSend -> "发送"
+                            else -> "停止"
+                        },
                         tint = if (actionable) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
                     )
                 }

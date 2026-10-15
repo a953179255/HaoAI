@@ -501,28 +501,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** 本 VM + 其他实例的在跑会话并集大小（顶栏「N 个任务进行中」胶囊）。
-     *  lazy：_activeRunSessions 在类后段声明，直接初始化会拿到 null。 */
-    /** 正在查看的会话是否忙（UserBubble 排队态渲染门）。lazy：被引用的两个 StateFlow 在类后段。 */
-    val viewedBusy by lazy {
-        kotlinx.coroutines.flow.combine(_activeRunSessions, _session) { mine, s ->
-            s != null && s.id in mine
-        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), false)
-    }
-
-    /** 本 VM + 其他实例所有在跑任务的会话 id（会话列表/抽屉的运行中转圈 + 顶栏计数）。lazy：同 activeRunCount。 */
+    /** 本 VM + 其他实例所有在跑任务的会话 id（会话列表/抽屉的运行中转圈）。lazy：_activeRunSessions 在类后段。 */
     val runningIds by lazy {
         kotlinx.coroutines.flow.combine(
             _activeRunSessions, com.haoai.agent.platform.AgentRunRegistry.activeIds
         ) { mine, ids -> mine + ids }
             .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), emptySet())
-    }
-
-    val activeRunCount by lazy {
-        kotlinx.coroutines.flow.combine(
-            _activeRunSessions, com.haoai.agent.platform.AgentRunRegistry.activeIds
-        ) { mine, ids -> (mine + ids).size }
-            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), 0)
     }
 
     /** 系统分享接入（R2.2）：导航层把 ACTION_SEND 内容转存 here，ChatScreen 消费后清空。 */
