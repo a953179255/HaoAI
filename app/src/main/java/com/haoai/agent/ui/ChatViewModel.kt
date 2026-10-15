@@ -411,6 +411,32 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
     private var promoteAfterStop: Pair<String, StoredQueuedMsg>? = null
 
+    // ── A2（2026-10-15）运行中插话 ──
+    /**
+     * 把一条排队消息标为「插话」：不脱离队列（保留兜底——若本轮恰好收尾没被引擎
+     * 环顶销账，drainQueue 会把它当普通排队任务执行，语义仍是"生效后不再重复"），
+     * 消息本体已在历史里，引擎下一轮组装请求天然带上；旗标只驱动销账与气泡文案。
+     */
+    fun interjectQueued(messageId: String) {
+        val sid = viewedSid() ?: return
+        val q = queues[sid] ?: return
+        val idx = q.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        q[idx] = q[idx].copy(interject = true)
+        refreshQueueCount(); persistQueueState(sid)
+    }
+
+    /** 引擎环顶销账钩子（IO 线程被调）：投回主线程做队列摘除，与 promote/drain 同线程纪律。 */
+    private fun drainSteering(sid: String): Int {
+        viewModelScope.launch {
+            val q = queues[sid] ?: return@launch
+            if (q.none { it.interject }) return@launch
+            q.removeAll { it.interject }
+            refreshQueueCount(); persistQueueState(sid)
+        }
+        return 0
+    }
+
     /** 删除排队消息在历史里的那条用户消息（内存副本 + 落盘都删）。 */
     private fun deleteQueuedMessage(sid: String, messageId: String) {
         runCatching {
@@ -2989,7 +3015,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             autoLearn = st.autoLearn,
             backgroundScope = c.applicationScope,
             softBudgetWarn = st.costBreakerEnabled && st.softBudgetWarn,
-            toolFailCap = st.consecutiveToolFailCap
+            toolFailCap = st.consecutiveToolFailCap,
+            // A2：插话环顶销账（把已被本轮携带的插话摘出队列，防收尾双跑）
+            steeringDrain = { sid -> drainSteering(sid) }
         )
     }
 

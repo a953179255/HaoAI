@@ -27,11 +27,12 @@ internal suspend fun AgentEngine.summarizerChain(): List<Pair<ProviderConfig, St
     return chain
 }
 
-/** 点6：链式压缩——按序尝试各目标，单个失败（非取消）降级下一个；全失败抛最后错误。 */
+/** 点6：链式压缩——按序尝试各目标，单个失败（非取消）降级下一个；
+ *  全失败返回 null（调用方走 A4 免摘要换窗），不再把异常抛给回合循环。 */
 internal suspend fun AgentEngine.compactWithChain(
     chatMsgs: List<com.haoai.agent.agent.model.ChatMessage>,
     chain: List<Pair<ProviderConfig, String>>
-): com.haoai.agent.agent.engine.compaction.CompactionResult {
+): com.haoai.agent.agent.engine.compaction.CompactionResult? {
     var lastErr: Throwable? = null
     for ((p, k) in chain) {
         val isLocal = p.baseUrl.contains("127.0.0.1") || p.baseUrl.startsWith("local")
@@ -51,7 +52,8 @@ internal suspend fun AgentEngine.compactWithChain(
             android.util.Log.w("HaoCompact", "压缩目标 ${p.name}/${p.model} 失败，尝试链上下一个", e)
         }
     }
-    throw lastErr ?: IllegalStateException("压缩摘要无可用模型")
+    android.util.Log.w("HaoCompact", "摘要链全失败（${lastErr?.message}），调用方将走免摘要换窗", lastErr)
+    return null
 }
 
 /**
@@ -126,6 +128,27 @@ internal suspend fun AgentEngine.maybeCompact(onEvent: (TurnEvent) -> Unit) {
     val prunedMsgs = compactionManager.prePruneToolOutputs(chatMsgs)
 
     val result = compactWithChain(prunedMsgs, chain)
+    // A4：摘要链全失败 → 免摘要换窗（Codex compact_token_budget 同款：跳过摘要、
+    // 直接推进水位）。摘要失败时 fallbackTruncate 会落一条垃圾摘要永久挂会话，
+    // 不如推水位让请求只保留最近窗口——历史原文仍在（水位不删原文），可回查。
+    if (result == null) {
+        val wid = prospectiveWatermark()
+        if (wid != null) {
+            session.compactionSummary = null
+            session.compactedTokensBefore = usedTokens
+            markCompactedThrough(wid)
+            persist()
+            onEvent(MessageAdded(ChatMessage(
+                role = ChatMessage.ROLE_ASSISTANT,
+                content = "[系统] 摘要生成失败，已切换为窗口模式：保留最近上下文继续，" +
+                    "更早的历史仍可回查（详情见记忆/工作区文件）"
+            )))
+            return
+        }
+        // 水位推不动（整段都还在保留窗内）：不落任何摘要，静默放过，下一轮再判
+        android.util.Log.w("HaoCompact", "摘要链失败且水位推不动，放弃本次压缩")
+        return
+    }
     session.compactionSummary = result.summary
     // 压掉多少按"决策时用的那个数"记账（真值口径），事后能判断这次压得对不对
     session.compactedTokensBefore = usedTokens
@@ -151,9 +174,16 @@ internal suspend fun AgentEngine.handleOverflow(
     val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
     val chatMsgs = uncompactedMessages().map { it.toModel() }
 
-    // 强制压缩（点6：链式降级）
+    // 强制压缩（点6：链式降级）；A4：全失败同样走免摘要换窗后重试——
+    // 此时水位推进是唯一的自救路径（原样重发必然再次 overflow）
     val result = compactWithChain(chatMsgs, chain)
-    session.compactionSummary = result.summary
+    if (result == null) {
+        session.compactionSummary = null
+        val wid = prospectiveWatermark()
+        if (wid != null) markCompactedThrough(wid)
+    } else {
+        session.compactionSummary = result.summary
+    }
     // M12：与 maybeCompact 同源——记账必须取"压缩前的真实规模"，压缩后水位未推进时
     // estimateContextTokens() 恰好还是压缩前的值，但语义上属于"事后重算"，
     // 一旦将来压缩动作改成会先改水位，这里就会记错。统一在压缩前取一次。
@@ -265,8 +295,9 @@ internal suspend fun AgentEngine.compactNow(): Int? {
     val before = estimateContextTokens()
     val chain = summarizerChain()
     val chatMsgs = uncompactedMessages().map { it.toModel() }
+    // A4：摘要链全失败也照常推水位（免摘要换窗），手动压缩一样受益
     val result = compactWithChain(chatMsgs, chain)
-    session.compactionSummary = result.summary
+    session.compactionSummary = result?.summary
     session.compactedTokensBefore = before
     // 手动 /compact 以前只写摘要、不推水位：摘要 + 全量历史一起发出去，token 只增不减
     markCompactedThrough(wid)

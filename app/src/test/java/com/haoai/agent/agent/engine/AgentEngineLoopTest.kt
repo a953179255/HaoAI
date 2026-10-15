@@ -78,7 +78,8 @@ class AgentEngineLoopTest {
         session: StoredSession = StoredSession.create(null),
         contextLength: Int = 0,
         turnTokenCap: Int = 150_000,
-        toolCallCap: Int = 80
+        toolCallCap: Int = 80,
+        steeringDrain: (String) -> Int = { 0 }
     ): AgentEngine =
         AgentEngine(
             httpClient = client,
@@ -97,7 +98,8 @@ class AgentEngineLoopTest {
             workspaceLabel = "test",
             toolFailCap = toolFailCap,
             turnTokenCap = turnTokenCap,
-            toolCallCap = toolCallCap
+            toolCallCap = toolCallCap,
+            steeringDrain = steeringDrain
         )
 
     /** 每轮换参数，避免撞 P2-5 重放保护（同名同参紧邻会被判为重放而不真正执行）。 */
@@ -109,6 +111,77 @@ class AgentEngineLoopTest {
 
     private fun saying(text: String) =
         listOf(SseEvent.Delta(text), SseEvent.Usage(50, 10))
+
+    /**
+     * A3：供应商回 length（max_tokens 截断）时，本轮流出的工具调用必须整批按失败
+     * 回填、零执行——参数可能是半截 JSON，截在合法边界的还会"看着像能跑"。
+     * 回归锁：pi failToolCallsFromTruncatedMessage 同款语义。
+     */
+    @Test
+    fun lengthTruncationFailsWholeBatchWithoutExecuting() = runBlocking {
+        val client = FakeClient(
+            listOf(
+                // 流尾带 finish_reason=length：参数截断
+                listOf(
+                    SseEvent.Delta("正在写"),
+                    SseEvent.Completed(
+                        listOf(ToolCallData("trunc-1", "todo", "{\"op\":\"add\",\"text\":\"只写了一半")),
+                        "length"
+                    ),
+                    SseEvent.Usage(100, 5)
+                ),
+                saying("收尾")
+            )
+        )
+        val session = StoredSession.create(null)
+        engine(client, tmpDir(), session = session).runTurn("开始", {}, {})
+        // 工具未执行：历史里那条 tool 结果必须是 error 标记
+        val toolMsgs = session.messages.filter { it.role == ChatMessage.ROLE_TOOL }
+        assertTrue("截断轮不应执行任何工具", toolMsgs.size <= 1)
+        assertTrue(
+            "回填的 tool 结果必须标记 error（模型可见、可自愈）",
+            toolMsgs.isNotEmpty() && toolMsgs.all { it.error }
+        )
+        // 且下一轮请求历史里出现截断提示（引导拆小重试）
+        assertTrue(
+            "应向模型说明截断并引导拆小",
+            client.requests[1].first.any { m -> m.content?.contains("截断") == true }
+        )
+    }
+
+    /**
+     * A2 运行中插话：插话消息入队时已落进会话历史，引擎每轮组装请求天然带上——
+     * 请求里必须出现该消息（模型可见）；且每环顶都会调 steeringDrain（销账入口）。
+     * 防回归：把插话改成"只在回合结束后当新任务跑"会漏掉这条断言。
+     */
+    @Test
+    fun interjectionIsVisibleToNextRoundRequest() = runBlocking {
+        val session = StoredSession.create(null)
+        // 模拟"用户跑动中插话"：消息已在历史里（VM 入队时落的）
+        session.messages.add(
+            StoredMessage(
+                id = "steer-1", role = ChatMessage.ROLE_USER,
+                content = "改成只统计 src 目录"
+            )
+        )
+        var drainCalls = 0
+        val client = FakeClient(
+            listOf(
+                callingTool("todo", "t1", "{\"op\":\"list\"}"),
+                saying("收尾")
+            )
+        )
+        engine(client, tmpDir(), session = session, steeringDrain = { _ -> drainCalls++ })
+            .runTurn("开始", {}, {})
+        // 第二轮请求的历史里必须含插话正文
+        val secondRoundHistory = client.requests[1].first
+        assertTrue(
+            "插话消息应出现在下一轮请求历史里（模型看得见）",
+            secondRoundHistory.any { m -> m.content?.contains("改成只统计 src 目录") == true }
+        )
+        // 环顶销账：两个请求轮 = 至少调两次
+        assertTrue("steeringDrain 应每环顶被调（销账入口）", drainCalls >= 2)
+    }
 
     /**
      * E5 连续工具失败熔断必须在**第 N 次**失败触发。

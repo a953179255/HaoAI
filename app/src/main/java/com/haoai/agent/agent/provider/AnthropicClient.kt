@@ -409,7 +409,9 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
             if (!state.gotAnyContent && state.pendingTools.isEmpty()) {
                 throw IOException("供应商未返回任何内容，请检查模型 ID 与 Base URL 是否匹配")
             }
-            emit(SseEvent.Completed(state.buildToolCalls()))
+            // A3：Anthropic 的 stop_reason（end_turn/max_tokens/tool_use）。max_tokens=被
+            // 单次回复上限截断，此时 tool_use 的 input_json_delta 可能是半截 JSON。
+            emit(SseEvent.Completed(state.buildToolCalls(), state.stopReason))
             if (state.inputTokens > 0 || state.outputTokens > 0) {
                 emit(SseEvent.Usage(state.inputTokens, state.outputTokens))
             }

@@ -204,7 +204,12 @@ sealed interface SseEvent {
 
     /** 思考过程增量：来自 reasoning_content 字段或内容中的 <think>…</think> 标签。 */
     data class Reasoning(val text: String) : SseEvent
-    data class Completed(val toolCalls: List<com.haoai.agent.agent.model.ToolCallData>) : SseEvent
+    data class Completed(
+        val toolCalls: List<com.haoai.agent.agent.model.ToolCallData>,
+        /** A3：供应商结束原因（"stop"/"length"/"tool_calls"/null）。length=被 max_tokens 截断，
+         *  此时工具调用参数可能是半截 JSON——引擎按 pi 方案整批按失败回填，不执行。 */
+        val stopReason: String? = null
+    ) : SseEvent
     data class Usage(val promptTokens: Int, val completionTokens: Int) : SseEvent
 }
 
@@ -317,6 +322,8 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
 
             var gotAnyContent = false
             var usage: UsageInfo? = null
+            // A3：流尾 chunk 的 finish_reason 收集（末轮才有值：stop/length/tool_calls）
+            val finishReasons = mutableListOf<String>()
             data class Pending(
                 var id: String? = null,
                 val name: StringBuilder = StringBuilder(),
@@ -366,6 +373,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                         if (!gotAnyContent && choice.delta.toolCalls != null && choice.delta.toolCalls.isNotEmpty()) {
                             gotAnyContent = true
                         }
+                        choice.finishReason?.takeIf { it.isNotBlank() }?.let { finishReasons += it }
                     }
                 }
             } finally {
@@ -381,6 +389,9 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                 throw IOException("供应商未返回任何内容，请检查模型 ID 与 Base URL 是否匹配")
             }
 
+            // A3：流尾 chunk 的 finish_reason 归一化（OpenAI: stop/length/tool_calls）
+            val stopReason = finishReasons.lastOrNull()?.takeIf { it.isNotBlank() }
+
             val calls = pending.entries.sortedBy { it.key }.mapNotNull { (_, p) ->
                 val name = p.name.toString().ifBlank { return@mapNotNull null }
                 com.haoai.agent.agent.model.ToolCallData(
@@ -392,7 +403,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                     args = p.args.toString().ifBlank { "{}" }
                 )
             }
-            emit(SseEvent.Completed(calls))
+            emit(SseEvent.Completed(calls, stopReason))
             usage?.let { emit(SseEvent.Usage(it.promptTokens, it.completionTokens)) }
         }
     }.flowOn(Dispatchers.IO)

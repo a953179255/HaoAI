@@ -21,7 +21,12 @@ data class StoredQueuedMsg(
     val id: String,
     val text: String,
     val enqueuedAt: Long = 0L,
-    val localModel: Boolean = false
+    val localModel: Boolean = false,
+    /** A2（2026-10-15）运行中插话：true=这条不是"排队等新任务"，而是"喂给正在跑的引擎"。
+     *  消息在入队时已落进会话历史，引擎环顶组装请求时天然带上；此标记只驱动
+     *  队列销账（steerTick 消费）与 UI 旗标语义。默认 false=老式排队任务，
+     *  持久化零迁移（旧 JSON 缺字段取默认）。 */
+    val interject: Boolean = false
 )
 
 @Serializable

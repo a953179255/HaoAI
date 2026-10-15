@@ -129,23 +129,74 @@ class CompactionManager(
         return result
     }
 
-    private fun messagesToText(messages: List<ChatMessage>): String = buildString {
-        for (msg in messages) {
-            when (msg.role) {
-                ChatMessage.ROLE_USER -> appendLine("[用户]: ${msg.content ?: ""}")
-                ChatMessage.ROLE_ASSISTANT -> {
-                    appendLine("[助手]: ${msg.content}")
-                    for (tc in msg.calls) {
-                        appendLine("  [工具调用] ${tc.name}(${tc.args.take(200)})")
-                    }
-                }
-                ChatMessage.ROLE_TOOL -> {
-                    val cc = msg.content ?: ""
-                    val brief = if (cc.length > 300) cc.take(300) + "..." else cc
-                    appendLine("[工具结果] $brief")
+    /**
+     * A4（2026-10-15）：摘要输入的分档装填。
+     *
+     * 旧实现整段全文直喂：长会话（工具结果密集）下摘要请求自身先超输入窗 → 摘要失败 →
+     * fallbackTruncate 垃圾摘要永久挂会话。改为显式预算分配（OpenClaw compaction.md 同思路）：
+     * - 最近 [RECENT_KEEP_FULL] 条逐字（保"当下在干什么"）
+     * - 用户消息截 500：asks/decisions/corrections 是长期任务意图的保真锚
+     * - 旧消息按角色截断（助手 300 / 工具调用参数 200 / 工具结果 300）
+     * - 超预算从最老开始丢，缺口标注「省略 N 条」并明令模型不得猜测
+     * 逐字段落带 * 标记便于摘要模型区分证据强度。
+     */
+    private fun messagesToText(messages: List<ChatMessage>): String {
+        val budget = settings.summaryInputBudgetChars
+        if (messages.isEmpty()) return ""
+        if (messages.size <= RECENT_KEEP_FULL + 2) {
+            return messages.joinToString("\n\n") { renderMsg(it, full = true) }
+        }
+        val keepFullFrom = messages.size - RECENT_KEEP_FULL
+        val sb = StringBuilder()
+        var dropped = 0
+        messages.forEachIndexed { i, msg ->
+            val full = i >= keepFullFrom
+            val text = renderMsg(msg, full)
+            if (!full && sb.length + text.length > budget * 3 / 4) {
+                dropped++
+                return@forEachIndexed
+            }
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            sb.append(text)
+        }
+        if (dropped > 0) {
+            sb.append("\n\n[已省略 $dropped 条更早的消息。省略部分不得猜测内容；" +
+                "确需了解时请读取记忆/工作区文件核实]")
+        }
+        return sb.toString()
+    }
+
+    /** 单条消息的分档渲染。full=逐字；非 full 按角色截断。 */
+    private fun renderMsg(msg: ChatMessage, full: Boolean): String = buildString {
+        when (msg.role) {
+            ChatMessage.ROLE_USER -> {
+                val c = msg.content ?: ""
+                appendLine("[用户${if (full) "*" else ""}]: ${if (full) c else c.take(USER_KEEP_CHARS)}")
+            }
+            ChatMessage.ROLE_ASSISTANT -> {
+                val c = msg.content ?: ""
+                appendLine("[助手${if (full) "*" else ""}]: ${if (full) c else c.take(ASSISTANT_KEEP_CHARS)}")
+                for (tc in msg.calls) {
+                    appendLine("  [工具调用] ${tc.name}(${tc.args.take(TOOLCALL_KEEP_CHARS)})")
                 }
             }
+            ChatMessage.ROLE_TOOL -> {
+                val cc = msg.content ?: ""
+                val brief = if (full) cc else {
+                    val cap = if (cc.length > TOOL_KEEP_CHARS) TOOL_KEEP_CHARS else cc.length
+                    cc.take(cap) + (if (cc.length > cap) "..." else "")
+                }
+                appendLine("[工具结果${if (full) "*" else ""}]: $brief")
+            }
         }
+    }
+
+    private companion object {
+        const val RECENT_KEEP_FULL = 6
+        const val USER_KEEP_CHARS = 500
+        const val ASSISTANT_KEEP_CHARS = 300
+        const val TOOLCALL_KEEP_CHARS = 200
+        const val TOOL_KEEP_CHARS = 300
     }
 
     /**

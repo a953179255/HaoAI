@@ -151,9 +151,62 @@ class AppContainer(app: Application) {
 
     val llama = LlamaServerController(app, okHttpClient)
 
-    val settingsFlow = MutableStateFlow(settingsStore.load()).also {
-        // 玻璃质感：持久化参数灌入运行态镜像（GlassTuning 单例，玻璃组件逐帧读）
-        com.haoai.agent.ui.theme.GlassTuning.loadFrom(it.value.glass)
+    /** 设置读改写互斥：UI 主线程 / flushUsage(IO) / ConfigFileBridge(IO) 并发写会丢更新。
+     *  A1：声明上移到 settingsFlow 之前——异步灌入与 updateSettings 要共用这把锁。 */
+    private val settingsLock = Any()
+
+    /**
+     * A1（2026-10-15）：设置改异步读取。
+     * 旧实现在 Application 构造期主线程同步 settingsStore.load()——settings.json 全量
+     * 反序列化（实测 ANR trace：HaoApplication.onCreate → AppContainer.<init> →
+     * SettingsStore.load → AppSettings$$serializer.deserialize 占住主线程）直接触发
+     * 「HaoAI 没有响应」，且 ANR 对话框期间系统会重投递 intent 造成任务双跑。
+     * 现在初值给默认 AppSettings()，真值在 applicationScope（IO）读完后一次性灌入并置
+     * settingsReady；消费方约定：
+     * - UI 首帧（MainActivity.RootApp）以 settingsReady 为门，未就绪不判 onboarding/聊天；
+     * - 深链投递 await settingsReady；
+     * - ready 前触发 updateSettings 的按调用方门禁（UI/深链都已挡）计风险≈0。
+     */
+    val settingsFlow = MutableStateFlow(AppSettings())
+
+    /** 设置真值已从磁盘灌入（就绪门，见 settingsFlow 注释）。
+     *  StateFlow 形态供 Compose 首帧订阅（避免默认 onboarded=false 闪一下引导页）；
+     *  @Volatile 影子供 awaitSettingsReady 忙读。 */
+    val settingsReadyFlow = MutableStateFlow(false)
+    @Volatile private var settingsReady = false
+
+    /** 挂起等待设置就绪（已就绪立即返回）；超时也放行让调用方按当前值走。 */
+    suspend fun awaitSettingsReady(timeoutMs: Long = 8_000): Boolean {
+        if (settingsReady) return true
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!settingsReady && System.currentTimeMillis() < deadline) {
+            kotlinx.coroutines.delay(40)
+        }
+        return settingsReady
+    }
+
+    init {
+        applicationScope.launch {
+            val loaded = settingsStore.load()
+            synchronized(settingsLock) { settingsFlow.value = loaded }
+            // 玻璃质感：持久化参数灌入运行态镜像（GlassTuning 单例，玻璃组件逐帧读）
+            com.haoai.agent.ui.theme.GlassTuning.loadFrom(loaded.glass)
+            // llama 参数补灌：原在构造期直读 settingsFlow.value（那时已是真值，异步后挪进来）
+            llama.preferredModel = loaded.localModelFile
+            llama.contextSize = loaded.localContextLength
+            // C6 迁移：legacy config apply 走 updateSettings，必须在 settingsFlow 真值就位后执行
+            runCatching {
+                (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
+                    val legacy = java.io.File(ws, "haoai.config.json")
+                    if (legacy.exists()) {
+                        runCatching { legacy.readText() }.getOrNull()?.let { configBridge.apply(it) }
+                        runCatching { legacy.delete() }
+                    }
+                }
+            }
+            settingsReady = true
+            settingsReadyFlow.value = true
+        }
     }
 
     /**
@@ -264,26 +317,14 @@ class AppContainer(app: Application) {
             )
         })
         com.haoai.agent.agent.mcp.McpManager.connectAll(applicationScope)
-        llama.preferredModel = settingsFlow.value.localModelFile
-        llama.contextSize = settingsFlow.value.localContextLength
+        // A1：llama.preferredModel/contextSize 的设置灌入挪进 settings 异步读完成处
         syncWorkspaceDocs()
-        // C6：工作区旧 haoai.config.json 一次性迁移——先应用其中未落库的改动（明文 key 加密入库），
-        // 随后移除工作区文件（配置源已迁状态目录，工作区不再保留镜像）
-        runCatching {
-            (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
-                val legacy = java.io.File(ws, "haoai.config.json")
-                if (legacy.exists()) {
-                    runCatching { legacy.readText() }.getOrNull()?.let { configBridge.apply(it) }
-                    runCatching { legacy.delete() }
-                }
-            }
-        }
+        // C6：工作区旧 haoai.config.json 一次性迁移挪进 settings 异步读完成处（A1-1）——
+        // 构造期直接跑会和尚未灌入的 settingsFlow 初值抢写（apply→updateSettings
+        // 基于"默认设置"改写、随后异步 load 用磁盘值覆盖 = 用户改动丢失）。
         // 配置文件桥：启动渲染镜像 + 监听外部改动（兜底覆盖 adb/文件管理器手改状态目录文件）
         configBridge.startWatching(applicationScope)
     }
-
-    /** 设置读改写互斥：UI 主线程 / flushUsage(IO) / ConfigFileBridge(IO) 并发写会丢更新。 */
-    private val settingsLock = Any()
 
     fun updateSettings(edit: (AppSettings) -> AppSettings) {
         synchronized(settingsLock) {

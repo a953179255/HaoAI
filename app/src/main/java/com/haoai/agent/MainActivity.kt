@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
     /** onNewIntent 投递的深链（含冷启动 intent 之外的所有重投递）。 */
     internal val deepLinkFlow = kotlinx.coroutines.flow.MutableStateFlow<android.net.Uri?>(null)
 
+
     /** 系统分享接入（R2.2）：(文本, 图片Uri)，ChatScreen 导航层消费。 */
     internal val shareFlow = kotlinx.coroutines.flow.MutableStateFlow<Pair<String?, android.net.Uri?>?>(null)
 
@@ -225,6 +226,20 @@ class MainActivity : ComponentActivity() {
 // 页面导航深度与"上一级是谁"这两张表挪到了 `ui/ScreenNav.kt`：
 // 那儿还多一份 parentOf，给下面那个兜底 BackHandler 用（详见那个文件的注释）。
 
+/**
+ * A1-2（2026-10-15）：派活类深链的幂等去重。
+ * 实测：冷启动主线程读设置触发 ANR 对话框期间，系统会把待投递的 intent 重投递一次，
+ * 同一任务被执行两遍（会话历史里两条相同 user 消息、各跑完整轮工具链）。
+ * ANR 只是诱因之一（连点、脚本双发同理），在投递口按「路由+内容」指纹统一去重。
+ * 只圈派活语义的路由（ask/new）；stop/resume/compact 等控制类重复执行无害，不圈。
+ */
+private val deepLinkDispatchGuard = java.util.concurrent.ConcurrentHashMap<String, Long>()
+private fun isDuplicateDispatch(fingerprint: String, windowMs: Long = 10_000): Boolean {
+    val now = System.currentTimeMillis()
+    val prev = deepLinkDispatchGuard.put(fingerprint, now)
+    return prev != null && now - prev < windowMs
+}
+
 @Composable
 private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     val app = LocalContext.current.applicationContext as HaoApplication
@@ -239,6 +254,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     })
 
     LaunchedEffect(Unit) {
+        // A1-1：settings 改异步读后置 keepAlive——冷启动先等就绪再判（就绪前读到默认 false
+        // 会漏启后台保活服务）。awaitSettingsReady 带超时兜底，不会永久挂起。
+        container.awaitSettingsReady()
         if (container.settingsFlow.value.keepAlive) {
             KeepAliveService.start(context)
         }
@@ -414,6 +432,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 }
             }
             "new" -> {
+                // A1-2：new 同样去重（重投递双开会话同样是"系统再投递一次"的受害者）
+                if (isDuplicateDispatch("new")) return
                 enterChat()
                 screen = 0
                 chatVm.newSession()
@@ -422,7 +442,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 // 调试直达：haoai://debug/ask?text=...（URL 编码）——绕过 IME 注入直接派任务
                 enterChat()
                 screen = 0
-                uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { chatVm.send(it) }
+                uri.getQueryParameter("text")?.takeIf { it.isNotBlank() }?.let { text ->
+                    // A1-2：同文本 10s 窗口内重复投递 = 重投递/连点，吞掉（防任务双跑）
+                    if (isDuplicateDispatch("ask#" + text.hashCode())) {
+                        android.util.Log.i("DeepLink", "ask 重复投递已去重: ${text.take(60)}")
+                    } else {
+                        chatVm.send(text)
+                    }
+                }
             }
             "stop" -> {
                 // 调试直达：haoai://debug/stop —— 取消当前会话正在跑的回合。
@@ -667,6 +694,13 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         }
     }
     LaunchedEffect(Unit) {
+        // A1-3：冷启动深链投递前等设置灌入完成——就绪前 activeProvider() 是默认值，
+        // 此时派活会落到"未配置"分支白跑一轮。awaitSettingsReady 带 8s 超时兜底。
+        (act as? MainActivity)?.let { ma ->
+            ma.applicationContext.let { appCtx ->
+                (appCtx as? HaoApplication)?.container?.awaitSettingsReady()
+            }
+        }
         // 冷启动：intent 已带 data
         (act?.intent)?.data?.let { consumeDeepLink(it) }
         act?.intent = null
@@ -867,7 +901,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 modifier = Modifier.matchParentSize()
             )
         }
-        if (!settings.onboarded) {
+        val settingsReady by container.settingsReadyFlow.collectAsState()
+        if (!settingsReady) {
+            // A1：设置异步灌入完成前渲染净色底（不判 onboarding/聊天）——
+            // 就绪门消除"默认 onboarded=false → 首帧闪引导页 → 真值回来后闪回聊天"的抖动。
+            Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {}
+        } else if (!settings.onboarded) {
             // 首启引导也走横屏内容列（s=-1：不命中浏览器豁免），5 步卡片不会被 873dp 拉开
             LandscapeWrap(s = -1) {
                 OnboardingGlass(

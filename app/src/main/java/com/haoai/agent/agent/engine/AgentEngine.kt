@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import java.io.File
 
 class AgentEngine(
@@ -133,7 +134,16 @@ class AgentEngine(
      * 「设置 → 搜索服务」的主后端（含已解密 key）。每次搜索时现取，改完设置不必重启引擎。
      * null / backend=builtin 时 web_search 只走内置免 key 链。
      */
-    internal val searchProviderFn: () -> com.haoai.agent.agent.tools.SearchProviderConfig? = { null }
+    internal val searchProviderFn: () -> com.haoai.agent.agent.tools.SearchProviderConfig? = { null },
+    /**
+     * A2（2026-10-15）运行中插话的环顶销账钩子。
+     * 插话消息入队那一刻就已落进会话历史（D17 批3 的设计），引擎本轮组装请求
+     * 经 buildApiMessages 天然带上——模型"看得见"不需要引擎做什么；这里只做记账：
+     * 把已被本轮携带的插话从 VM 队列摘除（否则回合正常结束 drainQueue 会把它
+     * 当排队任务再执行一遍=双跑），并把气泡从"插话待生效"转正。
+     * 返回摘除的条数仅用于调试日志。无人值守/子代理传默认空实现=无插话源。
+     */
+    internal val steeringDrain: (String) -> Int = { 0 }
 ) {
 
     /** 解析生效工具组：profile 空→会话分组；否则按预设（与 ToolRegistry.ALL_GROUPS 对齐）。 */
@@ -455,9 +465,14 @@ class AgentEngine(
 
                 transcript.reset()
                 var calls: List<ToolCallData> = emptyList()
+                // A3：本轮供应商结束原因（length=被 max_tokens 截断，工具参数可能是半截）
+                var stopReason: String? = null
 
-                // v7：循环内插话已升级为「排队任务」语义（ChatViewModel 全权管理队列）——
-                // 引擎不再在间隙消费队列，排队消息在回合正常结束后由 VM 作为新任务执行。
+                // A2（2026-10-15）运行中插话：用户在任务跑动中把排队消息标为「插话」后，
+                // 该消息已在会话历史里，本轮 buildApiMessages 会带上（模型即刻生效）；
+                // 这里环顶向 VM 销账（从队列摘除+旗标转正），防回合结束时被当排队任务二次执行。
+                // v7 的「排队任务」语义不变：未标插话的排队消息依然由 VM 在回合正常结束后接管。
+                steeringDrain(session.id)
 
                 // E9 todo 变更检测：本轮执行过 todo 工具 → 下一轮注入进度行
                 val todoNow = todoStore.load(session.id)
@@ -480,7 +495,10 @@ class AgentEngine(
                                     when (ev) {
                                         is SseEvent.Delta -> transcript.delta(ev.text)
                                         is SseEvent.Reasoning -> transcript.reasoningDelta(ev.text)
-                                        is SseEvent.Completed -> calls = uniquifyCallIds(ev.toolCalls, usedCallIds)
+                                        is SseEvent.Completed -> {
+                                            calls = uniquifyCallIds(ev.toolCalls, usedCallIds)
+                                            stopReason = ev.stopReason
+                                        }
                                         is SseEvent.Usage -> {
                                             st.promptTokens += ev.promptTokens
                                             st.completionTokens += ev.completionTokens
@@ -601,6 +619,24 @@ class AgentEngine(
                 }
 
                 st.toolCalls += calls.size
+
+                // A3（2026-10-15）：被 max_tokens 截断的一轮，工具调用参数可能是半截 JSON
+                // （截在合法边界内的还会"看着像能跑"）——pi 的处理是整批按失败回填、零执行。
+                // 显式 length/max_tokens 才触发；null/未知一律放过（供应商乱报的代价更大）。
+                if (stopReason == "length" || stopReason == "max_tokens") {
+                    for (call in calls) {
+                        val err = ToolResult(
+                            "本轮回复被单次输出上限截断（$stopReason），${call.name} 的参数可能是半截 JSON，" +
+                                "已按失败处理、未执行。请把该调用拆小：缩短参数文本/分批写入/减少本轮工具数，" +
+                                "然后重新调用。",
+                            true
+                        )
+                        onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.ERROR, briefOf(call), "输出被截断")))
+                        finishCall(call, buildJsonObject {}, ctx, err, ToolRunState.ERROR, 0L, "length-truncated", onEvent)
+                    }
+                    transcript.buildAssistant(toolCalls = maskSecretArgs(calls))?.let { appendAndNotify(it, onEvent) }
+                    continue
+                }
 
                 // E6 同轮多工具并行分组：READ 且在白名单内的调用并发执行
                 // （ALWAYS_ASK 模式 READ 也审批，审批弹窗必须在主协程，不能进并发块）。

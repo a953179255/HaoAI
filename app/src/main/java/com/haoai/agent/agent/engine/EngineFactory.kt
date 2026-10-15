@@ -66,7 +66,9 @@ object EngineFactory {
         autoLearn: Boolean = true,
         backgroundScope: CoroutineScope? = null,
         softBudgetWarn: Boolean = true,
-        toolFailCap: Int = 8
+        toolFailCap: Int = 8,
+        /** A2 运行中插话的环顶销账钩子（仅前台聊天注入；无人值守/子代理留默认空实现）。 */
+        steeringDrain: (String) -> Int = { 0 }
     ): AgentEngine {
         val st = container.settingsFlow.value
         return AgentEngine(
@@ -130,6 +132,7 @@ object EngineFactory {
             toolCallCap = toolCallCap,
             softBudgetWarn = softBudgetWarn,
             toolFailCap = toolFailCap,
+            steeringDrain = steeringDrain,
             // 5.3 模型路由 + P2 能力委派：同样三处共用，未配置时引擎自行不注册（不占工具 token）
             memoryTarget = {
                 container.resolvePurposeTargets(st.memoryExtractProviderId, st.memoryExtractFallbackIds)

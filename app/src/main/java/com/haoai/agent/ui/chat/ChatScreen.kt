@@ -219,14 +219,16 @@ data class ChatProfiles(
 val LocalChatProfiles = androidx.compose.runtime.staticCompositionLocalOf<ChatProfiles?> { null }
 
 /**
- * D17 批3：排队气泡的三个动作回调（撤回/编辑退回输入框/立即发送）。
+ * D17 批3：排队气泡的动作回调（撤回/编辑退回输入框/立即发送/插话）。
  * 走 CompositionLocal 而不是逐层透传——这条链要穿 MessageList→itemsIndexed→MessageRow，
- * 加三个参数会传染一大片；语义与 LocalChatProfiles 同款（渲染真源在 ChatScreen，VM 只出动作）。
+ * 加几个参数会传染一大片；语义与 LocalChatProfiles 同款（渲染真源在 ChatScreen，VM 只出动作）。
  */
 data class QueueActions(
     val withdraw: (String) -> Unit,
     val edit: (String) -> Unit,
-    val promote: (String) -> Unit
+    val promote: (String) -> Unit,
+    /** A2：标记为插话——消息已在历史里，引擎下一轮组装请求天然带上；旗标只驱动销账。 */
+    val interject: (String) -> Unit
 )
 val LocalQueueActions = androidx.compose.runtime.staticCompositionLocalOf<QueueActions?> { null }
 
@@ -1101,7 +1103,8 @@ fun ChatScreen(
                 LocalQueueActions provides QueueActions(
                     withdraw = { vm.withdrawQueued(it) },
                     edit = { vm.editQueued(it) },
-                    promote = { vm.promoteQueued(it) }
+                    promote = { vm.promoteQueued(it) },
+                    interject = { vm.interjectQueued(it) }
                 )
             ) {
             MessageList(
@@ -4567,19 +4570,24 @@ private fun UserBubble(
         if (running && row.queued != null && qa != null) {
             val q = row.queued
             // 旗标：Warn 语义色小胶囊（唯一一处排队文案，动作行不再重复）
+            // A2：插话态旗标换 Info 蓝（"主动送进当前轮"），排队态维持 Warn 琥珀
+            val qTone =
+                if (q.interject) com.haoai.agent.ui.theme.HaoTone.Info
+                else com.haoai.agent.ui.theme.HaoTone.Warn
             Text(
                 when {
+                    q.interject -> "插话中 · 下一轮生效"
                     row.queuePaused -> "排队中 · 已暂停"
                     q.localModel -> "本地模型 · 排队"
                     else -> "排队中 · 本轮后自动执行"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = com.haoai.agent.ui.theme.haoToneInk(com.haoai.agent.ui.theme.HaoTone.Warn),
+                color = com.haoai.agent.ui.theme.haoToneInk(qTone),
                 modifier = Modifier
                     .padding(end = 2.dp, bottom = 4.dp)
                     .background(
-                        com.haoai.agent.ui.theme.haoToneBadgeBg(com.haoai.agent.ui.theme.HaoTone.Warn),
+                        com.haoai.agent.ui.theme.haoToneBadgeBg(qTone),
                         CircleShape
                     )
                     .padding(horizontal = 9.dp, vertical = 2.dp)
@@ -4607,6 +4615,11 @@ private fun UserBubble(
             ) {
                 QuickActionButton(HaoIcons.Edit, "编辑（退回输入框）") { qa.edit(row.id) }
                 QuickActionButton(HaoIcons.Close, "撤回") { qa.withdraw(row.id) }
+                // A2：插话开关——只在还没标插话时显示（标了就是"已在送进的路上"，
+                // 再点没意义；要撤销插话用撤回）。Send=送进当前轮，与 ↑=抢占起新轮区分。
+                if (!q.interject) {
+                    QuickActionButton(HaoIcons.Send, "插话（不停当前轮，下一轮生效）") { qa.interject(row.id) }
+                }
                 Spacer(Modifier.weight(1f))
                 Icon(
                     HaoIcons.ArrowUp,

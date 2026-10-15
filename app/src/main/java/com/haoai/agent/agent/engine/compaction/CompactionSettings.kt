@@ -17,7 +17,9 @@ data class CompactionSettings(
     /** 压缩冷却时间（毫秒）。防止压缩失败后立即重试。 */
     val cooldownMs: Long = 30_000L,
     /** 工具输出预修剪：保留每个工具结果的前 N 个字符。0 = 不修剪。 */
-    val toolOutputKeepChars: Int = 500
+    val toolOutputKeepChars: Int = 500,
+    /** A4：喂给摘要模型的输入装填预算（字符）。超预算从最老开始丢并标注省略条数。 */
+    val summaryInputBudgetChars: Int = 24_000
 ) {
     fun summaryBudget(contextWindow: Int): Int =
         (contextWindow * summaryBudgetRatio).toInt().coerceIn(summaryBudgetMin, summaryBudgetMax)
