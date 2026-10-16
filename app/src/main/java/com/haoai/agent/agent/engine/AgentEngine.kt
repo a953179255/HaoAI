@@ -772,6 +772,26 @@ class AgentEngine(
             ledgerLlm("chat", st.promptTokens, st.completionTokens, System.currentTimeMillis() - turnStartMs, ok = false)
             // B 终态收口：失败 → in_progress 回滚 pending
             finishTurn(natural = false)
+            // 2026-10-16 用户实测修复：流式中异常中断（供应商 500 / 断网 / 看门狗）时，
+            // 本轮已产出的正文原先只留在 transcript 与流式气泡里，收尾 endStreaming 一清
+            // 就连带丢失；用户随后发的"继续执行"落在空档处，观感像插到了旧过程前面。
+            // 仿用户停止分支（见上 CancellationException）补落，标注意外中断。
+            if (transcript.hasContent) {
+                appendAndNotify(
+                    ChatMessage(
+                        role = ChatMessage.ROLE_ASSISTANT,
+                        content = transcript.textString() + "\n\n*意外中断：以上进度已保留*",
+                        // 思考过程一并留下：中断不应把思考链丢掉（与停止分支同口径）
+                        reasoning = transcript.reasoningOrNull(),
+                        pt = st.promptTokens.toInt().takeIf { it > 0 } ?: 0,
+                        ct = st.completionTokens.toInt().takeIf { it > 0 } ?: 0,
+                        ms = System.currentTimeMillis() - turnStartMs,
+                        model = provider.model,
+                        reasoningMs = transcript.reasoningMsOrNull()
+                    ),
+                    onEvent
+                )
+            }
             val msg = ChatMessage(
                 role = ChatMessage.ROLE_ASSISTANT,
                 content = friendlyError(e.message ?: e.javaClass.simpleName),

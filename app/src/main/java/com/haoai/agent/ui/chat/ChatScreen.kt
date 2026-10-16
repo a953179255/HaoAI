@@ -98,6 +98,7 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -484,12 +485,17 @@ fun ChatScreen(
     // 状态行显示「✓ 回复完毕 · N秒」4 秒后消失——旧版跑完直接消失，用户
     // 在上方看消息时完全不知道下面已经出结果。门：本轮产出过内容才提示
     //（空回合/秒失败不值得打扰；手动停止同样算"这轮结束了"，语义一致）。
+    // 2026-10-16 纠偏：结束有错（异常中断/失败）时文案改「⚠ 意外中断」——
+    // 原先失败也闪"回复完毕"属谎报（用户实测点名）。
     var lastRunningForDone by remember { mutableStateOf(false) }
     var turnDoneMs by remember { mutableStateOf<Long?>(null) }
+    var turnDoneError by remember { mutableStateOf(false) }
+    val lastTurnError by vm.lastTurnError.collectAsState()
     LaunchedEffect(running) {
         if (running) {
             turnDoneMs = null
         } else if (lastRunningForDone && turnHadOutput) {
+            turnDoneError = vm.lastTurnError.value != null
             turnDoneMs = (System.currentTimeMillis() - turnStartAt).coerceAtLeast(0L)
         }
         lastRunningForDone = running
@@ -1592,16 +1598,19 @@ fun ChatScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Check,
+                                imageVector = if (turnDoneError) Icons.Filled.WarningAmber
+                                              else Icons.Filled.Check,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
+                                tint = if (turnDoneError) MaterialTheme.colorScheme.error
+                                       else MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(Modifier.size(7.dp))
                             Text(
-                                "回复完毕",
+                                if (turnDoneError) "意外中断" else "回复完毕",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = if (turnDoneError) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1
                             )

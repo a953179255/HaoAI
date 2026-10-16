@@ -1603,6 +1603,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         liveToolsOf(s.id).clear()
         publishLiveTools()
         _running.value = true
+        // 新回合起跑清掉上一轮的结束错误：否则上一轮的"意外中断"会亮到本轮完毕
+        // （状态胶囊在 running 边沿定格文案，读的就是这个值）
+        _lastTurnError.value = null
         // 本会话新一轮的显示态清零（流式段/思考计时/首 token 标记）
         dispOf(s.id).let { d -> d.thinkingMs = null; d.turnStartAt = System.currentTimeMillis(); d.hadOutput = false }
         _streamingText.value = null
@@ -2545,6 +2548,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 publishSteps(sid)
             }
             is Finished -> {
+                // 2026-10-16 用户实测修复：回合结束是否有错记录下来，供状态胶囊区分
+                // 「✓ 回复完毕」与「⚠ 意外中断」——异常中断原先也闪"完毕"，谎报。
+                // 用户主动停止（"已停止"）不算异常，归入正常收尾。
+                _lastTurnError.value =
+                    if (ev.error != null && ev.error != "已停止") ev.error else null
                 // 运行期错误走会话门控：仅当用户仍看着运行会话才弹 Snackbar——
                 // 切到别的会话时不再把 A 的失败提示弹进 B（归属会话的历史里有失败痕迹）
                 if (ev.error != null && ev.error != "已停止") runError(sid, ev.error)
@@ -2556,6 +2564,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
     }
+
+    /** 最近一次回合结束的错误摘要（异常中断/失败时非空）。状态胶囊消费，不落库。
+     *  新回合起跑时由 startRun 清空，防止上一轮的错误亮到下一轮完毕。 */
+    private val _lastTurnError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val lastTurnError = _lastTurnError.asStateFlow()
 
     /** 运行期错误的会话门控弹出：错误归属的会话正被查看才弹，否则留给历史/通知卡兜底。 */
     private fun runError(sid: String?, msg: String) {

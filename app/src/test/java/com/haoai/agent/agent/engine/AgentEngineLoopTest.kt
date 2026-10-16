@@ -34,7 +34,9 @@ class AgentEngineLoopTest {
         private val script: List<List<SseEvent>>,
         private val failOn: Set<Int> = emptySet(),
         /** 这些调用先按脚本吐完事件再断流：模拟"流到一半网关挂了"，屏幕上会留下残句。 */
-        private val breakAfterEmit: Set<Int> = emptySet()
+        private val breakAfterEmit: Set<Int> = emptySet(),
+        /** 断流时抛什么异常（默认 IOException=瞬态会退避重试；可传 ProviderHttpException(400) 走非瞬态直断）。 */
+        private val breakWith: (Int) -> Exception = { java.io.IOException("connection reset") }
     ) : ProviderClient {
         val requests: MutableList<Pair<List<ApiMessage>, List<String>>> = mutableListOf()
         private var n = 0
@@ -52,7 +54,7 @@ class AgentEngineLoopTest {
             val events = script[minOf(idx, script.lastIndex)]
             if (idx in breakAfterEmit) return flow {
                 events.forEach { emit(it) }
-                throw java.io.IOException("connection reset")
+                throw breakWith(idx)
             }
             return flow { events.forEach { emit(it) } }
         }
@@ -114,6 +116,46 @@ class AgentEngineLoopTest {
 
     private fun saying(text: String) =
         listOf(SseEvent.Delta(text), SseEvent.Usage(50, 10))
+
+    /**
+     * 2026-10-16 用户实测修复：流式中异常中断（供应商 500/断网/看门狗）时，本轮已产出
+     * 的正文必须补落历史——原先只留 error 消息，endStreaming 一清连带着丢失；用户随后
+     * 发的"继续执行"落在空档处，观感像插到了旧工作过程前面（用户原话："显示在第一次
+     * 发送消息的下面，Agent 工作过程之上"）。补落内容带"意外中断"标记，且排在 error
+     * 消息之前（顺序=中断处 → 新消息）。
+     * 用 ProviderHttpException(400) 断流：非瞬态不触发 5/12/25s 退避，测试秒级完成。
+     */
+    @Test
+    fun streamFailureKeepsPartialAnswerInHistory() = runBlocking {
+        val session = StoredSession.create(null)
+        val client = FakeClient(
+            listOf(
+                listOf(
+                    SseEvent.Delta("半截的答案正文-MARKER"),
+                    SseEvent.Usage(50, 10)
+                )
+            ),
+            breakAfterEmit = setOf(0),
+            breakWith = { com.haoai.agent.agent.provider.ProviderHttpException(400, "gateway reset") }
+        )
+        engine(client, tmpDir(), session = session).runTurn("开始", {}, {})
+        val assistants = session.messages.filter { it.role == ChatMessage.ROLE_ASSISTANT }
+        // ① 半截正文必须补落（不再丢失）
+        val partial = assistants.firstOrNull { it.content?.contains("半截的答案正文-MARKER") == true }
+        assertTrue("异常中断必须补落本轮已产出的正文（防内容丢失）", partial != null)
+        // ② 带意外中断标记（用户能看出这是被动中断而非正常结束）
+        assertTrue(
+            "补落内容应带意外中断标记",
+            partial!!.content?.contains("意外中断") == true
+        )
+        // ③ error 消息仍在，且排在补落正文之后（用户后续发的消息会落到 error 后=中断处下方）
+        val errIdx = assistants.indexOfFirst { it.error }
+        assertTrue("失败轮应落 error 消息", errIdx >= 0)
+        assertTrue(
+            "error 消息应排在补落正文之后（保住'中断处→新消息'的顺序）",
+            errIdx > assistants.indexOf(partial)
+        )
+    }
 
     /**
      * A3：供应商回 length（max_tokens 截断）时，本轮流出的工具调用必须整批按失败
