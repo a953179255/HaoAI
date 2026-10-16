@@ -2710,20 +2710,17 @@ private fun TopBar(
     val density = LocalDensity.current
     val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
     val scrimColor = MaterialTheme.colorScheme.background
-    // 状态栏带防漏补强 v4（回退 v2/v3 的遮罩滥用，2026-10-16 用户实测纠偏）：
-    // 病根=blur 在玻璃顶缘采样天然衰减（顶行上方无像素可采）→ 顶部比其他位置透。
-    // v2/v3 用加浓背景色遮罩硬压，副作用是把大半条顶栏拍实——「顶栏模糊」滑杆
-    // 调到 0 本该全透，遮罩却还压着 0.85（滑杆语义被吞，用户点名）。v4：
-    // ① 与滑杆联动：barBlur=0 → 整层不画，透明就是透明；
-    // ② 浓度随 blur 线性（blur 越大边缘衰减越重，遮罩才越需要）：0.15+0.025×blur，
-    //    上限 0.6≈原 0.55 口径；
-    // ③ 只盖边缘衰减真影响的那条：平台段到状态栏底，20dp 淡出收尾，
-    //    不再延到标题行整高（v3 平台到 sb+40 ≈ 拍实大半条栏）。
-    // 滑杆改动即失效重算：绘制期读值走 observeReads（effects 重算），遮罩浓度
-    // 在组合期读——滑杆每挪一格重组必到（同 GlassTuning 接滑杆口径）。
+    // 状态栏带防漏补强 v5（2026-10-16 用户三度实测迭代）：病根=blur 在玻璃顶缘
+    // 采样天然衰减（最顶行上方无像素可采）→ 状态栏带比标题带透、滚过的正文可辨。
+    // 遮罩定位=补这一条的边缘衰减，三个不动：
+    // ① 范围锁死：平台只到状态栏底，24dp 淡出，绝不进标题行（v3 盖到标题行被骂）；
+    // ② 滑杆门控：barBlur=0 整层不画，"调 0 全透"语义不吞（v2/v3 被骂点）；
+    // ③ 浓度随滑杆：0.3+0.033×blur（15→0.8、24→0.85 封顶）。浓度允许高的理由：
+    //    状态栏带内只有系统图标、没有玻璃质感可牺牲，补浓不等于拍实玻璃；
+    //    标题带的磨砂/折射/白雾一概不碰，观感差异只在这一条上抹平。
     val barBlurNow = com.haoai.agent.ui.theme.GlassTuning.barBlur
-    val veilA = (0.15f + 0.025f * barBlurNow).coerceIn(0f, 0.6f)
-    val veilFadeEnd = statusBarPx + with(density) { 20.dp.toPx() }
+    val veilA = (0.3f + 0.033f * barBlurNow).coerceIn(0f, 0.85f)
+    val veilFadeEnd = statusBarPx + with(density) { 24.dp.toPx() }
     val veilPlateauStop = (statusBarPx / veilFadeEnd).coerceIn(0f, 1f)
     val topBarVeil: ((androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit))? =
         if (barBlurNow > 0f) {
