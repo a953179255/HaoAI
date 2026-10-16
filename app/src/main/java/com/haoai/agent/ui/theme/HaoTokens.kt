@@ -307,17 +307,16 @@ fun haoGroupBlurRadius(): androidx.compose.ui.unit.Dp =
 @Composable
 fun haoTileSurfaceAlpha(): Float = haoPageCardSurfaceAlpha()
 
-/** 页面顶栏实际使用的表面不透明度。 */
+/** 页面顶栏实际使用的表面不透明度。
+ *  2026-10-16 用户实测纠偏：原"素色底走固定规范 0.30"让「顶栏白雾」滑杆在非壁纸
+ *  模式**完全失效**（调了没反应）。顶栏磨砂糊的是穿过顶栏的聊天内容而非壁纸，
+ *  素色底下同样该可调，故一律吃 GlassTuning.barVeil（默认 0.55）。 */
 @Composable
-fun haoPageBarSurfaceAlpha(): Float =
-    if (LocalOnWallpaper.current) GlassTuning.barVeil
-    else HaoDimens.pageBarSurfaceAlpha
+fun haoPageBarSurfaceAlpha(): Float = GlassTuning.barVeil
 
-/** 页面顶栏的背景模糊半径（壁纸上加厚，让穿过的内容化成色雾）。 */
+/** 页面顶栏的背景模糊半径（同上：素色底也吃滑杆，默认 15dp）。 */
 @Composable
-fun haoPageBarBlurRadius(): androidx.compose.ui.unit.Dp =
-    if (LocalOnWallpaper.current) GlassTuning.barBlur.dp
-    else HaoDimens.pageBarBlurRadius
+fun haoPageBarBlurRadius(): androidx.compose.ui.unit.Dp = GlassTuning.barBlur.dp
 
 /** 页面顶栏的折射环半径（0 = 无折射；C 配方下 16dp）。 */
 @Composable
