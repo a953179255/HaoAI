@@ -490,12 +490,18 @@ fun ChatScreen(
     var lastRunningForDone by remember { mutableStateOf(false) }
     var turnDoneMs by remember { mutableStateOf<Long?>(null) }
     var turnDoneError by remember { mutableStateOf(false) }
+    // 2026-10-16 补：熔断收尾（成本/圈数上限）与「回复完毕」分流。引擎撞上限时是
+    // **正常收尾**（error=null），只剩半截进度，胶囊却闪"回复完毕" = 谎报完成，
+    // 用户无从判断要不要点继续。这里单独记一档，显示「⚠ 提前收尾」。
+    var turnDoneCapped by remember { mutableStateOf(false) }
     val lastTurnError by vm.lastTurnError.collectAsState()
     LaunchedEffect(running) {
         if (running) {
             turnDoneMs = null
         } else if (lastRunningForDone && turnHadOutput) {
             turnDoneError = vm.lastTurnError.value != null
+            turnDoneCapped = !turnDoneError &&
+                vm.lastTurnEndState.value == com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
             turnDoneMs = (System.currentTimeMillis() - turnStartAt).coerceAtLeast(0L)
         }
         lastRunningForDone = running
@@ -1597,20 +1603,34 @@ fun ChatScreen(
                             Modifier.padding(start = 12.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // 三档：异常中断（红）／撞上限提前收尾（琥珀）／正常完毕（主色）
+                            val doneIcon = when {
+                                turnDoneError -> Icons.Filled.WarningAmber
+                                turnDoneCapped -> Icons.Filled.WarningAmber
+                                else -> Icons.Filled.Check
+                            }
+                            val doneTint = when {
+                                turnDoneError -> MaterialTheme.colorScheme.error
+                                turnDoneCapped -> com.haoai.agent.ui.theme.haoToneMain(
+                                    com.haoai.agent.ui.theme.HaoTone.Warn
+                                )
+                                else -> MaterialTheme.colorScheme.primary
+                            }
                             Icon(
-                                imageVector = if (turnDoneError) Icons.Filled.WarningAmber
-                                              else Icons.Filled.Check,
+                                imageVector = doneIcon,
                                 contentDescription = null,
-                                tint = if (turnDoneError) MaterialTheme.colorScheme.error
-                                       else MaterialTheme.colorScheme.primary,
+                                tint = doneTint,
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(Modifier.size(7.dp))
                             Text(
-                                if (turnDoneError) "意外中断" else "回复完毕",
+                                when {
+                                    turnDoneError -> "意外中断"
+                                    turnDoneCapped -> "达上限提前收尾"
+                                    else -> "回复完毕"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = if (turnDoneError) MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.primary,
+                                color = doneTint,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1
                             )

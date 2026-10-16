@@ -62,10 +62,11 @@ class InterruptionVerdictTest {
             "消息已发出但任务未开始执行，可继续",
             StoredSession.interruptionNote(StoredSession.RUN_INTERRUPTED, listOf(user("还没人理")))
         )
-        assertTrue(
-            StoredSession.interruptionNote(StoredSession.RUN_TURNCAPPED, emptyList())
-                .contains("轮数上限")
-        )
+        // 2026-10-16 文案纠偏：turncapped 可能来自成本熔断/圈数熔断/轮数上限三者，
+        // 横幅不再写死"轮数上限"，改成覆盖三者的中性说法（用户实测被成本掐断时看旧文案会调错设置）
+        val cappedNote = StoredSession.interruptionNote(StoredSession.RUN_TURNCAPPED, emptyList())
+        assertTrue(cappedNote.contains("上限"))
+        assertTrue(cappedNote.contains("可继续"))
         // 尾部形态优先于结束状态：turncapped 但明显断在生成中途时，说断点更有用
         assertEquals(
             "回答生成到一半中断，可继续生成",

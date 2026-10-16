@@ -1606,6 +1606,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 新回合起跑清掉上一轮的结束错误：否则上一轮的"意外中断"会亮到本轮完毕
         // （状态胶囊在 running 边沿定格文案，读的就是这个值）
         _lastTurnError.value = null
+        // 同上：上一轮的结束态（turncapped 熔断收尾）也不能亮到本轮完毕
+        _lastTurnEndState.value = null
         // 本会话新一轮的显示态清零（流式段/思考计时/首 token 标记）
         dispOf(s.id).let { d -> d.thinkingMs = null; d.turnStartAt = System.currentTimeMillis(); d.hadOutput = false }
         _streamingText.value = null
@@ -1720,6 +1722,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         com.haoai.agent.platform.AgentRunRegistry.unregister(sid, runStopHandle)
         // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
         val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
+        _lastTurnEndState.value = endState
         // 思考阶段被打断：历史里补可见的停止标记（P3-1），别让用户消息孤零零挂着
         if (stopHintPending) {
             stopHintPending = false
@@ -2569,6 +2572,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      *  新回合起跑时由 startRun 清空，防止上一轮的错误亮到下一轮完毕。 */
     private val _lastTurnError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val lastTurnError = _lastTurnError.asStateFlow()
+
+    /** 最近一次回合的引擎结束态（idle/interrupted/turncapped/failed），状态胶囊消费，不落库。
+     *  2026-10-16 新增：长任务撞上「成本熔断/圈数熔断」时引擎是**正常收尾**（error=null），
+     *  胶囊只读 lastTurnError 就会显示「✓ 回复完毕」——用户看到的是"任务做完了"，
+     *  实际是被上限掐断、只剩半截进度（用户实测点名）。这里单独留一份供胶囊分流。 */
+    private val _lastTurnEndState = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val lastTurnEndState = _lastTurnEndState.asStateFlow()
 
     /** 运行期错误的会话门控弹出：错误归属的会话正被查看才弹，否则留给历史/通知卡兜底。 */
     private fun runError(sid: String?, msg: String) {

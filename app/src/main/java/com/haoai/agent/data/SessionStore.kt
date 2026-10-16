@@ -212,7 +212,10 @@ data class StoredSession(
                 TAIL_TOOL -> "停在工具执行中，可继续任务"
                 TAIL_PARTIAL_ASSISTANT -> "回答生成到一半中断，可继续生成"
                 else -> when (runState) {
-                    RUN_TURNCAPPED -> "达到轮数上限，可继续执行剩余步骤"
+                    // 2026-10-16 纠偏：turncapped 不只来自"轮数上限"，成本熔断（本轮累计
+                    // 计费 token 达上限）和圈数熔断（工具调用次数达上限）都落这个状态。
+                    // 写死"轮数上限"会让被成本掐断的用户以为是迭代次数问题、去调错设置。
+                    RUN_TURNCAPPED -> "达到本轮上限（成本或步数）已提前收尾，可继续执行剩余步骤"
                     RUN_FAILED -> "执行出错，可继续尝试"
                     else -> "进程中断，可继续执行"
                 }
