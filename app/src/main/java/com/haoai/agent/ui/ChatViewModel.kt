@@ -1260,6 +1260,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 回收站里再删一次就是不可逆的，先把那条会话原样留一份
         com.haoai.agent.platform.DataBackupManager.snapshotSession(c, id, "purge")
         c.sessionStore.deleteForever(id)
+        // 任务面板按会话存档展开态，会话没了就一起清，否则那两张表只长不缩
+        taskPanel.forget(id)
         refreshDeletedSessions()
     }
 
@@ -1723,6 +1725,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // E1: 按引擎结束状态持久化（null→idle；CancellationException 已置 idle）
         val endState = turnEngine?.runEndState ?: com.haoai.agent.data.StoredSession.RUN_IDLE
         _lastTurnEndState.value = endState
+        // 2026-10-21：任务完成后把面板收成胶囊（开关默认开，设置→主题外观→任务过程展开）。
+        // 只认**正常收尾**（idle）：中断/达上限提前收尾/出错时面板保持展开——那时用户
+        // 要看半截进度和「继续执行」入口，收起来反而添乱。
+        if (endState == com.haoai.agent.data.StoredSession.RUN_IDLE &&
+            c.settingsFlow.value.taskPanelAutoCollapse
+        ) {
+            taskPanel.collapseOnFinish(sid)
+        }
         // 思考阶段被打断：历史里补可见的停止标记（P3-1），别让用户消息孤零零挂着
         if (stopHintPending) {
             stopHintPending = false

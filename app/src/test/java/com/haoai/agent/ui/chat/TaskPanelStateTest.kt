@@ -69,19 +69,72 @@ class TaskPanelStateTest {
     }
 
     @Test
-    fun `换会话仍然归位（v9 方案B：他处开过的面板不残留到新会话）`() {
+    fun `换会话仍然归位，切回来恢复离开时的样子（v9 方案B + 按会话记忆）`() {
         val p = TaskPanelState()
         p.onEnter(s1)
-        p.maybeAutoExpand("todo-a")
-        p.toggleForcedVisible()          // /task 强制可见
+        p.toggleForcedVisible()          // /task 强制可见：顺带把面板翻成展开并存档
         assertTrue(p.forcedVisible)
+        p.maybeAutoExpand("todo-a")      // 清单到达（已经是展开态，只记指纹）
         p.onEnter(s2)                    // 切到另一个会话
         assertFalse("新会话不该带着上一个会话的展开态", p.expanded)
         assertFalse("新会话不该带着上一个会话的 /task 强制可见", p.forcedVisible)
         assertEquals(s2, p.ownerSessionId)
-        // 换回去算"新一次到达那份清单"，可以再展开
+        // 切回去：**恢复离开时的样子**（那时是展开），而不是被当成新清单再自动拉一次
         p.onEnter(s1)
-        assertTrue(p.maybeAutoExpand("todo-a"))
+        assertTrue("切回 A 应恢复离开时的展开态", p.expanded)
+        assertFalse("A 这份清单已经自动展开过，不该再拉开", p.maybeAutoExpand("todo-a"))
+    }
+
+    @Test
+    fun `在 A 收起后切去 B 再切回 A，收起这一步必须还在`() {
+        // 2026-10-21 用户实测点名：旧实现切回 A 会把面板重新拉开
+        val p = TaskPanelState()
+        p.onEnter(s1)
+        p.maybeAutoExpand("todo-a")
+        p.toggleExpanded()               // 用户手动收成胶囊
+        assertFalse(p.expanded)
+
+        p.onEnter(s2)                    // 切去 B：B 自己的清单照常展开
+        assertTrue(p.maybeAutoExpand("todo-b"))
+
+        p.onEnter(s1)                    // 切回 A
+        assertFalse("切回 A 要恢复离开时的收起态", p.expanded)
+        // 界面那条 LaunchedEffect(首条 id) 重跑一遍，也不许把它拉开
+        assertFalse(p.maybeAutoExpand("todo-a"))
+        assertFalse(p.expanded)
+    }
+
+    @Test
+    fun `回合正常结束收起面板：只收当前看的会话，且不阻断新清单自动展开`() {
+        val p = TaskPanelState()
+        p.onEnter(s1)
+        p.maybeAutoExpand("todo-a")
+        assertTrue(p.expanded)
+
+        p.collapseOnFinish(s2)           // 后台会话结束：不许动用户正在看的面板
+        assertTrue("别的会话结束不该收当前面板", p.expanded)
+
+        p.collapseOnFinish(s1)
+        assertFalse(p.expanded)
+        // 系统收起不算"用户手动收起"：下一轮新清单照常自动展开一次
+        assertTrue(p.maybeAutoExpand("todo-b"))
+
+        // 收起态也要按会话记住：切走再切回仍是收起
+        p.collapseOnFinish(s1)
+        p.onEnter(s2)
+        p.onEnter(s1)
+        assertFalse(p.expanded)
+    }
+
+    @Test
+    fun `删除会话后不再留着它的存档`() {
+        val p = TaskPanelState()
+        p.onEnter(s1)
+        p.maybeAutoExpand("todo-a")
+        p.forget(s1)
+        p.onEnter(s1)                    // 同名重新进入（重建场景）：当新会话
+        assertFalse(p.expanded)
+        assertTrue("清过指纹，新清单要能再展开", p.maybeAutoExpand("todo-a"))
     }
 
     @Test

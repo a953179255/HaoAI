@@ -168,6 +168,11 @@ data class AppSettings(
     val chainThinkAutoExpand: Boolean = false,
     /** 链卡变更卡/结果卡正文是否默认展开（false=一律收起；旧行为=短内容自动展开）。 */
     val chainContentAutoExpand: Boolean = false,
+    /**
+     * 任务面板：Agent 正常完成一轮后面板自动收成胶囊（默认开）。
+     * 只管"正常完成"——意外中断/达上限提前收尾时保持展开，那时要看半截进度与继续入口。
+     */
+    val taskPanelAutoCollapse: Boolean = true,
     val reasoningEffort: String = "",
     val localModelFile: String? = null,
     val agentName: String = "",

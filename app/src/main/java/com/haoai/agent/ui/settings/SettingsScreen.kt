@@ -3427,6 +3427,21 @@ private fun LazyListScope.themeItems(
                 onChange = { vm.setChainContentAutoExpand(it) },
                 backdrop = backdrop
             )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 14.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+            )
+            // 2026-10-21：任务面板"结束后收起"。只管正常完成——意外中断/达上限提前
+            // 收尾时要看半截进度和「继续执行」入口，收起反而添乱，那种情况保持展开。
+            ToggleRow(
+                title = "任务完成后自动收起面板",
+                subtitle = if (settings.taskPanelAutoCollapse)
+                    "已开：正常完成后面板收成胶囊，顶部空间还给回答；中断/达上限时仍保持展开"
+                else "关闭时回复结束后面板保持展开，需手动收起",
+                checked = settings.taskPanelAutoCollapse,
+                onChange = { vm.setTaskPanelAutoCollapse(it) },
+                backdrop = backdrop
+            )
         }
     }
 
