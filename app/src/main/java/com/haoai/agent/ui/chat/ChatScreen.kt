@@ -1253,7 +1253,7 @@ fun ChatScreen(
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(top = 8.dp),
+                                .padding(top = 8.dp, end = 12.dp),
                             contentAlignment = Alignment.TopEnd
                         ) {
                             SubagentBadge(
@@ -2218,12 +2218,13 @@ fun ChatScreen(
         )
     }
 
-    // P4 浮标详情弹层：面板行点击带入 id 并抓快照；此后 live（1s ticker 跟进）
-    // 持续覆盖，后台轨迹被清（新一轮 clearEnded）时保快照、弹层不闪退
-    val badgeDetailLive = badgeDetailId?.let { vm.subagentDetailById(it) }
-    androidx.compose.runtime.SideEffect {
-        if (badgeDetailLive != null && badgeDetailLive.id == badgeDetailId) {
-            badgeDetail = badgeDetailLive
+    // P4 浮标详情弹层：面板行点击带入 id 并抓快照；此后**弹层自轮询**（1s）跟进——
+    // 不能靠 bgBadge 发射驱动根级重组：唤醒回合一起跑 badge 置 null、StateFlow 去重
+    // 不再发射，弹层会冻死在旧快照（实测「仍在工作中」永不翻面）。轨迹被清时保快照不闪退。
+    LaunchedEffect(badgeDetailId) {
+        while (badgeDetailId != null) {
+            vm.subagentDetailById(badgeDetailId!!)?.let { badgeDetail = it }
+            kotlinx.coroutines.delay(1000)
         }
     }
     badgeDetail?.takeIf { badgeDetailId != null }?.let { d ->
