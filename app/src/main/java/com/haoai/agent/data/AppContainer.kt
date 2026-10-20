@@ -33,6 +33,12 @@ class AppContainer(app: Application) {
     // （原声明在 init 块之后；Kotlin init 按声明顺序执行，提前引用会 NPE。）
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * P4 后台子代理完成协调器：后台子代理跨回合存活，完成后由它批合并通知、
+     * 优先走前台 VM 通路注入、VM 不在时起无头唤醒回合。lazy=首次派后台子代理才实例化。
+     */
+    val backgroundSubagents by lazy { com.haoai.agent.platform.BackgroundSubagentCoordinator(this) }
+
     init {
         // 冷启动清扫：引擎只活在本进程，上个进程留下的 running 一律判成中断，
         // 否则那些会话既没有恢复入口也没有停止键，会永久卡住（放在 sessionStore

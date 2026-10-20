@@ -348,6 +348,43 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
+    /**
+     * P4 后台子代理完成通知入口（协调器经 LiveChatVms 调用，任意线程）。
+     * 语义与用户排队消息完全一致：忙→入该会话队列（本轮结束自动接上，含暂停态积压）；
+     * 闲→直接起跑。通知文本作为一条 user 消息落历史（[task-notification] 前缀），
+     * 排队气泡/运行气泡走既有渲染。返回 false = 本实例无法受理（协调器走无头通路）。
+     */
+    fun offerExternalNotice(sid: String, text: String): Boolean {
+        if (text.isBlank()) return false
+        return runCatching {
+            viewModelScope.launch { offerExternalNoticeOnMain(sid, text) }
+            true
+        }.getOrDefault(false)
+    }
+
+    /** [offerExternalNotice] 的主线程实现：queues/jobs 都是主线程结构。 */
+    private fun offerExternalNoticeOnMain(sid: String, text: String) {
+        runCatching {
+            if (isSessionBusy(sid) || queueOf(sid).isNotEmpty()) {
+                // 忙/有积压：通知消息先落历史（排队气泡=它），id 进队列，本轮结束自动接上。
+                // 与 send() 忙分支同构；暂停态也照常入队（用户主动停的是主任务，不该吞掉系统通知）。
+                val target = currentSession?.takeIf { it.id == sid }
+                    ?: c.sessionStore.load(sid)
+                    ?: return
+                val mid = appendLocalMessage(text, to = target)
+                queueOf(sid).addLast(
+                    com.haoai.agent.data.StoredQueuedMsg(mid, text, System.currentTimeMillis())
+                )
+                refreshQueueCount(); refreshQueuePaused(); persistQueueState(sid)
+            } else {
+                // 闲：fresh 副本落消息再起跑（alreadyInHistory=true），与 drainQueue 同构。
+                val fresh = c.sessionStore.load(sid) ?: return
+                appendLocalMessage(text, to = fresh)
+                startRun(fresh, text, alreadyInHistory = true)
+            }
+        }
+    }
+
     // ── D17 批2：held 队列时发新消息的选择弹窗（ZCode heldQueueInputRequiresChoice）──
     data class QueueHold(
         val sid: String, val text: String,
@@ -1229,10 +1266,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 用户一置顶某个会话就等于把"每次打开都跳进哪条"也改了（置顶只是为了好找）。
         val startId = SessionStartup.pick(c.sessionStore.list(), c.sessionStore.lastOpenedId())
         if (startId != null) selectSession(startId) else newSession()
+        // P4 后台子代理唤醒：本 VM 存活期间，后台子代理完成通知优先走这里
+        // （忙→队列自动续跑，闲→直接起跑，全程 UI 可见）。onCleared 摘除。
+        com.haoai.agent.platform.LiveChatVms.register(this) { sid, text ->
+            offerExternalNotice(sid, text)
+        }
     }
 
     override fun onCleared() {
         com.haoai.agent.platform.RunObserver.askAnswerSink = null
+        com.haoai.agent.platform.LiveChatVms.unregister(this)
         super.onCleared()
     }
 
@@ -1930,21 +1973,23 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun stop() {
-        // D16：本实例没在跑但注册表里有当前会话的登记（其他实例的引擎）→ 路由过去停。
+        // D16+P4：先分「这条轨道是不是本实例的 job 在跑」。
+        // 本实例在跑 → 本地取消；不在跑而注册表有登记（其他实例的引擎 / P4 无头唤醒回合）
+        // → 路由过去停。旧判定用 isSessionBusy（含注册表）区分两分支：注册表占用时
+        // 走进本地分支而 jobs[sid] 为空，stop 变成无操作——跨实例的运行和无头唤醒回合都停不掉。
         // 句柄身份比较：登记方就是自己（宿主 finally 清理窗口内）时不路由，直接走本地取消。
         val s = currentSession ?: return
-        if (!isSessionBusy(s.id)) {
-            val owner = com.haoai.agent.platform.AgentRunRegistry.ownerOf(s.id)
+        val sid = s.id
+        if (jobs[sid]?.isActive != true) {
+            val owner = com.haoai.agent.platform.AgentRunRegistry.ownerOf(sid)
             if (owner != null && owner !== runStopHandle) {
                 owner.invoke()
-                return
             }
-            return // 本会话本来就没在跑
+            return // 本会话本来就没在跑（或已路由给登记方）
         }
         // D17：只停当前查看的这条会话的轨道——别的会话的并行任务不受影响。
         // 队列保留不清（批 2：此置"已暂停"态 + 出「继续自动发送」pill）；
         // 收尾（登记摘除/运行态落盘/队列处置）由该 job 的 finally finishRun 完成。
-        val sid = s.id
         // 思考阶段打断（尚无任何上屏内容）时补一条可见的停止标记——否则用户消息
         // 孤零零挂着，看不出是被打断还是没响应（e2e P3-1）
         val d = dispOf(sid)

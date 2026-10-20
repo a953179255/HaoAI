@@ -36,7 +36,19 @@ class AgentEngineLoopTest {
         /** 这些调用先按脚本吐完事件再断流：模拟"流到一半网关挂了"，屏幕上会留下残句。 */
         private val breakAfterEmit: Set<Int> = emptySet(),
         /** 断流时抛什么异常（默认 IOException=瞬态会退避重试；可传 ProviderHttpException(400) 走非瞬态直断）。 */
-        private val breakWith: (Int) -> Exception = { java.io.IOException("connection reset") }
+        private val breakWith: (Int) -> Exception = { java.io.IOException("connection reset") },
+        /**
+         * 按请求特征命中的调用先挂起 [slowForMs] 毫秒：制造"主回合已收口、
+         * 子代理仍在跑"的窗口。入参 = (消息列表, 工具名清单)——判别子代理要用
+         * 系统提示前缀（[SUBAGENT]），工具面判别不可靠：主循环清单也含 read
+         * 且未必含 bash（shell 工具不叫 bash），按工具面会把主回合自己一起慢住。
+         */
+        private val slowWhen: ((List<ApiMessage>, List<String>) -> Boolean)? = null,
+        private val slowForMs: Long = 0,
+        /** 按请求特征命中的调用先按脚本吐完事件再断流（抛 [slowBreakException]，默认非瞬态 400）。 */
+        private val breakWhen: ((List<ApiMessage>, List<String>) -> Boolean)? = null,
+        private val slowBreakException: Exception =
+            com.haoai.agent.agent.provider.ProviderHttpException(400, "bad request")
     ) : ProviderClient {
         val requests: MutableList<Pair<List<ApiMessage>, List<String>>> = mutableListOf()
         private var n = 0
@@ -48,19 +60,25 @@ class AgentEngineLoopTest {
             tools: List<ApiTool>,
             reasoningEffort: String?
         ): Flow<SseEvent> {
-            requests += messages to tools.map { it.function.name }
+            val toolNames = tools.map { it.function.name }
+            requests += messages to toolNames
             val idx = n++
+            slowWhen?.takeIf { it(messages, toolNames) }?.let { kotlinx.coroutines.delay(slowForMs) }
             if (idx in failOn) throw java.io.IOException("connection reset")
             val events = script[minOf(idx, script.lastIndex)]
-            if (idx in breakAfterEmit) return flow {
+            if (idx in breakAfterEmit || breakWhen?.invoke(messages, toolNames) == true) return flow {
                 events.forEach { emit(it) }
-                throw breakWith(idx)
+                throw if (breakWhen?.invoke(messages, toolNames) == true) slowBreakException else breakWith(idx)
             }
             return flow { events.forEach { emit(it) } }
         }
 
         override suspend fun testConnection(provider: ProviderConfig, apiKey: String) = Result.success("ok")
     }
+
+    /** 子代理请求的稳定判别器：系统提示以 [SUBAGENT] 开头（主循环/记忆冲刷都不带）。 */
+    private val isSubagentRequest: (List<ApiMessage>, List<String>) -> Boolean =
+        { msgs, _ -> msgs.firstOrNull()?.role == "system" && msgs.first().content.orEmpty().startsWith("[SUBAGENT]") }
 
     private fun tmpDir(): File = Files.createTempDirectory("haoai-test").toFile().apply { deleteOnExit() }
 
@@ -83,7 +101,8 @@ class AgentEngineLoopTest {
         toolCallCap: Int = 80,
         steeringDrain: (String) -> Int = { 0 },
         backend: com.haoai.agent.platform.FileBackend? = null,
-        flagOverrides: Map<String, Boolean> = emptyMap()
+        flagOverrides: Map<String, Boolean> = emptyMap(),
+        onBackgroundSubagentDone: ((String, SubagentHandle) -> Unit)? = null
     ): AgentEngine =
         AgentEngine(
             httpClient = client,
@@ -104,7 +123,8 @@ class AgentEngineLoopTest {
             turnTokenCap = turnTokenCap,
             toolCallCap = toolCallCap,
             steeringDrain = steeringDrain,
-            flagOverrides = flagOverrides
+            flagOverrides = flagOverrides,
+            onBackgroundSubagentDone = onBackgroundSubagentDone
         )
 
     /** 每轮换参数，避免撞 P2-5 重放保护（同名同参紧邻会被判为重放而不真正执行）。 */
@@ -360,6 +380,110 @@ class AgentEngineLoopTest {
             kotlinx.coroutines.delay(50)
         }
         assertTrue("第二个回合的 background 子代理必须真的启动过", researchRoundSeen())
+    }
+
+    /**
+     * P4 后台子代理跨回合存活：主回合收口（finishTurn）时后台句柄不得被取消——
+     * 旧实现无差别 CANCELLED，后台模式名存实亡（子代理没干完就被杀，结果永远收不到）。
+     * 回归锁：慢响应制造「回合已结束、子代理仍在跑」窗口，断言不被置 CANCELLED、
+     * 最终 DONE、且 onBackgroundSubagentDone 以 (sessionId, handle) 触发一次。
+     */
+    @Test
+    fun backgroundSubagentSurvivesTurnEndAndNotifies() = runBlocking {
+        val session = StoredSession.create(null)
+        val notified = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, SubagentHandle>>()
+        val client = FakeClient(
+            script = listOf(
+                // 主回合 1：派后台子代理
+                callingTool("spawn_agent", "b1", "{\"task\":\"慢速调研\",\"background\":true}"),
+                // 槽 1 与槽 2 都是"无工具调用的子代理结论"：子代理请求与主回合 2 的落位
+                // 有先后竞态，但无论谁占哪个槽——主回合 2 无工具调用照常收口，
+                // 子代理首请求拿到结论即 DONE（脚本按请求序号取槽，不能假设落位）。
+                saying("后台结论-WAKE-MARKER"),
+                saying("后台结论-WAKE-MARKER")
+            ),
+            slowWhen = isSubagentRequest,
+            slowForMs = 800
+        )
+        val e = engine(client, tmpDir(), session = session) { sid, h ->
+            notified.add(sid to h)
+        }
+        e.runTurn("派个后台子代理", {}, {})
+        // 等句柄注册（后台协程从派发到 runSubAgent 有毫秒级窗口）
+        var h: SubagentHandle? = e.activeSubagents["sa_1"]
+        val regDeadline = System.currentTimeMillis() + 5000
+        while (h == null && System.currentTimeMillis() < regDeadline) {
+            kotlinx.coroutines.delay(20)
+            h = e.activeSubagents["sa_1"]
+        }
+        org.junit.Assert.assertNotNull("后台句柄应已注册", h)
+        assertTrue("句柄必须带后台标记", h!!.isBackground)
+        // 回合刚收口：后台子代理必须还活着（旧实现此刻已是 CANCELLED）
+        assertTrue(
+            "回合结束后后台子代理不得被取消，实际 ${h.state}",
+            h.state == "RUNNING"
+        )
+        // 等它自然跑完
+        val deadline = System.currentTimeMillis() + 8000
+        while (h.state == "RUNNING" && System.currentTimeMillis() < deadline) {
+            kotlinx.coroutines.delay(50)
+        }
+        assertEquals("后台子代理应自然完成（而非被杀）", "DONE", h.state)
+        // 完成上报恰一次，带会话 id 与结果
+        val notifyDeadline = System.currentTimeMillis() + 5000
+        while (notified.isEmpty() && System.currentTimeMillis() < notifyDeadline) {
+            kotlinx.coroutines.delay(20)
+        }
+        assertEquals("完成回调应恰好触发一次", 1, notified.size)
+        assertEquals(session.id, notified.peek()!!.first)
+        assertTrue(
+            "回调句柄的 finalResult 应带子代理结论",
+            notified.peek()!!.second.finalResult.orEmpty().contains("WAKE-MARKER")
+        )
+    }
+
+    /**
+     * P4 后台子代理失败同样要通知：用户需要知道这路没干成（ZCode 后台任务失败同款通知）。
+     * 非瞬态断流（400）→ runSubAgent ERROR 终态 → 回调 ok=false 且结果带失败摘要。
+     */
+    @Test
+    fun backgroundSubagentFailureNotifiesToo() = runBlocking {
+        val session = StoredSession.create(null)
+        val notified = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, SubagentHandle>>()
+        val client = FakeClient(
+            script = listOf(
+                callingTool("spawn_agent", "b1", "{\"task\":\"会失败的调研\",\"background\":true}"),
+                saying("已派发"),
+                saying("收尾")
+            ),
+            // 子代理的模型请求非瞬态断流 → runSubAgent 落 ERROR 终态
+            breakWhen = isSubagentRequest
+        )
+        val e = engine(client, tmpDir(), session = session) { sid, h ->
+            notified.add(sid to h)
+        }
+        e.runTurn("派个后台子代理", {}, {})
+        var h: SubagentHandle? = e.activeSubagents["sa_1"]
+        val regDeadline = System.currentTimeMillis() + 5000
+        while (h == null && System.currentTimeMillis() < regDeadline) {
+            kotlinx.coroutines.delay(20)
+            h = e.activeSubagents["sa_1"]
+        }
+        org.junit.Assert.assertNotNull(h)
+        val deadline = System.currentTimeMillis() + 8000
+        while (h!!.state == "RUNNING" && System.currentTimeMillis() < deadline) {
+            kotlinx.coroutines.delay(50)
+        }
+        assertEquals("失败路应落 ERROR 终态", "ERROR", h.state)
+        val notifyDeadline = System.currentTimeMillis() + 5000
+        while (notified.isEmpty() && System.currentTimeMillis() < notifyDeadline) {
+            kotlinx.coroutines.delay(20)
+        }
+        assertEquals("失败回调应恰好触发一次", 1, notified.size)
+        assertTrue(
+            "失败通知的结果应带失败说明（供唤醒回合向用户交代）",
+            notified.peek()!!.second.finalResult.orEmpty().contains("执行失败")
+        )
     }
 
     /**

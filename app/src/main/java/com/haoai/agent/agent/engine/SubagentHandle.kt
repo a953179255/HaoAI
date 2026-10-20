@@ -17,6 +17,9 @@ class SubagentHandle(
     val task: String,
     val job: kotlinx.coroutines.Job,
     @Volatile var state: String = "RUNNING",
+    /** P4 后台句柄：spawn_agent(background=true) 派出。回合结束不收口，完成后经
+     *  onBackgroundSubagentDone 唤醒主代理（ZCode task-notification 同款契约）。 */
+    val isBackground: Boolean = false,
     /** 当前正在执行的工具（P1 逐工具进度）。 */
     @Volatile var currentTool: String? = null,
     val steps: ConcurrentLinkedQueue<String> = ConcurrentLinkedQueue(),

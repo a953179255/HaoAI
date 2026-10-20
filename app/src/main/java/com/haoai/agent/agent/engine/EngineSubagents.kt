@@ -30,7 +30,10 @@ internal suspend fun AgentEngine.runSubAgent(
     index: Int = 1,
     total: Int = 1,
     mode: String = "research",
-    id: String? = null
+    id: String? = null,
+    /** P4：spawn_agent(background=true) 经 launchBackground 派发时为 true——
+     *  句柄带标记（finishTurn 不收口）、终态上报协调器。 */
+    isBackground: Boolean = false
 ): String {
     val fid = id ?: "sa_${subagentSeq.incrementAndGet()}"
     // 计划模式：work 子代理会执行改动，与 Plan 语义冲突，直接拒绝
@@ -39,7 +42,8 @@ internal suspend fun AgentEngine.runSubAgent(
     }
     val handle = SubagentHandle(
         fid, parentCtx.currentCallId, index, total, task,
-        currentCoroutineContext()[kotlinx.coroutines.Job] ?: kotlinx.coroutines.Job()
+        currentCoroutineContext()[kotlinx.coroutines.Job] ?: kotlinx.coroutines.Job(),
+        isBackground = isBackground
     )
     activeSubagents[fid] = handle
     var subPrompt = 0L
@@ -163,6 +167,8 @@ internal suspend fun AgentEngine.runSubAgent(
             // P1.2 失败不白干：回收已完成步骤与中间结论（而非裸错误）
             val failOut = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${handle.partialSummary()}"
             handle.finalResult = failOut
+            // P4：后台路失败也要唤醒主代理——用户需要知道这路没干成（ZCode 失败同样通知）
+            if (isBackground) notifyBackgroundDone(handle, ok = false)
             return failOut
         }
         finalText = subTranscript.textString()
@@ -254,6 +260,8 @@ internal suspend fun AgentEngine.runSubAgent(
     } else ""
     val out = finalText.ifBlank { "子代理未给出结论" } + capNote + logNote
     handle.finalResult = out
+    // P4：后台路完成 → 上报协调器（批合并后注入结果并起唤醒回合）。fire-and-forget 不阻塞返回。
+    if (isBackground) notifyBackgroundDone(handle, ok = subOk)
     return out
 }
 

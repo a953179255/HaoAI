@@ -35,7 +35,7 @@ class SubAgentTool(
     override val desc =
         "派出一个子代理独立完成任务。mode=research(默认)只读调研（read/grep/glob/web_fetch/memory）；" +
             "mode=work 可读写文件/执行命令，写权限随主代理（计划模式下不可用；config_set/tools_enable/todo 不可用，改动可回滚）。" +
-            "background=true 时立即返回、子代理后台运行（用 collect_agent 收结果、steer_agent 纠偏、stop_agent 终止；回合结束会一并终止）。" +
+            "background=true 时立即返回、子代理跨回合后台运行：完成后结果自动注入本会话并唤醒主代理补充回复（也可用 collect_agent 收进度、steer_agent 纠偏、stop_agent 终止）。" +
             "不可嵌套。"
     override val params = buildJsonObject {
         put("type", "object")
@@ -67,7 +67,8 @@ class SubAgentTool(
             controls.launchBackground(task, ctx, mode, id)
             return ToolResult(
                 "子代理 $id 已在后台启动（mode=$mode，任务：${task.take(80)}）。" +
-                    "用 collect_agent(id='$id') 收取进度/结果；steer_agent/stop_agent 可干预。注意：回合结束时后台子代理会一并终止。"
+                    "它会跨回合继续运行：本回合结束后不终止，完成后结果会以 [task-notification] 自动注入本会话并触发一轮补充回复，无需等待也可交给它。" +
+                    "运行中可用 collect_agent(id='$id') 即时查看进度；steer_agent/stop_agent 可干预。"
             )
         }
 

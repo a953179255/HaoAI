@@ -51,6 +51,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import java.io.File
@@ -144,7 +145,14 @@ class AgentEngine(
      * 当排队任务再执行一遍=双跑），并把气泡从"插话待生效"转正。
      * 返回摘除的条数仅用于调试日志。无人值守/子代理传默认空实现=无插话源。
      */
-    internal val steeringDrain: (String) -> Int = { 0 }
+    internal val steeringDrain: (String) -> Int = { 0 },
+    /**
+     * P4 后台子代理完成上报（ZCode task-notification 同款契约）：spawn_agent(background=true)
+     * 派出的子代理在回合结束后继续运行，DONE/ERROR 终态时以 (sessionId, handle) 回调调用方。
+     * 引擎层不落任何协调逻辑（批合并/唤醒/防并发都在调用方注入的协调器里）；
+     * null=不上报（测试与旧语义）。STOPPED/CANCELLED 不上报——那是显式终止，结果可当场回收。
+     */
+    internal val onBackgroundSubagentDone: ((sessionId: String, handle: SubagentHandle) -> Unit)? = null
 ) {
 
     /** 解析生效工具组：profile 空→会话分组；否则按预设（与 ToolRegistry.ALL_GROUPS 对齐）。 */
@@ -216,16 +224,30 @@ class AgentEngine(
                     // 结果由 runSubAgent 自己写进句柄 finalResult（:1205），此处不再重复赋值：
                     // 写成 `activeSubagents[id]?.finalResult = runSubAgent(...)` 时 Kotlin 先算左侧，
                     // 那一刻 id 还没注册 → 整条赋值是空操作，后台结果永远收不到。
-                    runSubAgent(task, parentCtx, 1, 1, mode, id)
+                    runSubAgent(task, parentCtx, 1, 1, mode, id, isBackground = true)
                 } catch (ce: CancellationException) {
                     // 终止/回合收口：句柄状态与部分结果已在 runSubAgent 内落账
                 } catch (e: Exception) {
                     activeSubagents[id]?.let { h ->
                         h.state = "ERROR"
                         h.finalResult = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${h.partialSummary()}"
+                        // P4：runSubAgent 内部 catch 不到的异常逃逸到这层时也要上报，
+                        // 否则协调器永远等不到这路完成通知（DONE/ERROR 之外的静默丢失）
+                        if (h.isBackground) notifyBackgroundDone(h, ok = false)
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * P4 后台子代理终态上报（DONE/ERROR 调用）：在引擎自持的 subagentScope 里 fire-and-forget，
+     * 不阻塞子代理收尾路径；协调器侧自行决定批合并/让路/唤醒。回调异常不得反噬子代理协程。
+     */
+    internal fun notifyBackgroundDone(handle: SubagentHandle, ok: Boolean) {
+        val cb = onBackgroundSubagentDone ?: return
+        subagentScope.launch {
+            runCatching { cb(session.id, handle) }
         }
     }
 
@@ -524,7 +546,11 @@ class AgentEngine(
                         // E9b 流式看门狗：90 秒无任何事件判定流挂死（供应商断流/SSE 假活），
                         // 中断后按瞬态错误走退避重试，而不是让整轮永远停在"正在思考"
                         while (collectJob.isActive) {
-                            delay(5_000)
+                            // P4：join+超时替代纯 delay 轮询。旧写法流结束后仍要睡满一个 5s 周期才退出，
+                            // 每轮请求固定多等 0~5s（快回合最伤：10 轮任务最多白攒 50 秒）；
+                            // join 返回=流已收口立刻放行，超时才做一次挂死检查，语义与旧版一致。
+                            val finished = withTimeoutOrNull(5_000L) { collectJob.join(); true } ?: false
+                            if (finished) break
                             // 180s：原 90s 会误杀 glm 的长思考（实测思考 97.8s 无 delta 合法存在），
                             // 且看门狗重试会让 turn 内已执行的工具重放（e2e P2-5）。
                             // 网络真死时 120s readTimeout 先兜底，这里只防 SSE 假活。
@@ -846,10 +872,13 @@ class AgentEngine(
      */
     private fun finishTurn(natural: Boolean) {
         if (depth != 0) return
-        // P3 后台子代理收口：只取消仍在跑的每个子代理 Job，不动 subagentScope 本身——
+        // P3→P4 后台子代理收口：前台句柄仍在收口之列（同步派发不该有 RUNNING 残留，兜底取消）；
+        // 后台句柄（isBackground）一律放行——回合结束它们继续跑，完成后经 onBackgroundSubagentDone
+        // 交协调器注入结果并起唤醒回合（ZCode task-notification 同款）。旧实现无差别取消，
+        // 是"后台模式名存实亡"的根因。只取消 Job、不动 subagentScope 本身——
         // 取消整个 scope 会让引擎实例的后续回合再也派不出后台子代理（launch 静默不执行）。
         activeSubagents.values.forEach { h ->
-            if (h.state == "RUNNING") {
+            if (h.state == "RUNNING" && !h.isBackground) {
                 h.state = "CANCELLED"
                 h.job.cancel()
             }
