@@ -152,7 +152,12 @@ class AgentEngine(
      * 引擎层不落任何协调逻辑（批合并/唤醒/防并发都在调用方注入的协调器里）；
      * null=不上报（测试与旧语义）。STOPPED/CANCELLED 不上报——那是显式终止，结果可当场回收。
      */
-    internal val onBackgroundSubagentDone: ((sessionId: String, handle: SubagentHandle) -> Unit)? = null
+    internal val onBackgroundSubagentDone: ((sessionId: String, handle: SubagentHandle) -> Unit)? = null,
+    /**
+     * P4 后台句柄 launch 瞬间上报（右上浮标数据源）：runSubAgent 注册句柄后同步回调，
+     * 只做入表登记必须即返。与 [onBackgroundSubagentDone] 一一配对（launch/终态）。
+     */
+    internal val onBackgroundSubagentLaunched: ((sessionId: String, handle: SubagentHandle) -> Unit)? = null
 ) {
 
     /** 解析生效工具组：profile 空→会话分组；否则按预设（与 ToolRegistry.ALL_GROUPS 对齐）。 */

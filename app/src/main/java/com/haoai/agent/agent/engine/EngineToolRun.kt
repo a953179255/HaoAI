@@ -231,7 +231,12 @@ internal fun AgentEngine.subagentBridge(ctx: ToolContext, call: ToolCallData, on
             onEvent(
                 SubagentUpdate(
                     call.id, report.id, report.index, report.total,
-                    report.state, report.tokensUsed, report.brief
+                    report.state, report.tokensUsed, report.brief,
+                    task = report.task,
+                    steps = report.steps,
+                    lastAssistant = report.lastAssistant,
+                    finalResult = report.finalResult,
+                    isBackground = report.isBackground
                 )
             )
         }

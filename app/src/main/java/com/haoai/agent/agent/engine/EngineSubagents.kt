@@ -46,13 +46,24 @@ internal suspend fun AgentEngine.runSubAgent(
         isBackground = isBackground
     )
     activeSubagents[fid] = handle
+    // P4 后台句柄登记：launch 的瞬间上报（浮标数据源）。同步调用、只做入表，不抛异常。
+    if (isBackground) onBackgroundSubagentLaunched?.let { cb -> runCatching { cb(session.id, handle) } }
     var subPrompt = 0L
     var subCompletion = 0L
     val subStart = System.currentTimeMillis()
+    // P4 透视扩字段：每条上报都带全量快照（任务/步骤/中间结论/终态结果/后台标记），
+    // UI 按句柄 id 覆盖渲染即可，无需自行累积
     fun report(state: String, tokens: Long, brief: String) {
         try {
             parentCtx.onSubagentEvent?.invoke(
-                com.haoai.agent.agent.engine.SubagentReport(fid, index, total, state, tokens, brief)
+                com.haoai.agent.agent.engine.SubagentReport(
+                    fid, index, total, state, tokens, brief,
+                    task = task,
+                    steps = handle.steps.toList(),
+                    lastAssistant = handle.lastAssistant.take(600),
+                    finalResult = handle.finalResult,
+                    isBackground = isBackground
+                )
             )
         } catch (_: Exception) {
         }
@@ -154,19 +165,20 @@ internal suspend fun AgentEngine.runSubAgent(
             handle.state = "STOPPED"
             subOk = false
             ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
-            report("STOPPED", subPrompt + subCompletion, "已终止（${handle.steps.size} 步已回收）")
+            // P4：先落 finalResult 再上报，终态事件自带结果（UI 时间线「回传」块直接可用）
             handle.finalResult = "子代理 ${handle.id} 被终止。\n\n${handle.partialSummary()}"
+            report("STOPPED", subPrompt + subCompletion, "已终止（${handle.steps.size} 步已回收）")
             transcriptTail("被终止")
             throw ce
         } catch (e: Exception) {
             subOk = false
             handle.state = "ERROR"
             ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = false)
-            report("ERROR", subPrompt + subCompletion, "失败：${e.message ?: e.javaClass.simpleName}")
-            transcriptTail("失败：${e.message ?: e.javaClass.simpleName}")
             // P1.2 失败不白干：回收已完成步骤与中间结论（而非裸错误）
             val failOut = "子代理执行失败：${e.message ?: e.javaClass.simpleName}\n\n${handle.partialSummary()}"
             handle.finalResult = failOut
+            report("ERROR", subPrompt + subCompletion, "失败：${e.message ?: e.javaClass.simpleName}")
+            transcriptTail("失败：${e.message ?: e.javaClass.simpleName}")
             // P4：后台路失败也要唤醒主代理——用户需要知道这路没干成（ZCode 失败同样通知）
             if (isBackground) notifyBackgroundDone(handle, ok = false)
             return failOut
@@ -252,7 +264,6 @@ internal suspend fun AgentEngine.runSubAgent(
     }
     handle.state = if (subOk) "DONE" else "ERROR"
     ledgerLlm("subagent", subPrompt, subCompletion, System.currentTimeMillis() - subStart, ok = subOk)
-    report("DONE", subPrompt + subCompletion, finalText.ifBlank { "（未给出结论）" }.take(120))
     val logNote = transcriptTail("完成")
     val capNote = if (hitTurnCap) {
         "\n\n（注意：达到 $SUB_MAX_TURNS 轮上限被截断，以上为部分结论。已完成步骤：\n" +
@@ -260,7 +271,9 @@ internal suspend fun AgentEngine.runSubAgent(
     } else ""
     val out = finalText.ifBlank { "子代理未给出结论" } + capNote + logNote
     handle.finalResult = out
-    // P4：后台路完成 → 上报协调器（批合并后注入结果并起唤醒回合）。fire-and-forget 不阻塞返回。
+    // P4：先落 finalResult 再上报，DONE 事件自带结果；随后后台路上报协调器（批合并后
+    // 注入结果并起唤醒回合）。fire-and-forget 不阻塞返回。
+    report("DONE", subPrompt + subCompletion, finalText.ifBlank { "（未给出结论）" }.take(120))
     if (isBackground) notifyBackgroundDone(handle, ok = subOk)
     return out
 }

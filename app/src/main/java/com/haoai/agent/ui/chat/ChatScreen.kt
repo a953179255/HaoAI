@@ -573,13 +573,20 @@ fun ChatScreen(
     androidx.compose.runtime.LaunchedEffect(runEnvSessionId) { runEnv = vm.runEnv() }
     // 工具详情弹层（v8 思维链）：ToolStep 点击后经 LocalOpenToolSheet 上抛，
     // 在 appLayer 外渲染 ToolDetailSheet+GlassPanel 真玻璃（独立窗口采样不到 backdrop）
-    var toolSheet by remember { mutableStateOf<com.haoai.agent.ui.UiTool?>(null) }
+    // P4：Pair 第二位 = pill 点击带入的初始选中子代理 id（null=自动选）
+    var toolSheet by remember { mutableStateOf<Pair<com.haoai.agent.ui.UiTool, String?>?>(null) }
+    // P4 右上角浮标：详情弹层（面板行/「查看完整过程」点击带入单路 id）。
+    // badgeDetail=打开时快照；此后 live（1s ticker 驱动重组）持续跟进，轨迹被清时保快照不闪退
+    var badgeDetailId by remember { mutableStateOf<String?>(null) }
+    var badgeDetail by remember { mutableStateOf<com.haoai.agent.ui.UiSubagentDetail?>(null) }
     // 工具卡"查看变更"（1.3）：从写前快照现算 diff
     var diffViewer by remember { mutableStateOf<Pair<String, List<com.haoai.agent.ui.common.DiffLine>>?>(null) }
     // 代际栅栏（显示侧）：diff 属于打开它的那个会话，切会话即关，防旧会话的变更弹窗盖在别的会话上
     val diffViewerSessionId = vm.session.collectAsState().value?.id
     androidx.compose.runtime.LaunchedEffect(diffViewerSessionId) {
         diffViewer = null
+        // P4：浮标详情弹层同理——它是某一会话的子代理轨迹，切会话即关防旧内容盖新会话
+        badgeDetailId = null
     }
     val snapshotScope = rememberCoroutineScope()
 
@@ -1071,7 +1078,7 @@ fun ChatScreen(
             // LocalOpenToolSheet 上抛要开哪个工具，由 ChatScreen 顶层（appLayer 外）
             // 渲染 ToolDetailSheet+GlassPanel 真玻璃——独立 Popup/Dialog 窗口采样不到 backdrop
             androidx.compose.runtime.CompositionLocalProvider(
-                com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t -> toolSheet = t },
+                com.haoai.agent.ui.chat.LocalOpenToolSheet provides { t, sub -> toolSheet = t to sub },
                 // 批2a：产物卡 [在浏览器打开]——navigate 自带 uiOpener（未开界面时
                 // 自动弹内置浏览器预览面板），这里只负责起协程
                 com.haoai.agent.ui.chat.LocalOpenHtmlFile provides { url ->
@@ -1231,6 +1238,32 @@ fun ChatScreen(
                             onToggle = { vm.taskPanel.toggleExpanded() },
                             backdrop = backdrop
                         )
+                    }
+                }
+                // P4 子代理浮标（效果图场景四）：挂 TaskFloat 之后——有任务面板时纵向
+                // 错开 8dp，没有时自动上移到顶栏下第一行。主回合运行时 vm 已让位 null。
+                // chip/面板无 pointerInput 的区域触摸穿透（Box 不吃事件），不挡下方消息列表。
+                val bgBadgeNow = vm.bgBadge.collectAsState().value
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = bgBadgeNow != null,
+                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+                ) {
+                    bgBadgeNow?.let { b ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            contentAlignment = Alignment.TopEnd
+                        ) {
+                            SubagentBadge(
+                                badge = b,
+                                onOpenDetail = { id ->
+                                    badgeDetailId = id
+                                    badgeDetail = vm.subagentDetailById(id)
+                                }
+                            )
+                        }
                     }
                 }
                 // 上下文用量详情（Z3 最上位，2026-09-10 三次修正）：保留「顶栏下沿从上
@@ -2166,11 +2199,12 @@ fun ChatScreen(
     }
 
     // 工具详情弹层（v8 思维链）：appLayer 外渲染 → GlassPanel 真玻璃折射消息流
-    toolSheet?.let { t ->
+    toolSheet?.let { (t, subId) ->
         ToolDetailSheet(
             tool = t,
             backdrop = backdrop,
             onDismiss = { toolSheet = null },
+            initialSubagentId = subId,
             onViewDiff = { callId ->
                 snapshotScope.launch {
                     val sidAtRequest = vm.session.value?.id
@@ -2181,6 +2215,23 @@ fun ChatScreen(
                 }
             },
             onStopSubagent = { vm.stopSubagent(it) }
+        )
+    }
+
+    // P4 浮标详情弹层：面板行点击带入 id 并抓快照；此后 live（1s ticker 跟进）
+    // 持续覆盖，后台轨迹被清（新一轮 clearEnded）时保快照、弹层不闪退
+    val badgeDetailLive = badgeDetailId?.let { vm.subagentDetailById(it) }
+    androidx.compose.runtime.SideEffect {
+        if (badgeDetailLive != null && badgeDetailLive.id == badgeDetailId) {
+            badgeDetail = badgeDetailLive
+        }
+    }
+    badgeDetail?.takeIf { badgeDetailId != null }?.let { d ->
+        SubagentBadgeDetailSheet(
+            detail = d,
+            backdrop = backdrop,
+            onDismiss = { badgeDetailId = null },
+            onStop = { vm.stopSubagent(it) }
         )
     }
 

@@ -44,7 +44,17 @@ data class SubagentUpdate(
     val total: Int,
     val state: String,
     val tokensUsed: Long,
-    val brief: String
+    val brief: String,
+    /** P4 透视扩字段：任务原文（派发词），过程面板「派发」块。 */
+    val task: String = "",
+    /** P4 透视扩字段：已完成步骤摘要（全量快照，UI 直接覆盖渲染）。 */
+    val steps: List<String> = emptyList(),
+    /** P4 透视扩字段：最近一次中间结论草稿（未定稿）。 */
+    val lastAssistant: String = "",
+    /** P4 透视扩字段：终态结果（DONE/ERROR 终态报告携带）。 */
+    val finalResult: String? = null,
+    /** P4：后台句柄（spawn_agent background=true），右上浮标数据源。 */
+    val isBackground: Boolean = false
 ) : TurnEvent
 
 /** E7a 工具侧上报载荷（ToolContext.onSubagentEvent），引擎补 callId 后转成 SubagentUpdate。 */
@@ -55,5 +65,15 @@ data class SubagentReport(
     val total: Int = 1,
     val state: String,
     val tokensUsed: Long = 0,
-    val brief: String
+    val brief: String,
+    /** P4 透视扩字段：任务原文（派发词）。 */
+    val task: String = "",
+    /** P4 透视扩字段：已完成步骤摘要（全量快照）。 */
+    val steps: List<String> = emptyList(),
+    /** P4 透视扩字段：最近一次中间结论草稿。 */
+    val lastAssistant: String = "",
+    /** P4 透视扩字段：终态结果。 */
+    val finalResult: String? = null,
+    /** P4：后台句柄标记。 */
+    val isBackground: Boolean = false
 )

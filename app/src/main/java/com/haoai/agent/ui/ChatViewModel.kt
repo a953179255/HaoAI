@@ -37,6 +37,7 @@ import com.haoai.agent.data.toModel
 import com.haoai.agent.data.toStored
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -222,8 +223,35 @@ data class SubagentLine(
     val total: Int,
     val state: String,
     val tokensUsed: Long,
-    val brief: String
+    val brief: String,
+    /** P4 透视扩字段：任务原文 / 步骤快照 / 中间结论 / 终态结果 / 后台标记（过程面板数据源）。 */
+    val task: String = "",
+    val steps: List<String> = emptyList(),
+    val lastAssistant: String = "",
+    val finalResult: String? = null,
+    val isBackground: Boolean = false
 )
+
+/**
+ * P4 一路子代理的详情快照（链卡 pill 弹层与右上浮标共用）。
+ * 回合内来自 SubagentUpdate 聚合，回合外来自协调器的后台轨迹（handle 活体直读）。
+ */
+data class UiSubagentDetail(
+    val id: String,
+    val index: Int,
+    val total: Int,
+    val state: String,
+    val task: String,
+    val steps: List<String>,
+    val lastAssistant: String,
+    val finalResult: String?,
+    val tokensUsed: Long,
+    /** 当前正在执行的工具（后台轨迹直读才有；回合内上报路径用 brief 代替）。 */
+    val currentTool: String? = null
+)
+
+/** P4 右上浮标：running=true 显示「N 路 · 工作中」，false 显示「已结束 · 查看 N 路结果」。 */
+data class BgBadge(val running: Boolean, val tracks: List<UiSubagentDetail>)
 
 /**
  * flushChain 的行 key 决策（2026-10-14 修「执行期头像丢失」抽为纯函数）。
@@ -623,6 +651,79 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 已落进合并行的工具 callId 集合（rebuildRows 每次重算，供流式卡去重）。 */
     private var landedCallIds: Set<String> = emptySet()
+
+    // ── P4 右上角子代理浮标：后台子代理跨回合存活的可视化 ──
+    // 数据源 = 协调器的后台轨迹登记表（handle 活体：state/steps/终态实时变化），
+    // 1s 轮询快照成 StateFlow；主回合在跑时浮标让位（链卡 pill 负责回合内展示）。
+
+    private val _bgBadge = MutableStateFlow<BgBadge?>(null)
+
+    /** 查看中会话的浮标状态；null=不显示。 */
+    val bgBadge = _bgBadge.asStateFlow()
+
+    private var bgTickerStarted = false
+
+    private fun ensureBgTicker() {
+        if (bgTickerStarted) return
+        bgTickerStarted = true
+        viewModelScope.launch {
+            while (isActive) {
+                delay(1000)
+                if (_bgBadge.value != null || c.backgroundSubagents.tracksVersion.value > 0) {
+                    refreshBgBadge()
+                }
+            }
+        }
+    }
+
+    private fun refreshBgBadge() {
+        val sid = viewedSid()
+        if (sid == null) {
+            _bgBadge.value = null
+            return
+        }
+        val tracks = c.backgroundSubagents.tracksFor(sid)
+        if (tracks.isEmpty() || jobs[sid]?.isActive == true) {
+            _bgBadge.value = null
+            return
+        }
+        val ui = tracks.map {
+            UiSubagentDetail(
+                id = it.handle.id, index = it.handle.index, total = it.handle.total,
+                state = it.handle.state, task = it.handle.task,
+                steps = it.handle.steps.toList(), lastAssistant = it.handle.lastAssistant,
+                finalResult = it.handle.finalResult, tokensUsed = 0,
+                currentTool = it.handle.currentTool
+            )
+        }
+        _bgBadge.value = BgBadge(running = ui.any { it.state == "RUNNING" || it.state == "STOPPING" }, tracks = ui)
+    }
+
+    /**
+     * 详情弹层数据源：回合内链卡快照（SubagentUpdate 聚合，带实时 brief）优先，
+     * 回合外回落协调器后台轨迹（handle 直读，带 currentTool）。
+     */
+    fun subagentDetailById(id: String): UiSubagentDetail? {
+        _liveToolsSnapshot.value.firstNotNullOfOrNull { t ->
+            t.subagents.firstOrNull { it.id == id }?.let { line ->
+                UiSubagentDetail(
+                    id = line.id, index = line.index, total = line.total,
+                    state = line.state, task = line.task, steps = line.steps,
+                    lastAssistant = line.lastAssistant, finalResult = line.finalResult,
+                    tokensUsed = line.tokensUsed
+                )
+            }
+        }?.let { return it }
+        val sid = viewedSid() ?: return null
+        return c.backgroundSubagents.tracksFor(sid).firstOrNull { it.handle.id == id }?.let {
+            UiSubagentDetail(
+                id = it.handle.id, index = it.handle.index, total = it.handle.total,
+                state = it.handle.state, task = it.handle.task, steps = it.handle.steps.toList(),
+                lastAssistant = it.handle.lastAssistant, finalResult = it.handle.finalResult,
+                tokensUsed = 0, currentTool = it.handle.currentTool
+            )
+        }
+    }
 
     private val _session = MutableStateFlow<StoredSession?>(null)
     val session = _session.asStateFlow()
@@ -1271,6 +1372,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         com.haoai.agent.platform.LiveChatVms.register(this) { sid, text ->
             offerExternalNotice(sid, text)
         }
+        // P4 右上浮标：后台子代理轨迹 1s 轮询（无轨迹时空转，代价可忽略）
+        ensureBgTicker()
     }
 
     override fun onCleared() {
@@ -1305,6 +1408,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         c.sessionStore.deleteForever(id)
         // 任务面板按会话存档展开态，会话没了就一起清，否则那两张表只长不缩
         taskPanel.forget(id)
+        // P4：后台子代理轨迹随会话一起清（浮标不再为已删除的会话挂结果）
+        c.backgroundSubagents.clearSession(id)
         refreshDeletedSessions()
     }
 
@@ -1597,6 +1702,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         alreadyInHistory: Boolean = false,
         queuedMsgId: String? = null
     ) {
+        // P4：起新回合 = 该会话「已结束」的后台轨迹浮标下线（ZCode 同款；仍在跑的不动）
+        c.backgroundSubagents.clearEnded(s.id)
         // 聊天会话模型路由：设置里「模型切换 → 聊天会话」优先（可精确到同供应商某模型），
         // 未配置回落激活供应商
         val provider0 = c.activeChatProvider() ?: c.activeProvider()
@@ -2585,8 +2692,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val tools = liveToolsOf(sid)
                 val prev = tools[ev.callId]
                 val lines = prev?.subagents.orEmpty().toMutableList()
-                val at = lines.indexOfFirst { it.index == ev.index }
-                val line = SubagentLine(ev.id, ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief)
+                val at = lines.indexOfFirst { it.id == ev.id || it.index == ev.index }
+                val line = SubagentLine(
+                    ev.id, ev.index, ev.total, ev.state, ev.tokensUsed, ev.brief,
+                    task = ev.task,
+                    steps = ev.steps,
+                    lastAssistant = ev.lastAssistant,
+                    finalResult = ev.finalResult,
+                    isBackground = ev.isBackground
+                )
                 if (at >= 0) lines[at] = line else lines.add(line)
                 // m5：原先用构造参数逐个重列，只带了 7 个字段，把已填好的
                 // body / elapsedMs / diff / htmlFile / fileRef / jobLog / hits / ask / askBatch

@@ -6,6 +6,8 @@ import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.StoredSession
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -77,6 +79,43 @@ class BackgroundSubagentCoordinator(private val container: AppContainer) {
     private val flushing = ConcurrentHashMap.newKeySet<String>()
 
     private val wakeSemaphore = Semaphore(MAX_CONCURRENT_WAKE)
+
+    // ── P4 后台句柄轨迹登记（右上浮标数据源）──
+
+    /** 一路后台子代理的活体轨迹：handle 本身就是引擎在改的同一对象（state/steps/终态实时）。 */
+    data class BackgroundTrack(val sessionId: String, val handle: SubagentHandle)
+
+    /** key = 句柄 id。launch 登记，进程内存活（结果可回查），起新回合/删会话时清理。 */
+    private val tracks = ConcurrentHashMap<String, BackgroundTrack>()
+
+    /** 版本号：登记/清理时 +1，UI 轮询判定是否有变化（handle 内部变化由 UI 按帧读）。 */
+    private val _tracksVersion = MutableStateFlow(0)
+    val tracksVersion = _tracksVersion.asStateFlow()
+
+    /** 引擎 launch 钩子（EngineFactory 接线）：同步入表即返。 */
+    fun onSubagentLaunched(sessionId: String, handle: SubagentHandle) {
+        if (!handle.isBackground) return
+        tracks[handle.id] = BackgroundTrack(sessionId, handle)
+        _tracksVersion.value += 1
+    }
+
+    /** 某会话的后台轨迹（按句柄 id 排序 = 派发顺序）。 */
+    fun tracksFor(sessionId: String): List<BackgroundTrack> =
+        tracks.values.filter { it.sessionId == sessionId }.sortedBy { it.handle.id }
+
+    /** 起新回合：清掉该会话已终态的轨迹（浮标「已结束」态随新回合消失，ZCode 同款）。 */
+    fun clearEnded(sessionId: String) {
+        if (tracks.entries.removeIf {
+                it.value.sessionId == sessionId &&
+                    it.value.handle.state != "RUNNING" && it.value.handle.state != "STOPPING"
+            }
+        ) _tracksVersion.value += 1
+    }
+
+    /** 会话删除：全清。 */
+    fun clearSession(sessionId: String) {
+        if (tracks.keys.removeIf { tracks[it]?.sessionId == sessionId }) _tracksVersion.value += 1
+    }
 
     /** 引擎回调入口（EngineFactory 对每个引擎接线）。同步入队即返回，不做任何 IO。 */
     fun onSubagentFinished(sessionId: String, handle: SubagentHandle) {

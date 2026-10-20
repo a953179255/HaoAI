@@ -79,10 +79,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
@@ -140,7 +143,8 @@ import java.util.Locale
  * ToolDetailSheet + GlassPanel 真玻璃）。独立 Popup/Dialog 窗口采样不到 appLayer
  * backdrop（实测弹层内为均匀死灰），必须在主窗口组合树内、appLayer 外渲染才出玻璃。
  */
-val LocalOpenToolSheet = androidx.compose.runtime.staticCompositionLocalOf<(UiTool) -> Unit> { {} }
+/** P4：第二参=初始选中的子代理 id（pill 点击带入；普通行点击传 null）。 */
+val LocalOpenToolSheet = androidx.compose.runtime.staticCompositionLocalOf<(UiTool, String?) -> Unit> { { _, _ -> } }
 
 /**
  * 批2a：产物卡 [在浏览器打开] 的回调。ChatScreen 顶层提供——BrowserController.
@@ -293,7 +297,10 @@ fun ChainCard(
                                 onToggle = { reasoningOpen[index] = !(reasoningOpen[index] == true) }
                             )
                             is ChainStep.Tool -> Column {
+                                val openToolFn = LocalOpenToolSheet.current
                                 ToolStep(tool = step.tool, live = toolsLive)
+                                // P4 子代理 pill 组：spawn 行下挂，每路实时在干什么（ZCode「The pill」规格）
+                                SubagentPillRow(step.tool) { subId -> openToolFn(step.tool, subId) }
 // 批1e：编码向步骤行下长出结果正文卡（exit/耗时 + 可折叠 stdout）
 // write/edit 例外：正文只有"已替换 N 处"一行，变更卡信息量全包含它，两张并排是噪音。
                                 if (step.tool.body != null && step.tool.diff == null) {
@@ -684,8 +691,9 @@ private fun ToolStep(
         Modifier
             .fillMaxWidth()
             // 整行点击=详情弹层（2026-10-07 用户回访：整行直达网页太激进，恢复原交互）；
-            // 快捷跳转收进域名文本本身（见下方 isFetch 分支）与弹层「打开网页」按钮
-            .chainPressable(enabled = !running) { openTool(tool) }
+            // 快捷跳转收进域名文本本身（见下方 isFetch 分支）与弹层「打开网页」按钮。
+            // P4：spawn 行运行中也可点（子代理 pill 透视需要边跑边看；其余工具维持运行中禁点）
+            .chainPressable(enabled = !running || tool.subagents.isNotEmpty()) { openTool(tool, null) }
             // 高亮通栏，内容自缩 12dp
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1816,7 +1824,9 @@ fun ToolDetailSheet(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     onDismiss: () -> Unit,
     onViewDiff: (String) -> Unit = {},
-    onStopSubagent: (String) -> Unit = {}
+    onStopSubagent: (String) -> Unit = {},
+    /** P4：pill 点击带入的初始选中子代理 id；null=自动选第一路运行中的。 */
+    initialSubagentId: String? = null
 ) {
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
@@ -2001,60 +2011,660 @@ fun ToolDetailSheet(
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
                         )
                     }
-                    Text(
-                        "关闭",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .clickable(onClick = onDismiss)
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    // P4：独立「关闭」文字键删除（2026-10-21 用户拍板）——横杠拖拽/点遮罩已是
+                    // 标准收起手势，再留一个文字键是冗余；「查看变更」保留（它有独立语义）
+                }
+                // P4 子代理过程面板（spawn 工具）：三路 tab + 选中路的派发/过程/中间结论/回传
+                if (tool.subagents.isNotEmpty()) {
+                    var selectedId by rememberSaveable(tool.callId, initialSubagentId) {
+                        mutableStateOf(
+                            initialSubagentId
+                                ?: tool.subagents.firstOrNull { it.state == "RUNNING" }?.id
+                                ?: tool.subagents.first().id
+                        )
+                    }
+                    val sel = tool.subagents.firstOrNull { it.id == selectedId } ?: tool.subagents.first()
+                    SubagentTabs(tool.subagents, sel.id) { selectedId = it }
+                    Spacer(Modifier.size(8.dp))
+                    SubagentTimeline(
+                        state = sel.state,
+                        task = sel.task.ifBlank { tool.brief },
+                        steps = sel.steps,
+                        lastAssistant = sel.lastAssistant,
+                        finalResult = sel.finalResult,
+                        tokensUsed = sel.tokensUsed,
+                        onStop = onStopSubagent,
+                        stopId = sel.id
                     )
                 }
-                // 子代理状态（spawn 工具）
-                if (tool.subagents.isNotEmpty()) {
-                    Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        tool.subagents.forEach { sub ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    Modifier
-                                        .size(7.dp)
-                                        .background(
-                                            when (sub.state) {
-                                                "RUNNING" -> MaterialTheme.colorScheme.primary
-                                                "DONE" -> Color(0xFF7BD88F)
-                                                "STOPPED" -> Color(0xFFFFC46B)
-                                                else -> MaterialTheme.colorScheme.error
-                                            }, CircleShape
-                                        )
-                                )
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    "子代理 ${sub.index}/${sub.total}" + if (sub.id.isNotEmpty()) " · ${sub.id}" else "",
-                                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    sub.brief, fontSize = 10.5.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (sub.state == "RUNNING" && sub.id.isNotEmpty()) {
-                                    Text(
-                                        "终止",
-                                        fontSize = 10.5.sp,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .clickable { onStopSubagent(sub.id) }
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
+        }
+    }
+}
+
+// ────────────────────────── P4 子代理透视组件 ──────────────────────────
+
+/** 身份脸谱九色（ZCode WorkflowAgentFace.tsx 原版色板，按路序号循环取色）。 */
+internal val SUBAGENT_FACE_COLORS = listOf(
+    Color(0xFF54B9A6), Color(0xFFF19D38), Color(0xFF6464EF), Color(0xFF885CF5),
+    Color(0xFF3C82F6), Color(0xFFED712E), Color(0xFFEB4699), Color(0xFF5BC67A),
+    Color(0xFFEA4045)
+)
+
+internal fun subagentFaceColor(index: Int): Color =
+    SUBAGENT_FACE_COLORS[((index - 1).mod(SUBAGENT_FACE_COLORS.size))]
+
+/**
+ * P4 子代理 pill 组（ZCode presentation.md「The pill」规格）：spawn 行下挂，
+ * 每路一行「脸谱号 · 子代理 i/N · 实时在干什么 · 状态槽」。超过 ~4 路时在
+ * 152dp 高度内滚动，底部用 DstOut 真透明渐隐（玻璃背板上不能糊实色遮罩）。
+ */
+@Composable
+internal fun SubagentPillRow(tool: UiTool, onOpenSub: (String) -> Unit) {
+    if (tool.subagents.isEmpty()) return
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 23.dp, end = 12.dp, bottom = 6.dp)
+            // 离屏合成层：DstOut 只擦本层像素，不动玻璃背板
+            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.72f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.9f)
+                    ),
+                    blendMode = BlendMode.DstOut
+                )
+            }
+    ) {
+        Column(
+            Modifier
+                .heightIn(max = 152.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            tool.subagents.forEach { sub ->
+                SubagentPill(sub = sub, onClick = { onOpenSub(sub.id) })
+            }
+        }
+    }
+}
+
+/** 单颗 pill：脸谱 20dp + 「子代理 i/N」 + 实时简报 + 状态槽（运行环/完成勾/失败叉）。 */
+@Composable
+private fun SubagentPill(sub: com.haoai.agent.ui.SubagentLine, onClick: () -> Unit) {
+    val running = sub.state == "RUNNING"
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(30.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(start = 4.dp, end = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            Modifier
+                .size(20.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(subagentFaceColor(sub.index)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "${sub.index}",
+                fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
+                color = Color.White
+            )
+        }
+        Text(
+            "子代理 ${sub.index}/${sub.total}",
+            fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+        )
+        Text(
+            text = when {
+                sub.state == "RUNNING" && sub.brief.isNotBlank() -> sub.brief
+                sub.state == "DONE" && sub.brief.isNotBlank() -> sub.brief
+                sub.state == "ERROR" -> "失败：${sub.brief}"
+                else -> if (sub.task.isNotBlank()) sub.task else "等待开始"
+            },
+            fontSize = 10.sp,
+            color = if (running) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        SubagentStateTail(sub.state)
+    }
+}
+
+/** 状态槽 13dp：运行=绿顶旋转环；完成=绿圆勾；失败=红叉；其他=灰点。 */
+@Composable
+private fun SubagentStateTail(state: String) {
+    Box(Modifier.size(13.dp), contentAlignment = Alignment.Center) {
+        when (state) {
+            "RUNNING", "STOPPING" -> {
+                val angle = rememberInfiniteTransition(label = "subspin").animateFloat(
+                    0f, 360f, infiniteRepeatable(tween(850, easing = LinearEasing)),
+                    label = "subspinA"
+                )
+                Box(
+                    Modifier
+                        .size(11.dp)
+                        .graphicsLayer { rotationZ = angle.value }
+                        .border(
+                            1.5.dp,
+                            Brush.sweepGradient(
+                                0f to MaterialTheme.colorScheme.primary,
+                                0.35f to MaterialTheme.colorScheme.primary,
+                                0.35f to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f),
+                                1f to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)
+                            ),
+                            CircleShape
+                        )
+                )
+            }
+            "DONE" -> Box(
+                Modifier
+                    .size(12.dp)
+                    .background(Color(0xFF3FAE5C), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Check, contentDescription = null,
+                    tint = Color.White, modifier = Modifier.size(8.dp)
+                )
+            }
+            "ERROR" -> Text(
+                "✕", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error
+            )
+            else -> Box(
+                Modifier
+                    .size(7.dp)
+                    .background(Color(0xFFFFC46B), CircleShape)
+            )
+        }
+    }
+}
+
+/** 三路切换 tab（场景二）：脸谱点 + 路号，选中态白底浮起。 */
+@Composable
+internal fun SubagentTabs(
+    subs: List<com.haoai.agent.ui.SubagentLine>,
+    selectedId: String,
+    onSelect: (String) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        subs.forEach { sub ->
+            val on = sub.id == selectedId
+            Row(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (on) MaterialTheme.colorScheme.surface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
+                    )
+                    .clickable { onSelect(sub.id) }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .background(subagentFaceColor(sub.index), CircleShape)
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    "${sub.index} · ${if (sub.state == "RUNNING") "工作中" else if (sub.state == "DONE") "完成" else if (sub.state == "ERROR") "失败" else "已终止"}",
+                    fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    color = if (on) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 单路时间线（场景二定稿四块）：派发 → 过程步骤 → 中间结论 → 回传。
+ * 链卡弹层与右上浮标详情弹层共用（数据源分别是回合内上报聚合 / 后台轨迹活体）。
+ */
+@Composable
+internal fun SubagentTimeline(
+    state: String,
+    task: String,
+    steps: List<String>,
+    lastAssistant: String,
+    finalResult: String?,
+    tokensUsed: Long,
+    onStop: (String) -> Unit = {},
+    stopId: String = ""
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        // 派发
+        Column {
+            Text(
+                "派发", fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.size(3.dp))
+            Text(
+                task.ifBlank { "（未记录任务词）" },
+                fontSize = 10.5.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    .padding(9.dp)
+            )
+        }
+        // 过程步骤
+        Column {
+            Text(
+                "过程" + if (steps.isNotEmpty()) " · ${steps.size} 步" else "",
+                fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.size(3.dp))
+            if (steps.isEmpty()) {
+                Text(
+                    if (state == "RUNNING") "正在读取任务…" else "（未留下步骤）",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    steps.forEach { s ->
+                        Text(
+                            "· $s",
+                            fontSize = 10.sp, lineHeight = 15.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        // 中间结论（未定稿草稿）
+        if (lastAssistant.isNotBlank()) {
+            Column {
+                Text(
+                    "中间结论（未经工具验证的草稿）",
+                    fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.size(3.dp))
+                Text(
+                    lastAssistant.take(600),
+                    fontSize = 10.sp, lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.07f))
+                        .padding(9.dp)
+                )
+            }
+        }
+        // 回传（终态结果）
+        val result = finalResult
+        Column {
+            Text(
+                "回传",
+                fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.size(3.dp))
+            if (result != null) {
+                val scroll = rememberScrollState()
+                Text(
+                    result.take(4000),
+                    fontSize = 10.5.sp, lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f))
+                        .verticalScroll(scroll)
+                        .padding(9.dp)
+                )
+            } else if (state == "RUNNING") {
+                Text(
+                    "仍在工作中，完成后自动回传并唤醒主代理…",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            } else {
+                Text(
+                    "（无结果回传）",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
+        // 状态行：运行中给终止键（与旧弹层同通路）
+        if (state == "RUNNING" && stopId.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    "终止这一路",
+                    fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.3f),
+                            RoundedCornerShape(999.dp)
+                        )
+                        .clickable { onStop(stopId) }
+                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                )
+            }
+        }
+    }
+}
+
+// ────────────────────────── P4 右上角浮标（效果图场景四） ──────────────────────────
+
+/**
+ * 右上角子代理浮标：运行中=「子代理 N 路 · 工作中」实时入口，全部结束后=
+ * 「已结束 · 查看 N 路结果」结果入口（链卡收起后回看子代理的唯一入口）。
+ * 点开 222dp 面板（逐路一行），行点击经 onOpenDetail 开单路详情弹层。
+ * 状态源 = BgBadge（ChatViewModel 1s 轮询协调器轨迹；主回合运行时已让位为 null，
+ * 由调用方决定不渲染）。挂载位置：顶栏 Column 内 TaskFloat 之后——
+ * 有任务面板时自然纵向错开 8dp，没有时自动上移到顶栏下那一行。
+ */
+@Composable
+internal fun SubagentBadge(
+    badge: com.haoai.agent.ui.BgBadge,
+    onOpenDetail: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(horizontalAlignment = Alignment.End) {
+        // 胶囊 chip：状态槽 + 文案 + ›
+        Row(
+            Modifier
+                .height(30.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+                .border(
+                    1.dp,
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                    RoundedCornerShape(999.dp)
+                )
+                .clickable { expanded = !expanded }
+                .padding(start = 9.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // 状态槽：运行=旋转环（复用 SubagentStateTail 视觉）；结束=绿勾/红叉
+            if (badge.running) SubagentStateTail("RUNNING") else SubagentStateTail(
+                if (badge.tracks.any { it.state == "ERROR" }) "ERROR" else "DONE"
+            )
+            Text(
+                if (badge.running) "子代理 ${badge.tracks.size} 路 · 工作中"
+                else "已结束 · 查看 ${badge.tracks.size} 路结果",
+                fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+            )
+            Text(
+                "›", fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        // 展开面板：222dp 宽，右对齐；行点击开详情
+        androidx.compose.animation.AnimatedVisibility(
+            visible = expanded,
+            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+        ) {
+            Column(
+                Modifier
+                    .padding(top = 6.dp)
+                    .width(222.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                        RoundedCornerShape(14.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
+            ) {
+                // 头：子代理 + 「N 路 · M 运行中」
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 2.dp, end = 2.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "子代理",
+                        fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                    )
+                    Spacer(Modifier.weight(1f))
+                    val runN = badge.tracks.count { it.state == "RUNNING" || it.state == "STOPPING" }
+                    Text(
+                        if (runN > 0) "${badge.tracks.size} 路 · $runN 运行中"
+                        else "${badge.tracks.size} 路 · 已结束",
+                        fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // 列表：150dp 内滚动 + DstOut 真透明渐隐（不糊实色遮罩）
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    0.80f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.9f)
+                                ),
+                                blendMode = BlendMode.DstOut
+                            )
+                        }
+                ) {
+                    Column(
+                        Modifier
+                            .heightIn(max = 150.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        badge.tracks.forEach { sub ->
+                            BadgeRow(sub = sub) { onOpenDetail(sub.id) }
                         }
                     }
                 }
+                // 脚：查看完整过程 → 第一路
+                val footLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 5.dp)
+                        .drawBehind {
+                            drawLine(
+                                color = footLineColor,
+                                start = Offset(0f, 0f),
+                                end = Offset(size.width, 0f),
+                                strokeWidth = 1.dp.toPx()
+                            )
+                        },
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        "查看完整过程 ›",
+                        fontSize = 9.5.sp, fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { badge.tracks.firstOrNull()?.let { onOpenDetail(it.id) } }
+                            .padding(vertical = 3.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 面板单行（28dp）：脸谱 14dp + i/N + 实时简报 + 状态槽；运行中淡绿底。 */
+@Composable
+private fun BadgeRow(
+    sub: com.haoai.agent.ui.UiSubagentDetail,
+    onClick: () -> Unit
+) {
+    val running = sub.state == "RUNNING" || sub.state == "STOPPING"
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (running) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                else Color.Transparent
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            Modifier
+                .size(14.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(subagentFaceColor(sub.index)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "${sub.index}",
+                fontSize = 8.sp, fontWeight = FontWeight.ExtraBold,
+                color = Color.White
+            )
+        }
+        Text(
+            "${sub.index}/${sub.total}",
+            fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+        )
+        Text(
+            text = when {
+                running && !sub.currentTool.isNullOrBlank() -> sub.currentTool!!
+                sub.state == "ERROR" ->
+                    "失败：${(sub.finalResult ?: sub.lastAssistant).ifBlank { sub.task }.take(26)}"
+                sub.state == "DONE" ->
+                    sub.finalResult?.take(36)?.replace('\n', ' ')
+                        ?: sub.lastAssistant.ifBlank { sub.task }.take(36).replace('\n', ' ')
+                sub.lastAssistant.isNotBlank() -> sub.lastAssistant.take(36).replace('\n', ' ')
+                sub.task.isNotBlank() -> sub.task
+                else -> "等待开始"
+            },
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        SubagentStateTail(sub.state)
+    }
+}
+
+/**
+ * 浮标详情弹层：单路 face 标题 + 状态胶囊 + 四块时间线（复用 SubagentTimeline）。
+ * 数据源 = subagentDetailById（回合内链卡快照优先，回合外回落协调器轨迹活体，
+ * 1s ticker 刷新 → 弹层内容实时跟进）。
+ */
+@Composable
+internal fun SubagentBadgeDetailSheet(
+    detail: com.haoai.agent.ui.UiSubagentDetail,
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onDismiss: () -> Unit,
+    onStop: (String) -> Unit = {}
+) {
+    com.haoai.agent.ui.common.GlassBottomSheet(
+        backdrop = backdrop,
+        onDismiss = onDismiss
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(top = 4.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(24.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(subagentFaceColor(detail.index)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "${detail.index}",
+                        fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+                        color = Color.White
+                    )
+                }
+                Text(
+                    "子代理 ${detail.index}/${detail.total}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                // 状态胶囊
+                val (label, tint) = when (detail.state) {
+                    "RUNNING", "STOPPING" -> "工作中" to MaterialTheme.colorScheme.primary
+                    "DONE" -> "已完成" to Color(0xFF3FAE5C)
+                    "ERROR" -> "失败" to MaterialTheme.colorScheme.error
+                    else -> "已终止" to Color(0xFFF08A0C)
+                }
+                Text(
+                    label,
+                    fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    color = tint,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(tint.copy(alpha = 0.1f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+            SubagentTimeline(
+                state = detail.state,
+                task = detail.task,
+                steps = detail.steps,
+                lastAssistant = detail.lastAssistant,
+                finalResult = detail.finalResult,
+                tokensUsed = detail.tokensUsed,
+                onStop = onStop,
+                stopId = if (detail.state == "RUNNING") detail.id else ""
+            )
         }
     }
 }

@@ -161,7 +161,9 @@ object EngineFactory {
             // 搜索主后端：每次搜索现取，改完设置不必重启引擎；key 在这一步才解密
             searchProviderFn = { container.searchProviderConfig() },
             // P4 后台子代理完成上报：协调器挂在 container 上（进程级），三处调用点共用
-            onBackgroundSubagentDone = { sid, h -> container.backgroundSubagents.onSubagentFinished(sid, h) }
+            onBackgroundSubagentDone = { sid, h -> container.backgroundSubagents.onSubagentFinished(sid, h) },
+            // P4 后台句柄 launch 登记：右上浮标数据源（同上，进程级共享）
+            onBackgroundSubagentLaunched = { sid, h -> container.backgroundSubagents.onSubagentLaunched(sid, h) }
         )
     }
 
