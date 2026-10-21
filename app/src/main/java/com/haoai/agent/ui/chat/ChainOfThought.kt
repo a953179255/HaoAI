@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -85,6 +86,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
@@ -101,6 +103,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -2078,10 +2082,14 @@ internal fun SubagentPillRow(tool: UiTool, onOpenSub: (String) -> Unit) {
                 )
             }
     ) {
+        // 2026-10-21：补挂 panelBoundaryClamp（此前漏挂 = pill 组滚到边界会带走
+        // 外层会话流；主 Agent 思考过程/题组卡早已挂上，见 panelBoundaryClamp 注释）
+        val pillScroll = rememberScrollState()
         Column(
             Modifier
                 .heightIn(max = 152.dp)
-                .verticalScroll(rememberScrollState()),
+                .panelBoundaryClamp(pillScroll)
+                .verticalScroll(pillScroll),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             tool.subagents.forEach { sub ->
@@ -2116,8 +2124,15 @@ private fun SubagentPill(sub: com.haoai.agent.ui.SubagentLine, onClick: () -> Un
         ) {
             Text(
                 "${sub.index}",
-                fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
-                color = Color.White
+                fontSize = 10.sp,
+                // 2026-10-21：关 includeFontPadding + lineHeight 匹配框高（20dp 框）——
+                // 默认行框含字体上下 padding，数字视觉重心被压偏低（用户实锤反馈）
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.White,
+                style = TextStyle(
+                    platformStyle = PlatformTextStyle(includeFontPadding = false)
+                )
             )
         }
         Text(
@@ -2237,8 +2252,11 @@ internal fun SubagentTabs(
 }
 
 /**
- * 单路时间线（场景二定稿四块）：派发 → 过程步骤 → 中间结论 → 回传。
- * 链卡弹层与右上浮标详情弹层共用（数据源分别是回合内上报聚合 / 后台轨迹活体）。
+ * 单路过程面板（2026-10-21 改版定稿 · 方案 A「气泡流」，替代旧四块分区终端风）：
+ * 派发（竖线 + 等宽任务词）→ 每步工具调用链卡 → 中间结论气泡 → 回传气泡
+ * （统计行 + 来源标签）。设计语言对齐主 Agent 聊天界面（链卡 + 气泡），
+ * 9.5sp 大字距分区标签与全等宽正文全部退役。
+ * ToolDetailSheet（spawn 工具弹层）与 SubagentBadgeDetailSheet（浮标详情）共用。
  */
 @Composable
 internal fun SubagentTimeline(
@@ -2251,112 +2269,194 @@ internal fun SubagentTimeline(
     onStop: (String) -> Unit = {},
     stopId: String = ""
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        // 派发
-        Column {
-            Text(
-                "派发", fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 0.5.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ── 派发：左侧竖线 + 等宽任务词（它就是命令，与主界面用户消息角色对等）──
+        Row(Modifier.fillMaxWidth()) {
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .heightIn(min = 32.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f),
+                        RoundedCornerShape(999.dp)
+                    )
             )
-            Spacer(Modifier.size(3.dp))
-            Text(
-                task.ifBlank { "（未记录任务词）" },
-                fontSize = 10.5.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-                    .padding(9.dp)
-            )
-        }
-        // 过程步骤
-        Column {
-            Text(
-                "过程" + if (steps.isNotEmpty()) " · ${steps.size} 步" else "",
-                fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 0.5.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.size(3.dp))
-            if (steps.isEmpty()) {
+            Spacer(Modifier.size(8.dp))
+            Column(Modifier.weight(1f)) {
                 Text(
-                    if (state == "RUNNING") "正在读取任务…" else "（未留下步骤）",
-                    fontSize = 10.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    steps.forEach { s ->
-                        Text(
-                            "· $s",
-                            fontSize = 10.sp, lineHeight = 15.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-        // 中间结论（未定稿草稿）
-        if (lastAssistant.isNotBlank()) {
-            Column {
-                Text(
-                    "中间结论（未经工具验证的草稿）",
-                    fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 0.5.sp,
+                    "派发任务",
+                    fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.4.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.size(3.dp))
                 Text(
-                    lastAssistant.take(600),
-                    fontSize = 10.sp, lineHeight = 16.sp,
+                    task.ifBlank { "（未记录任务词）" },
+                    fontSize = 10.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.07f))
-                        .padding(9.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.045f))
+                        .padding(horizontal = 9.dp, vertical = 7.dp)
                 )
             }
         }
-        // 回传（终态结果）
-        val result = finalResult
-        Column {
+        // ── 过程：每一步 = 一张小链卡（主 Agent 工具链卡同语言）──
+        if (steps.isEmpty()) {
             Text(
-                "回传",
-                fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 0.5.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                if (state == "RUNNING") "正在读取任务…" else "（未留下步骤）",
+                fontSize = 10.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(start = 11.dp)
             )
-            Spacer(Modifier.size(3.dp))
-            if (result != null) {
-                val scroll = rememberScrollState()
+        } else {
+            Column(
+                Modifier.padding(start = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                steps.forEach { s -> SubagentStepChip(s) }
+            }
+        }
+        // ── 中间结论：assistant 气泡（非等宽，去掉终端感）──
+        if (lastAssistant.isNotBlank()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                Column(
+                    Modifier
+                        .fillMaxWidth(0.92f)
+                        .clip(RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp, bottomEnd = 13.dp, bottomStart = 4.dp))
+                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f))
+                        .padding(horizontal = 11.dp, vertical = 9.dp)
+                ) {
+                    Text(
+                        "中间结论 · 未经工具验证",
+                        fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.4.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                    )
+                    Spacer(Modifier.size(4.dp))
+                    Text(
+                        lastAssistant.take(600),
+                        fontSize = 11.sp, lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+        // ── 回传：final 气泡（统计行 + 来源标签）──
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+            Column(
+                Modifier
+                    .fillMaxWidth(0.92f)
+                    .clip(RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp, bottomEnd = 13.dp, bottomStart = 4.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                        RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp, bottomEnd = 13.dp, bottomStart = 4.dp)
+                    )
+                    .padding(horizontal = 11.dp, vertical = 9.dp)
+            ) {
                 Text(
-                    result.take(4000),
-                    fontSize = 10.5.sp, lineHeight = 16.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 200.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f))
-                        .verticalScroll(scroll)
-                        .padding(9.dp)
+                    when {
+                        finalResult != null -> "回传 · 最终结果"
+                        state == "RUNNING" -> "回传 · 仍在工作中"
+                        else -> "回传"
+                    },
+                    fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.4.sp,
+                    color = MaterialTheme.colorScheme.primary
                 )
-            } else if (state == "RUNNING") {
-                Text(
-                    "仍在工作中，完成后自动回传并唤醒主代理…",
-                    fontSize = 10.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-            } else {
-                Text(
-                    "（无结果回传）",
-                    fontSize = 10.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
+                Spacer(Modifier.size(4.dp))
+                when {
+                    finalResult != null -> {
+                        // 回传正文：限高 200dp 内滚 + 边界钳制（2026-10-21 补挂，
+                        // 修复「滚到边界带走整个弹层/会话流」——用户实锤反馈）
+                        val retScroll = rememberScrollState()
+                        Text(
+                            finalResult.take(4000),
+                            fontSize = 10.5.sp, lineHeight = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .panelBoundaryClamp(retScroll)
+                                .verticalScroll(retScroll)
+                                .padding(end = 2.dp)
+                        )
+                        // 统计行：步数 + token（数据层无单路耗时字段，不造假）
+                        Spacer(Modifier.size(7.dp))
+                        val lineColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                        val tokText =
+                            if (tokensUsed >= 1000) "${tokensUsed / 1000}k tok" else "$tokensUsed tok"
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .drawBehind {
+                                    drawLine(
+                                        color = lineColor,
+                                        start = Offset(0f, 0f),
+                                        end = Offset(size.width, 0f),
+                                        strokeWidth = 1.dp.toPx()
+                                    )
+                                }
+                                .padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                "${steps.size} 步 · $tokText",
+                                fontSize = 9.sp, fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+                            )
+                        }
+                        // 来源标签：从步骤串里真实提取过的 URL（非编造）
+                        val srcUrls = remember(steps) {
+                            steps.mapNotNull { s ->
+                                Regex("https?://[^\\s)\\]>，。；]+").find(s)?.value
+                            }.distinct().take(4)
+                        }
+                        if (srcUrls.isNotEmpty()) {
+                            Spacer(Modifier.size(7.dp))
+                            val srcCtx = LocalContext.current
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                srcUrls.forEach { u ->
+                                    Text(
+                                        domainFromUrl(u),
+                                        fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF207A43),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(Color(0xFF3FAE5C).copy(alpha = 0.10f))
+                                            .clickable {
+                                                runCatching {
+                                                    srcCtx.startActivity(
+                                                        android.content.Intent(
+                                                            android.content.Intent.ACTION_VIEW,
+                                                            android.net.Uri.parse(u)
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                            .padding(horizontal = 7.dp, vertical = 2.5.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    state == "RUNNING" -> Text(
+                        "仍在工作中，完成后自动回传并唤醒主代理…",
+                        fontSize = 10.5.sp, lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    else -> Text(
+                        "（无结果回传）",
+                        fontSize = 10.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
             }
         }
         // 状态行：运行中给终止键（与旧弹层同通路）
@@ -2384,15 +2484,82 @@ internal fun SubagentTimeline(
     }
 }
 
+/**
+ * 过程步骤链卡（方案 A 2026-10-21）：把步骤串「fetch(url) → 404 [错误]」
+ * 拆成动作段（等宽主文本）+ 结果段（右侧，错误红/正常灰），
+ * 视觉与主 Agent 工具链卡同语言（图标 + 摘要 + 结果槽）。
+ */
+@Composable
+private fun SubagentStepChip(step: String) {
+    val action = step.substringBefore(" → ").trim().ifBlank { step }
+    val result = step.substringAfter(" → ", "").trim()
+    val isErr = result.contains("错误") || result.contains("404") || result.contains("失败")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f),
+                RoundedCornerShape(10.dp)
+            )
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Box(
+            Modifier
+                .size(17.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(
+                    if (isErr) MaterialTheme.colorScheme.error.copy(alpha = 0.10f)
+                    else Color(0xFF3FAE5C).copy(alpha = 0.12f)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isErr) {
+                Text(
+                    "✕", fontSize = 8.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                Icon(
+                    Icons.Filled.Check, contentDescription = null,
+                    tint = Color(0xFF2E9B4F), modifier = Modifier.size(9.dp)
+                )
+            }
+        }
+        Text(
+            action,
+            fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (result.isNotBlank()) {
+            Text(
+                result,
+                fontSize = 9.sp,
+                color = if (isErr) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
+}
+
 // ────────────────────────── P4 右上角浮标（效果图场景四） ──────────────────────────
 
 /**
- * 右上角子代理浮标：运行中=「子代理 N 路 · 工作中」实时入口，全部结束后=
- * 「已结束 · 查看 N 路结果」结果入口（链卡收起后回看子代理的唯一入口）。
- * 点开 222dp 面板（逐路一行），行点击经 onOpenDetail 开单路详情弹层。
+ * 右上角子代理浮标 v2（2026-10-21 重设计定稿，效果图场景四 v2 档）：
+ * - chip：脸谱堆叠（≤3 路全露，更多叠 "+N"）+ 「N/M 进行中」/ 结束态文案
+ *   + 底部 2dp 进度条（运行比例；有失败时进度条转红）
+ * - 面板 238dp：汇总头（N 路 · M 进行中 · K 完成）+ 38dp 两行结构行
+ *   （身份行 = i/N + 状态胶囊；简报行 = 当前工具/结果摘要）+ 150dp 内滚
+ *   （已挂 panelBoundaryClamp）+ 底部合计 token 统计行
  * 状态源 = BgBadge（ChatViewModel 1s 轮询协调器轨迹；主回合运行时已让位为 null，
- * 由调用方决定不渲染）。挂载位置：顶栏 Column 内 TaskFloat 之后——
- * 有任务面板时自然纵向错开 8dp，没有时自动上移到顶栏下那一行。
+ * 由调用方决定不渲染）。挂载位置：顶栏 Column 内 TaskFloat 之后。
  */
 @Composable
 internal fun SubagentBadge(
@@ -2400,11 +2567,26 @@ internal fun SubagentBadge(
     onOpenDetail: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val tracks = badge.tracks
+    val runN = tracks.count { it.state == "RUNNING" || it.state == "STOPPING" }
+    val doneN = tracks.count { it.state == "DONE" }
+    val errN = tracks.count { it.state == "ERROR" }
+    val anyErr = errN > 0
+    val totalTok = tracks.sumOf { it.tokensUsed }
+    val prog = when {
+        tracks.isEmpty() -> 0f
+        badge.running -> runN.toFloat() / tracks.size
+        else -> 1f
+    }
+    // drawBehind 里不能读 Theme——预先取色（2509 行同款坑）
+    val progTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    val progFillColor =
+        if (anyErr) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Column(horizontalAlignment = Alignment.End) {
-        // 胶囊 chip：状态槽 + 文案 + ›
-        Row(
+        // ── chip：Box 承载底部进度条 ──
+        Box(
             Modifier
-                .height(30.dp)
+                .height(32.dp)
                 .clip(RoundedCornerShape(999.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
                 .border(
@@ -2412,27 +2594,40 @@ internal fun SubagentBadge(
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
                     RoundedCornerShape(999.dp)
                 )
-                .clickable { expanded = !expanded }
-                .padding(start = 9.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .drawBehind {
+                    // 底部 2dp 进度条：轨道 + 运行/完成比例（圆头）
+                    val h = 2.dp.toPx()
+                    val y = size.height - 3.dp.toPx() - h / 2f
+                    val x0 = 10.dp.toPx()
+                    val x1 = size.width - 10.dp.toPx()
+                    drawLine(progTrackColor, Offset(x0, y), Offset(x1, y), h, StrokeCap.Round)
+                    if (prog > 0f) {
+                        drawLine(
+                            progFillColor, Offset(x0, y),
+                            Offset(x0 + (x1 - x0) * prog.coerceIn(0f, 1f), y), h, StrokeCap.Round
+                        )
+                    }
+                }
+                .clickable { expanded = !expanded },
+            contentAlignment = Alignment.CenterStart
         ) {
-            // 状态槽：运行=旋转环（复用 SubagentStateTail 视觉）；结束=绿勾/红叉
-            if (badge.running) SubagentStateTail("RUNNING") else SubagentStateTail(
-                if (badge.tracks.any { it.state == "ERROR" }) "ERROR" else "DONE"
-            )
-            Text(
-                if (badge.running) "子代理 ${badge.tracks.size} 路 · 工作中"
-                else "已结束 · 查看 ${badge.tracks.size} 路结果",
-                fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-            )
-            Text(
-                "›", fontSize = 10.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                Modifier.padding(start = 7.dp, end = 9.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                SubagentFaceStack(tracks)
+                Text(
+                    if (badge.running) "$runN/${tracks.size} 进行中"
+                    else if (anyErr) "${tracks.size} 路 · 有失败"
+                    else "${tracks.size} 路已完成",
+                    fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                )
+                Text("›", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
-        // 展开面板：222dp 宽，右对齐；行点击开详情
+        // ── 展开面板 ──
         androidx.compose.animation.AnimatedVisibility(
             visible = expanded,
             enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
@@ -2441,7 +2636,7 @@ internal fun SubagentBadge(
             Column(
                 Modifier
                     .padding(top = 6.dp)
-                    .width(222.dp)
+                    .width(238.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .border(
@@ -2451,7 +2646,7 @@ internal fun SubagentBadge(
                     )
                     .padding(horizontal = 8.dp, vertical = 8.dp)
             ) {
-                // 头：子代理 + 「N 路 · M 运行中」
+                // 汇总头
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -2464,15 +2659,18 @@ internal fun SubagentBadge(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
                     )
                     Spacer(Modifier.weight(1f))
-                    val runN = badge.tracks.count { it.state == "RUNNING" || it.state == "STOPPING" }
                     Text(
-                        if (runN > 0) "${badge.tracks.size} 路 · $runN 运行中"
-                        else "${badge.tracks.size} 路 · 已结束",
+                        buildString {
+                            append("${tracks.size} 路")
+                            if (runN > 0) append(" · $runN 进行中")
+                            if (doneN > 0) append(" · $doneN 完成")
+                            if (errN > 0) append(" · $errN 失败")
+                        },
                         fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                // 列表：150dp 内滚动 + DstOut 真透明渐隐（不糊实色遮罩）
+                // 列表：150dp 内滚 + DstOut 真透明渐隐 + 边界钳制
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -2488,23 +2686,25 @@ internal fun SubagentBadge(
                             )
                         }
                 ) {
+                    val listScroll = rememberScrollState()
                     Column(
                         Modifier
                             .heightIn(max = 150.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .panelBoundaryClamp(listScroll)
+                            .verticalScroll(listScroll),
                         verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        badge.tracks.forEach { sub ->
+                        tracks.forEach { sub ->
                             BadgeRow(sub = sub) { onOpenDetail(sub.id) }
                         }
                     }
                 }
-                // 脚：查看完整过程 → 第一路
+                // 脚：合计 token + 查看完整过程
                 val footLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(top = 5.dp)
+                        .padding(top = 6.dp)
                         .drawBehind {
                             drawLine(
                                 color = footLineColor,
@@ -2513,14 +2713,20 @@ internal fun SubagentBadge(
                                 strokeWidth = 1.dp.toPx()
                             )
                         },
-                    horizontalArrangement = Arrangement.End
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "查看完整过程 ›",
+                        if (totalTok >= 1000) "合计 ${totalTok / 1000}k tok" else "合计 $totalTok tok",
+                        fontSize = 9.sp, fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "查看完整过程",
                         fontSize = 9.5.sp, fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
-                            .clickable { badge.tracks.firstOrNull()?.let { onOpenDetail(it.id) } }
+                            .clickable { tracks.firstOrNull()?.let { onOpenDetail(it.id) } }
                             .padding(vertical = 3.dp)
                     )
                 }
@@ -2529,62 +2735,129 @@ internal fun SubagentBadge(
     }
 }
 
-/** 面板单行（28dp）：脸谱 14dp + i/N + 实时简报 + 状态槽；运行中淡绿底。 */
+/** chip 脸谱堆叠：≤3 路全露脸谱；超过 3 路第三个位置显示 "+N"。手算宽度的 Box 叠层。 */
+@Composable
+private fun SubagentFaceStack(tracks: List<com.haoai.agent.ui.UiSubagentDetail>) {
+    val shown = tracks.take(3)
+    if (shown.isEmpty()) return
+    val step = 11.dp
+    Box(
+        Modifier
+            .width(17.dp + step * (shown.size - 1))
+            .height(17.dp)
+    ) {
+        shown.forEachIndexed { i, sub ->
+            val more = i == 2 && tracks.size > 3
+            Box(
+                Modifier
+                    .offset(x = step * i)
+                    .size(17.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                        if (more) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        else subagentFaceColor(sub.index)
+                    )
+                    .border(1.5.dp, MaterialTheme.colorScheme.surface, RoundedCornerShape(6.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (more) "+${tracks.size - 2}" else "${sub.index}",
+                    fontSize = if (more) 7.5.sp else 8.5.sp,
+                    lineHeight = if (more) 9.sp else 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (more) MaterialTheme.colorScheme.onSurfaceVariant else Color.White,
+                    style = TextStyle(
+                        platformStyle = PlatformTextStyle(includeFontPadding = false)
+                    )
+                )
+            }
+        }
+    }
+}
+
+/** 面板单行 v2（2026-10-21，38dp 两行结构）：脸谱 18dp + 身份行 + 简报行；运行中淡绿底。 */
 @Composable
 private fun BadgeRow(
     sub: com.haoai.agent.ui.UiSubagentDetail,
     onClick: () -> Unit
 ) {
     val running = sub.state == "RUNNING" || sub.state == "STOPPING"
+    val (capLabel, capTint) = when (sub.state) {
+        "RUNNING", "STOPPING" -> "工作中" to MaterialTheme.colorScheme.primary
+        "DONE" -> "已完成" to Color(0xFF3FAE5C)
+        "ERROR" -> "失败" to MaterialTheme.colorScheme.error
+        else -> "已终止" to Color(0xFFF08A0C)
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .height(28.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .height(38.dp)
+            .clip(RoundedCornerShape(10.dp))
             .background(
                 if (running) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
                 else Color.Transparent
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp),
+            .padding(horizontal = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
     ) {
         Box(
             Modifier
-                .size(14.dp)
-                .clip(RoundedCornerShape(5.dp))
+                .size(18.dp)
+                .clip(RoundedCornerShape(6.dp))
                 .background(subagentFaceColor(sub.index)),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 "${sub.index}",
-                fontSize = 8.sp, fontWeight = FontWeight.ExtraBold,
-                color = Color.White
+                fontSize = 8.5.sp,
+                // 2026-10-21：关 includeFontPadding + lineHeight 匹配框高（18dp 框）
+                lineHeight = 10.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.White,
+                style = TextStyle(
+                    platformStyle = PlatformTextStyle(includeFontPadding = false)
+                )
             )
         }
-        Text(
-            "${sub.index}/${sub.total}",
-            fontSize = 10.sp, fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-        )
-        Text(
-            text = when {
-                running && !sub.currentTool.isNullOrBlank() -> sub.currentTool!!
-                sub.state == "ERROR" ->
-                    "失败：${(sub.finalResult ?: sub.lastAssistant).ifBlank { sub.task }.take(26)}"
-                sub.state == "DONE" ->
-                    sub.finalResult?.take(36)?.replace('\n', ' ')
-                        ?: sub.lastAssistant.ifBlank { sub.task }.take(36).replace('\n', ' ')
-                sub.lastAssistant.isNotBlank() -> sub.lastAssistant.take(36).replace('\n', ' ')
-                sub.task.isNotBlank() -> sub.task
-                else -> "等待开始"
-            },
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Column(Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    "子代理 ${sub.index}/${sub.total}",
+                    fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                )
+                Text(
+                    capLabel,
+                    fontSize = 8.5.sp, fontWeight = FontWeight.Bold,
+                    color = capTint,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(capTint.copy(alpha = 0.10f))
+                        .padding(horizontal = 6.dp, vertical = 1.5.dp)
+                )
+            }
+            Text(
+                text = when {
+                    running && !sub.currentTool.isNullOrBlank() -> sub.currentTool!!
+                    sub.state == "ERROR" ->
+                        "失败：${(sub.finalResult ?: sub.lastAssistant).ifBlank { sub.task }.take(26)}"
+                    sub.state == "DONE" ->
+                        sub.finalResult?.take(36)?.replace('\n', ' ')
+                            ?: sub.lastAssistant.ifBlank { sub.task }.take(36).replace('\n', ' ')
+                    sub.lastAssistant.isNotBlank() -> sub.lastAssistant.take(36).replace('\n', ' ')
+                    sub.task.isNotBlank() -> sub.task
+                    else -> "等待开始"
+                },
+                fontSize = 9.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+        }
         SubagentStateTail(sub.state)
     }
 }
@@ -2627,8 +2900,14 @@ internal fun SubagentBadgeDetailSheet(
                 ) {
                     Text(
                         "${detail.index}",
-                        fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
-                        color = Color.White
+                        fontSize = 11.sp,
+                        // 2026-10-21：关 includeFontPadding + lineHeight 匹配框高（24dp 框）
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White,
+                        style = TextStyle(
+                            platformStyle = PlatformTextStyle(includeFontPadding = false)
+                        )
                     )
                 }
                 Text(
