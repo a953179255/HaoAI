@@ -2245,7 +2245,16 @@ internal fun SubagentTabs(
                     .clip(RoundedCornerShape(8.dp))
                     .background(
                         if (on) MaterialTheme.colorScheme.surface
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+                    )
+                    // 2026-10-22 用户反馈：tab 与磨砂背景糊成一片（未选中原仅 5% 深色
+                    // 罩，定不住形）。补 1dp 描边——未选中 onSurface 16% 管定形，
+                    // 选中 primary 45% 管语义强调；底色同步 5%→7% 让形状更实。
+                    .border(
+                        1.dp,
+                        if (on) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
+                        RoundedCornerShape(8.dp)
                     )
                     .clickable { onSelect(sub.id) }
                     .padding(vertical = 6.dp),
