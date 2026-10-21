@@ -81,6 +81,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
@@ -1834,15 +1835,25 @@ fun ToolDetailSheet(
 ) {
     val verb = tool.brief.ifBlank { tool.name }.substringBefore('·').trim()
     val obj = tool.brief.substringAfter('·', "").trim()
+    // 方案 A（2026-10-21）：spawn 类弹层内容长（子代理工作过程可超数屏），
+    // 横杠可上拖展开全屏；短内容卡（read/fetch 几行字）不给上拖交互——
+    // 判据 = 内容自然高 > 560dp 封顶。壳接管封顶后调用方不再自挂 heightIn。
+    val isSubagentSheet = tool.subagents.isNotEmpty()
+    val screenH = with(androidx.compose.ui.platform.LocalDensity.current) {
+        androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx()
+    }
+    val expandedPx: (@Composable () -> Float)? =
+        if (isSubagentSheet) ({ screenH * 0.92f }) else null
     // v8：滑入/滑出 + 拖横杠跟手收起（GlassBottomSheet 通用壳，横杠由壳提供）
     com.haoai.agent.ui.common.GlassBottomSheet(
         backdrop = backdrop,
-        onDismiss = onDismiss
+        onDismiss = onDismiss,
+        collapsedMax = 560.dp,
+        expandedPx = expandedPx
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .heightIn(max = 560.dp)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 18.dp)
                 .padding(top = 4.dp, bottom = 16.dp)
@@ -1880,8 +1891,10 @@ fun ToolDetailSheet(
                     Spacer(Modifier.size(10.dp))
                 }
                 // 参数简报：仅当简报带对象/参数（「动词 · 对象」的「·」后段）时才显示——
-                // 截图类工具简报只有动词本身，标题已含同名文字，再渲染一遍就是重复
-                if (obj.isNotBlank()) {
+                // 截图类工具简报只有动词本身，标题已含同名文字，再渲染一遍就是重复；
+                // 子代理弹层同样跳过：brief=「并行子代理 · N 路」与标题+tab 计数重复，
+                // 2026-10-21 用户点名「标题与子代理名之间空隙大」——冗余简报块是元凶之一。
+                if (obj.isNotBlank() && !isSubagentSheet) {
                     Text(
                         tool.brief,
                         fontSize = 11.5.sp,
@@ -1896,6 +1909,10 @@ fun ToolDetailSheet(
                     )
                 }
                 val canReview = (tool.name == "write" || tool.name == "edit") && tool.state == ToolRunState.DONE
+                // 动作行有内容才渲染：空 Row 的 padding(vertical=12dp) 会白占 24dp，
+                // 把标题与子代理 tab 之间的空隙撑大（2026-10-21 用户点名）。
+                val hasActions = (tool.name.contains("fetch") && obj.startsWith("http")) ||
+                    tool.imageData != null || canReview
                 // 搜索结果卡列表（对齐 rikkahub SearchWebPreview）：图标+标题+摘要+域名，点击开浏览器
                 if (tool.hits.isNotEmpty()) {
                     Spacer(Modifier.size(10.dp))
@@ -1960,63 +1977,65 @@ fun ToolDetailSheet(
                         }
                     }
                 }
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
-                ) {
-                    // 抓取步：直达网页（行点击之外的第二入口， DENIED/ERROR 时行不可达这里仍可开）
-                    if (tool.name.contains("fetch") && obj.startsWith("http")) {
-                        val sheetCtx = LocalContext.current
-                        Text(
-                            "打开网页",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
-                                .clickable {
-                                    runCatching {
-                                        sheetCtx.startActivity(
-                                            android.content.Intent(
-                                                android.content.Intent.ACTION_VIEW,
-                                                android.net.Uri.parse(obj)
+                if (hasActions) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
+                    ) {
+                        // 抓取步：直达网页（行点击之外的第二入口， DENIED/ERROR 时行不可达这里仍可开）
+                        if (tool.name.contains("fetch") && obj.startsWith("http")) {
+                            val sheetCtx = LocalContext.current
+                            Text(
+                                "打开网页",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                    .clickable {
+                                        runCatching {
+                                            sheetCtx.startActivity(
+                                                android.content.Intent(
+                                                    android.content.Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(obj)
+                                                )
                                             )
-                                        )
+                                        }
                                     }
-                                }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                        tool.imageData?.let { shot ->
+                            val ctx = LocalContext.current
+                            Text(
+                                "保存到相册",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                    .clickable { saveShotToGallery(ctx, shot) }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                        if (canReview) {
+                            Text(
+                                "查看变更",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                                    .clickable { onDismiss(); onViewDiff(tool.callId) }
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                        // P4：独立「关闭」文字键删除（2026-10-21 用户拍板）——横杠拖拽/点遮罩已是
+                        // 标准收起手势，再留一个文字键是冗余；「查看变更」保留（它有独立语义）
                     }
-                    tool.imageData?.let { shot ->
-                        val ctx = LocalContext.current
-                        Text(
-                            "保存到相册",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
-                                .clickable { saveShotToGallery(ctx, shot) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
-                    }
-                    if (canReview) {
-                        Text(
-                            "查看变更",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
-                                .clickable { onDismiss(); onViewDiff(tool.callId) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
-                    }
-                    // P4：独立「关闭」文字键删除（2026-10-21 用户拍板）——横杠拖拽/点遮罩已是
-                    // 标准收起手势，再留一个文字键是冗余；「查看变更」保留（它有独立语义）
                 }
                 // P4 子代理过程面板（spawn 工具）：三路 tab + 选中路的派发/过程/中间结论/回传
                 if (tool.subagents.isNotEmpty()) {
@@ -2270,51 +2289,48 @@ internal fun SubagentTimeline(
     stopId: String = ""
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // ── 派发：左侧竖线 + 等宽任务词（它就是命令，与主界面用户消息角色对等）──
-        Row(Modifier.fillMaxWidth()) {
-            Box(
-                Modifier
-                    .width(3.dp)
-                    .heightIn(min = 32.dp)
-                    .background(
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f),
-                        RoundedCornerShape(999.dp)
-                    )
+        // ── 派发：等宽任务词（它就是命令，与主界面用户消息角色对等）。
+        // 2026-10-21 对齐修复：旧实现竖线 3dp+Spacer 8dp 把词块推到 29dp，比 tab/
+        // 气泡（18dp）右移 11dp——用户点名错位。竖线退役为词块内嵌左饰条，层级
+        // 语义不丢，所有块统一贴弹层 18dp 左边界。
+        Column(Modifier.fillMaxWidth()) {
+            Text(
+                "派发任务",
+                fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.4.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.size(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "派发任务",
-                    fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 0.4.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.size(3.dp))
-                Text(
-                    task.ifBlank { "（未记录任务词）" },
-                    fontSize = 10.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.045f))
-                        .padding(horizontal = 9.dp, vertical = 7.dp)
-                )
-            }
+            Spacer(Modifier.size(3.dp))
+            val railColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f)
+            Text(
+                task.ifBlank { "（未记录任务词）" },
+                fontSize = 10.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.045f))
+                    .drawBehind {
+                        drawRoundRect(
+                            color = railColor,
+                            topLeft = Offset(4.dp.toPx(), 8.dp.toPx()),
+                            size = Size(3.dp.toPx(), size.height - 16.dp.toPx()),
+                            cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx())
+                        )
+                    }
+                    .padding(start = 12.dp, end = 9.dp, top = 7.dp, bottom = 7.dp)
+            )
         }
-        // ── 过程：每一步 = 一张小链卡（主 Agent 工具链卡同语言）──
+        // ── 过程：每一步 = 一张小链卡（主 Agent 工具链卡同语言）。
+        // 2026-10-21 对齐修复：外层 start=11dp 缩进退役，与派发块/气泡统一贴 18dp 左边界。
         if (steps.isEmpty()) {
             Text(
                 if (state == "RUNNING") "正在读取任务…" else "（未留下步骤）",
                 fontSize = 10.5.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.padding(start = 11.dp)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
         } else {
-            Column(
-                Modifier.padding(start = 11.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 steps.forEach { s -> SubagentStepChip(s) }
             }
         }
@@ -2323,7 +2339,7 @@ internal fun SubagentTimeline(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                 Column(
                     Modifier
-                        .fillMaxWidth(0.92f)
+                        .fillMaxWidth()
                         .clip(RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp, bottomEnd = 13.dp, bottomStart = 4.dp))
                         .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f))
                         .padding(horizontal = 11.dp, vertical = 9.dp)
@@ -2347,7 +2363,7 @@ internal fun SubagentTimeline(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
             Column(
                 Modifier
-                    .fillMaxWidth(0.92f)
+                    .fillMaxWidth()
                     .clip(RoundedCornerShape(topStart = 13.dp, topEnd = 13.dp, bottomEnd = 13.dp, bottomStart = 4.dp))
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f))
                     .border(

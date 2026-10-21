@@ -88,6 +88,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
@@ -1156,6 +1157,18 @@ fun GlassBottomSheet(
     surfaceAlpha: Float = 0.72f,
     /** 默认吃全局磨砂滑杆（2026-10-08 接入，原硬编码 24dp 调参页改了没反应） */
     blurRadius: Dp = com.haoai.agent.ui.theme.GlassTuning.blur.dp,
+    /**
+     * 方案 A（2026-10-21 用户拍板）：横杠上拖展开。
+     * 传入 collapsedMax 后本壳接管内容封顶高度（调用方 Column 不要再自挂 heightIn）：
+     * 内容不足封顶自然包裹（短卡片不再被撑成 2/3 屏空壳），超出封顶出内滚。
+     */
+    collapsedMax: Dp = Dp.Unspecified,
+    /**
+     * 上拖展开目标 = 展开态面板总高 px（配合 collapsedMax 使用）。
+     * 内容实测超高（被封顶裁过）才挂上拖手势 +「上拖看全屏」提示——
+     * 只有几行字的短卡片不给没用的上拖交互。null=横杠只能下拉收起（旧行为）。
+     */
+    expandedPx: (@Composable () -> Float)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -1164,6 +1177,20 @@ fun GlassBottomSheet(
     // 滑移量（px）：slide 为进场/退场动画值，dragY 为拖横杠跟手值，eff 叠加生效
     val slide = remember { Animatable(2200f) }
     val dragY = remember { mutableFloatStateOf(0f) }
+    // 方案 A（2026-10-21）：横杠上拖展开量（px，≥0；0=收起态）。拖拽期 snapTo 跟手，
+    // 松手 animateTo 锁定/回弹。内容区实测高贴到封顶（clipped）才允许上拖。
+    val stretch = remember { Animatable(0f) }
+    var contentH by remember { mutableFloatStateOf(0f) }
+    val shellCap = collapsedMax != Dp.Unspecified
+    val density = LocalDensity.current
+    val collapsedMaxPx = with(density) { collapsedMax.toPx() }
+    val fullPx = expandedPx?.invoke() ?: 0f
+    // clipped = 内容把封顶撑满（自然高 ≥ collapsedMax）；短卡片自然高不足→false，
+    // 既不显示「上拖看全屏」也拖不开，避免上拖顶出一屏空白。
+    val clipped = shellCap && contentH >= collapsedMaxPx - 2f
+    val maxStretch = if (clipped && expandedPx != null)
+        (fullPx - collapsedMaxPx).coerceAtLeast(0f) else 0f
+    val canExpand = maxStretch > 4f
     // 关闭：把退场起点定格在当前位移，滑出屏幕后（动画播完）才真正卸载
     fun requestClose() {
         if (dismissed) return
@@ -1171,6 +1198,7 @@ fun GlassBottomSheet(
         scope.launch {
             slide.snapTo(slide.value + dragY.floatValue)
             dragY.floatValue = 0f
+            stretch.snapTo(0f)
             slide.animateTo(
                 if (panelH > 0f) panelH + 60f else 2200f,
                 tween(190, easing = LinearOutSlowInEasing)
@@ -1217,21 +1245,55 @@ fun GlassBottomSheet(
             depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
             chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca
         ) {
-            Column(Modifier.onSizeChanged { panelH = it.height.toFloat() }) {
-                // 拖拽横杠（跟手下滑；超 120px 或甩速 > 900 收起，否则回弹）
+            Column(
+                Modifier.onSizeChanged { panelH = it.height.toFloat() }
+            ) {
+                // 拖拽横杠：下滑收起（跟手，超 120px 或甩速 > 900）；方案 A：canExpand
+                // 时上拖跟手展开内容高度，过阈锁定全屏、不足回弹；已展开态下滑先收
+                // 高度、收到底才进收起拖拽。key=maxStretch：内容异步填充改变上限时重启
+                // 手势（detectVerticalDragGestures 的 lambda 按值捕获 maxStretch）。
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .height(26.dp)
-                        .pointerInput(Unit) {
+                        .pointerInput(maxStretch.toInt()) {
                             detectVerticalDragGestures(
                                 onDragEnd = {
-                                    if (dragY.floatValue > 120f) requestClose()
-                                    else dragY.floatValue = 0f
+                                    if (dragY.floatValue > 120f) {
+                                        requestClose()
+                                    } else {
+                                        dragY.floatValue = 0f
+                                        if (maxStretch > 0f) {
+                                            // 阈值 = 80dp，但不超过增量一半（防短面板拖不动）
+                                            val thr = 80.dp.toPx().coerceAtMost(maxStretch / 2f)
+                                            scope.launch {
+                                                stretch.animateTo(
+                                                    if (stretch.value > thr) maxStretch else 0f,
+                                                    tween(220, easing = FastOutSlowInEasing)
+                                                )
+                                            }
+                                        }
+                                    }
                                 },
-                                onDragCancel = { dragY.floatValue = 0f }
+                                onDragCancel = {
+                                    dragY.floatValue = 0f
+                                    scope.launch { stretch.animateTo(0f, tween(180)) }
+                                }
                             ) { _, dy ->
-                                dragY.floatValue = (dragY.floatValue + dy).coerceAtLeast(0f)
+                                if (dy < 0f && maxStretch > 0f) {
+                                    // 上拖：优先吃展开量
+                                    scope.launch {
+                                        stretch.snapTo((stretch.value - dy).coerceAtMost(maxStretch))
+                                    }
+                                } else if (dy > 0f && stretch.value > 0f) {
+                                    // 已展开时下滑：先收高度
+                                    scope.launch {
+                                        stretch.snapTo((stretch.value - dy).coerceAtLeast(0f))
+                                    }
+                                } else {
+                                    // 收起态常规下滑：跟手拖走
+                                    dragY.floatValue = (dragY.floatValue + dy).coerceAtLeast(0f)
+                                }
                             }
                         },
                     contentAlignment = Alignment.Center
@@ -1242,8 +1304,32 @@ fun GlassBottomSheet(
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
                     )
+                    if (canExpand && stretch.value < 1f) {
+                        Text(
+                            "上拖看全屏",
+                            fontSize = 8.5.sp, fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(end = 14.dp)
+                        )
+                    }
                 }
-                content()
+                if (shellCap) {
+                    // 壳接管封顶：内容高 = collapsedMax + 当前展开量（Dp 换算走 density）。
+                    // onSizeChanged 量的是被 heightIn 约束后的实际高：溢出时=封顶值→clipped。
+                    Column(
+                        Modifier
+                            .onSizeChanged { contentH = it.height.toFloat() }
+                            .heightIn(
+                                max = with(density) { (collapsedMaxPx + stretch.value).toDp() }
+                            )
+                    ) {
+                        content()
+                    }
+                } else {
+                    content()
+                }
             }
         }
     }
