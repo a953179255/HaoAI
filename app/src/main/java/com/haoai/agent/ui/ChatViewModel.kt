@@ -254,6 +254,24 @@ data class UiSubagentDetail(
 data class BgBadge(val running: Boolean, val tracks: List<UiSubagentDetail>)
 
 /**
+ * 后台轨迹 → UI 明细：index/total 按派发序派生（tracksFor 已按句柄 id 排序 =
+ * 派出顺序），不用 handle.index/total——后台派发路径（AgentEngine.launchBackground）
+ * 把 1/1 写死，多路后台子代理的脸谱色与编号会全场撞成「1 号青」，浮标/面板/详情
+ * 都指不出"第几路"（2026-10-21 实机实锤：两路后台全显青色「1」）。位置派生与
+ * tracks.size 联动：新派一路进来，全员编号自洽长一位。
+ */
+internal fun List<com.haoai.agent.platform.BackgroundSubagentCoordinator.BackgroundTrack>.toBgDetails():
+List<UiSubagentDetail> = mapIndexed { i, t ->
+    UiSubagentDetail(
+        id = t.handle.id, index = i + 1, total = size,
+        state = t.handle.state, task = t.handle.task,
+        steps = t.handle.steps.toList(), lastAssistant = t.handle.lastAssistant,
+        finalResult = t.handle.finalResult, tokensUsed = 0,
+        currentTool = t.handle.currentTool
+    )
+}
+
+/**
  * flushChain 的行 key 决策（2026-10-14 修「执行期头像丢失」抽为纯函数）。
  *
  * 时序化落行后同一条消息可能落两行：**内容行**（说话+它前面的链）与**尾行**
@@ -687,15 +705,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             _bgBadge.value = null
             return
         }
-        val ui = tracks.map {
-            UiSubagentDetail(
-                id = it.handle.id, index = it.handle.index, total = it.handle.total,
-                state = it.handle.state, task = it.handle.task,
-                steps = it.handle.steps.toList(), lastAssistant = it.handle.lastAssistant,
-                finalResult = it.handle.finalResult, tokensUsed = 0,
-                currentTool = it.handle.currentTool
-            )
-        }
+        val ui = tracks.toBgDetails()
         _bgBadge.value = BgBadge(running = ui.any { it.state == "RUNNING" || it.state == "STOPPING" }, tracks = ui)
     }
 
@@ -715,14 +725,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             }
         }?.let { return it }
         val sid = viewedSid() ?: return null
-        return c.backgroundSubagents.tracksFor(sid).firstOrNull { it.handle.id == id }?.let {
-            UiSubagentDetail(
-                id = it.handle.id, index = it.handle.index, total = it.handle.total,
-                state = it.handle.state, task = it.handle.task, steps = it.handle.steps.toList(),
-                lastAssistant = it.handle.lastAssistant, finalResult = it.handle.finalResult,
-                tokensUsed = 0, currentTool = it.handle.currentTool
-            )
-        }
+        return c.backgroundSubagents.tracksFor(sid).toBgDetails().firstOrNull { it.id == id }
     }
 
     private val _session = MutableStateFlow<StoredSession?>(null)
