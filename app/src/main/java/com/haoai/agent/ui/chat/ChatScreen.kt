@@ -3735,6 +3735,12 @@ private fun RowItem(
         SystemEventBar(row.text)
         return
     }
+    // P4 后台子代理唤醒通知：数据层必须按 user 落库（主 Agent 只"听到有人说话"才起
+    // 唤醒回合），但界面不能画绿色用户气泡——用户点名「看着像我发的」。改画折叠通知卡。
+    if (row.role == "user" && row.text.startsWith("[task-notification]")) {
+        SubagentNoticeCard(row.text)
+        return
+    }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead, headTopGap)
         else -> AssistantBlock(row, onOpenMenu, onCopyRow, onQuickRegenerate, running, turnStartAt, onViewDiff, onRollback, onStopRun, showActions, showHead, headTopGap, growIn, hideChain, onFooterReveal)
@@ -4396,6 +4402,155 @@ private fun SystemEventBar(text: String) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+            )
+        }
+    }
+}
+
+/** [task-notification] 首行解析出的唤醒通报摘要（纯函数，单测锁定，勿改文案格式）。 */
+internal data class WakeNoticeSummary(val total: Int, val done: Int, val failed: Int)
+
+private val WAKE_NOTICE_HEAD_RE = Regex(
+    "\\[task-notification\\] 有 (\\d+) 路后台子代理已结束（完成 (\\d+)、失败 (\\d+)）"
+)
+
+/** 从通知全文第一行解析路数/完成/失败；格式对不上返回 null（组件走保守默认）。 */
+internal fun parseWakeNotice(text: String): WakeNoticeSummary? {
+    val m = WAKE_NOTICE_HEAD_RE.find(text) ?: return null
+    return WakeNoticeSummary(
+        total = m.groupValues[1].toInt(),
+        done = m.groupValues[2].toInt(),
+        failed = m.groupValues[3].toInt()
+    )
+}
+
+/**
+ * P4 后台子代理唤醒通知卡（方案B 2026-10-22 用户拍板，效果图 subagent_notice_mockup）：
+ * 通知必须按 role=user 落库（主 Agent 只有"听到用户说话"才起唤醒回合——LLM 语义所限），
+ * 但界面不能画绿色气泡（用户点名「看着像我发的」）。收起态=一行状态（勾/叉+完成计数），
+ * 点开=全文内滚。折叠语言照搬思考阅读区规格：expandFrom Top 向下掀开 + 文字晚 60ms
+ * 后进光 + 箭头旋转；内滚必挂 panelBoundaryClamp（边界钳制，不带走会话流）。
+ */
+@Composable
+private fun SubagentNoticeCard(text: String) {
+    val s = parseWakeNotice(text)
+    val total = s?.total ?: 1
+    val done = s?.done ?: total
+    val failed = s?.failed ?: 0
+    var expanded by rememberSaveable(text) { mutableStateOf(false) }
+    val easeSpec = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)
+    val rot by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(240, easing = easeSpec),
+        label = "noticeChevron"
+    )
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = chatCardAlpha()))
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                RoundedCornerShape(18.dp)
+            )
+    ) {
+        // 头部行：点按开合（clickable 只挂头部，展开后点正文不误收）
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = if (expanded) 0.dp else 18.dp, bottomEnd = if (expanded) 0.dp else 18.dp))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val allOk = failed == 0
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (allOk) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (allOk) Icons.Filled.Check else Icons.Filled.Close,
+                    contentDescription = null,
+                    tint = if (allOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+            Text(
+                "后台子代理已结束 · $done/$total 完成" + (if (failed > 0) " · $failed 失败" else ""),
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 11.sp, lineHeight = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                ),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (expanded) "收起" else "展开看结果",
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 9.5.sp, lineHeight = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+            Icon(
+                Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起通知" else "展开通知",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationX = rot }
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(
+                animationSpec = androidx.compose.animation.core.tween(280, easing = easeSpec),
+                expandFrom = Alignment.Top
+            ),
+            exit = shrinkVertically(
+                animationSpec = androidx.compose.animation.core.tween(220, easing = easeSpec),
+                shrinkTowards = Alignment.Top
+            ) + fadeOut(androidx.compose.animation.core.tween(160))
+        ) {
+            // 文字「后进光」（同思考阅读区 2026-10-13 定稿）：入场首帧 0，
+            // 等 60ms 再 200ms 淡入；退场 110ms 快淡。Animatable 而非
+            // animateFloatAsState——后者首组合直取目标值播不出入场。
+            val reveal = remember { androidx.compose.animation.core.Animatable(1f) }
+            LaunchedEffect(expanded) {
+                if (expanded) {
+                    reveal.snapTo(0f)
+                    kotlinx.coroutines.delay(60)
+                    reveal.animateTo(1f, androidx.compose.animation.core.tween(200))
+                } else {
+                    reveal.animateTo(0f, androidx.compose.animation.core.tween(110))
+                }
+            }
+            val scroll = rememberScrollState()
+            Text(
+                text,
+                style = androidx.compose.ui.text.TextStyle(
+                    fontSize = 11.sp, lineHeight = 16.sp,
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .panelBoundaryClamp(scroll)
+                    .verticalScroll(scroll)
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+                    .graphicsLayer { alpha = reveal.value }
             )
         }
     }

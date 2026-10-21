@@ -390,7 +390,7 @@ private fun StepToggle(
  * 内容本身不可滚（maxValue=0，短面板）时放行：拖动仍应滚外层对话。
  */
 @Composable
-private fun Modifier.panelBoundaryClamp(scroll: androidx.compose.foundation.ScrollState): Modifier {
+internal fun Modifier.panelBoundaryClamp(scroll: androidx.compose.foundation.ScrollState): Modifier {
     val clamp = remember(scroll) {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
             override fun onPostScroll(
