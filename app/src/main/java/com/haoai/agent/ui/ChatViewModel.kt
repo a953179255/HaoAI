@@ -216,7 +216,9 @@ data class UiAskData(
     val freeText: String? = null
 )
 
-/** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）；id 供任务卡终止按钮定位。 */
+/** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）；id 供任务卡终止按钮定位。
+ *  P4b：@Serializable 供 SubagentLogStore 旁路落盘（回合结束后历史链卡回看过程）。 */
+@kotlinx.serialization.Serializable
 data class SubagentLine(
     val id: String = "",
     val index: Int,
@@ -339,7 +341,58 @@ data class ChatRow(
 class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private var currentSession: StoredSession? = null
-    /** 思考阶段打断（无上屏内容）时置位；turn finally 里落一条"已停止"标记后清零。 */
+
+    // ── P4b 子代理过程旁路存储（回合结束后历史链卡回看）──────────────
+    // subagents 数据原先只活在内存态 liveTools 里（startRun 即清），用户实测：
+    // 任务完成后点开历史链卡的「并行子代理 N 路」只剩空壳。这里在工具终态/
+    // 回合起跑清场前把过程刷进 files/subagent_logs/<sid>/<callId>.json，
+    // rebuildRows 历史分支经缓存异步回落读取（仿 diffCache 的 ensure 模式，
+    // 文件 IO 不上主线程）。存储只服务本 VM，不进 AppContainer（避免 data→ui 反依赖）。
+    private val subagentLogs = SubagentLogStore(java.io.File(c.appFilesDir, "subagent_logs"))
+    /** 已从旁路读回的过程缓存（key="sid|callId"；clearSessionCache 全清）。 */
+    private val subagentLogCache = HashMap<String, List<SubagentLine>>()
+
+    private fun subagentCacheKey(sid: String, callId: String) = "$sid|$callId"
+
+    /** 把该工具当前的子代理过程刷盘（工具终态 / 回合起跑清场前调用；空列表跳过）。 */
+    private fun persistSubagentLog(sid: String, callId: String, lines: List<SubagentLine>) {
+        if (lines.isEmpty()) return
+        subagentLogCache[subagentCacheKey(sid, callId)] = lines
+        subagentLogs.save(sid, callId, lines)
+    }
+
+    /** 回合起跑清场兜底：liveTools 里带过程的工具全部刷盘（中断/半截场景的数据保全）。 */
+    private fun flushSubagentLogs(sid: String) {
+        liveToolsOf(sid).values.forEach { t ->
+            if (t.subagents.isNotEmpty()) persistSubagentLog(sid, t.callId, t.subagents)
+        }
+    }
+
+    /**
+     * rebuildRows 历史分支的回落读取：cache miss 时触发异步加载（仿 ensureDiff），
+     * 本次返回 null（步骤行先按空过程渲染，加载完 rebuildRows 再上数据）。
+     */
+    private fun ensureSubagentLog(sid: String, callId: String) {
+        val key = subagentCacheKey(sid, callId)
+        if (subagentLogCache.containsKey(key)) return
+        subagentLogCache[key] = emptyList() // 占位防重复投递
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val loaded = subagentLogs.load(sid, callId)
+            if (loaded != null) {
+                subagentLogCache[key] = loaded
+                if (sid == viewedSid()) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    rebuildRows()
+                }
+            }
+        }
+    }
+
+    /** 删会话时同步清缓存与旁路目录（软删回收站不清——恢复后还要回看）。 */
+    private fun clearSubagentLogs(sid: String) {
+        subagentLogCache.keys.filter { it.startsWith("$sid|") }.forEach { subagentLogCache.remove(it) }
+        subagentLogs.clearSession(sid)
+    }
+
     private var stopHintPending = false
 
     // ── D17 多会话并行：排队消息按会话各排各的队 ──
@@ -1413,6 +1466,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         taskPanel.forget(id)
         // P4：后台子代理轨迹随会话一起清（浮标不再为已删除的会话挂结果）
         c.backgroundSubagents.clearSession(id)
+        // P4b：子代理过程旁路盘同步清（软删 deleteSession 不清——回收站恢复后还要回看）
+        clearSubagentLogs(id)
         refreshDeletedSessions()
     }
 
@@ -1755,6 +1810,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
         // 新回合清空上一轮的工具活动态：liveTools 跨轮次保留会把旧工具当成
         // 「刚完成」灌进任务卡/悬浮窗（旧消息的完成态由落库结果兜底渲染，清掉无碍）
+        // P4b：清之前先把带子代理过程的工具刷旁路盘——回合结束后历史链卡点开
+        // 「并行子代理 N 路」要能回看（用户实测需求）；中断/半截收尾的场景也靠这兜底
+        flushSubagentLogs(s.id)
         liveToolsOf(s.id).clear()
         publishLiveTools()
         _running.value = true
@@ -2684,8 +2742,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         // 不匹配则自动摘掉，芯片始终跟最新状态一致
                         jobLog = if ((prevTool?.name ?: "") == "bash")
                             com.haoai.agent.ui.chat.parseJobDispatch(ev.update.body, shellRoot())
-                        else null
+                            else null
                     )
+                // P4b：工具进终态且带着子代理过程 → 刷旁路盘（spawn_agents 返回时数据最全；
+                // spawn_agent(background=true) 此刻存的是半截，之后 SubagentUpdate 后台完成
+                // 事件会在全终态时再刷一次完整版，见 SubagentUpdate 分支）
+                val settled = tools[ev.update.callId]
+                if (ev.update.state != ToolRunState.RUNNING && settled?.subagents?.isNotEmpty() == true) {
+                    persistSubagentLog(sid, ev.update.callId, settled.subagents)
+                }
                 publishLiveTools()
                 if (sid == viewedSid()) rebuildRows()
                 publishSteps(sid)
@@ -2718,6 +2783,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         preview = prev?.preview,
                         subagents = lines.sortedBy { it.index }
                     )
+                // P4b：所有路都进终态时刷完整版旁路盘（后台子代理完成晚于工具 DONE，
+                // 靠这一刷把半截快照补全——否则历史回看停在「运行中」的旧过程）
+                val allSettled = lines.isNotEmpty() && lines.all {
+                    it.state != "RUNNING" && it.state != "STOPPING"
+                }
+                if (allSettled) persistSubagentLog(sid, ev.callId, lines.sortedBy { it.index })
                 publishLiveTools()
                 if (sid == viewedSid()) rebuildRows()
                 publishSteps(sid)
@@ -2874,7 +2945,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 stored != null -> base.copy(
                     state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
                     preview = previewLine(stored.first),
-                    subagents = live?.subagents ?: emptyList(),
+                    // P4b：历史回看的子代理过程——live（内存态，新回合即清）优先，
+                    // 否则回落旁路盘（工具终态/清场前刷的 files/subagent_logs）。
+                    // cache miss 时 ensureSubagentLog 异步加载后 rebuildRows 再上数据
+                    subagents = live?.subagents?.takeIf { it.isNotEmpty() }
+                        ?: subagentLogCache[subagentCacheKey(s.id, call.id)]
+                        ?: run { ensureSubagentLog(s.id, call.id); null }
+                        ?: emptyList(),
                     imageData = live?.imageData,
                     // 批1e：历史消息的结果正文从落库全文现截（口径与引擎 inlineBodyOf 同函数）
                     body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first),
