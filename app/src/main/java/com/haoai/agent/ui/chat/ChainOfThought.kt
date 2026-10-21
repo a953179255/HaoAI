@@ -84,11 +84,9 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
@@ -2079,27 +2077,18 @@ internal fun subagentFaceColor(index: Int): Color =
 /**
  * P4 子代理 pill 组（ZCode presentation.md「The pill」规格）：spawn 行下挂，
  * 每路一行「脸谱号 · 子代理 i/N · 实时在干什么 · 状态槽」。超过 ~4 路时在
- * 152dp 高度内滚动，底部用 DstOut 真透明渐隐（玻璃背板上不能糊实色遮罩）。
+ * 152dp 高度内滚动（2026-10-22 删底部 DstOut 渐隐：用户实锤白色渐隐遮挡
+ * 子代理名字/内容且其他场景也有；≤4 路不溢出时渐隐纯属误伤末行）。
  */
 @Composable
 internal fun SubagentPillRow(tool: UiTool, onOpenSub: (String) -> Unit) {
     if (tool.subagents.isEmpty()) return
+    // 2026-10-22 padding 改对称 12dp：原 start23/end12 不对称把整组推右
+    // 5.5dp（用户点名「没居中、靠右」），现与 ToolStep 行左右边距对齐。
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(start = 23.dp, end = 12.dp, bottom = 6.dp)
-            // 离屏合成层：DstOut 只擦本层像素，不动玻璃背板
-            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-            .drawWithContent {
-                drawContent()
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        0.72f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.9f)
-                    ),
-                    blendMode = BlendMode.DstOut
-                )
-            }
+            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
     ) {
         // 2026-10-21：补挂 panelBoundaryClamp（此前漏挂 = pill 组滚到边界会带走
         // 外层会话流；主 Agent 思考过程/题组卡早已挂上，见 panelBoundaryClamp 注释）
@@ -2695,21 +2684,11 @@ internal fun SubagentBadge(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                // 列表：150dp 内滚 + DstOut 真透明渐隐 + 边界钳制
+                // 列表：150dp 内滚 + 边界钳制（2026-10-22 删 DstOut 渐隐：
+                // 同 pill 组——白色渐隐误伤末行内容，用户要求去掉）
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-                        .drawWithContent {
-                            drawContent()
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0.80f to Color.Transparent,
-                                    1f to Color.Black.copy(alpha = 0.9f)
-                                ),
-                                blendMode = BlendMode.DstOut
-                            )
-                        }
                 ) {
                     val listScroll = rememberScrollState()
                     Column(
