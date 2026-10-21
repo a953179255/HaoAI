@@ -3569,9 +3569,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         // 剥掉历史恢复包装（点击继续后再次中断会嵌套），还原最初的任务目标
         val goal = (s.runGoal?.let { stripResumeNesting(it) } ?: "未记录目标").take(200)
         // runTurnsUsed 是"已完成轮数"，中断发生在那一轮的**途中**，报数要 +1，
-        // 否则第一轮里被杀掉会显示成"上次任务在第 0 轮中断"
+        // 否则第一轮里被杀掉会显示成"上次任务在第 0 步中断"
         val turns = s.runTurnsUsed + 1
-        val resumeText = "[系统恢复] 上次任务在第 $turns 轮中断，未完成目标：$goal。请先评估当前进度（可读文件/记忆核实），再继续执行。"
+        // 措辞「轮」→「步」（2026-10-22 中断控制重设计：去引擎黑话，用户视角是一步一步干活）
+        val resumeText = "[系统恢复] 上次任务在第 $turns 步中断，未完成目标：$goal。请先评估当前进度（可读文件/记忆核实），再继续执行。"
         val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = goal)
         currentSession = view
         c.sessionStore.save(view)
@@ -3580,22 +3581,19 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         send(resumeText, bypassHold = true)
     }
 
-    /** 恢复文本的包裹层（可嵌套）：剥掉全部恢复包装，还原最初的任务目标。 */
+    /** 恢复文本的包裹层（可嵌套）：剥掉全部恢复包装，还原最初的任务目标。
+     *  「轮|步」并存：旧历史落的是「轮」（2026-10-22 前），新注入文案是「步」。 */
     private val resumeWrapper = Regex(
-        "\\[系统恢复\\] 上次任务在第 \\d+ 轮中断，未完成目标：|。?请先评估当前进度（可读文件/记忆核实），再继续执行。"
+        "\\[系统恢复\\] 上次任务在第 \\d+[轮步]中断，未完成目标：|。?请先评估当前进度（可读文件/记忆核实），再继续执行。"
     )
 
     private fun stripResumeNesting(t: String): String =
         t.replace(resumeWrapper, "").trim().ifBlank { t }
 
-    /** E1 忽略恢复：清状态不注入（copy 实例使 StateFlow 必然重发射，否则横幅不消失）。 */
-    fun dismissResume() {
-        val s = currentSession ?: return
-        val view = s.copy(runState = com.haoai.agent.data.StoredSession.RUN_IDLE, runGoal = null)
-        currentSession = view
-        c.sessionStore.save(view)
-        _session.value = view
-    }
+    // E1 忽略入口 dismissResume 已退役（2026-10-22 中断横幅重设计）：旧 × 按钮注释写
+    // 「仅收起提示」，实现却清库里的 runState/runGoal——手滑一次，断点永久失去恢复
+    // 入口（语义陷阱）。横幅消失只靠点「恢复执行」或发新消息开新轮（startRun 改写
+    // runState，AnimatedVisibility gate 自然灭），不再提供手动清状态的后门。
 
     /** P2：当前回合引擎（任务卡终止子代理用；回合结束随会话收尾自然失效）。 */
     @Volatile private var activeEngine: AgentEngine? = null

@@ -199,34 +199,34 @@ data class StoredSession(
         }
 
         /**
-         * 恢复横幅第二行：断在哪一步、点「继续」会发生什么。判定全部来自已落库的数据。
+         * 恢复横幅第二行：断在哪一步、点「恢复执行」会发生什么。判定全部来自已落库的数据。
          * 文案集中在这里，UI 只负责显示（原先是一串带全限定名的 when，改一处要翻 Compose）。
          */
         fun interruptionNote(runState: String?, messages: List<StoredMessage>): String = when {
             danglingCalls(messages).isNotEmpty() ->
-                "中断时有工具调用没返回结果，它的副作用可能已经发生；继续时会先核实状态再动手"
+                "有工具未返回 · 恢复先核实副作用再动手"
             runState == RUN_INTERRUPTED && lastRoundCompleted(messages) ->
-                "上一轮其实已经答完，只是收尾前进程被中断，直接发新消息即可"
+                "其实已答完 · 发新消息即可"
             else -> when (tailShapeOf(messages)) {
-                TAIL_UNANSWERED_USER -> "消息已发出但任务未开始执行，可继续"
-                TAIL_TOOL -> "停在工具执行中，可继续任务"
-                TAIL_PARTIAL_ASSISTANT -> "回答生成到一半中断，可继续生成"
+                TAIL_UNANSWERED_USER -> "未开始执行 · 恢复即从头跑"
+                TAIL_TOOL -> "停在工具执行中 · 恢复先核实再动手"
+                TAIL_PARTIAL_ASSISTANT -> "话说一半 · 恢复接着生成"
                 else -> when (runState) {
                     // 2026-10-16 纠偏：turncapped 不只来自"轮数上限"，成本熔断（本轮累计
                     // 计费 token 达上限）和圈数熔断（工具调用次数达上限）都落这个状态。
                     // 写死"轮数上限"会让被成本掐断的用户以为是迭代次数问题、去调错设置。
-                    RUN_TURNCAPPED -> "达到本轮上限（成本或步数）已提前收尾，可继续执行剩余步骤"
-                    RUN_FAILED -> "执行出错，可继续尝试"
-                    else -> "进程中断，可继续执行"
+                    RUN_TURNCAPPED -> "已达本轮上限（成本或步数）· 可继续剩余步骤"
+                    RUN_FAILED -> "执行出错 · 可继续尝试"
+                    else -> "进程中断 · 可继续执行"
                 }
             }
         }
 
         /**
-         * 恢复横幅**主行**（2026-10-14 横幅治理）：「任务在第 N 轮中断」。
-         * 轮数口径与 resumeRun 注入文本一致（中断发生在那一轮途中，报数 +1）。
+         * 恢复横幅**主行**（2026-10-22 措辞去黑话）：「任务中断 · 停在第 N 步」。
+         * 步数口径与 resumeRun 注入文本一致（中断发生在那一轮途中，报数 +1）。
          */
-        fun interruptionHeadline(runTurnsUsed: Int): String = "任务在第 ${runTurnsUsed + 1} 轮中断"
+        fun interruptionHeadline(runTurnsUsed: Int): String = "任务中断 · 停在第 ${runTurnsUsed + 1} 步"
 
         /**
          * 从消息尾部判定中断形态：最后一条实质消息是什么，任务就断在哪一步。

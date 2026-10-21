@@ -49,7 +49,7 @@ class InterruptionVerdictTest {
         assertTrue(StoredSession.lastRoundCompleted(done))
         assertFalse(StoredSession.lastRoundCompleted(listOf(user("问题"), say("半截"))))
         val note = StoredSession.interruptionNote(StoredSession.RUN_INTERRUPTED, done)
-        assertTrue("该告诉用户不必续跑：$note", note.contains("已经答完"))
+        assertTrue("该告诉用户不必续跑：$note", note.contains("已答完"))
     }
 
     @Test
@@ -59,7 +59,7 @@ class InterruptionVerdictTest {
             StoredSession.interruptionNote(StoredSession.RUN_INTERRUPTED, dangling).contains("副作用")
         )
         assertEquals(
-            "消息已发出但任务未开始执行，可继续",
+            "未开始执行 · 恢复即从头跑",
             StoredSession.interruptionNote(StoredSession.RUN_INTERRUPTED, listOf(user("还没人理")))
         )
         // 2026-10-16 文案纠偏：turncapped 可能来自成本熔断/圈数熔断/轮数上限三者，
@@ -69,15 +69,15 @@ class InterruptionVerdictTest {
         assertTrue(cappedNote.contains("可继续"))
         // 尾部形态优先于结束状态：turncapped 但明显断在生成中途时，说断点更有用
         assertEquals(
-            "回答生成到一半中断，可继续生成",
+            "话说一半 · 恢复接着生成",
             StoredSession.interruptionNote(StoredSession.RUN_TURNCAPPED, listOf(say("半截")))
         )
     }
 
     @Test
-    fun `横幅主行轮数报数与注入文本同口径`() {
-        // runTurnsUsed 是"已完成轮数"，中断在那一轮**途中** ⇒ 报数 +1（第一轮被杀不能显示第 0 轮）
-        assertEquals("任务在第 1 轮中断", StoredSession.interruptionHeadline(0))
-        assertEquals("任务在第 3 轮中断", StoredSession.interruptionHeadline(2))
+    fun `横幅主行步数报数与注入文本同口径`() {
+        // runTurnsUsed 是"已完成轮数"，中断在那一轮**途中** ⇒ 报数 +1（第一轮被杀不能显示第 0 步）
+        assertEquals("任务中断 · 停在第 1 步", StoredSession.interruptionHeadline(0))
+        assertEquals("任务中断 · 停在第 3 步", StoredSession.interruptionHeadline(2))
     }
 }

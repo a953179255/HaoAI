@@ -1311,29 +1311,32 @@ fun ChatScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 2.dp)
                     ) {
-                        val amber = androidx.compose.ui.graphics.Color(0xFFF08A0C)
+                        // 中断横幅 2026-10-22 重设计（用户拍板效果图 interrupt_redesign_mockup）：
+                        // ① 橙▶徽标 → 琥珀⏸（警示语义归状态，动作绿归按钮——旧橙色与语义色系统无关）
+                        // ② 「第 N 轮」→「第 N 步」（去引擎黑话，headline 在 SessionStore 同步改）
+                        // ③ 「继续」小橙胶囊 → 绿实心「恢复执行」32dp 大按钮
+                        // ④ × 删除——注释曾写"仅收起"，实现却调 dismissResume 清库里的断点状态，
+                        //    手滑一次任务永久失去恢复入口（语义陷阱）。横幅消失只靠：点恢复、
+                        //    或发新消息开新轮（startRun 改写 runState，gate 自然灭）。
+                        val amberDeep = androidx.compose.ui.graphics.Color(0xFFB45309)
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(start = 8.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                                .padding(start = 8.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                         ) {
-                            // 橙圆播放徽标
+                            // 琥珀暂停徽标：状态警示
                             Box(
                                 Modifier
-                                    .size(26.dp)
+                                    .size(28.dp)
                                     .clip(androidx.compose.foundation.shape.CircleShape)
-                                    .background(
-                                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            listOf(androidx.compose.ui.graphics.Color(0xFFFFB84D), amber)
-                                        )
-                                    ),
+                                    .background(androidx.compose.ui.graphics.Color(0xFFFDF3E0)),
                                 contentAlignment = androidx.compose.ui.Alignment.Center
                             ) {
                                 Icon(
-                                    HaoIcons.Play, contentDescription = null,
-                                    tint = androidx.compose.ui.graphics.Color.White,
-                                    modifier = Modifier.size(13.dp)
+                                    HaoIcons.Pause, contentDescription = null,
+                                    tint = amberDeep,
+                                    modifier = Modifier.size(14.dp)
                                 )
                             }
                             Column(
@@ -1346,7 +1349,7 @@ fun ChatScreen(
                                         activeSession?.runTurnsUsed ?: 0
                                     ),
                                     style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1
                                 )
@@ -1358,45 +1361,21 @@ fun ChatScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            // 单「继续」橙色胶囊（resumeRun 逻辑不动）
-                            Row(
-                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            // 绿实心「恢复执行」（动作=绿；padding 上下 9dp → 总高 ~32dp 点击目标）
+                            Text(
+                                "恢复执行",
+                                style = androidx.compose.ui.text.TextStyle(
+                                    fontSize = 12.5.sp, lineHeight = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                ),
+                                color = androidx.compose.ui.graphics.Color.White,
                                 modifier = Modifier
                                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(999.dp))
-                                    .background(
-                                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            listOf(androidx.compose.ui.graphics.Color(0xFFFFB84D), amber)
-                                        )
-                                    )
+                                    .background(MaterialTheme.colorScheme.primary)
                                     .clickable { vm.resumeRun() }
-                                    .padding(horizontal = 13.dp, vertical = 6.dp)
-                            ) {
-                                Icon(
-                                    HaoIcons.Play, contentDescription = null,
-                                    tint = androidx.compose.ui.graphics.Color.White,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "继续", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                                    color = androidx.compose.ui.graphics.Color.White
-                                )
-                            }
-                            // × = 仅收起提示（发新消息仍会自然续上下文）
-                            Box(
-                                Modifier
-                                    .padding(start = 4.dp)
-                                    .size(24.dp)
-                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                    .clickable { vm.dismissResume() },
-                                contentAlignment = androidx.compose.ui.Alignment.Center
-                            ) {
-                                Icon(
-                                    HaoIcons.Close, contentDescription = "收起提示",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
+                                    .padding(horizontal = 16.dp, vertical = 9.dp)
+                            )
                         }
                     }
                 }
@@ -3735,11 +3714,16 @@ private fun RowItem(
         SystemEventBar(row.text)
         return
     }
-    // P4 后台子代理唤醒通知：数据层必须按 user 落库（主 Agent 只"听到有人说话"才起
-    // 唤醒回合），但界面不能画绿色用户气泡——用户点名「看着像我发的」。改画折叠通知卡。
-    if (row.role == "user" && row.text.startsWith("[task-notification]")) {
-        SubagentNoticeCard(row.text)
-        return
+    // 系统事件芯片（2026-10-22 中断控制重设计，用户拍板效果图 interrupt_redesign_mockup）：
+    // 引擎/协调器注入的 [task-notification]/[系统恢复]/[成本熔断]/[圈数熔断]/交接文档
+    // 必须按 role=user 落库（LLM 只读 user/assistant），但界面不画绿气泡冒充「我」——
+    // 统一渲染成语义色小卡（绿完成/琥珀熔断/蓝恢复/灰信息），点开见原文。
+    // 新增注入前缀务必进 classifySystemEvent + 单测，漏一个就是一起冒充事故。
+    if (row.role == "user") {
+        classifySystemEvent(row.text)?.let {
+            SystemEventChip(row.text, it)
+            return
+        }
     }
     when (row.role) {
         "user" -> UserBubble(row, onOpenMenu, onCopyRow, onQuickEdit, running, showHead, headTopGap)
@@ -4425,18 +4409,96 @@ internal fun parseWakeNotice(text: String): WakeNoticeSummary? {
 }
 
 /**
- * P4 后台子代理唤醒通知卡（方案B 2026-10-22 用户拍板，效果图 subagent_notice_mockup）：
- * 通知必须按 role=user 落库（主 Agent 只有"听到用户说话"才起唤醒回合——LLM 语义所限），
- * 但界面不能画绿色气泡（用户点名「看着像我发的」）。收起态=一行状态（勾/叉+完成计数），
- * 点开=全文内滚。折叠语言照搬思考阅读区规格：expandFrom Top 向下掀开 + 文字晚 60ms
- * 后进光 + 箭头旋转；内滚必挂 panelBoundaryClamp（边界钳制，不带走会话流）。
+ * 系统事件芯片的语义档位（2026-10-22 中断控制重设计，用户拍板效果图
+ * interrupt_redesign_mockup）：沿用既有语义色相——绿=完成动作、琥珀=警示代价、
+ * 蓝=中性信息。数据层注入文本必须按 role=user 落库（LLM 只读 user/assistant），
+ * 界面按前缀识别渲染成芯片，不再画绿气泡冒充用户。
+ */
+internal enum class SysTone { WAKE, CAP, RESUME, INFO }
+
+/** classifySystemEvent 结果：外观档位 + 收起态一行标题 + 右侧摘要指标（可空）。 */
+internal data class SystemEventView(val tone: SysTone, val title: String, val metric: String?)
+
+private val RESUME_STEP_RE = Regex("第\\s*(\\d+)\\s*[步轮]中断")
+private val COST_CAP_RE = Regex("计费约\\s*(\\d+)\\s*tokens，达到上限（(\\d+)）")
+private val CALL_CAP_RE = Regex("已执行\\s*(\\d+)\\s*次工具调用，达到上限（(\\d+)）")
+
+/** 大数缩写进 metric：275860→"275.9k"，250000→"250k"，<1万原样。 */
+internal fun fmtTokensK(raw: String): String {
+    val n = raw.toLongOrNull() ?: return raw
+    if (n < 10_000) return n.toString()
+    val tenthK = (n + 50) / 100          // 0.1k 精度四舍五入
+    return if (tenthK % 10 == 0L) "${tenthK / 10}k" else "${tenthK / 10.0}k"
+}
+
+/**
+ * 引擎/协调器注入的用户角色文本 → 芯片外观（纯函数，单测锁定）。
+ * null = 不是系统事件，走正常气泡。新增注入前缀必须同时进这里+单测，
+ * 漏一个就是一起「冒充用户」事故（2026-10-22 用户点名家族性复发）。
+ */
+internal fun classifySystemEvent(text: String): SystemEventView? {
+    // ① 后台子代理回传（完成计数沿用 parseWakeNotice，勾/叉由组件判）
+    parseWakeNotice(text)?.let {
+        return SystemEventView(
+            SysTone.WAKE,
+            "后台子代理已结束 · ${it.done}/${it.total} 完成" +
+                (if (it.failed > 0) " · ${it.failed} 失败" else ""),
+            null
+        )
+    }
+    // ② 断点恢复引导（新文案「步」，旧历史「轮」同样识别）
+    if (text.startsWith("[系统恢复]")) {
+        val step = RESUME_STEP_RE.find(text)?.groupValues?.get(1)
+        return SystemEventView(
+            SysTone.RESUME,
+            if (step != null) "恢复执行 · 继续第 $step 步的任务" else "恢复执行 · 继续中断的任务",
+            null
+        )
+    }
+    // ③ 成本熔断（琥珀：有代价发生）
+    if (text.startsWith("[成本熔断]")) {
+        val m = COST_CAP_RE.find(text)
+        return SystemEventView(
+            SysTone.CAP,
+            "成本熔断 · 已指示 Agent 立即收尾",
+            m?.let { "${fmtTokensK(it.groupValues[1])} / ${fmtTokensK(it.groupValues[2])}" }
+        )
+    }
+    // ④ 圈数熔断（同琥珀）
+    if (text.startsWith("[圈数熔断]")) {
+        val m = CALL_CAP_RE.find(text)
+        return SystemEventView(
+            SysTone.CAP,
+            "圈数熔断 · 工具调用达上限收尾",
+            m?.let { "${it.groupValues[1]} / ${it.groupValues[2]} 次" }
+        )
+    }
+    // ⑤ 压缩交接文档（EngineCompaction.compactHistory 落库的 Markdown 大文档）
+    if (text.startsWith(com.haoai.agent.agent.engine.HANDOFF_MARKER)) {
+        return SystemEventView(SysTone.INFO, "对话历史已压缩 · 生成交接文档", null)
+    }
+    return null
+}
+
+/** 芯片徽标 tint（背景 = tint 13% 透明）。WAKE 的叉态由组件另行走 error 色。 */
+@Composable
+private fun sysToneTint(tone: SysTone): androidx.compose.ui.graphics.Color = when (tone) {
+    SysTone.WAKE -> MaterialTheme.colorScheme.primary
+    SysTone.CAP -> androidx.compose.ui.graphics.Color(0xFFB45309)   // 琥珀深（语义色相定稿）
+    SysTone.RESUME -> androidx.compose.ui.graphics.Color(0xFF3A6DF0) // 蓝=信息恢复
+    SysTone.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/**
+ * 系统事件芯片（2026-10-22 中断控制重设计定稿）：把「不得不按 user 角色落库」的
+ * 引擎注入文本（子代理回传/系统恢复/成本与圈数熔断/压缩交接）统一渲染成
+ * 居中小卡——一行语义标题 + 右侧摘要指标，点开见原文。折叠语言照搬思考阅读区
+ * 规格：expandFrom Top 向下掀开 + 文字晚 60ms 后进光 + 箭头旋转；
+ * 内滚必挂 panelBoundaryClamp（边界钳制，不带走会话流）。
  */
 @Composable
-private fun SubagentNoticeCard(text: String) {
-    val s = parseWakeNotice(text)
-    val total = s?.total ?: 1
-    val done = s?.done ?: total
-    val failed = s?.failed ?: 0
+private fun SystemEventChip(text: String, view: SystemEventView) {
+    val wakeFailed = view.tone == SysTone.WAKE && view.title.contains("失败")
     var expanded by rememberSaveable(text) { mutableStateOf(false) }
     val easeSpec = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0.6f, 0.35f, 1f)
     val rot by androidx.compose.animation.core.animateFloatAsState(
@@ -4466,36 +4528,54 @@ private fun SubagentNoticeCard(text: String) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            val allOk = failed == 0
+            val tint = if (wakeFailed) MaterialTheme.colorScheme.error else sysToneTint(view.tone)
+            val badgeIcon = when {
+                wakeFailed -> Icons.Filled.Close
+                view.tone == SysTone.WAKE -> Icons.Filled.Check
+                view.tone == SysTone.CAP -> Icons.Filled.WarningAmber
+                view.tone == SysTone.RESUME -> Icons.Filled.Refresh
+                else -> HaoIcons.Archive
+            }
             Box(
                 Modifier
                     .size(18.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (allOk) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                        else MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
-                    ),
+                    .background(tint.copy(alpha = 0.13f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    if (allOk) Icons.Filled.Check else Icons.Filled.Close,
+                    badgeIcon,
                     contentDescription = null,
-                    tint = if (allOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    tint = tint,
                     modifier = Modifier.size(11.dp)
                 )
             }
             Text(
-                "后台子代理已结束 · $done/$total 完成" + (if (failed > 0) " · $failed 失败" else ""),
+                view.title,
                 style = androidx.compose.ui.text.TextStyle(
                     fontSize = 11.sp, lineHeight = 15.sp,
                     fontWeight = FontWeight.Bold,
                     platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
                 ),
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.weight(1f))
+            if (view.metric != null) {
+                Text(
+                    view.metric,
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontSize = 9.5.sp, lineHeight = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                    maxLines = 1
+                )
+            }
             Text(
-                if (expanded) "收起" else "展开看结果",
+                if (expanded) "收起" else "详情",
                 style = androidx.compose.ui.text.TextStyle(
                     fontSize = 9.5.sp, lineHeight = 13.sp,
                     fontWeight = FontWeight.SemiBold,
