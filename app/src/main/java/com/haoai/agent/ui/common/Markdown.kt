@@ -962,6 +962,27 @@ internal fun FullscreenCodeDialog(
     } else {
         lines.mapIndexed { i, l -> i to l }
     }
+    // ── 批2b 文件内搜索：当前视图（全文或切片）内不区分大小写匹配 ──
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchIndex by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val searchHits: List<Triple<Int, Int, Int>> = remember(searchQuery, shownLines) {
+        val q = searchQuery.trim().lowercase()
+        if (q.length < 2) emptyList()
+        else buildList {
+            shownLines.forEach { (realIdx, l) ->
+                val t = l.text.lowercase()
+                var from = 0
+                while (from <= t.length - q.length) {
+                    val idx = t.indexOf(q, from)
+                    if (idx < 0) break
+                    add(Triple(realIdx, idx, idx + q.length))
+                    from = idx + q.length
+                    if (size >= 500) return@buildList
+                }
+            }
+        }
+    }
     // 切片内滚动进度：逐帧读（snapshot 三范式不通知），64ms
     var vProgress by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     LaunchedEffect(vScroll) {
@@ -1034,6 +1055,23 @@ internal fun FullscreenCodeDialog(
                         )
                     }
                 }
+                // 批2b 搜索入口：较长文件才显示（短文件滚两下就看完）
+                if (!simple && lines.size > 20) {
+                    Box(
+                        Modifier
+                            .padding(end = 2.dp)
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { searchOpen = !searchOpen },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            HaoIcons.Search, contentDescription = "搜索",
+                            tint = if (searchOpen) primary else onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
                 trailing?.invoke()
                 // 切片态「返回全文」：进切片后用户的主要退路
                 if (viewingFrom in lines.indices) {
@@ -1068,6 +1106,63 @@ internal fun FullscreenCodeDialog(
                 }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
+            // ── 批2b 搜索栏 ──
+            if (searchOpen && !simple) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(surfaceC)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it; searchIndex = 0 },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 12.sp, lineHeight = 15.sp,
+                            color = onSurface,
+                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(primary),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(onSurface.copy(alpha = 0.05f))
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                    )
+                    if (searchQuery.trim().length >= 2) {
+                        Text(
+                            "${(searchIndex + 1).coerceAtMost(searchHits.size)}/${searchHits.size}",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = if (searchHits.isEmpty()) onSurfaceVariant.copy(alpha = 0.5f) else primary,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        listOf(
+                            Triple(HaoIcons.ChevronUp, "上一个匹配") { if (searchHits.isNotEmpty()) { searchIndex = (searchIndex - 1 + searchHits.size) % searchHits.size; viewingFrom = searchHits[searchIndex].first; vScroll.dispatchRawDelta(-vScroll.value.toFloat()) } },
+                            Triple(HaoIcons.ChevronDown, "下一个匹配") { if (searchHits.isNotEmpty()) { searchIndex = (searchIndex + 1) % searchHits.size; viewingFrom = searchHits[searchIndex].first; vScroll.dispatchRawDelta(-vScroll.value.toFloat()) } },
+                            Triple(HaoIcons.Close, "关闭搜索") { searchOpen = false; searchQuery = ""; searchIndex = 0 }
+                        ).forEach { (icon, desc, action) ->
+                            Box(
+                                Modifier
+                                    .size(30.dp)
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .clickable { action() },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(icon, contentDescription = desc, tint = onSurfaceVariant, modifier = Modifier.size(13.dp))
+                            }
+                        }
+                    }
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
+            }
             // ── 代码区：独立玻璃卡 + 行号槽 + 当前行 + 进度条 ──
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Column(
@@ -1087,6 +1182,20 @@ internal fun FullscreenCodeDialog(
                             ) {
                                 shownLines.forEach { (realIdx, line) ->
                                     val i = realIdx
+                                    val displayLine = if (searchHits.isNotEmpty()) {
+                                        val lm = searchHits.filter { it.first == realIdx }
+                                        if (lm.isEmpty()) line else buildAnnotatedString {
+                                            append(line.text)
+                                            line.spanStyles.forEach { addStyle(it.item, it.start, it.end) }
+                                            lm.forEach { (_, s, e) ->
+                                                addStyle(
+                                                    androidx.compose.ui.text.SpanStyle(
+                                                        background = androidx.compose.ui.graphics.Color(0x66F2B12A)
+                                                    ), s, e
+                                                )
+                                            }
+                                        }
+                                    } else line
                                     Row(
                                         Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.Top
@@ -1119,7 +1228,7 @@ internal fun FullscreenCodeDialog(
                                             }
                                         }
                                         Text(
-                                            if (line.text.isEmpty()) AnnotatedString(" ") else line,
+                                            if (displayLine.text.isEmpty()) AnnotatedString(" ") else displayLine,
                                             fontFamily = CodeFontFamily,
                                             style = androidx.compose.ui.text.TextStyle(
                                                 fontSize = fontSp.sp,
