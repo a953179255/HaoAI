@@ -962,6 +962,14 @@ internal fun FullscreenCodeDialog(
     } else {
         lines.mapIndexed { i, l -> i to l }
     }
+    // ── 批2c 大纲：IO 正则解析声明（kt/json/md），>20 行的文件才有 ──
+    var outlineOpen by rememberSaveable { mutableStateOf(false) }
+    var outline by remember { mutableStateOf<List<OutlineEntry>>(emptyList()) }
+    LaunchedEffect(fileChip, lines) {
+        if (lines.size > 20) {
+            outline = withContext(Dispatchers.IO) { parseOutline(fileChip, lines.map { it.text }) }
+        } else outline = emptyList()
+    }
     // ── 批2b 文件内搜索：当前视图（全文或切片）内不区分大小写匹配 ──
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -1068,6 +1076,23 @@ internal fun FullscreenCodeDialog(
                         Icon(
                             HaoIcons.Search, contentDescription = "搜索",
                             tint = if (searchOpen) primary else onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+                // 批2c 大纲入口：解析出声明才显示
+                if (!simple && outline.isNotEmpty()) {
+                    Box(
+                        Modifier
+                            .padding(end = 2.dp)
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { outlineOpen = !outlineOpen },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            HaoIcons.Archive, contentDescription = "大纲",
+                            tint = if (outlineOpen) primary else onSurfaceVariant,
                             modifier = Modifier.size(15.dp)
                         )
                     }
@@ -1394,6 +1419,159 @@ internal fun FullscreenCodeDialog(
             }
         }
     }
+    // ── 批2c 大纲抽屉（独立 Dialog 叠层，底部对齐，点上半透明区关闭）──
+    if (outlineOpen) {
+        Dialog(
+            onDismissRequest = { outlineOpen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Spacer(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clickable { outlineOpen = false }
+                )
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(surfaceC)
+                        .navigationBarsPadding()
+                ) {
+                    Box(
+                        Modifier
+                            .padding(top = 8.dp)
+                            .width(36.dp)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(onSurface.copy(alpha = 0.14f))
+                            .align(Alignment.CenterHorizontally)
+                    )
+                    Text(
+                        "大纲 · ${outline.size} 处",
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 12.5.sp, lineHeight = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                        ),
+                        color = onSurface,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                    Column(
+                        Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        outline.forEach { e ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(11.dp))
+                                    .clickable {
+                                        viewingFrom = e.line
+                                        vScroll.dispatchRawDelta(-vScroll.value.toFloat())
+                                        outlineOpen = false
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val badgeBg = when (e.kind) {
+                                    "FUN" -> primary.copy(alpha = 0.14f)
+                                    "CLS" -> androidx.compose.ui.graphics.Color(0xFF7C4DFF).copy(alpha = 0.14f)
+                                    "KEY" -> androidx.compose.ui.graphics.Color(0xFFF2B12A).copy(alpha = 0.2f)
+                                    else -> onSurfaceVariant.copy(alpha = 0.1f)
+                                }
+                                val badgeFg = when (e.kind) {
+                                    "FUN" -> primary
+                                    "CLS" -> androidx.compose.ui.graphics.Color(0xFF6A3DF0)
+                                    "KEY" -> androidx.compose.ui.graphics.Color(0xFF8A5A12)
+                                    else -> onSurfaceVariant
+                                }
+                                Text(
+                                    e.kind,
+                                    style = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 8.5.sp, lineHeight = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                    ),
+                                    color = badgeFg,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .background(badgeBg)
+                                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                                )
+                                Text(
+                                    e.label,
+                                    style = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 11.5.sp, lineHeight = 15.sp,
+                                        fontFamily = CodeFontFamily,
+                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                    ),
+                                    color = onSurface.copy(alpha = 0.88f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(start = 9.dp)
+                                )
+                                Text(
+                                    ":${e.line + 1}",
+                                    style = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 9.5.sp, lineHeight = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                    ),
+                                    color = onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 大纲条目：行(0基)、显示名、类型徽标。 */
+internal data class OutlineEntry(val line: Int, val label: String, val kind: String)
+
+/**
+ * 批2c 大纲解析（纯函数，单测锁定）：按扩展名正则抽「声明」——
+ * kt/kts 抽 fun/class/object/val；json 抽键；md 抽标题；其余返回空（按钮隐藏）。
+ * 轻量正则而非 AST：查看器场景要的是"快速跳到大概位置"，不是精确符号表。
+ */
+internal fun parseOutline(ext: String, texts: List<String>): List<OutlineEntry> {
+    val e = ext.lowercase()
+    val out = ArrayList<OutlineEntry>()
+    when (e) {
+        "kt", "kts" -> {
+            val funRe = Regex("^\\s*(?:private\\s+|internal\\s+|public\\s+|protected\\s+)?(?:suspend\\s+|inline\\s+|operator\\s+)*fun\\s+([\\w.<]+)")
+            val clsRe = Regex("^\\s*(?:private\\s+|internal\\s+|public\\s+)?(?:data\\s+|sealed\\s+|abstract\\s+|open\\s+|enum\\s+)*(?:class|interface|object)\\s+([\\w]+)")
+            val valRe = Regex("^\\s*(?:private\\s+|internal\\s+|public\\s+)?(?:const\\s+)?(val|var)\\s+([\\w]+)")
+            texts.forEachIndexed { i, t ->
+                funRe.find(t)?.let { out.add(OutlineEntry(i, it.groupValues[1], "FUN")) }
+                    ?: clsRe.find(t)?.let { out.add(OutlineEntry(i, it.groupValues[1], "CLS")) }
+                    ?: valRe.find(t)?.let { out.add(OutlineEntry(i, it.groupValues[2], "VAL")) }
+            }
+        }
+        "json" -> {
+            val keyRe = Regex("^\\s*\"([^\"]+)\"\\s*:")
+            texts.forEachIndexed { i, t ->
+                keyRe.find(t)?.let { out.add(OutlineEntry(i, it.groupValues[1], "KEY")) }
+            }
+        }
+        "md", "markdown" -> {
+            val hRe = Regex("^(#{1,4})\\s+(.+)")
+            texts.forEachIndexed { i, t ->
+                hRe.find(t)?.let {
+                    out.add(OutlineEntry(i, it.groupValues[2].take(60), "H${it.groupValues[1].length}"))
+                }
+            }
+        }
+        else -> return emptyList()
+    }
+    return out
 }
 
 /** 文件类型 chip 底色（装饰色板：只用于图标徽标，HaoTokens 口径）。 */
