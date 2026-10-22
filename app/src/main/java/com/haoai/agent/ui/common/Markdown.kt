@@ -927,6 +927,10 @@ internal fun FullscreenCodeDialog(
     /** 外部跳行请求（0 基行号）：非 null 即滚到该行。wrap=false 时自动开换行
     *  （跳行必须让目标行完整可见）。搜索/大纲复用此入口。 */
     jumpToLine: Int? = null,
+    /** 图片模式：非 null 时代码区渲染图片（Fit），底栏隐藏字号/换行。 */
+    imageBitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
+    /** 图片信息副行（「PNG · 1080×2400」），仅图片模式显示在状态行。 */
+    imageMeta: String = "",
 ) {
     val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
     val surfaceC = MaterialTheme.colorScheme.surface
@@ -1199,7 +1203,14 @@ internal fun FullscreenCodeDialog(
                         .border(1.dp, edge, RoundedCornerShape(18.dp))
                 ) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        if (wrap) {
+                        if (imageBitmap != null) {
+                            androidx.compose.foundation.Image(
+                                bitmap = imageBitmap,
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize().padding(10.dp)
+                            )
+                        } else if (wrap) {
                             Column(
                                 Modifier
                                     .verticalScroll(vScroll)
@@ -1330,7 +1341,19 @@ internal fun FullscreenCodeDialog(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (statusLang.isNotEmpty()) {
+                if (imageBitmap != null && imageMeta.isNotEmpty()) {
+                    Text(
+                        imageMeta,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 10.sp, lineHeight = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                        ),
+                        color = onSurfaceVariant.copy(alpha = 0.72f),
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else if (statusLang.isNotEmpty()) {
                     Text(
                         (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
                          else "共 ${lines.size} 行") +
@@ -1347,7 +1370,7 @@ internal fun FullscreenCodeDialog(
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
-                Text(
+                if (imageBitmap == null) Text(
                     "A−",
                     style = androidx.compose.ui.text.TextStyle(
                         fontSize = 13.sp, lineHeight = 16.sp,
@@ -1360,7 +1383,7 @@ internal fun FullscreenCodeDialog(
                         .clickable(enabled = fontSp > 10f) { fontSp -= 1f }
                         .padding(horizontal = 8.dp, vertical = 7.dp)
                 )
-                Text(
+                if (imageBitmap == null) Text(
                     "${fontSp.toInt()}sp",
                     style = androidx.compose.ui.text.TextStyle(
                         fontSize = 10.5.sp, lineHeight = 13.sp,
@@ -1375,7 +1398,7 @@ internal fun FullscreenCodeDialog(
                         .padding(horizontal = 8.dp, vertical = 5.dp)
                         .width(42.dp)
                 )
-                Text(
+                if (imageBitmap == null) Text(
                     "A+",
                     style = androidx.compose.ui.text.TextStyle(
                         fontSize = 14.sp, lineHeight = 17.sp,
@@ -1388,8 +1411,8 @@ internal fun FullscreenCodeDialog(
                         .clickable(enabled = fontSp < 20f) { fontSp += 1f }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 )
-                // 换行胶囊开关：开=绿底绿字（语义色），关=灰字
-                Row(
+                // 换行胶囊开关：开=绿底绿字（语义色），关=灰字（图片模式隐藏）
+                if (imageBitmap == null) Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))

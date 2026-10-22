@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
@@ -52,11 +53,23 @@ internal fun FileViewerDialog(
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val locateInTree = LocalLocateInTree.current
     val openTimeline = LocalOpenTimeline.current
+    // 批2d 分流：图片 → 解码预览（Fit）；文本 → 原路径
+    val extLower = ref.relPath.substringAfterLast('.', "").lowercase()
+    val isImage = extLower in setOf("png", "jpg", "jpeg", "webp", "gif")
+    var imageBitmap by remember(ref.absPath) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var imageMeta by remember(ref.absPath) { mutableStateOf("") }
     var result by remember(ref.absPath) {
         mutableStateOf<Pair<List<AnnotatedString>, String>?>(null)
     }
+    val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
     LaunchedEffect(ref.absPath, dark) {
-        result = withContext(Dispatchers.IO) { loadViewerLines(ref, dark) }
+        if (isImage) {
+            val r = withContext(Dispatchers.IO) { loadViewerImage(ref.absPath, screenW) }
+            imageBitmap = r?.first
+            imageMeta = r?.second ?: "图片"
+        } else {
+            result = withContext(Dispatchers.IO) { loadViewerLines(ref, dark) }
+        }
     }
     val lines = result?.first ?: listOf(AnnotatedString("加载中…"))
     val note = result?.second.orEmpty()
@@ -79,10 +92,12 @@ internal fun FileViewerDialog(
     }
     FullscreenCodeDialog(
         title = fileName,
+        imageBitmap = imageBitmap,
+        imageMeta = imageMeta,
         fileMeta = meta,
         fileChip = chip,
-        // 语言标签进壳层状态行（行号由壳层按滚动实时拼：行 X/Y · 标签）
-        statusLang = chip.ifEmpty { "text" },
+        // 图片模式状态行走 imageMeta（壳层分支）；文本模式走语言标签
+        statusLang = if (isImage) "" else chip.ifEmpty { "text" },
         lines = lines,
         dark = dark,
         onDismiss = onDismiss,
@@ -131,6 +146,23 @@ internal fun FileViewerDialog(
             }
         }
     )
+}
+
+/** 图片解码（降采样到屏宽内）→ (bitmap, "格式 · W×H")。失败返回 null（UI 出提示）。 */
+private fun loadViewerImage(path: String, screenW: Int): Pair<androidx.compose.ui.graphics.ImageBitmap, String>? {
+    return runCatching {
+        val f = java.io.File(path)
+        if (!f.isFile) return null
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= screenW) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return null
+        val fmt = path.substringAfterLast('.', "").uppercase()
+        Pair(bmp.asImageBitmap(), "$fmt · ${bounds.outWidth}×${bounds.outHeight}")
+    }.getOrNull()
 }
 
 /**
