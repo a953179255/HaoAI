@@ -924,6 +924,9 @@ internal fun FullscreenCodeDialog(
     simple: Boolean = false,
     /** 底栏状态行语言标签（如 MD/KT/JSON）；空=不显示状态行。行号由壳层按滚动实时拼。 */
     statusLang: String = "",
+    /** 外部跳行请求（0 基行号）：非 null 即滚到该行。wrap=false 时自动开换行
+    *  （跳行必须让目标行完整可见）。搜索/大纲复用此入口。 */
+    jumpToLine: Int? = null,
 ) {
     val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
     val surfaceC = MaterialTheme.colorScheme.surface
@@ -942,14 +945,29 @@ internal fun FullscreenCodeDialog(
     // 三种范式都不通知滚动帧——ChatScreen 消息流跟随同款坑，2026-09-19 已改逐帧），
     // 64ms 读 vScroll 推导首行/进度。滚动容器保持 Column+verticalScroll：
     // LazyColumn 在本环境实测时灵时不灵（装包后滑动整体失效），回退稳妥结构。
-    // 进度=滚动像素比值（不受软换行影响，准）——逐帧读（本项目 snapshot 三范式不通知）。
-    // 行号曾按"偏移/行高"估算，软换行下长行占多视觉行 → 估算偏差 13 行（实测），
-    // 已撤动态行号改「共 N 行」静态；如未来要精确行号，改 LazyColumn 按 item 索引。
-    var scrollProgress by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    // 跳行=「切片视图」：jumpToLine 非空时 lines.drop(该行) 直接把目标行置顶渲染
+    // （行号槽显示真实行号 i+from+1，零估算——LazyColumn 在 Dialog 内两次实测不吃
+    // 滚动手势、偏移估算在软换行下偏差 13 行，两条路都封死后切片是最稳解）。
+    var viewingFrom by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(-1) }
+    LaunchedEffect(jumpToLine, lines.size) {
+        val target = jumpToLine ?: return@LaunchedEffect
+        if (target in lines.indices) {
+            if (!wrap) wrap = true
+            viewingFrom = target
+            vScroll.scrollTo(0)
+        }
+    }
+    val shownLines: List<Pair<Int, AnnotatedString>> = if (viewingFrom in lines.indices) {
+        lines.drop(viewingFrom).mapIndexed { i, l -> (viewingFrom + i) to l }
+    } else {
+        lines.mapIndexed { i, l -> i to l }
+    }
+    // 切片内滚动进度：逐帧读（snapshot 三范式不通知），64ms
+    var vProgress by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     LaunchedEffect(vScroll) {
         while (isActive) {
             val p = if (vScroll.maxValue > 0) vScroll.value.toFloat() / vScroll.maxValue else 0f
-            if (p != scrollProgress) scrollProgress = p
+            if (p != vProgress) vProgress = p
             kotlinx.coroutines.delay(64)
         }
     }
@@ -1017,6 +1035,23 @@ internal fun FullscreenCodeDialog(
                     }
                 }
                 trailing?.invoke()
+                // 切片态「返回全文」：进切片后用户的主要退路
+                if (viewingFrom in lines.indices) {
+                    Box(
+                        Modifier
+                            .padding(start = 4.dp)
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { viewingFrom = -1 },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            HaoIcons.Back, contentDescription = "返回全文",
+                            tint = primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
                 Box(
                     Modifier
                         .padding(start = 4.dp)
@@ -1050,7 +1085,8 @@ internal fun FullscreenCodeDialog(
                                     .verticalScroll(vScroll)
                                     .padding(horizontal = 4.dp, vertical = 10.dp)
                             ) {
-                                lines.forEachIndexed { i, line ->
+                                shownLines.forEach { (realIdx, line) ->
+                                    val i = realIdx
                                     Row(
                                         Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.Top
@@ -1128,8 +1164,8 @@ internal fun FullscreenCodeDialog(
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(onSurface.copy(alpha = 0.06f))
                         ) {
-                            if (wrap && lines.size > 1) {
-                                val p = scrollProgress
+                            if (lines.size > 1) {
+                                val p = vProgress
                                 Box(
                                     Modifier
                                         .fillMaxWidth()
@@ -1162,7 +1198,8 @@ internal fun FullscreenCodeDialog(
             ) {
                 if (statusLang.isNotEmpty()) {
                     Text(
-                        "共 ${lines.size} 行" +
+                        (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
+                         else "共 ${lines.size} 行") +
                             if (statusLang.isNotEmpty()) " · $statusLang" else "",
                         style = androidx.compose.ui.text.TextStyle(
                             fontSize = 10.sp, lineHeight = 13.sp,
