@@ -942,14 +942,12 @@ internal fun FullscreenCodeDialog(
     // 三种范式都不通知滚动帧——ChatScreen 消息流跟随同款坑，2026-09-19 已改逐帧），
     // 64ms 读 vScroll 推导首行/进度。滚动容器保持 Column+verticalScroll：
     // LazyColumn 在本环境实测时灵时不灵（装包后滑动整体失效），回退稳妥结构。
-    var firstVisible by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    // 进度=滚动像素比值（不受软换行影响，准）——逐帧读（本项目 snapshot 三范式不通知）。
+    // 行号曾按"偏移/行高"估算，软换行下长行占多视觉行 → 估算偏差 13 行（实测），
+    // 已撤动态行号改「共 N 行」静态；如未来要精确行号，改 LazyColumn 按 item 索引。
     var scrollProgress by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
-    LaunchedEffect(vScroll, lineHeightPx, lines.size) {
+    LaunchedEffect(vScroll) {
         while (isActive) {
-            val lh = lineHeightPx.coerceAtLeast(1f)
-            val row = ((vScroll.value + lh / 2) / lh).toInt()
-                .coerceIn(0, (lines.size - 1).coerceAtLeast(0))
-            if (row != firstVisible) firstVisible = row
             val p = if (vScroll.maxValue > 0) vScroll.value.toFloat() / vScroll.maxValue else 0f
             if (p != scrollProgress) scrollProgress = p
             kotlinx.coroutines.delay(64)
@@ -1054,12 +1052,7 @@ internal fun FullscreenCodeDialog(
                             ) {
                                 lines.forEachIndexed { i, line ->
                                     Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .background(
-                                                if (i == firstVisible) primary.copy(alpha = 0.07f)
-                                                else androidx.compose.ui.graphics.Color.Transparent
-                                            ),
+                                        Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.Top
                                     ) {
                                         if (gutterPad > 0) {
@@ -1169,7 +1162,7 @@ internal fun FullscreenCodeDialog(
             ) {
                 if (statusLang.isNotEmpty()) {
                     Text(
-                        "行 ${firstVisible + 1}/${lines.size}" +
+                        "共 ${lines.size} 行" +
                             if (statusLang.isNotEmpty()) " · $statusLang" else "",
                         style = androidx.compose.ui.text.TextStyle(
                             fontSize = 10.sp, lineHeight = 13.sp,
