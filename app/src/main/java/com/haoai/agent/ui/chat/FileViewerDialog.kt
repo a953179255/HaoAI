@@ -1,5 +1,6 @@
 package com.haoai.agent.ui.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,8 +60,29 @@ internal fun FileViewerDialog(
     }
     val lines = result?.first ?: listOf(AnnotatedString("加载中…"))
     val note = result?.second.orEmpty()
+    // 批1 重构（2026-10-22）：壳层双行信息——主行文件名，副行「路径 · 行数 · 大小/截断说明」。
+    // chip 取扩展名大写（KT/JSON/MD…，壳内映射装饰色）；状态行给底栏「行 X/Y · 语言」。
+    val fileName = ref.relPath.substringAfterLast('/')
+    val dirPath = ref.relPath.substringBeforeLast('/', "").ifEmpty { "workspace" }
+    val meta = buildString {
+        append(dirPath)
+        append(" · ")
+        append("${lines.size} 行")
+        if (note.isNotEmpty()) append(" · $note")
+    }
+    val ext = ref.relPath.substringAfterLast('.', "").uppercase().take(4)
+    val chip = when {
+        ext.isEmpty() -> ""
+        ext.startsWith("KT") -> "KT"
+        ext.length <= 4 -> ext
+        else -> ext.take(3)
+    }
     FullscreenCodeDialog(
-        title = if (note.isEmpty()) ref.relPath else "${ref.relPath} · $note",
+        title = fileName,
+        fileMeta = meta,
+        fileChip = chip,
+        // 语言标签进壳层状态行（行号由壳层按滚动实时拼：行 X/Y · 标签）
+        statusLang = chip.ifEmpty { "text" },
         lines = lines,
         dark = dark,
         onDismiss = onDismiss,
@@ -69,31 +91,42 @@ internal fun FileViewerDialog(
             if (showTransferActions) androidx.compose.foundation.layout.Row(
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
             ) {
+                // 批1 主题化：版本历史=信息（灰胶囊）、在目录中定位=动作（绿胶囊，语义色）
+                val primary = MaterialTheme.colorScheme.primary
+                val onVar = MaterialTheme.colorScheme.onSurfaceVariant
                 Text(
                     "版本历史",
-                    fontSize = 11.5.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = Color(0xFF8AB4F8),
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontSize = 11.5.sp, lineHeight = 14.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                    ),
+                    color = onVar,
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
+                        .background(onVar.copy(alpha = 0.08f))
                         .clickable {
                             openTimeline(normalizeRel(ref.relPath))
                             onDismiss()
                         }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
                 Text(
                     "在目录中定位",
-                    fontSize = 11.5.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = Color(0xFF7BD88F),
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontSize = 11.5.sp, lineHeight = 14.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                    ),
+                    color = primary,
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
+                        .background(primary.copy(alpha = 0.12f))
                         .clickable {
                             locateInTree(normalizeRel(ref.relPath))
                             onDismiss()
                         }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
         }
