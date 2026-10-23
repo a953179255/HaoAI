@@ -2577,11 +2577,14 @@ private fun LazyListScope.workspaceItems(
 
     item {
         // 空间占用统计：进页现算一次（walk 全树，异常已在 VM 层吞成零值沉默）
-        var stats by androidx.compose.runtime.remember {
+        // wsTick 为 key：切档后 mode/路径/统计全部重算（组合期普通读不会自动失效）
+        val wsTick = vm.wsTick
+        var stats by androidx.compose.runtime.remember(wsTick) {
             androidx.compose.runtime.mutableStateOf<com.haoai.agent.ui.chat.WorkspaceStats?>(null)
         }
-        androidx.compose.runtime.LaunchedEffect(Unit) { stats = vm.workspaceStats() }
-        val mode = vm.workspaceMode()
+        androidx.compose.runtime.LaunchedEffect(wsTick, Unit) { stats = vm.workspaceStats() }
+        val mode = androidx.compose.runtime.remember(wsTick) { vm.workspaceMode() }
+        val wsPath = androidx.compose.runtime.remember(wsTick) { vm.workspacePath() }
         val hasAllFiles = android.os.Environment.isExternalStorageManager()
 
         Column {
@@ -2621,7 +2624,7 @@ private fun LazyListScope.workspaceItems(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            vm.workspacePath(),
+                            wsPath,
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2712,7 +2715,9 @@ private fun LazyListScope.workspaceItems(
                         RadioDot(selPublic)
                     },
                     onClick = {
-                        if (!hasAllFiles) openAllFilesAccess()
+                        // 权限判定必须点击时实时读：组合期快照不随授权刷新（实测：系统页开完
+                        // 权限回来 onClick 仍拿旧 false，永远跳引导）
+                        if (!android.os.Environment.isExternalStorageManager()) openAllFilesAccess()
                         else vm.useRawWorkspace(
                             vm.workspacePublicDefault(),
                             com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC
@@ -2727,7 +2732,7 @@ private fun LazyListScope.workspaceItems(
                     else "点选任意真实路径目录（需「所有文件管理」权限）——bash 照常可用",
                     trailing = { RadioDot(selCustom) },
                     onClick = {
-                        if (!hasAllFiles) openAllFilesAccess()
+                        if (!android.os.Environment.isExternalStorageManager()) openAllFilesAccess()
                         else pickCustomDir()
                     }
                 )

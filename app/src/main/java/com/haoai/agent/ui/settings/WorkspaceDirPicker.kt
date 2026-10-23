@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -134,11 +132,10 @@ fun WorkspaceDirPickerDialog(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp, horizontal = 4.dp)
             )
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 2.dp)
-            ) {
-                items(subdirs, key = { it.absolutePath }) { sub ->
+            // ⚠ 不能用 LazyColumn：GlassAlertDialog 的 content 已在 verticalScroll 列
+            // 里（实测：嵌套 lazy 被无限高约束测量直接崩 App），目录数量有限走普通 Column
+            Column(modifier = Modifier.fillMaxWidth()) {
+                subdirs.forEach { sub ->
                     Row(
                         Modifier
                             .fillMaxWidth()

@@ -1564,6 +1564,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         c.updateSettings { it.copy(customPrompt = text) }
     }
 
+    /**
+     * 工作区切换时钟：每次成功切换自增——UI（三档 radio/英雄卡/统计）以它为 key
+     * 重组刷新。引擎 mode() 是普通函数调用，组合期读不会因切换自动失效（实测坑：
+     * 切公共档成功落盘但 radio 钉死在应用专属）。
+     */
+    var wsTick by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+
     fun useDefaultWorkspace() {
         val oldRoot = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
         c.workspace.useDefault()
@@ -1572,6 +1580,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             oldRoot
         )
         c.onWorkspaceSwitched()
+        wsTick++
     }
 
     fun useSafWorkspace(uriString: String): Boolean {
@@ -1594,6 +1603,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             c.workspace.migrateInto(java.io.File(path), oldRoot)
         } else 0
         c.onWorkspaceSwitched()
+        wsTick++
         return copied
     }
 
