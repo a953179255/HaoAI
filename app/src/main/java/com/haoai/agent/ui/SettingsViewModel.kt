@@ -1565,7 +1565,12 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun useDefaultWorkspace() {
+        val oldRoot = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
         c.workspace.useDefault()
+        if (oldRoot != null) c.workspace.migrateInto(
+            (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir() ?: oldRoot,
+            oldRoot
+        )
         c.onWorkspaceSwitched()
     }
 
@@ -1579,12 +1584,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
      * 三档改造（2026-10-23）：真实路径档（公共文档/自选位置共用通路）。
      * migrate=true 时把旧 Raw 根的内容复制进新根（同名不覆盖）——MEMORY.md/skills
      * 等引擎文件不迁会导致 Agent「失忆」，这是切换体验的关键一环。
+     * 返回复制文件数；切换失败返回 -1。
      */
-    fun useRawWorkspace(path: String, migrate: Boolean): Int {
+    fun useRawWorkspace(path: String, kind: com.haoai.agent.platform.WorkspaceManager.Mode): Int {
         val oldRoot = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-        val ok = c.workspace.useRaw(path)
+        val ok = c.workspace.useRaw(path, kind)
         if (!ok) return -1
-        val copied = if (migrate && oldRoot?.absolutePath != path) {
+        val copied = if (oldRoot != null && oldRoot.absolutePath != path) {
             c.workspace.migrateInto(java.io.File(path), oldRoot)
         } else 0
         c.onWorkspaceSwitched()
@@ -1600,6 +1606,11 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** 空间短名（壳副标题用）：与 ChatViewModel.workspaceName 同口径取末段，全路径太长撑爆副标题行。 */
     fun workspaceName(): String =
         c.workspace.current?.displayName?.substringAfterLast('/')?.ifBlank { "根目录" } ?: "未绑定工作空间"
+
+    /** 完整路径（英雄卡展示与「复制路径」用）：Raw 系给绝对路径；SAF 给 content URI；无绑定给提示。 */
+    fun workspacePath(): String =
+        (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.absolutePath
+            ?: c.workspace.workspaceUriForSession ?: "未绑定工作空间"
 
     /**
      * 工作区浏览（2026-10-11 方案B）：设置·工作区页「浏览工作区文件」行的数据面——

@@ -11,10 +11,15 @@ import java.io.File
  * 工作区偏好（2026-10-23 三档改造）：
  * - safUri：SAF 档（引擎保留兼容存量绑定，UI 已退役新绑定入口）
  * - rawPath：真实路径档（公共文档/自选位置共用通路，bash/文档同步全可用）
- * 三态判定：rawPath==null → 专属；rawPath==默认公共根 → 公共文档；其他 rawPath → 自选位置。
+ * - rawKind：档位意图（"public"=公共文档含更换过的公共根 / "custom"=自选位置）——
+ *   更换过根的公共档与自选档在引擎层无差别，radio 落位靠它记忆。
  */
 @Serializable
-private data class WorkspacePref(val safUri: String? = null, val rawPath: String? = null)
+private data class WorkspacePref(
+    val safUri: String? = null,
+    val rawPath: String? = null,
+    val rawKind: String? = null
+)
 
 class WorkspaceManager(private val context: Context) {
 
@@ -33,6 +38,8 @@ class WorkspaceManager(private val context: Context) {
     /** 当前真实路径档的根（Raw 系才有；与 current 同生命周期，restore/useRaw 时维护）。 */
     var currentRawPath: String? = null
         private set
+
+    private var rawKind: String? = null
 
     init {
         restoreOrDefault()
@@ -62,16 +69,18 @@ class WorkspaceManager(private val context: Context) {
 
     /**
      * 三档改造（2026-10-23）：真实路径档——公共文档（Documents/HaoAI）与自选位置共用。
+     * kind：档位意图（PUBLIC/CUSTOM），radio 落位记忆用。
      * 目录不存在则尝试创建；创建/校验失败返回 false 不切换。
      */
-    fun useRaw(path: String): Boolean {
+    fun useRaw(path: String, kind: Mode): Boolean {
         val f = File(path)
         return runCatching {
             if (!f.exists()) f.mkdirs()
             if (!f.isDirectory) return false
             current = RawFileBackend(f)
             currentRawPath = f.absolutePath
-            persist(WorkspacePref(rawPath = f.absolutePath))
+            rawKind = kind.name
+            persist(WorkspacePref(rawPath = f.absolutePath, rawKind = kind.name))
             true
         }.getOrDefault(false)
     }
@@ -80,6 +89,9 @@ class WorkspaceManager(private val context: Context) {
     fun mode(): Mode = when {
         current is SafFileBackend -> Mode.SAF
         currentRawPath == null -> Mode.PRIVATE
+        rawKind == Mode.CUSTOM.name -> Mode.CUSTOM
+        rawKind == Mode.PUBLIC.name -> Mode.PUBLIC
+        // 存量 rawPath（无 kind 字段）按默认公共根兜底归类
         currentRawPath == publicDefaultRoot().absolutePath -> Mode.PUBLIC
         else -> Mode.CUSTOM
     }
@@ -149,6 +161,7 @@ class WorkspaceManager(private val context: Context) {
             if (ok) {
                 current = RawFileBackend(f)
                 currentRawPath = f.absolutePath
+                rawKind = saved.rawKind
             }
         }
         if (current == null) {

@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -124,7 +125,9 @@ import com.haoai.agent.ui.common.GlassPageBar
 import com.haoai.agent.ui.common.GlassPanel
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.haoai.agent.ui.common.HaoChip
+import com.haoai.agent.ui.common.HaoDivider
 import com.haoai.agent.ui.common.HaoGroup
+import com.haoai.agent.ui.common.HaoGroupLabel
 import com.haoai.agent.ui.common.HaoRow
 import com.haoai.agent.ui.theme.HaoDimens
 import com.haoai.agent.ui.theme.HaoTone
@@ -253,12 +256,6 @@ fun SettingsScreen(
         vm.cancelDraft()
     }
 
-    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            scope.launch { vm.useSafWorkspace(uri.toString()) }
-        }
-    }
-
     // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）。
     // 关键：不能 early return——供应商编辑/删除确认/模型选择等弹窗渲染在函数
     // 尾部，early return 会让独立模式下所有触发弹窗的按钮「点了没反应」
@@ -275,7 +272,6 @@ fun SettingsScreen(
             showDreamPicker = showDreamPicker, onPickDreamModel = { showDreamPicker = true },
             confirmWpClear = confirmWpClear, onConfirmWpClear = { confirmWpClear = true },
             confirmClearLedger = confirmClearLedger, onConfirmClearLedger = { confirmClearLedger = true },
-            treePickerLaunch = { treePicker.launch(null) },
             onOpenMemories = onOpenMemories,
             onOpenSearchCatalog = onOpenSearchCatalog,
             onEditCaps = { pid, mid -> capsTarget = pid to mid },
@@ -600,7 +596,6 @@ fun SettingsScreen(
             showDreamPicker = showDreamPicker, onPickDreamModel = { showDreamPicker = true },
             confirmWpClear = confirmWpClear, onConfirmWpClear = { confirmWpClear = true },
             confirmClearLedger = confirmClearLedger, onConfirmClearLedger = { confirmClearLedger = true },
-            treePickerLaunch = { treePicker.launch(null) },
             onOpenMemories = onOpenMemories,
             onOpenSearchCatalog = { section = "searchcat" },
             onEditCaps = { pid, mid -> capsTarget = pid to mid },
@@ -1233,7 +1228,6 @@ private fun SectionPage(
     onConfirmClearLedger: () -> Unit,
     // m23 参数链：清空账本确认后根级自增的版本号，usageItems 的 remember 以此为 key 重算
     ledgerVersion: Int,
-    treePickerLaunch: () -> Unit,
     onOpenMemories: () -> Unit,
     onOpenSearchCatalog: () -> Unit,
     onEditCaps: (String, String) -> Unit = { _, _ -> },
@@ -1246,6 +1240,10 @@ private fun SectionPage(
     var keyExportConfirm by remember { mutableStateOf(false) }
     // 工作区浏览壳（方案B 双入口之一）：设置·工作区页「浏览工作区文件」开纯目录单 Tab 壳
     var workspaceBrowseOpen by remember { mutableStateOf(false) }
+    // 三档目录浏览器（2026-10-23）：null 关闭；非空=待选档位（PUBLIC=更换公共根 / CUSTOM=自选位置）。
+    // 弹窗状态提在根级（同色盘教训：LazyColumn item 内 fillMaxSize 遮罩会被 item 约束）
+    var dirPickerKind by remember { mutableStateOf<com.haoai.agent.platform.WorkspaceManager.Mode?>(null) }
+    val wsScope = rememberCoroutineScope()
     // 我的档案（聊天社交化 2026-10-07）：编辑弹窗状态提在根级（同色盘教训，
     // LazyColumn item 内 fillMaxSize 遮罩会被约束）
     var showMyProfile by remember { mutableStateOf(false) }
@@ -1330,8 +1328,9 @@ private fun SectionPage(
                         )
                     }
                     "memory" -> memoryItems(vm, settings, onOpenMemories, localBackdrop, onPickDreamModel = onPickDreamModel)
-                    "workspace" -> workspaceItems(vm, localBackdrop,
-                        pickFolder = { treePickerLaunch() },
+                    "workspace" -> workspaceItems(vm, localBackdrop, context,
+                        pickCustomDir = { dirPickerKind = com.haoai.agent.platform.WorkspaceManager.Mode.CUSTOM },
+                        changePublicRoot = { dirPickerKind = com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC },
                         browseWorkspace = { workspaceBrowseOpen = true })
                     "linux" -> linuxItems(vm, localBackdrop, linuxState)
                     "general" -> generalItems(
@@ -1539,6 +1538,18 @@ private fun SectionPage(
                 resolve = { vm.fileRefOfRel(it) },
                 deleteFile = { vm.deleteWorkspaceFile(it) },
                 onDismiss = { workspaceBrowseOpen = false }
+            )
+        }
+        // 三档目录浏览器（自选位置/更换公共根共用一个门）
+        if (dirPickerKind != null) {
+            WorkspaceDirPickerDialog(
+                backdrop = localBackdrop,
+                onPick = { path ->
+                    val kind = dirPickerKind
+                    dirPickerKind = null
+                    if (kind != null) wsScope.launch { vm.useRawWorkspace(path, kind) }
+                },
+                onDismiss = { dirPickerKind = null }
             )
         }
     }
@@ -2539,68 +2550,206 @@ private fun ToggleRow(
 private fun LazyListScope.workspaceItems(
     vm: SettingsViewModel,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    pickFolder: () -> Unit,
+    context: android.content.Context,
+    pickCustomDir: () -> Unit,
+    changePublicRoot: () -> Unit,
     browseWorkspace: () -> Unit
 ) {
+    /** 引导开「所有文件管理」权限（公共/自选档的真实路径读写依赖它）。 */
+    fun openAllFilesAccess() {
+        val intent = android.content.Intent(
+            android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            android.net.Uri.parse("package:${context.packageName}")
+        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }.onFailure {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+        android.widget.Toast.makeText(
+            context, "需要「所有文件管理」权限：已打开系统设置，授权后返回重试",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
+    }
+
     item {
         // 空间占用统计：进页现算一次（walk 全树，异常已在 VM 层吞成零值沉默）
         var stats by androidx.compose.runtime.remember {
             androidx.compose.runtime.mutableStateOf<com.haoai.agent.ui.chat.WorkspaceStats?>(null)
         }
         androidx.compose.runtime.LaunchedEffect(Unit) { stats = vm.workspaceStats() }
+        val mode = vm.workspaceMode()
+        val hasAllFiles = android.os.Environment.isExternalStorageManager()
+
         Column {
-            // 顶部说明卡片：工作空间是什么、两种目录的差异
+            // 英雄路径卡（v3 定稿）：档位名 + 等宽路径 + 统计；点卡复制路径
             GlassGroup(backdrop) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.Folder,
-                            contentDescription = null,
-                            tint = haoToneMain(HaoTone.Info),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(Modifier.size(10.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                as android.content.ClipboardManager
+                            clip.setPrimaryClip(
+                                android.content.ClipData.newPlainText("workspace", vm.workspacePath())
+                            )
+                            android.widget.Toast.makeText(context, "路径已复制", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Folder,
+                        contentDescription = null,
+                        tint = haoToneMain(HaoTone.Accent),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            "什么是工作空间",
+                            when (mode) {
+                                com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE -> "应用专属"
+                                com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC -> "公共文档"
+                                com.haoai.agent.platform.WorkspaceManager.Mode.CUSTOM -> "自选位置"
+                                com.haoai.agent.platform.WorkspaceManager.Mode.SAF -> "SAF 目录（旧版）"
+                            },
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
+                        Text(
+                            vm.workspacePath(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        Text(
+                            stats?.let { com.haoai.agent.ui.chat.formatWorkspaceStats(it) }
+                                ?: "统计中…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 3.dp)
+                        )
                     }
-                    Text(
-                        "工作空间是助手读写文件、执行命令的根目录。默认目录（应用专属）支持完整文件与 shell 能力；选择 SAF 目录后 bash 不可用。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                    HorizontalDivider(
-                        Modifier.padding(vertical = 8.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-                    )
-                    Text(
-                        "当前：${vm.workspaceName()}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = "复制路径",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(17.dp)
                     )
                 }
             }
-            // 双按钮横排
-            Row(
-                Modifier.padding(top = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            // 权限横幅：公共/自选档在「所有文件管理」被关掉后引导去开（罕见但会断读写）
+            if ((mode == com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC ||
+                mode == com.haoai.agent.platform.WorkspaceManager.Mode.CUSTOM) && !hasAllFiles
             ) {
-                LiquidPillButton(
-                    backdrop = backdrop,
-                    text = "选择文件夹 (SAF)",
-                    modifier = Modifier.weight(1f),
-                    emphasized = false
-                ) { pickFolder() }
-                LiquidPillButton(
-                    backdrop = backdrop,
-                    text = "恢复默认目录",
-                    modifier = Modifier.weight(1f),
-                    // 回退性操作：用警告级（和"选择文件夹"这种普通次要操作区分开）
-                    level = com.haoai.agent.ui.theme.HaoButtonLevel.Warning
-                ) { vm.useDefaultWorkspace() }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(haoToneMain(HaoTone.Warn).copy(alpha = 0.14f))
+                        .clickable { openAllFilesAccess() }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = haoToneMain(HaoTone.Warn),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        "缺少「所有文件管理」权限，读写会失败。点此去系统设置开启。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+            // 位置类型三档单选（v3 定稿）：皆真实路径，bash 全程可用；SAF 新绑定已退役
+            Column(Modifier.padding(top = 12.dp)) {
+                HaoGroupLabel("位置类型 · 三档皆真实路径，bash 始终可用")
+            }
+            Spacer(Modifier.size(6.dp))
+            GlassGroup(backdrop) {
+                val selPrivate = mode == com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE
+                val selPublic = mode == com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC
+                val selCustom = mode == com.haoai.agent.platform.WorkspaceManager.Mode.CUSTOM
+                // ① 应用专属
+                HaoRow(
+                    title = "应用专属",
+                    subtitle = "Android/data 私有沙盒，其他应用不可见；USB 可读。最稳。",
+                    trailing = { RadioDot(selPrivate) },
+                    onClick = { vm.useDefaultWorkspace() }
+                )
+                HaoDivider()
+                // ② 公共文档
+                HaoRow(
+                    title = "公共文档",
+                    subtitle = if (selPublic) vm.workspaceName()
+                    else "默认 Documents/HaoAI，相册/WPS/文件管理器可直接读写产物。",
+                    trailing = {
+                        if (selPublic) {
+                            Text(
+                                "更换…",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = haoToneMain(HaoTone.Accent),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { changePublicRoot() }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                            )
+                            Spacer(Modifier.size(6.dp))
+                        }
+                        RadioDot(selPublic)
+                    },
+                    onClick = {
+                        if (!hasAllFiles) openAllFilesAccess()
+                        else vm.useRawWorkspace(
+                            vm.workspacePublicDefault(),
+                            com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC
+                        )
+                    }
+                )
+                HaoDivider()
+                // ③ 自选位置
+                HaoRow(
+                    title = "自选位置",
+                    subtitle = if (selCustom) vm.workspaceName()
+                    else "点选任意真实路径目录（需「所有文件管理」权限）——bash 照常可用",
+                    trailing = { RadioDot(selCustom) },
+                    onClick = {
+                        if (!hasAllFiles) openAllFilesAccess()
+                        else pickCustomDir()
+                    }
+                )
+            }
+            // SAF 存量绑定：UI 已退役新绑定入口，给一条平顺的退路
+            if (mode == com.haoai.agent.platform.WorkspaceManager.Mode.SAF) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                        .clickable { vm.useDefaultWorkspace() }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "SAF 目录已停用新绑定（bash 不可用）。点此恢复默认目录，旧文件会自动迁回。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             // 方案B 双入口之一：把空转的「工作区」面板接上目录浏览——
             // 点开与聊天抽屉共用同一 WorkspaceBrowserDialog（批4b 三 Tab 壳退役后的浏览单页），
@@ -2648,6 +2797,30 @@ private fun LazyListScope.workspaceItems(
                     modifier = Modifier.size(18.dp)
                 )
             }
+        }
+    }
+}
+
+/** 三档单选 radio（HaoRow trailing 用）：18dp 圆环，选中填 accent 内圆。 */
+@Composable
+private fun RadioDot(selected: Boolean) {
+    val accent = haoToneMain(HaoTone.Accent)
+    Box(
+        Modifier
+            .size(18.dp)
+            .border(
+                2.dp,
+                if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                CircleShape
+            )
+    ) {
+        if (selected) {
+            Box(
+                Modifier
+                    .padding(3.dp)
+                    .fillMaxSize()
+                    .background(accent, CircleShape)
+            )
         }
     }
 }
