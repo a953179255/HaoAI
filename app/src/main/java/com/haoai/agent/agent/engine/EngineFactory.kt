@@ -9,6 +9,7 @@ import com.haoai.agent.data.ConfigFileBridge
 import com.haoai.agent.data.ProviderConfig
 import com.haoai.agent.data.StoredSession
 import com.haoai.agent.data.UsageLedger
+import com.haoai.agent.data.cleanSoul
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -47,7 +48,9 @@ object EngineFactory {
         if (agentName.isNotBlank()) {
             append("## 你的身份\n")
             append("- 你的名字：$agentName（用户给你起的，请以此名字自称）\n")
-            if (soul.isNotBlank()) append("- 你的性格：$soul\n")
+            // 前缀由本行统一加；存量 soul 自带前缀时先剥掉，避免叠成「你的性格：你的性格：…」
+            val s = soul.cleanSoul()
+            if (s.isNotBlank()) append("- 你的性格：$s\n")
         }
     }
 

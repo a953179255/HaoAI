@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -364,6 +365,20 @@ class AppContainer(app: Application) {
         }
         // 镜像配置保持与真源一致（apiKey 掩码化回写）
         runCatching { configBridge.onSettingsChanged() }
+    }
+
+    /**
+     * 挂起等到 settings 异步加载完成（成功或失败兜底都会置位），再返回真值。
+     *
+     * ⚠ 事故背景（2026-10-24 真机实测）：init 第一个块里就调 syncWorkspaceDocs()，
+     *   那时 settingsFlow 还是默认空值，renderSoul/renderIdentity 拿到空 soul / 空
+     *   agentName，于是把 BrainMigrator 刚搬进脑目录的用户人设（柠瑶🍋、元气甜系）
+     *   覆盖成「用户未特别设定」默认模板——镜像文件直接把用户设定冲掉了。
+     * 规矩：任何异步任务要读设置，一律走这里，禁止直接取 settingsFlow.value。
+     */
+    suspend fun awaitSettings(): AppSettings {
+        settingsReadyFlow.first { it }
+        return settingsFlow.value
     }
 
     /** 把记忆/身份等渲染为工作区 Markdown（文件层），异步执行。 */

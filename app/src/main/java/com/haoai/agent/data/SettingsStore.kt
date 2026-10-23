@@ -176,6 +176,7 @@ data class AppSettings(
     val reasoningEffort: String = "",
     val localModelFile: String? = null,
     val agentName: String = "",
+    /** 人设全文（真源）。历史存量可能自带「你的性格：」前缀——见 [soulClean]。 */
     val soul: String = "",
     /** 档案头像：emoji 字符（空则回退名字首字）。 */
     val avatarEmoji: String = "",
@@ -302,6 +303,20 @@ data class AppSettings(
     /** 玻璃质感参数（主题外观设置页调，全 App 共享一套；默认=实验室定稿 16×1+blur4）。 */
     val glass: GlassParams = GlassParams()
 )
+
+/**
+ * 去掉历史脏前缀的人设正文（2026-10-24 存量兜底）。
+ *
+ * 旧版 PersonaPresets.fullText 会把「你的性格：」一起写进 settings.soul 全文，
+ * 而系统提示（EngineFactory.identityOf）和镜像（SOUL.md）渲染时各自还要再加一次
+ * 前缀，存量用户实际拿到的是「你的性格：你的性格：元气甜系…」。
+ * 新版写入已不带前缀，这里只负责把已存进磁盘的旧数据洗干净。
+ */
+fun String.cleanSoul(): String =
+    trimStart().removePrefix("你的性格：").removePrefix("你的性格:")
+
+val AppSettings.soulClean: String
+    get() = soul.cleanSoul()
 
 /**
  * 玻璃质感持久化参数（2026-10-08）：真源在这里，运行态镜像是

@@ -3,6 +3,7 @@ package com.haoai.agent.platform
 import com.haoai.agent.agent.memory.MemoryConsolidation
 import com.haoai.agent.data.AppContainer
 import com.haoai.agent.data.AppSettings
+import com.haoai.agent.data.soulClean
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -30,13 +31,16 @@ object WorkspaceDocs {
      */
     fun docsRoot(c: AppContainer): File = c.brainDir
 
-    fun syncAll(c: AppContainer) {
+    /** 挂起函数：必须等设置加载完成才能渲染（见 awaitSettings 注释里的事故）。 */
+    suspend fun syncAll(c: AppContainer) {
         val root = docsRoot(c)
         runCatching {
             val items = c.memoryBank.all()
             // MEMORY.md 不在此同步：它已是长期记忆真源（由 MemoryBank 直接读写），覆盖会丢数据
             root.resolve("USER.md").writeText(renderUser(items))
-            val st = c.settingsFlow.value
+            // ⚠ 必须等设置就位：init 期 settingsFlow 还是默认空值，直接读会把用户
+            //   人设（SOUL.md）/ 助理名（IDENTITY.md）渲染成"未设定"模板并覆盖真数据
+            val st = c.awaitSettings()
             root.resolve("IDENTITY.md").writeText(renderIdentity(st))
             root.resolve("SOUL.md").writeText(renderSoul(st))
             root.resolve("AGENTS.md").writeText(renderAgents(c))
@@ -198,10 +202,11 @@ object WorkspaceDocs {
         appendLine("- 简洁但完整；不堆客套，不复述用户刚说过的话")
         appendLine()
         appendLine("## 你的底色（用户设定）")
-        if (st.soul.isBlank()) {
+        val soul = st.soulClean
+        if (soul.isBlank()) {
             appendLine("（用户未特别设定——保持上面的默认底色即可；用户随时可以说「你的性格改成…」来定义你）")
         } else {
-            st.soul.lineSequence().forEach { appendLine("- $it") }
+            soul.lineSequence().forEach { appendLine("- $it") }
         }
         appendLine()
         appendLine("这份文件描述你是谁。它被改动时，坦然接受并在后续言行中体现——这就是成长。")
