@@ -1575,6 +1575,28 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         return ok
     }
 
+    /**
+     * 三档改造（2026-10-23）：真实路径档（公共文档/自选位置共用通路）。
+     * migrate=true 时把旧 Raw 根的内容复制进新根（同名不覆盖）——MEMORY.md/skills
+     * 等引擎文件不迁会导致 Agent「失忆」，这是切换体验的关键一环。
+     */
+    fun useRawWorkspace(path: String, migrate: Boolean): Int {
+        val oldRoot = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+        val ok = c.workspace.useRaw(path)
+        if (!ok) return -1
+        val copied = if (migrate && oldRoot?.absolutePath != path) {
+            c.workspace.migrateInto(java.io.File(path), oldRoot)
+        } else 0
+        c.onWorkspaceSwitched()
+        return copied
+    }
+
+    /** UI 三态判定（含 SAF 存量单列态）。 */
+    fun workspaceMode(): com.haoai.agent.platform.WorkspaceManager.Mode = c.workspace.mode()
+
+    /** 公共交换目录默认根（Documents/HaoAI），UI 英雄卡路径展示与公共档选中判定用。 */
+    fun workspacePublicDefault(): String = c.workspace.publicDefaultRoot().absolutePath
+
     /** 空间短名（壳副标题用）：与 ChatViewModel.workspaceName 同口径取末段，全路径太长撑爆副标题行。 */
     fun workspaceName(): String =
         c.workspace.current?.displayName?.substringAfterLast('/')?.ifBlank { "根目录" } ?: "未绑定工作空间"
