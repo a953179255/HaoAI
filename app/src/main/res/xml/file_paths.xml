@@ -11,4 +11,10 @@
     <cache-path
         name="shared"
         path="shared/" />
+    <!-- 批4a（2026-10-23 文件管理瘦身）：工作区文件外发（分享/其他应用打开）。
+         仅覆盖应用专属工作区目录（WorkspaceManager.defaultRoot）；后续批次若把
+         工作区搬到公共目录，需再评估暴露面（URI 授权仍是逐条最小化）。 -->
+    <external-files-path
+        name="workspace"
+        path="workspace/" />
 </paths>

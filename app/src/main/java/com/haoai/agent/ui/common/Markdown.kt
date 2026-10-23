@@ -931,6 +931,9 @@ internal fun FullscreenCodeDialog(
     imageBitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
     /** 图片信息副行（「PNG · 1080×2400」），仅图片模式显示在状态行。 */
     imageMeta: String = "",
+    /** 批4a：底部外发动作行插槽（文件查看器专用；null=不画，代码块全屏零变化）。
+     *  画在状态行之上，自带一条分隔线；内容由调用方给（Row 建议 fillMaxWidth）。 */
+    bottomActions: (@Composable () -> Unit)? = null,
 ) {
     val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
     val surfaceC = MaterialTheme.colorScheme.surface
@@ -1331,6 +1334,12 @@ internal fun FullscreenCodeDialog(
                 }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
+            // 批4a：外发动作行（文件查看器专用插槽）——画在状态行之上，自带分隔线；
+            // 代码块全屏不传=这段整体不存在，观感零变化。
+            if (bottomActions != null) {
+                bottomActions()
+                Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
+            }
             // ── 底栏：状态行 + 字号步进 + 换行胶囊 ──
             Row(
                 Modifier

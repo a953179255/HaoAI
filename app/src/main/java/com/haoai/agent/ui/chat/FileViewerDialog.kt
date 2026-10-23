@@ -2,8 +2,20 @@ package com.haoai.agent.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.SaveAs
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -11,14 +23,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haoai.agent.ui.UiFilePath
@@ -26,6 +44,7 @@ import com.haoai.agent.ui.common.CodeHighlight
 import com.haoai.agent.ui.common.FullscreenCodeDialog
 import com.haoai.agent.ui.common.splitAnnotatedPerLine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -90,6 +109,93 @@ internal fun FileViewerDialog(
         ext.length <= 4 -> ext
         else -> ext.take(3)
     }
+    // ── 批4a：外发动作行接线（分流表见 FileShareLogic；意图构造在此）──
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val mime = mimeFromViewerExt(extLower)
+    var htmlPreview by remember(ref.absPath) { mutableStateOf(false) }
+    val fileUrl = remember(ref.absPath) {
+        android.net.Uri.fromFile(java.io.File(ref.absPath)).toString()
+    }
+    val openHtmlFile = LocalOpenHtmlFile.current
+    // FileProvider 授权是逐条 URI 级的；文件不在 file_paths 覆盖目录（如未来的
+    // 公共位置未加规则）时取不到 uri——此时外发两键降级为提示，「另存为」仍可用
+    // （CreateDocument 走系统面板，与 FileProvider 无关）。
+    val providerUri: android.net.Uri? = runCatching {
+        androidx.core.content.FileProvider.getUriForFile(
+            context, context.packageName + ".fileprovider", java.io.File(ref.absPath)
+        )
+    }.getOrNull()
+    fun shareToast(s: String) =
+        android.widget.Toast.makeText(context, s, android.widget.Toast.LENGTH_SHORT).show()
+    val saveAsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument(mime)
+    ) { dest ->
+        if (dest != null) scope.launch(Dispatchers.IO) {
+            val ok = runCatching {
+                java.io.File(ref.absPath).inputStream().use { input ->
+                    context.contentResolver.openOutputStream(dest)?.use { out ->
+                        input.copyTo(out)
+                    } ?: 0L
+                } > 0L
+            }.getOrDefault(false)
+            shareToast(if (ok) "已另存 $fileName" else "另存失败：目标不可写")
+        }
+    }
+    fun onViewerAction(a: ViewerAction) = when (a) {
+        ViewerAction.RenderView -> { htmlPreview = true }
+        ViewerAction.Share -> {
+            val uri = providerUri
+            if (uri == null) shareToast("该位置暂不支持外发，请用另存为")
+            else runCatching {
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(
+                    android.content.Intent.createChooser(send, "分享文件")
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure { shareToast("没有可接收的应用") }
+        }
+        ViewerAction.SaveAs -> runCatching { saveAsLauncher.launch(fileName) }
+            .onFailure { shareToast("另存启动失败") }
+        ViewerAction.OpenWith -> {
+            val uri = providerUri
+            if (uri == null) shareToast("该位置暂不支持外发，请用另存为")
+            else runCatching {
+                val view = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, mime)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(
+                    android.content.Intent.createChooser(view, "打开方式")
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure { shareToast("没有能打开该类型的应用") }
+        }
+        ViewerAction.SaveToAlbum -> scope.launch(Dispatchers.IO) {
+            val ok = runCatching {
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/HaoAI")
+                    }
+                }
+                val u = context.contentResolver.insert(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                )
+                if (u == null) false
+                else context.contentResolver.openOutputStream(u)?.use { out ->
+                    java.io.File(ref.absPath).inputStream().use { it.copyTo(out) }
+                    true
+                } ?: false
+            }.getOrDefault(false)
+            shareToast(if (ok) "已存到相册 Pictures/HaoAI" else "存相册失败")
+        }
+    }
     FullscreenCodeDialog(
         title = fileName,
         imageBitmap = imageBitmap,
@@ -144,8 +250,73 @@ internal fun FileViewerDialog(
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
+        },
+        // 批4a：底部外发动作行（渲染看仅 HTML / 存相册仅图片 / 其余三键恒在）
+        bottomActions = {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                viewerActions(extLower).forEach { a ->
+                    FileShareChip(a) { onViewerAction(a) }
+                }
+            }
         }
     )
+    if (htmlPreview) {
+        com.haoai.agent.ui.common.HtmlPreviewDialog(
+            title = fileName,
+            source = com.haoai.agent.ui.common.HtmlPreviewSource.FilePage(fileUrl),
+            onDismiss = { htmlPreview = false },
+            // 换乘钮只在会话宿主给（showTransferActions 同款口径）：设置宿主没装
+            // 内置浏览器（LocalOpenHtmlFile 默认空实现），宁可不显示也不放死钮。
+            onOpenInBrowser = if (showTransferActions) ({ openHtmlFile(fileUrl) }) else null,
+        )
+    }
+}
+
+/** 外发键胶囊：等宽四键一行铺满；渲染看=绿主键（语义色），其余灰字。文案 11.5sp 无底衬。 */
+@Composable
+private fun RowScope.FileShareChip(action: ViewerAction, onClick: () -> Unit) {
+    val prim = action == ViewerAction.RenderView
+    val primaryC = MaterialTheme.colorScheme.primary
+    val onVar = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (prim) primaryC.copy(alpha = 0.12f) else onVar.copy(alpha = 0.07f))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = when (action) {
+                ViewerAction.RenderView -> Icons.Filled.Visibility
+                ViewerAction.Share -> Icons.Filled.Share
+                ViewerAction.SaveAs -> Icons.Filled.SaveAs
+                ViewerAction.OpenWith -> Icons.Filled.OpenInNew
+                ViewerAction.SaveToAlbum -> Icons.Filled.PhotoLibrary
+            },
+            contentDescription = action.label(),
+            tint = if (prim) primaryC else onVar,
+            modifier = Modifier.size(14.dp)
+        )
+        androidx.compose.foundation.layout.Spacer(Modifier.size(5.dp))
+        Text(
+            action.label(),
+            style = TextStyle(
+                fontSize = 11.5.sp, lineHeight = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                platformStyle = PlatformTextStyle(includeFontPadding = false)
+            ),
+            color = if (prim) primaryC else onVar,
+            maxLines = 1
+        )
+    }
 }
 
 /** 图片解码（降采样到屏宽内）→ (bitmap, "格式 · W×H")。失败返回 null（UI 出提示）。 */
