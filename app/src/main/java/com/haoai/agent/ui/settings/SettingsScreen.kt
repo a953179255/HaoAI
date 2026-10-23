@@ -70,7 +70,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -2719,11 +2721,20 @@ private fun LazyListScope.workspaceItems(
             // 迁移期间三档禁点防二次触发）
             val p = progress
             if (p != null) {
+                val accent = haoToneMain(HaoTone.Accent)
+                // 每 8 个文件才推一次进度 → 补间抹成平滑推进（观感连续，非逐格跳）
+                val frac by animateFloatAsState(
+                    targetValue = if (p.totalEstimate > 0)
+                        (p.done.toFloat() / p.totalEstimate).coerceIn(0f, 1f)
+                    else 0f,
+                    animationSpec = tween(durationMillis = 260, easing = LinearEasing),
+                    label = "wsMigrateProgress"
+                )
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(haoToneMain(HaoTone.Warn).copy(alpha = 0.14f))
+                        .background(accent.copy(alpha = 0.10f))
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2735,19 +2746,26 @@ private fun LazyListScope.workspaceItems(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.size(6.dp))
-                        LinearProgressIndicator(
-                            progress = {
-                                if (p.totalEstimate > 0)
-                                    (p.done.toFloat() / p.totalEstimate).coerceIn(0f, 1f)
-                                else 0.5f // 总数未知：不确定态观感
-                            },
-                            modifier = Modifier
+                        // 自绘进度条：① 0% 时不画进度块 → 空条末端无孤点（Material 标准
+                        // LinearProgressIndicator 在 0% 仍保留一个≥条粗的圆头进度头，即那个「点」）；
+                        // ② 配色回 Accent 绿，与本页 radio/图标同色（原借琥珀 Warn 是「缺权限警告」
+                        // 语义，迁移是中性进行态，琥珀配在绿系玻璃页上突兀——用户反馈 2026-10-23）。
+                        Box(
+                            Modifier
                                 .fillMaxWidth()
                                 .height(5.dp)
-                                .clip(RoundedCornerShape(3.dp)),
-                            color = haoToneMain(HaoTone.Warn),
-                            trackColor = haoToneMain(HaoTone.Warn).copy(alpha = 0.18f),
-                        )
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(accent.copy(alpha = 0.16f))
+                        ) {
+                            if (frac > 0f) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth(frac)
+                                        .fillMaxHeight()
+                                        .background(accent)
+                                )
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.size(6.dp))
