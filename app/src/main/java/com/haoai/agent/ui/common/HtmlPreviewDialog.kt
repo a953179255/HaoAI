@@ -112,6 +112,9 @@ fun HtmlPreviewDialog(
                 LinearProgressIndicator(
                     progress = { progress.floatValue },
                     color = MaterialTheme.colorScheme.primary,
+                    // M3 1.4 默认轨道末端 stopIndicator 小圆（同「多出一个绿点」反馈根因）——关闭
+                    gapSize = 0.dp,
+                    drawStopIndicator = {},
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp)
