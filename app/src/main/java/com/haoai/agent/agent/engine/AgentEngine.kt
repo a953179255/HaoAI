@@ -67,6 +67,8 @@ class AgentEngine(
     internal val persist: () -> Unit,
     internal val backend: FileBackend?,
     internal val appFilesDir: File,
+    /** v2：脑根（记忆/技能/待办的固定私有目录）。默认从 appFilesDir 派生，EngineFactory 显式传 container.brainDir。 */
+    internal val brainDir: File = java.io.File(appFilesDir, "brain"),
     internal val workspaceLabel: String,
     internal val memoryBank: MemoryBank? = null,
     internal val memoryEnabled: Boolean = true,
@@ -168,7 +170,7 @@ class AgentEngine(
         else -> sessionGroups
     }
 
-    internal val todoStore = TodoStore(appFilesDir)
+    internal val todoStore = TodoStore(brainDir)  // v2：待办属脑，固定 brainDir/todos
 
     /** E1 轮次结束状态：由 runTurn 生命周期填写（idle/interrupted/turncapped/failed）；null=进行中。 */
     @Volatile var runEndState: String? = null

@@ -55,10 +55,18 @@ class WorkspaceManager(private val context: Context) {
 
     fun useDefault() {
         current = RawFileBackend(defaultRoot)
-        currentRawPath = null
-        rawKind = null
+        // v2：显式记录「用户选了应用专属」。旧版置 null=没选过，会被新装默认逻辑
+        // 在下次启动时重新判一次（老用户被莫名弹去公共文档）——2026-10-24 实测踩坑。
+        currentRawPath = defaultRoot.absolutePath
+        rawKind = Mode.PRIVATE.name
         safUri = null
-        persist(WorkspacePref(exchangePath = exchangePath))
+        persist(
+            WorkspacePref(
+                rawPath = defaultRoot.absolutePath,
+                rawKind = Mode.PRIVATE.name,
+                exchangePath = exchangePath
+            )
+        )
     }
 
     fun useSaf(uriString: String): Boolean {
@@ -101,6 +109,7 @@ class WorkspaceManager(private val context: Context) {
     /** UI 三态判定：SAF 存量绑定单列（UI 不再提供新绑定入口，但如实显示现状）。 */
     fun mode(): Mode = when {
         current is SafFileBackend -> Mode.SAF
+        rawKind == Mode.PRIVATE.name -> Mode.PRIVATE
         currentRawPath == null -> Mode.PRIVATE
         rawKind == Mode.CUSTOM.name -> Mode.CUSTOM
         rawKind == Mode.PUBLIC.name -> Mode.PUBLIC
@@ -108,6 +117,9 @@ class WorkspaceManager(private val context: Context) {
         currentRawPath == publicDefaultRoot().absolutePath -> Mode.PUBLIC
         else -> Mode.CUSTOM
     }
+
+    /** 旧默认工作区根（应用专属，外部私有）：脑分家的必经源——升级用户的脑在这。 */
+    fun defaultWorkspaceRoot(): File = defaultRoot
 
     /** 公共交换目录默认根：Documents/HaoAI（v3 效果图定稿）。 */
     fun publicDefaultRoot(): File = File(
@@ -148,23 +160,6 @@ class WorkspaceManager(private val context: Context) {
             }.getOrNull()
             else -> null
         }
-
-    /**
-     * 切换前的旧根内容迁入新根（仅 Raw→Raw 有意义；v3 效果图「带迁移」定稿）。
-     * 目标已有同名文件**不覆盖**（防毁新根现有内容/引擎文件）。
-     * 2026-10-23 性能版：清单一次收集（总数精确，进度条不再挂「约」）→
-     * 目录串行建 → 文件多路并行拷（碎文件拷贝是 syscall-bound，实测 7 万文件
-     * 单线程要几分钟）。onProgress 内部按 120ms 节流（从 worker 线程调用）。
-     * 返回实际复制文件数；旧根不存在或不可读返回 0。
-     */
-    fun migrateInto(
-        newRoot: File,
-        fromRaw: File?,
-        onProgress: ((done: Int, total: Int) -> Boolean)? = null
-    ): Int {
-        if (fromRaw == null || !fromRaw.isDirectory) return 0
-        return runCatching { parallelCopy(fromRaw, newRoot, onProgress) }.getOrDefault(0)
-    }
 
     private fun persist(pref: WorkspacePref) {
         runCatching {
@@ -212,116 +207,34 @@ class WorkspaceManager(private val context: Context) {
             }
         }
         if (current == null) {
-            current = RawFileBackend(defaultRoot)
-            currentRawPath = null
-        }
-    }
-}
-
-/**
- * 目录树复制（旧串行内核，单线程；保留给单测与兜底路径）：
- * 目标同名文件不覆盖；单文件失败不中断整体；返回实际复制文件数。
- * onCopied(全局已完成数) 每复制一个文件回调一次，返回 false 即中止（返回 -1）。
- */
-internal fun copyDirTree(src: File, dst: File, onCopied: ((Int) -> Boolean)? = null): Int {
-    return copyDirTreeInner(src, dst, intArrayOf(0), onCopied)
-}
-
-/**
- * 并行迁移内核（2026-10-23 性能版）：plan 一次收集清单 → 建目录 → N 路 worker 拷文件。
- * worker 数=min(8, max(4, 核数))——安卓 F2FS/sdcardfs 上多路并发能把碎文件
- * syscall 串行延迟摊平（真机实测单线程 7.2 万文件要数分钟）。
- * onProgress(done,total) 120ms 节流；返回 false=中止请求（已在途任务自然跑完）。
- */
-internal fun parallelCopy(
-    src: File,
-    dst: File,
-    onProgress: ((done: Int, total: Int) -> Boolean)?
-): Int {
-    val pairs = ArrayList<Pair<File, File>>()   // srcFile -> dstFile
-    val dirs = ArrayList<Pair<File, File>>()    // srcDir -> dstDir
-    collectTree(src, dst, pairs, dirs)
-    for ((s, d) in dirs) runCatching { d.mkdirs() }
-    val total = pairs.size
-    if (total == 0) return 0
-    onProgress?.invoke(0, total) // 开扫即推：UI 立刻拿到分母，进度条不空窗
-    val copied = java.util.concurrent.atomic.AtomicInteger(0)    // 实际复制数（返回值）
-    val processed = java.util.concurrent.atomic.AtomicInteger(0) // 已处理数（进度含跳过）
-    val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
-    val lastPush = java.util.concurrent.atomic.AtomicLong(0L)
-    val workers = (Runtime.getRuntime().availableProcessors() * 2).coerceIn(4, 8)
-    // 进度推送（worker 线程调用）：120ms 节流 + 末个必推；返回 false=请求中止
-    val push: (Int) -> Boolean = push@{ p ->
-        if (onProgress == null) return@push true
-        val now = System.currentTimeMillis()
-        if (p >= total || now - lastPush.get() >= 120) {
-            lastPush.set(now)
-            val keep = onProgress(p, total)
-            if (!keep) aborted.set(true)
-            keep
-        } else true
-    }
-    // worker 是自循环到队列空的常驻任务，数量固定 → 裸线程（比线程池语义贴切，
-    // 无 core 满排队/拒绝之虞；start 失败极罕见，join 前不依赖 closeable，minSdk 26 安全）
-    val queue = java.util.concurrent.ConcurrentLinkedQueue(pairs)
-    val threads = Array(workers) {
-        Thread {
-            while (!aborted.get()) {
-                val (s, d) = queue.poll() ?: break
-                // 同名不覆盖（与串行内核同口径）；空文件照拷（保持树完整）。
-                // 不再单独 exists() 预检——copyTo(overwrite=false) 自己会查并抛
-                // FileAlreadyExistsException；预检=每个文件多付一次 FUSE stat
-                // （真机单次数毫秒，2 万文件白烧一分钟级）。
-                if (runCatching { s.copyTo(d, overwrite = false) }.isSuccess) {
-                    copied.incrementAndGet()
-                }
-                // 无论复制还是同名跳过，都计 processed 让进度前进
-                push(processed.incrementAndGet())
+            // v2 新装默认=公共文档（材料给相册/WPS/文件管理器直接访问，用户 2026-10-24 定稿）；
+            // 无「所有文件访问」权限才回落应用专属（设置页有引导，授权后一键切过去，秒切）。
+            // 升级保护：旧默认工作区（应用专属）已有内容 = 老用户，保持原地——
+            // 否则切档指针被弹去公共文档，旧工作区里的材料/脑文件全部被落空
+            // （2026-10-24 实测：偏好无 rawPath 的老用户被误判成新装）。
+            val legacyHasContent = defaultRoot.isDirectory &&
+                (defaultRoot.listFiles()?.isNotEmpty() == true)
+            val pub = publicDefaultRoot()
+            val pubOk = !legacyHasContent && runCatching {
+                if (!pub.exists()) pub.mkdirs()
+                pub.isDirectory && android.os.Environment.isExternalStorageManager()
+            }.getOrDefault(false)
+            if (pubOk) {
+                current = RawFileBackend(pub)
+                currentRawPath = pub.absolutePath
+                rawKind = Mode.PUBLIC.name
+                persist(
+                    WorkspacePref(
+                        rawPath = pub.absolutePath,
+                        rawKind = Mode.PUBLIC.name,
+                        exchangePath = exchangePath
+                    )
+                )
+            } else {
+                current = RawFileBackend(defaultRoot)
+                currentRawPath = null
             }
         }
     }
-    for (t in threads) t.start()
-    for (t in threads) t.join()
-    return copied.get()
 }
 
-/** 单遍收集：目录清单（先建）+ 文件清单（并行拷），顺序无关紧要。 */
-private fun collectTree(
-    src: File,
-    dst: File,
-    files: ArrayList<Pair<File, File>>,
-    dirs: ArrayList<Pair<File, File>>
-) {
-    val entries = src.listFiles() ?: return
-    for (e in entries) {
-        val target = File(dst, e.name)
-        if (e.isDirectory) {
-            dirs.add(e to target)
-            collectTree(e, target, files, dirs)
-        } else {
-            files.add(e to target)
-        }
-    }
-}
-
-/** 计数器数组跨递归共享；返回 -1 表示被中止（上层调用各自吞掉即可，已复制部分保留）。 */
-private fun copyDirTreeInner(src: File, dst: File, counter: IntArray, onCopied: ((Int) -> Boolean)?): Int {
-    var copied = 0
-    val entries = src.listFiles() ?: return 0
-    for (e in entries) {
-        val target = File(dst, e.name)
-        if (e.isDirectory) {
-            target.mkdirs()
-            val sub = copyDirTreeInner(e, target, counter, onCopied)
-            if (sub < 0) return -1
-            copied += sub
-        } else if (!target.exists()) {
-            if (runCatching { e.copyTo(target, overwrite = false) }.isSuccess) {
-                copied++
-                counter[0]++
-                if (onCopied != null && !onCopied(counter[0])) return -1
-            }
-        }
-    }
-    return copied
-}

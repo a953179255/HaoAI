@@ -9,9 +9,10 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 工作区文档层：把记忆/身份/能力渲染成用户可直接查看编辑的 Markdown 文件，
- * 落在默认工作区（Android/data/com.haoai.agent/files/workspace）：
- *   MEMORY.md   长期记忆库
+ * 工作区文档层：把记忆/身份/能力渲染成用户可直接查看编辑的 Markdown 文件。
+ * v2 架构解耦（2026-10-24）：文档固定落脑根 files/brain/（内部私有，不随工作区档位移动）；
+ * 工作区三档只放 Agent 生成的材料。SAF 档同样落脑根（内部存储始终可用）。
+ *   MEMORY.md   长期记忆库（真源，MemoryBank 直读写，本层不覆盖）
  *   USER.md     用户画像（偏好类记忆）
  *   IDENTITY.md 助理身份
  *   SOUL.md     性格设定
@@ -20,15 +21,17 @@ import java.util.Locale
  *   HEARTBEAT.md 定时任务清单
  *   DREAMS.md   梦境日记（固化历史，人工审查用）
  *   dreaming/YYYY-MM-DD.md 每日固化报告
- * 仅在默认工作区（真实文件目录）下同步；SAF 目录跳过。
  */
 object WorkspaceDocs {
 
-    fun workspaceRoot(c: AppContainer): File? =
-        (c.workspace.current as? RawFileBackend)?.shellWorkdir()
+    /**
+     * 脑根（v2 架构解耦）：引擎身份/记忆文档固定落内部私有 brainDir，不随工作区档位移动。
+     * 工作区（三档可换）只放 Agent 生成的材料。
+     */
+    fun docsRoot(c: AppContainer): File = c.brainDir
 
     fun syncAll(c: AppContainer) {
-        val root = workspaceRoot(c) ?: return
+        val root = docsRoot(c)
         runCatching {
             val items = c.memoryBank.all()
             // MEMORY.md 不在此同步：它已是长期记忆真源（由 MemoryBank 直接读写），覆盖会丢数据
@@ -36,7 +39,7 @@ object WorkspaceDocs {
             val st = c.settingsFlow.value
             root.resolve("IDENTITY.md").writeText(renderIdentity(st))
             root.resolve("SOUL.md").writeText(renderSoul(st))
-            root.resolve("AGENTS.md").writeText(renderAgents(c, root))
+            root.resolve("AGENTS.md").writeText(renderAgents(c))
             root.resolve("TOOLS.md").writeText(TOOLS_TEMPLATE)
             root.resolve("HEARTBEAT.md").writeText(renderHeartbeat(c))
             upgradeDreamsHeader(root)
@@ -49,11 +52,12 @@ object WorkspaceDocs {
      * 用户说「放到公共文档」Agent 要知道写哪，不用用户报绝对路径）。
      * 工作区已在交换目录内时改口「直接写工作区」，避免 Agent 绕路越界。
      */
-    private fun renderAgents(c: AppContainer, workspaceRoot: File): String {
+    private fun renderAgents(c: AppContainer): String {
         val exchange = c.workspace.exchangeRoot().absolutePath
-        val sameAsWorkspace = runCatching {
-            workspaceRoot.canonicalPath == File(exchange).canonicalPath ||
-                workspaceRoot.canonicalPath.startsWith(File(exchange).canonicalPath + File.separator)
+        val ws = (c.workspace.current as? RawFileBackend)?.shellWorkdir()
+        val sameAsWorkspace = ws != null && runCatching {
+            ws.canonicalPath == File(exchange).canonicalPath ||
+                ws.canonicalPath.startsWith(File(exchange).canonicalPath + File.separator)
         }.getOrDefault(false)
         val section = buildString {
             append("\n## 公共交换目录\n")
@@ -123,7 +127,7 @@ object WorkspaceDocs {
      * 工作区无文件路径（SAF 后端）时没有可写的日记，仅由调用方 logcat 记录。
      */
     fun appendDreamSkip(c: AppContainer, why: String) {
-        val root = workspaceRoot(c) ?: return
+        val root = docsRoot(c)
         runCatching {
             val tsFull = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date())
             val dreams = root.resolve("DREAMS.md")
@@ -135,7 +139,7 @@ object WorkspaceDocs {
 
     /** 固化完成后追加梦境日记与当日报告。 */
     fun appendDreamReport(c: AppContainer, report: MemoryConsolidation.Report, deep: Boolean, deepMergedNote: String = "") {
-        val root = workspaceRoot(c) ?: return
+        val root = docsRoot(c)
         runCatching {
             val tsFull = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date())
             val tsDay = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date())

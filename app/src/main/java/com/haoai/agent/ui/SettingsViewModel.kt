@@ -1576,22 +1576,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
 
     /**
-     * 迁移进度（切换时整树拷贝是重 I/O，实测 ANR 元凶——已挪 IO 线程）。
-     * null=空闲；非 null=(已处理文件数, 总数)。总数=parallelCopy 开扫单遍收集的
-     * 全树真实计数（不截断），与英雄卡 countTree 同口径，两个数字对得上。
+     * 切换结果一次性事件（UI collect 后 toast 并消费回 null）：label=档位名，failed=切换失败。
+     * v2 起切档=纯换指针零搬运（脑固定 brainDir，材料各安其位），无迁移进度概念。
      */
-    data class MigrateProgress(val done: Int, val total: Int)
-
-    private val _migrateProgress = MutableStateFlow<MigrateProgress?>(null)
-    val migrateProgress: StateFlow<MigrateProgress?> = _migrateProgress.asStateFlow()
-
-    /** 切换结果一次性事件（UI collect 后 toast 并消费回 null）：label=档位名，copied -1=失败。 */
-    data class SwitchOutcome(val label: String, val copied: Int)
+    data class SwitchOutcome(val label: String, val failed: Boolean)
 
     private val _wsOutcome = MutableStateFlow<SwitchOutcome?>(null)
     val wsOutcome: StateFlow<SwitchOutcome?> = _wsOutcome.asStateFlow()
 
-    /** 切换进行中标志：UI 三档行据此禁点，防迁移未完又触发第二次切换。 */
+    /** 切换进行中标志：防连点（切档虽快，syncWorkspaceDocs 仍走 IO，双触发会竞态）。 */
     var wsSwitching by androidx.compose.runtime.mutableStateOf(false)
         private set
 
@@ -1600,56 +1593,42 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         _wsOutcome.value = null
     }
 
-    /** 切回应用专属（异步：迁移在 viewModelScope+IO，导航离开页面不中断）。 */
+    /** 切回应用专属（秒切：只换指针，不搬任何文件）。 */
     fun useDefaultWorkspace() =
         startWorkspaceSwitch("应用专属", targetPath = null, kind = com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE)
 
     /**
      * 三档改造（2026-10-23）：真实路径档（公共文档/自选位置共用通路）。
-     * 迁移（旧根内容复制进新根，同名不覆盖，防 Agent「失忆」）挪到 IO：
-     * 实测整树拷贝在主线程 onClick 里直接 ANR「无响应」。
+     * v2（2026-10-24）：切档=纯指针切换零搬运——脑（记忆/技能/待办）固定内部 brainDir，
+     * 材料留在旧位置不跟来（要搬请用文件管理器）。实测整树拷贝 ANR/数分钟事故由此根治。
      */
     fun useRawWorkspace(
         path: String, kind: com.haoai.agent.platform.WorkspaceManager.Mode, label: String
     ) = startWorkspaceSwitch(label, targetPath = path, kind = kind)
 
-    /** 档位切换统一入口：viewModelScope 自启动，进度/结果走 StateFlow 给 UI。 */
+    /** 档位切换统一入口：viewModelScope 自启动，结果走 StateFlow 给 UI。 */
     private fun startWorkspaceSwitch(
         label: String,
         targetPath: String?,
         kind: com.haoai.agent.platform.WorkspaceManager.Mode
     ) {
-        if (wsSwitching) return // 迁移未完禁二次触发（UI 也已禁点，双保险）
+        if (wsSwitching) return // 防连点
         wsSwitching = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val oldRoot =
-                    (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
                 val ok = if (targetPath == null) {
                     c.workspace.useDefault(); true
                 } else {
                     c.workspace.useRaw(targetPath, kind)
                 }
                 if (!ok) {
-                    _wsOutcome.value = SwitchOutcome(label, -1)
+                    _wsOutcome.value = SwitchOutcome(label, failed = true)
                     return@launch
                 }
-                val newRoot =
-                    (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-                val needMigrate = oldRoot != null && newRoot != null &&
-                    oldRoot.absolutePath != newRoot.absolutePath
-                val copied = if (needMigrate && newRoot != null) {
-                    // 精确总数：parallelCopy 单遍收集清单后 (done,total) 双参推送（120ms 节流）
-                    c.workspace.migrateInto(newRoot, oldRoot) { done, total ->
-                        _migrateProgress.value = MigrateProgress(done, total)
-                        true // 暂不支持中途取消（切档意图单一，跑完即归位）
-                    }.coerceAtLeast(0)
-                } else 0
                 c.onWorkspaceSwitched()
                 wsTick++
-                _wsOutcome.value = SwitchOutcome(label, copied)
+                _wsOutcome.value = SwitchOutcome(label, failed = false)
             } finally {
-                _migrateProgress.value = null
                 wsSwitching = false
             }
         }

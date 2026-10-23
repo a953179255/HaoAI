@@ -70,9 +70,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -1551,7 +1549,7 @@ private fun SectionPage(
                 onPick = { path ->
                     val target = dirPickerTarget
                     dirPickerTarget = null
-                    // 档位切换：迁移在 VM 内 viewModelScope+IO 自启动，结果/进度走 StateFlow
+                    // 档位切换：v2 秒切（VM 内 viewModelScope+IO 换指针+同步脑文档），结果走 StateFlow
                     // 由工作区页订阅（禁在此 toast——异步未完拿到的是 -1 假失败）
                     when (target) {
                         DirPickerTarget.Exchange -> wsToast(
@@ -2606,16 +2604,14 @@ private fun LazyListScope.workspaceItems(
         val mode = androidx.compose.runtime.remember(wsTick) { vm.workspaceMode() }
         val wsPath = androidx.compose.runtime.remember(wsTick) { vm.workspacePath() }
         val hasAllFiles = android.os.Environment.isExternalStorageManager()
-        // 迁移进度（IO 线程整树拷贝，ANR 修复 2026-10-23）：非 null 时显进度横幅并禁三档点击
-        val progress by vm.migrateProgress.collectAsState()
         val switching = vm.wsSwitching
-        // 切换结果统一 toast（VM 异步完成后流出；消费回 null 防重组重弹）
+        // 切换结果统一 toast（v2：秒切零搬运；消费回 null 防重组重弹）
         androidx.compose.runtime.LaunchedEffect(Unit) {
             vm.wsOutcome.collect { o ->
                 if (o != null) {
                     wsToast(
                         context,
-                        if (o.copied >= 0) "已切换：${o.label}（迁入 ${o.copied} 个文件）"
+                        if (!o.failed) "已切换：${o.label}（旧位置文件未移动，脑文件不受影响）"
                         else "切换失败：${o.label} 目录不可用"
                     )
                     vm.consumeWsOutcome()
@@ -2717,59 +2713,6 @@ private fun LazyListScope.workspaceItems(
                 HaoGroupLabel("位置类型 · 三档皆真实路径，bash 始终可用")
             }
             Spacer(Modifier.size(6.dp))
-            // 迁移进度横幅（ANR 修复 2026-10-23：整树拷贝挪 IO 线程后，慢操作要有可见进度；
-            // 迁移期间三档禁点防二次触发）
-            val p = progress
-            if (p != null) {
-                val accent = haoToneMain(HaoTone.Accent)
-                // 每 8 个文件才推一次进度 → 补间抹成平滑推进（观感连续，非逐格跳）
-                val frac by animateFloatAsState(
-                    targetValue = if (p.total > 0)
-                        (p.done.toFloat() / p.total).coerceIn(0f, 1f)
-                    else 0f,
-                    animationSpec = tween(durationMillis = 260, easing = LinearEasing),
-                    label = "wsMigrateProgress"
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(accent.copy(alpha = 0.10f))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "正在迁移工作区文件…已复制 ${p.done} / ${p.total} 个",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.size(6.dp))
-                        // 自绘进度条：① 0% 时不画进度块 → 空条末端无孤点（Material 标准
-                        // LinearProgressIndicator 在 0% 仍保留一个≥条粗的圆头进度头，即那个「点」）；
-                        // ② 配色回 Accent 绿，与本页 radio/图标同色（原借琥珀 Warn 是「缺权限警告」
-                        // 语义，迁移是中性进行态，琥珀配在绿系玻璃页上突兀——用户反馈 2026-10-23）。
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(5.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(accent.copy(alpha = 0.16f))
-                        ) {
-                            if (frac > 0f) {
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth(frac)
-                                        .fillMaxHeight()
-                                        .background(accent)
-                                )
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.size(6.dp))
-            }
             GlassGroup(backdrop) {
                 val selPrivate = mode == com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE
                 val selPublic = mode == com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC
@@ -2781,7 +2724,7 @@ private fun LazyListScope.workspaceItems(
                     trailing = { RadioDot(selPrivate) },
                     enabled = !switching,
                     onClick = {
-                        // 结果 toast 统一走 wsOutcome 流（迁移异步完成后才报数，禁在此抢先报）
+                        // 结果 toast 统一走 wsOutcome 流（异步完成后才报，禁在此抢先报）
                         if (!selPrivate) vm.useDefaultWorkspace()
                     }
                 )
@@ -2809,7 +2752,7 @@ private fun LazyListScope.workspaceItems(
                     },
                     enabled = !switching,
                     onClick = {
-                        // 已选中再点不重迁（迁移幂等但白跑一遍 IO）；
+                        // 已选中再点不切（无副作用）；
                         // 权限判定必须点击时实时读：组合期快照不随授权刷新（实测：系统页开完
                         // 权限回来 onClick 仍拿旧 false，永远跳引导）
                         if (!selPublic) {

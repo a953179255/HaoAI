@@ -50,8 +50,8 @@ object MemoryBackupManager {
                 val journalDir = c.journal.currentStorageDir()
                 journalDir.listFiles { f -> f.name.endsWith(".md") }
                     ?.forEach { f -> zip.putEntry("journal/${f.name}", f.readBytes()); n++ }
-                // 工作区镜像与固化报告（默认工作区下才存在）
-                WorkspaceDocs.workspaceRoot(c)?.let { root ->
+                // 脑根镜像与固化报告（v2：固定 brainDir，内部私有始终可写）
+                c.brainDir.let { root ->
                     listOf("MEMORY.md", "USER.md", "DREAMS.md").forEach { name ->
                         val f = root.resolve(name)
                         if (f.exists()) { zip.putEntry("workspace/$name", f.readBytes()); n++ }

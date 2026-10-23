@@ -52,16 +52,41 @@ class AppContainer(app: Application) {
         applicationScope.launch { runCatching { sessionStore.markStaleRunsInterrupted() } }
     }
     val workspace = WorkspaceManager(app)
-    // 长期记忆真源 = 工作区 MEMORY.md（"文件即记忆"）；SAF 工作区时回退内部目录
+
+    /**
+     * 脑根（v2 架构解耦 2026-10-24）：内部私有固定目录，永不随工作区档位移动。
+     * 脑 = Agent 的身份/记忆/技能/待办（MEMORY.md、USER.md、skills/、todos/…）；
+     * 工作区 = Agent 生成的材料（三档可换、切档零搬运）。
+     * 旧版脑混在工作区根随档位被整树复制（7 万文件迁移事故根源），本目录将其分离。
+     */
+    val brainDir: java.io.File = java.io.File(app.filesDir, "brain").apply { mkdirs() }
+
+    init {
+        // 一次性脑分家（幂等）：旧版脑文件散在各旧位置，搬进 brainDir。
+        // 复制→字节校验→删源；目标赢不覆盖；失败不写 marker 下次重试。
+        // 三个源缺一不可（2026-10-24 实测教训）：①当前工作区根（引擎在用的那份）
+        // ②旧默认工作区（应用专属）——升级用户若被新装默认切走过，脑还留在这
+        // ③内部 filesDir 根（SAF 档 legacy 回退位 + todos 旧位）。
+        // 同步执行：必须赶在 memoryBank 首次读取之前（分家仅几十个小文件，一次性成本）。
+        val split = com.haoai.agent.platform.BrainMigrator.splitIfNeeded(
+            brainDir,
+            (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir(),
+            workspace.defaultWorkspaceRoot(),
+            appFilesDir
+        )
+        if (!split.ok) {
+            android.util.Log.w("HaoAI", "脑分家未完成(moved=${split.moved},failed=${split.failed})，下次启动重试")
+        }
+    }
+
+    // 长期记忆真源 = 脑根 MEMORY.md（"文件即记忆"）；v2 起固定内部私有，不随工作区移动
     val memoryBank = MemoryBank(
         appFilesDir,
-        storageFile = (workspace.current as? com.haoai.agent.platform.RawFileBackend)
-            ?.shellWorkdir()?.let { java.io.File(it, "MEMORY.md") }
+        storageFile = java.io.File(brainDir, "MEMORY.md")
     )
     val journal = DailyJournal(
         appFilesDir,
-        storageDir = (workspace.current as? com.haoai.agent.platform.RawFileBackend)
-            ?.shellWorkdir()?.let { java.io.File(it, "memory").apply { mkdirs() } }
+        storageDir = java.io.File(brainDir, "memory").apply { mkdirs() }
     )
 
     /** Linux 沙箱 proot 安装（3.1）：null = 当前设备不可用（ABI 无包/sha 不符），3.3 后端据此回落 toybox。 */
@@ -250,24 +275,9 @@ class AppContainer(app: Application) {
     init {
         // 存储单例先初始化（WorkspaceDocs 异步任务会用到）
         com.haoai.agent.agent.schedule.ScheduleStore.init(appFilesDir)
-        com.haoai.agent.agent.skills.SkillStore.init(appFilesDir)
-        // C5：技能落盘迁工作区 skills/<slug>/SKILL.md（人机共编辑权威资源，可 git/用户可读改）；
-        // filesDir/skills/ 存量一次性迁移到工作区（移动语义）：目标已存在（跳过）或复制成功
-        // 均清掉源条目、排空 legacy——否则工作区里删除的技能会在每次冷启动从残影复活
-        (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
-            val legacy = java.io.File(appFilesDir, "skills")
-            val target = java.io.File(ws, "skills")
-            if (legacy.isDirectory) {
-                legacy.listFiles { f -> f.isDirectory }?.forEach { d ->
-                    val dst = java.io.File(target, d.name)
-                    val targetExists = java.io.File(dst, "SKILL.md").exists()
-                    val copied = !targetExists &&
-                        runCatching { d.copyRecursively(dst, overwrite = false) }.isSuccess
-                    if (targetExists || copied) runCatching { d.deleteRecursively() }
-                }
-            }
-            com.haoai.agent.agent.skills.SkillStore.useWorkspaceDir(target)
-        }
+        // v2：技能根固定脑目录 brain/skills（不再随工作区档位移动）；
+        // filesDir/skills 与工作区 skills 的存量由 BrainMigrator 一次性分家收编
+        com.haoai.agent.agent.skills.SkillStore.init(brainDir)
         // C 出厂预置联网调研技能（迁移落定后播种，用户删除后凭标记不复活）
         com.haoai.agent.agent.skills.SkillStore.seedBundledResearchSkill(
             java.io.File(appFilesDir, ".bundled_skills")
@@ -389,10 +399,11 @@ class AppContainer(app: Application) {
             }.getOrNull()
         }
 
-    /** C5：工作区切换后同步技能落点（默认工作区 = 工作区 skills/；SAF 无本地路径回退状态目录）。 */
+    /**
+     * 工作区切换后同步引擎文档（v2：只同步脑根文档，技能/记忆/待办均在 brainDir 固定不动）。
+     * 切档 = 纯换指针零搬运，这里不再有任何技能落点迁移。
+     */
     fun onWorkspaceSwitched() {
-        val ws = (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-        com.haoai.agent.agent.skills.SkillStore.useWorkspaceDir(ws?.let { java.io.File(it, "skills") })
         syncWorkspaceDocs()
     }
 

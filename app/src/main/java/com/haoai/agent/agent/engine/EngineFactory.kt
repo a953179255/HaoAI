@@ -84,6 +84,7 @@ object EngineFactory {
             persist = { container.sessionStore.save(session) },
             backend = container.workspace.current,
             appFilesDir = container.appFilesDir,
+            brainDir = container.brainDir,
             workspaceLabel = workspaceLabel,
             memoryBank = container.memoryBank,
             memoryEnabled = st.memoryEnabled,

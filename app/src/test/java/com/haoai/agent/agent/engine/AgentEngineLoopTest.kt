@@ -118,6 +118,8 @@ class AgentEngineLoopTest {
             persist = {},
             backend = backend,
             appFilesDir = dir,
+            // v2：脑根与 TodoStore(dir) 同源（测试里的 todoStore 落 dir/todos，引擎必须读同一处）
+            brainDir = dir,
             workspaceLabel = "test",
             toolFailCap = toolFailCap,
             turnTokenCap = turnTokenCap,

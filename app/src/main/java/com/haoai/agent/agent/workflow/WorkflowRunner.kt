@@ -186,7 +186,7 @@ object WorkflowRunner {
         val st = container.settingsFlow.value
         val ctx = ToolContext(
             container.workspace.current, shellDir,
-            com.haoai.agent.agent.tools.TodoStore(container.appFilesDir), container.appFilesDir,
+            com.haoai.agent.agent.tools.TodoStore(container.brainDir), container.brainDir,
             sessionId = session.id,
             container.memoryBank, container.journal, 0, container.okHttpClient, container.appContext,
             onToolChange = null,

@@ -182,7 +182,8 @@ object DataBackupManager {
                 add("memory/MEMORY.md" to c.memoryBank.storageFile())
                 addAll(c.journal.currentStorageDir().listByExt("md")
                     .map { "memory/journal/${it.name}" to it })
-                WorkspaceDocs.workspaceRoot(c)?.let { root ->
+                // v2：脑文档固定 brainDir（zip 条目名保留 workspace/ 前缀=兼容旧备份包）
+                c.brainDir.let { root ->
                     addAll(listOf("USER.md", "DREAMS.md").mapNotNull { n ->
                         root.resolve(n).takeIf { it.isFile }?.let { "workspace/$n" to it }
                     })
@@ -1088,7 +1089,8 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
         runCatching { c.journal.currentStorageDir() }.getOrNull()?.let {
             copyTree(File(tmp, "payload/memory/journal"), it, tx)
         }
-        WorkspaceDocs.workspaceRoot(c)?.let { root ->
+        // v2：脑文档还原到 brainDir（payload 条目名不变，旧备份包可直还）
+        c.brainDir.let { root ->
             listOf("USER.md", "DREAMS.md").forEach { n ->
                 copyFile(File(tmp, "payload/workspace/$n"), root.resolve(n), tx)
             }
