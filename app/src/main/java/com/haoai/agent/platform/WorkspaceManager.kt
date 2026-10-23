@@ -18,7 +18,9 @@ import java.io.File
 private data class WorkspacePref(
     val safUri: String? = null,
     val rawPath: String? = null,
-    val rawKind: String? = null
+    val rawKind: String? = null,
+    /** 公共交换目录（v3 定稿）：null = 默认 Documents/HaoAI；与工作区档位独立。 */
+    val exchangePath: String? = null
 )
 
 class WorkspaceManager(private val context: Context) {
@@ -41,6 +43,12 @@ class WorkspaceManager(private val context: Context) {
 
     private var rawKind: String? = null
 
+    /** SAF 绑定 URI（切专属/交换目录等重 persist 场景要保住存量绑定）。 */
+    private var safUri: String? = null
+
+    /** 公共交换目录偏好（null = 默认 Documents/HaoAI）。 */
+    private var exchangePath: String? = null
+
     init {
         restoreOrDefault()
     }
@@ -48,7 +56,9 @@ class WorkspaceManager(private val context: Context) {
     fun useDefault() {
         current = RawFileBackend(defaultRoot)
         currentRawPath = null
-        persist(WorkspacePref())
+        rawKind = null
+        safUri = null
+        persist(WorkspacePref(exchangePath = exchangePath))
     }
 
     fun useSaf(uriString: String): Boolean {
@@ -62,7 +72,9 @@ class WorkspaceManager(private val context: Context) {
             val backend = SafFileBackend(context, uri)
             current = backend
             currentRawPath = null
-            persist(WorkspacePref(safUri = uriString))
+            rawKind = null
+            safUri = uriString
+            persist(WorkspacePref(safUri = uriString, exchangePath = exchangePath))
             true
         }.getOrDefault(false)
     }
@@ -80,7 +92,8 @@ class WorkspaceManager(private val context: Context) {
             current = RawFileBackend(f)
             currentRawPath = f.absolutePath
             rawKind = kind.name
-            persist(WorkspacePref(rawPath = f.absolutePath, rawKind = kind.name))
+            safUri = null
+            persist(WorkspacePref(rawPath = f.absolutePath, rawKind = kind.name, exchangePath = exchangePath))
             true
         }.getOrDefault(false)
     }
@@ -101,6 +114,29 @@ class WorkspaceManager(private val context: Context) {
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
         "HaoAI"
     )
+
+    /** 当前公共交换目录（偏好优先，回落默认根）。 */
+    fun exchangeRoot(): File = File(exchangePath ?: publicDefaultRoot().absolutePath)
+
+    /**
+     * 更换公共交换目录（v3 定稿：独立于工作区档位的「对外窗口」）。
+     * 只改映射不改工作区绑定；目录不存在则尝试创建。调用方负责重写 AGENTS.md。
+     */
+    fun useExchange(path: String): Boolean {
+        val f = File(path)
+        return runCatching {
+            if (!f.exists()) f.mkdirs()
+            if (!f.isDirectory) return false
+            exchangePath = f.absolutePath
+            persist(
+                WorkspacePref(
+                    safUri = safUri, rawPath = currentRawPath,
+                    rawKind = rawKind, exchangePath = f.absolutePath
+                )
+            )
+            true
+        }.getOrDefault(false)
+    }
 
     val workspaceUriForSession: String?
         get() = when (current) {
@@ -139,6 +175,10 @@ class WorkspaceManager(private val context: Context) {
                 HaoJson.json.decodeFromString(WorkspacePref.serializer(), prefFile.readText())
             } else null
         }.getOrNull()
+
+        // 交换目录/SAF 绑定优先恢复（与档位判定独立）
+        exchangePath = saved?.exchangePath
+        safUri = saved?.safUri
 
         // SAF 优先（存量兼容）；权限失效则继续尝试 rawPath
         if (saved?.safUri != null) {

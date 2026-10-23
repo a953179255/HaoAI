@@ -1610,8 +1610,21 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** UI 三态判定（含 SAF 存量单列态）。 */
     fun workspaceMode(): com.haoai.agent.platform.WorkspaceManager.Mode = c.workspace.mode()
 
-    /** 公共交换目录默认根（Documents/HaoAI），UI 英雄卡路径展示与公共档选中判定用。 */
+    /** 公共交换目录默认根（Documents/HaoAI），UI 公共档切换入口用。 */
     fun workspacePublicDefault(): String = c.workspace.publicDefaultRoot().absolutePath
+
+    /** 公共交换目录当前路径（默认 Documents/HaoAI），UI 卡片展示与 AGENTS.md 注入同源。 */
+    fun workspaceExchangePath(): String = c.workspace.exchangeRoot().absolutePath
+
+    /** 更换公共交换目录：只改映射不动工作区绑定；成功后重写 AGENTS.md 让 Agent 立即感知。 */
+    fun useExchangeDir(path: String): Boolean {
+        val ok = c.workspace.useExchange(path)
+        if (ok) {
+            c.syncWorkspaceDocs()
+            wsTick++
+        }
+        return ok
+    }
 
     /** 空间短名（壳副标题用）：与 ChatViewModel.workspaceName 同口径取末段，全路径太长撑爆副标题行。 */
     fun workspaceName(): String =

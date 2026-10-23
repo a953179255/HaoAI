@@ -36,12 +36,36 @@ object WorkspaceDocs {
             val st = c.settingsFlow.value
             root.resolve("IDENTITY.md").writeText(renderIdentity(st))
             root.resolve("SOUL.md").writeText(renderSoul(st))
-            root.resolve("AGENTS.md").writeText(AGENTS_TEMPLATE)
+            root.resolve("AGENTS.md").writeText(renderAgents(c, root))
             root.resolve("TOOLS.md").writeText(TOOLS_TEMPLATE)
             root.resolve("HEARTBEAT.md").writeText(renderHeartbeat(c))
             upgradeDreamsHeader(root)
             seedDocs(root)
         }
+    }
+
+    /**
+     * AGENTS.md = 静态模板 + 公共交换目录动态节（三档改造 2026-10-23 v3 定稿：
+     * 用户说「放到公共文档」Agent 要知道写哪，不用用户报绝对路径）。
+     * 工作区已在交换目录内时改口「直接写工作区」，避免 Agent 绕路越界。
+     */
+    private fun renderAgents(c: AppContainer, workspaceRoot: File): String {
+        val exchange = c.workspace.exchangeRoot().absolutePath
+        val sameAsWorkspace = runCatching {
+            workspaceRoot.canonicalPath == File(exchange).canonicalPath ||
+                workspaceRoot.canonicalPath.startsWith(File(exchange).canonicalPath + File.separator)
+        }.getOrDefault(false)
+        val section = buildString {
+            append("\n## 公共交换目录\n")
+            if (sameAsWorkspace) {
+                append("- 当前工作区本身就是公共交换目录（$exchange）：用户说「放到公共文档」= 直接写工作区，无需越界。\n")
+            } else {
+                append("- 路径：`$exchange`\n")
+                append("- 用户说「放到公共文档 / 放公共目录」= 把产物写到该绝对路径（用户不需要报路径）；")
+                append("相册/WPS/文件管理器可直接读写，是工作区之外的对外窗口。越界绝对路径写入时应用会自动申请存储权限。\n")
+            }
+        }
+        return AGENTS_TEMPLATE + section
     }
 
     /**
