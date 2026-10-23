@@ -20,9 +20,14 @@ data class PersonaPreset(
     /** 三段正文（性格 / 说话 / 底线） */
     val sections: List<String>
 ) {
-    /** 写进 settings.soul 的全文（不含代号）。 */
+    /**
+     * 写进 settings.soul 的全文（不含代号）。
+     * 不以「你的性格：」开头——该前缀会被 identityOf 原样拼进系统提示
+     * （"- 你的性格：$soul"），叠成「你的性格：你的性格：…」；且预览里读着
+     * 像在描述用户本人。副标题（tag——tagline）自带风格名，足以领起全段。
+     */
     val fullText: String
-        get() = "你的性格：$tag——$tagline\n\n" + sections.joinToString("\n\n")
+        get() = "$tag——$tagline\n\n" + sections.joinToString("\n\n")
 }
 
 object PersonaPresets {
