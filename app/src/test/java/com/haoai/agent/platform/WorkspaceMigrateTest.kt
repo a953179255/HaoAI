@@ -43,4 +43,33 @@ class WorkspaceMigrateTest {
         val plainFile = tmpDir("s4").apply { resolve("a.txt").writeText("x") }.resolve("a.txt")
         assertEquals(0, copyDirTree(plainFile, tmpDir("d4")))
     }
+
+    @Test
+    fun `进度回调逐文件递增且跨子目录累计`() {
+        val src = tmpDir("s5").apply {
+            resolve("a.txt").writeText("1")
+            resolve("b.txt").writeText("2")
+            resolve("sub/c.txt").apply { parentFile.mkdirs() }.writeText("3")
+        }
+        val dst = tmpDir("d5")
+        val seen = mutableListOf<Int>()
+        val copied = copyDirTree(src, dst) { done -> seen.add(done); true }
+        assertEquals(3, copied)
+        // 全局计数跨递归累计：应为 1,2,3 各一次（顺序按遍历，末值必为 3）
+        assertEquals(listOf(1, 2, 3), seen.sorted())
+    }
+
+    @Test
+    fun `进度回调返回false中止复制`() {
+        val src = tmpDir("s6").apply {
+            for (i in 1..10) resolve("f$i.txt").writeText("x")
+        }
+        val dst = tmpDir("d6")
+        var calls = 0
+        // 回调语义：true=继续 false=中止；done<3 即复制到第 3 个时返回 false 停止
+        val copied = copyDirTree(src, dst) { done -> calls = done; done < 3 }
+        // 第 3 次回调返回 false → 中止，内核上抛 -1；前 3 个文件已落盘
+        assertEquals(-1, copied)
+        assertEquals(3, calls)
+    }
 }

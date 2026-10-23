@@ -3,6 +3,9 @@ package com.haoai.agent.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.haoai.agent.agent.policy.PermissionMode
@@ -1572,40 +1575,103 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var wsTick by androidx.compose.runtime.mutableIntStateOf(0)
         private set
 
-    fun useDefaultWorkspace() {
-        val oldRoot = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-        c.workspace.useDefault()
-        if (oldRoot != null) c.workspace.migrateInto(
-            (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir() ?: oldRoot,
-            oldRoot
-        )
-        c.onWorkspaceSwitched()
-        wsTick++
+    /**
+     * 迁移进度（切换时整树拷贝是重 I/O，实测 ANR 元凶——已挪 IO 线程）。
+     * null=空闲；非 null=(已完成文件数, 预估总数)。总数是开始时的快照近似值
+     * （同名跳过不算），只用于进度条观感，不追求精确。
+     */
+    data class MigrateProgress(val done: Int, val totalEstimate: Int)
+
+    private val _migrateProgress = MutableStateFlow<MigrateProgress?>(null)
+    val migrateProgress: StateFlow<MigrateProgress?> = _migrateProgress.asStateFlow()
+
+    /** 切换结果一次性事件（UI collect 后 toast 并消费回 null）：label=档位名，copied -1=失败。 */
+    data class SwitchOutcome(val label: String, val copied: Int)
+
+    private val _wsOutcome = MutableStateFlow<SwitchOutcome?>(null)
+    val wsOutcome: StateFlow<SwitchOutcome?> = _wsOutcome.asStateFlow()
+
+    /** 切换进行中标志：UI 三档行据此禁点，防迁移未完又触发第二次切换。 */
+    var wsSwitching by androidx.compose.runtime.mutableStateOf(false)
+        private set
+
+    /** 消费切换结果（toast 后调，避免重组重复弹）。 */
+    fun consumeWsOutcome() {
+        _wsOutcome.value = null
     }
 
-    fun useSafWorkspace(uriString: String): Boolean {
-        val ok = c.workspace.useSaf(uriString)
-        if (ok) c.onWorkspaceSwitched()
-        return ok
-    }
+    /** 切回应用专属（异步：迁移在 viewModelScope+IO，导航离开页面不中断）。 */
+    fun useDefaultWorkspace() =
+        startWorkspaceSwitch("应用专属", targetPath = null, kind = com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE)
 
     /**
      * 三档改造（2026-10-23）：真实路径档（公共文档/自选位置共用通路）。
-     * migrate=true 时把旧 Raw 根的内容复制进新根（同名不覆盖）——MEMORY.md/skills
-     * 等引擎文件不迁会导致 Agent「失忆」，这是切换体验的关键一环。
-     * 返回复制文件数；切换失败返回 -1。
+     * 迁移（旧根内容复制进新根，同名不覆盖，防 Agent「失忆」）挪到 IO：
+     * 实测整树拷贝在主线程 onClick 里直接 ANR「无响应」。
      */
-    fun useRawWorkspace(path: String, kind: com.haoai.agent.platform.WorkspaceManager.Mode): Int {
-        val oldRoot = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
-        val ok = c.workspace.useRaw(path, kind)
-        if (!ok) return -1
-        val copied = if (oldRoot != null && oldRoot.absolutePath != path) {
-            c.workspace.migrateInto(java.io.File(path), oldRoot)
-        } else 0
-        c.onWorkspaceSwitched()
-        wsTick++
-        return copied
+    fun useRawWorkspace(
+        path: String, kind: com.haoai.agent.platform.WorkspaceManager.Mode, label: String
+    ) = startWorkspaceSwitch(label, targetPath = path, kind = kind)
+
+    /** 档位切换统一入口：viewModelScope 自启动，进度/结果走 StateFlow 给 UI。 */
+    private fun startWorkspaceSwitch(
+        label: String,
+        targetPath: String?,
+        kind: com.haoai.agent.platform.WorkspaceManager.Mode
+    ) {
+        if (wsSwitching) return // 迁移未完禁二次触发（UI 也已禁点，双保险）
+        wsSwitching = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val oldRoot =
+                    (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+                val ok = if (targetPath == null) {
+                    c.workspace.useDefault(); true
+                } else {
+                    c.workspace.useRaw(targetPath, kind)
+                }
+                if (!ok) {
+                    _wsOutcome.value = SwitchOutcome(label, -1)
+                    return@launch
+                }
+                val newRoot =
+                    (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
+                val needMigrate = oldRoot != null && newRoot != null &&
+                    oldRoot.absolutePath != newRoot.absolutePath
+                val copied = if (needMigrate && newRoot != null) {
+                    val totalEstimate = countTree(oldRoot)
+                    _migrateProgress.value = MigrateProgress(0, totalEstimate)
+                    c.workspace.migrateInto(newRoot, oldRoot) { done ->
+                        // 每 8 个文件发一次进度，避免高频 recompose
+                        if (done % 8 == 0 || done >= totalEstimate) {
+                            _migrateProgress.value = MigrateProgress(done, totalEstimate)
+                        }
+                        true
+                    }.coerceAtLeast(0)
+                } else 0
+                c.onWorkspaceSwitched()
+                wsTick++
+                _wsOutcome.value = SwitchOutcome(label, copied)
+            } finally {
+                _migrateProgress.value = null
+                wsSwitching = false
+            }
+        }
     }
+
+    /** 迁移预估总数：整树文件计数（IO 线程）；读不到的目录按 0 计，纯进度条观感用。 */
+    private fun countTree(root: java.io.File): Int = runCatching {
+        var n = 0
+        val stack = ArrayDeque<java.io.File>()
+        stack.addLast(root)
+        while (stack.isNotEmpty()) {
+            val d = stack.removeLast()
+            for (e in d.listFiles().orEmpty()) {
+                if (e.isDirectory) stack.addLast(e) else n++
+            }
+        }
+        n
+    }.getOrDefault(0)
 
     /** UI 三态判定（含 SAF 存量单列态）。 */
     fun workspaceMode(): com.haoai.agent.platform.WorkspaceManager.Mode = c.workspace.mode()

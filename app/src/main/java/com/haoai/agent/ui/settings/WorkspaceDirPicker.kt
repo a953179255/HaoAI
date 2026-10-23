@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,17 +54,25 @@ fun WorkspaceDirPickerDialog(
     var dir by remember { mutableStateOf(Environment.getExternalStorageDirectory()) }
     var subdirs by remember { mutableStateOf<List<File>>(emptyList()) }
     var readable by remember { mutableStateOf(true) }
+    // 切目录时的加载空窗：点 A 后 dir 立刻变，但 subdirs 要等 IO 回来——若这期间仍显示
+    // 旧列表，旧 A 行的涟漪动画还挂在屏上，看着就像「下一级默认选中了 A」（2026-10-23 实测）。
+    // 解决：进入新目录的瞬间清空旧列表并显 loading，新列表读好再填。
+    var loading by remember { mutableStateOf(true) }
 
     LaunchedEffect(dir) {
+        loading = true
+        subdirs = emptyList() // 立即清屏，绝不让旧列表带着在途按压动画过渡到新目录
         val loaded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                readable = dir.canRead() && dir.isDirectory
-                dir.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
-                    ?.sortedWith(compareBy({ !it.name.startsWith("Download") && !it.name.startsWith("Documents") }, { it.name.lowercase() }))
-                    .orEmpty()
-            }.getOrDefault(emptyList())
+            runCatching<Pair<Boolean, List<File>>> {
+                (dir.canRead() && dir.isDirectory) to
+                    (dir.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }
+                        ?.sortedWith(compareBy({ !it.name.startsWith("Download") && !it.name.startsWith("Documents") }, { it.name.lowercase() }))
+                        .orEmpty())
+            }.getOrDefault(true to emptyList())
         }
-        subdirs = loaded
+        readable = loaded.first
+        subdirs = loaded.second
+        loading = false
     }
 
     val atStorageRoot = dir.absolutePath == Environment.getExternalStorageDirectory().absolutePath
@@ -106,7 +115,15 @@ fun WorkspaceDirPickerDialog(
             )
         }
         Spacer(Modifier.size(6.dp))
-        if (!readable) {
+        if (loading) {
+            // 目录切换空窗：静态文案（项目禁常驻无限动画，且 listdir 本就毫秒级）
+            Text(
+                "读取中…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp, horizontal = 4.dp)
+            )
+        } else if (!readable) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 18.dp, horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -133,32 +150,39 @@ fun WorkspaceDirPickerDialog(
             )
         } else {
             // ⚠ 不能用 LazyColumn：GlassAlertDialog 的 content 已在 verticalScroll 列
-            // 里（实测：嵌套 lazy 被无限高约束测量直接崩 App），目录数量有限走普通 Column
+            // 里（实测：嵌套 lazy 被无限高约束测量直接崩 App），目录数量有限走普通 Column。
+            // 每行必须 key(absolutePath)：无 key 时切目录，Compose 按「位置」复用组合槽——
+            // 上一级被点行（A）的涟漪动画还没淡出，就被下一级「同一位置」的行继承，
+            // 表现为「进下级页面后该行默认带点击效果」（2026-10-23 实测）。
+            // 加 key 后每个目录条目独占槽：切入子目录时子项路径全不同 → 旧 A 行随切换销毁、
+            // 涟漪一并消失，不再串位到同位置的新行。
             Column(modifier = Modifier.fillMaxWidth()) {
                 subdirs.forEach { sub ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { dir = sub }
-                            .padding(horizontal = 4.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Filled.Folder,
-                            contentDescription = null,
-                            tint = haoToneMain(HaoTone.Accent),
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.size(10.dp))
-                        Text(
-                            sub.name,
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    key(sub.absolutePath) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { dir = sub }
+                                .padding(horizontal = 4.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Filled.Folder,
+                                contentDescription = null,
+                                tint = haoToneMain(HaoTone.Accent),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.size(10.dp))
+                            Text(
+                                sub.name,
+                                fontSize = 14.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }

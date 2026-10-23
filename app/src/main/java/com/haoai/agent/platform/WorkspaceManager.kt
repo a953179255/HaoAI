@@ -154,9 +154,12 @@ class WorkspaceManager(private val context: Context) {
      * 目标已有同名文件**不覆盖**（防毁新根现有内容/引擎文件）；目录递归。
      * 返回实际复制文件数；旧根不存在或不可读返回 0。
      */
-    fun migrateInto(newRoot: File, fromRaw: File?): Int {
+    fun migrateInto(newRoot: File, fromRaw: File?): Int = migrateInto(newRoot, fromRaw, null)
+
+    /** 带进度回调版：onCopied(全局已完成数) 返回 false = 请求中止（调用方档位又变了）。 */
+    fun migrateInto(newRoot: File, fromRaw: File?, onCopied: ((Int) -> Boolean)?): Int {
         if (fromRaw == null || !fromRaw.isDirectory) return 0
-        return runCatching { copyDirTree(fromRaw, newRoot) }.getOrDefault(0)
+        return runCatching { copyDirTree(fromRaw, newRoot, onCopied) }.getOrDefault(0)
     }
 
     private fun persist(pref: WorkspacePref) {
@@ -214,17 +217,29 @@ class WorkspaceManager(private val context: Context) {
 /**
  * 目录树复制（迁移器内核，顶层 internal 便于 JVM 单测）：
  * 目标同名文件不覆盖；单文件失败不中断整体；返回实际复制文件数。
+ * onCopied(全局已完成数) 每复制一个文件回调一次，返回 false 即中止（返回 -1）。
  */
-internal fun copyDirTree(src: File, dst: File): Int {
+internal fun copyDirTree(src: File, dst: File, onCopied: ((Int) -> Boolean)? = null): Int {
+    return run { copyDirTreeInner(src, dst, intArrayOf(0), onCopied) }
+}
+
+/** 计数器数组跨递归共享；返回 -1 表示被中止（上层调用各自吞掉即可，已复制部分保留）。 */
+private fun copyDirTreeInner(src: File, dst: File, counter: IntArray, onCopied: ((Int) -> Boolean)?): Int {
     var copied = 0
     val entries = src.listFiles() ?: return 0
     for (e in entries) {
         val target = File(dst, e.name)
         if (e.isDirectory) {
             target.mkdirs()
-            copied += copyDirTree(e, target)
+            val sub = copyDirTreeInner(e, target, counter, onCopied)
+            if (sub < 0) return -1
+            copied += sub
         } else if (!target.exists()) {
-            if (runCatching { e.copyTo(target, overwrite = false) }.isSuccess) copied++
+            if (runCatching { e.copyTo(target, overwrite = false) }.isSuccess) {
+                copied++
+                counter[0]++
+                if (onCopied != null && !onCopied(counter[0])) return -1
+            }
         }
     }
     return copied
