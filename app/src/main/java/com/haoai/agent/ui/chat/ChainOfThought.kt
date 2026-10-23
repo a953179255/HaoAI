@@ -798,7 +798,14 @@ private fun ToolStep(
                 )
             }
             if (viewing) {
-                FileViewerDialog(ref = ref, onDismiss = { viewing = false })
+                // 批4b：链卡宿主带「在目录中定位」（经 LocalLocateInTree 通道开浏览页）；
+                // 浏览页内的查看器不传此通道，就地可看不再二次跳转。
+                val locateInTree = LocalLocateInTree.current
+                FileViewerDialog(
+                    ref = ref,
+                    onDismiss = { viewing = false },
+                    onLocate = { rel -> locateInTree(rel) },
+                )
             }
         } else if (tool.jobLog != null) {
             // 批3c：bash 后台投递成功（结果文本带 job_xxx）→ 「日志」芯片。

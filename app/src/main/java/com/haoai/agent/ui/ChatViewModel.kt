@@ -1385,6 +1385,11 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()
         )
 
+    /** 批4b：浏览页长按删除（二次确认在页内做，这里只执行后端删除并回传 Result 供 toast）。 */
+    suspend fun deleteWorkspaceFile(rel: String): Result<Unit> = runCatching {
+        (c.workspace.current ?: error("未绑定工作空间")).delete(rel)
+    }
+
     private val _contextUsage = MutableStateFlow(
         ContextUsage(usedTokens = 0, totalTokens = 32768, systemTokens = 0, toolsTokens = 0, historyTokens = 0)
     )

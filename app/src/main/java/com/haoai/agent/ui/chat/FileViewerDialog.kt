@@ -66,12 +66,11 @@ private const val VIEWER_MAX_LINES = 2000
 internal fun FileViewerDialog(
     ref: UiFilePath,
     onDismiss: () -> Unit,
-    /** 换乘钮开关：会话宿主=true（可跳目录/版本）；纯目录设置宿主=false（本就在树内、无会话快照）。 */
-    showTransferActions: Boolean = true,
+    /** 「在目录中定位」：仅链卡宿主给（非空才画钮，点了开浏览页并落到父目录）。
+     *  批4b：「版本历史」钮随历史 Tab 退役（回滚走聊天 /undo 命令，快照引擎保留）。 */
+    onLocate: ((String) -> Unit)? = null,
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val locateInTree = LocalLocateInTree.current
-    val openTimeline = LocalOpenTimeline.current
     // 批2d 分流：图片 → 解码预览（Fit）；文本 → 原路径
     val extLower = ref.relPath.substringAfterLast('.', "").lowercase()
     val isImage = extLower in setOf("png", "jpg", "jpeg", "webp", "gif")
@@ -207,31 +206,12 @@ internal fun FileViewerDialog(
         lines = lines,
         dark = dark,
         onDismiss = onDismiss,
-        // 批3a 闭环（效果图 .ovft 定稿按钮）+ 批3d 版本直达：查看器头部两枚换乘钮
-        trailing = {
-            if (showTransferActions) androidx.compose.foundation.layout.Row(
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
-            ) {
-                // 批1 主题化：版本历史=信息（灰胶囊）、在目录中定位=动作（绿胶囊，语义色）
+        // 批4b：换乘钮退役到只剩「在目录中定位」，且仅在宿主传入 onLocate 时出现
+        // （链卡宿主给→可跳浏览页；浏览页内查看器不给→就地无需跳）。「版本历史」钮
+        // 随历史 Tab 一并退役，回滚能力仍在引擎（聊天 /undo）。
+        trailing = if (onLocate != null) {
+            {
                 val primary = MaterialTheme.colorScheme.primary
-                val onVar = MaterialTheme.colorScheme.onSurfaceVariant
-                Text(
-                    "版本历史",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontSize = 11.5.sp, lineHeight = 14.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                    ),
-                    color = onVar,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(onVar.copy(alpha = 0.08f))
-                        .clickable {
-                            openTimeline(normalizeRel(ref.relPath))
-                            onDismiss()
-                        }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                )
                 Text(
                     "在目录中定位",
                     style = androidx.compose.ui.text.TextStyle(
@@ -244,13 +224,13 @@ internal fun FileViewerDialog(
                         .clip(RoundedCornerShape(999.dp))
                         .background(primary.copy(alpha = 0.12f))
                         .clickable {
-                            locateInTree(normalizeRel(ref.relPath))
+                            onLocate(normalizeRel(ref.relPath))
                             onDismiss()
                         }
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
-        },
+        } else null,
         // 批4a：底部外发动作行（渲染看仅 HTML / 存相册仅图片 / 其余三键恒在）
         bottomActions = {
             Row(
@@ -270,9 +250,9 @@ internal fun FileViewerDialog(
             title = fileName,
             source = com.haoai.agent.ui.common.HtmlPreviewSource.FilePage(fileUrl),
             onDismiss = { htmlPreview = false },
-            // 换乘钮只在会话宿主给（showTransferActions 同款口径）：设置宿主没装
-            // 内置浏览器（LocalOpenHtmlFile 默认空实现），宁可不显示也不放死钮。
-            onOpenInBrowser = if (showTransferActions) ({ openHtmlFile(fileUrl) }) else null,
+            // 换乘钮只在链卡宿主给（onLocate 非空=链卡宿主，那里才装了内置浏览器）：
+            // 设置/浏览宿主页没装（LocalOpenHtmlFile 默认空实现），宁可不显示也不放死钮。
+            onOpenInBrowser = if (onLocate != null) ({ openHtmlFile(fileUrl) }) else null,
         )
     }
 }

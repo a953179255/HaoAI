@@ -561,12 +561,10 @@ fun ChatScreen(
     }
     var editTarget by remember { mutableStateOf<ChatRow?>(null) }
     var deleteTarget by remember { mutableStateOf<ChatRow?>(null) }
-    // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳。
-    // fileTreeLocate=查看器「在目录中定位」换乘请求；timelineFile=「版本历史」直达文件。
-    // 壳的 LaunchedEffect 按这两个信号自动切 Tab（壳没开就先开壳）。
+    // 工作区浏览单页（批4b：三 Tab 壳退役→扁平列表+面包屑）。
+    // fileTreeLocate=查看器「在目录中定位」跳入请求（落到该文件父目录并短暂高亮）。
     var workspaceOpen by remember { mutableStateOf(false) }
     var fileTreeLocate by remember { mutableStateOf<String?>(null) }
-    var timelineFile by remember { mutableStateOf<String?>(null) }
     // 批3e：内联运行能力（shell 恒可、python/js 需沙箱；装完发行版换会话/重进即重探）
     var runEnv by remember { mutableStateOf(com.haoai.agent.ui.common.RunEnv()) }
     val runEnvSessionId = vm.session.collectAsState().value?.id
@@ -1084,14 +1082,10 @@ fun ChatScreen(
                 com.haoai.agent.ui.chat.LocalOpenHtmlFile provides { url ->
                     scope.launch { com.haoai.agent.agent.browser.BrowserController.navigate(url) }
                 },
-                // 工作区壳·目录 Tab：查看器「在目录中定位」上抛——开壳+换乘到目录并定位目标 rel
+                // 工作区浏览页：查看器「在目录中定位」上抛——开单页并落到该文件所在目录。
+                // 批4b：「版本历史」通道随历史 Tab 退役（回滚走聊天 /undo，快照引擎保留）。
                 LocalLocateInTree provides { rel ->
                     fileTreeLocate = rel
-                    workspaceOpen = true
-                },
-                // 工作区壳·历史 Tab：查看器「版本历史」上抛——开壳+换乘到历史并预选该文件
-                LocalOpenTimeline provides { rel ->
-                    timelineFile = rel
                     workspaceOpen = true
                 },
                 // 批3e：代码块运行通道 + 能力快照（CodeBlock 据此决定出不出运行钮）
@@ -2135,46 +2129,22 @@ fun ChatScreen(
         }
         }
 
-    // 工作区共享壳（方案 B）：目录/产出/历史三 Tab 一个壳；抽屉「工作区」呼出。
-    // 「全部会话」页同款架构：实底 + 本页自带采样画布（wallpaper 垫底），顶栏玻璃
-    // 磨砂的是本页——首版借聊天 backdrop 采到消息流、右上又塞了个同义"关闭"，
-    // 用户 2026-10-11 点名两处缺陷已修。返回语义=只关壳：抽屉进壳时不收，全屏实底
-    // 盖在其上，退出即原样露出（首版"收抽屉+退出 drawer.open() 重开"会重播一次开合
-    // 动画，用户 2026-10-11 点名）；从消息芯片开壳时抽屉本就关着，退出回聊天。
-    // 查看器两枚换乘钮也开它：壳在消息列作用域之外，这里包一层 provider 补闭包
-    // （否则从壳里点开查看器后，「在目录中定位 / 版本历史」读到默认空实现=死按钮）。
+    // 工作区浏览单页（批4b 取代三 Tab 壳）：抽屉「工作区」呼出；查看器「在目录中
+    // 定位」也开它并落到目标文件所在目录（locateRel）。架构沿用壳定稿：实底+本页
+    // 自带采样画布，玻璃只采本页底；返回=只关页，抽屉原样露出。
     if (workspaceOpen) {
-        androidx.compose.runtime.CompositionLocalProvider(
-            LocalLocateInTree provides { rel -> fileTreeLocate = rel },
-            LocalOpenTimeline provides { rel -> timelineFile = rel },
-        ) {
-            WorkspaceShellDialog(
-                wallpaper = wallpaper,
-                workspaceName = vm.workspaceName(),
-                backendReady = vm.treeBackend() != null,
-                listDir = { vm.treeListDir(it) },
-                walk = { vm.treeWalk() },
-                resolve = { vm.fileRefOfRel(it) },
-                rows = rows,
-                loadMetas = { vm.snapshotMetas() },
-                readVersion = { callId, which -> vm.snapshotVersion(callId, which) },
-                hasBefore = { callId -> vm.snapshotHasBefore(callId) },
-                locateRel = fileTreeLocate,
-                onLocateConsumed = { fileTreeLocate = null },
-                historyFile = timelineFile,
-                onHistoryFileConsumed = { timelineFile = null },
-                onViewDiff = { callId ->
-                    snapshotScope.launch {
-                        val sidAtRequest = vm.session.value?.id
-                        val diff = vm.snapshotDiff(callId)
-                        if (diff != null && sidAtRequest != null && vm.isCurrentSession(sidAtRequest)) {
-                            diffViewer = diff
-                        }
-                    }
-                },
-                onDismiss = { workspaceOpen = false }
-            )
-        }
+        WorkspaceBrowserDialog(
+            wallpaper = wallpaper,
+            workspaceName = vm.workspaceName(),
+            backendReady = vm.treeBackend() != null,
+            listDir = { vm.treeListDir(it) },
+            walk = { vm.treeWalk() },
+            resolve = { vm.fileRefOfRel(it) },
+            deleteFile = { vm.deleteWorkspaceFile(it) },
+            locateRel = fileTreeLocate,
+            onLocateConsumed = { fileTreeLocate = null },
+            onDismiss = { workspaceOpen = false }
+        )
     }
 
     // 工具详情弹层（v8 思维链）：appLayer 外渲染 → GlassPanel 真玻璃折射消息流

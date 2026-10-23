@@ -1606,4 +1606,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** 树行 rel → 查看器定位（与 ChatViewModel.fileRefOfRel 同一安全口径 locateWorkspaceRel）。 */
     fun fileRefOfRel(rel: String): UiFilePath? =
         locateWorkspaceRel(rel, (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir())
+
+    /** 批4b：浏览页长按删除（与 ChatViewModel.deleteWorkspaceFile 同口径）。 */
+    suspend fun deleteWorkspaceFile(rel: String): Result<Unit> = runCatching {
+        (c.workspace.current ?: error("未绑定工作空间")).delete(rel)
+    }
 }

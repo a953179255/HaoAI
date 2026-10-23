@@ -1528,18 +1528,16 @@ private fun SectionPage(
                 }
             }
         }
-        // 工作区浏览壳（方案B 双入口之一）：与聊天页同一 WorkspaceShellDialog，
-        // tabs=[Tree] 纯目录——空间作用域（无会话，故无产出/历史；查看器不显换乘钮）
+        // 工作区浏览单页（批4b：取代纯目录 Tab 壳）：与聊天页同一组件，空间作用域。
         if (workspaceBrowseOpen) {
-            com.haoai.agent.ui.chat.WorkspaceShellDialog(
+            com.haoai.agent.ui.chat.WorkspaceBrowserDialog(
                 wallpaper = wallpaper,
                 workspaceName = vm.workspaceName(),
                 backendReady = vm.workspaceTreeReady(),
                 listDir = { vm.treeListDir(it) },
                 walk = { vm.treeWalk() },
                 resolve = { vm.fileRefOfRel(it) },
-                tabs = listOf(com.haoai.agent.ui.chat.WorkspaceTab.Tree),
-                sessionScoped = false,
+                deleteFile = { vm.deleteWorkspaceFile(it) },
                 onDismiss = { workspaceBrowseOpen = false }
             )
         }
@@ -2604,9 +2602,9 @@ private fun LazyListScope.workspaceItems(
                     level = com.haoai.agent.ui.theme.HaoButtonLevel.Warning
                 ) { vm.useDefaultWorkspace() }
             }
-            // 方案B 双入口之一（2026-10-11 定稿）：把空转的「工作区」面板接上目录浏览——
-            // 点开与聊天抽屉共用同一 WorkspaceShellDialog（tabs=[Tree]），全局统计副行是
-            // 设置入口独有的存储视角；SAF 后端无文件系统根 → 行仍在但点文件降级提示（同聊天口径）。
+            // 方案B 双入口之一：把空转的「工作区」面板接上目录浏览——
+            // 点开与聊天抽屉共用同一 WorkspaceBrowserDialog（批4b 三 Tab 壳退役后的浏览单页），
+            // 全局统计副行是设置入口独有的存储视角；SAF 后端无文件系统根 → 行仍在但点文件降级提示（同聊天口径）。
             Row(
                 Modifier
                     .padding(top = 10.dp)
