@@ -1577,10 +1577,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     /**
      * 迁移进度（切换时整树拷贝是重 I/O，实测 ANR 元凶——已挪 IO 线程）。
-     * null=空闲；非 null=(已完成文件数, 预估总数)。总数是开始时的快照近似值
-     * （同名跳过不算），只用于进度条观感，不追求精确。
+     * null=空闲；非 null=(已处理文件数, 总数)。总数=parallelCopy 开扫单遍收集的
+     * 全树真实计数（不截断），与英雄卡 countTree 同口径，两个数字对得上。
      */
-    data class MigrateProgress(val done: Int, val totalEstimate: Int)
+    data class MigrateProgress(val done: Int, val total: Int)
 
     private val _migrateProgress = MutableStateFlow<MigrateProgress?>(null)
     val migrateProgress: StateFlow<MigrateProgress?> = _migrateProgress.asStateFlow()
@@ -1639,14 +1639,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 val needMigrate = oldRoot != null && newRoot != null &&
                     oldRoot.absolutePath != newRoot.absolutePath
                 val copied = if (needMigrate && newRoot != null) {
-                    val totalEstimate = countTree(oldRoot)
-                    _migrateProgress.value = MigrateProgress(0, totalEstimate)
-                    c.workspace.migrateInto(newRoot, oldRoot) { done ->
-                        // 每 8 个文件发一次进度，避免高频 recompose
-                        if (done % 8 == 0 || done >= totalEstimate) {
-                            _migrateProgress.value = MigrateProgress(done, totalEstimate)
-                        }
-                        true
+                    // 精确总数：parallelCopy 单遍收集清单后 (done,total) 双参推送（120ms 节流）
+                    c.workspace.migrateInto(newRoot, oldRoot) { done, total ->
+                        _migrateProgress.value = MigrateProgress(done, total)
+                        true // 暂不支持中途取消（切档意图单一，跑完即归位）
                     }.coerceAtLeast(0)
                 } else 0
                 c.onWorkspaceSwitched()
@@ -1658,20 +1654,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
     }
-
-    /** 迁移预估总数：整树文件计数（IO 线程）；读不到的目录按 0 计，纯进度条观感用。 */
-    private fun countTree(root: java.io.File): Int = runCatching {
-        var n = 0
-        val stack = ArrayDeque<java.io.File>()
-        stack.addLast(root)
-        while (stack.isNotEmpty()) {
-            val d = stack.removeLast()
-            for (e in d.listFiles().orEmpty()) {
-                if (e.isDirectory) stack.addLast(e) else n++
-            }
-        }
-        n
-    }.getOrDefault(0)
 
     /** UI 三态判定（含 SAF 存量单列态）。 */
     fun workspaceMode(): com.haoai.agent.platform.WorkspaceManager.Mode = c.workspace.mode()
@@ -1707,13 +1689,22 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
      * 与壳的目录 Tab 管线。SAF 后端无文件系统根 → fileRefOfRel 恒 null →
      * 查看器降级提示（聊天侧同一口径）。
      */
+    // 卡片/迁移数字必须同源真实：walk 的 8000 是列表渲染上限，拿去当"共 N 文件"
+    // 报错过（8000 vs 72283 打架，用户实测 2026-10-23）→ countTree 全树真数。
     suspend fun workspaceStats(): com.haoai.agent.ui.chat.WorkspaceStats =
         runCatching {
-            com.haoai.agent.ui.chat.workspaceStatsOf(
-                c.workspace.current?.walk() ?: emptyList(),
-                System.currentTimeMillis()
-            )
+            val tc = c.workspace.current?.countTree(dayStartMillis())
+            if (tc == null) com.haoai.agent.ui.chat.WorkspaceStats(0, 0, 0)
+            else com.haoai.agent.ui.chat.WorkspaceStats(tc.files, tc.bytes, tc.today)
         }.getOrDefault(com.haoai.agent.ui.chat.WorkspaceStats(0, 0, 0))
+
+    /** 今日 0 点（统计"今天产出"口径，与 workspaceStatsOf 的 Calendar 判定一致）。 */
+    private fun dayStartMillis(): Long =
+        java.util.Calendar.getInstance().apply {
+            timeInMillis = System.currentTimeMillis()
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
 
     fun workspaceTreeReady(): Boolean = c.workspace.current != null
 

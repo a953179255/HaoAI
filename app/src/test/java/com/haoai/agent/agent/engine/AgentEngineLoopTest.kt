@@ -542,6 +542,8 @@ class AgentEngineLoopTest {
         override suspend fun listDir(rel: String): List<String> =
             files.keys.filter { it.startsWith(rel.trimEnd('/') + "/") }
                 .map { it.substringAfterLast('/') }
+        override suspend fun countTree(todaySinceMillis: Long): com.haoai.agent.platform.TreeCount =
+            com.haoai.agent.platform.TreeCount(files.size, files.values.sumOf { it.length.toLong() }, 0)
         override suspend fun walk(maxEntries: Int): List<com.haoai.agent.platform.FileEntry> =
             files.keys.take(maxEntries).map {
                 com.haoai.agent.platform.FileEntry(

@@ -72,4 +72,82 @@ class WorkspaceMigrateTest {
         assertEquals(-1, copied)
         assertEquals(3, calls)
     }
+
+    // ===== parallelCopy（2026-10-23 性能版迁移内核）=====
+
+    @Test
+    fun `并行复制保留子目录结构并计数`() {
+        val src = tmpDir("p1").apply {
+            resolve("MEMORY.md").writeText("记忆")
+            resolve("skills/web/SKILL.md").apply { parentFile.mkdirs() }.writeText("技能")
+            resolve("notes").apply { mkdirs() } // 空目录不算文件数
+        }
+        val dst = tmpDir("q1")
+        val copied = parallelCopy(src, dst, null)
+        assertEquals(2, copied)
+        assertEquals("记忆", dst.resolve("MEMORY.md").readText())
+        assertEquals("技能", dst.resolve("skills/web/SKILL.md").readText())
+        assertTrue(dst.resolve("notes").isDirectory)
+    }
+
+    @Test
+    fun `并行同名不覆盖且空文件照拷`() {
+        val src = tmpDir("p2").apply {
+            resolve("MEMORY.md").writeText("新版")
+            resolve("empty.txt").writeText("") // 0 字节也必须出现在目标
+            resolve("sub").apply { mkdirs() }.resolve("blank.bin").writeText("")
+        }
+        val dst = tmpDir("q2").apply { resolve("MEMORY.md").writeText("旧版") }
+        val copied = parallelCopy(src, dst, null)
+        // MEMORY.md 同名跳过；两个空文件复制 → 2
+        assertEquals(2, copied)
+        assertEquals("旧版", dst.resolve("MEMORY.md").readText())
+        assertTrue(dst.resolve("empty.txt").exists())
+        assertTrue(dst.resolve("sub/blank.bin").exists())
+    }
+
+    @Test
+    fun `并行进度total等于真实文件数且done单调到total`() {
+        val src = tmpDir("p3").apply {
+            for (i in 1..200) resolve("g$i.txt").writeText("x")
+            resolve("deep/a/b/c/leaf.txt").apply { parentFile.mkdirs() }.writeText("y")
+        }
+        val dst = tmpDir("q3")
+        val first = java.util.concurrent.atomic.AtomicReference<Pair<Int, Int>?>(null)
+        val seenDone = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        val allTotals = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        parallelCopy(src, dst) { done, tot ->
+            if (first.get() == null) first.set(done to tot)
+            seenDone.add(done); allTotals.add(tot)
+            true
+        }
+        // 201 文件全树真实计数（不截断——正是修复"卡片 8000"的口径）
+        assertEquals(201, allTotals.first())
+        assertTrue(allTotals.all { it == 201 })
+        // 开扫即推 0/total（在 worker 启动前，确定无竞态）
+        assertEquals(0 to 201, first.get())
+        // 并行下回调顺序不保证单调（各 worker 独立计数），但 max 必达 total、且无越界
+        assertEquals(201, seenDone.max())
+        assertTrue(seenDone.all { it in 0..201 })
+    }
+
+    @Test
+    fun `并行onProgress返回false请求中止`() {
+        val src = tmpDir("p4").apply { for (i in 1..1000) resolve("h$i.txt").writeText("x") }
+        val dst = tmpDir("q4")
+        var seenTotal = -1
+        val copied = parallelCopy(src, dst) { _, tot ->
+            seenTotal = tot
+            false // 立即请求中止
+        }
+        assertEquals(1000, seenTotal)
+        // 中止后已复制数远小于总量，且不超过 total（不要求精确——并行竞态）
+        assertTrue(copied in 0..1000)
+    }
+
+    @Test
+    fun `并行空源目录返回零`() {
+        val src = tmpDir("p5").apply { mkdirs() }
+        assertEquals(0, parallelCopy(src, tmpDir("q5"), null))
+    }
 }

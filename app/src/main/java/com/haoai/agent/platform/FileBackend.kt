@@ -16,6 +16,13 @@ data class FileEntry(
     val lastModified: Long
 )
 
+/**
+ * 全树真实计数（2026-10-23）：walk 的 maxEntries=8000 是给文件列表 UI 的渲染上限，
+ * 但把它当"工作区共 N 文件"报给用户就错了（实测：卡片 8000 vs 迁移 72283 打架）。
+ * 计数与迁移同口径=全树不截断、不跳目录，数字对得上是底线。
+ */
+data class TreeCount(val files: Int, val bytes: Long, val today: Int)
+
 interface FileBackend {
     val displayName: String
 
@@ -25,6 +32,8 @@ interface FileBackend {
     suspend fun rename(fromRel: String, newName: String)
     suspend fun listDir(rel: String): List<String>
     suspend fun walk(maxEntries: Int = 8000): List<FileEntry>
+    /** 全树真实计数（不截断）：英雄卡/浏览页统计用它，与迁移分母同口径。 */
+    suspend fun countTree(todaySinceMillis: Long): TreeCount
     fun shellWorkdir(): File?
 
     companion object {
@@ -179,6 +188,29 @@ class RawFileBackend(private val root: File) : FileBackend {
         out
     }
 
+    // 全树流式计数：显式栈免递归爆栈，口径与迁移 collectTree 一致（不跳 .git、不截断），
+    // 卡片数字与迁移分母必须对得上（用户实测抓到 8000 vs 72283 打架，2026-10-23）。
+    override suspend fun countTree(todaySinceMillis: Long): TreeCount = withContext(Dispatchers.IO) {
+        var files = 0L
+        var bytes = 0L
+        var today = 0L
+        val stack = ArrayDeque<File>()
+        stack.addLast(root)
+        while (stack.isNotEmpty()) {
+            val d = stack.removeLast()
+            val entries = d.listFiles() ?: continue
+            for (e in entries) {
+                if (e.isDirectory) stack.addLast(e)
+                else {
+                    files++
+                    bytes += e.length()
+                    if (e.lastModified() >= todaySinceMillis) today++
+                }
+            }
+        }
+        TreeCount(files.toInt(), bytes, today.toInt())
+    }
+
     override fun shellWorkdir(): File = root
 }
 
@@ -298,6 +330,28 @@ class SafFileBackend(
             }
         }
         out
+    }
+
+    // 全树真实计数：口径与上面 walk 一致（跳 .git）但不截断——卡片数字必须是真数。
+    override suspend fun countTree(todaySinceMillis: Long): TreeCount = withContext(Dispatchers.IO) {
+        var files = 0L
+        var bytes = 0L
+        var today = 0L
+        val queue = ArrayDeque<DocumentFile>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            for (f in queue.removeFirst().listFiles()) {
+                val name = f.name ?: continue
+                if (name == ".git" && f.isDirectory) continue
+                if (f.isDirectory) queue.add(f)
+                else {
+                    files++
+                    bytes += f.length()
+                    if (f.lastModified() >= todaySinceMillis) today++
+                }
+            }
+        }
+        TreeCount(files.toInt(), bytes, today.toInt())
     }
 
     override fun shellWorkdir(): File? = null

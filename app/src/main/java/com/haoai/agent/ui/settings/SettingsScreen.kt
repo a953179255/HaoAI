@@ -2724,8 +2724,8 @@ private fun LazyListScope.workspaceItems(
                 val accent = haoToneMain(HaoTone.Accent)
                 // 每 8 个文件才推一次进度 → 补间抹成平滑推进（观感连续，非逐格跳）
                 val frac by animateFloatAsState(
-                    targetValue = if (p.totalEstimate > 0)
-                        (p.done.toFloat() / p.totalEstimate).coerceIn(0f, 1f)
+                    targetValue = if (p.total > 0)
+                        (p.done.toFloat() / p.total).coerceIn(0f, 1f)
                     else 0f,
                     animationSpec = tween(durationMillis = 260, easing = LinearEasing),
                     label = "wsMigrateProgress"
@@ -2740,7 +2740,7 @@ private fun LazyListScope.workspaceItems(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "正在迁移工作区文件…已复制 ${p.done}${if (p.totalEstimate > 0) " / 约 ${p.totalEstimate}" else ""} 个",
+                            "正在迁移工作区文件…已复制 ${p.done} / ${p.total} 个",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
