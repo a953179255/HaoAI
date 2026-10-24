@@ -66,7 +66,10 @@ object WorkspaceDocs {
         val section = buildString {
             append("\n## 公共交换目录\n")
             if (sameAsWorkspace) {
-                append("- 当前工作区本身就是公共交换目录（$exchange）：用户说「放到公共文档」= 直接写工作区，无需越界。\n")
+                // 2026-10-24 口径翻转（用户产品模型定稿）：工作区在公共档时，公共目录就是
+                // **默认产出地**——不是「用户说了才写」的越界目标，产出直接落工作区。
+                append("- 工作区本身就是公共目录（$exchange）：**产出默认直接写工作区**，无需用户指定位置；")
+                append("用户用相册 / WPS / 文件管理器可直接查看产物。\n")
             } else {
                 append("- 路径：`$exchange`\n")
                 append("- 用户说「放到公共文档 / 放公共目录」= 把产物写到该绝对路径（用户不需要报路径）；")

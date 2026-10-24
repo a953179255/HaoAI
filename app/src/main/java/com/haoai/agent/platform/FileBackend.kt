@@ -169,10 +169,14 @@ class RawFileBackend(private val root: File) : FileBackend {
     override suspend fun listDir(rel: String): List<String> = withContext(Dispatchers.IO) {
         val f = if (rel.isBlank()) root else resolve(rel)
         require(f.isDirectory) { "不是目录：$rel" }
+        // 2026-10-24 改版：listFiles() 返回 null = 目录不可读（权限丢失/目录被删），
+        // 之前吞成空表会让浏览页谎报「（目录为空）」——真因必须浮出到 UI/模型。
         f.listFiles()
             ?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name.lowercase() })
             ?.map { if (it.isDirectory) "${it.name}/" else it.name }
-            ?: emptyList()
+            ?: throw IllegalStateException(
+                "无法读取目录（可能缺少「所有文件管理」权限）：${rel.ifBlank { "/" }}"
+            )
     }
 
     override suspend fun walk(maxEntries: Int): List<FileEntry> = withContext(Dispatchers.IO) {

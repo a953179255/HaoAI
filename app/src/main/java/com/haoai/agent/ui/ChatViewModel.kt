@@ -1363,13 +1363,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /**
      * 批3a：文件树三件套——后端可达性（null=未绑定，树出空态提示）、
      * 单层懒加载、搜索用全量 walk（8000 上限与工具层同口径）。
-     * listDir/walk 的异常吞成空表：树对读不了的目录保持沉默，不打断浏览。
+     * walk 仍吞错（只影响行元信息/搜索）；listDir 2026-10-24 改版起不吞——
+     * 读取失败的真实原因交给浏览页错误态显示，不再谎报「目录为空」。
      */
     fun treeBackend(): com.haoai.agent.platform.FileBackend? = c.workspace.current
 
     suspend fun treeListDir(rel: String): List<String> =
-        runCatching { c.workspace.current?.listDir(rel) ?: emptyList() }
-            .getOrDefault(emptyList())
+        c.workspace.current?.listDir(rel) ?: emptyList()
 
     suspend fun treeWalk(): List<com.haoai.agent.platform.FileEntry> =
         runCatching { c.workspace.current?.walk() ?: emptyList() }

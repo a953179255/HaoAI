@@ -40,6 +40,7 @@ import com.haoai.agent.ui.theme.haoDividerColor
 import com.haoai.agent.ui.theme.haoRowPressColor
 import com.haoai.agent.ui.theme.haoToneBadgeBg
 import com.haoai.agent.ui.theme.haoToneInk
+import com.haoai.agent.ui.theme.haoToneMain
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
 /**
@@ -132,6 +133,8 @@ fun HaoDivider() {
 fun HaoRow(
     title: String,
     subtitle: String? = null,
+    /** 标题右侧的小徽标（如「推荐」）：2026-10-24 工作区改版加，默认无。 */
+    titleBadge: String? = null,
     icon: ImageVector? = null,
     tone: HaoTone = HaoTone.Accent,
     /** 图标徽标的装饰色序号（HaoIconPalette）；-1 = 跟随 tone。设置页各入口的颜色区分用 */
@@ -169,21 +172,36 @@ fun HaoRow(
             HaoBadge(icon = icon, tone = tone, enabled = enabled, tintIndex = tintIndex)
         }
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    // 纯玻璃配方白雾只有 0.15，深色文字需要 1px 浅色晕才能从花纹里浮出来
-                    shadow = androidx.compose.ui.graphics.Shadow(
-                        color = Color.White.copy(alpha = 0.65f),
-                        offset = androidx.compose.ui.geometry.Offset(0f, 1f),
-                        blurRadius = 3f
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        // 纯玻璃配方白雾只有 0.15，深色文字需要 1px 浅色晕才能从花纹里浮出来
+                        shadow = androidx.compose.ui.graphics.Shadow(
+                            color = Color.White.copy(alpha = 0.65f),
+                            offset = androidx.compose.ui.geometry.Offset(0f, 1f),
+                            blurRadius = 3f
+                        )
+                    ),
+                    fontWeight = FontWeight.Medium,
+                    color = titleColor ?: MaterialTheme.colorScheme.onSurface.copy(
+                        alpha = if (enabled) 1f else 0.45f
                     )
-                ),
-                fontWeight = FontWeight.Medium,
-                color = titleColor ?: MaterialTheme.colorScheme.onSurface.copy(
-                    alpha = if (enabled) 1f else 0.45f
                 )
-            )
+                if (titleBadge != null) {
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        titleBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = haoToneMain(HaoTone.Accent),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(haoToneMain(HaoTone.Accent).copy(alpha = 0.12f))
+                            .padding(horizontal = 7.dp, vertical = 1.dp)
+                    )
+                }
+            }
             if (!subtitle.isNullOrBlank()) {
                 Text(
                     subtitle,

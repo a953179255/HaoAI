@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,7 +56,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.haoai.agent.agent.tools.snapshot.FileSnapshot
 import com.haoai.agent.platform.FileEntry
 import com.haoai.agent.ui.UiFilePath
+import com.haoai.agent.ui.theme.HaoTone
 import com.haoai.agent.ui.theme.haoIsDark
+import com.haoai.agent.ui.theme.haoToneMain
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -86,6 +90,10 @@ internal fun WorkspaceBrowserDialog(
     /** 「在目录中定位」跳入：非空=切到其父目录并短暂高亮该文件。 */
     locateRel: String? = null,
     onLocateConsumed: () -> Unit = {},
+    /** 空目录时的去向提示（设置页传「公共文档里还有 N 个文件…」；聊天侧不传）。 */
+    emptyHint: String? = null,
+    emptyActionLabel: String? = null,
+    onEmptyAction: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val theme = workspaceShellTheme()
@@ -96,6 +104,8 @@ internal fun WorkspaceBrowserDialog(
     var names by remember { mutableStateOf<List<String>>(emptyList()) }
     var entries by remember { mutableStateOf<List<FileEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    /** 目录读取失败的真实原因（2026-10-24 改版：错误不再吞成「目录为空」假象）。 */
+    var loadError by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var viewerRel by remember { mutableStateOf<String?>(null) }
     var menuRow by remember { mutableStateOf<BrowserRow?>(null) }
@@ -106,12 +116,14 @@ internal fun WorkspaceBrowserDialog(
     fun toast(s: String) { toastMsg = s }
 
     // 一次加载：当前目录名单 + 全量 walk（行元信息与统计与搜索都吃它）。
+    // listDir 失败要浮出原因（listDir 自身已不吞错）；walk 失败只影响元信息，保持沉默。
     LaunchedEffect(curRel, query, reloadTick, backendReady) {
         if (!backendReady) { loading = false; return@LaunchedEffect }
         loading = true
-        val n = runCatching { if (query.isEmpty()) listDir(curRel) else emptyList() }.getOrDefault(emptyList())
+        val n = runCatching { if (query.isEmpty()) listDir(curRel) else emptyList() }
+        names = n.getOrDefault(emptyList())
+        loadError = if (query.isEmpty()) n.exceptionOrNull()?.message else null
         val w = runCatching { withContext(Dispatchers.IO) { walk() } }.getOrDefault(emptyList())
-        names = n
         entries = w
         loading = false
     }
@@ -235,16 +247,70 @@ internal fun WorkspaceBrowserDialog(
             LazyColumn(Modifier.fillMaxSize()) {
                 if (rows.isEmpty()) {
                     item {
-                        Text(
+                        // 空态三分类（2026-10-24 改版）：读取失败 / 真·空目录（带去向提示与
+                        // 一键切回）/ 搜索无匹配——错误不许再伪装成「目录为空」。
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 36.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             when {
-                                !backendReady -> "未绑定工作空间"
-                                searchActive -> "没有匹配「$query」的文件"
-                                loading -> ""
-                                else -> "（目录为空）"
-                            },
-                            fontSize = 12.sp, color = theme.faint,
-                            modifier = Modifier.padding(24.dp)
-                        )
+                                !backendReady -> Text(
+                                    "未绑定工作空间", fontSize = 12.sp, color = theme.faint
+                                )
+                                loadError != null -> {
+                                    Icon(
+                                        Icons.Filled.Info, contentDescription = null,
+                                        tint = haoToneMain(HaoTone.Warn),
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                    Spacer(Modifier.size(10.dp))
+                                    Text(
+                                        "读取失败", fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold, color = theme.text
+                                    )
+                                    Spacer(Modifier.size(4.dp))
+                                    Text(
+                                        loadError ?: "", fontSize = 11.sp, color = theme.faint,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                                searchActive -> Text(
+                                    "没有匹配「$query」的文件", fontSize = 12.sp, color = theme.faint
+                                )
+                                else -> {
+                                    Icon(
+                                        Icons.Filled.FolderOpen, contentDescription = null,
+                                        tint = theme.faint, modifier = Modifier.size(26.dp)
+                                    )
+                                    Spacer(Modifier.size(10.dp))
+                                    Text(
+                                        "这个工作区是空的", fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold, color = theme.text
+                                    )
+                                    if (!emptyHint.isNullOrBlank()) {
+                                        Spacer(Modifier.size(4.dp))
+                                        Text(
+                                            emptyHint, fontSize = 11.sp, color = theme.faint,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                    if (emptyActionLabel != null && onEmptyAction != null) {
+                                        Spacer(Modifier.size(12.dp))
+                                        Text(
+                                            emptyActionLabel, fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = theme.accent,
+                                            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(theme.accentSoft)
+                                                .clickable { onEmptyAction() }
+                                                .padding(horizontal = 16.dp, vertical = 7.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 items(count = rows.size, key = { "r-" + rows[it].rel }) { idx ->

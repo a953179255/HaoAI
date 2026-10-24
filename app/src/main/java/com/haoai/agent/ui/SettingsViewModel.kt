@@ -1576,10 +1576,79 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
 
     /**
-     * 切换结果一次性事件（UI collect 后 toast 并消费回 null）：label=档位名，failed=切换失败。
-     * v2 起切档=纯换指针零搬运（脑固定 brainDir，材料各安其位），无迁移进度概念。
+     * 切换结果一次性事件（UI collect 后 toast 并消费回 null）：label=档位名，failed=切换失败，
+     * oldInfo=旧档文件去向（旧根有文件时才有，零搬运语义要如实说出口）。
      */
-    data class SwitchOutcome(val label: String, val failed: Boolean)
+    data class SwitchOutcome(val label: String, val failed: Boolean, val oldInfo: String? = null)
+
+    /** 产出位置档案：radio 行尾数字 / 文件去向提示条 / 浏览页空态共用。 */
+    data class WsRootInfo(
+        val mode: com.haoai.agent.platform.WorkspaceManager.Mode,
+        val label: String,
+        val path: String,
+        val count: Int
+    )
+
+    /** 统计缓存（2026-10-24 改版）：进页直读缓存值，后台静默刷新——不再每进页现算闪「统计中…」。 */
+    var wsStats by androidx.compose.runtime.mutableStateOf<com.haoai.agent.ui.chat.WorkspaceStats?>(null)
+        private set
+
+    /** 各档根的档案（key: private/public/custom）：行尾「N 个文件」徽标的数据源。 */
+    var wsRootInfos by androidx.compose.runtime.mutableStateOf<Map<String, WsRootInfo>>(emptyMap())
+        private set
+
+    /** 刚切离且还有文件的旧档（提示条「还有 N 个文件留在原处」）；null=无。 */
+    var wsLastLeft by androidx.compose.runtime.mutableStateOf<WsRootInfo?>(null)
+        private set
+
+    private var wsCachesAt = 0L
+
+    init {
+        // VM 创建即算好：首次进工作区页也大概率已有缓存值可显
+        refreshWsCaches()
+    }
+
+    /** 进工作区页时调：显示缓存的同时静默刷新（10s 内不重复，防页面往返刷爆 IO）。 */
+    fun maybeRefreshWsCaches() {
+        val now = System.currentTimeMillis()
+        if (wsStats != null && now - wsCachesAt < 10_000) return
+        refreshWsCaches()
+    }
+
+    /** 重算统计 + 三档各自根的文件数（与 countTree 同口径，含 .git 不截断——数字必须与英雄卡对得上）。 */
+    fun refreshWsCaches() {
+        wsCachesAt = System.currentTimeMillis()
+        viewModelScope.launch(Dispatchers.IO) {
+            val m = c.workspace.mode()
+            wsStats = workspaceStats()
+            suspend fun infoOf(
+                mode: com.haoai.agent.platform.WorkspaceManager.Mode,
+                label: String,
+                path: String?
+            ): Pair<String, WsRootInfo>? {
+                if (path == null) return null
+                // countTree 内部自带 withContext(IO)
+                val n = runCatching {
+                    com.haoai.agent.platform.RawFileBackend(java.io.File(path)).countTree(0L).files
+                }.getOrNull() ?: return null
+                return mode.name.lowercase() to WsRootInfo(mode, label, path, n)
+            }
+            wsRootInfos = listOfNotNull(
+                infoOf(com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE, "应用专属",
+                    c.workspace.defaultWorkspaceRoot().absolutePath),
+                infoOf(com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC, "公共文档",
+                    c.workspace.publicDefaultRoot().absolutePath),
+                infoOf(com.haoai.agent.platform.WorkspaceManager.Mode.CUSTOM, "自选位置",
+                    c.workspace.workspaceCustomPath()),
+            ).toMap()
+            // 当前档为空但已知旧档有文件时，浏览页空态的「去哪找文件」要有答案：
+            // 优先刚切离的旧档，其次任意有文件的已知根
+            val curCount = wsRootInfos[m.name.lowercase()]?.count ?: 0
+            if (curCount == 0 && wsLastLeft == null) {
+                wsLastLeft = wsRootInfos.values.filter { it.mode != m && it.count > 0 }.maxByOrNull { it.count }
+            }
+        }
+    }
 
     private val _wsOutcome = MutableStateFlow<SwitchOutcome?>(null)
     val wsOutcome: StateFlow<SwitchOutcome?> = _wsOutcome.asStateFlow()
@@ -1616,6 +1685,15 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         wsSwitching = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // 切档前如实给旧根计数（IO 里现算，几万文件秒级，wsSwitching 转圈盖住）：
+                // 零搬运语义下 toast 必须说清「N 个文件留在原处」，否则用户以为文件丢了
+                val oldMode = c.workspace.mode()
+                val oldLabel = wsModeLabel(oldMode)
+                val oldPath = (c.workspace.current as? com.haoai.agent.platform.RawFileBackend)
+                    ?.shellWorkdir()?.absolutePath
+                val oldCount = c.workspace.current?.let {
+                    runCatching { it.countTree(dayStartMillis()).files }.getOrNull()
+                }
                 val ok = if (targetPath == null) {
                     c.workspace.useDefault(); true
                 } else {
@@ -1625,13 +1703,29 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                     _wsOutcome.value = SwitchOutcome(label, failed = true)
                     return@launch
                 }
+                val newPath = c.workspace.current?.let { b ->
+                    (b as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.absolutePath
+                }
+                var oldInfo: String? = null
+                if (oldCount != null && oldCount > 0 && oldPath != null && oldPath != newPath) {
+                    wsLastLeft = WsRootInfo(oldMode, oldLabel, oldPath, oldCount)
+                    oldInfo = "「$oldLabel」的 $oldCount 个文件留在原处"
+                }
                 c.onWorkspaceSwitched()
                 wsTick++
-                _wsOutcome.value = SwitchOutcome(label, failed = false)
+                _wsOutcome.value = SwitchOutcome(label, failed = false, oldInfo = oldInfo)
+                refreshWsCaches()
             } finally {
                 wsSwitching = false
             }
         }
+    }
+
+    private fun wsModeLabel(m: com.haoai.agent.platform.WorkspaceManager.Mode): String = when (m) {
+        com.haoai.agent.platform.WorkspaceManager.Mode.PRIVATE -> "应用专属"
+        com.haoai.agent.platform.WorkspaceManager.Mode.PUBLIC -> "公共文档"
+        com.haoai.agent.platform.WorkspaceManager.Mode.CUSTOM -> "自选位置"
+        com.haoai.agent.platform.WorkspaceManager.Mode.SAF -> "SAF 目录"
     }
 
     /** UI 三态判定（含 SAF 存量单列态）。 */
@@ -1639,6 +1733,30 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 公共交换目录默认根（Documents/HaoAI），UI 公共档切换入口用。 */
     fun workspacePublicDefault(): String = c.workspace.publicDefaultRoot().absolutePath
+
+    /** 上次自选位置路径（null=从未自选过）：radio 行尾数字指向它。 */
+    fun workspaceCustomPath(): String? = c.workspace.workspaceCustomPath()
+
+    /**
+     * 系统 OpenDocumentTree 结果 → 真实路径（2026-10-24 改版：选择器用系统的，落库仍是
+     * 真实路径）。documentId 形如 "primary:Documents/HaoAI" / "<卷ID>:Foo"；只有本机
+     * 存储卷拼得出真实路径，云盘 / OTG provider → Result.failure 让 UI 当场提示重选，
+     * 而不是等 Agent 第一次跑 bash 才发现目录不存在。
+     */
+    fun resolveTreeUriToPath(uri: android.net.Uri): Result<String> = runCatching {
+        val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+        val volume = docId.substringBefore(':', "")
+        val rest = docId.substringAfter(':', "")
+        require(volume.isNotEmpty()) { "无法识别所选位置：$docId" }
+        val base = if (volume == "primary") {
+            android.os.Environment.getExternalStorageDirectory().absolutePath
+        } else "/storage/$volume"
+        val dir = java.io.File(if (rest.isBlank()) base else "$base/$rest")
+        require(dir.isDirectory) {
+            "该位置不是本机可读写的目录（云盘 / OTG 不支持），请选本机存储中的文件夹"
+        }
+        dir.absolutePath
+    }
 
     /** 公共交换目录当前路径（默认 Documents/HaoAI），UI 卡片展示与 AGENTS.md 注入同源。 */
     fun workspaceExchangePath(): String = c.workspace.exchangeRoot().absolutePath
@@ -1664,12 +1782,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     /**
      * 工作区浏览（2026-10-11 方案B）：设置·工作区页「浏览工作区文件」行的数据面——
-     * 统计副标题（walk 现算，异常吞成空表保持沉默，与聊天侧 treeWalk 同一口径）
-     * 与壳的目录 Tab 管线。SAF 后端无文件系统根 → fileRefOfRel 恒 null →
-     * 查看器降级提示（聊天侧同一口径）。
+     * 统计走 wsStats 缓存（refreshWsCaches 维护）；SAF 后端无文件系统根 →
+     * fileRefOfRel 恒 null → 查看器降级提示（聊天侧同一口径）。
      */
-    // 卡片/迁移数字必须同源真实：walk 的 8000 是列表渲染上限，拿去当"共 N 文件"
-    // 报错过（8000 vs 72283 打架，用户实测 2026-10-23）→ countTree 全树真数。
     suspend fun workspaceStats(): com.haoai.agent.ui.chat.WorkspaceStats =
         runCatching {
             val tc = c.workspace.current?.countTree(dayStartMillis())
@@ -1687,9 +1802,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     fun workspaceTreeReady(): Boolean = c.workspace.current != null
 
+    /**
+     * 目录名单（浏览页用）。2026-10-24 改版不再吞错：读取失败（权限丢失/目录被删）
+     * 要把真实原因抛给 WorkspaceBrowserDialog 的错误态显示，谎报「目录为空」的
+     * 时代结束了。
+     */
     suspend fun treeListDir(rel: String): List<String> =
-        runCatching { c.workspace.current?.listDir(rel) ?: emptyList() }
-            .getOrDefault(emptyList())
+        c.workspace.current?.listDir(rel) ?: emptyList()
 
     suspend fun treeWalk(): List<com.haoai.agent.platform.FileEntry> =
         runCatching { c.workspace.current?.walk() ?: emptyList() }

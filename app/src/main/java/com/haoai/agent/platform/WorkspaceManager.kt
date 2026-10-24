@@ -20,7 +20,9 @@ private data class WorkspacePref(
     val rawPath: String? = null,
     val rawKind: String? = null,
     /** 公共交换目录（v3 定稿）：null = 默认 Documents/HaoAI；与工作区档位独立。 */
-    val exchangePath: String? = null
+    val exchangePath: String? = null,
+    /** 上次自选位置的路径（2026-10-24 改版）：切走后 radio 行尾的文件数徽标仍要指它。 */
+    val customPath: String? = null
 )
 
 class WorkspaceManager(private val context: Context) {
@@ -49,6 +51,9 @@ class WorkspaceManager(private val context: Context) {
     /** 公共交换目录偏好（null = 默认 Documents/HaoAI）。 */
     private var exchangePath: String? = null
 
+    /** 上次自选位置路径（radio 行尾文件数徽标指向它；null=从未自选过）。 */
+    private var customPath: String? = null
+
     init {
         restoreOrDefault()
     }
@@ -64,7 +69,8 @@ class WorkspaceManager(private val context: Context) {
             WorkspacePref(
                 rawPath = defaultRoot.absolutePath,
                 rawKind = Mode.PRIVATE.name,
-                exchangePath = exchangePath
+                exchangePath = exchangePath,
+                customPath = customPath
             )
         )
     }
@@ -82,7 +88,7 @@ class WorkspaceManager(private val context: Context) {
             currentRawPath = null
             rawKind = null
             safUri = uriString
-            persist(WorkspacePref(safUri = uriString, exchangePath = exchangePath))
+            persist(WorkspacePref(safUri = uriString, exchangePath = exchangePath, customPath = customPath))
             true
         }.getOrDefault(false)
     }
@@ -101,7 +107,13 @@ class WorkspaceManager(private val context: Context) {
             currentRawPath = f.absolutePath
             rawKind = kind.name
             safUri = null
-            persist(WorkspacePref(rawPath = f.absolutePath, rawKind = kind.name, exchangePath = exchangePath))
+            persist(
+                WorkspacePref(
+                    rawPath = f.absolutePath, rawKind = kind.name,
+                    exchangePath = exchangePath,
+                    customPath = if (kind == Mode.CUSTOM) f.absolutePath else customPath
+                )
+            )
             true
         }.getOrDefault(false)
     }
@@ -112,7 +124,11 @@ class WorkspaceManager(private val context: Context) {
         rawKind == Mode.PRIVATE.name -> Mode.PRIVATE
         currentRawPath == null -> Mode.PRIVATE
         rawKind == Mode.CUSTOM.name -> Mode.CUSTOM
-        rawKind == Mode.PUBLIC.name -> Mode.PUBLIC
+        rawKind == Mode.PUBLIC.name ->
+            // 2026-10-24 改版：公共档不再有「更换」入口，改过根的旧公共档（v3 时期经
+            // 更换按钮落库的 rawKind=PUBLIC+自定义路径）按实际语义归入自选位置——
+            // radio 落位/副标题/交换卡显隐全跟着走对；引擎绑定与路径不动、无迁移。
+            if (currentRawPath == publicDefaultRoot().absolutePath) Mode.PUBLIC else Mode.CUSTOM
         // 存量 rawPath（无 kind 字段）按默认公共根兜底归类
         currentRawPath == publicDefaultRoot().absolutePath -> Mode.PUBLIC
         else -> Mode.CUSTOM
@@ -130,6 +146,10 @@ class WorkspaceManager(private val context: Context) {
     /** 当前公共交换目录（偏好优先，回落默认根）。 */
     fun exchangeRoot(): File = File(exchangePath ?: publicDefaultRoot().absolutePath)
 
+    /** 上次自选位置路径（切走后仍记得；null=从未自选过）。 */
+    fun workspaceCustomPath(): String? =
+        customPath ?: currentRawPath?.takeIf { mode() == Mode.CUSTOM }
+
     /**
      * 更换公共交换目录（v3 定稿：独立于工作区档位的「对外窗口」）。
      * 只改映射不改工作区绑定；目录不存在则尝试创建。调用方负责重写 AGENTS.md。
@@ -143,7 +163,8 @@ class WorkspaceManager(private val context: Context) {
             persist(
                 WorkspacePref(
                     safUri = safUri, rawPath = currentRawPath,
-                    rawKind = rawKind, exchangePath = f.absolutePath
+                    rawKind = rawKind, exchangePath = f.absolutePath,
+                    customPath = customPath
                 )
             )
             true
@@ -178,9 +199,10 @@ class WorkspaceManager(private val context: Context) {
             } else null
         }.getOrNull()
 
-        // 交换目录/SAF 绑定优先恢复（与档位判定独立）
+        // 交换目录/SAF 绑定/上次自选路径优先恢复（与档位判定独立）
         exchangePath = saved?.exchangePath
         safUri = saved?.safUri
+        customPath = saved?.customPath
 
         // SAF 优先（存量兼容）；权限失效则继续尝试 rawPath
         if (saved?.safUri != null) {
@@ -227,7 +249,8 @@ class WorkspaceManager(private val context: Context) {
                     WorkspacePref(
                         rawPath = pub.absolutePath,
                         rawKind = Mode.PUBLIC.name,
-                        exchangePath = exchangePath
+                        exchangePath = exchangePath,
+                        customPath = customPath
                     )
                 )
             } else {
