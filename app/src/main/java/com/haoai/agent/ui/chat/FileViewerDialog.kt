@@ -250,6 +250,9 @@ internal fun FileViewerDialog(
             isZip -> zipStatus ?: "读取中…"
             else -> chip.ifEmpty { "text" }
         },
+        // 状态行上顶栏（2026-10-25）：可视行区间并入副标题实时更新，截断说明跟随
+        statusPath = dirPath,
+        statusNote = note,
         lines = if (isZip) emptyList() else lines,
         dark = dark,
         onDismiss = onDismiss,

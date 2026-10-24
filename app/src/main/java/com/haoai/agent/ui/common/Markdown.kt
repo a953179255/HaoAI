@@ -936,6 +936,11 @@ internal fun FullscreenCodeDialog(
     simple: Boolean = false,
     /** 底栏状态行语言标签（如 MD/KT/JSON）；空=不显示状态行。行号由壳层按滚动实时拼。 */
     statusLang: String = "",
+    /** 2026-10-25 状态行上顶栏：实时副标题的路径前缀（如 workspace）；非空+文本模式时
+     *  副行变「路径 · 可视行区间 · 语言」实时更新（底栏不再有状态行），图片/ZIP 仍走 fileMeta。 */
+    statusPath: String = "",
+    /** 实时副标题的补充说明（截断信息等），追加在语言标签后。 */
+    statusNote: String = "",
     /** 外部跳行请求（0 基行号）：非 null 即滚到该行。wrap=false 时自动开换行
     *  （跳行必须让目标行完整可见）。搜索/大纲复用此入口。 */
     jumpToLine: Int? = null,
@@ -1041,6 +1046,22 @@ internal fun FullscreenCodeDialog(
     else trackHpx
     val thumbTopPx = if (trackHpx > 0 && thumbHpx < trackHpx && maxScroll > 0)
         (vProgress * (trackHpx - thumbHpx)).toInt() else 0
+    // 状态行上顶栏（2026-10-25 效果图定稿）：底栏只剩控件；可视行区间+语言并入副标题
+    // 实时更新。读 64ms 轮询的 vProgress 推导（直接读 vScroll.value 在本环境不触发重组），
+    // 软换行估算偏差照旧钳到 [1, 总行-可视+1]；切片态沿用「从行 X 起」。
+    val liveStatus = if (!simple && textMode && statusLang.isNotEmpty()) {
+        val visCount = if (trackHpx > 0) (trackHpx / lineHeightPx).toInt() else 0
+        val firstVis = (((vProgress * maxScroll) / lineHeightPx).toInt() + 1)
+            .coerceIn(1, (lines.size - visCount + 1).coerceAtLeast(1))
+        val last = (firstVis + visCount - 1).coerceAtLeast(firstVis).coerceAtMost(lines.size)
+        buildString {
+            if (statusPath.isNotEmpty()) { append(statusPath); append(" · ") }
+            if (viewingFrom in lines.indices) append("从行 ${viewingFrom + 1} 起")
+            else { append(firstVis); append('–'); append(last); append(" / "); append(lines.size); append(" 行") }
+            append(" · "); append(statusLang)
+            if (statusNote.isNotEmpty()) { append(" · "); append(statusNote) }
+        }
+    } else ""
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
@@ -1327,7 +1348,21 @@ internal fun FullscreenCodeDialog(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (!simple && fileMeta.isNotEmpty()) {
+                    // 实时状态副标题（2026-10-25 上顶栏）：绿字=活数据，跟滚动/字号实时变；
+                    // 无实时态（图片/ZIP/simple）回落静态 fileMeta
+                    if (!simple && liveStatus.isNotEmpty()) {
+                        Text(
+                            liveStatus,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 9.5.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else if (!simple && fileMeta.isNotEmpty()) {
                         Text(
                             fileMeta,
                             style = androidx.compose.ui.text.TextStyle(
@@ -1625,28 +1660,8 @@ internal fun FullscreenCodeDialog(
                             textAlign = androidx.compose.ui.text.style.TextAlign.End,
                             modifier = Modifier.weight(1f)
                         )
-                    } else if (statusLang.isNotEmpty()) {
-                        // 可视区间而非「共 N 行」：长文件里用户更需要知道看到了哪
-                        // 软换行会让估算行高偏小（首行号虚高）——钳到 [1, 总行-可视+1]
-                        val visCount = if (trackHpx > 0) (trackHpx / lineHeightPx).toInt() else 0
-                        val firstVis = ((vScroll.value / lineHeightPx).toInt() + 1)
-                            .coerceIn(1, (shownLines.size - visCount + 1).coerceAtLeast(1))
-                        Text(
-                            (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
-                             else "$firstVis–${(firstVis + visCount).coerceAtMost(shownLines.size)} / ${shownLines.size} 行") +
-                                if (statusLang.isNotEmpty()) " · $statusLang" else "",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 10.sp, lineHeight = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                            ),
-                            color = onSurfaceVariant.copy(alpha = 0.72f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                            modifier = Modifier.weight(1f)
-                        )
                     } else {
+                        // 文本模式状态行已上顶栏（2026-10-25），底栏只留控件
                         Spacer(Modifier.weight(1f))
                     }
                 }
