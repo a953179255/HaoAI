@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -35,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.haoai.agent.ui.UiFilePath
+import com.haoai.agent.ui.common.FullscreenDialogImmersive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -76,15 +78,21 @@ internal fun JobLogViewerDialog(ref: UiFilePath, onDismiss: () -> Unit) {
     val jobId = ref.relPath.substringAfterLast('/').removeSuffix(".log")
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        // 恒深壳铺到系统条后面（同查看器灰带修复）→ 白图标
+        FullscreenDialogImmersive(Color(0xFF10151A))
         Box(
             Modifier
                 .fillMaxSize()
                 .background(Color(0xFF10151A))
                 .statusBarsPadding()
         ) {
-            Column(Modifier.fillMaxSize()) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .navigationBarsPadding()
+            ) {
                 Row(
                     Modifier
                         .fillMaxWidth()

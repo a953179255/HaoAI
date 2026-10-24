@@ -99,8 +99,10 @@ fun ImageLightbox(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        // 黑底沉浸铺到系统条后面（同查看器灰带修复）；恒深底 → 白图标
+        FullscreenDialogImmersive(Color.Black)
         // 方案三「信息完整 · 胶片导航风」（2026-10-14 用户选定）：
         // 纯黑底；顶部渐变压暗栏放 返回(兼关闭)+标题+页码（拇指党友好，左上即退）；
         // 底部独立暗色工具带放 缩略图胶片条（一眼看清整组、点格跳页）+ 带文字标签的 保存/分享。
