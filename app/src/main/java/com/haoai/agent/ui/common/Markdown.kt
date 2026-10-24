@@ -1506,6 +1506,9 @@ internal fun FullscreenCodeDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // 左手习惯（2026-10-24）：图片/ZIP/HTML 的外发按钮簇贴左（拇指侧），
+                    // 元信息（PNG·尺寸 / N 项 等）退到右端；文本模式不动（状态行在左+字号/换行在右）
+                    if (!textMode) clusterActions?.invoke(this)
                     if (imageBitmap != null && imageMeta.isNotEmpty()) {
                         Text(
                             imageMeta,
@@ -1516,6 +1519,8 @@ internal fun FullscreenCodeDialog(
                             ),
                             color = onSurfaceVariant.copy(alpha = 0.72f),
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
                             modifier = Modifier.weight(1f)
                         )
                     } else if (customContent != null) {
@@ -1529,6 +1534,8 @@ internal fun FullscreenCodeDialog(
                             ),
                             color = onSurfaceVariant.copy(alpha = 0.72f),
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
                             modifier = Modifier.weight(1f)
                         )
                     } else if (statusLang.isNotEmpty()) {
@@ -1622,8 +1629,8 @@ internal fun FullscreenCodeDialog(
                             color = if (wrap) primary else onSurfaceVariant.copy(alpha = 0.72f)
                         )
                     }
-                    // 行内动作（图片/ZIP 的胶囊直接进簇；HTML 的「渲染看」主键也在此）
-                    clusterActions?.invoke(this)
+                    // 行内动作（文本模式若有簇在此渲染；非文本模式的簇已前置到最左，勿重复）
+                    if (textMode) clusterActions?.invoke(this)
                     // ⋯ 溢出菜单（文本模式的外发三键收进来，簇里放不下全量）
                     if (textMode && overflowMenu != null) {
                         androidx.compose.foundation.layout.Box(

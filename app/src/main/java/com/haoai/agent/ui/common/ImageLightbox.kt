@@ -194,31 +194,13 @@ fun ImageLightbox(
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 胶片条：多图才有；点格跳页，当前格描边高亮
-                if (images.size > 1) {
-                    Row(
-                        Modifier
-                            .weight(1f)
-                            .horizontalScroll(filmScroll),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        images.forEachIndexed { i, (u, _) ->
-                            FilmThumb(
-                                url = u,
-                                active = i == pagerState.currentPage,
-                                onClick = { scope.launch { pagerState.animateScrollToPage(i) } }
-                            )
-                        }
-                    }
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+                // 左手习惯（2026-10-24）：保存/分享动作贴左（拇指侧），胶片条退到右侧
                 current?.let { (url, _) ->
                     var busy by remember(url) { mutableStateOf(false) }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(20.dp),
-                        modifier = Modifier.padding(start = if (images.size > 1) 14.dp else 0.dp)
+                        modifier = Modifier.padding(end = if (images.size > 1) 14.dp else 0.dp)
                     ) {
                         LbAction(
                             icon = HaoIcons.Save, label = "保存", enabled = !busy,
@@ -246,6 +228,25 @@ fun ImageLightbox(
                             }
                         )
                     }
+                }
+                // 胶片条：多图才有；点格跳页，当前格描边高亮
+                if (images.size > 1) {
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .horizontalScroll(filmScroll),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        images.forEachIndexed { i, (u, _) ->
+                            FilmThumb(
+                                url = u,
+                                active = i == pagerState.currentPage,
+                                onClick = { scope.launch { pagerState.animateScrollToPage(i) } }
+                            )
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
             }
         }
