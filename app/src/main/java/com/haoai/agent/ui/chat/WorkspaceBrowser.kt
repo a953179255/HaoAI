@@ -94,6 +94,10 @@ internal fun WorkspaceBrowserDialog(
     emptyHint: String? = null,
     emptyActionLabel: String? = null,
     onEmptyAction: (() -> Unit)? = null,
+    /** 顶栏标题（旧产出区只读浏览传「旧产出区」以示区别）。 */
+    title: String = "工作区",
+    /** true=只读查看：隐藏长按菜单（删除/外部打开），旧产出区浏览用。 */
+    readOnly: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val theme = workspaceShellTheme()
@@ -164,7 +168,7 @@ internal fun WorkspaceBrowserDialog(
         Column(Modifier.fillMaxSize()) {
             com.haoai.agent.ui.common.GlassPageBar(
                 backdrop = localBackdrop,
-                title = "工作区",
+                title = title,
                 onBack = onDismiss
             )
             // 副标题统计行（壳定稿口径：统计进副标题，不放底栏）。
@@ -332,7 +336,8 @@ internal fun WorkspaceBrowserDialog(
                                     if (row.isDir && !searchActive) curRel = row.rel
                                     else viewerRel = row.rel
                                 },
-                                onLongClick = { if (!searchActive) menuRow = row }
+                                // readOnly（旧产出区浏览）不给长按菜单：删除/外部打开都不适用
+                                onLongClick = { if (!searchActive && !readOnly) menuRow = row }
                             )
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically

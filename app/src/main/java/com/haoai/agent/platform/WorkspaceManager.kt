@@ -58,23 +58,6 @@ class WorkspaceManager(private val context: Context) {
         restoreOrDefault()
     }
 
-    fun useDefault() {
-        current = RawFileBackend(defaultRoot)
-        // v2：显式记录「用户选了应用专属」。旧版置 null=没选过，会被新装默认逻辑
-        // 在下次启动时重新判一次（老用户被莫名弹去公共文档）——2026-10-24 实测踩坑。
-        currentRawPath = defaultRoot.absolutePath
-        rawKind = Mode.PRIVATE.name
-        safUri = null
-        persist(
-            WorkspacePref(
-                rawPath = defaultRoot.absolutePath,
-                rawKind = Mode.PRIVATE.name,
-                exchangePath = exchangePath,
-                customPath = customPath
-            )
-        )
-    }
-
     fun useSaf(uriString: String): Boolean {
         val uri = Uri.parse(uriString)
         return runCatching {
@@ -229,15 +212,10 @@ class WorkspaceManager(private val context: Context) {
             }
         }
         if (current == null) {
-            // v2 新装默认=公共文档（材料给相册/WPS/文件管理器直接访问，用户 2026-10-24 定稿）；
-            // 无「所有文件访问」权限才回落应用专属（设置页有引导，授权后一键切过去，秒切）。
-            // 升级保护：旧默认工作区（应用专属）已有内容 = 老用户，保持原地——
-            // 否则切档指针被弹去公共文档，旧工作区里的材料/脑文件全部被落空
-            // （2026-10-24 实测：偏好无 rawPath 的老用户被误判成新装）。
-            val legacyHasContent = defaultRoot.isDirectory &&
-                (defaultRoot.listFiles()?.isNotEmpty() == true)
+            // 新装默认=公共文档（用户 2026-10-24 双档裁决：产出默认放公共目录）；
+            // 无「所有文件访问」权限才回落应用专属沙盒（设置页有黄色横幅引导）。
             val pub = publicDefaultRoot()
-            val pubOk = !legacyHasContent && runCatching {
+            val pubOk = runCatching {
                 if (!pub.exists()) pub.mkdirs()
                 pub.isDirectory && android.os.Environment.isExternalStorageManager()
             }.getOrDefault(false)
@@ -256,6 +234,30 @@ class WorkspaceManager(private val context: Context) {
             } else {
                 current = RawFileBackend(defaultRoot)
                 currentRawPath = null
+            }
+        }
+        // 双档裁决（2026-10-24）：应用专属退役为产出位置。存量用户升级后绑定停在私有
+        // 沙盒（老升级保护遗留）→ 自动切到公共文档，零搬运：文件原地保留，由设置页
+        // 「旧产出区」蓝条指路（只读浏览/一键清理）。无存储权限时保持原地 + 横幅引导。
+        val livePath = (current as? RawFileBackend)?.shellWorkdir()?.absolutePath
+        if (livePath != null && livePath == defaultRoot.absolutePath) {
+            val pub = publicDefaultRoot()
+            val pubOk = runCatching {
+                if (!pub.exists()) pub.mkdirs()
+                pub.isDirectory && android.os.Environment.isExternalStorageManager()
+            }.getOrDefault(false)
+            if (pubOk) {
+                current = RawFileBackend(pub)
+                currentRawPath = pub.absolutePath
+                rawKind = Mode.PUBLIC.name
+                persist(
+                    WorkspacePref(
+                        rawPath = pub.absolutePath,
+                        rawKind = Mode.PUBLIC.name,
+                        exchangePath = exchangePath,
+                        customPath = customPath
+                    )
+                )
             }
         }
     }
