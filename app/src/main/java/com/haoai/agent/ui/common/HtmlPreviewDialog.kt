@@ -76,8 +76,11 @@ fun HtmlPreviewDialog(
     val progress = remember { mutableFloatStateOf(0f) }
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        // Dialog 窗口 edge-to-edge：深壳铺到系统条后面，状态栏/导航栏区域
+        // 不再露出压暗的下层界面（同查看器灰带修复，FullscreenDialogImmersive）
+        FullscreenDialogImmersive()
         Column(
             Modifier
                 .fillMaxSize()
@@ -123,7 +126,13 @@ fun HtmlPreviewDialog(
             AndroidView(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    // 有换乘钮时由按钮行让位导航栏；没有时 WebView 自己让——
+                    // edge-to-edge 后页面内容不能钻到系统手势条底下
+                    .then(
+                        if (onOpenInBrowser == null) Modifier.navigationBarsPadding()
+                        else Modifier
+                    ),
                 factory = { ctx ->
                     @SuppressLint("SetJavaScriptEnabled")
                     WebViewPool.acquire(ctx).apply {

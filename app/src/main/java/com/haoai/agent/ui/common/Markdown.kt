@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -1042,8 +1043,9 @@ internal fun FullscreenCodeDialog(
         (vProgress * (trackHpx - thumbHpx)).toInt() else 0
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        FullscreenDialogImmersive()
         // ── 2026-10-24 查看器改版：控制件悬浮玻璃化，内容全出血 ──
         // 旧版三段 surface 灰横条（顶栏/搜索/代码卡/底栏）只靠发丝线分隔=「缝合」观感
         // 的根源；新版顶栏与底部控制簇是圆角玻璃浮件（半透明+细边），代码区全出血、
@@ -1070,13 +1072,59 @@ internal fun FullscreenCodeDialog(
                     customContent()
                 }
                 if (imageBitmap != null) {
-                            androidx.compose.foundation.Image(
-                                bitmap = imageBitmap,
-                                contentDescription = null,
-                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize().padding(10.dp)
-                            )
-                        } else if (wrap) {
+                    // 图片手势（2026-10-24）：双指捏合缩放 1×..8×、单指拖动平移、
+                    // 双击在「放大 2.5×/还原」间切换。缩放锚点=质心下的内容点不动
+                    // （t' = d − (d−t)·s'/s，d=质心−中心），平移随后叠加；|t| 钳到
+                    // (s−1)·宽/2 防拖出可视区，缩回 1× 自动回正。
+                    var imgScale by remember(imageBitmap) { mutableFloatStateOf(1f) }
+                    var imgPan by remember(imageBitmap) { mutableStateOf(Offset.Zero) }
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .pointerInput(imageBitmap) {
+                                detectTapGestures(onDoubleTap = { q ->
+                                    if (imgScale > 1.01f) {
+                                        imgScale = 1f
+                                        imgPan = Offset.Zero
+                                    } else {
+                                        val d = q - Offset(size.width / 2f, size.height / 2f)
+                                        imgPan = d - (d - imgPan) * 2.5f
+                                        imgScale = 2.5f
+                                    }
+                                })
+                            }
+                            .pointerInput(imageBitmap) {
+                                detectTransformGestures { centroid, drag, zoom, _ ->
+                                    val old = imgScale
+                                    val new = (old * zoom).coerceIn(1f, 8f)
+                                    val d = centroid - Offset(size.width / 2f, size.height / 2f)
+                                    val raw = d - (d - imgPan) * (new / old) + drag
+                                    val limX = (new - 1f) * size.width / 2f
+                                    val limY = (new - 1f) * size.height / 2f
+                                    imgPan = Offset(
+                                        raw.x.coerceIn(-limX, limX),
+                                        raw.y.coerceIn(-limY, limY)
+                                    )
+                                    imgScale = new
+                                }
+                            }
+                    ) {
+                        androidx.compose.foundation.Image(
+                            bitmap = imageBitmap,
+                            contentDescription = null,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(10.dp)
+                                .graphicsLayer {
+                                    scaleX = imgScale
+                                    scaleY = imgScale
+                                    translationX = imgPan.x
+                                    translationY = imgPan.y
+                                }
+                        )
+                    }
+                } else if (wrap) {
                             Column(
                                 Modifier
                                     .verticalScroll(vScroll)
@@ -1601,8 +1649,9 @@ internal fun FullscreenCodeDialog(
     if (outlineOpen) {
         Dialog(
             onDismissRequest = { outlineOpen = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
+            FullscreenDialogImmersive()
             Column(Modifier.fillMaxSize()) {
                 Spacer(
                     Modifier
