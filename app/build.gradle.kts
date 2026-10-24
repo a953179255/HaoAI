@@ -156,6 +156,8 @@ val syncLlamaEngine = tasks.register("syncLlamaEngine") {
     group = "build"
     inputs.property("tag", llamaTag)
     inputs.property("sha256", llamaSha256)
+    // 截断算法版本：改 truncate 逻辑时同步 +1，强制产物重生成
+    inputs.property("stripVer", 5)
     outputs.dir(llamaJniDir)
     // CC 要求：配置期把脚本属性拷成本地值，doLast 只碰这些（顶层 val/fun 都算脚本对象）
     val tag = llamaTag
@@ -193,10 +195,66 @@ val syncLlamaEngine = tasks.register("syncLlamaEngine") {
                     if (pFilesz > 0) end = maxOf(end, pOffset + pFilesz)
                 }
                 if (end !in 1..f.length()) return
+                // 截断前先抄出原始段表里的 ALLOC 段头：bionic 链接器按 SHT_DYNAMIC
+                // 段头定位 .dynamic（"dynamic section header was not found"）、并校验
+                // e_shentsize==64 / e_shstrndx<e_shnum，真 strip 工具同样保留 ALLOC 段。
+                // sh_link/sh_info 指向的段被丢弃时按 0(SHN_UNDEF) 重映射。
+                val eShoff = bb.getLong(0x28)
+                val eShentsize = bb.getShort(0x3A).toInt()
+                val eShnum = bb.getShort(0x3C).toInt()
+                val kept = ArrayList<ByteArray>()
+                if (eShoff in 1 until f.length() && eShnum > 0 && eShentsize == 64) {
+                    val oldToNew = HashMap<Int, Int>()
+                    val entries = ArrayList<Pair<Int, ByteArray>>()
+                    for (i in 0 until eShnum) {
+                        raf.seek(eShoff + i.toLong() * 64)
+                        val e = ByteArray(64)
+                        if (raf.read(e) < 64) break
+                        val flags = ByteBuffer.wrap(e).order(ByteOrder.LITTLE_ENDIAN).getLong(8)
+                        if (flags and 2L != 0L) {
+                            oldToNew[i] = entries.size + 1
+                            entries.add(i to e)
+                        }
+                    }
+                    entries.forEach { (_, e) ->
+                        val b = ByteBuffer.wrap(e).order(ByteOrder.LITTLE_ENDIAN)
+                        b.putInt(40, oldToNew[b.getInt(40)] ?: 0)
+                        b.putInt(44, oldToNew[b.getInt(44)] ?: 0)
+                        kept.add(e)
+                    }
+                }
                 raf.setLength(end)
-                // e_shoff(0x28)/e_shentsize(0x3A)/e_shnum(0x3C)/e_shstrndx(0x3E) 清零
-                raf.seek(0x28); raf.writeLong(0L)
-                raf.seek(0x3A); raf.writeShort(0); raf.writeShort(0); raf.writeShort(0)
+                // 追加新段表：[0] NULL + [1..n] 原 ALLOC 段（原值照抄）+ 末尾 .shstrtab
+                val shoff = (end + 15) / 16 * 16
+                val shnum = 1 + kept.size + 1
+                val shstrndx = shnum - 1
+                val shstrtabOff = shoff + shnum * 64L
+                val shstrtab = byteArrayOf(0) + ".shstrtab".toByteArray() + byteArrayOf(0)
+                raf.setLength(shstrtabOff + shstrtab.size)
+                kept.forEachIndexed { j, e ->
+                    raf.seek(shoff + (j + 1) * 64L)
+                    raf.write(e)
+                }
+                val shStr = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN)
+                shStr.putInt(1)                          // sh_name → strtab 偏移 1
+                shStr.putInt(3)                          // sh_type = SHT_STRTAB
+                shStr.putLong(0); shStr.putLong(0)       // sh_flags / sh_addr
+                shStr.putLong(shstrtabOff)               // sh_offset
+                shStr.putLong(shstrtab.size.toLong())    // sh_size
+                shStr.putInt(0); shStr.putInt(0)         // sh_link / sh_info
+                shStr.putLong(1); shStr.putLong(0)       // sh_addralign / sh_entsize
+                raf.seek(shoff + shstrndx * 64L); raf.write(shStr.array())
+                raf.seek(shstrtabOff); raf.write(shstrtab)
+                // Ehdr：e_shoff(0x28)；e_shentsize(0x3A)=64/e_shnum(0x3C)/e_shstrndx(0x3E)。
+                // 0x30~0x39（e_flags/e_ehsize/e_phentsize/e_phnum）保留原值不动。
+                // RandomAccessFile.writeShort/Long 是大端序，ELF 是小端——必须经
+                // LITTLE_ENDIAN ByteBuffer 中转（实测直写 64 会被读成 0x4000 拒载）。
+                raf.seek(0x28)
+                raf.write(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(shoff).array())
+                raf.seek(0x3A)
+                raf.write(ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN).run {
+                    putShort(64); putShort(shnum.toShort()); putShort(shstrndx.toShort()); array()
+                })
             }
         }
 
