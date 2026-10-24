@@ -143,14 +143,26 @@ internal fun FileViewerDialog(
         android.net.Uri.fromFile(java.io.File(ref.absPath)).toString()
     }
     val openHtmlFile = LocalOpenHtmlFile.current
-    // FileProvider 授权是逐条 URI 级的；文件不在 file_paths 覆盖目录（如未来的
-    // 公共位置未加规则）时取不到 uri——此时外发两键降级为提示，「另存为」仍可用
-    // （CreateDocument 走系统面板，与 FileProvider 无关）。
-    val providerUri: android.net.Uri? = runCatching {
-        androidx.core.content.FileProvider.getUriForFile(
-            context, context.packageName + ".fileprovider", java.io.File(ref.absPath)
-        )
-    }.getOrNull()
+    // FileProvider 授权是逐条 URI 级的；文件不在 file_paths 覆盖目录（公共工作区、
+    // 脑内档案等——工作区搬去公共目录后覆盖清单只剩 cache/shared 可用）时，先暂存
+    // 到 cache/shared（覆盖清单内）再取 URI：查看器能读的文件就一定能外发，
+    // 不再有「该位置暂不支持外发」死路（2026-10-24 用户实测撞上）。
+    suspend fun externalUri(): android.net.Uri? = withContext(Dispatchers.IO) {
+        val f = java.io.File(ref.absPath)
+        runCatching {
+            androidx.core.content.FileProvider.getUriForFile(
+                context, context.packageName + ".fileprovider", f
+            )
+        }.getOrElse {
+            val staged = java.io.File(java.io.File(context.cacheDir, "shared").apply { mkdirs() }, fileName)
+            runCatching {
+                f.inputStream().use { input -> staged.outputStream().use { input.copyTo(it) } }
+                androidx.core.content.FileProvider.getUriForFile(
+                    context, context.packageName + ".fileprovider", staged
+                )
+            }.getOrNull()
+        }
+    }
     fun shareToast(s: String) =
         android.widget.Toast.makeText(context, s, android.widget.Toast.LENGTH_SHORT).show()
     val saveAsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -169,9 +181,9 @@ internal fun FileViewerDialog(
     }
     fun onViewerAction(a: ViewerAction) = when (a) {
         ViewerAction.RenderView -> { htmlPreview = true }
-        ViewerAction.Share -> {
-            val uri = providerUri
-            if (uri == null) shareToast("该位置暂不支持外发，请用另存为")
+        ViewerAction.Share -> scope.launch {
+            val uri = externalUri()
+            if (uri == null) shareToast("外发失败：文件无法读取")
             else runCatching {
                 val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                     type = mime
@@ -186,9 +198,9 @@ internal fun FileViewerDialog(
         }
         ViewerAction.SaveAs -> runCatching { saveAsLauncher.launch(fileName) }
             .onFailure { shareToast("另存启动失败") }
-        ViewerAction.OpenWith -> {
-            val uri = providerUri
-            if (uri == null) shareToast("该位置暂不支持外发，请用另存为")
+        ViewerAction.OpenWith -> scope.launch {
+            val uri = externalUri()
+            if (uri == null) shareToast("外发失败：文件无法读取")
             else runCatching {
                 val view = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
                     setDataAndType(uri, mime)
