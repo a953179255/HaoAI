@@ -1045,7 +1045,7 @@ internal fun FullscreenCodeDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        FullscreenDialogImmersive()
+        FullscreenDialogImmersive(MaterialTheme.colorScheme.background)
         // ── 2026-10-24 查看器改版：控制件悬浮玻璃化，内容全出血 ──
         // 旧版三段 surface 灰横条（顶栏/搜索/代码卡/底栏）只靠发丝线分隔=「缝合」观感
         // 的根源；新版顶栏与底部控制簇是圆角玻璃浮件（半透明+细边），代码区全出血、
@@ -1651,7 +1651,7 @@ internal fun FullscreenCodeDialog(
             onDismissRequest = { outlineOpen = false },
             properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
-            FullscreenDialogImmersive()
+            FullscreenDialogImmersive(surfaceC)
             Column(Modifier.fillMaxSize()) {
                 Spacer(
                     Modifier

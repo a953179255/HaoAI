@@ -79,8 +79,9 @@ fun HtmlPreviewDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         // Dialog 窗口 edge-to-edge：深壳铺到系统条后面，状态栏/导航栏区域
-        // 不再露出压暗的下层界面（同查看器灰带修复，FullscreenDialogImmersive）
-        FullscreenDialogImmersive()
+        // 不再露出压暗的下层界面（同查看器灰带修复，FullscreenDialogImmersive）；
+        // 壳恒为深色 → 白图标
+        FullscreenDialogImmersive(Color(0xFF10151A))
         Column(
             Modifier
                 .fillMaxSize()
