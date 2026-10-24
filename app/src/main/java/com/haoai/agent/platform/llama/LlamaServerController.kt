@@ -1,6 +1,7 @@
 package com.haoai.agent.platform.llama
 
 import android.content.Context
+import com.haoai.agent.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -54,9 +55,30 @@ class LlamaServerController(
             }
         }
 
-        /** jniLibs 里是否存在 Hexagon skel 库（仅 arm64 构建打包）。 */
-        fun skelLibsAvailable(nativeDir: String?): Boolean =
-            nativeDir?.let { dir -> java.io.File(dir, "libggml-htp-v73.so").exists() } == true
+        /** 引擎版本（官方预编译 tag，来自 build.gradle 的 LLAMA_TAG，设置页展示用）。 */
+        val ENGINE_TAG: String get() = BuildConfig.LLAMA_ENGINE_TAG
+
+        /**
+         * 引擎文件清单（2026-10-24 改官方 snapdragon 预编译）：arm64 = llama-server
+         * 薄壳 + 10 个 so（后端全是 DT_NEEDED 硬链接，缺一整个链就起不来）；
+         * x86_64 模拟器仍是仓库内自编单文件（官方不发 x86_64 安卓包）。
+         * 启动前逐个预检，缺/坏哪个点名报哪个。
+         */
+        fun engineFiles(): List<String> =
+            if (android.os.Build.SUPPORTED_ABIS.firstOrNull() == "arm64-v8a") listOf(
+                "libllamaserver.so", "libllama-server-impl.so", "libllama-common.so", "libmtmd.so",
+                "libllama.so", "libggml.so", "libggml-base.so", "libggml-cpu.so", "libggml-rpc.so",
+                "libggml-opencl.so", "libggml-hexagon.so"
+            ) else listOf("libllamaserver.so")
+
+        /**
+         * jniLibs 里是否存在 Hexagon 后端与 DSP skel（2026-10-24 起随官方包带
+         * libggml-hexagon.so + skel 五代 v73~v85，比本地自编版多 v85 一代）。
+         */
+        fun skelLibsAvailable(nativeDir: String?): Boolean = nativeDir?.let { dir ->
+            java.io.File(dir, "libggml-hexagon.so").exists() &&
+                listOf("v73", "v75", "v79", "v81", "v85").any { java.io.File(dir, "libggml-htp-$it.so").exists() }
+        } == true
 
         const val DEFAULT_MODEL_URL =
             "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
@@ -252,10 +274,19 @@ class LlamaServerController(
                 _state.value = LlamaState.Failed("此设备缺少端侧推理组件（ABI 不支持）")
                 return@withLock false
             }
-            // 二进制完整性预检：坏 .so（缺动态符号表）bionic linker 直接拒绝，症状只是
-            // "server 进程退出"难排查（e2e 2026-09-11 P3-4）。解析异常不拦截，保守放行走原错误路径。
-            if (!isElfLinked(bin)) {
-                _state.value = LlamaState.Failed("端侧推理组件损坏（缺少动态符号表），请卸载后重新安装 APK")
+            // 引擎完整性预检（2026-10-24 起为模块化 so 集，缺/坏哪个点名报哪个）：坏 .so
+            // （缺动态符号表）bionic linker 直接拒绝，症状只是 "server 进程退出"难排查
+            // （e2e 2026-09-11 P3-4）。解析异常不拦截，保守放行走原错误路径。
+            val nativeDir = context.applicationInfo.nativeLibraryDir
+            val missing = engineFiles().filter { !File(nativeDir, it).exists() }
+            if (missing.isNotEmpty()) {
+                _state.value = LlamaState.Failed("端侧推理组件不完整（缺 ${missing.first()}），请卸载后重新安装 APK")
+                return@withLock false
+            }
+            val broken = engineFiles().map { File(nativeDir, it) }
+                .firstOrNull { !isElfLinked(it.absolutePath) }
+            if (broken != null) {
+                _state.value = LlamaState.Failed("端侧推理组件损坏（${broken.name} 缺少动态符号表），请卸载后重新安装 APK")
                 return@withLock false
             }
             val model = preferredFile
@@ -330,11 +361,14 @@ class LlamaServerController(
                     4
                 )
                 val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+                val env = pb.environment()
+                // 2026-10-24 起官方模块化引擎：薄壳 llama-server 的 DT_NEEDED（10 个
+                // libllama*/libggml* so）靠 LD_LIBRARY_PATH 解析，必须无条件设置；
+                // libggml-opencl.so 还依赖 vendor 分区的 libOpenCL.so（App 类加载器
+                // 搜索路径不含 vendor）。
+                env["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env["LD_LIBRARY_PATH"] ?: "")
                 if (useHtp) {
-                    val env = pb.environment()
-                    // libOpenCL.so 在 vendor 分区（App 类加载器搜索路径不含 vendor），
-                    // 二进制 DT_NEEDED 直接依赖它，必须显式加 /vendor/lib64
-                    env["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env["LD_LIBRARY_PATH"] ?: "")
+                    // DSP skel 搜索路径（HTP 专用）
                     env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
                 }
 

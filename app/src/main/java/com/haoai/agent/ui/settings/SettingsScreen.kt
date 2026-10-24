@@ -1889,7 +1889,8 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
         val detected = remember { com.haoai.agent.platform.llama.LlamaServerController.detectHexagonArch() }
         com.haoai.agent.ui.common.HaoNote(
             backdrop = backdrop,
-            text = "推理后端：三后端单二进制（CPU/GPU/NPU-Hexagon）· " +
+            text = "推理引擎：官方预编译 ${com.haoai.agent.platform.llama.LlamaServerController.ENGINE_TAG}" +
+                "（CPU/Adreno GPU/Hexagon NPU，gradle 自动下载，升级改版本号即可）· " +
                 (detected?.let { "本机骁龙 → Hexagon $it（arm64 启动时启用，失败自动 CPU 兜底）" } ?: "本机走 CPU/GPU 兜底") +
                 " · 当前生效：${vm.backendLabel()}",
             modifier = Modifier.padding(vertical = 4.dp)
