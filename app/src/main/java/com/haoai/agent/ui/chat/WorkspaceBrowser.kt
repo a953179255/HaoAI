@@ -156,7 +156,18 @@ internal fun WorkspaceBrowserDialog(
     }
     val stats = remember(entries) { workspaceStatsOf(entries, System.currentTimeMillis()) }
 
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    // 系统返回逐层而退（2026-10-24 用户实测 bug：钻进子目录后按返回直接退出了整个
+    // 浏览页）：收长按菜单 → 退搜索态 → 回上一级目录 → 顶层才关页。顺序即优先级。
+    androidx.activity.compose.BackHandler(
+        onBack = {
+            when {
+                menuRow != null -> menuRow = null
+                searchActive -> query = ""
+                curRel.isNotEmpty() -> curRel = parentOf(curRel)
+                else -> onDismiss()
+            }
+        }
+    )
     Box(
         Modifier
             .fillMaxSize()
