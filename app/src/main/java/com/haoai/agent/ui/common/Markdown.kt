@@ -1468,7 +1468,7 @@ internal fun FullscreenCodeDialog(
                     }
                 }
             }
-            // ── 悬浮玻璃控制簇（底）：溢出小菜单 + 状态行 + 字号/换行 + 行内动作/⋯ ──
+            // ── 悬浮玻璃控制簇（底）：控件贴左（字号/换行/行内动作/⋯）+ 信息退右（状态行）──
             // 溢出菜单展开时铺一层透明命中垫点外收起（垫在菜单下、内容上）
             if (overflowOpen && overflowMenu != null) {
                 Box(
@@ -1506,60 +1506,8 @@ internal fun FullscreenCodeDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // 左手习惯（2026-10-24）：图片/ZIP/HTML 的外发按钮簇贴左（拇指侧），
-                    // 元信息（PNG·尺寸 / N 项 等）退到右端；文本模式不动（状态行在左+字号/换行在右）
-                    if (!textMode) clusterActions?.invoke(this)
-                    if (imageBitmap != null && imageMeta.isNotEmpty()) {
-                        Text(
-                            imageMeta,
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 10.sp, lineHeight = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                            ),
-                            color = onSurfaceVariant.copy(alpha = 0.72f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else if (customContent != null) {
-                        // ZIP 等自定义内容：statusLang 由调用方给成品文案（如「42 项 · 128 MB」）
-                        Text(
-                            statusLang,
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 10.sp, lineHeight = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                            ),
-                            color = onSurfaceVariant.copy(alpha = 0.72f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else if (statusLang.isNotEmpty()) {
-                        // 可视区间而非「共 N 行」：长文件里用户更需要知道看到了哪
-                        // 软换行会让估算行高偏小（首行号虚高）——钳到 [1, 总行-可视+1]
-                        val visCount = if (trackHpx > 0) (trackHpx / lineHeightPx).toInt() else 0
-                        val firstVis = ((vScroll.value / lineHeightPx).toInt() + 1)
-                            .coerceIn(1, (shownLines.size - visCount + 1).coerceAtLeast(1))
-                        Text(
-                            (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
-                             else "$firstVis–${(firstVis + visCount).coerceAtMost(shownLines.size)} / ${shownLines.size} 行") +
-                                if (statusLang.isNotEmpty()) " · $statusLang" else "",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 10.sp, lineHeight = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                            ),
-                            color = onSurfaceVariant.copy(alpha = 0.72f),
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                    }
+                    // 左手拇指位（2026-10-24）：全部模式的控件簇（字号/换行/外发/溢出）
+                    // 贴左（拇指侧），元信息/状态行（PNG·尺寸 / N 项 / 可视行区间）退到右端
                     if (textMode) Text(
                         "A−",
                         style = androidx.compose.ui.text.TextStyle(
@@ -1629,8 +1577,8 @@ internal fun FullscreenCodeDialog(
                             color = if (wrap) primary else onSurfaceVariant.copy(alpha = 0.72f)
                         )
                     }
-                    // 行内动作（文本模式若有簇在此渲染；非文本模式的簇已前置到最左，勿重复）
-                    if (textMode) clusterActions?.invoke(this)
+                    // 行内动作（图片/ZIP 的外发胶囊、HTML 的「渲染看」主键也在此）
+                    clusterActions?.invoke(this)
                     // ⋯ 溢出菜单（文本模式的外发三键收进来，簇里放不下全量）
                     if (textMode && overflowMenu != null) {
                         androidx.compose.foundation.layout.Box(
@@ -1647,6 +1595,59 @@ internal fun FullscreenCodeDialog(
                                 modifier = Modifier.size(16.dp)
                             )
                         }
+                    }
+                    if (imageBitmap != null && imageMeta.isNotEmpty()) {
+                        Text(
+                            imageMeta,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else if (customContent != null) {
+                        // ZIP 等自定义内容：statusLang 由调用方给成品文案（如「42 项 · 128 MB」）
+                        Text(
+                            statusLang,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else if (statusLang.isNotEmpty()) {
+                        // 可视区间而非「共 N 行」：长文件里用户更需要知道看到了哪
+                        // 软换行会让估算行高偏小（首行号虚高）——钳到 [1, 总行-可视+1]
+                        val visCount = if (trackHpx > 0) (trackHpx / lineHeightPx).toInt() else 0
+                        val firstVis = ((vScroll.value / lineHeightPx).toInt() + 1)
+                            .coerceIn(1, (shownLines.size - visCount + 1).coerceAtLeast(1))
+                        Text(
+                            (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
+                             else "$firstVis–${(firstVis + visCount).coerceAtMost(shownLines.size)} / ${shownLines.size} 行") +
+                                if (statusLang.isNotEmpty()) " · $statusLang" else "",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
                 }
             }
