@@ -1244,6 +1244,8 @@ private fun SectionPage(
     // 工作区浏览（2026-10-24 二轮）：null 关闭；"cur"=当前产出根；"legacy"=旧应用专属区只读。
     // 弹窗状态提在根级（弹窗铁律：LazyColumn item 内 fillMaxSize 遮罩会被 item 约束）
     var wsBrowseTarget by remember { mutableStateOf<String?>(null) }
+    // 脑内档案只读查看（2026-10-24）：非空=brain/ 下待查看的文件名（根级挂载，弹窗铁律）
+    var brainViewRel by remember { mutableStateOf<String?>(null) }
     // 旧产出区一键清理的二次确认（根级挂载，同上铁律）
     var wsCleanConfirm by remember { mutableStateOf(false) }
     // 系统目录选择器（2026-10-24 改版）：自建选择器退役，自选位置走系统的
@@ -1343,7 +1345,7 @@ private fun SectionPage(
                             onBack = onBack
                         )
                     }
-                    "memory" -> memoryItems(vm, settings, onOpenMemories, localBackdrop, onPickDreamModel = onPickDreamModel)
+                    "memory" -> memoryItems(vm, settings, onOpenMemories, localBackdrop, onPickDreamModel = onPickDreamModel, onViewBrainDoc = { brainViewRel = it })
                     "workspace" -> workspaceItems(vm, localBackdrop, context,
                         pickCustomDir = { wsTreePicker.launch(null) },
                         browseWorkspace = { wsBrowseTarget = "cur" },
@@ -1571,6 +1573,14 @@ private fun SectionPage(
                 deleteFile = { Result.failure(IllegalStateException("旧产出区只读")) },
                 readOnly = legacyMode,
                 onDismiss = { wsBrowseTarget = null }
+            )
+        }
+        // 脑内档案只读查看器（根级挂载）：v1 只读，改动走对应入口（脑内档案区副行指路）
+        brainViewRel?.let { name ->
+            val abs = remember(name) { java.io.File(vm.brainDir(), name).absolutePath }
+            com.haoai.agent.ui.chat.FileViewerDialog(
+                ref = com.haoai.agent.ui.UiFilePath(relPath = name, absPath = abs),
+                onDismiss = { brainViewRel = null }
             )
         }
         // 旧产出区清理二次确认（根级挂载——弹窗铁律；防御性核对：当前区比旧区少时先劝退）
@@ -2301,7 +2311,8 @@ private fun LazyListScope.memoryItems(
     settings: AppSettings,
     onOpenMemories: () -> Unit,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
-    onPickDreamModel: () -> Unit = {}
+    onPickDreamModel: () -> Unit = {},
+    onViewBrainDoc: (String) -> Unit = {}
 ) {
     item { SectionTitle("记忆库概览") }
     item {
@@ -2476,6 +2487,99 @@ item {
             }
         }
     }
+    // ── 脑内档案（2026-10-24）：brain/ 的 markdown 清单只读查看 ──
+    // 脑子搬进内部私有目录后 Android 上没有外部工具能进——应用内查看面是唯一入口
+    // （OpenClaw 用户靠桌面编辑器改文件这条路对我们不存在）。v1 只读：AGENTS/TOOLS/
+    // HEARTBEAT/USER/IDENTITY/SOUL 每次同步自动重写，手改必被覆盖；MEMORY 是记忆
+    // 真源，手改与固化流程打架——想改走对话/记忆页。
+    item { SectionTitle("脑内档案") }
+    item {
+        val brainDir = remember { vm.brainDir() }
+        GlassGroup(backdrop) {
+            BRAIN_DOCS.forEachIndexed { i, doc ->
+                val f = remember(doc.file) { java.io.File(brainDir, doc.file) }
+                val exists = remember(doc.file) { f.isFile }
+                val meta = remember(doc.file) {
+                    if (!exists) "尚未生成"
+                    else formatBrainDocSize(f.length()) + " · " +
+                        java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)
+                            .format(java.util.Date(f.lastModified()))
+                }
+                if (i > 0) HaoDivider()
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = exists) { onViewBrainDoc(doc.file) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    com.haoai.agent.ui.common.FileTypeBadge(doc.file, 28.dp)
+                    Spacer(Modifier.size(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                doc.file,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(
+                                    alpha = if (exists) 1f else 0.45f
+                                )
+                            )
+                            if (doc.auto) {
+                                Spacer(Modifier.size(6.dp))
+                                Text(
+                                    "自动生成",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(
+                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f)
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            doc.label + " · " + (doc.goto ?: meta),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        Icons.Filled.ChevronRight, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 脑内档案目录（2026-10-24）：file=文件名 label=中文名 auto=每次同步重写 goto=改动入口。 */
+private data class BrainDoc(val file: String, val label: String, val auto: Boolean, val goto: String?)
+
+private val BRAIN_DOCS = listOf(
+    BrainDoc("MEMORY.md", "长期记忆库", auto = false, goto = null),
+    BrainDoc("USER.md", "用户画像", auto = true, goto = "随偏好记忆更新"),
+    BrainDoc("IDENTITY.md", "助理身份", auto = true, goto = "设置 → 通用 → 身份"),
+    BrainDoc("SOUL.md", "性格设定", auto = true, goto = "设置 → 通用 → 身份"),
+    BrainDoc("AGENTS.md", "工作约定", auto = true, goto = "随设置自动重写"),
+    BrainDoc("TOOLS.md", "工具清单", auto = true, goto = "随版本自动重写"),
+    BrainDoc("HEARTBEAT.md", "定时任务", auto = true, goto = "设置 → 定时任务"),
+    BrainDoc("DREAMS.md", "梦境日记", auto = false, goto = null)
+)
+
+private fun formatBrainDocSize(bytes: Long): String = when {
+    bytes >= 1L shl 20 -> "%.1f MB".format(bytes / 1048576.0)
+    bytes >= 1024 -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 /** 选择弹窗里的单选行：标题 + 路径副标题。 */

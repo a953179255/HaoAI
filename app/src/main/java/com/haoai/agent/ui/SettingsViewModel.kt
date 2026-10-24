@@ -1641,6 +1641,9 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     /** 旧私有沙盒区根（「去看看」只读浏览用；当前就在沙盒时无意义）。 */
     fun legacyWorkspaceRoot(): java.io.File = c.workspace.defaultWorkspaceRoot()
 
+    /** 脑内档案根（2026-10-24）：brain/ 的 markdown 只读查看数据面。 */
+    fun brainDir(): java.io.File = c.brainDir
+
     /**
      * 一键清理旧应用专属区（双档改版 2026-10-24）：二次确认由 UI 弹窗负责，这里只管删。
      * 后台 IO 递归删除 + 重建空目录（保住 defaultRoot 恒存在的引擎假设），完成态走

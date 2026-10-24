@@ -1,14 +1,22 @@
 package com.haoai.agent.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -41,7 +49,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haoai.agent.ui.UiFilePath
 import com.haoai.agent.ui.common.CodeHighlight
+import com.haoai.agent.ui.common.FileTypeBadge
 import com.haoai.agent.ui.common.FullscreenCodeDialog
+import com.haoai.agent.ui.common.fileVisualOf
 import com.haoai.agent.ui.common.splitAnnotatedPerLine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,20 +81,35 @@ internal fun FileViewerDialog(
     onLocate: ((String) -> Unit)? = null,
 ) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    // 批2d 分流：图片 → 解码预览（Fit）；文本 → 原路径
+    // 批2d 分流：图片 → 解码预览（Fit）；文本 → 原路径；ZIP → 只读清单（2026-10-24 改版）
     val extLower = ref.relPath.substringAfterLast('.', "").lowercase()
     val isImage = extLower in setOf("png", "jpg", "jpeg", "webp", "gif")
+    val isZip = extLower == "zip"
     var imageBitmap by remember(ref.absPath) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var imageMeta by remember(ref.absPath) { mutableStateOf("") }
     var result by remember(ref.absPath) {
         mutableStateOf<Pair<List<AnnotatedString>, String>?>(null)
     }
+    /** ZIP 条目清单（name/原始大小/压缩后大小；目录条目名带尾 '/'）。null=非 zip 或读取中。 */
+    var zipRows by remember(ref.absPath) { mutableStateOf<List<Triple<String, Long, Long>>?>(null) }
+    var zipNote by remember(ref.absPath) { mutableStateOf("") }
     val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
     LaunchedEffect(ref.absPath, dark) {
         if (isImage) {
             val r = withContext(Dispatchers.IO) { loadViewerImage(ref.absPath, screenW) }
             imageBitmap = r?.first
             imageMeta = r?.second ?: "图片"
+            if (r == null) {
+                // 解码失败要给说法（2026-10-24）：此前永远停「加载中…」误导排障
+                result = Pair(
+                    listOf(AnnotatedString("图片无法解码（文件损坏或格式不支持）")),
+                    ""
+                )
+            }
+        } else if (isZip) {
+            val r = withContext(Dispatchers.IO) { loadZipEntries(ref.absPath) }
+            zipRows = r?.first
+            zipNote = r?.second ?: ""
         } else {
             result = withContext(Dispatchers.IO) { loadViewerLines(ref, dark) }
         }
@@ -98,7 +123,8 @@ internal fun FileViewerDialog(
     val meta = buildString {
         append(dirPath)
         append(" · ")
-        append("${lines.size} 行")
+        if (isZip) append("${zipRows?.size ?: 0} 项")
+        else append("${lines.size} 行")
         if (note.isNotEmpty()) append(" · $note")
     }
     val ext = ref.relPath.substringAfterLast('.', "").uppercase().take(4)
@@ -195,18 +221,27 @@ internal fun FileViewerDialog(
             shareToast(if (ok) "已存到相册 Pictures/HaoAI" else "存相册失败")
         }
     }
+    // ZIP 状态文案：条目数 + 展示说明（截断说明在 zipNote）
+    val zipStatus = zipRows?.let { rows ->
+        "${rows.size} 项 · 只读清单" + if (zipNote.isNotEmpty()) " · $zipNote" else ""
+    }
     FullscreenCodeDialog(
         title = fileName,
         imageBitmap = imageBitmap,
         imageMeta = imageMeta,
         fileMeta = meta,
         fileChip = chip,
-        // 图片模式状态行走 imageMeta（壳层分支）；文本模式走语言标签
-        statusLang = if (isImage) "" else chip.ifEmpty { "text" },
-        lines = lines,
+        // 类型徽标（2026-10-24）：彩底彩图标与文件列表同源；7z/rar 仍按二进制拒渲不进这里
+        chipIcon = if (chip.isEmpty()) null else fileVisualOf(fileName).icon,
+        statusLang = when {
+            isImage -> ""
+            isZip -> zipStatus ?: "读取中…"
+            else -> chip.ifEmpty { "text" }
+        },
+        lines = if (isZip) emptyList() else lines,
         dark = dark,
         onDismiss = onDismiss,
-        // 批4b：换乘钮退役到只剩「在目录中定位」，且仅在宿主传入 onLocate 时出现
+        // 换乘钮退役到只剩「在目录中定位」，且仅在宿主传入 onLocate 时出现
         // （链卡宿主给→可跳浏览页；浏览页内查看器不给→就地无需跳）。「版本历史」钮
         // 随历史 Tab 一并退役，回滚能力仍在引擎（聊天 /undo）。
         trailing = if (onLocate != null) {
@@ -231,19 +266,50 @@ internal fun FileViewerDialog(
                 )
             }
         } else null,
-        // 批4a：底部外发动作行（渲染看仅 HTML / 存相册仅图片 / 其余三键恒在）
-        bottomActions = {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                viewerActions(extLower).forEach { a ->
-                    FileShareChip(a) { onViewerAction(a) }
+        // ── 2026-10-24 改版：外发动作进悬浮控制簇 ──
+        // 图片/ZIP：动作胶囊直接进簇（此时字号/换行已隐藏，有空间）；
+        // 文本/HTML：簇里放不下字号控件+全量外发键 → 收进 ⋯ 溢出菜单（HTML 的
+        // 「渲染看」是主操作，破例直接进簇置绿）。
+        clusterActions = when {
+            isImage -> {
+                {
+                    viewerActions(extLower).forEach { a ->
+                        ClusterActionChip(
+                            label = a.label(),
+                            primary = a == ViewerAction.SaveToAlbum
+                        ) { onViewerAction(a) }
+                    }
                 }
             }
-        }
+            isZip -> {
+                {
+                    listOf(ViewerAction.Share, ViewerAction.SaveAs).forEach { a ->
+                        ClusterActionChip(label = a.label(), primary = false) { onViewerAction(a) }
+                    }
+                }
+            }
+            extLower == "html" || extLower == "htm" -> {
+                {
+                    ClusterActionChip(
+                        label = ViewerAction.RenderView.label(), primary = true
+                    ) { onViewerAction(ViewerAction.RenderView) }
+                }
+            }
+            else -> null
+        },
+        overflowMenu = if (isImage || isZip) null else {
+            {
+                // HTML 时渲染看已进簇，菜单里只留其余三键
+                viewerActions(extLower)
+                    .filter { it != ViewerAction.RenderView }
+                    .forEach { a ->
+                        OverflowActionRow(label = a.label()) { onViewerAction(a) }
+                    }
+            }
+        },
+        customContent = if (isZip) {
+            { ZipListColumn(rows = zipRows ?: emptyList()) }
+        } else null
     )
     if (htmlPreview) {
         com.haoai.agent.ui.common.HtmlPreviewDialog(
@@ -257,47 +323,139 @@ internal fun FileViewerDialog(
     }
 }
 
-/** 外发键胶囊：等宽四键一行铺满；渲染看=绿主键（语义色），其余灰字。文案 11.5sp 无底衬。 */
+/** 悬浮控制簇里的动作胶囊（2026-10-24 改版）：小号不等宽，主键绿底。 */
 @Composable
-private fun RowScope.FileShareChip(action: ViewerAction, onClick: () -> Unit) {
-    val prim = action == ViewerAction.RenderView
+private fun ClusterActionChip(label: String, primary: Boolean, onClick: () -> Unit) {
     val primaryC = MaterialTheme.colorScheme.primary
     val onVar = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
+    Text(
+        label,
+        style = TextStyle(
+            fontSize = 11.sp, lineHeight = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            platformStyle = PlatformTextStyle(includeFontPadding = false)
+        ),
+        color = if (primary) primaryC else onVar,
+        maxLines = 1,
         modifier = Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (prim) primaryC.copy(alpha = 0.12f) else onVar.copy(alpha = 0.07f))
+            .clip(RoundedCornerShape(999.dp))
+            .background(
+                if (primary) primaryC.copy(alpha = 0.16f)
+                else onVar.copy(alpha = 0.08f)
+            )
             .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    )
+}
+
+/** ⋯ 溢出菜单行（2026-10-24 改版）：玻璃小卡内的一行式动作。 */
+@Composable
+private fun OverflowActionRow(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        style = TextStyle(
+            fontSize = 12.5.sp, lineHeight = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            platformStyle = PlatformTextStyle(includeFontPadding = false)
+        ),
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 11.dp)
+    )
+}
+
+/** ZIP 只读清单（2026-10-24 改版提案落地）：目录前置 + 条目名/原始大小/压缩率。 */
+@Composable
+private fun ZipListColumn(rows: List<Triple<String, Long, Long>>) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(androidx.compose.foundation.rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Icon(
-            imageVector = when (action) {
-                ViewerAction.RenderView -> Icons.Filled.Visibility
-                ViewerAction.Share -> Icons.Filled.Share
-                ViewerAction.SaveAs -> Icons.Filled.SaveAs
-                ViewerAction.OpenWith -> Icons.Filled.OpenInNew
-                ViewerAction.SaveToAlbum -> Icons.Filled.PhotoLibrary
-            },
-            contentDescription = action.label(),
-            tint = if (prim) primaryC else onVar,
-            modifier = Modifier.size(14.dp)
-        )
-        androidx.compose.foundation.layout.Spacer(Modifier.size(5.dp))
-        Text(
-            action.label(),
-            style = TextStyle(
-                fontSize = 11.5.sp, lineHeight = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                platformStyle = PlatformTextStyle(includeFontPadding = false)
-            ),
-            color = if (prim) primaryC else onVar,
-            maxLines = 1
-        )
+        if (rows.isEmpty()) {
+            Text(
+                "读取中…", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
+        rows.forEachIndexed { i, (name, size, compressed) ->
+            if (i > 0) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 0.dp)
+                        .height(0.5.dp)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f))
+                )
+            }
+            val isDir = name.endsWith("/")
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isDir) {
+                    Icon(
+                        Icons.Filled.Folder, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                } else {
+                    FileTypeBadge(name, 22.dp)
+                }
+                Spacer(Modifier.size(9.dp))
+                Text(
+                    name.trimEnd('/'),
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = if (isDir) FontWeight.SemiBold else FontWeight.Normal,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDir) 0.95f else 0.8f),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (!isDir) {
+                    val pct = if (size > 0) (compressed * 100 / size).toInt() else 100
+                    Text(
+                        "${formatZipSize(size)} · 压缩 $pct%",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                    )
+                }
+            }
+        }
     }
 }
+
+private fun formatZipSize(bytes: Long): String = when {
+    bytes >= 1L shl 20 -> "%.1f MB".format(bytes / 1048576.0)
+    bytes >= 1024 -> "${bytes / 1024} KB"
+    else -> "$bytes B"
+}
+
+/**
+ * ZIP 条目读取（2026-10-24）：java.util.zip 原生 API 零新依赖；目录条目前置排序，
+ * 截断到 800 条（查看器是"看一眼"不是解压工具）。失败（损坏/加密）返回 null 由
+ * 调用方展示「读取中…」占位与空态。
+ */
+private fun loadZipEntries(path: String): Pair<List<Triple<String, Long, Long>>, String>? =
+    runCatching {
+        java.util.zip.ZipFile(java.io.File(path)).use { zf ->
+            val all = zf.entries().asSequence().toList()
+            val kept = all
+                .sortedWith(compareBy({ !it.name.endsWith("/") }, { it.name }))
+                .take(800)
+                .map { Triple(it.name, it.size, it.compressedSize) }
+            val note = if (all.size > 800) "前 800/${all.size} 项" else ""
+            Pair(kept, note)
+        }
+    }.getOrNull()
 
 /** 图片解码（降采样到屏宽内）→ (bitmap, "格式 · W×H")。失败返回 null（UI 出提示）。 */
 private fun loadViewerImage(path: String, screenW: Int): Pair<androidx.compose.ui.graphics.ImageBitmap, String>? {

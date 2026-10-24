@@ -365,10 +365,9 @@ internal fun WorkspaceBrowserDialog(
                                 modifier = Modifier.weight(1f)
                             )
                         } else {
-                            Icon(
-                                Icons.Filled.Description, contentDescription = null,
-                                tint = theme.faint, modifier = Modifier.size(14.dp)
-                            )
+                            // 类型徽标（2026-10-24 改版）：此前所有文件共用同一文档图标，
+                            // 格式只能靠后缀分辨（用户实测反馈）——按扩展名给专属图标+色相
+                            com.haoai.agent.ui.common.FileTypeBadge(row.name, 22.dp)
                             Spacer(Modifier.size(7.dp))
                             Text(
                                 row.name, fontSize = 13.sp, fontFamily = FontFamily.Monospace,

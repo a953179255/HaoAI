@@ -14,6 +14,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -24,14 +26,17 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,8 +50,12 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.Icon
@@ -62,6 +71,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.setValue
@@ -108,6 +118,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 
 /** 解析后的 Markdown 块：类型化区分，渲染端按类型分发。 */
@@ -931,9 +942,17 @@ internal fun FullscreenCodeDialog(
     imageBitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
     /** 图片信息副行（「PNG · 1080×2400」），仅图片模式显示在状态行。 */
     imageMeta: String = "",
-    /** 批4a：底部外发动作行插槽（文件查看器专用；null=不画，代码块全屏零变化）。
-     *  画在状态行之上，自带一条分隔线；内容由调用方给（Row 建议 fillMaxWidth）。 */
-    bottomActions: (@Composable () -> Unit)? = null,
+    /** 2026-10-24 查看器改版：顶栏类型徽标图标（非空=彩底图标，替代 ext 文字块）。 */
+    chipIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    /**
+     * 2026-10-24 改版：底部悬浮簇的行内动作胶囊（图片/ZIP 模式的 存相册/分享/另存为；
+     * 文本模式建议留空走 [overflowMenu]，簇里放不下字号控件+全量外发键）。
+     */
+    clusterActions: (@Composable RowScope.() -> Unit)? = null,
+    /** 2026-10-24 改版：溢出菜单内容（文本模式的 分享/另存为/打开方式 收进 ⋯）；null=不画 ⋯。 */
+    overflowMenu: (@Composable ColumnScope.() -> Unit)? = null,
+    /** 2026-10-24 改版：自定义内容区（ZIP 只读清单等）——非空时代码区整体替换，滚动条/字号/换行隐藏。 */
+    customContent: (@Composable () -> Unit)? = null,
 ) {
     val plain = (if (dark) CodeHighlight.darkColors() else CodeHighlight.lightColors()).plain
     val surfaceC = MaterialTheme.colorScheme.surface
@@ -1007,25 +1026,228 @@ internal fun FullscreenCodeDialog(
             kotlinx.coroutines.delay(64)
         }
     }
+    // ── 2026-10-24 查看器改版：真滚动条几何 + 溢出菜单态 ──
+    // 旧实现病灶：thumb 固定 32% 高 + 中间态永远钉 Center（滚几页才动一次的根源），
+    // 且无任何手势。新版：thumb 高=可视占比（≥40dp 保拖得到），位置=滚动比例连续映射。
+    val scope = rememberCoroutineScope()
+    var trackHpx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var overflowOpen by remember { mutableStateOf(false) }
+    val textMode = imageBitmap == null && customContent == null
+    val minThumbPx = with(density) { 40.dp.toPx() }
+    val maxScroll = vScroll.maxValue
+    val thumbHpx = if (trackHpx > 0 && maxScroll > 0)
+        (((trackHpx.toFloat() / (trackHpx + maxScroll)) * trackHpx).coerceAtLeast(minThumbPx)).toInt()
+    else trackHpx
+    val thumbTopPx = if (trackHpx > 0 && thumbHpx < trackHpx && maxScroll > 0)
+        (vProgress * (trackHpx - thumbHpx)).toInt() else 0
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Column(
+        // ── 2026-10-24 查看器改版：控制件悬浮玻璃化，内容全出血 ──
+        // 旧版三段 surface 灰横条（顶栏/搜索/代码卡/底栏）只靠发丝线分隔=「缝合」观感
+        // 的根源；新版顶栏与底部控制簇是圆角玻璃浮件（半透明+细边），代码区全出血、
+        // 从浮件底下滚过去。右缘滚动条同步重做（见下）。
+        val glass = surfaceC.copy(alpha = 0.92f)
+        val glassShape = RoundedCornerShape(18.dp)
+        val pillShape = RoundedCornerShape(999.dp)
+        val glassBorder = onSurface.copy(alpha = 0.09f)
+        Box(
             Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
                 .statusBarsPadding()
+                .navigationBarsPadding()
         ) {
-            // ── 顶栏：文件 chip + 双行信息 + trailing + 关闭 ──
+            // 内容层：全出血；顶部给悬浮顶栏让位、底部给控制簇让位
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(top = 64.dp, bottom = 66.dp, start = 4.dp, end = 4.dp)
+            ) {
+                // ZIP 等自定义内容（整体替换代码区；滚动条/字号/换行随 textMode=false 隐藏）
+                if (customContent != null) {
+                    customContent()
+                }
+                if (imageBitmap != null) {
+                            androidx.compose.foundation.Image(
+                                bitmap = imageBitmap,
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize().padding(10.dp)
+                            )
+                        } else if (wrap) {
+                            Column(
+                                Modifier
+                                    .verticalScroll(vScroll)
+                                    .padding(horizontal = 4.dp, vertical = 10.dp)
+                            ) {
+                                shownLines.forEach { (realIdx, line) ->
+                                    val i = realIdx
+                                    val displayLine = if (searchHits.isNotEmpty()) {
+                                        val lm = searchHits.filter { it.first == realIdx }
+                                        if (lm.isEmpty()) line else buildAnnotatedString {
+                                            append(line.text)
+                                            line.spanStyles.forEach { addStyle(it.item, it.start, it.end) }
+                                            lm.forEach { (_, s, e) ->
+                                                addStyle(
+                                                    androidx.compose.ui.text.SpanStyle(
+                                                        background = androidx.compose.ui.graphics.Color(0x66F2B12A)
+                                                    ), s, e
+                                                )
+                                            }
+                                        }
+                                    } else line
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        if (gutterPad > 0) {
+                                            Box(
+                                                Modifier.width(with(density) { (gutterPad * 8 + 12).dp })
+                                            ) {
+                                                Text(
+                                                    (i + 1).toString().padStart(gutterPad),
+                                                    fontFamily = CodeFontFamily,
+                                                    style = androidx.compose.ui.text.TextStyle(
+                                                        fontSize = (fontSp - 1.5f).sp,
+                                                        lineHeight = (fontSp * 1.45f).sp,
+                                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                                    ),
+                                                    color = plain.copy(alpha = 0.38f),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(end = 9.dp)
+                                                )
+                                                // 行号槽右侧 1dp 细分隔线
+                                                Box(
+                                                    Modifier
+                                                        .align(Alignment.CenterEnd)
+                                                        .width(1.dp)
+                                                        .fillMaxHeight()
+                                                        .background(edge)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            if (displayLine.text.isEmpty()) AnnotatedString(" ") else displayLine,
+                                            fontFamily = CodeFontFamily,
+                                            style = androidx.compose.ui.text.TextStyle(
+                                                fontSize = fontSp.sp,
+                                                lineHeight = (fontSp * 1.45f).sp,
+                                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                            ),
+                                            softWrap = true,
+                                            modifier = Modifier.weight(1f).padding(end = 10.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Column(
+                                Modifier
+                                    .horizontalScroll(hScroll)
+                                    .verticalScroll(vScroll)
+                                    .padding(horizontal = 4.dp, vertical = 10.dp)
+                            ) {
+                                lines.forEach { line ->
+                                    Text(
+                                        if (line.text.isEmpty()) AnnotatedString(" ") else line,
+                                        fontFamily = CodeFontFamily,
+                                        style = androidx.compose.ui.text.TextStyle(
+                                            fontSize = fontSp.sp,
+                                            lineHeight = (fontSp * 1.45f).sp,
+                                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                                        ),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(end = 10.dp)
+                                    )
+                                }
+                            }
+                        }
+            }
+            // ── 真滚动条（2026-10-24 重做）：thumb=可视占比（≥40dp 保拖得到）、
+            // 位置=滚动比例连续映射、可拖拽、点轨道跳转。旧版「固定 32% 高+中间态
+            // 钉 Center」的三态指示器（滚几页才动一次的根源）退役。
+            if (textMode && lines.size > 1) {
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .padding(top = 68.dp, bottom = 70.dp)
+                        .width(20.dp)
+                        .onSizeChanged { trackHpx = it.height }
+                        .pointerInput(trackHpx, thumbHpx, maxScroll) {
+                            detectTapGestures { off ->
+                                if (trackHpx > 0 && thumbHpx < trackHpx && maxScroll > 0) {
+                                    val t = ((off.y - thumbHpx / 2f) / (trackHpx - thumbHpx))
+                                        .coerceIn(0f, 1f)
+                                    scope.launch { vScroll.scrollTo((t * maxScroll).roundToInt()) }
+                                }
+                            }
+                        }
+                ) {
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(4.dp)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(onSurface.copy(alpha = 0.07f))
+                    )
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .width(4.dp)
+                            .height(with(density) { thumbHpx.toDp() })
+                            .offset { IntOffset(0, thumbTopPx) }
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(primary)
+                            .pointerInput(trackHpx, thumbHpx, maxScroll) {
+                                detectVerticalDragGestures { change, dy ->
+                                    change.consume()
+                                    if (trackHpx > 0 && thumbHpx < trackHpx && maxScroll > 0) {
+                                        val perPx = maxScroll.toFloat() / (trackHpx - thumbHpx)
+                                        vScroll.dispatchRawDelta(dy * perPx)
+                                        // 拖拽即时跟手，不等 64ms 轮询
+                                        vProgress = if (vScroll.maxValue > 0)
+                                            vScroll.value.toFloat() / vScroll.maxValue else 0f
+                                    }
+                                }
+                            }
+                    )
+                }
+            }
+            // ── 悬浮玻璃顶栏 ──
             Row(
                 Modifier
+                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .background(surfaceC)
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .clip(glassShape)
+                    .background(glass)
+                    .border(1.dp, glassBorder, glassShape)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (!simple && fileChip.isNotEmpty()) {
+                if (!simple && chipIcon != null) {
+                    // 类型徽标（2026-10-24）：彩底彩图标，图标系统与文件列表同源
+                    val chipTint = fileChipColor(fileChip.ifEmpty { "TXT" })
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(chipTint.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            chipIcon, contentDescription = null,
+                            tint = chipTint, modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(9.dp))
+                } else if (!simple && fileChip.isNotEmpty()) {
                     Box(
                         Modifier
                             .size(30.dp)
@@ -1137,13 +1359,17 @@ internal fun FullscreenCodeDialog(
                     )
                 }
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
-            // ── 批2b 搜索栏 ──
+            // ── 悬浮搜索栏（展开时叠在顶栏之下）──
             if (searchOpen && !simple) {
                 Row(
                     Modifier
+                        .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .background(surfaceC)
+                        .padding(horizontal = 10.dp)
+                        .padding(top = 62.dp)
+                        .clip(glassShape)
+                        .background(glass)
+                        .border(1.dp, glassBorder, glassShape)
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1193,260 +1419,180 @@ internal fun FullscreenCodeDialog(
                         }
                     }
                 }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
             }
-            // ── 代码区：独立玻璃卡 + 行号槽 + 当前行 + 进度条 ──
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                Column(
+            // ── 悬浮玻璃控制簇（底）：溢出小菜单 + 状态行 + 字号/换行 + 行内动作/⋯ ──
+            // 溢出菜单展开时铺一层透明命中垫点外收起（垫在菜单下、内容上）
+            if (overflowOpen && overflowMenu != null) {
+                Box(
                     Modifier
-                        .padding(horizontal = 10.dp, vertical = 10.dp)
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(surfaceC.copy(alpha = 0.82f))
-                        .border(1.dp, edge, RoundedCornerShape(18.dp))
-                ) {
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        if (imageBitmap != null) {
-                            androidx.compose.foundation.Image(
-                                bitmap = imageBitmap,
-                                contentDescription = null,
-                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize().padding(10.dp)
-                            )
-                        } else if (wrap) {
-                            Column(
-                                Modifier
-                                    .verticalScroll(vScroll)
-                                    .padding(horizontal = 4.dp, vertical = 10.dp)
-                            ) {
-                                shownLines.forEach { (realIdx, line) ->
-                                    val i = realIdx
-                                    val displayLine = if (searchHits.isNotEmpty()) {
-                                        val lm = searchHits.filter { it.first == realIdx }
-                                        if (lm.isEmpty()) line else buildAnnotatedString {
-                                            append(line.text)
-                                            line.spanStyles.forEach { addStyle(it.item, it.start, it.end) }
-                                            lm.forEach { (_, s, e) ->
-                                                addStyle(
-                                                    androidx.compose.ui.text.SpanStyle(
-                                                        background = androidx.compose.ui.graphics.Color(0x66F2B12A)
-                                                    ), s, e
-                                                )
-                                            }
-                                        }
-                                    } else line
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.Top
-                                    ) {
-                                        if (gutterPad > 0) {
-                                            Box(
-                                                Modifier.width(with(density) { (gutterPad * 8 + 12).dp })
-                                            ) {
-                                                Text(
-                                                    (i + 1).toString().padStart(gutterPad),
-                                                    fontFamily = CodeFontFamily,
-                                                    style = androidx.compose.ui.text.TextStyle(
-                                                        fontSize = (fontSp - 1.5f).sp,
-                                                        lineHeight = (fontSp * 1.45f).sp,
-                                                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                                                    ),
-                                                    color = plain.copy(alpha = 0.38f),
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(end = 9.dp)
-                                                )
-                                                // 行号槽右侧 1dp 细分隔线
-                                                Box(
-                                                    Modifier
-                                                        .align(Alignment.CenterEnd)
-                                                        .width(1.dp)
-                                                        .fillMaxHeight()
-                                                        .background(edge)
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            if (displayLine.text.isEmpty()) AnnotatedString(" ") else displayLine,
-                                            fontFamily = CodeFontFamily,
-                                            style = androidx.compose.ui.text.TextStyle(
-                                                fontSize = fontSp.sp,
-                                                lineHeight = (fontSp * 1.45f).sp,
-                                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                                            ),
-                                            softWrap = true,
-                                            modifier = Modifier.weight(1f).padding(end = 10.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            Column(
-                                Modifier
-                                    .horizontalScroll(hScroll)
-                                    .padding(horizontal = 4.dp, vertical = 10.dp)
-                            ) {
-                                lines.forEach { line ->
-                                    Text(
-                                        if (line.text.isEmpty()) AnnotatedString(" ") else line,
-                                        fontFamily = CodeFontFamily,
-                                        style = androidx.compose.ui.text.TextStyle(
-                                            fontSize = fontSp.sp,
-                                            lineHeight = (fontSp * 1.45f).sp,
-                                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                                        ),
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(end = 10.dp)
-                                    )
-                                }
-                            }
-                        }
-                        // 右缘 3dp 滚动进度条
-                        Box(
-                            Modifier
-                                .align(Alignment.CenterEnd)
-                                .padding(end = 2.dp)
-                                .width(3.dp)
-                                .fillMaxHeight()
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(onSurface.copy(alpha = 0.06f))
-                        ) {
-                            if (lines.size > 1) {
-                                val p = vProgress
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .fillMaxHeight(0.32f)
-                                        .align(
-                                            when {
-                                                p <= 0.001f -> Alignment.TopCenter
-                                                p >= 0.999f -> Alignment.BottomCenter
-                                                else -> Alignment.Center
-                                            }
-                                        )
-                                        .clip(RoundedCornerShape(2.dp))
-                                        .background(primary)
-                                )
-                            }
-                        }
-                    }
-                }
+                        .matchParentSize()
+                        .pointerInput(Unit) { detectTapGestures { overflowOpen = false } }
+                )
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
-            // 批4a：外发动作行（文件查看器专用插槽）——画在状态行之上，自带分隔线；
-            // 代码块全屏不传=这段整体不存在，观感零变化。
-            if (bottomActions != null) {
-                bottomActions()
-                Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
-            }
-            // ── 底栏：状态行 + 字号步进 + 换行胶囊 ──
-            Row(
+            Column(
                 Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(surfaceC)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
-                if (imageBitmap != null && imageMeta.isNotEmpty()) {
-                    Text(
-                        imageMeta,
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 10.sp, lineHeight = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                        ),
-                        color = onSurfaceVariant.copy(alpha = 0.72f),
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else if (statusLang.isNotEmpty()) {
-                    Text(
-                        (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
-                         else "共 ${lines.size} 行") +
-                            if (statusLang.isNotEmpty()) " · $statusLang" else "",
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 10.sp, lineHeight = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                        ),
-                        color = onSurfaceVariant.copy(alpha = 0.72f),
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
+                if (overflowOpen && overflowMenu != null) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(glassShape)
+                            .background(glass)
+                            .border(1.dp, glassBorder, glassShape)
+                            .padding(vertical = 6.dp)
+                    ) {
+                        overflowMenu()
+                    }
+                    Spacer(Modifier.height(6.dp))
                 }
-                if (imageBitmap == null) Text(
-                    "A−",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontSize = 13.sp, lineHeight = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                    ),
-                    color = plain.copy(alpha = if (fontSp <= 10f) 0.25f else 0.85f),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(11.dp))
-                        .clickable(enabled = fontSp > 10f) { fontSp -= 1f }
-                        .padding(horizontal = 8.dp, vertical = 7.dp)
-                )
-                if (imageBitmap == null) Text(
-                    "${fontSp.toInt()}sp",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontSize = 10.5.sp, lineHeight = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                    ),
-                    color = onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(onSurface.copy(alpha = 0.05f))
-                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                        .width(42.dp)
-                )
-                if (imageBitmap == null) Text(
-                    "A+",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontSize = 14.sp, lineHeight = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
-                    ),
-                    color = plain.copy(alpha = if (fontSp >= 20f) 0.25f else 0.85f),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(11.dp))
-                        .clickable(enabled = fontSp < 20f) { fontSp += 1f }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-                // 换行胶囊开关：开=绿底绿字（语义色），关=灰字（图片模式隐藏）
-                if (imageBitmap == null) Row(
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(pillShape)
+                        .background(glass)
+                        .border(1.dp, glassBorder, pillShape)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(
-                            if (wrap) primary.copy(alpha = 0.14f)
-                            else androidx.compose.ui.graphics.Color.Transparent
-                        )
-                        .clickable { wrap = !wrap }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        HaoIcons.Expand, contentDescription = null,
-                        tint = if (wrap) primary else onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        if (wrap) "开" else "关",
+                    if (imageBitmap != null && imageMeta.isNotEmpty()) {
+                        Text(
+                            imageMeta,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else if (customContent != null) {
+                        // ZIP 等自定义内容：statusLang 由调用方给成品文案（如「42 项 · 128 MB」）
+                        Text(
+                            statusLang,
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else if (statusLang.isNotEmpty()) {
+                        // 可视区间而非「共 N 行」：长文件里用户更需要知道看到了哪
+                        // 软换行会让估算行高偏小（首行号虚高）——钳到 [1, 总行-可视+1]
+                        val visCount = if (trackHpx > 0) (trackHpx / lineHeightPx).toInt() else 0
+                        val firstVis = ((vScroll.value / lineHeightPx).toInt() + 1)
+                            .coerceIn(1, (shownLines.size - visCount + 1).coerceAtLeast(1))
+                        Text(
+                            (if (viewingFrom in lines.indices) "从行 ${viewingFrom + 1} 起"
+                             else "$firstVis–${(firstVis + visCount).coerceAtMost(shownLines.size)} / ${shownLines.size} 行") +
+                                if (statusLang.isNotEmpty()) " · $statusLang" else "",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 10.sp, lineHeight = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (textMode) Text(
+                        "A−",
                         style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 11.sp, lineHeight = 14.sp,
+                            fontSize = 13.sp, lineHeight = 16.sp,
                             fontWeight = FontWeight.Bold,
                             platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
                         ),
-                        color = if (wrap) primary else onSurfaceVariant.copy(alpha = 0.72f)
+                        color = plain.copy(alpha = if (fontSp <= 10f) 0.25f else 0.85f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(11.dp))
+                            .clickable(enabled = fontSp > 10f) { fontSp -= 1f }
+                            .padding(horizontal = 8.dp, vertical = 7.dp)
                     )
+                    if (textMode) Text(
+                        "${fontSp.toInt()}sp",
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 10.5.sp, lineHeight = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                        ),
+                        color = onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(onSurface.copy(alpha = 0.05f))
+                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                            .width(42.dp)
+                    )
+                    if (textMode) Text(
+                        "A+",
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 14.sp, lineHeight = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                        ),
+                        color = plain.copy(alpha = if (fontSp >= 20f) 0.25f else 0.85f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(11.dp))
+                            .clickable(enabled = fontSp < 20f) { fontSp += 1f }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+                    // 换行胶囊开关：开=绿底绿字（语义色），关=灰字（图片模式隐藏）
+                    if (textMode) Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(
+                                if (wrap) primary.copy(alpha = 0.14f)
+                                else androidx.compose.ui.graphics.Color.Transparent
+                            )
+                            .clickable { wrap = !wrap }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            HaoIcons.Expand, contentDescription = null,
+                            tint = if (wrap) primary else onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (wrap) "开" else "关",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 11.sp, lineHeight = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)
+                            ),
+                            color = if (wrap) primary else onSurfaceVariant.copy(alpha = 0.72f)
+                        )
+                    }
+                    // 行内动作（图片/ZIP 的胶囊直接进簇；HTML 的「渲染看」主键也在此）
+                    clusterActions?.invoke(this)
+                    // ⋯ 溢出菜单（文本模式的外发三键收进来，簇里放不下全量）
+                    if (textMode && overflowMenu != null) {
+                        androidx.compose.foundation.layout.Box(
+                            Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .clickable { overflowOpen = !overflowOpen },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = "更多操作",
+                                tint = if (overflowOpen) primary else onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
