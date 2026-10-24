@@ -2740,7 +2740,7 @@ private fun LazyListScope.workspaceItems(
                         )
                     }
                     Text(
-                        if (selCustom) wsPath else "用系统文件器选任意本机目录",
+                        if (selCustom) wsPath else "指定任意本机文件夹",
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = if (selCustom) FontFamily.Monospace else MaterialTheme.typography.labelSmall.fontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2766,7 +2766,7 @@ private fun LazyListScope.workspaceItems(
                 )
                 Spacer(Modifier.size(6.dp))
                 Text(
-                    "记忆 / 技能 / 性格等内部文件固定存应用内部，与此处选择无关",
+                    "记忆 / 技能 / 性格等内部文件固定存应用内部，不随产出位置变化",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
