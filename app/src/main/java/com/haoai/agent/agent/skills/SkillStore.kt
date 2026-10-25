@@ -34,10 +34,11 @@ data class SkillMeta(
     /** failStreak≥2 置位：不再注入系统提示索引，待人审/修订；一次成功即复位。 */
     val needsRevision: Boolean = false,
     /**
-     * 隔离晋升（Phase 5）：false=候选态——不进系统提示索引，等技能库页人工"验证并启用"。
-     * 存量与用户手建缺省 true；仅导入（import_*）与 agent 新建（source=agent）默认 false。
+     * 人工停用开关（2026-10-25 候选态退役，对齐 Hermes 自由写 + openclaw 版本化回滚）：
+     * true=不进系统提示索引，库里仍可查可看。agent 沉淀即生效，事后治理=
+     * 疗效遥测（needsRevision 连败出索引）+ 本开关 + 覆盖前版本快照。
      */
-    val validated: Boolean = true,
+    val disabled: Boolean = false,
     /** 导入内容扫描（SkillGuard）命中标签，供人审参考；验证启用时清除。 */
     val reviewNotes: String? = null
 ) {
@@ -165,8 +166,8 @@ object SkillStore {
             failCount = line("failCount")?.toIntOrNull() ?: 0,
             failStreak = line("failStreak")?.toIntOrNull() ?: 0,
             needsRevision = line("needsRevision") == "true",
-            // 旧文件无此字段 → 存量默认 true（零迁移成本）
-            validated = line("validated")?.let { it == "true" } ?: true,
+            // 旧候选字段 validated 已退役：存量 validated:false 一律唤醒启用；只认新 disabled
+            disabled = line("disabled") == "true",
             reviewNotes = line("reviewNotes")?.takeIf { it != "null" }
         )
     }
@@ -204,8 +205,8 @@ object SkillStore {
             if (meta.failCount > 0) appendLine("failCount: ${meta.failCount}")
             if (meta.failStreak > 0) appendLine("failStreak: ${meta.failStreak}")
             if (meta.needsRevision) appendLine("needsRevision: true")
-            // 只在候选态落盘：validated=true 为默认值，避免给存量文件添噪
-            if (!meta.validated) appendLine("validated: false")
+            // 只在停用时落盘：disabled=false 为默认值，避免给存量文件添噪
+            if (meta.disabled) appendLine("disabled: true")
             if (meta.reviewNotes != null) appendLine("reviewNotes: ${meta.reviewNotes}")
             appendLine("updatedAt: ${meta.updatedAt}")
             appendLine("---")
@@ -236,11 +237,8 @@ object SkillStore {
         // 覆盖更新时保留历史计数；新建时记录来源
         val old = if (f.exists()) parseMeta(runCatching { f.readText() }.getOrDefault(""), safe, 0) else null
         val now = System.currentTimeMillis()
-        // C 只读技能免确认：agent 新建的技能若正文只引用只读工具（调研/检索/读取类），
-        // 自动晋升进索引——最坏情况只是搜得不好，且有疗效遥测兜底（连续失败 2 次出索引）。
-        // 涉及写入/执行/设备控制的技能照旧走候选态人审；SkillGuard 扫描命中可疑内容的不放行。
-        val autoValidate = old?.validated
-            ?: (source == "user" || (source == "agent" && reviewNotes.isNullOrBlank() && isReadOnlyBody(body)))
+        // 对齐 Hermes（2026-10-25 候选态退役）：沉淀即生效进索引，不再按工具面分流；
+        // 事后治理 = 疗效遥测（连败 2 次出索引）+ 技能库页停用开关 + 覆盖前版本快照。
         val meta = SkillMeta(
             name = safe,
             description = description.trim().replace(Regex("[\\r\\n]+"), " ").take(120),
@@ -257,31 +255,15 @@ object SkillStore {
             failCount = old?.failCount ?: 0,
             failStreak = old?.failStreak ?: 0,
             needsRevision = old?.needsRevision ?: false,
-            // 候选门控：新建时仅用户手建与只读 agent 技能免验；其余导入/写入类 agent 新建走 false。
-            // 覆盖更新保留原状（agent 修订不得给技能解禁）
-            validated = autoValidate,
+            // 覆盖更新保留停用原状（agent 修订不得替用户解禁）
+            disabled = old?.disabled ?: false,
             reviewNotes = reviewNotes?.ifBlank { null } ?: old?.reviewNotes
         )
+        // openclaw 式事后安全网：覆盖改写前把旧文归档（保留最近 10 份，可恢复上一版）
+        if (f.exists()) snapshotVersion(safe, f)
         writeMeta(f, meta, body.trim().take(bodyLimit))
         cachedList = null
         return f
-    }
-
-    /**
-     * C 只读判定：正文不得提及任何写入/执行/设备控制类工具名（提及即视为有副作用风险，
-     * 走候选态人审）。只查英文工具名——中文叙述（"写入文件"）不构成工具引用。
-     */
-    fun isReadOnlyBody(body: String): Boolean {
-        val risky = listOf(
-            "bash", "edit", "write", "spawn_agents", "screen", "tap", "type_text", "key",
-            "scroll", "wait", "find", "launch_app", "open_uri", "config_set", "config_get",
-            "browser_click", "browser_input", "browser_navigate", "browser_search",
-            "browser_open", "browser_scroll", "browser_back", "browser_screenshot",
-            "vscreen_launch", "vscreen_tap", "vscreen_text", "vscreen_scroll", "vscreen_close",
-            "schedule", "workflow_save", "delegate_to_vision", "transcribe_audio",
-            "camera", "calendar", "contacts", "clipboard", "notifications", "alarm"
-        ).any { Regex("\\b${Regex.escape(it)}\\b").containsMatchIn(body) }
-        return !risky
     }
 
     /** 技能名净化：与 save 一致，供导入通道预检/重命名使用（去尾部连字符避免 "name-" 形态）。 */
@@ -298,7 +280,7 @@ object SkillStore {
     fun list(): List<SkillMeta> {
         maybeSweep()
         cachedList?.let { return it }
-        val result = dir.listFiles { f -> f.isDirectory }?.mapNotNull { d ->
+        val result = dir.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }?.mapNotNull { d ->
             val f = File(d, "SKILL.md")
             if (!f.exists()) return@mapNotNull null
             val text = runCatching { f.readText() }.getOrNull() ?: return@mapNotNull null
@@ -376,15 +358,61 @@ object SkillStore {
         return true
     }
 
-    /** Phase 5 候选晋升：人工确认后进系统提示索引；启用时清 reviewNotes（审阅完成）。 */
+    /** 人工停用/启用开关（hermes skills.disabled / pi disable-model-invocation 同语义）：停用=不进索引，库里可查可看；启用时清 reviewNotes（视为已阅）。 */
     @Synchronized
-    fun setValidated(name: String, validated: Boolean): Boolean {
+    fun setDisabled(name: String, disabled: Boolean): Boolean {
         val d = resolve(name) ?: return false
         val sf = File(d, "SKILL.md")
         if (!sf.exists()) return false
         val text = runCatching { sf.readText() }.getOrNull() ?: return false
         val meta = parseMeta(text, d.name, sf.lastModified())
-        writeMeta(sf, meta.copy(validated = validated, reviewNotes = if (validated) null else meta.reviewNotes), bodyOf(sf))
+        writeMeta(sf, meta.copy(disabled = disabled, reviewNotes = if (!disabled) null else meta.reviewNotes), bodyOf(sf))
+        cachedList = null
+        return true
+    }
+
+    // ---------- 版本快照（openclaw 式事后安全网：覆盖改写前归档旧文，可恢复上一版） ----------
+
+    private const val VERSION_KEEP = 10
+
+    private fun versionsRoot(name: String): File = File(File(dir, ".versions"), name)
+
+    /** 该技能是否存在可恢复的历史版本（技能库页按钮显隐用）。 */
+    fun hasVersions(name: String): Boolean {
+        val root = versionsRoot(sanitizeName(name))
+        return root.isDirectory && root.listFiles { f -> f.isFile }?.isNotEmpty() == true
+    }
+
+    private fun snapshotVersion(name: String, current: File) {
+        runCatching {
+            val root = versionsRoot(name).apply { mkdirs() }
+            val existing = root.listFiles { f -> f.isFile }?.map { it.name }?.toSet() ?: emptySet()
+            var ts = System.currentTimeMillis()
+            while ("$ts.md" in existing) ts++
+            java.nio.file.Files.copy(
+                current.toPath(), File(root, "$ts.md").toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+            root.listFiles { f -> f.isFile }
+                ?.sortedByDescending { it.name }
+                ?.drop(VERSION_KEEP)
+                ?.forEach { it.delete() }
+        }
+    }
+
+    /** 恢复上一版：最新快照写回现文；恢复前的现文先入快照（再按一次可回到"恢复前"）。 */
+    @Synchronized
+    fun restoreLastVersion(name: String): Boolean {
+        val safe = sanitizeName(name)
+        val f = skillFile(safe)
+        if (!f.exists()) return false
+        val newest = versionsRoot(safe).listFiles { f2 -> f2.isFile }
+            ?.maxByOrNull { it.name } ?: return false
+        val restored = runCatching { newest.readText() }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: return false
+        snapshotVersion(safe, f)
+        writeMeta(f, parseMeta(restored, safe, f.lastModified()).copy(updatedAt = System.currentTimeMillis()), bodyTextOf(restored))
+        newest.delete()
         cachedList = null
         return true
     }
@@ -397,7 +425,7 @@ object SkillStore {
     fun sweep(now: Long = System.currentTimeMillis()): Int {
         lastSweepAt = now
         var n = 0
-        dir.listFiles { f -> f.isDirectory }?.forEach { d ->
+        dir.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }?.forEach { d ->
             val f = File(d, "SKILL.md")
             if (!f.exists()) return@forEach
             val text = runCatching { f.readText() }.getOrNull() ?: return@forEach
@@ -422,7 +450,7 @@ object SkillStore {
      * 描述截断 60 字符——渐进披露。
      */
     fun promptIndex(): String {
-        val active = list().filter { !it.staleForPrompt() && !it.needsRevision && it.validated }
+        val active = list().filter { !it.staleForPrompt() && !it.needsRevision && !it.disabled }
         if (active.isEmpty()) return ""
         // C 披露排序：常用（useCount 降序）> 常青（无活跃度数据时按最近活动）；
         // 疗效差的（failStreak>0 但未到 needsRevision 线）沉底。
@@ -496,7 +524,7 @@ object SkillStore {
         val base = sanitizeName(nameOverride ?: doc.name ?: suggestedName ?: "imported")
         if (base.isBlank()) return ImportOutcome.Failed("技能名无效")
         if (exists(base) && !overwrite) return ImportOutcome.Conflict(base)
-        // 内容扫描：命中不阻断导入，记入 reviewNotes 供人审（候选态本就不进索引）
+        // 内容扫描：命中不阻断导入，记入 reviewNotes 供技能库页人审参考
         val hits = SkillGuard.scan(doc.description + "\n" + doc.body)
         save(base, doc.description, doc.body, source = importSource, importedAt = System.currentTimeMillis(),
             bodyLimit = 20_000, reviewNotes = hits.joinToString("、").ifBlank { null })

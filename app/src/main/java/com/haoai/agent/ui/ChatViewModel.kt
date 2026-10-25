@@ -3704,7 +3704,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     /**
      * 技能复盘（OpenClaw Skill Workshop「Learn from past conversations」#142909 对标）：
      * 把最近会话的对话节选打包成一个可见的聊天任务——过程可观察、可插话纠偏、可停止；
-     * 产出走 skill save，由 SkillGuard 自动分流（只读技能直接启用，写入类进候选态人审）。
+     * 产出走 skill save（沉淀即生效；事后治理靠疗效遥测+停用开关+版本快照）。
      * 手动触发不会打开任何"自动自学习"开关。
      */
     fun learnFromHistory() {

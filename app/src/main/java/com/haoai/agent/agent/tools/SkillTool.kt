@@ -41,11 +41,8 @@ class SkillTool(private val store: SkillStore) : Tool {
                 val content = args.optString("content").trim()
                 if (content.isEmpty()) return ToolResult("save 需要 content（技能正文）", true)
                 store.save(name, desc, content, source = "agent")
-                // C 只读技能免确认：晋升结果按正文工具面即时反馈，模型下一步即可复用
-                val auto = com.haoai.agent.agent.skills.SkillStore.isReadOnlyBody(content)
-                val msg = if (auto) "技能「$name」已保存并生效（只读技能自动启用）。下次遇到同类任务先 view 复用。"
-                else "技能「$name」已保存（候选态：含写入/执行/设备操作，待用户在技能库页验证启用）。"
-                ToolResult(msg)
+                // 对齐 Hermes：沉淀即生效（含写入/执行类）；事后治理靠疗效遥测+停用开关+版本快照
+                ToolResult("技能「$name」已保存并生效。下次遇到同类任务先 view 复用。")
             }
             "view" -> {
                 val name = args.optString("name").trim()

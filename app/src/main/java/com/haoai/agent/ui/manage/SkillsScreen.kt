@@ -68,6 +68,8 @@ fun SkillsScreen(
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var skills by remember { mutableStateOf(store.list()) }
+    // 有版本快照可恢复的技能名集合（openclaw 式事后回退）
+    var restorable by remember { mutableStateOf(emptySet<String>()) }
     var viewBody by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showAdd by remember { mutableStateOf(false) }
     // 待删除技能名：删除不可逆，先确认
@@ -141,6 +143,7 @@ fun SkillsScreen(
 
     fun refresh() {
         skills = store.list()
+        restorable = skills.filter { store.hasVersions(it.name) }.map { it.name }.toSet()
     }
 
     Box(
@@ -292,15 +295,15 @@ fun SkillsScreen(
                                                 .padding(horizontal = 6.dp, vertical = 1.dp)
                                         )
                                     }
-                                    if (!s.validated) {
+                                    if (s.disabled) {
                                         Text(
-                                            "候选 · 待验证",
+                                            "已停用",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.tertiary,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier
                                                 .padding(start = 6.dp)
                                                 .background(
-                                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
+                                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f),
                                                     RoundedCornerShape(6.dp)
                                                 )
                                                 .padding(horizontal = 6.dp, vertical = 1.dp)
@@ -330,7 +333,7 @@ fun SkillsScreen(
                                         modifier = Modifier.padding(top = 2.dp)
                                     )
                                 }
-                                if (!s.validated && !s.reviewNotes.isNullOrBlank()) {
+                                if (!s.reviewNotes.isNullOrBlank()) {
                                     Text(
                                         "⚠ 内容扫描：${s.reviewNotes}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -364,12 +367,20 @@ fun SkillsScreen(
                             ) {
                                 // 动作横排 + 横滑（原先 5 个动作竖排，把每张卡撑到两倍高；
                                 // 横排后卡片只剩"信息 + 一行动作"）
-                                if (!s.validated) {
+                                com.haoai.agent.ui.common.GlassTextButton(
+                                    text = if (s.disabled) "启用" else "停用",
+                                    backdrop = localBackdrop,
+                                    onClick = {
+                                        store.setDisabled(s.name, !s.disabled)
+                                        refresh()
+                                    }
+                                )
+                                if (s.name in restorable) {
                                     com.haoai.agent.ui.common.GlassTextButton(
-                                        text = "验证并启用",
+                                        text = "恢复上一版",
                                         backdrop = localBackdrop,
                                         onClick = {
-                                            store.setValidated(s.name, true)
+                                            store.restoreLastVersion(s.name)
                                             refresh()
                                         }
                                     )

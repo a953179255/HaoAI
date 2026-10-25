@@ -2,7 +2,7 @@ package com.haoai.agent.agent.skills
 
 /**
  * 导入技能内容扫描（Phase 5）：约 8 条正则黑名单，命中不阻断——只产出标签
- * 记入 SkillMeta.reviewNotes 供人审（候选态本就不进系统提示索引）。
+ * 记入 SkillMeta.reviewNotes 供技能库页人审参考（导入即生效，标签仅提示）。
  * 设计取舍：高置信、低频规则；宁可漏报不误报，误报只多一行提示不拦导入。
  */
 object SkillGuard {
