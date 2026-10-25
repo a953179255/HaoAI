@@ -515,9 +515,13 @@ object VirtualScreenController {
         } else src
         val bos = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.JPEG, quality, bos)
+        // 宽高在 recycle 前取好：debugLog 的实参无条件求值，对已回收 Bitmap 调
+        // getWidth/Height 是 AOSP 明文的 undefined behavior（部分 ROM 可触发 native 崩溃）
+        val w = bmp.width
+        val h = bmp.height
         bmp.recycle()
         val b64 = Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
-        debugLog("capture ${src.width}x${src.height} q=$quality -> ${bos.size()} bytes")
+        debugLog("capture ${w}x${h} q=$quality -> ${bos.size()} bytes")
         return "data:image/jpeg;base64,$b64"
     }
 

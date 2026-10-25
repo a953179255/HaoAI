@@ -97,11 +97,29 @@ class PrivilegedShellService : Binder() {
 
     private fun exec(cmd: String): String {
         val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
-        val out = p.inputStream.readBytes().decodeToString()
-        val err = p.errorStream.readBytes().decodeToString()
-        val rc = p.waitFor()
+        val out = StringBuilder()
+        val err = StringBuilder()
+        // 双流异步排空 + 服务端 30s 超时：卡死命令原先无限阻塞在 readBytes/waitFor，
+        // binder 客户端（shizukuExec）跟着挂死，进而把 VirtualScreenController 的
+        // 全局锁一起占住——超时强杀把错误返回给客户端
+        val t1 = Thread { runCatching { out.append(p.inputStream.readBytes().decodeToString()) } }
+            .apply { isDaemon = true }
+        val t2 = Thread { runCatching { err.append(p.errorStream.readBytes().decodeToString()) } }
+            .apply { isDaemon = true }
+        t1.start(); t2.start()
+        val finished = runCatching {
+            p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+        }.getOrDefault(false)
+        val rc: Int
+        if (!finished) {
+            runCatching { p.destroyForcibly() }
+            rc = -1
+        } else {
+            rc = p.exitValue()
+        }
+        t1.join(1_000); t2.join(1_000)
         // stdout+stderr 合并：am start 的重投递警告走 stderr，只取 stdout 会漏检
-        val text = (out + "\n" + err).trim().ifBlank { "(no output)" }
+        val text = (out.toString() + "\n" + err.toString()).trim().ifBlank { "(no output)" }
         return "$rc\n$text"
     }
 

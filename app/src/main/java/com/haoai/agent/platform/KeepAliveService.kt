@@ -212,6 +212,9 @@ class KeepAliveService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        // 跨端轮询跟随保活服务停止：PcWatchdog 的 20s 双请求循环原先在服务销毁后
+        // 继续空转（纯耗电），与它自己「只在保活服务活着的时候跑」的设计注释相悖
+        runCatching { PcWatchdog.stop() }
         super.onDestroy()
     }
 

@@ -28,7 +28,7 @@ object PrivilegedShell {
 
     const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     // 注意：每次修改 PrivilegedShellService 代码后必须 +1，Shizuku 才会杀掉旧服务进程换新代码
-    const val USER_SERVICE_VERSION = 14
+    const val USER_SERVICE_VERSION = 15
 
     enum class Status { NOT_INSTALLED, NOT_RUNNING, UNAUTHORIZED, GRANTED }
 
@@ -90,15 +90,32 @@ object PrivilegedShell {
             }.isSuccess
         }
         if (!rootAvailable.value) {
-            if (runCatching { suProbe() }.getOrDefault(false)) rootAvailable.value = true
+            // 探测丢后台线程：su 授权弹框期间进程会挂着不退出，原先在调用线程
+            //（设置页 LaunchedEffect=主线程）同步 readBytes+waitFor 会 ANR。
+            // rootAvailable 是 StateFlow，异步回填后 UI 照常响应式刷新
+            Thread {
+                if (runCatching { suProbe() }.getOrDefault(false)) rootAvailable.value = true
+            }.apply { isDaemon = true; name = "haoai-su-probe" }.start()
         }
     }
 
     private fun suProbe(): Boolean {
         val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-        val out = p.inputStream.readBytes().decodeToString()
-        p.waitFor()
-        return p.exitValue() == 0 && out.contains("uid=0")
+        val out = StringBuilder()
+        val reader = Thread {
+            runCatching { out.append(p.inputStream.readBytes().decodeToString()) }
+        }.apply { isDaemon = true; name = "haoai-su-probe-read" }
+        reader.start()
+        // 2.5s 未退出（授权弹框挂着/无 su 响应）即判不可用并杀进程，不再无限阻塞
+        val finished = runCatching {
+            p.waitFor(2_500, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        if (!finished) {
+            runCatching { p.destroyForcibly() }
+            return false
+        }
+        reader.join(500)
+        return p.exitValue() == 0 && out.toString().contains("uid=0")
     }
 
     /** 弹 Shizuku 授权框（设置页按钮）。 */
@@ -256,14 +273,32 @@ object PrivilegedShell {
             }.onFailure { lastCaptureError = it.javaClass.simpleName + ": ${it.message}" }.getOrNull()
         }
 
-    /** root（su）执行；阻塞读，须在 IO 线程。 */
-    suspend fun rootExec(cmd: String): ExecResult = withContext(Dispatchers.IO) {
+    /** root（su）执行；阻塞读，须在 IO 线程。默认 30s 超时：卡死命令超时强杀，不再永久挂起。 */
+    suspend fun rootExec(cmd: String, timeoutMs: Long = 30_000): ExecResult = withContext(Dispatchers.IO) {
         runCatching {
             val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-            val out = p.inputStream.readBytes().decodeToString()
-            val err = p.errorStream.readBytes().decodeToString()
-            val code = p.waitFor()
-            ExecResult(code, (out.ifBlank { err }).ifBlank { "（无输出）" }.trim())
+            val out = StringBuilder()
+            val err = StringBuilder()
+            val t1 = Thread { runCatching { out.append(p.inputStream.readBytes().decodeToString()) } }
+                .apply { isDaemon = true }
+            val t2 = Thread { runCatching { err.append(p.errorStream.readBytes().decodeToString()) } }
+                .apply { isDaemon = true }
+            t1.start(); t2.start()
+            val finished = runCatching {
+                p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
+            if (!finished) {
+                runCatching { p.destroyForcibly() }
+                return@runCatching ExecResult(
+                    -1,
+                    "[root 执行超时（${timeoutMs / 1000}s），已强杀] ${out.toString().take(2000)}"
+                )
+            }
+            t1.join(1_000); t2.join(1_000)
+            ExecResult(
+                p.exitValue(),
+                (out.toString().ifBlank { err.toString() }).ifBlank { "（无输出）" }.trim()
+            )
         }.getOrElse { ExecResult(-1, "root 执行失败：${it.message}") }
     }
 }

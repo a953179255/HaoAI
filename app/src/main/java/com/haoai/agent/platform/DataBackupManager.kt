@@ -510,14 +510,23 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
      */
     private fun mcpAndPcPlaintexts(c: AppContainer): Map<String, List<String>> {
         val out = LinkedHashMap<String, List<String>>()
+        val cipher = com.haoai.agent.data.KeystoreCipher()
+        // 逐项收集而非整段 runCatching：任一 header 解密失败只跳过该项，不再中断
+        // 后续（含 PC token）的收集。查不到明文的 header 由 inlineMcpSecrets 保留
+        // 密文原样出包（此前被静默整条丢弃，恢复后服务器丢失鉴权头）
         runCatching {
-            val cipher = com.haoai.agent.data.KeystoreCipher()
             for (srv in com.haoai.agent.agent.mcp.McpServerStore.load()) {
                 for ((hName, hVal) in srv.headers) {
-                    val plain = if (hVal.startsWith("enc:")) cipher.decrypt(hVal.removePrefix("enc:")) else hVal
+                    val plain = runCatching {
+                        if (hVal.startsWith("enc:")) cipher.decrypt(hVal.removePrefix("enc:")) else hVal
+                    }.getOrNull().orEmpty()
                     if (plain.isNotBlank()) out[srv.id + MCP_HEADER_KEY_PREFIX + hName] = listOf(plain)
                 }
             }
+        }.onFailure {
+            android.util.Log.w("HaoBackup", "收集 MCP 密钥失败，未收集项将以密文原样出包：${it.message}")
+        }
+        runCatching {
             val pcFile = File(c.appFilesDir, "pc-link.json")
             if (pcFile.isFile) {
                 val ep = runCatching {
@@ -530,7 +539,7 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
                 if (plain.isNotBlank()) out[PC_TOKEN_KEY] = listOf(plain)
             }
         }.onFailure {
-            android.util.Log.w("HaoBackup", "收集 MCP/PC 密钥失败，这两处将以密文原样出包：${it.message}")
+            android.util.Log.w("HaoBackup", "收集 PC 配对 token 失败，将以密文原样出包：${it.message}")
         }
         return out
     }
@@ -546,8 +555,11 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
                         add(buildJsonObject {
                             item.forEach { (k, v) -> if (k != "headers") put(k, v) }
                             put("headers", buildJsonObject {
-                                headers.forEach { (hName, _) ->
+                                headers.forEach { (hName, hVal) ->
+                                    // 查不到明文的 header 保留原值（多为密文）原样出包：
+                                    // 静默丢弃会让恢复后的服务器直接丢失鉴权头
                                     plain[id + MCP_HEADER_KEY_PREFIX + hName]?.firstOrNull()?.let { put(hName, it) }
+                                        ?: put(hName, hVal)
                                 }
                             })
                         })
@@ -598,7 +610,15 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
 
     private fun stripSecrets(el: JsonElement): JsonElement = when (el) {
         is JsonObject -> buildJsonObject {
-            el.forEach { (k, v) -> if (k !in SECRET_KEYS) put(k, stripSecrets(v)) }
+            el.forEach { (k, v) ->
+                when {
+                    // pc-link 的配对 token：密文在新机解不开，恢复侧还会把它当明文
+                    // 二次加密成死 token——不含 Key 导出时直接剔除（token+base 同场判定）
+                    k == "token" && el["base"] != null -> Unit
+                    k !in SECRET_KEYS -> put(k, stripSecrets(v))
+                    else -> Unit
+                }
+            }
         }
         is JsonArray -> buildJsonArray { el.forEach { add(stripSecrets(it)) } }
         else -> el
@@ -672,6 +692,11 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
                                 buildJsonObject { out.forEach { (b, key) -> put(b, key) } }
                             )
                         }
+                        // pc-link.json：token+base 同场即判定（与恢复侧 walk 同判据）。
+                        // 含 Key 导出用明文内联；收集失败（plain 无值）时剔除而不是保留
+                        // 密文——恢复侧会把密文当明文二次加密，留下恒 401 的僵尸配对
+                        k == "token" && el["base"] != null ->
+                            plain[PC_TOKEN_KEY]?.firstOrNull()?.let { put("token", it) }
                         k in SECRET_KEYS -> Unit
                         else -> put(k, inlineSecrets(v, plain))
                     }
@@ -1015,6 +1040,10 @@ val bySearch: Map<String, List<String>> = s.searchApiKeyCiphers.mapNotNull { (ba
         fun pcTokenSealed(el: JsonObject): String? {
             val plain = (el["token"] as? JsonPrimitive)?.contentOrNull
             if (plain.isNullOrEmpty()) return null
+            // 旧版导出的死密文防御：token 以 enc:v1: 开头说明这份包由"明文未内联"的
+            // 旧版导出（原 inlineSecrets 无 token 分支），新机 Keystore 解不开旧密文，
+            // 二次加密只会留下恒 401 的僵尸配对——宁可剔除按"未配对"处理
+            if (plain.startsWith(PC_ENC_PREFIX)) return null
             val cipherText = encrypt(plain) ?: return null
             count++
             return PC_ENC_PREFIX + cipherText

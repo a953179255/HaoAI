@@ -3,10 +3,7 @@ package com.haoai.agent.platform
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.haoai.agent.HaoApplication
-import com.haoai.agent.agent.workflow.WorkflowRunner
 import com.haoai.agent.agent.workflow.WorkflowStore
-import kotlinx.coroutines.launch
 
 /**
  * 工作流外部触发入口：Tasker / MacroDroid / adb 广播拉起。
@@ -42,10 +39,9 @@ class WorkflowTriggerReceiver : BroadcastReceiver() {
             lastTriggerAt = now
         }
 
-        val container = (context.applicationContext as? HaoApplication)?.container ?: return
-        container.applicationScope.launch {
-            runCatching { WorkflowRunner.run(container, def, trigger = "external") }
-        }
+        // 改投 WorkManager：广播拉起的进程没有任何前台组件/绑定，fire-and-forget
+        // 随时被冻结或回收，分钟级工作流大概率跑不完且无痕迹（WorkflowRunWorker 负责存活）
+        WorkflowRunWorker.enqueue(context, def.id, "external")
     }
 
     companion object {

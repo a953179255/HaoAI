@@ -69,9 +69,7 @@ object ShellRunner {
             }.getOrDefault(false)
 
             if (!finished) {
-                process.destroy()
-                runCatching { process.waitFor(2000, TimeUnit.MILLISECONDS) }
-                if (process.isAlive) process.destroyForcibly()
+                killTree(process)
                 val partial = synchronized(byteBuf) { String(byteBuf.toByteArray(), Charsets.UTF_8) }
                 return Result(-1, "$partial\n[执行超时（${timeoutMs}ms），已终止]")
             }
@@ -81,10 +79,37 @@ object ShellRunner {
             return Result(process.exitValue(), output.ifBlank { "(无输出)" })
         } catch (ie: InterruptedException) {
             // 调用协程被取消（用户按停止）：必须杀掉子进程，否则命令继续在后台跑
-            process.destroy()
-            runCatching { process.waitFor(2000, TimeUnit.MILLISECONDS) }
-            if (process.isAlive) process.destroyForcibly()
+            killTree(process)
             throw ie
         }
     }
+
+    /**
+     * 杀进程树：Process.destroy 只作用于直接子进程（sh -c 里的 sh 本身），命令中
+     * 后台化的孙进程（`long_task &`）会存活并持有 stdout 管道，pump 读线程因此
+     * 阻塞不退出。pkill -P 补杀一层子进程（toybox 自带）。pid 在 API<34 无公开
+     * API，反射 ART ProcessImpl 的 pid 字段尽力获取；任一步失败退化为旧行为
+     * （只杀直接子进程），不比现状差。
+     */
+    private fun killTree(process: Process) {
+        runCatching {
+            process.destroy()
+            runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }
+            if (process.isAlive) process.destroyForcibly()
+            val pid = pidOf(process)
+            if (pid > 0) {
+                runCatching {
+                    Runtime.getRuntime()
+                        .exec(arrayOf("pkill", "-KILL", "-P", pid.toString()))
+                        .waitFor()
+                }
+            }
+        }
+    }
+
+    private fun pidOf(p: Process): Long = runCatching {
+        val f = p.javaClass.getDeclaredField("pid")
+        f.isAccessible = true
+        (f[p] as Int).toLong()
+    }.getOrDefault(-1L)
 }

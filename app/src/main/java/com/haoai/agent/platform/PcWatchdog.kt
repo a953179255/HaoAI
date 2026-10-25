@@ -71,6 +71,10 @@ object PcWatchdog {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
 
+    /** 共享连接池：原先每次调用 new PcLink 都连带新建 OkHttpClient，20s 轮询
+     *  周期性建弃连接池，空闲 socket 反复滞留。 */
+    private val sharedHttp = PcLink.defaultClient()
+
     private val _state = MutableStateFlow(State())
     val state = _state.asStateFlow()
 
@@ -126,7 +130,7 @@ object PcWatchdog {
         val f = file() ?: return "应用还没起完"
         val ep = store?.load(f)
         val pcSaid = if (ep != null && ep.token.isNotBlank())
-            when (val out = PcLink(ep.base, ep.token).unpair()) {
+            when (val out = PcLink(ep.base, ep.token, sharedHttp).unpair()) {
                 is PcOut.Ok -> out.value
                 is PcOut.Fail -> "（那台电脑没答上：${out.message}）"
             } else "（本地本来就没配对）"
@@ -199,7 +203,7 @@ object PcWatchdog {
             _state.value = _state.value.copy(lastNote = "还没配对那台电脑")
             return PcWatchAction.Same
         }
-        return when (val out = PcLink(ep.base, ep.token).pending()) {
+        return when (val out = PcLink(ep.base, ep.token, sharedHttp).pending()) {
             is PcOut.Fail -> {
                 // 连不上/被解除：先把"在等"的假象收掉，并清空差集 —— 重连之后如果还是那几条，
                 // 应该重新提醒一次（人可能根本没看到刚才那条）。
@@ -232,7 +236,7 @@ object PcWatchdog {
                  * 一次轮询两个请求（20 秒一轮）换的是"人不在电脑前也知道结果出来了"，
                  * 值；真要省，就该把两个口合成一个，而不是少问一次。
                  */
-                announceResults(PcLink(ep.base, ep.token).digest())
+                announceResults(PcLink(ep.base, ep.token, sharedHttp).digest())
                 act
             }
         }
@@ -243,7 +247,7 @@ object PcWatchdog {
         val f = file() ?: return
         val ep = store?.load(f) ?: return
         _state.value = _state.value.copy(
-            lastNote = when (val out = PcLink(ep.base, ep.token).decide(id, decision)) {
+            lastNote = when (val out = PcLink(ep.base, ep.token, sharedHttp).decide(id, decision)) {
                 is PcOut.Ok -> out.value
                 is PcOut.Fail -> out.message
             }
@@ -257,7 +261,7 @@ object PcWatchdog {
         val f = file() ?: return
         val ep = store?.load(f) ?: return
         _state.value = _state.value.copy(
-            lastNote = when (val out = PcLink(ep.base, ep.token).answer(id, text)) {
+            lastNote = when (val out = PcLink(ep.base, ep.token, sharedHttp).answer(id, text)) {
                 is PcOut.Ok -> out.value
                 is PcOut.Fail -> out.message
             }

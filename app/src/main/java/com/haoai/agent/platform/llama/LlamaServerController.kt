@@ -466,6 +466,13 @@ class LlamaServerController(
                         Request.Builder().url("$LOCAL_BASE_URL/health").build()
                     ).execute().use { resp ->
                         if (resp.isSuccessful) {
+                            // 所有权复核：用户在健康检查命中的瞬间按了停止（stop() 已把
+                            // process 置空并异步收割）——不复核会把刚停掉的服务复活成
+                            // Running，状态与真实进程脱钩
+                            if (process !== proc) {
+                                reapProcess(proc)
+                                return false
+                            }
                             currentModelPath = model.absolutePath
                             lastActiveBackend = tier.key
                             _state.value = LlamaState.Running(model.name)
@@ -551,6 +558,9 @@ class LlamaServerController(
                                 var done = 0L
                                 var lastPct = -1
                                 while (input.read(buf).also { read = it } != -1) {
+                                    // 几 GB 模型下载必须可即时取消：原先无检查点，
+                                    // 取消只在整包下载完后才生效（白下满全程）
+                                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
                                     output.write(buf, 0, read)
                                     done += read
                                     if (total > 0) {
