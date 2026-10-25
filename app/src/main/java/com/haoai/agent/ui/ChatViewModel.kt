@@ -415,14 +415,14 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     // 现在每条会话一个 FIFO，条目 = 已落进历史的用户消息 id + 文本（撤回/编辑按 id 定位）。
     // 主线程读写（send/finishRun/撤回都在主线程）。
     private val queues = HashMap<String, ArrayDeque<StoredQueuedMsg>>()
-    private val _interjectCount = kotlinx.coroutines.flow.MutableStateFlow(0)
-    val interjectCount = _interjectCount.asStateFlow()
+    private val _queueCount = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val queueCount = _queueCount.asStateFlow()
 
     private fun queueOf(sid: String): ArrayDeque<StoredQueuedMsg> = queues.getOrPut(sid) { ArrayDeque() }
 
     /** 刷新"正在查看的会话"的排队条数（入队/撤回/切会话/续跑后调用）；同步重排显示行。 */
     private fun refreshQueueCount() {
-        _interjectCount.value = viewedSid()?.let { queues[it]?.size } ?: 0
+        _queueCount.value = viewedSid()?.let { queues[it]?.size } ?: 0
         // 排队态/转正靠 rebuildRows 重算 ChatRow.queued：入队即变虚线气泡、出队即转正常气泡
         if (viewedSid() != null) rebuildRows()
     }
@@ -579,14 +579,13 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     /** 引擎环顶销账钩子（IO 线程被调）：投回主线程做队列摘除，与 promote/drain 同线程纪律。 */
-    private fun drainSteering(sid: String): Int {
+    private fun drainSteering(sid: String) {
         viewModelScope.launch {
             val q = queues[sid] ?: return@launch
             if (q.none { it.interject }) return@launch
             q.removeAll { it.interject }
             refreshQueueCount(); persistQueueState(sid)
         }
-        return 0
     }
 
     /** 删除排队消息在历史里的那条用户消息（内存副本 + 落盘都删）。 */

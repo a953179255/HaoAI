@@ -226,10 +226,20 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
                             parts.forEach { p ->
                                 when {
                                     p.type == "text" && p.text != null -> append("user", Block.Text(p.text))
-                                    p.type == "image_url" && p.imageUrl != null ->
-                                        parseDataUrl(p.imageUrl.url)?.let { (mt, b64) ->
-                                            append("user", Block.Image(mt, b64))
+                                    p.type == "image_url" && p.imageUrl != null -> {
+                                        val dataUrl = parseDataUrl(p.imageUrl.url)
+                                        if (dataUrl != null) {
+                                            append("user", Block.Image(dataUrl.first, dataUrl.second))
+                                        } else {
+                                            // 远程 http(s) 图 URL 静默丢弃会让模型"看不见图还装看见了"；
+                                            // 显式注记降级（OpenAI 路径原样透传远程 URL，行为分叉点）
+                                            append("user", Block.Text(
+                                                "[系统] 消息携带了一张远程图片链接（${p.imageUrl.url.take(120)}），" +
+                                                    "当前 Anthropic 通路仅支持内嵌 base64 图片，未能发送。" +
+                                                    "如需查看请改用 web_fetch 获取页面内容。"
+                                            ))
                                         }
+                                    }
                                 }
                             }
                         } else {

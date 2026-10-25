@@ -30,7 +30,12 @@ class McpTool(
     override val desc: String = buildString {
         append("[MCP·${cfg.name}] ")
         append(info.description.ifBlank { info.name })
-        append("（远程工具，执行前会请求用户批准）")
+        // 审批口径与 PolicyEngine.riskOverride 一致：read 级服务器（用户配置免审批）
+        // 的工具直接执行，write 级才弹审批——原先一律写"会请求批准"是错误预期
+        append(
+            if (cfg.approvalLevel == "read") "（远程工具，本服务器已设为免审批直接执行）"
+            else "（远程工具，执行前会请求用户批准）"
+        )
     }
 
     /** 远端 schema 防御性补全：缺 type 时按 object 补全，缺 root 对象用默认空参，避免模型端解析失败。 */

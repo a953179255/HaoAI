@@ -99,7 +99,7 @@ class AgentEngineLoopTest {
         contextLength: Int = 0,
         turnTokenCap: Int = 150_000,
         toolCallCap: Int = 80,
-        steeringDrain: (String) -> Int = { 0 },
+        steeringDrain: (String) -> Unit = {},
         backend: com.haoai.agent.platform.FileBackend? = null,
         flagOverrides: Map<String, Boolean> = emptyMap(),
         onBackgroundSubagentDone: ((String, SubagentHandle) -> Unit)? = null

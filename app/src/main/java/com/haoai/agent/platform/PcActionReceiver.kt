@@ -19,9 +19,17 @@ class PcActionReceiver : BroadcastReceiver() {
         val decision = intent.getStringExtra(EXTRA_DECISION) ?: return
         // 同一个按钮口，两种语义：审批送的是那三个决定值，提问送的是回答文字
         val isAnswer = intent.getBooleanExtra(EXTRA_IS_ANSWER, false)
+        // goAsync 撑住广播窗口：网络请求（连接 4s+读 10s）原先在 onReceive 返回后
+        // fire-and-forget，PcWatchdog 从设置页启动（无前台服务）时进程可能先于
+        // 请求完成被回收——用户点了"允许"电脑端却没收到
+        val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { if (isAnswer) PcWatchdog.answer(id, decision) else PcWatchdog.decide(id, decision) }
-                .onFailure { android.util.Log.w("HaoPcLink", "点决定没送到：${it.message}") }
+            try {
+                runCatching { if (isAnswer) PcWatchdog.answer(id, decision) else PcWatchdog.decide(id, decision) }
+                    .onFailure { android.util.Log.w("HaoPcLink", "点决定没送到：${it.message}") }
+            } finally {
+                pending.finish()
+            }
         }
     }
 

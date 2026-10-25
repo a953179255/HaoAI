@@ -147,7 +147,7 @@ class AgentEngine(
      * 当排队任务再执行一遍=双跑），并把气泡从"插话待生效"转正。
      * 返回摘除的条数仅用于调试日志。无人值守/子代理传默认空实现=无插话源。
      */
-    internal val steeringDrain: (String) -> Int = { 0 },
+    internal val steeringDrain: (String) -> Unit = {},
     /**
      * P4 后台子代理完成上报（ZCode task-notification 同款契约）：spawn_agent(background=true)
      * 派出的子代理在回合结束后继续运行，DONE/ERROR 终态时以 (sessionId, handle) 回调调用方。
@@ -302,7 +302,9 @@ class AgentEngine(
         sameToolFailHaltAfter = 8,
         maxCyclePeriod = 4,
         hardStopEnabled = false,
-        loopCap = if (toolCallCap in 1..200) toolCallCap else 0
+        // 圈数熔断与主循环 E5b 同阈值双轨：守卫版在 finishCall 内 Halt（无 RUN_TURNCAPPED
+        // 记账、文案不同），统一走主循环 E5b 那条带收尾指令+终态记账的路径，这里关闭
+        loopCap = 0
     )
 
     /** 5.7 已追加过自改进提示的技能（会话级限一次）。
@@ -957,11 +959,19 @@ class AgentEngine(
         if (identity.isNotBlank()) sysParts.add(identity)
         val sysText = sysParts.joinToString("\n\n")
 
+        // 窗口化：旁路提问不落库、无工具循环，但原先全量历史直发——长会话改标题/插话
+        // 的成本与主请求同量级。窗口 = 首条 user 消息（标题生成的主题锚点）+ 最近 20 条。
+        // 本路径把 tool 消息折叠成 user、不传 toolCalls，无配对截断问题
+        val all = session.messages
+        val head = all.firstOrNull { it.role == ChatMessage.ROLE_USER }
+        val tail = all.takeLast(20)
+        val windowed = if (head != null && !tail.contains(head)) listOf(head) + tail else tail
+
         val apiMessages = mutableListOf<com.haoai.agent.agent.provider.ApiMessage>()
         if (sysText.isNotBlank()) {
             apiMessages.add(com.haoai.agent.agent.provider.ApiMessage(role = "system", content = sysText))
         }
-        session.messages.forEach { m ->
+        windowed.forEach { m ->
             apiMessages.add(com.haoai.agent.agent.provider.ApiMessage(
                 role = when (m.role) {
                     ChatMessage.ROLE_USER -> "user"

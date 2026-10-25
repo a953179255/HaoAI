@@ -101,7 +101,7 @@ class CollectAgentTool(private val controls: SubagentControl) : Tool {
 
     override val name = "collect_agent"
     override val desc =
-        "收取子代理的进度或结果（id 见 spawn 结果标注，后台子代理必须用本工具收取）。wait_seconds=0 只看当前快照；>0 最多等待该秒数直到完成，返回状态、已完成步骤与最终结论。"
+        "收取子代理的进度或结果（id 见 spawn 结果标注，后台子代理必须用本工具收取）。wait_seconds=0 只看当前快照；>0 最多等待该秒数直到完成（上限 150s，受单次工具执行总超时约束），返回状态、已完成步骤与最终结论。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -115,7 +115,9 @@ class CollectAgentTool(private val controls: SubagentControl) : Tool {
         if (id.isEmpty()) return ToolResult("缺少 id（见 spawn 结果的 sa_N 标注）", true)
         val h = controls.byId(id)
             ?: return ToolResult("子代理 $id 不存在（未派出或已超出本回合）", true)
-        val wait = (args.optInt("wait_seconds") ?: 0).coerceIn(0, 600)
+        // 上限 150s 而非 600s：外层 invokeTool 对工具的 180s 总超时先到（600s 承诺
+        // 会让模型报"工具执行超时"后自己编个理由继续），留给收尾/网络余量
+        val wait = (args.optInt("wait_seconds") ?: 0).coerceIn(0, 150)
         val deadline = System.currentTimeMillis() + wait * 1000L
         while (h.state == "RUNNING" && System.currentTimeMillis() < deadline) delay(400)
         return buildString {

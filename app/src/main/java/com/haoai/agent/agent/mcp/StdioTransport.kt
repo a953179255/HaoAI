@@ -118,7 +118,7 @@ private var process: Process? = null
     }
         }, responseTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         try {
-    val body = readResponse(p, id, deadline = responseTimeoutMs)
+    val body = readResponse(p, id)
    completed.set(true)
             McpHttpResponse(200, body)
         } catch (e: IOException) {
@@ -172,52 +172,47 @@ private var process: Process? = null
      * 只能等到 responseTimeoutMs（默认 120s）超时。
      * 修法：reader 提为实例字段，随 transport 生命周期创建/关闭，跨请求复用。
      */
-    private fun readResponse(p: Process, id: kotlinx.serialization.json.JsonElement?, deadline: Long): JsonObject {
+    private fun readResponse(p: Process, id: kotlinx.serialization.json.JsonElement?): JsonObject {
         val reader = readerFor(p)
         while (true) {
-      val line = try {
-        reader.readLine()
-      } catch (_: Exception) {
-       throw IOException("读取 MCP 服务器输出失败：${stderrText()}")
+            val line = try {
+                reader.readLine()
+            } catch (_: Exception) {
+                throw IOException("读取 MCP 服务器输出失败：${stderrText()}")
             } ?: throw IOException(
-          "MCP 服务器关闭了输出流（exit ${exitOf(p)}）：${stderrText()}"
-      )
+                "MCP 服务器关闭了输出流（exit ${exitOf(p)}）：${stderrText()}"
+            )
             val trimmed = line.trim()
- if (trimmed.isEmpty()) continue
-    if (trimmed.startsWith("Content-Length:", ignoreCase = true)) {
-            // LSP 风格：读完头块（空行止），按声明长度读负载
-        val payloadLen = trimmed.substringAfter(":").trim().toIntOrNull() ?: continue
-     while (reader.readLine()?.isNotEmpty() == true) { /* 头块其余行 */ }
-   val buf = CharArray(payloadLen)
-  var off = 0
-        while (off < payloadLen) {
-   val n = reader.read(buf, off, payloadLen - off)
-            if (n < 0) throw IOException("MCP 服务器输出中断：${stderrText()}")
-        off += n
+            if (trimmed.isEmpty()) continue
+            if (trimmed.startsWith("Content-Length:", ignoreCase = true)) {
+                // LSP 风格：读完头块（空行止），按声明长度读负载
+                val payloadLen = trimmed.substringAfter(":").trim().toIntOrNull() ?: continue
+                while (reader.readLine()?.isNotEmpty() == true) { /* 头块其余行 */ }
+                val buf = CharArray(payloadLen)
+                var off = 0
+                while (off < payloadLen) {
+                    val n = reader.read(buf, off, payloadLen - off)
+                    if (n < 0) throw IOException("MCP 服务器输出中断：${stderrText()}")
+                    off += n
+                }
+                asResponseWithId(String(buf), id)?.let { return it }
+                continue
+            }
+            asResponseWithId(trimmed, id)?.let { return it }
         }
-       asResponseWithId(String(buf), id)?.let { return it }
-    continue
-  }
-          asResponseWithId(trimmed, id)?.let { return it }
-  }
     }
 
     /**
      * 取（并缓存）该进程的 reader。**必须复用同一个实例** —— 见 [readResponse] 的说明：
      * 每次新建 BufferedReader 会预读并丢弃缓冲里不属于本次响应的字节。
      */
-    private fun readerFor(p: Process): BufferedReader {
-        readerLock?.let { l ->
-            synchronized(l) {
-                if (reader == null || readerProcess !== p) {
-                    runCatching { reader?.close() }
-                    reader = BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8))
-                    readerProcess = p
-                }
-                return reader!!
-            }
+    private fun readerFor(p: Process): BufferedReader = synchronized(readerLock) {
+        if (reader == null || readerProcess !== p) {
+            runCatching { reader?.close() }
+            reader = BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8))
+            readerProcess = p
         }
-        return BufferedReader(InputStreamReader(p.inputStream, Charsets.UTF_8))
+        reader!!
     }
 
     /** 行文本 → 匹配 id 的响应 JSON（不匹配/不可解析返回 null，调用方继续读）。 */

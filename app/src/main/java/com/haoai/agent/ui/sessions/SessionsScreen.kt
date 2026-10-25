@@ -414,19 +414,10 @@ fun SessionsScreen(
                                     }
                                 },
                                 content = { cardClick ->
-                                    GlassCard(
+                                    SessionPageCard(
                                         onClick = cardClick,
-                                        backdrop = localBackdrop,
-                                        shape = RoundedCornerShape(14.dp),
-                                        // 与全项目内容卡同刻度（壁纸模式自动 0.82）；
-                                        // 当前会话用品牌色 tint 区分，不再用"更透"区分
-                                        surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
-                                        tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
-                                        lensRadius = 14.dp,
-                                        pressScale = true,
-                                        // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
-                                        pageTier = true,
-                                        modifier = Modifier.fillMaxWidth()
+                                        active = active,
+                                        backdrop = localBackdrop
                                     ) {
                                         Row(
                                             Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
@@ -559,16 +550,10 @@ fun SessionsScreen(
                                     }
                                 },
                                 content = { cardClick ->
-                                    GlassCard(
+                                    SessionPageCard(
                                         onClick = cardClick,
-                                        backdrop = localBackdrop,
-                                        shape = RoundedCornerShape(14.dp),
-                                        surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
-                                        lensRadius = 14.dp,
-                                        pressScale = true,
-                                        // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
-                                        pageTier = true,
-                                        modifier = Modifier.fillMaxWidth()
+                                        active = false,
+                                        backdrop = localBackdrop
                                     ) {
                                         Row(
                                             Modifier.padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
@@ -695,5 +680,35 @@ fun SessionsScreen(
                 color = MaterialTheme.colorScheme.onBackground
             )
         }
+    }
+}
+
+/**
+ * 会话页与回收站页共用的玻璃卡壳（2026-10-25 抽取）：shape/档位/镜面半径/按压反馈
+ * 七个参数两侧必须同步改（此前复制粘贴，改一处漏另一处），收拢到这一处。
+ * tint 仅活动会话用（回收站传 false 等价于 null）。
+ */
+@Composable
+private fun SessionPageCard(
+    onClick: () -> Unit,
+    active: Boolean,
+    backdrop: LayerBackdrop,
+    content: @Composable () -> Unit
+) {
+    com.haoai.agent.ui.common.GlassCard(
+        onClick = onClick,
+        backdrop = backdrop,
+        shape = RoundedCornerShape(14.dp),
+        // 与全项目内容卡同刻度（壁纸模式自动 0.82）；
+        // 当前会话用品牌色 tint 区分，不再用"更透"区分
+        surfaceAlpha = com.haoai.agent.ui.theme.haoPageCardSurfaceAlpha(),
+        tint = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else null,
+        lensRadius = 14.dp,
+        pressScale = true,
+        // 2026-10-09 方案A：页面玻璃卡档（磨砂/白雾独立于聊天卡片）
+        pageTier = true,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        content()
     }
 }

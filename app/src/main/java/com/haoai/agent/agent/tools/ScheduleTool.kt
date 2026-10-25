@@ -91,7 +91,8 @@ class ScheduleTool(private val appFilesDir: java.io.File) : Tool {
                     }
                 }
                 val enabled = nowEnabled ?: return ToolResult("未找到任务：$id", true)
-                if (enabled) Scheduler.enqueueNext(toSchedule!!) else Scheduler.cancel(cancelId!!)
+                if (enabled) toSchedule?.let(Scheduler::enqueueNext)
+                else cancelId?.let(Scheduler::cancel)
                 ToolResult("「$taskName」已${if (enabled) "启用" else "停用"}")
             }
 

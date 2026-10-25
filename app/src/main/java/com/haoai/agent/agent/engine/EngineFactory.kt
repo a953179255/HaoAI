@@ -71,7 +71,7 @@ object EngineFactory {
         softBudgetWarn: Boolean = true,
         toolFailCap: Int = 8,
         /** A2 运行中插话的环顶销账钩子（仅前台聊天注入；无人值守/子代理留默认空实现）。 */
-        steeringDrain: (String) -> Int = { 0 }
+        steeringDrain: (String) -> Unit = {}
     ): AgentEngine {
         val st = container.settingsFlow.value
         return AgentEngine(

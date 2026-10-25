@@ -92,7 +92,6 @@ internal suspend fun AgentEngine.executeCall(
                 "请基于已有信息给出完整执行计划：步骤、涉及文件、预期结果，等待用户批准后再执行。",
             false
         )
-        finalState = ToolRunState.DONE
         val storedP = TextCap.middle(result.content, STORED_CAP)
         appendAndNotify(
             ChatMessage(role = ChatMessage.ROLE_TOOL, content = storedP, callId = call.id, name = call.name),
@@ -428,14 +427,17 @@ internal suspend fun AgentEngine.executeParallelCalls(
     val prepared = mutableListOf<PreparedCall>()
     val hookBlocked = mutableListOf<Pair<PreparedCall, Triple<ToolResult, ToolRunState, String>>>()
     for (call in calls) {
-        val p = PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.args), ctx)
+        // 与串行 executeCall 同构：桥接一次（带子代理上报回调），hooks 与并执行共
+        // 用同一份 ctx——原先 PreparedCall 存未桥接 ctx，并执行的工具体拿不到
+        // currentCallId/onSubagentEvent
+        val p = PreparedCall(call, tools.firstOrNull { it.name == call.name }, parseArgs(call.args), subagentBridge(ctx, call, onEvent))
         var hookFailure: String? = null
         var handled: Triple<ToolResult, ToolRunState, String>? = null
         try {
             for (h in hooks) {
                 if (h.names.isNotEmpty() && call.name !in h.names) continue
                 // callCtx 与串行 executeCall 同源（subagentBridge 会带上子代理上报回调）
-                val d = h.before(call, p.args ?: buildJsonObject {}, subagentBridge(ctx, call, onEvent))
+                val d = h.before(call, p.args ?: buildJsonObject {}, p.ctx)
                 if (d is ToolHook.HookDecision.Handled) {
                     handled = Triple(
                         d.result,

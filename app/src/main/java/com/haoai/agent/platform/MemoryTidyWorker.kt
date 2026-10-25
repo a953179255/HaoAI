@@ -21,10 +21,14 @@ class MemoryTidyWorker(context: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val container = (applicationContext as HaoApplication).container
         val settings = container.settingsFlow.value
+        // force=true = 用户在设置页手动点按钮：跳过每日预算闸（用户显式要求，别让
+        // "预算用完"把手动触发变成纯规则层——原写入参从未被读，手动与自动无差别）
+        val forced = inputData.getBoolean("force", false)
         var reportText = ""
         try {
             // 5.1 每日预算：超预算时跳过云端 LLM 深度固化（端侧模型不耗云端 token 不受限），回退纯规则
-            val overBudget = com.haoai.agent.data.UsageLedger.budgetExhausted(settings.dailyTokenBudgetK) &&
+            val overBudget = !forced &&
+                com.haoai.agent.data.UsageLedger.budgetExhausted(settings.dailyTokenBudgetK) &&
                 settings.dreamProviderId != "local"
             if (settings.deepDream && settings.memoryEnabled && !overBudget) {
                 val wasRunning =

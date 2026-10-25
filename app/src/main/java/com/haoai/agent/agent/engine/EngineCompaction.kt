@@ -35,8 +35,7 @@ internal suspend fun AgentEngine.compactWithChain(
 ): com.haoai.agent.agent.engine.compaction.CompactionResult? {
     var lastErr: Throwable? = null
     for ((p, k) in chain) {
-        val isLocal = p.baseUrl.contains("127.0.0.1") || p.baseUrl.startsWith("local")
-        val cw = if (isLocal) 32768 else p.effectiveContextLength()
+        val cw = contextWindowOf(p)
         try {
             return compactionManager.compact(
                 messages = chatMsgs,
@@ -109,8 +108,7 @@ internal suspend fun AgentEngine.maybeCompact(onEvent: (TurnEvent) -> Unit) {
     if (compactionManager.isCoolingDown()) return
     val chain = summarizerChain()
     val sp = chain.first().first
-    val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
-    val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
+    val contextWindow = contextWindowOf(sp)
     val chatMsgs = uncompactedMessages().map { it.toModel() }
     // 触发判定统一走 estimateContextTokens：供应商真值优先、字符估算兜底。
     // （旧口径在这里现算全量历史 + 系统提示 + 工具定义，工具密集会话能高估一个数量级）
@@ -138,11 +136,14 @@ internal suspend fun AgentEngine.maybeCompact(onEvent: (TurnEvent) -> Unit) {
             session.compactedTokensBefore = usedTokens
             markCompactedThrough(wid)
             persist()
-            onEvent(MessageAdded(ChatMessage(
-                role = ChatMessage.ROLE_ASSISTANT,
-                content = "[系统] 摘要生成失败，已切换为窗口模式：保留最近上下文继续，" +
-                    "更早的历史仍可回查（详情见记忆/工作区文件）"
-            )))
+            appendAndNotify(
+                ChatMessage(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = "[系统] 摘要生成失败，已切换为窗口模式：保留最近上下文继续，" +
+                        "更早的历史仍可回查（详情见记忆/工作区文件）"
+                ),
+                onEvent
+            )
             return
         }
         // 水位推不动（整段都还在保留窗内）：不落任何摘要，静默放过，下一轮再判
@@ -154,10 +155,13 @@ internal suspend fun AgentEngine.maybeCompact(onEvent: (TurnEvent) -> Unit) {
     session.compactedTokensBefore = usedTokens
     markCompactedThrough()
     persist()
-    onEvent(MessageAdded(ChatMessage(
-        role = ChatMessage.ROLE_ASSISTANT,
-        content = "[系统] 上下文已压缩，释放约 ${result.tokensSaved} tokens"
-    )))
+    appendAndNotify(
+        ChatMessage(
+            role = ChatMessage.ROLE_ASSISTANT,
+            content = "[系统] 上下文已压缩，释放约 ${result.tokensSaved} tokens"
+        ),
+        onEvent
+    )
 }
 
 /** Overflow 恢复：检测 API 返回的 context_length_exceeded 错误，自动压缩后重试。 */
@@ -170,30 +174,30 @@ internal suspend fun AgentEngine.handleOverflow(
     if (compactionManager.isCoolingDown()) throw Exception(error)
     val chain = summarizerChain()
     val sp = chain.first().first
-    val isLocal = sp.baseUrl.contains("127.0.0.1") || sp.baseUrl.startsWith("local")
-    val contextWindow = if (isLocal) 32768 else sp.effectiveContextLength()
+    val contextWindow = contextWindowOf(sp)
     val chatMsgs = uncompactedMessages().map { it.toModel() }
 
     // 强制压缩（点6：链式降级）；A4：全失败同样走免摘要换窗后重试——
     // 此时水位推进是唯一的自救路径（原样重发必然再次 overflow）
     val result = compactWithChain(chatMsgs, chain)
+    // M12：记账取"压缩前的真实规模"——必须在推水位之前取。水位不删原文，但
+    // estimateContextTokens 走 uncompactedMessages（随水位收缩），推完再算会虚低，
+    // 与 ：187 注释"统一在压缩前取一次"的原意一致
+    session.compactedTokensBefore = estimateContextTokens()
     if (result == null) {
         session.compactionSummary = null
-        val wid = prospectiveWatermark()
-        if (wid != null) markCompactedThrough(wid)
     } else {
         session.compactionSummary = result.summary
     }
-    // M12：与 maybeCompact 同源——记账必须取"压缩前的真实规模"，压缩后水位未推进时
-    // estimateContextTokens() 恰好还是压缩前的值，但语义上属于"事后重算"，
-    // 一旦将来压缩动作改成会先改水位，这里就会记错。统一在压缩前取一次。
-    session.compactedTokensBefore = estimateContextTokens()
     markCompactedThrough()
     persist()
-    onEvent(MessageAdded(ChatMessage(
-        role = ChatMessage.ROLE_ASSISTANT,
-        content = "[系统] 上下文溢出，已自动压缩并重试"
-    )))
+    appendAndNotify(
+        ChatMessage(
+            role = ChatMessage.ROLE_ASSISTANT,
+            content = "[系统] 上下文溢出，已自动压缩并重试"
+        ),
+        onEvent
+    )
     retryBlock()
 }
 

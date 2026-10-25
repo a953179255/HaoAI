@@ -310,7 +310,9 @@ object DataBackupManager {
 
     fun scopeSize(c: AppContainer, scope: BackupScope): Long = when (scope) {
         BackupScope.SETTINGS -> fileSources(c, scope).sumOf { it.second.length() } +
-            listOf("settings/settings.json", "state/haoai.config.json")
+            // 与 2026-10-10 打包清单对齐：MCP servers 与 PC 配对也在 SETTINGS 域出包，
+            // 体积口径漏了这两项 UI 显示会偏小
+            listOf("settings/settings.json", "state/haoai.config.json", "settings/mcp/servers.json", "settings/pc-link.json")
                 .map { File(c.appFilesDir, it) }
                 .filter { it.isFile }.sumOf { it.length() }
 

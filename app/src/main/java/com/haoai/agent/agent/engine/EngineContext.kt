@@ -184,11 +184,15 @@ internal fun AgentEngine.effectiveEffort(): String? {
     return v.takeIf { it.isNotBlank() && it != "off" }
 }
 
-/** 聊天模型的真实上下文窗口（本地端侧固定按 32K 保守算）。 */
-internal fun AgentEngine.chatContextWindow(): Int {
-    val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-    return if (isLocal) 32768 else provider.effectiveContextLength()
+/** 指定 provider 的聊天上下文窗口（本地端侧固定按 32K 保守算）。
+ *  压缩链/催办等多处内联复制同款判断，统一走这里；引擎自身的用 [chatContextWindow]。 */
+internal fun contextWindowOf(p: com.haoai.agent.data.ProviderConfig): Int {
+    val isLocal = p.baseUrl.contains("127.0.0.1") || p.baseUrl.startsWith("local")
+    return if (isLocal) 32768 else p.effectiveContextLength()
 }
+
+/** 聊天模型的真实上下文窗口（本地端侧固定按 32K 保守算）。 */
+internal fun AgentEngine.chatContextWindow(): Int = contextWindowOf(provider)
 
 /**
  * 还没被摘要覆盖的消息：压缩水位之后的那一段。
@@ -382,8 +386,7 @@ internal fun AgentEngine.maybeNudgeHandoff(onEvent: (TurnEvent) -> Unit) {
         it.role == ChatMessage.ROLE_USER && it.content.startsWith(HANDOFF_MARKER)
     }
     if (recentNudged || recentHasDoc) return
-    val isLocal = provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")
-    val contextWindow = if (isLocal) 32768 else provider.effectiveContextLength()
+    val contextWindow = chatContextWindow()
     if (contextWindow <= 0) return
     // 与 maybeCompact 共用同一个口径（真值优先），两处不再各算一份近似
     val usedTokens = estimateContextTokens()

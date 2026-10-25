@@ -30,7 +30,6 @@ class ValidateWriteHook(private val hinted: MutableSet<String>) : ToolHook {
         if (path.isBlank() || !isCodeFile(path)) return result
         val content = args.optString("content")
         if (content.isBlank()) return result
-        val code = if (call.name == "edit") null else content // edit 无整段 content
         val err = validate(path, content)
         if (err == null) return result
         // 每文件每会话最多 1 次自动提示（防打转）
