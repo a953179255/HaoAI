@@ -65,6 +65,10 @@ class ResilientCall(
         resolve(provider).testConnection(provider, apiKey)
 
     private fun isRetryable(e: IOException): Boolean {
+        // 结构化声明（无 HTTP 码）的业务错误不可重试：如 OpenAI 兼容流在 HTTP 200 下
+        // 发的 error 帧（限流/余额不足）——文本里没有 "HTTP ddd" 前缀，原先会落到
+        // "无 HTTP 标记=网络错误"被当瞬态重试，放大等待且丢失真实错误文案
+        if (e is ProviderHttpException && e.httpCode == null) return false
         val msg = e.message.orEmpty()
         val m = Regex("^HTTP (\\d{3})").find(msg)
         if (m != null) {

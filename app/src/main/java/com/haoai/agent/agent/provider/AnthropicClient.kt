@@ -59,6 +59,11 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
                 "message_start" -> {
                     val usage = data["message"]?.jsonObject?.get("usage") as? JsonObject
                     inputTokens = usage?.get("input_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                    // prompt cache 计费 token（读 0.1x / 写 1.25x）：>1024 token 的提示
+                    // Anthropic 自动启用缓存，多轮工具会话常态出现。原先两个字段全丢，
+                    // token 台账系统性低估实际开销——按原值并入 input 侧合计（保守口径）
+                    inputTokens += usage?.get("cache_read_input_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                    inputTokens += usage?.get("cache_creation_input_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
                 }
                 "content_block_start" -> {
                     val idx = data["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0

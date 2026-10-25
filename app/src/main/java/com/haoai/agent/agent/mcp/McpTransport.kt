@@ -48,10 +48,14 @@ class StreamableHttpTransport(
     @Volatile private var sessionId: String? = null
     @Volatile private var protocolVersion: String? = null
 
+    /** initialize 协商出的版本回写：此后所有请求带 MCP-Protocol-Version 头（新版规范要求）。 */
+    fun setProtocolVersion(v: String?) { protocolVersion = v }
+
     override suspend fun connect() { /* HTTP 无状态，握手由 McpClient 的 initialize 完成 */ }
 
     override suspend fun send(request: JsonObject): McpHttpResponse = withContext(Dispatchers.IO) {
         val payload = request.toString()
+        val reqId = request["id"]
         val builder = Request.Builder()
             .url(endpoint)
             .header("Accept", "application/json, text/event-stream")
@@ -68,20 +72,87 @@ class StreamableHttpTransport(
             if (resp.code == 202) return@use McpHttpResponse(202, null)
 
             val contentType = resp.header("Content-Type") ?: ""
+            val body = resp.body ?: throw IOException("响应无 body")
             // 上限前置检查：Content-Length 明示超限直接拒收，不启动读取
-            resp.body?.contentLength()?.takeIf { it > MAX_RESPONSE_BYTES }?.let {
+            body.contentLength().takeIf { it > MAX_RESPONSE_BYTES }?.let {
                 throw IOException("响应体 ${it / 1024 / 1024}MB 超过上限（${MAX_RESPONSE_BYTES / 1024 / 1024}MB）")
             }
-            val raw = resp.body?.let { readBounded(it) } ?: ""
+            if (resp.isSuccessful && contentType.contains("event-stream", ignoreCase = true)) {
+                // SSE 流式逐帧解析：命中请求 id 的帧立即返回。规范（2025-06-18）允许
+                // 服务器在真正的响应帧之前推送 notifications/progress——旧的"整流读到
+                // EOF 再取第一条能 parse 的 JSON"会把通知帧当响应（缺 result → 报错 →
+                // 触发拆链重连），且服务器保持流开放时会一直阻塞到 readTimeout。
+                val matched = readSseUntilMatch(body.source(), reqId)
+                    ?: throw IOException("SSE 流结束：未找到 id=${reqId?.toString()?.take(40)} 的响应帧")
+                return@use McpHttpResponse(resp.code, matched)
+            }
+            val raw = readBounded(body)
             if (!resp.isSuccessful) {
                 // 非 2xx：尽量把 body 里的错误信息带给上层，便于 UI 展示可读原因
                 val detail = parseSseOrJson(raw)?.toString()?.take(300) ?: raw.take(300)
                 throw IOException("HTTP ${resp.code}${if (detail.isBlank()) "" else "：$detail"}")
             }
-            val body = parseSseOrJson(raw)
+            val parsed = parseSseOrJson(raw)
                 ?: throw IOException("响应体不是有效 JSON 或 SSE（Content-Type: $contentType）")
-            McpHttpResponse(resp.code, body)
+            McpHttpResponse(resp.code, parsed)
         }
+    }
+
+    /**
+     * 逐行读 SSE 流，每帧尝试解析并匹配请求 id，命中立即返回（不读完整个流）。
+     * 通知类请求（无 id）沿用"第一条可解析 JSON"语义；带 id 的请求跳过服务器
+     * 推送的 notification/progress 帧。累计读取量受 MAX_RESPONSE_BYTES 约束。
+     */
+    private fun readSseUntilMatch(
+        source: okio.BufferedSource,
+        reqId: kotlinx.serialization.json.JsonElement?
+    ): JsonObject? {
+        var total = 0L
+        var pending = StringBuilder()
+        while (!source.exhausted()) {
+            val line = source.readUtf8Line() ?: break
+            total += line.length + 1L
+            if (total > MAX_RESPONSE_BYTES) {
+                throw IOException("SSE 流超过 ${MAX_RESPONSE_BYTES / 1024 / 1024}MB 上限，已中止读取")
+            }
+            val l = line.trimEnd('\r')
+            when {
+                l.startsWith("data:") -> {
+                    if (pending.isNotEmpty()) pending.append('\n')
+                    pending.append(l.removePrefix("data:").trimStart())
+                }
+                l.isEmpty() -> {
+                    trySseFrame(pending.toString(), reqId)?.let { return it }
+                    pending = StringBuilder()
+                }
+                // event:/id:/retry: 及注释行忽略——只需要响应负载
+            }
+        }
+        // 流结束（EOF）：最后一帧无尾随空行，同样要试
+        return trySseFrame(pending.toString(), reqId)
+    }
+
+    private fun trySseFrame(
+        data: String,
+        reqId: kotlinx.serialization.json.JsonElement?
+    ): JsonObject? {
+        if (data.isEmpty()) return null
+        val obj = runCatching {
+            com.haoai.agent.data.HaoJson.json.parseToJsonElement(data) as? JsonObject
+        }.getOrNull() ?: return null
+        if (reqId == null) return obj
+        return if (idMatches(obj["id"], reqId)) obj else null
+    }
+
+    /** JSON-RPC id 宽松匹配：数值/字符串同值视为相等（个别服务器会把 number 回显成 string）。 */
+    private fun idMatches(
+        a: kotlinx.serialization.json.JsonElement?,
+        b: kotlinx.serialization.json.JsonElement?
+    ): Boolean {
+        if (a == b) return true
+        val ap = a as? kotlinx.serialization.json.JsonPrimitive ?: return false
+        val bp = b as? kotlinx.serialization.json.JsonPrimitive ?: return false
+        return ap.content == bp.content
     }
 
     /** 有界读取：最多读 MAX_RESPONSE_BYTES+1 字节即判超限中止，等效替代无上限的 body.string()。 */

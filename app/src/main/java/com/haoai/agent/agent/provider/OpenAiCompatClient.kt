@@ -169,7 +169,15 @@ private data class UsageInfo(
 )
 
 @Serializable
-private data class StreamChunk(val choices: List<StreamChoice> = emptyList(), val usage: UsageInfo? = null)
+private data class StreamChunk(
+    val choices: List<StreamChoice> = emptyList(),
+    val usage: UsageInfo? = null,
+    /** HTTP 200 下网关在流内报错的 error 帧（OpenRouter 等发限流/余额不足的常见形态）。 */
+    val error: StreamError? = null
+)
+
+@Serializable
+private data class StreamError(val message: String? = null, val code: String? = null)
 
 @Serializable
 private data class StreamChoice(
@@ -350,6 +358,16 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                     val chunk = runCatching {
                         HaoJson.json.decodeFromString(StreamChunk.serializer(), payload)
                     }.getOrNull() ?: continue
+                    chunk.error?.let { se ->
+                        // 流内 error 帧是网关在 HTTP 200 下报业务错误（限流/余额不足）：
+                        // 静默解码成空 chunk 会落到"供应商未返回任何内容"被当瞬态重试 3 次
+                        // 再切备链，真实错误文案全丢。ProviderHttpException(null) 显式标记
+                        // 不可重试（见 ResilientCall.isRetryable）。
+                        throw ProviderHttpException(
+                            null,
+                            "流内错误帧（${provider.name}）${se.code?.let { "[$it] " } ?: ""}${se.message ?: "未知错误"}"
+                        )
+                    }
                     chunk.usage?.let { if (it.promptTokens > 0 || it.completionTokens > 0) usage = it }
 
                     for (choice in chunk.choices) {
@@ -364,7 +382,10 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                             if (visible.isNotEmpty()) emit(SseEvent.Delta(visible))
                         }
                         choice.delta.toolCalls?.forEach { tc ->
-                            val idx = tc.index ?: pending.size
+                            // 缺 index 的网关：固定落到当前最大槽位（无槽时 0）。原先用
+                            // pending.size 兜底，分多帧传输的同一调用第二片会落进新槽——
+                            // 一个调用被劈成两个各带半截 JSON 参数的调用，引擎按坏参数执行失败
+                            val idx = tc.index ?: (pending.lastKey() ?: 0)
                             val p = pending.getOrPut(idx) { Pending() }
                             tc.id?.let { p.id = it }
                             tc.function?.name?.let { p.name.append(it) }

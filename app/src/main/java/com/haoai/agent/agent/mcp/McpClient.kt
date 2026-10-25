@@ -96,9 +96,16 @@ class McpClient(private val transport: McpTransport) {
                 )
             }
             negotiatedVersion = serverVersion ?: PROTOCOL_VERSION
+            // 协商结果回写传输层：initialize 之后所有请求须带 MCP-Protocol-Version 头
+            //（2025-06-18 规范要求；严格实现的服务器对缺失头可回 400）
+            (transport as? StreamableHttpTransport)?.setProtocolVersion(negotiatedVersion)
             // initialized 是纯通知：202/空响应都算成功
             transport.send(notification("notifications/initialized", null))
             Result.success(Unit)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            // 用户停止/协程取消不是服务器故障：包装成 Result.failure 会被 McpManager
+            // 当作连接异常拆掉健康连接并触发 stdio 子进程重建
+            throw ce
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -143,6 +150,8 @@ class McpClient(private val transport: McpTransport) {
                 android.util.Log.w("HaoMcp", "tools/list 超过 $MAX_TOOL_LIST_PAGES 页上限，已截断（共 ${out.size} 个工具）")
             }
             Result.success(out)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -176,6 +185,8 @@ class McpClient(private val transport: McpTransport) {
                 }
             }.joinToString("\n").ifBlank { "（工具无文本返回）" }
             Result.success(McpToolResult(text, isError))
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
         } catch (e: Exception) {
             Result.failure(e)
         }
