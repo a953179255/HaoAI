@@ -849,6 +849,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         var thinkingMs: Long? = null
         var turnStartAt: Long = 0L
         var hadOutput: Boolean = false
+        /** 有新 delta 未上屏：flusher 无新内容时跳过全量 toString 拷贝
+         *  （长回复末段每 40ms 拷几十 KB 的分配就是掉帧来源之一） */
+        @Volatile var dirty: Boolean = false
+        var flushedLen: Int = 0
     }
     private val runDisplays = HashMap<String, RunDisplay>()
     private fun dispOf(sid: String): RunDisplay = runDisplays.getOrPut(sid) { RunDisplay() }
@@ -877,14 +881,18 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** 把"正在查看的会话"的本轮累计文本推上屏；RunObserver 尾部镜像跟随被观察的运行。 */
+    /** 把"正在查看的会话"的本轮累计文本推上屏；RunObserver 尾部镜像跟随被观察的运行。
+     *  无新 delta 时直接跳过（不再每 40ms 空转全量拷贝）。 */
     private fun flushStreamDisplay() {
         val sid = viewedSid() ?: return
         runDisplays[sid]?.let { d ->
+            if (!d.dirty) return@let
             val t = synchronized(d.text) { d.text.toString() }
             val r = synchronized(d.reasoning) { d.reasoning.toString() }
             if (_streamingText.value != t) _streamingText.value = t
             if (_streamingReasoning.value != r) _streamingReasoning.value = r
+            d.flushedLen = t.length
+            d.dirty = false
         }
         observerSid?.let { oSid ->
             runDisplays[oSid]?.let { od ->
@@ -904,6 +912,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         d.hadOutput = true
         if (sid == viewedSid()) _turnHadOutput.value = true
         synchronized(d.text) { d.text.append(frag); Unit }
+        d.dirty = true
     }
 
     private fun appendReasoning(sid: String, frag: String) {
@@ -911,6 +920,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         d.hadOutput = true
         if (sid == viewedSid()) _turnHadOutput.value = true
         synchronized(d.reasoning) { d.reasoning.append(frag); Unit }
+        d.dirty = true
     }
 
     /** 结束/中断收尾（按会话）：回收该会话的显示态；正在看它就摘流式气泡；没人跑了停 flusher。 */
@@ -934,6 +944,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val d = dispOf(sid)
         synchronized(d.text) { d.text.setLength(0) }
         synchronized(d.reasoning) { d.reasoning.setLength(0) }
+        d.dirty = false
+        d.flushedLen = 0
         if (sid == viewedSid()) {
             _streamingText.value = ""
             _streamingReasoning.value = ""
@@ -1240,6 +1252,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private class ToolStaticParse(val brief: String, val fileRef: UiFilePath?, val htmlFile: UiHtmlFile?)
     private val toolParseCache = HashMap<String, ToolStaticParse>()
 
+    /**
+     * 终态产物缓存：ask/askBatch/hits/preview/body/jobLog 由 stored 结果文本派生，
+     * 工具调用落库后不再变（同 call.id）。运行中的步（走 live 分支）不进此缓存。
+     */
+    private class ToolDoneParse(
+        val ask: UiAskData?, val askBatch: UiBatchAskData?, val hits: List<SearchHitLite>,
+        val preview: String?, val body: String?, val jobLog: UiFilePath?
+    )
+    private val toolDoneParseCache = HashMap<String, ToolDoneParse>()
+
     /** 正在加载中的 callId，避免同一次改动被并发触发多次磁盘读 + LCS。 */
     private val diffLoading = HashSet<String>()
 
@@ -1523,9 +1545,27 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     fun selectSession(id: String) {
         if (_session.value?.id == id) return
+        // 冷读挪 IO：数百条消息的大会话 parseFile 是全量 JSON 解析，原先同步跑在
+        // 主线程——切会话卡一下的根因。内存热数据（latest/diskCache）命中时仍
+        // 同步完成，行为与原版一致；冷会话异步装载（UI 稍后自动刷上）
+        val warm = c.sessionStore.peek(id)
+        if (warm != null) {
+            applySelectedSession(warm)
+            return
+        }
+        viewModelScope.launch {
+            val s = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                c.sessionStore.load(id)
+            } ?: return@launch
+            // 装载期间用户已切走（或反复点选）时丢弃旧结果，防覆盖最新选择
+            if (_session.value?.id == id) return@launch
+            applySelectedSession(s)
+        }
+    }
+
+    private fun applySelectedSession(s: StoredSession) {
         // D17：切换会话不中断进行中的任务（结果写回原会话）；
         // 流式/思考/工具显示改为"接上目标会话自己的那份"，切回无缝续上
-        val s = c.sessionStore.load(id) ?: return
         // E1 进程死亡检测：持久化 running 且登记表确认进程内已无引擎持有，才判中断。
         // D16：实例分裂/切走再切回时旧实例的引擎可能仍在跑，误标会弹假「任务中断」横幅
         if (s.runState == StoredSession.RUN_RUNNING && !com.haoai.agent.platform.AgentRunRegistry.isActive(s.id)) {
@@ -1533,7 +1573,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             runCatching { c.sessionStore.save(s) }
         }
         currentSession = s
-        c.sessionStore.rememberOpened(id) // 记下"用户现在看的是这条"，冷启动回到这里（见 SessionStartup）
+        c.sessionStore.rememberOpened(s.id) // 记下"用户现在看的是这条"，冷启动回到这里（见 SessionStartup）
         // 晋升行标记按会话清空：key 虽是全局唯一消息 id，但新会话的首帧行不应继承旧会话的豁免
         clearPromotedKeys()
         // 批1f：快照按会话分目录，diff 缓存同样必须按会话清——否则 A 会话的改动量会显示到 B 会话
@@ -2707,6 +2747,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 val d = dispOf(sid)
                 synchronized(d.text) { d.text.setLength(0) }
                 synchronized(d.reasoning) { d.reasoning.setLength(0) }
+                d.dirty = false
+                d.flushedLen = 0
                 if (sid == viewedSid()) {
                     _streamingText.value = null
                     _streamingReasoning.value = null
@@ -2946,13 +2988,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
         // 把一次工具调用解析成链卡步骤（ask_user/web_search 的增强数据在这里挂上）
         fun toolStepOf(call: StoredToolCall): ChainStep.Tool {
-            // D17：读“正在重建的这条会话”的 live 工具态（rebuildRows 只服务查看中的会话）
+            // D17：读"正在重建的这条会话"的 live 工具态（rebuildRows 只服务查看中的会话）
             val live = currentSession?.id?.let { liveToolsOf(it)[call.id] }
             val stored = resultByCall[call.id]
-            val ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored?.first) else null
-            val askBatch = if (call.name == "ask_user_batch")
-                askDataOfBatch(call.argumentsJson, stored?.first) else null
-            val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
+            val liveRunning = live != null && live.state == ToolRunState.RUNNING
             // 参数派生产物走缓存（见 toolParseCache 注释）：重活是 JSON parse +
             // canonicalFile 磁盘 stat，同 call.id 只需做一次
             val static = toolParseCache.getOrPut(call.id) {
@@ -2969,8 +3008,23 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         htmlFileOf(call.argumentsJson) else null
                 )
             }
+            // 终态产物缓存：ask/askBatch/hits/body/jobLog/preview 都由 stored 结果文本
+            // 派生，工具落库后不再变——每个事件重解析（JSON parse/正则/全文截断）纯浪费。
+            // 运行中的步走 live 分支用不到它们，跳过
+            val done = if (!liveRunning && stored != null) toolDoneParseCache.getOrPut(call.id) {
+                ToolDoneParse(
+                    ask = if (call.name == "ask_user") askDataOf(call.argumentsJson, stored.first) else null,
+                    askBatch = if (call.name == "ask_user_batch")
+                        askDataOfBatch(call.argumentsJson, stored.first) else null,
+                    hits = if (call.name == "web_search") searchHitsOf(stored.first) else emptyList(),
+                    preview = previewLine(stored.first),
+                    body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first),
+                    jobLog = if (call.name == "bash")
+                        com.haoai.agent.ui.chat.parseJobDispatch(stored.first, shellRoot()) else null
+                )
+            } else null
             val base = UiTool(call.id, call.name, static.brief,
-                ask = ask, askBatch = askBatch, hits = hits,
+                ask = done?.ask, askBatch = done?.askBatch, hits = done?.hits ?: emptyList(),
                 htmlFile = static.htmlFile,
                 fileRef = static.fileRef)
             // 批1f：write/edit 完成后从写前快照取变更量（异步，首次只是触发加载）。
@@ -2979,10 +3033,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 diffCache[call.id] ?: run { ensureDiff(call.id); null }
             } else null
             val tool = when {
-                live != null && live.state == ToolRunState.RUNNING -> live
+                liveRunning -> live!!
                 stored != null -> base.copy(
                     state = if (stored.second) ToolRunState.ERROR else ToolRunState.DONE,
-                    preview = previewLine(stored.first),
+                    preview = done?.preview,
                     // P4b：历史回看的子代理过程——live（内存态，新回合即清）优先，
                     // 否则回落旁路盘（工具终态/清场前刷的 files/subagent_logs）。
                     // cache miss 时 ensureSubagentLog 异步加载后 rebuildRows 再上数据
@@ -2992,7 +3046,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                         ?: emptyList(),
                     imageData = live?.imageData,
                     // 批1e：历史消息的结果正文从落库全文现截（口径与引擎 inlineBodyOf 同函数）
-                    body = com.haoai.agent.agent.engine.inlineBodyOf(call.name, stored.first),
+                    body = done?.body,
                     // 批1e 补：耗时不落库，但 liveTools 的收尾事件带着（UiTool.elapsedMs）——
                     // 不从 live 接过来的话卡头「exit 0 · 1.8s」永远出不来；liveTools 被
                     // 新回合清空后回落 0（卡头隐藏耗时），与「重进为 0」口径同。
@@ -3000,16 +3054,15 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     diff = diff,
                     // 批3c：历史回看同样重算（落库全文含"后台任务已投递：job_xxx"→芯片；
                     // live 已挂上也以 stored 重算为准，两者同函数同口径）
-                    jobLog = if (call.name == "bash")
-                        com.haoai.agent.ui.chat.parseJobDispatch(stored.first, shellRoot())
-                    else null
+                    jobLog = done?.jobLog
                 )
                 live != null -> live
                 else -> base
             }
             // favicon 预热（幂等，见 prefetchFavicons）：会话打开/流式到达即后台拉取，
             // 等用户展开步骤或滚到搜索行时 logo 已在缓存，不再看见加载过程（真机反馈）
-            if (hits.isNotEmpty()) prefetchFavicons(hits.map { it.domain })
+            val doneHits = done?.hits.orEmpty()
+            if (doneHits.isNotEmpty()) prefetchFavicons(doneHits.map { it.domain })
             if (call.name.contains("fetch")) {
                 val u = base.brief.substringAfter('·', "").trim()
                 if (u.startsWith("http")) prefetchFavicons(listOf(domainFromUrl(u)))

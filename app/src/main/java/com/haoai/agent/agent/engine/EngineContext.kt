@@ -29,6 +29,12 @@ internal fun AgentEngine.buildSystemText(markMemoryUse: Boolean = false): String
  * 加的小标题归入基础提示（误差可忽略）。
  */
 internal fun AgentEngine.buildSystemTextWithInjected(markMemoryUse: Boolean = false): Pair<String, String> {
+    // 轮内估算缓存（只读路径共享一次构建）：markMemoryUse=false 的调用方只有
+    // token 估算（estimateOverheadTokens → maybeNudgeHandoff/maybeCompact/详情面板），
+    // 同一圈循环内会调 2-3 次、每次全量重建（SkillStore 排序+MCP 摘要+记忆打分）。
+    // 请求路径（markMemoryUse=true）不读不写：它要消费记忆注入标志，且 nudge
+    // 注入后 lastOrNull(USER) 已变、内容确实不同。失效点见 sysTextEstimateCache 注释。
+    if (!markMemoryUse) sysTextEstimateCache?.let { return it }
     val shellAvailable = backend?.shellWorkdir() != null
     val dateText = SimpleDateFormat("yyyy-MM-dd EEEE", Locale.CHINA).format(Date())
     // 3.3：当前 shell 后端说明 + 沙箱能力探测（探测异步跑一次，下一轮注入）
@@ -75,6 +81,7 @@ internal fun AgentEngine.buildSystemTextWithInjected(markMemoryUse: Boolean = fa
             capabilityNote = capabilityNote
         ) + budget + todoProgressLine(consume = markMemoryUse)
     val injected = memory + skillIndex + journalBlock + mcpSummary + budget + capabilityNote
+    if (!markMemoryUse) sysTextEstimateCache = full to injected
     return full to injected
 }
 
@@ -389,4 +396,6 @@ internal fun AgentEngine.maybeNudgeHandoff(onEvent: (TurnEvent) -> Unit) {
         ),
         onEvent
     )
+    // nudge 是 user 消息：记忆打分 query（lastOrNull USER）已变，估算缓存作废
+    sysTextEstimateCache = null
 }

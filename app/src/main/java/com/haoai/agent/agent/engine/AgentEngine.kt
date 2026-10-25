@@ -233,7 +233,16 @@ class AgentEngine(
                     // 那一刻 id 还没注册 → 整条赋值是空操作，后台结果永远收不到。
                     runSubAgent(task, parentCtx, 1, 1, mode, id, isBackground = true)
                 } catch (ce: CancellationException) {
-                    // 终止/回合收口：句柄状态与部分结果已在 runSubAgent 内落账
+                    // stop_agent 终止：句柄状态（STOPPED）与部分结果已在 runSubAgent 内
+                    // 落账。防御性兜底：句柄仍停在 RUNNING 说明取消来自其他路径（未来新增
+                    // 的 withTimeout/子协程取消传播）——不上报会让协调器永等这路完成通知
+                    activeSubagents[id]?.let { h ->
+                        if (h.state == "RUNNING") {
+                            h.state = "ERROR"
+                            h.finalResult = "子代理 ${h.id} 被取消（非正常终止路径）。\n\n${h.partialSummary()}"
+                            notifyBackgroundDone(h, ok = false)
+                        }
+                    }
                 } catch (e: Exception) {
                     activeSubagents[id]?.let { h ->
                         h.state = "ERROR"
@@ -266,11 +275,20 @@ class AgentEngine(
     /** E4b tools_enable 生效标记：工具组变更后主循环尾重建工具清单（下一轮 LLM 请求生效）。 */
     @Volatile internal var _groupsDirty = false
 
+    /**
+     * 轮内系统提示估算缓存（markMemoryUse=false 的只读估算共享一次构建，见
+     * buildSystemTextWithInjected 注释）。失效：runTurn 入口、主循环每圈顶
+     * （上一圈工具结果已落库）、nudge 注入后。
+     */
+    @Volatile internal var sysTextEstimateCache: Pair<String, String>? = null
+
     /** E9 todo 进度联动：清单变更后的下一轮注入一次进度行。 */
     internal var todoDirty = false
     private var todoLastSnapshot: List<com.haoai.agent.agent.tools.TodoItem>? = null
 
-    /** E3 会话级工具连续失败计数（成功清零）。 */
+    /** E3 工具连续失败计数（成功清零）。
+     *  生命周期=引擎实例（调用方当前每回合重建）：即"回合内连续"语义。跨回合保留
+     *  会让上一回合的失败累积进新回合的开局判定（可能开局即熔断），刻意不做会话级。 */
     internal val conFailCount = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /**
@@ -287,15 +305,19 @@ class AgentEngine(
         loopCap = if (toolCallCap in 1..200) toolCallCap else 0
     )
 
-    /** 5.7 已追加过自改进提示的技能（引擎生命周期=会话，天然满足每会话限一次）。 */
-    internal val hintedSkills = mutableSetOf<String>()
+    /** 5.7 已追加过自改进提示的技能（会话级限一次）。
+     *  引擎实例实际由调用方每回合重建（ChatViewModel buildEngine），挂实例上"限一次"
+     *  会退化为"每回合一次"重复注入提示烧 token——注册表按 session.id 进程级持有。
+     *  写校验提示（ValidateWriteHook）同语义同去处。 */
+    internal val hintedSkills: MutableSet<String> = sessionHintState(session.id).hintedSkills
+    internal val hintedWrites: MutableSet<String> = sessionHintState(session.id).hintedWrites
 
     /** E7b 横切 hooks：before（快照）+ after（E3 升级/技能提示/写文件校验），列表序执行。 */
     internal val hooks: List<ToolHook> = listOf(
         SnapshotHook(appFilesDir, session.id, backend),
         EscalationHook(conFailCount),
         SkillHintHook(hintedSkills),
-        ValidateWriteHook()
+        ValidateWriteHook(hintedWrites)
     )
 
     /** 5.6 本回合拦截过 WRITE/EXEC（供 UI 判定模型产出的是计划）。 */
@@ -395,6 +417,7 @@ class AgentEngine(
         runEndState = null
         _loopFailedCap = false
         _loopStallHalt = false
+        sysTextEstimateCache = null
         if (resuming) closeDanglingCalls(onEvent)
         // 本会话已用过的 tool_call id：新来的调用必须避开，否则跨轮撞号会让 UI 行状态与
         // pairSanitized 的配对判定互相顶名（详见 uniquifyCallIds 的注释）
@@ -517,6 +540,9 @@ class AgentEngine(
                     todoDirty = true
                 }
                 todoLastSnapshot = todoNow
+
+                // 圈顶失效：上一圈工具结果/nudge 已落库，估算缓存作废重算
+                sysTextEstimateCache = null
 
                 maybeNudgeHandoff(onEvent)
 
@@ -1017,3 +1043,21 @@ private fun shortTechDetailShared(raw: String, cap: Int = 100): String {
     return cleaned.take(cap)
 }
 
+
+/**
+ * 会话级"限一次"提示状态注册表（进程级）：引擎实例由调用方每回合重建，
+ * hintedSkills（技能自改进提示）与 ValidateWriteHook 的写校验提示语义都是
+ * "每会话最多一次"，挂实例上会退化成每回合重复注入（噪音+token）。按
+ * session.id 持有；条目量=每会话几十字节，不随会话删除清理（同 id 重开
+ * 重新提示一次无碍）。conFailCount 不在此列（连续失败计数刻意保持回合级，
+ * 见其字段注释）。
+ */
+private val engineSessionHints = java.util.concurrent.ConcurrentHashMap<String, SessionHintState>()
+
+internal class SessionHintState {
+    val hintedSkills: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    val hintedWrites: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+}
+
+internal fun sessionHintState(sessionId: String): SessionHintState =
+    engineSessionHints.getOrPut(sessionId) { SessionHintState() }

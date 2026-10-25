@@ -12,8 +12,11 @@ import java.util.concurrent.ConcurrentHashMap
  * E7c 写文件验证闭环：write/edit 成功且为代码类文件时做结构校验，
  * 校验失败作为错误回给模型形成一次修复循环（每文件每会话最多提示 1 次）。
  * 沙箱未就绪时降级为建议提示，不阻塞。
+ *
+ * hinted 去重集由调用方传入（会话级共享）：引擎实例每回合由调用方重建，
+ * 集挂实例上"每会话一次"会退化成"每回合一次"重复注入。
  */
-class ValidateWriteHook : ToolHook {
+class ValidateWriteHook(private val hinted: MutableSet<String>) : ToolHook {
     override val names = setOf("write", "edit")
 
     override suspend fun after(
@@ -39,8 +42,6 @@ class ValidateWriteHook : ToolHook {
             true
         )
     }
-
-    private val hinted = ConcurrentHashMap.newKeySet<String>()
 
     private fun isCodeFile(path: String): Boolean =
         path.endsWith(".kt") || path.endsWith(".java") || path.endsWith(".py") ||

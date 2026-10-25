@@ -428,6 +428,16 @@ class SessionStore(private val dir: File) {
             ?: parseFile(f)?.also { diskCache[id] = mtime to it }
     }
 
+    /** 只查内存热数据（latest/diskCache 命中才返回），不触发磁盘解析：
+     *  调用方（selectSession）先试热路径保同步语义，冷会话再走 IO 异步 load。 */
+    fun peek(id: String): StoredSession? {
+        if (id in tombstones) return null
+        latest[id]?.let { return it }
+        val f = fileOf(id)
+        val mtime = if (f.exists()) f.lastModified() else return null
+        return diskCache[id]?.takeIf { it.first == mtime }?.second
+    }
+
     @Synchronized
     fun save(session: StoredSession, touch: Boolean = true) {
         // 已彻底删除的会话：静默丢弃迟到的持久化（引擎后台 persist 等）
