@@ -24,6 +24,12 @@ class ToolLoopGuard(
     private val maxCyclePeriod: Int = 4,
     /** 无人值守/ YOLO 时 true：warn 阈值直接当 hard stop 语义收紧（由调用方设置）。 */
     private val hardStopEnabled: Boolean = false,
+    /**
+     * 失败容忍工具（hermes FAILURE_TOLERANT_TOOLS 同语义）：bash/搜索/导航类的「失败」经常是
+     * 正常工作输出（测试红、搜索空、页面超时）——same-tool 连续失败**只提醒不强制收尾**；
+     * 精确重放（同参同果）仍走 identicalStreak 照常 halt。
+     */
+    private val failureTolerant: Set<String> = emptySet(),
     /** 圈数级硬顶（与 EngineLimits 的 toolCallCap 对齐，guard 侧可独立更紧）。 */
     private val loopCap: Int = 0
 ) {
@@ -165,7 +171,9 @@ class ToolLoopGuard(
                     "请读取错误详情、换参数或换工具，不要原样重试。$extra"
             )
         }
-        if (!isRead && isError && sameToolFailStreak >= sameToolFailHaltAfter && sameToolFailHaltAfter > 0) {
+        if (!isRead && isError && sameToolFailStreak >= sameToolFailHaltAfter && sameToolFailHaltAfter > 0 &&
+            toolName !in failureTolerant
+        ) {
             return Decision.Halt(
                 "[空转守卫] 「$toolName」连续失败 $sameToolFailStreak 次且无进展，强制收尾。" +
                     "请基于已有信息总结失败原因与下一步建议。"

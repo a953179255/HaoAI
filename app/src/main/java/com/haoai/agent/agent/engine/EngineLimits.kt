@@ -10,8 +10,16 @@ package com.haoai.agent.agent.engine
  * 每个数的来历都写在这里 —— 它们都是调出来的，不是拍的：改动前先读注释。
  */
 
-/** 主循环回合上限（一轮 = 一次模型请求 + 其工具执行）。 */
-const val MAX_TURNS = 60
+/**
+ * 主循环回合上限（一轮 = 一次模型请求 + 其工具执行）。**0 = 不限**（2026-10-25 对齐 hermes：
+ * AIAgent.max_iterations 默认 sys.maxsize、pi/openclaw 自家循环根本无上限——长任务跑不完的
+ * 主要枷锁就是它；防失控交给 loopGuard 的空转/循环检测，用户随时手动停）。capNotice 机制
+ * 保留（0 时死代码），将来若要恢复限额改这一个数即可。
+ */
+const val MAX_TURNS = 0
+
+/** 子代理回合上限：hermes delegation.max_iterations 默认 50（原 10 过紧，长研究/构建跑不完）。 */
+const val SUB_MAX_TURNS = 50
 
 /** 历史条数保险上限：真正的窗口由 token 预算决定，这里只兜估算失准。 */
 const val MAX_HISTORY = 80
@@ -37,9 +45,6 @@ const val TOOLS_BASE_TOKENS = 3500
  */
 const val STORED_CAP = 16_000
 const val REQ_CAP = 4_000
-
-/** 子代理回合上限（它只有 10 轮，不到主循环的 1/5）。 */
-const val SUB_MAX_TURNS = 10
 
 /** 瞬态错误（429/超时/网关抖动）退避秒数：主循环与子代理共用同一套节奏。 */
 val SUB_BACKOFFS_SEC = intArrayOf(5, 12, 25)

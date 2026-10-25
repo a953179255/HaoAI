@@ -55,7 +55,9 @@ object EngineFactory {
     }
 
     /**
-     * @param turnTokenCap / toolCallCap 由调用方按「交互=设置值 / 无人值守=15万与80硬限 / 总开关关闭=0」算好后传入。
+     * @param turnTokenCap / toolCallCap / toolFailCap 熔断上限：**默认全 0=停用**（2026-10-25
+     *   对齐 hermes——三家上游都无默认花费/次数熔断，长任务不再被粗闸门掐断；防失控交给
+     *   loopGuard 空转/循环检测。机制保留供单测显式开启）。
      * @param backgroundScope 传 null 表示不挂到应用级作用域（定时任务在 WorkManager 线程里跑）。
      */
     fun newEngine(
@@ -64,12 +66,12 @@ object EngineFactory {
         provider: ProviderConfig,
         interaction: Interaction,
         workspaceLabel: String,
-        turnTokenCap: Int,
-        toolCallCap: Int,
+        turnTokenCap: Int = 0,
+        toolCallCap: Int = 0,
         autoLearn: Boolean = true,
         backgroundScope: CoroutineScope? = null,
         softBudgetWarn: Boolean = true,
-        toolFailCap: Int = 8,
+        toolFailCap: Int = 0,
         /** A2 运行中插话的环顶销账钩子（仅前台聊天注入；无人值守/子代理留默认空实现）。 */
         steeringDrain: (String) -> Unit = {}
     ): AgentEngine {
@@ -176,14 +178,4 @@ object EngineFactory {
         policy = PolicyEngine(mode),
         approve = { mode == com.haoai.agent.agent.policy.PermissionMode.YOLO }
     )
-
-    /** 与既有引擎默认值对齐的无人值守熔断硬限。 */
-    const val UNATTENDED_TOKEN_CAP = 150_000
-    const val UNATTENDED_TOOL_CALL_CAP = 80
-
-    /** 供调用方按总开关折算熔断上限：关闭=完全不熔断（0）。 */
-    fun capsFor(costBreakerEnabled: Boolean, unattended: Boolean, st: com.haoai.agent.data.AppSettings): Pair<Int, Int> =
-        if (!costBreakerEnabled) 0 to 0
-        else if (unattended) UNATTENDED_TOKEN_CAP to UNATTENDED_TOOL_CALL_CAP
-        else st.turnTokenCap to st.toolCallCap
 }

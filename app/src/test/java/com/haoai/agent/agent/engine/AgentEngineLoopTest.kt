@@ -668,13 +668,15 @@ class AgentEngineLoopTest {
     }
 
     /**
-     * 续跑必须连着上次算轮数。
-     * 此前"断点续跑"是重开一轮：每中断一次，MAX_TURNS 预算就重新给满，
-     * 一个跑偏的长任务可以无限续下去而不触顶。
+     * 轮数上限已移除（2026-10-25 对齐 hermes：MAX_TURNS=0 不限）。
+     * 旧锁「续跑必须连着上次算 60 轮预算」随上限一起作废；新锁验证：
+     * ① 遗留的 runTurnsUsed 计数不再卡住任何回合（跑过 58 也不触顶）；
+     * ② 全程不得出现任何轮数封顶文案（capNotice 已是死代码）。
+     * 循环终止交给显式传入的圈数熔断（toolCallCap），与主路径无关。
      */
     @Test
-    fun resumedTurnCountsAgainstCumulativeRoundBudget() = runBlocking {
-        // 每轮都调一个未知工具（确定失败、无副作用、不触网），把轮数一路推到上限
+    fun turnsUnlimitedByDefault() = runBlocking {
+        // 每轮都调一个未知工具（确定失败、无副作用、不触网），把轮数一路推上去
         val endless = listOf(
             listOf(
                 SseEvent.Delta("再试一次"),
@@ -683,29 +685,21 @@ class AgentEngineLoopTest {
             )
         )
         val s = StoredSession.create(null)
-        s.runTurnsUsed = 58
+        s.runTurnsUsed = 58           // 上一轮遗留的计数
         val resuming = FakeClient(endless)
-        // 关掉成本/圈数熔断，只留轮数上限这一条路径
-        engine(resuming, tmpDir(), session = s, turnTokenCap = 0, toolCallCap = 0)
+        // toolFailCap=0：否则 8 次连续失败熔断会先到（那是另一条测试锁的行为）
+        engine(resuming, tmpDir(), session = s, turnTokenCap = 0, toolCallCap = 10, toolFailCap = 0)
             .runTurn("继续", {}, {}, resuming = true)
-        assertEquals("已用 58 轮 + 上限 60 → 只该再发 2 次请求", 2, resuming.requests.size)
         assertTrue(
-            "封顶提示要说清是累计的",
-            s.messages.any { (it.content ?: "").contains("含续跑") && (it.content ?: "").contains("上限（60）") }
+            "遗留 58 轮计数不得卡住回合（实际 ${resuming.requests.size} 轮）",
+            resuming.requests.size >= 10
         )
-
-        val s2 = StoredSession.create(null)
-        s2.runTurnsUsed = 58           // 上一轮遗留的计数
-        val fresh = FakeClient(endless)
-        // 不真跑满 60 轮（每轮重建上下文是平方级，会把套件拖到 6 分钟）：
-        // 圈数熔断设 12，只要能证明轮次是从 0 起算、没被遗留的 58 卡住就够了。
-        // toolFailCap=0：每轮都调未知工具，否则 8 次连续失败熔断会先到（那是另一条测试锁的行为）。
-        engine(fresh, tmpDir(), session = s2, turnTokenCap = 0, toolCallCap = 12, toolFailCap = 0)
-            .runTurn("新任务", {}, {})   // 不续跑：必须从 0 重新计
-        assertTrue("新任务不该被遗留计数卡住，实际 ${fresh.requests.size} 轮", fresh.requests.size >= 12)
         assertTrue(
-            "新任务的封顶文案不该带「含续跑」（那是续跑路径专属）",
-            s2.messages.none { (it.content ?: "").contains("含续跑") }
+            "轮数上限已移除，不得出现轮数封顶文案",
+            s.messages.none {
+                val c = it.content ?: ""
+                c.contains("轮数上限") || c.contains("单次任务轮数") || c.contains("含续跑")
+            }
         )
     }
 

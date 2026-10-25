@@ -3416,86 +3416,11 @@ private fun LazyListScope.generalItems(
             }
         }
     }
-    // E5b 成本熔断：交互聊天与无人值守分级——聊天用这里设置（默认 25 万），定时任务/工作流固定 15 万硬限
+    // E5b 成本熔断设置块已于 2026-10-25 移除（对齐 hermes：长任务不再被花费/次数粗闸门掐断，
+    // 防失控交给引擎空转守卫）。智能审批原与本块同卡，保留独立成卡。
     item {
         GlassGroup(backdrop) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                ToggleRow(
-                    title = "成本熔断",
-                    subtitle = "达到上限时让 Agent 总结进度并收尾，防止失控任务烧 token。关闭后交互聊天与定时任务/工作流均不再自动收尾。",
-                    checked = settings.costBreakerEnabled,
-                    onChange = { vm.setCostBreakerEnabled(it) },
-                    backdrop = backdrop
-                )
-                if (settings.costBreakerEnabled) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("单轮 Token 上限", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "一轮对话累计消耗（含每次工具调用重发的上下文）达到上限即收尾。0 = 不限；定时任务/工作流不受此项影响（固定 15 万）。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    var capText by androidx.compose.runtime.remember(settings.turnTokenCap) {
-                        androidx.compose.runtime.mutableStateOf(settings.turnTokenCap.let { if (it == 0) "" else it.toString() })
-                    }
-                    // 防抖：停止输入 600ms 才落盘（逐键击 updateSettings=全量 JSON+双文件写+整页重组）
-                    LaunchedEffect(capText) {
-                        if ((capText.toIntOrNull() ?: 0) == settings.turnTokenCap) return@LaunchedEffect
-                        kotlinx.coroutines.delay(600)
-                        vm.setTurnTokenCap(capText.toIntOrNull() ?: 0)
-                    }
-                    OutlinedTextField(
-                        value = capText,
-                        onValueChange = { t ->
-                            capText = t.filter { ch -> ch.isDigit() }.take(7)
-                        },
-                        modifier = Modifier.width(150.dp),
-                        singleLine = true,
-                        placeholder = { Text("不限") },
-                        trailingIcon = { Text("tok/轮", style = MaterialTheme.typography.labelSmall) },
-                        colors = com.haoai.agent.ui.common.glassFieldColors()
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                Text("圈数上限（工具调用次数）", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "一轮对话累计工具调用达到上限即收尾，防失控循环。0 = 不限。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    var callText by androidx.compose.runtime.remember(settings.toolCallCap) {
-                        androidx.compose.runtime.mutableStateOf(settings.toolCallCap.let { if (it == 0) "" else it.toString() })
-                    }
-                    LaunchedEffect(callText) {
-                        if ((callText.toIntOrNull() ?: 0) == settings.toolCallCap) return@LaunchedEffect
-                        kotlinx.coroutines.delay(600)
-                        vm.setToolCallCap(callText.toIntOrNull() ?: 0)
-                    }
-                    OutlinedTextField(
-                        value = callText,
-                        onValueChange = { t ->
-                            callText = t.filter { ch -> ch.isDigit() }.take(6)
-                        },
-                        modifier = Modifier.width(150.dp),
-                        singleLine = true,
-                        placeholder = { Text("不限") },
-                        trailingIcon = { Text("次/轮", style = MaterialTheme.typography.labelSmall) },
-                        colors = com.haoai.agent.ui.common.glassFieldColors()
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                ToggleRow(
-                    title = "熔断前软提醒",
-                    subtitle = "达单轮上限 70% 时先提醒 Agent 精简收尾，到 100% 才强制结束",
-                    checked = settings.softBudgetWarn,
-                    onChange = { vm.setSoftBudgetWarn(it) },
-                    backdrop = backdrop
-                )
-                Spacer(Modifier.height(4.dp))
                 ToggleRow(
                     title = "智能审批",
                     subtitle = "危险命令先交给辅助模型判一遍：安全的自动放行、危险的直接拒绝，只有拿不准或判失败才升级给你确认",
@@ -3532,7 +3457,6 @@ private fun LazyListScope.generalItems(
                             )
                         }
                     }
-                }
                 }
             }
         }

@@ -106,4 +106,32 @@ class ToolLoopGuardTest {
         val d = g.observe("read", "3", "c", false, true)
         assertTrue(d is ToolLoopGuard.Decision.Halt)
     }
+
+    /**
+     * hermes FAILURE_TOLERANT 语义：bash/搜索/导航类「换着参数失败」是正常工作输出
+     * （测试红、搜索空、页面超时），连续多次**不同参数**的失败只允许提醒，不得强制收尾；
+     * 精确重放（同参同果）仍走 identicalStreak 照常 halt。2026-10-25 长任务松绑的回归锁。
+     */
+    @Test
+    fun failureTolerantTools_neverHaltOnDifferentArgsFailures() {
+        val g = ToolLoopGuard(
+            identicalWarnAfter = 3, identicalBlockAfter = 5,
+            sameToolFailWarnAfter = 3, sameToolFailHaltAfter = 8,
+            maxCyclePeriod = 4, hardStopEnabled = false,
+            failureTolerant = setOf("bash", "web_search"),
+            loopCap = 0
+        )
+        // bash 连续 20 次不同参数失败：最多 warn，绝不 Halt
+        var halted = false
+        var warned = false
+        for (i in 1..20) {
+            when (val d = g.observe("bash", """{"cmd":"cmd$i"}""", "exit=1 #$i", true, false)) {
+                is ToolLoopGuard.Decision.Halt -> halted = true
+                is ToolLoopGuard.Decision.Warn -> warned = true
+                ToolLoopGuard.Decision.None -> Unit
+            }
+        }
+        assertTrue("容忍工具连续失败不得 Halt", !halted)
+        assertTrue("但达到 warn 阈值仍要提醒", warned)
+    }
 }

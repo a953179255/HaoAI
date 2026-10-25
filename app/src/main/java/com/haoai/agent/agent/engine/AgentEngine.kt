@@ -119,14 +119,15 @@ class AgentEngine(
     internal val delegateTarget: (suspend (String) -> List<Pair<ProviderConfig, String>>)? = null,
     /** 5.6 Plan 模式门：true 时 WRITE/EXEC 工具不执行，返回引导文本继续循环。 */
     internal val planGate: () -> Boolean = { false },
-    /** E5 单轮 token 熔断上限（prompt+completion 累计）；0=不限。无人值守默认 15 万，交互聊天走设置（默认 25 万）。 */
-    internal val turnTokenCap: Int = 150_000,
-    /** E5b 圈数熔断：单轮工具调用累计上限；0=不限。防失控循环的主力（行业默认 20~500，取 80）。 */
-    internal val toolCallCap: Int = 80,
-    /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒（不中断循环）。 */
+    /** E5 单轮 token 熔断上限（prompt+completion 累计）；**0=停用**。2026-10-25 对齐 hermes（无默认花费熔断）设置项已移除；机制保留，单测显式开启。 */
+    internal val turnTokenCap: Int = 0,
+    /** E5b 圈数熔断：单轮工具调用累计上限；**0=停用**。防失控交给 loopGuard 的空转/循环检测（hermes 无总次数上限，同姿势）。 */
+    internal val toolCallCap: Int = 0,
+    /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒（不中断循环）。仅在 turnTokenCap>0 时有意义。 */
     internal val softBudgetWarn: Boolean = true,
-    /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；0=仅 token 熔断。 */
-    internal val toolFailCap: Int = 8,
+    /** E5 连续工具失败熔断阈值（复用 E3 conFailCount）；**0=停用**。一刀切计数会误杀「换参数重试」的真实工作
+     *  （hermes FAILURE_TOLERANT 语义：换着法子失败是正常工作）——失败场景交给 loopGuard 的精确重放/无进展检测。 */
+    internal val toolFailCap: Int = 0,
     /** B4 会话搜索数据源：UI 与工具共用 SessionStore 投影；null=不注册 session_search。 */
     internal val sessionSearchFn: ((String) -> List<Pair<String, String>>)? = null,
     /**
@@ -302,6 +303,9 @@ class AgentEngine(
         sameToolFailHaltAfter = 8,
         maxCyclePeriod = 4,
         hardStopEnabled = false,
+        // 失败容忍（hermes FAILURE_TOLERANT 同款）：bash 的测试红/编译错、搜索空结果、
+        // 页面超时都是正常工作输出，换参数重试不应被强制收尾；同参同果重放仍照常 halt。
+        failureTolerant = setOf("bash", "web_fetch", "web_search", "browser_navigate"),
         // 圈数熔断与主循环 E5b 同阈值双轨：守卫版在 finishCall 内 Halt（无 RUN_TURNCAPPED
         // 记账、文案不同），统一走主循环 E5b 那条带收尾指令+终态记账的路径，这里关闭
         loopCap = 0
@@ -512,7 +516,7 @@ class AgentEngine(
                         "[轮次提醒] 本任务已进行 ${st.turns} 轮（上限 $MAX_TURNS）。请在剩余轮次内收敛：" +
                             "完成关键步骤并准备给出最终回答，未完成项在任务清单中如实标注。"
                 }
-                if (st.beginRound() > MAX_TURNS) {
+                if (MAX_TURNS > 0 && st.beginRound() > MAX_TURNS) {
                     runEndState = com.haoai.agent.data.StoredSession.RUN_TURNCAPPED
                     finishTurn(natural = false)
                     appendAndNotify(

@@ -284,18 +284,12 @@ data class AppSettings(
     val summarizeFallbackIds: List<String> = emptyList(),
     /** 聊天模型备用链（同 purpose 结构，元素可为 "providerId" 或 "providerId|modelId"）。 */
     val chatFallbackIds: List<String> = emptyList(),
-    /** E5b 成本熔断总开关：关闭后交互聊天与无人值守（定时/工作流）均不再自动收尾（失控任务会持续消耗 token）。 */
-    val costBreakerEnabled: Boolean = true,
-    /** E5 单轮 LLM token 累计上限（prompt+completion，交互聊天口径）；0=不限。无人值守（定时/工作流）固定 15 万硬限，不受此项影响。 */
-    val turnTokenCap: Int = 250_000,
-    /** E5b 圈数熔断：单轮工具调用累计上限；0=不限。 */
-    val toolCallCap: Int = 80,
-    /** E5b 软提醒：达单轮 token 上限 70% 时注入一次精简收尾提醒。 */
-    val softBudgetWarn: Boolean = true,
+    // E5/E5b 成本熔断（costBreakerEnabled/turnTokenCap/toolCallCap/softBudgetWarn/consecutiveToolFailCap）
+    // 已于 2026-10-25 移除（对齐 hermes：三家上游都无默认花费/次数熔断，长任务跑不完的主因；
+    // 防失控交给引擎 loopGuard 的空转/循环检测）。旧 settings.json 里的同名键由
+    // ignoreUnknownKeys 静默忽略，无需迁移。
     /** 设置结构版本（迁移用）：1 = 熔断分级改造；2 = 模型条目模态字段（vision 物化为 inputModalities）。 */
     val settingsVersion: Int = 0,
-    /** E5 连续工具失败熔断阈值（复用 E3 计数）；0=仅 token 熔断。 */
-    val consecutiveToolFailCap: Int = 8,
     /** B3 智能审批：命中需审批的操作先用辅助模型评审（APPROVE/DENY/ESCALATE）；失败一律升级人工。 */
     val smartApproval: Boolean = false,
     /** B6 会话工具组预设：null=按会话 activeGroups；"minimal"/"coding"/"full"。 */
@@ -374,9 +368,7 @@ class SettingsStore(context: Context) {
         val loaded = HaoJson.readJsonSafe(file, Wrapped.serializer())?.settings ?: AppSettings()
         var s = loaded
         if (s.settingsVersion < 1) {
-            // 一次性迁移：settingsVersion 引入前，用户没显式改过（仍是旧默认 150k）的交互上限放宽到 250k。
-            // 显式设过其他值（含 0=不限）的尊重原值；迁移后版本号置 1，下次保存落盘。
-            if (s.turnTokenCap == 150_000) s = s.copy(turnTokenCap = 250_000)
+            // v1（熔断分级改造）的一次性迁移：熔断设置项本身已于 2026-10-25 移除，这里只补版本号。
             s = s.copy(settingsVersion = 1)
             save(s)
         }

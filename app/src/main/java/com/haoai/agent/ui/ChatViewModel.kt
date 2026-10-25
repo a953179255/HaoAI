@@ -3347,11 +3347,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun buildEngine(s: StoredSession, provider: com.haoai.agent.data.ProviderConfig): AgentEngine {
         val st = c.settingsFlow.value
-        val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
-            costBreakerEnabled = st.costBreakerEnabled, unattended = false, st = st
-        )
         // 能力闭包（config_*、memoryTarget/summarizeTarget/auxClientFor、delegateTarget）已收进 EngineFactory，
         // 此处只留交互态：审批弹窗、用量上报、状态渲染、todo 刷新、Plan 门、插话队列。
+        // 熔断上限全走引擎默认 0（2026-10-25 对齐 hermes，成本熔断设置已移除）。
         return com.haoai.agent.agent.engine.EngineFactory.newEngine(
             container = c,
             session = s,
@@ -3368,12 +3366,8 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 planGate = { _planMode.value }
             ),
             workspaceLabel = workspaceName(),
-            turnTokenCap = tokenCap,
-            toolCallCap = callCap,
             autoLearn = st.autoLearn,
             backgroundScope = c.applicationScope,
-            softBudgetWarn = st.costBreakerEnabled && st.softBudgetWarn,
-            toolFailCap = st.consecutiveToolFailCap,
             // A2：插话环顶销账（把已被本轮携带的插话摘出队列，防收尾双跑）
             steeringDrain = { sid -> drainSteering(sid) }
         )

@@ -144,11 +144,8 @@ object WorkflowRunner {
         val p = provider ?: throw Exception("未配置模型服务")
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "▶ ${def.name}"
-        val st = container.settingsFlow.value
-        val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
-            costBreakerEnabled = st.costBreakerEnabled, unattended = true, st = st
-        )
         // 走 EngineFactory：工作流步骤此前同样漏传能力闭包（config_*/委派/压缩备用链）
+        // 熔断上限走引擎默认 0（2026-10-25 对齐 hermes，成本熔断设置已移除）。
         val engine = com.haoai.agent.agent.engine.EngineFactory.newEngine(
             container = container,
             session = session,
@@ -158,8 +155,6 @@ object WorkflowRunner {
                 approve = approveFor(mode)
             ),
             workspaceLabel = "工作空间",
-            turnTokenCap = tokenCap,
-            toolCallCap = callCap,
             autoLearn = false, // 工作流辅助运行不自动沉淀记忆（防噪声）
             backgroundScope = container.applicationScope
         )

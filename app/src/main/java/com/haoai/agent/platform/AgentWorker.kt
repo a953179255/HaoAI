@@ -66,20 +66,15 @@ class AgentWorker(context: Context, params: WorkerParameters) :
 
         val session = StoredSession.create(container.workspace.workspaceUriForSession)
         session.title = "⏰ ${task.name}"
-        val st = container.settingsFlow.value
-        val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
-            costBreakerEnabled = st.costBreakerEnabled, unattended = true, st = st
-        )
         // 走 EngineFactory：定时任务此前漏传 configMutator/delegateTarget/summarizeTarget，
         // 导致 config_set 恒失败、无视觉/语音委派、压缩无备用链。
+        // 熔断上限走引擎默认 0（2026-10-25 对齐 hermes，成本熔断设置已移除）。
         val engine = com.haoai.agent.agent.engine.EngineFactory.newEngine(
             container = container,
             session = session,
             provider = provider,
             interaction = com.haoai.agent.agent.engine.EngineFactory.unattended(mode),
-            workspaceLabel = container.workspace.current?.displayName ?: "定时任务",
-            turnTokenCap = tokenCap,
-            toolCallCap = callCap
+            workspaceLabel = container.workspace.current?.displayName ?: "定时任务"
         )
 
         var resultText: String? = null

@@ -198,9 +198,7 @@ class BackgroundSubagentCoordinator(private val container: AppContainer) {
             AgentRunRegistry.register(sessionId, stopHandle)
             try {
                 val session: StoredSession = container.sessionStore.load(sessionId) ?: return
-                val (tokenCap, callCap) = com.haoai.agent.agent.engine.EngineFactory.capsFor(
-                    costBreakerEnabled = st.costBreakerEnabled, unattended = true, st = st
-                )
+                // 熔断上限走引擎默认 0（2026-10-25 对齐 hermes，成本熔断设置已移除）。
                 val engine = com.haoai.agent.agent.engine.EngineFactory.newEngine(
                     container = container,
                     session = session,
@@ -208,8 +206,6 @@ class BackgroundSubagentCoordinator(private val container: AppContainer) {
                     interaction = com.haoai.agent.agent.engine.EngineFactory.unattended(st.permissionMode),
                     workspaceLabel = container.workspace.current?.displayName
                         ?.substringAfterLast('/')?.ifBlank { "根目录" } ?: "未绑定工作空间",
-                    turnTokenCap = tokenCap,
-                    toolCallCap = callCap,
                     autoLearn = false, // 系统通知驱动的回合不自动沉淀记忆（防噪声，同工作流步骤）
                     backgroundScope = container.applicationScope
                 )
