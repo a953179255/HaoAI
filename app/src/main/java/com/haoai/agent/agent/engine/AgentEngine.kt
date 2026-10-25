@@ -1043,14 +1043,37 @@ fun friendlyErrorText(raw: String): String {
     }
 }
 
-/** 技术摘要提取：优先取错误 JSON 的 message 字段值，否则清洗原文；截短到 cap。 */
+/**
+ * 技术摘要提取：优先取错误 JSON 的 message 字段值，否则清洗原文；截短到 cap。
+ *
+ * 2026-10-25 真机实证修复（用户任务显示「出错了：\」）：旧正则 [^"] 遇到 message 值
+ * 以转义引号开头的错误体（网关把模型名包在引号里 → "message":"\"…\""）会在 \ 处
+ * 停下，捕获组只剩一个反斜杠——真实错误原因被整个吃掉。改为转义感知捕获 +
+ * JSON 反转义；提取结果清洗后若退化成空/纯标点，逐级回落到清洗原文。
+ */
 private fun shortTechDetailShared(raw: String, cap: Int = 100): String {
-    val fromJson = Regex(""""message"\s*:\s*"([^"]{1,200})""").find(raw)?.groupValues?.get(1)
-    val cleaned = (fromJson ?: raw)
-        .replace(Regex("[{}\"\\r\\n]+"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-    return cleaned.take(cap)
+    // (?:\\.|[^"\\])* ：吃掉 \" \\ \n 等转义对，或普通字符，直到真正的收尾引号
+    val fromJson = Regex(""""message"\s*:\s*"((?:\\.|[^"\\]){0,300})"""").find(raw)
+        ?.groupValues?.get(1)
+        // JSON 反转义：先 \\ 后 \" 顺序不可反（否则 \\ 被误当转义引号的前半）
+        ?.replace("\\\\", "\u0000")
+        ?.replace("\\\"", "\"")
+        ?.replace("\\n", "\n")
+        ?.replace("\\t", " ")
+        ?.replace("\u0000", "\\")
+    val collapse = Regex("\\s+")
+    val fromJsonCleaned = fromJson
+        ?.replace(Regex("[{}\"\\r\\n]+"), " ")
+        ?.let { collapse.replace(it, " ").trim() }
+    val rawCleaned = collapse.replace(raw.replace(Regex("[{}\"\\r\\n]+"), " "), " ").trim()
+    // 逐级回落：message 提取 → 清洗原文。两边都只剩标点（如裸 "\"）时宁可给原文，
+    // 一个反斜杠对排查毫无价值，JSON 原文至少看得见错误形状
+    val degenerate = Regex("^[\\p{Punct}\\s]*$")
+    return when {
+        !fromJsonCleaned.isNullOrBlank() && !degenerate.matches(fromJsonCleaned) -> fromJsonCleaned.take(cap)
+        rawCleaned.isNotBlank() && !degenerate.matches(rawCleaned) -> rawCleaned.take(cap)
+        else -> raw.take(cap)
+    }
 }
 
 
