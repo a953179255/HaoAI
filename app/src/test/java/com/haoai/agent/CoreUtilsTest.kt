@@ -75,4 +75,22 @@ class CoreUtilsTest {
             assertTrue(e.message!!.contains("越界"))
         }
     }
+
+    @Test
+    fun `path safety maps sandbox workspace mount to root`() {
+        // bash 沙箱把工作区根挂载为 /workspace（91ba4cc9 会话「read 对不上路径」根因）
+        assertEquals(emptyList<String>(), PathSafety.normalize("/workspace"))
+        assertEquals(listOf("a.txt"), PathSafety.normalize("/workspace/a.txt"))
+        assertEquals(listOf("w", "a.txt"), PathSafety.normalize("/workspace/w/a.txt"))
+        assertEquals(listOf("a.txt"), PathSafety.normalize("/workspace/./a.txt"))
+        // 前缀相似但不是挂载点：不能吃掉
+        assertEquals(listOf("workspacefoo"), PathSafety.normalize("/workspacefoo"))
+        assertEquals(listOf("workspace", "a.txt"), PathSafety.normalize("workspace/a.txt"))
+        try {
+            PathSafety.normalize("")
+            throw AssertionError("should reject empty")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("路径为空"))
+        }
+    }
 }

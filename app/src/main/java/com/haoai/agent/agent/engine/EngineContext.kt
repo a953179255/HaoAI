@@ -258,7 +258,41 @@ internal fun AgentEngine.requestHistoryWindow(): List<com.haoai.agent.data.Store
         historyBudgetTokens(),
         MAX_HISTORY
     )
-    return msgs.drop(from)
+    return historyWindowWithHeadAnchor(msgs, from)
+}
+
+/**
+ * 窗口头锚定：条数/预算裁剪真的发生时（from>0），把未压缩段里最早的一条**真实任务
+ * 消息**（用户消息，排除 [系统 开头的系统注入）重新放进窗口，并挂上裁剪标记。
+ *
+ * 为什么必须有这一步（91ba4cc9 会话实测教训）：windowStart 静默丢掉开头后，模型看到
+ * 的历史从 cryptic 的工具输出开始——它既不知道任务是什么，也没有任何摘要可读（压缩
+ * 链只在 token 触发，条数上限这条裁剪路径不产生摘要），只能去翻技能/工作区文件瞎猜，
+ * 把「查 LOL 赛程」猜成了「分析新闻简报 skill」。openclaw 的裁剪与压缩是同一套机制
+ * （到窗必有摘要），HaoAI 的条数保险丝绕过了它——头锚定+显式标记让这条路径诚实地
+ * 退化：任务原话永远在场，模型知道该去 session_search 回查而不是猜。
+ *
+ * 头消息是用户消息，天然不在 tool_calls 配对约束里（pairSanitized 无需关心它）。
+ */
+internal fun historyWindowWithHeadAnchor(
+    msgs: List<com.haoai.agent.data.StoredMessage>,
+    from: Int
+): List<com.haoai.agent.data.StoredMessage> {
+    val window = msgs.drop(from)
+    if (from <= 0 || window.isEmpty()) return window
+    val headIdx = msgs.indexOfFirst {
+        it.role == ChatMessage.ROLE_USER && !it.content.startsWith("[系统")
+    }
+    if (headIdx < 0 || headIdx >= from) return window
+    val head = msgs[headIdx]
+    val body = if (head.content.length > 2000)
+        head.content.take(2000) + "\n[…原始消息过长已截断]"
+    else head.content
+    val marked = head.copy(
+        content = "[系统] 本会话更早的 $from 条历史因上下文窗口未随本次请求发送，中间的过程细节不在窗口内；" +
+            "需要更早细节时用 session_search 回查，不要凭工作区文件猜测任务。下面是本会话最早的任务消息：\n\n$body"
+    )
+    return listOf(marked) + window
 }
 
 /** 供 UI 上下文面板复用：按引擎真实请求口径算「这一轮历史会占多少 token」。

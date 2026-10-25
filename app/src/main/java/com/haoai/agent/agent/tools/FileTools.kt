@@ -11,11 +11,22 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
+/**
+ * bash 沙箱内部绝对路径（/tmp、/root、/home…）不在工作区映射内，read/write/edit 永远
+ * 看不到它们。91ba4cc9 会话实测：模型拿到「文件不存在」后用相同参数反复重试到触发
+ * 熔断——第一次失败就把可执行的出路写清楚，比连续失败后的「恢复提示」省得多。
+ * （/workspace 已在 PathSafety.normalize 映射回工作区根，不会走到这个提示。）
+ */
+internal fun sandboxPathHint(path: String): String =
+    if (path.trim().replace('\\', '/').startsWith("/"))
+        "（提示：这是绝对路径，read/write/edit 只能访问工作区内的文件——bash 沙箱里的 /workspace 即工作区根，用相对路径或 /workspace/ 开头的路径；/tmp、/root 等沙箱内部文件请改用 bash 读取，或先 cp 到 /workspace/ 下。）"
+    else ""
+
 class ReadTool : Tool {
 
     override val name = "read"
     override val desc =
-        "读取工作空间内文本文件（带行号），或列出目录内容。支持 offset/limit 行范围，大文件自动截断。"
+        "读取工作空间内文本文件（带行号），或列出目录内容。path 用工作区相对路径（bash 沙箱里的 /workspace 就是工作区根，/workspace/xx 自动映射）；沙箱内部路径（/tmp、/root 等）这里读不到。支持 offset/limit 行范围，大文件自动截断。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -40,7 +51,7 @@ class ReadTool : Tool {
                 ToolResult("列目录失败：${e.message}", true)
             }
         } catch (e: Exception) {
-            ToolResult("读取失败：${e.message}", true)
+            ToolResult("读取失败：${e.message}${sandboxPathHint(path)}", true)
         }
     }
 
@@ -78,7 +89,7 @@ class ReadTool : Tool {
 class WriteTool : Tool {
 
     override val name = "write"
-    override val desc = "新建或覆盖工作空间内的文件（UTF-8 文本，最大 256KB）。"
+    override val desc = "新建或覆盖工作空间内的文件（UTF-8 文本，最大 256KB）。path 用工作区相对路径（bash 沙箱里的 /workspace 即工作区根，/workspace/xx 自动映射；/tmp 等沙箱内部路径写不了）。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -98,7 +109,7 @@ class WriteTool : Tool {
             withContext(Dispatchers.IO) { backend.writeText(path, content) }
             ToolResult("已写入 $path（${bytes.size} 字节）")
         } catch (e: Exception) {
-            ToolResult("写入失败：${e.message}", true)
+            ToolResult("写入失败：${e.message}${sandboxPathHint(path)}", true)
         }
     }
 }
@@ -107,7 +118,7 @@ class EditTool : Tool {
 
     override val name = "edit"
     override val desc =
-        "精确替换文件中的文本片段。old_string 必须与文件内容完全一致（含缩进换行）；出现多次时需提供更多上下文或设置 replace_all=true。"
+        "精确替换文件中的文本片段。path 用工作区相对路径（bash 沙箱里的 /workspace 即工作区根）。old_string 必须与文件内容完全一致（含缩进换行）；出现多次时需提供更多上下文或设置 replace_all=true。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
@@ -147,7 +158,7 @@ class EditTool : Tool {
                 }
             }
         } catch (e: Exception) {
-            ToolResult("编辑失败：${e.message}", true)
+            ToolResult("编辑失败：${e.message}${sandboxPathHint(path)}", true)
         }
     }
 }

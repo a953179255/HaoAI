@@ -79,9 +79,15 @@ interface FileBackend {
 
 object PathSafety {
     fun normalize(raw: String): List<String> {
-        val cleaned = raw.trim().replace('\\', '/').trimStart('/')
-        require(cleaned.isNotEmpty()) { "路径为空" }
-        val parts = cleaned.split('/').filter { it.isNotEmpty() && it != "." }
+        val trimmed = raw.trim()
+        require(trimmed.isNotEmpty()) { "路径为空" }
+        var s = trimmed.replace('\\', '/')
+        // bash 沙箱把工作区根挂载为 /workspace（BashTool 工具描述同口径）。模型拿沙箱
+        // 绝对路径调 read/write 时直接映射回工作区根，而不是当成字面的 workspace/
+        // 子目录——91ba4cc9 会话实测「read 跟工作区路径对不上」4 连败的根因：
+        // 沙箱里 ls 看到的 /workspace/x 在 Android 侧其实是 <工作区根>/x。
+        if (s == "/workspace" || s.startsWith("/workspace/")) s = s.removePrefix("/workspace")
+        val parts = s.trimStart('/').split('/').filter { it.isNotEmpty() && it != "." }
         require(parts.none { it == ".." }) { "路径越界被拒绝：$raw" }
         require(parts.none { it.contains('\u0000') }) { "非法路径" }
         return parts
@@ -95,8 +101,13 @@ class RawFileBackend(private val root: File) : FileBackend {
 
     override val displayName: String get() = root.absolutePath
 
-    private fun resolve(rel: String): File {
+    /**
+     * [allowRoot] 只给读/列目录用（read("/workspace") 要落到根并产出「这是目录」的
+     * 可读错误）；写入/删除/重命名一律拒绝根——空段路径意味着把整个工作区当文件操作。
+     */
+    private fun resolve(rel: String, allowRoot: Boolean = false): File {
         val segs = PathSafety.normalize(rel)
+        require(allowRoot || segs.isNotEmpty()) { "路径为空：工作区根不能作为写入/删除目标" }
         var f = root
         for (s in segs) f = File(f, s)
         val canonRoot = root.canonicalFile
@@ -111,7 +122,7 @@ class RawFileBackend(private val root: File) : FileBackend {
         file.relativeToOrSelf(root).invariantSeparatorsPath
 
     override suspend fun readText(rel: String, maxBytes: Int): String = withContext(Dispatchers.IO) {
-        val f = resolve(rel)
+        val f = resolve(rel, allowRoot = true)
         require(f.exists()) { "文件不存在：$rel" }
         require(f.isFile) { "这是一个目录，请用目录模式读取：$rel" }
         val head = ByteArray(8192)
@@ -167,7 +178,7 @@ class RawFileBackend(private val root: File) : FileBackend {
     }
 
     override suspend fun listDir(rel: String): List<String> = withContext(Dispatchers.IO) {
-        val f = if (rel.isBlank()) root else resolve(rel)
+        val f = if (rel.isBlank() || PathSafety.normalize(rel).isEmpty()) root else resolve(rel, allowRoot = true)
         require(f.isDirectory) { "不是目录：$rel" }
         // 2026-10-24 改版：listFiles() 返回 null = 目录不可读（权限丢失/目录被删），
         // 之前吞成空表会让浏览页谎报「（目录为空）」——真因必须浮出到 UI/模型。
