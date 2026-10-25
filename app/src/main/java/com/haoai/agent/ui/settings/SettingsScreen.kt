@@ -1891,8 +1891,7 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
             backdrop = backdrop,
             text = "推理引擎：官方预编译 ${com.haoai.agent.platform.llama.LlamaServerController.ENGINE_TAG}" +
                 "（CPU/Adreno GPU/Hexagon NPU，gradle 自动下载，升级改版本号即可）· " +
-                (detected?.let { "本机骁龙 → Hexagon $it（arm64 启动时启用，失败自动 CPU 兜底）" } ?: "本机走 CPU/GPU 兜底") +
-                " · 当前生效：${vm.backendLabel()}",
+                (detected?.let { "本机骁龙 → 启动兜底链 NPU→GPU→CPU（按 prefill 速度排序，逐档自动降级）" } ?: "本机走 GPU/CPU 兜底"),
             modifier = Modifier.padding(vertical = 4.dp)
         )
     }
@@ -1910,7 +1909,9 @@ private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.
                             Text("llama.cpp 本地推理", style = MaterialTheme.typography.titleSmall)
                             Text(
                                 when (val s = llama) {
-                                    is LlamaState.Running -> "运行中 · ${s.modelFile}"
+                                    // 后端标签放这行（随 llama 状态重组刷新；说明卡的
+                                    // 「当前生效」旧位置从不重组，永远显示首帧旧值）
+                                    is LlamaState.Running -> "运行中 · ${s.modelFile} · ${vm.backendLabel()}"
                                     is LlamaState.Starting -> s.detail
                                     is LlamaState.Failed -> "失败：${s.message}"
                                     else -> "已停止 · 模型：${vm.currentLocalModelLabel() ?: "未选择"}"

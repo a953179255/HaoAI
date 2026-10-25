@@ -33,7 +33,7 @@ class LlamaServerController(
         const val LOCAL_PROVIDER_ID = "local"
         const val LOCAL_PROVIDER_BASE = "local://llama"
 
-        /** Phase 7 阶段2：最近一次 server 实际生效的后端（"cpu" / "htp-v73"…）。 */
+        /** Phase 7 阶段2：最近一次 server 实际生效的后端（"cpu" / "gpu" / "htp-v73"…）。 */
         @Volatile
         var lastActiveBackend: String = "cpu"
 
@@ -306,202 +306,191 @@ class LlamaServerController(
         }
     }
 
+    /** 后端档位：key 写入 lastActiveBackend（设置页「当前生效」显示），args 为该档独有参数。 */
+    private class BackendTier(
+        val key: String,
+        val label: String,
+        val args: List<String>,
+        val adsp: Boolean,
+    )
+
     private suspend fun launchServer(bin: String, model: File, mmproj: File?): Boolean =
         withContext(Dispatchers.IO) {
-            // HTP 参数在 try 外声明：启动失败时 catch 块去掉 NPU 参数以 CPU 兜底重试
-            var useHtp = false
-            var hex: String? = null
             val nativeDir = context.applicationInfo.nativeLibraryDir
-            // 完整命令在 try 内赋值、catch 兜底时读取（不得在 catch 里重新拼——无 -m/--port 必失败）
-            var fullCmd: List<String>? = null
-            try {
-                stopInternal()
-                val cmd = mutableListOf(
-                    bin,
-                    "-m", model.absolutePath,
-                    "--host", "127.0.0.1",
-                    "--port", PORT.toString(),
-                    "-c", contextSize.coerceIn(2048, 262_144).toString(),
-                    // 线程留 2 核给 UI/系统：推理打满 CPU 会把界面与停止键「饿死」十几秒
-                    "-t", (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4).toString(),
-                    // 单 slot：默认多 slot 会把 KV 内存翻数倍（4 slot × 64K = 256K 总缓存），
-                    // 且请求在 slot 间轮转，Agent 多轮的前缀缓存完全失效、每轮全量重算 prefill。
-                    // 不加 --cache-reuse：实测会触发 KV 碎片整理导致 prefill 阶段性卡死数十秒
-                    "-np", "1",
-                    "--no-webui",
-                    // --jinja 必须保留（OpenAI 端点工具调用依赖模板解析）；
-                    // 不能加 --reasoning off：思考型模型（MiniCPM5 等）被强制跳过推理后会乱答
-                    // （实测 2+3=4），保留思考则正确（2+3=5）且思考走 reasoning_content 独立字段，
-                    // App 端 OpenAiCompatClient 已解析为「思考过程」展示
-                    "--jinja"
+            val arm64 = android.os.Build.SUPPORTED_ABIS.firstOrNull() == "arm64-v8a"
+            // ── 后端兜底链（2026-10-25）：NPU(HTP0) → GPU(Adreno/OpenCL) → CPU ──
+            // 按 prefill 吞吐排序：NPU 852 ≫ GPU 84.5 > CPU 33.8（tok/s，LFM2.5-2.6B
+            // Q4_0 基准）；Agent 场景 prefill 主导（工具链/记忆注入每轮全量重算），
+            // GPU 排 CPU 前。NPU 需 unsigned PD 权限（Flyme 拦 app 域，2026-10-25
+            // 实测新旧引擎都进不去，只能 shell 域），GPU 走 OpenCL 无此限制；
+            // x86_64 模拟器/无 libggml-opencl.so 时跳过 GPU 档。
+            val hex = if (arm64 && skelLibsAvailable(nativeDir)) detectHexagonArch() else null
+            val gpuAvailable = arm64 && java.io.File(nativeDir, "libggml-opencl.so").exists()
+            val tiers = buildList {
+                if (hex != null) add(
+                    BackendTier("htp-$hex", "Hexagon $hex NPU",
+                        listOf("-ngl", "99", "-dev", "HTP0", "--device", "HTP0"), adsp = true)
                 )
-                if (mmproj != null) cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
-                // ── Hexagon NPU（Phase 7 阶段2）：arm64 + 骁龙 + skel 在位 → HTP 设备；
-                // 启动/健康失败自动去 NPU 参数以 CPU 兜底重启（三后端单二进制）。
-                hex = if (android.os.Build.SUPPORTED_ABIS.firstOrNull() == "arm64-v8a" &&
-                    skelLibsAvailable(nativeDir)
-                ) detectHexagonArch() else null
-                useHtp = hex != null
-                if (useHtp) cmd.addAll(listOf("-ngl", "99", "-dev", "HTP0", "--device", "HTP0"))
-                fullCmd = cmd
-                // 进度（百分比方案）：由日志排水线程按 llama.cpp 里程碑推进，
-                // 健康检查循环每 500ms 把当前百分比刷进 Starting 状态
-                val progress = java.util.concurrent.atomic.AtomicInteger(4)
-                val stage = java.util.concurrent.atomic.AtomicReference("启动服务进程")
-                fun setP(pct: Int, note: String) {
-                    progress.updateAndGet { if (pct > it) pct else it }
-                    stage.set(note)
-                }
-                // 时间插值基线：server stdout 被管道全缓冲，日志里程碑要攒 4KB 才刷出来、
-                // 解析会滞后——按模型体积估算加载时长做平滑推进（里程碑命中则向上跳变）
-                val loadStartMs = android.os.SystemClock.elapsedRealtime()
-                val durationEstMs = (model.length() / (50L * 1024 * 1024)).coerceIn(8L, 300L) * 1000
-                _state.value = LlamaState.Starting(
-                    if (useHtp) "加载模型 ${model.name}（Hexagon $hex NPU）… 4%" else "加载模型 ${model.name}（CPU）… 4%",
-                    4
+                if (gpuAvailable) add(
+                    BackendTier("gpu", "Adreno GPU",
+                        listOf("-ngl", "99", "-dev", "GPUOpenCL", "--device", "GPUOpenCL"), adsp = false)
                 )
-                val pb = ProcessBuilder(cmd).redirectErrorStream(true)
-                val env = pb.environment()
-                // 2026-10-24 起官方模块化引擎：薄壳 llama-server 的 DT_NEEDED（10 个
-                // libllama*/libggml* so）靠 LD_LIBRARY_PATH 解析，必须无条件设置；
-                // libggml-opencl.so 还依赖 vendor 分区的 libOpenCL.so（App 类加载器
-                // 搜索路径不含 vendor）。
-                env["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env["LD_LIBRARY_PATH"] ?: "")
-                if (useHtp) {
-                    // DSP skel 搜索路径（HTP 专用）
-                    env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
-                }
-
-                // 首次尝试（NPU）：截断重写，这是本轮启动日志的新起点
-                val logFile = serverLogFile()
-                val proc = pb.start()
-                process = proc
-
-                // 必须持续排水到 EOF：只读固定行数后关流，会让 server 写满管道冻结或
-                // 因 SIGPIPE 直接死掉；日志仅落盘前 MAX_LOG_LINES 行防止无限增长。
-                Thread {
-                    runCatching {
-                        proc.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                            java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(logFile, false))).use { writer ->
-                                var written = 0
-                                reader.forEachLine { line ->
-                                    if (written++ < MAX_LOG_LINES) writer.println(line)
-                                    // 里程碑 → 百分比（llama.cpp 稳定日志串）
-                                    when {
-                                        "build: " in line -> setP(10, "推理引擎已启动")
-                                        "system_info" in line -> setP(14, "读取运行环境")
-                                        "load_tensors: loading model tensors" in line -> setP(20, "读取模型文件")
-                                        "load_tensors:" in line && "loaded" in line -> setP(70, "模型张量就绪")
-                                        "warmup" in line -> setP(88, "预热")
-                                        "listening" in line -> setP(96, "等待服务就绪")
-                                    }
-                                }
-                                writer.flush()
-                            }
-                        }
-                    }
-                }.apply { isDaemon = true }.start()
-
-                val healthClient = okHttpClient.newBuilder()
-                    .connectTimeout(2, TimeUnit.SECONDS)
-                    .readTimeout(2, TimeUnit.SECONDS)
-                    .build()
-                repeat(HEALTH_TRIES) { attempt ->
-                    // 大模型加载可达数分钟：等待必须可被协程取消（停止键立即生效）
-                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                    if (proc.exitValueOrNull() != null) throw IllegalStateException("server 进程退出，详见 server.log")
-                    runCatching {
-                        healthClient.newCall(
-                            Request.Builder().url("$LOCAL_BASE_URL/health").build()
-                        ).execute().use { resp ->
-                            if (resp.isSuccessful) {
-                                currentModelPath = model.absolutePath
-                                lastActiveBackend = if (useHtp) "htp-$hex" else "cpu"
-                                _state.value = LlamaState.Running(model.name)
-                                return@withContext true
-                            }
-                        }
-                    }
-                    // 百分比 = max(日志里程碑, 时间插值)：插值平滑、里程碑跳变兜底
-                    val elapsed = android.os.SystemClock.elapsedRealtime() - loadStartMs
-                    val timePct = 4 + ((91L * elapsed / durationEstMs).toInt().coerceIn(0, 91))
-                    val pct = maxOf(progress.get(), if (progress.get() < 96) timePct else progress.get())
-                    if (pct > progress.get()) progress.set(pct)
-                    _state.value = LlamaState.Starting(
-                        "启动 ${pct}%（${stage.get()}）", pct
-                    )
-                    delay(HEALTH_INTERVAL_MS)
-                }
-                throw IllegalStateException("健康检查超时（${HEALTH_TRIES * HEALTH_INTERVAL_MS / 1000}s）")
-            } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
-                throw ce
-            } catch (e: Exception) {
-                stopInternal()
-                // HTP 失败（skel 不兼容/无 HTP 权限）：去 NPU 参数 CPU 兜底重试一次
-                if (useHtp) {
-                    android.util.Log.w("HaoLlama", "Hexagon 启动失败（${e.message?.take(120)}），回退 CPU")
-                    val base = fullCmd
-                    if (base == null) {
-                        android.util.Log.w("HaoLlama", "CPU 兜底缺完整命令行，跳过重试")
-                    } else {
-                    val retry = base.filterIndexed { i, arg ->
-                        !(arg == "-ngl" || arg == "-dev" || arg == "--device" ||
-                            (i > 0 && (base[i - 1] == "-ngl" || base[i - 1] == "-dev" || base[i - 1] == "--device")))
-                    } + listOf("-ngl", "0")
-                    val pb2 = ProcessBuilder(retry).redirectErrorStream(true)
-                    val env2 = pb2.environment()
-                    env2["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env2["LD_LIBRARY_PATH"] ?: "")
-                    _state.value = LlamaState.Starting("NPU 不可用，CPU 兜底加载 ${model.name}… 12%", 12)
-                    val proc2 = pb2.start()
-                    process = proc2
-                    Thread {
-                        runCatching {
-                            proc2.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                                // CPU 兜底 = 追加写（2026-10-10 Nit：原先两条路径各自
-                                // FileWriter(false) 互相截断，NPU 为何失败的日志被兜底抹掉，
-                                // 而"启动失败详见 server.log"里恰恰只剩兜底这段）
-                                java.io.PrintWriter(java.io.BufferedWriter(java.io.FileWriter(serverLogFile(), true))).use { w ->
-                                    var n = 0
-                                    reader.forEachLine { line -> if (n++ < MAX_LOG_LINES) w.println(line) }
-                                    w.flush()
-                                }
-                            }
-                        }
-                    }.apply { isDaemon = true }.start()
-                    val health2 = okHttpClient.newBuilder()
-                        .connectTimeout(2, TimeUnit.SECONDS)
-                        .readTimeout(2, TimeUnit.SECONDS)
-                        .build()
-                    repeat(HEALTH_TRIES) { attempt ->
-                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                        if (proc2.exitValueOrNull() != null) {
-                            // 处于 catch 块内，再抛异常会逃逸协程直接崩 App：
-                            // 置 Failed 走 return，让调用方拿到 false 优雅降级
-                            android.util.Log.w("HaoLlama", "CPU 兜底进程也退出（exit=${proc2.exitValueOrNull()}）")
-                            lastActiveBackend = "cpu"
-                            _state.value = LlamaState.Failed("端侧服务启动失败（NPU 与 CPU 均不可用），详见 server.log")
-                            return@withContext false
-                        }
-                        runCatching {
-                            health2.newCall(Request.Builder().url("$LOCAL_BASE_URL/health").build())
-                                .execute().use { resp ->
-                                    if (resp.isSuccessful) {
-                                        currentModelPath = model.absolutePath
-                                        lastActiveBackend = "cpu"
-                                        _state.value = LlamaState.Running(model.name)
-                                        return@withContext true
-                                    }
-                                }
-                        }
-                        delay(HEALTH_INTERVAL_MS)
-                    }
-                    }
-                }
-                lastActiveBackend = "cpu"
-                _state.value = LlamaState.Failed(e.message ?: e.javaClass.simpleName)
-                false
+                add(BackendTier("cpu", "CPU", listOf("-ngl", "0"), adsp = false))
             }
+            stopInternal()
+            var launched = false
+            for ((i, tier) in tiers.withIndex()) {
+                _state.value = LlamaState.Starting("加载模型 ${model.name}（${tier.label}）… 4%", 4)
+                launched = attemptBackend(bin, model, mmproj, tier, nativeDir, firstAttempt = i == 0)
+                if (launched) break
+                if (i < tiers.size - 1) {
+                    val next = tiers[i + 1]
+                    android.util.Log.w("HaoLlama", "${tier.label} 启动失败，回退 ${next.label}")
+                    _state.value = LlamaState.Starting("${tier.label} 不可用，${next.label} 兜底加载… 4%", 4)
+                }
+            }
+            if (!launched) {
+                lastActiveBackend = "cpu"
+                _state.value = LlamaState.Failed(
+                    "端侧服务启动失败（${tiers.joinToString("、") { it.label }} 均不可用），详见 server.log"
+                )
+            }
+            launched
         }
+
+    /**
+     * 单档启动尝试：组命令 → 起进程（日志排水+里程碑进度）→ 健康轮询。
+     * 进程退出/健康超时/异常一律返回 false 交下一档兜底；CancellationException
+     * 照抛（停止键必须立即生效）。firstAttempt=true 时日志截断重写（新起点），
+     * 后续档位追加写——失败档的报错不能被兜底档抹掉（2026-10-10 Nit）。
+     */
+    private suspend fun attemptBackend(
+        bin: String,
+        model: File,
+        mmproj: File?,
+        tier: BackendTier,
+        nativeDir: String,
+        firstAttempt: Boolean,
+    ): Boolean {
+        return try {
+            val cmd = mutableListOf(
+                bin,
+                "-m", model.absolutePath,
+                "--host", "127.0.0.1",
+                "--port", PORT.toString(),
+                "-c", contextSize.coerceIn(2048, 262_144).toString(),
+                // 线程留 2 核给 UI/系统：推理打满 CPU 会把界面与停止键「饿死」十几秒
+                "-t", (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4).toString(),
+                // 单 slot：默认多 slot 会把 KV 内存翻数倍（4 slot × 64K = 256K 总缓存），
+                // 且请求在 slot 间轮转，Agent 多轮的前缀缓存完全失效、每轮全量重算 prefill。
+                // 不加 --cache-reuse：实测会触发 KV 碎片整理导致 prefill 阶段性卡死数十秒
+                "-np", "1",
+                "--no-webui",
+                // --jinja 必须保留（OpenAI 端点工具调用依赖模板解析）；
+                // 不能加 --reasoning off：思考型模型（MiniCPM5 等）被强制跳过推理后会乱答
+                // （实测 2+3=4），保留思考则正确（2+3=5）且思考走 reasoning_content 独立字段，
+                // App 端 OpenAiCompatClient 已解析为「思考过程」展示
+                "--jinja"
+            )
+            if (mmproj != null) cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
+            cmd.addAll(tier.args)
+
+            // 进度（百分比方案）：由日志排水线程按 llama.cpp 里程碑推进，
+            // 健康检查循环每 500ms 把当前百分比刷进 Starting 状态
+            val progress = java.util.concurrent.atomic.AtomicInteger(4)
+            val stage = java.util.concurrent.atomic.AtomicReference("启动服务进程")
+            fun setP(pct: Int, note: String) {
+                progress.updateAndGet { if (pct > it) pct else it }
+                stage.set(note)
+            }
+            // 时间插值基线：server stdout 被管道全缓冲，日志里程碑要攒 4KB 才刷出来、
+            // 解析会滞后——按模型体积估算加载时长做平滑推进（里程碑命中则向上跳变）
+            val loadStartMs = android.os.SystemClock.elapsedRealtime()
+            val durationEstMs = (model.length() / (50L * 1024 * 1024)).coerceIn(8L, 300L) * 1000
+
+            val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+            val env = pb.environment()
+            // 2026-10-24 起官方模块化引擎：薄壳 llama-server 的 DT_NEEDED（10 个
+            // libllama*/libggml* so）靠 LD_LIBRARY_PATH 解析，必须无条件设置；
+            // libggml-opencl.so 还依赖 vendor 分区的 libOpenCL.so（App 类加载器
+            // 搜索路径不含 vendor）。
+            env["LD_LIBRARY_PATH"] = "$nativeDir:/vendor/lib64:" + (env["LD_LIBRARY_PATH"] ?: "")
+            if (tier.adsp) {
+                // DSP skel 搜索路径（HTP 专用）
+                env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
+            }
+            val logFile = serverLogFile()
+            val proc = pb.start()
+            process = proc
+
+            // 必须持续排水到 EOF：只读固定行数后关流，会让 server 写满管道冻结或
+            // 因 SIGPIPE 直接死掉；日志仅落盘前 MAX_LOG_LINES 行防止无限增长。
+            Thread {
+                runCatching {
+                    proc.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        java.io.PrintWriter(java.io.BufferedWriter(
+                            java.io.FileWriter(logFile, !firstAttempt)
+                        )).use { writer ->
+                            var written = 0
+                            reader.forEachLine { line ->
+                                if (written++ < MAX_LOG_LINES) writer.println(line)
+                                // 里程碑 → 百分比（llama.cpp 稳定日志串）
+                                when {
+                                    "build: " in line -> setP(10, "推理引擎已启动")
+                                    "system_info" in line -> setP(14, "读取运行环境")
+                                    "load_tensors: loading model tensors" in line -> setP(20, "读取模型文件")
+                                    "load_tensors:" in line && "loaded" in line -> setP(70, "模型张量就绪")
+                                    "warmup" in line -> setP(88, "预热")
+                                    "listening" in line -> setP(96, "等待服务就绪")
+                                }
+                            }
+                            writer.flush()
+                        }
+                    }
+                }
+            }.apply { isDaemon = true }.start()
+
+            val healthClient = okHttpClient.newBuilder()
+                .connectTimeout(2, TimeUnit.SECONDS)
+                .readTimeout(2, TimeUnit.SECONDS)
+                .build()
+            repeat(HEALTH_TRIES) {
+                // 大模型加载可达数分钟：等待必须可被协程取消（停止键立即生效）
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (proc.exitValueOrNull() != null) {
+                    reapProcess(proc)
+                    return false
+                }
+                runCatching {
+                    healthClient.newCall(
+                        Request.Builder().url("$LOCAL_BASE_URL/health").build()
+                    ).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            currentModelPath = model.absolutePath
+                            lastActiveBackend = tier.key
+                            _state.value = LlamaState.Running(model.name)
+                            return true
+                        }
+                    }
+                }
+                // 百分比 = max(日志里程碑, 时间插值)：插值平滑、里程碑跳变兜底
+                val elapsed = android.os.SystemClock.elapsedRealtime() - loadStartMs
+                val timePct = 4 + ((91L * elapsed / durationEstMs).toInt().coerceIn(0, 91))
+                val pct = maxOf(progress.get(), if (progress.get() < 96) timePct else progress.get())
+                if (pct > progress.get()) progress.set(pct)
+                _state.value = LlamaState.Starting("启动 ${pct}%（${stage.get()}）", pct)
+                delay(HEALTH_INTERVAL_MS)
+            }
+            reapProcess(proc) // 健康检查超时（240s）：进程可能仍在加载，交给下一档前先收割
+            false
+        } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            android.util.Log.w("HaoLlama", "${tier.label} 启动异常：${e.message?.take(120)}")
+            stopInternal()
+            false
+        }
+    }
 
     /**
      * UI 直接调用：状态立即置 Stopped，进程收割（destroy + 最多 5s 等待）放后台线程，
