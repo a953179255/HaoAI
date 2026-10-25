@@ -3703,8 +3703,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     /**
      * 技能复盘（OpenClaw Skill Workshop「Learn from past conversations」#142909 对标）：
-     * 把最近会话的对话节选打包成一个可见的聊天任务——过程可观察、可插话纠偏、可停止；
+     * 把最近几个会话的完整转录打包成一个可见的聊天任务——过程可观察、可插话纠偏、可停止；
      * 产出走 skill save（沉淀即生效；事后治理靠疗效遥测+停用开关+版本快照）。
+     * 素材管线对齐 Hermes background_review：全量转录含工具调用与结果（2026-10-25
+     * 替换旧版 6 会话×8 条×260 字纯文本摘要——工具过程全丢等于把踩坑证据扔了）。
      * 手动触发不会打开任何"自动自学习"开关。
      */
     fun learnFromHistory() {
@@ -3718,9 +3720,10 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         currentSession?.title = "技能复盘 · ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
         send(
             buildString {
-                appendLine("[技能复盘] 下面附上了最近几个会话的对话节选。请通读后提炼值得沉淀为技能的可复用经验：")
-                appendLine("走通的多步流程、踩坑后找到的修复路径、被用户纠正过的做法。")
+                appendLine("[技能复盘] 下面附上了最近几个会话的完整对话转录（含工具调用与结果）。请通读后提炼值得沉淀为技能的可复用经验，重点看三类证据：")
+                appendLine("① 被用户纠正过的做法；② 工具调用的失败→换法→成功链（最值钱的踩坑证据在工具结果里，别只看助手的总结）；③ 走通的多步流程。")
                 appendLine("纪律：先用 skill list/view 查重，强化旧条目而不是追加复制品；")
+                appendLine("只对可复用的做法沉淀（下次同类任务会再用到），一次性事实不要存；")
                 appendLine("没有值得沉淀的就明确回答\"无\"，不要硬凑；每条技能正文按 When to Use / Procedure / Pitfalls 结构写。")
                 appendLine()
                 append(digest)
@@ -3728,29 +3731,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         )
     }
 
-    /** 近期会话对话节选：最多 6 个会话，每个取尾部 8 条实质消息，全局 8000 字封顶。 */
-    private fun buildHistoryDigest(): String {
-        val recent = c.sessionStore.list().sortedByDescending { it.updatedAt }.take(6)
-        val sb = StringBuilder()
-        for (s in recent) {
-            val msgs = s.messages.filter {
-                (it.role == ChatMessage.ROLE_USER || it.role == ChatMessage.ROLE_ASSISTANT) &&
-                    it.content.isNotBlank()
-            }
-            if (msgs.isEmpty()) continue
-            sb.appendLine("── 会话「${s.title}」（共 ${msgs.size} 条）──")
-            var budget = 1400
-            for (m in msgs.takeLast(8)) {
-                if (budget <= 0) break
-                val who = if (m.role == ChatMessage.ROLE_USER) "用户" else "助手"
-                val text = m.content.replace(Regex("\\s+"), " ").trim().take(260)
-                sb.appendLine("$who：$text")
-                budget -= text.length
-            }
-            if (sb.length > 8000) break
-        }
-        return sb.toString().trim()
-    }
+    /** 近期会话完整转录（HistoryDigest 纯函数拼装）：最近 3 个实质会话，全局 40k 字预算。 */
+    private fun buildHistoryDigest(): String =
+        com.haoai.agent.agent.skills.HistoryDigest.render(c.sessionStore.list())
 
     /** 摘除当前会话的流式展示（切换/新建会话时调用；任务继续在后台跑，不中断）。 */
     private fun detachStreaming() {
