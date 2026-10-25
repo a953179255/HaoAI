@@ -3436,28 +3436,22 @@ private fun LazyListScope.generalItems(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        "" to "Session",
-                        "minimal" to "Min",
-                        "coding" to "Code",
-                        "full" to "Full"
-                    ).forEach { (value, label) ->
-                        val selected = settings.toolProfile == value
-                        com.haoai.agent.ui.common.LiquidGlassButton(
-                            onClick = { vm.setToolProfile(value) },
-                            backdrop = backdrop,
-                            enabled = true
-                        ) {
-                            Text(
-                                label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
+                // 与思考等级/权限模式同款 LiquidTabRow：原先的 LiquidGlassButton 行没有最小
+                // 高度、挤在左侧、选中态只有文字变色——四个迷你文字 chip 与全页 segmented
+                // control 语言脱节（2026-10-26 用户指出）。
+                val profileOptions = listOf(
+                    "" to "会话",
+                    "minimal" to "仅核心",
+                    "coding" to "核心+扩展",
+                    "full" to "全开"
+                )
+                com.haoai.agent.ui.common.LiquidTabRow(
+                    tabs = profileOptions.map { it.second },
+                    selectedIndex = profileOptions.indexOfFirst { it.first == settings.toolProfile }
+                        .let { if (it < 0) 0 else it },
+                    onSelected = { i -> vm.setToolProfile(profileOptions[i].first) },
+                    backdrop = backdrop
+                )
             }
         }
     }
