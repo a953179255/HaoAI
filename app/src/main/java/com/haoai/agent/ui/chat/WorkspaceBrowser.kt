@@ -111,6 +111,14 @@ internal fun WorkspaceBrowserDialog(
     /** 目录读取失败的真实原因（2026-10-24 改版：错误不再吞成「目录为空」假象）。 */
     var loadError by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
+    /** 防抖后的搜索词：搜索要跑全工作区 walk（上限 8000 文件），每键击都触发
+     *  会让输入卡顿（SessionsScreen 同场景已用 300ms 防抖，此处对齐） */
+    var searchQuery by remember { mutableStateOf("") }
+    LaunchedEffect(query) {
+        if (query == searchQuery) return@LaunchedEffect
+        delay(if (query.isEmpty()) 0 else 300)
+        searchQuery = query
+    }
     var viewerRel by remember { mutableStateOf<String?>(null) }
     var menuRow by remember { mutableStateOf<BrowserRow?>(null) }
     var highlightRel by remember { mutableStateOf<String?>(null) }
@@ -121,12 +129,12 @@ internal fun WorkspaceBrowserDialog(
 
     // 一次加载：当前目录名单 + 全量 walk（行元信息与统计与搜索都吃它）。
     // listDir 失败要浮出原因（listDir 自身已不吞错）；walk 失败只影响元信息，保持沉默。
-    LaunchedEffect(curRel, query, reloadTick, backendReady) {
+    LaunchedEffect(curRel, searchQuery, reloadTick, backendReady) {
         if (!backendReady) { loading = false; return@LaunchedEffect }
         loading = true
-        val n = runCatching { if (query.isEmpty()) listDir(curRel) else emptyList() }
+        val n = runCatching { if (searchQuery.isEmpty()) listDir(curRel) else emptyList() }
         names = n.getOrDefault(emptyList())
-        loadError = if (query.isEmpty()) n.exceptionOrNull()?.message else null
+        loadError = if (searchQuery.isEmpty()) n.exceptionOrNull()?.message else null
         val w = runCatching { withContext(Dispatchers.IO) { walk() } }.getOrDefault(emptyList())
         entries = w
         loading = false
@@ -144,10 +152,11 @@ internal fun WorkspaceBrowserDialog(
     }
 
     // 外部打开的另存兜底不在本页（长按菜单三件已覆盖需求），但分享仍要有：
+    // 结果行按防抖词过滤；输入态 UI（清空按钮/占位）仍看原始 query 即时响应
     val searchActive = query.isNotBlank()
-    val rows = remember(names, entries, curRel, searchActive) {
-        if (searchActive) {
-            searchPaths(entries, query).map {
+    val rows = remember(names, entries, curRel, searchQuery) {
+        if (searchQuery.isNotBlank()) {
+            searchPaths(entries, searchQuery).map {
                 BrowserRow(it, it.substringAfterLast('/'), false,
                     entries.firstOrNull { e -> e.path.replace('\\', '/') == it }?.size ?: 0,
                     entries.firstOrNull { e -> e.path.replace('\\', '/') == it }?.lastModified ?: 0)

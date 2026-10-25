@@ -37,6 +37,7 @@ class SubagentLogStoreTest {
             line("sa_2", 2, "DONE", "结论二")
         )
         s.save("sidA", "call_1", lines)
+        s.flushForTests()
         assertEquals(lines, s.load("sidA", "call_1"))
     }
 
@@ -44,8 +45,10 @@ class SubagentLogStoreTest {
     fun `later save overwrites earlier snapshot`() {
         val s = store()
         s.save("sidA", "call_1", listOf(line("sa_1", 1, "RUNNING")))
+        s.flushForTests()
         val done = listOf(line("sa_1", 1, "DONE", "最终结论"))
         s.save("sidA", "call_1", done)
+        s.flushForTests()
         assertEquals(done, s.load("sidA", "call_1"))
     }
 
@@ -53,6 +56,7 @@ class SubagentLogStoreTest {
     fun `empty lines are not persisted`() {
         val s = store()
         s.save("sidA", "call_1", emptyList())
+        s.flushForTests()
         assertFalse(s.has("sidA", "call_1"))
         assertNull(s.load("sidA", "call_1"))
     }
@@ -67,6 +71,7 @@ class SubagentLogStoreTest {
     fun `corrupted file returns null not crash`() {
         val s = store()
         s.save("sidA", "call_1", listOf(line("sa_1", 1, "DONE", "x")))
+        s.flushForTests()
         // 截断主文件、删掉 .bak：模拟写一半进程被杀的残留
         val f = File(tmp.root, "subagent_logs/sidA/call_1.json")
         f.writeText("""[{"id":"sa_1","index":1,"total""")
@@ -78,7 +83,9 @@ class SubagentLogStoreTest {
     fun `sessions are isolated by sid`() {
         val s = store()
         s.save("sidA", "call_1", listOf(line("sa_1", 1, "DONE", "A 的结论")))
+        s.flushForTests()
         s.save("sidB", "call_1", listOf(line("sa_1", 1, "DONE", "B 的结论")))
+        s.flushForTests()
         assertEquals("A 的结论", s.load("sidA", "call_1")?.single()?.finalResult)
         assertEquals("B 的结论", s.load("sidB", "call_1")?.single()?.finalResult)
     }
@@ -87,7 +94,9 @@ class SubagentLogStoreTest {
     fun `clearSession removes only that session`() {
         val s = store()
         s.save("sidA", "call_1", listOf(line("sa_1", 1, "DONE")))
+        s.flushForTests()
         s.save("sidB", "call_1", listOf(line("sa_1", 1, "DONE")))
+        s.flushForTests()
         s.clearSession("sidA")
         assertFalse(s.has("sidA", "call_1"))
         assertTrue(s.has("sidB", "call_1"))
@@ -97,6 +106,7 @@ class SubagentLogStoreTest {
     fun `callId with path separators is sanitized`() {
         val s = store()
         s.save("sidA", "../../evil", listOf(line("sa_1", 1, "DONE")))
+        s.flushForTests()
         // 过滤后落在 sidA 目录内，不会越出根
         assertTrue(s.has("sidA", "../../evil"))
         assertFalse(File(tmp.root, "evil.json").exists())
@@ -109,6 +119,7 @@ class SubagentLogStoreTest {
             line("sa_1", 1, "DONE", "中文结论：三条猜测两条被推翻，一条成立 ✅")
         )
         s.save("sidA", "call_u", lines)
+        s.flushForTests()
         assertEquals(lines, s.load("sidA", "call_u"))
     }
 }

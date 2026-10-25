@@ -47,6 +47,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.contentOrNull
 
+/** 流式期重组优化：这些行数据类由 rebuildRows 每次整表新建、构造后不再就地改字段，
+ *  声明 @Immutable 让 ChatRow 参数的消息行可跳过重组（此前含 List 字段全被判
+ *  unstable，流式期整列表每 40ms 重组风暴）。嵌套展示类型一并标注。 */
+@androidx.compose.runtime.Immutable
 data class UiTool(
     val callId: String,
     val name: String,
@@ -101,9 +105,11 @@ data class UiTool(
 )
 
 /** 批2a：HTML 产物定位。relPath 展示用（工作区相对），absPath 供 file:// 加载。 */
+@androidx.compose.runtime.Immutable
 data class UiHtmlFile(val relPath: String, val absPath: String)
 
 /** 批2c：步骤行路径芯片的定位结果（工作区内文件）。 */
+@androidx.compose.runtime.Immutable
 data class UiFilePath(val relPath: String, val absPath: String)
 
 /**
@@ -160,6 +166,7 @@ internal fun locateHtmlFile(argsJson: String, root: java.io.File?): UiHtmlFile? 
  * （PC 端才有），走它等于新写一条全链路。快照是既有能力：SnapshotHook 在 write/edit 的
  * before 阶段拍盘，after 由参数预测，所以任何时候都能把这次改动重算出来。
  */
+@androidx.compose.runtime.Immutable
 data class UiDiff(
     /** 被改的文件路径（快照 manifest 里带）。 */
     val path: String,
@@ -188,12 +195,15 @@ sealed interface ChainStep {
      * 直播态用固定键。链卡的 key 原来用 `reason_$index`，合并回合/新段插入时
      * index 整体后移 ⇒ remember/展开状态全部失效重建（展开的步骤会莫名收起）。
      */
+    @androidx.compose.runtime.Immutable
     data class Think(val text: String, val ms: Long? = null, val id: String? = null) : ChainStep
     /** 一次工具调用。 */
+    @androidx.compose.runtime.Immutable
     data class Tool(val tool: UiTool) : ChainStep
 }
 
 /** ask_user_batch 步骤的题组数据：标题 + 逐题（题干/选项/作答）；历史回看用，运行中为 null。 */
+@androidx.compose.runtime.Immutable
 data class UiBatchAskData(
     val title: String,
     val questions: List<UiBatchQuestion>,
@@ -202,9 +212,11 @@ data class UiBatchAskData(
 )
 
 /** UiBatchAskData 单题：题干 + 选项 label 列表。 */
+@androidx.compose.runtime.Immutable
 data class UiBatchQuestion(val question: String, val options: List<String> = emptyList())
 
 /** ask_user 步骤的问答数据：问题 + 选项 + 用户回答（历史回看用；运行中 live 步骤为 null）。 */
+@androidx.compose.runtime.Immutable
 data class UiAskData(
     val question: String,
     val options: List<String> = emptyList(),
@@ -219,6 +231,7 @@ data class UiAskData(
 /** E7a 单路子代理状态行（RUNNING/DONE/ERROR + token 用量 + 简报）；id 供任务卡终止按钮定位。
  *  P4b：@Serializable 供 SubagentLogStore 旁路落盘（回合结束后历史链卡回看过程）。 */
 @kotlinx.serialization.Serializable
+@androidx.compose.runtime.Immutable
 data class SubagentLine(
     val id: String = "",
     val index: Int,
@@ -301,6 +314,7 @@ internal fun chainRowKey(
     else -> headId
 }
 
+@androidx.compose.runtime.Immutable
 data class ChatRow(
     /** LazyColumn 稳定 key：用消息 id，勿回退为下标（删除/重发后会整体错位）。 */
     val key: String,
@@ -1215,6 +1229,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      * 每帧重组都重算，长文件会直接把滚动拖死。命中即返回，算过一次不再算。
      */
     private val diffCache = HashMap<String, UiDiff>()
+
+    /**
+     * rebuildRows 静态解析缓存：brief/fileRef/htmlFile 只由 call.argumentsJson
+     * 派生（同 call.id 参数恒定，UUID 不跨会话撞号）。原先每次 rebuildRows 都对
+     * 全历史每条 StoredToolCall 重新 JSON parse + canonicalFile 磁盘 stat，
+     * 全在主线程——50 工具调用的会话每个事件（ToolChanged/SubagentUpdate/
+     * MessageAdded）重算数千次。会话切换/清场无需失效：键为全局唯一调用 id。
+     */
+    private class ToolStaticParse(val brief: String, val fileRef: UiFilePath?, val htmlFile: UiHtmlFile?)
+    private val toolParseCache = HashMap<String, ToolStaticParse>()
 
     /** 正在加载中的 callId，避免同一次改动被并发触发多次磁盘读 + LCS。 */
     private val diffLoading = HashSet<String>()
@@ -2929,17 +2953,26 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
             val askBatch = if (call.name == "ask_user_batch")
                 askDataOfBatch(call.argumentsJson, stored?.first) else null
             val hits = if (call.name == "web_search") searchHitsOf(stored?.first) else emptyList()
-            val base = UiTool(call.id, call.name, briefFor(call.name, call.argumentsJson),
+            // 参数派生产物走缓存（见 toolParseCache 注释）：重活是 JSON parse +
+            // canonicalFile 磁盘 stat，同 call.id 只需做一次
+            val static = toolParseCache.getOrPut(call.id) {
+                ToolStaticParse(
+                    brief = briefFor(call.name, call.argumentsJson),
+                    // 批2c：路径芯片——read/write/edit 都挂（glob/grep 的 pattern 不是路径）。
+                    // 与 htmlFile 不同：不筛扩展名、运行中也给（read 的入参就是现成路径，
+                    // 点开看盘上当下内容，天然只读、无半截问题）
+                    fileRef = if (call.name == "read" || call.name == "write" || call.name == "edit")
+                        fileRefOf(call.argumentsJson) else null,
+                    // 批2a：write/edit 的 HTML 产物定位（运行中走 live 分支天然不带——
+                    // 落盘完成前打开是半截文件；stored 分支才挂卡）
+                    htmlFile = if (call.name == "write" || call.name == "edit")
+                        htmlFileOf(call.argumentsJson) else null
+                )
+            }
+            val base = UiTool(call.id, call.name, static.brief,
                 ask = ask, askBatch = askBatch, hits = hits,
-                // 批2a：write/edit 的 HTML 产物定位（运行中走 live 分支天然不带——
-                // 落盘完成前打开是半截文件；stored 分支才挂卡）
-                htmlFile = if (call.name == "write" || call.name == "edit")
-                    htmlFileOf(call.argumentsJson) else null,
-                // 批2c：路径芯片——read/write/edit 都挂（glob/grep 的 pattern 不是路径）。
-                // 与 htmlFile 不同：不筛扩展名、运行中也给（read 的入参就是现成路径，
-                // 点开看盘上当下内容，天然只读、无半截问题）
-                fileRef = if (call.name == "read" || call.name == "write" || call.name == "edit")
-                    fileRefOf(call.argumentsJson) else null)
+                htmlFile = static.htmlFile,
+                fileRef = static.fileRef)
             // 批1f：write/edit 完成后从写前快照取变更量（异步，首次只是触发加载）。
             // 运行中的步不取——快照的 after 是参数预测值，中途展示等于显示一个还没落盘的结果。
             val diff = if (call.name == "write" || call.name == "edit") {

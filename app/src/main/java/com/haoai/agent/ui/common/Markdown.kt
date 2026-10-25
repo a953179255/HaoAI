@@ -635,10 +635,24 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
     val bg = if (dark) Color(0xFF06080D).copy(alpha = 0.88f) else Color(0xFFF7F8FA)
     val plain = colors.plain
     // 块级缓存：语法高亮全量正则扫描只在代码/语言/配色变化时重算（Colors 为 data class）
-    // v0.18.1：闭合块走全局 LRU——pop 重建聊天页时历史代码块命中缓存不再重扫
+    // v0.18.1：闭合块走全局 LRU——pop 重建聊天页时历史代码块命中缓存不再重扫。
+    // 流式未闭合只高亮尾部窗口：内容每 40ms 增长，整块全量重扫的成本随块长线性
+    // 上涨且都在组合线程；已定型的头部以纯色呈现，闭合瞬间切到全量高亮（走 LRU）
     val highlighted = remember(code, lang, colors) {
         if (closed) CodeHighlight.highlightCached(code.trimEnd('\n'), lang, colors)
-        else CodeHighlight.highlight(code.trimEnd('\n'), lang, colors)
+        else {
+            val body = code.trimEnd('\n')
+            val ls = body.split('\n')
+            if (ls.size > STREAM_HIGHLIGHT_TAIL_LINES) {
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = plain)) {
+                        append(ls.dropLast(STREAM_HIGHLIGHT_TAIL_LINES).joinToString("\n"))
+                        append('\n')
+                    }
+                    append(CodeHighlight.highlight(ls.takeLast(STREAM_HIGHLIGHT_TAIL_LINES).joinToString("\n"), lang, colors))
+                }
+            } else CodeHighlight.highlight(body, lang, colors)
+        }
     }
     // 批2b：闭合块逐行渲染（行号槽 + 折叠 + 全屏的载体）；流式未闭合保持整块
     // 单 Text——内容每帧都在长，逐行 Row 每帧重排整块不值当，行号也未定型。
@@ -877,6 +891,9 @@ private fun CodeBlock(lang: String, code: String, closed: Boolean, dark: Boolean
 
 /** 批2b：代码块折叠阈值（约 2/3 屏，超过就该折叠/全屏而不是在气泡里滚）。 */
 private const val CODE_COLLAPSE_AT = 24
+
+/** 流式未闭合代码块的高亮尾窗行数：只有尾部在增长/未定型，头部以纯色呈现。 */
+private const val STREAM_HIGHLIGHT_TAIL_LINES = 40
 
 /**
  * 批2b：整块高亮结果按行切分，样式与链接标注随区间保留（subSequence 语义）。

@@ -4,6 +4,7 @@ import com.haoai.agent.data.HaoJson
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * P4 子代理过程旁路存储（2026-10-21 用户实测需求：回合结束后点开历史链卡里的
@@ -34,13 +35,27 @@ class SubagentLogStore(private val dir: File) {
         return File(d, "$safe.json")
     }
 
-    /** 覆盖写该工具调用的子代理过程快照（同 callId 后写覆盖前写）。空列表跳过。 */
+    /** 覆盖写该工具调用的子代理过程快照（同 callId 后写覆盖前写）。空列表跳过。
+     *  序列化+原子写（tmp+bak+rename 共 4+ 次文件系统操作）排到单线程 IO 队列：
+     *  调用方（ChatViewModel.handleEvent）在主线程，并行子代理流式期间
+     *  SubagentUpdate 高频到达，原先每次都在主线程同步落盘。 */
+    private val io = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "haoai-subagent-log").apply { isDaemon = true }
+    }
+
     fun save(sid: String, callId: String, lines: List<SubagentLine>) {
         if (lines.isEmpty()) return
-        val target = fileOf(sid, callId)
-        runCatching {
-            HaoJson.writeAtomic(target, Json.encodeToString(serializer, lines))
+        val payload = runCatching { Json.encodeToString(serializer, lines) }.getOrNull() ?: return
+        io.execute {
+            runCatching {
+                HaoJson.writeAtomic(fileOf(sid, callId), payload)
+            }
         }
+    }
+
+    /** 阻塞等待挂起的落盘任务完成（测试与需要强一致读回的路径用；生产路径不调）。 */
+    fun flushForTests() {
+        io.submit { }.get()
     }
 
     /** 读回；文件不存在/解析失败均返回 null（调用方按空过程处理）。 */

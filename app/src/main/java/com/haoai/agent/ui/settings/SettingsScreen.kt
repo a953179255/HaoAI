@@ -4855,8 +4855,11 @@ private fun SearchKeyField(
             visualTransformation = PasswordVisualTransformation(),
             colors = com.haoai.agent.ui.common.glassFieldColors()
         )
+        // 掩码走 remember（backendId+has 不变即复用）：解密是 AndroidKeyStore 的
+        // Cipher.init+doFinal，原先每次重组（本字段每键击/任何同重组域状态变化）都重做
+        val mask = if (has) remember(backendId, has) { vm.searchKeyMask(backendId) } else ""
         Text(
-            if (has) "已保存 ${vm.searchKeyMask(backendId)} · Keystore 加密，备份包默认不含"
+            if (has) "已保存 $mask · Keystore 加密，备份包默认不含"
             else "未填时这家不可用，会自动退回内置链",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
