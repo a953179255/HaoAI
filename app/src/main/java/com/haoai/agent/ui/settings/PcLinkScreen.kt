@@ -109,12 +109,16 @@ fun PcLinkScreen(
                             Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     HaoChip(if (st.paired) "已配对" else "没配对", if (st.paired) HaoTone.Accent else HaoTone.Neutral)
+                                    // failing=true = 配对在但上次轮询没问成（电脑没开/端口没听）：
+                                    // 上面那颗"已配对"不再等于"已连"，这里单独说实话
+                                    if (st.failing) HaoChip("未连上·退避重试", HaoTone.Warn)
                                     HaoChip(if (st.polling) "轮询中" else "没在轮询", HaoTone.Neutral)
                                     // 5.1 #10：上次轮询时间上台面 —— "进程活着"和"轮询活着"是两件事，
-                                    // 10-01 静默 40 分钟就是因为这两件事在界面上长得一模一样
+                                    // 10-01 静默 40 分钟就是因为这两件事在界面上长得一模一样。
+                                    // stale 阈值跟当前节律走：退避到 120s 时 60s 固定阈值会误报停摆
                                     if (st.lastPollAt > 0) {
                                         val age = System.currentTimeMillis() - st.lastPollAt
-                                        val stale = age > PcWatchdog.POLL_MS * 3
+                                        val stale = age > PcWatchdog.currentIntervalMs * 3
                                         HaoChip(
                                             if (stale) "轮询停了 ${age / 60_000} 分钟" else "上次轮询 ${age / 1000} 秒前",
                                             if (stale) HaoTone.Warn else HaoTone.Neutral

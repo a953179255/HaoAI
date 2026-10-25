@@ -418,11 +418,19 @@ fun SettingsScreen(
                             icon = Icons.Filled.Computer,
                             tintIndex = 3,
                             title = "电脑联动",
-                            subtitle = if (pcWait.paired) "已连 ${pcWait.base}" else "配到电脑那台 HaoAI，锁屏外也能替它点批准",
+                            // paired 只代表配对信息存在；真实连通性看 failing（上次轮询成败）
+                            subtitle = when {
+                                !pcWait.paired -> "配到电脑那台 HaoAI，锁屏外也能替它点批准"
+                                pcWait.failing -> "未连上（电脑没开着？）· 仍在盯着 ${pcWait.base}"
+                                else -> "已连 ${pcWait.base}"
+                            },
                             trailing = {
                                 if (pcWait.waiting > 0) HaoChip("等 ${pcWait.waiting} 条", HaoTone.Warn)
-                                else HaoChip(if (pcWait.paired) { if (pcWait.polling) "盯着" else "没在轮询" } else "未配对",
-                                    if (pcWait.paired) HaoTone.Accent else HaoTone.Neutral)
+                                else HaoChip(
+                                    if (pcWait.paired) { if (pcWait.polling) "盯着" else "没在轮询" } else "未配对",
+                                    if (!pcWait.paired) HaoTone.Neutral
+                                    else if (pcWait.failing) HaoTone.Warn else HaoTone.Accent
+                                )
                             },
                             showChevron = true,
                             divider = true,

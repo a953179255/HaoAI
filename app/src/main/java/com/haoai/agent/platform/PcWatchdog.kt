@@ -58,9 +58,13 @@ object PcWatchdog {
          * 最近一次轮询落地的时刻（毫秒）。10-01 真机：进程活着、通知挂着，
          * 轮询协程却在长寿命进程里静默死了 40 分钟 —— 从外面看"进程没死"和
          * "轮询没死"完全分不开。这个时间戳就是把两者分开的那把尺：
-         * 界面按它显示"上次轮询 X 秒前"，超 [POLL_MS]×3 没动就当死轮处理（见 [ensureRunning]）。
+         * 界面按它显示"上次轮询 X 秒前"，超当前节律×3 没动就当死轮处理（见 [ensureRunning]）。
          */
-        val lastPollAt: Long = 0L
+        val lastPollAt: Long = 0L,
+        /** 最近一次【成功】问到的时刻（毫秒）；0 = 本次进程内还没成功过。 */
+        val lastOkAt: Long = 0L,
+        /** 连续失败中：界面按它显示「未连上」而不是「已连」（paired 只代表配对信息存在）。 */
+        val failing: Boolean = false
     )
 
     private var app: Context? = null
@@ -74,6 +78,23 @@ object PcWatchdog {
     /** 共享连接池：原先每次调用 new PcLink 都连带新建 OkHttpClient，20s 轮询
      *  周期性建弃连接池，空闲 socket 反复滞留。 */
     private val sharedHttp = PcLink.defaultClient()
+
+    /**
+     * 失败退避（2026-10-25 真机实测发现：PC 没开时看门狗仍 20s 一轮空转到天亮，
+     * 一晚 4000+ 次无效请求）。节律 = 连续失败 1-3 次维持 20s（电脑可能只是重启中），
+     * 4-8 次降到 60s，之后 120s 封顶——PC 回来最迟 2 分钟内被发现，夜间无效请求
+     * 降 ~95%。任一次成功立即复位。
+     */
+    @Volatile
+    var currentIntervalMs: Long = POLL_MS
+        private set
+    private var failStreak = 0
+
+    private fun backoffFor(streak: Int): Long = when {
+        streak <= 3 -> POLL_MS
+        streak <= 8 -> 60_000L
+        else -> 120_000L
+    }
 
     private val _state = MutableStateFlow(State())
     val state = _state.asStateFlow()
@@ -110,6 +131,10 @@ object PcWatchdog {
             base = ep?.base.orEmpty(),
             device = ep?.device.orEmpty()
         )
+        // 配对信息刚被（重）写：立即回到全速轮询——用户刚配完对/改完地址，
+        // 别让上一次的退避节律把新端点的发现拖到两分钟后
+        failStreak = 0
+        currentIntervalMs = POLL_MS
         if (ep == null) { watch.reset(); results.reset() }
     }
 
@@ -159,7 +184,7 @@ object PcWatchdog {
                         _state.value = _state.value.copy(lastNote = "这轮没问成（下一轮会继续）：${t.message}")
                     }
                     _state.value = _state.value.copy(lastPollAt = System.currentTimeMillis())
-                    delay(POLL_MS)
+                    delay(currentIntervalMs)
                 }
             } finally {
                 _state.value = _state.value.copy(polling = false)
@@ -180,7 +205,9 @@ object PcWatchdog {
         if (app == null) return
         val st = _state.value
         val dead = job?.isActive != true
-        val stale = st.lastPollAt > 0L && System.currentTimeMillis() - st.lastPollAt > POLL_MS * 3
+        // stale 阈值必须跟当前节律走：退避到 120s 时正常一轮就是两分钟，
+        // 拿固定的 60s 当尺会把健康退避误判成死轮不停重启
+        val stale = st.lastPollAt > 0L && System.currentTimeMillis() - st.lastPollAt > currentIntervalMs * 3
         if (!dead && !stale) return
         android.util.Log.w(
             "HaoPcLink",
@@ -210,19 +237,24 @@ object PcWatchdog {
                 watch.reset()
                 results.reset()
                 hideNotification()
+                failStreak++
+                currentIntervalMs = backoffFor(failStreak)
                 _state.value = _state.value.copy(
                     waiting = 0, lastAt = System.currentTimeMillis(), lastNote = out.message,
-                    paired = !out.unauthorized
+                    paired = !out.unauthorized, failing = true
                 )
                 PcWatchAction.Clear
             }
             is PcOut.Ok -> {
+                failStreak = 0
+                currentIntervalMs = POLL_MS
                 val items = out.value
                 val act = watch.onPending(items.map { it.id })
                 _state.value = _state.value.copy(
                     waiting = items.size, lastAt = System.currentTimeMillis(),
                     lastNote = if (items.isEmpty()) "问过了：电脑上没有要批的"
-                    else "电脑上有 ${items.size} 条在等你批"
+                    else "电脑上有 ${items.size} 条在等你批",
+                    lastOkAt = System.currentTimeMillis(), failing = false
                 )
                 when (act) {
                     is PcWatchAction.Notify -> showNotification(items, act.total)
