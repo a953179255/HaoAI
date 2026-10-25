@@ -236,9 +236,15 @@ object BrowserController {
         check(Looper.myLooper() == Looper.getMainLooper()) { "WebView 只能在主线程操作" }
     }
 
-    /** 取下标处的 WebView（不存在则创建并合成布局）；返回恒非空。 */
+    /** 取下标处的 WebView（不存在则创建并合成布局）；下标越界时返回可读错误（原静默
+     *  回落到第一个标签，click/input 会打到错误页面且模型毫无感知）。 */
     suspend fun webViewAt(index: Int? = null): WebView = withContext(Dispatchers.Main) {
         touch()
+        if (index != null && tabs.getOrNull(index) == null) {
+            throw IllegalStateException(
+                "browser 标签下标 $index 越界（当前共 ${tabs.size} 个标签，0..${(tabs.size - 1).coerceAtLeast(0)}）；请先用 browser_read 确认标签编号"
+            )
+        }
         val tab = (index?.let { tabs.getOrNull(it) } ?: getOrCreateTab())
         ensureLaidOut(tab.webView)
         tab.webView
@@ -611,9 +617,14 @@ object BrowserController {
                 return JSON.stringify({ok:false,reason:'元素 '+el.tagName+' 不是输入框，请重新 browser_read 选择'});
               el.scrollIntoView({block:'center'});el.focus();
               var v=$quoted;
-              var proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
-              var d=Object.getOwnPropertyDescriptor(proto,'value');
-              if(d&&d.set)d.set.call(el,v);else el.value=v;
+              var proto=(el.tagName==='TEXTAREA')?HTMLTextAreaElement.prototype
+                :(el.tagName==='INPUT')?HTMLInputElement.prototype
+                // contentEditable 无 value 属性：走 HTMLElement 原型的 textContent 直写，
+                // 原先取 HTMLInputElement 的 value setter 会抛 Illegal invocation（页面脚本中断）
+                :HTMLElement.prototype;
+              if(el.isContentEditable){el.textContent=v;}
+              else{var d=Object.getOwnPropertyDescriptor(proto,'value');
+              if(d&&d.set)d.set.call(el,v);else el.value=v;}
               el.dispatchEvent(new Event('input',{bubbles:true}));
               el.dispatchEvent(new Event('change',{bubbles:true}));
               var submitted=false;
@@ -638,9 +649,11 @@ object BrowserController {
         headlessGuard()?.let { return it }
         val wv = webViewAt(tabIndex)
         val a = amount.coerceIn(0.1, 0.9)
+        // direction 白名单内插：模型参数带引号/分号时宁可返回"未知方向"，不注入页面 JS
+        val d = direction.lowercase().takeIf { it in setOf("up", "down", "left", "right") } ?: "unknown"
         val script = """
             (function(){
-              var d='$direction',f=$a,h=window.innerHeight,w=window.innerWidth,before=window.scrollY;
+              var d='$d',f=$a,h=window.innerHeight,w=window.innerWidth,before=window.scrollY;
               if(d==='up')window.scrollBy(0,-h*f);
               else if(d==='down')window.scrollBy(0,h*f);
               else if(d==='left')window.scrollBy(w*f,0);

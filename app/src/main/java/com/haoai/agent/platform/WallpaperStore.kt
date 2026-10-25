@@ -46,13 +46,7 @@ object WallpaperStore {
         BitmapFactory.decodeFile(f.absolutePath, opts)
         var sample = 1
         while (maxOf(opts.outWidth, opts.outHeight) / sample > maxDim) sample *= 2
-        val bmp = BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
-            ?: return null
-        // 修正 EXIF 方向的常见场景：宽>高交换（简化处理，仅当明显颠倒时旋转）
-        if (opts.outWidth > opts.outHeight && bmp.width < bmp.height * 2) {
-            // 保持原样，Android 相册图通常方向正确
-        }
-        bmp
+        BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
     }.getOrNull()
 
     /** cover-fit 绘制参数（等比缩放居中裁剪）。 */

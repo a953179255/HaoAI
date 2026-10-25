@@ -414,7 +414,9 @@ class MemoryBank(
                     }
                 }
             }
-            save(state)
+            // 记账走延迟合并落盘（与 markInjected 同策略）：search 在工具/召回热路径上，
+            // 同步全量重写 MEMORY.md+.bak 每次都是固定双文件写
+            schedulePersist()
         }
         return scored.map { it.first }
     }

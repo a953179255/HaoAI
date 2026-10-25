@@ -4777,7 +4777,9 @@ private fun DataUrlThumb(
     contentScale: ContentScale = ContentScale.Crop,
     onClick: (() -> Unit)? = null
 ) {
-    val key = remember(dataUrl) { dataUrl.hashCode().toString() }
+    // LRU key 用 dataUrl 本身（LruCache 接受任意长 String）；hashCode 的 32 位碰撞
+    // 会从缓存取到别人的图并直接显示（静默错图），不值得省这点内存
+    val key = remember(dataUrl) { dataUrl }
     var bmp by remember(dataUrl) { mutableStateOf(dataUrlBmpCache.get(key)) }
     LaunchedEffect(dataUrl) {
         if (bmp != null) return@LaunchedEffect
