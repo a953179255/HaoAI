@@ -36,10 +36,6 @@ internal suspend fun AgentEngine.runSubAgent(
     isBackground: Boolean = false
 ): String {
     val fid = id ?: "sa_${subagentSeq.incrementAndGet()}"
-    // 计划模式：work 子代理会执行改动，与 Plan 语义冲突，直接拒绝
-    if (mode == "work" && planGate()) {
-        return "计划模式下不派出 work 子代理（会执行改动）；请先结束计划阶段再派。"
-    }
     val handle = SubagentHandle(
         fid, parentCtx.currentCallId, index, total, task,
         currentCoroutineContext()[kotlinx.coroutines.Job] ?: kotlinx.coroutines.Job(),
@@ -97,6 +93,21 @@ internal suspend fun AgentEngine.runSubAgent(
     }
     // P3：childCtx 用 copy 全量继承（work 模式的 config 通道/webCache 复用）；depth+1 且去嵌套上报
     val childCtx = parentCtx.copy(depth = parentCtx.depth + 1, onSubagentEvent = null)
+    // 计划模式：work 子代理会执行改动，与 Plan 语义冲突，直接拒绝。
+    // 检查放在句柄注册之后：后台路径在工具层已对模型宣称「已启动」，原先这里静默
+    // return 会让协调器等一个永不到来的完成通知、collect_agent 也查无此 id。
+    if (mode == "work" && planGate()) {
+        val refuse = "计划模式下不派出 work 子代理（会执行改动）；请先结束计划阶段再派。"
+        if (!isBackground) {
+            activeSubagents.remove(fid)
+            return refuse
+        }
+        handle.state = "ERROR"
+        handle.finalResult = refuse
+        report("ERROR", 0, "计划模式拒绝 work 子代理")
+        notifyBackgroundDone(handle, ok = false)
+        return refuse
+    }
     // E7a 进度上报（经 parentCtx 回调；失败也上报 ERROR，不拖垮整卡）
     report("RUNNING", 0, task.take(80))
     // P3-A：work 模式=主代理工具面（depth+1 已天然排除 spawn 防嵌套；再减配置/清单纪律项），
@@ -238,6 +249,11 @@ internal suspend fun AgentEngine.runSubAgent(
                         else -> tool.run(childArgs, childCtx)
                     }
                 }
+            } catch (te: kotlinx.coroutines.TimeoutCancellationException) {
+                // 工具超时只作废本次调用（与主循环 EngineToolRun 同口径）：原先原样重抛，
+                // 后台路径（launchBackground 无外层超时）最终落入 AgentEngine 的静默
+                // CancellationException catch——句柄停在 RUNNING、notifyBackgroundDone 不调用。
+                ToolResult("工具 ${call.name} 执行超时，请拆小步骤或跳过重试", true)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {

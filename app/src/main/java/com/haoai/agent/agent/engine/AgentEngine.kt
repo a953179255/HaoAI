@@ -389,6 +389,12 @@ class AgentEngine(
         lastExecutedResult = null
         loopGuard.reset()
         turnTainted = false
+        // 回合级收口状态一并归位：当前调用方都每回合 buildEngine 所以未爆发，但 runTurn 是
+        // public API，同一实例跑第二个回合时残留的 runEndState 会让 finishTurn 恒走
+        // rollbackTodos（natural=false）、残留的熔断旗会让 E5b 提前收尾。
+        runEndState = null
+        _loopFailedCap = false
+        _loopStallHalt = false
         if (resuming) closeDanglingCalls(onEvent)
         // 本会话已用过的 tool_call id：新来的调用必须避开，否则跨轮撞号会让 UI 行状态与
         // pairSanitized 的配对判定互相顶名（详见 uniquifyCallIds 的注释）
@@ -669,7 +675,10 @@ class AgentEngine(
                         onEvent(ToolChanged(ToolUpdate(call.id, ToolRunState.ERROR, briefOf(call), "输出被截断")))
                         finishCall(call, buildJsonObject {}, ctx, err, ToolRunState.ERROR, 0L, "length-truncated", onEvent)
                     }
-                    transcript.buildAssistant(toolCalls = maskSecretArgs(calls))?.let { appendAndNotify(it, onEvent) }
+                    // 本轮 assistant 已在上方 isFinal 判定处落库一次；这里再追加会得到
+                    // 「assistant(tool_calls) → tool(结果) → assistant(同一批 tool_calls)」的
+                    // 尾部无结果毒历史——OpenAI 兼容端对未应答 tool_calls 返回 400，且已持久化，
+                    // 该会话之后每轮都 400。只补 tool 结果，不再落 assistant。
                     continue
                 }
 

@@ -47,21 +47,22 @@ class CompactionTieringTest {
     )
 
     /**
-     * 摘要模型持续失败时 compact 不得把异常抛给回合循环——
-     * 旧行为抛异常会让 maybeCompact 整个炸掉回合；A4 起调用方看到的是
-     * "fallback 摘要"或 null（换窗），绝不外抛。
+     * 摘要模型失败时 compact 必须把原始异常上抛——由 compactWithChain 的链层捕获
+     * （降级到链上下一个摘要目标；全失败返回 null，调用方走 A4 免摘要换窗）。
+     * 旧版在 compact 内落 fallbackTruncate 把失败伪装成"成功"：链式降级/换窗
+     * 两条兜底永不触发，垃圾摘要还会永久挂进 compactionSummary 每次请求重发。
      */
     @Test
-    fun compactNeverThrowsOnSummaryFailure() = runBlocking {
+    fun compactThrowsOnSummaryFailureForChainFallback() = runBlocking {
         val manager = CompactionManager(client = FailingSummaryClient())
         val msgs = (1..10).map { user("任务 $it") }
         val result = runCatching {
             manager.compact(msgs, null, provider(), "key", 32_768)
         }
-        assertTrue("摘要失败也不得把异常抛给回合循环", result.isSuccess)
+        assertTrue("摘要失败必须上抛给链层降级（fallback 已移除）", result.isFailure)
         assertTrue(
-            "fallback 摘要应含用户消息痕迹",
-            result.getOrNull()?.summary?.contains("任务") == true
+            "抛的应是原始 IOException（保留链层日志与诊断信息）",
+            result.exceptionOrNull() is java.io.IOException
         )
     }
 

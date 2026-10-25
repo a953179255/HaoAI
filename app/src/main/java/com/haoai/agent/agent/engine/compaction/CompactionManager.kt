@@ -74,16 +74,11 @@ class CompactionManager(
             CompactionPrompts.incrementalSummaryPrompt(existingSummary, context, budget)
         }
 
-        val summary = try {
-            callLlmForSummary(prompt, provider, apiKey)
-        } catch (ce: CancellationException) {
-            // 用户停止/协程取消：不能落进下面的 fallback，否则会把截断垃圾摘要持久化污染会话
-            throw ce
-        } catch (_: Exception) {
-            // LLM 调用失败，使用 fallback 截断
-            val allText = messages.map { "${it.role}: ${it.content?.take(200) ?: ""}" }
-            CompactionPrompts.fallbackTruncate(allText)
-        }
+        // LLM 失败直接上抛：compactWithChain 捕获后降级到链上下一个摘要目标，
+        // 全失败由调用方走 A4 免摘要换窗（推水位）。原先在这里落 fallbackTruncate
+        // 会把失败伪装成"成功"——链式降级/换窗两条兜底永不触发，且截断拼接的垃圾
+        // 摘要会写进 compactionSummary 作为 system 前缀在后续每次请求里永久重发。
+        val summary = callLlmForSummary(prompt, provider, apiKey)
 
         lastCompactionTime = System.currentTimeMillis()
         return CompactionResult(
@@ -95,6 +90,9 @@ class CompactionManager(
     /** 检测 overflow 错误。 */
     fun isOverflowError(error: String): Boolean {
         val lower = error.lowercase()
+        // "400"+"token" 宽匹配排除 max_tokens 参数类报错：那是调用参数错误（重发还会失败），
+        // 不是上下文超限，误判会白白触发一次压缩+重试
+        if (lower.contains("max_tokens")) return false
         return lower.contains("context_length_exceeded") ||
             lower.contains("maximum context length") ||
             lower.contains("too many tokens") ||

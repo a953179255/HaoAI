@@ -129,6 +129,29 @@ internal fun AgentEngine.toolsGroupHintText(): String {
 internal fun AgentEngine.gateTools(apiTools: List<com.haoai.agent.agent.provider.ApiTool>): List<com.haoai.agent.agent.provider.ApiTool> =
     if (provider.caps().tools == false) emptyList() else apiTools
 
+/**
+ * 音频→base64 缓存：带音频的历史消息在工具循环的每一轮都会重进 buildApiMessages，
+ * 原先每轮 readBytes+Base64（8MB 上限）同一文件反复读盘编码 60 次。按
+ * (path, length, lastModified) 键控——文件被替换自动失效；上限 2 条
+ * （base64 后每条可达 ~11MB，内存代价封顶 ~22MB）。访问全部在 synchronized 内。
+ */
+private val audioB64Cache = LinkedHashMap<String, Pair<String, Pair<Long, Long>>>()
+
+private fun audioBase64Cached(path: String): String? = runCatching {
+    val f = java.io.File(path)
+    if (!f.exists() || f.length() > 8L * 1024 * 1024) return@runCatching null
+    val stamp = f.length() to f.lastModified()
+    synchronized(audioB64Cache) {
+        audioB64Cache[path]?.takeIf { it.second == stamp }?.let { return it.first }
+    }
+    val b64 = android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
+    synchronized(audioB64Cache) {
+        audioB64Cache[path] = b64 to stamp
+        while (audioB64Cache.size > 2) audioB64Cache.remove(audioB64Cache.keys.first())
+    }
+    b64
+}.getOrNull()
+
 internal fun AgentEngine.estimateOverheadTokens(): Pair<Int, Int> =
     com.haoai.agent.ui.chat.ContextUsage.estimateStringTokens(buildSystemText()) to
         (_toolsTokenCache ?: TOOLS_BASE_TOKENS)
@@ -267,12 +290,7 @@ internal fun AgentEngine.buildApiMessages(): List<ApiMessage> {
                     // 音频：有 audio-in 时读文件转 input_audio 直发（OpenAI 兼容），否则注记降级
                     if (!m.audioPath.isNullOrBlank()) {
                         if (caps.hasAudio) {
-                            val b64 = runCatching {
-                                val f = java.io.File(m.audioPath)
-                                if (f.exists() && f.length() <= 8L * 1024 * 1024)
-                                    android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP)
-                                else null
-                            }.getOrNull()
+                            val b64 = audioBase64Cached(m.audioPath)
                             if (b64 != null) {
                                 val fmt = m.audioPath.substringAfterLast('.', "mp3").lowercase()
                                     .let { if (it == "mpeg") "mp3" else it }
