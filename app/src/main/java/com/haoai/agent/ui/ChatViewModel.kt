@@ -2508,7 +2508,9 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
     private suspend fun requestApproval(req: ApprovalRequest): Boolean {
         // B3 智能审批：仅对 shell 执行走辅助评审；APPROVE/DENY 直接落地，失败/空回/不确定一律升级人工
         if (c.settingsFlow.value.smartApproval && req is ApprovalRequest.ExecOp) {
-            when (runCatching { smartApproveShell(req.command) }.getOrNull()) {
+            when (runCatching { smartApproveShell(req.command) }
+                .onFailure { android.util.Log.w("HaoSmartA", "评审异常：${it.javaClass.simpleName}: ${it.message}") }
+                .getOrNull()) {
                 SmartVerdict.APPROVE -> return true
                 SmartVerdict.DENY -> return false
                 else -> { /* escalate → 下方人工弹窗 */ }
@@ -2650,8 +2652,16 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
      */
     private suspend fun smartApproveShell(command: String): SmartVerdict {
         val st = c.settingsFlow.value
+        // 聊天路由为默认空（chatPurposeId="" 且无 fallback）时 resolvePurposeTargets 返回空表，
+        // 此前直接 ESCALATE ⇒ **默认配置下智能审批从不评审、永远升级人工且无日志**（2026-10-26
+        // 真机实测：echo 都弹人工窗）。语义应为"评审用当前聊天模型"→ 回落到活跃供应商。
         val target = c.resolvePurposeTargets(st.chatPurposeId, st.chatFallbackIds).firstOrNull()
-            ?: return SmartVerdict.ESCALATE
+            ?: c.activeProvider()?.let {
+                com.haoai.agent.data.AppContainer.DreamTarget(it, c.resolveApiKey(it), isLocal = false)
+            }
+            ?: return SmartVerdict.ESCALATE.also {
+                android.util.Log.w("HaoSmartA", "无可用评审模型，升级人工")
+            }
         val cleaned = command.lineSequence()
             .map { line ->
                 // 粗剥行尾 # 注释（保留引号内；非完整 shell 解析，只去最常见注入面）
@@ -2681,8 +2691,12 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                 if (ev is com.haoai.agent.agent.provider.SseEvent.Delta) buf.append(ev.text)
             }
             true
-        } ?: return SmartVerdict.ESCALATE
-        if (job != true) return SmartVerdict.ESCALATE
+        } ?: return SmartVerdict.ESCALATE.also {
+            android.util.Log.w("HaoSmartA", "评审流 8s 超时，升级人工")
+        }
+        if (job != true) return SmartVerdict.ESCALATE.also {
+            android.util.Log.w("HaoSmartA", "评审流失败，升级人工")
+        }
         val word = buf.toString().trim().uppercase()
             .replace(Regex("[^A-Z]"), "")
             .takeLast(8) // 可能带句号/前缀噪声
