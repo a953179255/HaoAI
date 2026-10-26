@@ -60,6 +60,20 @@ class HistoryDigestTest {
     }
 
     @Test
+    fun `智能标题改名的复盘会话仍被指纹排除`() {
+        // 实测：智能标题把"技能复盘 · …"改名成"安全命令审批技能复盘"，标题前缀过滤失效
+        val renamed = session("安全命令审批技能复盘", 200, listOf(
+            msg("user", "[技能复盘] 下面附上了最近几个会话的对话节选。"),
+            msg("assistant", "（旧摘要正文）")
+        ))
+        val normal = session("正常任务", 100, listOf(msg("user", "任务A")))
+        val out = HistoryDigest.render(listOf(renamed, normal))
+        assertFalse("改名复盘会话不得混入素材", out.contains("安全命令审批技能复盘"))
+        assertFalse("旧摘要不得随素材带入", out.contains("旧摘要正文"))
+        assertTrue(out.contains("正常任务"))
+    }
+
+    @Test
     fun `工具失败带标记_正文截断到2000字`() {
         val s = session("长文", 100, listOf(
             msg("user", "长任务"),

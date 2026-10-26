@@ -26,7 +26,12 @@ object HistoryDigest {
     /** 单条正文截断（原 260 字是为了塞下 6 会话；现在给足上下文）。 */
     private const val TEXT_CLIP = 2000
 
-    /** 复盘会话标题前缀：自身不作为学习素材（防递归——复盘转录再学一遍会自我强化）。 */
+    /** 复盘任务标记：复盘会话的首条用户消息以此开头。智能标题会把复盘会话改名
+     *  （实测"技能复盘 · …"被改成"安全命令审批技能复盘"），标题前缀不可靠，
+     *  以消息指纹为主——复盘转录再进素材会拿二手摘要自我强化。 */
+    private const val REVIEW_TASK_TAG = "[技能复盘]"
+
+    /** 标题前缀兜底（learnFromHistory 生成"技能复盘 · MM-dd HH:mm"）。 */
     private const val REVIEW_TITLE_PREFIX = "技能复盘"
 
     /**
@@ -36,6 +41,7 @@ object HistoryDigest {
     fun render(sessions: List<StoredSession>, budgetChars: Int = CHAR_BUDGET): String {
         val picked = sessions
             .filter { !it.title.startsWith(REVIEW_TITLE_PREFIX) }
+            .filter { s -> s.messages.none { it.role == "user" && it.content.startsWith(REVIEW_TASK_TAG) } }
             .sortedByDescending { it.updatedAt }
             .filter { s -> s.messages.any { it.role == "user" && it.content.isNotBlank() } }
             .take(SESSION_COUNT)
