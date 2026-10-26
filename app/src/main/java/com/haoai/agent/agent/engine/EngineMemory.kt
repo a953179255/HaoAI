@@ -36,21 +36,16 @@ internal fun AgentEngine.maybeExtractMemory() {
     // 端侧模型跳过自动记忆提取：辅助请求会冲掉 llama-server 单 slot 前缀缓存，
     // 让 Agent 工具循环的每轮请求全量重算 prefill（手机上每轮多花几十秒）
     if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) return
-    val recent = session.messages
-        .filter {
-            (it.role == ChatMessage.ROLE_USER || it.role == ChatMessage.ROLE_ASSISTANT) &&
-                it.content.isNotBlank()
-        }
-        .takeLast(8)
+    // Hermes 主通道联动：本回合模型已主动调 memory 工具沉淀 → 兜底提取跳过（省一次辅助调用）
+    if (com.haoai.agent.agent.memory.TurnEvidence.memoryToolUsedThisTurn(session.messages)) {
+        android.util.Log.i("HaoMemory", "本回合模型已主动 save 记忆，兜底提取跳过")
+        return
+    }
     // 门槛：没有实质用户输入（纯指令/太短）就不值得沉淀，直接跳过
-    val userText = recent.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content.orEmpty()
+    val userText = session.messages.lastOrNull { it.role == ChatMessage.ROLE_USER }?.content.orEmpty()
     if (userText.length < 12) return
-    val transcript = recent
-        .joinToString("\n") { m ->
-            val who = if (m.role == ChatMessage.ROLE_USER) "用户" else "助手"
-            "$who：${m.content.take(500)}"
-        }
-        .trim()
+    // 素材带工具链（TurnEvidence）：用户纠正/踩坑换法的证据在工具调用与结果里，旧版纯文本全滤了
+    val transcript = com.haoai.agent.agent.memory.TurnEvidence.buildTranscript(session.messages)
     if (transcript.length < 80) return
     // M-1 修复①：提取提示词携带现有记忆清单——换述级重复在源头就不让提
     // （remember() 的归一化去重只抓标点/空白差异，"的/。"差异与措辞改写必然穿透）
