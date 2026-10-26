@@ -89,6 +89,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
@@ -101,6 +102,10 @@ import com.kyant.backdrop.effects.vibrancy
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.tanh
 import androidx.compose.foundation.layout.imePadding
 
@@ -667,21 +672,48 @@ fun LiquidGlassButton(
                 blur(2.dp.toPx())
                 lens(
                     refractionHeight = t.lensHeight.dp.toPx(),
-                    refractionAmount = t.lensAmount.dp.toPx(),
+                    // 展示玻璃独立位移档（2026-10-27 双主题：经典 16 / 液态 24）
+                    refractionAmount = t.btnLensAmount.dp.toPx(),
                     chromaticAberration = t.ca
                 )
             },
             layerBlock = {
                 val progress = highlight.pressProgress
-                val scale = lerp(1f, 1f + 2.dp.toPx() / size.height, progress)
-                // 不做跟指平移：折射层跟随指尖在小按钮上读作「按钮可以被拖走」（两轮用户反馈）。
-                // 交互反馈保留按压缩放 + 指尖辉光，位置完全静止
+                var scale = lerp(1f, 1f + 2.dp.toPx() / size.height, progress)
+                var tx = 0f
+                var ty = 0f
+                // 跟手弹性（2026-10-27 主题开关；demo Catalog 公式：tanh 软限位平移
+                // + 拖向缩放。当年"像可拖拽"的否决针对常开——现归「通透液态」主题可选）
+                if (com.haoai.agent.ui.theme.GlassTuning.elastic) {
+                    val maxOffset = size.minDimension
+                    val off = highlight.offset
+                    tx = maxOffset * tanh(0.05f * off.x / maxOffset)
+                    ty = maxOffset * tanh(0.05f * off.y / maxOffset)
+                    val ang = atan2(off.y, off.x)
+                    val maxDrag = 4f.dp.toPx() / size.height
+                    scale += maxDrag * abs(cos(ang) * off.x / size.maxDimension) *
+                        (size.width / size.height).fastCoerceAtMost(1f)
+                    scale += maxDrag * abs(sin(ang) * off.y / size.maxDimension) *
+                        (size.height / size.width).fastCoerceAtMost(1f)
+                }
+                translationX = tx
+                translationY = ty
                 scaleX = scale
                 scaleY = scale
             },
             onDrawSurface = {
-                if (surfaceColor != null) {
-                    drawRect(surfaceColor)
+                // 着色三态（2026-10-27 双主题）：hue=demo 同款保明暗着色（只换色相、
+                // 背景亮暗透出）；solid=现状实色；clear=纯玻璃。读 btnTint 注册
+                // 快照订阅——设置页切换即时重绘。
+                val t = com.haoai.agent.ui.theme.GlassTuning
+                t.btnTint
+                if (surfaceColor != null && t.btnTint != "clear") {
+                    if (t.btnTint == "hue") {
+                        drawRect(surfaceColor, blendMode = BlendMode.Hue)
+                        drawRect(surfaceColor.copy(alpha = 0.75f))
+                    } else {
+                        drawRect(surfaceColor)
+                    }
                 }
             }
         )

@@ -61,6 +61,8 @@ object GlassTuning {
     /** 外投影模糊半径 dp（默认 24 = 库 Shadow.Default 现值，守"默认档零变化"铁律；
      *  浮层的加浓档 26/30dp 不接滑杆，保持专属） */
     const val DEFAULT_SHADOW = 24f
+    /** 展示玻璃（按钮等）折射位移默认 dp（2026-10-27 双主题：经典 16 / 液态 24） */
+    const val DEFAULT_BTN_LENS_AMOUNT = 16f
 
     /** 背景模糊 dp（磨砂感的主要来源）——全 App 玻璃统一 */
     var blur by mutableFloatStateOf(DEFAULT_BLUR)
@@ -110,6 +112,20 @@ object GlassTuning {
      *  滑杆在任何壁纸/主题组合下恒生效） */
     var pageVeil by mutableFloatStateOf(DEFAULT_PAGE_VEIL)
 
+    /** 玻璃风格主题（2026-10-27 双主题并存）：classic=经典奶白 / liquid=通透液态。
+     *  切换=套用该主题标准配方（见 [applyLiquidTheme]/[applyClassicTheme]） */
+    var glassStyle by mutableStateOf("classic")
+
+    /** 展示玻璃（按钮等无长文字表面）着色方式：hue=保背景明暗的着色（demo 同款）/
+     *  solid=实色 / clear=透明 */
+    var btnTint by mutableStateOf("solid")
+
+    /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放） */
+    var elastic by mutableStateOf(false)
+
+    /** 展示玻璃折射位移 dp（独立于全局：按钮小面积，位移手感单独一档） */
+    var btnLensAmount by mutableFloatStateOf(DEFAULT_BTN_LENS_AMOUNT)
+
     /**
      * 弹层白雾映射：滑杆 veil（默认 0.48）按 [anchor]/0.48 等比放大到各弹层
      * 原有的档位锚点（对话框/消息操作 0.92、底部弹层 0.72、Popup 0.52）——
@@ -136,6 +152,10 @@ object GlassTuning {
         inputVeil = p.inputVeil
         pageBlur = p.pageBlur
         pageVeil = p.pageVeil
+        glassStyle = p.glassStyle
+        btnTint = p.btnTint
+        elastic = p.elastic
+        btnLensAmount = p.btnLensAmount
     }
 
     /** 当前值快照为持久化参数（调参页防抖落盘用） */
@@ -154,8 +174,39 @@ object GlassTuning {
         inputBlur = inputBlur,
         inputVeil = inputVeil,
         pageBlur = pageBlur,
-        pageVeil = pageVeil
+        pageVeil = pageVeil,
+        glassStyle = glassStyle,
+        btnTint = btnTint,
+        elastic = elastic,
+        btnLensAmount = btnLensAmount
     )
+
+    /** 「通透液态」主题（2026-10-27，对齐 AndroidLiquidGlass demo 配方）：
+     *  只动观感档——位移翻倍、白雾微降、按钮换 Hue 着色+跟手弹性；
+     *  模糊档与表面结构不动（HaoAI 文字面板本就与 demo 自带文字的面板配方一致）。
+     *  切换会覆盖当前白雾/位移等滑杆值（两主题各有标准配方）。 */
+    fun applyLiquidTheme() {
+        glassStyle = "liquid"
+        lensAmount = 32f
+        veil = 0.44f
+        barVeil = 0.50f
+        barBlur = 10f
+        btnTint = "hue"
+        elastic = true
+        btnLensAmount = 24f
+    }
+
+    /** 「经典奶白」主题（= 出厂默认档，现状配方） */
+    fun applyClassicTheme() {
+        glassStyle = "classic"
+        lensAmount = DEFAULT_LENS_AMOUNT
+        veil = DEFAULT_VEIL
+        barVeil = DEFAULT_BAR_VEIL
+        barBlur = DEFAULT_BAR_BLUR
+        btnTint = "solid"
+        elastic = false
+        btnLensAmount = DEFAULT_BTN_LENS_AMOUNT
+    }
 
     /** 一键还原出厂默认（"还原默认"按钮） */
     fun reset() {
@@ -174,5 +225,9 @@ object GlassTuning {
         inputVeil = DEFAULT_INPUT_VEIL
         pageBlur = DEFAULT_PAGE_BLUR
         pageVeil = DEFAULT_PAGE_VEIL
+        glassStyle = "classic"
+        btnTint = "solid"
+        elastic = false
+        btnLensAmount = DEFAULT_BTN_LENS_AMOUNT
     }
 }

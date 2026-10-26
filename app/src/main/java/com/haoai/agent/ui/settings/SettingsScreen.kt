@@ -83,6 +83,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -2991,6 +2992,38 @@ private fun LazyListScope.workspaceItems(
     }
 }
 
+/** 玻璃风格预设卡（2026-10-27 双主题并存）：标题+一句话说明，选中=主题色描边。 */
+@Composable
+private fun GlassThemeCard(
+    title: String,
+    desc: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+        )
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            )
+            Text(desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
 /** 三档单选 radio（HaoRow trailing 用）：18dp 圆环，选中填 accent 内圆。 */
 @Composable
 private fun RadioDot(selected: Boolean) {
@@ -3853,7 +3886,61 @@ private fun LazyListScope.themeItems(
     }
 
     // ── 调参分三组（2026-10-10 对照 Kyant0 玻璃实验室重排）：
-    //    全局几何 / 折射 / 光泽。裸标题在卡外（与其他段落一致）。 ──
+    //    全局几何 / 折射 / 光泽。裸标题在卡外（与其他段落一致）。
+    //    2026-10-27 头部新增「玻璃风格」组：双主题预设 + 展示玻璃三旋钮。 ──
+    item { SectionTitle("玻璃风格") }
+    item {
+        GlassGroup(backdrop) {
+            val t = com.haoai.agent.ui.theme.GlassTuning
+            t.glassStyle; t.btnTint; t.elastic; t.btnLensAmount
+            // 全局预设双卡（2026-10-27 双主题并存）：切换=套用该主题标准配方
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassThemeCard(
+                    title = "经典奶白", desc = "现状配方，可读性优先",
+                    selected = t.glassStyle != "liquid",
+                    modifier = Modifier.weight(1f)
+                ) { vm.applyGlassTheme("classic") }
+                GlassThemeCard(
+                    title = "通透液态", desc = "对齐液态玻璃演示",
+                    selected = t.glassStyle == "liquid",
+                    modifier = Modifier.weight(1f)
+                ) { vm.applyGlassTheme("liquid") }
+            }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            // 展示玻璃组（按钮等无长文字表面）
+            Text("展示玻璃（按钮 / 开关）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("hue" to "Hue 着色", "solid" to "实色", "clear" to "透明").forEach { (mode, label) ->
+                    Surface(
+                        onClick = { t.btnTint = mode; vm.persistGlass() },
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (t.btnTint == mode) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (t.btnTint == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Text(label, fontSize = 12.sp, color = if (t.btnTint == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text("按压跟手弹性", style = MaterialTheme.typography.bodyMedium)
+                    Text("按住按钮拖动时的果冻跟手（演示同款）", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                com.haoai.agent.ui.common.HaoSwitch(checked = t.elastic, onCheckedChange = { t.elastic = it; vm.persistGlass() })
+            }
+            GlassSliderRow("按钮折射位移", dpText(t.btnLensAmount), "展示玻璃专属档（与全局位移分开）", t.btnLensAmount, 0f..48f, backdrop, step = 0.5f, onEnd = { vm.persistGlass() }) { t.btnLensAmount = it }
+            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            Text(
+                "切换主题会套用该主题的标准配方（白雾 / 位移 / 着色会被覆盖）；下面的滑杆仍可继续微调。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+        }
+    }
     item { SectionTitle("全局玻璃") }
     item {
         GlassGroup(backdrop) {

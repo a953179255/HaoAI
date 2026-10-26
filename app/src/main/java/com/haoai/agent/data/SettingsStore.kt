@@ -351,7 +351,17 @@ data class GlassParams(
     val pageBlur: Float = 4f,
     /** 页面玻璃卡白雾（独立档；取代旧"壁纸深浅≠主题深浅时写死 0.50"分支——
      *  滑杆在任何壁纸/主题组合下恒生效） */
-    val pageVeil: Float = 0.48f
+    val pageVeil: Float = 0.48f,
+    /** 玻璃风格主题（2026-10-27 双主题并存）：classic=经典奶白 / liquid=通透液态。
+     *  切换主题=套用该主题标准配方（白雾/位移/着色等观感档），模糊档与表面结构不动。 */
+    val glassStyle: String = "classic",
+    /** 展示玻璃（按钮等无长文字表面）着色方式：hue=保背景明暗的着色（demo 同款）/
+     *  solid=实色 / clear=透明 */
+    val btnTint: String = "solid",
+    /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放） */
+    val elastic: Boolean = false,
+    /** 展示玻璃折射位移 dp（独立于全局：按钮小面积，位移手感单独一档） */
+    val btnLensAmount: Float = 16f
 )
 
 class SettingsStore(context: Context) {
