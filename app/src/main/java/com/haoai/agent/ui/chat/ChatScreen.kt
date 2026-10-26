@@ -422,6 +422,8 @@ fun ChatScreen(
         contentLayerBackdrop(composerContentLayer, composerContentCoords)
     }
     val context = LocalContext.current
+    // 状态栏带遮罩色（v6）：顶栏与抽屉共用同一条取样色，保证两处状态栏带观感一致
+    val topVeilColor = rememberStatusBarVeilColor(wallpaper)
 
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     fun copyText(text: String) {
@@ -1195,6 +1197,7 @@ fun ChatScreen(
                     subtitle = "",
                     contextUsage = contextUsage,
                     backdrop = backdrop,
+                    veilColor = topVeilColor,
                     onDrawer = { toggleDrawer() },
                     onNewChat = {
                         vm.newSession()
@@ -2040,6 +2043,15 @@ fun ChatScreen(
                     val drawerBackdrop = com.kyant.backdrop.backdrops.rememberCombinedBackdrop(
                         backdrop, topBarContentBackdrop, composerContentBackdrop
                     )
+                    // 抽屉与顶栏共用状态栏带遮罩（v6）：抽屉自身没有这层时，顶部只有
+                    // 模糊顶缘衰减 + scrim，比顶栏带更透（蓝色壁纸用户实测）；共用后
+                    // 色/浓/范围与顶栏一致，滑出时状态栏带连续
+                    val drawerVeil = statusBarVeilOverlay(
+                        veilColor = topVeilColor,
+                        barBlur = com.haoai.agent.ui.theme.GlassTuning.barBlur,
+                        statusBarPx = WindowInsets.statusBars.getTop(density).toFloat(),
+                        fadePx = with(density) { 24.dp.toPx() }
+                    )
                     GlassPanel(
                         backdrop = drawerBackdrop,
                         modifier = Modifier
@@ -2073,6 +2085,7 @@ fun ChatScreen(
                         lensAmount = com.haoai.agent.ui.theme.GlassTuning.lensAmount.dp,
                         depthEffect = com.haoai.agent.ui.theme.GlassTuning.depthEffect,
                         chromaticAberration = com.haoai.agent.ui.theme.GlassTuning.ca,
+                        surfaceOverlay = drawerVeil,
                         // 贴屏幕左缘：左上/左下不做圆角，保证与边缘齐平的折射观感
                         shape = RoundedCornerShape(
                             topStart = 0.dp,
@@ -2711,6 +2724,87 @@ fun ChatScreen(
 }
 }
 
+/**
+ * 状态栏带防漏补强遮罩（v5 构造提取，v6 换色源）：顶栏与抽屉各盖一条，色/浓/范围一致。
+ * 抽屉此前没有这层——它的状态栏带只有模糊顶缘衰减 + scrim，与顶栏带观感断裂
+ * （用户实测「抽屉顶部比顶栏透」）；共用后抽屉滑出时状态栏带连续。
+ * 三个不动沿用 v5：范围锁死状态栏带 +24dp 淡出，绝不进标题行；barBlur=0 整层不画；
+ * 浓度随磨砂滑杆（0.3+0.033×barBlur，0.85 封顶）。
+ */
+private fun statusBarVeilOverlay(
+    veilColor: Color,
+    barBlur: Float,
+    statusBarPx: Float,
+    fadePx: Float
+): (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)? {
+    if (barBlur <= 0f) return null
+    val veilA = (0.3f + 0.033f * barBlur).coerceIn(0f, 0.85f)
+    val fadeEnd = statusBarPx + fadePx
+    val plateau = (statusBarPx / fadeEnd).coerceIn(0f, 1f)
+    return {
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to veilColor.copy(alpha = veilA),
+                plateau to veilColor.copy(alpha = veilA),
+                1f to veilColor.copy(alpha = 0f),
+                startY = 0f,
+                endY = fadeEnd
+            )
+        )
+    }
+}
+
+/**
+ * 遮罩取样色（v6，2026-10-27）：v5 遮罩色原为 colorScheme.background——壁纸低饱和时
+ * 与玻璃带浑然一体，壁纸换成蓝色后状态栏带被白雾拍得比下方标题带更白（用户实测凸显）。
+ * 玻璃带的真实底色 = 壁纸模糊色 + 表面雾，这里从壁纸位图取「状态栏带对应区域」的平均色
+ * （cover-fit 裁切与 rememberAppBackdrop 的画法逐字对齐），再向主题背景回掺一档补偿
+ * 表面白雾/vibrancy 提亮，让遮罩带与玻璃带色相连续。无壁纸 → 主题背景（素色底时
+ * 遮罩与玻璃带同源，行为与 v5 逐字一致）。
+ */
+@Composable
+private fun rememberStatusBarVeilColor(wallpaper: android.graphics.Bitmap?): Color {
+    val background = MaterialTheme.colorScheme.background
+    if (wallpaper == null) return background
+    val density = LocalDensity.current
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
+    val canvasW = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val canvasH = with(density) { configuration.screenHeightDp.dp.toPx() }
+    return remember(wallpaper, background, statusBarPx, canvasW, canvasH) {
+        wallpaperStripColor(wallpaper, background, statusBarPx, canvasW, canvasH)
+    }
+}
+
+private fun wallpaperStripColor(
+    wallpaper: android.graphics.Bitmap,
+    background: Color,
+    statusBarPx: Float,
+    canvasW: Float,
+    canvasH: Float
+): Color {
+    // cover-fit 参数与 rememberAppBackdrop（Glass.kt）逐字对齐：画布顶端对应位图行 = -dstY/scale
+    val scale = maxOf(canvasW / wallpaper.width, canvasH / wallpaper.height)
+    val dstY = (canvasH - wallpaper.height * scale) / 2f
+    val topRow = (-dstY / scale).toInt().coerceIn(0, wallpaper.height - 1)
+    // 取样高度 = 状态栏带 ×2：blur 混合带内外邻域，平均范围略宽观感更稳
+    val rows = ((statusBarPx * 2f) / scale).toInt().coerceAtLeast(1)
+        .coerceAtMost(wallpaper.height - topRow)
+    val crop = android.graphics.Bitmap.createBitmap(wallpaper, 0, topRow, wallpaper.width, rows)
+    val small = android.graphics.Bitmap.createScaledBitmap(crop, 8, 4, true)
+    var r = 0L; var g = 0L; var b = 0L; var n = 0
+    for (y in 0 until small.height) for (x in 0 until small.width) {
+        val c = small.getPixel(x, y)
+        r += (c shr 16) and 0xFF; g += (c shr 8) and 0xFF; b += c and 0xFF; n++
+    }
+    // createBitmap 全图裁切会返回原对象，回收前必须判同（否则把壁纸本体回收掉）
+    if (small !== crop) small.recycle()
+    if (crop !== wallpaper) crop.recycle()
+    if (n == 0) return background
+    val avg = Color(red = (r / n).toInt(), green = (g / n).toInt(), blue = (b / n).toInt())
+    return androidx.compose.ui.graphics.lerp(avg, background, 0.35f)
+}
+
 @Composable
 private fun TopBar(
     title: String,
@@ -2734,38 +2828,23 @@ private fun TopBar(
     // TopBar 只留触发点
     contextDetailExpanded: Boolean = false,
     onToggleContextDetail: () -> Unit = {},
+    /** 状态栏带遮罩色（v6 壁纸取样色，ChatScreen 计算传入；素色底=主题背景） */
+    veilColor: Color = MaterialTheme.colorScheme.background,
     modifier: Modifier = Modifier
 ) {
     val vscreenId by com.haoai.agent.platform.vdisplay.VirtualScreenController.displayIdFlow.collectAsState()
     val density = LocalDensity.current
     val statusBarPx = WindowInsets.statusBars.getTop(density).toFloat()
-    val scrimColor = MaterialTheme.colorScheme.background
-    // 状态栏带防漏补强 v5（2026-10-16 用户三度实测迭代）：病根=blur 在玻璃顶缘
-    // 采样天然衰减（最顶行上方无像素可采）→ 状态栏带比标题带透、滚过的正文可辨。
-    // 遮罩定位=补这一条的边缘衰减，三个不动：
-    // ① 范围锁死：平台只到状态栏底，24dp 淡出，绝不进标题行（v3 盖到标题行被骂）；
-    // ② 滑杆门控：barBlur=0 整层不画，"调 0 全透"语义不吞（v2/v3 被骂点）；
-    // ③ 浓度随滑杆：0.3+0.033×blur（15→0.8、24→0.85 封顶）。浓度允许高的理由：
-    //    状态栏带内只有系统图标、没有玻璃质感可牺牲，补浓不等于拍实玻璃；
-    //    标题带的磨砂/折射/白雾一概不碰，观感差异只在这一条上抹平。
-    val barBlurNow = com.haoai.agent.ui.theme.GlassTuning.barBlur
-    val veilA = (0.3f + 0.033f * barBlurNow).coerceIn(0f, 0.85f)
-    val veilFadeEnd = statusBarPx + with(density) { 24.dp.toPx() }
-    val veilPlateauStop = (statusBarPx / veilFadeEnd).coerceIn(0f, 1f)
-    val topBarVeil: ((androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit))? =
-        if (barBlurNow > 0f) {
-            {
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        0f to scrimColor.copy(alpha = veilA),
-                        veilPlateauStop to scrimColor.copy(alpha = veilA),
-                        1f to scrimColor.copy(alpha = 0f),
-                        startY = 0f,
-                        endY = veilFadeEnd
-                    )
-                )
-            }
-        } else null
+    // 状态栏带防漏补强 v6（2026-10-27）：病根不变——blur 在玻璃顶缘采样天然衰减
+    // （最顶行上方无像素可采）→ 状态栏带比标题带透、滚过的正文可辨，遮罩照旧补这条；
+    // 换的只是色源：v5 用主题背景，壁纸饱和后遮罩带被白雾拍得比标题带更白（蓝色壁纸
+    // 用户实测凸显），v6 改壁纸取样色（见 rememberStatusBarVeilColor），色相与玻璃带连续。
+    val topBarVeil = statusBarVeilOverlay(
+        veilColor = veilColor,
+        barBlur = com.haoai.agent.ui.theme.GlassTuning.barBlur,
+        statusBarPx = statusBarPx,
+        fadePx = with(density) { 24.dp.toPx() }
+    )
     // 通栏方角顶栏：无左右边距、无圆角、无四周描边（底缘发丝线由内容
     // Row 下方的 Box 画出）；任务面板在同一块玻璃内向下一体生长（animateContentSize）
     GlassPanel(
