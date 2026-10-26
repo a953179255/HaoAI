@@ -33,8 +33,14 @@ class ReadTool : Tool {
             putJsonObject("path") {
                 put("type", "string")
             }
-            putJsonObject("offset") { put("type", "integer") }
-            putJsonObject("limit") { put("type", "integer") }
+            putJsonObject("offset") {
+                put("type", "integer")
+                put("description", "起始行号（1 起始），大文件配合 limit 分段读")
+            }
+            putJsonObject("limit") {
+                put("type", "integer")
+                put("description", "本次最多读取的行数，默认 400，上限 1000")
+            }
         }
         putJsonArray("required") { add(JsonPrimitive("path")) }
     }
@@ -118,7 +124,7 @@ class EditTool : Tool {
 
     override val name = "edit"
     override val desc =
-        "精确替换文件中的文本片段。path 用工作区相对路径（bash 沙箱里的 /workspace 即工作区根）。old_string 必须与文件内容完全一致（含缩进换行）；出现多次时需提供更多上下文或设置 replace_all=true。"
+        "精确替换文件中的文本片段。path 用工作区相对路径（bash 沙箱里的 /workspace 即工作区根）。先 read 确认最新内容再动手：old_string 必须与文件当前内容完全一致（含缩进换行，凭记忆写常失配）；出现多次时补充上下文使其唯一，或设置 replace_all=true。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {

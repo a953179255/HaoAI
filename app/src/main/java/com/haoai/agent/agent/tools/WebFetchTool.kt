@@ -15,12 +15,15 @@ class WebFetchTool : Tool {
 
     override val name = "web_fetch"
     override val desc =
-        "抓取网页并转为可读文本（自动去除 HTML 标签）。仅支持 http(s) 链接。"
+        "抓取网页并转为可读文本（自动去除 HTML 标签）。仅支持 http(s) 链接。JS 渲染的页面可能只抓到导航模板，需要点击/输入或看渲染后界面时改用内置浏览器 browser_*。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {
             putJsonObject("url") { put("type", "string") }
-            putJsonObject("max_chars") { put("type", "integer") }
+            putJsonObject("max_chars") {
+                put("type", "integer")
+                put("description", "返回文本上限，默认 8000，范围 200-30000")
+            }
         }
         putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("url")) }
     }

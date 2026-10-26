@@ -152,7 +152,7 @@ class FindTool : Tool {
 
     override val name = "find"
     override val desc =
-        "在可滚动列表中查找目标文案：自动朝 direction 方向滚动最多 max_swipes 次，找到返回编号与坐标（同时更新 screen 缓存），找不到返回失败。"
+        "在可滚动列表中查找目标文案：自动朝 direction 方向滚动最多 max_swipes 次，找到返回编号与坐标（同时更新 screen 缓存），找不到返回失败。注意：这是找屏幕上的控件，不是文件搜索——找文件内容用 grep。"
     override val params = buildJsonObject {
         put("type", "object")
         putJsonObject("properties") {

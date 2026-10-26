@@ -40,8 +40,23 @@ class MemoryTool : Tool {
             putJsonObject("id") { put("type", "string") }
             putJsonObject("tags") { put("type", "string") }
             putJsonObject("query") { put("type", "string") }
-            putJsonObject("type") { put("type", "string") }
-            putJsonObject("importance") { put("type", "integer") }
+            putJsonObject("type") {
+                put("type", "string")
+                putJsonArray("enum") {
+                    add(JsonPrimitive("preference"))
+                    add(JsonPrimitive("fact"))
+                    add(JsonPrimitive("decision"))
+                    add(JsonPrimitive("event"))
+                }
+            }
+            putJsonObject("importance") {
+                put("type", "integer")
+                put(
+                    "description",
+                    "重要性 1-5：5=用户明确交代要记的偏好/约定，4=重要教训（journal 满 4 夜间自动晋升长期记忆），3=一般事实；" +
+                        "≤2 且 30 天未用会休眠、满仓时优先被清理"
+                )
+            }
         }
     }
 
