@@ -323,11 +323,10 @@ data class GlassParams(
     val blur: Float = 4f,
     /** 折射环带宽度 dp */
     val lensHeight: Float = 16f,
-    /** 折射位移量 dp（2026-10-10 解耦：旧 lensAmountMul 倍数制废弃，
-     *  旧存档该键被 ignoreUnknownKeys 丢弃、读默认 16 = 原「16×1」观感不变） */
-    val lensAmount: Float = 16f,
+    /** 折射位移量 dp（2026-10-27 玻璃主题转正：默认 32=「通透液态」档） */
+    val lensAmount: Float = 32f,
     /** 卡片白雾（表面不透明度） */
-    val veil: Float = 0.48f,
+    val veil: Float = 0.44f,
     /** 卡片圆角 dp */
     val corner: Float = 16f,
     /** 中心深度感（库 lens depthEffect，2026-10-10 补开关；默认开=原写死值） */
@@ -338,10 +337,10 @@ data class GlassParams(
     val highlight: Float = 1f,
     /** 外投影模糊半径 dp（2026-10-10 补滑杆；默认 24=库 Shadow.Default 现值） */
     val shadow: Float = 24f,
-    /** 顶栏背景模糊 dp（顶栏有标题文字，磨砂比卡片厚一档） */
-    val barBlur: Float = 15f,
+    /** 顶栏背景模糊 dp（2026-10-27 转正：10=通透液态档，顶栏更透） */
+    val barBlur: Float = 10f,
     /** 顶栏白雾 */
-    val barVeil: Float = 0.55f,
+    val barVeil: Float = 0.50f,
     /** 输入框背景模糊 dp */
     val inputBlur: Float = 4f,
     /** 输入框白雾（2026-10-08 独立于卡片：输入框常年压在正文上，用户要单独调） */
@@ -352,16 +351,13 @@ data class GlassParams(
     /** 页面玻璃卡白雾（独立档；取代旧"壁纸深浅≠主题深浅时写死 0.50"分支——
      *  滑杆在任何壁纸/主题组合下恒生效） */
     val pageVeil: Float = 0.48f,
-    /** 玻璃风格主题（2026-10-27 双主题并存）：classic=经典奶白 / liquid=通透液态。
-     *  切换主题=套用该主题标准配方（白雾/位移/着色等观感档），模糊档与表面结构不动。 */
-    val glassStyle: String = "classic",
-    /** 展示玻璃（按钮等无长文字表面）着色方式：hue=保背景明暗的着色（demo 同款）/
-     *  solid=实色 / clear=透明 */
-    val btnTint: String = "solid",
-    /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放） */
-    val elastic: Boolean = false,
+    /** 展示玻璃（按钮等无长文字表面）着色方式：hue=保背景明暗的着色（demo 同款，
+     *  2026-10-27 转正为默认）/ solid=实色 / clear=透明 */
+    val btnTint: String = "hue",
+    /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放；转正后默认开） */
+    val elastic: Boolean = true,
     /** 展示玻璃折射位移 dp（独立于全局：按钮小面积，位移手感单独一档） */
-    val btnLensAmount: Float = 16f
+    val btnLensAmount: Float = 24f
 )
 
 class SettingsStore(context: Context) {
@@ -398,6 +394,13 @@ class SettingsStore(context: Context) {
                 },
                 settingsVersion = 2
             )
+            save(s)
+        }
+        if (s.settingsVersion < 3) {
+            // 一次性迁移（2026-10-27 玻璃主题转正）：「通透液态」成为唯一玻璃配方——
+            // 旧档的白雾/位移等观感参数整体落到新默认值；着色/跟手/按钮位移三个
+            // 新旋钮同步取液态档。用户后续仍可在主题外观里继续微调。
+            s = s.copy(glass = GlassParams(), settingsVersion = 3)
             save(s)
         }
         return s

@@ -35,22 +35,21 @@ import androidx.compose.runtime.setValue
  */
 object GlassTuning {
 
-    /** 出厂默认（2026-10-08 实验室定稿 / 2026-10-10 解耦改造）：
-     *  blur 折射(环带16, 位移16) / 白雾 0.48 / 深度感开 / 色差开；
-     *  顶栏白雾 0.55（文字底）；输入框模糊 4。
-     *  ⚠️ 位移默认 16 = 旧「环带16 × 倍数1」，解耦后默认档观感零变化（用户铁律）。 */
+    /** 出厂默认（2026-10-27「通透液态」转正，用户真机体验后裁决淘汰旧档）：
+     *  位移 32 / 白雾 0.44 / 顶栏 0.50+blur10 / 按钮位移 24 / Hue 着色 / 跟手弹性开。
+     *  模糊档（卡片4）与表面结构不动——与 demo 自带文字面板的配方同源。 */
     const val DEFAULT_BLUR = 4f
     const val DEFAULT_LENS_HEIGHT = 16f
-    const val DEFAULT_LENS_AMOUNT = 16f
-    const val DEFAULT_VEIL = 0.48f
+    const val DEFAULT_LENS_AMOUNT = 32f
+    const val DEFAULT_VEIL = 0.44f
     const val DEFAULT_CORNER = 16f
     const val DEFAULT_DEPTH = true
     const val DEFAULT_CA = true
 
     /** 顶栏与卡片分开调：顶栏有标题文字，需要更实的磨砂（用户实测 blur≈15 合适；
      *  折射与全局统一，只有模糊和白雾是顶栏专属档） */
-    const val DEFAULT_BAR_BLUR = 15f
-    const val DEFAULT_BAR_VEIL = 0.55f
+    const val DEFAULT_BAR_BLUR = 10f
+    const val DEFAULT_BAR_VEIL = 0.50f
     const val DEFAULT_INPUT_BLUR = 4f
     const val DEFAULT_INPUT_VEIL = 0.48f
     const val DEFAULT_PAGE_BLUR = 4f
@@ -62,7 +61,7 @@ object GlassTuning {
      *  浮层的加浓档 26/30dp 不接滑杆，保持专属） */
     const val DEFAULT_SHADOW = 24f
     /** 展示玻璃（按钮等）折射位移默认 dp（2026-10-27 双主题：经典 16 / 液态 24） */
-    const val DEFAULT_BTN_LENS_AMOUNT = 16f
+    const val DEFAULT_BTN_LENS_AMOUNT = 24f
 
     /** 背景模糊 dp（磨砂感的主要来源）——全 App 玻璃统一 */
     var blur by mutableFloatStateOf(DEFAULT_BLUR)
@@ -112,16 +111,12 @@ object GlassTuning {
      *  滑杆在任何壁纸/主题组合下恒生效） */
     var pageVeil by mutableFloatStateOf(DEFAULT_PAGE_VEIL)
 
-    /** 玻璃风格主题（2026-10-27 双主题并存）：classic=经典奶白 / liquid=通透液态。
-     *  切换=套用该主题标准配方（见 [applyLiquidTheme]/[applyClassicTheme]） */
-    var glassStyle by mutableStateOf("classic")
+    /** 展示玻璃（按钮等无长文字表面）着色方式：hue=保背景明暗的着色（demo 同款，
+     *  转正默认）/ solid=实色 / clear=透明 */
+    var btnTint by mutableStateOf("hue")
 
-    /** 展示玻璃（按钮等无长文字表面）着色方式：hue=保背景明暗的着色（demo 同款）/
-     *  solid=实色 / clear=透明 */
-    var btnTint by mutableStateOf("solid")
-
-    /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放） */
-    var elastic by mutableStateOf(false)
+    /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放；转正默认开） */
+    var elastic by mutableStateOf(true)
 
     /** 展示玻璃折射位移 dp（独立于全局：按钮小面积，位移手感单独一档） */
     var btnLensAmount by mutableFloatStateOf(DEFAULT_BTN_LENS_AMOUNT)
@@ -152,7 +147,6 @@ object GlassTuning {
         inputVeil = p.inputVeil
         pageBlur = p.pageBlur
         pageVeil = p.pageVeil
-        glassStyle = p.glassStyle
         btnTint = p.btnTint
         elastic = p.elastic
         btnLensAmount = p.btnLensAmount
@@ -175,38 +169,11 @@ object GlassTuning {
         inputVeil = inputVeil,
         pageBlur = pageBlur,
         pageVeil = pageVeil,
-        glassStyle = glassStyle,
         btnTint = btnTint,
         elastic = elastic,
         btnLensAmount = btnLensAmount
     )
 
-    /** 「通透液态」主题（2026-10-27，对齐 AndroidLiquidGlass demo 配方）：
-     *  只动观感档——位移翻倍、白雾微降、按钮换 Hue 着色+跟手弹性；
-     *  模糊档与表面结构不动（HaoAI 文字面板本就与 demo 自带文字的面板配方一致）。
-     *  切换会覆盖当前白雾/位移等滑杆值（两主题各有标准配方）。 */
-    fun applyLiquidTheme() {
-        glassStyle = "liquid"
-        lensAmount = 32f
-        veil = 0.44f
-        barVeil = 0.50f
-        barBlur = 10f
-        btnTint = "hue"
-        elastic = true
-        btnLensAmount = 24f
-    }
-
-    /** 「经典奶白」主题（= 出厂默认档，现状配方） */
-    fun applyClassicTheme() {
-        glassStyle = "classic"
-        lensAmount = DEFAULT_LENS_AMOUNT
-        veil = DEFAULT_VEIL
-        barVeil = DEFAULT_BAR_VEIL
-        barBlur = DEFAULT_BAR_BLUR
-        btnTint = "solid"
-        elastic = false
-        btnLensAmount = DEFAULT_BTN_LENS_AMOUNT
-    }
 
     /** 一键还原出厂默认（"还原默认"按钮） */
     fun reset() {
@@ -225,7 +192,6 @@ object GlassTuning {
         inputVeil = DEFAULT_INPUT_VEIL
         pageBlur = DEFAULT_PAGE_BLUR
         pageVeil = DEFAULT_PAGE_VEIL
-        glassStyle = "classic"
         btnTint = "solid"
         elastic = false
         btnLensAmount = DEFAULT_BTN_LENS_AMOUNT

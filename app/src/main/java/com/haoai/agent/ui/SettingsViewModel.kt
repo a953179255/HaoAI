@@ -1328,14 +1328,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         persistGlass()
     }
 
-    /** 玻璃风格主题切换（2026-10-27 双主题并存）：套用该主题标准配方并落盘。
-     *  只覆盖白雾/位移/着色等观感档；模糊档与表面结构不动。 */
-    fun applyGlassTheme(theme: String) {
-        if (theme == "liquid") com.haoai.agent.ui.theme.GlassTuning.applyLiquidTheme()
-        else com.haoai.agent.ui.theme.GlassTuning.applyClassicTheme()
-        persistGlass()
-    }
-
     fun setWallpaperGlobal(enabled: Boolean) {
         c.updateSettings { it.copy(wallpaperGlobal = enabled) }
     }
