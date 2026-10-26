@@ -331,6 +331,18 @@ fun GlassPanel(
     /** 表面附加绘制（画在磨砂与着色之上、内容之下）：如顶栏状态栏带的渐变补强。仅折射路径生效。 */
     surfaceOverlay: (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)? = null,
     /**
+     * 采样环带（px，2026-10-27 状态栏带根治）：>0 时把记录画布向四周外扩该量。
+     *
+     * 病根（库源码实证）：blur() 在效果链已有 renderEffect（如 vibrancy）时把
+     * `padding` 设为模糊半径——记录画布外扩了，但 recordBackdropBlock 只把内容
+     * 平移 +padding 绘制，**外扩环无人填色 = 透明环**；玻璃贴屏幕边时 blur 在边缘
+     * 混入透明环 → 贴边一圈磨砂失效、锐利正文透出（顶栏状态栏带即此）。
+     * 配合调用方用「壁纸延伸」垫满环带（ChatScreen 的 BledTopBarBackdrop），
+     * 环内即有真实像素，边缘磨砂与中央完全一致。环带被 shape 裁剪
+     * （layoutLayerBlock clip=true），不会画到屏幕上，纯采样缓冲。
+     */
+    edgeBleedPx: Float = 0f,
+    /**
      * **浮层强化**（2026-09-21 定案）：用于"悬浮在内容之上"的面板（任务面板 / 上下文面板 / 弹层）。
      *
      * 开启后不再手画描边，改用**库原生三件套**表达分层：
@@ -457,6 +469,9 @@ fun GlassPanel(
                     // 「读取 State 的 lambda」
                     redrawKey?.invoke()
                     surfaceState.value
+                    // 采样环带（见 edgeBleedPx 注释）：先于 blur/lens 设置——blur 只增不
+                    // 减，lens 按折射高度消耗，最终环 = max(edgeBleedPx−refractionHeight, blur)
+                    if (edgeBleedPx > 0f) padding = edgeBleedPx
                     // ⚠️ 必须在此观察圆角（2026-10-09 壁纸错位实锤）：corner 变化会经
                     // shapeProvider 触发 layer 属性失效重建，若效果链不重算，lens 的
                     // renderEffect 丢失 → 折射（尤其整面档）内容"弹回"未扭曲位置 =
