@@ -1648,8 +1648,14 @@ private fun SectionPage(
 
 /** Linux 环境区块的界面状态（发行版列表/安装进度/弹窗路由），由设置页持有。 */
 private class LinuxEnvState {
-    var statuses by androidx.compose.runtime.mutableStateOf<
-        List<com.haoai.agent.platform.sandbox.DistroManager.Status>>(emptyList())
+    /**
+     * 初始值取 DistroManager 进程级缓存（2026-10-27 修复进页闪烁）：设置主页
+     * 预取过一次后，进 Linux 子页首帧即有卡片，不再先渲染「正在读取状态…」
+     * 占位再硬切成卡片。LaunchedEffect 仍会异步 refresh 兜底真实扫描。
+     */
+    var statuses by androidx.compose.runtime.mutableStateOf(
+        com.haoai.agent.platform.sandbox.DistroManager.cachedStatuses ?: emptyList()
+    )
     var installingId by androidx.compose.runtime.mutableStateOf<String?>(null)
     var progressRead by androidx.compose.runtime.mutableStateOf(0L)
     var progressTotal by androidx.compose.runtime.mutableStateOf(0L)

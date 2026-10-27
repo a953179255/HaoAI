@@ -70,6 +70,18 @@ class DistroManager(
 
     fun distroById(id: String): Distro? = builtIns.find { it.id == id }
 
+    companion object {
+        /**
+         * 进程级状态缓存（2026-10-27 修复进页闪烁）：statuses() 的 sizeOf 全树
+         * walk 在装好的 Ubuntu（~192MB、数千文件）上耗时数百 ms，慢于页面转场
+         * ——发行版卡片「进入瞬间才出现闪烁」。缓存让设置主页的预取结果被子页
+         * 直接复用（此前缓存在页面实例的 LinuxEnvState 里，进子页重建即丢）。
+         * 只缓存不可变 Status 快照，install/delete 后失效重扫。
+         */
+        @Volatile
+        var cachedStatuses: List<Status>? = null
+    }
+
     /** 沙箱根目录（proot/lib 由 3.1 的运行时库占用，发行版放 distros/ 子目录避免混布）。 */
     fun rootfsDir(distroId: String): File =
         File(File(filesDir, "proot/distros/$distroId"), "rootfs")
@@ -84,17 +96,51 @@ class DistroManager(
 
     private fun downloadTmp(): File = File(filesDir, "proot/download.tmp")
 
-    /** 全部内置发行版的当前状态（size 递归统计，调用方放 IO 线程）。 */
-    fun statuses(): List<Status> = builtIns.map { d ->
+    /**
+     * 全部内置发行版的当前状态（size 优先读 meta 缓存，调用方放 IO 线程）。
+     * 双层加速：① 进程级 cachedStatuses 命中直接返回（install/delete 时失效）；
+     * ② 单个发行版的 sizeBytes 走 meta.json 缓存，只有缺失（旧安装）才全树 walk
+     * 并写回——把「每次进页数百 ms」降到毫秒级，占位不再来得及闪现。
+     */
+    fun statuses(): List<Status> {
+        cachedStatuses?.let { return it }
+        val result = builtIns.map { d -> statusOf(d) }
+        cachedStatuses = result
+        return result
+    }
+
+    private fun statusOf(d: Distro): Status {
         val root = rootfsDir(d.id)
         val state = when {
             !root.exists() -> State.NOT_INSTALLED
             shExists(root) -> State.READY
             else -> State.DAMAGED
         }
-        Status(d, state, sizeOf(root), metaFile(d.id).takeIf { it.exists() }?.let {
-            runCatching { JSONObject(it.readText()).optLong("installedAt") }.getOrDefault(0L)
-        } ?: 0L)
+        return Status(
+            d, state, sizeViaMeta(d, root, state),
+            metaFile(d.id).takeIf { it.exists() }?.let {
+                runCatching { JSONObject(it.readText()).optLong("installedAt") }.getOrDefault(0L)
+            } ?: 0L
+        )
+    }
+
+    /** size 快路径：meta.json 里的 sizeBytes；缺失（旧安装/缓存被清）时 walk 一次并写回。 */
+    private fun sizeViaMeta(d: Distro, root: File, state: State): Long {
+        if (state == State.NOT_INSTALLED) return 0L
+        val meta = metaFile(d.id)
+        if (meta.exists()) {
+            runCatching {
+                val obj = JSONObject(meta.readText())
+                if (obj.has("sizeBytes")) return obj.getLong("sizeBytes")
+            }
+        }
+        val size = sizeOf(root)
+        runCatching {
+            val obj = if (meta.exists()) JSONObject(meta.readText()) else JSONObject()
+            obj.put("sizeBytes", size)
+            meta.writeText(obj.toString())
+        }
+        return size
     }
 
     fun sizeOf(dir: File?): Long {
@@ -184,7 +230,7 @@ class DistroManager(
             // 4. 初始化：DNS / haoai-env / 时区 / 基础目录
             initialize(root)
 
-            // 5. 自检 + 记录元数据
+            // 5. 自检 + 记录元数据（含 size 缓存：statuses() 免 walk）
             if (!shExists(root)) error("安装后自检失败：缺少 /bin/sh（rootfs 不完整）")
             metaFile(distro.id).writeText(
                 JSONObject()
@@ -194,8 +240,10 @@ class DistroManager(
                     .put("url", url)
                     .put("sha256", src.sha256)
                     .put("installedAt", System.currentTimeMillis())
+                    .put("sizeBytes", sizeOf(root))
                     .toString()
             )
+            cachedStatuses = null
             Unit
         }
     }
@@ -238,6 +286,9 @@ exec "${'$'}@"
     }
 
     /** 删除发行版（释放其全部空间；幂等）。 */
-    fun delete(distroId: String): Boolean =
-        File(filesDir, "proot/distros/$distroId").deleteRecursively()
+    fun delete(distroId: String): Boolean {
+        val ok = File(filesDir, "proot/distros/$distroId").deleteRecursively()
+        if (ok) cachedStatuses = null
+        return ok
+    }
 }

@@ -940,14 +940,23 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                                     )
                                     .apply { targetContentZIndex = 1f }
                             } else {
+                                // pop 修复（2026-10-27 实机取证）：旧实现退出页
+                                // 前半程就淡完（tween 215 无 delay）+ 进入页后半程
+                                // 才淡入（sink），215ms 处两层同时接近透明 = 空窗
+                                // （录屏实测帧亮度跌到纯壁纸 78.8）——用户感知
+                                // 「点返回后半天才回来」「返回主页卡片浮现割裂」。
+                                // 改为交叉滑动：进入页全程淡入（与 -16% 迎上同步
+                                // 开始），退出页后半程淡出（与滑出同步收尾），
+                                // 全程两层可见性重叠，无空窗。
+                                val riseIn = androidx.compose.animation.core.tween<Float>(
+                                    MT.pageLiquidMs, easing = com.haoai.agent.ui.theme.LiquidPageEasing
+                                )
                                 (androidx.compose.animation.slideInHorizontally(slide) { -it * 16 / 100 } +
                                     androidx.compose.animation.scaleIn(initialScale = 0.94f, animationSpec = scale) +
-                                    androidx.compose.animation.fadeIn(sink))
+                                    androidx.compose.animation.fadeIn(riseIn))
                                     .togetherWith(
                                         androidx.compose.animation.slideOutHorizontally(slide) { it } +
-                                            androidx.compose.animation.fadeOut(
-                                                androidx.compose.animation.core.tween(MT.pageLiquidMs / 2)
-                                            )
+                                            androidx.compose.animation.fadeOut(sink)
                                     )
                                     .apply { targetContentZIndex = -1f }
                             }
