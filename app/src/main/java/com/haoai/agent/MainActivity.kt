@@ -863,6 +863,22 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
     ) { androidx.compose.foundation.lazy.LazyListState() }
 
+    // 跟随状态机的两项跨页状态（2026-10-28 虚拟化配套）：ChatScreen 子树在
+    // AnimatedContent 销毁分支内，其 rememberSaveable 返回时不恢复（实测，见
+    // settingsRootListState 注释）——「列表当前所属会话」与「跟随停车」若放
+    // ChatScreen 内，返回聊天会被误判成切会话/未停车而跳底，位置保持失效。
+    // 提升到 RootApp 层（rememberSaveable 在此层实测可恢复）：
+    // · chatListSessionId=listState 当前所属会话——切会话/冷启动贴底的判据
+    //   （null≠当前会话→贴底），设置往返不触发。
+    // · chatFollowParked=用户已接管画面（上滑停车）——返回时若停在中段，
+    //   跟随循环不得自动钉底，位置才真正保得住。
+    val chatListSessionId = androidx.compose.runtime.saveable.rememberSaveable {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    val chatFollowParked = androidx.compose.runtime.saveable.rememberSaveable {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+
     // 设置主页滚动状态提升到 RootApp：进子页（独立 screen）会销毁重建设置
     // 组件，rememberSaveable 在 AnimatedContent 销毁分支不恢复（实测），
     // 提升到不随 screen 销毁的层级才能真正记住位置
@@ -1207,6 +1223,8 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     wallpaper = wallpaper,
                     drawer = drawer,
                     listState = chatListState,
+                    listSessionId = chatListSessionId,
+                    followParked = chatFollowParked,
                     // 侧边栏点设置：push 转场开始——先冻结聊天页（后续帧绘制
                     // 静态快照，重页面组合延迟不再被看穿），切页触发转场。
                     // parallax=true：此路径退出层保留 1/3 视差+缩放+淡出纵深

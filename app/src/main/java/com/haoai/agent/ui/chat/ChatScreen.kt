@@ -368,6 +368,17 @@ fun ChatScreen(
     // 只兜底独立使用场景）。
     listState: androidx.compose.foundation.lazy.LazyListState =
         androidx.compose.foundation.lazy.rememberLazyListState(),
+    // 跟随状态机跨页状态（RootApp 提升实例；独立使用时用本地默认）：
+    // listSessionId=listState 当前所属会话（切会话贴底判据，设置往返不触发）；
+    // followParked=用户接管画面（停车）。两者放 ChatScreen 内会随 AnimatedContent
+    // 销毁分支丢失（rememberSaveable 在该分支不恢复，实测），导致返回聊天被误判
+    // 成切会话/未停车而跳底——提升后位置保持才真正成立。详见 MainActivity 注释。
+    listSessionId: androidx.compose.runtime.MutableState<String?> =
+        androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf<String?>(null)
+        },
+    followParked: androidx.compose.runtime.MutableState<Boolean> =
+        androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) },
     onOpenSettings: () -> Unit,
     onOpenSessions: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
@@ -467,13 +478,15 @@ fun ChatScreen(
     // 以便同时传给 MessageList 读写与浮钮读取
     val userScrolledAway = remember { mutableStateOf(false) }
     // 粘底订阅状态（2026-10-12 三修，替代「松手边沿停车」）：true=用户已接管画面
-    // （本帧 value 被非钉底的外力挪动过），跟随循环不钉底；false=贴底订阅中。
+    // （本帧位移被非钉底的外力挪动过），跟随循环不钉底；false=贴底订阅中。
     // 撤停=滚回真底（delta≤8px，rikkahub 同款严格触底）或显式动作（回底钮/发消息/
-    // 新一轮/切会话）。提在 ChatScreen 级：回底浮钮在 MessageList 之外也要能撤停。
-    // 演进：二修用「会话结束边沿+落点>63px」判停车，但拖把手路径多、把手向下拖时
-    // 画面朝下走（dV>0）方向判定也不成立 → 用户实测弹跳区间缩小但没消失；
+    // 新一轮/切会话）。虚拟化版（2026-10-28）提升到 RootApp（followParked 参数）：
+    // 本组件在 AnimatedContent 销毁分支内，进设置再返回会整树重建——停车状态留在
+    // 本地会让返回后的跟随循环把恢复出的中段位置当成「该跟随」钉回底部，位置保持
+    // 失效（实测）。演进：二修用「会话结束边沿+落点>63px」判停车，但拖把手路径多、
+    // 把手向下拖时画面朝下走（dV>0）方向判定也不成立 → 用户实测弹跳区间缩小但没消失；
     // 三修改为逐帧位移归属（dV≠0 且非我们钉的=接管），一次覆盖全部路径。
-    val parkedFollow = remember { mutableStateOf(false) }
+    val parkedFollow = followParked
     // 展开锚点豁免窗口（2026-10-13）：点展开时置 now+750ms，跟随循环在窗口内跳过吸底，
     // 使视口锚在被点条上、内容向下掀（详见 ChainOfThought.LocalParkExpand）。
     // 独立于 parkedFollow：不背滚动归因，且躲开「delta≤8 撤停」在同帧抹掉。
@@ -1184,6 +1197,7 @@ fun ChatScreen(
                 liveToolsSnapshot = liveToolsSnapshot,
                 promotedRowKeys = promotedRowKeys,
                 listState = listState,
+                listSessionId = listSessionId,
                 userScrolledAway = userScrolledAway,
                 parkedFollow = parkedFollow,
                 expandParkUntil = expandParkUntil,
@@ -3014,6 +3028,9 @@ private fun MessageList(
     promotedRowKeys: Set<String> = emptySet(),
     /** 虚拟化（2026-10-28）：列表滚动状态 = LazyListState（MainActivity 提升实例）。 */
     listState: androidx.compose.foundation.lazy.LazyListState,
+    /** listState 当前所属会话（RootApp 提升实例）：切会话贴底判据。放本组件内会随
+     *  AnimatedContent 销毁分支丢失 → 设置往返被误判成切会话而跳底（实测），故提升。 */
+    listSessionId: androidx.compose.runtime.MutableState<String?>,
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
     /** 松手停车（2026-10-11）：滚动会话结束帧停在底部上方=用户有意停车，撤贴底跟随。 */
     parkedFollow: androidx.compose.runtime.MutableState<Boolean>,
@@ -3076,18 +3093,20 @@ private fun MessageList(
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var lastSentUserKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var lastSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
     // footer 展开动画启动的通知（RowItem 生长动画仍会回调，保留供排查）
     var footerRevealTick by remember { mutableStateOf(0) }
 
     // 发送新消息 / 切会话：无条件贴底并把粘滞复位。
     // 只挂这两个 key——流式期的持续跟随交给下面的逐帧循环，不再靠 text.length 之类的 key。
+    // 切会话判据=listSessionId（RootApp 提升）：本组件随 AnimatedContent 销毁重建，
+    // 会话指纹放这里的话，设置往返会被误判成切会话而跳底（旧 rememberSaveable 版
+    // 在销毁分支不恢复，实测同病）——提升后只有真换会话/冷启动才贴底。
     LaunchedEffect(rows.lastOrNull()?.key, sessionId) {
         if (totalItems <= 0) return@LaunchedEffect
         // 切会话：无条件贴底并复位粘滞（切换后停在旧位置；末条未必是 user 消息，
         // 逐帧循环又会被"已断开粘滞"拦下 → 必须先复位）
-        if (sessionId != null && sessionId != lastSessionKey) {
-            lastSessionKey = sessionId
+        if (sessionId != null && sessionId != listSessionId.value) {
+            listSessionId.value = sessionId
             userScrolledAway.value = false
             parkedFollow.value = false
             jumperVisible.value = false
