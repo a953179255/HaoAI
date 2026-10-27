@@ -3495,6 +3495,13 @@ private fun MessageList(
 
     androidx.compose.foundation.lazy.LazyColumn(
         state = listState,
+        // contentPadding（2026-10-28 修「消息被挡在玻璃条外」）：留白属滚动**内容**
+        // 而非容器边界——消息滚过贴顶/贴底时从玻璃条下方穿过（B′ 既有设计：
+        // 「列表物理延伸到玻璃顶栏下方」）。Modifier.padding 会内缩容器边界，
+        // 内容被裁在玻璃条外=用户看到的「不透明遮罩」。
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = topPadding, bottom = bottomPadding
+        ),
         modifier = modifier
             .pointerInput(Unit) {
             // 只做一件事：手指按在列表上（越过 touchSlop 的真实拖动，含拖选把手）
@@ -3527,7 +3534,6 @@ private fun MessageList(
                 }
             }
         }
-            .padding(top = topPadding, bottom = bottomPadding)
     ) {
         itemsIndexed(slots, key = { _, slot -> slotItemKey(slot) }) { _, slot ->
             when (slot) {
