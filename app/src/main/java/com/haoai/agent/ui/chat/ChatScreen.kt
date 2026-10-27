@@ -70,6 +70,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -362,8 +363,11 @@ fun ChatScreen(
     vm: ChatViewModel,
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     drawer: DrawerController = remember { DrawerController() },
-    scrollState: androidx.compose.foundation.ScrollState =
-        androidx.compose.foundation.rememberScrollState(),
+    // 2026-10-28：聊天列表虚拟化（LazyColumn），滚动状态从 ScrollState 换回
+    // LazyListState（跨设置导航的位置恢复由 MainActivity 提升的实例承担，此默认值
+    // 只兜底独立使用场景）。
+    listState: androidx.compose.foundation.lazy.LazyListState =
+        androidx.compose.foundation.lazy.rememberLazyListState(),
     onOpenSettings: () -> Unit,
     onOpenSessions: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
@@ -1179,7 +1183,7 @@ fun ChatScreen(
                     "端侧推理 · 正在理解上下文（需预处理全部提示词，可能数十秒）" else null,
                 liveToolsSnapshot = liveToolsSnapshot,
                 promotedRowKeys = promotedRowKeys,
-                scrollState = scrollState,
+                listState = listState,
                 userScrolledAway = userScrolledAway,
                 parkedFollow = parkedFollow,
                 expandParkUntil = expandParkUntil,
@@ -1937,7 +1941,9 @@ fun ChatScreen(
                         // 用户主动回底=重新接管，撤停车（配合循环里 delta==0 安全网双保险）
                         parkedFollow.value = false
                         jumperVisible.value = false
-                        scope.launch { scrollState.pinToBottom() }
+                        // requestScrollToItem 会一并取消进行中的滚动会话（惯性甩动被接管，
+                        // 与旧行为的差异：旧 dispatchRawDelta 不取消会话、会被甩动反超）
+                        listState.requestPinToBottom()
                     },
                     backdrop = backdrop,
                     shape = CircleShape,
@@ -3006,7 +3012,8 @@ private fun MessageList(
     liveToolsSnapshot: List<com.haoai.agent.ui.UiTool> = emptyList(),
     /** 从流式区晋升落行的 key：这些行跳过入场淡入（同帧内容已在上屏，淡入=闪一下）。 */
     promotedRowKeys: Set<String> = emptySet(),
-    scrollState: androidx.compose.foundation.ScrollState,
+    /** 虚拟化（2026-10-28）：列表滚动状态 = LazyListState（MainActivity 提升实例）。 */
+    listState: androidx.compose.foundation.lazy.LazyListState,
     userScrolledAway: androidx.compose.runtime.MutableState<Boolean>,
     /** 松手停车（2026-10-11）：滚动会话结束帧停在底部上方=用户有意停车，撤贴底跟随。 */
     parkedFollow: androidx.compose.runtime.MutableState<Boolean>,
@@ -3028,8 +3035,6 @@ private fun MessageList(
     val showStreaming = streamingText != null || running
     val totalItems = rows.size + (if (showStreaming) 1 else 0)
 
-    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-
     // ── 跟随判定：位置派生（2026-09-16 第三版定案，照搬 rikkahub）────────────
     // 三段教训：
     //  v1 `isScrollInProgress` 判"用户在滑"——它不区分滚动来源（自己的 scrollBy 也算），
@@ -3041,12 +3046,31 @@ private fun MessageList(
     //     （`isAtBottom()` → `requestScrollToItem(末项+10)`），任何一帧都能自愈；
     //     而任何"标志 + 守卫"的写法都引入了一个可能永久卡死的状态。
     //     userScrolledAway 从此只作「回到底部浮钮」的显隐依据，且同样由位置派生。
+    // 虚拟化版（2026-10-28）判定源从 ScrollState 的 value/maxValue 换回 item 级
+    // layoutInfo（末项底边 vs 视口底），B′ 当年弃用它是因为依赖"末项已组合"——
+    // 现在「末项不在视口」本身就被 distanceToBottomPx 判为离底很远，语义自洽。
     val bottomSlackPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
     // 回底浮钮 v3 门槛（2026-10-12 方向感知定稿）：离底不足 150dp 时不冒钮——
     // 那点距离手指一划就到，弹出来纯属添乱（用户报怨旧版「没有距离门槛」）。
     val jumperGapPx = with(androidx.compose.ui.platform.LocalDensity.current) { 150.dp.roundToPx() }
     // 「本轮用户是否主动滚动过」userScrolledThisRun 已删除（2026-10-12 三修）：
     // 它是旧「猜意图」方案的状态；粘底状态机只看位移原因（dV/dM），不需要跨帧意图标志。
+
+    // ── 虚拟化（2026-10-28，B′ 手动窗口化退役）────────────────────────────
+    // LazyColumn 接管视口裁剪：只组合/测量可见 item，滚动=锚点位移。删除：
+    // windowSize/扩窗循环/贴顶补偿 dispatchRawDelta/「更早的消息」提示行/hiddenRowCount
+    // ——虚拟化后没有窗口概念，全量 rows 直接交给 itemsIndexed。
+    // 轮级折叠 slots 原样保留：每个槽位一个 item，Plain=row.key、Group=headRow.key
+    // 作稳定 key（ChatRow.key=消息 id，删除/重发不漂移）。正在进行的轮从首条过程行
+    // 起就是 Group（key 稳定），终答落行只改组内容不改 key → 折叠瞬间视口锚点不丢。
+    val active = running || showStreaming
+    val slots = remember(rows, active) { buildRenderSlots(rows, active) }
+    // item 总数（与下方 items 的实际构成同源）：切会话/发消息的贴底请求发生时
+    // layoutInfo 还是上一次的测量，必须用本帧组合已知的数量兜底。
+    val expectedItemCount = slots.size + (if (showStreaming) 1 else 0) +
+        (if (planProposal != null) 1 else 0)
+
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
 
     // 发送新消息收起键盘：按末条 user 消息 key 去重——流式期间最后一条仍是 user，
     // 不能每次都收，否则用户流式中打开键盘想插话会被下一个 delta 误关
@@ -3067,7 +3091,10 @@ private fun MessageList(
             userScrolledAway.value = false
             parkedFollow.value = false
             jumperVisible.value = false
-            scrollState.pinToBottom()
+            // 此时 layoutInfo 还是旧会话的测量（新会话重测在本帧 layout 阶段才发生），
+            // distanceToBottomPx 会拿旧数据误判「已贴底」→ 不能走 gap 守卫的 pinToBottom；
+            // 用本帧组合已知的 item 数直接发起贴底请求，与新会话首测同帧应用。
+            listState.requestPinToBottom(expectedItemCount)
             return@LaunchedEffect
         }
         val isUserMessage = rows.lastOrNull()?.role == "user"
@@ -3081,44 +3108,30 @@ private fun MessageList(
                 keyboardController?.hide()
                 focusManager.clearFocus()
             }
-            scrollState.pinToBottom()
+            // 新消息同帧贴底：请求在下一次重测（即新行首次测量的那一次）生效，
+            // 新行出现帧直接以贴底姿态绘制，无中间帧
+            listState.requestPinToBottom(expectedItemCount)
         } else {
             // 新行入列：是否跟随交给位置订阅判定，这里只在"仍贴着底"时补一次；
             // 停车中（用户拖把手刚松手）不补——否则绕过 parkedFollow 又钉一次底
-            if (!parkedFollow.value && scrollState.isAtBottom(bottomSlackPx)) scrollState.pinToBottom()
+            if (!parkedFollow.value && listState.isAtBottom(bottomSlackPx)) listState.pinToBottom()
         }
     }
 
-    // ── 版本翻页闪帧补偿（三修，2026-10-08）：变高帧 draw 偏移 ──────────────
-    // 用户实测方向不对称（1→2 闪、2→1 不闪）+ 真机轨迹终局定位：
-    // onSizeChanged 是 layout 回调，触发时 verticalScroll 还没把新内容高写进
-    // maxValue —— dispatchRawDelta 被**旧上限夹扁**（轨迹铁证：delta=68
-    // dispatched=true 而 pos=2121/2121 纹丝不动），一修二修的「改值」路从未真正
-    // 落地，贴底靠下一帧跟随循环——中间隔的那帧（巨型列重测 ~66ms 慢帧）=闪帧。
-    // 变矮方向不闪：value>新max 时夹钳发生在同一次 placement，跳变与文字替换融进
-    // 同一帧，肉眼不可分——与用户观察完全吻合。
-    // 三修：变高帧不改滚动值（改了也被夹），改**画**。graphicsLayer 的 translationY
-    // 在 draw 阶段读取，draw 晚于 layout 回调 → 同帧生效零延迟；下一帧跟随循环把
-    // value 贴回新底部时归零（见下方 pinned 分支），两帧画面像素级无缝。
-    // 门：500ms 窗口 + 翻页瞬间贴底（用户滚半路回看不该被动画）+ 手势让位。
-    var pagerShift by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
-    var pagerCompensateUntil by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
-    var pagerWasAtBottom by remember { mutableStateOf(false) }
-    val prevContentH = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    // ── 版本翻页闪帧补偿（LazyColumn 重设计，2026-10-28）────────────────────
+    // Column 时代的 draw 阶段 graphicsLayer translationY 方案已删：它靠 onSizeChanged
+    // 量测整体 contentHeight——LazyColumn 的列表节点尺寸不变（变的只是内部 item），
+    // 那个量测点不存在了。新方案利用 requestScrollToItem「下一次重测生效」的语义：
+    // 贴底侧翻页**先**排队贴底请求、再切内容——切版变高触发的那次重测会同时应用
+    // 两者，变高帧直接以贴底姿态出现，中间帧不存在（比旧方案还少一帧）。
+    // 非贴底侧（用户滚上去回看版本）照旧不动画；手势中让位（isScrollInProgress）。
     val outerSwitch = androidx.compose.runtime.rememberUpdatedState(LocalSwitchVersion.current)
     val versionSwitch: (String, Int) -> Unit = { uid, idx ->
-        pagerCompensateUntil = System.currentTimeMillis() + 500
-        pagerWasAtBottom = scrollState.isAtBottom(bottomSlackPx)
-        if (FollowTrace.enabled) FollowTrace.addSlow("PAGER_ARM")
-        outerSwitch.value(uid, idx)
-    }
-    // 安全阀：偏移只该活到跟随循环贴回那一帧；若用户中途甩动让循环让位（busy），
-    // 200ms 后强制归零，宁可回弹一帧也不留长期画面悬空
-    LaunchedEffect(pagerShift) {
-        if (pagerShift != 0f) {
-            kotlinx.coroutines.delay(200)
-            pagerShift = 0f
+        if (!listState.isScrollInProgress && listState.isAtBottom(bottomSlackPx)) {
+            listState.requestPinToBottom()
+            if (FollowTrace.enabled) FollowTrace.addSlow("PAGER_ARM")
         }
+        outerSwitch.value(uid, idx)
     }
 
     // 拖选把手守卫（2026-10-11）：长按拖选后把手拖到靠近视口底缘时，文本选择会自动
@@ -3135,20 +3148,18 @@ private fun MessageList(
     // 三者叠加后，"停住"只可能发生在用户自己滚走之后 —— 那正是期望行为。
     // 为什么不再单纯依赖位置：真机探针实测 delta=2816/197（收尾换位、长行落行）
     // 会让纯位置判定永久停手（位置判定无状态、不会自己回来）；③ 就是那副解药。
-    // B′：判定源从"末项底边 vs 内容末端"换成 ScrollState 的 value/maxValue ——
-    // 语义等价（value==maxValue 即贴底），但不再依赖 item 级 layoutInfo，判定大幅简化，
-    // 也去掉了原版"末项未组合 / 末项索引对不上"那类边界情况。
-    // 关键：snapshotFlow 必须**同时**订阅 value 与 maxValue —— 只订阅 value 的话，
-    // 流式内容变高（maxValue 变）而滚动位置没动时不会发出，跟随会漏帧。
-    LaunchedEffect(scrollState, bottomSlackPx) {
+    // 虚拟化版（2026-10-28）：判定源=distanceToBottomPx()（末项底边 vs 视口底），
+    // 位移归因 dV 用 firstVisibleItemIndex/Offset 复合代理（行只在末尾增删、折叠只
+    // 发生在末轮，锚点之上的 item 结构不变 → 该代理与旧 ScrollState.value 同样单调）。
+    // 关键不变量保持：每帧必有记录、自愈循环（异常重连）、prevPinnedByUs 归因。
+    LaunchedEffect(listState, bottomSlackPx) {
         var prevAtBottom = true
         var busyFrames = 0
-        var lastEndPos = -1
-        var prevMax = -1
+        var lastEndPos = -1L
         var prevPinnedByUs = false
-        // 粘底状态机（2026-10-12 三修）：逐帧比对 value 变化量判「这一帧的位移是
-        // 谁造成的」。-1=首帧未知。
-        var prevFrameV = -1
+        // 粘底状态机（2026-10-12 三修）：逐帧比对位移量判「这一帧的位移是谁造成的」。
+        // -1=首帧未知。
+        var prevFrameV = -1L
         // 回底浮钮 v3 闲置淡出计时基准（2026-10-12 方向感知定稿）：最近一次用户
         // 归因滚动帧的时刻。是循环内**本地变量**——钮的「停手 2.5 秒淡出」用它
         // 判闲置，绝不每帧写 State（每帧写=读取方每帧重组，主题页 jank 同款教训）。
@@ -3157,33 +3168,27 @@ private fun MessageList(
         // 理由：跟随逻辑一旦中途失效，粘底状态机就再也不推进、钉底/停车全部瘫痪，
         // 而且**没有任何可见报错**（排查时极难定位）。重连保证任何单次异常都不会让它永久失效。
         // 【逐帧循环，不用 snapshotFlow】2026-09-19：改用逐帧后有两个硬好处——
-        // ① 每帧必有记录，任何"谁改了 value / 谁在还原位置"都会现形（snapshotFlow 依赖
+        // ① 每帧必有记录，任何"谁改了位置 / 谁在还原位置"都会现形（snapshotFlow 依赖
         //    "读到的状态变了才发"，实测它在拖拽期间一次都不发，把排查带偏过一轮）；
         // ② 不依赖状态变化的采样，就不会出现"effect 看起来死了"的假象。
         while (true) {
         try {
         androidx.compose.runtime.withFrameNanos { }
         run {
-                // 外部挪动/高度突变侦测（2026-10-11 排查「拖统计行上弹」）：
-                // 上一帧收尾值 ≠ 本帧开头值，而上一帧既没钉底也没滚动会话 = 别的东西
-                // 直接改了 value（嫌疑=文本选择边缘自动滚动）；maxValue 帧间突变=布局
-                // 在重测内容高度。两条都进慢帧通道（低频、只在异常帧拼串），
-                // 弹跳现场由探针自证，不依赖事后肉眼对录屏。
+                // 外部挪动侦测（2026-10-11 排查「拖统计行上弹」）：上一帧收尾值 ≠ 本帧
+                // 开头值，而上一帧既没钉底也没滚动会话 = 别的东西直接改了滚动位置
+                // （嫌疑=文本选择边缘自动滚动）。进慢帧通道（低频、只在异常帧拼串）。
+                // （MAXCHG 探针随 ScrollState.maxValue 一起退役：LazyColumn 无整体内容高。）
                 if (FollowTrace.enabled) {
-                    val vNow = scrollState.value
-                    val mNow = scrollState.maxValue
+                    val vNow = listState.scrollPosProxy()
                     if (lastEndPos >= 0 && vNow != lastEndPos && !prevPinnedByUs && busyFrames == 0 &&
-                        !scrollState.isScrollInProgress) {
-                        FollowTrace.addSlow("JUMP ${lastEndPos}→$vNow max=$mNow")
-                    }
-                    if (prevMax >= 0 && mNow != prevMax && mNow != Int.MAX_VALUE && prevMax != Int.MAX_VALUE) {
-                        FollowTrace.addSlow("MAXCHG $prevMax→$mNow v=$vNow")
+                        !listState.isScrollInProgress) {
+                        FollowTrace.addSlow("JUMP $lastEndPos→$vNow")
                     }
                     lastEndPos = vNow
-                    prevMax = mNow
                 }
-                val delta = scrollState.maxValue - scrollState.value
-                val atBottom = scrollState.isAtBottom(bottomSlackPx)
+                val delta = listState.distanceToBottomPx()
+                val atBottom = delta <= bottomSlackPx
                 // 粘滞标志：**仅**用于「回到底部」浮钮的显隐。连续两帧离开底部才置位，
                 // 恢复贴底立即清除（单帧宽限，否则收尾/大重排时浮钮会闪一下）。
                 // 【2026-09-19 合并进来】原先它由一个独立的 snapshotFlow effect 维护，
@@ -3192,30 +3197,30 @@ private fun MessageList(
                 val awayNow = !atBottom
                 if (awayNow && !prevAtBottom) userScrolledAway.value = true
                 else if (!awayNow) userScrolledAway.value = false
-                busyFrames = if (scrollState.isScrollInProgress) busyFrames + 1 else 0
+                busyFrames = if (listState.isScrollInProgress) busyFrames + 1 else 0
                 // ── 粘底状态机（2026-10-12 三修，语义对齐 rikkahub ChatList）──────
                 // 一修（按住让位）、二修（松手边沿停车+落点阈值）都在**猜手势边沿**：
                 // 拖把手的路径有好几条（走滚动会话/被选择层消费/边缘自动滚动），落点
                 // 方向也不唯一（把手向下=画面朝下走），边沿+方向判定永远漏一条带 =
                 // 用户实测「弹跳区间缩小但没消失」。
                 // 三修改看**位移归属**（rikkahub 不变量：跟随只对内容增高反应，从不
-                // 回拉用户移动过的位置；它的 isAtBottom 是 8px 严格触底，非 48dp 宽限）：
-                // · 停车：dV≠0 且上一帧不是我们钉的 = value 被别人挪过（上/下/甩/
-                //   把手边缘滚动，不分方向与手势类型）。我们自己的钉底只会 dV>0，
-                //   且由 prevPinnedByUs 归因排除；内容变矮的夹回 dV<0 会误停一帧，
-                //   但夹回终态 delta==0 被下一行同帧撤销，不误伤。
+                // 回拉用户移动过的位置）：
+                // · 停车：dV≠0 且上一帧不是我们钉的 = 位置被别人挪过（上/下/甩/
+                //   把手边缘滚动，不分方向与手势类型）。我们自己的钉底由
+                //   prevPinnedByUs 归因排除；内容变矮的夹回在新世界不再产生 dV
+                //   （锚定语义下末项收缩不改变 firstVisible 锚点）。
                 // · 撤停：delta ≤ 8px（rikkahub 同款严格触底）或显式动作（回底钮/
                 //   发消息/新一轮/切会话，各 effect 清 parked）。不用 48dp 宽限撤停：
                 //   把手松手常停离底 ~100px（宽限内），那样即撤停=流式增高帧立刻
                 //   钉回=缺陷复活；拖把手落点永远 >8px，不会命中。
-                // · 钉底：follow=!parked。间隙由**内容增高**产生（dV==0）时 parked
+                // · 钉底：follow=!parked。间隙由**内容增高**产生（锚点不动）时 parked
                 //   不置位 → footer 展开/版本切换/键盘顶起照常保持贴底；间隙由用户
                 //   挪出 → parked=恒不钉，流式与否一视同仁（rikkahub 行为：上滑即
                 //   停跟随，新内容转入徽标/浮钮，回到底部附近自动重新接管）。
-                val vNow2 = scrollState.value
-                val dV = if (prevFrameV >= 0) vNow2 - prevFrameV else 0
+                val vNow2 = listState.scrollPosProxy()
+                val dV = if (prevFrameV >= 0) vNow2 - prevFrameV else 0L
                 prevFrameV = vNow2
-                if (dV != 0 && !prevPinnedByUs) parkedFollow.value = true
+                if (dV != 0L && !prevPinnedByUs) parkedFollow.value = true
                 // 展开豁免窗口内不撤停：点展开置的 parkedFollow 若被本行「仍贴底」当场抹掉，
                 // 窗口一过又吸底=锚定失效。窗口外撤停逻辑照常（用户滚回底部恢复跟随）。
                 if (delta <= 8 && expandParkUntil.value <= System.currentTimeMillis())
@@ -3228,7 +3233,7 @@ private fun MessageList(
                 // 闲置淡出：记下最近一次用户归因滚动帧（本地变量，**不逐帧写
                 // State**——每帧写会让读取方每帧重组，主题页 17.34% jank 同款
                 // 教训），钮亮着且 2.5 秒没有新归因位移即收。
-                if (dV != 0 && !prevPinnedByUs) {
+                if (dV != 0L && !prevPinnedByUs) {
                     lastUserScrollFrameMs = System.currentTimeMillis()
                     when {
                         delta <= jumperGapPx -> jumperVisible.value = false
@@ -3243,18 +3248,15 @@ private fun MessageList(
                 }
                 val follow = !parkedFollow.value
                 // 展开锚点豁免（2026-10-13）：点展开后 750ms 窗口内跳过吸底——
-                // 视口 value 原地、被点的条纹丝不动、新内容把下方正文/footer 往下推=向下掀。
-                // 窗口外 follow 逻辑完全照常（流式增高照常吸底）。
+                // 视口锚在被点条上、被点的条纹丝不动、新内容把下方正文/footer 往下推
+                // =向下掀。虚拟化下同一语义由 LazyList 锚点天然达成：不钉底则
+                // firstVisible 锚点不动、展开内容向下长。窗口外 follow 逻辑完全照常。
                 val expandParked = expandParkUntil.value > System.currentTimeMillis()
                 var pinned = false
                 // fingerOnList/busyFrames 让位闸保留作belt：按住期间钉底会与拖选
                 // 边缘自动滚动逐帧打架；此刻的位移下一帧也会被 dV 归因接住。
                 if (busyFrames < 1 && follow && !fingerOnList.value && !expandParked)
-                    pinned = scrollState.pinToBottom()
-                // 三修归零点：本帧把 value 贴回新 maxValue 的同时撤掉 draw 偏移。
-                // 循环跑在帧首（layout/draw 之前），同帧生效：上一帧画面=value旧+shift
-                // 上移，本帧画面=value新+0 偏移，两者逐像素一致，衔接无缝。
-                if (pinned && pagerShift != 0f) pagerShift = 0f
+                    pinned = listState.pinToBottom()
                 // 诊断走**内存**（不落盘：滚动路径上做主线程 IO 会卡顿），
                 // 需要时用 haoai://debug/followdump 一次性导出。
                 // P0-2：这条字符串每渲染帧拼一条，探针关着时连拼都不拼
@@ -3263,7 +3265,7 @@ private fun MessageList(
                         "busy=$busyFrames atBottom=$atBottom prev=$prevAtBottom delta=$delta " +
                             "follow=$follow pinned=$pinned finger=${fingerOnList.value} " +
                             "dV=$dV parked=${parkedFollow.value} " +
-                            "pos=${scrollState.value}/${scrollState.maxValue}"
+                            "pos=${listState.firstVisibleItemIndex}/${listState.firstVisibleItemScrollOffset}"
                     )
                 }
                 prevPinnedByUs = pinned
@@ -3280,6 +3282,21 @@ private fun MessageList(
         }
     }
 
+    // 拖动列表收键盘（2026-10-28 LazyColumn 重定位，替代旧 pointerInput 里的
+    // clearFocus）：列表滚动手势开始时 interactionSource 发出 DragInteraction.Start——
+    // 与旧「越过 slop 的真实拖拽即收键盘」同一时刻、同一手势来源。移动收键盘的
+    // isConsumed 区分判据失效了（滚动现在是**子孙**节点消费，普通滚动与拖选把手
+    // 在本观察者眼里都是已消费，无法区分），而 DragInteraction 天然只来自真实
+    // 滚动手势：拖选把手的边缘自动滚动不走滚动会话、不发交互（f03bfa3 结论）→
+    // 不误杀拖选；程序化贴底（requestScrollToItem）不是手势会话 → 不误收键盘。
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is androidx.compose.foundation.interaction.DragInteraction.Start) {
+                focusManager.clearFocus()
+            }
+        }
+    }
+
 
     // ── 慢帧探针（2026-09-18）────────────────────────────────────────
     // 目的：真机实测滚动中偶发一帧 400ms（另有 85ms×2），对照实验表明它**不是**某个区域的
@@ -3287,10 +3304,12 @@ private fun MessageList(
     // 做法：Choreographer 逐帧回调，帧间隔 >=50ms 时把"可见行区间 + 各行高度"写进内存轨迹
     // （FollowTrace.addSlow，零文件 IO，不在滚动路径上分配）。
     // 判读：卡顿帧的可见区间相对上一帧扩张的那一侧 = 新进入视口的行 = 首要嫌疑。
+    // 虚拟化版（2026-10-28）：item 级 layoutInfo 回来了——直接记首末可见索引，
+    // "新进入视口的行"判读法恢复（B′ 时代只能记 pos/max 的降级作废）。
     // P0-2：此探针是自续 120Hz Choreographer 回调 + 每帧两次 getRuntimeStat，常开即常烧；
     // 只在 followdump 深链打开 FollowTrace.enabled 后才启动（默认零成本）
     if (FollowTrace.enabled) {
-    LaunchedEffect(scrollState) {
+    LaunchedEffect(listState) {
         val choreographer = android.view.Choreographer.getInstance()
         var prevFrame = 0L
         var prevGcCount = 0L
@@ -3299,7 +3318,6 @@ private fun MessageList(
             override fun doFrame(frameTimeNanos: Long) {
                 val prev = prevFrame
                 prevFrame = frameTimeNanos
-                // B′：Column 下没有 item 索引可记（原 prevFirst/prevLast 用于对照"新进入视口的行"）
                 var gcCount = 0L
                 var gcTime = 0L
                 runCatching {
@@ -3313,10 +3331,11 @@ private fun MessageList(
                 if (prev != 0L) {
                     val ms = (frameTimeNanos - prev) / 1_000_000L
                     if (ms >= 50L) {
-                        // B′：Column 下没有 item 级 layoutInfo，改记滚动位置与内容总高
+                        val info = listState.layoutInfo
                         FollowTrace.addSlow(
                             "SLOWFRAME ${ms}ms gc=+${dGc}(${dGcTime}ms) " +
-                                "pos=${scrollState.value}/${scrollState.maxValue}"
+                                "items=[${info.visibleItemsInfo.firstOrNull()?.index}, " +
+                                "${info.visibleItemsInfo.lastOrNull()?.index}]/${info.totalItemsCount}"
                         )
                     }
                 }
@@ -3332,66 +3351,65 @@ private fun MessageList(
     }
     }
 
-    // ── Phase 3：显示窗口 ────────────────────────────────────────────────
-    // B′ 不做虚拟化：窗口内每条消息都会常驻组合（真机/模拟器实测 ≈+4.4MB/条），
-    // 进页面还要把窗口内所有行一次组合 + 测量（24 行时 674~911ms）。
-    // 这里只把**最近 12 条**放进 Column，向上滚到顶部附近再自动扩窗。
-    // 关键：扩窗后把新增内容的高度补进滚动位置，**视口不跳**（否则上方插入会让画面位移）。
-    // 不截断任何内容 —— 只是延后组合；切会话重置。
-    var windowSize by remember(sessionId) { mutableStateOf(12) }
-    // 【必须用 rememberUpdatedState】rows 是**值参数**不是 State：LaunchedEffect 的协程
-    // 只会捕获启动那一刻的 List，之后它在循环里读到的永远是旧数量 ——
-    // 实测症状：造了 6 条新消息，循环里 rows.size 仍恒为 8，于是"自动扩窗"永不触发
-    // （2026-09-19 用临时诊断 WINDOW 定位）。改读 State 才能拿到最新数量。
-    val rowsCount by androidx.compose.runtime.rememberUpdatedState(rows.size)
-    val windowedRows = remember(rows, windowSize) {
-        if (rows.size <= windowSize) rows else rows.takeLast(windowSize)
-    }
-    val hiddenRowCount = rows.size - windowedRows.size
-    // 入场动画用（替代 LazyColumn 的 animateItem，见下方 forEach 内注释）。
-    // 初值 = 首帧就存在的 keys ⇒ 首屏/切会话时不会集体淡入；之后 add 成功才是"新行"。
+    // 入场动画用：初值 = 首帧就存在的 keys ⇒ 首屏/切会话时不会集体淡入；
+    // 之后 add 成功才是"新行"。虚拟化下离屏行的 remember 状态会随 item 销毁，
+    // 但 seenRowKeys 持有的是全量 key —— 回看旧行不重播淡入，行为同窗口化时代。
     val seenRowKeys = remember(sessionId) { rows.mapTo(HashSet<String>()) { it.key } }
-    LaunchedEffect(sessionId) {
-        while (true) {
-            kotlinx.coroutines.delay(300)
-            if (rowsCount > windowSize && scrollState.value <= 400) {
-                val before = scrollState.maxValue
-                windowSize = minOf(rowsCount, windowSize + 8)
-                // 等新内容测量落地（最多 10 帧），再把它的高度补进位置
-                var waited = 0
-                while (waited < 10 && scrollState.maxValue == before) {
-                    androidx.compose.runtime.withFrameNanos { }
-                    waited++
-                }
-                val grown = scrollState.maxValue - before
-                if (grown > 0 && scrollState.maxValue != Int.MAX_VALUE) {
-                    // 补偿两步走（2026-09-19 探针实测修正）：
-                    // ① 先用 UserInput 优先级的"空滚动"抢占可能仍在进行的惯性滚动（fling）。
-                    //    fling 持有 Default 优先级会话：不抢占的话，它接下来会继续把 value 拉回 0
-                    //    ——这就是此前 dispatchRawDelta / scrollBy 两种补偿"都没生效"的真因；
-                    //    而 scrollBy 自己还会因拿不到互斥直接抛 CancellationException 被
-                    //    runCatching 静默吞掉（探针实测补偿后 v 仍停在 0 的直接原因）。
-                    //    若当前是手指拖拽（同为 UserInput）抢占会静默失败——无妨，拖拽是
-                    //    相对位移，② 的补偿不会被它重置。
-                    // ② 再用 dispatchRawDelta 立即补偿（不走滚动互斥，任何时刻都能改 value）。
-                    runCatching {
-                        scrollState.scroll(androidx.compose.foundation.MutatePriority.UserInput) { }
-                    }
-                    scrollState.dispatchRawDelta(grown.toFloat())
+
+    // 逐行的「画不画名字行 / 是否增强轮次边界」预计算（全量 rows；折叠隐藏中间行
+    // 不改变这个判定——最终回复行前面是同组 assistant，本就不重复画头像）。
+    // 全量索引后 rowIdx>0 即「会话里不是第一行」——窗口化时代用 hiddenRowCount>0
+    // 给窗口首行补轮次分隔，现在自然由全量下标表达。
+    val headFlags = remember(rows) {
+        rows.mapIndexed { rowIdx, row ->
+            val prevRole = rows.getOrNull(rowIdx - 1)?.role
+            val showHead = prevRole != row.role
+            val enhanced = showHead && row.role == "user" && rowIdx > 0
+            row.key to (showHead to enhanced)
+        }.toMap()
+    }
+
+    // 槽位→行区间映射（预解析用）：slotRowStarts[i] = 第 i 个槽位首行在 rows 里的下标；
+    // 槽位行数 = 下一个槽位起点 - 本槽位起点（末槽到 rows 末尾）。
+    val slotRowStarts = remember(slots) {
+        IntArray(slots.size).also { arr ->
+            var acc = 0
+            for (i in slots.indices) {
+                arr[i] = acc
+                acc += when (val s = slots[i]) {
+                    is RenderSlot.Plain -> 1
+                    is RenderSlot.Group -> s.group.rows.size + (if (s.tailRow != null) 1 else 0)
                 }
             }
         }
     }
 
-    // 预解析（2026-10-28 修「贴顶扩窗一帧 8 行同步 Markdown 解析掉帧」）：
-    // 把窗口外紧邻的 16 行（离窗口最近者优先）提前在 Dispatchers.Default 解析进
-    // MdAstCache——扩窗帧的新行全部命中缓存，帧内只剩组合+测量。rows 变化时
-    // effect 重启，ensure() 对已缓存文本零成本跳过。
-    LaunchedEffect(rows, windowSize) {
-        val hiddenEnd = (rows.size - windowSize).coerceAtLeast(0)
-        val start = (hiddenEnd - 16).coerceAtLeast(0)
-        for (i in hiddenEnd - 1 downTo start) {
-            MdAstCache.ensure(rows[i].text)
+    // 预解析（2026-10-28 虚拟化版；前身为 330301d 的「窗口外紧邻 16 行」）：
+    // 视口外前后各 12 行提前在 Dispatchers.Default 解析进 MdAstCache——滚动使新行
+    // 进入视口时，首次组合的主线程同步解析（缓存未命中路径）被消掉。
+    // ChatViewModel（1e1a6f0）已持续预热最近 24 行，覆盖流式/切页返回；这里补
+    // 「上下滚动翻历史」两个方向。collectLatest 保证快速甩动时旧的预解析被取消。
+    val slotRowStartsState = androidx.compose.runtime.rememberUpdatedState(slotRowStarts)
+    val rowsState = androidx.compose.runtime.rememberUpdatedState(rows)
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow {
+            val info = listState.layoutInfo
+            (info.visibleItemsInfo.firstOrNull()?.index ?: -1) to
+                (info.visibleItemsInfo.lastOrNull()?.index ?: -1)
+        }.collectLatest { (firstSlot, lastSlot) ->
+            val starts = slotRowStartsState.value
+            if (firstSlot < 0 || starts.isEmpty()) return@collectLatest
+            val currentRows = rowsState.value
+            val s0 = firstSlot.coerceIn(0, starts.lastIndex)
+            val s1 = lastSlot.coerceIn(0, starts.lastIndex)
+            val rowFirst = starts[s0]
+            val rowLast = (if (s1 + 1 < starts.size) starts[s1 + 1] else currentRows.size) - 1
+            for (i in (rowFirst - 12).coerceAtLeast(0) until rowFirst) {
+                MdAstCache.ensure(currentRows[i].text)
+            }
+            for (i in rowLast + 1 until (rowLast + 13).coerceAtMost(currentRows.size)) {
+                MdAstCache.ensure(currentRows[i].text)
+            }
         }
     }
 
@@ -3415,51 +3433,72 @@ private fun MessageList(
     LaunchedEffect(justStarted) {
         if (justStarted) {
             userScrolledAway.value = false
-            // 新一轮开始=用户要看新输出：撤停+重新起链（钉底自维持由本帧 pinToBottom
-            // 建立，循环里 prevPinnedByUs 在下一帧看到我们钉过即接管）
+            // 新一轮开始=用户要看新输出：撤停+重新起链（贴底请求在下一次重测生效，
+            // 循环里 prevPinnedByUs 在下一帧看到我们钉过即接管）
             parkedFollow.value = false
             jumperVisible.value = false
-            scrollState.pinToBottom()
+            listState.requestPinToBottom(expectedItemCount)
         }
     }
 
-    // B′（2026-09-19）：LazyColumn -> Column + verticalScroll。
-    // 取消"滚动时首次测量巨型 item"这个动作：Column 下所有行在进入组合时一次测完，
-    // 滚动只是纯位移，因此不再出现"滚到长消息卡一下"。
-    // 代价：失去虚拟化（Phase 3 用显示窗口分页兜）与 animateItem 入场动画（先只保功能正确）。
+    // ── LazyColumn（2026-10-28，B′ Column+verticalScroll 退役）──────────────
+    // 滚动时首次测量巨型 item 的问题由虚拟化本身解决——只组合/测量可见 item，
+    // 滚动=锚点位移；B′ 的手动窗口化与其全部派生物已删。
+    // 入场动画：RowSlotItem 内部的 alpha Animatable 原样保留（首帧已存在的行不淡入、
+    // 晋升行直出）——放在 item 内容里而不是用 animateItem，行为与窗口化时代一致。
 
-    androidx.compose.foundation.layout.Column(
+    // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
+    // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示。
+    // 「收尾」判定（2026-10-07 真机修复）只看 running 不够：中间叙述落行后
+    // vm.running 可能已翻 false 而链卡/流式正文还在继续，最后落地的行会被
+    // 误判成最终回复、挂上复制/重发/更多并一直留存——流式区还有产出时同样不算收尾
+    // （这几个值在 LazyColumn 之前的组合体里算：LazyListScope 的 item lambda
+    // 不是 @Composable 上下文，remember/rememberParkOnExpand 不能放里面。）
+    val finalRowKey = if (!running && !showStreaming) rows.lastOrNull()?.key else null
+    val growInKey = if (justFinished) finalRowKey else null
+    // 轮级折叠（2026-10-13 定稿）：把全量 rows 预切成「普通行 / 过程组」槽位
+    // （buildRenderSlots 见上方；itemsIndexed 逐槽渲染）。过程组 = 连续的过程行
+    // （链卡 + 中间叙述）。组内是否收起由 turnExpanded 控制，默认收起；只有
+    // 「已完成的一轮」（尾行=最终回复且非运行态）才享受折叠，正在进行的一轮强制
+    // 全展开——尾行落库那一帧从「展开」翻成「收起」，AnimatedVisibility 把这一下
+    // 高度差插值成收拢动画（=用户要的"终答到达才折叠"）。2026-10-14 修复：折叠只认
+    // 终答**落行且回合结束**——曾经的"流式首字提前折叠"（taillessBar）已删，
+    // 任务中段说话不再误触收起（用户真机实锤的抽搐）。
+    // 轮次状态与会话绑定：remember(sessionId)，item 销毁重建（滚动出视口）不影响
+    // 折叠态（map 存活于 MessageList 作用域）。
+    val turnExpanded = remember(sessionId) {
+        androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+    }
+    // 展开锚点（2026-10-13，效果图 fold-anchor-lab）：轮级条/链卡「由收→展」那一下置停车，
+    // 视口锚在被点条上、内容向下掀；收起方向不调用（保持吸底=footer 原地）。
+    // 虚拟化下同语义由 LazyList 锚点达成：不钉底则 firstVisible 锚点不动。
+    val parkOnExpand = rememberParkOnExpand()
+
+    androidx.compose.foundation.lazy.LazyColumn(
+        state = listState,
         modifier = modifier
-            .verticalScroll(scrollState)
             .pointerInput(Unit) {
-            // 只做一件事：真正拖动列表（超过 touchSlop）时收起输入法。
-            // **不参与跟随判定**——跟随完全由位置决定（见 isAtBottom），
+            // 只做一件事：手指按在列表上（越过 touchSlop 的真实拖动，含拖选把手）
+            // 期间暂停贴底钉底。**不参与跟随判定**——跟随完全由位置决定（见 isAtBottom），
             // 避免"手指标志没复位 → 跟随永久失效"这类不可自愈的状态。
-            // clearFocus 必须跳过"已被文本选择层消费的 MOVE"：长按选区出现后
-            // 手指继续拖动=拖选扩选，此时 clearFocus 会直接杀死拖选手势
-            // （选区瞬间消失，用户只能拖把手；demo 实测 .test-work/sel-demo 2026-09-19）。
-            // 普通滚动时没人消费 MOVE，照常收键盘。
+            // 虚拟化下的变化（2026-10-28）：滚动手势移到了列表内部（子孙节点），本
+            // 观察者收到的 MOVE 恒为已消费——普通滚动被列表消费、拖选被选择层消费，
+            // 旧「isConsumed 区分收键盘」的判据失效（祖先层无法区分两种消费源）。
+            // 收键盘职责移交上方 interactionSource 的 DragInteraction 监听
+            // （真实滚动手势才发交互；拖选边缘自动滚动不走滚动会话不误杀），
+            // 此处只留 fingerOnList 守卫。
             awaitEachGesture {
                 val start = awaitFirstDown(requireUnconsumed = false)
-                var slopPassed = false
                 val slop = 8.dp.toPx()
                 try {
                     while (true) {
                         val ev = awaitPointerEvent()
                         val ch = ev.changes.firstOrNull { it.id == start.id } ?: break
-                        if (!slopPassed && (ch.position - start.position).getDistance() > slop) {
+                        if ((ch.position - start.position).getDistance() > slop) {
                             // 越过 slop=真实拖拽（普通滚动、拖选把手都算）：按住期间暂停
                             // 贴底钉框。拖选把手的边缘自动滚动不走滚动会话（isScrollInProgress
                             // 全程 false），原先两条让位闸都漏掉它，与 pinToBottom 逐帧打架。
-                            // 放在 !isConsumed 判断**之外**：把手拖拽的 MOVE 被选择层消费，
-                            // 但暂停意图恰是为这种被消费的手势服务的。
-                            // 抬手后的「不回拉」不再需要意图标志：粘底状态机直接看位移
-                            // 原因（用户把 value 滚上去的那一帧即停车，2026-10-12 三修）。
                             fingerOnList.value = true
-                            if (!ch.isConsumed) {
-                                slopPassed = true
-                                focusManager.clearFocus()
-                            }
                         }
                         if (!ch.pressed) break
                     }
@@ -3470,90 +3509,8 @@ private fun MessageList(
             }
         }
             .padding(top = topPadding, bottom = bottomPadding)
-            // 翻页补偿的量测点：内容总高在 layout 阶段变化时立即同步滚动（见上方注释）。
-            // 翻页补偿的量测点：内容总高在 layout 阶段变化时记账（见上方三修注释）。
-            // 变高：不改滚动值（onSizeChanged 时 maxValue 还是旧值，dispatchRawDelta
-            // 被旧上限夹扁＝从未落地），改累加 pagerShift，由 graphicsLayer 在 draw
-            // 阶段把内容上移——同帧生效，视觉上等价于已贴底；下一帧跟随循环贴回真
-            // maxValue 后归零，两帧无缝。变矮：value>新max 由 verticalScroll 同帧夹回，
-            // 无需补偿，此时若还挂着旧的向上偏移要一并清零以免过冲。
-            .onSizeChanged { sz ->
-                val prev = prevContentH.intValue
-                prevContentH.intValue = sz.height
-                val inWindow = System.currentTimeMillis() <= pagerCompensateUntil
-                // 用户手指/惯性正在滚动时让位：补偿会与手势打架（同 pinToBottom 的
-                // busyFrames 让位逻辑），且手势结束后跟随循环自会贴回
-                if (inWindow && pagerWasAtBottom && prev > 0 && !scrollState.isScrollInProgress) {
-                    val delta = sz.height - prev
-                    if (delta > 0) {
-                        pagerShift += delta.toFloat()
-                    } else if (delta < 0 && pagerShift != 0f) {
-                        pagerShift = 0f
-                    }
-                    if (FollowTrace.enabled) {
-                        FollowTrace.addSlow("SIZE h=${sz.height} prev=$prev delta=$delta shift=${pagerShift.toInt()} pos=${scrollState.value}/${scrollState.maxValue}")
-                    }
-                }
-            }
-            // draw 阶段偏移：translationY 在 graphicsLayer 里读取，graphicsLayer 是
-            // DrawModifier 不参与测量，且该 Column 节点是内容高（父级裁剪），上移
-            // 即在父裁剪框内把新长出的底部推到视口底——与"已贴底"逐像素一致。
-            .graphicsLayer { translationY = -pagerShift }
     ) {
-        // 快捷操作按钮只挂回合最终回复：usage 字段只在整轮最终消息落值；
-        // 兜底 = 非运行态的最后一条（覆盖无 usage 的错误收尾行），运行中不显示。
-        // 「收尾」判定（2026-10-07 真机修复）只看 running 不够：中间叙述落行后
-        // vm.running 可能已翻 false 而链卡工具/流式正文还在继续，最后落地的行会被
-        // 误判成最终回复、挂上复制/重发/更多并一直留存——流式区还有产出时同样不算收尾
-        val finalRowKey = if (!running && !showStreaming) windowedRows.lastOrNull()?.key else null
-        val growInKey = if (justFinished) finalRowKey else null
-        // 窗口外还有更早的消息时给一行提示（向上滚即自动加载，不截断内容）
-        if (hiddenRowCount > 0) {
-            androidx.compose.runtime.key("more_history") {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "↑ 更早的消息（还有 $hiddenRowCount 条，向上滑自动加载）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f)
-                    )
-                }
-            }
-        }
-        // B′：逐行直出。LazyColumn 的 animateItem（入场淡入/位移补间）是 lazy 专属能力，
-        // 这里先只保功能正确、去掉入场动画；要恢复可用 alpha 动画补。
-        // 轮级折叠（2026-10-13 定稿）：把 windowedRows 预切成「普通行 / 过程组」槽位。
-        // 过程组 = 连续的过程行（链卡 + 中间叙述）。组内是否收起由 turnExpanded 控制，
-        // 默认收起；只有「已完成的一轮」（尾行=最终回复且非运行态）才享受折叠，
-        // 正在进行的一轮强制全展开——尾行落库那一帧从「展开」翻成「收起」，
-        // AnimatedVisibility 把这一下高度差插值成收拢动画（=用户要的"终答到达才折叠"）。
-        // 2026-10-14 修复：折叠只认终答**落行且回合结束**——曾经的"流式首字提前折叠"
-        // （taillessBar）无法区分中间叙述与最终回复（同一条流式通道），已删，
-        // 任务中段说话不再误触收起（用户真机实锤的抽搐）。
-        val slots = buildRenderSlots(
-            windowedRows,
-            active = running || showStreaming,
-        )
-        val turnExpanded = remember(sessionId) {
-            androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
-        }
-        // 展开锚点（2026-10-13，效果图 fold-anchor-lab）：轮级条/链卡「由收→展」那一下置停车，
-        // 视口锚在被点条上、内容向下掀；收起方向不调用（保持吸底=footer 原地）
-        val parkOnExpand = rememberParkOnExpand()
-        // 逐行的「画不画名字行 / 是否增强轮次边界」预计算（按 windowedRows 原始相邻关系，
-        // 折叠隐藏中间行不改变这个判定——最终回复行前面是同组 assistant，本就不重复画头像）。
-        val headFlags = windowedRows.mapIndexed { rowIdx, row ->
-            val prevRole = windowedRows.getOrNull(rowIdx - 1)?.role
-            val showHead = prevRole != row.role
-            val enhanced = showHead && row.role == "user" && (rowIdx > 0 || hiddenRowCount > 0)
-            row.key to (showHead to enhanced)
-        }.toMap()
-
-        slots.forEach { slot ->
+        itemsIndexed(slots, key = { _, slot -> slotItemKey(slot) }) { _, slot ->
             when (slot) {
                 is RenderSlot.Plain -> RowSlotItem(
                     row = slot.row,
@@ -3664,7 +3621,7 @@ private fun MessageList(
             }
         }
         if (showStreaming) {
-            androidx.compose.runtime.key("streaming") {
+            item(key = "streaming") {
                 StreamingItem(
                     streamingText,
                     streamingReasoning,
@@ -3690,7 +3647,7 @@ private fun MessageList(
         }
         // ask_user 提问卡：P1 复审起固定钉在输入框上方（ChatScreen 底栏），不再放消息流
         planProposal?.let { plan ->
-            androidx.compose.runtime.key("plan-proposal") {
+            item(key = "plan-proposal") {
                 PlanProposalCard(
                     plan = plan,
                     onApprove = onApprovePlan,
@@ -3702,47 +3659,88 @@ private fun MessageList(
 }
 
 /**
- * 是否贴着底（B′ 版，2026-09-19 由 LazyListState 版等价移植）。
+ * 距内容底部的像素距离（虚拟化版，2026-10-28 替代 B′ 的 ScrollState 减法）。
+ * = 末项底边超出视口底部的量：流式增高 g 则为 g，已贴底/内容不足一屏为 0。
+ * 与旧 `maxValue - value` 同义（都是"还有多少内容藏在视口底之下"），容差权衡不变：
+ * 太小 → 流式一帧长高就被判成"离开底部"而停手；太大 → 用户小幅上滑被判"仍在底部"。
  *
- * 语义与原版一致（原版是"末项底边距内容末端 ≤ slackPx"）——ScrollState 下"贴底"
- * 就是 value == maxValue，所以判定从 item 级几何退化成一次减法，**不再依赖 layoutInfo**。
- * 这既更便宜，也顺带消掉了原版"末项没被组合 / 末项索引对不上"那一类边界情况。
- *
- * 仍然用"位置"而不是任何标志来判定跟随 —— 这是 rikkahub 没有"跟随卡死"类问题的根本原因。
- * 容差 slackPx 的权衡不变：太小 → 流式一帧长高就被判成"离开底部"而停手（位置判定无状态，
- * 会一直停到你手动拖回）；太大 → 用户小幅上滑会被判成"仍在底部"而被拉回。
- * 48dp≈一行半文字，能吸收流式逐帧增长，又小于任何有意的拖动。
+ * 关键差异：LazyColumn 没有整体 maxValue，测距只能用 layoutInfo 的 item 几何——
+ * 末项不在视口里（滚到中途）时几何上测不到真实距离，统一按"离底很远"处理：
+ * 停车撤除/浮钮距离门槛都必须只在看得到末项时给出小值。
+ * 未测量/空列表返回 0（视作贴底，与旧 `maxValue == Int.MAX_VALUE` 分支同义）。
  */
-private fun androidx.compose.foundation.ScrollState.isAtBottom(slackPx: Int): Boolean {
-    // maxValue == Int.MAX_VALUE 表示尚未完成测量 —— 当作贴底（与旧版 totalItemsCount==0 同义）
-    if (maxValue == Int.MAX_VALUE) return true
-    return maxValue - value <= slackPx
+private fun androidx.compose.foundation.lazy.LazyListState.distanceToBottomPx(): Int {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return 0
+    if (last.index != info.totalItemsCount - 1) return Int.MAX_VALUE / 4
+    val viewportContentEnd = info.viewportEndOffset - info.afterContentPadding
+    return (last.offset + last.size - viewportContentEnd).coerceAtLeast(0)
 }
 
 /**
- * 贴底：把滚动位置补到 maxValue。**一次性、非挂起**；无位移时直接返回，
- * 因此逐帧调用是安全的（零成本）。语义与原 LazyListState 版一致。
- * 非挂起是硬要求 —— 见函数体内注释（suspend 的 scrollBy 会在用户手势期间挂起并阻塞 collect）。
- *
- * 原版为什么要 scrollBy 补差量而不是 scrollToItem(末项)：那是**顶边对齐**——流式条目
- * 长过一屏后最新内容会留在视口下方（历史踩坑）。ScrollState 下 maxValue 天然就是
- * "底边对齐"的目标位置，这个坑从根上不存在了。
- *
- * @return 是否发生位移（供排查用）
+ * 是否贴着底（位置判定，仍是 rikkahub 语义：跟随只看位置、不用任何标志）。
+ * 本列表的上下留白走 Modifier.padding（列表视口之外），afterContentPadding 恒为 0，
+ * 判定即「末项底边距视口底 ≤ slack」。
  */
-private fun androidx.compose.foundation.ScrollState.pinToBottom(): Boolean {
-    if (maxValue == Int.MAX_VALUE) return false
-    val delta = maxValue - value
-    if (delta == 0) return false
-    // 【必须用 dispatchRawDelta，不能用 suspend 的 scrollBy】2026-09-19 模拟器定位：
-    // scrollBy 走 MutatePriority 互斥，**用户手势持有滚动会话时它会挂起等待**。而本函数是
-    // 从跟随 effect 的 collect 体里逐帧调用的 —— 一旦挂起，collect 就被阻塞，跟随判定
-    // 再也不执行（userScrolledThisRun 永远置位不了），等手势结束那次位移才补上，
-    // 于是表现为「上滑后 1.5 秒被弹回原位、位置回到完全一致的像素状态」。
-    // 实测证据：跟随轨迹末帧停在 +45969ms，而同 composable 的定时采样一直写到 +62983ms；
-    // inProgress=true 的采样里 value 却纹丝不动；全程无异常（所以不是被异常打死的）。
-    dispatchRawDelta(delta.toFloat())
+private fun androidx.compose.foundation.lazy.LazyListState.isAtBottom(slackPx: Int): Boolean =
+    distanceToBottomPx() <= slackPx
+
+/**
+ * 滚动位置的单调代理（逐帧状态机的 dV 归因用）：
+ * firstVisibleItemIndex * 1e6 + firstVisibleItemScrollOffset。行只在列表末尾增删、
+ * 折叠只发生在末轮、版本切换不改 key → 锚点之上的 item 结构不变，该值与旧
+ * ScrollState.value 同样随下滚单调递增（item 高度 < 1e6 px，跨项不回绕）。
+ */
+private fun androidx.compose.foundation.lazy.LazyListState.scrollPosProxy(): Long =
+    firstVisibleItemIndex.toLong() * 1_000_000L + firstVisibleItemScrollOffset
+
+/**
+ * 贴底：一次性、非挂起；**无间隙时零成本返回**（不请求、不触发重测——
+ * requestScrollToItem 的去重只看位置相等，无条件重复请求会导致每帧重测，
+ * 逐帧循环必须走 gap 守卫，这是与 rikkahub「每次发射都请求」的刻意差异）。
+ *
+ * 实现 = `requestScrollToItem(末项索引, 大偏移)`：非挂起、在下一次重测生效
+ * （rikkahub 同款机制）。大偏移是必须的——越界索引会被测量收敛成 (末项, 0)，
+ * 末项高于视口时会**顶对齐**而非贴底（LazyListMeasure 的 scroll-back 只在
+ * "向前组合不满视口"时触发）；带大偏移的请求经 scroll-back 数学收敛到
+ * offset=末项高度-视口高，**严格底边对齐**，与末项高度无关（流式区/长回答
+ * 超过一屏时同样成立，这是纯越界索引写法做不到的）。
+ *
+ * @return 是否发起了请求（供排查归因用）
+ */
+private fun androidx.compose.foundation.lazy.LazyListState.pinToBottom(): Boolean {
+    if (distanceToBottomPx() <= 0) return false
+    return requestPinToBottom()
+}
+
+/**
+ * 无条件贴底请求（不做 gap 检查）：切会话/新消息/新一轮回底时 layoutInfo 还是
+ * 上一次的测量，gap 守卫会拿旧数据误判「已贴底」而跳过；这类调用点用本帧组合
+ * 已知的 item 数（[itemCountHint]，0=用已测量的 totalItemsCount）直接发起。
+ * 贴底请求与同帧的内容变更（新行/切会话）在**同一次重测**里一起应用。
+ */
+private fun androidx.compose.foundation.lazy.LazyListState.requestPinToBottom(
+    itemCountHint: Int = 0
+): Boolean {
+    val count = if (itemCountHint > 0) itemCountHint else layoutInfo.totalItemsCount
+    if (count <= 0) return false
+    requestScrollToItem(count - 1, PinBottomOverscrollPx)
     return true
+}
+
+/**
+ * 贴底请求的越底偏移。测量期 scroll-back 的落点与该值无关（收敛到底边对齐），
+ * 只需大于任何可能的前置 padding 与间隙，取 1M px 覆盖全部现实场景。
+ */
+private const val PinBottomOverscrollPx = 1_000_000
+
+/**
+ * LazyColumn 稳定 item key：普通槽=行 key，过程组槽=组首行 key
+ * （首行已被组消费，不会同时以普通槽出现 → 全列表 key 唯一）。
+ */
+private fun slotItemKey(slot: RenderSlot): String = when (slot) {
+    is RenderSlot.Plain -> slot.row.key
+    is RenderSlot.Group -> slot.group.headRow.key
 }
 
 @Composable

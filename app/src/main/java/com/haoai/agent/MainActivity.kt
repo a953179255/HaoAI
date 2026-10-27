@@ -856,11 +856,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
         }
     }
     // 聊天滚动状态提升到 RootApp（不随 screen 切换销毁），进设置再返回时保持位置。
-    // B′（2026-09-19）：聊天列表已由 LazyColumn 改为 Column + verticalScroll，
-    // 状态类型随之从 LazyListState 换成 ScrollState（Saver 同步换）。
+    // 2026-10-28：聊天列表虚拟化（LazyColumn），状态从 B′ 的 ScrollState 换回
+    // LazyListState——Saver 存 firstVisibleItemIndex+Offset，索引+偏移恢复比像素值
+    // 更抗内容变化（流式新增行都在视口下方，恢复位置不受影响）。
     val chatListState = androidx.compose.runtime.saveable.rememberSaveable(
-        saver = androidx.compose.foundation.ScrollState.Saver
-    ) { androidx.compose.foundation.ScrollState(initial = 0) }
+        saver = androidx.compose.foundation.lazy.LazyListState.Saver
+    ) { androidx.compose.foundation.lazy.LazyListState() }
 
     // 设置主页滚动状态提升到 RootApp：进子页（独立 screen）会销毁重建设置
     // 组件，rememberSaveable 在 AnimatedContent 销毁分支不恢复（实测），
@@ -1205,7 +1206,7 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // wallpaperGlobal 门控，与本页背景同规则）——壳盖住聊天页时背景不能突变
                     wallpaper = wallpaper,
                     drawer = drawer,
-                    scrollState = chatListState,
+                    listState = chatListState,
                     // 侧边栏点设置：push 转场开始——先冻结聊天页（后续帧绘制
                     // 静态快照，重页面组合延迟不再被看穿），切页触发转场。
                     // parallax=true：此路径退出层保留 1/3 视差+缩放+淡出纵深
