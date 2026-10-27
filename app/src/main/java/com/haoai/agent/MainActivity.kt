@@ -762,45 +762,18 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     // 素底玻璃的底色跟随主题（动态取色时随 Material You 变化）：
     // 上浅下深两级 surface，玻璃 vibrancy 透出的即主题背景色
     val scheme = androidx.compose.material3.MaterialTheme.colorScheme
-    // 转场纱幕：旧页淡出溶进的是「净色实底」（其根布局
-    // background(colorScheme.background)），HaoAI 淡出溶进的是花壁纸
-    // ——彩色图案残影。push 期间在壁纸上盖一层主题净色「纱」
-    // （alpha 0.9 近实底，转场完缓退），转场瞬间借用同样的净底。
-    // 只在 push（离开聊天/设置根）时升起：pop 是「揭开」语义，聊天页
-    // 滑回时壁纸应同步回归——纱幕若在，会把落位的聊天页罩灰（实测确认）
-    var lastScreen by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(screen)
-    }
-    var scrimLevel by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(0f)
-    }
-    // 转场落位标记：screen 变化后等 spring 收尾才更新。状态栏亮度采样
+    // 转场纱幕（TransitionScrim）2026-10-27 随转场结构化**退役**：三档新结构
+    // （液态纵深/丝滑横滑/柔和穿梭）都不需要净色接底——液态/丝滑的旧页缩退
+    // 在恒定壁纸上进行，柔和是原地交叉淡化。曾由纱幕遮挡的「非聊天转场
+    // 壁纸整块消失的闪白」连根移除。
+    // 转场落位标记：screen 变化后等转场收尾才更新。状态栏亮度采样
     // （PixelCopy GPU 回读）只挂这个键——转场起点不再被回读抢帧，
     // 落位后补一次采样即可
     var screenSettled by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(screen)
     }
     androidx.compose.runtime.LaunchedEffect(screen) {
-        // 转场纱幕只为「有淡出参与」的转场服务（非聊天页之间的纵深转场，
-        // 旧页 fadeOut 需要净色接住）。方向二后聊天页参与的转场是纯滑动、
-        // 无任何淡出——若升纱幕，转场结束后的 450ms 缓退会在已落位的
-        // 聊天页上呈现为「背景缓慢淡出」（用户反馈确认），故直接跳过
-        val chatInvolved = screen == 0 || lastScreen == 0
-        lastScreen = screen
-        if (!chatInvolved) {
-            scrimLevel = 0.9f
-            try {
-                kotlinx.coroutines.delay(420)
-            } finally {
-                // 取消兜底：快速连点返回（如 模型大脑→设置→聊天 两跳间隔 <420ms）时，
-                // 本协程在 delay(420) 中被下一个 screen 转场取消，原「delay 后置 0」
-                // 永远执行不到；而下一个转场若聊天参与会整体跳过纱幕逻辑，scrimLevel
-                // 就永久停在 0.9——净色纱幕罩住聊天页（白遮罩 bug）。finally 保证
-                // 任何取消路径都把纱幕落下
-                scrimLevel = 0f
-            }
-        }
-        kotlinx.coroutines.delay(100)   // 转场 spring 收尾
+        kotlinx.coroutines.delay(100)   // 转场收尾
         screenSettled = screen
     }
     // 遗留3 修复（2026-09-22）：净色底玻璃"透过"的颜色必须与页面实际底色一致
@@ -890,16 +863,6 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize()
             )
-            // 转场纱幕：净色盖在壁纸上（页面层之下），旧页淡出时溶进净色
-            // 而非花壁纸——丝滑的关键（底就是净色实底）
-            // v0.18.1：动画收进子组合——旧实现 animateFloatAsState().value 在
-            // RootApp 顶层解包，450ms 淡出期间每帧重组整个 RootApp（含 AnimatedContent
-            // 全部页面）；现在只传离散 scrimLevel，逐帧 alpha 只重组这个 10 行的小组件
-            TransitionScrim(
-                level = scrimLevel,
-                color = scheme.background,
-                modifier = Modifier.matchParentSize()
-            )
         }
         val settingsReady by container.settingsReadyFlow.collectAsState()
         if (!settingsReady) {
@@ -916,23 +879,14 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
             }
         } else {
-            // 页面切换过渡（slide + scale + fade，有纵深感）：
-            // push——新页全屏滑入；旧页缩小(1→0.92)+变暗淡出沉底（不是全 0.7，
-            // HaoAI 旧页带着展开抽屉，缩太多会露出边缘）。pop 反向——旧页全速
-            // 滑出，下层页从 0.92 迎上来放大回位。双向运动 = 流畅感来源。
-            // zIndex：AnimatedContent 默认 target 在顶，pop 时必须显式把进入的
-            // 聊天页压到 -1，否则聊天页（含抽屉 scrim）盖在设置页上洗灰。
+            // 页面切换过渡（2026-10-27 结构化重做，交互效果图方案获用户批准）：
+            // 三档 = 三种运动结构（详见 Motion.kt），不再只是曲线快慢。
+            // 旧页离开聊天时是 frozen 快照纹理（v0.18.1），缩退/淡出是纯 GPU
+            // 合成、成本≈0——不再按 chatInvolved 特例降级为纯滑动。
+            // zIndex：AnimatedContent 默认 target 在顶；液态档 pop 时必须显式把
+            // 进入的下层页压到 -1（缩退卡在下层迎上来），否则盖在滑出的上层页上。
             fun levelOf(s: Int) = com.haoai.agent.ui.ScreenNav.depth(s)
-            // 转场接线缺口修复（2026-10-10）：原来这里写死 spring/tween，设置里的
-            // 动效档位对页面转场完全无效（设置项部分失效，审查 M 区点名）。
-            // 现从 MotionTheme 读三档规格 —— Liquid 档值 = 此前的实测值，
-            // 默认体验零变化；切 Snappy/Gentle 档页面转场真正跟随变化。
-            val slideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
-                com.haoai.agent.ui.theme.MotionTheme.pageSlideSpec
-            val fadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
-                com.haoai.agent.ui.theme.MotionTheme.pageFadeSpec
-            val scaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float> =
-                com.haoai.agent.ui.theme.MotionTheme.pageScaleSpec
+            val MT = com.haoai.agent.ui.theme.MotionTheme
             // 系统返回键兜底（2026-09-30）：本 App 换屏是一个 `screen: Int`，不是 NavHost，
             // 返回键不会自己"退一屏"——每屏得自己装 BackHandler。电脑联动(19) 那屏没装，
             // 结果手势返回把 Activity finish 了，用户看到的是"不返回上一级，而是直接退出应用"。
@@ -955,57 +909,107 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     // 同深（理论不存在）按编号兜底，保证任何一对页面方向确定。
                     // 修复：记忆库(2,深度3)↔记忆与梦境(11,深度2) 旧版同层双向同动画
                     val isPush = to > from || (to == from && targetState > initialState)
-                    // 方向二：聊天页(0)参与的转场用纯滑动——聊天页不缩放不淡出
-                    // （重页面最简单的运动最不容易露馅：缩放+淡出会放大重组延迟
-                    // 的可见性，直线滑动则完全掩盖）。仅非聊天页之间保留
-                    // slide+scale+fade 纵深（用户确认设置↔技能库观感好）
-                    val chatInvolved = initialState == 0 || targetState == 0
-                    when {
-                        // push（聊天→设置等）：设置页全速滑入盖上来；
-                        // 聊天页退出（v0.18.1：所有离开聊天页路径统一 frozen 快照，
-                        // 退出层是静态纹理，动画成本≈0）：
-                        // - 侧边栏→设置（frozenParallax）：纵深视差——1/3 滑距+缩小+
-                        //   淡出，静态纹理上做这些是纯 GPU 合成
-                        // - 其他路径：保持全宽直线滑出（与旧版实时滑出观感一致）
-                        isPush -> {
-                            (androidx.compose.animation.slideInHorizontally(slideSpec) { it })
-                                .togetherWith(
-                                if (chatInvolved) {
-                                    if (drawer.frozenParallax) {
-                                        androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
-                                            androidx.compose.animation.scaleOut(
-                                                targetScale = 0.92f, animationSpec = scaleSpec
-                                            ) +
-                                            androidx.compose.animation.fadeOut(fadeSpec)
-                                    } else {
-                                        androidx.compose.animation.slideOutHorizontally(slideSpec) { -it }
-                                    }
-                                } else {
-                                    androidx.compose.animation.slideOutHorizontally(slideSpec) { -it / 3 } +
-                                        androidx.compose.animation.scaleOut(
-                                            targetScale = 0.92f, animationSpec = scaleSpec
-                                        ) +
-                                        androidx.compose.animation.fadeOut(fadeSpec)
-                                }
-                            ).apply { targetContentZIndex = 1f }
+                    when (MT.style) {
+                        // ── 液态纵深：push=新页全幅滑入盖上，旧页原地缩退成玻璃卡
+                        // （缩 0.94 + 左移 16% + 变暗 26%，fadeOut 从 1 淡到 0 但
+                        // 起点已滞后——用 fadeOut 半程近似沉底变暗）；pop=上层页
+                        // 全幅滑出揭开，下层页从缩退态迎上来放大回位。430ms 同曲线。
+                        com.haoai.agent.ui.theme.MotionStyle.Liquid -> {
+                            val slide = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(
+                                MT.pageLiquidMs, easing = com.haoai.agent.ui.theme.LiquidPageEasing
+                            )
+                            val scale = androidx.compose.animation.core.tween<Float>(
+                                MT.pageLiquidMs, easing = com.haoai.agent.ui.theme.LiquidPageEasing
+                            )
+                            // 沉底=后半程淡出（旧页缩退卡随时间溶入恒定壁纸）；
+                            // 回位=后半程淡入（下层卡从沉底态重新显出）。
+                            // （transitionSpec 逐属性 spec 支持 delay；效果图的
+                            // 26% 压暗罩层是二档增强，本期用淡出近似。）
+                            val sink = androidx.compose.animation.core.tween<Float>(
+                                MT.pageLiquidMs / 2, delayMillis = MT.pageLiquidMs / 2
+                            )
+                            if (isPush) {
+                                (androidx.compose.animation.slideInHorizontally(slide) { it } +
+                                    androidx.compose.animation.fadeIn(
+                                        androidx.compose.animation.core.tween(MT.pageLiquidMs / 2)
+                                    ))
+                                    .togetherWith(
+                                        androidx.compose.animation.slideOutHorizontally(slide) { -it * 16 / 100 } +
+                                            androidx.compose.animation.scaleOut(targetScale = 0.94f, animationSpec = scale) +
+                                            androidx.compose.animation.fadeOut(sink)
+                                    )
+                                    .apply { targetContentZIndex = 1f }
+                            } else {
+                                (androidx.compose.animation.slideInHorizontally(slide) { -it * 16 / 100 } +
+                                    androidx.compose.animation.scaleIn(initialScale = 0.94f, animationSpec = scale) +
+                                    androidx.compose.animation.fadeIn(sink))
+                                    .togetherWith(
+                                        androidx.compose.animation.slideOutHorizontally(slide) { it } +
+                                            androidx.compose.animation.fadeOut(
+                                                androidx.compose.animation.core.tween(MT.pageLiquidMs / 2)
+                                            )
+                                    )
+                                    .apply { targetContentZIndex = -1f }
+                            }
                         }
-                        // pop（返回聊天 / 返回设置）：上层页全速右滑出；
-                        // 非聊天下层页从 0.92 迎上来放大回位（双向运动）；
-                        // 聊天页则直线滑回（重页面不做缩放，快照+直线最稳）
-                        else -> {
-                            (androidx.compose.animation.slideInHorizontally(slideSpec) { if (chatInvolved) -it / 4 else -it / 5 } +
-                                if (chatInvolved) {
-                                    // 聊天页直线滑回：不加 scale/fade（重页面纯滑动最稳）
-                                    androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(1))
-                                } else {
-                                    androidx.compose.animation.scaleIn(
-                                        initialScale = 0.92f, animationSpec = scaleSpec
-                                    ) +
-                                    androidx.compose.animation.fadeIn(fadeSpec)
-                                })
+                        // ── 丝滑横滑：36% 轻位移换位 + 交叉淡入淡出，无满幅搬运
+                        com.haoai.agent.ui.theme.MotionStyle.Snappy -> {
+                            val inSlide = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(
+                                MT.pageSnappyInMs, easing = com.haoai.agent.ui.theme.QuickPageEasing
+                            )
+                            val inFade = androidx.compose.animation.core.tween<Float>(
+                                MT.pageSnappyInMs, easing = com.haoai.agent.ui.theme.QuickPageEasing
+                            )
+                            val outSlide = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(
+                                MT.pageSnappyOutMs, easing = com.haoai.agent.ui.theme.QuickPageEasing
+                            )
+                            val outFade = androidx.compose.animation.core.tween<Float>(
+                                MT.pageSnappyOutMs, easing = com.haoai.agent.ui.theme.QuickPageEasing
+                            )
+                            if (isPush) {
+                                (androidx.compose.animation.slideInHorizontally(inSlide) { it * 36 / 100 } +
+                                    androidx.compose.animation.fadeIn(inFade))
+                                    .togetherWith(
+                                        androidx.compose.animation.slideOutHorizontally(outSlide) { -it * 16 / 100 } +
+                                            androidx.compose.animation.fadeOut(outFade)
+                                    )
+                                    .apply { targetContentZIndex = 1f }
+                            } else {
+                                (androidx.compose.animation.slideInHorizontally(inSlide) { -it * 16 / 100 } +
+                                    androidx.compose.animation.fadeIn(inFade))
+                                    .togetherWith(
+                                        androidx.compose.animation.slideOutHorizontally(outSlide) { it * 36 / 100 } +
+                                            androidx.compose.animation.fadeOut(outFade)
+                                    )
+                                    .apply { targetContentZIndex = -1f }
+                            }
+                        }
+                        // ── 柔和穿梭：旧页原地淡出 140ms，新页延迟 70ms 上浮 18dp
+                        // 淡入 300ms；零横向运动
+                        com.haoai.agent.ui.theme.MotionStyle.Gentle -> {
+                            val inFade = androidx.compose.animation.core.tween<Float>(
+                                MT.pageGentleInMs, delayMillis = MT.pageGentleInDelayMs,
+                                easing = com.haoai.agent.ui.theme.QuickPageEasing
+                            )
+                            val inSlide = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(
+                                MT.pageGentleInMs, delayMillis = MT.pageGentleInDelayMs,
+                                easing = com.haoai.agent.ui.theme.QuickPageEasing
+                            )
+                            (androidx.compose.animation.fadeIn(inFade) +
+                                androidx.compose.animation.slideInVertically(inSlide) { it / 40 } +
+                                androidx.compose.animation.scaleIn(
+                                    initialScale = 0.985f,
+                                    animationSpec = androidx.compose.animation.core.tween(
+                                        MT.pageGentleInMs, delayMillis = MT.pageGentleInDelayMs,
+                                        easing = com.haoai.agent.ui.theme.QuickPageEasing
+                                    )
+                                ))
                                 .togetherWith(
-                                androidx.compose.animation.slideOutHorizontally(slideSpec) { it }
-                            ).apply { targetContentZIndex = -1f }
+                                    androidx.compose.animation.fadeOut(
+                                        androidx.compose.animation.core.tween(MT.pageGentleOutMs)
+                                    )
+                                )
+                                .apply { targetContentZIndex = 1f }
                         }
                     }
                 },
@@ -1316,28 +1320,6 @@ private fun LandscapeWrap(s: Int, drawerOpen: Boolean = false, content: @Composa
     }
 }
 
-
-/**
- * 转场纱幕：盖在壁纸上的主题净色层。level>0 立即升起（tween 0），归零时 450ms
- * 缓退。动画订阅只发生在本组件内——父组合只传离散 level，淡出逐帧不再重组页面树。
- */
-@Composable
-private fun TransitionScrim(level: Float, color: Color, modifier: Modifier = Modifier) {
-    val alpha = androidx.compose.animation.core.animateFloatAsState(
-        targetValue = level,
-        animationSpec = androidx.compose.animation.core.tween(
-            durationMillis = if (level > 0f) 0 else 450,
-            easing = androidx.compose.animation.core.FastOutSlowInEasing
-        ),
-        label = "transitionScrim"
-    ).value
-    if (alpha > 0.01f) {
-        Box(
-            modifier
-                .background(color.copy(alpha = alpha))
-        )
-    }
-}
 
 @Composable
 private fun OnboardingGlass(

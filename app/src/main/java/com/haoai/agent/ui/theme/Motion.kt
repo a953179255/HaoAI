@@ -1,6 +1,7 @@
 package com.haoai.agent.ui.theme
 
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -10,21 +11,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
+/** 液态纵深曲线（2026-10-27 效果图定稿 cubic-bezier(.24,.9,.26,1)，快出缓落） */
+val LiquidPageEasing = CubicBezierEasing(0.24f, 0.9f, 0.26f, 1f)
+/** 快速换位/上浮曲线（效果图 quick 段） */
+val QuickPageEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
 /**
  * 全局动画风格（三套完整语言，覆盖前端全部动效位置）：
- * - **Liquid 液态玻璃**（默认）：spring 带一次过冲回弹，弹层从触发点缩放 0.92→1 并上浮，
- *   底部弹窗越界回弹 —— 有物理感、有"果冻感"，与液态玻璃语言同源。
- * - **Snappy 丝滑响应**：高刚度 spring 无回弹，120-170ms。跟手性优先，即来即用。
- * - **Gentle 柔和渐显**：FastOutSlowIn 220-280ms，淡入为主 + 0.96 微缩放，弱化位移，安静。
+ * - **Liquid 液态纵深**（默认）：页面转场=新页滑入盖上、旧页缩退成玻璃卡（结构见下）；
+ *   弹层 spring 带一次过冲回弹，从触发点缩放 0.92→1 并上浮，底部弹窗越界回弹。
+ * - **Snappy 丝滑横滑**：页面转场=190ms 轻位移换位淡入淡出，无满幅搬运；
+ *   弹层高刚度 spring 无回弹，120-170ms，跟手优先。
+ * - **Gentle 柔和穿梭**：页面转场=旧页原地淡出、新页上浮淡入，零横向运动；
+ *   弹层 FastOutSlowIn 220-280ms，淡入为主 + 0.96 微缩放，安静。
  *
  * 位置覆盖：页面转场 / 抽屉 / 玻璃弹层(GlassPopup) / 弹窗(GlassAlertDialog) /
  * 底部弹窗(GlassBottomSheet) / 按压反馈(玻璃辉光) / 滑杆 / 展开收起 / 浮钮 / 开关 / 用量环。
  * 接入通道在 ui/common/Glass.kt 与 MainActivity（转场）。
  */
 enum class MotionStyle(val label: String) {
-    Liquid("液态玻璃"),
-    Snappy("丝滑响应"),
-    Gentle("柔和渐显")
+    Liquid("液态纵深"),
+    Snappy("丝滑横滑"),
+    Gentle("柔和穿梭")
 }
 
 object MotionTheme {
@@ -81,51 +89,31 @@ object MotionTheme {
 
     // ── 页面转场（MainActivity AnimatedContent）──────────────────────
     //
-    // 转场接线缺口修复（2026-10-10）：原 pageSlideFraction/pageMs/pageEasing 是
-    // **早期转场设计**（28% 部分位移 + 固定时长）的参数，而转场后来重做成了
-    // push/pop 双向全屏滑入 + 缩放沉底 —— 属性与实现语义对不上，一直没接，
-    // 结果是设置里切动效档位对页面转场完全无效（审查点名的"设置项部分失效"）。
-    //
-    // 修法：把**当前实测调好的参数**作为 Liquid（默认）档参数化进来，三档
-    // 各有可感知差异；过时的三个属性删除（留着就是"看起来有开关其实没接"）。
-    // 注意 Liquid 档值 = 重做转场时的实测值，接上后默认体验零变化。
+    // 2026-10-27 结构化重做（交互效果图方案获用户批准）：三档从「同一运动的
+    // 曲线快慢」升级为「三种运动结构」——旧实现三档只差 spring/tween 参数，
+    // 运动结构完全相同（满幅对滑+缩放沉底+纱幕），肉眼无法分辨档位。现在：
+    // - **Liquid 液态纵深**：新页全幅滑入盖上，旧页原地缩退成玻璃卡（缩 0.94
+    //   + 左移 16% + 变暗 26% + 圆角 26，由页面 chrome 的 retreat 进度驱动），
+    //   壁纸恒定不动；430ms。
+    // - **Snappy 丝滑横滑**：新页 36% 轻位移淡入 190ms，旧页 -16% 让位淡出
+    //   170ms，无满幅搬运，壁纸恒定。
+    // - **Gentle 柔和穿梭**：旧页原地淡出 140ms → 新页上浮 18dp 淡入 300ms
+    //   （延迟 70ms），零横向运动。
+    // 纱幕（TransitionScrim）随结构化**退役**：三种结构都不再需要净色接底
+    // ——液态/丝滑的壁纸恒定可见，柔和是原地交叉淡化。
+    // 滑动/淡出在 MainActivity 的 transitionSpec 声明；缩放/暗角/圆角/扫光
+    // chrome 在 AnimatedContent 内容层按进度驱动（graphicsLayer，纯 GPU）。
+    // 弹层/抽屉/按压仍走各自档位曲线（popupSpec/pressSpec/sheetSpec 不动）。
 
-    /** 页面滑入/滑出位移规格（IntOffset）。 */
-    val pageSlideSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset>
-        get() = when (style) {
-            MotionStyle.Liquid -> spring(
-                dampingRatio = 0.9f,
-                stiffness = Spring.StiffnessMedium,
-                visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
-            )
-            // 丝滑响应：临界阻尼 + 高刚度，快而不弹
-            MotionStyle.Snappy -> spring(
-                dampingRatio = 1f,
-                stiffness = 2500f,
-                visibilityThreshold = androidx.compose.ui.unit.IntOffset(1, 1)
-            )
-            MotionStyle.Gentle -> tween(320, easing = gentleEasing)
-        }
-
-    /** 页面淡入/淡出规格。 */
-    val pageFadeSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float>
-        get() = when (style) {
-            MotionStyle.Liquid -> tween(300, easing = FastOutSlowInEasing)
-            MotionStyle.Snappy -> tween(160, easing = FastOutSlowInEasing)
-            MotionStyle.Gentle -> tween(280, easing = gentleEasing)
-        }
-
-    /** 页面缩放（旧页沉底/回位）规格。 */
-    val pageScaleSpec: androidx.compose.animation.core.FiniteAnimationSpec<Float>
-        get() = when (style) {
-            MotionStyle.Liquid -> spring(
-                dampingRatio = 0.9f,
-                stiffness = Spring.StiffnessMedium,
-                visibilityThreshold = 0.001f
-            )
-            MotionStyle.Snappy -> spring(dampingRatio = 1f, stiffness = 2500f, visibilityThreshold = 0.001f)
-            MotionStyle.Gentle -> tween(280, easing = gentleEasing)
-        }
+    /** 液态纵深总时长：滑入滑出与缩退 chrome 共用一条时间线 */
+    val pageLiquidMs: Int get() = 430
+    /** 丝滑横滑：进 190 / 出 170 */
+    val pageSnappyInMs: Int get() = 190
+    val pageSnappyOutMs: Int get() = 170
+    /** 柔和穿梭：旧页淡出 140；新页延迟 70ms 后 300ms 上浮淡入 */
+    val pageGentleOutMs: Int get() = 140
+    val pageGentleInMs: Int get() = 300
+    val pageGentleInDelayMs: Int get() = 70
 
     // ── 通用淡入淡出时长 ──
     val fadeMs: Int

@@ -3996,8 +3996,8 @@ private fun LazyListScope.themeItems(
     item {
         HaoGroup(backdrop = backdrop) {
             HaoRow(
-                title = "液态玻璃",
-                subtitle = MotionStyle.Liquid.label + " · spring 回弹，弹层上浮，底部弹窗越界",
+                title = "液态纵深",
+                subtitle = MotionStyle.Liquid.label + " · 新页滑入盖上，旧页缩成玻璃卡，壁纸恒定",
                 tintIndex = 2,
                 onClick = { MotionTheme.style = MotionStyle.Liquid },
                 trailing = {
@@ -4006,8 +4006,8 @@ private fun LazyListScope.themeItems(
                 showChevron = false
             )
             HaoRow(
-                title = "丝滑响应",
-                subtitle = MotionStyle.Snappy.label + " · 无回弹，120-170ms，跟手优先",
+                title = "丝滑横滑",
+                subtitle = MotionStyle.Snappy.label + " · 190ms 轻位移换位淡入淡出，无满幅搬运",
                 tintIndex = 4,
                 onClick = { MotionTheme.style = MotionStyle.Snappy },
                 trailing = {
@@ -4017,8 +4017,8 @@ private fun LazyListScope.themeItems(
                 showChevron = false
             )
             HaoRow(
-                title = "柔和渐显",
-                subtitle = MotionStyle.Gentle.label + " · 强缓动淡入，安静不抢戏",
+                title = "柔和穿梭",
+                subtitle = MotionStyle.Gentle.label + " · 旧页原地淡出，新页上浮淡入，最安静",
                 tintIndex = 5,
                 onClick = { MotionTheme.style = MotionStyle.Gentle },
                 trailing = {
