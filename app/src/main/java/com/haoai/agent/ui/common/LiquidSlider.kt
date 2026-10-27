@@ -205,7 +205,7 @@ fun LiquidSlider(
                         blur(8f.dp.toPx() * (1f - progress))
                         // 折射 2026-10-08 接全局调参（observeReads 通道，绘制期读单例）；
                         // ×progress 保留"按下才起折射"的动效系数
-                        lens(
+                        if (!com.haoai.agent.ui.theme.GlassTuning.transitionActive) lens(
                             GlassTuning.lensHeight.dp.toPx() * progress,
                             GlassTuning.lensAmount.dp.toPx() * progress,
                             chromaticAberration = true
