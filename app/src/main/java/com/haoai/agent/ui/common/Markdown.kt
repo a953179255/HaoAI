@@ -236,6 +236,38 @@ private fun collectMessageImages(blocks: List<MdBlock>): List<Pair<String, Strin
         }
     }
 
+/**
+ * Markdown AST 进程级缓存（2026-10-28 修「上滑扩窗一帧 8 行同步解析掉帧」）：
+ * 键=解析源文本，值=(源文本, 块表)——取用时校验源一致防碰撞。
+ * 填充方：① MarkdownText 首组合未命中时同步解析后回填；② 非流式异步重解析完成后回填；
+ * ③ MessageList 预解析器在行进入窗口前于 Dispatchers.Default 提前填充（扩窗帧零解析）。
+ * 进程级单例（非 remember）——AnimatedContent 切页销毁聊天子树后缓存仍存活，
+ * 「设置返回聊天」的首帧 12 行组合同样受益。LRU 限 64 条防内存膨胀。
+ */
+object MdAstCache {
+    private const val MAX = 64
+    private val map = java.util.Collections.synchronizedMap(
+        object : java.util.LinkedHashMap<String, Pair<String, List<MdBlock>>>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<String, List<MdBlock>>>): Boolean =
+                size > MAX
+        }
+    )
+
+    fun get(source: String): List<MdBlock>? =
+        map[source]?.takeIf { it.first == source }?.second
+
+    fun put(source: String, blocks: List<MdBlock>) {
+        map[source] = source to blocks
+    }
+
+    /** 预解析：未命中才解析（内部切 Default，可从主协程顺序调用）。 */
+    suspend fun ensure(source: String) {
+        if (map.containsKey(source)) return
+        val blocks = withContext(Dispatchers.Default) { parseMarkdownAst(source) }
+        put(source, blocks)
+    }
+}
+
 /** Markdown 渲染入口（v2 AST 管线）：ChatScreen 两处调用点的唯一门面。 */
 @Composable
 fun MarkdownText(
@@ -250,7 +282,12 @@ fun MarkdownText(
     // 首帧同步解析防闪烁；后续文本变化走后台线程（mapLatest 自动丢弃过期任务，
     // 打字速率 >> 解析速率时天然合并）。
     // 冻结前缀仍生效：settledBoundary 之外的尾部子串独立解析后按块表拼接。
-    var blocks by remember { mutableStateOf(parseMarkdownAst(parseSource)) }
+    // 2026-10-28 首帧同步解析是「上滑扩窗一帧 8 行」掉帧的大头：先查进程级缓存
+    // （MessageList 的预解析器已在后台填好），命中即免主线程解析；未命中才同步
+    // 解析并回填缓存（下次组合/扩窗免费）。
+    var blocks by remember {
+        mutableStateOf(MdAstCache.get(parseSource) ?: parseMarkdownAst(parseSource).also { MdAstCache.put(parseSource, it) })
+    }
     var parsedFor by remember { mutableStateOf(parseSource) }
     var frozenSrc by remember { mutableStateOf("") }
     var frozenBlocks by remember { mutableStateOf<List<MdBlock>>(emptyList()) }
@@ -271,6 +308,8 @@ fun MarkdownText(
                 parseMarkdownAst(parseSource)
             }
         }
+        // 非流式的最终结果才进缓存——流式中间态文本会污染 LRU
+        if (!streaming) MdAstCache.put(parseSource, result)
         blocks = result
         parsedFor = parseSource
     }

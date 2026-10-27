@@ -180,6 +180,7 @@ import com.haoai.agent.ui.common.HaoIcons
 import com.haoai.agent.ui.common.GlassBottomSheet
 import com.haoai.agent.ui.common.LiquidGlassButton
 import com.haoai.agent.ui.common.MarkdownText
+import com.haoai.agent.ui.common.MdAstCache
 import com.haoai.agent.ui.common.PickerHueColors
 import com.haoai.agent.ui.common.SwipeRevealCard
 import com.haoai.agent.ui.common.appLayer
@@ -3379,6 +3380,18 @@ private fun MessageList(
                     scrollState.dispatchRawDelta(grown.toFloat())
                 }
             }
+        }
+    }
+
+    // 预解析（2026-10-28 修「贴顶扩窗一帧 8 行同步 Markdown 解析掉帧」）：
+    // 把窗口外紧邻的 16 行（离窗口最近者优先）提前在 Dispatchers.Default 解析进
+    // MdAstCache——扩窗帧的新行全部命中缓存，帧内只剩组合+测量。rows 变化时
+    // effect 重启，ensure() 对已缓存文本零成本跳过。
+    LaunchedEffect(rows, windowSize) {
+        val hiddenEnd = (rows.size - windowSize).coerceAtLeast(0)
+        val start = (hiddenEnd - 16).coerceAtLeast(0)
+        for (i in hiddenEnd - 1 downTo start) {
+            MdAstCache.ensure(rows[i].text)
         }
     }
 
