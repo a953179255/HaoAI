@@ -911,9 +911,16 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                     val isPush = to > from || (to == from && targetState > initialState)
                     when (MT.style) {
                         // ── 液态纵深：push=新页全幅滑入盖上，旧页原地缩退成玻璃卡
-                        // （缩 0.94 + 左移 16% + 变暗 26%，fadeOut 从 1 淡到 0 但
-                        // 起点已滞后——用 fadeOut 半程近似沉底变暗）；pop=上层页
-                        // 全幅滑出揭开，下层页从缩退态迎上来放大回位。430ms 同曲线。
+                        // （缩 0.94 + 左移 16% + 后半程溶入恒定壁纸）；pop=上层页
+                        // 不透明全幅滑出揭开，下层页从缩退态**全程不透明**迎上来
+                        // 放大回位。430ms 同曲线。
+                        // 2026-10-28 闪烁根治：进入页一律不挂 fade——「被揭开」的
+                        // 下层页（pop）与「盖上来的」新页（push）都是不透明层，
+                        // 靠位移/缩放显隐。此前 pop 进入页半程 alpha≈0（9c267b0
+                        // 的 riseIn 全程淡入同样从 0 起步），上层页滑走露出的半程
+                        // 是壁纸，内容"闪现"=用户报的「返回侧边栏聊天内容闪一下」。
+                        // 沉底淡出只保留在 push 的退出缩退卡上（溶入壁纸是定稿
+                        // 深度语义，且新页从右盖上无空窗）。
                         com.haoai.agent.ui.theme.MotionStyle.Liquid -> {
                             val slide = androidx.compose.animation.core.tween<androidx.compose.ui.unit.IntOffset>(
                                 MT.pageLiquidMs, easing = com.haoai.agent.ui.theme.LiquidPageEasing
@@ -921,18 +928,12 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                             val scale = androidx.compose.animation.core.tween<Float>(
                                 MT.pageLiquidMs, easing = com.haoai.agent.ui.theme.LiquidPageEasing
                             )
-                            // 沉底=后半程淡出（旧页缩退卡随时间溶入恒定壁纸）；
-                            // 回位=后半程淡入（下层卡从沉底态重新显出）。
-                            // （transitionSpec 逐属性 spec 支持 delay；效果图的
-                            // 26% 压暗罩层是二档增强，本期用淡出近似。）
+                            // 缩退卡沉底=后半程淡出（溶入恒定壁纸；新页从右盖上无空窗）
                             val sink = androidx.compose.animation.core.tween<Float>(
                                 MT.pageLiquidMs / 2, delayMillis = MT.pageLiquidMs / 2
                             )
                             if (isPush) {
-                                (androidx.compose.animation.slideInHorizontally(slide) { it } +
-                                    androidx.compose.animation.fadeIn(
-                                        androidx.compose.animation.core.tween(MT.pageLiquidMs / 2)
-                                    ))
+                                (androidx.compose.animation.slideInHorizontally(slide) { it })
                                     .togetherWith(
                                         androidx.compose.animation.slideOutHorizontally(slide) { -it * 16 / 100 } +
                                             androidx.compose.animation.scaleOut(targetScale = 0.94f, animationSpec = scale) +
@@ -940,23 +941,10 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                                     )
                                     .apply { targetContentZIndex = 1f }
                             } else {
-                                // pop 修复（2026-10-27 实机取证）：旧实现退出页
-                                // 前半程就淡完（tween 215 无 delay）+ 进入页后半程
-                                // 才淡入（sink），215ms 处两层同时接近透明 = 空窗
-                                // （录屏实测帧亮度跌到纯壁纸 78.8）——用户感知
-                                // 「点返回后半天才回来」「返回主页卡片浮现割裂」。
-                                // 改为交叉滑动：进入页全程淡入（与 -16% 迎上同步
-                                // 开始），退出页后半程淡出（与滑出同步收尾），
-                                // 全程两层可见性重叠，无空窗。
-                                val riseIn = androidx.compose.animation.core.tween<Float>(
-                                    MT.pageLiquidMs, easing = com.haoai.agent.ui.theme.LiquidPageEasing
-                                )
                                 (androidx.compose.animation.slideInHorizontally(slide) { -it * 16 / 100 } +
-                                    androidx.compose.animation.scaleIn(initialScale = 0.94f, animationSpec = scale) +
-                                    androidx.compose.animation.fadeIn(riseIn))
+                                    androidx.compose.animation.scaleIn(initialScale = 0.94f, animationSpec = scale))
                                     .togetherWith(
-                                        androidx.compose.animation.slideOutHorizontally(slide) { it } +
-                                            androidx.compose.animation.fadeOut(sink)
+                                        androidx.compose.animation.slideOutHorizontally(slide) { it }
                                     )
                                     .apply { targetContentZIndex = -1f }
                             }
