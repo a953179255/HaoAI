@@ -15,6 +15,7 @@ import com.haoai.agent.agent.engine.stopSubagent
 import com.haoai.agent.agent.tools.TodoItem
 import com.haoai.agent.agent.tools.TodoStore
 import com.haoai.agent.ui.chat.ContextUsage
+import com.haoai.agent.ui.common.MdAstCache
 import com.haoai.agent.ui.common.domainFromUrl
 import com.haoai.agent.ui.common.prefetchFavicons
 import com.haoai.agent.agent.engine.Finished
@@ -40,6 +41,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -799,6 +801,21 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private val _rows = MutableStateFlow<List<ChatRow>>(emptyList())
     val rows = _rows.asStateFlow()
+
+    init {
+        // Markdown AST 预热（2026-10-28）：常驻把最近 24 行解析进 MdAstCache。
+        // 关键差异：协程挂在 ViewModel 上——切到设置等页面后聊天子树虽被
+        // AnimatedContent 销毁，这里仍在跑；「设置返回聊天」时 12 行窗口全部
+        // 命中缓存，pop 首帧组合免掉主线程同步 Markdown 解析（卡半秒+闪烁的
+        // 组成部分）。collectLatest+500ms 防抖：流式期逐 token 的行变化不会触发
+        // 反复重解析，静默 500ms 后才补；ensure() 对已缓存文本零成本跳过。
+        viewModelScope.launch {
+            _rows.collectLatest { list ->
+                delay(500)
+                for (r in list.takeLast(24)) MdAstCache.ensure(r.text)
+            }
+        }
+    }
 
     /**
      * ❶ 晋升行标记：这些 key 的行是"刚从流式区晋升"的——引擎 MessageAdded 落库时，
