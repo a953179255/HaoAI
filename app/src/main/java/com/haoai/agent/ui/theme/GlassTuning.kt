@@ -118,6 +118,12 @@ object GlassTuning {
     /** 展示玻璃按压跟手弹性（demo 同款 tanh 平移+拖向缩放；转正默认开） */
     var elastic by mutableStateOf(true)
 
+    /** 转场玻璃降级（2026-10-28）：页面转场进行中=true，全部折射玻璃退化为平色
+     *  半透明卡（跳过 drawBackdrop 的 RenderEffect 采样）。两层页面被变换时每帧
+     *  每块玻璃重采样，成本∝玻璃面板数——用户真机差分实证（工作空间顺/主题外观
+     *  卡/用量灾难）。430ms 内以平色卡过场、落位即恢复折射。 */
+    var transitionActive by mutableStateOf(false)
+
     /** 展示玻璃折射位移 dp（独立于全局：按钮小面积，位移手感单独一档） */
     var btnLensAmount by mutableFloatStateOf(DEFAULT_BTN_LENS_AMOUNT)
 

@@ -365,7 +365,7 @@ fun GlassPanel(
     floating: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val r = refract ?: LocalGlassRefract.current
+    val r = !com.haoai.agent.ui.theme.GlassTuning.transitionActive && (refract ?: LocalGlassRefract.current)
     val surface = glassSurfaceColor(surfaceAlpha, floating)
     // 表面色状态观察（⚠️ 2026-10-01 深浅翻转滞留修复）：玻璃层是画进 graphicsLayer
     // 的缓存渲染，主题翻转时仅靠重组换绘制 lambda 不总能触发层重绘——实测深→浅→深
@@ -657,7 +657,7 @@ fun LiquidGlassButton(
     val animationScope = rememberCoroutineScope()
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
 
-    val r = refract ?: LocalGlassRefract.current
+    val r = !com.haoai.agent.ui.theme.GlassTuning.transitionActive && (refract ?: LocalGlassRefract.current)
     val bgModifier = if (r) {
         Modifier.drawBackdrop(
             backdrop = backdrop,
@@ -770,7 +770,7 @@ fun GlassCard(
     val animationScope = rememberCoroutineScope()
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
 
-    val r = refract ?: LocalGlassRefract.current
+    val r = !com.haoai.agent.ui.theme.GlassTuning.transitionActive && (refract ?: LocalGlassRefract.current)
     val cardSurface = glassSurfaceColor(surfaceAlpha)
     // 高光/外投影接调参（2026-10-10）：库 drawBackdrop 的默认值就是
     // Highlight.Default（alpha 1）与 Shadow.Default（24dp/黑10%），故在滑杆默认档
@@ -945,7 +945,7 @@ fun LiquidToggle(
     val animationScope = rememberCoroutineScope()
     val highlight = remember(animationScope) { LiquidPressHighlight(animationScope) }
     val view = LocalView.current
-    val r = refract ?: LocalGlassRefract.current
+    val r = !com.haoai.agent.ui.theme.GlassTuning.transitionActive && (refract ?: LocalGlassRefract.current)
 
     val width = 52.dp
     val height = 32.dp

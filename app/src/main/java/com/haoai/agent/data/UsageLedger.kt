@@ -89,6 +89,8 @@ object UsageLedger {
     fun init(filesDir: File) {
         dir = File(filesDir, "usage").apply { mkdirs() }
         executor.execute { runCatching { sweep() } }
+        // 仪表盘预热（2026-10-28）：首次进用量页的转场首帧不再撞文件 IO
+        executor.execute { runCatching { refreshDashboard() } }
     }
 
     fun add(entry: Entry) {
@@ -96,6 +98,7 @@ object UsageLedger {
             runCatching { appendNow(entry) }.onFailure {
                 android.util.Log.w("HaoLedger", "ledger write failed: ${it.message}")
             }
+            runCatching { refreshDashboard() }
         }
     }
 
@@ -228,6 +231,7 @@ object UsageLedger {
             todayCacheDate = null
             todayCacheSum = 0L
         }
+        executor.execute { runCatching { refreshDashboard() } }
     }
 
     // ---------- 方案B 时段仪表盘 ----------
@@ -296,10 +300,32 @@ object UsageLedger {
     }
 
     /**
-     * 方案B 仪表盘聚合：一次读账本，三个时段各出一份 PeriodStats。
-     * prevTotal 取上一窗口总 token（今日→昨日 / 本周→上周 / 本月→上月），供环比。
+     * 方案B 仪表盘聚合（带进程级缓存，2026-10-28 修「用量页转场灾难级」）：
+     * readAll() 全量读账本文件 + 逐行 JSON 反序列化，原来在组合期同步跑——转场
+     * 首帧被文件 IO 打断（与 DistroManager 同病，9c267b0 修过它）。现在读永远
+     * 命中缓存；写（add/clearAll）后由账本单线程 executor 后台重算；init 预热。
+     * 缓存未命中的兜底路径仍同步计算（首次进入且预热未完成时，一次性）。
      */
     fun dashboard(): List<PeriodStats> {
+        dashboardCache?.let { return it }
+        synchronized(lock) {
+            dashboardCache?.let { return it }
+            val out = computeDashboard()
+            dashboardCache = out
+            return out
+        }
+    }
+
+    @Volatile
+    private var dashboardCache: List<PeriodStats>? = null
+
+    private fun refreshDashboard() {
+        synchronized(lock) {
+            dashboardCache = computeDashboard()
+        }
+    }
+
+    private fun computeDashboard(): List<PeriodStats> {
         val entries = readAll()
         val cal = java.util.Calendar.getInstance()
         val dayStart = cal.clone().let { c ->

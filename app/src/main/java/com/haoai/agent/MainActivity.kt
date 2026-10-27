@@ -772,9 +772,35 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
     var screenSettled by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(screen)
     }
-    androidx.compose.runtime.LaunchedEffect(screen) {
-        kotlinx.coroutines.delay(100)   // 转场收尾
+    // 转场玻璃降级（2026-10-28）：新屏组合帧同步置位（remember(screen) 早于首帧
+    // 绘制），落位后恢复折射。冷启动首帧不置位（首次组合本来就是最重的一帧，
+    // 但冷启动直接玻璃全开观感不突兀，避免「玻璃晚半秒出现」的 crystallize 观感）。
+    // settle 时长按当前档位最长转场算——旧 delay(100) 是 spring 时代的值，
+    // 430ms 液态档下会在转场中段就采样状态栏（亮度采到动画中间帧）。
+    val firstScreenRef = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(true)
+    }
+    val settleDelayMs = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableIntStateOf(430)
+    }
+    androidx.compose.runtime.remember(screen) {
+        val mst = com.haoai.agent.ui.theme.MotionTheme
+        if (!firstScreenRef.value) {
+            com.haoai.agent.ui.theme.GlassTuning.transitionActive = true
+        }
+        firstScreenRef.value = false
+        settleDelayMs.intValue = when (mst.style) {
+            com.haoai.agent.ui.theme.MotionStyle.Liquid -> mst.pageLiquidMs
+            com.haoai.agent.ui.theme.MotionStyle.Snappy -> maxOf(
+                mst.pageSnappyInMs, mst.pageSnappyOutMs
+            )
+            com.haoai.agent.ui.theme.MotionStyle.Gentle -> mst.pageGentleInDelayMs + mst.pageGentleInMs
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(screen, settleDelayMs.intValue) {
+        kotlinx.coroutines.delay(settleDelayMs.intValue + 80L)   // 转场收尾
         screenSettled = screen
+        com.haoai.agent.ui.theme.GlassTuning.transitionActive = false
     }
     // 遗留3 修复（2026-09-22）：净色底玻璃"透过"的颜色必须与页面实际底色一致
     // （采样=所见）。此前用 surface/surfaceVariant 渐变，与壳的 .background(background) 不符
