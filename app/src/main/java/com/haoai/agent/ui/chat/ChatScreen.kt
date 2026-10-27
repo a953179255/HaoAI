@@ -2983,12 +2983,6 @@ private fun TopBar(
     }
 }
 
-/** 消息列表首帧小窗（2026-10-27 修「设置返回卡半秒」）：首帧只组合这么几行，
- *  让 AnimatedContent 转场立即开始；落定后由 LaunchedEffect 补齐到 [FULL_WINDOW]。 */
-private const val INITIAL_WINDOW = 4
-/** 补齐后的常驻窗口（与原实现一致：最近 12 条，向上滚再自动扩窗）。 */
-private const val FULL_WINDOW = 12
-
 @Composable
 private fun MessageList(
     rows: List<ChatRow>,
@@ -3343,16 +3337,7 @@ private fun MessageList(
     // 这里只把**最近 12 条**放进 Column，向上滚到顶部附近再自动扩窗。
     // 关键：扩窗后把新增内容的高度补进滚动位置，**视口不跳**（否则上方插入会让画面位移）。
     // 不截断任何内容 —— 只是延后组合；切会话重置。
-    //
-    // ⭐首帧小窗（2026-10-27 修「设置返回卡半秒」）：本页是 AnimatedContent 转场的
-    // target——转场动画必须等本页**首帧组合+测量完成**才开始（Compose 机制），
-    // 而 12 行一次组合在真机 ARM 上 350-450ms（本项目实测 24 行 674-911ms，
-    // 模拟器 x86 快一个量级感知不到）＝用户感知「点返回后半天才回聊天页」。
-    // 首帧只组合 INITIAL_WINDOW=4 行让转场立刻开始，落定后由下方 LaunchedEffect
-    // 立即补齐到 FULL_WINDOW——转场是交叉滑动，补齐那几帧没人数消息条数；
-    // 冷启动首屏同样受益（首帧更快）。切会话同样走小窗+补齐（补齐在下一帧前
-    // 完成，可见差异 <1 帧）。
-    var windowSize by remember(sessionId) { mutableStateOf(INITIAL_WINDOW) }
+    var windowSize by remember(sessionId) { mutableStateOf(12) }
     // 【必须用 rememberUpdatedState】rows 是**值参数**不是 State：LaunchedEffect 的协程
     // 只会捕获启动那一刻的 List，之后它在循环里读到的永远是旧数量 ——
     // 实测症状：造了 6 条新消息，循环里 rows.size 仍恒为 8，于是"自动扩窗"永不触发
@@ -3366,25 +3351,6 @@ private fun MessageList(
     // 初值 = 首帧就存在的 keys ⇒ 首屏/切会话时不会集体淡入；之后 add 成功才是"新行"。
     val seenRowKeys = remember(sessionId) { rows.mapTo(HashSet<String>()) { it.key } }
     LaunchedEffect(sessionId) {
-        // ⭐首帧小窗补齐（2026-10-27，见 windowSize 处注释）：置满后等新内容测量
-        // 落地，把顶部插入的高度补进滚动位置（与下方扩窗补偿同法）——贴底状态
-        // 视口纹丝不动，补齐那几帧藏在页面转场动画里。
-        if (windowSize < FULL_WINDOW) {
-            val before = scrollState.maxValue
-            windowSize = FULL_WINDOW
-            var waited = 0
-            while (waited < 10 && scrollState.maxValue == before) {
-                androidx.compose.runtime.withFrameNanos { }
-                waited++
-            }
-            val grown = scrollState.maxValue - before
-            if (grown > 0 && scrollState.maxValue != Int.MAX_VALUE) {
-                runCatching {
-                    scrollState.scroll(androidx.compose.foundation.MutatePriority.UserInput) { }
-                }
-                scrollState.dispatchRawDelta(grown.toFloat())
-            }
-        }
         while (true) {
             kotlinx.coroutines.delay(300)
             if (rowsCount > windowSize && scrollState.value <= 400) {
@@ -3528,10 +3494,8 @@ private fun MessageList(
         // 误判成最终回复、挂上复制/重发/更多并一直留存——流式区还有产出时同样不算收尾
         val finalRowKey = if (!running && !showStreaming) windowedRows.lastOrNull()?.key else null
         val growInKey = if (justFinished) finalRowKey else null
-        // 窗口外还有更早的消息时给一行提示（向上滚即自动加载，不截断内容）。
-        // 门在 FULL_WINDOW（2026-10-27）：首帧小窗（4 行）期间 hiddenRowCount
-        // 是虚高值（146），提示行会闪一帧错误数字——补齐到 12 行后才显示。
-        if (hiddenRowCount > 0 && windowSize >= FULL_WINDOW) {
+        // 窗口外还有更早的消息时给一行提示（向上滚即自动加载，不截断内容）
+        if (hiddenRowCount > 0) {
             androidx.compose.runtime.key("more_history") {
                 Box(
                     Modifier
