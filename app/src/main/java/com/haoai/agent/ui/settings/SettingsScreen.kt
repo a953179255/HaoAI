@@ -10,8 +10,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -188,7 +191,14 @@ fun SettingsScreen(
     /** section 子页独立 screen 化：主页菜单点击回调（参数为 section key → screen 号由 MainActivity 映射） */
     onOpenSection: (Int) -> Unit = {},
     /** 搜索服务 → 目录页（全量后端 + 搜索过滤），独立 screen 由 MainActivity 映射 */
-    onOpenSearchCatalog: () -> Unit = {}
+    onOpenSearchCatalog: () -> Unit = {},
+    /**
+     * 转场退出层冻结（2026-10-28）：MainActivity 判定「本层是被替换的退出层」
+     * 时置 true——退出层在 AnimatedContent 里拿到的 screen 号 ≠ 当前 target。
+     * true 时整页录一次快照、之后每帧只画这张静态纹理（纯 GPU 合成），
+     * 避免玻璃密集页在转场中逐帧全量重绘。观感与实时渲染逐帧一致。
+     */
+    frozen: Boolean = false
 ) {
     val context = LocalContext.current
     val settings by vm.settings.collectAsState()
@@ -263,6 +273,32 @@ fun SettingsScreen(
     // 独立 screen 模式：只渲染锁定的子页（无主页分支、返回走 onSectionBack）。
     // 关键：不能 early return——供应商编辑/删除确认/模型选择等弹窗渲染在函数
     // 尾部，early return 会让独立模式下所有触发弹窗的按钮「点了没反应」
+    //
+    // ⭐转场退出层冻结（2026-10-28，对齐聊天页 drawer.frozen 机制）：
+    // 设置页是玻璃密集页（主页约 140 个玻璃表面，每个=背景采样+折射+景深+色差+
+    // 24dp 投影），作退出层滑出时每帧全量重绘，真机 120Hz 下转场全程掉帧
+    // （实测录制命令 7.6ms/帧、渲染执行 9.5ms/帧，预算只有 8.3ms）。
+    // 冻结=整页录一次快照，之后每帧只画这张静态纹理（纯 GPU 合成）。
+    // 观感零影响：退出层在转场中整体平移，壁纸恒定不动，玻璃采样源恒定
+    // ——录进快照的画面与实时渲染逐帧一致（聊天页同机制已长期验证）。
+    val snapshotLayer = rememberGraphicsLayer()
+    // 快照新鲜度用普通 var（不订阅快照）：只在绘制期读写，走 State 会触发重组。
+    val snapFresh = remember { object { var fresh = false } }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .drawWithContent {
+                if (frozen) {
+                    if (!snapFresh.fresh) {
+                        snapshotLayer.record { this@drawWithContent.drawContent() }
+                        snapFresh.fresh = true
+                    }
+                    drawLayer(snapshotLayer)                } else {
+                    snapFresh.fresh = false
+                    drawContent()
+                }
+            }
+    ) {
     if (lockedSection != null) {
         SectionPage(
             section = lockedSection,
@@ -614,6 +650,7 @@ fun SettingsScreen(
             onBack = { section = "" }
         )
     }
+    } // 冻结层 Box 结束（弹窗留在冻结层外：独立窗口/自绘遮罩不受转场定格影响）
 
     draft?.let { d ->
         if (vm.wizardOpen) {

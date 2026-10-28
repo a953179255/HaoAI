@@ -1052,12 +1052,24 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
             // zIndex 已由 transitionSpec 的 targetContentZIndex 声明（内容重组层
             // 的 Modifier.zIndex 不参与 AnimatedContent 的 z 排序，是死代码），
             // 页面直接平铺
+            // ⭐本层专属采样画布（2026-10-28）：按「本层类型」定，不按当前 screen 定。
+            // 背景：screen 在转场首帧就已变成 target，共享的 backdrop 变量随之突变
+            // （设置页 1→聊天页 0 时切到聊天页画布）——退出层设置页的玻璃采样源
+            // 在转场第一帧突变，冻结快照会把「透出聊天内容」的玻璃画面定格下来。
+            // 本层画布固定 = 转场前后采样源一致 = 快照与起点逐帧一致（观感零影响）。
+            val layerBackdrop = when {
+                s == 0 -> chatBackdrop
+                wallpaper != null && settings.wallpaperGlobal -> settingsBackdrop
+                else -> plainBackdrop
+            }
             // 横屏：整页限宽居中（一处覆盖 0~18 全部屏；浏览器/抽屉可见时豁免）
             LandscapeWrap(s = s, drawerOpen = s == 0 && (drawer.drawerVisible || drawer.frozen)) {
             when (s) {
                 1 -> SettingsScreen(
                     vm = settingsVm,
-                    backdrop = backdrop,
+                    backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     // 全局壁纸开时设置页自带对齐的壁纸底（页面自己的 Image 层，
                     // 随页面整体滑动）——「壁纸应用于所有页面」真正生效
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
@@ -1088,63 +1100,83 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 // ---- 设置 section 子页独立 screen（9-16）：共用 SettingsScreen
                 // lockedSection 渲染，转场/壁纸/返回与技能库等完全一致 ----
                 9 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "brain", onSectionBack = { screen = 1 }
                 )
                 10 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "privacy", onSectionBack = { screen = 1 }
                 )
                 11 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "memory", onSectionBack = { screen = 1 },
                     onOpenMemories = { screen = 2 }
                 )
                 12 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "linux", onSectionBack = { screen = 1 }
                 )
                 13 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "workspace", onSectionBack = { screen = 1 }
                 )
                 14 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "general", onSectionBack = { screen = 1 }
                 )
                 // 主题外观（2026-10-08）：配色/壁纸/玻璃质感/动画风格，从通用页拆出
                 20 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "theme", onSectionBack = { screen = 1 }
                 )
                 15 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "about", onSectionBack = { screen = 1 }
                 )
                 16 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "usage", onSectionBack = { screen = 1 }
                 )
                 17 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 1 },
                     lockedSection = "search", onSectionBack = { screen = 1 },
@@ -1152,7 +1184,9 @@ private fun RootApp(wallpaper: android.graphics.Bitmap?) {
                 )
                 // 搜索服务目录页：从「搜索服务」进来，返回要回它而不是设置主页
                 18 -> com.haoai.agent.ui.settings.SettingsScreen(
-                    vm = settingsVm, backdrop = backdrop,
+                    vm = settingsVm, backdrop = layerBackdrop,
+                    // 转场退出层冻结：s 是本层自己的 screen 号，≠ 当前 target 即退出层
+                    frozen = (s != screen),
                     wallpaper = if (settings.wallpaperGlobal) wallpaper else null,
                     onBack = { screen = 17 },
                     lockedSection = "searchcat", onSectionBack = { screen = 17 }
