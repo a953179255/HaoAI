@@ -5,6 +5,8 @@ import com.haoai.agent.agent.model.newFallbackCallId
 import com.haoai.agent.data.HaoJson
 import com.haoai.agent.data.ProviderConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -403,8 +405,13 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
             val source = resp.body?.source() ?: throw IOException("响应为空")
             val state = StreamState()
 
-            val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
-                ?.invokeOnCompletion { call.cancel() }
+            // ⭐看门狗而非 invokeOnCompletion（2026-10-28 真机实锤）：旧钩子是「协程**彻底
+            // 结束**才回调」，而结束的前提正是这个阻塞读读完了 —— 死锁：取消请求发出 →
+            // 读还阻塞 → 协程不结束 → 钩子不触发 → call.cancel() 不执行 → 一直卡到
+            // readTimeout（120s）。实测：用户按下停止后引擎又跑了 120.5s 才落盘
+            // （= readTimeout 120s），期间 UI 状态胶囊一直转、停止键看着"没反应"。
+            // 看门狗用子协程把「父协程被取消」翻译成「立刻 call.cancel() 断链」，公开 API。
+            val watchdog = StreamCancelWatchdog(call, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.currentCoroutineContext()))
             try {
                 while (true) {
                     val line = source.readUtf8Line() ?: break
@@ -417,8 +424,15 @@ class AnthropicClient(private val okHttpClient: OkHttpClient) : ProviderClient {
                     state.handle(event).forEach { emit(it) }
                     state.errorMessage?.let { throw IOException("$it（${provider.name}）") }
                 }
+            } catch (e: IOException) {
+                // 取消导致的断链（call.cancel() → read 抛 "Canceled"）不是网络故障：
+                // ensureActive() 在协程已被取消时抛 CancellationException，让引擎走
+                // 「用户停止」分支（标记[已停止]+保留已产出内容），而不是「意外中断」错误。
+                // 协程未取消时 ensureActive() 是空操作，原样抛出网络异常。
+                currentCoroutineContext().ensureActive()
+                throw e
             } finally {
-                cancelHandle?.dispose()
+                watchdog.dispose()
             }
 
             if (!state.gotAnyContent && state.pendingTools.isEmpty()) {

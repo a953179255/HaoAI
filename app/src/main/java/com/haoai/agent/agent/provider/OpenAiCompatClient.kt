@@ -4,6 +4,8 @@ import com.haoai.agent.agent.model.newFallbackCallId
 import com.haoai.agent.data.HaoJson
 import com.haoai.agent.data.ProviderConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -345,9 +347,15 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
             val thinkParser = ThinkTagParser()
 
             // 读循环是阻塞 IO：协程取消不会自动中断 socket 读（本地推理 prefill 数分钟无
-            // token，停止键会卡到读超时）。挂 completion 钩子在取消时强制断开连接。
-            val cancelHandle = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
-                ?.invokeOnCompletion { call.cancel() }
+            // token，停止键会卡到读超时）。挂看门狗在取消时强制断开连接。
+            //
+            // ⭐旧实现用 invokeOnCompletion（协程**彻底结束**才回调）→ 死锁（2026-10-28 真机实锤）：
+            // 结束的前提正是这个阻塞读读完了 —— 取消请求发出 → 读还阻塞 → 协程不结束
+            // → 钩子不触发 → call.cancel() 不执行 → 一直卡到 readTimeout（120s）。
+            // 实测：用户按下停止后引擎又跑了 120.5s 才落盘（= readTimeout 120s），
+            // 期间 UI 状态胶囊一直转、停止键看着"没反应"。
+            // 看门狗用子协程把「父协程被取消」翻译成「立刻 call.cancel() 断链」，公开 API。
+            val watchdog = StreamCancelWatchdog(call, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.currentCoroutineContext()))
             try {
                 while (true) {
                     val line = source.readUtf8Line() ?: break
@@ -397,8 +405,15 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                         choice.finishReason?.takeIf { it.isNotBlank() }?.let { finishReasons += it }
                     }
                 }
+            } catch (e: IOException) {
+                // 取消导致的断链（call.cancel() → read 抛 "Canceled"）不是网络故障：
+                // ensureActive() 在协程已被取消时抛 CancellationException，让引擎走
+                // 「用户停止」分支（标记[已停止]+保留已产出内容），而不是「意外中断」错误。
+                // 协程未取消时 ensureActive() 是空操作，原样抛出网络异常。
+                currentCoroutineContext().ensureActive()
+                throw e
             } finally {
-                cancelHandle?.dispose()
+                watchdog.dispose()
             }
 
             // 流结束：冲出残留缓冲（未闭合的 <think> 尾部按思考内容处理）
