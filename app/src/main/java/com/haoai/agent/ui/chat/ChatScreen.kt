@@ -1202,6 +1202,7 @@ fun ChatScreen(
                 parkedFollow = parkedFollow,
                 expandParkUntil = expandParkUntil,
                 jumperVisible = jumperVisible,
+                keyboardLiftPxState = keyboardLiftState,
                 sessionId = vm.session.collectAsState().value?.id,
                 planProposal = planProposal
                     ?.takeIf { it.first == vm.session.collectAsState().value?.id }?.second,
@@ -3040,6 +3041,9 @@ private fun MessageList(
      *  向下翻且离底超门槛=浮现（dV>0 且非我方钉底帧），向上翻（阅读意图）=即隐；
      *  闲置 2.5 秒淡出的计时也在循环内（本地时间戳，不逐帧写 State）。 */
     jumperVisible: androidx.compose.runtime.MutableState<Boolean>,
+    /** 键盘抬升高度（px，ChatScreen keyboardLiftState）：停车态下逐帧补偿滚动用。
+     *  必须是 State——逐帧循环每帧读最新值；传普通 Int 参数会捕获快照、永不更新。 */
+    keyboardLiftPxState: androidx.compose.runtime.State<Int>,
     sessionId: String? = null,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
@@ -3179,10 +3183,18 @@ private fun MessageList(
         // 粘底状态机（2026-10-12 三修）：逐帧比对位移量判「这一帧的位移是谁造成的」。
         // -1=首帧未知。
         var prevFrameV = -1L
+        // 停车补偿自认闸（2026-10-29）：dispatchRawDelta 不是滚动会话，它造成的位移
+        // 在下一帧以 dV≠0 现形。若不豁免，会被"位移归因"判成用户挪过 → 误亮回底浮钮、
+        // 刷闲置计时。语义同 prevPinnedByUs（钉底帧豁免），二者取或。
+        var prevLiftedByUs = false
         // 回底浮钮 v3 闲置淡出计时基准（2026-10-12 方向感知定稿）：最近一次用户
         // 归因滚动帧的时刻。是循环内**本地变量**——钮的「停手 2.5 秒淡出」用它
         // 判闲置，绝不每帧写 State（每帧写=读取方每帧重组，主题页 jank 同款教训）。
         var lastUserScrollFrameMs = 0L
+        // 键盘升起补偿（2026-10-29 修「停车态呼出键盘内容不抬」）：停车（parked）时
+        // 粘底让位，"内容随键盘抬起"没人负责——账本=已代键盘补滚的像素，停车态每帧
+        // 向 keyboardLiftPx 追平（多退少补）；跟随态由 pin 代劳，账本对齐 lift。
+        var imeCompensatedPx = 0f
         // 【自愈】2026-09-19：把跟随改成逐帧驱动后，这里再包一层 try/catch + 循环重连。
         // 理由：跟随逻辑一旦中途失效，粘底状态机就再也不推进、钉底/停车全部瘫痪，
         // 而且**没有任何可见报错**（排查时极难定位）。重连保证任何单次异常都不会让它永久失效。
@@ -3239,20 +3251,22 @@ private fun MessageList(
                 val vNow2 = listState.scrollPosProxy()
                 val dV = if (prevFrameV >= 0) vNow2 - prevFrameV else 0L
                 prevFrameV = vNow2
-                if (dV != 0L && !prevPinnedByUs) parkedFollow.value = true
+                if (dV != 0L && !prevPinnedByUs && !prevLiftedByUs) parkedFollow.value = true
                 // 展开豁免窗口内不撤停：点展开置的 parkedFollow 若被本行「仍贴底」当场抹掉，
                 // 窗口一过又吸底=锚定失效。窗口外撤停逻辑照常（用户滚回底部恢复跟随）。
                 if (delta <= 8 && expandParkUntil.value <= System.currentTimeMillis())
                     parkedFollow.value = false
                 // ── 回底浮钮 v3 方向驱动（2026-10-12 定稿）───────────────────
-                // 只看**用户归因**位移（我方钉底帧由 prevPinnedByUs 排除，语义同
-                // 上面的停车判定）。dV>0=画面朝下走=用户在向下找新内容 → 若离底
+                // 只看**用户归因**位移（我方钉底帧由 prevPinnedByUs 排除，停车补偿帧
+                // 由 prevLiftedByUs 排除——补偿是 IM 动画期逐帧代键盘挪位，不是用户在翻，
+                // 误归因会刷闲置计时、令浮钮在键盘起落期闪现，语义同钉底豁免）。
+                // dV>0=画面朝下走=用户在向下找新内容 → 若离底
                 // 还超过 150dp 门槛就浮现；dV<0=向上翻=阅读意图 → 立即隐藏；
                 // 已滚到底附近(delta≤门槛)一并收钮（贴底不需要回底入口）。
                 // 闲置淡出：记下最近一次用户归因滚动帧（本地变量，**不逐帧写
                 // State**——每帧写会让读取方每帧重组，主题页 17.34% jank 同款
                 // 教训），钮亮着且 2.5 秒没有新归因位移即收。
-                if (dV != 0L && !prevPinnedByUs) {
+                if (dV != 0L && !prevPinnedByUs && !prevLiftedByUs) {
                     lastUserScrollFrameMs = System.currentTimeMillis()
                     when {
                         delta <= jumperGapPx -> jumperVisible.value = false
@@ -3276,6 +3290,39 @@ private fun MessageList(
                 // 边缘自动滚动逐帧打架；此刻的位移下一帧也会被 dV 归因接住。
                 if (busyFrames < 1 && follow && !fingerOnList.value && !expandParked)
                     pinned = listState.pinToBottom()
+                // ── 停车态键盘补偿（2026-10-29 修「停车态呼出键盘内容不抬」）──────
+                // 背景：键盘避让=输入栏 offset 上移 + 列表底部留白(bottomPadding)同步
+                // 增大，"内容跟着抬"过去全靠粘底 pin 的副作用；停车（用户上滑回看）时
+                // pin 让位，留白却照样变大→视口底被键盘吃掉多少就盖住多少气泡（用户报）。
+                // 补法：停车时逐帧把「抬升增量」代为补滚——dispatchRawDelta 同步即时
+                // （区别于 requestScrollToItem 的"下次重测生效"），与 IM 动画逐帧同步。
+                // 方向：dispatchRawDelta(+d)=画面朝下走=内容相对上移，与 lift 变大同向。
+                // 多退少补：键盘收起动画期反向回滚——LazyList 顶部锚定下若不还原，
+                // 整屏内容会随留白缩小"往下沉"盖过输入栏，还原才与用户预期一致。
+                // 让位闸同 pin：按住/滚动会话/展开豁免窗口不抢方向盘。
+                // 边界保护：回滚只允许在"顶部尚有已组合内容可还原"（firstVisible 非
+                // (0,0)）时执行，防止单页短会话反向滚穿顶部。
+                val lift = keyboardLiftPxState.value
+                var liftedByUs = false
+                if (busyFrames < 1 && !follow && !fingerOnList.value && !expandParked) {
+                    val need = lift - imeCompensatedPx
+                    if (abs(need) >= 1f) {
+                        // 回滚（need<0，键盘收起期）只允许在"顶部尚有已组合内容可还原"
+                        // 时执行——单页短会话从 (0,0) 再回滚没有意义（也会被 LazyList
+                        // 钳住），显式跳过少一次无谓重测。
+                        val allowBack = need > 0f ||
+                            listState.firstVisibleItemIndex > 0 ||
+                            listState.firstVisibleItemScrollOffset > 0
+                        if (allowBack) {
+                            listState.dispatchRawDelta(need)
+                            liftedByUs = true
+                        }
+                    }
+                }
+                // 账本无条件对齐 lift：跟随态=钉底代劳、让位态=用户手势期间键盘正在
+                // 收起（clearFocus→lift→0），都不欠补偿；转停车帧从账本=当前 lift 起步，
+                // 不会对用户刚定位的内容补出一记"跳"。
+                imeCompensatedPx = lift.toFloat()
                 // 诊断走**内存**（不落盘：滚动路径上做主线程 IO 会卡顿），
                 // 需要时用 haoai://debug/followdump 一次性导出。
                 // P0-2：这条字符串每渲染帧拼一条，探针关着时连拼都不拼
@@ -3288,6 +3335,7 @@ private fun MessageList(
                     )
                 }
                 prevPinnedByUs = pinned
+                prevLiftedByUs = liftedByUs
                 prevAtBottom = atBottom
         }
         } catch (c: kotlinx.coroutines.CancellationException) {
