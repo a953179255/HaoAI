@@ -176,6 +176,11 @@ class LlamaServerController(
             Regex("'([^']+)'").find(line)?.groupValues?.get(1)?.let { arch -> arch to line.trim() }
         }
 
+    /** app 侧里程碑行（启动参数/兜底/就绪/退出）：单行追加写，与排水线程共用日志文件。 */
+    private fun appendAppLog(f: File, line: String) = runCatching {
+        java.io.FileWriter(f, true).use { it.append(line).append("\n").flush() }
+    }
+
     fun findModel(): File? {
         // 支持免拷贝直读：preferredModel 可以是手机上任意位置的绝对路径
         preferredModel?.let { pref ->
@@ -406,6 +411,7 @@ class LlamaServerController(
                 if (i < tiers.size - 1) {
                     val next = tiers[i + 1]
                     android.util.Log.w("HaoLlama", "${tier.label} 启动失败，回退 ${next.label}")
+                    runCatching { appendAppLog(serverLogFile(), "[app] ${tier.label} 启动失败，回退 ${next.label}") }
                     _state.value = LlamaState.Starting("${tier.label} 不可用，${next.label} 兜底加载… 4%", 4)
                 }
             }
@@ -492,6 +498,12 @@ class LlamaServerController(
                 env["ADSP_LIBRARY_PATH"] = nativeDir + ";" + (env["ADSP_LIBRARY_PATH"] ?: "")
             }
             val logFile = serverLogFile()
+            // 首档启动前截断旧日志（原在排水线程首写时做——挪到这里，app 侧里程碑行
+            // 才不会被随后的截断吃掉）。b11982 实测：成功启动的 server stdout 不足
+            // 4KB 会被管道全缓冲憋住、一行都不落盘，日志面板只见空文件——所以
+            // app 侧自己写启动参数/兜底/就绪/退出里程碑行，保证面板任何时刻有上下文。
+            if (firstAttempt) runCatching { logFile.writeText("") }
+            appendAppLog(logFile, "[app] === 启动 ${model.name}（${tier.label}）· tag=${BuildConfig.LLAMA_ENGINE_TAG} · -c $contextSize -t ${cmd[cmd.indexOf("-t") + 1]} ===")
             val proc = pb.start()
             process = proc
 
@@ -501,7 +513,7 @@ class LlamaServerController(
                 runCatching {
                     proc.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
                         java.io.PrintWriter(java.io.BufferedWriter(
-                            java.io.FileWriter(logFile, !firstAttempt)
+                            java.io.FileWriter(logFile, true)
                         )).use { writer ->
                             var written = 0
                             reader.forEachLine { line ->
@@ -530,6 +542,7 @@ class LlamaServerController(
                 // 大模型加载可达数分钟：等待必须可被协程取消（停止键立即生效）
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 if (proc.exitValueOrNull() != null) {
+                    appendAppLog(logFile, "[app] 进程退出（code=${proc.exitValueOrNull()}），详见上方报错")
                     reapProcess(proc)
                     return false
                 }
@@ -547,6 +560,7 @@ class LlamaServerController(
                             }
                             currentModelPath = model.absolutePath
                             lastActiveBackend = tier.key
+                            appendAppLog(logFile, "[app] 服务就绪（${tier.label}）：http://127.0.0.1:$PORT")
                             _state.value = LlamaState.Running(model.name)
                             return true
                         }
