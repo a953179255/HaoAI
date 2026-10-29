@@ -19,7 +19,10 @@ import com.haoai.agent.agent.tools.SearchTestOutcome
 import com.haoai.agent.data.AppSettings
 import com.haoai.agent.data.CapabilityResolver
 import com.haoai.agent.data.ProviderConfig
+import com.haoai.agent.platform.llama.GgufMeta
+import com.haoai.agent.platform.llama.LlamaServerController
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1358,28 +1361,97 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     var importingModel by mutableStateOf<String?>(null)
         private set
 
+    private var importingCopyJob: kotlinx.coroutines.Job? = null
+
     /**
-     * 加载模型文件：仅直读 SAF 解析出的本机真实路径（不复制、不占双份空间）。
-     * 解析不到真实路径（第三方/云文档提供器）时不再复制兜底，直接提示改用「扫描」或把模型放到本机存储。
+     * 加载模型文件：优先直读 SAF 解析出的本机真实路径（不复制、不占双份空间）。
+     * 2026-10-30：解析不到真实路径（第三方/云文档提供器）时改为流式复制进应用目录——
+     * 不再逼用户「先把模型挪到 Download」；受限路径直读仍提示开权限。
      */
     fun loadModelFile(context: android.content.Context, uriString: String) {
         val resolved = resolveDocumentPath(context, uriString)
         val file = resolved?.let { java.io.File(it) }
-        val msg = when {
-            resolved == null || !resolved.endsWith(".gguf", ignoreCase = true) || file?.exists() != true ->
-                "无法直读该位置（非本机存储路径）。请把模型放到手机存储（如 Download），再用「扫描手机已有模型」选择"
-            !file.canRead() ->
-                "无读取权限：请在设置里给 HaoAI 开启「所有文件访问」，或把模型移到 HaoAI 的 models 目录"
-            else -> {
+        when {
+            resolved != null && !resolved.endsWith(".gguf", ignoreCase = true) ->
+                importingModel = "所选文件不是 .gguf 模型"
+            resolved != null && file?.exists() == true && !file.canRead() ->
+                importingModel = "无读取权限：请在设置里给 HaoAI 开启「所有文件访问」"
+            resolved != null && file?.exists() == true -> {
                 useDeviceModel(resolved)
-                "已加载 ${file.name}（原路径直读）"
+                importingModel = "已加载 ${file.name}（原路径直读）"
+                refreshLocalModelLibrary()
+                scheduleImportingClear(importingModel!!)
             }
-        }
-        importingModel = msg
-        if (msg.startsWith("已加载")) {
-            viewModelScope.launch { delay(4000); if (importingModel == msg) importingModel = null }
+            else -> importByCopy(context, uriString)
         }
     }
+
+    private fun scheduleImportingClear(msg: String) {
+        viewModelScope.launch { delay(4000); if (importingModel == msg) importingModel = null }
+    }
+
+    /** SAF 直读不可行时的兜底：把所选 GGUF 流式复制进应用目录（不要求用户挪文件）。 */
+    private fun importByCopy(context: android.content.Context, uriString: String) {
+        if (importingCopyJob?.isActive == true) return
+        importingCopyJob = viewModelScope.launch(Dispatchers.IO) {
+            importingModel = "正在复制模型到应用目录…"
+            runCatching {
+                val uri = android.net.Uri.parse(uriString)
+                val name = queryDisplayName(context, uri)
+                    ?.takeIf { it.endsWith(".gguf", ignoreCase = true) }
+                    ?: ((uri.lastPathSegment?.substringAfterLast('/') ?: "model")
+                        .let { if (it.endsWith(".gguf", true)) it else "$it.gguf" })
+                val dir = c.llama.modelsDir()
+                val usable = android.os.StatFs(dir.absolutePath).availableBytes
+                val target = java.io.File(dir, name)
+                val tmp = java.io.File(dir, "$name.copying")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tmp.outputStream().use { output ->
+                        val buf = ByteArray(256 * 1024)
+                        var read: Int
+                        var done = 0L
+                        while (input.read(buf).also { read = it } != -1) {
+                            this@launch.ensureActive()
+                            output.write(buf, 0, read)
+                            done += read
+                            if (done % (512L * 1024 * 1024) < buf.size) {
+                                importingModel = "正在复制模型到应用目录… ${done / (1024 * 1024)}MB"
+                            }
+                        }
+                    }
+                } ?: error("无法打开所选文件")
+                if (tmp.length() < 1_000_000) error("文件过小（${tmp.length()} 字节），不是有效模型")
+                if (tmp.length() > usable) error("应用目录空间不足（需 ${tmp.length() / (1024 * 1024)}MB）")
+                if (target.exists()) target.delete()
+                if (!tmp.renameTo(target)) {
+                    tmp.copyTo(target, overwrite = true); tmp.delete()
+                }
+                target
+            }.fold(
+                onSuccess = { f ->
+                    val meta = GgufMeta.parse(f)
+                    val warn = meta?.architecture
+                        ?.takeIf { !LlamaServerController.archSupported(it) }
+                        ?.let { "（注意：架构 $it 需要更新引擎后才能运行）" } ?: ""
+                    useDeviceModel(f.absolutePath)
+                    importingModel = "已导入 ${f.name}$warn"
+                    refreshLocalModelLibrary()
+                    scheduleImportingClear(importingModel!!)
+                },
+                onFailure = { e ->
+                    importingModel = "导入失败：${e.message ?: "未知错误"}"
+                }
+            )
+        }
+    }
+
+    /** OpenableColumns 查显示名；查不到回退 null。 */
+    private fun queryDisplayName(context: android.content.Context, uri: android.net.Uri): String? =
+        runCatching {
+            context.contentResolver.query(
+                uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+            )?.use { cur -> if (cur.moveToFirst()) cur.getString(0) else null }
+        }.getOrNull()
 
     /** externalstorage 文档 URI → /storage/emulated/0/... 真实路径；其余返回 null。 */
     private fun resolveDocumentPath(context: android.content.Context, uriString: String): String? = runCatching {
@@ -1394,7 +1466,10 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
 
     // ---- 端侧模型：免拷贝直读手机上已有的 GGUF ----
 
-    var scannedDeviceModels by mutableStateOf<List<java.io.File>?>(null)
+    /** 扫描结果（2026-10-30 起带 GGUF 元数据与引擎兼容判定，入库前先看见架构建不建得跑）。 */
+    data class ScannedModel(val file: java.io.File, val meta: GgufMeta.Info?, val supported: Boolean?)
+
+    var scannedDeviceModels by mutableStateOf<List<ScannedModel>?>(null)
         private set
 
     var scanningModels by mutableStateOf(false)
@@ -1404,9 +1479,13 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         if (scanningModels) return
         scanningModels = true
         viewModelScope.launch(Dispatchers.IO) {
-            val r = runCatching { c.llama.scanDeviceModels() }
+            val files = runCatching { c.llama.scanDeviceModels() }.getOrDefault(emptyList())
+            val out = files.map { f ->
+                val meta = metaFor(f.absolutePath)
+                ScannedModel(f, meta, meta?.architecture?.let { LlamaServerController.archSupported(it) })
+            }
             scanningModels = false
-            scannedDeviceModels = r.getOrDefault(emptyList())
+            scannedDeviceModels = out
         }
     }
 
@@ -1503,7 +1582,14 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
                 name = "端侧模型 (llama.cpp)",
                 baseUrl = com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_BASE,
                 model = c.llama.findModel()?.name ?: "未下载模型",
-                apiKeyCipher = ""
+                apiKeyCipher = "",
+                // 端侧采样默认值显式落库：运行参数卡的滑杆所见即所发（send 开关随写打开）
+                sendTemperature = true,
+                temperature = 0.7f,
+                sendTopP = true,
+                topP = 0.95f,
+                topK = 40,
+                repeatPenalty = 1.1f
             )
             s.copy(providers = list, activeProviderId = com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
         }
@@ -1542,6 +1628,209 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun localContextLength(): Int = c.settingsFlow.value.localContextLength
+
+    // ---- 端侧推理改版（2026-10-30）：模型库 / 运行参数 / 添加弹层 / 日志 ----
+
+    /** 模型库条目：应用目录 + 手机存储直读的当前模型，带 GGUF 元数据与兼容判定。 */
+    data class LocalModelUi(
+        val name: String,
+        val path: String,
+        val sizeBytes: Long,
+        val isDevice: Boolean,
+        val meta: GgufMeta.Info?,
+        /** null=架构未知不表态；true/false=当前引擎是否支持。 */
+        val supported: Boolean?,
+        val isActive: Boolean,
+    )
+
+    var localModelLibrary by mutableStateOf<List<LocalModelUi>>(emptyList())
+        private set
+
+    /** 弹层状态：null=关；"add"=添加模型；"log"=服务日志。 */
+    var llamaSheet by mutableStateOf<String?>(null)
+        private set
+
+    var llamaAddTab by mutableStateOf("dl")
+
+    /** 正在下载的广场模型名；null=空闲。进度走 llamaDownload。 */
+    var llamaDownloadingName by mutableStateOf<String?>(null)
+        private set
+
+    private val metaCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, GgufMeta.Info?>>()
+
+    /** GGUF 元数据（按 path+长度缓存，避免重复读头）。 */
+    fun metaFor(path: String): GgufMeta.Info? {
+        val f = java.io.File(path)
+        val cached = metaCache[path]
+        if (cached != null && cached.first == f.length()) return cached.second
+        val info = GgufMeta.parse(f)
+        metaCache[path] = f.length() to info
+        return info
+    }
+
+    fun openLlamaSheet(which: String, tab: String? = null) {
+        if (tab != null) llamaAddTab = tab
+        if (which == "add" && llamaAddTab == "scan" && scannedDeviceModels == null) scanDeviceModels()
+        llamaSheet = which
+    }
+
+    fun closeLlamaSheet() {
+        llamaSheet = null
+        clearDeviceScan()
+    }
+
+    fun refreshLocalModelLibrary() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val active = c.settingsFlow.value.localModelFile
+            val files = c.llama.listModels()
+            val out = mutableListOf<LocalModelUi>()
+            for (f in files) {
+                val meta = metaFor(f.absolutePath)
+                out += LocalModelUi(
+                    name = f.name, path = f.absolutePath, sizeBytes = f.length(), isDevice = false,
+                    meta = meta,
+                    supported = meta?.architecture?.let { LlamaServerController.archSupported(it) },
+                    isActive = active == f.name || (active == null && f === files.firstOrNull())
+                )
+            }
+            // 手机存储直读的当前模型（不在应用目录内）
+            if (active != null && active.startsWith("/")) {
+                val f = java.io.File(active)
+                if (f.isFile && files.none { it.absolutePath == active }) {
+                    val meta = metaFor(f.absolutePath)
+                    out += LocalModelUi(
+                        name = f.name, path = f.absolutePath, sizeBytes = f.length(), isDevice = true,
+                        meta = meta,
+                        supported = meta?.architecture?.let { LlamaServerController.archSupported(it) },
+                        isActive = true
+                    )
+                }
+            }
+            withContext(Dispatchers.Main) { localModelLibrary = out.sortedByDescending { it.sizeBytes } }
+        }
+    }
+
+    fun useLibraryModel(m: LocalModelUi) {
+        if (m.isDevice) useDeviceModel(m.path) else selectLocalModel(m.name)
+        refreshLocalModelLibrary()
+    }
+
+    /** 删除应用目录内模型；直读条目只解除引用不删源文件。 */
+    fun deleteLibraryModel(m: LocalModelUi) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (m.isDevice) {
+                if (c.settingsFlow.value.localModelFile == m.path) {
+                    c.updateSettings { it.copy(localModelFile = null) }
+                    c.llama.preferredModel = null
+                }
+            } else {
+                runCatching {
+                    val f = java.io.File(m.path)
+                    if (f.isFile && c.llama.currentModelPath == m.path) c.llama.stop()
+                    if (f.isFile) f.delete()
+                    if (c.settingsFlow.value.localModelFile == m.name) {
+                        c.updateSettings { it.copy(localModelFile = null) }
+                        c.llama.preferredModel = null
+                    }
+                }
+            }
+            refreshLocalModelLibrary()
+        }
+    }
+
+    /** 模型广场下载：完成且当前无选中模型时自动设为当前。 */
+    fun downloadCatalogModel(url: String, name: String, onDone: (Boolean) -> Unit = {}) {
+        if (llamaDownloadingName != null) return
+        llamaDownloadingName = name
+        viewModelScope.launch {
+            val r = c.llama.downloadModel(url, name)
+            llamaDownloadingName = null
+            val ok = r.isSuccess
+            if (ok) {
+                r.getOrNull()?.let { f ->
+                    if (c.settingsFlow.value.localModelFile == null) selectLocalModel(f.name)
+                }
+                refreshLocalModelLibrary()
+            }
+            onDone(ok)
+        }
+    }
+
+    // ---- 端侧运行参数 ----
+
+    fun setLocalThreads(v: Int) {
+        val x = v.coerceIn(0, 8)
+        c.updateSettings { it.copy(localThreads = x) }
+        c.llama.tuning = c.llama.tuning.copy(threads = x)
+    }
+
+    fun setLocalBackend(v: String) {
+        c.updateSettings { it.copy(localBackend = v) }
+        c.llama.tuning = c.llama.tuning.copy(backend = v)
+    }
+
+    fun setLocalFlashAttn(v: String) {
+        c.updateSettings { it.copy(localFlashAttn = v) }
+        c.llama.tuning = c.llama.tuning.copy(flashAttn = v)
+    }
+
+    fun setLocalKvCache(v: String) {
+        c.updateSettings { it.copy(localKvCache = v) }
+        c.llama.tuning = c.llama.tuning.copy(kvCache = v)
+    }
+
+    fun setLocalMmap(v: Boolean) {
+        c.updateSettings { it.copy(localMmap = v) }
+        c.llama.tuning = c.llama.tuning.copy(mmap = v)
+    }
+
+    fun setLocalSeed(v: Long) {
+        c.updateSettings { it.copy(localSeed = v) }
+        c.llama.tuning = c.llama.tuning.copy(seed = v)
+    }
+
+    /** local 供应商的采样值（温度 to topP）；未创建或未开启时给端侧默认。 */
+    fun localSampling(): Pair<Float, Float> {
+        val p = c.settingsFlow.value.providers.firstOrNull {
+            it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID
+        }
+        return (p?.temperature?.takeIf { p.sendTemperature } ?: 0.7f) to
+            (p?.topP?.takeIf { p.sendTopP } ?: 0.95f)
+    }
+
+    /** 采样滑杆提交（onValueChangeFinished 一次性写，避免逐帧双文件写放大）。 */
+    fun setLocalSampling(temp: Float, topP: Float) {
+        c.updateSettings { s ->
+            s.copy(providers = s.providers.map {
+                if (it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
+                    it.copy(temperature = temp, sendTemperature = true, topP = topP, sendTopP = true)
+                else it
+            })
+        }
+    }
+
+    /** 高级采样（topK to repeatPenalty）：0/0f=不发送走服务器默认。 */
+    fun localAdvancedSampling(): Pair<Int, Float> {
+        val p = c.settingsFlow.value.providers.firstOrNull {
+            it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID
+        }
+        return (p?.topK ?: 40) to ((p?.repeatPenalty?.takeIf { it > 0f }) ?: 1.1f)
+    }
+
+    fun setLocalAdvancedSampling(topK: Int, rep: Float) {
+        c.updateSettings { s ->
+            s.copy(providers = s.providers.map {
+                if (it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID)
+                    it.copy(topK = topK.coerceIn(0, 200), repeatPenalty = rep.coerceIn(0f, 2f))
+                else it
+            })
+        }
+    }
+
+    fun llamaLogTail(): List<String> = c.llama.readLogTail()
+
+    /** 失败根因：未知模型架构（架构名 to 原始错误行）；无则 null。 */
+    fun llamaArchError(): Pair<String, String>? = c.llama.lastArchError()
 
     fun setCustomPrompt(text: String) {
         c.updateSettings { it.copy(customPrompt = text) }

@@ -154,6 +154,9 @@ private data class ChatCompletionRequest(
     val stream: Boolean = true,
     val temperature: Double? = null,
     @SerialName("top_p") val topP: Double? = null,
+    /** llama.cpp 扩展字段；默认 null 不发送，严格网关（OpenAI 等）不受影响。 */
+    @SerialName("top_k") val topK: Int? = null,
+    @SerialName("repeat_penalty") val repeatPenalty: Double? = null,
     @SerialName("presence_penalty") val presencePenalty: Double? = null,
     @SerialName("frequency_penalty") val frequencyPenalty: Double? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
@@ -311,6 +314,9 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
                 // 采样参数「是否发送」开关：关=请求体不带该字段，与旧行为一致
                 temperature = provider.temperature.toDouble().takeIf { provider.sendTemperature },
                 topP = provider.topP.toDouble().takeIf { provider.sendTopP },
+                // top_k / repeat_penalty：llama.cpp 扩展采样（端侧运行参数卡配置到 local 供应商）；>0 才发送
+                topK = provider.topK.takeIf { it > 0 },
+                repeatPenalty = provider.repeatPenalty.toDouble().takeIf { it > 0f },
                 presencePenalty = provider.presencePenalty.toDouble().takeIf { provider.sendPresencePenalty },
                 frequencyPenalty = provider.frequencyPenalty.toDouble().takeIf { provider.sendFrequencyPenalty }
             )

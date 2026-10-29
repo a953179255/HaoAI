@@ -68,6 +68,10 @@ data class ProviderConfig(
     val presencePenalty: Float = 0f,
     val sendFrequencyPenalty: Boolean = false,
     val frequencyPenalty: Float = 0f,
+    /** top_k（llama.cpp 扩展字段；0=不发送，云端供应商不受影响）。 */
+    val topK: Int = 0,
+    /** repeat_penalty（llama.cpp 扩展字段；0=不发送）。 */
+    val repeatPenalty: Float = 0f,
     // ── API Key 池：主 Key 之外追加备用密文，按策略轮换分摊限流 ──
     val apiKeyPoolCiphers: List<String> = emptyList(),
     /** ROUND_ROBIN=逐请求轮询 | RANDOM=随机 */
@@ -209,6 +213,19 @@ data class AppSettings(
     val tokenOutToday: Long = 0,
     /** 端侧推理上下文窗口（llama.cpp -c 参数）。系统提示+工具约 5K token，32K 与引擎本地压缩窗口对齐；KV 内存随窗口线性增长。 */
     val localContextLength: Int = 32768,
+    // ── 端侧运行参数（2026-10-30 改版，llama.cpp 启动参数；重启服务生效）──
+    /** 推理线程（-t）：0=自动（核数-2，留核给 UI 防饿死）。 */
+    val localThreads: Int = 0,
+    /** 运行后端：auto=按 prefill 速度自动降级 NPU→GPU→CPU；npu/gpu/cpu=锁定单档。 */
+    val localBackend: String = "auto",
+    /** FlashAttention：auto/on/off。 */
+    val localFlashAttn: String = "auto",
+    /** KV 缓存量化（--cache-type-k/v）：f16/q8_0/q4_0。 */
+    val localKvCache: String = "f16",
+    /** mmap 读模型（关=--no-mmap，冷启动慢但多应用抢内存时更稳）。 */
+    val localMmap: Boolean = true,
+    /** 随机种子（-s）：-1=随机。 */
+    val localSeed: Long = -1,
     /** 上次记忆本地自动备份时间（毫秒）。 */
     val lastMemoryBackupAt: Long = 0,
     /** 上次记忆导出时间（毫秒）。 */

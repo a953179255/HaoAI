@@ -206,7 +206,6 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     // 玻璃弹窗状态
-    var showScan by androidx.compose.runtime.remember { mutableStateOf(false) }
     // 待删除的供应商 id：点击删除先弹确认（防止误触直接删库）
     var pendingDelete by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     // 模型能力编辑弹层目标（providerId to modelId）——设计稿 ③：输入/输出模态勾选
@@ -306,7 +305,6 @@ fun SettingsScreen(
             context = context, a11yOn = a11yOn, a11yTick = a11yTick,
             wpVersion = wpVersion, onWpVersionChange = { wpVersion = it },
             ledgerVersion = ledgerVersion, linuxState = linuxState,
-            showScan = showScan, onShowScan = { showScan = true },
             pendingDelete = pendingDelete, onPendingDelete = { pendingDelete = it },
             purposePicker = purposePicker, onPickPurposeModel = { purposePicker = it },
             showDreamPicker = showDreamPicker, onPickDreamModel = { showDreamPicker = true },
@@ -638,7 +636,6 @@ fun SettingsScreen(
             context = context, a11yOn = a11yOn, a11yTick = a11yTick,
             wpVersion = wpVersion, onWpVersionChange = { wpVersion = it },
             ledgerVersion = ledgerVersion, linuxState = linuxState,
-            showScan = showScan, onShowScan = { showScan = true },
             pendingDelete = pendingDelete, onPendingDelete = { pendingDelete = it },
             purposePicker = purposePicker, onPickPurposeModel = { purposePicker = it },
             showDreamPicker = showDreamPicker, onPickDreamModel = { showDreamPicker = true },
@@ -716,61 +713,8 @@ fun SettingsScreen(
         }
     }
 
-    if (showScan) {
-        val scanned = vm.scannedDeviceModels
-        val canScan = !vm.scanningModels && vm.scannedDeviceModels == null
-        com.haoai.agent.ui.common.GlassAlertDialog(
-            backdrop = backdrop,
-            title = "手机上的模型文件",
-            onDismiss = { vm.clearDeviceScan(); showScan = false },
-            confirmLabel = if (canScan) "开始扫描" else "关闭",
-            onConfirm = { if (canScan) vm.scanDeviceModels() else showScan = false },
-            dismissLabel = "取消"
-        ) {
-            Column {
-                if (vm.scanningModels) {
-                    Text("扫描中…（Download / Documents / models 等目录）")
-                } else if (scanned.isNullOrEmpty()) {
-                    Text(
-                        "未找到大体积 GGUF 文件。请确认模型位置；若放在应用专属目录之外的受限目录，" +
-                            "需先在「权限与自动化 → 系统权限」里授予「文件管理（所有文件访问）」。",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    Text(
-                        "点击直接引用原文件（不复制、不占双份空间）：",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Column(Modifier.heightIn(max = 360.dp).padding(top = 6.dp)) {
-                        scanned.forEach { f ->
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        vm.useDeviceModel(f.absolutePath)
-                                        showScan = false
-                                    }
-                                    .padding(vertical = 8.dp)
-                            ) {
-                                Text(
-                                    f.name,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    "${f.length() / (1024 * 1024)} MB · ${f.parent?.removePrefix("/storage/emulated/0/") ?: ""}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 端侧推理弹层（添加模型 / 服务日志）——2026-10-30 改版，扫描入口并入「添加模型」
+    LocalLlamaSheets(vm = vm, backdrop = backdrop)
 
     // 删除供应商确认：红色确认键，展示供应商名与模型；
     // 删的是当前服务时写明将自动切换到哪个——fallback 是列表里下一个云端服务，用户该知道
@@ -1263,8 +1207,6 @@ private fun SectionPage(
     // 内部 lambda 想赋值 = 'val' cannot be reassigned）
     onWpVersionChange: (Boolean) -> Unit,
     linuxState: LinuxEnvState,
-    showScan: Boolean,
-    onShowScan: () -> Unit,
     pendingDelete: String?,
     onPendingDelete: (String?) -> Unit,
     purposePicker: String?,
@@ -1376,7 +1318,7 @@ private fun SectionPage(
                 when (section) {
                     "brain" -> {
                         brainItems(vm, settings, localBackdrop, onDeleteRequest = { onPendingDelete(it) }, onPickPurposeModel = { onPickPurposeModel(it) }, onEditCaps = onEditCaps)
-                        localItems(vm, localBackdrop, onOpenScan = onShowScan)
+                        localItems(vm, localBackdrop)
                     }
                     "privacy" -> privacyItems(vm, settings, context, a11yOn, localBackdrop)
                     "search" -> searchItems(
@@ -1934,228 +1876,10 @@ private fun LazyListScope.brainItems(
     }
 }
 
-private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop, onOpenScan: () -> Unit) {
-    item { SectionTitle("端侧推理（llama.cpp 本地运行）") }
-    item {
-        // Phase 7 阶段2：SoC 后端检测结果
-        val detected = remember { com.haoai.agent.platform.llama.LlamaServerController.detectHexagonArch() }
-        com.haoai.agent.ui.common.HaoNote(
-            backdrop = backdrop,
-            text = "推理引擎：官方预编译 ${com.haoai.agent.platform.llama.LlamaServerController.ENGINE_TAG}" +
-                "（CPU/Adreno GPU/Hexagon NPU，gradle 自动下载，升级改版本号即可）· " +
-                (detected?.let { "本机骁龙 → 启动兜底链 NPU→GPU→CPU（按 prefill 速度排序，逐档自动降级）" } ?: "本机走 GPU/CPU 兜底"),
-            modifier = Modifier.padding(vertical = 4.dp)
-        )
-    }
-    item {
-        val llama by vm.llamaState.collectAsState()
-        val dl by vm.llamaDownload.collectAsState()
-        var dlUrl by androidx.compose.runtime.remember {
-            mutableStateOf(com.haoai.agent.platform.llama.LlamaServerController.DEFAULT_MODEL_URL)
-        }
-        Column {
-            GlassGroup(backdrop) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("llama.cpp 本地推理", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                when (val s = llama) {
-                                    // 后端标签放这行（随 llama 状态重组刷新；说明卡的
-                                    // 「当前生效」旧位置从不重组，永远显示首帧旧值）
-                                    is LlamaState.Running -> "运行中 · ${s.modelFile} · ${vm.backendLabel()}"
-                                    is LlamaState.Starting -> s.detail
-                                    is LlamaState.Failed -> "失败：${s.message}"
-                                    else -> "已停止 · 模型：${vm.currentLocalModelLabel() ?: "未选择"}"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2
-                            )
-                        }
-                        if (vm.isLocalActive()) {
-                            Text(
-                                "当前使用",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                    // 端侧启动进度条（百分比由 server 日志里程碑驱动，v0.18.3）
-                    val startingProgress = (llama as? LlamaState.Starting)?.progress ?: -1
-                    if (startingProgress in 0..99) {
-                        androidx.compose.material3.LinearProgressIndicator(
-                            progress = { startingProgress / 100f },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            gapSize = 0.dp,
-                            drawStopIndicator = {}
-                        )
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(top = 10.dp)
-                    ) {
-                        when (llama) {
-                            is LlamaState.Running -> {
-                                LiquidPillButton(
-                                    backdrop = backdrop,
-                                    text = "停止服务",
-                                    emphasized = true
-                                ) { vm.stopLlama() }
-                            }
-                            else -> {
-                                LiquidPillButton(
-                                    backdrop = backdrop,
-                                    text = "启动服务",
-                                    enabled = vm.llamaModelFile() != null,
-                                    emphasized = true
-                                ) { vm.startLlama { vm.useLocalModel() } }
-                            }
-                        }
-                    }
-                }
-            }
-            if (vm.llamaModelFile() == null) {
-                OutlinedTextField(
-                    value = dlUrl,
-                    onValueChange = { dlUrl = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    label = { Text("模型 GGUF 下载地址") },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.labelSmall,
-                    colors = com.haoai.agent.ui.common.glassFieldColors()
-                )
-                if (dl != null) {
-                    androidx.compose.material3.LinearProgressIndicator(
-                        progress = { dl ?: 0f },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        gapSize = 0.dp,
-                        drawStopIndicator = {}
-                    )
-                    Text(
-                        "下载中 ${(100 * (dl ?: 0f)).toInt()}%（约 470MB，请耐心等待）",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                } else {
-                    LiquidPillButton(
-                        backdrop = backdrop,
-                        text = "下载模型（Qwen2.5-0.5B，约 470MB）",
-                        modifier = Modifier.padding(top = 8.dp),
-                        emphasized = true
-                    ) { vm.downloadLlamaModel(dlUrl) { } }
-                }
-            }
-            val ctxLocal = androidx.compose.ui.platform.LocalContext.current
-            val importLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.OpenDocument()
-            ) { uri -> uri?.let { vm.loadModelFile(ctxLocal, it.toString()) } }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 8.dp)
-            ) {
-                LiquidPillButton(
-                    backdrop = backdrop,
-                    text = "加载模型文件",
-                    enabled = vm.importingModel == null,
-                    emphasized = true
-                ) { importLauncher.launch(arrayOf("*/*")) }
-                LiquidPillButton(
-                    backdrop = backdrop,
-                    text = "扫描手机已有模型",
-                    emphasized = false
-                ) { onOpenScan() }
-            }
-            vm.importingModel?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-            com.haoai.agent.ui.common.HaoNote(
-                backdrop = backdrop,
-                text = "提示：优先用「扫描」或「加载模型文件」直读手机上已有的 GGUF（不复制、不占双份空间）；" +
-                    "视觉投影文件与模型同名放置即可自动启用图像识别。",
-                modifier = Modifier.padding(vertical = 4.dp)
-            )
-            Text(
-                "完全离线运行，对话不出设备。模型越大越聪明但越慢，可按需切换。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp)
-            )
-            // 已添加的模型：当前使用 + 应用目录内已有文件（只读展示，切换走扫描/加载入口）
-            Text(
-                "已添加的模型",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-            GlassGroup(backdrop, modifier = Modifier.padding(top = 6.dp)) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "当前使用",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.widthIn(min = 64.dp)
-                        )
-                        Text(
-                            vm.currentLocalModelLabel() ?: "未添加",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                    }
-                    val appDirModels = vm.localModels()
-                    if (appDirModels.isNotEmpty()) {
-                        HorizontalDivider(
-                            Modifier.padding(vertical = 6.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
-                        )
-                        Text(
-                            "应用目录内（${appDirModels.size} 个）：",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        appDirModels.forEach { name ->
-                            Text(
-                                "· $name",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                maxLines = 1,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
-                }
-            }
-            Text(
-                "本地模型上下文窗口（32K 足够日常与工具流，KV 内存随窗口线性增长；切换后下次启动生效）",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
-            )
-            val ctxOptions = listOf(32768, 65536, 131072, 262144)
-            com.haoai.agent.ui.common.LiquidTabRow(
-                tabs = ctxOptions.map { "${it / 1024}K" },
-                selectedIndex = ctxOptions.indexOf(vm.localContextLength()).coerceAtLeast(0),
-                onSelected = { i -> vm.setLocalContextLength(ctxOptions[i]) },
-                backdrop = backdrop,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-    }
+private fun LazyListScope.localItems(vm: SettingsViewModel, backdrop: com.kyant.backdrop.backdrops.LayerBackdrop) {
+    // 2026-10-30 端侧推理改版：实现整体迁至 LocalInferenceSection.kt（状态卡/模型库/运行参数/引擎卡+弹层）
+    localInferenceCards(vm, backdrop)
 }
-
 private fun LazyListScope.privacyItems(
     vm: SettingsViewModel,
     settings: AppSettings,
@@ -5840,7 +5564,7 @@ private fun formatTokens(n: Long): String = when {
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+internal fun SectionTitle(text: String) {
     // 统一到共享段落标题（子页与首页同一套间距/竖条规范）
     com.haoai.agent.ui.common.HaoSectionTitle(text)
 }
@@ -5858,7 +5582,7 @@ private fun SectionTitle(text: String) {
  * 故这里不再加垂直内边距。
  */
 @Composable
-private fun GlassGroup(
+internal fun GlassGroup(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     modifier: Modifier = Modifier,
     refract: Boolean? = null,
@@ -5874,7 +5598,7 @@ private fun GlassGroup(
 
 /** 液态玻璃胶囊按钮（主操作），替代普通 Material Button。 */
 @Composable
-private fun LiquidPillButton(
+internal fun LiquidPillButton(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     text: String,
     modifier: Modifier = Modifier,

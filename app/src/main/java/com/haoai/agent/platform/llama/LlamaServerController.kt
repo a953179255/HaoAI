@@ -80,8 +80,26 @@ class LlamaServerController(
                 listOf("v73", "v75", "v79", "v81", "v85").any { java.io.File(dir, "libggml-htp-$it.so").exists() }
         } == true
 
+        /**
+         * 默认推荐模型（2026-10-30 换 LFM3-1.7B）：ModelScope 官方仓库国内直链。
+         * 原默认 Qwen2.5-0.5B 用户实测嫌弱；LFM3-1.7B Q4_K_M 约 1.02GB，
+         * b11982 引擎起支持（见 [ARCH_MIN_ENGINE]）。
+         */
         const val DEFAULT_MODEL_URL =
-            "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            "https://www.modelscope.cn/models/LiquidAI/LFM3-1.7B-GGUF/resolve/master/LFM3-1.7B-Q4_K_M.gguf"
+
+        /**
+         * 已知模型架构 → 支持它的最低引擎 tag（仅 2026-10-24 引擎包化之后新增的
+         * 架构才需要登记）。用于模型库徽标与失败根因卡：lfm3 支持随 b11982 进包，
+         * 旧引擎 b11800 加载必报 unknown model architecture。
+         */
+        val ARCH_MIN_ENGINE: Map<String, String> = mapOf("lfm3" to "b11982")
+
+        fun archSupported(arch: String?): Boolean {
+            val min = arch?.let { ARCH_MIN_ENGINE[it] } ?: return true
+            fun num(t: String) = t.filter { it.isDigit() }.toLongOrNull() ?: 0L
+            return num(ENGINE_TAG) >= num(min)
+        }
         private const val HEALTH_TRIES = 240
 
         private const val HEALTH_INTERVAL_MS = 500L
@@ -114,6 +132,25 @@ class LlamaServerController(
     @Volatile
     var contextSize: Int = 65536
 
+    /** 端侧运行参数（设置页「运行参数」卡读写；重启服务生效）。 */
+    data class LlamaTuning(
+        /** 推理线程（-t）：0=自动（核数-2，留核给 UI/系统防饿死）。 */
+        val threads: Int = 0,
+        /** 运行后端：auto=NPU→GPU→CPU 按序降级；npu/gpu/cpu=锁定单档（失败即报，不兜底）。 */
+        val backend: String = "auto",
+        /** FlashAttention：auto（缺省省略参数）/on/off。 */
+        val flashAttn: String = "auto",
+        /** KV 缓存量化（--cache-type-k/v）：f16/q8_0/q4_0，q 系省一半以上 KV 内存。 */
+        val kvCache: String = "f16",
+        /** mmap 读模型；false 加 --no-mmap（冷启动慢、多应用抢内存时更稳）。 */
+        val mmap: Boolean = true,
+        /** 随机种子（-s）；-1=随机。 */
+        val seed: Long = -1,
+    )
+
+    @Volatile
+    var tuning: LlamaTuning = LlamaTuning()
+
     private val startMutex = kotlinx.coroutines.sync.Mutex()
 
     fun modelsDir(): File = File(context.getExternalFilesDir(null), "models").apply { mkdirs() }
@@ -126,6 +163,18 @@ class LlamaServerController(
         File(context.filesDir, "llama").apply { mkdirs() }.let { File(it, "server.log") }
 
     private fun internalModelsDir(): File = File(context.filesDir, "models")
+
+    /** server.log 末尾若干行（失败根因卡/日志面板展示用；仅应用私有目录，不上传）。 */
+    fun readLogTail(maxLines: Int = 80): List<String> = runCatching {
+        val f = serverLogFile()
+        if (!f.isFile) emptyList() else f.readLines().takeLast(maxLines)
+    }.getOrDefault(emptyList())
+
+    /** 从日志提取「未知模型架构」根因：返回 架构名 to 原始错误行；无则 null。 */
+    fun lastArchError(): Pair<String, String>? =
+        readLogTail(200).lastOrNull { "unknown model architecture" in it }?.let { line ->
+            Regex("'([^']+)'").find(line)?.groupValues?.get(1)?.let { arch -> arch to line.trim() }
+        }
 
     fun findModel(): File? {
         // 支持免拷贝直读：preferredModel 可以是手机上任意位置的绝对路径
@@ -326,16 +375,27 @@ class LlamaServerController(
             // x86_64 模拟器/无 libggml-opencl.so 时跳过 GPU 档。
             val hex = if (arm64 && skelLibsAvailable(nativeDir)) detectHexagonArch() else null
             val gpuAvailable = arm64 && java.io.File(nativeDir, "libggml-opencl.so").exists()
+            // 「运行后端」参数（2026-10-30）：auto=全链按 prefill 速度降级；
+            // 锁定单档（npu/gpu/cpu）只给一档——用户点名要的后端失败就该原样报错，
+            // 静默降级会让「锁 CPU 省电」这类诉求悄悄变成 NPU 高功耗。
+            val lock = tuning.backend.takeIf { it != "auto" }
             val tiers = buildList {
-                if (hex != null) add(
+                if (hex != null && lock in listOf(null, "npu")) add(
                     BackendTier("htp-$hex", "Hexagon $hex NPU",
                         listOf("-ngl", "99", "-dev", "HTP0", "--device", "HTP0"), adsp = true)
                 )
-                if (gpuAvailable) add(
+                if (gpuAvailable && lock in listOf(null, "gpu")) add(
                     BackendTier("gpu", "Adreno GPU",
                         listOf("-ngl", "99", "-dev", "GPUOpenCL", "--device", "GPUOpenCL"), adsp = false)
                 )
-                add(BackendTier("cpu", "CPU", listOf("-ngl", "0"), adsp = false))
+                if (lock in listOf(null, "cpu")) add(BackendTier("cpu", "CPU", listOf("-ngl", "0"), adsp = false))
+            }
+            if (tiers.isEmpty()) {
+                lastActiveBackend = lock ?: "cpu"
+                _state.value = LlamaState.Failed(
+                    "锁定的后端在此设备不可用（${lock}）：缺对应组件或硬件不支持，可切回「自动」"
+                )
+                return@withContext false
             }
             stopInternal()
             var launched = false
@@ -379,8 +439,10 @@ class LlamaServerController(
                 "--host", "127.0.0.1",
                 "--port", PORT.toString(),
                 "-c", contextSize.coerceIn(2048, 262_144).toString(),
-                // 线程留 2 核给 UI/系统：推理打满 CPU 会把界面与停止键「饿死」十几秒
-                "-t", (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4).toString(),
+                // 线程留 2 核给 UI/系统：推理打满 CPU 会把界面与停止键「饿死」十几秒；
+                // 「运行参数」卡可覆盖（0=沿用自动值）
+                "-t", (tuning.threads.takeIf { it > 0 }
+                    ?: (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)).toString(),
                 // 单 slot：默认多 slot 会把 KV 内存翻数倍（4 slot × 64K = 256K 总缓存），
                 // 且请求在 slot 间轮转，Agent 多轮的前缀缓存完全失效、每轮全量重算 prefill。
                 // 不加 --cache-reuse：实测会触发 KV 碎片整理导致 prefill 阶段性卡死数十秒
@@ -392,6 +454,16 @@ class LlamaServerController(
                 // App 端 OpenAiCompatClient 已解析为「思考过程」展示
                 "--jinja"
             )
+            // 「运行参数」卡高级项（2026-10-30）：FA/KV 量化/mmap/种子，缺省与上游默认一致
+            when (tuning.flashAttn) {
+                "on" -> cmd.addAll(listOf("--flash-attn", "on"))
+                "off" -> cmd.addAll(listOf("--flash-attn", "off"))
+            }
+            if (tuning.kvCache != "f16") cmd.addAll(
+                listOf("--cache-type-k", tuning.kvCache, "--cache-type-v", tuning.kvCache)
+            )
+            if (!tuning.mmap) cmd.add("--no-mmap")
+            if (tuning.seed >= 0) cmd.addAll(listOf("-s", tuning.seed.toString()))
             if (mmproj != null) cmd.addAll(listOf("--mmproj", mmproj.absolutePath))
             cmd.addAll(tier.args)
 

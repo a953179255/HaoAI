@@ -336,6 +336,14 @@ class AppContainer(app: Application) {
                 // llama 参数补灌：原在构造期直读 settingsFlow.value（那时已是真值，异步后挪进来）
                 llama.preferredModel = loaded.localModelFile
                 llama.contextSize = loaded.localContextLength
+                llama.tuning = LlamaServerController.LlamaTuning(
+                    threads = loaded.localThreads,
+                    backend = loaded.localBackend,
+                    flashAttn = loaded.localFlashAttn,
+                    kvCache = loaded.localKvCache,
+                    mmap = loaded.localMmap,
+                    seed = loaded.localSeed
+                )
                 // C6 迁移：legacy config apply 走 updateSettings，必须在 settingsFlow 真值就位后执行
                 runCatching {
                     (workspace.current as? com.haoai.agent.platform.RawFileBackend)?.shellWorkdir()?.let { ws ->
