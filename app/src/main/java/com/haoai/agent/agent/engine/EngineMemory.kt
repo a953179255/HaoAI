@@ -35,7 +35,7 @@ internal fun AgentEngine.maybeExtractMemory() {
     if (!autoLearn) return
     // 端侧模型跳过自动记忆提取：辅助请求会冲掉 llama-server 单 slot 前缀缓存，
     // 让 Agent 工具循环的每轮请求全量重算 prefill（手机上每轮多花几十秒）
-    if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) return
+    if (com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(provider.baseUrl)) return
     // Hermes 主通道联动：本回合模型已主动调 memory 工具沉淀 → 兜底提取跳过（省一次辅助调用）
     if (com.haoai.agent.agent.memory.TurnEvidence.memoryToolUsedThisTurn(session.messages)) {
         android.util.Log.i("HaoMemory", "本回合模型已主动 save 记忆，兜底提取跳过")

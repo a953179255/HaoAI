@@ -33,6 +33,15 @@ class LlamaServerController(
         const val LOCAL_PROVIDER_ID = "local"
         const val LOCAL_PROVIDER_BASE = "local://llama"
 
+        /**
+         * baseUrl 是否指向端侧 llama 引擎（伪 URL "local*"，或运行时替换后的
+         * 本机 llama-server 固定端口）。判定不能写成 contains("127.0.0.1")——
+         * 那会把 Ollama、qoder2api 等一切本机回环网关误判成端侧：上下文被压成
+         * local 窗口、请求被剥掉 reasoning 注入、标题/记忆等辅助行为全部走偏。
+         */
+        fun isLocalEngineBaseUrl(baseUrl: String): Boolean =
+            baseUrl.startsWith("local") || baseUrl.startsWith(LOCAL_BASE_URL)
+
         /** Phase 7 阶段2：最近一次 server 实际生效的后端（"cpu" / "gpu" / "htp-v73"…）。 */
         @Volatile
         var lastActiveBackend: String = "cpu"

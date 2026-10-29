@@ -65,7 +65,7 @@ internal fun AgentEngine.buildSystemTextWithInjected(markMemoryUse: Boolean = fa
     // delegateTarget 是 suspend 闭包，此处直接检查设置字符串（buildSystemText 非挂起上下文）
     val delegateReady = delegateTarget != null
     val capabilityNote =
-        if (provider.baseUrl.contains("127.0.0.1") || provider.baseUrl.startsWith("local")) ""
+        if (com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(provider.baseUrl)) ""
         else com.haoai.agent.data.CapabilityResolver.capabilityPromptFragment(provider.caps(), delegateReady).orEmpty()
     val full = SystemPrompt.PREFIX +
         SystemPrompt.buildSuffix(
@@ -187,7 +187,7 @@ internal fun AgentEngine.effectiveEffort(): String? {
 /** 指定 provider 的聊天上下文窗口（本地端侧固定按 32K 保守算）。
  *  压缩链/催办等多处内联复制同款判断，统一走这里；引擎自身的用 [chatContextWindow]。 */
 internal fun contextWindowOf(p: com.haoai.agent.data.ProviderConfig): Int {
-    val isLocal = p.baseUrl.contains("127.0.0.1") || p.baseUrl.startsWith("local")
+    val isLocal = com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(p.baseUrl) || p.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID
     return if (isLocal) 32768 else p.effectiveContextLength()
 }
 

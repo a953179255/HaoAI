@@ -295,7 +295,7 @@ class OpenAiCompatClient(private val okHttpClient: OkHttpClient) : ProviderClien
         reasoningEffort: String?
     ): Flow<SseEvent> = flow {
         val url = normalizeUrl(provider.baseUrl)
-        val isLocal = provider.baseUrl.contains("127.0.0.1")
+        val isLocal = com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(provider.baseUrl) || provider.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID
         // 能力门控：模型标记不支持 reasoning 时不发 effort 参数
         val requestJson = HaoJson.json.encodeToString(
             ChatCompletionRequest.serializer(),

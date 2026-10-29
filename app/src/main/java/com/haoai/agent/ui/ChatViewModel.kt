@@ -636,7 +636,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
 
     private fun isLocalProvider(p: com.haoai.agent.data.ProviderConfig): Boolean =
         p.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-            p.baseUrl.startsWith("local") || p.baseUrl.contains("127.0.0.1")
+            com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(p.baseUrl)
 
     /** 本地槽空出后，把排在别条会话的本地任务按入队顺序接上（不限并行，唯本地串行）。 */
     private fun startNextLocalQueued() {
@@ -2154,7 +2154,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val mainProvider = c.activeProvider() ?: return
         val implicitLocal = titleCfgId.isEmpty() && (
             mainProvider.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-                mainProvider.baseUrl.contains("127.0.0.1")
+                com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(mainProvider.baseUrl)
             )
         if (implicitLocal) {
             val fallback = s.messages.firstOrNull {
@@ -3413,7 +3413,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         val st = c.settingsFlow.value
         val p = st.providers.find { it.id == st.activeProviderId } ?: st.providers.firstOrNull()
         val isLocal = p?.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-            p?.baseUrl?.contains("127.0.0.1") == true
+            p?.baseUrl?.let { com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(it) } == true
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).format(java.util.Date())
         val ver = runCatching {
             c.appContext.packageManager.getPackageInfo(c.appContext.packageName, 0).versionName
@@ -3523,7 +3523,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
                     val isLocal = settings.providers.find { it.id == settings.activeProviderId }
                         ?.let {
                             it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-                                it.baseUrl.contains("127.0.0.1")
+                                com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(it.baseUrl)
                         } == true
                     val contextWindow = if (isLocal) settings.localContextLength
                         else settings.providers.find { it.id == settings.activeProviderId }
@@ -3631,7 +3631,7 @@ class ChatViewModel(private val c: AppContainer) : ViewModel() {
         return st.providers.find { it.id == st.activeProviderId }
             ?.let {
                 it.id == com.haoai.agent.platform.llama.LlamaServerController.LOCAL_PROVIDER_ID ||
-                    it.baseUrl.contains("127.0.0.1")
+                    com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(it.baseUrl)
             } == true
     }
 

@@ -94,7 +94,7 @@ data class ProviderConfig(
     fun effectiveMaxTokens(): Int =
         modelEntry()?.maxTokens?.takeIf { it > 0 }
             ?: maxTokens.takeIf { it > 0 }
-            ?: if (baseUrl.contains("127.0.0.1") || baseUrl.startsWith("local")) 4096 else 0
+            ?: if (com.haoai.agent.platform.llama.LlamaServerController.isLocalEngineBaseUrl(baseUrl)) 4096 else 0
 
     /** 全部可选模型 ID（当前 model 排最前，去重）。 */
     fun modelIds(): List<String> = (listOf(model) + models.map { it.id }).distinct()
